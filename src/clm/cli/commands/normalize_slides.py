@@ -38,6 +38,17 @@ from clm.slides.normalizer import (
     help="Preview changes without modifying files.",
 )
 @click.option(
+    "--canonicalize-start-completed",
+    is_flag=True,
+    help=(
+        "Force start/completed cohesion pairs into the canonical DE/EN "
+        "interleave, even when DE/EN code differs (e.g. localized "
+        "identifiers). Run before `clm slides split` so the round-trip "
+        "unify(split(deck)) == deck holds byte-for-byte. Only affects the "
+        "interleaving operation."
+    ),
+)
+@click.option(
     "--json",
     "as_json",
     is_flag=True,
@@ -52,6 +63,7 @@ def normalize_slides_cmd(
     path: Path,
     operations: str | None,
     dry_run: bool,
+    canonicalize_start_completed: bool,
     as_json: bool,
     data_dir: Path | None,
 ):
@@ -76,7 +88,7 @@ def normalize_slides_cmd(
         clm normalize-slides course-specs/python-basics.xml
     """
     op_list = _parse_operations(operations)
-    result = _dispatch(path, op_list, dry_run, data_dir)
+    result = _dispatch(path, op_list, dry_run, data_dir, canonicalize_start_completed)
 
     if as_json:
         click.echo(json.dumps(_result_to_dict(result), indent=2))
@@ -111,14 +123,31 @@ def _dispatch(
     operations: list[str] | None,
     dry_run: bool,
     data_dir: Path | None,
+    canonicalize_start_completed: bool = False,
 ) -> NormalizationResult:
     if path.is_file() and path.suffix == ".xml":
         slides_dir = _resolve_slides_dir(data_dir, path)
-        return normalize_course(path, slides_dir, operations=operations, dry_run=dry_run)
+        return normalize_course(
+            path,
+            slides_dir,
+            operations=operations,
+            dry_run=dry_run,
+            canonicalize_start_completed=canonicalize_start_completed,
+        )
     elif path.is_dir():
-        return normalize_directory(path, operations=operations, dry_run=dry_run)
+        return normalize_directory(
+            path,
+            operations=operations,
+            dry_run=dry_run,
+            canonicalize_start_completed=canonicalize_start_completed,
+        )
     elif path.is_file():
-        return normalize_file(path, operations=operations, dry_run=dry_run)
+        return normalize_file(
+            path,
+            operations=operations,
+            dry_run=dry_run,
+            canonicalize_start_completed=canonicalize_start_completed,
+        )
     else:
         raise click.ClickException(f"Path is not a file or directory: {path}")
 

@@ -557,6 +557,7 @@ clm normalize-slides [OPTIONS] PATH
 |--------|-------------|
 | `--operations TEXT` | Comma-separated operations: `tag_migration`, `workshop_tags`, `interleaving`, `slide_ids`, `all` (default: `all`) |
 | `--dry-run` | Preview changes without modifying files |
+| `--canonicalize-start-completed` | Force `start`/`completed` cohesion pairs into the canonical DE/EN interleave, even when DE/EN code differs (e.g. localized identifiers). Run before `clm slides split` so `unify(split(deck)) == deck` holds byte-for-byte. Only affects the `interleaving` operation. |
 | `--json` | Output as JSON |
 | `--data-dir DIR` | Course data directory (contains slides/) |
 
@@ -567,6 +568,8 @@ clm normalize-slides slides/module_010/topic_100_intro/slides_intro.py
 clm normalize-slides slides/module_010/ --dry-run
 clm normalize-slides slides/module_010/ --operations tag_migration
 clm normalize-slides slides/module_010/ --operations slide_ids --json
+# Pre-conversion: canonicalize start/completed order so the split round-trips exactly
+clm slides normalize slides/module_010/topic_100_intro/ --operations interleaving --canonicalize-start-completed
 ```
 
 ### `clm slides assign-ids`

@@ -370,6 +370,120 @@ class TestInterleaving:
 
 
 # ---------------------------------------------------------------------------
+# canonicalize_start_completed flag
+# ---------------------------------------------------------------------------
+
+
+# Cohesion layout [DE_start, DE_completed, EN_start, EN_completed] where the
+# DE/EN code differs only by localized identifiers (begruessung vs greeting).
+# This is the layout `clm slides normalize` leaves untouched by default
+# (the similarity gate rejects the pair) but that breaks the byte-identical
+# split→unify round-trip.
+_COHESION_DIFF_NAMES = (
+    '# %% lang="de" tags=["start"]\n'
+    "def begruessung(name, alter):\n"
+    '    return f"Hallo {name}"\n'
+    "\n"
+    '# %% lang="de" tags=["completed"]\n'
+    "def begruessung(name: str, alter: int) -> str:\n"
+    '    return f"Hallo {name}"\n'
+    "\n"
+    '# %% lang="en" tags=["start"]\n'
+    "def greeting(name, age):\n"
+    '    return f"Hello {name}"\n'
+    "\n"
+    '# %% lang="en" tags=["completed"]\n'
+    "def greeting(name: str, age: int) -> str:\n"
+    '    return f"Hello {name}"\n'
+)
+
+
+class TestCanonicalizeStartCompleted:
+    def test_default_leaves_cohesion_layout_with_review(self, tmp_path):
+        """Without the flag, a differing-code start/completed pair is left
+        in cohesion layout and reported as a similarity failure."""
+        path = _write_slide(tmp_path / "slides_test.py", _COHESION_DIFF_NAMES)
+        result = normalize_file(path, operations=["interleaving"])
+
+        assert not any(c.operation == "interleaving" for c in result.changes)
+        assert any(
+            r.issue == "similarity_failure" and "code_structure" in r.details["failed_checks"]
+            for r in result.review_items
+        )
+        # Source order is unchanged (still cohesion layout).
+        assert path.read_text(encoding="utf-8") == _COHESION_DIFF_NAMES
+
+    def test_flag_forces_canonical_interleave(self, tmp_path):
+        """With the flag, the pair is forced into the canonical interleave
+        [DE_start, EN_start, DE_completed, EN_completed] with no review."""
+        path = _write_slide(tmp_path / "slides_test.py", _COHESION_DIFF_NAMES)
+        result = normalize_file(
+            path,
+            operations=["interleaving"],
+            canonicalize_start_completed=True,
+        )
+
+        assert any(c.operation == "interleaving" for c in result.changes)
+        assert result.review_items == []
+
+        lines = path.read_text(encoding="utf-8").split("\n")
+        de_start = next(i for i, ln in enumerate(lines) if "def begruessung(name, alter)" in ln)
+        en_start = next(i for i, ln in enumerate(lines) if "def greeting(name, age)" in ln)
+        de_done = next(i for i, ln in enumerate(lines) if "def begruessung(name: str" in ln)
+        en_done = next(i for i, ln in enumerate(lines) if "def greeting(name: str" in ln)
+        assert de_start < en_start < de_done < en_done
+
+    def test_flag_does_not_affect_non_start_completed_failures(self, tmp_path):
+        """The flag is scoped to start/completed pairs; a genuine markdown
+        similarity failure still produces a review item."""
+        text = (
+            '# %% [markdown] lang="de" tags=["slide"]\n'
+            "# # Folie\n"
+            "\n"
+            '# %% [markdown] lang="en" tags=["subslide"]\n'
+            "# # Slide\n"
+        )
+        path = _write_slide(tmp_path / "slides_test.py", text)
+        result = normalize_file(
+            path,
+            operations=["interleaving"],
+            canonicalize_start_completed=True,
+        )
+
+        assert any(r.issue == "similarity_failure" for r in result.review_items)
+
+    def test_flag_is_idempotent_on_identical_code(self, tmp_path):
+        """A start/completed pair with identical DE/EN code already
+        interleaves; the flag does not disturb the result."""
+        text = (
+            '# %% lang="de" tags=["start"]\n'
+            "names = []\n"
+            "\n"
+            '# %% lang="de" tags=["completed"]\n'
+            "names: list[str] = []\n"
+            "\n"
+            '# %% lang="en" tags=["start"]\n'
+            "names = []\n"
+            "\n"
+            '# %% lang="en" tags=["completed"]\n'
+            "names: list[str] = []\n"
+        )
+        path = _write_slide(tmp_path / "slides_test.py", text)
+        result = normalize_file(
+            path,
+            operations=["interleaving"],
+            canonicalize_start_completed=True,
+        )
+        lines = path.read_text(encoding="utf-8").split("\n")
+        # completed cells carry the annotation; start cells do not
+        starts = [i for i, ln in enumerate(lines) if ln == "names = []"]
+        dones = [i for i, ln in enumerate(lines) if ln == "names: list[str] = []"]
+        # canonical interleave: DE_start, EN_start, DE_completed, EN_completed
+        assert starts[0] < starts[1] < dones[0] < dones[1]
+        assert result.review_items == []
+
+
+# ---------------------------------------------------------------------------
 # Dry run
 # ---------------------------------------------------------------------------
 
