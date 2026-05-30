@@ -71,6 +71,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **Split and bilingual builds now produce byte-equivalent output
+  ([#133](https://github.com/hoelzl/clm/issues/133)).** The notebook
+  processor strips jupytext's `lines_to_next_cell` cell metadata from build
+  output. That field is a layout artifact jupytext records when the physical
+  blank-line count between two cells differs from its PEP 8 lookahead
+  heuristic. Because the heuristic depends on the *identity* of the next
+  physical cell, a `clm slides split` single-language deck and the original
+  bilingual deck recorded the field differently for cells whose neighbouring
+  cell was a same-language markdown cell (split) versus an other-language
+  code clone later filtered out (bilingual). The two forms have the same
+  surviving cells, so the divergent metadata caused spurious failures in the
+  byte-equivalence gate (and an extra trailing newline in the `.py`/`.html`).
+  The field carries no semantic meaning for executed `.ipynb`/HTML output and
+  source files are untouched — only build output is normalized.
 - **`clm db vacuum` / `clm db clean` now actually reclaim disk space on the
   jobs database (issue #144).** The jobs DB runs in WAL mode, where a plain
   `VACUUM` rewrites the database into write-ahead-log pages rather than the
