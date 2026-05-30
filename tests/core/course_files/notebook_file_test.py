@@ -4,7 +4,7 @@ from typing import cast
 import pytest
 
 from clm.core.course_file import CourseFile
-from clm.core.course_files.notebook_file import NotebookFile
+from clm.core.course_files.notebook_file import NotebookFile, _base_cassette_stem
 from clm.core.course_spec import TopicSpec
 from clm.core.operations.process_notebook import ProcessNotebookOperation
 from clm.core.section import Section
@@ -320,6 +320,110 @@ class TestCassetteResolution:
         assert nb.expected_cassette_relative_name == "_cassettes/slides_replay.http-cassette.yaml"
 
 
+class TestReplayCassetteLanguageFallback:
+    """Issue #159: split ``.de``/``.en`` decks fall back to the base cassette
+    on the *replay* path, while the strict properties stay language-specific."""
+
+    @pytest.mark.parametrize(
+        ("stem", "expected"),
+        [
+            ("slides_replay.de", "slides_replay"),
+            ("slides_replay.en", "slides_replay"),
+            ("slides_replay", None),  # no language token
+            ("slides_v1.2", None),  # dotted but not a language token
+            ("slides_replay.fr", None),  # unrecognised language token
+            ("slides_replay.de.de", "slides_replay.de"),  # strip once only
+        ],
+    )
+    def test_base_cassette_stem(self, stem, expected):
+        assert _base_cassette_stem(stem) == expected
+
+    def _make_split_nb_file(self, tmp_path: Path, lang: str) -> NotebookFile:
+        from clm.core.course import Course
+        from clm.core.course_spec import CourseSpec
+
+        spec = CourseSpec(
+            name=Text(de="Test", en="Test"),
+            prog_lang="python",
+            description=Text(de="", en=""),
+            certificate=Text(de="", en=""),
+            sections=[],
+        )
+        course = Course(spec=spec, course_root=tmp_path, output_root=tmp_path)
+        section = Section(name=Text(de="S", en="S"), course=course)
+        topic_spec = TopicSpec(id="t")
+        py_file = tmp_path / f"slides_replay.{lang}.py"
+        py_file.write_text("# %% [markdown]\n# Title\n", encoding="utf-8")
+        topic = Topic.from_spec(topic_spec, section=section, path=tmp_path)
+        return cast(NotebookFile, CourseFile.from_path(course, py_file, topic))
+
+    def test_prefers_language_specific(self, tmp_path):
+        nb = self._make_split_nb_file(tmp_path, "de")
+        (tmp_path / "slides_replay.de.http-cassette.yaml").write_text(
+            "interactions: []\n", encoding="utf-8"
+        )
+        (tmp_path / "slides_replay.http-cassette.yaml").write_text(
+            "interactions: []\n", encoding="utf-8"
+        )
+        assert nb.replay_cassette_path == tmp_path / "slides_replay.de.http-cassette.yaml"
+
+    def test_falls_back_to_base_sibling(self, tmp_path):
+        nb = self._make_split_nb_file(tmp_path, "de")
+        base = tmp_path / "slides_replay.http-cassette.yaml"
+        base.write_text("interactions: []\n", encoding="utf-8")
+        assert nb.cassette_path is None  # strict stays language-specific
+        assert nb.replay_cassette_path == base
+        assert nb.replay_cassette_relative_name == "slides_replay.http-cassette.yaml"
+
+    def test_falls_back_to_base_nested(self, tmp_path):
+        nb = self._make_split_nb_file(tmp_path, "en")
+        (tmp_path / "_cassettes").mkdir()
+        base = tmp_path / "_cassettes" / "slides_replay.http-cassette.yaml"
+        base.write_text("interactions: []\n", encoding="utf-8")
+        assert nb.cassette_path is None
+        assert nb.replay_cassette_path == base
+        assert nb.replay_cassette_relative_name == "_cassettes/slides_replay.http-cassette.yaml"
+
+    def test_none_when_neither(self, tmp_path):
+        nb = self._make_split_nb_file(tmp_path, "de")
+        assert nb.replay_cassette_path is None
+        assert nb.replay_cassette_relative_name is None
+
+    def test_strict_properties_do_not_fall_back(self, tmp_path):
+        """Record/seed/sweep rely on the strict, language-specific names."""
+        nb = self._make_split_nb_file(tmp_path, "de")
+        (tmp_path / "slides_replay.http-cassette.yaml").write_text(
+            "interactions: []\n", encoding="utf-8"
+        )
+        assert nb.cassette_path is None
+        assert nb.cassette_relative_name is None
+        assert nb.expected_cassette_relative_name == "slides_replay.de.http-cassette.yaml"
+
+    def test_no_fallback_for_non_split_deck(self, tmp_path):
+        """A non-split deck has no language token → replay == strict lookup."""
+        from clm.core.course import Course
+        from clm.core.course_spec import CourseSpec
+
+        spec = CourseSpec(
+            name=Text(de="Test", en="Test"),
+            prog_lang="python",
+            description=Text(de="", en=""),
+            certificate=Text(de="", en=""),
+            sections=[],
+        )
+        course = Course(spec=spec, course_root=tmp_path, output_root=tmp_path)
+        section = Section(name=Text(de="S", en="S"), course=course)
+        topic_spec = TopicSpec(id="t")
+        py_file = tmp_path / "slides_replay.py"
+        py_file.write_text("# %% [markdown]\n# Title\n", encoding="utf-8")
+        topic = Topic.from_spec(topic_spec, section=section, path=tmp_path)
+        nb = cast(NotebookFile, CourseFile.from_path(course, py_file, topic))
+        assert nb.replay_cassette_path is None
+        base = tmp_path / "slides_replay.http-cassette.yaml"
+        base.write_text("interactions: []\n", encoding="utf-8")
+        assert nb.replay_cassette_path == base  # == cassette_path, no stripping
+
+
 class TestProcessNotebookOperationHttpReplay:
     """http_replay_mode plumbing through ProcessNotebookOperation."""
 
@@ -494,6 +598,85 @@ class TestProcessNotebookOperationHttpReplay:
         # Canonical cassette is still present under its kernel-cwd-relative key
         # because the explicit assignment in compute_other_files re-adds it.
         assert "slides_replay.http-cassette.yaml" in other
+
+    # --- Issue #159: split-deck language fallback through the operation ---
+
+    def _make_split_operation(
+        self,
+        tmp_path: Path,
+        *,
+        lang: str,
+        mode: str | None,
+        base: bool = False,
+        lang_specific: bool = False,
+    ) -> tuple[ProcessNotebookOperation, NotebookFile]:
+        from clm.core.course import Course
+        from clm.core.course_spec import CourseSpec
+
+        spec = CourseSpec(
+            name=Text(de="Test", en="Test"),
+            prog_lang="python",
+            description=Text(de="", en=""),
+            certificate=Text(de="", en=""),
+            sections=[],
+        )
+        course = Course(spec=spec, course_root=tmp_path, output_root=tmp_path)
+        course.http_replay_mode = mode
+        section = Section(name=Text(de="S", en="S"), course=course)
+        topic_spec = TopicSpec(id="t", http_replay=mode is not None)
+        py_file = tmp_path / f"slides_replay.{lang}.py"
+        py_file.write_text("# %% [markdown]\n# Title\n", encoding="utf-8")
+        topic = Topic.from_spec(topic_spec, section=section, path=tmp_path)
+        if base:
+            (tmp_path / "slides_replay.http-cassette.yaml").write_bytes(b"interactions: []\n")
+        if lang_specific:
+            (tmp_path / f"slides_replay.{lang}.http-cassette.yaml").write_bytes(
+                b"interactions: []\n"
+            )
+        nb = cast(NotebookFile, CourseFile.from_path(course, py_file, topic))
+        nb.http_replay = mode is not None
+        op = ProcessNotebookOperation(
+            input_file=nb,
+            output_file=tmp_path / "out.html",
+            language=lang,
+            format="html",
+            kind="speaker",
+            prog_lang="python",
+            http_replay_mode=mode,
+        )
+        return op, nb
+
+    def test_resolve_replay_falls_back_to_base_for_split(self, tmp_path):
+        op, _ = self._make_split_operation(tmp_path, lang="de", mode="replay", base=True)
+        assert op._resolve_cassette_name() == "slides_replay.http-cassette.yaml"
+
+    def test_resolve_replay_prefers_language_specific_for_split(self, tmp_path):
+        op, _ = self._make_split_operation(
+            tmp_path, lang="de", mode="replay", base=True, lang_specific=True
+        )
+        assert op._resolve_cassette_name() == "slides_replay.de.http-cassette.yaml"
+
+    def test_resolve_record_modes_ignore_base_fallback_for_split(self, tmp_path):
+        # ``once``/``refresh`` must target the language-specific name even
+        # when only the base cassette exists — never the shared base (which a
+        # full re-record would overwrite / seed the other language from).
+        for mode in ("once", "refresh"):
+            op, _ = self._make_split_operation(tmp_path, lang="de", mode=mode, base=True)
+            assert op._resolve_cassette_name() == "slides_replay.de.http-cassette.yaml", (
+                f"mode={mode!r} must keep the language-specific record target"
+            )
+
+    def test_other_files_ships_base_on_replay_for_split(self, tmp_path):
+        op, _ = self._make_split_operation(tmp_path, lang="de", mode="replay", base=True)
+        other = op.compute_other_files()
+        assert "slides_replay.http-cassette.yaml" in other
+        assert "slides_replay.de.http-cassette.yaml" not in other
+
+    def test_other_files_ignores_base_on_record_for_split(self, tmp_path):
+        op, _ = self._make_split_operation(tmp_path, lang="de", mode="once", base=True)
+        other = op.compute_other_files()
+        assert "slides_replay.http-cassette.yaml" not in other
+        assert "slides_replay.de.http-cassette.yaml" not in other
 
 
 class TestExecutionCacheHashCassetteIndependence:
