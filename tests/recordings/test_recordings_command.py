@@ -234,32 +234,133 @@ class TestBuildRecordingsConfig:
 # ---------------------------------------------------------------------------
 
 
+def _install_fake_check_deps(monkeypatch, mapping: dict):
+    """Install a fake check_dependencies_for_backend returning *mapping*."""
+    fake_utils = MagicMock()
+    fake_utils.check_dependencies_for_backend = MagicMock(return_value=mapping)
+    monkeypatch.setitem(sys.modules, "clm.recordings.processing.utils", fake_utils)
+    return fake_utils
+
+
+def _set_backend(monkeypatch, backend: str, api_key: str = ""):
+    """Make ``_build_recordings_config`` return a config with *backend*."""
+    from clm.infrastructure.config import AuphonicConfig, RecordingsConfig
+
+    cfg = RecordingsConfig.model_construct(
+        processing_backend=backend,
+        auphonic=AuphonicConfig(api_key=api_key),
+    )
+    monkeypatch.setattr(recordings_module, "_build_recordings_config", lambda: cfg)
+    # _check_auphonic_backend reads the key via _get_auphonic_config.
+    monkeypatch.setattr(recordings_module, "_get_auphonic_config", lambda: (api_key, ""))
+
+
 class TestCheckCommand:
-    def test_all_dependencies_found(self, monkeypatch: pytest.MonkeyPatch):
-        fake_utils = MagicMock()
-        fake_utils.check_dependencies = MagicMock(
-            return_value={"ffmpeg": "/usr/bin/ffmpeg", "onnxruntime": "1.17"}
+    def test_onnx_all_dependencies_found(self, monkeypatch: pytest.MonkeyPatch):
+        _set_backend(monkeypatch, "onnx")
+        fake = _install_fake_check_deps(
+            monkeypatch,
+            {"ffmpeg": "/usr/bin/ffmpeg", "ffprobe": "/usr/bin/ffprobe", "onnxruntime": "1.17"},
         )
-        monkeypatch.setitem(sys.modules, "clm.recordings.processing.utils", fake_utils)
 
         runner = CliRunner()
         result = runner.invoke(recordings_group, ["check"])
 
         assert result.exit_code == 0, result.output
-        assert "All dependencies found" in result.output
+        assert "All dependencies for the 'onnx' backend" in result.output
+        fake.check_dependencies_for_backend.assert_called_once_with("onnx")
 
-    def test_missing_dependencies_exit_1(self, monkeypatch: pytest.MonkeyPatch):
-        fake_utils = MagicMock()
-        fake_utils.check_dependencies = MagicMock(
-            return_value={"ffmpeg": "/usr/bin/ffmpeg", "onnxruntime": None}
+    def test_onnx_missing_dependencies_exit_1(self, monkeypatch: pytest.MonkeyPatch):
+        _set_backend(monkeypatch, "onnx")
+        _install_fake_check_deps(
+            monkeypatch,
+            {"ffmpeg": "/usr/bin/ffmpeg", "ffprobe": "/usr/bin/ffprobe", "onnxruntime": None},
         )
-        monkeypatch.setitem(sys.modules, "clm.recordings.processing.utils", fake_utils)
 
         runner = CliRunner()
         result = runner.invoke(recordings_group, ["check"])
 
         assert result.exit_code == 1
-        assert "Some dependencies are missing" in result.output
+        assert "are missing" in result.output
+
+    def test_external_skips_onnxruntime(self, monkeypatch: pytest.MonkeyPatch):
+        _set_backend(monkeypatch, "external")
+        fake = _install_fake_check_deps(
+            monkeypatch, {"ffmpeg": "/usr/bin/ffmpeg", "ffprobe": "/usr/bin/ffprobe"}
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(recordings_group, ["check"])
+
+        assert result.exit_code == 0, result.output
+        assert "All dependencies for the 'external' backend" in result.output
+        assert "onnxruntime" not in result.output
+        fake.check_dependencies_for_backend.assert_called_once_with("external")
+
+    def test_auphonic_missing_api_key_exit_1(self, monkeypatch: pytest.MonkeyPatch):
+        _set_backend(monkeypatch, "auphonic", api_key="")
+        _install_fake_check_deps(monkeypatch, {})
+
+        runner = CliRunner()
+        result = runner.invoke(recordings_group, ["check"])
+
+        assert result.exit_code == 1
+        assert "for the 'auphonic' backend are missing" in result.output
+        assert "NOT CONFIGURED" in result.output
+        # Auphonic does not require ffmpeg/onnxruntime.
+        assert "ffmpeg" not in result.output
+
+    def test_auphonic_offline_only_checks_key(self, monkeypatch: pytest.MonkeyPatch):
+        _set_backend(monkeypatch, "auphonic", api_key="secret")
+        _install_fake_check_deps(monkeypatch, {})
+        # If the client were built, this would explode — assert it isn't.
+        monkeypatch.setattr(
+            recordings_module,
+            "_build_auphonic_client",
+            MagicMock(side_effect=AssertionError("must not contact API when --offline")),
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(recordings_group, ["check", "--offline"])
+
+        assert result.exit_code == 0, result.output
+        # The side_effect on _build_auphonic_client guarantees no API call
+        # happened; reaching exit 0 confirms the offline path was taken.
+        assert "All dependencies for the 'auphonic' backend" in result.output
+
+    def test_auphonic_online_reachable(self, monkeypatch: pytest.MonkeyPatch):
+        _set_backend(monkeypatch, "auphonic", api_key="secret")
+        _install_fake_check_deps(monkeypatch, {})
+
+        fake_client = MagicMock()
+        fake_client.list_presets = MagicMock(return_value=[MagicMock(), MagicMock()])
+        monkeypatch.setattr(recordings_module, "_build_auphonic_client", lambda: fake_client)
+
+        runner = CliRunner()
+        result = runner.invoke(recordings_group, ["check"])
+
+        assert result.exit_code == 0, result.output
+        assert "reachable" in result.output
+        assert "2 preset(s)" in result.output
+        fake_client.list_presets.assert_called_once()
+
+    def test_auphonic_online_unreachable_exit_1(self, monkeypatch: pytest.MonkeyPatch):
+        _set_backend(monkeypatch, "auphonic", api_key="bad-key")
+        _install_fake_check_deps(monkeypatch, {})
+
+        from clm.recordings.workflow.backends.auphonic_client import AuphonicHTTPError
+
+        fake_client = MagicMock()
+        fake_client.list_presets = MagicMock(
+            side_effect=AuphonicHTTPError("GET", "https://auphonic.com", 401, "bad key")
+        )
+        monkeypatch.setattr(recordings_module, "_build_auphonic_client", lambda: fake_client)
+
+        runner = CliRunner()
+        result = runner.invoke(recordings_group, ["check"])
+
+        assert result.exit_code == 1
+        assert "UNREACHABLE" in result.output
 
 
 # ---------------------------------------------------------------------------

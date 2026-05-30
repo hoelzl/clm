@@ -1738,11 +1738,32 @@ recording-to-lecture assignment, and status tracking.
 
 #### `clm recordings check`
 
-Check that recording dependencies (ffmpeg, onnxruntime) are installed.
+Check that the dependencies required by the **active processing backend**
+(`recordings.processing_backend`) are available. The set of checks is
+backend-aware:
+
+- `onnx` (default): `ffmpeg`, `ffprobe`, and `onnxruntime` — the local
+  DeepFilterNet3 pipeline.
+- `external`: `ffmpeg` and `ffprobe` only. CLM muxes the externally produced
+  `.wav` (e.g. from iZotope RX 11), so `onnxruntime` is **not** required.
+- `auphonic`: neither `ffmpeg` nor `onnxruntime` is required (the cloud
+  backend is video-in/video-out with no local mux). Instead, `check`
+  verifies that `recordings.auphonic.api_key` is non-empty and performs a
+  read-only API round-trip (`AuphonicClient.list_presets()`) to confirm the
+  credentials and connectivity.
+
+The output table header shows which backend was checked. The command exits
+non-zero if any required dependency is missing or the Auphonic check fails.
 
 ```
-clm recordings check
+clm recordings check [--offline]
 ```
+
+Options:
+
+- `--offline`: For the `auphonic` backend, skip the API connectivity
+  round-trip and only validate that an API key is configured. No effect for
+  the `onnx`/`external` backends.
 
 #### `clm recordings process`
 

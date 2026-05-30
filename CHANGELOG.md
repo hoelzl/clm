@@ -25,6 +25,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **`clm recordings check` is now backend-aware** (issue #33). The command
+  reads `recordings.processing_backend` and only checks the dependencies the
+  active backend actually needs, and the output table header shows which
+  backend was checked:
+  - `onnx` (default): unchanged — `ffmpeg`, `ffprobe`, `onnxruntime`.
+  - `external`: `ffmpeg` + `ffprobe` only; `onnxruntime` is no longer
+    required (the externally produced `.wav` is just muxed via ffmpeg).
+  - `auphonic`: no longer requires `ffmpeg`/`onnxruntime` (cloud
+    video-in/video-out, no local mux). Instead verifies that the API key is
+    non-empty and performs a read-only `AuphonicClient.list_presets()`
+    round-trip to confirm credentials and connectivity. A new `--offline`
+    flag skips the network call and validates config shape only.
+
+  Previously `check` always reported "All dependencies found" based solely
+  on `ffmpeg` + `onnxruntime`, giving a false green for the `auphonic`
+  backend (e.g. with an unset or rejected API key) and a false red for
+  `external` (missing `onnxruntime` it never uses).
+
 ### Fixed
 
 ## [1.6.2] - 2026-05-26

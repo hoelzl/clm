@@ -31,18 +31,38 @@ def recordings_group():
 
 
 @recordings_group.command()
-def check():
-    """Check that recording dependencies (ffmpeg, onnxruntime) are installed."""
-    from clm.recordings.processing.utils import check_dependencies
+@click.option(
+    "--offline",
+    is_flag=True,
+    help=(
+        "Skip the Auphonic API connectivity round-trip; only validate that "
+        "an API key is configured. No effect for the onnx/external backends."
+    ),
+)
+def check(offline: bool):
+    """Check that the active processing backend's dependencies are available.
 
-    deps = check_dependencies()
-    all_ok = True
+    The set of dependencies checked depends on
+    ``recordings.processing_backend``:
 
-    table = Table(title="Recording Dependencies")
-    table.add_column("Tool", style="cyan")
+    \b
+    - onnx     : ffmpeg, ffprobe, onnxruntime (local DeepFilterNet3 pipeline).
+    - external : ffmpeg, ffprobe (CLM muxes the externally-produced .wav).
+    - auphonic : a non-empty API key, plus a read-only API round-trip
+                 (clm recordings auphonic preset list) unless --offline.
+    """
+    from clm.recordings.processing.utils import check_dependencies_for_backend
+
+    backend = _build_recordings_config().processing_backend
+
+    table = Table(title=f"Recording Dependencies ({backend} backend)")
+    table.add_column("Check", style="cyan")
     table.add_column("Status")
     table.add_column("Info")
 
+    all_ok = True
+
+    deps = check_dependencies_for_backend(backend)
     for name, value in deps.items():
         if value:
             table.add_row(name, "[green]found[/green]", str(value))
@@ -50,13 +70,55 @@ def check():
             table.add_row(name, "[red]NOT FOUND[/red]", "")
             all_ok = False
 
+    if backend == "auphonic":
+        ok, status_cell, info = _check_auphonic_backend(offline=offline)
+        table.add_row("auphonic api", status_cell, info)
+        all_ok = all_ok and ok
+
     console.print(table)
 
     if all_ok:
-        console.print("\n[green]All dependencies found.[/green]")
+        console.print(
+            f"\n[green]All dependencies for the '{backend}' backend are available.[/green]"
+        )
     else:
-        console.print("\n[red]Some dependencies are missing. See above for details.[/red]")
+        console.print(
+            f"\n[red]Some dependencies for the '{backend}' backend are missing. "
+            "See above for details.[/red]"
+        )
         raise SystemExit(1)
+
+
+def _check_auphonic_backend(*, offline: bool) -> tuple[bool, str, str]:
+    """Verify Auphonic credentials (and optionally connectivity).
+
+    Returns ``(ok, status_cell, info)`` where ``status_cell`` and ``info``
+    are pre-rendered rich markup strings for the dependencies table.
+    """
+    api_key, _preset = _get_auphonic_config()
+    if not api_key:
+        return (
+            False,
+            "[red]NOT CONFIGURED[/red]",
+            "recordings.auphonic.api_key is empty",
+        )
+
+    if offline:
+        return (True, "[green]key set[/green]", "connectivity not checked (--offline)")
+
+    from clm.recordings.workflow.backends.auphonic_client import AuphonicError
+
+    try:
+        client = _build_auphonic_client()
+        presets = client.list_presets()
+    except AuphonicError as exc:
+        logger.warning("Auphonic connectivity check failed: %s", exc)
+        return (False, "[red]UNREACHABLE[/red]", str(exc))
+    except Exception as exc:  # network errors, missing key, etc.
+        logger.warning("Auphonic connectivity check failed: %s", exc)
+        return (False, "[red]UNREACHABLE[/red]", str(exc))
+
+    return (True, "[green]reachable[/green]", f"key valid, {len(presets)} preset(s)")
 
 
 @recordings_group.command()
