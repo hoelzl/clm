@@ -17,6 +17,7 @@ from clm.core.output_write_registry import (
     WriteOutcome,
     is_image_path,
 )
+from clm.infrastructure.backend import JobsPendingTimeoutError
 from clm.infrastructure.backends.local_ops_backend import LocalOpsBackend
 from clm.infrastructure.database.db_operations import DatabaseManager
 from clm.infrastructure.database.job_queue import JobQueue
@@ -690,9 +691,12 @@ class SqliteBackend(LocalOpsBackend):
             # Check timeout
             elapsed = asyncio.get_event_loop().time() - start_time
             if elapsed > self.max_wait_for_completion_duration:
-                raise TimeoutError(
-                    f"Jobs did not complete within {self.max_wait_for_completion_duration} seconds. "
-                    f"{len(self.active_jobs)} job(s) still pending."
+                self._report_pending_jobs_timeout(elapsed)
+                raise JobsPendingTimeoutError(
+                    f"Jobs did not complete within "
+                    f"{self.max_wait_for_completion_duration} seconds. "
+                    f"{len(self.active_jobs)} job(s) still pending.",
+                    pending_jobs=list(self.active_jobs.values()),
                 )
 
             # Wait before polling again
@@ -719,6 +723,46 @@ class SqliteBackend(LocalOpsBackend):
 
         logger.info("All jobs completed successfully")
         return True
+
+    def _report_pending_jobs_timeout(self, elapsed: float) -> None:
+        """Record one infrastructure error per still-pending job on timeout.
+
+        Without this, a ``wait_for_completion`` timeout raised only a bare
+        ``TimeoutError`` and never reached the build summary, so the build
+        could report "completed successfully" and exit 0 despite stuck jobs
+        (issue #143, sub-bug A). Recording the errors here means the timeout
+        is visible in the summary and drives the non-zero exit policy.
+        """
+        if not self.build_reporter:
+            return
+
+        from clm.cli.build_data_classes import BuildError
+
+        for job_info in self.active_jobs.values():
+            input_file = str(job_info.get("input_file", "unknown"))
+            job_type = job_info.get("job_type", "unknown")
+            self.build_reporter.report_error(
+                BuildError(
+                    error_type="infrastructure",
+                    category="job_timeout",
+                    severity="error",
+                    file_path=input_file,
+                    message=(
+                        f"{job_type} job did not complete within "
+                        f"{self.max_wait_for_completion_duration:.0f}s "
+                        f"(waited {elapsed:.0f}s); the worker appears to be "
+                        f"stuck processing this file."
+                    ),
+                    actionable_guidance=(
+                        "The worker hung on this file rather than failing. "
+                        "Try running the notebook directly (e.g. via "
+                        "'jupyter execute') to confirm it completes outside "
+                        "CLM, then re-run the build. See issue #143."
+                    ),
+                    job_id=job_info.get("job_id"),
+                    correlation_id=job_info.get("correlation_id"),
+                )
+            )
 
     async def shutdown(self):
         """Shutdown the backend and perform build-end cleanup if configured."""

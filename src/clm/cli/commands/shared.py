@@ -6,12 +6,12 @@ This module contains utilities used by multiple CLI command modules.
 import locale
 import logging
 import sys
-from logging.handlers import RotatingFileHandler
 
 from rich.console import Console
 from rich.logging import RichHandler
 
 from clm.infrastructure.logging.log_paths import get_main_log_path as get_log_file_path
+from clm.infrastructure.logging.resilient_handler import ResilientRotatingFileHandler
 
 # Shared console for CLI output - uses stderr to avoid mixing with JSON output
 cli_console = Console(file=sys.stderr)
@@ -47,8 +47,11 @@ def setup_logging(log_level_name: str, console_logging: bool = False):
         handler.close()
         root_logger.removeHandler(handler)
 
-    # File handler with rotation (10 MB max, keep 3 backups)
-    file_handler = RotatingFileHandler(
+    # File handler with rotation (10 MB max, keep 3 backups).
+    # ResilientRotatingFileHandler tolerates the Windows "file in use"
+    # rollover race that otherwise floods the console with WinError 32
+    # tracebacks when worker subprocesses share the log file (issue #143).
+    file_handler = ResilientRotatingFileHandler(
         log_file,
         maxBytes=10 * 1024 * 1024,  # 10 MB
         backupCount=3,

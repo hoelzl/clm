@@ -996,8 +996,15 @@ class TestBuildCliWrapper:
 
         monkeypatch.setattr(build_module, "git_dir_mover", fake_mover)
 
-        # BuildReporter: trivial stub.
-        monkeypatch.setattr(build_module, "BuildReporter", lambda formatter: MagicMock())
+        # BuildReporter: trivial stub. finish_build must return a real
+        # BuildSummary (not a MagicMock) so the entry-point exit policy —
+        # which now reads summary.timed_out (issue #143) — sees concrete
+        # falsey values rather than a truthy mock attribute.
+        _stub_reporter = MagicMock()
+        _stub_reporter.finish_build.return_value = BuildSummary(
+            duration=0.0, total_files=0, errors=[], warnings=[]
+        )
+        monkeypatch.setattr(build_module, "BuildReporter", lambda formatter: _stub_reporter)
 
         # Avoid real execution stages (already mocked on fake_course).
         monkeypatch.setattr(
@@ -1044,6 +1051,7 @@ def _setup_mocked_build_pipeline(
     monkeypatch: pytest.MonkeyPatch,
     *,
     summary_errors: list[BuildError] | None = None,
+    summary_timed_out: bool = False,
 ) -> tuple[Path, MagicMock]:
     """Stub every heavy dep so ``main_build`` runs end-to-end with no
     real workers, kernels, or IO. The fake ``BuildReporter`` returns a
@@ -1145,6 +1153,7 @@ def _setup_mocked_build_pipeline(
         total_files=0,
         errors=list(summary_errors or []),
         warnings=[],
+        timed_out=summary_timed_out,
     )
     fake_reporter = MagicMock()
     fake_reporter.errors = list(summary_errors or [])
@@ -1334,6 +1343,59 @@ class TestBuildExitCodeOnCellErrors:
         assert result.exit_code == 1, (
             "Expected exit 1 when --fail-on-error overrides "
             f"CLM_FAIL_ON_ERROR=0; got {result.exit_code}. "
+            f"exception={result.exception!r}\noutput:\n{result.output}"
+        )
+
+
+class TestBuildExitCodeOnJobTimeout:
+    """Issue #143 (sub-bug A): a worker-job timeout must exit non-zero.
+
+    Distinct from issue #90 (cell errors): a timeout with pending jobs is
+    an infrastructure failure and must fail the build *unconditionally* —
+    independent of the ``--fail-on-error`` policy — because the output tree
+    is incomplete.
+    """
+
+    def test_build_exits_nonzero_when_summary_timed_out(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        spec, _ = _setup_mocked_build_pipeline(tmp_path, monkeypatch, summary_timed_out=True)
+
+        result = _invoke_build(["--http-replay=new-episodes", str(spec)], tmp_path=tmp_path)
+
+        assert result.exit_code == 1, (
+            "Expected exit 1 when the build summary is flagged timed_out; "
+            f"got {result.exit_code}. exception={result.exception!r}\n"
+            f"output:\n{result.output}"
+        )
+
+    def test_timeout_overrides_no_fail_on_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``--no-fail-on-error`` does NOT suppress a job-timeout failure."""
+        spec, _ = _setup_mocked_build_pipeline(tmp_path, monkeypatch, summary_timed_out=True)
+
+        result = _invoke_build(
+            ["--http-replay=new-episodes", "--no-fail-on-error", str(spec)],
+            tmp_path=tmp_path,
+        )
+
+        assert result.exit_code == 1, (
+            "A job timeout must fail the build even with --no-fail-on-error; "
+            f"got {result.exit_code}. exception={result.exception!r}\n"
+            f"output:\n{result.output}"
+        )
+
+    def test_no_timeout_no_errors_still_exits_zero(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Sanity: a clean, non-timed-out build still exits 0."""
+        spec, _ = _setup_mocked_build_pipeline(tmp_path, monkeypatch, summary_timed_out=False)
+
+        result = _invoke_build(["--http-replay=new-episodes", str(spec)], tmp_path=tmp_path)
+
+        assert result.exit_code == 0, (
+            f"Expected exit 0 on a clean build; got {result.exit_code}. "
             f"exception={result.exception!r}\noutput:\n{result.output}"
         )
 

@@ -74,6 +74,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   `## Workshop (Continued)` inside an already-open scope are not flagged.
   Runs in `--quick` mode as well.
 
+- **Per-cell timing instrumentation in the notebook worker (issue #143).**
+  `TrackingExecutePreprocessor` now logs a `cell N/total begin` line before
+  and a `cell N/total done in Xs` line after every cell at DEBUG, plus an
+  INFO `slow cell` line for cells slower than
+  `CLM_SLOW_CELL_LOG_THRESHOLD_SECONDS` (default 60s). When a build later
+  times out, the last `begin` line with no matching `done` line pinpoints
+  the stuck cell. New opt-in `CLM_CELL_TIMEOUT_SECONDS` env var sets
+  nbclient's per-cell `timeout` so a hung cell raises a normal cell error
+  instead of blocking the whole build until the job timeout fires (the
+  build worker previously always ran cells with `timeout=None`, unlike a
+  direct `jupyter execute --timeout=120`).
+
 ### Changed
 
 - **`clm recordings check` is now backend-aware** (issue #33). The command
@@ -110,6 +122,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   byte-equivalence gate (and an extra trailing newline in the `.py`/`.html`).
   The field carries no semantic meaning for executed `.ipynb`/HTML output and
   source files are untouched — only build output is normalized.
+- **`clm build` now exits non-zero when worker jobs time out (issue #143,
+  sub-bug A).** A build where one or more jobs do not complete within
+  `max_wait_for_completion_duration` (default 1,200s) previously could
+  print "Build completed successfully" and exit 0 even though jobs were
+  still pending and the output tree was incomplete. `wait_for_completion`
+  now records one infrastructure error per stuck job in the build summary,
+  flags the summary as timed-out, and the build exits 1 unconditionally —
+  independent of `--fail-on-error`, because a timeout means the output is
+  incomplete.
+- **Resilient log rotation on Windows (issue #143, sub-bug B).** The main
+  build log now uses `ResilientRotatingFileHandler`, which tolerates the
+  Windows "file in use by another process" (`WinError 32`) error that the
+  stock `RotatingFileHandler.doRollover()` raised when worker subprocesses
+  shared the log file. A locked rollover is now skipped (and logged once at
+  DEBUG) instead of flooding the console with a traceback per log record.
 - **`clm db vacuum` / `clm db clean` now actually reclaim disk space on the
   jobs database (issue #144).** The jobs DB runs in WAL mode, where a plain
   `VACUUM` rewrites the database into write-ahead-log pages rather than the

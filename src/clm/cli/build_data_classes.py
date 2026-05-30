@@ -145,6 +145,12 @@ class BuildSummary:
     output_dedup_count: int = 0
     output_conflicts: list[OutputConflictInfo] = field(default_factory=list)
     output_large_file_collision_count: int = 0
+    timed_out: bool = False
+    """True when the build aborted because one or more worker jobs did not
+    complete within ``max_wait_for_completion_duration`` (issue #143). A
+    timed-out build must always exit non-zero, independent of the
+    ``--fail-on-error`` policy, because pending jobs mean the output tree is
+    incomplete."""
 
     @property
     def successful_files(self) -> int:

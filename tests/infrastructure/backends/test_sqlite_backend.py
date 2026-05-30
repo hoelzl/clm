@@ -340,11 +340,56 @@ async def test_wait_for_completion_timeout(temp_db, temp_workspace):
         payload = MockPayload()
         await backend.execute_operation(operation, payload)
 
-        # Should timeout
-        with pytest.raises(TimeoutError, match="did not complete within"):
+        # Should timeout. The typed JobsPendingTimeoutError subclasses
+        # TimeoutError, so this assertion keeps matching while the build
+        # orchestration can detect the typed variant (issue #143).
+        from clm.infrastructure.backend import JobsPendingTimeoutError
+
+        with pytest.raises(JobsPendingTimeoutError, match="did not complete within") as excinfo:
             await backend.wait_for_completion()
+        # Pending jobs are attached so the orchestration can record one
+        # infrastructure error per stuck job.
+        assert len(excinfo.value.pending_jobs) == 1
     finally:
         backend.active_jobs.clear()  # Avoid 5s shutdown timeout waiting for unprocessed jobs
+        await backend.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_wait_for_completion_timeout_reports_build_errors(temp_db, temp_workspace):
+    """Issue #143 (sub-bug A): a pending-job timeout records one
+    infrastructure BuildError per stuck job on the build reporter, so the
+    timeout reaches the build summary instead of silently exiting 0."""
+    from unittest.mock import MagicMock
+
+    from clm.infrastructure.backend import JobsPendingTimeoutError
+
+    reporter = MagicMock()
+    backend = SqliteBackend(
+        db_path=temp_db,
+        workspace_path=temp_workspace,
+        max_wait_for_completion_duration=0.5,
+        skip_worker_check=True,
+        build_reporter=reporter,
+        enable_progress_tracking=False,
+    )
+
+    try:
+        operation = MockOperation(service_name_value="notebook-processor")
+        payload = MockPayload()
+        await backend.execute_operation(operation, payload)
+
+        with pytest.raises(JobsPendingTimeoutError):
+            await backend.wait_for_completion()
+
+        # Exactly one error reported, with the job-timeout signature.
+        assert reporter.report_error.call_count == 1
+        reported = reporter.report_error.call_args[0][0]
+        assert reported.category == "job_timeout"
+        assert reported.error_type == "infrastructure"
+        assert reported.severity == "error"
+    finally:
+        backend.active_jobs.clear()
         await backend.shutdown()
 
 
