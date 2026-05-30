@@ -184,6 +184,44 @@ class ProcessNotebookOperation(Operation):
         # Calculate relative path from output file to course's img/ folder
         return relative_path_to_course_img(self.output_file, course_dir)
 
+    def compute_cross_references(self, data: str) -> dict[str, str]:
+        """Resolve every ``clm:`` cross-reference in *data* for this artifact.
+
+        Returns a mapping consumed by ``rewrite_cross_references`` in the
+        worker: raw reference -> resolved relative href (empty string means
+        "drop the link, keep the text"; an omitted reference is left
+        verbatim). Resolution happens here, at payload-construction time,
+        because the full ``Course`` (all sections, assigned numbers, renamed
+        filenames) is in scope — the worker processes one notebook in
+        isolation and must not need other notebooks' output names.
+
+        Build-time *reporting* of missing/ambiguous targets is handled
+        separately by ``validate_cross_references`` (host-side, feeds the
+        build summary); here we only produce the rewrite map, applying the
+        same fail-on-missing policy so a failing build leaves dangling links
+        verbatim rather than silently dropping them.
+        """
+        from clm.core.cross_references import (
+            extract_cross_references,
+            has_cross_references,
+        )
+
+        if not has_cross_references(data):
+            return {}
+
+        course = self.input_file.course
+        resolver = course.cross_reference_resolver
+        references = extract_cross_references(data)
+        hrefs, _issues = resolver.build_href_map(
+            references,
+            from_notebook=self.input_file,
+            language=self.language,
+            kind=self.kind,
+            format=self.format,
+            fail_on_missing=course.fail_on_missing_xref,
+        )
+        return hrefs
+
     def compute_source_topic_dir(self) -> str:
         """Compute the absolute path to the topic directory.
 
@@ -268,6 +306,7 @@ class ProcessNotebookOperation(Operation):
             inline_images=course.inline_images,
             author=author,
             organization=organization,
+            cross_references=self.compute_cross_references(data),
         )
         await note_correlation_id_dependency(correlation_id, payload)
         return payload

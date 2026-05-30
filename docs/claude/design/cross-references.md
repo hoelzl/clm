@@ -1,9 +1,54 @@
 # Cross-References Between Notebooks (Issue #17)
 
-**Status**: Design proposal — awaiting maintainer decisions
+**Status**: Implemented (v1) — decisions locked, shipping
 **Issue**: [hoelzl/clm#17](https://github.com/hoelzl/clm/issues/17)
-**Target version**: TBD (1.7.x candidate)
+**Target version**: 1.7.x
 **Author**: Claude (design-first investigation)
+
+## Implementation summary (locked decisions)
+
+The maintainer locked the open decisions and the feature is implemented:
+
+* **Syntax (Decision 1 = A):** `[text](clm:topic-id)`.
+* **Identifier (Decision 2 = A, v1):** the path-derived topic id, with an
+  optional `/notebook-stem` disambiguator. An `#anchor` is parsed but
+  **stripped** (anchors are out of scope for v1). Multi-notebook directory
+  topics resolve deterministically (lowest `number_in_section`, then name)
+  and emit a build-time **warning** (`cross_reference_ambiguous`); they do
+  **not** hard-fail.
+* **Missing target (Decision 4 = C):** configurable. Default = error under
+  `--http-replay=replay` (CI-strict), warn-and-drop otherwise. Controlled by
+  `--fail-on-missing-xref / --no-fail-on-missing-xref` and
+  `CLM_FAIL_ON_MISSING_XREF`, mirroring issue #90's `--fail-on-error`.
+* **Per-format (Decisions 4/5):** `html`/`notebook` get working relative
+  links; `code` **drops** the link (renders link text only); `jupyterlite`
+  is **deferred** (link text left verbatim).
+
+Code map:
+
+* `src/clm/core/cross_references.py` — `extract_cross_references`,
+  `split_reference`, `rewrite_cross_references`, `CrossReferenceResolver`
+  (filesystem-free per-`(language, kind, format)` href computation),
+  `validate_cross_references` (host-side build validation).
+* `src/clm/core/operations/process_notebook.py` —
+  `ProcessNotebookOperation.compute_cross_references()` resolves the href map
+  at payload-construction time; carried in `NotebookPayload.cross_references`.
+* `src/clm/workers/notebook/notebook_processor.py` —
+  `_process_markdown_cell_contents` does the mechanical rewrite only.
+* `src/clm/cli/commands/build.py` — `--fail-on-missing-xref` flag,
+  `_resolve_fail_on_missing_xref`, `_report_cross_reference_issues`.
+* `src/clm/slides/spec_validator.py` — `cross_reference_target_missing` /
+  `cross_reference_ambiguous` `SpecFinding`s for `clm validate-spec`.
+
+### v1 limitations (documented)
+
+* No `#anchor` / sub-section targets (Decision 3 = A).
+* Multi-notebook directory topics resolve to a deterministic deck with a
+  warning rather than a hard error; use a `/notebook-stem` disambiguator
+  (`clm:topic_id/slides_<stem>`) for precision.
+* `jupyterlite` link targets are deferred until the JupyterLite site builder
+  ships; link text is left verbatim.
+* Cross-*course* references are out of scope.
 
 ## Problem statement
 

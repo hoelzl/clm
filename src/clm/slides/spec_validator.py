@@ -265,6 +265,15 @@ def validate_spec(
         suffix=_suffix,
     )
 
+    # Cross-reference checks (Issue #17): scan included slide files for
+    # ``clm:`` references and verify each target topic is included.
+    _validate_cross_references(
+        spec=spec,
+        topic_map=topic_map,
+        findings=findings,
+        suffix=_suffix,
+    )
+
     return SpecValidationResult(
         course_spec=str(course_spec_path),
         topics_total=topics_total,
@@ -434,6 +443,128 @@ def _validate_includes(
                                     ),
                                 )
                             )
+
+
+def _validate_cross_references(
+    *,
+    spec: CourseSpec,
+    topic_map: dict[str, list[TopicMatch]],
+    findings: list[SpecFinding],
+    suffix: Callable[[bool, str], str],
+) -> None:
+    """Emit findings for ``clm:`` cross-references in included slide files.
+
+    Scans every slide file of every resolved topic in *spec* for the
+    ``clm:`` link scheme and checks that each referenced topic id is itself
+    included in the spec. Two categories are produced:
+
+    * ``cross_reference_target_missing`` — error when a referenced topic id
+      is not part of the course (not in any included section). Because the
+      scan runs over ``spec.sections`` (which already reflect any
+      ``--section`` selection / disabled-section filtering applied at parse
+      time), a target that exists on disk but is not included is correctly
+      reported.
+    * ``cross_reference_ambiguous`` — warning when a topic-granular
+      reference resolves to a directory topic containing several slide
+      notebooks and no ``/notebook-stem`` disambiguator was given.
+
+    The build path performs the same check with full course context
+    (``clm.core.cross_references.validate_cross_references``); this mirror
+    lets authors catch dangling links via ``clm validate-spec`` without a
+    full build.
+    """
+    from clm.core.cross_references import (
+        extract_cross_references,
+        has_cross_references,
+        split_reference,
+    )
+    from clm.core.topic_resolver import find_slide_files, matches_for_binding
+
+    # The set of topic ids that are actually included by the spec.
+    included_topic_ids: set[str] = set()
+    for section in spec.sections:
+        for topic_spec in section.topics:
+            included_topic_ids.add(topic_spec.id)
+
+    seen: set[tuple[str, str]] = set()
+
+    for section in spec.sections:
+        section_name = section.name.en or section.name.de
+        section_disabled = not section.enabled
+        for topic_spec in section.topics:
+            effective_module = section.module_for(topic_spec)
+            matches = matches_for_binding(topic_map, topic_spec.id, effective_module)
+            if len(matches) != 1:
+                # Unresolved / ambiguous topics are already flagged; do not
+                # double-report by scanning a path we cannot pin down.
+                continue
+            for slide_file in find_slide_files(matches[0].path):
+                try:
+                    text = slide_file.read_text(encoding="utf-8")
+                except OSError:
+                    continue
+                if not has_cross_references(text):
+                    continue
+                for reference in extract_cross_references(text):
+                    target_id, notebook_stem = split_reference(reference)
+                    key = (str(slide_file), reference)
+                    if target_id not in included_topic_ids:
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        findings.append(
+                            SpecFinding(
+                                severity="error",
+                                type="cross_reference_target_missing",
+                                topic_id=topic_spec.id,
+                                section=section_name,
+                                message=suffix(
+                                    section_disabled,
+                                    f"Topic '{topic_spec.id}' "
+                                    f"({slide_file.name}) links to "
+                                    f"'{reference}', which is not included in "
+                                    f"the course.",
+                                ),
+                                suggestion=(
+                                    "Add the target topic to the spec, fix the "
+                                    "'clm:' reference, or remove the link."
+                                ),
+                            )
+                        )
+                        continue
+                    # Ambiguity: directory topic with several slide notebooks
+                    # and no disambiguator.
+                    if notebook_stem is None:
+                        target_matches = matches_for_binding(topic_map, target_id, None)
+                        if len(target_matches) == 1:
+                            slide_count = len(find_slide_files(target_matches[0].path))
+                            if slide_count > 1:
+                                if key in seen:
+                                    continue
+                                seen.add(key)
+                                findings.append(
+                                    SpecFinding(
+                                        severity="warning",
+                                        type="cross_reference_ambiguous",
+                                        topic_id=topic_spec.id,
+                                        section=section_name,
+                                        message=suffix(
+                                            section_disabled,
+                                            f"Topic '{topic_spec.id}' "
+                                            f"({slide_file.name}) links to "
+                                            f"'{reference}', a topic with "
+                                            f"{slide_count} slide notebooks; the "
+                                            f"build resolves this "
+                                            f"deterministically to the first.",
+                                        ),
+                                        suggestion=(
+                                            "Add a '/notebook-stem' "
+                                            "disambiguator (e.g. "
+                                            f"'clm:{target_id}/slides_<stem>') "
+                                            "to select a specific deck."
+                                        ),
+                                    )
+                                )
 
 
 def _emit_section_inheritance(

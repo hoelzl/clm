@@ -62,6 +62,17 @@ class NotebookPayload(Payload):
     author: str = "Dr. Matthias Hölzl"
     # Organization name (already resolved for target language)
     organization: str = ""
+    # Cross-references (Issue #17): maps a raw ``clm:`` reference string
+    # (the part after ``clm:``, exactly as authored) to its already-resolved
+    # relative href for THIS (language, kind, format) artifact. An empty
+    # string value means "drop the link, keep the text" (the ``code`` format
+    # rule and the warn-and-drop missing-target policy). A reference absent
+    # from this map is left verbatim. Empty when the notebook has no
+    # cross-references. Computed in ProcessNotebookOperation.payload() where
+    # the full Course is in scope; the worker only does a mechanical string
+    # rewrite via ``rewrite_cross_references`` and needs no knowledge of
+    # other notebooks' output names.
+    cross_references: dict[str, str] = {}
 
     # The backend relies on having a data property
     @property

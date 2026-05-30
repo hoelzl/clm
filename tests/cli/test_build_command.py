@@ -29,6 +29,7 @@ from clm.cli.commands.build import (
     _report_duplicate_file_warnings,
     _report_image_collisions,
     _report_loading_issues,
+    _resolve_fail_on_missing_xref,
     _resolve_http_replay_mode,
     configure_workers,
     create_output_formatter,
@@ -1335,6 +1336,31 @@ class TestBuildExitCodeOnCellErrors:
             f"CLM_FAIL_ON_ERROR=0; got {result.exit_code}. "
             f"exception={result.exception!r}\noutput:\n{result.output}"
         )
+
+
+class TestResolveFailOnMissingXref:
+    """Precedence for the --fail-on-missing-xref / CLM_FAIL_ON_MISSING_XREF policy (Issue #17)."""
+
+    def test_cli_flag_wins(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("CLM_FAIL_ON_MISSING_XREF", "0")
+        assert _resolve_fail_on_missing_xref(True, "new-episodes") is True
+        assert _resolve_fail_on_missing_xref(False, "replay") is False
+
+    def test_env_var_wins_over_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("CLM_FAIL_ON_MISSING_XREF", "1")
+        assert _resolve_fail_on_missing_xref(None, "new-episodes") is True
+        monkeypatch.setenv("CLM_FAIL_ON_MISSING_XREF", "no")
+        assert _resolve_fail_on_missing_xref(None, "replay") is False
+
+    def test_replay_mode_default_on(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("CLM_FAIL_ON_MISSING_XREF", raising=False)
+        assert _resolve_fail_on_missing_xref(None, "replay") is True
+        assert _resolve_fail_on_missing_xref(None, "new-episodes") is False
+
+    def test_invalid_env_value_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("CLM_FAIL_ON_MISSING_XREF", "maybe")
+        with pytest.raises(click.UsageError):
+            _resolve_fail_on_missing_xref(None, "replay")
 
 
 # ---------------------------------------------------------------------------

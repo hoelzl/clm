@@ -102,6 +102,34 @@ def _resolve_fail_on_error(cli_value: bool | None, resolved_http_replay_mode: st
     return resolved_http_replay_mode == "replay"
 
 
+def _resolve_fail_on_missing_xref(cli_value: bool | None, resolved_http_replay_mode: str) -> bool:
+    """Resolve whether an unresolved ``clm:`` cross-reference target fails the
+    build (issue #17).
+
+    Precedence mirrors ``_resolve_fail_on_error`` exactly: explicit CLI flag >
+    ``CLM_FAIL_ON_MISSING_XREF`` env var > replay-mode default. The default is
+    **on** under ``--http-replay=replay`` (the CI-strict mode) and **off**
+    otherwise, so a developer building a single section locally legitimately
+    excludes link targets without the build erroring (the link is dropped with
+    a warning instead).
+    """
+    import os
+
+    if cli_value is not None:
+        return cli_value
+    env_value = os.environ.get("CLM_FAIL_ON_MISSING_XREF")
+    if env_value is not None:
+        normalized = env_value.strip().lower()
+        if normalized in ("1", "true", "yes"):
+            return True
+        if normalized in ("0", "false", "no"):
+            return False
+        raise click.UsageError(
+            f"Invalid CLM_FAIL_ON_MISSING_XREF={env_value!r}. Valid values: 1/true/yes/0/false/no."
+        )
+    return resolved_http_replay_mode == "replay"
+
+
 def _find_env_file(start_dir: Path) -> Path | None:
     """Walk up from start_dir looking for a .env file.
 
@@ -212,6 +240,13 @@ class BuildConfig:
     # to decide which section directories to clean up and by the watch-mode
     # event handler to filter events.
     resolved_section_selection: SectionSelection | None = None
+
+    # Cross-reference policy (Issue #17). When True, an unresolved ``clm:``
+    # cross-reference target fails the build; when False it is a warning and
+    # the link is dropped. Resolved from ``--fail-on-missing-xref`` /
+    # ``CLM_FAIL_ON_MISSING_XREF`` / the replay-mode default, mirroring
+    # ``fail_on_error`` (issue #90).
+    fail_on_missing_xref: bool = False
 
 
 def create_output_formatter(config: BuildConfig) -> OutputFormatter:
@@ -471,6 +506,9 @@ def initialize_paths_and_course(config: BuildConfig) -> tuple[Course, list[Path]
         section_selection=section_selection,
         http_replay_mode=config.http_replay_mode,
     )
+    # Cross-reference policy (Issue #17): propagate the resolved fail-on-missing
+    # decision so payload-time rewrite and build-time validation agree.
+    course.fail_on_missing_xref = config.fail_on_missing_xref
 
     # Calculate root directories for cleanup
     root_dirs = []
@@ -732,6 +770,46 @@ def _report_loading_issues(course: Course, build_reporter: BuildReporter) -> Non
         )
 
 
+def _report_cross_reference_issues(course: Course, build_reporter: BuildReporter) -> None:
+    """Validate notebook cross-references and report findings (Issue #17).
+
+    Missing targets are errors when ``course.fail_on_missing_xref`` is set
+    (CI-strict), otherwise warnings (the link is dropped at rewrite time).
+    Ambiguous multi-notebook targets are always warnings. Honors the active
+    ``--section`` selection because the resolver is built from the already
+    filtered ``course.sections``.
+    """
+    from clm.cli.build_data_classes import BuildError, BuildWarning
+    from clm.core.cross_references import validate_cross_references
+
+    findings = validate_cross_references(course, fail_on_missing=course.fail_on_missing_xref)
+    for finding in findings:
+        if finding.severity == "error":
+            build_reporter.report_error(
+                BuildError(
+                    error_type="user",
+                    category=finding.type,
+                    severity="error",
+                    message=finding.message,
+                    file_path=finding.source_file,
+                    actionable_guidance=(
+                        "Add the referenced topic to the course spec (or the "
+                        "selected sections), fix the topic id, or pass "
+                        "--no-fail-on-missing-xref to downgrade this to a warning."
+                    ),
+                )
+            )
+        else:
+            build_reporter.report_warning(
+                BuildWarning(
+                    category=finding.type,
+                    message=finding.message,
+                    severity="high",
+                    file_path=finding.source_file,
+                )
+            )
+
+
 def _compute_section_dirs_for_cleanup(course: Course) -> list[Path]:
     """Return the full set of per-section output directories for the
     current (already filtered) ``course.sections``.
@@ -867,6 +945,7 @@ async def process_course_with_backend(
     async def _run_stages() -> BuildSummary | None:
         _report_duplicate_file_warnings(course, build_reporter)
         _report_loading_issues(course, build_reporter)
+        _report_cross_reference_issues(course, build_reporter)
 
         if _report_image_collisions(course, build_reporter):
             build_reporter.finish_build()
@@ -1158,6 +1237,7 @@ async def main_build(
     image_mode,
     image_format,
     inline_images,
+    fail_on_missing_xref=False,
 ) -> BuildSummary | None:
     """Main orchestration function for course building.
 
@@ -1262,6 +1342,7 @@ async def main_build(
         clean=clean,
         sweep=effective_sweep,
         selected_sections=selected_sections,
+        fail_on_missing_xref=fail_on_missing_xref,
     )
 
     # Create output formatter early to show startup messages
@@ -1596,6 +1677,18 @@ async def main_build(
     ),
 )
 @click.option(
+    "--fail-on-missing-xref/--no-fail-on-missing-xref",
+    default=None,
+    help=(
+        "Exit with non-zero status if a 'clm:' cross-reference points at a "
+        "topic not included in the build (issue #17). Defaults to on under "
+        "--http-replay=replay (the CI-strict default) and off under all other "
+        "replay modes — locally, a missing target is a warning and the link is "
+        "dropped (text kept). Override via "
+        "CLM_FAIL_ON_MISSING_XREF={1,true,yes,0,false,no}."
+    ),
+)
+@click.option(
     "--image-mode",
     type=click.Choice(["duplicated", "shared"], case_sensitive=False),
     default="duplicated",
@@ -1661,6 +1754,7 @@ def build(
     force_execute,
     http_replay,
     fail_on_error,
+    fail_on_missing_xref,
     image_mode,
     image_format,
     inline_images,
@@ -1759,6 +1853,9 @@ def build(
     # the precedence logic. ``main_build`` re-resolves harmlessly (the
     # resolver returns its CLI argument unchanged when not ``None``).
     resolved_http_replay_mode = _resolve_http_replay_mode(http_replay)
+    resolved_fail_on_missing_xref = _resolve_fail_on_missing_xref(
+        fail_on_missing_xref, resolved_http_replay_mode
+    )
 
     summary = asyncio.run(
         main_build(
@@ -1797,6 +1894,7 @@ def build(
             image_mode,
             image_format,
             inline_images,
+            resolved_fail_on_missing_xref,
         )
     )
 
