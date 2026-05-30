@@ -8,6 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **`clm slides normalize --canonicalize-start-completed`.** New opt-in
+  flag for the interleaving operation. By default the normalizer leaves a
+  `start`/`completed` cohesion pair (`[DE_start, DE_completed, EN_start,
+  EN_completed]`) untouched when the DE and EN code differ — the
+  content-similarity gate can't confirm the pairing, so it reports a
+  `similarity_failure` review item. This is the layout that breaks the
+  byte-identical `unify(split(deck)) == deck` round-trip, because
+  `clm slides unify` always emits the canonical interleave
+  (`[DE_start, EN_start, DE_completed, EN_completed]`). With the flag,
+  such pairs are paired *structurally* (by `start`/`completed` tag and
+  position rather than content) and forced into the canonical interleave,
+  so a deck can be normalized before a split and round-trip exactly.
+  Default-off preserves the cohesion layout for decks that are not being
+  converted. Available on the CLI and the `normalize_slides` MCP tool.
+
 ### Changed
 
 ### Fixed

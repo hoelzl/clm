@@ -209,10 +209,41 @@ def _classify_cell(cell: _RawCell) -> str:
     return "markdown"
 
 
+def _is_start_completed_pair(de_cell: _RawCell, en_cell: _RawCell) -> bool:
+    """True if a DE/EN code pair is a ``start``/``completed`` cohesion unit.
+
+    A same-language ``start`` cell (or its paired ``completed`` cell)
+    represents the *same* logical cell shown in two output variants. Its
+    DE/EN counterpart is identified by the matching ``start``/``completed``
+    tag and document position — not by content similarity, which routinely
+    differs for localized identifiers (e.g. ``begruessung`` vs ``greeting``).
+    """
+    de_tags = set(de_cell.metadata.tags)
+    en_tags = set(en_cell.metadata.tags)
+    return ("start" in de_tags and "start" in en_tags) or (
+        "completed" in de_tags and "completed" in en_tags
+    )
+
+
 def _apply_interleaving(
-    cells: list[_RawCell], file_path: str
+    cells: list[_RawCell],
+    file_path: str,
+    *,
+    canonicalize_start_completed: bool = False,
 ) -> tuple[list[_RawCell], list[Change], list[ReviewItem]]:
     """Reorder cells for proper DE/EN interleaving.
+
+    Args:
+        cells: The cells to reorder in place (returns a new list).
+        file_path: Source path, used for change/review reporting.
+        canonicalize_start_completed: When ``True``, ``start``/``completed``
+            code pairs are paired *structurally* (by tag + position) and
+            forced into the canonical interleave
+            ``[DE_start, EN_start, DE_completed, EN_completed]``, bypassing
+            the content-similarity gate that otherwise leaves them in the
+            permitted cohesion layout ``[DE_start, DE_completed, EN_start,
+            EN_completed]``. Used to pre-normalize decks before a split, so
+            the round-trip ``unify(split(deck)) == deck`` holds byte-for-byte.
 
     Returns ``(reordered_cells, changes, review_items)``.
     """
@@ -277,6 +308,16 @@ def _apply_interleaving(
         # Tier 2: positional pairing with similarity verification
         for pair_idx, (de_i, en_i) in enumerate(zip(de_indices, en_indices, strict=True)):
             failed = _check_similarity(cells[de_i], cells[en_i])
+            if (
+                failed
+                and canonicalize_start_completed
+                and _is_start_completed_pair(cells[de_i], cells[en_i])
+            ):
+                # Structural start/completed pairing is authoritative for
+                # these cells; ignore content-similarity failures (e.g.
+                # localized function names) and force the canonical
+                # interleave.
+                failed = []
             if failed:
                 review_items.append(
                     ReviewItem(
@@ -534,6 +575,7 @@ def normalize_file(
     operations: list[str] | None = None,
     dry_run: bool = False,
     assign_options: AssignOptions | None = None,
+    canonicalize_start_completed: bool = False,
 ) -> NormalizationResult:
     """Normalize a single slide file.
 
@@ -546,6 +588,10 @@ def normalize_file(
             ``--accept-content-derived``, LLM suggester, …). ``None``
             uses defaults — refuse headingless slides, never overwrite
             existing ids, no LLM.
+        canonicalize_start_completed: Forwarded to the interleaving pass;
+            forces ``start``/``completed`` cohesion pairs into the canonical
+            interleave so a subsequent ``split``/``unify`` round-trips
+            byte-for-byte. No effect unless ``interleaving`` runs.
 
     Returns:
         A :class:`NormalizationResult` with changes and review items.
@@ -569,7 +615,11 @@ def normalize_file(
         all_changes.extend(_apply_workshop_tags(cells, file_str))
 
     if "interleaving" in op_set:
-        cells, interleave_changes, interleave_reviews = _apply_interleaving(cells, file_str)
+        cells, interleave_changes, interleave_reviews = _apply_interleaving(
+            cells,
+            file_str,
+            canonicalize_start_completed=canonicalize_start_completed,
+        )
         all_changes.extend(interleave_changes)
         all_review.extend(interleave_reviews)
 
@@ -598,6 +648,7 @@ def normalize_directory(
     operations: list[str] | None = None,
     dry_run: bool = False,
     assign_options: AssignOptions | None = None,
+    canonicalize_start_completed: bool = False,
 ) -> NormalizationResult:
     """Normalize all slide files in a directory (recursive)."""
     slide_files = find_slide_files_recursive(path)
@@ -609,6 +660,7 @@ def normalize_directory(
             operations=operations,
             dry_run=dry_run,
             assign_options=assign_options,
+            canonicalize_start_completed=canonicalize_start_completed,
         )
         combined.files_modified += result.files_modified
         combined.changes.extend(result.changes)
@@ -624,6 +676,7 @@ def normalize_course(
     operations: list[str] | None = None,
     dry_run: bool = False,
     assign_options: AssignOptions | None = None,
+    canonicalize_start_completed: bool = False,
 ) -> NormalizationResult:
     """Normalize all slides referenced by a course spec."""
     from clm.core.course_spec import CourseSpec
@@ -642,6 +695,7 @@ def normalize_course(
                     operations=operations,
                     dry_run=dry_run,
                     assign_options=assign_options,
+                    canonicalize_start_completed=canonicalize_start_completed,
                 )
                 combined.files_modified += result.files_modified
                 combined.changes.extend(result.changes)

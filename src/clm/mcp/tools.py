@@ -438,6 +438,7 @@ async def handle_normalize_slides(
     *,
     operations: list[str] | None = None,
     dry_run: bool = False,
+    canonicalize_start_completed: bool = False,
 ) -> str:
     """Normalize slide files by applying mechanical fixes.
 
@@ -447,6 +448,9 @@ async def handle_normalize_slides(
         data_dir: Root data directory (contains ``slides/``).
         operations: Which operations to apply.  Default: all.
         dry_run: If ``True``, preview changes without modifying files.
+        canonicalize_start_completed: Force start/completed cohesion pairs
+            into the canonical DE/EN interleave so a subsequent split/unify
+            round-trips byte-for-byte. Only affects the interleaving op.
 
     Returns:
         JSON string with normalization results.
@@ -457,11 +461,27 @@ async def handle_normalize_slides(
 
     if target.is_file() and target.suffix == ".xml":
         slides_dir = data_dir / "slides"
-        result = _normalize_course(target, slides_dir, operations=operations, dry_run=dry_run)
+        result = _normalize_course(
+            target,
+            slides_dir,
+            operations=operations,
+            dry_run=dry_run,
+            canonicalize_start_completed=canonicalize_start_completed,
+        )
     elif target.is_dir():
-        result = _normalize_directory(target, operations=operations, dry_run=dry_run)
+        result = _normalize_directory(
+            target,
+            operations=operations,
+            dry_run=dry_run,
+            canonicalize_start_completed=canonicalize_start_completed,
+        )
     else:
-        result = _normalize_file(target, operations=operations, dry_run=dry_run)
+        result = _normalize_file(
+            target,
+            operations=operations,
+            dry_run=dry_run,
+            canonicalize_start_completed=canonicalize_start_completed,
+        )
 
     return json.dumps(_normalization_result_to_dict(result), indent=2)
 

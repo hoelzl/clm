@@ -166,6 +166,7 @@ def create_server(data_dir: Path) -> FastMCP:
         path: str,
         operations: list[str] | None = None,
         dry_run: bool = False,
+        canonicalize_start_completed: bool = False,
     ) -> str:
         """Normalize slide files by applying mechanical fixes.
 
@@ -179,8 +180,18 @@ def create_server(data_dir: Path) -> FastMCP:
             operations: Which operations to apply: tag_migration,
                 workshop_tags, interleaving, all.  Default: all.
             dry_run: If True, preview changes without modifying files.
+            canonicalize_start_completed: Force start/completed cohesion
+                pairs into the canonical DE/EN interleave (even when DE/EN
+                code differs) so a subsequent split/unify round-trips
+                byte-for-byte. Only affects the interleaving operation.
         """
-        return await handle_normalize_slides(path, data_dir, operations=operations, dry_run=dry_run)
+        return await handle_normalize_slides(
+            path,
+            data_dir,
+            operations=operations,
+            dry_run=dry_run,
+            canonicalize_start_completed=canonicalize_start_completed,
+        )
 
     @mcp.tool()
     async def get_language_view(
