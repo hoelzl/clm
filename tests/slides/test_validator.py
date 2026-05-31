@@ -630,6 +630,174 @@ class TestCheckPairing:
         assert result.findings == []
 
 
+class TestSplitFilePairing:
+    """Issue #160: the bilingual DE/EN pairing checks must be suppressed on
+    single-language split halves (``*.de.py`` / ``*.en.py``), which by design
+    contain cells of only one language. Per-file slide_id integrity and the
+    format/tags checks must keep running, and bilingual files are unaffected.
+    """
+
+    def test_de_split_file_no_count_mismatch(self, tmp_path):
+        # A .de.py with only German cells must NOT trip the DE/EN count check.
+        p = _write_slide(
+            tmp_path,
+            "slides_010.de.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"] slide_id="intro"
+            # ## Einführung
+
+            # %% [markdown] lang="de" tags=["subslide"] slide_id="details"
+            # ## Mehr
+            """,
+        )
+        result = validate_file(p, checks=["pairing"])
+        assert result.findings == []
+
+    def test_en_split_file_no_count_mismatch(self, tmp_path):
+        # Symmetric: a .en.py with only English cells is also clean.
+        p = _write_slide(
+            tmp_path,
+            "slides_010.en.py",
+            """\
+            # %% [markdown] lang="en" tags=["slide"] slide_id="intro"
+            # ## Introduction
+
+            # %% [markdown] lang="en" tags=["subslide"] slide_id="details"
+            # ## More
+            """,
+        )
+        result = validate_file(p, checks=["pairing"])
+        assert result.findings == []
+
+    def test_split_file_still_runs_format_and_tags(self, tmp_path):
+        # The applicable checks keep firing; only the bilingual pairing
+        # checks are suppressed. A malformed tag is still an error, and there
+        # is no false count-mismatch finding.
+        p = _write_slide(
+            tmp_path,
+            "slides_020.de.py",
+            """\
+            # %% [markdown] lang="de" tags=broken
+            # ## Kaputt
+            """,
+        )
+        result = validate_file(p, checks=None)
+        assert any(
+            f.category == "format" and "Malformed tags" in f.message for f in result.findings
+        )
+        assert not any("cell count mismatch" in f.message for f in result.findings)
+
+    def test_split_file_still_checks_slide_ids(self, tmp_path):
+        # slide_id integrity is a per-file property and must keep running on
+        # a split half — a duplicate id is still a (pairing-category) error.
+        p = _write_slide(
+            tmp_path,
+            "slides_030.de.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"] slide_id="dup"
+            # ## A
+
+            # %% [markdown] lang="de" tags=["slide"] slide_id="dup"
+            # ## B
+            """,
+        )
+        result = validate_file(p, checks=["pairing"])
+        errors = [f for f in result.findings if f.severity == "error"]
+        assert len(errors) == 1
+        assert "duplicate slide_id" in errors[0].message
+        assert not any("cell count mismatch" in f.message for f in result.findings)
+
+    def test_bilingual_file_still_flags_count_mismatch(self, tmp_path):
+        # Control: a bilingual deck (no .de/.en suffix) is unaffected — the
+        # count check still fires.
+        p = _write_slide(
+            tmp_path,
+            "slides_040.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"]
+            # ## Titel
+
+            # %% [markdown] lang="de" tags=["subslide"]
+            # ## Extra German
+            """,
+        )
+        result = validate_file(p, checks=["pairing"])
+        assert any("cell count mismatch" in f.message for f in result.findings)
+
+    def test_directory_split_pair_no_false_count_mismatch(self, tmp_path):
+        # A topic directory holding a complete split pair validates clean: no
+        # per-file count mismatch, and the byte-identical shared cell passes
+        # the cross-file parity check.
+        topic = tmp_path / "topic"
+        topic.mkdir()
+        _write_slide(
+            topic,
+            "slides_intro.de.py",
+            """\
+            # j2 from "macros.j2" import header_de
+            # {{ header_de("Mein Titel") }}
+
+            # %% [markdown] lang="de" tags=["slide"] slide_id="intro"
+            # ## Einführung
+
+            # %% tags=["keep"]
+            x = 1
+            """,
+        )
+        _write_slide(
+            topic,
+            "slides_intro.en.py",
+            """\
+            # j2 from "macros.j2" import header_en
+            # {{ header_en("My Title") }}
+
+            # %% [markdown] lang="en" tags=["slide"] slide_id="intro"
+            # ## Introduction
+
+            # %% tags=["keep"]
+            x = 1
+            """,
+        )
+        result = validate_directory(topic, checks=["pairing"])
+        assert not any("cell count mismatch" in f.message for f in result.findings)
+        assert result.findings == []
+
+    def test_directory_split_pair_still_catches_divergent_shared_cell(self, tmp_path):
+        # The cross-file parity check is unchanged: a shared cell that differs
+        # between the two halves is still reported as a pairing error.
+        topic = tmp_path / "topic"
+        topic.mkdir()
+        _write_slide(
+            topic,
+            "slides_intro.de.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"] slide_id="intro"
+            # ## Einführung
+
+            # %% tags=["keep"]
+            x = 1
+            """,
+        )
+        _write_slide(
+            topic,
+            "slides_intro.en.py",
+            """\
+            # %% [markdown] lang="en" tags=["slide"] slide_id="intro"
+            # ## Introduction
+
+            # %% tags=["keep"]
+            x = 99
+            """,
+        )
+        result = validate_directory(topic, checks=["pairing"])
+        parity_errors = [
+            f
+            for f in result.findings
+            if f.severity == "error" and "shared cell" in f.message.lower()
+        ]
+        assert len(parity_errors) == 1
+
+
 class TestCheckOrdering:
     """DE/EN adjacency checks (canonical layout)."""
 

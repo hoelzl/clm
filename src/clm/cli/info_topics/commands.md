@@ -531,6 +531,17 @@ adjacency, and — since CLM {version} — **`slide_id` metadata**:
 | paired DE/EN slides carry mismatched bare `slide_id`s | `warning` | Suggested fix: `clm slides assign-ids --force`. |
 | `slide_id` is not a valid kebab-case ASCII slug (≤30 chars) | `warning` | The leading `!` preserve marker is permitted and does not count toward the length cap. |
 
+Since CLM {version}, the **bilingual** `pairing` sub-checks (DE/EN cell
+count parity, per-pair tag/type consistency, and DE/EN adjacency) are
+**skipped on single-language split files** (`*.de.py` / `*.en.py`) — a
+split half legitimately carries cells of only one language, so these
+checks would otherwise report a false `DE/EN cell count mismatch` on every
+converted deck (issue #160). The per-file `slide_id` integrity checks (and
+the `format` / `tags` groups) still run on split files unchanged, and the
+cross-file shared-cell parity diff between a `.de.py` / `.en.py` pair is
+still applied when validating a directory or course spec. Bilingual decks
+(no `.de` / `.en` suffix) are unaffected — the full pairing check still runs.
+
 Since CLM {version}, the `tags` check group also verifies **workshop
 scope** (issue #78). The `partial` output kind leaves a workshop's code
 cells empty for live code-alongs; if the workshop scope is missing, the
