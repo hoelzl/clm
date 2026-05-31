@@ -14,9 +14,12 @@ Scope of this engine:
   order (deterministic, no LLM). Applied only when the rest of the pass is
   clean (real baseline, no errors, no deferred add/conflict), because a reorder
   is idempotent only once the watermark advances to record the new order.
-- **add** / **conflict** — *not applied here*. Adds need translation + id minting
-  (Phase 3); conflicts are isolated by design. Counted as ``deferred`` so
-  nothing is silent.
+- **add** — translate a brand-new id-less slide, mint its EN-authority id onto
+  *both* decks, and insert the counterpart at the anchor (needs a
+  ``translator``; without one, deferred). A narrative companion inherits the
+  slide's id. id-carrying "missing counterpart" adds are a follow-up.
+- **conflict** — isolated by design; counted as ``deferred`` so nothing is
+  silent.
 
 Atomicity: each proposal is all-or-nothing for its target cell; the two decks
 are flushed once at the end. The **watermark advances only on a complete,
@@ -27,13 +30,16 @@ never be silently baked into the baseline and lost.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from clm.infrastructure.llm.ollama_client import OllamaError
-from clm.notebooks.slide_parser import parse_cells
+from clm.notebooks.slide_parser import parse_cell_header, parse_cells
 from clm.slides.raw_cells import RawCell
+from clm.slides.slug import resolve_collision, slugify
 from clm.slides.sync_plan import Proposal, SyncPlan, ordered_sync_cells
+from clm.slides.sync_translate import TranslationError
 from clm.slides.sync_writeback import FileState, role_of
 
 if TYPE_CHECKING:
@@ -41,6 +47,10 @@ if TYPE_CHECKING:
 
     from clm.infrastructure.llm.cache import SyncWatermarkCache
     from clm.infrastructure.llm.ollama_client import SyncJudge
+    from clm.slides.sync_translate import SlideTranslator
+
+_SLIDE_ID_RE = re.compile(r'\s*slide_id="[^"]*"')
+_SLIDE_ROLES = {"slide", "subslide"}
 
 logger = logging.getLogger(__name__)
 
@@ -54,14 +64,15 @@ class ApplyResult:
     applied_edit: int = 0
     applied_remove: int = 0
     applied_move: int = 0
+    applied_add: int = 0
     in_sync: int = 0  # an edit the judge decided needed no change
-    deferred: int = 0  # add / conflict (or moves declined this pass)
+    deferred: int = 0  # conflict (or moves/adds declined this pass)
     watermark_recorded: bool = False
     errors: list[str] = field(default_factory=list)
 
     @property
     def applied(self) -> int:
-        return self.applied_edit + self.applied_remove + self.applied_move
+        return self.applied_edit + self.applied_remove + self.applied_move + self.applied_add
 
     @property
     def has_errors(self) -> bool:
@@ -72,15 +83,17 @@ def apply_plan(
     plan: SyncPlan,
     *,
     judge: SyncJudge | None,
+    translator: SlideTranslator | None = None,
     watermark_cache: SyncWatermarkCache | None = None,
 ) -> ApplyResult:
-    """Apply the remove/edit proposals in ``plan`` and advance the watermark.
+    """Apply ``plan``'s proposals to the decks and advance the watermark.
 
-    ``judge`` provides the target-side rewrite for ``edit`` proposals; pass
-    ``None`` to skip edits (each is recorded as an error). Applies remove / edit
-    / move; add and conflict are counted as ``deferred``. The two decks are
-    flushed once; the watermark is recorded only when the plan applied cleanly
-    and completely.
+    ``judge`` provides the target-side rewrite for ``edit`` proposals (``None``
+    records each edit as an error). ``translator`` produces the counterpart for
+    a brand-new id-less slide (``None`` defers adds). Applies remove / edit /
+    move / id-less add; conflicts and id-carrying adds are ``deferred``. The two
+    decks are flushed once; the watermark advances only on a clean, complete
+    apply.
     """
     result = ApplyResult()
 
@@ -101,9 +114,14 @@ def apply_plan(
             _apply_edit(proposal, de_state, en_state, de_content, en_content, judge, result)
         elif kind == "move":
             moves.append(proposal)
-        else:
-            # add / conflict — out of scope for this engine.
+        elif kind == "conflict":
             result.deferred += 1
+        # "add" is handled by _apply_adds below (it walks the decks directly).
+
+    # Adds run before moves so a freshly-inserted slide takes part in any
+    # reorder. Adds are sticky via the stamped id (a re-run no longer sees an
+    # id-less cell), so unlike moves they do not require a clean pass.
+    _apply_adds(de_state, en_state, result, plan, translator)
 
     # Moves are applied last, and only if the rest of the pass is clean (so the
     # watermark will advance and the reorder stays idempotent).
@@ -205,6 +223,187 @@ def _apply_edit(
         result.errors.append(f"edit {proposal.slide_id}/{proposal.role}: target cell not found")
 
 
+# ---------------------------------------------------------------------------
+# Add (translate + mint + insert)
+# ---------------------------------------------------------------------------
+
+
+def _apply_adds(
+    de_state: FileState,
+    en_state: FileState,
+    result: ApplyResult,
+    plan: SyncPlan,
+    translator: SlideTranslator | None,
+) -> None:
+    """Translate, mint, and insert the counterpart for each id-less new slide.
+
+    Walks each deck's id-less sync cells (which are exactly the plan's id-less
+    ``add`` proposals): a slide mints a fresh EN-derived id stamped onto *both*
+    siblings; a narrative companion inherits the preceding slide's id. The
+    translated counterpart is inserted on the other deck at the matching
+    anchor. id-carrying "missing counterpart" adds are out of scope here and
+    deferred. Adds are sticky via the stamp, so they apply regardless of
+    whether the rest of the pass is clean.
+    """
+    add_props = [p for p in plan.proposals if p.kind == "add"]
+    if not add_props:
+        return
+
+    idd = [p for p in add_props if p.slide_id is not None]
+    if idd:
+        result.deferred += len(idd)  # missing-counterpart adds: a follow-up
+
+    idless = [p for p in add_props if p.slide_id is None]
+    if not idless:
+        return
+    if translator is None:
+        result.deferred += len(idless)
+        result.errors.append("id-less add(s) present but no translator available")
+        return
+    if len({p.direction for p in idless}) > 1:
+        # id-less new slides on BOTH decks: the author edited both sides, which
+        # is off the single-language path. Pairing them is out of scope; defer
+        # rather than translate each independently and duplicate the slide.
+        result.deferred += len(idless)
+        result.errors.append(
+            "id-less new slides on both decks — edit one deck at a time (deferred)"
+        )
+        return
+
+    used_ids = {
+        cell.metadata.slide_id
+        for state in (de_state, en_state)
+        for cell in state.cells
+        if cell.metadata.slide_id
+    }
+    _add_one_direction(de_state, en_state, "de", "en", translator, used_ids, result)
+    _add_one_direction(en_state, de_state, "en", "de", translator, used_ids, result)
+
+
+def _add_one_direction(
+    source_state: FileState,
+    target_state: FileState,
+    source_lang: str,
+    target_lang: str,
+    translator: SlideTranslator,
+    used_ids: set[str],
+    result: ApplyResult,
+) -> None:
+    current_slide_id: str | None = None
+    anchor: tuple[str, str] | None = None
+    for cell in list(source_state.cells):
+        role = role_of(cell.metadata)
+        if role is None:
+            continue
+        sid = cell.metadata.slide_id
+        if sid is not None:
+            # An existing paired cell — not an add. It anchors what follows.
+            if role in _SLIDE_ROLES:
+                current_slide_id = sid
+            anchor = (sid, role)
+            continue
+
+        # id-less => an add: translate first (the body is unchanged by stamping).
+        # Normalise away the terminal-newline artifact split_cells parks on the
+        # last cell, so the body the translator sees doesn't depend on position.
+        source_body = cell.body.rstrip("\n")
+        try:
+            target_body = translator.translate(
+                source_body=source_body,
+                source_lang=source_lang,
+                target_lang=target_lang,
+                role=role,
+            )
+        except TranslationError as exc:
+            result.deferred += 1
+            result.errors.append(f"add {role}: translation failed: {exc}")
+            continue
+
+        if role in _SLIDE_ROLES:
+            # EN-authority: slug the id from the EN text (the translation when
+            # the author edited DE, the source itself when they edited EN).
+            en_body = target_body if target_lang == "en" else source_body
+            new_id = resolve_collision(_slug_or_default(en_body), used_ids)
+            used_ids.add(new_id)
+            current_slide_id = new_id
+        elif current_slide_id is None:
+            result.deferred += 1
+            result.errors.append(
+                f"add {role}: id-less narrative with no preceding slide — deferred"
+            )
+            continue
+        else:
+            new_id = current_slide_id
+
+        _stamp_slide_id(cell, new_id)  # stamp the previously-id-less source cell
+        source_state.dirty = True
+        new_cell = _build_cell(target_lang, cell.metadata.tags, new_id, target_body)
+        _insert_at_anchor(target_state, anchor, new_cell)
+        anchor = (new_id, role)
+        result.applied_add += 1
+
+
+def _slug_or_default(en_body: str) -> str:
+    return slugify(_extract_heading(en_body)) or "slide"
+
+
+def _extract_heading(body: str) -> str:
+    """Best-effort slide heading text from a percent-format cell body.
+
+    Drops the ``# `` comment prefix as a fixed prefix (not a char set, so a
+    ``**bold**`` lead-in survives), returns a Markdown heading's text, and
+    treats a line as a bullet only when it starts with an actual ``-``/``*``/
+    ``+`` *list marker* (followed by whitespace). ``slugify`` then strips any
+    residual Markdown.
+    """
+    for raw in body.split("\n"):
+        if raw.startswith("# "):
+            md = raw[2:].strip()
+        elif raw.startswith("#"):
+            md = raw[1:].strip()
+        else:
+            md = raw.strip()
+        if not md:
+            continue
+        heading = re.match(r"#{1,6}\s+(.*)", md)
+        if heading:
+            return heading.group(1).strip()
+        if not re.match(r"[-*+]\s", md):
+            return md
+    return ""
+
+
+def _stamp_slide_id(cell: RawCell, slide_id: str) -> None:
+    """Write ``slide_id="…"`` onto a cell header (mirrors assign-ids)."""
+    stripped = _SLIDE_ID_RE.sub("", cell.lines[0]).rstrip()
+    header = f'{stripped} slide_id="{slide_id}"'
+    cell.lines[0] = header
+    cell.metadata = parse_cell_header(header)
+
+
+def _build_cell(lang: str, tags: list[str], slide_id: str, body: str) -> RawCell:
+    """Build a fresh markdown RawCell carrying the translated counterpart.
+
+    The body is built bare (no leading/trailing blank lines); the insert
+    primitive grants the deck's inter-cell separator based on final position.
+    """
+    tag_repr = ", ".join(f'"{t}"' for t in tags) if tags else '"slide"'
+    header = f'# %% [markdown] lang="{lang}" tags=[{tag_repr}] slide_id="{slide_id}"'
+    body_lines = body.split("\n")
+    while body_lines and body_lines[0] == "":  # drop a stray leading blank
+        body_lines.pop(0)
+    while body_lines and body_lines[-1] == "":
+        body_lines.pop()
+    return RawCell(lines=[header, *body_lines], line_number=0, metadata=parse_cell_header(header))
+
+
+def _insert_at_anchor(
+    target_state: FileState, anchor: tuple[str, str] | None, new_cell: RawCell
+) -> None:
+    if anchor is None or not target_state.insert_after(anchor[0], anchor[1], new_cell):
+        target_state.insert_before_first_sync_cell(new_cell)
+
+
 def _apply_moves(
     moves: list[Proposal],
     de_state: FileState,
@@ -245,9 +444,12 @@ def _apply_moves(
     candidate = reordered if reordered is not None else target_state.cells
     if _sync_key_order(candidate) == _sync_key_order(source_state.cells):
         if reordered is not None:
-            _heal_terminal_newline(reordered, target_state)
+            sep = target_state.separator_blanks()
+            original_last = target_state.cells[-1] if target_state.cells else None
             target_state.cells = reordered
             target_state.dirty = True
+            if original_last is not None:
+                target_state.normalize_displaced_last(original_last, sep)
         result.applied_move += len(moves)
     else:
         result.deferred += len(moves)
@@ -319,22 +521,6 @@ def _group_reorder(cells: list[RawCell], source_order: list[str]) -> list[RawCel
     if [g[0].metadata.slide_id for g in groups] == [g[0].metadata.slide_id for g in reordered]:
         return None
     return head + [cell for group in reordered for cell in group]
-
-
-def _heal_terminal_newline(new_cells: list[RawCell], target: FileState) -> None:
-    """Drop the terminal-newline artifact off a reordered ex-last cell.
-
-    ``split_cells`` parks the file's final newline as a trailing ``""`` on the
-    last cell. After a reorder that cell may no longer be last, where the
-    ``""`` would render as a spurious mid-file blank line. Strip that one
-    ``""`` (genuine trailing blanks are preserved); :meth:`FileState.flush`
-    restores the terminal newline.
-    """
-    if not target.ends_with_newline or not new_cells or not target.cells:
-        return
-    original_last = target.cells[-1]
-    if new_cells[-1] is not original_last and original_last.lines and original_last.lines[-1] == "":
-        original_last.lines.pop()
 
 
 # ---------------------------------------------------------------------------

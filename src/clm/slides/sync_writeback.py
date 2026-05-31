@@ -66,6 +66,26 @@ def _cell_matches(cell: RawCell, slide_id: str, role: str) -> bool:
     return cell.metadata.slide_id == slide_id and role_of(cell.metadata) == role
 
 
+def _trailing_blanks(cell: RawCell) -> int:
+    """Count the blank body lines at the end of ``cell``."""
+    n = 0
+    for line in reversed(cell.lines[1:]):
+        if line == "":
+            n += 1
+        else:
+            break
+    return n
+
+
+def _set_trailing_blanks(cell: RawCell, n: int) -> None:
+    """Force ``cell`` to end with exactly ``n`` blank body lines."""
+    body = cell.lines[1:]
+    while body and body[-1] == "":
+        body.pop()
+    body.extend([""] * n)
+    cell.lines = [cell.lines[0], *body]
+
+
 def target_path_for_outcome(outcome: PairOutcome, result: SyncResult) -> Path:
     """Return the file path the outcome would write to."""
     if outcome.direction == "de->en":
@@ -209,6 +229,86 @@ class FileState:
                 self.dirty = True
                 return True
         return False
+
+    def separator_blanks(self) -> int:
+        """The deck's inter-cell blank-line gap (0 = tight, 1 = blank-separated).
+
+        Read from the first cell, which is always non-last when there are two
+        or more cells, so its trailing-blank count reflects the *separator*
+        convention rather than the terminal-newline artifact the last cell
+        carries. Compute it **before** a structural mutation. Non-uniform
+        decks fall back to the first gap (documented limitation).
+        """
+        if len(self.cells) < 2:
+            return 0
+        return _trailing_blanks(self.cells[0])
+
+    def insert_after(self, slide_id: str, role: str, new_cell: RawCell) -> bool:
+        """Insert ``new_cell`` immediately after the ``(slide_id, role)`` cell.
+
+        Returns ``False`` when the anchor cell is absent. Used by the Issue
+        #166 add path to place a translated counterpart next to its neighbour.
+        """
+        sep = self.separator_blanks()
+        original_last = self.cells[-1] if self.cells else None
+        for i, cell in enumerate(self.cells):
+            if _cell_matches(cell, slide_id, role):
+                self.cells.insert(i + 1, new_cell)
+                self.dirty = True
+                self._place_inserted(new_cell, original_last, sep)
+                return True
+        return False
+
+    def insert_before_first_sync_cell(self, new_cell: RawCell) -> None:
+        """Insert ``new_cell`` ahead of the first sync cell (after the head).
+
+        The anchor for an add with no preceding shared cell — it becomes the
+        deck's first slide, sitting after any j2 header / intro cells but
+        before the existing slides/narrative. Appends only when the deck has no
+        sync cell at all.
+        """
+        sep = self.separator_blanks()
+        original_last = self.cells[-1] if self.cells else None
+        for i, cell in enumerate(self.cells):
+            if role_of(cell.metadata) is not None:
+                self.cells.insert(i, new_cell)
+                self.dirty = True
+                self._place_inserted(new_cell, original_last, sep)
+                return
+        self.cells.append(new_cell)
+        self.dirty = True
+        self._place_inserted(new_cell, original_last, sep)
+
+    def _place_inserted(self, new_cell: RawCell, original_last: RawCell | None, sep: int) -> None:
+        """Give ``new_cell`` the deck's separator (or none, if it is now last).
+
+        When ``new_cell`` lands last, it carries no explicit trailing blank —
+        :meth:`flush` restores the terminal newline — and the cell it displaced
+        from the end is normalised to the separator (its terminal artifact is
+        not a real gap).
+        """
+        if self.cells and self.cells[-1] is new_cell:
+            _set_trailing_blanks(new_cell, 0)
+            if original_last is not None:
+                self.normalize_displaced_last(original_last, sep)
+        else:
+            _set_trailing_blanks(new_cell, sep)
+
+    def normalize_displaced_last(self, original_last: RawCell, sep: int) -> None:
+        """Normalise the trailing blanks of a cell pushed off the end.
+
+        ``split_cells`` parks the file's final newline as a trailing ``""`` on
+        the last cell. When a move/insert pushes that cell off the end, that
+        ``""`` is the terminal artifact, not a real separator — reset its
+        trailing blanks to the deck ``sep`` (so a tight deck loses it and a
+        blank-separated deck keeps one). :meth:`flush` restores the terminal
+        newline on whatever ends up last. No-op when still last.
+        """
+        if not self.ends_with_newline or not self.cells:
+            return
+        if self.cells[-1] is original_last:
+            return
+        _set_trailing_blanks(original_last, sep)
 
     def flush(self) -> None:
         if not self.dirty:

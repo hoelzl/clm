@@ -457,6 +457,24 @@ the narrative-reassignment silent-divergence (now deferred); the move-gate
 
 ### Phase 3 — New-slide translation + EN-authority ID minting (the ADD path)
 
+**Status: ✅ implemented 2026-05-31** — `clm/slides/sync_translate.py`
+(`SlideTranslator` protocol + `StaticSlideTranslator` + `OpenRouterSlideTranslator`,
+model fixed to Sonnet) + the add path in `sync_apply.py` (`_apply_adds` /
+`_add_one_direction`: translate → mint EN-authority id from the EN heading →
+stamp both siblings → insert the counterpart at the anchor; narrative
+companions inherit the slide's id). Adds run **before** moves and are sticky
+via the stamp (so they apply even when the rest of the pass isn't clean).
+`FileState` gained `insert_after` / `insert_before_first_sync_cell` plus
+**separator-aware** placement (`separator_blanks` / `normalize_displaced_last`),
+which keeps both blank-separated (real) and tight decks byte-clean and also
+closed a *latent* Phase 2b move issue the tight test fixtures had masked.
+29 apply tests (incl. blank-separated byte-equality). A 12-agent adversarial
+review found 6 issues, all folded in: inter-cell separator on inserts; heading
+extraction discarding bold/dash lead-ins; the slide-less-target append heal +
+ordering; parallel id-less adds on both decks (now deferred, not duplicated);
+translator leading-newline strip + `max_tokens`. Deferred follow-up:
+id-carrying "missing counterpart" adds. Live `clm slides sync` still unchanged.
+
 - Translate a new source cell → target counterpart. New prompt suite (distinct
   from the edit judge); routed through `_build_client` like the voiceover
   `propagate_*` path (structured JSON). **Model fixed: Claude Sonnet

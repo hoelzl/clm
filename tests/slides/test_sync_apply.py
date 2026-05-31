@@ -9,6 +9,7 @@ from clm.infrastructure.llm.ollama_client import StaticSyncJudge, SyncProposal
 from clm.notebooks.slide_parser import parse_cells
 from clm.slides.sync_apply import apply_plan
 from clm.slides.sync_plan import PlanIssue, Proposal, SyncPlan, build_sync_plan, ordered_sync_cells
+from clm.slides.sync_translate import StaticSlideTranslator
 from clm.slides.sync_writeback import FileState
 
 # ---------------------------------------------------------------------------
@@ -496,3 +497,329 @@ class TestApplyMove:
         assert result.deferred >= 1
         assert result.watermark_recorded is False
         assert _slide_order(en_path) == ["a", "b"]  # EN untouched
+
+
+# ---------------------------------------------------------------------------
+# apply_plan — add (Phase 3: translate + mint + insert)
+# ---------------------------------------------------------------------------
+
+
+def _slide_idless(lang: str, body: str) -> str:
+    return f'# %% [markdown] lang="{lang}" tags=["slide"]\n{body}\n'
+
+
+def _vo_idless(lang: str, body: str) -> str:
+    return f'# %% [markdown] lang="{lang}" tags=["voiceover"]\n{body}\n'
+
+
+def _cell_for(path: Path, slide_id: str, role: str = "slide"):
+    for c in parse_cells(path.read_text(encoding="utf-8")):
+        if c.metadata.slide_id == slide_id and role in c.tags:
+            return c
+    return None
+
+
+class TestApplyAdd:
+    def test_idless_slide_add_mints_en_id_on_both_decks(self, tmp_path: Path):
+        de_path, en_path = _write_pair(
+            tmp_path, _slide("de", "a", "# ## A"), _slide("en", "a", "# ## A")
+        )
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_watermark(cache, de_path, en_path)
+            # Author appends a brand-new id-less slide on DE.
+            de_path.write_text(
+                _slide("de", "a", "# ## A") + _slide_idless("de", "# ## Neues Thema"),
+                encoding="utf-8",
+            )
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            assert plan.count("add") == 1
+            translator = StaticSlideTranslator(mapping={"# ## Neues Thema": "# ## New Topic"})
+            result = apply_plan(plan, judge=None, translator=translator, watermark_cache=cache)
+            plan2 = build_sync_plan(de_path, en_path, watermark_cache=cache)
+        finally:
+            cache.close()
+
+        assert result.applied_add == 1
+        # EN-authority: the id is slugged from the EN (translated) heading and
+        # written to BOTH decks.
+        de_new = _cell_for(de_path, "new-topic")
+        en_new = _cell_for(en_path, "new-topic")
+        assert de_new is not None and en_new is not None
+        assert "Neues Thema" in de_new.content  # source body unchanged, just stamped
+        assert "New Topic" in en_new.content  # translated counterpart
+        assert _slide_order(en_path) == ["a", "new-topic"]
+        assert en_path.read_text(encoding="utf-8").endswith("\n")
+        assert plan2.is_noop  # idempotent: the stamped cell is no longer id-less
+
+    def test_en_to_de_add_slugs_from_en_source(self, tmp_path: Path):
+        de_path, en_path = _write_pair(
+            tmp_path, _slide("de", "a", "# ## A"), _slide("en", "a", "# ## A")
+        )
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_watermark(cache, de_path, en_path)
+            en_path.write_text(
+                _slide("en", "a", "# ## A") + _slide_idless("en", "# ## New Topic"),
+                encoding="utf-8",
+            )
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            translator = StaticSlideTranslator(mapping={"# ## New Topic": "# ## Neues Thema"})
+            result = apply_plan(plan, judge=None, translator=translator, watermark_cache=cache)
+        finally:
+            cache.close()
+
+        assert result.applied_add == 1
+        de_new = _cell_for(de_path, "new-topic")
+        assert de_new is not None
+        assert "Neues Thema" in de_new.content  # DE counterpart translated
+        assert _slide_order(de_path) == ["a", "new-topic"]
+
+    def test_narrative_companion_inherits_slide_id(self, tmp_path: Path):
+        de_path, en_path = _write_pair(
+            tmp_path, _slide("de", "a", "# ## A"), _slide("en", "a", "# ## A")
+        )
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_watermark(cache, de_path, en_path)
+            de_path.write_text(
+                _slide("de", "a", "# ## A")
+                + _slide_idless("de", "# ## Neu")
+                + _vo_idless("de", "# Sprechertext"),
+                encoding="utf-8",
+            )
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            translator = StaticSlideTranslator(
+                mapping={"# ## Neu": "# ## New", "# Sprechertext": "# Narration"}
+            )
+            result = apply_plan(plan, judge=None, translator=translator, watermark_cache=cache)
+        finally:
+            cache.close()
+
+        assert result.applied_add == 2
+        en_cells = parse_cells(en_path.read_text(encoding="utf-8"))
+        sync_ids = [(c.metadata.slide_id, c.tags[0]) for c in en_cells if c.metadata.slide_id]
+        assert sync_ids == [("a", "slide"), ("new", "slide"), ("new", "voiceover")]
+        # The DE voiceover inherited the slide's minted id too.
+        assert _cell_for(de_path, "new", "voiceover") is not None
+
+    def test_add_in_the_middle_is_anchored(self, tmp_path: Path):
+        de_path, en_path = _write_pair(
+            tmp_path,
+            _slide("de", "a", "# ## A") + _slide("de", "b", "# ## B"),
+            _slide("en", "a", "# ## A") + _slide("en", "b", "# ## B"),
+        )
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_watermark(cache, de_path, en_path)
+            de_path.write_text(
+                _slide("de", "a", "# ## A")
+                + _slide_idless("de", "# ## Mid")
+                + _slide("de", "b", "# ## B"),
+                encoding="utf-8",
+            )
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            translator = StaticSlideTranslator(mapping={"# ## Mid": "# ## Middle"})
+            apply_plan(plan, judge=None, translator=translator, watermark_cache=cache)
+        finally:
+            cache.close()
+
+        assert _slide_order(en_path) == ["a", "middle", "b"]
+
+    def test_collision_resolves_against_existing_ids(self, tmp_path: Path):
+        de_path, en_path = _write_pair(
+            tmp_path, _slide("de", "new", "# ## Something"), _slide("en", "new", "# ## Something")
+        )
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_watermark(cache, de_path, en_path)
+            de_path.write_text(
+                _slide("de", "new", "# ## Something") + _slide_idless("de", "# ## Neu"),
+                encoding="utf-8",
+            )
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            # "Neu" -> "New" -> slug "new", which collides with the existing id.
+            translator = StaticSlideTranslator(mapping={"# ## Neu": "# ## New"})
+            apply_plan(plan, judge=None, translator=translator, watermark_cache=cache)
+        finally:
+            cache.close()
+
+        assert _cell_for(en_path, "new-2") is not None
+        assert _cell_for(de_path, "new-2") is not None
+
+    def test_add_without_translator_is_deferred(self, tmp_path: Path):
+        de_path, en_path = _write_pair(
+            tmp_path, _slide("de", "a", "# ## A"), _slide("en", "a", "# ## A")
+        )
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_watermark(cache, de_path, en_path)
+            de_path.write_text(
+                _slide("de", "a", "# ## A") + _slide_idless("de", "# ## Neu"),
+                encoding="utf-8",
+            )
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            result = apply_plan(plan, judge=None, translator=None, watermark_cache=cache)
+        finally:
+            cache.close()
+
+        assert result.applied_add == 0
+        assert result.deferred >= 1
+        assert result.watermark_recorded is False
+        assert _slide_order(en_path) == ["a"]  # nothing inserted
+
+    def test_translation_failure_defers_the_add(self, tmp_path: Path):
+        de_path, en_path = _write_pair(
+            tmp_path, _slide("de", "a", "# ## A"), _slide("en", "a", "# ## A")
+        )
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_watermark(cache, de_path, en_path)
+            de_path.write_text(
+                _slide("de", "a", "# ## A") + _slide_idless("de", "# ## Neu"),
+                encoding="utf-8",
+            )
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            translator = StaticSlideTranslator()  # no mapping, no default -> raises
+            result = apply_plan(plan, judge=None, translator=translator, watermark_cache=cache)
+        finally:
+            cache.close()
+
+        assert result.applied_add == 0
+        assert result.has_errors
+        assert result.watermark_recorded is False
+        assert _slide_order(en_path) == ["a"]  # EN untouched
+        # The DE source cell stays id-less, so it is re-detected next run.
+        assert any(
+            c.metadata.slide_id is None and "slide" in c.tags
+            for c in parse_cells(de_path.read_text(encoding="utf-8"))
+        )
+
+    def test_bold_heading_mints_meaningful_id(self, tmp_path: Path):
+        # A heading with a bold lead-in must still yield an EN-derived slug,
+        # not a generic "slide" id.
+        de_path, en_path = _write_pair(
+            tmp_path, _slide("de", "a", "# ## A"), _slide("en", "a", "# ## A")
+        )
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_watermark(cache, de_path, en_path)
+            de_path.write_text(
+                _slide("de", "a", "# ## A") + _slide_idless("de", "# ## Wichtig"),
+                encoding="utf-8",
+            )
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            translator = StaticSlideTranslator(
+                mapping={"# ## Wichtig": "# ## **Important** Concept"}
+            )
+            apply_plan(plan, judge=None, translator=translator, watermark_cache=cache)
+        finally:
+            cache.close()
+
+        assert _cell_for(en_path, "important-concept") is not None
+        assert _cell_for(de_path, "important-concept") is not None
+
+    def test_parallel_idless_adds_on_both_decks_are_deferred(self, tmp_path: Path):
+        # The author mistakenly added a new slide id-less on BOTH decks. Pairing
+        # is out of scope; the engine must defer rather than duplicate.
+        de_path, en_path = _write_pair(
+            tmp_path, _slide("de", "a", "# ## A"), _slide("en", "a", "# ## A")
+        )
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_watermark(cache, de_path, en_path)
+            de_path.write_text(
+                _slide("de", "a", "# ## A") + _slide_idless("de", "# ## Neu"), encoding="utf-8"
+            )
+            en_path.write_text(
+                _slide("en", "a", "# ## A") + _slide_idless("en", "# ## New"), encoding="utf-8"
+            )
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            translator = StaticSlideTranslator(
+                mapping={"# ## Neu": "# ## New", "# ## New": "# ## Neu"}
+            )
+            result = apply_plan(plan, judge=None, translator=translator, watermark_cache=cache)
+        finally:
+            cache.close()
+
+        assert result.applied_add == 0
+        assert result.deferred >= 2
+        assert result.watermark_recorded is False
+        # No duplication: each deck still has exactly its slide + one id-less new.
+        assert len(_slide_order(de_path)) == 2  # "a" + one id-less
+        assert len(_slide_order(en_path)) == 2
+
+
+# ---------------------------------------------------------------------------
+# Blank-separated decks (realistic spacing): inserts/moves must stay byte-clean
+# ---------------------------------------------------------------------------
+
+
+def _bcell(lang: str, body: str, sid: str | None = None) -> str:
+    head = f'# %% [markdown] lang="{lang}" tags=["slide"]'
+    if sid is not None:
+        head += f' slide_id="{sid}"'
+    return f"{head}\n{body}"
+
+
+def _bjoin(*cells: str) -> str:
+    """Join cells with a blank-line separator and a terminal newline."""
+    return "\n\n".join(cells) + "\n"
+
+
+class TestBlankSeparatedDecks:
+    def test_add_in_middle_is_byte_clean(self, tmp_path: Path):
+        de = _bjoin(_bcell("de", "# ## A", "a"), _bcell("de", "# ## B", "b"))
+        en = _bjoin(_bcell("en", "# ## A", "a"), _bcell("en", "# ## B", "b"))
+        de_path, en_path = _write_pair(tmp_path, de, en)
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_watermark(cache, de_path, en_path)
+            de_path.write_text(
+                _bjoin(
+                    _bcell("de", "# ## A", "a"),
+                    _bcell("de", "# ## Mid"),
+                    _bcell("de", "# ## B", "b"),
+                ),
+                encoding="utf-8",
+            )
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            translator = StaticSlideTranslator(mapping={"# ## Mid": "# ## Middle"})
+            apply_plan(plan, judge=None, translator=translator, watermark_cache=cache)
+        finally:
+            cache.close()
+
+        expected = _bjoin(
+            _bcell("en", "# ## A", "a"),
+            _bcell("en", "# ## Middle", "middle"),
+            _bcell("en", "# ## B", "b"),
+        )
+        assert en_path.read_text(encoding="utf-8") == expected
+
+    def test_reorder_is_byte_clean(self, tmp_path: Path):
+        slides = [("a", "# ## A"), ("b", "# ## B"), ("c", "# ## C")]
+        de = _bjoin(*[_bcell("de", body, sid) for sid, body in slides])
+        en = _bjoin(*[_bcell("en", body, sid) for sid, body in slides])
+        de_path, en_path = _write_pair(tmp_path, de, en)
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_watermark(cache, de_path, en_path)
+            de_path.write_text(
+                _bjoin(
+                    _bcell("de", "# ## C", "c"),
+                    _bcell("de", "# ## A", "a"),
+                    _bcell("de", "# ## B", "b"),
+                ),
+                encoding="utf-8",
+            )
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            apply_plan(plan, judge=None, watermark_cache=cache)
+        finally:
+            cache.close()
+
+        expected = _bjoin(
+            _bcell("en", "# ## C", "c"),
+            _bcell("en", "# ## A", "a"),
+            _bcell("en", "# ## B", "b"),
+        )
+        assert en_path.read_text(encoding="utf-8") == expected
