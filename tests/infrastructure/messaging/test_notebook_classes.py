@@ -61,49 +61,87 @@ class TestNotebookPayload:
         assert sample_payload.other_files == {}
         assert sample_payload.fallback_execute is False
 
-    def test_json_roundtrip_preserves_worker_consumed_fields(self):
-        """Regression guard for issue #17.
+    def test_from_job_payload_round_trips_every_field(self):
+        """Structural regression guard for issue #17.
 
-        The notebook worker reconstructs the payload from the job's serialized
-        JSON. It must preserve *every* field the host sets — a hand-maintained
-        field list previously dropped ``cross_references`` (and
-        ``svg_available_stems`` / ``inline_images``), silently disabling the
-        cross-reference rewrite so every ``clm:`` link shipped unrewritten.
-        Serialize with the same call the backend uses (``model_dump(mode=
-        "json")``) and reconstruct the way ``NotebookWorker`` now does
-        (``model_validate`` of the whole dict), then assert the fields survive.
+        The worker reconstructs the payload from the job's serialized JSON via
+        ``NotebookPayload.from_job_payload`` (which deserializes the whole dict
+        through ``model_validate``). It must preserve *every* field the host
+        sets — a hand-listed reconstruction previously dropped
+        ``cross_references`` (and ``svg_available_stems`` / ``inline_images``),
+        silently disabling the cross-reference rewrite so every ``clm:`` link
+        shipped unrewritten.
+
+        Every field is given a distinctive non-default value so a *dropped*
+        field is always caught (a dropped field would fall back to its default
+        and the dump comparison would differ). The ``model_fields`` set-equality
+        check ties this test to the model: adding a field makes it fail until
+        the new field is covered here, which then proves it survives the
+        round-trip too.
         """
-        original = NotebookPayload(
-            correlation_id="cid",
-            input_file="/in.py",
-            input_file_name="in.py",
-            output_file="/out.html",
-            data="src",
-            kind="completed",
-            prog_lang="python",
-            language="en",
-            format="html",
-            cross_references={"workshop": "../W/02%20Workshop.html"},
-            svg_available_stems=["diagram"],
-            inline_images=True,
+        # A non-default value for every NotebookPayload field.
+        values = {
+            "correlation_id": "cid-x",
+            "input_file": "/in/notebook.py",
+            "input_file_name": "notebook.py",
+            "output_file": "/out/nb.html",
+            "data": "SOURCE",
+            "kind": "trainer",
+            "prog_lang": "cpp",
+            "language": "de",
+            "format": "html",
+            "template_dir": "tmpl",
+            "other_files": {"helper.py": b"x = 1"},
+            "fallback_execute": True,
+            "skip_evaluation": True,
+            "skip_errors": True,
+            "http_replay_mode": "once",
+            "http_replay_cassette_name": "cassette.yaml",
+            "http_replay_trace_dir": "/trace",
+            "img_path_prefix": "../../img/",
+            "source_topic_dir": "module_100/topic_010_intro",
+            "svg_available_stems": ["diagram"],
+            "inline_images": True,
+            "author": "Ada Lovelace",
+            "organization": "Coding Academy",
+            "cross_references": {"workshop": "../Workshops/02%20Workshop.html"},
+        }
+        assert set(values) == set(NotebookPayload.model_fields), (
+            "NotebookPayload fields changed — add the new field above with a "
+            "non-default value so the round-trip guard covers it."
         )
 
+        original = NotebookPayload(**values)
+        # Same serialization the SqliteBackend uses to enqueue the job.
         dumped = original.model_dump(mode="json")
-        # The worker overrides data + path fields (filesystem/job) and takes
-        # everything else verbatim from the serialized dict.
-        restored = NotebookPayload.model_validate(
-            {
-                **dumped,
-                "data": "src",
-                "input_file": "/in.py",
-                "input_file_name": "in.py",
-                "output_file": "/out.html",
-            }
+
+        # Reconstruct exactly as NotebookWorker does. The file-bound overrides
+        # are set to the original's values so the whole model must round-trip.
+        restored = NotebookPayload.from_job_payload(
+            dumped,
+            content=original.data,
+            input_file=original.input_file,
+            output_file=original.output_file,
+            fallback_correlation_id="unused-correlation-id-present",
         )
 
-        assert restored.cross_references == {"workshop": "../W/02%20Workshop.html"}
-        assert restored.svg_available_stems == ["diagram"]
-        assert restored.inline_images is True
+        assert restored.model_dump() == original.model_dump()
+
+    def test_from_job_payload_raises_on_missing_required_field(self):
+        """A malformed job payload (missing a required descriptor) fails loudly
+        rather than being silently defaulted — the host always sets these, so a
+        gap is a real bug worth surfacing."""
+        import pytest as _pytest
+        from pydantic import ValidationError
+
+        with _pytest.raises(ValidationError):
+            NotebookPayload.from_job_payload(
+                {"kind": "completed"},  # missing prog_lang / language / format
+                content="src",
+                input_file="/in.py",
+                output_file="/out.html",
+                fallback_correlation_id="cid",
+            )
 
     def test_notebook_text_property(self, sample_payload):
         """Should return data as notebook_text property."""

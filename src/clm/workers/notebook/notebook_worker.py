@@ -173,55 +173,36 @@ class NotebookWorker(Worker):
                 logger.info(f"Job {job.id} was cancelled after reading input, aborting")
                 return
 
-            # Create output spec
-            output_spec = create_output_spec(
-                kind=payload_data.get("kind", "completed"),
-                prog_lang=payload_data.get("prog_lang", "python"),
-                language=payload_data.get("language", "en"),
-                format=payload_data.get("format", "notebook"),
+            # Reconstruct the full typed payload from the serialized job data.
+            # ``from_job_payload`` deserializes the whole dict so no field can
+            # be silently dropped at the worker boundary (issue #17); see its
+            # docstring for the file-bound override rationale.
+            payload = NotebookPayload.from_job_payload(
+                payload_data,
+                content=notebook_text,
+                input_file=str(input_path),
+                output_file=job.output_file,
+                fallback_correlation_id=f"job-{job.id}",
             )
 
-            # Reconstruct the full NotebookPayload from the serialized job
-            # data. Deserialize the whole dict via ``model_validate`` rather
-            # than re-listing fields by hand: the host serializes the payload
-            # with ``model_dump(mode="json")`` (see ``SqliteBackend``), so
-            # round-tripping the dict preserves *every* field automatically.
-            # The previous hand-maintained constructor silently dropped any
-            # field it did not name — e.g. ``cross_references`` (issue #17),
-            # which left every ``clm:`` link unrewritten in the output, and
-            # ``svg_available_stems`` / ``inline_images``. ``data`` and the
-            # path fields are overridden because in Docker source-mount mode
-            # the notebook text and paths come from the filesystem rather than
-            # the payload.
-            payload = NotebookPayload.model_validate(
-                {
-                    # Defaults for the required descriptor fields, preserved
-                    # from the previous hand-written reconstruction so a
-                    # partial payload still validates; ``payload_data`` below
-                    # overrides them whenever the host set them (it always
-                    # does for real jobs). Every other field — including
-                    # cross_references — flows through automatically.
-                    "kind": "completed",
-                    "prog_lang": "python",
-                    "language": "en",
-                    "format": "notebook",
-                    **payload_data,
-                    "data": notebook_text,
-                    "input_file": str(input_path),
-                    "input_file_name": input_path.name,
-                    "output_file": job.output_file,
-                    "correlation_id": payload_data.get("correlation_id", f"job-{job.id}"),
-                }
+            # Create output spec from the reconstructed (typed) payload, so the
+            # descriptor values come from a single validated source rather than
+            # re-reading the raw dict with ad-hoc defaults.
+            output_spec = create_output_spec(
+                kind=payload.kind,
+                prog_lang=payload.prog_lang,
+                language=payload.language,
+                format=payload.format,
             )
 
             # Determine source directory for supporting files (Docker mode with source mount)
             source_dir: Path | None = None
-            if host_data_dir and payload_data.get("source_topic_dir"):
+            if host_data_dir and payload.source_topic_dir:
                 # Convert host topic directory to container path
                 from clm.infrastructure.workers.worker_base import convert_input_path_to_container
 
                 source_dir = convert_input_path_to_container(
-                    payload_data["source_topic_dir"], host_data_dir
+                    payload.source_topic_dir, host_data_dir
                 )
                 logger.debug(
                     f"Docker mode: using source directory {source_dir} for supporting files"
@@ -280,10 +261,10 @@ class NotebookWorker(Worker):
                 job.output_file,
                 job.content_hash,
                 {
-                    "format": payload_data.get("format", "notebook"),
-                    "kind": payload_data.get("kind", "participant"),
-                    "prog_lang": payload_data.get("prog_lang", "python"),
-                    "language": payload_data.get("language", "en"),
+                    "format": payload.format,
+                    "kind": payload.kind,
+                    "prog_lang": payload.prog_lang,
+                    "language": payload.language,
                 },
             )
             logger.debug(f"Added result to cache for {job.output_file}")

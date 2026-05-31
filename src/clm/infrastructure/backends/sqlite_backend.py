@@ -536,6 +536,7 @@ class SqliteBackend(LocalOpsBackend):
                                     )
                                     from clm.infrastructure.messaging.notebook_classes import (
                                         NotebookResult,
+                                        notebook_metadata_tags_from_payload,
                                     )
 
                                     payload_dict = json.loads(row[0])
@@ -555,11 +556,8 @@ class SqliteBackend(LocalOpsBackend):
                                             input_file=str(job_info["input_file"]),
                                             content_hash=content_hash,
                                             result=result_text,
-                                            output_metadata_tags=(
-                                                payload_dict.get("kind", "participant"),
-                                                payload_dict.get("prog_lang", "python"),
-                                                payload_dict.get("language", "en"),
-                                                payload_dict.get("format", "notebook"),
+                                            output_metadata_tags=notebook_metadata_tags_from_payload(
+                                                payload_dict
                                             ),
                                         )
                                     elif job_type in ("plantuml", "drawio"):
@@ -1006,11 +1004,11 @@ class SqliteBackend(LocalOpsBackend):
         """
         if job_type == "notebook":
             # NotebookPayload.output_metadata() returns tuple of (kind, prog_lang, language, format)
-            kind = payload_dict.get("kind", "participant")
-            prog_lang = payload_dict.get("prog_lang", "python")
-            language = payload_dict.get("language", "en")
-            format_val = payload_dict.get("format", "notebook")
-            return str((kind, prog_lang, language, format_val))
+            from clm.infrastructure.messaging.notebook_classes import (
+                notebook_metadata_tags_from_payload,
+            )
+
+            return str(notebook_metadata_tags_from_payload(payload_dict))
         elif job_type in ("plantuml", "drawio"):
             # ImagePayload.output_metadata() returns output_format
             output_format = payload_dict.get("output_format", "png")

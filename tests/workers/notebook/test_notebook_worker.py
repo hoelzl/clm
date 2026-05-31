@@ -242,7 +242,12 @@ class TestNotebookWorkerProcessJob:
             input_file="/nonexistent/notebook.ipynb",
             output_file="/output/notebook.html",
             content_hash="test-hash",
-            payload={"kind": "completed", "prog_lang": "python"},
+            payload={
+                "kind": "completed",
+                "prog_lang": "python",
+                "language": "en",
+                "format": "html",
+            },
             status="processing",
             created_at=datetime.now(),
         )
@@ -266,7 +271,12 @@ class TestNotebookWorkerProcessJob:
             input_file=str(input_file),
             output_file=str(tmp_path / "output.html"),
             content_hash="test-hash",
-            payload={"kind": "completed"},
+            payload={
+                "kind": "completed",
+                "prog_lang": "python",
+                "language": "en",
+                "format": "html",
+            },
             status="processing",
             created_at=datetime.now(),
         )
@@ -293,7 +303,12 @@ class TestNotebookWorkerProcessJob:
             input_file=str(input_file),
             output_file=str(tmp_path / "output.html"),
             content_hash="test-hash",
-            payload={"kind": "completed"},
+            payload={
+                "kind": "completed",
+                "prog_lang": "python",
+                "language": "en",
+                "format": "html",
+            },
             status="processing",
             created_at=datetime.now(),
         )
@@ -371,7 +386,12 @@ class TestNotebookWorkerProcessJob:
             input_file=str(input_file),
             output_file=str(output_file),
             content_hash="test-hash",
-            payload={"kind": "completed"},
+            payload={
+                "kind": "completed",
+                "prog_lang": "python",
+                "language": "en",
+                "format": "html",
+            },
             status="processing",
             created_at=datetime.now(),
         )
@@ -409,7 +429,12 @@ class TestNotebookWorkerProcessJob:
             input_file=str(input_file),
             output_file=str(output_file),
             content_hash="test-hash",
-            payload={"kind": "completed"},
+            payload={
+                "kind": "completed",
+                "prog_lang": "python",
+                "language": "en",
+                "format": "html",
+            },
             status="processing",
             created_at=datetime.now(),
         )
@@ -451,7 +476,12 @@ class TestNotebookWorkerProcessJob:
             input_file=str(input_file),
             output_file=str(output_file),
             content_hash="test-hash",
-            payload={"kind": "completed", "format": "html"},
+            payload={
+                "kind": "completed",
+                "prog_lang": "python",
+                "language": "en",
+                "format": "html",
+            },
             status="processing",
             created_at=datetime.now(),
         )
@@ -721,7 +751,12 @@ class TestNotebookWorkerIntegration:
                 input_file=str(input_file),
                 output_file=str(output_file),
                 content_hash="test-hash",
-                payload={"kind": "completed", "prog_lang": "python"},
+                payload={
+                    "kind": "completed",
+                    "prog_lang": "python",
+                    "language": "en",
+                    "format": "html",
+                },
             )
 
         # Create worker
@@ -771,7 +806,12 @@ class TestNotebookWorkerIntegration:
                 input_file=str(input_file),
                 output_file=str(output_file),
                 content_hash="test-hash",
-                payload={"kind": "completed"},
+                payload={
+                    "kind": "completed",
+                    "prog_lang": "python",
+                    "language": "en",
+                    "format": "html",
+                },
             )
 
         # Create worker

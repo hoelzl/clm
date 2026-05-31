@@ -102,7 +102,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   drift, and CI now installs the `[replay]` extra so those tests run there.
   Ready-to-submit upstream patches that would let the fork be retired are in
   `docs/claude/vcrpy-upstream-patches.md`.
-
+- **Worker payloads are reconstructed by total deserialization, not a
+  hand-listed field set (issue #17 follow-up).** The notebook worker now
+  rebuilds its `NotebookPayload` via `Payload.from_job_payload`, which
+  `model_validate`s the entire serialized dict (symmetric with the host's
+  `model_dump`), so a newly added payload field can never again be silently
+  dropped at the worker boundary — the failure mode that disabled
+  cross-references. A malformed job missing a required descriptor field now
+  fails loudly instead of being coerced to defaults, and the
+  `(kind, prog_lang, language, format)` metadata extraction is centralized in
+  `notebook_metadata_tags_from_payload` (used by the worker and the
+  result/cache bookkeeping), removing previously divergent fallback defaults.
+  A structural round-trip test tied to `NotebookPayload.model_fields` guards
+  the invariant for every current and future field.
 - **`clm recordings check` is now backend-aware** (issue #33). The command
   reads `recordings.processing_backend` and only checks the dependencies the
   active backend actually needs, and the output table header shows which

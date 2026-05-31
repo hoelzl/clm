@@ -1,6 +1,8 @@
 import hashlib
 from abc import ABC, abstractmethod
-from typing import Any, Literal
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Any, Literal, Self
 
 from pydantic import BaseModel, Field
 
@@ -38,6 +40,49 @@ class Payload(TransferModel):
     input_file_name: str
     output_file: str
     data: str
+
+    @classmethod
+    def from_job_payload(
+        cls,
+        payload_data: Mapping[str, Any],
+        *,
+        content: str,
+        input_file: str,
+        output_file: str,
+        fallback_correlation_id: str,
+    ) -> Self:
+        """Reconstruct a payload from a job's serialized JSON payload dict.
+
+        The host serializes payloads with ``model_dump(mode="json")`` (see
+        ``SqliteBackend``); this deserializes the *whole* dict back via
+        ``model_validate``, so the round-trip is symmetric and total. A field
+        added to a payload subclass therefore can never be silently dropped at
+        the worker boundary — a hand-listed constructor previously dropped
+        ``cross_references`` (and ``svg_available_stems`` / ``inline_images``)
+        exactly this way (issue #17), leaving every ``clm:`` link unrewritten.
+
+        Only the file-bound fields are overridden, because at consume time they
+        do not come from the payload: the canonical input/output paths are
+        columns on the job row, and in Docker source-mount mode the ``content``
+        (notebook / diagram source) is read from the mounted filesystem rather
+        than carried inline. **Do not "simplify" these overrides away** — both
+        direct and Docker modes depend on them.
+
+        A required descriptor field missing from ``payload_data`` raises a
+        ``ValidationError`` rather than being silently defaulted: the host
+        always sets them, so a gap means a genuinely malformed job that should
+        fail loudly.
+        """
+        return cls.model_validate(
+            {
+                **dict(payload_data),
+                "data": content,
+                "input_file": input_file,
+                "input_file_name": Path(input_file).name,
+                "output_file": output_file,
+                "correlation_id": payload_data.get("correlation_id", fallback_correlation_id),
+            }
+        )
 
     def content_hash(self) -> str:
         return hashlib.sha256(self.data.encode("utf-8")).hexdigest()
