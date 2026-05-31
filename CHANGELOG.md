@@ -88,6 +88,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **Hardened the HTTP-replay vcrpy fork against silent breakage (issue #143,
+  toward #165).** The `[replay]` extra now pins `vcrpy>=8.1.1,<8.2` (was an
+  unbounded `>=6.0.0`). The notebook HTTP-replay bootstrap forks vcrpy 8.1.x
+  *internals* — notably the issue #143 connection-leak fix, which reinstalls
+  vcrpy's `_vcr_handle_request`/`_vcr_handle_async_request` verbatim plus an
+  explicit `close()`. An unvalidated vcrpy bump could silently change those
+  functions and resurrect the connection-pool deadlock; the tight pin makes
+  such a bump fail loudly at resolution time, and a new in-kernel guard fails
+  the build early if a kernel resolves vcrpy outside the validated 8.1.x line
+  or is missing the forked-internals symbols. A new pin-guard test
+  (`tests/workers/notebook/test_http_replay_vcr_pin_guard.py`) detects upstream
+  drift, and CI now installs the `[replay]` extra so those tests run there.
+  Ready-to-submit upstream patches that would let the fork be retired are in
+  `docs/claude/vcrpy-upstream-patches.md`.
+
 - **`clm recordings check` is now backend-aware** (issue #33). The command
   reads `recordings.processing_backend` and only checks the dependencies the
   active backend actually needs, and the output table header shows which
