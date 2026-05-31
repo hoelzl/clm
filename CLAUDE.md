@@ -112,6 +112,13 @@ Full procedure lives in `docs/developer-guide/releasing.md`. The hard rules:
   `uv run ruff format src/ tests/`.
 - Commits that fail a hook did **not** happen — fix the issue, re-stage, and
   create a **new** commit. Never `--amend` a commit the hook rejected.
+- **Reset a worktree to master** without breaking the main checkout: from inside
+  the worktree run `git fetch origin && git switch -C <worktree-branch>
+  origin/master`. Git won't let the *same* branch be checked out in two worktrees
+  (no config changes this), so do **not** check out the literal `master` in a
+  worktree, and **never** set `core.bare=true` on the main repo to work around it
+  — that strips the main checkout's working tree and is a recurring source of
+  breakage.
 
 ## Documentation Map
 
