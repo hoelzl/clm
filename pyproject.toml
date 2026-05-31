@@ -195,7 +195,19 @@ slides = [
 # (e.g. ``requests``, ``httpx``). Enables offline, deterministic HTML
 # builds when a topic opts in via ``http-replay="yes"`` in the spec.
 replay = [
-    "vcrpy>=6.0.0",
+    # Upper bound is deliberately tight. The HTTP-replay bootstrap in
+    # ``clm/workers/notebook/notebook_processor.py`` forks vcrpy *internals*
+    # to compensate for upstream bugs: notably the issue #143 connection-leak
+    # fix reinstalls vcrpy 8.1.x's ``_vcr_handle_request`` /
+    # ``_vcr_handle_async_request`` verbatim (plus an explicit ``close()``),
+    # and the issue #129 fix swaps ``vcr.patch.reset_patchers``. Those forks
+    # are validated against vcrpy 8.1.x only; a minor/major bump can silently
+    # change the forked functions and resurrect the #143 deadlock. Capping at
+    # ``<8.2`` makes any such bump fail *loudly* at resolution time instead,
+    # forcing a human to re-validate the forks and the pin-guard test
+    # (``tests/workers/notebook/test_http_replay_vcr_pin_guard.py``) before
+    # widening the bound.
+    "vcrpy>=8.1.1,<8.2",
     # Used to serialize cassette merges across concurrent workers that
     # process the same notebook in different languages.
     "filelock>=3.12.0",

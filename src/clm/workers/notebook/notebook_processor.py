@@ -427,6 +427,35 @@ _clm_atexit.register(_clm_ctx.__exit__, None, None, None)
 # the ``httpcore_stubs`` module globals at call time, so reassigning them here takes
 # effect even though the cassette is already entered.
 import vcr.stubs.httpcore_stubs as _clm_hcs
+# Pin-guard (issue #143): the two functions reinstalled below are a verbatim
+# fork of vcrpy 8.1.x's stubs (plus an explicit close()), and they call upstream
+# internals -- ``_vcr_request``, ``_record_responses``, ``ByteStream`` -- by name.
+# If a future vcrpy renames or refactors these, the fork would silently stop
+# closing the leaked httpcore connection and the Stage-3 pool-exhaustion deadlock
+# would return with no error. The ``pyproject.toml`` ``[replay]`` pin
+# (``vcrpy>=8.1.1,<8.2``) is the primary defense; this guard is defense-in-depth
+# for kernels that resolve vcrpy outside that pin. It turns silent rot into a
+# loud, early bootstrap failure. Re-validate the fork + the pin-guard test
+# (``tests/workers/notebook/test_http_replay_vcr_pin_guard.py``) before widening
+# the pin.
+_clm_vcr_version = getattr(_clm_vcr, "__version__", "0")
+_clm_vcr_major_minor = ".".join(str(_clm_vcr_version).split(".")[:2])
+_clm_missing_hcs = [
+    _n for _n in (
+        "_vcr_handle_request", "_vcr_handle_async_request",
+        "_vcr_request", "_record_responses", "ByteStream",
+    ) if not hasattr(_clm_hcs, _n)
+]
+if _clm_vcr_major_minor != "8.1" or _clm_missing_hcs:
+    raise RuntimeError(
+        "CLM HTTP-replay bootstrap (issue #143): the forked vcrpy httpcore stubs "
+        "are validated only against vcrpy 8.1.x, but this kernel has vcrpy "
+        + str(_clm_vcr_version)
+        + (("; missing httpcore_stubs symbols: " + ", ".join(_clm_missing_hcs)) if _clm_missing_hcs else "")
+        + ". The connection-leak fix would silently no-op. Re-validate the forked "
+        "_vcr_handle_request/_vcr_handle_async_request and the pin-guard test, then "
+        "update the pyproject.toml [replay] pin (currently >=8.1.1,<8.2)."
+    )
 def _clm_vcr_handle_request(cassette, real_handle_request, self, real_request):
     real_request_body = b"".join(real_request.stream)
     real_request.stream = _clm_hcs.ByteStream(real_request_body)
