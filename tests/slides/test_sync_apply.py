@@ -8,7 +8,7 @@ from clm.infrastructure.llm.cache import SyncWatermarkCache
 from clm.infrastructure.llm.ollama_client import StaticSyncJudge, SyncProposal
 from clm.notebooks.slide_parser import parse_cells
 from clm.slides.sync_apply import apply_plan
-from clm.slides.sync_plan import Proposal, SyncPlan, build_sync_plan, ordered_sync_cells
+from clm.slides.sync_plan import PlanIssue, Proposal, SyncPlan, build_sync_plan, ordered_sync_cells
 from clm.slides.sync_writeback import FileState
 
 # ---------------------------------------------------------------------------
@@ -252,7 +252,9 @@ class TestDeferredAndWatermark:
         assert result.watermark_recorded is False
         assert recorded is False
 
-    def test_move_is_deferred_and_watermark_not_advanced(self, tmp_path: Path):
+    def test_conflict_is_deferred_and_watermark_not_advanced(self, tmp_path: Path):
+        # A conflict is isolated (never applied), so the watermark must not
+        # advance — un-reconciled state must not be baselined.
         de_path, en_path = _write_pair(
             tmp_path,
             _slide("de", "a", "# ## A"),
@@ -262,7 +264,7 @@ class TestDeferredAndWatermark:
         try:
             plan = SyncPlan(de_path=de_path, en_path=en_path, baseline_source="watermark")
             plan.proposals.append(
-                Proposal(kind="move", role="slide", direction="de->en", slide_id="a")
+                Proposal(kind="conflict", role="slide", direction=None, slide_id="a")
             )
             result = apply_plan(plan, judge=None, watermark_cache=cache)
             recorded = cache.has_pair(str(de_path), str(en_path))
@@ -272,7 +274,7 @@ class TestDeferredAndWatermark:
         assert result.deferred == 1
         assert result.applied == 0
         assert result.watermark_recorded is False
-        assert recorded is False  # un-applied move must not be baselined
+        assert recorded is False  # un-reconciled conflict must not be baselined
 
     def test_remove_missing_target_is_error(self, tmp_path: Path):
         de_path, en_path = _write_pair(
@@ -316,3 +318,181 @@ class TestDeferredAndWatermark:
             if c.metadata.slide_id
         ]
         assert en_ids == ["a"]
+
+
+# ---------------------------------------------------------------------------
+# apply_plan — move (Phase 2b)
+# ---------------------------------------------------------------------------
+
+
+def _vo(lang: str, sid: str, body: str) -> str:
+    return f'# %% [markdown] lang="{lang}" tags=["voiceover"] slide_id="{sid}"\n{body}\n'
+
+
+def _slide_order(path: Path) -> list[str]:
+    return [
+        c.metadata.slide_id
+        for c in parse_cells(path.read_text(encoding="utf-8"))
+        if c.metadata.is_slide_start
+    ]
+
+
+class TestApplyMove:
+    def test_reorder_propagates_to_target(self, tmp_path: Path):
+        de = _slide("de", "a", "# ## A") + _slide("de", "b", "# ## B") + _slide("de", "c", "# ## C")
+        en = _slide("en", "a", "# ## A") + _slide("en", "b", "# ## B") + _slide("en", "c", "# ## C")
+        de_path, en_path = _write_pair(tmp_path, de, en)
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_watermark(cache, de_path, en_path)
+            # Author moves c to the front on DE.
+            de_path.write_text(
+                _slide("de", "c", "# ## C")
+                + _slide("de", "a", "# ## A")
+                + _slide("de", "b", "# ## B"),
+                encoding="utf-8",
+            )
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            assert plan.count("move") >= 1
+            result = apply_plan(plan, judge=None, watermark_cache=cache)
+            plan2 = build_sync_plan(de_path, en_path, watermark_cache=cache)
+        finally:
+            cache.close()
+
+        assert result.applied_move >= 1
+        assert _slide_order(en_path) == ["c", "a", "b"]
+        # Byte-clean: identical to building the deck in target order — no
+        # spurious blank line from the dragged terminal-newline artifact.
+        expected = (
+            _slide("en", "c", "# ## C") + _slide("en", "a", "# ## A") + _slide("en", "b", "# ## B")
+        )
+        assert en_path.read_text(encoding="utf-8") == expected
+        assert plan2.is_noop  # idempotent after watermark advance
+
+    def test_move_carries_narrative_companion(self, tmp_path: Path):
+        de = (
+            _slide("de", "a", "# ## A")
+            + _vo("de", "a", "# voiceover a")
+            + _slide("de", "b", "# ## B")
+            + _vo("de", "b", "# voiceover b")
+        )
+        en = (
+            _slide("en", "a", "# ## A")
+            + _vo("en", "a", "# voiceover a")
+            + _slide("en", "b", "# ## B")
+            + _vo("en", "b", "# voiceover b")
+        )
+        de_path, en_path = _write_pair(tmp_path, de, en)
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_watermark(cache, de_path, en_path)
+            # Move the whole b-group ahead of a on DE.
+            de_path.write_text(
+                _slide("de", "b", "# ## B")
+                + _vo("de", "b", "# voiceover b")
+                + _slide("de", "a", "# ## A")
+                + _vo("de", "a", "# voiceover a"),
+                encoding="utf-8",
+            )
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            apply_plan(plan, judge=None, watermark_cache=cache)
+        finally:
+            cache.close()
+
+        # EN slide order mirrors DE, and each voiceover stays under its slide.
+        en_cells = parse_cells(en_path.read_text(encoding="utf-8"))
+        sync_ids = [(c.metadata.slide_id, c.tags[0]) for c in en_cells if c.metadata.slide_id]
+        assert sync_ids == [
+            ("b", "slide"),
+            ("b", "voiceover"),
+            ("a", "slide"),
+            ("a", "voiceover"),
+        ]
+
+    def test_move_deferred_when_plan_has_an_add(self, tmp_path: Path):
+        de = _slide("de", "a", "# ## A") + _slide("de", "b", "# ## B")
+        en = _slide("en", "a", "# ## A") + _slide("en", "b", "# ## B")
+        de_path, en_path = _write_pair(tmp_path, de, en)
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_watermark(cache, de_path, en_path)
+            # Reorder AND add an id-less slide on DE.
+            de_path.write_text(
+                _slide("de", "b", "# ## B")
+                + _slide("de", "a", "# ## A")
+                + '# %% [markdown] lang="de" tags=["slide"]\n# ## Neu\n',
+                encoding="utf-8",
+            )
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            assert plan.count("add") == 1
+            assert plan.count("move") >= 1
+            result = apply_plan(plan, judge=None, watermark_cache=cache)
+        finally:
+            cache.close()
+
+        # The add can't be applied (Phase 3), so the move is held back too and
+        # the watermark does not advance — EN keeps its original order.
+        assert result.applied_move == 0
+        assert result.watermark_recorded is False
+        assert _slide_order(en_path) == ["a", "b"]
+
+    def test_narrative_reassignment_is_deferred_not_baselined(self, tmp_path: Path):
+        # The author swaps the two voiceovers across slides (slide order stays
+        # a,b, but notes change which slide they sit under). A slide-group
+        # reorder cannot express that, so it must be deferred and surfaced —
+        # never silently counted as applied and baselined.
+        de = (
+            _slide("de", "a", "# ## A")
+            + _vo("de", "a", "# vo a")
+            + _slide("de", "b", "# ## B")
+            + _vo("de", "b", "# vo b")
+        )
+        en = de.replace('lang="de"', 'lang="en"')
+        de_path, en_path = _write_pair(tmp_path, de, en)
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_watermark(cache, de_path, en_path)
+            # Swap the voiceovers: vo-b now under slide a, vo-a under slide b.
+            swapped = (
+                _slide("de", "a", "# ## A")
+                + _vo("de", "b", "# vo b")
+                + _slide("de", "b", "# ## B")
+                + _vo("de", "a", "# vo a")
+            )
+            de_path.write_text(swapped, encoding="utf-8")
+            before_en = en_path.read_text(encoding="utf-8")
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            assert plan.count("move") >= 1
+            result = apply_plan(plan, judge=None, watermark_cache=cache)
+        finally:
+            cache.close()
+
+        assert result.applied_move == 0
+        assert result.deferred >= 1
+        assert result.watermark_recorded is False  # divergence not baselined
+        assert en_path.read_text(encoding="utf-8") == before_en  # EN untouched
+
+    def test_classifier_error_defers_move(self, tmp_path: Path):
+        # A classifier error (e.g. an id collision elsewhere) makes the pass
+        # un-clean: a move must not write to disk while the watermark refuses
+        # to advance (the gate and the watermark check share one predicate).
+        de_path, en_path = _write_pair(
+            tmp_path,
+            _slide("de", "a", "# ## A") + _slide("de", "b", "# ## B"),
+            _slide("en", "a", "# ## A") + _slide("en", "b", "# ## B"),
+        )
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            plan = SyncPlan(de_path=de_path, en_path=en_path, baseline_source="watermark")
+            plan.issues.append(PlanIssue(severity="error", slide_id="x", reason="collision"))
+            plan.proposals.append(
+                Proposal(kind="move", role="slide", direction="de->en", slide_id="b")
+            )
+            result = apply_plan(plan, judge=None, watermark_cache=cache)
+        finally:
+            cache.close()
+
+        assert result.applied_move == 0
+        assert result.deferred >= 1
+        assert result.watermark_recorded is False
+        assert _slide_order(en_path) == ["a", "b"]  # EN untouched

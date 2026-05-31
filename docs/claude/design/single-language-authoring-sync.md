@@ -331,6 +331,22 @@ used and why it found 0 changes (in sync vs no baseline).
 
 - **Full 3-way LLM merge** for true conflicts (watermark is the ancestor).
 - **`--detect-moves`** content-similarity matching for delete-and-rewrite moves.
+- **Partial-apply watermark staleness** — the watermark advances all-or-nothing
+  (`_pass_is_clean`). When a pass reconciles some cells (edit/remove/move) but
+  defers others (a conflict, or — pre-Phase-3 — an add), the watermark does not
+  advance, so the reconciled edits re-surface as drift on the next run (the
+  judge then no-ops, so no data loss, but the UX is noisy). The clean fix is a
+  **per-cell** watermark advance that records reconciled cells while preserving
+  conflict cells' pre-conflict baseline — lands naturally with Phase 4 conflict
+  handling.
+- **Non-uniform inter-group blank padding** (cosmetic) — group-level move-apply
+  carries each group's own trailing blank padding verbatim, so reordering a deck
+  whose slides have *different* numbers of trailing blank lines redistributes
+  that spacing. The terminal-newline artifact is healed; genuine author
+  whitespace is preserved (not normalized), so a reorder can produce a
+  whitespace-only diff. Normalizing inter-slide spacing would violate the
+  byte-preserving split/unify contract, so it's left as-is unless real-deck
+  diffs prove noisy.
 - **Prompt tuning & batching** — the *model* is settled (Claude Sonnet via
   OpenRouter, §3.3/§8); what remains open is prompt iteration, batching of
   multiple new-slide translations per call (à la voiceover `merge_batch`), and
@@ -402,18 +418,27 @@ The spine. Everything else consumes its plan.
 
 ### Phase 2 — Writeback primitives + atomic apply for the deterministic kinds
 
-**Status: ✅ core implemented 2026-05-31** — `FileState.find_cell /
-replace_cell_body / delete_cell` (keyed by `(slide_id, role)`) +
-`clm/slides/sync_apply.py` (`apply_plan`: **remove** + **edit**, atomic,
-watermark advances only on a clean complete apply *and* a real baseline). 14
-tests; mypy + ruff clean. A 15-agent adversarial review ran; all 6 confirmed
-findings folded in (cold-start `has_baseline` watermark guard;
-terminal-newline preservation on last-cell delete; language-filtered
-content index; `role_of` de-duplicated to one public helper; shared
-`_cell_matches`; docstring). **MOVE-apply deferred to Phase 2b** (reordering
-slide *groups* with their narrative companions while preserving the
-round-trip). Live `clm slides sync` still unchanged — the apply engine is not
-yet wired into the CLI.
+**Status: ✅ implemented 2026-05-31 (incl. 2b move-apply)** — `FileState.find_cell
+/ replace_cell_body / delete_cell` (keyed by `(slide_id, role)`) +
+`clm/slides/sync_apply.py` (`apply_plan`: **remove** + **edit** + **move**,
+atomic, watermark advances only on a clean complete apply *and* a real
+baseline, via the shared `_pass_is_clean` predicate). 18 tests; mypy + ruff
+clean. Live `clm slides sync` still unchanged — the apply engine is not yet
+wired into the CLI.
+
+MOVE-apply reorders the target deck's slide *groups* (slide/subslide + its
+narrative companions + code) to match the source order by id-join. It commits
+only when the reorder reconciles the **full `(slide_id, role)` order** with the
+source (`_sync_key_order`); a narrative companion reassigned to a different
+slide that a group-level reorder cannot express is deferred and surfaced, never
+silently baselined.
+
+Two adversarial-review rounds (15 agents then 8) found **11 confirmed issues,
+all folded in**: cold-start `has_baseline` watermark guard; terminal-newline
+preservation on last-cell delete *and* on move (the dragged `""` artifact);
+language-filtered content index; `role_of`/`_cell_matches` de-duplication;
+the narrative-reassignment silent-divergence (now deferred); the move-gate
+`plan.has_errors` gap (now the shared `_pass_is_clean`).
 
 - `FileState.insert / delete / move` (`sync_writeback.py`), preserving the
   header + trailing-blank round-trip the split/unify invariant depends on.
