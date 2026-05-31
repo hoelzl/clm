@@ -226,7 +226,8 @@ These help diagnose builds that hang on a single notebook (see issue #143).
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `CLM_CELL_TIMEOUT_SECONDS` | Per-cell execution timeout (seconds) passed to nbclient. When set to a positive integer, a cell that does not return to idle within this window raises a cell timeout error (surfaced as a normal cell error) instead of blocking the worker until the build-level job timeout fires. Unset / non-positive keeps the historical no-timeout behavior. | (unset → no per-cell timeout) |
+| `CLM_CELL_TIMEOUT_SECONDS` | Per-cell execution timeout (seconds) passed to nbclient. When set to a positive integer, a cell that does not return to idle within this window raises a cell timeout error (surfaced as a normal cell error) instead of blocking the worker until the build-level job timeout fires. Always takes precedence over the replay-mode default below. Unset / non-positive keeps the historical no-timeout behavior for non-replay builds. | (unset → no per-cell timeout, except replay builds — see next row) |
+| `CLM_HTTP_REPLAY_CELL_TIMEOUT_SECONDS` | Default per-cell timeout (seconds) applied **only to HTTP-replay-engaged jobs** (any `--http-replay` mode but `disabled`), so a replay-layer hang surfaces as a clean cell timeout instead of stalling to the build-level job timeout (issue #143). Real cells in replay decks finish in seconds, so only a genuine hang reaches this ceiling. `CLM_CELL_TIMEOUT_SECONDS` overrides it; set to `0` to opt out. | `600` |
 | `CLM_SLOW_CELL_LOG_THRESHOLD_SECONDS` | Cells slower than this are logged at INFO (`slow cell N/total took Xs`) so a stalling notebook is visible without enabling DEBUG. | `60` |
 
 ### MCP Server

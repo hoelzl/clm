@@ -23,10 +23,12 @@ import pytest
 from nbformat import NotebookNode
 
 from clm.infrastructure.messaging.notebook_classes import NotebookPayload
+from clm.workers.notebook import notebook_processor as notebook_processor_module
 from clm.workers.notebook.notebook_processor import (
     CellIdGenerator,
     NotebookProcessor,
     TrackingExecutePreprocessor,
+    _effective_cell_timeout,
     _normalize_jupytext_metadata_filters,
     _strip_lines_to_next_cell,
 )
@@ -4061,3 +4063,50 @@ class TestSkipEvaluation:
         MockEP.assert_not_called()
         # Notebook output is non-empty JSON.
         assert result and result.strip()
+
+
+class TestEffectiveCellTimeout:
+    """Per-cell timeout resolution (issue #143 defense-in-depth, Option F).
+
+    An explicit CLM_CELL_TIMEOUT_SECONDS always wins; otherwise replay-engaged
+    jobs get a generous default so a replay-layer hang fails as a clean
+    CellTimeoutError instead of stalling to the job timeout, while non-replay
+    builds keep the historical no-timeout behavior.
+    """
+
+    def _payload(self, mode):
+        p = make_payload("", kind="speaker", format_="html")
+        if mode is not None:
+            p = p.model_copy(update={"http_replay_mode": mode})
+        return p
+
+    def test_disabled_mode_has_no_timeout(self):
+        with patch.object(notebook_processor_module, "CELL_EXECUTION_TIMEOUT", None):
+            assert _effective_cell_timeout(self._payload("disabled")) is None
+
+    def test_no_mode_has_no_timeout(self):
+        with patch.object(notebook_processor_module, "CELL_EXECUTION_TIMEOUT", None):
+            assert _effective_cell_timeout(self._payload(None)) is None
+
+    @pytest.mark.parametrize("mode", ["once", "replay", "new-episodes", "refresh"])
+    def test_replay_modes_get_the_default(self, mode):
+        with patch.object(notebook_processor_module, "CELL_EXECUTION_TIMEOUT", None):
+            assert (
+                _effective_cell_timeout(self._payload(mode))
+                == notebook_processor_module._HTTP_REPLAY_DEFAULT_CELL_TIMEOUT
+            )
+
+    def test_explicit_env_timeout_wins_even_for_replay(self):
+        with patch.object(notebook_processor_module, "CELL_EXECUTION_TIMEOUT", 42):
+            assert _effective_cell_timeout(self._payload("once")) == 42
+
+    def test_explicit_env_timeout_applies_to_disabled_too(self):
+        with patch.object(notebook_processor_module, "CELL_EXECUTION_TIMEOUT", 42):
+            assert _effective_cell_timeout(self._payload("disabled")) == 42
+
+    def test_replay_default_can_be_opted_out(self):
+        with (
+            patch.object(notebook_processor_module, "CELL_EXECUTION_TIMEOUT", None),
+            patch.object(notebook_processor_module, "_HTTP_REPLAY_DEFAULT_CELL_TIMEOUT", None),
+        ):
+            assert _effective_cell_timeout(self._payload("once")) is None
