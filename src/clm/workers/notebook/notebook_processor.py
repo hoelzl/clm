@@ -136,6 +136,13 @@ except ValueError:
 # LLM/RAG decks that use replay finish in seconds, so only a genuine hang reaches
 # this ceiling. An explicit CLM_CELL_TIMEOUT_SECONDS always wins; set
 # CLM_HTTP_REPLAY_CELL_TIMEOUT_SECONDS=0 to opt out of the default.
+#
+# Under the out-of-process mitmproxy transport (issue #165) a strict-replay miss
+# is engineered to fail FAST on its own: the addon returns a non-retryable 4xx
+# (404), so the SDK raises on the first attempt rather than retrying it as a 5xx
+# (an earlier 599 was retried, amplifying a miss across a deck's ``.batch()``
+# calls until this ceiling fired — measured at ~1200s). This timeout now only
+# backstops a genuine unexpected hang, not the expected miss path.
 try:
     _raw_replay_cell_timeout = float(os.environ.get("CLM_HTTP_REPLAY_CELL_TIMEOUT_SECONDS", "600"))
     _HTTP_REPLAY_DEFAULT_CELL_TIMEOUT: int | None = (
@@ -181,6 +188,23 @@ _HTTP_REPLAY_BOOTSTRAP_MARKER = "http_replay"
 # we encounter other telemetry endpoints with the same shape, or override
 # at build time via ``CLM_HTTP_REPLAY_IGNORE_HOSTS`` (comma-separated).
 _DEFAULT_HTTP_REPLAY_IGNORE_HOSTS = ("api.smith.langchain.com",)
+
+
+def resolve_http_replay_ignore_hosts() -> tuple[str, ...]:
+    """Resolve the http-replay ignore-hosts list from the environment.
+
+    Unset ``CLM_HTTP_REPLAY_IGNORE_HOSTS`` → the default
+    (:data:`_DEFAULT_HTTP_REPLAY_IGNORE_HOSTS`); set (even to the empty string)
+    → the comma-separated override, where an empty string means "record every
+    host". Shared by the in-kernel vcrpy bootstrap injection and the
+    out-of-process mitmproxy transport (build.py) so both honour the same
+    telemetry-suppression policy.
+    """
+    raw = os.environ.get("CLM_HTTP_REPLAY_IGNORE_HOSTS")
+    if raw is None:
+        return _DEFAULT_HTTP_REPLAY_IGNORE_HOSTS
+    return tuple(host.strip() for host in raw.split(",") if host.strip())
+
 
 _HTTP_REPLAY_BOOTSTRAP_TEMPLATE = """\
 # CLM HTTP REPLAY BOOTSTRAP - DO NOT EDIT
@@ -695,6 +719,147 @@ if _clm_trace_dir:
 
     _clm_atexit.register(_clm_trace_close)
 """
+
+
+# Out-of-process transport (issue #165, P2). Injected into the kernel
+# *instead of* the heavy vcrpy bootstrap when
+# ``CLM_HTTP_REPLAY_TRANSPORT=mitmproxy``. It does not patch httpcore or
+# enter any cassette context — it only tags every outgoing httpx request
+# with the destination cassette path so the single shared mitmproxy can
+# demux flows to the correct per-(topic,language,kind) cassette. The proxy
+# strips the ``X-CLM-Cassette`` header before recording or forwarding.
+# The patch is on the httpx ``Client``/``AsyncClient`` *classes*, so it
+# covers clients created before or after this cell (openai/langchain both
+# route through ``Client.send``). One tag per kernel (fresh kernel per
+# notebook), captured in the closure — the same lifetime the vcrpy
+# bootstrap relies on. No literal ``{}`` in the body so ``str.format`` only
+# substitutes ``{tag!r}``.
+_HTTP_REPLAY_TAG_BOOTSTRAP_TEMPLATE = """\
+# CLM HTTP REPLAY TAG BOOTSTRAP - DO NOT EDIT
+import httpx as _clm_httpx
+_CLM_CASSETTE_TAG = {tag!r}
+if not getattr(_clm_httpx.Client.send, "_clm_tagged", False):
+    _clm_orig_send = _clm_httpx.Client.send
+    def _clm_tagged_send(self, request, *args, **kwargs):
+        request.headers["x-clm-cassette"] = _CLM_CASSETTE_TAG
+        return _clm_orig_send(self, request, *args, **kwargs)
+    _clm_tagged_send._clm_tagged = True
+    _clm_httpx.Client.send = _clm_tagged_send
+if not getattr(_clm_httpx.AsyncClient.send, "_clm_tagged", False):
+    _clm_orig_asend = _clm_httpx.AsyncClient.send
+    async def _clm_tagged_asend(self, request, *args, **kwargs):
+        request.headers["x-clm-cassette"] = _CLM_CASSETTE_TAG
+        return await _clm_orig_asend(self, request, *args, **kwargs)
+    _clm_tagged_asend._clm_tagged = True
+    _clm_httpx.AsyncClient.send = _clm_tagged_asend
+"""
+
+
+# Socket-only forensic trace for the mitmproxy transport (issue #165 P5).
+# Appended to the tag bootstrap when CLM_HTTP_REPLAY_TRACE=1. Under the
+# transport the kernel never imports vcr or patches httpcore, so the heavy
+# ``_HTTP_REPLAY_TRACE_TEMPLATE`` (which wraps vcr internals and references
+# ``_clm_vcr_patch``/``_clm_cassette``/``_clm_json``/``_clm_atexit`` from the
+# vcrpy bootstrap) cannot run here. This template is fully self-contained — it
+# imports its own json/atexit and only installs the ``socket.connect`` audit
+# hook (Stream 1, the ground truth). The proxy-side ``proxy`` stream
+# (Stream 2′, written by the addon) supplies the interception evidence the
+# now-dark ``vcr`` stream used to. It writes the SAME ``worker-<pid>.jsonl``
+# file the vcr trace uses (only one of the two ever runs per kernel) so
+# ``analyze_http_replay_trace.py`` reads it identically. No literal ``{}`` in
+# the body except the doubled ``{{}}`` so ``str.format`` only fills ``{trace_dir!r}``.
+_HTTP_REPLAY_SOCKET_TRACE_TEMPLATE = """\
+# CLM HTTP REPLAY SOCKET TRACE - DO NOT EDIT
+_clm_strace_dir = {trace_dir!r}
+if _clm_strace_dir:
+    import atexit as _clm_st_atexit
+    import json as _clm_st_json
+    import os as _clm_st_os
+    import socket as _clm_st_socket  # noqa: F401
+    import sys as _clm_st_sys
+    import threading as _clm_st_threading
+    import time as _clm_st_time
+    from datetime import datetime as _clm_st_datetime, timezone as _clm_st_timezone
+
+    _clm_st_os.makedirs(_clm_strace_dir, exist_ok=True)
+    _clm_strace_path = _clm_st_os.path.join(
+        _clm_strace_dir, "worker-" + str(_clm_st_os.getpid()) + ".jsonl"
+    )
+    _clm_strace_fh = open(_clm_strace_path, "a", encoding="utf-8", newline="\\n")
+    _clm_strace_lock = _clm_st_threading.Lock()
+    _clm_strace_start = _clm_st_time.monotonic()
+
+    def _clm_strace_emit(stream, event, data=None):
+        try:
+            record = {{
+                "ts_mono": _clm_st_time.monotonic() - _clm_strace_start,
+                "ts_wall": _clm_st_datetime.now(_clm_st_timezone.utc).isoformat(),
+                "pid": _clm_st_os.getpid(),
+                "tid": _clm_st_threading.get_ident(),
+                "stream": stream,
+                "event": event,
+                "data": data or {{}},
+            }}
+            line = _clm_st_json.dumps(record) + "\\n"
+            with _clm_strace_lock:
+                _clm_strace_fh.write(line)
+                _clm_strace_fh.flush()
+        except Exception:
+            pass
+
+    def _clm_saudit_hook(event, args):
+        try:
+            if event == "socket.connect" and len(args) >= 2:
+                address = args[1]
+                if isinstance(address, tuple) and len(address) >= 2:
+                    host, port = address[0], address[1]
+                else:
+                    host, port = repr(address), None
+                _clm_strace_emit("socket", "connect", {{"host": host, "port": port}})
+        except Exception:
+            pass
+
+    _clm_st_sys.addaudithook(_clm_saudit_hook)
+    _clm_strace_emit("socket", "bootstrap.complete", {{"transport": "mitmproxy"}})
+
+    def _clm_strace_close():
+        try:
+            _clm_strace_fh.flush()
+            _clm_strace_fh.close()
+        except Exception:
+            pass
+
+    _clm_st_atexit.register(_clm_strace_close)
+"""
+
+
+def _inject_http_replay_tag_bootstrap(nb: NotebookNode, tag: str, *, trace_dir: str = "") -> None:
+    """Prepend the mitmproxy cassette-routing tag cell to ``nb``.
+
+    ``tag`` is the absolute canonical cassette path the host-side merge
+    will fold into. The cell carries the same ``clm_injected`` marker as
+    the vcrpy bootstrap so :func:`_strip_injected_cells` removes it before
+    the notebook reaches HTML / the execution cache.
+
+    When ``trace_dir`` is non-empty (CLM_HTTP_REPLAY_TRACE=1), the
+    self-contained socket-only forensic trace is appended so the kernel emits
+    the ``socket`` ground-truth stream to ``<trace_dir>/worker-<pid>.jsonl``
+    (issue #165 P5). Empty string (the common case) leaves the cell as just
+    the tag bootstrap.
+    """
+    from nbformat.v4 import new_code_cell
+
+    source = _HTTP_REPLAY_TAG_BOOTSTRAP_TEMPLATE.format(tag=tag)
+    if trace_dir:
+        source += "\n" + _HTTP_REPLAY_SOCKET_TRACE_TEMPLATE.format(trace_dir=trace_dir)
+    cell = new_code_cell(
+        source=source,
+        metadata={
+            "tags": ["del"],
+            "clm_injected": _HTTP_REPLAY_BOOTSTRAP_MARKER,
+        },
+    )
+    nb["cells"].insert(0, cell)
 
 
 def _inject_http_replay_bootstrap(
@@ -1941,6 +2106,15 @@ class NotebookProcessor:
         this directory; the host code merges staging into canonical via
         the same view of the filesystem.
         """
+        if os.environ.get("CLM_HTTP_REPLAY_TRANSPORT") == "mitmproxy":
+            # Out-of-process transport (issue #165): the mitmproxy proxy records
+            # and replays at the network layer, so the kernel needs no vcrpy
+            # bootstrap, no per-worker staging file, and no canonical merge.
+            # Returning None makes the seed / inject / merge calls all no-op, and
+            # the kernel's real httpx/httpcore is never patched (the structural
+            # fix for the issue #143 connection-pool deadlock).
+            return None
+
         from .http_replay_cassette import CassettePaths, resolve_paths
 
         mode = payload.http_replay_mode
@@ -1973,6 +2147,60 @@ class NotebookProcessor:
             return None
         paths: CassettePaths = resolve_paths(target_dir, cassette_name)
         return paths
+
+    def _resolve_mitmproxy_tag(
+        self, payload: NotebookPayload, source_dir: Path | None
+    ) -> str | None:
+        """Resolve the ``X-CLM-Cassette`` routing tag for the mitmproxy transport.
+
+        The tag is the absolute canonical cassette path this notebook's
+        traffic belongs to. It uses the same ``payload.http_replay_cassette_name``
+        as the vcrpy path's :meth:`_resolve_cassette_paths` (which already
+        carries the split-deck base-cassette fallback for ``replay`` and the
+        strict language-specific name for record modes, issue #159) and the
+        same ``resolve_paths`` canonical computation.
+
+        **Host namespace (issue #165 P4):** unlike the vcrpy path — where the
+        in-container *kernel* writes the staging cassette and therefore needs
+        the container-mapped ``source_dir`` (``/source/...``) — the mitmproxy
+        proxy and the ``merge_mitmproxy_cassette_staging`` host step run on the
+        **host**. The tag must therefore name a **host** path so the proxy
+        writes ``<tag>.staging-mitm-<build_id>`` beside the real canonical
+        cassette the host-side merge folds it into. We resolve against
+        ``payload.source_topic_dir`` (the host topic dir in both Direct and
+        Docker modes — Docker workers derive their container ``source_dir``
+        *from* it) and fall back to the container ``source_dir`` only if no
+        host path is available. In Direct mode the two are identical, so this
+        is a no-op there. Returns ``None`` when the topic did not opt into a
+        replay-capable mode or no cassette / target dir resolves.
+
+        **Invariant:** an http-replay notebook must keep its cassette beside the
+        notebook at the topic root (the ``_cassettes/`` dir under
+        ``source_topic_dir``). ``cassette_name`` is resolved relative to the
+        notebook's own parent while the tag here resolves against
+        ``source_topic_dir``; for a notebook nested in a sub-directory of the
+        topic the two diverge, so the proxy would write staging to a dir the
+        host-side merge (``Course.merge_mitmproxy_cassette_staging``) does not
+        scan and a record-mode recording would be misplaced (replay is
+        unaffected — it reads the committed canonical). This mirrors the
+        existing vcrpy direct path's topic-dir-based resolution; converging
+        nested layouts is a separate follow-up touching both transports.
+        """
+        mode = payload.http_replay_mode
+        if not mode or mode == "disabled" or mode not in _HTTP_REPLAY_MODE_TO_VCR_MODE:
+            return None
+        cassette_name = payload.http_replay_cassette_name
+        if not cassette_name:
+            return None
+        if payload.source_topic_dir:
+            target_dir: Path = Path(payload.source_topic_dir)
+        elif source_dir is not None:
+            target_dir = source_dir
+        else:
+            return None
+        from .http_replay_cassette import resolve_paths
+
+        return str(resolve_paths(target_dir, cassette_name).canonical)
 
     def _persist_recorded_cassette(
         self,
@@ -2028,7 +2256,10 @@ class NotebookProcessor:
             )
 
         try:
-            merged = merge_staging_into_canonical(paths)
+            # ``refresh`` (vcrpy ``all``) re-records every interaction, so a
+            # freshly recorded response must supersede the stale canonical entry
+            # rather than being dropped by first-seen dedup (issue #165 P3).
+            merged = merge_staging_into_canonical(paths, overwrite_existing=(mode == "refresh"))
         except Exception as exc:  # noqa: BLE001 — defensive: never let merge mask
             #  the original notebook execution error.
             logger.exception(
@@ -2052,13 +2283,43 @@ class NotebookProcessor:
         processed_nb: NotebookNode,
         payload: NotebookPayload,
         paths: "CassettePaths | None",
+        source_dir: Path | None = None,
     ) -> bool:
-        """Inject the vcrpy bootstrap cell when the topic opted into replay.
+        """Inject the http-replay bootstrap cell when the topic opted in.
 
-        ``paths`` is the resolved canonical/staging pair from
-        :meth:`_resolve_cassette_paths`. Returns ``True`` when a cell was
-        injected so the caller can decide whether to run the strip pass.
+        Under the out-of-process transport (``CLM_HTTP_REPLAY_TRANSPORT=
+        mitmproxy``) this injects the lightweight cassette-routing *tag*
+        bootstrap (which patches httpx to tag each request with its
+        destination cassette so the shared proxy demuxes correctly); the
+        kernel's httpcore is never patched. Otherwise it injects the
+        in-kernel vcrpy bootstrap using ``paths`` (the resolved
+        canonical/staging pair from :meth:`_resolve_cassette_paths`).
+        Returns ``True`` when a cell was injected so the caller runs the
+        strip pass.
         """
+        if os.environ.get("CLM_HTTP_REPLAY_TRANSPORT") == "mitmproxy":
+            tag = self._resolve_mitmproxy_tag(payload, source_dir)
+            if tag is None:
+                return False
+            # Forensic socket trace (issue #165 P5): the kernel emits its
+            # ground-truth ``socket`` stream so the analyzer can confirm every
+            # connect goes to the proxy (none escapes). Prefer the payload field
+            # (same source the vcrpy path uses); fall back to the host-pinned env
+            # the Direct worker inherits, so the socket stream is reliably written
+            # whenever CLM_HTTP_REPLAY_TRACE=1 even if the field was not threaded.
+            trace_dir = (
+                getattr(payload, "http_replay_trace_dir", "")
+                or os.environ.get("CLM_HTTP_REPLAY_TRACE_INVOCATION_DIR", "")
+                or ""
+            )
+            _inject_http_replay_tag_bootstrap(processed_nb, tag, trace_dir=trace_dir)
+            logger.debug(
+                f"{payload.correlation_id}: Injected http-replay tag bootstrap "
+                f"(mitmproxy transport, cassette='{tag}') for "
+                f"'{payload.input_file_name}'"
+            )
+            return True
+
         if paths is None:
             return False
         mode = payload.http_replay_mode
@@ -2076,14 +2337,7 @@ class NotebookProcessor:
             trace_max_body = int(trace_max_body_raw) if trace_max_body_raw else 2048
         except ValueError:
             trace_max_body = 2048
-        ignore_hosts_raw = os.environ.get("CLM_HTTP_REPLAY_IGNORE_HOSTS")
-        ignore_hosts: tuple[str, ...]
-        if ignore_hosts_raw is None:
-            ignore_hosts = _DEFAULT_HTTP_REPLAY_IGNORE_HOSTS
-        else:
-            ignore_hosts = tuple(
-                host.strip() for host in ignore_hosts_raw.split(",") if host.strip()
-            )
+        ignore_hosts = resolve_http_replay_ignore_hosts()
         _inject_http_replay_bootstrap(
             processed_nb,
             str(paths.staging),
@@ -2128,7 +2382,7 @@ class NotebookProcessor:
 
                     seed_staging_from_canonical(cassette_paths)
                 replay_injected = self._maybe_inject_http_replay(
-                    processed_nb, payload, cassette_paths
+                    processed_nb, payload, cassette_paths, source_dir
                 )
                 execution_succeeded = False
                 try:

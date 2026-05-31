@@ -24,6 +24,87 @@ from clm.infrastructure.workers.windows_job_object import WorkerJobObject
 
 logger = logging.getLogger(__name__)
 
+# DNS alias every container uses to reach the host (extra_hosts host-gateway):
+# the CLM REST API (CLM_API_URL) and, under the mitmproxy transport, the proxy.
+# Shared by the API-URL construction and NO_PROXY so the two can never drift
+# (NO_PROXY must list exactly the API host or worker registration would be
+# routed through the replay proxy — see _mitmproxy_docker_env).
+_DOCKER_HOST_ALIAS = "host.docker.internal"
+
+# Dedicated in-container bind-mount target for the mitmproxy CA bundle (issue
+# #165 P4). NOT the CLM source tree (that lives at /app/clm); this is a mount-
+# only path. A single read-only file mount works on Docker Desktop (Windows/
+# WSL2) and native Linux alike.
+_MITM_CA_CONTAINER_PATH = "/clm/mitmproxy-ca-bundle.pem"
+
+
+def _mitmproxy_docker_env(
+    host_environ: dict[str, str],
+) -> tuple[dict[str, str], tuple[str, str] | None]:
+    """Container env additions + CA bind-mount for the mitmproxy transport (#165 P4).
+
+    Returns ``({}, None)`` unless the host activated the out-of-process
+    HTTP-replay transport (``CLM_HTTP_REPLAY_TRANSPORT=mitmproxy`` with an
+    ``HTTP(S)_PROXY`` set by ``build._maybe_start_mitmproxy_transport``). A
+    ``127.0.0.1`` proxy is unreachable from inside a container, so when active
+    this:
+
+    - rewrites ``HTTP(S)_PROXY`` from the host's loopback proxy URL to
+      ``host.docker.internal`` (the container's route back to the host;
+      ``extra_hosts host-gateway`` is already set) so the kernel's LLM traffic
+      is intercepted by the shared proxy;
+    - sets ``NO_PROXY=host.docker.internal`` so the worker's REST-API traffic to
+      the CLM host (``CLM_API_URL``) **bypasses** the proxy — otherwise worker
+      registration/heartbeats would hit the replay proxy as cassette misses and
+      the build would stall before any notebook ran;
+    - points the three cert-bundle env vars at the proxy CA bundle, bind-mounted
+      read-only at :data:`_MITM_CA_CONTAINER_PATH`, so the container's TLS
+      trusts the proxy-forged certificates;
+    - passes ``CLM_HTTP_REPLAY_TRANSPORT`` through so the in-container notebook
+      processor injects the cassette-routing tag bootstrap (P2) and skips the
+      in-kernel vcrpy bootstrap.
+
+    The second return value is ``(host_ca_path, container_ca_path)`` for the
+    read-only bind mount, or ``None`` when no usable host CA bundle is found.
+    """
+    if host_environ.get("CLM_HTTP_REPLAY_TRANSPORT") != "mitmproxy":
+        return {}, None
+    proxy = host_environ.get("HTTPS_PROXY") or host_environ.get("HTTP_PROXY")
+    if not proxy:
+        return {}, None
+
+    from urllib.parse import urlsplit, urlunsplit
+
+    parts = urlsplit(proxy)
+    try:
+        port = parts.port
+    except ValueError:
+        port = None
+    netloc = _DOCKER_HOST_ALIAS + (f":{port}" if port else "")
+    container_proxy = urlunsplit((parts.scheme or "http", netloc, "", "", ""))
+
+    env: dict[str, str] = {
+        "HTTP_PROXY": container_proxy,
+        "HTTPS_PROXY": container_proxy,
+        "http_proxy": container_proxy,
+        "https_proxy": container_proxy,
+        # Worker <-> CLM REST API (CLM_API_URL host) must NOT be proxied, or
+        # registration/heartbeats would be replayed as cassette misses. Uses the
+        # same _DOCKER_HOST_ALIAS the API URL is built from so they can't drift.
+        "NO_PROXY": _DOCKER_HOST_ALIAS,
+        "no_proxy": _DOCKER_HOST_ALIAS,
+        "CLM_HTTP_REPLAY_TRANSPORT": "mitmproxy",
+    }
+
+    mount: tuple[str, str] | None = None
+    ca_host = host_environ.get("SSL_CERT_FILE")
+    if ca_host and Path(ca_host).is_file():
+        mount = (str(Path(ca_host).absolute()), _MITM_CA_CONTAINER_PATH)
+        env["SSL_CERT_FILE"] = _MITM_CA_CONTAINER_PATH
+        env["REQUESTS_CA_BUNDLE"] = _MITM_CA_CONTAINER_PATH
+        env["CURL_CA_BUNDLE"] = _MITM_CA_CONTAINER_PATH
+    return env, mount
+
 
 @dataclass
 class WorkerConfig:
@@ -199,7 +280,7 @@ class DockerWorkerExecutor(WorkerExecutor):
             # This solves the SQLite WAL mode issues on Windows Docker
             from clm.infrastructure.api.server import DEFAULT_PORT
 
-            api_url = f"http://host.docker.internal:{DEFAULT_PORT}"
+            api_url = f"http://{_DOCKER_HOST_ALIAS}:{DEFAULT_PORT}"
 
             # Build volume mounts
             volumes = {
@@ -250,6 +331,29 @@ class DockerWorkerExecutor(WorkerExecutor):
                     _v = os.environ.get(_k, "")
                     if _v:
                         environment[_k] = _v
+
+            # Out-of-process mitmproxy HTTP-replay transport (issue #165 P4):
+            # route the container's LLM traffic through the host proxy via
+            # host.docker.internal and trust its CA, while keeping worker<->API
+            # traffic off the proxy. Only the notebook worker makes the LLM
+            # traffic the proxy intercepts, so we inject solely for it — diagram
+            # converters (plantuml/drawio) get no needless proxy env or CA mount.
+            # No-op unless the host activated the transport
+            # (CLM_HTTP_REPLAY_TRANSPORT=mitmproxy).
+            mitm_env, mitm_mount = (
+                _mitmproxy_docker_env(dict(os.environ)) if worker_type == "notebook" else ({}, None)
+            )
+            if mitm_env:
+                environment.update(mitm_env)
+                logger.debug(
+                    "mitmproxy transport: container proxy=%s NO_PROXY=%s CA=%s",
+                    environment.get("HTTPS_PROXY"),
+                    environment.get("NO_PROXY"),
+                    environment.get("SSL_CERT_FILE", "NOT MOUNTED"),
+                )
+            if mitm_mount is not None:
+                host_ca, container_ca = mitm_mount
+                volumes[host_ca] = {"bind": container_ca, "mode": "ro"}
 
             log_mounts = f"  Workspace: {self.workspace_path.absolute()} -> /workspace (rw)"
             if self.data_dir:

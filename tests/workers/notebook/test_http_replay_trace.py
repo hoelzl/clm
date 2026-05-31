@@ -532,3 +532,229 @@ class TestAnalysisScript:
         payload = json.loads(proc.stdout)
         assert "workers" in payload
         assert "host" in payload
+
+
+class TestIsLoopback:
+    """is_loopback must recognize all loopback forms a dual-stack kernel's
+    socket.connect audit event can report verbatim (issue #165 P5), so they are
+    not over-reported as escapes."""
+
+    def _ana(self):
+        sys.path.insert(0, str(Path("scripts").resolve()))
+        try:
+            import analyze_http_replay_trace as ana
+        finally:
+            sys.path.pop(0)
+        return ana
+
+    def test_loopback_forms_recognized(self):
+        ana = self._ana()
+        for h in [
+            "127.0.0.1",
+            "127.0.0.5",  # whole 127.0.0.0/8
+            "::1",
+            "0:0:0:0:0:0:0:1",  # expanded IPv6 loopback
+            "::ffff:127.0.0.1",  # IPv4-mapped loopback
+            "localhost",
+        ]:
+            assert ana.is_loopback(h) is True, h
+
+    def test_non_loopback_not_recognized(self):
+        ana = self._ana()
+        for h in ["10.0.0.2", "api.openai.com", "smith.langchain.com", "0.0.0.0", ""]:
+            assert ana.is_loopback(h) is False, h
+
+
+class TestTransportModeAnalysis:
+    """Under transport=mitmproxy the analyzer inverts the bypass rule and reads
+    the ``proxy`` stream as interception evidence (issue #165 P5).
+
+    The kernel's intended remote target IS the proxy, so a remote connect on the
+    proxy port is expected (to-proxy), and a remote connect to any other port is
+    a genuine escape. The dark ``vcr`` stream is not consulted.
+    """
+
+    PROXY_PORT = 12345
+
+    def _build_bundle(self, tmp_path: Path) -> Path:
+        invocation = tmp_path / "trace"
+        invocation.mkdir()
+        (invocation / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "schema": 1,
+                    "started_at": "2026-05-31T10:00:00+00:00",
+                    "host_pid": 99,
+                    "http_replay_mode": "new-episodes",
+                    "transport": "mitmproxy",
+                    "verbose": False,
+                    "max_body_bytes": 2048,
+                    "argv": ["clm", "build"],
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+        def _event(stream, event, *, pid, tid, ts_mono, data=None):
+            return (
+                json.dumps(
+                    {
+                        "ts_mono": ts_mono,
+                        "ts_wall": "2026-05-31T10:00:00+00:00",
+                        "pid": pid,
+                        "tid": tid,
+                        "stream": stream,
+                        "event": event,
+                        "data": data or {},
+                    }
+                )
+                + "\n"
+            )
+
+        # Proxy stream: the addon's per-flow decisions.
+        proxy_lines = [
+            _event(
+                "proxy",
+                "proxy.ready",
+                pid=5000,
+                tid=1,
+                ts_mono=0.0,
+                data={
+                    "listen_host": "0.0.0.0",
+                    "listen_port": self.PROXY_PORT,
+                    "mode": "new-episodes",
+                },
+            ),
+            _event(
+                "proxy",
+                "proxy.request",
+                pid=5000,
+                tid=1,
+                ts_mono=1.0,
+                data={"method": "POST", "host": "api.openai.com", "port": 443, "action": "served"},
+            ),
+            _event(
+                "proxy",
+                "proxy.request",
+                pid=5000,
+                tid=1,
+                ts_mono=1.1,
+                data={"method": "POST", "host": "api.openai.com", "port": 443, "action": "forward"},
+            ),
+            _event(
+                "proxy",
+                "proxy.response",
+                pid=5000,
+                tid=1,
+                ts_mono=1.2,
+                data={"host": "api.openai.com", "port": 443, "status": 200, "recorded": True},
+            ),
+            _event(
+                "proxy",
+                "proxy.request",
+                pid=5000,
+                tid=1,
+                ts_mono=1.3,
+                data={
+                    "method": "POST",
+                    "host": "smith.langchain.com",
+                    "port": 443,
+                    "action": "ignored",
+                },
+            ),
+        ]
+        (invocation / "proxy-5000.jsonl").write_text("".join(proxy_lines), encoding="utf-8")
+
+        # Worker stream: a loopback Jupyter connect (NOT the proxy port), a
+        # Direct-style loopback connect TO the proxy port, a Docker-style
+        # gateway-IP connect to the proxy port, and a genuine escape on :443.
+        worker_lines = [
+            _event(
+                "socket",
+                "connect",
+                pid=4242,
+                tid=1,
+                ts_mono=0.4,
+                data={"host": "127.0.0.1", "port": 50000},
+            ),
+            _event(
+                "socket",
+                "connect",
+                pid=4242,
+                tid=1,
+                ts_mono=0.5,
+                data={"host": "127.0.0.1", "port": self.PROXY_PORT},
+            ),
+            _event(
+                "socket",
+                "connect",
+                pid=4242,
+                tid=1,
+                ts_mono=0.6,
+                data={"host": "10.0.0.2", "port": self.PROXY_PORT},
+            ),
+            _event(
+                "socket",
+                "connect",
+                pid=4242,
+                tid=1,
+                ts_mono=0.7,
+                data={"host": "api.openai.com", "port": 443},
+            ),
+        ]
+        (invocation / "worker-4242.jsonl").write_text("".join(worker_lines), encoding="utf-8")
+        return invocation
+
+    def _ana(self):
+        sys.path.insert(0, str(Path("scripts").resolve()))
+        try:
+            import analyze_http_replay_trace as ana
+        finally:
+            sys.path.pop(0)
+        return ana
+
+    def test_proxy_stream_and_bypass_inversion(self, tmp_path):
+        ana = self._ana()
+        result = ana.analyze(self._build_bundle(tmp_path))
+
+        assert result.transport == "mitmproxy"
+        assert result.proxy.proxy_ports == {self.PROXY_PORT}
+        assert result.proxy.flows_total == 3
+        assert result.proxy.served == 1
+        assert result.proxy.forward == 1
+        assert result.proxy.ignored == 1
+        assert result.proxy.recorded == 1
+
+        ws = result.workers[4242]
+        assert len(ws.loopback_connects) == 2  # jupyter + the Direct loopback-to-proxy
+        assert len(ws.remote_connects) == 2  # the gateway-IP one + the escape
+        # Both proxy-port connects (loopback Direct + remote Docker gateway) are
+        # to-proxy, NOT bypasses.
+        assert len(ws.to_proxy_connects) == 2
+        assert {c.data["host"] for c in ws.to_proxy_connects} == {"127.0.0.1", "10.0.0.2"}
+        # Only the :443 connect that is NOT on the proxy port is the genuine escape.
+        assert len(ws.bypassed) == 1
+        assert ws.bypassed[0]["host"] == "api.openai.com"
+        # No vcr stream → no race candidates under the transport.
+        assert ws.race_candidates == []
+
+    def test_text_report_transport_sections(self, tmp_path):
+        ana = self._ana()
+        result = ana.analyze(self._build_bundle(tmp_path))
+        report = ana.format_text(result)
+        assert "Transport:       mitmproxy" in report
+        assert "Proxy (interception evidence):" in report
+        assert "To proxy (expected): 2" in report
+        assert "Bypassed (escaped the proxy): 1" in report
+        assert "BYPASS — escaped the proxy" in report
+
+    def test_json_report_has_proxy_block(self, tmp_path):
+        ana = self._ana()
+        result = ana.analyze(self._build_bundle(tmp_path))
+        payload = json.loads(ana.format_json(result))
+        assert payload["transport"] == "mitmproxy"
+        assert payload["proxy"]["proxy_ports"] == [self.PROXY_PORT]
+        assert payload["proxy"]["flows_total"] == 3
+        assert payload["workers"]["4242"]["to_proxy_connects"] == 2
+        assert payload["workers"]["4242"]["remote_connects"] == 2

@@ -1,0 +1,391 @@
+# Issue #165 — production plan (mitmproxy HTTP-replay transport)
+
+Phase 0 is complete and all three GO gates are GREEN (see
+`issue-165-phase0-findings.md`): CA trust, deadlock-class elimination, and
+single-proxy throughput at 16-worker load. The architectural risk is retired.
+What follows is **known production engineering**, not unknowns.
+
+**Invariant for every phase below:** vcrpy stays the **default**;
+`CLM_HTTP_REPLAY_TRANSPORT=mitmproxy` is opt-in and must remain bit-identical to
+today when unset. vcrpy is **never uninstalled** — it remains the pure YAML
+serializer behind `clm cassette doctor`, `strip_cassette_hosts.py`, and
+`merge_staging_into_canonical`. The default flips to mitmproxy only after every
+parity gate holds across a full release cycle, and the 8 in-kernel workarounds
+are deleted only then.
+
+Current state (branch `claude/issue-165-mitmproxy-transport`, draft #173, stacked
+on insurance #172): `MitmproxyManager` + `ClmReplayAddon` (native `.mitm`
+format), opt-in Direct-mode wiring, 4 smoke + 3 no-op regression tests.
+
+---
+
+## P1 — vcrpy-YAML cassette bridge  ·  ~3–4 d  ·  risk: medium  ·  **DONE**
+
+**Status (done):** the addon now persists the vcrpy v1 YAML schema via a
+pure `cassette_format.py` bridge (imports only `vcr` + stdlib; importable
+both as a CLM submodule and by bare path inside the `uv tool` mitmdump
+interpreter, which now carries vcrpy via `uv tool install mitmproxy --with
+vcrpy`). The bridge routes through vcrpy's own `serialize` / `Request` /
+`decode_response`, so output is byte-identical to a vcrpy-recorded
+cassette. Gate proven by `tests/infrastructure/test_http_replay_mitm_cassette_format.py`
+(byte-identity vs vcrpy for plain + gzip + multi-value headers, LF
+endings, no `convert_to_unicode` aliasing leak, round-trip load, and
+`merge_staging_into_canonical` folding a bridge cassette). The 4 mitmproxy
+smoke tests pass against the new format (record → replay → strict-miss
+599). Still single-shared-cassette — per-target routing is P2.
+
+The addon persisted native `.mitm` before. Production must read/write the
+**existing vcrpy v1 YAML schema** so committed course cassettes and the
+doctor/strip/merge tooling keep working unchanged.
+
+- Convert `HTTPFlow` ⇄ vcrpy `(Request, response-dict)` at the addon boundary.
+- Write via `vcr.serialize.serialize` + `FilesystemPersister` — verified
+  near-pure (import `yaml` / `vcr.request.Request` / `vcr.serializers.compat`;
+  no live VCR/cassette/patching context needed). Read via `vcr.deserialize`.
+- **Must:** LF-only writes through the shared atomic-write helper (not
+  `FilesystemPersister`'s default newline) to avoid CRLF flapping under the
+  repo's `eol=lf` gitattributes; emit headers as dict-of-lists and
+  `response.body.string` as UTF-8 text so `cassette doctor` / `strip` load it;
+  `decode_compressed_response` parity (gzip/deflate/br); avoid the
+  `convert_to_unicode` bytes→str in-place mutation (the workaround-#2 footgun)
+  by not aliasing dicts between the index and the writer.
+- **Gate:** a mitmproxy-recorded cassette for a deck is byte-comparable to the
+  vcrpy-produced one; `cassette doctor` and `strip_cassette_hosts.py` operate on
+  it unchanged.
+
+## P2 — request→cassette routing (concurrent multi-topic)  ·  ~2–3 d  ·  risk: medium  ·  **DONE**
+
+**Status (done):** each worker injects a lightweight tag bootstrap (patch
+httpx `Client`/`AsyncClient.send` to add `X-CLM-Cassette: <canonical>`)
+instead of the vcrpy bootstrap under the transport; the tag is
+`payload.http_replay_cassette_name` resolved exactly like the vcrpy path,
+so it **already carries the #159 split-deck base-cassette fallback** (replay
+→ fallback-aware name, record → strict name) and equals the host
+merge-discovery canonical by construction. The single addon demuxes flows
+by tag into one `<cassette>.staging-mitm-<build_id>` per canonical (vcrpy
+YAML), strips the tag before recording/forwarding, and routes untagged
+traffic to a catch-all so strict replay never escapes. The **host** writes
+the `.completed` marker for this build's staging in the build `finally`
+(`Course.merge_mitmproxy_cassette_staging(build_id)`) — the reliable
+build-completion signal (mitmproxy's `done` hook does not fire on a Windows
+`CTRL_BREAK`) — then folds via the existing `merge_staging_into_canonical`.
+A force-killed build never reaches the marker step, so its staging stays
+markerless and the next pre-build sweep discards it (issue #115 semantics,
+at build-end granularity). Gate proven: a routing smoke test (two tagged
++ one untagged request → correct per-cassette staging, tag stripped, no
+cross-contamination, catch-all, real host marker+merge round-trip) plus
+unit tests for tag injection/strip, tag resolution, and the host merge
+(folds markered, leaves markerless, LF endings).
+
+**Adversarial review (workflow `wf_eeeba6cb-563`, 5 probe-driven lenses)
+confirmed 4 findings; the convert_to_unicode aliasing concern was refuted by
+a control probe (the `serialize_interactions` deepcopy is load-bearing).**
+Fixed in this branch: (1) **HIGH** — `once` mode aborted the build because the
+Phase-0 catch-all existence guard in `addon.running()` checked the
+always-empty build-scratch catch-all; removed it, `once`/`refresh` now route
+per-target via the mode sets (regression test added). (2) **LOW** — a
+non-ASCII HTTP/1.1 reason phrase was recorded where vcrpy would crash and the
+result was not vcrpy-replayable; `cassette_format` now drops it to `None`
+(ASCII reasons stay byte-identical). **Deferred** (not P1/P2 regressions): the
+`refresh`-overwrite gap (the mode-blind `merge_staging_into_canonical` keeps
+the stale canonical entry — *identical behavior in the in-process vcrpy path*,
+so a cross-cutting merge change → P3) and the catch-all's O(n²) eager
+full-rewrite (latent; tagged per-notebook targets stay tiny, proven fine at
+the 18-notebook / 506 KB scale → perf follow-up).
+
+The Phase-0 proof used **one shared cassette**; production needs each request
+mapped to the correct per-(topic, language, kind) cassette under concurrency.
+
+- Tag each request per worker (e.g. an `X-CLM-Cassette` header injected by the
+  worker env / a tiny client hook, stripped before recording) so the single
+  addon demuxes flows into the correct per-target staging file — or run one
+  proxy per worker (rejected unless P1/throughput says otherwise; the shared
+  proxy is proven sufficient).
+- Reuse the existing `merge_staging_into_canonical` (resolve_paths, FileLock,
+  `.completed` markers, `sweep_orphans`, dedup key) — format-agnostic, hardened
+  by the #145 + BytesIO fixes.
+- Preserve the `.de`/`.en` split-deck base-cassette fallback (#159/#161).
+- **Gate:** a concurrent DE/EN multi-topic build routes each topic's flows to the
+  correct staging file and merges with no cross-contamination; split fallback
+  still resolves.
+
+## P3 — correctness/security parity in the addon  ·  ~3–5 d  ·  risk: high  ·  **DONE**
+
+**Status (done):** the addon now has secret/telemetry hygiene + matching/mode
+parity with the in-kernel vcrpy bootstrap, all reusing vcrpy's *own* filter and
+matcher functions so behavior is identical by construction.
+
+- **Secret filtering + ignore_hosts** live in `cassette_format.build_request_filter`,
+  which reconstructs vcrpy's `VCR._build_before_record_request` closure from the
+  public `vcr.filters.{replace_headers,replace_query_parameters,replace_post_data_parameters}`
+  (same `(h, None)` mapping, same order, same deepcopy) and returns `None` for an
+  ignore-host (forward-but-don't-record). The addon applies it on **both** hooks:
+  `request()` (so secrets never even enter the match key) and `response()` (so the
+  *filtered* request is what gets recorded — byte-identical to vcrpy). Proven by a
+  byte-identity test vs `VCR._build_before_record_request` (incl. the
+  `application/json; charset=…` no-rewrite edge) and end-to-end smoke tests
+  (auth/x-api-key/api_key/token stripped from the recorded cassette; LangSmith
+  forwarded but not recorded). `ignore_hosts` is plumbed build.py → manager
+  (`clm_ignore_hosts` option) → addon, resolved by the shared
+  `notebook_processor.resolve_http_replay_ignore_hosts()` (default
+  `api.smith.langchain.com`, `CLM_HTTP_REPLAY_IGNORE_HOSTS` override) so both
+  transports honour the same policy.
+- **JSON-semantic matching**: replay lookup is a pairwise scan reusing
+  `vcr.matchers.{method,scheme,host,port,path,query}` + a `clm_json_body_matcher`
+  that mirrors the bootstrap's `_clm_json_body_matcher` (parse JSON when
+  content-type is JSON case-insensitively; byte-compare otherwise) — the exact
+  `match_on` the in-kernel vcrpy uses. A real LLM JSON POST replay-hits even when
+  the live body differs only by key order / separators (smoke test); a byte key
+  would miss. A drift-guard test pins the `FILTER_*` constants + matcher set
+  to the bootstrap literals.
+- **Strict `once`/`refresh` per target**: `addon._modes_for` resolves
+  `(serve, record, overwrite)` per target — `once` is existence-dependent
+  (present → strict replay/404-on-miss; absent → record-and-serve), `refresh`
+  never serves and overwrites. `refresh`-overwrite is completed by the new
+  `merge_staging_into_canonical(overwrite_existing=…)` (last-seen-staging-wins,
+  in-place canonical replacement) wired on for `refresh` in **both** the
+  mitmproxy host merge and the **vcrpy per-worker merge** — fixing the
+  refresh-overwrite gap for both transports. The default (`overwrite_existing=False`)
+  additive branch is kept **verbatim** so the vcrpy default path stays
+  byte-identical.
+- **Strict-replay-miss → fast non-zero build exit**: a miss returns a
+  **non-retryable HTTP 404** (`_REPLAY_MISS_STATUS`) with an SDK-shaped
+  `{"error": {message, type, code}}` body and never escapes to the network. The
+  kernel's SDK raises `NotFoundError` on the **first attempt** → cell error → the
+  #93 fail-on-error policy → non-zero build exit, the out-of-process analogue of
+  vcrpy raising `CannotOverwriteExistingCassetteException` synchronously. **The
+  e2e gate caught that the original 599 (a 5xx) was *retried* by the SDK** —
+  measured: a probe showed openai 2.32 retries 599/500/429 (3 calls) but raises
+  on the first attempt for 404/400/422; under a deck's many `.batch()` calls the
+  599 retry amplified one stale-cassette miss into a ~1200s build-timeout hang.
+  The 404 fix makes a forced miss fail the build in seconds with a clean
+  `NotFoundError: clm_replay_miss: …` (validated end-to-end against the #143
+  reproducer; isolated probe shows 1.8s single-attempt vs 3.5s retried).
+- **Kill-survival**: the addon writes the staging cassette eagerly on every
+  recorded response (unchanged from P2), so a build-timeout kill of mitmdump
+  loses nothing.
+- **Manager robustness**: a daemon **reader thread** drains mitmdump stdout into a
+  bounded ring buffer so a multi-hour build can't deadlock on a full pipe; it is
+  joined on stop (no leak) and `_drain_output` no longer races the thread with
+  `communicate()`. Unit-tested against an 800 KiB-output subprocess.
+
+**Gates:** secret/telemetry hygiene (no auth/cookie/api-key, no LangSmith),
+JSON-match parity (real JSON POSTs replay-hit, no spurious miss) and strict-miss →
+fast non-zero exit are covered by the new unit + smoke tests; full fast suite
+green (5795 passed).
+
+**E2E gate run against the #143 reproducer (18 committed DE/EN split-deck
+cassettes, dummy key, no network egress):** gates **5 + 6 PASS at production
+scale** — all 18 notebooks re-executed (`--ignore-cache`, 177s), every real LLM
+JSON POST replay-**hit** (exit 0, 0 errors, no miss), the 18 cassettes came out
+**byte-identical**, and the dummy key's auth header was filtered before matching
+so it still matched the real-key recording. Gate **7**: a forced miss (renamed
+cassette) initially exposed a real defect — the 599 retry-amplification hang
+above — now **fixed (non-retryable 404)** and re-validated: a forced miss fails
+the build with a clean `NotFoundError` cell error in seconds, no timeout. The
+only piece still **deferred (needs OPENROUTER credentials + real spend):** the
+record-mode "no-op rebuild grows nothing" half — lower-risk (record byte-identity
+is unit-proven), best run as part of the P5 cutover gate.
+
+**Adversarial review (workflow `wf_7e8803f5-482`, 5 probe-driven lenses → verify):
+1 confirmed, 2 refuted.** Confirmed (MEDIUM): the "599 → bounded SDK retry → fail"
+claim was asserted but unvalidated — the e2e then proved it was actually a
+~1200s hang (599 is a 5xx → SDK-retried → amplified across `.batch()` calls).
+Fixed by switching the miss to a non-retryable 404 (fast first-attempt
+`NotFoundError`), validated by probe + e2e. Refuted: (a) `set-cookie` in
+`filter_headers` "violates HTTP semantics" — intentional vcrpy parity,
+drift-guarded; (b) kernel-side miss not explicitly detected — the miss is
+explicit/structured and SDKs fail on it; out of P3 scope.
+
+The prototype addon lacked parity with the vcrpy bootstrap's load-bearing
+behavior (the design doc wrongly called these "trivial").
+
+- **Strict `once` / `refresh` semantics per target** (deferred from P2's review):
+  under the transport `once` currently behaves like `new-episodes` and `refresh`
+  records additively. `refresh`-overwrite needs a **mode-aware merge** —
+  `merge_staging_into_canonical` is mode-blind and keeps the stale canonical
+  entry on a re-record (the *in-process vcrpy path has the identical bug*), so
+  the fix (thread the mode through; staging-wins for `refresh`/`record`) lands
+  here and benefits **both** transports. `once`-must-exist should error/miss per
+  tagged canonical rather than via the build-scratch catch-all.
+- **Secret filtering** at record time: `authorization`, `cookie`, `x-api-key`,
+  `set-cookie` headers + post-data/query params (match the bootstrap's
+  `filter_headers` / `filter_post_data_parameters` / `filter_query_parameters`).
+- **`ignore_hosts`** pass-through (default `api.smith.langchain.com`,
+  `CLM_HTTP_REPLAY_IGNORE_HOSTS` override) so LangSmith telemetry never enters
+  the cassette (re-introducing the PR #146 churn).
+- **JSON-semantic body matching** in `_request_key` (parse JSON when
+  content-type is `application/json` case-insensitively; byte-compare otherwise)
+  — matching `_clm_json_body_matcher`, or a byte-exact key 599-misses real LLM
+  JSON POSTs.
+- **Strict-replay-miss → loud build failure**: verify the 599 propagates as a
+  non-zero build exit equivalent to vcrpy's `CannotOverwriteExistingCassetteException`
+  + the #93 exit policy, and is not swallowed/retried by the langchain/openai
+  retry layers.
+- **Kill-survival:** confirm the addon flushes each flow synchronously on
+  response (eager-append equivalent) so a build-timeout kill of mitmdump loses
+  no recorded interactions.
+- **Manager robustness:** drain mitmdump stdout on a reader thread (avoid a
+  multi-hour-build PIPE-buffer deadlock); define proxy lifetime under watch-mode
+  rebuilds (one proxy across the watch session vs per-rebuild).
+- **Gates:** no-op rebuild yields an empty cassette git-diff and contains no
+  secrets/LangSmith; real LLM JSON POSTs replay-hit (no spurious 599); a
+  deliberate miss fails the build non-zero.
+
+## P4 — Docker worker support  ·  ~3–5 d  ·  risk: high  ·  **DONE**
+
+**Status (done):** Docker notebook workers now reach the proxy and the full
+record→merge→replay round-trip works inside a container.
+
+- **Wildcard bind, scoped:** `build._maybe_start_mitmproxy_transport` binds the
+  proxy `0.0.0.0` (so containers reach it via `host.docker.internal`) **only when
+  a Docker _notebook_ worker is configured** (`_build_has_docker_notebook_worker`);
+  Direct-only and diagram-only-Docker builds keep the `127.0.0.1` bind. The
+  `os.environ` proxy URL stays a loopback address — `MitmproxyManager._client_host`
+  returns `127.0.0.1` for a wildcard bind so Direct workers and the readiness poll
+  connect via loopback (`connect("0.0.0.0")` is invalid on Windows); the bind host
+  itself stays the wildcard.
+- **Per-container injection:** `DockerWorkerExecutor` injects into the **notebook**
+  container only (`worker_executor._mitmproxy_docker_env`): `HTTP(S)_PROXY` rewritten
+  host→`host.docker.internal` (preserving the port), `NO_PROXY=host.docker.internal`
+  so worker↔CLM-REST-API traffic (`CLM_API_URL`) **bypasses** the proxy (else worker
+  registration would replay-miss and stall the build), a **read-only CA-bundle bind
+  mount** + `SSL_CERT_FILE`/`REQUESTS_CA_BUNDLE`/`CURL_CA_BUNDLE`, and
+  `CLM_HTTP_REPLAY_TRANSPORT` passthrough. `host.docker.internal` is a shared
+  `_DOCKER_HOST_ALIAS` constant used by both the API-URL build and `NO_PROXY` so they
+  cannot drift. `extra_hosts host-gateway` was already set.
+- **Host-namespace cassette tag:** `_resolve_mitmproxy_tag` resolves the
+  `X-CLM-Cassette` tag against `payload.source_topic_dir` (the **host** path) — the
+  proxy + `merge_mitmproxy_cassette_staging` run host-side, so a container `/source`
+  path would write staging to a bogus host location. The vcrpy path still uses the
+  container `source_dir` (its in-container kernel writes there).
+
+**Gate (PASSED):** a real Docker notebook-worker build completed the
+record→merge→replay round-trip via `host.docker.internal` with CA trust: the
+container's HTTPS GET was intercepted (200), worker registration succeeded through
+`NO_PROXY`, staging landed at the **host** canonical path, and an offline replay (the
+recorded body was tampered to a sentinel) served the cassette — proving the
+replay-mode proxy never forwards upstream. The lite image (no `vcr` installed) ran
+fine, confirming the transport drops the kernel's vcr dependency.
+
+**Caveats / follow-ups (confirmed by the P4 adversarial review; behind the opt-in
+flag, default-unset unaffected):**
+
+- **Open-proxy LAN exposure (MEDIUM):** the `0.0.0.0` bind makes the proxy an
+  unauthenticated listener on the LAN for the build's duration; in record-capable
+  modes (default non-CI is `new-episodes`) it can relay/record arbitrary traffic and
+  attacker-supplied responses could be merged into committed cassettes. This mirrors
+  the existing `0.0.0.0` `WorkerApiServer` and is now scoped to Docker-notebook builds.
+  **Hardening follow-up:** bind the docker-bridge gateway IP instead of all interfaces,
+  or enable `mitmdump --proxyauth` with a per-build credential injected alongside
+  `HTTP(S)_PROXY`.
+- **Image must contain mitmproxy-aware CLM (MEDIUM):** the in-container tag bootstrap /
+  vcrpy-skip live in `notebook_processor`, so the worker **image must be built from a
+  CLM version that has the mitmproxy transport** (≥ the P2 tag-bootstrap). A pre-mitmproxy
+  image silently mis-routes record-mode traffic to the catch-all (strict modes fail loud
+  via the 404-miss). The E2E gate validated against a **source-shadowed** lite image (the
+  local prebuilt image is 1.5.0); production needs a rebuilt image. There is no host↔image
+  version negotiation — a runtime guard is a possible follow-up.
+- **Firewall opacity (NIT):** the host readiness poll proves only loopback reachability,
+  not docker-bridge reachability; a firewall blocking the bridge→proxy port surfaces as
+  generic LLM connection failures bounded by `max_job_time` + the #93 fail-on-error policy,
+  not a clear "proxy unreachable". A container-side preflight is a possible follow-up.
+- **Nested-subdir notebooks (LOW):** an http-replay notebook must keep its cassette beside
+  the notebook at the topic root; a notebook nested in a sub-dir diverges the tag (topic-dir)
+  from the merge (notebook-parent) and would misplace record-mode staging (replay unaffected).
+  Pre-existing in the vcrpy direct path; converging is a separate follow-up touching both
+  transports.
+
+## P5 — trace-harness re-port + vcrpy retirement  ·  ~3–5 d  ·  risk: medium  ·  **STEP 1 DONE; flip/deletion deferred**
+
+**Status (2026-05-31):** step 1 (the trace-harness re-port) is **shipped on the
+branch** and the one open record-mode parity gate is **closed**. The default-flip
+and workaround deletion stay **deferred to a post-merge release** — the transport
+is still branch-only (draft #173, not merged, latest tag v1.6.2), so the plan's
+own invariant ("flip only after the gates hold across a full release cycle") is
+not yet satisfiable. Full readiness analysis, the per-gate audit, the
+workaround-deletion inventory, and the deletion blast radius are in
+`docs/claude/issue-165-p5-readiness.md`.
+
+- **Trace-harness re-port (DONE).** Under the transport the kernel `socket`
+  stream survives but its meaning inverts (the kernel's intended target is the
+  proxy) and the `vcr` stream goes dark. New pieces: a pure stdlib
+  `http_replay_mitm/trace_log.py` (`ProxyTraceLog`, path-importable in the
+  mitmdump interpreter) the addon uses to emit a **`proxy` stream**
+  (`proxy.ready`/`request`/`response`); a self-contained
+  `_HTTP_REPLAY_SOCKET_TRACE_TEMPLATE` appended to the tag bootstrap so the
+  kernel still emits the `socket` ground truth; manager `trace_dir` plumbing +
+  manifest `transport` field; and `analyze_http_replay_trace.py` gains a
+  transport mode (bypass = a connect whose port is not the proxy's; proxy-flow
+  stats replace the dark vcr stream). Design addendum in
+  `docs/claude/design/http-replay-trace.md`. Proven by the isolated proxy smoke
+  (proxy.ready + HTTPS-via-proxy 200 + 0-bypass) and a 116-flow reproducer build
+  (111 served, **no pool-exhaustion deadlock signature**).
+- **Gate 6 record-mode "grows nothing" — CLOSED.** A minimal real-OpenRouter
+  record through the addon produced a **secret-clean** cassette (no key /
+  authorization / x-api-key / LangSmith) and a no-op rebuild left it
+  **byte-identical**. This was the only gate the plan did not claim closed.
+- **Finding (sharpens gate 7, validates keeping Option-F):** a strict-replay
+  miss fast-fails at the addon (404) and the SDK, but **langchain's agent/retry
+  layer above the SDK can re-issue a missed request**, so a stale-cassette miss
+  can stall a cell until the per-cell Option-F timeout fires. Keep Option-F.
+- **Still to do at the cutover (future release):** convert the uncommitted
+  scale/e2e proofs (gates 1, 2, 7, 8, 9) into committed tests or a repeatable
+  cutover-gate script; add an `allow_playback_repeats` regression test on the
+  mitmproxy side; then flip the default for one release with
+  `CLM_HTTP_REPLAY_TRANSPORT=vcrpy` still selectable as rollback insurance.
+- **Only then** delete the moot/reimplemented in-kernel workarounds + the
+  ~480-line bootstrap templates **in the same commit that removes the in-kernel
+  vcrpy bootstrap** (deleting earlier reintroduces #129/#143 for every default
+  build — see the readiness inventory), remove `test_http_replay_vcr_pin_guard.py`
+  and relax the `[replay]` vcrpy pin. Keep the Option-F per-cell timeout as a
+  transport-agnostic loud-failure net, and keep vcrpy installed as the YAML
+  serializer.
+
+---
+
+## Parity gates (gate vcrpy default-flip / workaround deletion)
+
+1. Deadlock-defeat: 16-worker stress repro, 0 stalls, py-spy-clean (✅ Phase 0).
+2. HTTPS round-trip on Windows against real endpoints (✅ Phase 0, at scale).
+3. Cassette byte-identity vs vcrpy (compressed bodies decoded, dict-of-lists
+   headers, UTF-8 body string, LF endings) — P1.
+4. Tooling: `cassette doctor` / `strip_cassette_hosts` / merge load mitmproxy
+   cassettes unchanged — P1.
+5. Secret/telemetry hygiene: no auth/cookie/api-key headers, no LangSmith; no-op
+   rebuild grows nothing — P3 ✅ (filter byte-identity vs vcrpy + ignore_hosts;
+   secret-stripping + LangSmith-not-recorded smoke tests; **e2e: 18 real cassettes
+   replayed byte-identical with a dummy key**).
+6. JSON-match parity: real LLM JSON POSTs replay-hit, no spurious miss — P3 ✅
+   (vcr-matcher-chain replay scan incl. `clm_json_body`; JSON-POST replay smoke
+   test; **e2e: 18-notebook real replay, exit 0, no miss**). Record-mode no-op
+   "grows nothing" half still wants a one-off real-LLM run (OPENROUTER creds).
+7. Strict-replay failure parity: a miss → *fast* non-zero build exit, not
+   swallowed — P3 ✅ via a **non-retryable 404** → SDK `NotFoundError` → #93
+   policy. **e2e-validated:** the original 599 (a 5xx) was SDK-retried into a
+   ~1200s timeout hang; the 404 fix fails a forced miss in seconds with a clean
+   cell error (probe + reproducer build).
+8. Concurrency routing: DE/EN multi-topic routes correctly, no contamination;
+   split fallback resolves — P2.
+9. Default-unchanged: transport unset ⇒ build bit-identical to vcrpy (✅ tests).
+
+## Sequencing & estimate
+
+P1 → P2 → P3 are the core (vcrpy-parity); they can partly overlap but P3 depends
+on P1's format. P4 is independent and optional-for-v1. P5 is the cutover.
+**Core (P1–P3): ~8–12 d. With P4–P5: ~14–22 d.** Each phase ships behind the
+flag with its parity gate; nothing changes the default until P5.
+
+## Open design decisions for the owner
+
+- **Routing mechanism (P2):** per-request worker tagging vs per-worker proxies.
+  Tagging keeps the proven single-proxy model and one cassette-merge path;
+  per-worker proxies re-open port management. Recommendation: tagging.
+- **Docker in v1 (P4):** ~~support now, or ship Direct-only and keep vcrpy for
+  Docker?~~ **Resolved: supported now** (P4 DONE) — Docker notebook workers reach
+  the proxy via `host.docker.internal` with CA trust, gate passed. Remaining items
+  are the P4 hardening follow-ups (proxyauth/bridge-bind; production image rebuild).
+- **Upstream-first:** if the upstream vcrpy `close()` + scoped `force_reset`
+  patches (`docs/claude/vcrpy-upstream-patches.md`) land, the #143/#129 forks
+  retire independently — reducing the urgency delta but not the cross-process
+  capability story.

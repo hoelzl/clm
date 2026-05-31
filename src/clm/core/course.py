@@ -370,6 +370,99 @@ class Course(NotebookMixin):
         await self.process_dir_group_for_targets(backend)
         await self.process_jupyterlite_for_targets(backend)
 
+    def _collect_http_replay_canonical_paths(self) -> set[Path]:
+        """Unique canonical cassette paths for every http-replay notebook.
+
+        A topic may contain several notebooks but only one canonical
+        cassette per notebook. ``cassette_path`` returns the existing
+        canonical (preferring the nested ``_cassettes/`` layout);
+        ``expected_cassette_path`` always yields a path even when no
+        cassette has been recorded yet, and its parent dir is the right
+        glob target for staging files on a first run. Shared by the
+        pre-build orphan sweep and the post-build mitmproxy merge.
+        """
+        from clm.core.course_files.notebook_file import NotebookFile
+
+        canonical_paths: set[Path] = set()
+        for file in self.files:
+            if not isinstance(file, NotebookFile):
+                continue
+            if not file.http_replay:
+                continue
+            canonical = file.cassette_path or file.expected_cassette_path
+            canonical_paths.add(canonical)
+        return canonical_paths
+
+    def merge_mitmproxy_cassette_staging(
+        self, build_id: str | None = None, *, mode: str | None = None
+    ) -> int:
+        """Fold per-target staging files written by the mitmproxy transport.
+
+        The out-of-process transport (issue #165) records into per-(topic,
+        language,kind) ``<cassette>.staging-mitm-<build_id>`` files beside
+        each canonical cassette. This runs **after** the proxy stops (from
+        the build's ``finally``) to fold them into their canonicals via the
+        same dedup/merge path the vcrpy workers use.
+
+        Reaching this method *is* the build-completion signal (the build's
+        ``finally`` ran), so for each canonical we write the ``.completed``
+        marker for **this build's** staging file (``build_id``), exactly as
+        the vcrpy path's host writes a completion marker on clean notebook
+        completion. mitmproxy's ``done`` hook is unreliable on a Windows
+        ``CTRL_BREAK`` shutdown, so the host owns this signal. A force-killed
+        build never reaches here, so its staging stays markerless and is
+        discarded by the next build's pre-build sweep (issue #115).
+
+        ``sweep_orphans=False``: markerless staging (older builds, or a
+        concurrent build still recording) is left untouched. A no-op for
+        builds that did not use the transport.
+
+        ``mode`` is the CLM http-replay mode; ``refresh`` folds with
+        ``overwrite_existing=True`` so a re-recorded interaction supersedes the
+        stale canonical entry (issue #165 P3), matching vcrpy ``all`` semantics.
+
+        Returns the number of staging files folded into canonical.
+        """
+        canonical_paths = self._collect_http_replay_canonical_paths()
+        if not canonical_paths:
+            return 0
+
+        from clm.workers.notebook.http_replay_cassette import (
+            CassettePaths,
+            merge_staging_into_canonical,
+            write_completion_marker,
+        )
+
+        overwrite_existing = mode == "refresh"
+        folded = 0
+        for canonical in sorted(canonical_paths):
+            if not canonical.parent.is_dir():
+                continue
+            # Mark this build's staging file complete so the merge folds it.
+            if build_id:
+                staging = canonical.parent / f"{canonical.name}.staging-mitm-{build_id}"
+                if staging.is_file():
+                    write_completion_marker(CassettePaths(canonical=canonical, staging=staging))
+            if not any(canonical.parent.glob(f"{canonical.name}.staging-*")):
+                continue
+            synthetic = canonical.parent / f"{canonical.name}.staging-mitm-merge"
+            try:
+                merged = merge_staging_into_canonical(
+                    CassettePaths(canonical=canonical, staging=synthetic),
+                    sweep_orphans=False,
+                    overwrite_existing=overwrite_existing,
+                )
+            except Exception as exc:  # noqa: BLE001 — never mask the build result
+                logger.warning(
+                    f"Post-build mitmproxy cassette merge failed for "
+                    f"'{canonical}' ({type(exc).__name__}: {exc})."
+                )
+                continue
+            if merged:
+                logger.info(f"Merged {merged} mitmproxy staging cassette(s) into '{canonical}'.")
+                folded += merged
+        return folded
+
     def _sweep_orphan_cassette_staging_files(self) -> int:
         """Merge any orphan HTTP-replay staging cassettes into canonical.
 
@@ -407,26 +500,7 @@ class Course(NotebookMixin):
             had at least one staging file present). Zero when nothing
             needed sweeping or when ``http-replay`` is not used.
         """
-        from clm.core.course_files.notebook_file import NotebookFile
-
-        # Collect unique canonical cassette paths to sweep. A topic may
-        # contain several notebooks but only one canonical cassette per
-        # notebook; merging twice would be harmless (the lock serializes
-        # and the second pass finds zero stagings) but wasteful.
-        canonical_paths: set[Path] = set()
-        for file in self.files:
-            if not isinstance(file, NotebookFile):
-                continue
-            if not file.http_replay:
-                continue
-            # ``cassette_path`` returns the existing canonical (preferring
-            # the nested ``_cassettes/`` layout); ``expected_cassette_path``
-            # always yields a path even when no cassette has been recorded
-            # yet. Orphans can sit next to the *expected* path on first run,
-            # so prefer that — its parent dir is the right glob target.
-            canonical = file.cassette_path or file.expected_cassette_path
-            canonical_paths.add(canonical)
-
+        canonical_paths = self._collect_http_replay_canonical_paths()
         if not canonical_paths:
             return 0
 

@@ -1653,3 +1653,160 @@ class TestProcessCourseInvokesCassetteSweep:
             "was removed or moved out of the build entry path — restore "
             "it or the orphan cleanup stops happening during normal builds."
         )
+
+
+class TestMaybeStartMitmproxyTransport:
+    """The experimental mitmproxy transport (issue #165) must be a strict no-op
+    unless explicitly opted in, so existing builds are never affected."""
+
+    def test_returns_none_when_transport_not_opted_in(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.delenv("CLM_HTTP_REPLAY_TRANSPORT", raising=False)
+        # Returns before locating mitmdump, so no external dependency needed.
+        result = build_module._maybe_start_mitmproxy_transport("replay", tmp_path / "jobs.db")
+        assert result is None
+
+    def test_returns_none_when_other_transport_value(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.setenv("CLM_HTTP_REPLAY_TRANSPORT", "vcrpy")
+        result = build_module._maybe_start_mitmproxy_transport("replay", tmp_path / "jobs.db")
+        assert result is None
+
+    def test_returns_none_when_mode_disabled(self, monkeypatch, tmp_path) -> None:
+        # Even opted in, a disabled replay mode means no proxy is needed.
+        monkeypatch.setenv("CLM_HTTP_REPLAY_TRANSPORT", "mitmproxy")
+        result = build_module._maybe_start_mitmproxy_transport("disabled", tmp_path / "jobs.db")
+        assert result is None
+
+
+def _fake_worker_config(specs):
+    """Stand-in for WorkersManagementConfig.get_all_worker_configs().
+
+    ``specs`` is a list of ``(worker_type, execution_mode, count)`` tuples.
+    """
+    cfgs = [SimpleNamespace(worker_type=wt, execution_mode=m, count=c) for (wt, m, c) in specs]
+    return SimpleNamespace(get_all_worker_configs=lambda: cfgs)
+
+
+class TestBuildHasDockerNotebookWorker:
+    """Detecting whether a build will start a Docker *notebook* worker (the only
+    worker using the replay proxy) — decides the wildcard bind (issue #165 P4)."""
+
+    def test_none_config_is_direct_only(self) -> None:
+        assert build_module._build_has_docker_notebook_worker(None) is False
+
+    def test_all_direct_is_false(self) -> None:
+        wc = _fake_worker_config(
+            [("notebook", "direct", 4), ("plantuml", "direct", 1), ("drawio", "direct", 1)]
+        )
+        assert build_module._build_has_docker_notebook_worker(wc) is False
+
+    def test_docker_notebook_is_true(self) -> None:
+        wc = _fake_worker_config([("notebook", "docker", 2), ("plantuml", "direct", 1)])
+        assert build_module._build_has_docker_notebook_worker(wc) is True
+
+    def test_docker_only_for_non_notebook_is_false(self) -> None:
+        # Diagram converters never use the replay proxy, so a docker plantuml/
+        # drawio worker must NOT trigger the wider 0.0.0.0 bind.
+        wc = _fake_worker_config(
+            [("notebook", "direct", 4), ("plantuml", "docker", 1), ("drawio", "docker", 1)]
+        )
+        assert build_module._build_has_docker_notebook_worker(wc) is False
+
+    def test_docker_notebook_with_zero_count_is_false(self) -> None:
+        wc = _fake_worker_config([("notebook", "docker", 0), ("plantuml", "direct", 1)])
+        assert build_module._build_has_docker_notebook_worker(wc) is False
+
+    def test_resolution_error_is_treated_as_direct_only(self) -> None:
+        def _boom():
+            raise RuntimeError("cannot resolve")
+
+        wc = SimpleNamespace(get_all_worker_configs=_boom)
+        assert build_module._build_has_docker_notebook_worker(wc) is False
+
+
+class _FakeMitmManager:
+    """Records the listen_host kwarg and emulates just enough of the real
+    manager for ``_maybe_start_mitmproxy_transport`` (no real mitmdump)."""
+
+    last_listen_host: str | None = None
+    last_trace_dir: object = None
+
+    def __init__(self, *, cassette_path, mode, listen_host, confdir, ignore_hosts, trace_dir=None):
+        _FakeMitmManager.last_listen_host = listen_host
+        _FakeMitmManager.last_trace_dir = trace_dir
+        self._confdir = Path(confdir)
+        self.build_id = "fakebuild"
+
+    def start(self):
+        self._confdir.mkdir(parents=True, exist_ok=True)
+        self.ca_cert_path.write_bytes(b"-----BEGIN CERTIFICATE-----\nfake\n")
+
+    @property
+    def ca_cert_path(self) -> Path:
+        return self._confdir / "mitmproxy-ca-cert.pem"
+
+    @property
+    def proxy_url(self) -> str:
+        return "http://127.0.0.1:9999"
+
+    def stop(self):
+        pass
+
+
+class TestMitmproxyTransportBindHost:
+    """The proxy binds 0.0.0.0 only when Docker workers must reach it via
+    host.docker.internal; Direct-only builds keep the loopback bind (#165 P4)."""
+
+    def _run(self, monkeypatch, tmp_path, worker_config):
+        import os
+
+        monkeypatch.setenv("CLM_HTTP_REPLAY_TRANSPORT", "mitmproxy")
+        monkeypatch.setattr(
+            "clm.infrastructure.http_replay_mitm.MitmproxyManager", _FakeMitmManager
+        )
+        _FakeMitmManager.last_listen_host = None
+        saved = dict(os.environ)
+        try:
+            mgr = build_module._maybe_start_mitmproxy_transport(
+                "replay", tmp_path / "jobs.db", worker_config=worker_config
+            )
+            assert mgr is not None
+            return _FakeMitmManager.last_listen_host, dict(os.environ)
+        finally:
+            os.environ.clear()
+            os.environ.update(saved)
+
+    def test_binds_wildcard_for_docker_notebook(self, monkeypatch, tmp_path) -> None:
+        wc = _fake_worker_config([("notebook", "docker", 1)])
+        listen_host, env = self._run(monkeypatch, tmp_path, wc)
+        assert listen_host == "0.0.0.0"
+        # The exported proxy URL stays loopback for Direct workers / the poll.
+        assert env["HTTP_PROXY"] == "http://127.0.0.1:9999"
+
+    def test_binds_loopback_for_direct(self, monkeypatch, tmp_path) -> None:
+        wc = _fake_worker_config([("notebook", "direct", 4)])
+        listen_host, _ = self._run(monkeypatch, tmp_path, wc)
+        assert listen_host == "127.0.0.1"
+
+    def test_binds_loopback_for_diagram_only_docker(self, monkeypatch, tmp_path) -> None:
+        # Docker plantuml/drawio but Direct notebook: no proxy user in a
+        # container, so keep the loopback bind (no LAN exposure).
+        wc = _fake_worker_config([("notebook", "direct", 4), ("drawio", "docker", 1)])
+        listen_host, _ = self._run(monkeypatch, tmp_path, wc)
+        assert listen_host == "127.0.0.1"
+
+    def test_binds_loopback_when_no_worker_config(self, monkeypatch, tmp_path) -> None:
+        listen_host, _ = self._run(monkeypatch, tmp_path, None)
+        assert listen_host == "127.0.0.1"
+
+    def test_forwards_trace_dir_from_invocation_env(self, monkeypatch, tmp_path) -> None:
+        # When CLM_HTTP_REPLAY_TRACE pinned an invocation dir, the transport
+        # forwards it to the manager so the addon can write the proxy stream
+        # (issue #165 P5). Unset -> None.
+        monkeypatch.setenv("CLM_HTTP_REPLAY_TRACE_INVOCATION_DIR", str(tmp_path / "trace-inv"))
+        self._run(monkeypatch, tmp_path, None)
+        assert _FakeMitmManager.last_trace_dir == Path(tmp_path / "trace-inv")
+
+    def test_no_trace_dir_when_invocation_env_unset(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.delenv("CLM_HTTP_REPLAY_TRACE_INVOCATION_DIR", raising=False)
+        self._run(monkeypatch, tmp_path, None)
+        assert _FakeMitmManager.last_trace_dir is None

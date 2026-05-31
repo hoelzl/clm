@@ -353,6 +353,11 @@ module = [
     "vcr.*",
     "filelock",
     "filelock.*",
+    # mitmproxy runs out-of-process (uv tool install); the addon module is
+    # loaded by mitmdump's own interpreter, not clm's venv, so the package is
+    # intentionally absent from clm's environment.
+    "mitmproxy",
+    "mitmproxy.*",
 ]
 ignore_missing_imports = true
 

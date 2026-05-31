@@ -131,6 +131,150 @@ def _resolve_fail_on_missing_xref(cli_value: bool | None, resolved_http_replay_m
     return resolved_http_replay_mode == "replay"
 
 
+def _build_has_docker_notebook_worker(worker_config: object | None) -> bool:
+    """True when this build will start a Docker-mode **notebook** worker.
+
+    Only the notebook worker makes the LLM HTTP traffic the replay proxy
+    intercepts (plantuml/drawio/jupyterlite never touch it). A ``127.0.0.1``
+    proxy is unreachable from inside a container, so a Docker notebook worker
+    forces the mitmproxy transport to bind a wildcard address (``0.0.0.0``)
+    that the container reaches via ``host.docker.internal`` (issue #165 P4).
+
+    Scoping to the notebook worker keeps the wider ``0.0.0.0`` bind (and its
+    LAN-exposure window — see ``_maybe_start_mitmproxy_transport``) off builds
+    whose only Docker workers are diagram converters that never use the proxy.
+    ``None`` worker_config (older callers / tests) is treated as Direct-only.
+    """
+    if worker_config is None:
+        return False
+    try:
+        return any(
+            c.worker_type == "notebook" and c.execution_mode == "docker" and c.count > 0
+            for c in worker_config.get_all_worker_configs()  # type: ignore[attr-defined]
+        )
+    except Exception:  # noqa: BLE001 — detection must never break the build
+        logger.debug("Could not resolve worker execution modes; assuming Direct-only")
+        return False
+
+
+def _maybe_start_mitmproxy_transport(
+    mode: str | None, jobs_db_path: Path, worker_config: object | None = None
+):
+    """Start an out-of-process mitmproxy HTTP-replay transport when opted in.
+
+    Experimental (issue #165). Opt in with ``CLM_HTTP_REPLAY_TRANSPORT=mitmproxy``;
+    default unset keeps the in-process vcrpy path unchanged. Returns the running
+    :class:`MitmproxyManager` (so the caller can stop it) or ``None``.
+
+    When active it (1) starts one ``mitmdump`` for the whole build, (2) sets
+    ``HTTP(S)_PROXY`` + a ``certifi`` + proxy-CA bundle in ``os.environ`` so
+    Direct workers inherit them via ``os.environ.copy()``, and (3) leaves
+    ``CLM_HTTP_REPLAY_TRANSPORT`` set so each kernel skips the vcrpy bootstrap
+    (``_resolve_cassette_paths`` returns ``None``). The kernel's real
+    httpx/httpcore is therefore never patched — the structural fix for the
+    issue #143 connection-pool deadlock.
+
+    One shared proxy serves the whole build; each worker tags its requests
+    with the destination cassette (P2), so the addon demuxes them into
+    per-(topic,language,kind) staging files folded into their canonicals
+    after the proxy stops (see ``Course.merge_mitmproxy_cassette_staging``).
+    The ``transport.http-cassette.yaml`` here is only the catch-all for any
+    untagged traffic.
+
+    **Docker (P4):** when ``worker_config`` reports any Docker-mode worker the
+    proxy binds ``0.0.0.0`` so containers can reach it via
+    ``host.docker.internal``; the ``os.environ`` proxy URL stays a loopback
+    address (``MitmproxyManager.proxy_url``) for Direct workers and the
+    readiness poll, while the Docker executor rewrites the host and mounts the
+    CA per container. Direct-only builds keep binding ``127.0.0.1`` unchanged.
+    """
+    import os as _os
+
+    if (
+        _os.environ.get("CLM_HTTP_REPLAY_TRANSPORT") != "mitmproxy"
+        or not mode
+        or mode == "disabled"
+    ):
+        return None
+
+    import time as _time
+
+    import certifi
+
+    from clm.infrastructure.http_replay_mitm import MitmproxyManager
+    from clm.workers.notebook.notebook_processor import resolve_http_replay_ignore_hosts
+
+    base = Path(jobs_db_path).resolve().parent / "mitm"
+    base.mkdir(parents=True, exist_ok=True)
+    cassette = base / "transport.http-cassette.yaml"
+    confdir = base / "confdir"
+    # Bind a wildcard address only when a Docker notebook worker must reach us
+    # via host.docker.internal; Direct-only (and diagram-only-Docker) builds keep
+    # the loopback bind so the replay proxy is never exposed beyond the host.
+    # NOTE (issue #165 P4 hardening follow-up): a 0.0.0.0 bind makes the proxy an
+    # unauthenticated listener on the LAN for the build's duration; in
+    # record-capable modes it can relay/record arbitrary traffic. This mirrors the
+    # existing 0.0.0.0 WorkerApiServer and is gated to opt-in Docker builds, but a
+    # future hardening should bind the docker-bridge gateway IP or add
+    # mitmdump --proxyauth with a per-build credential.
+    listen_host = "0.0.0.0" if _build_has_docker_notebook_worker(worker_config) else "127.0.0.1"
+    # Same telemetry-suppression policy as the in-kernel vcrpy path: LangSmith
+    # by default, overridable via CLM_HTTP_REPLAY_IGNORE_HOSTS. The addon
+    # forwards these hosts but never records them into a cassette.
+    ignore_hosts = resolve_http_replay_ignore_hosts()
+    # Forward the forensic trace dir (issue #165 P5) so the addon can write the
+    # per-flow ``proxy`` stream alongside the worker ``socket`` stream. The host
+    # pins this env earlier (when CLM_HTTP_REPLAY_TRACE=1); unset → no tracing.
+    trace_inv = _os.environ.get("CLM_HTTP_REPLAY_TRACE_INVOCATION_DIR", "").strip()
+    trace_dir = Path(trace_inv) if trace_inv else None
+    manager = MitmproxyManager(
+        cassette_path=cassette,
+        mode=mode,
+        listen_host=listen_host,
+        confdir=confdir,
+        ignore_hosts=ignore_hosts,
+        trace_dir=trace_dir,
+    )
+    manager.start()
+
+    # mitmdump writes its CA during startup; the manager only polls the port,
+    # so wait briefly for the CA file too before splicing it.
+    ca = manager.ca_cert_path
+    deadline = _time.monotonic() + 5.0
+    while not ca.exists() and _time.monotonic() < deadline:
+        _time.sleep(0.05)
+    if not ca.exists():
+        manager.stop()
+        raise RuntimeError(f"mitmproxy CA cert not generated at {ca}")
+
+    # Combined bundle: real roots (certifi) + the proxy CA, so both proxy-forged
+    # certs (kernel->proxy) and ignore_hosts direct traffic validate. httpx 0.28
+    # honors SSL_CERT_FILE; requests honors REQUESTS_CA_BUNDLE (Phase-0 verified).
+    bundle = base / "ca-bundle.pem"
+    bundle.write_bytes(Path(certifi.where()).read_bytes() + b"\n" + ca.read_bytes())
+
+    proxy = manager.proxy_url
+    _os.environ.update(
+        {
+            "HTTP_PROXY": proxy,
+            "HTTPS_PROXY": proxy,
+            "http_proxy": proxy,
+            "https_proxy": proxy,
+            "SSL_CERT_FILE": str(bundle),
+            "REQUESTS_CA_BUNDLE": str(bundle),
+            "CURL_CA_BUNDLE": str(bundle),
+        }
+    )
+    logger.info(
+        "mitmproxy transport active: proxy=%s mode=%s cassette=%s ca_bundle=%s",
+        proxy,
+        mode,
+        cassette,
+        bundle,
+    )
+    return manager
+
+
 def _find_env_file(start_dir: Path) -> Path | None:
     """Walk up from start_dir looking for a .env file.
 
@@ -1338,9 +1482,17 @@ async def main_build(
     if _trace_is_enabled():
         _trace_invocation_dir = _trace_make_invocation_dir()
         _trace_set_invocation_dir(_trace_invocation_dir)
+        # Record which transport produced this trace bundle so the analyzer
+        # picks the right bypass model: under "mitmproxy" the ``vcr`` stream is
+        # dark and the ``proxy`` stream is the interception evidence; under
+        # "vcrpy" the in-kernel ``vcr`` stream is used (issue #165 P5).
+        _trace_transport = (
+            "mitmproxy" if _os.environ.get("CLM_HTTP_REPLAY_TRANSPORT") == "mitmproxy" else "vcrpy"
+        )
         _trace_write_manifest(
             _trace_invocation_dir,
             http_replay_mode=resolved_http_replay_mode,
+            extra={"transport": _trace_transport},
         )
         _os.environ["CLM_HTTP_REPLAY_TRACE_INVOCATION_DIR"] = str(_trace_invocation_dir)
         click.echo(f"HTTP-replay trace active: {_trace_invocation_dir}")
@@ -1419,6 +1571,15 @@ async def main_build(
         data_dir=data_dir,
     )
 
+    # Experimental out-of-process HTTP-replay transport (issue #165). Must run
+    # BEFORE workers spawn so they inherit HTTP(S)_PROXY + the CA bundle via
+    # os.environ.copy() (Direct) or the per-container injection (Docker, P4).
+    # No-op unless CLM_HTTP_REPLAY_TRANSPORT=mitmproxy. ``worker_config`` lets
+    # it bind 0.0.0.0 when Docker workers will reach it via host.docker.internal.
+    mitm_manager = _maybe_start_mitmproxy_transport(
+        config.http_replay_mode, config.jobs_db_path, worker_config=worker_config
+    )
+
     output_formatter.show_startup_message("Starting workers...")
     started_workers = start_managed_workers(lifecycle_manager, worker_config)
     if started_workers:
@@ -1457,6 +1618,25 @@ async def main_build(
                 logger.info(f"Stopped {len(started_workers)} worker(s)")
             except Exception as e:
                 logger.error(f"Failed to stop workers: {e}", exc_info=True)
+        if mitm_manager is not None:
+            logger.info("Stopping mitmproxy transport...")
+            try:
+                mitm_manager.stop()
+            except Exception as e:
+                logger.error(f"Failed to stop mitmproxy: {e}", exc_info=True)
+            # The addon wrote per-(topic,language,kind) staging cassettes as it
+            # recorded; now that the proxy has flushed and exited, mark this
+            # build's staging files complete and fold them into their canonical
+            # cassettes (issue #165 P2). Reaching here is the build-completion
+            # signal, so partial recordings from a force-killed build (which
+            # never reaches this point) stay markerless and are discarded by the
+            # next build's pre-build sweep.
+            try:
+                course.merge_mitmproxy_cassette_staging(
+                    mitm_manager.build_id, mode=config.http_replay_mode
+                )
+            except Exception as e:
+                logger.error(f"Failed to merge mitmproxy cassettes: {e}", exc_info=True)
 
     return summary
 
