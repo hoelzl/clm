@@ -383,6 +383,57 @@ def _check_workshop_headings(cells: list[Cell], file_path: str) -> list[Finding]
     return findings
 
 
+def _check_workshop_tag_symmetry(cells: list[Cell], file_path: str) -> list[Finding]:
+    """Flag DE/EN slide-heading pairs that disagree on a slide-scoped tag.
+
+    ``workshop`` and ``end-workshop`` mark a *slide* (a DE/EN pair) as a
+    workshop boundary; they belong to the slide, not a single language. The
+    notebook build derives workshop ranges from these tags to decide which
+    code cells to blank in Code-Along/Partial output.
+
+    A *bilingual* build tolerates the tag on only one language's heading: its
+    range scan runs over the interleaved stream, so a tag on either half
+    establishes a range that — by index — also covers the other language. A
+    single-language *split* build does not: the untagged language loses the
+    workshop range and leaks solution code into Code-Along/Partial. This check
+    flags the asymmetry on the bilingual source so it is fixed before
+    splitting. On a single-language file there are no DE/EN pairs, so it is a
+    no-op. Run ``clm slides normalize`` to symmetrize the tags automatically.
+    """
+    findings: list[Finding] = []
+    for group in build_slide_groups(cells):
+        if len(group) != 2:
+            continue
+        i, j = group
+        for tag in ("workshop", "end-workshop"):
+            i_has = tag in cells[i].metadata.tags
+            j_has = tag in cells[j].metadata.tags
+            if i_has == j_has:
+                continue
+            tagged, untagged = (cells[i], cells[j]) if i_has else (cells[j], cells[i])
+            findings.append(
+                Finding(
+                    severity="warning",
+                    category="pairing",
+                    file=file_path,
+                    line=untagged.line_number,
+                    message=(
+                        f"slide-heading pair disagrees on the '{tag}' tag: the "
+                        f"{tagged.metadata.lang or '?'} heading has it but the "
+                        f"{untagged.metadata.lang or '?'} heading does not — a "
+                        f"split build of the untagged language will miss the "
+                        f"workshop range and may leak solution code"
+                    ),
+                    suggestion=(
+                        f"Add the '{tag}' tag to the "
+                        f"{untagged.metadata.lang or '?'} heading, or run "
+                        f"`clm slides normalize` to symmetrize it."
+                    ),
+                )
+            )
+    return findings
+
+
 def _check_pairing(cells: list[Cell], file_path: str, *, is_split: bool = False) -> list[Finding]:
     """Check DE/EN cell pairing: count, position, and tag consistency.
 
@@ -1204,6 +1255,11 @@ def validate_file(
         # directory/course entrypoints via _check_shared_cell_parity.
         is_split = split_lang_suffix(path) is not None
         findings.extend(_check_pairing(cells, file_str, is_split=is_split))
+        # workshop/end-workshop tags must match across a DE/EN heading pair;
+        # the asymmetry only manifests on the bilingual source (a split half
+        # has no DE/EN pairs to compare).
+        if not is_split:
+            findings.extend(_check_workshop_tag_symmetry(cells, file_str))
 
     # Review material extraction
     review_checks = check_set & ALL_REVIEW_CHECKS

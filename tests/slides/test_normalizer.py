@@ -178,6 +178,87 @@ class TestWorkshopTags:
 
         assert len(result.changes) == 0
 
+
+# ---------------------------------------------------------------------------
+# Workshop tag symmetry (DE/EN propagation)
+# ---------------------------------------------------------------------------
+
+
+class TestWorkshopSymmetry:
+    """``workshop``/``end-workshop`` are slide-scoped — symmetrize across pairs.
+
+    Headings are deliberately worded so the heading-text pass
+    (``_apply_workshop_tags``) does *not* fire; only the pair-symmetry pass
+    can add the missing tag.
+    """
+
+    def test_propagates_de_to_en(self, tmp_path):
+        text = (
+            '# %% [markdown] lang="de" tags=["subslide", "workshop"]\n'
+            "# ## Aufgabe\n"
+            "\n"
+            '# %% [markdown] lang="en" tags=["subslide"]\n'
+            "# ## Exercise\n"
+        )
+        path = _write_slide(tmp_path / "slides_test.py", text)
+        result = normalize_file(path, operations=["workshop_tags"])
+
+        assert len(result.changes) == 1
+        new_text = path.read_text(encoding="utf-8")
+        # Both headings now carry the tag.
+        assert new_text.count('"workshop"') == 2
+
+    def test_propagates_en_to_de(self, tmp_path):
+        text = (
+            '# %% [markdown] lang="de" tags=["subslide"]\n'
+            "# ## Aufgabe\n"
+            "\n"
+            '# %% [markdown] lang="en" tags=["subslide", "workshop"]\n'
+            "# ## Exercise\n"
+        )
+        path = _write_slide(tmp_path / "slides_test.py", text)
+        result = normalize_file(path, operations=["workshop_tags"])
+
+        assert len(result.changes) == 1
+        new_text = path.read_text(encoding="utf-8")
+        assert new_text.count('"workshop"') == 2
+
+    def test_end_workshop_propagates(self, tmp_path):
+        text = (
+            '# %% [markdown] lang="de" tags=["slide", "end-workshop"]\n'
+            "# ## Ende\n"
+            "\n"
+            '# %% [markdown] lang="en" tags=["slide"]\n'
+            "# ## End\n"
+        )
+        path = _write_slide(tmp_path / "slides_test.py", text)
+        result = normalize_file(path, operations=["workshop_tags"])
+
+        assert len(result.changes) == 1
+        new_text = path.read_text(encoding="utf-8")
+        assert new_text.count('"end-workshop"') == 2
+
+    def test_symmetric_pair_unchanged(self, tmp_path):
+        text = (
+            '# %% [markdown] lang="de" tags=["subslide", "workshop"]\n'
+            "# ## Aufgabe\n"
+            "\n"
+            '# %% [markdown] lang="en" tags=["subslide", "workshop"]\n'
+            "# ## Exercise\n"
+        )
+        path = _write_slide(tmp_path / "slides_test.py", text)
+        result = normalize_file(path, operations=["workshop_tags"])
+
+        assert len(result.changes) == 0
+
+    def test_solo_heading_not_propagated(self, tmp_path):
+        # A lone DE workshop heading (no EN partner) must not gain a phantom pair.
+        text = '# %% [markdown] lang="de" tags=["subslide", "workshop"]\n# ## Aufgabe\n'
+        path = _write_slide(tmp_path / "slides_test.py", text)
+        result = normalize_file(path, operations=["workshop_tags"])
+
+        assert len(result.changes) == 0
+
     def test_workshop_heading_no_existing_tags(self, tmp_path):
         text = '# %% [markdown] lang="de"\n# ## Workshop: Begrüßung\n'
         path = _write_slide(tmp_path / "slides_test.py", text)

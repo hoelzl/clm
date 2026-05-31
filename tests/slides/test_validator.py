@@ -527,6 +527,86 @@ class TestCheckWorkshopHeadings:
 
 
 # ---------------------------------------------------------------------------
+# Workshop tag symmetry (DE/EN)
+# ---------------------------------------------------------------------------
+
+
+def _workshop_symmetry_warnings(result):
+    return [
+        f for f in result.findings if f.category == "pairing" and "disagrees on the" in f.message
+    ]
+
+
+class TestCheckWorkshopTagSymmetry:
+    """A workshop tag on only one language's heading leaks solutions in the
+    other language's split build — flag the asymmetry on the bilingual source.
+    """
+
+    def test_asymmetric_workshop_tag_warns(self, tmp_path):
+        p = _write_slide(
+            tmp_path,
+            "asym.py",
+            """\
+            # %% [markdown] lang="de" tags=["subslide", "workshop"]
+            # ## Mini-Workshop: Übung
+
+            # %% [markdown] lang="en" tags=["subslide"]
+            # ## Mini Workshop: Exercise
+            """,
+        )
+        result = validate_file(p, checks=["pairing"])
+        warnings = _workshop_symmetry_warnings(result)
+        assert len(warnings) == 1
+        assert "workshop" in warnings[0].message
+
+    def test_symmetric_workshop_tag_ok(self, tmp_path):
+        p = _write_slide(
+            tmp_path,
+            "sym.py",
+            """\
+            # %% [markdown] lang="de" tags=["subslide", "workshop"]
+            # ## Mini-Workshop: Übung
+
+            # %% [markdown] lang="en" tags=["subslide", "workshop"]
+            # ## Mini Workshop: Exercise
+            """,
+        )
+        result = validate_file(p, checks=["pairing"])
+        assert _workshop_symmetry_warnings(result) == []
+
+    def test_asymmetric_end_workshop_warns(self, tmp_path):
+        p = _write_slide(
+            tmp_path,
+            "asym_end.py",
+            """\
+            # %% [markdown] lang="de" tags=["subslide", "end-workshop"]
+            # ## Ende
+
+            # %% [markdown] lang="en" tags=["subslide"]
+            # ## End
+            """,
+        )
+        result = validate_file(p, checks=["pairing"])
+        warnings = _workshop_symmetry_warnings(result)
+        assert len(warnings) == 1
+        assert "end-workshop" in warnings[0].message
+
+    def test_single_language_file_no_warning(self, tmp_path):
+        # A split single-language file has no DE/EN pairs, so the check is a
+        # no-op even when a workshop heading is present.
+        p = _write_slide(
+            tmp_path,
+            "split.en.py",
+            """\
+            # %% [markdown] lang="en" tags=["subslide", "workshop"]
+            # ## Mini Workshop: Exercise
+            """,
+        )
+        result = validate_file(p, checks=["pairing"])
+        assert _workshop_symmetry_warnings(result) == []
+
+
+# ---------------------------------------------------------------------------
 # Pairing checks
 # ---------------------------------------------------------------------------
 
