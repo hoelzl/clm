@@ -1240,8 +1240,17 @@ class TestRetakeWindow:
     ):
         """After a normal take, the session lands in ARMED_AFTER_TAKE
         with the same deck preserved for a potential retake."""
+        # ARMED_AFTER_TAKE is a *time-limited* state: the retake timer
+        # auto-expires it to IDLE after retake_window_seconds. The window
+        # MUST exceed _wait_for_state's poll ceiling (15s), otherwise under
+        # xdist CPU starvation the poll thread can be descheduled past the
+        # window, the timer fires ARMED_AFTER_TAKE -> IDLE first, and the
+        # poll never observes the transient state ("stuck at idle within
+        # 15.0s"). Raising the timeout can't fix that — the target state is
+        # already gone. Window expiry itself is covered by
+        # test_retake_window_expires_to_idle.
         sess = _phase2_session(
-            mock_obs, recording_root, short_take_seconds=0.0, retake_window_seconds=5.0
+            mock_obs, recording_root, short_take_seconds=0.0, retake_window_seconds=60.0
         )
         sess.arm("c", "s", "01 Deck")
 
