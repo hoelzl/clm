@@ -244,6 +244,31 @@ def test_routing_demuxes_tagged_requests_to_per_cassette_staging(
     assert not staging_a[0].exists()  # folded + consumed
 
 
+def test_once_mode_starts_without_existing_catchall(
+    upstream_server: str, cassette_path: Path, tmp_path: Path
+) -> None:
+    """Regression (issue #165): ``once`` must not abort the proxy when the
+    catch-all cassette does not exist.
+
+    Under P2 the ``clm_cassette_path`` catch-all is created empty on every
+    fresh build, so the old Phase-0 ``once`` existence guard wrongly shut the
+    proxy down at startup (``MitmproxyError: Mode 'once' requires an existing
+    cassette``). Per-target routing means the real cassettes are the tagged
+    canonicals, not the catch-all.
+    """
+    confdir = tmp_path / "mitm-confdir"
+    cass = tmp_path / "topicO" / "_cassettes" / "slidesO.http-cassette.yaml"
+    assert not cassette_path.exists()  # fresh scratch catch-all
+
+    # Previously raised MitmproxyError during startup; must now start cleanly.
+    with MitmproxyManager(cassette_path=cassette_path, mode="once", confdir=confdir) as proxy:
+        response = _get_via_proxy(f"{upstream_server}/once", proxy.proxy_url, tag=str(cass))
+
+    assert response.status_code == 200
+    # A miss in once mode records into the tagged per-cassette staging file.
+    assert _staging_files(cass), "once should record a miss into per-cassette staging"
+
+
 def test_env_vars_exposes_proxy_url(cassette_path: Path, tmp_path: Path) -> None:
     """The env_vars dict has the four HTTP_PROXY variants workers need."""
     confdir = tmp_path / "mitm-confdir"

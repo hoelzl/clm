@@ -152,6 +152,33 @@ def test_multivalue_response_headers_preserved_as_list():
     assert actual["headers"]["set-cookie"] == ["a=1", "b=2"]
 
 
+def test_no_reason_phrase_normalises_to_none():
+    """HTTP/2-style responses (no reason phrase) match vcrpy's message: None."""
+    _, _, _, _, status, _, resp_fields, raw_body = _POST_JSON
+    # httpcore with empty extensions -> _serialize_response yields message=None.
+    real_response = _httpcore_response(status, None, resp_fields, raw_body)
+    expected = decode_response(_serialize_response(real_response, raw_body))
+    actual = cf.vcr_response_dict_from_parts(status, "", resp_fields, raw_body)
+    assert actual == expected
+    assert actual["status"]["message"] is None
+
+
+def test_non_ascii_reason_phrase_dropped_to_none():
+    """A non-ASCII reason phrase is dropped (vcrpy can't (de)serialize it).
+
+    vcrpy decodes the reason as ASCII and would crash on non-ASCII bytes; a
+    stored non-ASCII message could not be replayed by the in-kernel vcrpy
+    transport. We keep the cassette vcrpy-replayable by storing None.
+    """
+    _, _, _, _, status, _, resp_fields, raw_body = _POST_JSON
+    actual = cf.vcr_response_dict_from_parts(status, "Café", resp_fields, raw_body)
+    assert actual["status"]["message"] is None
+    # The serialized cassette is therefore plain ASCII and reloads cleanly.
+    request = cf.vcr_request_from_parts("GET", "https://example.com/", [], b"")
+    yaml_text = cf.serialize_interactions([(request, actual)])
+    yaml_text.encode("ascii")  # must not raise
+
+
 def test_serialize_does_not_mutate_in_memory_body():
     """The convert_to_unicode bytes->str mutation must not leak to the index."""
     _, _, _, _, status, reason, resp_fields, raw_body = _POST_JSON

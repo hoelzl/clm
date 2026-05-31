@@ -63,6 +63,22 @@ def _decode_ascii(value: object) -> str:
     return str(value)
 
 
+def _ascii_reason(reason_phrase: str | None) -> str | None:
+    """Normalise an HTTP reason phrase to an ASCII ``str`` or ``None``.
+
+    vcrpy decodes the reason as ASCII and stores ``None`` when absent. We
+    map empty/missing to ``None`` and drop a non-ASCII reason to ``None``
+    too (it could not round-trip through vcrpy's ASCII (de)serialization).
+    """
+    if not reason_phrase:
+        return None
+    try:
+        reason_phrase.encode("ascii")
+    except UnicodeEncodeError:
+        return None
+    return reason_phrase
+
+
 def vcr_request_from_parts(
     method: str,
     url: str,
@@ -107,6 +123,16 @@ def vcr_response_dict_from_parts(
     (mitmproxy's ``flow.response.raw_content``), not the decoded content,
     so :func:`decode_response` sees the ``content-encoding`` header and
     decompresses identically to vcrpy.
+
+    The reason phrase is forced to ASCII (or dropped to ``None``): vcrpy
+    decodes it as ASCII (``extensions["reason_phrase"].decode("ascii")``)
+    and would *raise* on a non-ASCII reason — and a stored non-ASCII
+    ``status.message`` cannot be replayed by the in-kernel vcrpy transport
+    (its ``_deserialize_response`` does ``message.encode("ascii")``). So for
+    the common ASCII case this is byte-identical to vcrpy; for the rare
+    non-ASCII HTTP/1.1 reason (real LLM endpoints use ASCII reasons or
+    HTTP/2, which has none) we drop it to ``None`` rather than crash or
+    write a cassette vcrpy cannot read back.
     """
     headers: dict[str, list[str]] = defaultdict(list)
     for name, value in header_fields:
@@ -114,8 +140,9 @@ def vcr_response_dict_from_parts(
 
     response = {
         # vcrpy stores ``message: None`` when there is no reason phrase
-        # (e.g. HTTP/2). Normalise empty strings to None to match.
-        "status": {"code": status_code, "message": reason_phrase or None},
+        # (e.g. HTTP/2). Normalise empty strings to None to match, and keep
+        # the stored message ASCII-clean so the cassette stays vcrpy-replayable.
+        "status": {"code": status_code, "message": _ascii_reason(reason_phrase)},
         "headers": dict(headers),
         "body": {"string": raw_body},
     }

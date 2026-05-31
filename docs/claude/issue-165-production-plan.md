@@ -77,6 +77,22 @@ cross-contamination, catch-all, real host marker+merge round-trip) plus
 unit tests for tag injection/strip, tag resolution, and the host merge
 (folds markered, leaves markerless, LF endings).
 
+**Adversarial review (workflow `wf_eeeba6cb-563`, 5 probe-driven lenses)
+confirmed 4 findings; the convert_to_unicode aliasing concern was refuted by
+a control probe (the `serialize_interactions` deepcopy is load-bearing).**
+Fixed in this branch: (1) **HIGH** — `once` mode aborted the build because the
+Phase-0 catch-all existence guard in `addon.running()` checked the
+always-empty build-scratch catch-all; removed it, `once`/`refresh` now route
+per-target via the mode sets (regression test added). (2) **LOW** — a
+non-ASCII HTTP/1.1 reason phrase was recorded where vcrpy would crash and the
+result was not vcrpy-replayable; `cassette_format` now drops it to `None`
+(ASCII reasons stay byte-identical). **Deferred** (not P1/P2 regressions): the
+`refresh`-overwrite gap (the mode-blind `merge_staging_into_canonical` keeps
+the stale canonical entry — *identical behavior in the in-process vcrpy path*,
+so a cross-cutting merge change → P3) and the catch-all's O(n²) eager
+full-rewrite (latent; tagged per-notebook targets stay tiny, proven fine at
+the 18-notebook / 506 KB scale → perf follow-up).
+
 The Phase-0 proof used **one shared cassette**; production needs each request
 mapped to the correct per-(topic, language, kind) cassette under concurrency.
 
@@ -98,6 +114,14 @@ mapped to the correct per-(topic, language, kind) cassette under concurrency.
 The prototype addon lacks parity with the vcrpy bootstrap's load-bearing
 behavior (the design doc wrongly called these "trivial").
 
+- **Strict `once` / `refresh` semantics per target** (deferred from P2's review):
+  under the transport `once` currently behaves like `new-episodes` and `refresh`
+  records additively. `refresh`-overwrite needs a **mode-aware merge** —
+  `merge_staging_into_canonical` is mode-blind and keeps the stale canonical
+  entry on a re-record (the *in-process vcrpy path has the identical bug*), so
+  the fix (thread the mode through; staging-wins for `refresh`/`record`) lands
+  here and benefits **both** transports. `once`-must-exist should error/miss per
+  tagged canonical rather than via the build-scratch catch-all.
 - **Secret filtering** at record time: `authorization`, `cookie`, `x-api-key`,
   `set-cookie` headers + post-data/query params (match the bootstrap's
   `filter_headers` / `filter_post_data_parameters` / `filter_query_parameters`).

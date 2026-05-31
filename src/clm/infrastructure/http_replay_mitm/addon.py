@@ -182,24 +182,20 @@ class ClmReplayAddon:
         cassette_path_str = ctx.options.clm_cassette_path
         self._default_cassette = Path(cassette_path_str) if cassette_path_str else None
 
-        if (
-            self._mode == MODE_REFRESH
-            and self._default_cassette is not None
-            and self._default_cassette.exists()
-        ):
-            self._default_cassette.unlink()
-
-        if (
-            self._mode == MODE_ONCE
-            and self._default_cassette is not None
-            and not self._default_cassette.exists()
-        ):
-            logger.error(
-                "Mode 'once' requires an existing cassette at %s — refusing to start",
-                self._default_cassette,
-            )
-            ctx.master.shutdown()
-            return
+        # NOTE: vcrpy's strict ``once`` (cassette-must-exist) and ``refresh``
+        # (overwrite) semantics are not enforced per target under the
+        # out-of-process transport yet. The Phase-0 model had a single shared
+        # cassette, so this method could existence-check / unlink it; but under
+        # P2's per-(topic,language,kind) tag routing, ``clm_cassette_path`` is
+        # only the build-scratch *catch-all* (created empty on every fresh
+        # build — see build.py). A ``once`` existence check against it would
+        # wrongly abort the proxy at startup, and a ``refresh`` unlink of it
+        # would clear nothing real. So we do neither here. Until per-target
+        # strict semantics land (issue #165 P3), ``once`` behaves like
+        # ``new-episodes`` (serve cassette hits, record misses) and ``refresh``
+        # records fresh interactions additively (the host merge dedups against
+        # canonical — the same imperfect overwrite the in-process vcrpy path
+        # exhibits today). The mode sets above encode this routing.
 
         logger.info(
             "Addon ready: mode=%s default_cassette=%s build=%s",
