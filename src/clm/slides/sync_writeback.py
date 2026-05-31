@@ -4,8 +4,11 @@ Used by:
 
 - :mod:`clm.slides.sync_walker` — interactive ``--interactive`` walker
 - :mod:`clm.slides.sync_trivial` — ``--apply --trivial`` auto-applier
+- :mod:`clm.slides.sync_apply` — Issue #166 authoring apply engine
+  (drives ``find_cell`` / ``replace_cell_body`` / ``delete_cell``, keyed by
+  ``(slide_id, role)`` rather than line number)
 
-Both paths must keep cell headers and trailing-blank padding verbatim so
+These paths must keep cell headers and trailing-blank padding verbatim so
 the surrounding bytes never shift; the v1 / Phase 5 round-trip
 invariant is what makes `clm slides split` / `unify` work, and the
 sync write paths inherit that contract. All three primitives here are
@@ -20,6 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from clm.notebooks.slide_parser import CellMetadata
 from clm.slides.raw_cells import RawCell, reconstruct, split_cells
 
 if TYPE_CHECKING:
@@ -31,8 +35,35 @@ __all__ = [
     "FileState",
     "cell_content_hash",
     "record_snapshot",
+    "role_of",
     "target_path_for_outcome",
 ]
+
+# Tags that identify a sync-relevant cell's role. Duplicated from
+# ``clm.slides.sync`` / ``clm.slides.sync_plan`` to keep this low-level
+# write module free of an import cycle (sync_plan imports this module).
+_SYNC_ROLE_TAGS = {"slide", "subslide", "voiceover", "notes"}
+
+
+def role_of(metadata: CellMetadata) -> str | None:
+    """Return the sync role of a cell from its metadata, or ``None``.
+
+    Public so :mod:`clm.slides.sync_apply` reuses the exact same predicate
+    instead of keeping its own copy.
+    """
+    if metadata.is_j2:
+        return None
+    if metadata.cell_type != "markdown":
+        return None
+    for tag in metadata.tags:
+        if tag in _SYNC_ROLE_TAGS:
+            return tag
+    return None
+
+
+def _cell_matches(cell: RawCell, slide_id: str, role: str) -> bool:
+    """Whether ``cell`` carries ``slide_id`` in sync ``role``."""
+    return cell.metadata.slide_id == slide_id and role_of(cell.metadata) == role
 
 
 def target_path_for_outcome(outcome: PairOutcome, result: SyncResult) -> Path:
@@ -107,12 +138,18 @@ class FileState:
     preamble: str
     cells: list[RawCell]
     dirty: bool = False
+    ends_with_newline: bool = True
 
     @classmethod
     def load(cls, path: Path) -> FileState:
         text = path.read_text(encoding="utf-8")
         preamble, cells = split_cells(text)
-        return cls(path=path, preamble=preamble, cells=cells)
+        return cls(
+            path=path,
+            preamble=preamble,
+            cells=cells,
+            ends_with_newline=text.endswith("\n"),
+        )
 
     def replace_body(self, outcome: PairOutcome, new_text: str) -> None:
         """Replace the body of the target cell named by ``outcome``.
@@ -133,10 +170,55 @@ class FileState:
             "file changed since the sync pass parsed it?"
         )
 
+    def find_cell(self, slide_id: str, role: str) -> RawCell | None:
+        """Return the cell carrying ``slide_id`` in ``role``, or ``None``.
+
+        Used by the Issue #166 apply engine, whose proposals are keyed by
+        ``(slide_id, role)`` rather than by line number — so deletes and
+        edits stay correct even as earlier operations shift line numbers.
+        """
+        for cell in self.cells:
+            if _cell_matches(cell, slide_id, role):
+                return cell
+        return None
+
+    def replace_cell_body(self, slide_id: str, role: str, new_text: str) -> bool:
+        """Rewrite the body of the ``(slide_id, role)`` cell in place.
+
+        Returns ``False`` when no such cell exists. Header and trailing
+        blank-line padding stay verbatim (same contract as
+        :meth:`replace_body`).
+        """
+        cell = self.find_cell(slide_id, role)
+        if cell is None:
+            return False
+        self._rewrite_cell_body(cell, new_text)
+        self.dirty = True
+        return True
+
+    def delete_cell(self, slide_id: str, role: str) -> bool:
+        """Remove the ``(slide_id, role)`` cell, lines and all.
+
+        Returns ``False`` when no such cell exists. The cell owns its
+        boundary line, body, and trailing blanks, so dropping it from the
+        list leaves the surrounding cells' bytes untouched.
+        """
+        for i, cell in enumerate(self.cells):
+            if _cell_matches(cell, slide_id, role):
+                del self.cells[i]
+                self.dirty = True
+                return True
+        return False
+
     def flush(self) -> None:
         if not self.dirty:
             return
         text = reconstruct(self.preamble, self.cells)
+        # Deleting the file's last cell drops the trailing-newline element
+        # that ``split_cells`` parked on it; restore the original terminal
+        # newline so a remove never emits a "No newline at end of file" diff.
+        if self.ends_with_newline and not text.endswith("\n"):
+            text += "\n"
         self.path.write_text(text, encoding="utf-8", newline="\n")
         self.dirty = False
 

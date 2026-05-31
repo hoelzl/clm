@@ -402,6 +402,19 @@ The spine. Everything else consumes its plan.
 
 ### Phase 2 — Writeback primitives + atomic apply for the deterministic kinds
 
+**Status: ✅ core implemented 2026-05-31** — `FileState.find_cell /
+replace_cell_body / delete_cell` (keyed by `(slide_id, role)`) +
+`clm/slides/sync_apply.py` (`apply_plan`: **remove** + **edit**, atomic,
+watermark advances only on a clean complete apply *and* a real baseline). 14
+tests; mypy + ruff clean. A 15-agent adversarial review ran; all 6 confirmed
+findings folded in (cold-start `has_baseline` watermark guard;
+terminal-newline preservation on last-cell delete; language-filtered
+content index; `role_of` de-duplicated to one public helper; shared
+`_cell_matches`; docstring). **MOVE-apply deferred to Phase 2b** (reordering
+slide *groups* with their narrative companions while preserving the
+round-trip). Live `clm slides sync` still unchanged — the apply engine is not
+yet wired into the CLI.
+
 - `FileState.insert / delete / move` (`sync_writeback.py`), preserving the
   header + trailing-blank round-trip the split/unify invariant depends on.
 - Apply path for **MOVE** (reorder target by id-join), **REMOVE** (delete the
