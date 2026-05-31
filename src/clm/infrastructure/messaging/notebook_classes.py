@@ -1,5 +1,6 @@
 import hashlib
-from typing import Literal
+from collections.abc import Mapping
+from typing import Any, Literal
 
 from clm.infrastructure.messaging.base_classes import Payload, ProcessingError, Result
 
@@ -10,6 +11,27 @@ def notebook_metadata(kind, prog_lang, language, output_format) -> str:
 
 def notebook_metadata_tags(kind, prog_lang, language, output_format) -> tuple[str, str, str, str]:
     return kind, prog_lang, language, output_format
+
+
+def notebook_metadata_tags_from_payload(
+    payload_data: Mapping[str, Any],
+) -> tuple[str, str, str, str]:
+    """Extract the ``(kind, prog_lang, language, format)`` tuple from a
+    serialized notebook payload dict, using one canonical set of fallbacks.
+
+    Several host- and worker-side call sites previously duplicated this
+    extraction with *divergent* defaults (``kind`` fell back to ``"participant"``
+    in the result/metadata path but ``"completed"`` in the worker), an
+    avoidable source of drift. The fallbacks are unreachable for real jobs —
+    the host always sets these required fields — but keep result and cache
+    bookkeeping robust against a malformed payload.
+    """
+    return notebook_metadata_tags(
+        payload_data.get("kind", "participant"),
+        payload_data.get("prog_lang", "python"),
+        payload_data.get("language", "en"),
+        payload_data.get("format", "notebook"),
+    )
 
 
 class NotebookPayload(Payload):
