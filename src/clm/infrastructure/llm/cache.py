@@ -473,6 +473,135 @@ class SyncSnapshotCache:
         self._conn.close()
 
 
+class SyncWatermarkCache:
+    """Ordered, per-language structural watermark of the last synced deck state.
+
+    This is the baseline against which the Issue #166 change classifier
+    (:mod:`clm.slides.sync_plan`) detects adds / edits / moves / removes when
+    one half of a split deck is edited. Where :class:`SyncSnapshotCache` stores
+    a *per-cell* ``(de_hash, en_hash)`` pair keyed by ``slide_id`` (for
+    direction inference), the watermark stores the **whole deck** as an ordered
+    list of cells *per language*, so it can:
+
+    - represent **id-less** cells (``slide_id`` is nullable), and
+    - capture cell **order** (for move / reorder detection).
+
+    A pair's two decks are written together, only on a successful sync apply, so
+    the watermark advances with the agreed state and is immune to the author's
+    git-commit cadence. Cold-start (no watermark) falls back to git HEAD.
+
+    Shares the same SQLite file as the other LLM caches; lives in its own table.
+    """
+
+    def __init__(self, db_path: Path):
+        self.db_path = db_path
+        self._conn = sqlite3.connect(str(db_path))
+        self._migrate()
+
+    def _migrate(self) -> None:
+        cursor = self._conn.execute("PRAGMA table_info(sync_watermarks)")
+        columns = {row[1] for row in cursor.fetchall()}
+        if not columns:
+            self._conn.execute(
+                """CREATE TABLE sync_watermarks (
+                    de_path      TEXT NOT NULL,
+                    en_path      TEXT NOT NULL,
+                    lang         TEXT NOT NULL,
+                    position     INTEGER NOT NULL,
+                    slide_id     TEXT,
+                    role         TEXT NOT NULL,
+                    content_hash TEXT NOT NULL,
+                    synced_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (de_path, en_path, lang, position)
+                )"""
+            )
+            self._conn.commit()
+
+    def get_deck(
+        self,
+        de_path: str,
+        en_path: str,
+        lang: str,
+    ) -> list[tuple[int, str | None, str, str]]:
+        """Return the watermark for one deck, ordered by position.
+
+        Tuples are ``(position, slide_id, role, content_hash)``;
+        ``slide_id`` is ``None`` for id-less rows. An empty list means the
+        deck has no watermark (cold start for this pair).
+        """
+        rows = self._conn.execute(
+            "SELECT position, slide_id, role, content_hash FROM sync_watermarks "
+            "WHERE de_path=? AND en_path=? AND lang=? ORDER BY position",
+            (de_path, en_path, lang),
+        ).fetchall()
+        return [(r[0], r[1], r[2], r[3]) for r in rows]
+
+    def put_deck(
+        self,
+        *,
+        de_path: str,
+        en_path: str,
+        lang: str,
+        cells: list[tuple[int, str | None, str, str]],
+    ) -> None:
+        """Replace the watermark for one deck atomically.
+
+        ``cells`` is an ordered list of ``(position, slide_id, role,
+        content_hash)``. The whole ``(de_path, en_path, lang)`` slice is
+        deleted and rewritten in a single transaction so a deck's watermark
+        is never observed half-updated.
+        """
+        if lang not in ("de", "en"):
+            raise ValueError(f"lang must be 'de' or 'en', got {lang!r}")
+        with self._conn:  # single transaction (BEGIN/COMMIT or ROLLBACK)
+            self._conn.execute(
+                "DELETE FROM sync_watermarks WHERE de_path=? AND en_path=? AND lang=?",
+                (de_path, en_path, lang),
+            )
+            self._conn.executemany(
+                "INSERT INTO sync_watermarks "
+                "(de_path, en_path, lang, position, slide_id, role, content_hash) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (de_path, en_path, lang, position, slide_id, role, content_hash)
+                    for (position, slide_id, role, content_hash) in cells
+                ],
+            )
+
+    def has_pair(self, de_path: str, en_path: str) -> bool:
+        """Return True when any watermark row exists for the pair."""
+        row = self._conn.execute(
+            "SELECT 1 FROM sync_watermarks WHERE de_path=? AND en_path=? LIMIT 1",
+            (de_path, en_path),
+        ).fetchone()
+        return row is not None
+
+    def clear_pair(self, de_path: str, en_path: str) -> int:
+        """Delete all watermark rows for the pair; return rows removed."""
+        cursor = self._conn.execute(
+            "DELETE FROM sync_watermarks WHERE de_path=? AND en_path=?",
+            (de_path, en_path),
+        )
+        self._conn.commit()
+        return cursor.rowcount
+
+    def iter_entries(self) -> list[tuple[str, str, str, int, str | None, str, str, str]]:
+        """Return every watermark row for a future ``sync --dump``.
+
+        Tuples are ``(de_path, en_path, lang, position, slide_id, role,
+        content_hash, synced_at)`` ordered by pair, language, and position.
+        """
+        rows = self._conn.execute(
+            "SELECT de_path, en_path, lang, position, slide_id, role, "
+            "content_hash, synced_at "
+            "FROM sync_watermarks ORDER BY de_path, en_path, lang, position"
+        ).fetchall()
+        return [(r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7]) for r in rows]
+
+    def close(self) -> None:
+        self._conn.close()
+
+
 def resolve_cache_dir(
     *,
     cli_override: Path | None = None,
