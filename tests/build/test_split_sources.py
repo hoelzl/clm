@@ -63,6 +63,29 @@ BILINGUAL_DECK = dedent(
 )
 
 
+# A deck whose DE and EN titles are byte-identical. After ``split_in_file``
+# each companion carries only its own ``header_de`` / ``header_en`` macro, but
+# ``find_notebook_titles`` fills *both* ``Text`` slots from the single macro it
+# finds. So each split file reports the same DE-side filename — the exact shape
+# that made ``detect_duplicate_output_files`` raise a false "Duplicate output
+# file" warning for real-world decks like ``Video - Prompt Engineering``.
+IDENTICAL_TITLE_DECK = dedent(
+    """\
+    # j2 from "macros.j2" import header
+    # {{ header("Prompt Engineering", "Prompt Engineering") }}
+
+    # %% [markdown] lang="de" tags=["slide", "slide_id=intro"]
+    # ## Einführung
+
+    # %% [markdown] lang="en" tags=["slide", "slide_id=intro"]
+    # ## Introduction
+
+    # %%
+    x = 1
+    """
+)
+
+
 SPEC_XML = dedent(
     """\
     <course>
@@ -437,3 +460,64 @@ class TestBuildRefuses:
         assert reporter.finished is True
         assert reporter.cleaned is True
         assert any(e.category == "split_slide_dual_format" for e in reporter.errors)
+
+
+# ---------------------------------------------------------------------------
+# Duplicate-output detection must honour the per-language split filter
+# ---------------------------------------------------------------------------
+
+
+class TestDuplicateDetectionWithSplits:
+    """``detect_duplicate_output_files`` must not flag split companions.
+
+    A ``.de.py`` / ``.en.py`` pair emits to disjoint language directories, so
+    it can never collide on disk. Before the fix, the detector iterated *both*
+    languages for every file and ignored ``output_language_filter`` — so a
+    split pair whose DE and EN titles are identical was falsely reported as a
+    high-priority duplicate. Regression for that false positive.
+    """
+
+    def _split_course(self, tmp_path: Path) -> Course:
+        course_root, topic_dir = _scaffold_course(tmp_path)
+        source = topic_dir / "slides_prompt.py"
+        source.write_text(IDENTICAL_TITLE_DECK, encoding="utf-8")
+        split_in_file(source)
+        source.unlink()
+        course = _make_course(course_root, tmp_path)
+        assert course.loading_errors == []
+        return course
+
+    def test_identical_title_split_pair_not_flagged(self, tmp_path: Path) -> None:
+        course = self._split_course(tmp_path)
+
+        # Sanity: the pair really does share a number *and* a DE-side title,
+        # so each file would produce the same DE output filename.
+        notebooks = sorted(
+            (f for f in course.files if isinstance(f, NotebookFile)),
+            key=lambda f: f.path.name,
+        )
+        assert [f.path.name for f in notebooks] == [
+            "slides_prompt.de.py",
+            "slides_prompt.en.py",
+        ]
+        assert notebooks[0].file_name("de", ".html") == notebooks[1].file_name("de", ".html")
+
+        # The real method must report no duplicates: the filter routes each
+        # file to its own language directory.
+        assert course.detect_duplicate_output_files() == []
+
+    def test_filter_is_what_suppresses_the_false_positive(self, tmp_path: Path) -> None:
+        """Clearing the language filter reinstates the (false) collision.
+
+        This pins the suppression to ``output_language_filter`` and, by the
+        same token, proves the detector still catches genuine collisions among
+        files that carry no filter — the fix narrows scope, it doesn't disable
+        detection.
+        """
+        course = self._split_course(tmp_path)
+        for nb in (f for f in course.files if isinstance(f, NotebookFile)):
+            nb.output_language_filter = None
+
+        duplicates = course.detect_duplicate_output_files()
+        assert duplicates, "without the filter the identical-title pair collides"
+        assert all(d["files"] and len(d["files"]) > 1 for d in duplicates)
