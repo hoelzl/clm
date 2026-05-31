@@ -131,6 +131,85 @@ def _resolve_fail_on_missing_xref(cli_value: bool | None, resolved_http_replay_m
     return resolved_http_replay_mode == "replay"
 
 
+def _maybe_start_mitmproxy_transport(mode: str | None, jobs_db_path: Path):
+    """Start an out-of-process mitmproxy HTTP-replay transport when opted in.
+
+    Experimental (issue #165). Opt in with ``CLM_HTTP_REPLAY_TRANSPORT=mitmproxy``;
+    default unset keeps the in-process vcrpy path unchanged. Returns the running
+    :class:`MitmproxyManager` (so the caller can stop it) or ``None``.
+
+    When active it (1) starts one ``mitmdump`` for the whole build, (2) sets
+    ``HTTP(S)_PROXY`` + a ``certifi`` + proxy-CA bundle in ``os.environ`` so
+    Direct workers inherit them via ``os.environ.copy()``, and (3) leaves
+    ``CLM_HTTP_REPLAY_TRANSPORT`` set so each kernel skips the vcrpy bootstrap
+    (``_resolve_cassette_paths`` returns ``None``). The kernel's real
+    httpx/httpcore is therefore never patched — the structural fix for the
+    issue #143 connection-pool deadlock.
+
+    Minimal Direct-mode wiring for the Phase-0 proof: one shared proxy and one
+    shared cassette (no per-(topic,language,kind) routing yet) and no Docker
+    support — both are later phases per the staged plan.
+    """
+    import os as _os
+
+    if (
+        _os.environ.get("CLM_HTTP_REPLAY_TRANSPORT") != "mitmproxy"
+        or not mode
+        or mode == "disabled"
+    ):
+        return None
+
+    import time as _time
+
+    import certifi
+
+    from clm.infrastructure.http_replay_mitm import MitmproxyManager
+
+    base = Path(jobs_db_path).resolve().parent / "mitm"
+    base.mkdir(parents=True, exist_ok=True)
+    cassette = base / "transport.mitm"
+    confdir = base / "confdir"
+    manager = MitmproxyManager(cassette_path=cassette, mode=mode, confdir=confdir)
+    manager.start()
+
+    # mitmdump writes its CA during startup; the manager only polls the port,
+    # so wait briefly for the CA file too before splicing it.
+    ca = manager.ca_cert_path
+    deadline = _time.monotonic() + 5.0
+    while not ca.exists() and _time.monotonic() < deadline:
+        _time.sleep(0.05)
+    if not ca.exists():
+        manager.stop()
+        raise RuntimeError(f"mitmproxy CA cert not generated at {ca}")
+
+    # Combined bundle: real roots (certifi) + the proxy CA, so both proxy-forged
+    # certs (kernel->proxy) and ignore_hosts direct traffic validate. httpx 0.28
+    # honors SSL_CERT_FILE; requests honors REQUESTS_CA_BUNDLE (Phase-0 verified).
+    bundle = base / "ca-bundle.pem"
+    bundle.write_bytes(Path(certifi.where()).read_bytes() + b"\n" + ca.read_bytes())
+
+    proxy = manager.proxy_url
+    _os.environ.update(
+        {
+            "HTTP_PROXY": proxy,
+            "HTTPS_PROXY": proxy,
+            "http_proxy": proxy,
+            "https_proxy": proxy,
+            "SSL_CERT_FILE": str(bundle),
+            "REQUESTS_CA_BUNDLE": str(bundle),
+            "CURL_CA_BUNDLE": str(bundle),
+        }
+    )
+    logger.info(
+        "mitmproxy transport active: proxy=%s mode=%s cassette=%s ca_bundle=%s",
+        proxy,
+        mode,
+        cassette,
+        bundle,
+    )
+    return manager
+
+
 def _find_env_file(start_dir: Path) -> Path | None:
     """Walk up from start_dir looking for a .env file.
 
@@ -1419,6 +1498,11 @@ async def main_build(
         data_dir=data_dir,
     )
 
+    # Experimental out-of-process HTTP-replay transport (issue #165). Must run
+    # BEFORE workers spawn so they inherit HTTP(S)_PROXY + the CA bundle via
+    # os.environ.copy(). No-op unless CLM_HTTP_REPLAY_TRANSPORT=mitmproxy.
+    mitm_manager = _maybe_start_mitmproxy_transport(config.http_replay_mode, config.jobs_db_path)
+
     output_formatter.show_startup_message("Starting workers...")
     started_workers = start_managed_workers(lifecycle_manager, worker_config)
     if started_workers:
@@ -1457,6 +1541,12 @@ async def main_build(
                 logger.info(f"Stopped {len(started_workers)} worker(s)")
             except Exception as e:
                 logger.error(f"Failed to stop workers: {e}", exc_info=True)
+        if mitm_manager is not None:
+            logger.info("Stopping mitmproxy transport...")
+            try:
+                mitm_manager.stop()
+            except Exception as e:
+                logger.error(f"Failed to stop mitmproxy: {e}", exc_info=True)
 
     return summary
 

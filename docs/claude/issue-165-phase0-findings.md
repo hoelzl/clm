@@ -61,22 +61,68 @@ kernel's real httpx returns connections to its pool normally because nothing is
 patched in-process. The deadlock *class* is genuinely defeated, not just the
 one instance the #168 stopgap patched.
 
-## What Phase 0 did NOT yet prove (remaining gate)
+## Gate 3 — full-build single-proxy throughput: **GREEN**
 
-This mechanism proof is single-process and small. It does **not** answer the
-critic's follow-on: can a **single shared `mitmdump`** sustain a real
-**16-kernel `.batch()` burst** without becoming a *new* serialization/throughput
-bottleneck? That needs the full reproducer:
+The critic's follow-on to gate 2: a single-process micro-repro can't show
+whether **one shared `mitmdump`** sustains a real **16-kernel `.batch()` burst**
+or becomes a new serialization/throughput bottleneck. Run against the full
+reproducer (`chains-parallel-stress-cassette.xml`, 9 topic copies × DE/EN = 18
+notebooks, `--notebook-workers 16`, `--http-replay new-episodes`) through the
+minimal transport wiring (this branch), launcher `C:\Users\tc\Tmp\clm-phase0\run-mitm.ps1`
+(`PYTHONPATH`→this worktree, `CLM_HTTP_REPLAY_TRANSPORT=mitmproxy`,
+`CLM_MITMDUMP`→uv-tool mitmdump), key sourced from `PythonCourses/.env`,
+`LANGSMITH_TRACING=false`:
 
-- Rig: `~/Programming/Python/Tests/clm-bug-repros/issue-143-cassette-connection-pool-deadlock/`,
-  spec `course-specs/chains-parallel-stress-cassette.xml` (9 topic copies, 16
-  workers), launcher `run-clm.ps1` (repoint its `PYTHONPATH` worktree to this
-  branch).
-- Requires: real OpenRouter API credit (recording path), the minimal
-  `CLM_HTTP_REPLAY_TRANSPORT=mitmproxy` build wiring (start manager in
-  `build.py`, inject `HTTP(S)_PROXY` + the certifi+CA bundle in
-  `worker_executor.py`, bypass the vcrpy bootstrap in `notebook_processor.py`),
-  and a `py-spy` clean check vs. the patched-vcrpy reference run.
+```
+✓ Build completed successfully in 118.5s
+  Stage 3/4: HTML Speaker (18 jobs)
+  36 files processed · 0 errors · 0 warnings
+```
+
+Corroborating evidence:
+- `mitm/transport.mitm` = **506 KB** — the proxy recorded real OpenRouter HTTPS
+  flows (the LLM calls genuinely routed through it and the CA was trusted under
+  load).
+- `clm.log`: `mitmproxy transport active: proxy=http://127.0.0.1:NNNNN
+  mode=new-episodes …` then `Stopping mitmproxy transport…` — clean lifecycle.
+- **0** occurrences of `wait_for_connection` / `PoolTimeout` / `CellTimeoutError`
+  in the build log — the exact inverse of the vcrpy run, where `py-spy` showed
+  all 16 kernels frozen in `wait_for_connection`.
+- **0** vcrpy bootstraps injected (`grep -ci "import vcr|_vcr_handle"` == 0) —
+  the bypass holds under full concurrency.
+
+**Conclusion:** the same 16-worker reproducer that deadlocks under vcrpy
+completes cleanly in ~2 minutes through one shared mitmdump. The single-proxy
+throughput concern is empirically cleared at production-like load; per-worker
+proxies are not needed for this workload. The HTTPS/CA path also works
+end-to-end against real OpenRouter under load (gate 1 confirmed at scale).
+
+### Minimal transport wiring (this branch, opt-in, default-off)
+
+Three surgical edits gated on `CLM_HTTP_REPLAY_TRANSPORT=mitmproxy` (unset =
+today's behavior, bit-identical):
+- `build.py` `_maybe_start_mitmproxy_transport`: starts one `mitmdump` before
+  workers spawn, splices a **certifi + proxy-CA** bundle, sets
+  `HTTP(S)_PROXY`/`SSL_CERT_FILE`/`REQUESTS_CA_BUNDLE` in `os.environ` (Direct
+  workers inherit via `os.environ.copy()`); stopped in the build `finally`.
+- `notebook_processor.py` `_resolve_cassette_paths`: returns `None` under the
+  transport → no vcrpy bootstrap, no staging, no merge; kernel httpx is never
+  patched.
+- `proxy_manager.py` `_locate_mitmdump`: `CLM_MITMDUMP` override for the
+  `uv tool install` model.
+
+Note: this proof used **one shared cassette** (no per-(topic,language,kind)
+routing) and **Direct** workers only — both correctness/coverage items remain
+for later phases, but neither affects the deadlock/throughput conclusion.
+
+## What still remains for production (later phases, per the staged plan)
+
+Not blockers for the GO decision, but required before vcrpy can be retired:
+the YAML cassette bridge (vs the prototype's native `.mitm`), request→cassette
+routing for concurrent multi-topic correctness, secret-filtering + `ignore_hosts`
++ JSON-body-match parity in the addon, strict-replay-miss → non-zero build exit
+parity, and Docker-worker reachability (`host.docker.internal` + CA-in-container).
+vcrpy stays the default until those parity gates pass.
 
 ## Prototype package status (this branch)
 

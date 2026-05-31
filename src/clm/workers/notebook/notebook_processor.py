@@ -1941,6 +1941,15 @@ class NotebookProcessor:
         this directory; the host code merges staging into canonical via
         the same view of the filesystem.
         """
+        if os.environ.get("CLM_HTTP_REPLAY_TRANSPORT") == "mitmproxy":
+            # Out-of-process transport (issue #165): the mitmproxy proxy records
+            # and replays at the network layer, so the kernel needs no vcrpy
+            # bootstrap, no per-worker staging file, and no canonical merge.
+            # Returning None makes the seed / inject / merge calls all no-op, and
+            # the kernel's real httpx/httpcore is never patched (the structural
+            # fix for the issue #143 connection-pool deadlock).
+            return None
+
         from .http_replay_cassette import CassettePaths, resolve_paths
 
         mode = payload.http_replay_mode

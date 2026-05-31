@@ -247,11 +247,21 @@ class MitmproxyManager:
 def _locate_mitmdump() -> str:
     """Find the mitmdump executable for the current Python environment.
 
-    Preference order: ``shutil.which`` (honors PATH), then the scripts
-    directory of the running interpreter. Raises ``MitmproxyError`` if
-    neither finds it — typically meaning the ``[mitmproxy]`` extra
-    isn't installed.
+    Preference order: explicit ``CLM_MITMDUMP`` env override, then
+    ``shutil.which`` (honors PATH), then the scripts directory of the
+    running interpreter. Raises ``MitmproxyError`` if none find it.
+
+    The ``CLM_MITMDUMP`` override is the recommended hook for the settled
+    ``uv tool install mitmproxy`` model (and CI provisioning), where
+    ``mitmdump`` lives in its own isolated environment rather than the
+    worker venv's scripts directory.
     """
+    override = os.environ.get("CLM_MITMDUMP")
+    if override:
+        if Path(override).exists():
+            return override
+        raise MitmproxyError(f"CLM_MITMDUMP={override!r} does not exist")
+
     found = shutil.which("mitmdump")
     if found:
         return found

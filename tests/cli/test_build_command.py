@@ -1653,3 +1653,25 @@ class TestProcessCourseInvokesCassetteSweep:
             "was removed or moved out of the build entry path — restore "
             "it or the orphan cleanup stops happening during normal builds."
         )
+
+
+class TestMaybeStartMitmproxyTransport:
+    """The experimental mitmproxy transport (issue #165) must be a strict no-op
+    unless explicitly opted in, so existing builds are never affected."""
+
+    def test_returns_none_when_transport_not_opted_in(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.delenv("CLM_HTTP_REPLAY_TRANSPORT", raising=False)
+        # Returns before locating mitmdump, so no external dependency needed.
+        result = build_module._maybe_start_mitmproxy_transport("replay", tmp_path / "jobs.db")
+        assert result is None
+
+    def test_returns_none_when_other_transport_value(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.setenv("CLM_HTTP_REPLAY_TRANSPORT", "vcrpy")
+        result = build_module._maybe_start_mitmproxy_transport("replay", tmp_path / "jobs.db")
+        assert result is None
+
+    def test_returns_none_when_mode_disabled(self, monkeypatch, tmp_path) -> None:
+        # Even opted in, a disabled replay mode means no proxy is needed.
+        monkeypatch.setenv("CLM_HTTP_REPLAY_TRANSPORT", "mitmproxy")
+        result = build_module._maybe_start_mitmproxy_transport("disabled", tmp_path / "jobs.db")
+        assert result is None
