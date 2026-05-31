@@ -476,6 +476,35 @@ class TestHandleValidateSlides:
         # No deterministic findings expected
         assert data["findings"] == []
 
+    async def test_voiceover_opt_in_default_excludes_gaps(self, course_tree):
+        # Issue #176: voiceover coverage is opt-in, so the default MCP path
+        # (checks=None) must not surface voiceover gaps even for a deck that
+        # has obvious ones.
+        topic = course_tree / "slides" / "module_100_basics" / "topic_010_intro"
+        gappy = topic / "slides_no_vo.py"
+        gappy.write_text(
+            '# %% [markdown] lang="de" tags=["slide"]\n# ## Titel\n\n'
+            '# %% [markdown] lang="en" tags=["slide"]\n# ## Title\n',
+            encoding="utf-8",
+        )
+        result = await handle_validate_slides(str(gappy), course_tree)
+        data = json.loads(result)
+        review = data.get("review_material", {})
+        assert "voiceover_gaps" not in review
+
+    async def test_voiceover_opt_in_explicit_runs(self, course_tree):
+        topic = course_tree / "slides" / "module_100_basics" / "topic_010_intro"
+        gappy = topic / "slides_no_vo.py"
+        gappy.write_text(
+            '# %% [markdown] lang="de" tags=["slide"]\n# ## Titel\n\n'
+            '# %% [markdown] lang="en" tags=["slide"]\n# ## Title\n',
+            encoding="utf-8",
+        )
+        result = await handle_validate_slides(str(gappy), course_tree, checks=["voiceover"])
+        data = json.loads(result)
+        gaps = data["review_material"]["voiceover_gaps"]
+        assert len(gaps) > 0
+
 
 # ---------------------------------------------------------------------------
 # normalize_slides

@@ -31,7 +31,9 @@ from clm.slides.validator import (
         "Comma-separated list of checks to run. "
         "Deterministic: format, pairing, tags. "
         "Review: code_quality, voiceover, completeness. "
-        "Default: all deterministic checks."
+        "Default: all deterministic checks. "
+        "voiceover coverage is opt-in (voiceover is optional per deck) — "
+        "it runs only when you name it explicitly, e.g. --checks voiceover."
     ),
 )
 @click.option(

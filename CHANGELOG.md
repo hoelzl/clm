@@ -88,6 +88,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **The `voiceover` slide-coverage check is now opt-in (issue #176).**
+  Course-authoring policy changed: voiceover is optional per deck, so the
+  coverage check — which reports a gap for every slide / nontrivial code cell
+  lacking a voiceover cell — is no longer part of any default, "all", or
+  "review" bundle. It runs **only** when named explicitly (`--checks voiceover`
+  on the CLI, or `checks=["voiceover"]` via the MCP `validate_slides` tool /
+  the `validate_file`/`validate_directory`/`validate_course` library
+  functions). The library/MCP `checks=None` default now resolves to a new
+  `DEFAULT_CHECKS` bundle (`format`, `pairing`, `tags`, `code_quality`,
+  `completeness`) instead of `ALL_CHECKS`; `voiceover` stays a valid name so it
+  can still be requested on demand. This removes the false-positive flood the
+  MCP review path produced on voiceover-less decks. The CLI default (already
+  deterministic-only) and the `--quick` hook path are unchanged.
 - **Hardened the HTTP-replay vcrpy fork against silent breakage (issue #143,
   toward #165).** The `[replay]` extra now pins `vcrpy>=8.1.1,<8.2` (was an
   unbounded `>=6.0.0`). The notebook HTTP-replay bootstrap forks vcrpy 8.1.x

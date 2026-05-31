@@ -8,6 +8,8 @@ from textwrap import dedent
 import pytest
 
 from clm.slides.validator import (
+    ALL_CHECKS,
+    DEFAULT_CHECKS,
     Finding,
     ReviewMaterial,
     ValidationResult,
@@ -2018,6 +2020,65 @@ class TestVoiceoverGapsInsideWorkshop:
         assert result.review_material is not None
         gaps = result.review_material.voiceover_gaps or []
         assert gaps == []
+
+
+class TestVoiceoverOptIn:
+    """Issue #176: voiceover coverage is opt-in.
+
+    Voiceover is optional per deck, so the coverage check must never run as
+    part of a default / "all" / review bundle — only when the caller names it
+    explicitly. The other review checks (code_quality, completeness) still run
+    by default.
+    """
+
+    # A deck with obvious gaps: slides and a code cell, no voiceover anywhere.
+    _GAPPY_DECK = """\
+        # %% [markdown] lang="de" tags=["slide"]
+        # ## Titel
+
+        # %% [markdown] lang="en" tags=["slide"]
+        # ## Title
+
+        # %% tags=["keep"]
+        x = 1
+        """
+
+    def test_voiceover_excluded_from_default_bundle_constant(self):
+        # The name stays valid (so it can be requested), but is not a default.
+        assert "voiceover" in ALL_CHECKS
+        assert "voiceover" not in DEFAULT_CHECKS
+        # The other review checks remain in the default bundle.
+        assert {"code_quality", "completeness", "format", "pairing", "tags"} <= DEFAULT_CHECKS
+
+    def test_default_checks_does_not_run_voiceover(self, tmp_path):
+        p = _write_slide(tmp_path, "slides_no_vo.py", self._GAPPY_DECK)
+        result = validate_file(p, checks=None)
+        # Review material is still produced (code_quality / completeness ran)...
+        assert result.review_material is not None
+        # ...but voiceover coverage was not run, so no gaps are surfaced.
+        assert result.review_material.voiceover_gaps is None
+
+    def test_explicit_voiceover_still_runs(self, tmp_path):
+        p = _write_slide(tmp_path, "slides_no_vo.py", self._GAPPY_DECK)
+        result = validate_file(p, checks=["voiceover"])
+        assert result.review_material is not None
+        assert result.review_material.voiceover_gaps is not None
+        assert len(result.review_material.voiceover_gaps) > 0
+
+    def test_directory_default_does_not_run_voiceover(self, tmp_path):
+        _write_slide(tmp_path, "slides_no_vo.py", self._GAPPY_DECK)
+        result = validate_directory(tmp_path, checks=None)
+        # combined review material exists (completeness/code_quality), but no
+        # voiceover gaps are merged in under the default bundle.
+        if result.review_material is not None:
+            assert result.review_material.voiceover_gaps is None
+
+    def test_directory_explicit_voiceover_runs(self, tmp_path):
+        _write_slide(tmp_path, "slides_no_vo.py", self._GAPPY_DECK)
+        result = validate_directory(tmp_path, checks=["voiceover"])
+        assert result.review_material is not None
+        assert result.review_material.voiceover_gaps
+        assert len(result.review_material.voiceover_gaps) > 0
 
 
 class TestCompletenessExtraction:
