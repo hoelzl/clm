@@ -2,6 +2,47 @@
 
 This file tracks known issues and planned improvements for the CLM project.
 
+## Planned Improvements
+
+### Uniform, per-purpose model configurability across CLM
+
+**Status**: 📋 Investigation — tracked in #167 (raised 2026-05-31 during #166 design). Outcome may be "no change".
+
+**Context**: CLM selects LLMs ad hoc per feature, across two backends:
+
+- The OpenAI-compatible async client
+  (`infrastructure/llm/client.py` `_build_client`) — used by `summarize` and
+  voiceover `merge`/`propagate`. Model is passed per call; OpenRouter via
+  `api_base`; key from `OPENAI_API_KEY` / `CLM_LLM__API_KEY`.
+- The local Ollama client (`infrastructure/llm/ollama_client.py`) — used by the
+  slide-`sync` judge and the assign-ids `TitleSuggester`.
+
+Default models live as scattered `DEFAULT_*` module constants
+(`DEFAULT_MERGE_MODEL = anthropic/claude-sonnet-4-6`, `DEFAULT_SYNC_MODEL`, …).
+
+**Goal**: one uniform way to choose the model used for each *purpose*
+(summarize, voiceover-merge, voiceover-propagate, slide-sync-judge,
+slide-translation, assign-ids-title, polish, …), configurable via
+pyproject `[tool.clm]` / `CLM_LLM__*` env / per-command CLI override, with a
+sane per-purpose default and provider-agnostic resolution.
+
+**Approaches to evaluate** (not pre-decided):
+
+- **Internal registry over the existing OpenAI-compatible client** — lightest.
+  OpenRouter already exposes many providers through the OpenAI API shape, and
+  Ollama speaks an OpenAI-compatible endpoint too, so a per-purpose model map +
+  the existing `_build_client` may suffice without a new framework.
+- **LiteLLM** — a thin unified multi-provider proxy; less churn than LangChain.
+- **LangChain** — broadest abstraction but heavy and fast-moving; weigh the
+  dependency cost.
+- See also `docs/claude/design/dspy-authoring-research.md` (DSPy prior art).
+
+**Trigger**: #166 fixes slide-translation to Claude Sonnet via the OpenRouter
+path for now (`docs/claude/design/single-language-authoring-sync.md`); this task
+generalizes that choice rather than hardcoding more `DEFAULT_*` constants.
+
+---
+
 ## Bugs / Technical Debt
 
 ### ~~Flaky Test: `test_heartbeat_round_trip_smoke`~~ (FIXED)

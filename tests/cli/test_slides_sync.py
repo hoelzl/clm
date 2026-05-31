@@ -1,14 +1,28 @@
-"""CLI smoke tests for ``clm slides sync``."""
+"""CLI tests for ``clm slides sync`` (Issue #166 engine, Phase 5).
+
+The live command now runs the single-language authoring engine: it diffs both
+decks against the structural watermark, decides direction per cell, and — by
+default — writes the agreed changes to the working tree. ``--dry-run`` previews,
+``--interactive`` prompts. There is no global ``--source-lang`` and no
+``--apply`` / ``--trivial`` (those were removed in Phase 5).
+
+These tests drive the CLI surface with a watermark seeded directly into the
+cache and a :class:`StaticSyncJudge` patched in, so they exercise flag parsing,
+engine wiring, file writes, and watermark advance without a live LLM.
+"""
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
 
-from clm.cli.commands.slides_sync import slides_sync_cmd
-from clm.infrastructure.llm.cache import SyncSnapshotCache
+from clm.cli.commands.slides_sync import CACHE_DB_NAME, slides_sync_cmd
+from clm.infrastructure.llm.cache import SyncWatermarkCache
+from clm.notebooks.slide_parser import parse_cells
+from clm.slides.sync_plan import ordered_sync_cells
 
 
 @pytest.fixture
@@ -21,534 +35,343 @@ def cli_runner():
         return CliRunner()
 
 
-@pytest.fixture
-def pair(tmp_path: Path) -> tuple[Path, Path]:
-    """Write a minimal split DE/EN pair to disk and return both paths."""
-    de = '# %% [markdown] lang="de" tags=["slide"] slide_id="intro"\n# ## Einleitung\n'
-    en = '# %% [markdown] lang="en" tags=["slide"] slide_id="intro"\n# ## Introduction\n'
-    de_path = tmp_path / "slides_intro.de.py"
-    en_path = tmp_path / "slides_intro.en.py"
-    de_path.write_text(de, encoding="utf-8")
-    en_path.write_text(en, encoding="utf-8")
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _cell(lang: str, sid: str, body: str, *, role: str = "slide") -> str:
+    return f'# %% [markdown] lang="{lang}" tags=["{role}"] slide_id="{sid}"\n{body}\n'
+
+
+def _write_pair(
+    tmp_path: Path, de_text: str, en_text: str, *, stem: str = "slides_intro"
+) -> tuple[Path, Path]:
+    de_path = tmp_path / f"{stem}.de.py"
+    en_path = tmp_path / f"{stem}.en.py"
+    de_path.write_text(de_text, encoding="utf-8")
+    en_path.write_text(en_text, encoding="utf-8")
     return de_path, en_path
 
 
-class TestArgumentParsing:
-    def test_missing_source_lang_errors_outside_git(self, cli_runner: CliRunner, pair, tmp_path):
-        """With no snapshot rows and no git history, inference fails and
-        the CLI surfaces an actionable error pointing at --source-lang."""
-        de_path, en_path = pair
+def _seed_watermark(
+    cache_dir: Path,
+    de_path: Path,
+    en_path: Path,
+    *,
+    de_text: str,
+    en_text: str,
+) -> None:
+    """Record ``(de_text, en_text)`` as the last-synced baseline for the pair.
+
+    Mirrors ``sync_apply._record_watermark`` exactly (same ``ordered_sync_cells``
+    + ``content_hash``), so the classifier sees a deck whose current on-disk
+    content differs from this baseline as *edited*.
+    """
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    wm = SyncWatermarkCache(cache_dir / CACHE_DB_NAME)
+    try:
+        for lang, text in (("de", de_text), ("en", en_text)):
+            cells = ordered_sync_cells(parse_cells(text), lang)
+            wm.put_deck(
+                de_path=str(de_path),
+                en_path=str(en_path),
+                lang=lang,
+                cells=[(c.position, c.slide_id, c.role, c.content_hash) for c in cells],
+            )
+    finally:
+        wm.close()
+
+
+def _stub_judge(
+    monkeypatch, proposed_text: str, *, verdict: str = "update", reason: str = ""
+) -> None:
+    """Patch the CLI to skip the Ollama liveness check and use a static judge."""
+    from clm.cli.commands import slides_sync as cmd
+    from clm.infrastructure.llm.ollama_client import StaticSyncJudge, SyncProposal
+
+    proposal = SyncProposal(verdict=verdict, proposed_text=proposed_text, reason=reason)
+    monkeypatch.setattr(cmd, "is_available", lambda _judge: True)
+    monkeypatch.setattr(
+        cmd,
+        "OllamaSyncJudge",
+        lambda **_kw: StaticSyncJudge(default_proposal=proposal),
+    )
+
+
+def _combined(result) -> str:
+    return (result.stderr or "") + (result.output or "")
+
+
+def _json_payload(result) -> dict:
+    # On Click 8.2+ a stderr warning can precede the JSON body when the runner
+    # falls back to a merged stream; locate the object by its opening brace.
+    brace = result.output.find("{")
+    assert brace >= 0, f"no JSON object in CLI output:\n{result.output}"
+    return json.loads(result.output[brace:])
+
+
+# A reusable edit scenario: DE drifted from the watermark, EN unchanged.
+_DE_BASE = _cell("de", "intro", "# ## Einleitung")
+_EN_BASE = _cell("en", "intro", "# ## Introduction")
+_DE_EDITED = _cell("de", "intro", "# ## Einleitung\n# - Punkt eins")
+_EN_PROPOSAL = "# ## Introduction\n# - Point one"
+
+
+def _edit_scenario(tmp_path: Path) -> tuple[Path, Path, Path]:
+    """Seed a watermark, then leave DE edited and EN at baseline on disk."""
+    cache_dir = tmp_path / "cache"
+    de_path, en_path = _write_pair(tmp_path, _DE_EDITED, _EN_BASE)
+    _seed_watermark(cache_dir, de_path, en_path, de_text=_DE_BASE, en_text=_EN_BASE)
+    return de_path, en_path, cache_dir
+
+
+# ---------------------------------------------------------------------------
+# Removed flags (Phase 5 hard break)
+# ---------------------------------------------------------------------------
+
+
+class TestRemovedFlags:
+    @pytest.mark.parametrize("flag", ["--source-lang", "--apply", "--trivial"])
+    def test_legacy_flag_is_rejected(self, cli_runner: CliRunner, tmp_path: Path, flag: str):
+        de_path, en_path = _write_pair(tmp_path, _DE_BASE, _EN_BASE)
+        extra = ["de"] if flag == "--source-lang" else []
         result = cli_runner.invoke(
             slides_sync_cmd,
-            [str(de_path), str(en_path), "--no-cache"],
+            [str(de_path), str(en_path), flag, *extra, "--no-cache"],
         )
-        assert result.exit_code != 0
-        assert "source-lang" in (result.stderr or result.output).lower()
+        assert result.exit_code == 2
+        combined = _combined(result).lower()
+        assert "no such option" in combined or flag in combined
 
-    def test_invalid_source_lang_errors(self, cli_runner: CliRunner, pair):
-        de_path, en_path = pair
+
+# ---------------------------------------------------------------------------
+# Dry-run preview
+# ---------------------------------------------------------------------------
+
+
+class TestDryRun:
+    def test_dry_run_previews_edit_without_writing(self, cli_runner: CliRunner, tmp_path: Path):
+        de_path, en_path, cache_dir = _edit_scenario(tmp_path)
+        before = en_path.read_text(encoding="utf-8")
+
         result = cli_runner.invoke(
             slides_sync_cmd,
-            [str(de_path), str(en_path), "--source-lang", "fr"],
+            [str(de_path), str(en_path), "--dry-run", "--cache-dir", str(cache_dir)],
         )
-        assert result.exit_code != 0
-        combined = (result.stderr or "") + (result.output or "")
-        assert "fr" in combined.lower() or "invalid" in combined.lower()
 
-    def test_missing_paths_errors(self, cli_runner: CliRunner):
-        result = cli_runner.invoke(slides_sync_cmd, ["--source-lang", "de"])
-        assert result.exit_code != 0
+        # An edit is proposed → exit 1; nothing on disk changed.
+        assert result.exit_code == 1, result.output
+        assert "edit" in result.output
+        assert "de->en" in result.output
+        assert en_path.read_text(encoding="utf-8") == before
 
-    def test_nonexistent_path_errors(self, cli_runner: CliRunner, tmp_path: Path):
+    def test_dry_run_json_shape(self, cli_runner: CliRunner, tmp_path: Path):
+        de_path, en_path, cache_dir = _edit_scenario(tmp_path)
+
         result = cli_runner.invoke(
             slides_sync_cmd,
-            [
-                str(tmp_path / "missing.de.py"),
-                str(tmp_path / "missing.en.py"),
-                "--source-lang",
-                "de",
-            ],
+            [str(de_path), str(en_path), "--dry-run", "--json", "--cache-dir", str(cache_dir)],
+        )
+
+        assert result.exit_code == 1
+        payload = _json_payload(result)
+        assert payload["mode"] == "dry-run"
+        assert payload["exit_code"] == 1
+        assert payload["apply"] is None
+        assert payload["walker"] is None
+        assert payload["plan"]["baseline_source"] == "watermark"
+        assert payload["plan"]["counts"]["edit"] == 1
+        assert payload["plan"]["proposals"][0]["direction"] == "de->en"
+
+
+# ---------------------------------------------------------------------------
+# Default write-to-tree apply
+# ---------------------------------------------------------------------------
+
+
+class TestApply:
+    def test_default_apply_writes_target(self, cli_runner: CliRunner, tmp_path: Path, monkeypatch):
+        _stub_judge(monkeypatch, _EN_PROPOSAL)
+        de_path, en_path, cache_dir = _edit_scenario(tmp_path)
+
+        result = cli_runner.invoke(
+            slides_sync_cmd,
+            [str(de_path), str(en_path), "--cache-dir", str(cache_dir)],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "Point one" in en_path.read_text(encoding="utf-8")
+        assert "applied: 1 edit" in result.output
+        assert "watermark advanced" in result.output
+
+    def test_apply_json_shape(self, cli_runner: CliRunner, tmp_path: Path, monkeypatch):
+        _stub_judge(monkeypatch, _EN_PROPOSAL)
+        de_path, en_path, cache_dir = _edit_scenario(tmp_path)
+
+        result = cli_runner.invoke(
+            slides_sync_cmd,
+            [str(de_path), str(en_path), "--json", "--cache-dir", str(cache_dir)],
+        )
+
+        assert result.exit_code == 0
+        payload = _json_payload(result)
+        assert payload["mode"] == "apply"
+        assert payload["apply"]["applied"]["edit"] == 1
+        assert payload["apply"]["applied"]["total"] == 1
+        assert payload["apply"]["watermark_recorded"] is True
+        assert payload["apply"]["errors"] == []
+
+    def test_apply_then_rerun_is_idempotent_noop(
+        self, cli_runner: CliRunner, tmp_path: Path, monkeypatch
+    ):
+        _stub_judge(monkeypatch, _EN_PROPOSAL)
+        de_path, en_path, cache_dir = _edit_scenario(tmp_path)
+
+        first = cli_runner.invoke(
+            slides_sync_cmd,
+            [str(de_path), str(en_path), "--cache-dir", str(cache_dir)],
+        )
+        assert first.exit_code == 0, first.output
+
+        # The watermark advanced to the now-synced state, so a second run sees
+        # zero changes.
+        second = cli_runner.invoke(
+            slides_sync_cmd,
+            [str(de_path), str(en_path), "--json", "--cache-dir", str(cache_dir)],
+        )
+        assert second.exit_code == 0
+        payload = _json_payload(second)
+        assert payload["plan"]["counts"]["edit"] == 0
+        assert payload["apply"]["applied"]["total"] == 0
+
+    def test_both_sides_edited_is_deferred_conflict(
+        self, cli_runner: CliRunner, tmp_path: Path, monkeypatch
+    ):
+        _stub_judge(monkeypatch, _EN_PROPOSAL)
+        cache_dir = tmp_path / "cache"
+        de_edited = _cell("de", "intro", "# ## Einleitung\n# - DE neu")
+        en_edited = _cell("en", "intro", "# ## Introduction\n# - EN new")
+        de_path, en_path = _write_pair(tmp_path, de_edited, en_edited)
+        _seed_watermark(cache_dir, de_path, en_path, de_text=_DE_BASE, en_text=_EN_BASE)
+
+        result = cli_runner.invoke(
+            slides_sync_cmd,
+            [str(de_path), str(en_path), "--cache-dir", str(cache_dir)],
+        )
+
+        # A both-sides edit is isolated as a conflict: deferred, both decks
+        # untouched, watermark held.
+        assert result.exit_code == 1, result.output
+        assert "conflict" in result.output
+        assert "watermark held" in result.output
+        assert de_path.read_text(encoding="utf-8") == de_edited
+        assert en_path.read_text(encoding="utf-8") == en_edited
+
+
+# ---------------------------------------------------------------------------
+# Interactive
+# ---------------------------------------------------------------------------
+
+
+class TestInteractive:
+    def test_interactive_apply_writes_and_reports(
+        self, cli_runner: CliRunner, tmp_path: Path, monkeypatch
+    ):
+        _stub_judge(monkeypatch, _EN_PROPOSAL)
+        de_path, en_path, cache_dir = _edit_scenario(tmp_path)
+
+        result = cli_runner.invoke(
+            slides_sync_cmd,
+            [str(de_path), str(en_path), "--interactive", "--cache-dir", str(cache_dir)],
+            input="a\n",
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "Point one" in en_path.read_text(encoding="utf-8")
+        assert "1 accepted" in result.output
+        assert "applied: 1 edit" in result.output
+
+    def test_interactive_skip_defers(self, cli_runner: CliRunner, tmp_path: Path, monkeypatch):
+        _stub_judge(monkeypatch, _EN_PROPOSAL)
+        de_path, en_path, cache_dir = _edit_scenario(tmp_path)
+        before = en_path.read_text(encoding="utf-8")
+
+        result = cli_runner.invoke(
+            slides_sync_cmd,
+            [str(de_path), str(en_path), "--interactive", "--cache-dir", str(cache_dir)],
+            input="s\n",
+        )
+
+        # Skipped → deferred → exit 1; EN untouched; watermark held.
+        assert result.exit_code == 1, result.output
+        assert en_path.read_text(encoding="utf-8") == before
+        assert "1 skipped" in result.output
+        assert "watermark held" in result.output
+
+    def test_interactive_and_json_rejected(self, cli_runner: CliRunner, tmp_path: Path):
+        de_path, en_path = _write_pair(tmp_path, _DE_BASE, _EN_BASE)
+        result = cli_runner.invoke(
+            slides_sync_cmd,
+            [str(de_path), str(en_path), "--interactive", "--json", "--no-cache"],
         )
         assert result.exit_code != 0
+        assert "mutually exclusive" in _combined(result)
+
+    def test_interactive_and_dry_run_rejected(self, cli_runner: CliRunner, tmp_path: Path):
+        de_path, en_path = _write_pair(tmp_path, _DE_BASE, _EN_BASE)
+        result = cli_runner.invoke(
+            slides_sync_cmd,
+            [str(de_path), str(en_path), "--interactive", "--dry-run", "--no-cache"],
+        )
+        assert result.exit_code != 0
+        assert "mutually exclusive" in _combined(result)
+
+
+# ---------------------------------------------------------------------------
+# LLM unavailable
+# ---------------------------------------------------------------------------
 
 
 class TestOllamaUnavailable:
-    """When Ollama is not reachable, every pair becomes an error
-    outcome. Exit code is 2 (structural error)."""
+    def test_unreachable_ollama_records_edit_errors(self, cli_runner: CliRunner, tmp_path: Path):
+        de_path, en_path, cache_dir = _edit_scenario(tmp_path)
 
-    def test_unreachable_ollama_records_errors(self, cli_runner: CliRunner, pair, tmp_path: Path):
-        de_path, en_path = pair
         result = cli_runner.invoke(
             slides_sync_cmd,
             [
                 str(de_path),
                 str(en_path),
-                "--source-lang",
-                "de",
                 "--ollama-url",
                 "http://127.0.0.1:1",  # nothing listens here
                 "--llm-timeout",
                 "1.0",
-                "--no-cache",
+                "--cache-dir",
+                str(cache_dir),
             ],
         )
-        # Exit 2 = at least one error.
-        assert result.exit_code == 2
-        # Warning was emitted about Ollama being unreachable.
+
+        # The lone edit can't be reconciled → error → exit 2; watermark held.
+        assert result.exit_code == 2, result.output
         assert "Ollama is not reachable" in (result.stderr or "")
-        # The lone pair was counted as an error.
-        assert "1 pair(s) visited" in result.output
         assert "1 error(s)" in result.output
+        assert "watermark held" in result.output
 
-    def test_json_output_shape(self, cli_runner: CliRunner, pair, tmp_path: Path):
-        import json
 
-        de_path, en_path = pair
+# ---------------------------------------------------------------------------
+# No baseline (cold, no watermark, no git)
+# ---------------------------------------------------------------------------
+
+
+class TestNoBaseline:
+    def test_no_watermark_no_git_reports_baseline_none(self, cli_runner: CliRunner, tmp_path: Path):
+        # Identical ids on both sides, no watermark, tmp dir is not a git repo:
+        # the classifier can pair by id but cannot detect edits → no proposals,
+        # and the no-silent-no-op summary explains why.
+        de_path, en_path = _write_pair(tmp_path, _DE_BASE, _EN_BASE)
         result = cli_runner.invoke(
             slides_sync_cmd,
-            [
-                str(de_path),
-                str(en_path),
-                "--source-lang",
-                "de",
-                "--ollama-url",
-                "http://127.0.0.1:1",
-                "--llm-timeout",
-                "1.0",
-                "--no-cache",
-                "--json",
-            ],
+            [str(de_path), str(en_path), "--dry-run", "--no-cache"],
         )
-        assert result.exit_code == 2
-        # On Click 8.2+ stderr is mixed into result.output when CliRunner
-        # is constructed without the (removed) ``mix_stderr=False`` flag,
-        # so the "Ollama is not reachable" warning may precede the JSON
-        # body. Locate the JSON object by its opening brace.
-        output = result.output
-        brace = output.find("{")
-        assert brace >= 0, f"no JSON object in CLI output:\n{output}"
-        payload = json.loads(output[brace:])
-        assert payload["pairs_visited"] == 1
-        assert payload["pairs_error"] == 1
-        assert len(payload["outcomes"]) == 1
-        assert payload["outcomes"][0]["verdict"] == "error"
-        # New v2 keys ride along with zero values when no walker ran.
-        assert payload["pairs_accepted"] == 0
-        assert payload["pairs_skipped"] == 0
-        assert payload["pairs_edited"] == 0
-        assert payload["pairs_quit"] == 0
-
-
-class TestInteractiveCli:
-    """End-to-end smoke for ``--interactive`` driven by a stub judge.
-
-    These tests can't reach a real Ollama daemon and instead patch the
-    judge selection inside ``slides_sync_cmd`` to return a
-    :class:`StaticSyncJudge`. That keeps the CLI surface (flag parsing,
-    walker wiring, file writes, snapshot recording) under test without
-    requiring the local LLM.
-    """
-
-    def test_interactive_apply_writes_target_and_reports_counters(
-        self, cli_runner: CliRunner, tmp_path: Path, monkeypatch
-    ):
-        from clm.cli.commands import slides_sync as cmd_module
-        from clm.infrastructure.llm.ollama_client import StaticSyncJudge, SyncProposal
-
-        # Force the CLI to skip the Ollama liveness check and supply a
-        # judge that always proposes an update.
-        proposal = SyncProposal(
-            verdict="update",
-            proposed_text="# ## Introduction\n# - Point one\n# - Point two",
-            reason="DE added a bullet",
-        )
-        monkeypatch.setattr(cmd_module, "is_available", lambda _judge: True)
-        monkeypatch.setattr(
-            cmd_module,
-            "OllamaSyncJudge",
-            lambda **_kw: StaticSyncJudge(default_proposal=proposal),
-        )
-
-        de = (
-            '# %% [markdown] lang="de" tags=["slide"] slide_id="intro"\n'
-            "# ## Einleitung\n# - Punkt eins\n# - Punkt zwei\n"
-        )
-        en = (
-            '# %% [markdown] lang="en" tags=["slide"] slide_id="intro"\n'
-            "# ## Introduction\n# - Point one\n"
-        )
-        de_path = tmp_path / "slides_intro.de.py"
-        en_path = tmp_path / "slides_intro.en.py"
-        de_path.write_text(de, encoding="utf-8")
-        en_path.write_text(en, encoding="utf-8")
-
-        result = cli_runner.invoke(
-            slides_sync_cmd,
-            [
-                str(de_path),
-                str(en_path),
-                "--source-lang",
-                "de",
-                "--interactive",
-                "--cache-dir",
-                str(tmp_path / "cache"),
-            ],
-            input="a\n",
-        )
-
-        # Exit 1 = at least one proposed update (now accepted).
-        assert result.exit_code == 1
-        assert "Point two" in en_path.read_text(encoding="utf-8")
-        assert "walker:" in result.output
-        assert "1 accepted" in result.output
-
-    def test_interactive_json_is_rejected(self, cli_runner: CliRunner, tmp_path: Path):
-        de = '# %% [markdown] lang="de" tags=["slide"] slide_id="intro"\n# ## A\n'
-        en = '# %% [markdown] lang="en" tags=["slide"] slide_id="intro"\n# ## A\n'
-        de_path = tmp_path / "x.de.py"
-        en_path = tmp_path / "x.en.py"
-        de_path.write_text(de, encoding="utf-8")
-        en_path.write_text(en, encoding="utf-8")
-
-        result = cli_runner.invoke(
-            slides_sync_cmd,
-            [
-                str(de_path),
-                str(en_path),
-                "--source-lang",
-                "de",
-                "--interactive",
-                "--json",
-            ],
-        )
-        combined = (result.stderr or "") + (result.output or "")
-        assert result.exit_code != 0
-        assert "mutually exclusive" in combined
-
-
-class TestApplyTrivial:
-    """``--apply --trivial`` CLI smoke tests.
-
-    These tests follow the same monkeypatch pattern as
-    :class:`TestInteractiveCli` — the local LLM is never reached and
-    the judge is replaced with a :class:`StaticSyncJudge` whose proposed
-    text drives the trivial-vs-non-trivial decision.
-    """
-
-    @staticmethod
-    def _stub_judge(
-        monkeypatch,
-        proposed_text: str,
-        reason: str = "",
-    ) -> None:
-        from clm.cli.commands import slides_sync as cmd_module
-        from clm.infrastructure.llm.ollama_client import StaticSyncJudge, SyncProposal
-
-        proposal = SyncProposal(verdict="update", proposed_text=proposed_text, reason=reason)
-        monkeypatch.setattr(cmd_module, "is_available", lambda _judge: True)
-        monkeypatch.setattr(
-            cmd_module,
-            "OllamaSyncJudge",
-            lambda **_kw: StaticSyncJudge(default_proposal=proposal),
-        )
-
-    @staticmethod
-    def _pair(tmp_path: Path, *, de_body: str, en_body: str) -> tuple[Path, Path]:
-        de = f'# %% [markdown] lang="de" tags=["slide"] slide_id="intro"\n{de_body}\n'
-        en = f'# %% [markdown] lang="en" tags=["slide"] slide_id="intro"\n{en_body}\n'
-        de_path = tmp_path / "slides_intro.de.py"
-        en_path = tmp_path / "slides_intro.en.py"
-        de_path.write_text(de, encoding="utf-8")
-        en_path.write_text(en, encoding="utf-8")
-        return de_path, en_path
-
-    def test_apply_without_trivial_is_rejected(self, cli_runner: CliRunner, tmp_path: Path):
-        de_path, en_path = self._pair(tmp_path, de_body="# ## A", en_body="# ## A")
-        result = cli_runner.invoke(
-            slides_sync_cmd,
-            [
-                str(de_path),
-                str(en_path),
-                "--source-lang",
-                "de",
-                "--apply",
-            ],
-        )
-        combined = (result.stderr or "") + (result.output or "")
-        assert result.exit_code != 0
-        assert "--trivial" in combined
-
-    def test_trivial_without_apply_is_rejected(self, cli_runner: CliRunner, tmp_path: Path):
-        de_path, en_path = self._pair(tmp_path, de_body="# ## A", en_body="# ## A")
-        result = cli_runner.invoke(
-            slides_sync_cmd,
-            [
-                str(de_path),
-                str(en_path),
-                "--source-lang",
-                "de",
-                "--trivial",
-            ],
-        )
-        combined = (result.stderr or "") + (result.output or "")
-        assert result.exit_code != 0
-        assert "--apply" in combined
-
-    def test_trivial_diff_is_auto_applied(self, cli_runner: CliRunner, tmp_path: Path, monkeypatch):
-        # EN has a double-space inside one bullet; proposal collapses it.
-        self._stub_judge(monkeypatch, "# ## Introduction\n# - one")
-        de_path, en_path = self._pair(
-            tmp_path,
-            de_body="# ## Einleitung\n# - eins",
-            en_body="# ## Introduction\n# -  one",
-        )
-
-        result = cli_runner.invoke(
-            slides_sync_cmd,
-            [
-                str(de_path),
-                str(en_path),
-                "--source-lang",
-                "de",
-                "--apply",
-                "--trivial",
-                "--cache-dir",
-                str(tmp_path / "cache"),
-            ],
-        )
-
-        # Exit 0 = all proposals resolved (the only one was trivial).
-        assert result.exit_code == 0
-        # File rewritten.
-        en_text = en_path.read_text(encoding="utf-8")
-        assert "# - one" in en_text
-        assert "# -  one" not in en_text
-        # Report mentions the auto-apply.
-        assert "auto-apply:" in result.output
-        assert "1 trivial update(s) applied" in result.output
-        assert "applied (trivial)" in result.output
-
-    def test_non_trivial_diff_falls_through_to_report(
-        self, cli_runner: CliRunner, tmp_path: Path, monkeypatch
-    ):
-        # Proposal adds a bullet — not a whitespace-only-one-line change.
-        self._stub_judge(monkeypatch, "# ## Introduction\n# - one\n# - two")
-        de_path, en_path = self._pair(
-            tmp_path,
-            de_body="# ## Einleitung\n# - eins\n# - zwei",
-            en_body="# ## Introduction\n# - one",
-        )
-
-        result = cli_runner.invoke(
-            slides_sync_cmd,
-            [
-                str(de_path),
-                str(en_path),
-                "--source-lang",
-                "de",
-                "--apply",
-                "--trivial",
-                "--cache-dir",
-                str(tmp_path / "cache"),
-            ],
-        )
-
-        # Exit 1 = proposal remains for human review.
-        assert result.exit_code == 1
-        # File unchanged (non-trivial was NOT auto-applied).
-        assert "# - two" not in en_path.read_text(encoding="utf-8")
-        # Report carries both the auto-apply line (0 applied) and the
-        # propose entry.
-        assert "auto-apply: 0 trivial update(s) applied" in result.output
-        assert "propose intro/slide" in result.output
-
-    def test_json_shape_includes_pairs_auto_applied(
-        self, cli_runner: CliRunner, tmp_path: Path, monkeypatch
-    ):
-        import json as _json
-
-        self._stub_judge(monkeypatch, "# ## Introduction\n# - one")
-        de_path, en_path = self._pair(
-            tmp_path,
-            de_body="# ## Einleitung",
-            en_body="# ## Introduction\n# -  one",
-        )
-
-        result = cli_runner.invoke(
-            slides_sync_cmd,
-            [
-                str(de_path),
-                str(en_path),
-                "--source-lang",
-                "de",
-                "--apply",
-                "--trivial",
-                "--json",
-                "--cache-dir",
-                str(tmp_path / "cache"),
-            ],
-        )
-
-        assert result.exit_code == 0
-        brace = result.output.find("{")
-        assert brace >= 0
-        payload = _json.loads(result.output[brace:])
-        assert payload["pairs_auto_applied"] == 1
-        # Each outcome carries the applied_trivially flag.
-        applied_flags = [o.get("applied_trivially") for o in payload["outcomes"]]
-        assert any(applied_flags)
-
-
-class TestDirectionAutoDetection:
-    """End-to-end smoke for the omitted-``--source-lang`` path.
-
-    These tests construct a tiny git repo + snapshot cache to drive the
-    inference module from the CLI surface. The static judge keeps the
-    test from depending on a live Ollama instance.
-    """
-
-    @staticmethod
-    def _stub_judge(monkeypatch, proposed_text: str = "# ## Introduction") -> None:
-        from clm.cli.commands import slides_sync as cmd_module
-        from clm.infrastructure.llm.ollama_client import StaticSyncJudge, SyncProposal
-
-        proposal = SyncProposal(verdict="update", proposed_text=proposed_text)
-        monkeypatch.setattr(cmd_module, "is_available", lambda _judge: True)
-        monkeypatch.setattr(
-            cmd_module,
-            "OllamaSyncJudge",
-            lambda **_kw: StaticSyncJudge(default_proposal=proposal),
-        )
-
-    @staticmethod
-    def _seed_snapshot(
-        cache_dir: Path,
-        *,
-        de_path: Path,
-        en_path: Path,
-        slide_id: str,
-        role: str,
-        de_text: str,
-        en_text: str,
-    ) -> None:
-        from clm.cli.commands.slides_sync import CACHE_DB_NAME
-        from clm.slides.sync_writeback import cell_content_hash
-
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        snapshot_cache = SyncSnapshotCache(cache_dir / CACHE_DB_NAME)
-        try:
-            snapshot_cache.put(
-                de_path=str(de_path),
-                en_path=str(en_path),
-                slide_id=slide_id,
-                role=role,
-                de_hash=cell_content_hash(de_text),
-                en_hash=cell_content_hash(en_text),
-                direction="de->en",
-            )
-        finally:
-            snapshot_cache.close()
-
-    def test_omitted_source_lang_infers_from_snapshot(
-        self, cli_runner: CliRunner, tmp_path: Path, monkeypatch
-    ):
-        self._stub_judge(monkeypatch)
-        de_body = "# ## Einleitung\n# - eins"
-        en_body = "# ## Introduction\n# - one\n# - two"  # EN has drifted
-        de = f'# %% [markdown] lang="de" tags=["slide"] slide_id="intro"\n{de_body}\n'
-        en = f'# %% [markdown] lang="en" tags=["slide"] slide_id="intro"\n{en_body}\n'
-        de_path = tmp_path / "slides_intro.de.py"
-        en_path = tmp_path / "slides_intro.en.py"
-        de_path.write_text(de, encoding="utf-8")
-        en_path.write_text(en, encoding="utf-8")
-
-        cache_dir = tmp_path / "cache"
-        # Snapshot says original EN was "# ## Introduction\n# - one"; the
-        # current EN drifted; DE is unchanged.
-        self._seed_snapshot(
-            cache_dir,
-            de_path=de_path,
-            en_path=en_path,
-            slide_id="intro",
-            role="slide",
-            de_text=de_body,
-            en_text="# ## Introduction\n# - one",
-        )
-
-        result = cli_runner.invoke(
-            slides_sync_cmd,
-            [
-                str(de_path),
-                str(en_path),
-                "--cache-dir",
-                str(cache_dir),
-            ],
-        )
-        # Inference picked 'en' as source → direction en->de → DE side is
-        # the target. The run completes without raising UsageError.
-        assert result.exit_code != 2, result.output
-        combined = (result.stderr or "") + (result.output or "")
-        assert "inferred as 'en'" in combined
-        assert "snapshot" in combined
-
-    def test_omitted_source_lang_in_non_git_dir_raises_usage(
-        self, cli_runner: CliRunner, tmp_path: Path
-    ):
-        de = '# %% [markdown] lang="de" tags=["slide"] slide_id="intro"\n# ## A\n'
-        en = '# %% [markdown] lang="en" tags=["slide"] slide_id="intro"\n# ## A\n'
-        de_path = tmp_path / "x.de.py"
-        en_path = tmp_path / "x.en.py"
-        de_path.write_text(de, encoding="utf-8")
-        en_path.write_text(en, encoding="utf-8")
-
-        result = cli_runner.invoke(
-            slides_sync_cmd,
-            [str(de_path), str(en_path), "--no-cache"],
-        )
-        assert result.exit_code != 0
-        combined = (result.stderr or "") + (result.output or "")
-        assert "could not be inferred" in combined
-        assert "--source-lang" in combined
-
-    def test_explicit_source_lang_disagreeing_with_inference_warns(
-        self, cli_runner: CliRunner, tmp_path: Path, monkeypatch
-    ):
-        self._stub_judge(monkeypatch)
-        de_body = "# ## Einleitung\n# - eins"
-        en_body = "# ## Introduction\n# - one (changed)"  # EN drifted
-        de = f'# %% [markdown] lang="de" tags=["slide"] slide_id="intro"\n{de_body}\n'
-        en = f'# %% [markdown] lang="en" tags=["slide"] slide_id="intro"\n{en_body}\n'
-        de_path = tmp_path / "slides_intro.de.py"
-        en_path = tmp_path / "slides_intro.en.py"
-        de_path.write_text(de, encoding="utf-8")
-        en_path.write_text(en, encoding="utf-8")
-
-        cache_dir = tmp_path / "cache"
-        self._seed_snapshot(
-            cache_dir,
-            de_path=de_path,
-            en_path=en_path,
-            slide_id="intro",
-            role="slide",
-            de_text=de_body,
-            en_text="# ## Introduction\n# - one",
-        )
-
-        # User passes --source-lang=de, but snapshot says EN drifted.
-        result = cli_runner.invoke(
-            slides_sync_cmd,
-            [
-                str(de_path),
-                str(en_path),
-                "--source-lang",
-                "de",
-                "--cache-dir",
-                str(cache_dir),
-            ],
-        )
-        combined = (result.stderr or "") + (result.output or "")
-        assert "warning" in combined.lower()
-        assert "disagrees with inferred direction 'en'" in combined
-        # The explicit override is still honored — direction de->en is
-        # used, so the EN cell is treated as the target.
-        assert result.exit_code != 2, result.output
+        assert result.exit_code == 0, result.output
+        assert "baseline=none" in result.output

@@ -674,44 +674,50 @@ clm slides assign-ids slides/module_010/ --force        # regenerate all derivab
 
 *Added in CLM {version}.*
 
-Cross-language sync helper for split-format decks
+Single-language authoring sync for split-format decks
 (`<deck>.de.py` / `<deck>.en.py`, the layout produced by
-`clm slides split`). After an author edits one half of a pair, this
-command walks the two files by `slide_id`, asks the local LLM
-(Ollama) to propose any needed update to the other side, and prints
-a unified diff per cell.
+`clm slides split`). After an author edits **one** half of a pair, this
+command brings the *other* half into sync in a single pass: edits are
+propagated, brand-new slides are translated and inserted, removed
+slides are dropped, reorders are mirrored, and a shared `slide_id` is
+minted onto both decks as it goes.
 
-The LLM call is memoized in a `SyncCache` table keyed by
-`(de_hash, en_hash, prompt_version)` — re-runs against an unchanged
-pair short-circuit to the cached proposal and avoid LLM spend. The
-cache lives in the same SQLite file as the `assign-ids` and
-`coverage` caches.
+**Default behavior changed in CLM {version}: the command now writes to
+the working tree.** A bare `clm slides sync de en` applies the agreed
+changes (it no longer just prints a diff). Nothing is committed —
+review the result with `git diff`, the design's primary review surface.
+Use `--dry-run` to preview without writing. See the migration guide
+(`clm info migration`) for the full before/after.
 
-**Scope:** the default mode is dry-run (no files modified).
-`--interactive` walks proposed updates one by one with an apply / skip /
-edit / quit prompt and writes accepted (or edited) proposals to the
-target file. `--apply --trivial` auto-applies the safe subset of
-proposals (EOL-only or whitespace-only-one-line diffs) without
-prompting; non-trivial proposals fall through to the report (or to the
-`--interactive` walker when both flags are passed).
+**Per-cell direction (no `--source-lang`).** Direction is decided per
+cell by diffing each deck against a structural **watermark** — the
+last-synced deck state, recorded only on a successful apply, so it is
+immune to the author's git-commit cadence. Different cells can flow in
+different directions in the same pass. A cell with **no** `slide_id` is,
+by construction, *added since the last sync* (a commit never runs
+assign-ids), so new slides are detected even after the editing deck is
+committed. When no watermark exists yet, the baseline falls back to each
+deck's git `HEAD`, then to the id-less-as-new heuristic alone; the
+no-silent-no-op summary states which baseline was used.
 
-**Direction-of-edit** is inferred when `--source-lang` is omitted.
-Inference prefers `SyncSnapshotCache` drift evidence (content-
-addressed; survives rebases) and falls back to git commit timestamps
-when no snapshot row points at a clear winner. The CLI prints a
-short note on stderr showing which signal won. Pass `--source-lang`
-explicitly to override; a warning is emitted when the explicit value
-disagrees with the inferred direction, and the explicit value is
-honored. Inference falls back to requiring `--source-lang` when both
-signals are unusable (no snapshot rows, no git history, equal
-timestamps, or the two signals contradict each other).
+**Conflicts are isolated, never guessed.** A cell edited on *both* decks
+since the last sync (or removed on one and edited on the other) is
+surfaced as a `conflict`: both decks are left untouched and it is listed
+in the summary. Resolve it with `--interactive` (`[d]e-wins` /
+`[e]n-wins`) or by editing one side and re-running.
+
+**Two LLMs.** Edits are reconciled by the local Ollama judge
+(`--llm-model`, default `qwen3:30b`). Brand-new slides are translated by
+an OpenRouter model (`--translation-model`, default
+`anthropic/claude-sonnet-4-6`), which needs `$OPENROUTER_API_KEY` (or
+`$OPENAI_API_KEY`); without a key, add proposals defer. When Ollama is
+unreachable, edit proposals are recorded as errors (exit 2) rather than
+guessed.
 
 Cells synced: markdown `slide` / `subslide` cells and narrative
 `voiceover` / `notes` cells. Shared code cells are intentionally
-excluded — split companions must keep them byte-identical, and that
-consistency is enforced by the Phase-6 split-source validator
-instead. Cells without a `slide_id` are skipped silently (run
-`clm slides assign-ids` first).
+excluded — split companions must keep them byte-identical, enforced by
+the split-source validator instead.
 
 ```
 clm slides sync [OPTIONS] DE_PATH EN_PATH
@@ -719,66 +725,52 @@ clm slides sync [OPTIONS] DE_PATH EN_PATH
 
 | Option | Description |
 |--------|-------------|
-| `--source-lang de\|en` | Language that was edited; updates are proposed for the other side. Optional — inferred from snapshot drift or git commit timestamps when omitted. An explicit value that disagrees with the inferred direction triggers a warning and is honored. |
-| `--dry-run / --no-dry-run` | Show proposed diffs without modifying any file (default). `--interactive` and `--apply --trivial` implicitly disable dry-run. |
-| `--interactive` | Walk proposed updates one by one with `[a]pply / [s]kip / [e]dit / [q]uit` per proposal; accepted / edited proposals are written to the target file and the post-write `(de_hash, en_hash)` is recorded in `sync_snapshots`. Mutually exclusive with `--json`. |
-| `--apply` | Write proposals to disk. Currently requires `--trivial`; full unconditional `--apply` is not yet supported. |
-| `--trivial` | Modifier for `--apply`. Auto-apply diffs that are EOL-only (CR/CRLF / trailing newline) or whitespace-only-one-line. Non-trivial proposals are left for human review. |
-| `--llm-model TEXT` | Ollama model name (default: `qwen3:30b`). |
+| `--dry-run` | Classify only: print the plan and write nothing. (The default, without this flag, writes the agreed changes to the working tree.) |
+| `--interactive` | Walk each proposal and choose `[a]pply / [s]kip / [q]uit` (`[d]e-wins / [e]n-wins` for a conflict) before a single atomic apply. Mutually exclusive with `--dry-run` and `--json`. |
+| `--llm-model TEXT` | Ollama model for the edit-reconciliation judge (default: `qwen3:30b`). |
 | `--ollama-url TEXT` | Base URL of the Ollama daemon (default: `$OLLAMA_URL` or `http://localhost:11434`). |
-| `--llm-timeout SECONDS` | Per-call timeout (default: 120s — cold-load on a 30B local model can exceed 60s). |
-| `--cache-dir PATH` | Directory for the SyncCache. Lookup order: flag → `$CLM_CACHE_DIR` → `tool.clm.cache_dir` in `pyproject.toml` → `<cwd>/.clm-cache/`. |
-| `--no-cache` | Skip cache reads and writes (useful when iterating on the prompt or model). |
+| `--llm-timeout SECONDS` | Per-call timeout for the edit judge (default: 120s — cold-load on a 30B local model can exceed 60s). |
+| `--translation-model TEXT` | OpenRouter model used to translate brand-new slides for the add path (default: `anthropic/claude-sonnet-4-6`). Needs `$OPENROUTER_API_KEY` / `$OPENAI_API_KEY`; adds defer when absent. |
+| `--cache-dir PATH` | Directory holding the structural watermark. Lookup order: flag → `$CLM_CACHE_DIR` → `tool.clm.cache_dir` in `pyproject.toml` → `<cwd>/.clm-cache/`. |
+| `--no-cache` | Do not read or write the watermark. Every run then re-derives its baseline from git `HEAD` and no synced state is persisted. |
 | `--json` | Emit a JSON report instead of human-readable lines. |
 
-Exit codes: `0` clean (no proposed updates and no errors, or every
-proposal was auto-applied via `--apply --trivial`), `1` at least one
-proposed update for author review, `2` at least one structural error
-(slide_id count mismatch or LLM unavailable).
+Exit codes: `0` clean (every change applied, or nothing to do, with no
+errors), `1` something is left for review (a skipped proposal or an
+unresolved conflict), `2` a structural error (classifier error, missing
+target cell, or the edit LLM is unavailable).
 
-A run also surfaces structural issues for slide_ids that cannot be
-paired cleanly: cells present on one side but not the other
-(severity `warning`) and slide_ids with unequal cell counts on the
-two sides (severity `error` — manual pairing needed).
+A run also surfaces structural issues the classifier will not turn into
+a proposal — for example a duplicate `slide_id` whose original cannot be
+identified (`error`), or cell order that drifted on both decks
+(`warning`, order not propagated). Any issue holds the whole watermark
+so the signal is never silently baselined.
 
-Pilot instrumentation: every run records per-session counters
-(`pairs_visited`, `pairs_in_sync`, `pairs_proposed`, `pairs_error`,
-`cache_hits`). `--interactive` adds `pairs_accepted`, `pairs_edited`,
-`pairs_skipped`, and `pairs_quit`. `--apply --trivial` adds
-`pairs_auto_applied` (and sets `applied_trivially` on each
-auto-applied outcome). The PythonCourses Phase D pilot ships when
-`(pairs_accepted + pairs_edited) / pairs_resolved > 0.8`.
-
-Both `--interactive` accepts/edits and `--apply --trivial` auto-applies
-write a `sync_snapshots` row per write, capturing the post-write
-`(de_hash, en_hash)` for that `(de_path, en_path, slide_id, role)`
-slot. The direction-auto-detection pass that runs when
-`--source-lang` is omitted reads these rows to decide which side
-drifted since the last sync.
+The JSON report carries `mode` (`dry-run` / `apply` / `interactive`),
+`exit_code`, a `plan` block (`baseline_source`, per-kind `counts`,
+`in_sync`, the `proposals`, and `issues`), an `apply` block (per-kind
+`applied` counts, `in_sync`, `deferred`, `watermark_recorded`, and
+`errors`) — `null` under `--dry-run` — and a `walker` block of
+accept/skip/defer counters under `--interactive`. These counters are the
+pilot accept-rate instrumentation.
 
 Examples:
 
 ```bash
-# After committing the DE edit, infer direction from snapshot/git history.
+# Edit intro.de.py, then bring intro.en.py into sync (writes to the tree).
 clm slides sync slides/topic/intro.de.py slides/topic/intro.en.py
 
-# Same, but explicit (overrides inference; warns if inference disagrees).
-clm slides sync slides/topic/intro.de.py slides/topic/intro.en.py --source-lang de
+# Preview the plan first — write nothing.
+clm slides sync intro.de.py intro.en.py --dry-run
 
-# Walk proposals interactively, applying or editing per cell.
-clm slides sync intro.de.py intro.en.py --source-lang de --interactive
+# Walk each proposal, resolving conflicts as you go.
+clm slides sync intro.de.py intro.en.py --interactive
 
-# Auto-apply trivial diffs (EOL / whitespace-only); leave the rest in the report.
-clm slides sync intro.de.py intro.en.py --source-lang de --apply --trivial
+# Machine-readable plan for tooling.
+clm slides sync intro.de.py intro.en.py --dry-run --json
 
-# Auto-apply trivial diffs, then walk the rest interactively.
-clm slides sync intro.de.py intro.en.py --source-lang de --apply --trivial --interactive
-
-# Same, JSON output for tooling.
-clm slides sync intro.de.py intro.en.py --source-lang de --json
-
-# Iterating on the prompt — skip the cache to fire fresh LLM calls every time.
-clm slides sync intro.de.py intro.en.py --source-lang de --no-cache
+# Stateless run: ignore/leave the watermark, baseline off git HEAD.
+clm slides sync intro.de.py intro.en.py --no-cache
 ```
 
 ### `clm slides coverage`
