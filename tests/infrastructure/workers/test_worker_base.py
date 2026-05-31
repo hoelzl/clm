@@ -17,10 +17,17 @@ from clm.infrastructure.workers.worker_base import Worker
 
 def _wait_until(
     predicate: Callable[[], bool],
-    timeout: float = 5.0,
+    timeout: float = 15.0,
     interval: float = 0.05,
 ) -> None:
-    """Poll until *predicate* returns True, or raise after *timeout* seconds."""
+    """Poll until *predicate* returns True, or raise after *timeout* seconds.
+
+    The wait returns as soon as the predicate holds, so a generous ceiling
+    costs nothing on the happy path; it only bounds the pathological case.
+    The default matches the polling deadline used by the worker integration
+    tests and guards against the fixed-ceiling starvation flake that bit the
+    mock-pool tests under pytest-xdist load (issue #163).
+    """
     deadline = time.monotonic() + timeout
     while not predicate():
         if time.monotonic() > deadline:
@@ -280,7 +287,6 @@ def test_worker_updates_heartbeat(worker_id, db_path):
     try:
         _wait_until(
             lambda: (_read_worker_last_heartbeat(db_path, worker_id) or "") > initial_heartbeat,
-            timeout=5.0,
         )
     finally:
         worker.stop()
@@ -314,15 +320,9 @@ def test_worker_updates_status(worker_id, db_path):
     thread.start()
     try:
         # Wait for the worker to pick up the job and transition to "busy".
-        _wait_until(
-            lambda: _read_worker_status(db_path, worker_id) == "busy",
-            timeout=5.0,
-        )
+        _wait_until(lambda: _read_worker_status(db_path, worker_id) == "busy")
         # Then wait for it to finish and return to "idle".
-        _wait_until(
-            lambda: _read_worker_status(db_path, worker_id) == "idle",
-            timeout=5.0,
-        )
+        _wait_until(lambda: _read_worker_status(db_path, worker_id) == "idle")
     finally:
         worker.stop()
         thread.join(timeout=5)
