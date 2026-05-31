@@ -108,6 +108,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **Cross-references (`clm:`) now actually render as working links
+  ([#17](https://github.com/hoelzl/clm/issues/17)).** Two defects made the
+  feature a no-op end-to-end as first merged: (1) the notebook worker
+  reconstructed its payload from a hand-listed set of fields and silently
+  dropped `cross_references` (and `svg_available_stems` / `inline_images`), so
+  the resolved href map never reached the rewrite step and every `clm:` link
+  shipped verbatim; the worker now deserializes the whole payload via
+  `model_validate`, so no field can be dropped again. (2) Resolved hrefs were
+  not URL-encoded, but CLM output filenames are `"{NN} {title}{ext}"` and the
+  embedded space is not a valid Markdown link destination — renderers
+  (nbconvert, JupyterLab/VS Code) left `[text](02 Foo.html)` as literal text
+  rather than an anchor; hrefs are now percent-encoded
+  (`02%20Foo.html`). Added a Markdown→HTML rendering regression test and a
+  payload round-trip test.
 - **`clm validate` no longer false-errors on split slide files
   ([#160](https://github.com/hoelzl/clm/issues/160)).** The bilingual DE/EN
   `pairing` sub-checks — cell-count parity, per-pair tag/type consistency, and

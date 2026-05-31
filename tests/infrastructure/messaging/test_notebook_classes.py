@@ -61,6 +61,50 @@ class TestNotebookPayload:
         assert sample_payload.other_files == {}
         assert sample_payload.fallback_execute is False
 
+    def test_json_roundtrip_preserves_worker_consumed_fields(self):
+        """Regression guard for issue #17.
+
+        The notebook worker reconstructs the payload from the job's serialized
+        JSON. It must preserve *every* field the host sets — a hand-maintained
+        field list previously dropped ``cross_references`` (and
+        ``svg_available_stems`` / ``inline_images``), silently disabling the
+        cross-reference rewrite so every ``clm:`` link shipped unrewritten.
+        Serialize with the same call the backend uses (``model_dump(mode=
+        "json")``) and reconstruct the way ``NotebookWorker`` now does
+        (``model_validate`` of the whole dict), then assert the fields survive.
+        """
+        original = NotebookPayload(
+            correlation_id="cid",
+            input_file="/in.py",
+            input_file_name="in.py",
+            output_file="/out.html",
+            data="src",
+            kind="completed",
+            prog_lang="python",
+            language="en",
+            format="html",
+            cross_references={"workshop": "../W/02%20Workshop.html"},
+            svg_available_stems=["diagram"],
+            inline_images=True,
+        )
+
+        dumped = original.model_dump(mode="json")
+        # The worker overrides data + path fields (filesystem/job) and takes
+        # everything else verbatim from the serialized dict.
+        restored = NotebookPayload.model_validate(
+            {
+                **dumped,
+                "data": "src",
+                "input_file": "/in.py",
+                "input_file_name": "in.py",
+                "output_file": "/out.html",
+            }
+        )
+
+        assert restored.cross_references == {"workshop": "../W/02%20Workshop.html"}
+        assert restored.svg_available_stems == ["diagram"]
+        assert restored.inline_images is True
+
     def test_notebook_text_property(self, sample_payload):
         """Should return data as notebook_text property."""
         assert sample_payload.notebook_text == "notebook content here"
