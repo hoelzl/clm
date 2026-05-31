@@ -1156,7 +1156,5 @@ def mock_notebook_workers(mock_worker_pool):
     to process jobs.
     """
     workers = mock_worker_pool.start_workers("notebook", count=2)
-    assert mock_worker_pool.wait_for_workers_registered(timeout=5.0), (
-        "Mock notebook workers did not register within 5s"
-    )
+    assert mock_worker_pool.wait_for_workers_registered(), "Mock notebook workers did not register"
     return workers

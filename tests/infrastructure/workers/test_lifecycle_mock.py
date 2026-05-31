@@ -30,7 +30,7 @@ class TestMockWorkerBasics:
 
         try:
             worker.start()
-            assert worker.wait_for_registration(timeout=5.0), "Worker should register within 5s"
+            assert worker.wait_for_registration(), "Worker should register"
 
             # Verify worker is registered in database
             conn = sqlite3.connect(str(mock_db_path))
@@ -54,7 +54,7 @@ class TestMockWorkerBasics:
         worker = MockWorker(config, mock_db_path, worker_id=0)
 
         worker.start()
-        assert worker.wait_for_registration(timeout=5.0), "Worker should register within 5s"
+        assert worker.wait_for_registration(), "Worker should register"
         worker.stop()  # join waits for thread to finish and mark dead
 
         # Verify worker is marked as dead
@@ -125,7 +125,7 @@ class TestMockWorkerPool:
 
         try:
             workers = pool.start_workers("notebook", count=3)
-            assert pool.wait_for_workers_registered(timeout=5.0)
+            assert pool.wait_for_worker_count(3, worker_type="notebook")
 
             assert len(workers) == 3
             assert len(pool.running_workers) == 3
@@ -145,7 +145,7 @@ class TestMockWorkerPool:
         pool = MockWorkerPool(mock_db_path)
 
         workers = pool.start_workers("notebook", count=3)
-        assert pool.wait_for_workers_registered(timeout=5.0)
+        assert pool.wait_for_workers_registered()
         pool.stop_all()  # join waits for threads to finish and mark dead
 
         assert len(pool.running_workers) == 0
@@ -166,7 +166,7 @@ class TestMockWorkerPool:
             notebook_workers = pool.start_workers("notebook", count=2)
             plantuml_workers = pool.start_workers("plantuml", count=1)
             drawio_workers = pool.start_workers("drawio", count=1)
-            assert pool.wait_for_workers_registered(timeout=5.0)
+            assert pool.wait_for_workers_registered()
 
             assert len(notebook_workers) == 2
             assert len(plantuml_workers) == 1
@@ -214,7 +214,7 @@ class TestMockWorkerJobProcessing:
             # Close the race against thread startup under xdist load: gate on
             # registration before polling for job completion (otherwise the
             # 5s job-wait races with the OS scheduling worker threads).
-            assert pool.wait_for_workers_registered(timeout=10.0), (
+            assert pool.wait_for_workers_registered(), (
                 "Workers should register before processing jobs"
             )
 
@@ -256,7 +256,7 @@ class TestMockWorkerJobProcessing:
         try:
             # Start workers with 50% fail rate
             pool.start_workers("notebook", count=2, processing_delay=0.02, fail_rate=0.5)
-            assert pool.wait_for_workers_registered(timeout=10.0), (
+            assert pool.wait_for_workers_registered(), (
                 "Workers should register before processing jobs"
             )
 
@@ -286,7 +286,7 @@ class TestMockWorkerDiscovery:
         try:
             pool.start_workers("notebook", count=2)
             pool.start_workers("plantuml", count=1)
-            assert pool.wait_for_workers_registered(timeout=5.0)
+            assert pool.wait_for_workers_registered()
 
             discovery = WorkerDiscovery(mock_db_path)
             workers = discovery.discover_workers()
@@ -314,7 +314,12 @@ class TestMockWorkerDiscovery:
         try:
             pool.start_workers("notebook", count=3)
             pool.start_workers("plantuml", count=2)
-            assert pool.wait_for_workers_registered(timeout=5.0)
+            # Poll the committed DB — the same view WorkerDiscovery reads —
+            # until both worker types are registered, rather than relying on a
+            # tight in-process event ceiling that starves under xdist load
+            # (issue #163).
+            assert pool.wait_for_worker_count(3, worker_type="notebook")
+            assert pool.wait_for_worker_count(2, worker_type="plantuml")
 
             discovery = WorkerDiscovery(mock_db_path)
 
@@ -338,7 +343,7 @@ class TestMockWorkerCleanup:
 
         # Start and stop workers
         pool.start_workers("notebook", count=3)
-        assert pool.wait_for_workers_registered(timeout=5.0)
+        assert pool.wait_for_workers_registered()
         pool.stop_all()  # join waits for threads to finish and mark dead
 
         # Verify workers are marked as dead
@@ -367,7 +372,7 @@ class TestMockWorkerCleanup:
 
         try:
             pool.start_workers("notebook", count=2, processing_delay=0.02)
-            assert pool.wait_for_workers_registered(timeout=10.0), (
+            assert pool.wait_for_workers_registered(), (
                 "Workers should register before processing jobs"
             )
             assert pool.wait_for_jobs(timeout=15.0), "All jobs should be processed within timeout"

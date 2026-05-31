@@ -23,6 +23,16 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+# Generous ceiling for registration waits. The waits below return as soon as
+# the condition is observed, so a large ceiling costs nothing on the happy
+# path; it only bounds the pathological "never registers" case. The previous
+# 5s ceiling starved under pytest-xdist load — worker threads competing with
+# dozens of other test processes for CPU could not all run their registration
+# INSERT within 5s, even though they registered fine moments later (issue
+# #163). This mirrors the polling deadline already used by the direct-worker
+# integration tests (``_wait_for_registered_workers``).
+DEFAULT_REGISTRATION_TIMEOUT = 30.0
+
 
 @dataclass
 class MockWorkerConfig:
@@ -114,8 +124,12 @@ class MockWorker:
         self._thread = threading.Thread(target=self._run, daemon=True, name=self.container_id)
         self._thread.start()
 
-    def wait_for_registration(self, timeout: float = 5.0) -> bool:
+    def wait_for_registration(self, timeout: float = DEFAULT_REGISTRATION_TIMEOUT) -> bool:
         """Wait until this worker has registered in the database.
+
+        The registration row is committed before ``_registered_event`` is set
+        (see ``_run``), so a set event guarantees the row is visible to a fresh
+        connection.
 
         Args:
             timeout: Maximum time to wait in seconds
@@ -456,8 +470,61 @@ class MockWorkerPool:
         self._workers.extend(workers)
         return workers
 
-    def wait_for_workers_registered(self, timeout: float = 5.0) -> bool:
-        """Wait until all workers have registered in the database.
+    def wait_for_worker_count(
+        self,
+        expected: int,
+        worker_type: str | None = None,
+        timeout: float = DEFAULT_REGISTRATION_TIMEOUT,
+        poll_interval: float = 0.05,
+    ) -> bool:
+        """Poll the committed ``workers`` table until at least ``expected``
+        live (non-dead) workers — optionally of a single ``worker_type`` — are
+        visible.
+
+        This polls the same committed database state that
+        :class:`~clm.infrastructure.workers.discovery.WorkerDiscovery` reads
+        through its own connection, so it is robust to both slow thread
+        scheduling and cross-connection write-visibility under heavy
+        pytest-xdist load. A fixed in-process event ceiling, by contrast,
+        could expire while the worker threads were merely starved of CPU
+        (issue #163).
+
+        Args:
+            expected: Minimum number of live workers to wait for
+            worker_type: Restrict the count to a single worker type (None = any)
+            timeout: Maximum time to wait in seconds
+            poll_interval: Time between polls in seconds
+
+        Returns:
+            True if the count was reached within the timeout, False otherwise
+        """
+        query = "SELECT COUNT(*) FROM workers WHERE status != 'dead'"
+        params: tuple = ()
+        if worker_type is not None:
+            query += " AND worker_type = ?"
+            params = (worker_type,)
+
+        deadline = time.monotonic() + timeout
+        conn = sqlite3.connect(str(self.db_path), timeout=30.0)
+        try:
+            while True:
+                count = conn.execute(query, params).fetchone()[0]
+                if count >= expected:
+                    return True
+                if time.monotonic() >= deadline:
+                    return False
+                time.sleep(poll_interval)
+        finally:
+            conn.close()
+
+    def wait_for_workers_registered(self, timeout: float = DEFAULT_REGISTRATION_TIMEOUT) -> bool:
+        """Wait until all started workers are registered and visible in the DB.
+
+        Polls committed database state (via :meth:`wait_for_worker_count`)
+        rather than per-worker in-process events: under pytest-xdist load the
+        worker threads can be starved long enough that a fixed in-process event
+        ceiling expires before they run, even though they register fine moments
+        later (issue #163).
 
         Args:
             timeout: Maximum time to wait in seconds
@@ -465,7 +532,7 @@ class MockWorkerPool:
         Returns:
             True if all workers registered within timeout, False otherwise
         """
-        return all(w.wait_for_registration(timeout=timeout) for w in self._workers)
+        return self.wait_for_worker_count(len(self._workers), timeout=timeout)
 
     def stop_all(self, timeout: float = 5.0) -> None:
         """Stop all mock workers.
