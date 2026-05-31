@@ -19,9 +19,22 @@ format), opt-in Direct-mode wiring, 4 smoke + 3 no-op regression tests.
 
 ---
 
-## P1 — vcrpy-YAML cassette bridge  ·  ~3–4 d  ·  risk: medium
+## P1 — vcrpy-YAML cassette bridge  ·  ~3–4 d  ·  risk: medium  ·  **DONE**
 
-The addon persists native `.mitm` today. Production must read/write the
+**Status (done):** the addon now persists the vcrpy v1 YAML schema via a
+pure `cassette_format.py` bridge (imports only `vcr` + stdlib; importable
+both as a CLM submodule and by bare path inside the `uv tool` mitmdump
+interpreter, which now carries vcrpy via `uv tool install mitmproxy --with
+vcrpy`). The bridge routes through vcrpy's own `serialize` / `Request` /
+`decode_response`, so output is byte-identical to a vcrpy-recorded
+cassette. Gate proven by `tests/infrastructure/test_http_replay_mitm_cassette_format.py`
+(byte-identity vs vcrpy for plain + gzip + multi-value headers, LF
+endings, no `convert_to_unicode` aliasing leak, round-trip load, and
+`merge_staging_into_canonical` folding a bridge cassette). The 4 mitmproxy
+smoke tests pass against the new format (record → replay → strict-miss
+599). Still single-shared-cassette — per-target routing is P2.
+
+The addon persisted native `.mitm` before. Production must read/write the
 **existing vcrpy v1 YAML schema** so committed course cassettes and the
 doctor/strip/merge tooling keep working unchanged.
 

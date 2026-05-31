@@ -84,7 +84,7 @@ def upstream_server() -> Iterator[str]:
 
 @pytest.fixture
 def cassette_path(tmp_path: Path) -> Path:
-    return tmp_path / "smoke.mitm"
+    return tmp_path / "smoke.http-cassette.yaml"
 
 
 def _get_via_proxy(url: str, proxy_url: str) -> requests.Response:

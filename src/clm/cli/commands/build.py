@@ -167,7 +167,7 @@ def _maybe_start_mitmproxy_transport(mode: str | None, jobs_db_path: Path):
 
     base = Path(jobs_db_path).resolve().parent / "mitm"
     base.mkdir(parents=True, exist_ok=True)
-    cassette = base / "transport.mitm"
+    cassette = base / "transport.http-cassette.yaml"
     confdir = base / "confdir"
     manager = MitmproxyManager(cassette_path=cassette, mode=mode, confdir=confdir)
     manager.start()
