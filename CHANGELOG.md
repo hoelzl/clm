@@ -128,6 +128,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   result/cache bookkeeping), removing previously divergent fallback defaults.
   A structural round-trip test tied to `NotebookPayload.model_fields` guards
   the invariant for every current and future field.
+- **`clm slides sync` is now the single-language authoring command and writes
+  by default** (issue #166). Edit **one** half of a split deck
+  (`<deck>.de.py` / `<deck>.en.py`) and one pass brings the other half into
+  sync: edits are propagated, brand-new slides are translated (OpenRouter
+  Claude Sonnet, `--translation-model`) and inserted, removed slides are
+  dropped, reorders are mirrored, and a shared `slide_id` is minted onto both
+  decks. **Breaking:** the default flipped from dry-run to writing the working
+  tree — a bare `clm slides sync de en` now applies changes (nothing is
+  committed; review with `git diff`). Pass `--dry-run` for the old preview.
+  Direction is now decided **per cell** by diffing each deck against a new
+  ordered, per-language structural watermark (`sync_watermarks`, recorded only
+  on a successful apply), so the global `--source-lang` flag and the
+  `sync_snapshots`-based direction inference are **removed**; a cell edited on
+  both decks is isolated as a `conflict` rather than guessed. The legacy
+  `--apply` / `--trivial` flags are **removed** (the default already applies;
+  use `--interactive` to gate proposals). Edits are still reconciled by the
+  local Ollama judge; when Ollama is unreachable, edits are recorded as errors
+  (exit 2). See `clm info migration` for the full before/after.
 - **`clm recordings check` is now backend-aware** (issue #33). The command
   reads `recordings.processing_backend` and only checks the dependencies the
   active backend actually needs, and the output table header shows which

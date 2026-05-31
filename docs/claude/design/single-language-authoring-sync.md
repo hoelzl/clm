@@ -618,6 +618,32 @@ Original Phase 4 spec (for reference):
 
 ### Phase 5 — Default-flip + docs + deprecate old inference + pilot / CHANGELOG
 
+**Status: ✅ implemented 2026-05-31.** `clm slides sync`
+(`cli/commands/slides_sync.py`) is rewritten onto the new engine:
+`build_sync_plan` → `apply_plan` (batch) / `run_plan_walker` (interactive) over
+the `SyncWatermarkCache`. The **default now writes to the working tree**;
+`--dry-run` is the explicit preview; `--interactive` prompts per proposal before
+a single atomic apply. Direction is per-cell from the watermark — the **global
+`--source-lang` flag and the `sync_snapshots`-based inference are gone** — and a
+both-decks edit is isolated as a `conflict`. The legacy `--apply` / `--trivial`
+flags are **removed** (the default already applies; `--interactive` gates). New
+`--translation-model` (OpenRouter Sonnet) drives the add path. The JSON report
+carries `mode` / `exit_code` / `plan` / `apply` / `walker` blocks (the pilot
+accept-rate counters). Info topics (`commands.md` `clm slides sync` section +
+a `migration.md` breaking-change entry) and the CHANGELOG are updated per the
+**Info Topics Maintenance Rule**.
+
+The legacy engine modules (`sync.py`, `sync_walker.py`, `sync_trivial.py`,
+`sync_direction.py`) are left **dormant** (still unit-tested) rather than deleted
+— nothing in `src` imports them now that the CLI is rewired; pruning them is a
+follow-up so this phase's diff stays focused on the CLI + docs.
+
+Decision (user, 2026-05-31): both `--source-lang` and `--apply`/`--trivial` are
+**hard-removed**, not deprecated-and-ignored — a clean pre-1.0 surface for a
+feature with no external users yet (the migration topic documents the break).
+
+Original Phase 5 spec (for reference):
+
 - **Flip the default** to write-to-working-tree (never commit); `--dry-run`
   becomes the explicit preview. Update CLI help text.
 - Migrate direction inference fully onto the watermark; deprecate the

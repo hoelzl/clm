@@ -187,6 +187,65 @@ clm validate slides/topic/slides_intro.py --checks voiceover
 
 …or via MCP: `validate_slides(path, checks=["voiceover"])`.
 
+## `clm slides sync` is now a single-language authoring command (writes by default)
+
+CLM {version} reworks `clm slides sync` into the single-language
+authoring workflow (issue #166): edit **one** half of a split deck, run
+the command, and it brings the other half into sync in a single pass —
+propagating edits, translating and inserting brand-new slides, dropping
+removed slides, mirroring reorders, and minting a shared `slide_id` onto
+both decks.
+
+### Breaking changes
+
+| Before | After |
+|--------|-------|
+| **Default was dry-run** (printed diffs, wrote nothing). | **Default writes to the working tree.** A bare `clm slides sync de en` applies the agreed changes. Nothing is committed — review with `git diff`. Pass `--dry-run` for the old preview-only behavior. |
+| `--source-lang de\|en` selected the edited side (or was inferred from `sync_snapshots` drift / git timestamps). | **Removed.** Direction is decided **per cell** by diffing each deck against the structural watermark, so a single pass can carry edits in both directions. A cell edited on both decks is isolated as a `conflict` instead of being guessed. Passing `--source-lang` is now a usage error. |
+| `--apply --trivial` auto-applied EOL-/whitespace-only diffs. | **Removed.** The new default already applies; there is no trivial-only mode. Use `--interactive` to gate proposals one by one. Passing `--apply` or `--trivial` is now a usage error. |
+| Per-cell `sync_snapshots` rows recorded the last accepted `(de_hash, en_hash)` for direction inference. | The engine now records an ordered, per-language **`sync_watermarks`** baseline (the whole deck, with cell order and id-less cells), written only on a successful apply. `sync_snapshots` is no longer written or read by `sync`. |
+
+### What stays the same
+
+- The pair arguments (`DE_PATH EN_PATH`), `--interactive`, `--json`,
+  `--llm-model`, `--ollama-url`, `--llm-timeout`, `--cache-dir`, and
+  `--no-cache` are unchanged in spelling. `--interactive` still prompts
+  per proposal (now `[a]pply / [s]kip / [q]uit`, plus
+  `[d]e-wins / [e]n-wins` on a conflict) before a single atomic apply.
+- Exit codes keep their buckets: `0` clean, `1` something left for
+  review (a skipped proposal / unresolved conflict), `2` a structural
+  error (classifier error, missing target cell, or the edit LLM down).
+
+### What's new
+
+- `--translation-model TEXT` (default `anthropic/claude-sonnet-4-6`)
+  picks the OpenRouter model that translates brand-new slides on the add
+  path. It needs `$OPENROUTER_API_KEY` (or `$OPENAI_API_KEY`); without a
+  key, add proposals defer (everything else still applies).
+
+### How to migrate
+
+```bash
+# Before: bare invocation was a safe dry-run.
+clm slides sync intro.de.py intro.en.py            # now WRITES — review with git diff
+
+# Keep the old preview behavior explicitly.
+clm slides sync intro.de.py intro.en.py --dry-run
+
+# Drop --source-lang entirely — direction is per-cell now.
+clm slides sync intro.de.py intro.en.py            # (was: --source-lang de)
+
+# Replace --apply --trivial with the default apply, or gate with --interactive.
+clm slides sync intro.de.py intro.en.py            # (was: --apply --trivial)
+clm slides sync intro.de.py intro.en.py --interactive
+```
+
+Because the default now mutates files, wire `clm slides sync` into a
+clean working tree (commit or stash first) so `git diff` shows exactly
+what the sync proposed. The watermark advances only on a successful,
+non-deferred apply, so a conflict or a skipped proposal re-surfaces on
+the next run rather than being silently baselined.
+
 ## CLI restructure: verb-grouped subcommands
 
 CLM {version} reorganises the top-level command surface. Several flat
