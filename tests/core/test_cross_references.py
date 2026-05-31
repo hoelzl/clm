@@ -108,9 +108,11 @@ def test_split_reference(reference: str, expected: tuple[str, str | None]) -> No
 # rewrite_cross_references
 # --------------------------------------------------------------------------- #
 def test_rewrite_replaces_href() -> None:
+    # The resolver always hands ``rewrite_cross_references`` an already
+    # percent-encoded href (issue #17), so the substitution is verbatim.
     text = "See [the workshop](clm:functions_workshop)."
-    out = rewrite_cross_references(text, {"functions_workshop": "../Workshops/03 Functions.html"})
-    assert out == "See [the workshop](../Workshops/03 Functions.html)."
+    out = rewrite_cross_references(text, {"functions_workshop": "../Workshops/03%20Functions.html"})
+    assert out == "See [the workshop](../Workshops/03%20Functions.html)."
 
 
 def test_rewrite_drops_link_on_empty_href() -> None:
@@ -238,7 +240,9 @@ def test_resolver_maps_topic_id_to_html_href() -> None:
     )
     assert resolved is not None
     # From section "Basics" up one and into "Workshops" with the renamed file.
-    assert resolved.href == "../Workshops/03 Functions.html"
+    # The space in the filename is percent-encoded so the link renders as a
+    # working anchor (issue #17).
+    assert resolved.href == "../Workshops/03%20Functions.html"
     assert resolved.ambiguous is False
 
 
@@ -255,7 +259,7 @@ def test_resolver_href_is_per_variant() -> None:
         format="notebook",
     )
     assert de_nb is not None
-    assert de_nb.href == "../Workshops/03 Funktionen.ipynb"
+    assert de_nb.href == "../Workshops/03%20Funktionen.ipynb"
 
     en_code = resolver.resolve(
         "functions_workshop",
@@ -266,7 +270,7 @@ def test_resolver_href_is_per_variant() -> None:
     )
     assert en_code is not None
     # code format extension follows the prog lang (.py for python).
-    assert en_code.href == "../Workshops/03 Functions.py"
+    assert en_code.href == "../Workshops/03%20Functions.py"
 
 
 def test_resolver_returns_none_for_missing_topic() -> None:
@@ -332,7 +336,7 @@ def test_resolver_ambiguous_multi_notebook_topic() -> None:
     assert resolved is not None
     assert resolved.ambiguous is True
     # Deterministic fallback: lowest number_in_section -> Part A (slot 1).
-    assert resolved.href == "../Advanced/01 Part A.html"
+    assert resolved.href == "../Advanced/01%20Part%20A.html"
 
 
 def test_resolver_disambiguator_selects_specific_deck() -> None:
@@ -348,7 +352,7 @@ def test_resolver_disambiguator_selects_specific_deck() -> None:
     )
     assert resolved is not None
     assert resolved.ambiguous is False
-    assert resolved.href == "../Advanced/02 Part B.html"
+    assert resolved.href == "../Advanced/02%20Part%20B.html"
 
 
 # --------------------------------------------------------------------------- #
@@ -430,7 +434,7 @@ def test_href_map_ambiguous_emits_warning_but_resolves() -> None:
         format="html",
         fail_on_missing=True,
     )
-    assert hrefs == {"advanced": "../Advanced/01 Part A.html"}
+    assert hrefs == {"advanced": "../Advanced/01%20Part%20A.html"}
     assert len(issues) == 1
     assert issues[0].severity == "warning"
 
@@ -506,7 +510,7 @@ def test_payload_compute_cross_references_resolves_for_variant() -> None:
     )
     data = "See [the workshop](clm:functions_workshop)."
     hrefs = op.compute_cross_references(data)
-    assert hrefs == {"functions_workshop": "../Workshops/03 Functions.html"}
+    assert hrefs == {"functions_workshop": "../Workshops/03%20Functions.html"}
 
 
 def test_payload_compute_cross_references_empty_without_refs() -> None:

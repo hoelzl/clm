@@ -45,7 +45,9 @@ def _payload(cross_references: dict[str, str], format_: str = "html") -> Noteboo
 def test_rewrite_produces_working_relative_link(format_: str) -> None:
     processor = NotebookProcessor(CompletedOutput(format=format_))
     ext = "html" if format_ == "html" else "ipynb"
-    href = f"../Workshops/03 Functions.{ext}"
+    # The resolver percent-encodes the href (issue #17); the worker rewrite is
+    # a verbatim substitution of that encoded value.
+    href = f"../Workshops/03%20Functions.{ext}"
     cell = _markdown_cell("See [the workshop](clm:functions_workshop).")
 
     processor._process_markdown_cell_contents(
@@ -55,6 +57,35 @@ def test_rewrite_produces_working_relative_link(format_: str) -> None:
     )
 
     assert cell["source"] == f"See [the workshop]({href})."
+
+
+def test_rewritten_link_renders_as_html_anchor() -> None:
+    """End-to-end guard for issue #17: a rewritten href must survive
+    Markdown -> HTML rendering as a real ``<a>`` anchor.
+
+    CLM output filenames are ``"{NN} {title}{ext}"`` and therefore contain
+    spaces. A bare space is not a valid CommonMark inline-link destination, so
+    nbconvert renders ``[text](02 Foo.html)`` as *literal text* rather than a
+    link. The resolver percent-encodes the href to prevent exactly this; here
+    we render the rewritten cell through the same exporter CLM uses and assert
+    an anchor is produced (not literal markdown).
+    """
+    import nbformat
+    from nbconvert import HTMLExporter
+
+    processor = NotebookProcessor(CompletedOutput(format="html"))
+    href = "../Workshops/03%20Functions.html"
+    cell = _markdown_cell("See [the workshop](clm:functions_workshop).")
+    processor._process_markdown_cell_contents(
+        cell, "img/", _payload({"functions_workshop": href}, format_="html")
+    )
+
+    nb = nbformat.v4.new_notebook()
+    nb.cells = [nbformat.v4.new_markdown_cell(cell["source"])]
+    body, _ = HTMLExporter(template_name="classic").from_notebook_node(nb)
+
+    assert f'href="{href}"' in body, "rewritten cross-reference must render as a working anchor"
+    assert "[the workshop]" not in body, "the Markdown link syntax must not survive as literal text"
 
 
 def test_rewrite_drops_link_when_href_empty() -> None:

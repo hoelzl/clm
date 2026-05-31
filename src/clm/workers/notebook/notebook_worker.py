@@ -181,30 +181,37 @@ class NotebookWorker(Worker):
                 format=payload_data.get("format", "notebook"),
             )
 
-            # Create NotebookPayload for processing
-            # Note: This is a simplified version that works with the new architecture
-            payload = NotebookPayload(
-                data=notebook_text,
-                input_file=str(input_path),
-                input_file_name=input_path.name,
-                output_file=job.output_file,
-                kind=payload_data.get("kind", "completed"),
-                prog_lang=payload_data.get("prog_lang", "python"),
-                language=payload_data.get("language", "en"),
-                format=payload_data.get("format", "notebook"),
-                template_dir=payload_data.get("template_dir", ""),
-                other_files=payload_data.get("other_files", {}),
-                correlation_id=payload_data.get("correlation_id", f"job-{job.id}"),
-                fallback_execute=payload_data.get("fallback_execute", False),
-                skip_evaluation=payload_data.get("skip_evaluation", False),
-                skip_errors=payload_data.get("skip_errors", False),
-                http_replay_mode=payload_data.get("http_replay_mode"),
-                http_replay_cassette_name=payload_data.get("http_replay_cassette_name"),
-                http_replay_trace_dir=payload_data.get("http_replay_trace_dir", ""),
-                img_path_prefix=payload_data.get("img_path_prefix", "img/"),
-                source_topic_dir=payload_data.get("source_topic_dir", ""),
-                author=payload_data.get("author", "Dr. Matthias Hölzl"),
-                organization=payload_data.get("organization", ""),
+            # Reconstruct the full NotebookPayload from the serialized job
+            # data. Deserialize the whole dict via ``model_validate`` rather
+            # than re-listing fields by hand: the host serializes the payload
+            # with ``model_dump(mode="json")`` (see ``SqliteBackend``), so
+            # round-tripping the dict preserves *every* field automatically.
+            # The previous hand-maintained constructor silently dropped any
+            # field it did not name — e.g. ``cross_references`` (issue #17),
+            # which left every ``clm:`` link unrewritten in the output, and
+            # ``svg_available_stems`` / ``inline_images``. ``data`` and the
+            # path fields are overridden because in Docker source-mount mode
+            # the notebook text and paths come from the filesystem rather than
+            # the payload.
+            payload = NotebookPayload.model_validate(
+                {
+                    # Defaults for the required descriptor fields, preserved
+                    # from the previous hand-written reconstruction so a
+                    # partial payload still validates; ``payload_data`` below
+                    # overrides them whenever the host set them (it always
+                    # does for real jobs). Every other field — including
+                    # cross_references — flows through automatically.
+                    "kind": "completed",
+                    "prog_lang": "python",
+                    "language": "en",
+                    "format": "notebook",
+                    **payload_data,
+                    "data": notebook_text,
+                    "input_file": str(input_path),
+                    "input_file_name": input_path.name,
+                    "output_file": job.output_file,
+                    "correlation_id": payload_data.get("correlation_id", f"job-{job.id}"),
+                }
             )
 
             # Determine source directory for supporting files (Docker mode with source mount)

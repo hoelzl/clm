@@ -41,6 +41,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
+from urllib.parse import quote
 
 from clm.core.utils.text_utils import sanitize_file_name
 from clm.infrastructure.utils.path_utils import (
@@ -272,7 +273,7 @@ class CrossReferenceResolver:
         # the relative path is purely a function of the two section dirs.
         from_path = PurePosixPath(from_section_dir)
         target_path = PurePosixPath(target_section_dir) / target_file_name
-        href = _relative_posix(target_path, from_path)
+        href = _encode_href(_relative_posix(target_path, from_path))
         return ResolvedReference(reference=reference, href=href, ambiguous=ambiguous)
 
     def build_href_map(
@@ -506,3 +507,19 @@ def _relative_posix(target: PurePosixPath, start: PurePosixPath) -> str:
     if not rel_parts:
         return "."
     return "/".join(rel_parts)
+
+
+def _encode_href(path: str) -> str:
+    """Percent-encode a relative href so it is a usable Markdown link target.
+
+    CLM output filenames follow ``"{number_in_section:02} {title}{ext}"`` and
+    therefore almost always contain spaces (and may contain other characters
+    such as parentheses). A bare space is not valid inside a CommonMark inline
+    link destination, so renderers — nbconvert's ``HTMLExporter``,
+    JupyterLab/VS Code — leave ``[text](02 Foo.html)`` as *literal text*
+    rather than emitting a working ``<a>`` anchor. Percent-encoding the path
+    while preserving the ``/`` separators (e.g. ``../Workshops/03%20Foo.html``)
+    is treated as a link by every renderer and resolves back to the real file
+    in the browser (issue #17).
+    """
+    return quote(path, safe="/")
