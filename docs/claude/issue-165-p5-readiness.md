@@ -118,17 +118,19 @@ every default (non-mitmproxy) build.
 | `convert_to_unicode_deepcopy` | nbp:284–289 | **Reimplemented** | `cassette_format.py:378` (deepcopy in `serialize_interactions`); ⚠ no drift-guard ties the two deepcopy sites |
 | `clm_json_body_matcher` | nbp:292–395 | **Reimplemented** | `cassette_format.py:279` + `REPLAY_MATCHERS`; drift-guarded by `test_filter_constants_and_matchers_match_bootstrap` |
 | `ignore_hosts` | nbp:193 (shared fn) + template:376 | **Reimplemented** (shared policy) | `resolve_http_replay_ignore_hosts` is **module-scope, used by both transports** — KEEP the function; only the template usage goes |
-| `allow_playback_repeats` | template:417 | **Reimplemented by construction** | addon serve loop is non-depleting (addon.py:292–297); ⚠ **no mitmproxy-side repeat regression test yet** |
+| `allow_playback_repeats` | template:417 | **Reimplemented by construction** | addon serve loop is non-depleting (addon.py:292–297); regression test added (`test_replay_serves_repeated_identical_requests_non_depleting`) |
 | `eager_append` | nbp:432–438 | **Reimplemented** | addon eager `write_cassette` (addon.py:343); kill-survival differs by design (markerless staging is swept, not folded) |
 | `per_cell_timeout` (Option-F) | nbp:146–169, applied :1885 | **KEEP** | transport-agnostic loud-failure net; not an HTTP concern — do **not** delete at the flip |
 
 Parity confidence is **high** for every reimplemented item (verbatim mirrors with
 a drift-guard test on the filter/matcher constants). Two follow-ups surfaced:
 
-- **`allow_playback_repeats` has no mitmproxy-side regression test.** Add a
-  "record once, replay the same request 2× with 0 upstream hits" smoke test
-  before deleting the in-kernel flag, so the non-depletion guarantee is pinned on
-  the surviving transport.
+- **`allow_playback_repeats` mitmproxy regression test — DONE.**
+  `test_replay_serves_repeated_identical_requests_non_depleting`
+  (`tests/infrastructure/test_http_replay_mitm.py`) records one interaction then
+  replays the identical request 3× in one proxy lifecycle, asserting all serve
+  from the single recorded entry with the upstream counter never advancing — the
+  non-depletion guarantee is now pinned on the surviving transport.
 - **`convert_to_unicode_deepcopy` drift is not guarded.** The kernel persister and
   the addon's `serialize_interactions` deepcopy are independent; retiring one does
   not auto-flag the other. Acceptable (the in-kernel one is deleted at the flip),
@@ -156,12 +158,57 @@ removed (mitmproxy becomes the sole transport):
 
 ## Sequencing for the cutover (future release)
 
-1. Land the transport behind the flag in a release (merge #173). Let it bake.
-2. Convert the uncommitted e2e/probe proofs (gates 1, 2, 7, 8, 9) into committed
-   tests or a repeatable cutover-gate script; add the `allow_playback_repeats`
-   mitmproxy regression test.
+1. ~~Land the transport behind the flag in a release (merge #173). Let it bake.~~
+   **DONE** — #173 merged to `master` (`4fcbefb`, 2026-06-01); now baking.
+2. Run the **cutover-gate checklist** below before the flip. The
+   `allow_playback_repeats` mitmproxy regression test is **DONE**; the unit/smoke
+   gates are committed; the e2e gates are a documented manual checklist for now
+   (an automated harness is deferred — see the note after the checklist).
 3. After the gates hold across that release cycle, flip the default to mitmproxy
    (keep `CLM_HTTP_REPLAY_TRANSPORT=vcrpy` selectable as rollback insurance).
 4. **Only then**, in the same commit that removes the in-kernel vcrpy bootstrap,
    delete the moot/reimplemented workarounds above, remove the pin-guard, and
    relax the vcrpy pin. Keep the Option-F per-cell timeout and vcrpy-as-serializer.
+
+## Cutover-gate checklist (run before the flip)
+
+Run this once the transport has baked, immediately before flipping the default.
+Gates 3/4/5/6(replay)/7(addon)/8/9 are **committed tests** — green CI is the
+proof. Gates 1/2/6(record)/7(full-chain)/9(whole-build) need a real build or
+network/$, so they are **manual** until the automated harness lands.
+
+**Shared setup** (PowerShell; CLM must be a mitmproxy-aware build — ≥ the merged
+`4fcbefb`):
+
+```powershell
+$env:CLM_MITMDUMP = "C:\Users\tc\.local\bin\mitmdump.exe"   # uv tool install mitmproxy --with vcrpy
+$env:CLM_HTTP_REPLAY_TRANSPORT = "mitmproxy"
+$Repro = "C:\Users\tc\Programming\Python\Tests\clm-bug-repros\issue-143-cassette-connection-pool-deadlock"
+```
+
+| Gate | How to run | PASS criterion |
+|---|---|---|
+| 3 byte-identity, 4 tooling | `pytest tests/infrastructure/test_http_replay_mitm_cassette_format.py` | green (skip-safe w/o mitmdump) |
+| 5 secret-strip, 6 JSON-match (replay), 7 addon-404, 8 routing | `pytest tests/infrastructure/test_http_replay_mitm.py tests/workers/notebook/test_http_replay_mitm_tag.py` | green |
+| 8 host merge, 9 default-unchanged | `pytest tests/core/course_test.py -k mitmproxy_cassette_staging` and `tests/cli/test_build_command.py::TestMitmproxyTransportBindHost` + the no-op-inject tests | green |
+| **1** deadlock-defeat + no-bypass | `CLM_HTTP_REPLAY_TRACE=1` build of the reproducer in replay, **with current cassettes** (see ⚠), `--ignore-cache --notebook-workers 16`, then `python scripts/analyze_http_replay_trace.py <trace_dir>` | build completes (no stall); analyzer **Bypassed: 0**, proxy **served == flows**, conn-bound ratio low |
+| **2** HTTPS + CA on Windows | reference: `Tmp\p5_proxy_smoke.py` — start `MitmproxyManager(new-episodes)`, httpx `GET https://example.com` through `proxy_url` with a certifi+CA bundle | status 200; analyzer 0 bypass |
+| **6** record "grows nothing" (real $) | reference: `Tmp\p5_gate6.py` — one real OpenRouter record (key from `.env`, never print/persist) | cassette secret-clean; no-op rebuild byte-identical |
+| **7** full strict-miss→exit chain | rename a committed cassette, replay-build the reproducer | build exits non-zero **fast** with a `NotFoundError: clm_replay_miss` cell error (not a timeout) |
+| **9** whole-build byte-identity | build a deck with the transport **unset** vs a pre-transport baseline; `python scripts/diff_build_outputs.py` | outputs identical |
+
+⚠ **Gate 1 caveat (found this session):** the committed reproducer cassettes
+predate the current build, so a straight replay **misses 5/116 requests** →
+langchain's agent/retry layer re-issues the 404 → the cell stalls until the
+Option-F per-cell timeout. Before running gate 1, **refresh the cassettes**
+(record them once with a real key under the transport) so replay is a clean
+0-miss hit; otherwise the "build completes" criterion is masked by the stale-
+cassette stall, not a transport deadlock. (The harness *did* show 0 transport
+bypass and no pool-exhaustion — the stall is purely the stale-cassette miss.)
+
+**Deferred — automated cutover-gate harness.** A `scripts/run_cutover_gates.py`
+that drives the reproducer build + records each e2e gate's pass/fail is
+intentionally **not built now**: it would bit-rot across the bake cycle before
+the flip, and the real-LLM/record gates need creds + spend at run time. Promote
+the `Tmp\p5_proxy_smoke.py` / `p5_gate6.py` reference scripts into `scripts/`
+when the flip is actually scheduled.

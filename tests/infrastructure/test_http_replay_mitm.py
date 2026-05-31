@@ -201,6 +201,46 @@ def test_replay_serves_from_cassette_without_upstream_hit(
     assert _CountingHandler.upstream_hits == 1, "replay-mode request should not reach upstream"
 
 
+def test_replay_serves_repeated_identical_requests_non_depleting(
+    upstream_server: str, cassette_path: Path, tmp_path: Path
+) -> None:
+    """A single recorded interaction replays N times without depleting.
+
+    This is the out-of-process equivalent of the in-kernel
+    ``allow_playback_repeats=True`` workaround (issue #95-A): the host merge
+    dedups by (method, uri, body) so a canonical cassette holds exactly ONE
+    entry per fingerprint; a deck that issues the same request N times must
+    replay-hit on every call. vcrpy's record_mode="none" consumes each entry
+    once and would raise CannotOverwriteExistingCassetteException on call 2..N.
+    The addon's serve loop instead scans an append-only ``recorded`` list and
+    never pops, so repeats re-serve the same entry for free — this test pins
+    that guarantee on the surviving transport (the in-kernel flag has its own
+    regression test; the mitmproxy side had none until now).
+    """
+    confdir = tmp_path / "mitm-confdir"
+    target = f"{upstream_server}/repeated"
+
+    # Record exactly one interaction.
+    with MitmproxyManager(
+        cassette_path=cassette_path, mode="new-episodes", confdir=confdir
+    ) as proxy:
+        recorded = _get_via_proxy(target, proxy.proxy_url)
+    assert recorded.status_code == 200
+    assert _CountingHandler.upstream_hits == 1
+
+    # Replay the SAME request three times within ONE proxy lifecycle. Every
+    # call must serve the recorded entry (no depletion), and the upstream
+    # counter must stay at 1 across all of them.
+    with MitmproxyManager(cassette_path=cassette_path, mode="replay", confdir=confdir) as proxy:
+        replays = [_get_via_proxy(target, proxy.proxy_url) for _ in range(3)]
+    assert [r.status_code for r in replays] == [200, 200, 200]
+    assert all(r.json() == recorded.json() for r in replays)
+    assert _CountingHandler.upstream_hits == 1, (
+        "repeated identical replay requests must all serve from the single "
+        "recorded entry, never deplete it or escape to upstream"
+    )
+
+
 def test_strict_replay_miss_returns_nonretryable_404(
     upstream_server: str, cassette_path: Path, tmp_path: Path
 ) -> None:
