@@ -518,17 +518,59 @@ than this feature): a structural change is flushed to the working tree even on
 an erroring pass — it is surfaced + `git diff`-visible + revertible, and the
 watermark never advances over it, but the working tree is mutated.
 
-- Extend `sync_walker` to render ADD / REMOVE / MOVE / CONFLICT (today
-  UPDATE-only).
+**Part 2a — Interactive review walker + conflict UX + exit codes ✅ implemented
+2026-05-31.** New `clm/slides/sync_plan_walker.py` (`run_plan_walker` →
+`PlanWalkResult`) renders every proposal kind and prompts per proposal, then
+calls `apply_plan` **once** (atomic; the walker writes nothing itself).
+`apply_plan` gained an optional `decisions` map (keyed by `id(proposal)`):
+`apply`/`skip` gate edit/remove/move, `de-wins`/`en-wins` resolve a conflict by
+re-casting it as an edit flowing the winning direction; `decisions=None` is the
+**batch default and stays byte-identical** to the pre-change engine (63 batch
+tests unchanged). Conflicts render two-up (current DE vs current EN) — *not* the
+designed three-up, because the watermark stores only content hashes, not base
+*content*; a true base column needs the watermark to also store bodies (or a
+git-HEAD lookup in the git-fallback case), deferred as a refinement. Add/rename
+are intentionally **always-applied** (non-destructive; reviewed in the resulting
+`git diff`) rather than per-proposal skippable — this avoids a risky refactor of
+the Part-1-reviewed add path; the interactive gate covers the judgment-heavy
+kinds (edit/remove/move/conflict). Exit codes: 2 (plan/apply error) / 1
+(anything deferred) / 0 (clean). The new walker lives alongside the legacy
+`sync_walker.py` (which still serves the legacy `sync.py` engine wired to the
+live CLI); Phase 5 swaps the CLI onto this engine. The summary is split into an
+honest **decisions** line (what the author chose) and an **outcomes** line (what
+the engine wrote / deferred / errored) so an accepted-but-errored edit or a
+deferred id-carrying add is never reported as "applied". **Watermark stays
+all-or-nothing here** (the documented-safe behavior): any skip/defer/quit
+increments `deferred`, and `_pass_is_clean` holds the watermark — nothing
+un-applied is ever baselined. A 9-agent adversarial-review Workflow (5 review
+dimensions × adversarial verify) confirmed the safety invariant intact and found
+**2 medium issues, both fixed**: the walker mislabeled id-carrying adds as
+"auto-applied" (now rendered/counted as deferred), and the suite lacked a
+mixed-accept+skip watermark-held test (added). 25 walker tests; 711 slides tests
+green; mypy/ruff clean. Live `clm slides sync` STILL UNCHANGED.
+
+**Part 2b — Per-cell watermark advance (the §10 partial-apply staleness fix)** is
+the remaining Phase 4 work, split out as its own commit because its failure mode
+is silent data loss (it deserves an isolated adversarial review). Today a
+skip/defer holds the *whole* watermark (safe but noisy on the next run); 2b will
+advance reconciled cells while preserving conflict/skip cells' pre-conflict
+baseline.
+
+Original Phase 4 spec (for reference):
+
+- Extend the walker to render ADD / REMOVE / MOVE / CONFLICT (today
+  UPDATE-only). *(done in 2a — a new `sync_plan_walker` over the new engine.)*
 - Conflict three-up (watermark base / current DE / current EN) with
   `[d]e-wins / [e]n-wins / [s]kip`; non-interactive leaves conflicts untouched
-  and lists them in the summary.
+  and lists them in the summary. *(2a ships a two-up; base-content column
+  deferred — see above.)*
 - New summary lines + exit codes: conflicts and unresolved proposals → exit 1
   ("needs review"); structural/LLM errors → exit 2 (keep today's buckets).
+  *(done in 2a.)*
 - **Tests:** walker over all kinds; conflict-resolution paths; the exit-code
-  matrix.
+  matrix. *(done in 2a.)*
 - **Exit:** every proposal kind is reviewable; conflicts resolve or defer
-  cleanly.
+  cleanly. *(met in 2a.)*
 
 ### Phase 5 — Default-flip + docs + deprecate old inference + pilot / CHANGELOG
 

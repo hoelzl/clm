@@ -54,7 +54,25 @@ _SLIDE_ROLES = {"slide", "subslide"}
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["ApplyResult", "apply_plan"]
+# Per-proposal decisions an interactive walker can hand to :func:`apply_plan`.
+# ``apply`` / ``skip`` gate the deterministic kinds (edit / remove / move);
+# ``de-wins`` / ``en-wins`` resolve a conflict by propagating the winning side.
+# A conflict with no decision (or ``skip``) is deferred. The decisions map is
+# keyed by ``id(proposal)`` of the proposals in the same :class:`SyncPlan`.
+DECISION_APPLY = "apply"
+DECISION_SKIP = "skip"
+DECISION_DE_WINS = "de-wins"
+DECISION_EN_WINS = "en-wins"
+
+__all__ = [
+    "DECISION_APPLY",
+    "DECISION_DE_WINS",
+    "DECISION_EN_WINS",
+    "DECISION_SKIP",
+    "ApplyResult",
+    "apply_plan",
+    "content_index",
+]
 
 
 @dataclass
@@ -92,6 +110,7 @@ def apply_plan(
     judge: SyncJudge | None,
     translator: SlideTranslator | None = None,
     watermark_cache: SyncWatermarkCache | None = None,
+    decisions: dict[int, str] | None = None,
 ) -> ApplyResult:
     """Apply ``plan``'s proposals to the decks and advance the watermark.
 
@@ -101,13 +120,22 @@ def apply_plan(
     move / id-less add; conflicts and id-carrying adds are ``deferred``. The two
     decks are flushed once; the watermark advances only on a clean, complete
     apply.
+
+    ``decisions`` drives interactive review (``None`` = the batch default, which
+    applies every deterministic kind and defers conflicts). When provided, it
+    maps ``id(proposal)`` to a decision (:data:`DECISION_APPLY` /
+    :data:`DECISION_SKIP` for edit / remove / move; :data:`DECISION_DE_WINS` /
+    :data:`DECISION_EN_WINS` / :data:`DECISION_SKIP` for a conflict). A skipped
+    proposal is counted as ``deferred`` so the watermark cannot advance over it.
+    Add / rename proposals are always applied (they are non-destructive and the
+    counterpart is reviewed in the resulting ``git diff``).
     """
     result = ApplyResult()
 
     # Pre-apply content (parser-stripped) for the judge, keyed by (slide_id,
     # role). Read before FileState mutates anything.
-    de_content = _content_index(plan.de_path, "de")
-    en_content = _content_index(plan.en_path, "en")
+    de_content = content_index(plan.de_path, "de")
+    en_content = content_index(plan.en_path, "en")
 
     de_state = FileState.load(plan.de_path)
     en_state = FileState.load(plan.en_path)
@@ -116,14 +144,25 @@ def apply_plan(
     for proposal in plan.proposals:
         kind = proposal.kind
         if kind == "remove":
-            _apply_remove(proposal, de_state, en_state, result)
+            if _accepted(decisions, proposal):
+                _apply_remove(proposal, de_state, en_state, result)
+            else:
+                result.deferred += 1
         elif kind == "edit":
-            _apply_edit(proposal, de_state, en_state, de_content, en_content, judge, result)
+            if _accepted(decisions, proposal):
+                _apply_edit(proposal, de_state, en_state, de_content, en_content, judge, result)
+            else:
+                result.deferred += 1
         elif kind == "move":
-            moves.append(proposal)
+            if _accepted(decisions, proposal):
+                moves.append(proposal)
+            else:
+                result.deferred += 1
         elif kind == "conflict":
-            result.deferred += 1
-        # "add" is handled by _apply_adds below (it walks the decks directly).
+            _apply_conflict(
+                proposal, decisions, de_state, en_state, de_content, en_content, judge, result
+            )
+        # "add" / "rename" are handled by _apply_adds below (always applied).
 
     # Adds run before moves so a freshly-inserted slide takes part in any
     # reorder. Adds are sticky via the stamped id (a re-run no longer sees an
@@ -156,6 +195,74 @@ def apply_plan(
         result.watermark_recorded = True
 
     return result
+
+
+def _accepted(decisions: dict[int, str] | None, proposal: Proposal) -> bool:
+    """Whether a deterministic proposal (edit / remove / move) should apply.
+
+    ``None`` is batch mode — every deterministic kind applies. Otherwise the
+    proposal applies only on an explicit :data:`DECISION_APPLY`.
+    """
+    if decisions is None:
+        return True
+    return decisions.get(id(proposal)) == DECISION_APPLY
+
+
+def _conflict_decision(decisions: dict[int, str] | None, proposal: Proposal) -> str:
+    """The resolution for a conflict proposal (defaults to skip/defer)."""
+    if decisions is None:
+        return DECISION_SKIP
+    return decisions.get(id(proposal), DECISION_SKIP)
+
+
+def _conflict_as_edit(proposal: Proposal, direction: str) -> Proposal:
+    """Recast a resolved conflict as an ``edit`` flowing the winning direction."""
+    return Proposal(
+        kind="edit",
+        role=proposal.role,
+        direction=direction,
+        slide_id=proposal.slide_id,
+    )
+
+
+def _apply_conflict(
+    proposal: Proposal,
+    decisions: dict[int, str] | None,
+    de_state: FileState,
+    en_state: FileState,
+    de_content: dict[tuple[str, str], str],
+    en_content: dict[tuple[str, str], str],
+    judge: SyncJudge | None,
+    result: ApplyResult,
+) -> None:
+    """Resolve a conflict per its decision, or defer it.
+
+    ``de-wins`` / ``en-wins`` propagate the winning side as an ordinary edit
+    (the judge rewrites the losing side to match); any other decision defers.
+    """
+    decision = _conflict_decision(decisions, proposal)
+    if decision == DECISION_DE_WINS:
+        _apply_edit(
+            _conflict_as_edit(proposal, "de->en"),
+            de_state,
+            en_state,
+            de_content,
+            en_content,
+            judge,
+            result,
+        )
+    elif decision == DECISION_EN_WINS:
+        _apply_edit(
+            _conflict_as_edit(proposal, "en->de"),
+            de_state,
+            en_state,
+            de_content,
+            en_content,
+            judge,
+            result,
+        )
+    else:
+        result.deferred += 1
 
 
 def _pass_is_clean(plan: SyncPlan, result: ApplyResult) -> bool:
@@ -699,13 +806,14 @@ def _group_reorder(cells: list[RawCell], source_order: list[str]) -> list[RawCel
 # ---------------------------------------------------------------------------
 
 
-def _content_index(path: Path, lang: str) -> dict[tuple[str, str], str]:
+def content_index(path: Path, lang: str) -> dict[tuple[str, str], str]:
     """Map ``(slide_id, role) -> parser-stripped content`` for one deck.
 
     Filtered to ``lang`` so the apply-side lookup matches exactly what the
     Phase 1 classifier (``ordered_sync_cells``) extracted — the same
     role+language predicate, so the judge can never be fed an
-    other-language cell that happens to share a key.
+    other-language cell that happens to share a key. Public so the interactive
+    walker can render each proposal's current source/target bodies.
     """
     index: dict[tuple[str, str], str] = {}
     for cell in parse_cells(path.read_text(encoding="utf-8")):
