@@ -146,9 +146,12 @@ def _maybe_start_mitmproxy_transport(mode: str | None, jobs_db_path: Path):
     httpx/httpcore is therefore never patched — the structural fix for the
     issue #143 connection-pool deadlock.
 
-    Minimal Direct-mode wiring for the Phase-0 proof: one shared proxy and one
-    shared cassette (no per-(topic,language,kind) routing yet) and no Docker
-    support — both are later phases per the staged plan.
+    One shared proxy serves the whole build; each worker tags its requests
+    with the destination cassette (P2), so the addon demuxes them into
+    per-(topic,language,kind) staging files folded into their canonicals
+    after the proxy stops (see ``Course.merge_mitmproxy_cassette_staging``).
+    The ``transport.http-cassette.yaml`` here is only the catch-all for any
+    untagged traffic. Direct-mode only; Docker support is a later phase.
     """
     import os as _os
 
@@ -1547,6 +1550,17 @@ async def main_build(
                 mitm_manager.stop()
             except Exception as e:
                 logger.error(f"Failed to stop mitmproxy: {e}", exc_info=True)
+            # The addon wrote per-(topic,language,kind) staging cassettes as it
+            # recorded; now that the proxy has flushed and exited, mark this
+            # build's staging files complete and fold them into their canonical
+            # cassettes (issue #165 P2). Reaching here is the build-completion
+            # signal, so partial recordings from a force-killed build (which
+            # never reaches this point) stay markerless and are discarded by the
+            # next build's pre-build sweep.
+            try:
+                course.merge_mitmproxy_cassette_staging(mitm_manager.build_id)
+            except Exception as e:
+                logger.error(f"Failed to merge mitmproxy cassettes: {e}", exc_info=True)
 
     return summary
 

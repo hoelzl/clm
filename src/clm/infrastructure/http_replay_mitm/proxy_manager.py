@@ -20,6 +20,7 @@ import socket
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 from types import TracebackType
 
@@ -71,6 +72,11 @@ class MitmproxyManager:
         # makes the prototype easier to reason about.
         self.confdir = Path(confdir) if confdir is not None else None
         self.extra_args = extra_args or []
+        # Per-build id: the addon names its staging files
+        # ``<cassette>.staging-mitm-<build_id>`` so the host can mark
+        # exactly this build's recordings complete after the proxy stops
+        # (see ``Course.merge_mitmproxy_cassette_staging``).
+        self.build_id = uuid.uuid4().hex
         self._process: subprocess.Popen | None = None
         self._log_file = None
 
@@ -148,6 +154,8 @@ class MitmproxyManager:
             f"clm_cassette_path={self.cassette_path}",
             "--set",
             f"clm_mode={self.mode}",
+            "--set",
+            f"clm_build_id={self.build_id}",
             # Quiet flow logging — the addon emits its own structured logs.
             "--set",
             "termlog_verbosity=warn",

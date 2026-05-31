@@ -53,7 +53,29 @@ doctor/strip/merge tooling keep working unchanged.
   vcrpy-produced one; `cassette doctor` and `strip_cassette_hosts.py` operate on
   it unchanged.
 
-## P2 — request→cassette routing (concurrent multi-topic)  ·  ~2–3 d  ·  risk: medium
+## P2 — request→cassette routing (concurrent multi-topic)  ·  ~2–3 d  ·  risk: medium  ·  **DONE**
+
+**Status (done):** each worker injects a lightweight tag bootstrap (patch
+httpx `Client`/`AsyncClient.send` to add `X-CLM-Cassette: <canonical>`)
+instead of the vcrpy bootstrap under the transport; the tag is
+`payload.http_replay_cassette_name` resolved exactly like the vcrpy path,
+so it **already carries the #159 split-deck base-cassette fallback** (replay
+→ fallback-aware name, record → strict name) and equals the host
+merge-discovery canonical by construction. The single addon demuxes flows
+by tag into one `<cassette>.staging-mitm-<build_id>` per canonical (vcrpy
+YAML), strips the tag before recording/forwarding, and routes untagged
+traffic to a catch-all so strict replay never escapes. The **host** writes
+the `.completed` marker for this build's staging in the build `finally`
+(`Course.merge_mitmproxy_cassette_staging(build_id)`) — the reliable
+build-completion signal (mitmproxy's `done` hook does not fire on a Windows
+`CTRL_BREAK`) — then folds via the existing `merge_staging_into_canonical`.
+A force-killed build never reaches the marker step, so its staging stays
+markerless and the next pre-build sweep discards it (issue #115 semantics,
+at build-end granularity). Gate proven: a routing smoke test (two tagged
++ one untagged request → correct per-cassette staging, tag stripped, no
+cross-contamination, catch-all, real host marker+merge round-trip) plus
+unit tests for tag injection/strip, tag resolution, and the host merge
+(folds markered, leaves markerless, LF endings).
 
 The Phase-0 proof used **one shared cassette**; production needs each request
 mapped to the correct per-(topic, language, kind) cassette under concurrency.

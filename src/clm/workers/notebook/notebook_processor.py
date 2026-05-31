@@ -697,6 +697,61 @@ if _clm_trace_dir:
 """
 
 
+# Out-of-process transport (issue #165, P2). Injected into the kernel
+# *instead of* the heavy vcrpy bootstrap when
+# ``CLM_HTTP_REPLAY_TRANSPORT=mitmproxy``. It does not patch httpcore or
+# enter any cassette context — it only tags every outgoing httpx request
+# with the destination cassette path so the single shared mitmproxy can
+# demux flows to the correct per-(topic,language,kind) cassette. The proxy
+# strips the ``X-CLM-Cassette`` header before recording or forwarding.
+# The patch is on the httpx ``Client``/``AsyncClient`` *classes*, so it
+# covers clients created before or after this cell (openai/langchain both
+# route through ``Client.send``). One tag per kernel (fresh kernel per
+# notebook), captured in the closure — the same lifetime the vcrpy
+# bootstrap relies on. No literal ``{}`` in the body so ``str.format`` only
+# substitutes ``{tag!r}``.
+_HTTP_REPLAY_TAG_BOOTSTRAP_TEMPLATE = """\
+# CLM HTTP REPLAY TAG BOOTSTRAP - DO NOT EDIT
+import httpx as _clm_httpx
+_CLM_CASSETTE_TAG = {tag!r}
+if not getattr(_clm_httpx.Client.send, "_clm_tagged", False):
+    _clm_orig_send = _clm_httpx.Client.send
+    def _clm_tagged_send(self, request, *args, **kwargs):
+        request.headers["x-clm-cassette"] = _CLM_CASSETTE_TAG
+        return _clm_orig_send(self, request, *args, **kwargs)
+    _clm_tagged_send._clm_tagged = True
+    _clm_httpx.Client.send = _clm_tagged_send
+if not getattr(_clm_httpx.AsyncClient.send, "_clm_tagged", False):
+    _clm_orig_asend = _clm_httpx.AsyncClient.send
+    async def _clm_tagged_asend(self, request, *args, **kwargs):
+        request.headers["x-clm-cassette"] = _CLM_CASSETTE_TAG
+        return await _clm_orig_asend(self, request, *args, **kwargs)
+    _clm_tagged_asend._clm_tagged = True
+    _clm_httpx.AsyncClient.send = _clm_tagged_asend
+"""
+
+
+def _inject_http_replay_tag_bootstrap(nb: NotebookNode, tag: str) -> None:
+    """Prepend the mitmproxy cassette-routing tag cell to ``nb``.
+
+    ``tag`` is the absolute canonical cassette path the host-side merge
+    will fold into. The cell carries the same ``clm_injected`` marker as
+    the vcrpy bootstrap so :func:`_strip_injected_cells` removes it before
+    the notebook reaches HTML / the execution cache.
+    """
+    from nbformat.v4 import new_code_cell
+
+    source = _HTTP_REPLAY_TAG_BOOTSTRAP_TEMPLATE.format(tag=tag)
+    cell = new_code_cell(
+        source=source,
+        metadata={
+            "tags": ["del"],
+            "clm_injected": _HTTP_REPLAY_BOOTSTRAP_MARKER,
+        },
+    )
+    nb["cells"].insert(0, cell)
+
+
 def _inject_http_replay_bootstrap(
     nb: NotebookNode,
     cassette_path: str,
@@ -1983,6 +2038,38 @@ class NotebookProcessor:
         paths: CassettePaths = resolve_paths(target_dir, cassette_name)
         return paths
 
+    def _resolve_mitmproxy_tag(
+        self, payload: NotebookPayload, source_dir: Path | None
+    ) -> str | None:
+        """Resolve the ``X-CLM-Cassette`` routing tag for the mitmproxy transport.
+
+        The tag is the absolute canonical cassette path this notebook's
+        traffic belongs to. It is resolved exactly like the vcrpy path's
+        :meth:`_resolve_cassette_paths` (same ``payload.http_replay_cassette_name``
+        — which already carries the split-deck base-cassette fallback for
+        ``replay`` and the strict language-specific name for record modes,
+        issue #159 — and the same ``resolve_paths`` canonical computation),
+        so the proxy's per-target staging file lands beside the very
+        cassette the host-side merge will fold it into. Returns ``None``
+        when the topic did not opt into a replay-capable mode or no
+        cassette / writable target dir resolves.
+        """
+        mode = payload.http_replay_mode
+        if not mode or mode == "disabled" or mode not in _HTTP_REPLAY_MODE_TO_VCR_MODE:
+            return None
+        cassette_name = payload.http_replay_cassette_name
+        if not cassette_name:
+            return None
+        if source_dir is not None:
+            target_dir: Path = source_dir
+        elif payload.source_topic_dir:
+            target_dir = Path(payload.source_topic_dir)
+        else:
+            return None
+        from .http_replay_cassette import resolve_paths
+
+        return str(resolve_paths(target_dir, cassette_name).canonical)
+
     def _persist_recorded_cassette(
         self,
         cid: str,
@@ -2061,13 +2148,32 @@ class NotebookProcessor:
         processed_nb: NotebookNode,
         payload: NotebookPayload,
         paths: "CassettePaths | None",
+        source_dir: Path | None = None,
     ) -> bool:
-        """Inject the vcrpy bootstrap cell when the topic opted into replay.
+        """Inject the http-replay bootstrap cell when the topic opted in.
 
-        ``paths`` is the resolved canonical/staging pair from
-        :meth:`_resolve_cassette_paths`. Returns ``True`` when a cell was
-        injected so the caller can decide whether to run the strip pass.
+        Under the out-of-process transport (``CLM_HTTP_REPLAY_TRANSPORT=
+        mitmproxy``) this injects the lightweight cassette-routing *tag*
+        bootstrap (which patches httpx to tag each request with its
+        destination cassette so the shared proxy demuxes correctly); the
+        kernel's httpcore is never patched. Otherwise it injects the
+        in-kernel vcrpy bootstrap using ``paths`` (the resolved
+        canonical/staging pair from :meth:`_resolve_cassette_paths`).
+        Returns ``True`` when a cell was injected so the caller runs the
+        strip pass.
         """
+        if os.environ.get("CLM_HTTP_REPLAY_TRANSPORT") == "mitmproxy":
+            tag = self._resolve_mitmproxy_tag(payload, source_dir)
+            if tag is None:
+                return False
+            _inject_http_replay_tag_bootstrap(processed_nb, tag)
+            logger.debug(
+                f"{payload.correlation_id}: Injected http-replay tag bootstrap "
+                f"(mitmproxy transport, cassette='{tag}') for "
+                f"'{payload.input_file_name}'"
+            )
+            return True
+
         if paths is None:
             return False
         mode = payload.http_replay_mode
@@ -2137,7 +2243,7 @@ class NotebookProcessor:
 
                     seed_staging_from_canonical(cassette_paths)
                 replay_injected = self._maybe_inject_http_replay(
-                    processed_nb, payload, cassette_paths
+                    processed_nb, payload, cassette_paths, source_dir
                 )
                 execution_succeeded = False
                 try:

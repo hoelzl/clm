@@ -877,6 +877,65 @@ def test_sweep_orphan_staging_files_no_orphans_present(tmp_path):
     assert swept == 0
 
 
+def test_merge_mitmproxy_cassette_staging_folds_markered_leaves_markerless(tmp_path):
+    """Post-build mitmproxy merge folds markered staging, leaves markerless.
+
+    The out-of-process transport (issue #165 P2) writes per-cassette
+    ``*.staging-mitm-*`` files beside each canonical with a ``.completed``
+    marker on clean shutdown. ``Course.merge_mitmproxy_cassette_staging``
+    folds the markered ones (build finished cleanly) and leaves markerless
+    ones (mitmdump force-killed) for the next pre-build sweep to discard —
+    the same partial-recording protection the vcrpy workers get.
+    """
+    pytest.importorskip("vcr")
+    pytest.importorskip("filelock")
+
+    topic_dir = _make_topic_dir(tmp_path, "module_100_live", "topic_010_intro")
+    canonical = topic_dir / "slides_intro.http-cassette.yaml"
+    markered = topic_dir / "slides_intro.http-cassette.yaml.staging-mitm-buildA"
+    markerless = topic_dir / "slides_intro.http-cassette.yaml.staging-mitm-buildB"
+    _write_orphan_cassette(markered, uri="http://example/recorded", body="R1")
+    _write_orphan_cassette(markerless, uri="http://example/partial", body="P1")
+    (markered.parent / f"{markered.name}.completed").write_text("{}\n", encoding="utf-8")
+
+    sections_xml = """
+    <sections>
+      <section http-replay="yes">
+        <name><de>S</de><en>S</en></name>
+        <topics><topic>intro</topic></topics>
+      </section>
+    </sections>
+    """
+    course = _build_course(tmp_path, sections_xml)
+
+    folded = course.merge_mitmproxy_cassette_staging()
+
+    assert folded == 1
+    assert canonical.exists()
+    content = canonical.read_text(encoding="utf-8")
+    assert "http://example/recorded" in content  # markered folded
+    assert "http://example/partial" not in content  # markerless NOT folded
+    assert not markered.exists()  # consumed + marker deleted
+    assert markerless.exists()  # left for the next pre-build sweep
+    # Canonical cassette is written with LF endings (no CRLF flapping).
+    assert b"\r\n" not in canonical.read_bytes()
+
+
+def test_merge_mitmproxy_cassette_staging_no_replay_topics(tmp_path):
+    """No http-replay topics → merge is a no-op and never imports vcr/filelock."""
+    _make_topic_dir(tmp_path, "module_100_live", "topic_010_intro")
+    sections_xml = """
+    <sections>
+      <section>
+        <name><de>S</de><en>S</en></name>
+        <topics><topic>intro</topic></topics>
+      </section>
+    </sections>
+    """
+    course = _build_course(tmp_path, sections_xml)
+    assert course.merge_mitmproxy_cassette_staging() == 0
+
+
 # ---------------------------------------------------------------------------
 # output_root re-roots spec ``<output-targets>``
 #

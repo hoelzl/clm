@@ -87,15 +87,26 @@ def cassette_path(tmp_path: Path) -> Path:
     return tmp_path / "smoke.http-cassette.yaml"
 
 
-def _get_via_proxy(url: str, proxy_url: str) -> requests.Response:
+def _get_via_proxy(url: str, proxy_url: str, tag: str | None = None) -> requests.Response:
+    headers = {"X-CLM-Cassette": tag} if tag is not None else None
     return requests.get(
         url,
+        headers=headers,
         proxies={"http": proxy_url, "https": proxy_url},
         # mitmproxy intercepts HTTP cleanly; HTTPS would need CA trust
         # set up. The smoke test stays on HTTP for simplicity — see the
         # design doc for the HTTPS story.
         timeout=10.0,
     )
+
+
+def _staging_files(canonical: Path) -> list[Path]:
+    """Per-build staging files beside ``canonical`` (markers excluded)."""
+    return [
+        p
+        for p in canonical.parent.glob(f"{canonical.name}.staging-mitm-*")
+        if not p.name.endswith(".completed")
+    ]
 
 
 def test_proxy_starts_and_routes_traffic(
@@ -168,6 +179,69 @@ def test_strict_replay_miss_returns_599(
     assert _CountingHandler.upstream_hits == 1, (
         "strict-replay miss must not fall through to upstream"
     )
+
+
+def test_routing_demuxes_tagged_requests_to_per_cassette_staging(
+    upstream_server: str, cassette_path: Path, tmp_path: Path
+) -> None:
+    """P2: tagged requests route to per-cassette staging; untagged → catch-all.
+
+    Each request carries an ``X-CLM-Cassette`` header naming its
+    destination canonical cassette. The addon demuxes flows into one
+    ``*.staging-mitm-*`` file per canonical (with a ``.completed`` marker on
+    clean shutdown), strips the tag header before recording, and routes
+    untagged traffic to the shared catch-all — all without cross-contamination.
+    """
+    confdir = tmp_path / "mitm-confdir"
+    cass_a = tmp_path / "topicA" / "_cassettes" / "slidesA.http-cassette.yaml"
+    cass_b = tmp_path / "topicB" / "_cassettes" / "slidesB.http-cassette.yaml"
+
+    with MitmproxyManager(
+        cassette_path=cassette_path, mode="new-episodes", confdir=confdir
+    ) as proxy:
+        ra = _get_via_proxy(f"{upstream_server}/a", proxy.proxy_url, tag=str(cass_a))
+        rb = _get_via_proxy(f"{upstream_server}/b", proxy.proxy_url, tag=str(cass_b))
+        rc = _get_via_proxy(f"{upstream_server}/c", proxy.proxy_url)  # untagged
+
+    assert ra.status_code == rb.status_code == rc.status_code == 200
+    assert _CountingHandler.upstream_hits == 3
+
+    # Each tagged cassette got exactly one staging file with its own request.
+    staging_a = _staging_files(cass_a)
+    staging_b = _staging_files(cass_b)
+    assert len(staging_a) == 1, staging_a
+    assert len(staging_b) == 1, staging_b
+
+    text_a = staging_a[0].read_text(encoding="utf-8")
+    text_b = staging_b[0].read_text(encoding="utf-8")
+    assert "/a" in text_a and "/b" not in text_a  # no cross-contamination
+    assert "/b" in text_b and "/a" not in text_b
+    # The routing tag header is stripped before recording.
+    assert "x-clm-cassette" not in text_a.lower()
+    assert "x-clm-cassette" not in text_b.lower()
+
+    # Untagged traffic landed in the catch-all, not in any tagged cassette.
+    assert cassette_path.exists()
+    assert "/c" in cassette_path.read_text(encoding="utf-8")
+    assert "/c" not in text_a and "/c" not in text_b
+
+    # The host writes the .completed marker after the proxy stops and folds
+    # the staging into its canonical (issue #165 P2). Drive that real merge
+    # path against the proxy-written staging and assert the interaction lands
+    # in the canonical cassette.
+    from clm.workers.notebook.http_replay_cassette import (
+        CassettePaths,
+        merge_staging_into_canonical,
+        write_completion_marker,
+    )
+
+    write_completion_marker(CassettePaths(canonical=cass_a, staging=staging_a[0]))
+    folded = merge_staging_into_canonical(CassettePaths(canonical=cass_a, staging=staging_a[0]))
+    assert folded == 1
+    assert cass_a.exists()
+    canonical_text = cass_a.read_text(encoding="utf-8")
+    assert "/a" in canonical_text and "/b" not in canonical_text
+    assert not staging_a[0].exists()  # folded + consumed
 
 
 def test_env_vars_exposes_proxy_url(cassette_path: Path, tmp_path: Path) -> None:
