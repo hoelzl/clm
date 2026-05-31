@@ -219,18 +219,46 @@ class TestMove:
         assert plan.in_sync_count == 3
 
 
-class TestCollision:
-    def test_duplicate_id_in_one_deck_is_error(self):
+class TestDuplicateId:
+    def test_copy_paste_is_detected_and_renamed(self):
+        # The watermark identifies the original (matches the baseline hash);
+        # the other duplicate is a copy → a rename proposal, not an error.
         plan = classify(
-            [cur(0, "dup", "h0"), cur(1, "dup", "h1")],
+            [cur(0, "dup", "h0"), cur(1, "dup", "hNEW")],  # original h0 + edited copy
+            [cur(0, "dup", "e0")],
+            [base(0, "dup", "h0")],
+            [base(0, "dup", "e0")],
+        )
+        assert not plan.has_errors
+        renames = [p for p in plan.proposals if p.kind == "rename"]
+        assert len(renames) == 1
+        assert renames[0].slide_id == "dup"
+        assert renames[0].direction == "de->en"
+        assert renames[0].content_hash == "hNEW"  # the copy, not the original
+        assert plan.in_sync_count == 1  # the original pairs normally
+
+    def test_ambiguous_duplicate_both_drifted_is_error(self):
+        # Neither duplicate matches the baseline → can't tell which is original.
+        plan = classify(
+            [cur(0, "dup", "hA"), cur(1, "dup", "hB")],
             [cur(0, "dup", "e0")],
             [base(0, "dup", "h0")],
             [base(0, "dup", "e0")],
         )
         assert plan.has_errors
-        errors = [i for i in plan.issues if i.severity == "error"]
-        assert len(errors) == 1
-        assert errors[0].slide_id == "dup"
+        assert plan.count("rename") == 0
+
+    def test_duplicate_with_no_baseline_is_error(self):
+        # Cold start: no baseline to identify the original → error, not a guess.
+        plan = classify(
+            [cur(0, "dup", "h0"), cur(1, "dup", "h1")],
+            [cur(0, "dup", "e0")],
+            None,
+            None,
+            source="none",
+        )
+        assert plan.has_errors
+        assert plan.count("rename") == 0
 
 
 class TestColdStart:

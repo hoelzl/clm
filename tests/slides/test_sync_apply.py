@@ -823,3 +823,231 @@ class TestBlankSeparatedDecks:
             _bcell("en", "# ## B", "b"),
         )
         assert en_path.read_text(encoding="utf-8") == expected
+
+
+# ---------------------------------------------------------------------------
+# apply_plan — rename (copy-pasted duplicate id)
+# ---------------------------------------------------------------------------
+
+
+class TestApplyRename:
+    def test_copy_paste_is_renamed_with_counterpart(self, tmp_path: Path):
+        de_path, en_path = _write_pair(
+            tmp_path,
+            _slide("de", "intro", "# ## Einleitung"),
+            _slide("en", "intro", "# ## Introduction"),
+        )
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_watermark(cache, de_path, en_path)
+            # Author copy-pastes the intro slide (keeping its id) and edits the
+            # copy — two cells now carry slide_id="intro".
+            de_path.write_text(
+                _slide("de", "intro", "# ## Einleitung")
+                + _slide("de", "intro", "# ## Neues Kapitel"),
+                encoding="utf-8",
+            )
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            assert plan.count("rename") == 1
+            assert not plan.has_errors
+            translator = StaticSlideTranslator(mapping={"# ## Neues Kapitel": "# ## New Chapter"})
+            result = apply_plan(plan, judge=None, translator=translator, watermark_cache=cache)
+            plan2 = build_sync_plan(de_path, en_path, watermark_cache=cache)
+        finally:
+            cache.close()
+
+        assert result.applied_rename == 1
+        # Original intro untouched; the copy re-minted on both decks.
+        de_intro = _cell_for(de_path, "intro")
+        assert de_intro is not None and "Einleitung" in de_intro.content
+        de_copy = _cell_for(de_path, "new-chapter")
+        en_copy = _cell_for(en_path, "new-chapter")
+        assert de_copy is not None and "Neues Kapitel" in de_copy.content
+        assert en_copy is not None and "New Chapter" in en_copy.content
+        assert _slide_order(en_path) == ["intro", "new-chapter"]
+        assert plan2.is_noop  # the duplicate is resolved, baselined, idempotent
+
+    def test_copy_without_translator_is_deferred(self, tmp_path: Path):
+        de_path, en_path = _write_pair(
+            tmp_path,
+            _slide("de", "intro", "# ## Einleitung"),
+            _slide("en", "intro", "# ## Introduction"),
+        )
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_watermark(cache, de_path, en_path)
+            de_path.write_text(
+                _slide("de", "intro", "# ## Einleitung")
+                + _slide("de", "intro", "# ## Neues Kapitel"),
+                encoding="utf-8",
+            )
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            result = apply_plan(plan, judge=None, translator=None, watermark_cache=cache)
+        finally:
+            cache.close()
+
+        assert result.applied_rename == 0
+        assert result.deferred >= 1
+        assert result.watermark_recorded is False
+
+    def test_copied_group_with_identical_companion_is_resolved(self, tmp_path: Path):
+        # Copy a slide GROUP (slide + voiceover), edit the copied slide but leave
+        # the copied voiceover identical to the original. The whole group must be
+        # re-minted — companion included — leaving no duplicate.
+        de = _slide("de", "intro", "# ## Einleitung") + _vo("de", "intro", "# Sprechertext")
+        en = _slide("en", "intro", "# ## Introduction") + _vo("en", "intro", "# Narration")
+        de_path, en_path = _write_pair(tmp_path, de, en)
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_watermark(cache, de_path, en_path)
+            de_path.write_text(
+                _slide("de", "intro", "# ## Einleitung")
+                + _vo("de", "intro", "# Sprechertext")
+                + _slide("de", "intro", "# ## Neues Kapitel")
+                + _vo("de", "intro", "# Sprechertext"),  # copy companion = identical
+                encoding="utf-8",
+            )
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            assert not plan.has_errors
+            translator = StaticSlideTranslator(
+                mapping={
+                    "# ## Neues Kapitel": "# ## New Chapter",
+                    "# Sprechertext": "# Narration",
+                }
+            )
+            result = apply_plan(plan, judge=None, translator=translator, watermark_cache=cache)
+            plan2 = build_sync_plan(de_path, en_path, watermark_cache=cache)
+        finally:
+            cache.close()
+
+        assert not result.has_errors
+        for path in (de_path, en_path):
+            ids = [
+                (c.metadata.slide_id, c.tags[0])
+                for c in parse_cells(path.read_text(encoding="utf-8"))
+                if c.metadata.slide_id
+            ]
+            # No duplicate "intro"; the copy group is its own slide+companion.
+            assert ids == [
+                ("intro", "slide"),
+                ("intro", "voiceover"),
+                ("new-chapter", "slide"),
+                ("new-chapter", "voiceover"),
+            ]
+        assert plan2.is_noop  # idempotent — the duplicate is gone, not re-detected
+
+    def test_standalone_companion_duplicate_is_an_error(self, tmp_path: Path):
+        # Only the voiceover is copy-pasted (the slide is NOT duplicated). There
+        # is no copied slide to anchor a new id, so it must error, not corrupt.
+        de = _slide("de", "intro", "# ## Einleitung") + _vo("de", "intro", "# Sprechertext")
+        en = _slide("en", "intro", "# ## Introduction") + _vo("en", "intro", "# Narration")
+        de_path, en_path = _write_pair(tmp_path, de, en)
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_watermark(cache, de_path, en_path)
+            de_path.write_text(
+                _slide("de", "intro", "# ## Einleitung")
+                + _vo("de", "intro", "# Sprechertext")
+                + _vo("de", "intro", "# Sprechertext zwei"),  # second voiceover, same id
+                encoding="utf-8",
+            )
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            translator = StaticSlideTranslator(default="# whatever")
+            result = apply_plan(plan, judge=None, translator=translator, watermark_cache=cache)
+        finally:
+            cache.close()
+
+        assert plan.has_errors
+        assert plan.count("rename") == 0
+        assert result.applied_rename == 0
+        assert result.watermark_recorded is False
+
+    def test_identical_slide_edited_companion_remints_the_copy_not_original(self, tmp_path: Path):
+        # Slide headings byte-identical, but the copied companion is edited. The
+        # COPY (by position) must be re-minted, leaving the ORIGINAL's id and its
+        # cross-language pairing intact.
+        de = _slide("de", "s", "# ## Titel") + _vo("de", "s", "# VO eins")
+        en = _slide("en", "s", "# ## Title") + _vo("en", "s", "# VO one")
+        de_path, en_path = _write_pair(tmp_path, de, en)
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_watermark(cache, de_path, en_path)
+            de_path.write_text(
+                _slide("de", "s", "# ## Titel")
+                + _vo("de", "s", "# VO eins")
+                + _slide("de", "s", "# ## Titel")  # identical heading
+                + _vo("de", "s", "# VO zwei"),  # edited companion
+                encoding="utf-8",
+            )
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            translator = StaticSlideTranslator(
+                mapping={"# ## Titel": "# ## Title", "# VO zwei": "# VO two"}
+            )
+            result = apply_plan(plan, judge=None, translator=translator, watermark_cache=cache)
+        finally:
+            cache.close()
+
+        assert not result.has_errors
+        # The ORIGINAL 's' keeps its companion on BOTH decks (EN pairing intact).
+        assert _cell_for(de_path, "s", "voiceover").content.strip() == "# VO eins"
+        assert _cell_for(en_path, "s", "voiceover").content.strip() == "# VO one"
+        # The copy got a fresh id and carries the edited companion.
+        assert "VO zwei" in _cell_for(de_path, "title", "voiceover").content
+        assert "VO two" in _cell_for(en_path, "title", "voiceover").content
+
+    def test_unidentifiable_duplicate_errors_without_destructive_remove(self, tmp_path: Path):
+        # Two 'a' slides, BOTH edited away from the baseline → original cannot be
+        # identified → error. Crucially, the errored key must NOT re-enter the
+        # diff as a phantom `remove` that deletes the EN cell.
+        de = _slide("de", "a", "# ## A") + _slide("de", "b", "# ## B")
+        en = _slide("en", "a", "# ## A") + _slide("en", "b", "# ## B")
+        de_path, en_path = _write_pair(tmp_path, de, en)
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_watermark(cache, de_path, en_path)
+            de_path.write_text(
+                _slide("de", "a", "# ## A one")
+                + _slide("de", "a", "# ## A two")
+                + _slide("de", "b", "# ## B"),
+                encoding="utf-8",
+            )
+            before_en = en_path.read_text(encoding="utf-8")
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            translator = StaticSlideTranslator(default="# ## X")
+            result = apply_plan(plan, judge=None, translator=translator, watermark_cache=cache)
+        finally:
+            cache.close()
+
+        assert plan.has_errors
+        assert plan.count("remove") == 0  # no phantom remove for the errored 'a'
+        assert result.applied_remove == 0
+        assert result.watermark_recorded is False
+        assert en_path.read_text(encoding="utf-8") == before_en  # EN untouched
+
+    def test_malformed_copy_companion_is_safe(self, tmp_path: Path):
+        # A copied group whose companion carries a DIFFERENT id than its slide.
+        # The slide renames, but the mismatched companion is left to normal
+        # pairing (an id-carrying add -> deferred), so the watermark cannot
+        # advance over the divergence.
+        de = _slide("de", "intro", "# ## Einleitung") + _vo("de", "intro", "# Sprechertext")
+        en = _slide("en", "intro", "# ## Introduction") + _vo("en", "intro", "# Narration")
+        de_path, en_path = _write_pair(tmp_path, de, en)
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_watermark(cache, de_path, en_path)
+            de_path.write_text(
+                _slide("de", "intro", "# ## Einleitung")
+                + _vo("de", "intro", "# Sprechertext")
+                + _slide("de", "intro", "# ## Neues Kapitel")
+                + _vo("de", "weird", "# Sprechertext copy"),  # companion id != slide id
+                encoding="utf-8",
+            )
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            translator = StaticSlideTranslator(default="# ## X")
+            result = apply_plan(plan, judge=None, translator=translator, watermark_cache=cache)
+        finally:
+            cache.close()
+
+        # Not silently baselined: the mismatched companion forces a deferral.
+        assert result.deferred >= 1
+        assert result.watermark_recorded is False

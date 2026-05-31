@@ -62,6 +62,10 @@ _ROLE_TAGS = {
     "notes": "notes",
 }
 
+# Roles that lead a slide group; narrative roles (voiceover/notes) belong to the
+# most recent slide group rather than starting their own.
+_SLIDE_ROLES = {"slide", "subslide"}
+
 
 # ---------------------------------------------------------------------------
 # Public types
@@ -93,11 +97,16 @@ class CurrentCell:
 class Proposal:
     """One cross-language change the sync would make.
 
-    ``kind`` is ``add`` / ``edit`` / ``move`` / ``remove`` / ``conflict``.
-    ``direction`` is ``"de->en"`` / ``"en->de"`` (the side that drifted is the
-    source), or ``None`` for a conflict. ``slide_id`` is ``None`` for an
-    id-less add. Positions are 0-based indices among sync-relevant cells and
-    are best-effort context for later phases (anchoring, walker rendering).
+    ``kind`` is ``add`` / ``edit`` / ``move`` / ``remove`` / ``conflict`` /
+    ``rename``. ``direction`` is ``"de->en"`` / ``"en->de"`` (the side that
+    drifted is the source), or ``None`` for a conflict. ``slide_id`` is ``None``
+    for an id-less add, and the *duplicated* id for a ``rename``. Positions are
+    0-based indices among sync-relevant cells and are best-effort context for
+    later phases (anchoring, walker rendering).
+
+    ``content_hash`` is set on a ``rename`` proposal: it identifies which of the
+    duplicate-id cells is the copy (the apply re-mints the cell matching this
+    hash, leaving the original alone).
     """
 
     kind: str
@@ -105,11 +114,12 @@ class Proposal:
     direction: str | None
     slide_id: str | None
     reason: str = ""
-    translation_pending: bool = False  # True for ``add`` (content not yet made)
+    translation_pending: bool = False  # True for ``add`` / ``rename`` (content not yet made)
     source_position: int | None = None
     target_position: int | None = None
     old_position: int | None = None
     new_position: int | None = None
+    content_hash: str | None = None  # the copy's hash, for ``rename``
 
 
 @dataclass
@@ -286,26 +296,139 @@ def _baseline_from_git_head(path: Path) -> list[BaselineCell] | None:
 
 def _index_by_key(
     cells: list[CurrentCell],
-) -> tuple[dict[tuple[str, str], CurrentCell], list[CurrentCell], set[tuple[str, str]]]:
-    """Index id-carrying cells by ``(slide_id, role)``.
+) -> tuple[dict[tuple[str, str], list[CurrentCell]], list[CurrentCell]]:
+    """Index id-carrying cells by ``(slide_id, role)``, keeping duplicates.
 
-    Returns ``(by_key, idless, collisions)``. ``collisions`` holds keys that
-    appear more than once (duplicate id in one deck) — those keys are excluded
-    from normal pairing and surfaced as an error issue by the caller.
+    Returns ``(by_key, idless)`` where ``by_key`` maps each key to *all* cells
+    carrying it (a list of length > 1 is a duplicate-id collision, resolved by
+    :func:`_resolve_duplicates`).
     """
-    by_key: dict[tuple[str, str], CurrentCell] = {}
-    collisions: set[tuple[str, str]] = set()
+    by_key: dict[tuple[str, str], list[CurrentCell]] = {}
     idless: list[CurrentCell] = []
     for cell in cells:
         if cell.slide_id is None:
             idless.append(cell)
             continue
-        key = (cell.slide_id, cell.role)
-        if key in by_key:
-            collisions.add(key)
+        by_key.setdefault((cell.slide_id, cell.role), []).append(cell)
+    return by_key, idless
+
+
+def _slide_groups(cells: list[CurrentCell]) -> list[list[CurrentCell]]:
+    """Split ordered cells into slide groups (slide + trailing companions).
+
+    Each group's first cell is a slide/subslide; the rest are its narrative
+    companions. A companion that precedes any slide forms its own one-cell
+    group (an orphan, never a copied-group member).
+    """
+    groups: list[list[CurrentCell]] = []
+    current: list[CurrentCell] | None = None
+    for cell in cells:
+        if cell.role in _SLIDE_ROLES:
+            current = [cell]
+            groups.append(current)
+        elif current is not None:
+            current.append(cell)
+        else:
+            groups.append([cell])  # orphan companion before the first slide
+            current = None
+    return groups
+
+
+def _resolve_duplicates(
+    current: list[CurrentCell],
+    by_key: dict[tuple[str, str], list[CurrentCell]],
+    base_index: dict[tuple[str, str], BaselineCell],
+    direction: str,
+    plan: SyncPlan,
+) -> tuple[dict[tuple[str, str], CurrentCell], set[tuple[str, str]]]:
+    """Collapse duplicate-id cells to one original each, renaming the copies.
+
+    Copy-pasting a slide produces two slide *groups* sharing an id (the slide
+    cell and its narrative companions). Resolution is done at the **group**
+    level: when the watermark identifies the original group (its slide matches
+    the baseline), the other groups are copies — a single ``rename`` for the
+    copy's slide cell re-mints the whole group (the apply re-binds the
+    companions). When the original cannot be identified, or a duplicate is *not*
+    explained by a copied slide group (e.g. a lone duplicated companion), it is
+    surfaced as an error and left for manual resolution — never guessed.
+    """
+    excluded: set[int] = set()  # id() of copy-group cells sharing the slide's id
+    errored_ids: set[str] = set()
+
+    groups_by_slide_id: dict[str, list[list[CurrentCell]]] = {}
+    for group in _slide_groups(current):
+        head = group[0]
+        if head.role in _SLIDE_ROLES and head.slide_id is not None:
+            groups_by_slide_id.setdefault(head.slide_id, []).append(group)
+
+    for sid, group_list in groups_by_slide_id.items():
+        if len(group_list) < 2:
             continue
-        by_key[key] = cell
-    return by_key, idless, collisions
+        slide_role = group_list[0][0].role
+        base = base_index.get((sid, slide_role))
+        candidates = [
+            g for g in group_list if base is not None and g[0].content_hash == base.content_hash
+        ]
+        if base is None or not candidates:
+            plan.issues.append(
+                PlanIssue(
+                    severity="error",
+                    slide_id=sid,
+                    reason=f"slide_id appears {len(group_list)}x and the original cannot be "
+                    "identified (no baseline match) — resolve the duplicate manually",
+                )
+            )
+            errored_ids.add(sid)
+            for group in group_list:
+                # Only the slide cells carry the duplicated id here; drop them
+                # from pairing (surfaced as an error). Companions with a
+                # different id stay and are paired/added normally.
+                excluded.update(id(c) for c in group if c.slide_id == sid)
+            continue
+        original = min(candidates, key=lambda g: abs(g[0].position - base.position))
+        for group in group_list:
+            if group is original:
+                continue
+            slide_cell = group[0]
+            plan.proposals.append(
+                Proposal(
+                    kind="rename",
+                    role=slide_cell.role,
+                    direction=direction,
+                    slide_id=sid,
+                    content_hash=slide_cell.content_hash,
+                    translation_pending=True,
+                    source_position=slide_cell.position,
+                    reason="copy-pasted duplicate slide group — re-minted as a new slide",
+                )
+            )
+            # Exclude only the cells that actually carry the duplicated id (the
+            # slide and its same-id companions). A companion whose id differs is
+            # not part of this group's identity — leave it to normal pairing so
+            # it can't become a silent cross-deck orphan.
+            excluded.update(id(c) for c in group if c.slide_id == sid)
+
+    singular: dict[tuple[str, str], CurrentCell] = {}
+    for key, cells in by_key.items():
+        survivors = [c for c in cells if id(c) not in excluded]
+        if not survivors:
+            continue
+        if len(survivors) == 1:
+            singular[key] = survivors[0]
+        elif key[0] not in errored_ids:
+            sid, role = key
+            plan.issues.append(
+                PlanIssue(
+                    severity="error",
+                    slide_id=sid,
+                    reason=f"role={role!r} slide_id appears {len(survivors)}x without a copied "
+                    "slide group to explain it (a lone duplicated companion?) — resolve manually",
+                )
+            )
+    # Keys that had cells but produced no original (errored) must be dropped
+    # from the diff universe, else they re-enter as phantom `remove`s.
+    error_keys = set(by_key) - set(singular)
+    return singular, error_keys
 
 
 def _baseline_index(
@@ -394,37 +517,37 @@ def classify_changes(
     """
     plan = SyncPlan(de_path=de_path, en_path=en_path, baseline_source=baseline_source)
 
-    de_by_key, de_idless, de_collisions = _index_by_key(de_current)
-    en_by_key, en_idless, en_collisions = _index_by_key(en_current)
-
-    for key in sorted(de_collisions | en_collisions):
-        sid, role = key
-        side = "DE" if key in de_collisions else "EN"
-        if key in de_collisions and key in en_collisions:
-            side = "both decks"
-        plan.issues.append(
-            PlanIssue(
-                severity="error",
-                slide_id=sid,
-                reason=f"role={role!r} slide_id appears more than once on {side}; "
-                "ids must be unique within a deck — resolve the collision",
-            )
-        )
+    de_lists, de_idless = _index_by_key(de_current)
+    en_lists, en_idless = _index_by_key(en_current)
 
     has_baseline = de_baseline is not None and en_baseline is not None
+    de_base = _baseline_index(de_baseline)
+    en_base = _baseline_index(en_baseline)
+
+    # Collapse duplicate-id cells to one original each, emitting a `rename` for
+    # every copy (or an error when the original can't be identified). Duplicate
+    # resolution only renames against a real both-deck baseline; with a missing
+    # or asymmetric baseline it gets no baseline (every duplicate then errors).
+    dup_de_base = de_base if has_baseline else {}
+    dup_en_base = en_base if has_baseline else {}
+    de_by_key, de_error_keys = _resolve_duplicates(
+        de_current, de_lists, dup_de_base, "de->en", plan
+    )
+    en_by_key, en_error_keys = _resolve_duplicates(
+        en_current, en_lists, dup_en_base, "en->de", plan
+    )
+
     if not has_baseline:
-        _classify_cold(
-            plan, de_by_key, en_by_key, de_idless, en_idless, de_collisions | en_collisions
-        )
+        _classify_cold(plan, de_by_key, en_by_key, de_idless, en_idless, set())
         _append_idless_adds(plan, de_idless, en_idless)
         plan.proposals.sort(key=_proposal_sort_key)
         return plan
 
-    de_base = _baseline_index(de_baseline)
-    en_base = _baseline_index(en_baseline)
-
-    excluded = de_collisions | en_collisions
-    keys = (set(de_by_key) | set(en_by_key) | set(de_base) | set(en_base)) - excluded
+    # Drop keys an errored duplicate left unresolved, so a still-in-baseline key
+    # whose original was dropped does not re-enter the diff as a phantom remove.
+    keys = (set(de_by_key) | set(en_by_key) | set(de_base) | set(en_base)) - (
+        de_error_keys | en_error_keys
+    )
 
     states_de: dict[tuple[str, str], str] = {}
     states_en: dict[tuple[str, str], str] = {}
@@ -690,7 +813,7 @@ def _edit(
     )
 
 
-_KIND_ORDER = {"conflict": 0, "remove": 1, "edit": 2, "move": 3, "add": 4}
+_KIND_ORDER = {"conflict": 0, "remove": 1, "edit": 2, "move": 3, "add": 4, "rename": 5}
 
 
 def _proposal_sort_key(p: Proposal) -> tuple:

@@ -40,7 +40,7 @@ from clm.slides.raw_cells import RawCell
 from clm.slides.slug import resolve_collision, slugify
 from clm.slides.sync_plan import Proposal, SyncPlan, ordered_sync_cells
 from clm.slides.sync_translate import TranslationError
-from clm.slides.sync_writeback import FileState, role_of
+from clm.slides.sync_writeback import FileState, cell_content_hash, role_of
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -65,6 +65,7 @@ class ApplyResult:
     applied_remove: int = 0
     applied_move: int = 0
     applied_add: int = 0
+    applied_rename: int = 0
     in_sync: int = 0  # an edit the judge decided needed no change
     deferred: int = 0  # conflict (or moves/adds declined this pass)
     watermark_recorded: bool = False
@@ -72,7 +73,13 @@ class ApplyResult:
 
     @property
     def applied(self) -> int:
-        return self.applied_edit + self.applied_remove + self.applied_move + self.applied_add
+        return (
+            self.applied_edit
+            + self.applied_remove
+            + self.applied_move
+            + self.applied_add
+            + self.applied_rename
+        )
 
     @property
     def has_errors(self) -> bool:
@@ -128,6 +135,16 @@ def apply_plan(
     if moves:
         _apply_moves(moves, de_state, en_state, result, plan)
 
+    # Fail-safe: a complete resolution leaves no duplicate id behind. If one
+    # survives (a should-not-happen bug), error so the watermark cannot advance
+    # over a corrupt state and the situation is surfaced rather than baselined.
+    _flag_residual_duplicates(de_state, "de", result)
+    _flag_residual_duplicates(en_state, "en", result)
+    # On an otherwise-clean pass both decks must carry the same (slide_id, role)
+    # set; a one-sided orphan is a silent cross-deck divergence.
+    if not result.errors and result.deferred == 0 and not plan.has_errors:
+        _flag_cross_deck_orphans(de_state, en_state, result)
+
     de_state.flush()
     en_state.flush()
 
@@ -149,6 +166,41 @@ def _pass_is_clean(plan: SyncPlan, result: ApplyResult) -> bool:
     classifier errors, no apply-time errors, and nothing deferred.
     """
     return plan.has_baseline and not plan.has_errors and not result.errors and result.deferred == 0
+
+
+def _flag_residual_duplicates(state: FileState, label: str, result: ApplyResult) -> None:
+    """Error on any ``(slide_id, role)`` left duplicated after the apply walk."""
+    seen: set[tuple[str, str]] = set()
+    for cell in state.cells:
+        role = role_of(cell.metadata)
+        sid = cell.metadata.slide_id
+        if role is None or sid is None:
+            continue
+        key = (sid, role)
+        if key in seen:
+            result.errors.append(f"unresolved duplicate slide_id {sid!r}/{role} on {label}")
+        else:
+            seen.add(key)
+
+
+def _sync_keys(state: FileState) -> set[tuple[str, str]]:
+    """The set of ``(slide_id, role)`` sync keys in a deck."""
+    keys: set[tuple[str, str]] = set()
+    for cell in state.cells:
+        role = role_of(cell.metadata)
+        sid = cell.metadata.slide_id
+        if role is not None and sid is not None:
+            keys.add((sid, role))
+    return keys
+
+
+def _flag_cross_deck_orphans(de_state: FileState, en_state: FileState, result: ApplyResult) -> None:
+    """Error on any sync key present on one deck but not the other."""
+    de_keys, en_keys = _sync_keys(de_state), _sync_keys(en_state)
+    for sid, role in sorted(de_keys - en_keys):
+        result.errors.append(f"slide_id {sid!r}/{role} present on de but missing on en")
+    for sid, role in sorted(en_keys - de_keys):
+        result.errors.append(f"slide_id {sid!r}/{role} present on en but missing on de")
 
 
 # ---------------------------------------------------------------------------
@@ -235,18 +287,25 @@ def _apply_adds(
     plan: SyncPlan,
     translator: SlideTranslator | None,
 ) -> None:
-    """Translate, mint, and insert the counterpart for each id-less new slide.
+    """Translate, mint, and insert counterparts for new and copy-pasted slides.
 
-    Walks each deck's id-less sync cells (which are exactly the plan's id-less
-    ``add`` proposals): a slide mints a fresh EN-derived id stamped onto *both*
-    siblings; a narrative companion inherits the preceding slide's id. The
-    translated counterpart is inserted on the other deck at the matching
-    anchor. id-carrying "missing counterpart" adds are out of scope here and
-    deferred. Adds are sticky via the stamp, so they apply regardless of
-    whether the rest of the pass is clean.
+    One deck walk per direction handles two cases:
+
+    - **add** (id-less cell): a new slide mints a fresh EN-authority id stamped
+      onto *both* siblings; a narrative companion inherits the preceding slide's
+      id; the translated counterpart is inserted on the other deck.
+    - **rename** (copy-pasted duplicate id): the copy *slide* cell chosen by
+      :func:`_identify_copy_slides` (by position, so identical copies don't
+      defeat it) is re-minted to a fresh id — its companions follow by
+      group-adjacency — leaving the original alone, then handled like an add.
+
+    id-carrying "missing counterpart" adds are out of scope and deferred. Both
+    cases are sticky via the stamp, so they apply regardless of whether the rest
+    of the pass is clean.
     """
     add_props = [p for p in plan.proposals if p.kind == "add"]
-    if not add_props:
+    rename_props = [p for p in plan.proposals if p.kind == "rename"]
+    if not add_props and not rename_props:
         return
 
     idd = [p for p in add_props if p.slide_id is not None]
@@ -254,21 +313,29 @@ def _apply_adds(
         result.deferred += len(idd)  # missing-counterpart adds: a follow-up
 
     idless = [p for p in add_props if p.slide_id is None]
-    if not idless:
+    if len(idless) + len(rename_props) == 0:
         return
     if translator is None:
-        result.deferred += len(idless)
-        result.errors.append("id-less add(s) present but no translator available")
+        result.deferred += len(idless) + len(rename_props)
+        result.errors.append("add/rename present but no translator available")
         return
-    if len({p.direction for p in idless}) > 1:
-        # id-less new slides on BOTH decks: the author edited both sides, which
-        # is off the single-language path. Pairing them is out of scope; defer
-        # rather than translate each independently and duplicate the slide.
+
+    process_idless = True
+    if idless and len({p.direction for p in idless}) > 1:
+        # id-less new slides on BOTH decks: off the single-language path. Defer
+        # the adds (renames are independent and still apply).
         result.deferred += len(idless)
         result.errors.append(
             "id-less new slides on both decks — edit one deck at a time (deferred)"
         )
-        return
+        process_idless = False
+
+    de_copy_ids = _identify_copy_slides(
+        de_state, "de", [p for p in rename_props if p.direction == "de->en"]
+    )
+    en_copy_ids = _identify_copy_slides(
+        en_state, "en", [p for p in rename_props if p.direction == "en->de"]
+    )
 
     used_ids = {
         cell.metadata.slide_id
@@ -276,8 +343,49 @@ def _apply_adds(
         for cell in state.cells
         if cell.metadata.slide_id
     }
-    _add_one_direction(de_state, en_state, "de", "en", translator, used_ids, result)
-    _add_one_direction(en_state, de_state, "en", "de", translator, used_ids, result)
+    _add_one_direction(
+        de_state, en_state, "de", "en", translator, used_ids, result, de_copy_ids, process_idless
+    )
+    _add_one_direction(
+        en_state, de_state, "en", "de", translator, used_ids, result, en_copy_ids, process_idless
+    )
+
+
+def _identify_copy_slides(
+    source_state: FileState, source_lang: str, rename_props: list[Proposal]
+) -> set[int]:
+    """Pick the physical copy *slide* cell for each rename, by position.
+
+    For an edited copy the hash is already unique; for a byte-identical copy
+    several slide cells share the hash, so each rename is bound to the matching
+    cell whose sync-cell index is closest to its ``source_position`` — the copy
+    the classifier designated, never the in-place original. Returns the set of
+    ``id()`` of the cells to re-mint.
+    """
+    by_sig: dict[tuple[str, str, str], list[tuple[int, RawCell]]] = {}
+    pos = -1
+    for cell in source_state.cells:
+        role = role_of(cell.metadata)
+        if role is None or cell.metadata.lang != source_lang:
+            continue
+        pos += 1
+        sid = cell.metadata.slide_id
+        if role in _SLIDE_ROLES and sid is not None:
+            by_sig.setdefault((sid, role, cell_content_hash(cell.body)), []).append((pos, cell))
+
+    copy_ids: set[int] = set()
+    for prop in rename_props:
+        if prop.slide_id is None or prop.content_hash is None:
+            continue
+        want = prop.source_position if prop.source_position is not None else 0
+        candidates = [
+            (p, c)
+            for (p, c) in by_sig.get((prop.slide_id, prop.role, prop.content_hash), [])
+            if id(c) not in copy_ids
+        ]
+        if candidates:
+            copy_ids.add(id(min(candidates, key=lambda pc: abs(pc[0] - want))[1]))
+    return copy_ids
 
 
 def _add_one_direction(
@@ -288,59 +396,122 @@ def _add_one_direction(
     translator: SlideTranslator,
     used_ids: set[str],
     result: ApplyResult,
+    copy_slide_ids: set[int],
+    process_idless: bool,
 ) -> None:
+    """Walk the source deck, minting ids for new and copy-pasted slides.
+
+    ``copy_slide_ids`` is the set of ``id()`` of copy-paste *slide* cells to
+    re-mint (chosen by :func:`_identify_copy_slides`). A copied slide's narrative
+    companions are re-minted by group-adjacency — ``renaming_from`` holds the
+    copy slide's old id so each following same-id companion inherits the freshly
+    minted id — rather than by a per-companion hash match (which identical
+    companions defeat).
+    """
     current_slide_id: str | None = None
+    renaming_from: str | None = None  # old id of a copy slide whose companions follow
     anchor: tuple[str, str] | None = None
     for cell in list(source_state.cells):
         role = role_of(cell.metadata)
-        if role is None:
+        if role is None or cell.metadata.lang != source_lang:
             continue
         sid = cell.metadata.slide_id
-        if sid is not None:
-            # An existing paired cell — not an add. It anchors what follows.
-            if role in _SLIDE_ROLES:
-                current_slide_id = sid
-            anchor = (sid, role)
-            continue
-
-        # id-less => an add: translate first (the body is unchanged by stamping).
-        # Normalise away the terminal-newline artifact split_cells parks on the
-        # last cell, so the body the translator sees doesn't depend on position.
-        source_body = cell.body.rstrip("\n")
-        try:
-            target_body = translator.translate(
-                source_body=source_body,
-                source_lang=source_lang,
-                target_lang=target_lang,
-                role=role,
-            )
-        except TranslationError as exc:
-            result.deferred += 1
-            result.errors.append(f"add {role}: translation failed: {exc}")
-            continue
 
         if role in _SLIDE_ROLES:
-            # EN-authority: slug the id from the EN text (the translation when
-            # the author edited DE, the source itself when they edited EN).
-            en_body = target_body if target_lang == "en" else source_body
+            is_copy = id(cell) in copy_slide_ids
+            if sid is not None and not is_copy:
+                current_slide_id = sid  # existing slide; anchors what follows
+                renaming_from = None
+                anchor = (sid, role)
+                continue
+            if sid is None and not process_idless:
+                renaming_from = None
+                continue  # deferred parallel id-less add
+            # id-less add OR copy slide: translate, mint EN-authority id, place.
+            target_body = _translate(cell, source_lang, target_lang, translator, role, result)
+            if target_body is None:
+                renaming_from = None
+                continue
+            en_body = target_body if target_lang == "en" else cell.body.rstrip("\n")
             new_id = resolve_collision(_slug_or_default(en_body), used_ids)
             used_ids.add(new_id)
-            current_slide_id = new_id
-        elif current_slide_id is None:
-            result.deferred += 1
-            result.errors.append(
-                f"add {role}: id-less narrative with no preceding slide — deferred"
+            _place_new_cell(
+                cell, new_id, target_lang, target_body, source_state, target_state, anchor
             )
+            anchor = (new_id, role)
+            current_slide_id = new_id
+            renaming_from = sid if is_copy else None  # for a copy, sid is the old dup id
+            if is_copy:
+                result.applied_rename += 1
+            else:
+                result.applied_add += 1
             continue
-        else:
-            new_id = current_slide_id
 
-        _stamp_slide_id(cell, new_id)  # stamp the previously-id-less source cell
-        source_state.dirty = True
-        new_cell = _build_cell(target_lang, cell.metadata.tags, new_id, target_body)
-        _insert_at_anchor(target_state, anchor, new_cell)
-        anchor = (new_id, role)
-        result.applied_add += 1
+        # narrative role
+        is_copy_companion = renaming_from is not None and sid is not None and sid == renaming_from
+        if sid is not None and not is_copy_companion:
+            anchor = (sid, role)  # existing companion (of a non-copied slide)
+            continue
+        if sid is None and not process_idless:
+            continue
+        if current_slide_id is None:
+            result.deferred += 1
+            result.errors.append(f"add {role}: narrative with no preceding slide — deferred")
+            continue
+        target_body = _translate(cell, source_lang, target_lang, translator, role, result)
+        if target_body is None:
+            continue
+        # Companions inherit the slide's id (the freshly minted one for a copy).
+        _place_new_cell(
+            cell, current_slide_id, target_lang, target_body, source_state, target_state, anchor
+        )
+        anchor = (current_slide_id, role)
+        if is_copy_companion:
+            result.applied_rename += 1
+        else:
+            result.applied_add += 1
+
+
+def _translate(
+    cell: RawCell,
+    source_lang: str,
+    target_lang: str,
+    translator: SlideTranslator,
+    role: str,
+    result: ApplyResult,
+) -> str | None:
+    """Translate a cell body, recording a deferral + error on failure.
+
+    rstrip drops the terminal-newline artifact so the translator input does not
+    depend on cell position.
+    """
+    try:
+        return translator.translate(
+            source_body=cell.body.rstrip("\n"),
+            source_lang=source_lang,
+            target_lang=target_lang,
+            role=role,
+        )
+    except TranslationError as exc:
+        result.deferred += 1
+        result.errors.append(f"{role}: translation failed: {exc}")
+        return None
+
+
+def _place_new_cell(
+    cell: RawCell,
+    new_id: str,
+    target_lang: str,
+    target_body: str,
+    source_state: FileState,
+    target_state: FileState,
+    anchor: tuple[str, str] | None,
+) -> None:
+    """Stamp the source cell's id and insert the translated counterpart."""
+    _stamp_slide_id(cell, new_id)
+    source_state.dirty = True
+    new_cell = _build_cell(target_lang, cell.metadata.tags, new_id, target_body)
+    _insert_at_anchor(target_state, anchor, new_cell)
 
 
 def _slug_or_default(en_body: str) -> str:

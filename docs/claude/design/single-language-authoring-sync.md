@@ -497,6 +497,27 @@ id-carrying "missing counterpart" adds. Live `clm slides sync` still unchanged.
 
 ### Phase 4 — Interactive walker + conflict UX + summary / exit-codes
 
+**Part 1 — copy-paste duplicate-id resolution ✅ implemented 2026-05-31.** A
+new `rename` proposal kind. The classifier (`_resolve_duplicates`) resolves
+duplicate ids at the **slide-group** level: it identifies the original group
+(its slide matches the baseline) and emits one `rename` per copy slide;
+companions follow. It only resolves against a real both-deck baseline and
+**errors** (never guesses) when it can't identify the original or a duplicate
+isn't explained by a copied slide group. The apply (`_identify_copy_slides` +
+`_add_one_direction`) re-mints the copy slide **by position** (so byte-identical
+copies don't bind to the wrong cell) and its trailing same-id companions by
+group-adjacency. Two **fail-safe guards** — `_flag_residual_duplicates`
+(in-deck) and `_flag_cross_deck_orphans` (clean-pass parity) — error so the
+watermark can never advance over a corrupt/divergent state.
+
+Two adversarial-review rounds (the first found the feature corrupted copied
+slide *groups* with companions; the rewrite + a second review fixed the
+phantom-`remove` regression, the identical-slide/edited-companion desync, and
+the malformed-companion divergence). Known limitation (pre-existing, broader
+than this feature): a structural change is flushed to the working tree even on
+an erroring pass — it is surfaced + `git diff`-visible + revertible, and the
+watermark never advances over it, but the working tree is mutated.
+
 - Extend `sync_walker` to render ADD / REMOVE / MOVE / CONFLICT (today
   UPDATE-only).
 - Conflict three-up (watermark base / current DE / current EN) with
