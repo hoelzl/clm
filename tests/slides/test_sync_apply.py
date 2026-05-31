@@ -7,7 +7,7 @@ from pathlib import Path
 from clm.infrastructure.llm.cache import SyncWatermarkCache
 from clm.infrastructure.llm.ollama_client import StaticSyncJudge, SyncProposal
 from clm.notebooks.slide_parser import parse_cells
-from clm.slides.sync_apply import apply_plan
+from clm.slides.sync_apply import DECISION_APPLY, DECISION_SKIP, apply_plan
 from clm.slides.sync_plan import PlanIssue, Proposal, SyncPlan, build_sync_plan, ordered_sync_cells
 from clm.slides.sync_translate import StaticSlideTranslator
 from clm.slides.sync_writeback import FileState
@@ -1051,3 +1051,428 @@ class TestApplyRename:
         # Not silently baselined: the mismatched companion forces a deferral.
         assert result.deferred >= 1
         assert result.watermark_recorded is False
+
+
+# ---------------------------------------------------------------------------
+# apply_plan — per-cell partial watermark advance (Phase 4 part 2b)
+# ---------------------------------------------------------------------------
+
+
+def _keys_of(path: Path, lang: str) -> list[tuple[str | None, str]]:
+    cells = ordered_sync_cells(parse_cells(path.read_text("utf-8")), lang)
+    return [(c.slide_id, c.role) for c in cells]
+
+
+class _MarkerJudge:
+    """A judge that returns ``update`` only when the source body contains a
+    marker, else the ``in_sync`` (verdict != "update") verdict the real judge
+    emits when it decides the target already reflects the source edit."""
+
+    prompt_version = "test"
+
+    def __init__(self, update_markers: set[str], proposed: str) -> None:
+        self._markers = update_markers
+        self._proposed = proposed
+
+    def propose(self, source_text, target_text, *, source_lang, target_lang):  # noqa: ANN001
+        if any(m in source_text for m in self._markers):
+            return SyncProposal(verdict="update", proposed_text=self._proposed)
+        return SyncProposal(verdict="in_sync", proposed_text="")
+
+
+class TestPartialWatermarkAdvance:
+    def test_reconciled_edit_advances_while_deferred_conflict_resurfaces(self, tmp_path: Path):
+        # The headline 2b win: an edit on 'a' applied alongside a deferred
+        # conflict on 'b'. The watermark advances PER-CELL — 'a' is banked (no
+        # longer re-surfaces) while 'b' (preserved at its pre-conflict baseline)
+        # is still detected as a conflict on the next run. No data loss.
+        de = _slide("de", "a", "# ## A") + _slide("de", "b", "# ## B")
+        en = _slide("en", "a", "# ## A") + _slide("en", "b", "# ## B")
+        de_path, en_path = _write_pair(tmp_path, de, en)
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_watermark(cache, de_path, en_path)
+            # DE 'a' edited (a plain edit); BOTH sides of 'b' edited (a conflict).
+            de_path.write_text(
+                _slide("de", "a", "# ## A-de2") + _slide("de", "b", "# ## B-de2"),
+                encoding="utf-8",
+            )
+            en_path.write_text(
+                _slide("en", "a", "# ## A") + _slide("en", "b", "# ## B-en2"),
+                encoding="utf-8",
+            )
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            assert plan.count("edit") == 1 and plan.count("conflict") == 1
+
+            judge = _update_judge("# ## A-en2")
+            result = apply_plan(plan, judge=judge, watermark_cache=cache)
+            plan2 = build_sync_plan(de_path, en_path, watermark_cache=cache)
+        finally:
+            cache.close()
+
+        assert result.applied_edit == 1
+        assert result.deferred == 1
+        assert result.watermark_recorded is True  # partial advance fired
+        # Edit 'a' was banked; only the conflict 'b' is left for the next run.
+        assert plan2.count("edit") == 0
+        assert plan2.count("conflict") == 1
+        assert plan2.proposals[0].slide_id == "b"
+        # The conflict's cells were never written (isolated); the edit was.
+        assert "# ## A-en2" in en_path.read_text("utf-8")
+        assert "# ## B-de2" in de_path.read_text("utf-8")
+        assert "# ## B-en2" in en_path.read_text("utf-8")
+
+    def test_skipped_edit_advances_sibling_and_resurfaces(self, tmp_path: Path):
+        # Interactive: accept the edit on 'a', skip the edit on 'b'. 'a' banks,
+        # 'b' re-surfaces next run (its source-side baseline is preserved).
+        de = _slide("de", "a", "# ## A") + _slide("de", "b", "# ## B")
+        en = _slide("en", "a", "# ## A") + _slide("en", "b", "# ## B")
+        de_path, en_path = _write_pair(tmp_path, de, en)
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_watermark(cache, de_path, en_path)
+            de_path.write_text(
+                _slide("de", "a", "# ## A-de2") + _slide("de", "b", "# ## B-de2"),
+                encoding="utf-8",
+            )
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            assert plan.count("edit") == 2
+            decisions = {
+                id(p): (DECISION_APPLY if p.slide_id == "a" else DECISION_SKIP)
+                for p in plan.proposals
+            }
+            judge = _update_judge("# ## A-en2")
+            result = apply_plan(plan, judge=judge, watermark_cache=cache, decisions=decisions)
+            plan2 = build_sync_plan(de_path, en_path, watermark_cache=cache)
+        finally:
+            cache.close()
+
+        assert result.applied_edit == 1
+        assert result.deferred == 1
+        assert result.watermark_recorded is True
+        # Only the skipped 'b' edit remains; 'a' was banked.
+        assert plan2.count("edit") == 1
+        assert plan2.proposals[0].slide_id == "b"
+
+    def test_conflict_only_pass_holds_watermark(self, tmp_path: Path):
+        # No reconciled write to bank -> not eligible for a partial advance, so
+        # the watermark holds (matches all-or-nothing). Proven with a SEEDED
+        # cache so the hold is the applied_edit>0 gate, not the missing-baseline
+        # guard.
+        de = _slide("de", "a", "# ## A")
+        en = _slide("en", "a", "# ## A")
+        de_path, en_path = _write_pair(tmp_path, de, en)
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_watermark(cache, de_path, en_path)
+            de_path.write_text(_slide("de", "a", "# ## A-de2"), encoding="utf-8")
+            en_path.write_text(_slide("en", "a", "# ## A-en2"), encoding="utf-8")
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            assert plan.count("conflict") == 1 and plan.count("edit") == 0
+            before = {
+                lang: cache.get_deck(str(de_path), str(en_path), lang) for lang in ("de", "en")
+            }
+            result = apply_plan(plan, judge=None, watermark_cache=cache)
+            after = {
+                lang: cache.get_deck(str(de_path), str(en_path), lang) for lang in ("de", "en")
+            }
+        finally:
+            cache.close()
+
+        assert result.deferred == 1
+        assert result.applied_edit == 0
+        assert result.watermark_recorded is False
+        assert after == before  # baseline untouched
+
+    def test_structural_partial_pass_holds_watermark(self, tmp_path: Path):
+        # An edit reconciled + a conflict deferred, but the pass also has an
+        # id-less ADD (structural). Structure changed, so the partial advance is
+        # NOT eligible; the watermark holds whole.
+        de = _slide("de", "a", "# ## A") + _slide("de", "b", "# ## B")
+        en = _slide("en", "a", "# ## A") + _slide("en", "b", "# ## B")
+        de_path, en_path = _write_pair(tmp_path, de, en)
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_watermark(cache, de_path, en_path)
+            de_path.write_text(
+                _slide("de", "a", "# ## A-de2")
+                + _slide("de", "b", "# ## B-de2")
+                + '# %% [markdown] lang="de" tags=["slide"]\n# ## Neu\n',
+                encoding="utf-8",
+            )
+            en_path.write_text(
+                _slide("en", "a", "# ## A") + _slide("en", "b", "# ## B-en2"),
+                encoding="utf-8",
+            )
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            assert plan.count("edit") == 1
+            assert plan.count("conflict") == 1
+            assert plan.count("add") == 1  # structural
+            judge = _update_judge("# ## A-en2")
+            translator = StaticSlideTranslator(mapping={"# ## Neu": "# ## New"})
+            result = apply_plan(plan, judge=judge, translator=translator, watermark_cache=cache)
+        finally:
+            cache.close()
+
+        assert result.deferred >= 1  # the conflict
+        assert result.watermark_recorded is False  # structural -> held
+
+    def test_partial_advance_preserves_positions_and_keys(self, tmp_path: Path):
+        # After a partial advance the watermark keeps the same (slide_id, role)
+        # structure as the decks (content-only invariant) — no rows dropped or
+        # re-ordered.
+        de = _slide("de", "a", "# ## A") + _slide("de", "b", "# ## B")
+        en = _slide("en", "a", "# ## A") + _slide("en", "b", "# ## B")
+        de_path, en_path = _write_pair(tmp_path, de, en)
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_watermark(cache, de_path, en_path)
+            de_path.write_text(
+                _slide("de", "a", "# ## A-de2") + _slide("de", "b", "# ## B-de2"),
+                encoding="utf-8",
+            )
+            en_path.write_text(
+                _slide("en", "a", "# ## A") + _slide("en", "b", "# ## B-en2"),
+                encoding="utf-8",
+            )
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            apply_plan(plan, judge=_update_judge("# ## A-en2"), watermark_cache=cache)
+            wm_de = [
+                (p, s, r) for (p, s, r, _h) in cache.get_deck(str(de_path), str(en_path), "de")
+            ]
+        finally:
+            cache.close()
+
+        assert wm_de == [(0, "a", "slide"), (1, "b", "slide")]
+        assert _keys_of(de_path, "de") == [("a", "slide"), ("b", "slide")]
+
+    def test_in_sync_edit_is_reconciled_partial_path(self, tmp_path: Path):
+        # An in_sync verdict is a reconciliation ("the target already reflects the
+        # source", per SyncProposal) — NOT a deferral. On a partial pass it banks
+        # like an applied edit: it must NOT re-surface (else the judge re-declines
+        # it every run forever). Only the true deferral (the conflict) re-surfaces.
+        de = _slide("de", "a", "# ## A") + _slide("de", "b", "# ## B") + _slide("de", "c", "# ## C")
+        en = _slide("en", "a", "# ## A") + _slide("en", "b", "# ## B") + _slide("en", "c", "# ## C")
+        de_path, en_path = _write_pair(tmp_path, de, en)
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_watermark(cache, de_path, en_path)
+            # DE a,b edited (de->en edits); c edited on BOTH (a conflict).
+            de_path.write_text(
+                _slide("de", "a", "# ## A-de2")
+                + _slide("de", "b", "# ## B-de2")
+                + _slide("de", "c", "# ## C-de2"),
+                encoding="utf-8",
+            )
+            en_path.write_text(
+                _slide("en", "a", "# ## A")
+                + _slide("en", "b", "# ## B")
+                + _slide("en", "c", "# ## C-en2"),
+                encoding="utf-8",
+            )
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            assert plan.count("edit") == 2 and plan.count("conflict") == 1
+            # 'a' -> update (applied); 'b' -> in_sync (judge reconciles, no write).
+            judge = _MarkerJudge({"A-de2"}, "# ## A-en2")
+            result = apply_plan(plan, judge=judge, watermark_cache=cache)
+            plan2 = build_sync_plan(de_path, en_path, watermark_cache=cache)
+        finally:
+            cache.close()
+
+        assert result.applied_edit == 1  # 'a'
+        assert result.in_sync == 1  # 'b' reconciled (no write)
+        assert result.deferred == 1  # conflict 'c'
+        assert result.watermark_recorded is True  # partial advance fired
+        # Both 'a' (applied) and 'b' (in_sync) are banked; only 'c' re-surfaces.
+        assert plan2.count("edit") == 0
+        assert plan2.count("conflict") == 1
+        assert plan2.proposals[0].slide_id == "c"
+
+    def test_in_sync_only_edit_is_reconciled_full_path(self, tmp_path: Path):
+        # A pass whose only non-applied work is an in_sync edit (deferred==0) goes
+        # the full-advance path — and an in_sync verdict banks there too (it is a
+        # reconciliation). The next run is a no-op; the edit does not re-surface.
+        de = _slide("de", "a", "# ## A")
+        en = _slide("en", "a", "# ## A")
+        de_path, en_path = _write_pair(tmp_path, de, en)
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_watermark(cache, de_path, en_path)
+            de_path.write_text(_slide("de", "a", "# ## A-de2"), encoding="utf-8")
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            assert plan.count("edit") == 1
+            judge = _MarkerJudge(set(), "x")  # never matches -> always in_sync
+            result = apply_plan(plan, judge=judge, watermark_cache=cache)
+            plan2 = build_sync_plan(de_path, en_path, watermark_cache=cache)
+        finally:
+            cache.close()
+
+        assert result.applied_edit == 0
+        assert result.in_sync == 1
+        assert result.deferred == 0
+        assert result.watermark_recorded is True  # full advance (deferred == 0)
+        assert plan2.is_noop  # reconciled -> banked -> does not re-surface
+
+    def test_both_decks_reorder_warning_holds_watermark(self, tmp_path: Path):
+        # Regression for the high-sev 2b finding: a both-decks reorder is emitted
+        # as a *warning* (no move proposal, not an error). The partial advance
+        # must NOT fire (it would bake the new order and lose the "resolve
+        # ordering manually" signal); plan.issues forces a hold.
+        def deck(lang: str, order: list[str]) -> str:
+            return "".join(_slide(lang, s, f"# ## {s.upper()}") for s in order)
+
+        de_path, en_path = _write_pair(
+            tmp_path, deck("de", ["a", "b", "d", "e"]), deck("en", ["a", "b", "d", "e"])
+        )
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_watermark(cache, de_path, en_path)
+            # Swap a<->b on BOTH decks (both-decks reorder -> warning, no move);
+            # edit 'd' on DE only (applied); 'e' edited on both (conflict).
+            de_path.write_text(
+                _slide("de", "b", "# ## B")
+                + _slide("de", "a", "# ## A")
+                + _slide("de", "d", "# ## D-de2")
+                + _slide("de", "e", "# ## E-de2"),
+                encoding="utf-8",
+            )
+            en_path.write_text(
+                _slide("en", "b", "# ## B")
+                + _slide("en", "a", "# ## A")
+                + _slide("en", "d", "# ## D")
+                + _slide("en", "e", "# ## E-en2"),
+                encoding="utf-8",
+            )
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            assert plan.count("move") == 0
+            assert plan.issues  # the order-drift warning
+            result = apply_plan(plan, judge=_update_judge("# ## D-en2"), watermark_cache=cache)
+            plan2 = build_sync_plan(de_path, en_path, watermark_cache=cache)
+        finally:
+            cache.close()
+
+        assert result.watermark_recorded is False  # held, not silently baselined
+        assert plan2.issues  # the order warning still surfaces next run
+
+    def test_reorder_warning_holds_full_advance_path(self, tmp_path: Path):
+        # Same warning hazard but with NO proposals at all (deferred==0), so the
+        # pass would otherwise be `_pass_is_clean` and take the FULL advance. The
+        # top-level `not plan.issues` gate must hold it there too — else the new
+        # order is silently baselined and the "resolve manually" signal vanishes.
+        def deck(lang: str, order: list[str]) -> str:
+            return "".join(_slide(lang, s, f"# ## {s.upper()}") for s in order)
+
+        de_path, en_path = _write_pair(
+            tmp_path, deck("de", ["a", "b", "c"]), deck("en", ["a", "b", "c"])
+        )
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_watermark(cache, de_path, en_path)
+            # Swap a<->b on BOTH decks, no content change anywhere (both-decks
+            # reorder -> warning, no proposals, deferred == 0).
+            for path, lang in ((de_path, "de"), (en_path, "en")):
+                path.write_text(deck(lang, ["b", "a", "c"]), encoding="utf-8")
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            assert not plan.proposals  # nothing to apply
+            assert plan.issues  # order-drift warning
+            result = apply_plan(plan, judge=None, watermark_cache=cache)
+            plan2 = build_sync_plan(de_path, en_path, watermark_cache=cache)
+        finally:
+            cache.close()
+
+        assert result.deferred == 0  # would be _pass_is_clean but for the issue
+        assert result.watermark_recorded is False  # held by the not-plan.issues gate
+        assert plan2.issues  # warning re-surfaces
+
+    def test_en_side_skipped_edit_advances_sibling_and_resurfaces(self, tmp_path: Path):
+        # Mirror of the DE-side skipped-edit test (review symmetry gap): an
+        # en->de skipped edit must also re-surface (both decks' baselines are
+        # preserved for un-written cells).
+        de = _slide("de", "a", "# ## A") + _slide("de", "b", "# ## B")
+        en = _slide("en", "a", "# ## A") + _slide("en", "b", "# ## B")
+        de_path, en_path = _write_pair(tmp_path, de, en)
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_watermark(cache, de_path, en_path)
+            en_path.write_text(
+                _slide("en", "a", "# ## A-en2") + _slide("en", "b", "# ## B-en2"),
+                encoding="utf-8",
+            )
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            assert plan.count("edit") == 2
+            decisions = {
+                id(p): (DECISION_APPLY if p.slide_id == "a" else DECISION_SKIP)
+                for p in plan.proposals
+            }
+            result = apply_plan(
+                plan, judge=_update_judge("# ## A-de2"), watermark_cache=cache, decisions=decisions
+            )
+            plan2 = build_sync_plan(de_path, en_path, watermark_cache=cache)
+        finally:
+            cache.close()
+
+        assert result.applied_edit == 1
+        assert result.deferred == 1
+        assert result.watermark_recorded is True
+        assert plan2.count("edit") == 1
+        assert plan2.proposals[0].slide_id == "b"
+
+    def test_removed_de_edited_en_conflict_holds_watermark(self, tmp_path: Path):
+        # A "removed on DE / edited on EN" collision is classified as a CONFLICT
+        # (not a remove), so it slips the structural gate. But 'b' is gone from
+        # DE's current cells, so the partial advance cannot faithfully preserve
+        # it — it must hold the whole watermark, else the conflict is dropped and
+        # next run mutates into a phantom add re-creating the removed slide.
+        de = _slide("de", "a", "# ## A") + _slide("de", "b", "# ## B")
+        en = _slide("en", "a", "# ## A") + _slide("en", "b", "# ## B")
+        de_path, en_path = _write_pair(tmp_path, de, en)
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_watermark(cache, de_path, en_path)
+            # DE: edit 'a' (the reconciled write) + REMOVE 'b'. EN: edit 'b'.
+            de_path.write_text(_slide("de", "a", "# ## A-de2"), encoding="utf-8")
+            en_path.write_text(
+                _slide("en", "a", "# ## A") + _slide("en", "b", "# ## B-en2"),
+                encoding="utf-8",
+            )
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            assert plan.count("edit") == 1 and plan.count("conflict") == 1
+            assert plan.count("remove") == 0  # the removal is a conflict, not a remove
+            result = apply_plan(plan, judge=_update_judge("# ## A-en2"), watermark_cache=cache)
+            plan2 = build_sync_plan(de_path, en_path, watermark_cache=cache)
+        finally:
+            cache.close()
+
+        assert result.deferred == 1
+        assert result.watermark_recorded is False  # held, not dropped
+        conflicts = [p.slide_id for p in plan2.proposals if p.kind == "conflict"]
+        assert "b" in conflicts  # 'b' re-surfaces as a conflict
+        assert plan2.count("add") == 0  # NOT a phantom re-add of the removed slide
+
+    def test_edited_de_removed_en_conflict_holds_watermark(self, tmp_path: Path):
+        # Mirror of the above: removed on EN, edited on DE.
+        de = _slide("de", "a", "# ## A") + _slide("de", "b", "# ## B")
+        en = _slide("en", "a", "# ## A") + _slide("en", "b", "# ## B")
+        de_path, en_path = _write_pair(tmp_path, de, en)
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_watermark(cache, de_path, en_path)
+            # DE: edit 'a' (reconciled write) + edit 'b'. EN: REMOVE 'b'.
+            de_path.write_text(
+                _slide("de", "a", "# ## A-de2") + _slide("de", "b", "# ## B-de2"),
+                encoding="utf-8",
+            )
+            en_path.write_text(_slide("en", "a", "# ## A"), encoding="utf-8")
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            assert plan.count("edit") == 1 and plan.count("conflict") == 1
+            assert plan.count("remove") == 0
+            result = apply_plan(plan, judge=_update_judge("# ## A-en2"), watermark_cache=cache)
+            plan2 = build_sync_plan(de_path, en_path, watermark_cache=cache)
+        finally:
+            cache.close()
+
+        assert result.deferred == 1
+        assert result.watermark_recorded is False
+        conflicts = [p.slide_id for p in plan2.proposals if p.kind == "conflict"]
+        assert "b" in conflicts
+        assert plan2.count("add") == 0

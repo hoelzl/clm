@@ -141,6 +141,15 @@ def apply_plan(
     en_state = FileState.load(plan.en_path)
 
     moves: list[Proposal] = []
+    # (slide_id, role) of every TRUE deferral this pass: an unresolved conflict
+    # or a user-skipped edit/remove/move. The per-cell partial watermark advance
+    # preserves exactly these cells at their old baseline so they re-surface next
+    # run; everything else (an applied edit, an unchanged cell, and an edit the
+    # judge reconciled with an in_sync verdict) banks its current state. in_sync
+    # is a reconciliation decision — "the target already reflects the source",
+    # per SyncProposal — so it advances, the same as on a fully clean pass; were
+    # it preserved it would re-surface every run forever (the judge re-declines).
+    deferred_keys: set[tuple[str, str]] = set()
     for proposal in plan.proposals:
         kind = proposal.kind
         if kind == "remove":
@@ -148,19 +157,30 @@ def apply_plan(
                 _apply_remove(proposal, de_state, en_state, result)
             else:
                 result.deferred += 1
+                _note_deferred(deferred_keys, proposal)
         elif kind == "edit":
             if _accepted(decisions, proposal):
                 _apply_edit(proposal, de_state, en_state, de_content, en_content, judge, result)
             else:
                 result.deferred += 1
+                _note_deferred(deferred_keys, proposal)
         elif kind == "move":
             if _accepted(decisions, proposal):
                 moves.append(proposal)
             else:
                 result.deferred += 1
+                _note_deferred(deferred_keys, proposal)
         elif kind == "conflict":
             _apply_conflict(
-                proposal, decisions, de_state, en_state, de_content, en_content, judge, result
+                proposal,
+                decisions,
+                de_state,
+                en_state,
+                de_content,
+                en_content,
+                judge,
+                result,
+                deferred_keys,
             )
         # "add" / "rename" are handled by _apply_adds below (always applied).
 
@@ -187,14 +207,42 @@ def apply_plan(
     de_state.flush()
     en_state.flush()
 
-    # Advance the watermark only when everything we were asked to do was done.
-    # Deferred moves/adds mean the decks are not yet fully in sync, so baking
-    # the current state into the baseline would silently lose that work.
-    if watermark_cache is not None and _pass_is_clean(plan, result):
-        _record_watermark(watermark_cache, plan.de_path, plan.en_path)
-        result.watermark_recorded = True
+    # Watermark advance. A fully clean pass advances the whole deck. A
+    # *content-only* partial pass (edits/conflicts only, so structure is
+    # unchanged) advances the reconciled cells per-cell while preserving the
+    # deferred cells' pre-conflict baseline — so a deferred conflict no longer
+    # forces every reconciled edit to re-surface next run. Any other partial
+    # pass holds the whole watermark (nothing un-applied is ever baselined).
+    #
+    # ``not plan.issues`` gates BOTH paths: a both-decks reorder or an ambiguous
+    # de/en state is emitted as a *warning* (no proposal, no error) whose order/
+    # ambiguity is deliberately not reconciled. Advancing over it — on either the
+    # full or the partial path — would bake the new positions and silently lose
+    # the "resolve manually" signal, so any issue holds the whole watermark.
+    if watermark_cache is not None and not plan.issues:
+        if _pass_is_clean(plan, result):
+            _record_watermark(watermark_cache, plan.de_path, plan.en_path)
+            result.watermark_recorded = True
+        elif (
+            _eligible_for_partial_advance(plan, result)
+            # Completeness invariant: in a content-only pass every deferral is one
+            # distinct (slide_id, role), so the recorded keys must account for
+            # *every* deferral. If they don't (an unforeseen deferral with no
+            # key), hold the whole watermark rather than risk advancing over it.
+            and len(deferred_keys) == result.deferred
+            and _record_watermark_partial(
+                watermark_cache, plan.de_path, plan.en_path, deferred_keys
+            )
+        ):
+            result.watermark_recorded = True
 
     return result
+
+
+def _note_deferred(deferred_keys: set[tuple[str, str]], proposal: Proposal) -> None:
+    """Record a deferred proposal's ``(slide_id, role)`` for the partial advance."""
+    if proposal.slide_id is not None:
+        deferred_keys.add((proposal.slide_id, proposal.role))
 
 
 def _accepted(decisions: dict[int, str] | None, proposal: Proposal) -> bool:
@@ -234,11 +282,14 @@ def _apply_conflict(
     en_content: dict[tuple[str, str], str],
     judge: SyncJudge | None,
     result: ApplyResult,
+    deferred_keys: set[tuple[str, str]],
 ) -> None:
     """Resolve a conflict per its decision, or defer it.
 
     ``de-wins`` / ``en-wins`` propagate the winning side as an ordinary edit
-    (the judge rewrites the losing side to match); any other decision defers.
+    (the judge rewrites the losing side to match); any other decision defers,
+    recording the key so the per-cell advance keeps its pre-conflict baseline
+    and the conflict re-surfaces next run.
     """
     decision = _conflict_decision(decisions, proposal)
     if decision == DECISION_DE_WINS:
@@ -263,6 +314,7 @@ def _apply_conflict(
         )
     else:
         result.deferred += 1
+        _note_deferred(deferred_keys, proposal)
 
 
 def _pass_is_clean(plan: SyncPlan, result: ApplyResult) -> bool:
@@ -843,3 +895,91 @@ def _record_watermark(
             lang=lang,
             cells=[(c.position, c.slide_id, c.role, c.content_hash) for c in cells],
         )
+
+
+def _eligible_for_partial_advance(plan: SyncPlan, result: ApplyResult) -> bool:
+    """Whether a per-cell partial watermark advance is safe for this pass.
+
+    Restricted to a **content-only** partial pass: every proposal is an
+    ``edit`` or ``conflict`` (no add / remove / move / rename) AND the plan
+    carries **no issues**. The no-issues guard matters: a both-decks reorder or
+    an ambiguous de/en state is emitted as a *warning* (not a proposal and not
+    an error), and its order/ambiguity is deliberately not reconciled — so a
+    pass carrying any issue must hold the whole watermark, else that
+    un-propagated signal would be silently baselined. With neither structural
+    proposals nor issues, both decks' ordered ``(slide_id, role)`` structure is
+    unchanged, so current positions equal baseline positions.
+
+    Requires a real baseline, no errors, no issues, at least one deferral (a
+    clean pass already did a full advance), and at least one *reconciled write*
+    (``applied_edit > 0``) — there is nothing to bank in a pass that only
+    deferred, so it just holds. Any other partial pass falls back to holding the
+    whole watermark — safe, just noisier on the next run.
+    """
+    if not plan.has_baseline or plan.issues or result.errors:
+        return False
+    if result.deferred <= 0 or result.applied_edit <= 0:
+        return False
+    structural = (
+        plan.count("add") + plan.count("remove") + plan.count("move") + plan.count("rename")
+    )
+    return structural == 0
+
+
+def _record_watermark_partial(
+    cache: SyncWatermarkCache,
+    de_path: Path,
+    en_path: Path,
+    preserve_keys: set[tuple[str, str]],
+) -> bool:
+    """Advance the watermark per-cell, holding the true deferrals at baseline.
+
+    Records the **current** state for every cell — the reconciliation default,
+    matching the full advance — EXCEPT for any ``(slide_id, role)`` in
+    ``preserve_keys`` (an unresolved conflict or a user-skipped edit), which
+    keeps its **old** baseline hash so it re-surfaces next run instead of being
+    silently baselined. An ``in_sync`` edit is *not* a deferral — the judge
+    reconciled it — so it banks like an applied edit.
+
+    Valid only on a content-only, issue-free pass (see
+    :func:`_eligible_for_partial_advance`): structure is unchanged, so current
+    positions equal baseline positions. Returns ``False`` without writing if any
+    preserved key is absent from *either* deck's old baseline **or** current
+    cells. The current-cell check matters: a "removed on one deck / edited on the
+    other" collision is classified as a ``conflict`` (not a ``remove``), so it
+    slips the structural gate, yet the cell is gone from the removing deck — we
+    cannot faithfully preserve it there, so we hold the whole watermark and let
+    the conflict re-surface instead of dropping it.
+    """
+    old: dict[str, dict[tuple[str, str], str]] = {}
+    cells_by_lang = {
+        "de": ordered_sync_cells(parse_cells(de_path.read_text(encoding="utf-8")), "de"),
+        "en": ordered_sync_cells(parse_cells(en_path.read_text(encoding="utf-8")), "en"),
+    }
+    current: dict[str, set[tuple[str, str]]] = {}
+    for lang in ("de", "en"):
+        old[lang] = {
+            (sid, role): chash
+            for (_pos, sid, role, chash) in cache.get_deck(str(de_path), str(en_path), lang)
+            if sid is not None
+        }
+        current[lang] = {
+            (c.slide_id, c.role) for c in cells_by_lang[lang] if c.slide_id is not None
+        }
+    for key in preserve_keys:
+        if key not in old["de"] or key not in old["en"]:
+            return False
+        if key not in current["de"] or key not in current["en"]:
+            return False
+
+    for lang in ("de", "en"):
+        rows: list[tuple[int, str | None, str, str]] = []
+        for c in cells_by_lang[lang]:
+            if c.slide_id is not None and (c.slide_id, c.role) in preserve_keys:
+                # Hold the deferral at its pre-conflict baseline so it re-surfaces.
+                chash = old[lang][(c.slide_id, c.role)]
+            else:
+                chash = c.content_hash  # bank: applied / in_sync / unchanged
+            rows.append((c.position, c.slide_id, c.role, chash))
+        cache.put_deck(de_path=str(de_path), en_path=str(en_path), lang=lang, cells=rows)
+    return True

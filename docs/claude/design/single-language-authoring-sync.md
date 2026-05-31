@@ -331,14 +331,21 @@ used and why it found 0 changes (in sync vs no baseline).
 
 - **Full 3-way LLM merge** for true conflicts (watermark is the ancestor).
 - **`--detect-moves`** content-similarity matching for delete-and-rewrite moves.
-- **Partial-apply watermark staleness** — the watermark advances all-or-nothing
-  (`_pass_is_clean`). When a pass reconciles some cells (edit/remove/move) but
-  defers others (a conflict, or — pre-Phase-3 — an add), the watermark does not
-  advance, so the reconciled edits re-surface as drift on the next run (the
-  judge then no-ops, so no data loss, but the UX is noisy). The clean fix is a
-  **per-cell** watermark advance that records reconciled cells while preserving
-  conflict cells' pre-conflict baseline — lands naturally with Phase 4 conflict
-  handling.
+- **Partial-apply watermark staleness — *addressed for content-only passes in
+  Phase 4 Part 2b*.** The watermark used to advance all-or-nothing
+  (`_pass_is_clean`): a pass that reconciled some cells but deferred a conflict
+  advanced nothing, so the reconciled edits re-surfaced as drift next run (judge
+  no-ops them — safe but noisy). Phase 4 Part 2b adds a **per-cell** advance for
+  a *content-only, issue-free* partial pass (only edit/conflict proposals): it
+  banks every reconciled cell (applied edit, `in_sync`, unchanged) and preserves
+  only the **true deferrals** (unresolved conflicts, user-skipped edits) at their
+  pre-conflict baseline so they re-surface. Structural partial passes (any
+  add/remove/move/rename), any pass carrying a *warning* issue (both-decks
+  reorder, ambiguous de/en), and any deferral whose cell was removed on one deck
+  still hold the whole watermark — the conservative, provably-safe fallback.
+  Remaining noise on those held passes is the documented residual (a follow-up
+  could extend the per-cell advance to structural passes, but that needs
+  positional reasoning the content-only restriction sidesteps).
 - **Non-uniform inter-group blank padding** (cosmetic) — group-level move-apply
   carries each group's own trailing blank padding verbatim, so reordering a deck
   whose slides have *different* numbers of trailing blank lines redistributes
@@ -549,12 +556,49 @@ dimensions × adversarial verify) confirmed the safety invariant intact and foun
 mixed-accept+skip watermark-held test (added). 25 walker tests; 711 slides tests
 green; mypy/ruff clean. Live `clm slides sync` STILL UNCHANGED.
 
-**Part 2b — Per-cell watermark advance (the §10 partial-apply staleness fix)** is
-the remaining Phase 4 work, split out as its own commit because its failure mode
-is silent data loss (it deserves an isolated adversarial review). Today a
-skip/defer holds the *whole* watermark (safe but noisy on the next run); 2b will
-advance reconciled cells while preserving conflict/skip cells' pre-conflict
-baseline.
+**Part 2b — Per-cell watermark advance ✅ implemented 2026-05-31.** A
+content-only, issue-free partial pass now advances per-cell: it banks every
+*reconciled* cell and preserves only the *true deferrals* at their pre-conflict
+baseline so those re-surface. The watermark block is gated top-level by
+`not plan.issues` (both the full and partial paths), with a partial path behind
+`_eligible_for_partial_advance` (content-only: zero add/remove/move/rename
+proposals, real baseline, no errors, ≥1 deferral, ≥1 applied edit) + a
+completeness invariant (`len(deferred_keys) == result.deferred`) +
+`_record_watermark_partial`, which preserves `deferred_keys` (unresolved
+conflicts + user-skipped edits) and banks the rest.
+
+**The load-bearing semantic decision: `in_sync` is a *reconciliation*, not a
+deferral.** Per `SyncProposal`, an `in_sync` verdict means "the target already
+adequately reflects the source" — the judge examined both sides and decided no
+write is needed. So an `in_sync` edit **banks** (advances), exactly like an
+applied edit and exactly like the long-standing full-advance path. Preserving it
+instead would re-propose every judge-declined cell *every run forever* (the judge
+re-declines), and in real syncs most edits are `in_sync` — so banking is required
+for the tool to be usable. Only **unresolved conflicts** and **user-skipped
+edits** (an explicit "not now") re-surface.
+
+This part was the **deepest rabbit hole of the issue** — four adversarial-review
+rounds. The first two reviews (run under a too-strict "any un-written cell must
+re-surface" invariant I had seeded) flagged `in_sync`-banking as data loss; I
+over-corrected to a preserve-`in_sync` design, then recognized that re-surfacing
+`in_sync` infinite-loops and reverted to the correct bank-`in_sync` semantics.
+The reviews surfaced **three genuine bugs, all fixed**: (1) the full-advance path
+ignored `plan.issues`, so a both-decks-reorder *warning* could be silently
+baselined → fixed by gating both paths on `not plan.issues`; (2) the earlier
+preserve-by-`applied_keys` variant lost data via the full path — dissolved by the
+correct `in_sync`-banks semantics; (3) a **"removed on one deck / edited on the
+other" collision is classified as a `conflict`, not a `remove`**, so it slipped
+the structural gate, and since the cell is gone from the removing deck the
+partial advance dropped the preserve-key and next run mutated it into a *phantom
+add re-creating the deleted slide* → fixed by also requiring every preserve-key
+to be present in **both decks' current cells** (else hold). The final fix is
+monotonically safe (it only adds holds, never advances). 12
+`TestPartialWatermarkAdvance` tests; 723 slides tests green; mypy/ruff clean.
+Lesson logged: never seed an adversarial review with an unproven invariant — it
+manufactures false positives.
+
+Live `clm slides sync` STILL UNCHANGED (Phase 5 wires the engine + flips the
+default).
 
 Original Phase 4 spec (for reference):
 
