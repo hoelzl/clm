@@ -150,6 +150,43 @@ The PostToolUse hook on PythonCourses surfaces findings as
 warnings only and never blocks writes. Use pre-commit or
 `clm slides coverage slides/` as the gating sweep.
 
+## `voiceover` coverage check is now opt-in (issue #176)
+
+Course-authoring policy changed (2026-05-31): **voiceover is optional**
+for every deck. Decks may intentionally ship without voiceover, and
+narration is added only on explicit request.
+
+Accordingly, the `voiceover` review check (which reports a gap for every
+slide / nontrivial code cell that lacks a voiceover cell) is no longer
+part of any default, "all", or "review" bundle. It runs **only** when you
+name it explicitly.
+
+What changed:
+
+- The library functions `validate_file` / `validate_directory` /
+  `validate_course` no longer include `voiceover` in their `checks=None`
+  default. The default bundle is now `format`, `pairing`, `tags`,
+  `code_quality`, `completeness`.
+- The **MCP `validate_slides`** tool — which calls those functions with
+  `checks=None` — therefore no longer emits `voiceover_gaps` by default.
+  This was the main source of the false-positive flood on voiceover-less
+  decks.
+
+What did **not** change:
+
+- The CLI `clm validate <slides>` default was already deterministic-only
+  (`format`, `pairing`, `tags`) and never ran `voiceover`.
+- The PostToolUse quick path (`clm validate --quick`) never ran it.
+
+To run voiceover coverage on a deck that *is* meant to be fully narrated,
+ask for it explicitly:
+
+```bash
+clm validate slides/topic/slides_intro.py --checks voiceover
+```
+
+…or via MCP: `validate_slides(path, checks=["voiceover"])`.
+
 ## CLI restructure: verb-grouped subcommands
 
 CLM {version} reorganises the top-level command surface. Several flat

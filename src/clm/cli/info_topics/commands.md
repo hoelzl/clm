@@ -513,12 +513,22 @@ clm validate-slides [OPTIONS] PATH
 
 | Option | Description |
 |--------|-------------|
-| `--checks TEXT` | Comma-separated checks: `format`, `pairing`, `tags`, `code_quality`, `voiceover`, `completeness` (default: all deterministic) |
+| `--checks TEXT` | Comma-separated checks: `format`, `pairing`, `tags`, `code_quality`, `voiceover`, `completeness` (CLI default: all deterministic) |
 | `--quick` | Fast syntax-only check (format + tags + slide_ids). Useful for PostToolUse hooks |
 | `--json` | Output as JSON |
 | `--data-dir DIR` | Course data directory (contains slides/) |
 
 `PATH` can be a single slide file, a topic directory, or a course spec XML file.
+
+Since CLM {version}, the **`voiceover` coverage check is opt-in** (issue #176).
+Voiceover is now optional per deck, so the check — which reports a gap for every
+slide / nontrivial code cell that lacks a voiceover cell — is **never** part of a
+default, "all", or "review" bundle. It runs **only** when you name it explicitly:
+`--checks voiceover` (or include it in a longer list). This applies everywhere:
+the CLI default was already deterministic-only, and the MCP `validate_slides`
+tool / the `validate_file`/`validate_directory`/`validate_course` library
+functions now exclude `voiceover` from their `checks=None` default too. The other
+review checks (`code_quality`, `completeness`) still run by default.
 
 The `pairing` check group covers DE/EN cell count, tag consistency,
 adjacency, and — since CLM {version} — **`slide_id` metadata**:

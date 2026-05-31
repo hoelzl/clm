@@ -157,7 +157,9 @@ def create_server(data_dir: Path) -> FastMCP:
                 XML (absolute, or relative to the data directory).
             checks: Which checks to run.  Deterministic: format, pairing,
                 tags.  Review: code_quality, voiceover, completeness.
-                Default: all.
+                Default: all checks except ``voiceover``.  Voiceover
+                coverage is opt-in (voiceover is optional per deck, issue
+                #176) — pass ``checks=["voiceover"]`` to run it.
         """
         return await handle_validate_slides(path, data_dir, checks=checks)
 

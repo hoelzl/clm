@@ -104,7 +104,22 @@ class ValidationResult:
 
 ALL_DETERMINISTIC_CHECKS = frozenset({"format", "pairing", "tags"})
 ALL_REVIEW_CHECKS = frozenset({"code_quality", "voiceover", "completeness"})
+# Universe of valid check names — used to validate an explicit ``--checks`` /
+# ``checks=`` request. A name in here is always *runnable* when asked for by
+# name, even if it is excluded from the default bundle below.
 ALL_CHECKS = ALL_DETERMINISTIC_CHECKS | ALL_REVIEW_CHECKS
+
+# Checks that are valid to request explicitly but are never part of a default /
+# "all" bundle. Voiceover coverage is opt-in because voiceover is optional per
+# deck (issue #176) — running it by default floods voiceover-less decks with
+# false-positive gap findings. Run it only by naming it: ``--checks voiceover``
+# / ``checks=["voiceover"]``.
+OPT_IN_CHECKS = frozenset({"voiceover"})
+
+# The bundle used when the caller does not name specific checks: everything
+# except the opt-in checks (i.e. format, pairing, tags, code_quality,
+# completeness).
+DEFAULT_CHECKS = ALL_CHECKS - OPT_IN_CHECKS
 
 
 def _check_format(cells: list[Cell], file_path: str) -> list[Finding]:
@@ -1229,14 +1244,19 @@ def validate_file(
 
     Args:
         path: Path to the ``.py`` slide file.
-        checks: Which checks to run. Default: all.
+        checks: Which checks to run. Default (``None``): every check except
+            the opt-in ones — ``format``, ``pairing``, ``tags``,
+            ``code_quality``, ``completeness``.
             Deterministic: ``"format"``, ``"pairing"``, ``"tags"``.
             Review: ``"code_quality"``, ``"voiceover"``, ``"completeness"``.
+            ``"voiceover"`` is **opt-in** (issue #176): voiceover is optional
+            per deck, so coverage runs only when you name it explicitly in
+            ``checks`` — never as part of the default bundle.
 
     Returns:
         A :class:`ValidationResult` with findings and optional review material.
     """
-    check_set = set(checks) if checks else set(ALL_CHECKS)
+    check_set = set(checks) if checks else set(DEFAULT_CHECKS)
     file_str = str(path)
 
     text = path.read_text(encoding="utf-8")
@@ -1332,6 +1352,8 @@ def validate_directory(
     Args:
         path: Path to a directory containing slide files (at any depth).
         checks: Which checks to run (passed to :func:`validate_file`).
+            ``None`` runs the default bundle, which excludes the opt-in
+            ``voiceover`` coverage check (issue #176).
     """
     slide_files = find_slide_files_recursive(path)
     all_findings: list[Finding] = []
@@ -1346,7 +1368,7 @@ def validate_directory(
     # Phase 6: surface divergent shared cells between split pairs as
     # ``pairing`` errors. This runs even when only ``pairing`` checks are
     # requested via ``checks=`` because the parity is a pairing property.
-    check_set = set(checks) if checks else set(ALL_CHECKS)
+    check_set = set(checks) if checks else set(DEFAULT_CHECKS)
     if "pairing" in check_set:
         for de_path, en_path in _slide_files_to_split_pairs(slide_files):
             all_findings.extend(_check_shared_cell_parity(de_path, en_path))
@@ -1371,6 +1393,8 @@ def validate_course(
         course_spec_path: Path to the course spec XML file.
         slides_dir: Path to the ``slides/`` directory.
         checks: Which checks to run (passed to :func:`validate_file`).
+            ``None`` runs the default bundle, which excludes the opt-in
+            ``voiceover`` coverage check (issue #176).
     """
     from clm.core.course_spec import CourseSpec
 
@@ -1381,7 +1405,7 @@ def validate_course(
     files_checked = 0
     combined_review = ReviewMaterial() if (not checks or set(checks) & ALL_REVIEW_CHECKS) else None
 
-    check_set = set(checks) if checks else set(ALL_CHECKS)
+    check_set = set(checks) if checks else set(DEFAULT_CHECKS)
 
     for binding in spec.iter_topic_bindings():
         matches = matches_for_binding(topic_map, binding.topic_id, binding.effective_module)

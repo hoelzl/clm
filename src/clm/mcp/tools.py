@@ -374,7 +374,9 @@ async def handle_validate_slides(
         path: Path to a slide file, topic directory, or course spec XML
             (absolute or relative to data_dir).
         data_dir: Root data directory (contains ``slides/``).
-        checks: Which checks to run.  Default: all.
+        checks: Which checks to run.  Default (``None``): all checks except
+            the opt-in ``voiceover`` coverage check (issue #176) — pass
+            ``checks=["voiceover"]`` to run it.
 
     Returns:
         JSON string with validation results.
