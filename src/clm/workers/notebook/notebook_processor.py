@@ -755,17 +755,103 @@ if not getattr(_clm_httpx.AsyncClient.send, "_clm_tagged", False):
 """
 
 
-def _inject_http_replay_tag_bootstrap(nb: NotebookNode, tag: str) -> None:
+# Socket-only forensic trace for the mitmproxy transport (issue #165 P5).
+# Appended to the tag bootstrap when CLM_HTTP_REPLAY_TRACE=1. Under the
+# transport the kernel never imports vcr or patches httpcore, so the heavy
+# ``_HTTP_REPLAY_TRACE_TEMPLATE`` (which wraps vcr internals and references
+# ``_clm_vcr_patch``/``_clm_cassette``/``_clm_json``/``_clm_atexit`` from the
+# vcrpy bootstrap) cannot run here. This template is fully self-contained — it
+# imports its own json/atexit and only installs the ``socket.connect`` audit
+# hook (Stream 1, the ground truth). The proxy-side ``proxy`` stream
+# (Stream 2′, written by the addon) supplies the interception evidence the
+# now-dark ``vcr`` stream used to. It writes the SAME ``worker-<pid>.jsonl``
+# file the vcr trace uses (only one of the two ever runs per kernel) so
+# ``analyze_http_replay_trace.py`` reads it identically. No literal ``{}`` in
+# the body except the doubled ``{{}}`` so ``str.format`` only fills ``{trace_dir!r}``.
+_HTTP_REPLAY_SOCKET_TRACE_TEMPLATE = """\
+# CLM HTTP REPLAY SOCKET TRACE - DO NOT EDIT
+_clm_strace_dir = {trace_dir!r}
+if _clm_strace_dir:
+    import atexit as _clm_st_atexit
+    import json as _clm_st_json
+    import os as _clm_st_os
+    import socket as _clm_st_socket  # noqa: F401
+    import sys as _clm_st_sys
+    import threading as _clm_st_threading
+    import time as _clm_st_time
+    from datetime import datetime as _clm_st_datetime, timezone as _clm_st_timezone
+
+    _clm_st_os.makedirs(_clm_strace_dir, exist_ok=True)
+    _clm_strace_path = _clm_st_os.path.join(
+        _clm_strace_dir, "worker-" + str(_clm_st_os.getpid()) + ".jsonl"
+    )
+    _clm_strace_fh = open(_clm_strace_path, "a", encoding="utf-8", newline="\\n")
+    _clm_strace_lock = _clm_st_threading.Lock()
+    _clm_strace_start = _clm_st_time.monotonic()
+
+    def _clm_strace_emit(stream, event, data=None):
+        try:
+            record = {{
+                "ts_mono": _clm_st_time.monotonic() - _clm_strace_start,
+                "ts_wall": _clm_st_datetime.now(_clm_st_timezone.utc).isoformat(),
+                "pid": _clm_st_os.getpid(),
+                "tid": _clm_st_threading.get_ident(),
+                "stream": stream,
+                "event": event,
+                "data": data or {{}},
+            }}
+            line = _clm_st_json.dumps(record) + "\\n"
+            with _clm_strace_lock:
+                _clm_strace_fh.write(line)
+                _clm_strace_fh.flush()
+        except Exception:
+            pass
+
+    def _clm_saudit_hook(event, args):
+        try:
+            if event == "socket.connect" and len(args) >= 2:
+                address = args[1]
+                if isinstance(address, tuple) and len(address) >= 2:
+                    host, port = address[0], address[1]
+                else:
+                    host, port = repr(address), None
+                _clm_strace_emit("socket", "connect", {{"host": host, "port": port}})
+        except Exception:
+            pass
+
+    _clm_st_sys.addaudithook(_clm_saudit_hook)
+    _clm_strace_emit("socket", "bootstrap.complete", {{"transport": "mitmproxy"}})
+
+    def _clm_strace_close():
+        try:
+            _clm_strace_fh.flush()
+            _clm_strace_fh.close()
+        except Exception:
+            pass
+
+    _clm_st_atexit.register(_clm_strace_close)
+"""
+
+
+def _inject_http_replay_tag_bootstrap(nb: NotebookNode, tag: str, *, trace_dir: str = "") -> None:
     """Prepend the mitmproxy cassette-routing tag cell to ``nb``.
 
     ``tag`` is the absolute canonical cassette path the host-side merge
     will fold into. The cell carries the same ``clm_injected`` marker as
     the vcrpy bootstrap so :func:`_strip_injected_cells` removes it before
     the notebook reaches HTML / the execution cache.
+
+    When ``trace_dir`` is non-empty (CLM_HTTP_REPLAY_TRACE=1), the
+    self-contained socket-only forensic trace is appended so the kernel emits
+    the ``socket`` ground-truth stream to ``<trace_dir>/worker-<pid>.jsonl``
+    (issue #165 P5). Empty string (the common case) leaves the cell as just
+    the tag bootstrap.
     """
     from nbformat.v4 import new_code_cell
 
     source = _HTTP_REPLAY_TAG_BOOTSTRAP_TEMPLATE.format(tag=tag)
+    if trace_dir:
+        source += "\n" + _HTTP_REPLAY_SOCKET_TRACE_TEMPLATE.format(trace_dir=trace_dir)
     cell = new_code_cell(
         source=source,
         metadata={
@@ -2215,7 +2301,18 @@ class NotebookProcessor:
             tag = self._resolve_mitmproxy_tag(payload, source_dir)
             if tag is None:
                 return False
-            _inject_http_replay_tag_bootstrap(processed_nb, tag)
+            # Forensic socket trace (issue #165 P5): the kernel emits its
+            # ground-truth ``socket`` stream so the analyzer can confirm every
+            # connect goes to the proxy (none escapes). Prefer the payload field
+            # (same source the vcrpy path uses); fall back to the host-pinned env
+            # the Direct worker inherits, so the socket stream is reliably written
+            # whenever CLM_HTTP_REPLAY_TRACE=1 even if the field was not threaded.
+            trace_dir = (
+                getattr(payload, "http_replay_trace_dir", "")
+                or os.environ.get("CLM_HTTP_REPLAY_TRACE_INVOCATION_DIR", "")
+                or ""
+            )
+            _inject_http_replay_tag_bootstrap(processed_nb, tag, trace_dir=trace_dir)
             logger.debug(
                 f"{payload.correlation_id}: Injected http-replay tag bootstrap "
                 f"(mitmproxy transport, cassette='{tag}') for "

@@ -296,3 +296,65 @@ gating later if we want).
 Specifically: is the per-worker trace file layout right; is the event
 schema rich enough; are there other vcr internals worth instrumenting
 that I've missed?
+
+---
+
+## P5 re-port — mitmproxy transport mode (2026-05-31)
+
+Implemented for issue #165 P5. The harness above was designed for the
+in-kernel **vcrpy** path, where Stream 2 (vcr) is the interception
+evidence. Under the **out-of-process mitmproxy transport**
+(`CLM_HTTP_REPLAY_TRANSPORT=mitmproxy`) two of the three streams change:
+
+- **Stream 1 (socket) survives, but its meaning inverts.** vcrpy patched
+  *above* the socket, so a real `socket.connect` to a provider was the bug.
+  The proxy lives *below* the kernel's HTTP client: the kernel now
+  *legitimately* opens a TCP connection — to the **proxy**. So a connect to
+  the proxy is expected; a connect to anything else is the escape.
+- **Stream 2 (vcr) goes dark.** The kernel no longer imports vcr or patches
+  httpcore (the whole point of the transport), so there are no vcr internals
+  to wrap and no `force_reset` race to detect. Its role — *was this request
+  intercepted?* — moves to a new **Stream 2′ (proxy)** emitted by the addon.
+- **Stream 3 (cassette) is unchanged** (host-side merge lifecycle).
+
+### Stream 2′ — proxy (the addon's view)
+
+**Where:** the `mitmdump` process, via
+`clm.infrastructure.http_replay_mitm.trace_log.ProxyTraceLog` (pure stdlib,
+path-importable in the isolated mitmdump interpreter, same JSONL record shape
+as `TraceWriter`). Written to `proxy-<pid>.jsonl`.
+
+**Event types:**
+- `proxy.ready` — `{listen_host, listen_port, mode, build_id, ignore_hosts}`.
+  The `listen_port` is what lets the analyzer recognize a to-proxy connect.
+- `proxy.request` — `{method, scheme, host, port, has_tag, action}` where
+  `action ∈ {served, miss, ignored, forward, passthrough}` (the addon's
+  decision: cassette hit / strict-404 / ignore_hosts-forwarded / record-mode
+  upstream / untagged-no-catch-all).
+- `proxy.response` — `{host, port, status, recorded}` (emitted when an upstream
+  reply is persisted to a staging cassette).
+
+**Wiring:** `build.py` records `transport` in `manifest.json` and forwards the
+trace dir to `MitmproxyManager(trace_dir=…)`, which passes
+`--set clm_trace_dir=…` to mitmdump. Off entirely unless
+`CLM_HTTP_REPLAY_TRACE=1` (the directory is only created then).
+
+### Analyzer changes (`analyze_http_replay_trace.py`)
+
+`analyze()` reads `manifest["transport"]` (default `"vcrpy"` for
+back-compatibility with old bundles) and branches:
+
+- **vcrpy** → the original `_classify_bypasses` (vcr-event cross-reference +
+  `force_reset` race detection). Unchanged.
+- **mitmproxy** → `_classify_bypasses_transport`: a remote (non-loopback)
+  connect whose **port is the proxy's** is a *to-proxy* connect (expected); any
+  other remote connect is a **bypass**. Direct builds reach the proxy on
+  loopback, so any remote connect is already a bypass; Docker builds reach it
+  at the bridge-gateway IP on the proxy port, which the port match recognizes.
+  No race candidates (nothing patches the kernel).
+
+The report gains a **Proxy (interception evidence)** section and a
+**connection-bound** health line: the issue #143 leak signature was ≈1 leaked
+pooled connection per request (connects ≈ flows); healthy pooling to the
+out-of-process proxy keeps connects ≪ flows. This is how the deadlock-defeat
+gate (gate 1) is re-proven for the transport.

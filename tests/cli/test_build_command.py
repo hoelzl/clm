@@ -1728,9 +1728,11 @@ class _FakeMitmManager:
     manager for ``_maybe_start_mitmproxy_transport`` (no real mitmdump)."""
 
     last_listen_host: str | None = None
+    last_trace_dir: object = None
 
-    def __init__(self, *, cassette_path, mode, listen_host, confdir, ignore_hosts):
+    def __init__(self, *, cassette_path, mode, listen_host, confdir, ignore_hosts, trace_dir=None):
         _FakeMitmManager.last_listen_host = listen_host
+        _FakeMitmManager.last_trace_dir = trace_dir
         self._confdir = Path(confdir)
         self.build_id = "fakebuild"
 
@@ -1795,3 +1797,16 @@ class TestMitmproxyTransportBindHost:
     def test_binds_loopback_when_no_worker_config(self, monkeypatch, tmp_path) -> None:
         listen_host, _ = self._run(monkeypatch, tmp_path, None)
         assert listen_host == "127.0.0.1"
+
+    def test_forwards_trace_dir_from_invocation_env(self, monkeypatch, tmp_path) -> None:
+        # When CLM_HTTP_REPLAY_TRACE pinned an invocation dir, the transport
+        # forwards it to the manager so the addon can write the proxy stream
+        # (issue #165 P5). Unset -> None.
+        monkeypatch.setenv("CLM_HTTP_REPLAY_TRACE_INVOCATION_DIR", str(tmp_path / "trace-inv"))
+        self._run(monkeypatch, tmp_path, None)
+        assert _FakeMitmManager.last_trace_dir == Path(tmp_path / "trace-inv")
+
+    def test_no_trace_dir_when_invocation_env_unset(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.delenv("CLM_HTTP_REPLAY_TRACE_INVOCATION_DIR", raising=False)
+        self._run(monkeypatch, tmp_path, None)
+        assert _FakeMitmManager.last_trace_dir is None

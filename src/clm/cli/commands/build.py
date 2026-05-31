@@ -222,12 +222,18 @@ def _maybe_start_mitmproxy_transport(
     # by default, overridable via CLM_HTTP_REPLAY_IGNORE_HOSTS. The addon
     # forwards these hosts but never records them into a cassette.
     ignore_hosts = resolve_http_replay_ignore_hosts()
+    # Forward the forensic trace dir (issue #165 P5) so the addon can write the
+    # per-flow ``proxy`` stream alongside the worker ``socket`` stream. The host
+    # pins this env earlier (when CLM_HTTP_REPLAY_TRACE=1); unset → no tracing.
+    trace_inv = _os.environ.get("CLM_HTTP_REPLAY_TRACE_INVOCATION_DIR", "").strip()
+    trace_dir = Path(trace_inv) if trace_inv else None
     manager = MitmproxyManager(
         cassette_path=cassette,
         mode=mode,
         listen_host=listen_host,
         confdir=confdir,
         ignore_hosts=ignore_hosts,
+        trace_dir=trace_dir,
     )
     manager.start()
 
@@ -1476,9 +1482,17 @@ async def main_build(
     if _trace_is_enabled():
         _trace_invocation_dir = _trace_make_invocation_dir()
         _trace_set_invocation_dir(_trace_invocation_dir)
+        # Record which transport produced this trace bundle so the analyzer
+        # picks the right bypass model: under "mitmproxy" the ``vcr`` stream is
+        # dark and the ``proxy`` stream is the interception evidence; under
+        # "vcrpy" the in-kernel ``vcr`` stream is used (issue #165 P5).
+        _trace_transport = (
+            "mitmproxy" if _os.environ.get("CLM_HTTP_REPLAY_TRANSPORT") == "mitmproxy" else "vcrpy"
+        )
         _trace_write_manifest(
             _trace_invocation_dir,
             http_replay_mode=resolved_http_replay_mode,
+            extra={"transport": _trace_transport},
         )
         _os.environ["CLM_HTTP_REPLAY_TRACE_INVOCATION_DIR"] = str(_trace_invocation_dir)
         click.echo(f"HTTP-replay trace active: {_trace_invocation_dir}")

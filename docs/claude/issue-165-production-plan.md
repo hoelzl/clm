@@ -296,16 +296,51 @@ flag, default-unset unaffected):**
   Pre-existing in the vcrpy direct path; converging is a separate follow-up touching both
   transports.
 
-## P5 — trace-harness re-port + vcrpy retirement  ·  ~3–5 d  ·  risk: medium
+## P5 — trace-harness re-port + vcrpy retirement  ·  ~3–5 d  ·  risk: medium  ·  **STEP 1 DONE; flip/deletion deferred**
 
-- Re-port the Phase-A diagnostic: its `socket.connect` ground-truth survives,
-  but the vcr-stream events go dark — rebuild the methodology against proxy logs.
-- Run the full parity-gate suite (below). If all pass and Docker is supported or
-  scoped out, flip the default to mitmproxy for one release with
+**Status (2026-05-31):** step 1 (the trace-harness re-port) is **shipped on the
+branch** and the one open record-mode parity gate is **closed**. The default-flip
+and workaround deletion stay **deferred to a post-merge release** — the transport
+is still branch-only (draft #173, not merged, latest tag v1.6.2), so the plan's
+own invariant ("flip only after the gates hold across a full release cycle") is
+not yet satisfiable. Full readiness analysis, the per-gate audit, the
+workaround-deletion inventory, and the deletion blast radius are in
+`docs/claude/issue-165-p5-readiness.md`.
+
+- **Trace-harness re-port (DONE).** Under the transport the kernel `socket`
+  stream survives but its meaning inverts (the kernel's intended target is the
+  proxy) and the `vcr` stream goes dark. New pieces: a pure stdlib
+  `http_replay_mitm/trace_log.py` (`ProxyTraceLog`, path-importable in the
+  mitmdump interpreter) the addon uses to emit a **`proxy` stream**
+  (`proxy.ready`/`request`/`response`); a self-contained
+  `_HTTP_REPLAY_SOCKET_TRACE_TEMPLATE` appended to the tag bootstrap so the
+  kernel still emits the `socket` ground truth; manager `trace_dir` plumbing +
+  manifest `transport` field; and `analyze_http_replay_trace.py` gains a
+  transport mode (bypass = a connect whose port is not the proxy's; proxy-flow
+  stats replace the dark vcr stream). Design addendum in
+  `docs/claude/design/http-replay-trace.md`. Proven by the isolated proxy smoke
+  (proxy.ready + HTTPS-via-proxy 200 + 0-bypass) and a 116-flow reproducer build
+  (111 served, **no pool-exhaustion deadlock signature**).
+- **Gate 6 record-mode "grows nothing" — CLOSED.** A minimal real-OpenRouter
+  record through the addon produced a **secret-clean** cassette (no key /
+  authorization / x-api-key / LangSmith) and a no-op rebuild left it
+  **byte-identical**. This was the only gate the plan did not claim closed.
+- **Finding (sharpens gate 7, validates keeping Option-F):** a strict-replay
+  miss fast-fails at the addon (404) and the SDK, but **langchain's agent/retry
+  layer above the SDK can re-issue a missed request**, so a stale-cassette miss
+  can stall a cell until the per-cell Option-F timeout fires. Keep Option-F.
+- **Still to do at the cutover (future release):** convert the uncommitted
+  scale/e2e proofs (gates 1, 2, 7, 8, 9) into committed tests or a repeatable
+  cutover-gate script; add an `allow_playback_repeats` regression test on the
+  mitmproxy side; then flip the default for one release with
   `CLM_HTTP_REPLAY_TRANSPORT=vcrpy` still selectable as rollback insurance.
-- **Only then** delete the 8 in-kernel workarounds + the ~480-line bootstrap
-  templates. Keep the Option-F per-cell timeout as a transport-agnostic
-  loud-failure net. Keep vcrpy installed as the YAML serializer.
+- **Only then** delete the moot/reimplemented in-kernel workarounds + the
+  ~480-line bootstrap templates **in the same commit that removes the in-kernel
+  vcrpy bootstrap** (deleting earlier reintroduces #129/#143 for every default
+  build — see the readiness inventory), remove `test_http_replay_vcr_pin_guard.py`
+  and relax the `[replay]` vcrpy pin. Keep the Option-F per-cell timeout as a
+  transport-agnostic loud-failure net, and keep vcrpy installed as the YAML
+  serializer.
 
 ---
 

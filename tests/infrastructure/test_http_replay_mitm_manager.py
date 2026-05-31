@@ -12,6 +12,7 @@ import subprocess
 import sys
 import time
 
+from clm.infrastructure.http_replay_mitm import proxy_manager
 from clm.infrastructure.http_replay_mitm.proxy_manager import MitmproxyManager
 
 
@@ -108,3 +109,37 @@ class TestClientHostAndProxyUrl:
         mgr.listen_port = 8080
         assert mgr._client_host() == "192.168.1.5"
         assert mgr.proxy_url == "http://192.168.1.5:8080"
+
+
+class TestStartCommandTraceDir:
+    """The forensic trace dir (issue #165 P5) reaches the addon via a
+    ``--set clm_trace_dir=`` option only when configured."""
+
+    class _FakeProc:
+        stdout = None
+
+        def poll(self):
+            return None
+
+    def _captured_cmd(self, monkeypatch, **kwargs) -> list[str]:
+        captured: dict[str, list[str]] = {}
+
+        def _fake_popen(cmd, **_kw):
+            captured["cmd"] = cmd
+            return self._FakeProc()
+
+        monkeypatch.setattr(proxy_manager, "_locate_mitmdump", lambda: "mitmdump")
+        monkeypatch.setattr(proxy_manager, "_pick_free_port", lambda host: 12345)
+        monkeypatch.setattr(proxy_manager.subprocess, "Popen", _fake_popen)
+        monkeypatch.setattr(MitmproxyManager, "_wait_for_ready", lambda self: None)
+        mgr = MitmproxyManager(cassette_path="unused.yaml", **kwargs)
+        mgr.start()
+        return captured["cmd"]
+
+    def test_trace_dir_adds_clm_trace_dir_set(self, monkeypatch, tmp_path) -> None:
+        cmd = self._captured_cmd(monkeypatch, trace_dir=tmp_path)
+        assert any(str(part) == f"clm_trace_dir={tmp_path}" for part in cmd)
+
+    def test_no_trace_dir_omits_clm_trace_dir_set(self, monkeypatch) -> None:
+        cmd = self._captured_cmd(monkeypatch)
+        assert not any("clm_trace_dir=" in str(part) for part in cmd)

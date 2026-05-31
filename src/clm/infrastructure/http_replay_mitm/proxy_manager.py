@@ -73,11 +73,17 @@ class MitmproxyManager:
         confdir: Path | None = None,
         extra_args: list[str] | None = None,
         ignore_hosts: tuple[str, ...] | list[str] = (),
+        trace_dir: Path | None = None,
     ) -> None:
         self.cassette_path = Path(cassette_path)
         self.mode = mode
         self.listen_host = listen_host
         self._configured_port = listen_port
+        # Forensic HTTP-replay trace directory (issue #165 P5). When set, the
+        # addon writes per-flow proxy events to ``proxy-<pid>.jsonl`` there so
+        # ``scripts/analyze_http_replay_trace.py`` can cross-reference the
+        # worker socket stream against the proxy's interception decisions.
+        self.trace_dir = Path(trace_dir) if trace_dir is not None else None
         self.listen_port: int | None = None  # set on start
         # mitmproxy stores its CA + config under ``confdir``. Per-build
         # isolation keeps the CA out of the user's home directory and gives
@@ -203,6 +209,8 @@ class MitmproxyManager:
         ]
         if self.confdir is not None:
             cmd.extend(["--set", f"confdir={self.confdir}"])
+        if self.trace_dir is not None:
+            cmd.extend(["--set", f"clm_trace_dir={self.trace_dir}"])
         cmd.extend(self.extra_args)
 
         env = os.environ.copy()

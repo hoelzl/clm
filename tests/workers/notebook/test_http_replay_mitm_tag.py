@@ -9,6 +9,9 @@ resolution and confirm the kernel's httpcore is never patched.
 
 from __future__ import annotations
 
+import json
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,6 +19,7 @@ from nbformat.v4 import new_code_cell, new_notebook
 
 from clm.workers.notebook.notebook_processor import (
     _HTTP_REPLAY_BOOTSTRAP_MARKER,
+    _HTTP_REPLAY_SOCKET_TRACE_TEMPLATE,
     NotebookProcessor,
     _inject_http_replay_tag_bootstrap,
     _strip_injected_cells,
@@ -61,6 +65,69 @@ def test_strip_removes_tag_bootstrap_cell():
     _strip_injected_cells(nb)
     assert len(nb["cells"]) == 1
     assert nb["cells"][0]["source"] == "print(1)"
+
+
+def test_tag_bootstrap_without_trace_dir_omits_socket_trace():
+    nb = new_notebook(cells=[new_code_cell("print(1)")])
+    _inject_http_replay_tag_bootstrap(nb, "/x/foo.http-cassette.yaml")
+    src = nb["cells"][0]["source"]
+    assert "x-clm-cassette" in src  # still the tag bootstrap
+    assert "SOCKET TRACE" not in src
+    assert "addaudithook" not in src
+
+
+def test_tag_bootstrap_with_trace_dir_appends_socket_trace(tmp_path):
+    """Issue #165 P5: under the transport the kernel's socket ground-truth
+    stream must be installed by the tag bootstrap (the vcr trace template
+    cannot run — vcr is never imported)."""
+    nb = new_notebook(cells=[new_code_cell("print(1)")])
+    _inject_http_replay_tag_bootstrap(nb, "/x/foo.http-cassette.yaml", trace_dir=str(tmp_path))
+    src = nb["cells"][0]["source"]
+    # Tag bootstrap is still present...
+    assert "x-clm-cassette" in src
+    # ...plus the self-contained socket trace (audit hook, worker file)...
+    assert "addaudithook" in src
+    assert "socket.connect" in src
+    assert "worker-" in src
+    # ...and it must NOT pull in the heavy vcr trace machinery (vcr is never
+    # imported under the transport, so those symbols would NameError).
+    assert "import vcr" not in src
+    assert "force_reset" not in src
+    assert "_clm_vcr_patch" not in src
+    assert "play_response" not in src
+
+
+def test_socket_trace_template_execs_standalone_and_emits(tmp_path):
+    """The socket trace must run with NONE of the vcrpy-bootstrap symbols
+    defined (it is self-contained). Exec it in a clean subprocess and confirm
+    it writes a worker JSONL with the socket bootstrap.complete event."""
+    rendered = _HTTP_REPLAY_SOCKET_TRACE_TEMPLATE.format(trace_dir=str(tmp_path))
+    script = rendered + "\n_clm_strace_close()\n"
+    proc = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, check=False
+    )
+    assert proc.returncode == 0, proc.stderr
+    files = list(tmp_path.glob("worker-*.jsonl"))
+    assert len(files) == 1, files
+    records = [json.loads(line) for line in files[0].read_text().splitlines() if line]
+    streams_events = {(r["stream"], r["event"]) for r in records}
+    assert ("socket", "bootstrap.complete") in streams_events
+    assert all(r["stream"] == "socket" for r in records)
+
+
+def test_maybe_inject_under_transport_injects_socket_trace_when_traced(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLM_HTTP_REPLAY_TRANSPORT", "mitmproxy")
+    proc = NotebookProcessor(CompletedOutput(format="code"))
+    nb = new_notebook(cells=[new_code_cell("print(1)")])
+    payload = _payload(source_topic_dir=str(tmp_path), http_replay_trace_dir=str(tmp_path))
+
+    injected = proc._maybe_inject_http_replay(nb, payload, None, tmp_path)
+
+    assert injected is True
+    src = nb["cells"][0]["source"]
+    assert "x-clm-cassette" in src
+    assert "addaudithook" in src  # socket trace wired through the payload field
+    assert "import vcr" not in src
 
 
 def test_resolve_mitmproxy_tag_uses_payload_cassette_name(monkeypatch, tmp_path):

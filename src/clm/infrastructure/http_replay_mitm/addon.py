@@ -34,6 +34,7 @@ import sys
 import uuid
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any, Protocol
 
 from mitmproxy import ctx, http
 
@@ -55,6 +56,18 @@ except ImportError:  # mitmdump interpreter — import the sibling by path
     except ImportError as exc:  # vcrpy missing from the mitmdump env
         cf = None  # type: ignore[assignment]
         _CF_IMPORT_ERROR = exc
+
+# The proxy-flow trace writer (issue #165 P5 forensic harness). Pure stdlib, so
+# it always imports — both as a CLM submodule and by bare path inside the
+# mitmdump interpreter. Off unless the manager passes ``clm_trace_dir``.
+try:  # CLM venv
+    from clm.infrastructure.http_replay_mitm import trace_log as _trace_log
+except ImportError:  # mitmdump interpreter — import the sibling by path
+    sys.path.insert(0, str(Path(__file__).parent))
+    try:
+        import trace_log as _trace_log  # type: ignore[import-not-found,no-redef]
+    except ImportError:  # pragma: no cover — pure stdlib, should never fail
+        _trace_log = None  # type: ignore[assignment]
 
 
 # CLM HTTP-replay modes (the four CLM exposes; ``disabled`` is handled by the
@@ -104,6 +117,32 @@ _SERVE_DROP_HEADERS = frozenset({"content-length", "transfer-encoding"})
 # ``clm_replay_miss`` body, not this status (see ``_is_replay_miss_marker``),
 # so it never collides with a legitimately recorded 404 response.
 _REPLAY_MISS_STATUS = 404
+
+
+class _TraceLike(Protocol):
+    """The slice of ``ProxyTraceLog`` the addon depends on (so the trace can be
+    either a real log or the no-op stand-in without confusing the type checker)."""
+
+    def emit(self, event: str, data: dict[str, Any] | None = None) -> None: ...
+
+    def close(self) -> None: ...
+
+
+class _DisabledTrace:
+    """No-op proxy-trace stand-in used when the trace module can't be imported.
+
+    ``trace_log`` is pure stdlib so this should never be needed in practice,
+    but it lets the addon call ``self._trace.emit(...)`` unconditionally.
+    """
+
+    def emit(self, event: str, data: dict[str, Any] | None = None) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+
+_DISABLED_TRACE = _DisabledTrace()
 
 
 class _Target:
@@ -186,6 +225,10 @@ class ClmReplayAddon:
         self._request_filter: Callable[..., object] | None = None
         # Keyed by canonical-path string; "" is the untagged catch-all.
         self._targets: dict[str, _Target] = {}
+        # Forensic per-flow trace (issue #165 P5). Disabled until running()
+        # reads ``clm_trace_dir``; off entirely unless the build sets
+        # CLM_HTTP_REPLAY_TRACE=1 and the manager forwards the directory.
+        self._trace: _TraceLike = _DISABLED_TRACE
 
     def load(self, loader) -> None:
         loader.add_option(
@@ -214,6 +257,14 @@ class ClmReplayAddon:
             default="",
             help="Comma-separated hosts whose traffic is forwarded but never "
             "recorded (LangSmith telemetry by default). Mirrors vcrpy ignore_hosts.",
+        )
+        loader.add_option(
+            name="clm_trace_dir",
+            typespec=str,
+            default="",
+            help="Forensic HTTP-replay trace directory (issue #165 P5). When set, "
+            "the addon writes per-flow proxy events to proxy-<pid>.jsonl there. "
+            "Empty disables tracing.",
         )
 
     def running(self) -> None:
@@ -247,6 +298,25 @@ class ClmReplayAddon:
         # already exists), so there is nothing to existence-check or unlink
         # here — ``clm_cassette_path`` is only the build-scratch catch-all.
 
+        # Forensic trace (issue #165 P5). The ``proxy.ready`` event records the
+        # listen port so the analyzer can tell a worker's connect-to-proxy from
+        # a genuine bypass (a connect whose port is NOT this proxy's).
+        trace_dir = getattr(ctx.options, "clm_trace_dir", "") or ""
+        if trace_dir and _trace_log is not None:
+            self._trace = _trace_log.ProxyTraceLog.from_trace_dir(trace_dir)
+        listen_port = getattr(ctx.options, "listen_port", None)
+        listen_host = getattr(ctx.options, "listen_host", "")
+        self._trace.emit(
+            "proxy.ready",
+            {
+                "listen_host": listen_host,
+                "listen_port": listen_port,
+                "mode": self._mode,
+                "build_id": self._build_id,
+                "ignore_hosts": list(ignore_hosts),
+            },
+        )
+
         logger.info(
             "Addon ready: mode=%s default_cassette=%s ignore_hosts=%s build=%s",
             self._mode,
@@ -258,8 +328,10 @@ class ClmReplayAddon:
     def done(self) -> None:
         # Staging files are written eagerly on each recorded response, and
         # the host writes the .completed markers after the proxy stops, so
-        # there is nothing to flush here. Kept for lifecycle symmetry.
-        return
+        # there is nothing to flush here. Best-effort close the trace log
+        # (every trace line is already flushed, so a missed close — e.g. a
+        # Windows CTRL_BREAK that skips this hook — loses nothing).
+        self._trace.close()
 
     def request(self, flow: http.HTTPFlow) -> None:
         if cf is None:
@@ -280,10 +352,12 @@ class ClmReplayAddon:
             # ignore_hosts (e.g. LangSmith telemetry) or an unfilterable request:
             # forward upstream untouched, record nothing, never a miss response.
             flow.metadata[_FLOW_IGNORED_KEY] = True
+            self._trace_request(flow, tag, "ignored")
             return
 
         target = self._target_for(tag)
         if target is None:
+            self._trace_request(flow, tag, "passthrough")
             return  # untagged with no catch-all configured -> pass through
 
         self._ensure_loaded(target)
@@ -294,12 +368,20 @@ class ClmReplayAddon:
                 if cf.requests_match(filtered, rec_request):
                     flow.response = self._build_reply(rec_response)
                     flow.metadata[_FLOW_SERVED_KEY] = True
+                    self._trace_request(flow, tag, "served")
                     return
 
         if not record:
             # Strict replay (``replay``, or ``once`` with an existing cassette):
             # a miss must fail loudly, never escaping to the real network.
             flow.response = self._replay_miss_response(flow, target)
+            self._trace_request(flow, tag, "miss")
+            return
+
+        # Recording modes (new-episodes / refresh / once-when-absent) on a
+        # cache miss: the request is forwarded upstream and response() persists
+        # the reply. This is the only path that produces a real upstream connect.
+        self._trace_request(flow, tag, "forward")
 
     def response(self, flow: http.HTTPFlow) -> None:
         if cf is None or flow.response is None:
@@ -341,6 +423,38 @@ class ClmReplayAddon:
         target.seen.add(key)
         # Eager rewrite so a build-timeout kill of mitmdump loses nothing.
         cf.write_cassette(target.write_path, target.to_write)
+        self._trace.emit(
+            "proxy.response",
+            {
+                "host": flow.request.host,
+                "port": flow.request.port,
+                "status": flow.response.status_code,
+                "recorded": True,
+            },
+        )
+
+    # -- tracing ---------------------------------------------------------
+
+    def _trace_request(self, flow: http.HTTPFlow, tag: str | None, action: str) -> None:
+        """Emit one ``proxy.request`` forensic event for this flow.
+
+        ``action`` is the addon's decision for the request: ``served`` (cassette
+        hit), ``miss`` (strict-replay 404), ``ignored`` (ignore_hosts, forwarded
+        not recorded), ``forward`` (recording mode, will hit upstream) or
+        ``passthrough`` (untagged, no catch-all). The analyzer uses these as the
+        interception-evidence stream that replaces the (now-dark) ``vcr`` stream.
+        """
+        self._trace.emit(
+            "proxy.request",
+            {
+                "method": flow.request.method,
+                "scheme": flow.request.scheme,
+                "host": flow.request.host,
+                "port": flow.request.port,
+                "has_tag": tag is not None,
+                "action": action,
+            },
+        )
 
     # -- routing ---------------------------------------------------------
 
