@@ -3,7 +3,10 @@
 Applies mechanical fixes to percent-format ``.py`` slide files:
 
 - **Tag migration**: ``alt`` → ``completed`` after ``start`` cells
-- **Workshop tag insertion**: adds ``workshop`` to workshop heading cells
+- **Workshop tag insertion**: adds ``workshop`` to workshop heading cells,
+  and symmetrizes ``workshop``/``end-workshop`` tags across DE/EN heading
+  pairs so single-language split builds detect the same workshop ranges as
+  bilingual builds
 - **Interleaving normalization**: reorders cells so paired DE/EN cells
   are adjacent
 
@@ -28,6 +31,7 @@ from clm.core.topic_resolver import (
     matches_for_binding,
 )
 from clm.notebooks.slide_parser import parse_cell_header
+from clm.slides.pairing import build_slide_groups
 from clm.slides.raw_cells import RawCell as _RawCell
 from clm.slides.raw_cells import reconstruct as _reconstruct
 from clm.slides.raw_cells import split_cells as _split_raw_cells
@@ -180,6 +184,64 @@ def _add_tag_to_header(header: str, tag: str) -> str:
             new_tags = f'"{tag}"'
         return header[: tags_match.start()] + f"tags=[{new_tags}]" + header[tags_match.end() :]
     return header.rstrip() + f' tags=["{tag}"]'
+
+
+# ---------------------------------------------------------------------------
+# Workshop tag symmetry: propagate workshop/end-workshop across DE/EN pairs
+# ---------------------------------------------------------------------------
+
+# Tags that scope a *slide* (a DE/EN pair), not a single language. They must
+# appear on both halves of a slide so that a single-language split build sees
+# the same workshop ranges a bilingual build does.
+_SLIDE_SCOPED_TAGS = ("workshop", "end-workshop")
+
+
+def _apply_workshop_symmetry(cells: list[_RawCell], file_path: str) -> list[Change]:
+    """Propagate slide-scoped ``workshop``/``end-workshop`` tags across pairs.
+
+    ``workshop`` and ``end-workshop`` mark a *slide* (a DE/EN heading pair) as a
+    workshop boundary. The notebook build derives workshop ranges from these
+    tags to decide which code cells to blank in the Code-Along/Partial kinds.
+
+    A *bilingual* build runs that range scan over the interleaved cell stream,
+    so a tag on **either** language's heading establishes a range that — by
+    cell index — also covers the other language's cells. A single-language
+    *split* build (``*.de.py`` / ``*.en.py``) only sees one language: if the
+    tag is missing on that language's heading, no range is detected and the
+    workshop's solution code leaks into the Code-Along/Partial output instead
+    of being blanked.
+
+    This pass closes that gap by copying the tag to the untagged half of every
+    DE/EN heading pair. Bilingual output is unchanged (the range was already
+    detected); split output now matches it. Headings must be adjacent in source
+    order to be paired (see :func:`clm.slides.pairing.build_slide_groups`),
+    which holds after interleaving and after ``unify``.
+    """
+    changes: list[Change] = []
+    for group in build_slide_groups(cells):
+        if len(group) != 2:
+            continue
+        i, j = group
+        for tag in _SLIDE_SCOPED_TAGS:
+            i_has = tag in cells[i].metadata.tags
+            j_has = tag in cells[j].metadata.tags
+            if i_has == j_has:
+                continue
+            target = cells[j] if i_has else cells[i]
+            new_header = _add_tag_to_header(target.header, tag)
+            target.header = new_header
+            target.metadata = parse_cell_header(new_header)
+            changes.append(
+                Change(
+                    file=file_path,
+                    operation="workshop_tags",
+                    line=target.line_number,
+                    description=(
+                        f"Propagated '{tag}' tag to paired {target.metadata.lang or '?'} heading"
+                    ),
+                )
+            )
+    return changes
 
 
 # ---------------------------------------------------------------------------
@@ -613,6 +675,7 @@ def normalize_file(
 
     if "workshop_tags" in op_set:
         all_changes.extend(_apply_workshop_tags(cells, file_str))
+        all_changes.extend(_apply_workshop_symmetry(cells, file_str))
 
     if "interleaving" in op_set:
         cells, interleave_changes, interleave_reviews = _apply_interleaving(
