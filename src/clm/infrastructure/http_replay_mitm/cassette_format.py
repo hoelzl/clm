@@ -285,7 +285,7 @@ def clm_json_body_matcher(r1: Request, r2: Request) -> None:
     compare the parsed values; otherwise byte-compare. Raises
     ``AssertionError`` on mismatch (the convention vcr's matcher chain expects).
 
-    This is why a real LLM JSON ``POST`` replay-hits instead of 599-missing: a
+    This is why a real LLM JSON ``POST`` replay-hits instead of missing: a
     byte-exact body key would diverge whenever vcrpy's
     ``filter_post_data_parameters`` re-dumped the JSON with default separators
     at record time but the live body uses compact separators. **Keep this in

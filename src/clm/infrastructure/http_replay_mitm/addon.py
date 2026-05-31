@@ -23,7 +23,7 @@ The tag header is stripped before recording or forwarding upstream.
 
 Untagged traffic (a kernel that somehow bypassed the tag bootstrap) falls
 back to the single ``clm_cassette_path`` catch-all so strict ``replay``
-mode still returns a 599 instead of escaping to the network.
+mode still returns a non-retryable 404 instead of escaping to the network.
 """
 
 from __future__ import annotations
@@ -64,7 +64,7 @@ except ImportError:  # mitmdump interpreter — import the sibling by path
 # refresh for defensiveness (CLM does not emit it). The serve/record/overwrite
 # semantics each implies are computed per-target in ``_modes_for`` because
 # ``once`` depends on whether the target cassette already exists.
-MODE_REPLAY = "replay"  # serve from cassette, 599 on miss, never record
+MODE_REPLAY = "replay"  # serve from cassette, 404 on miss, never record
 MODE_RECORD = "record"  # alias of refresh (not emitted by CLM)
 MODE_NEW_EPISODES = "new-episodes"  # serve cassette hits, record misses
 MODE_REFRESH = "refresh"  # always hit upstream, overwrite cassette
@@ -92,6 +92,18 @@ _STAGING_INFIX = ".staging-mitm-"
 # decoded body in memory, so the recorded content-length / transfer
 # framing no longer applies — let mitmproxy recompute them from the body.
 _SERVE_DROP_HEADERS = frozenset({"content-length", "transfer-encoding"})
+
+# Status synthesized for a strict-replay miss. It MUST be a status the LLM
+# SDKs do NOT retry, so a stale-cassette miss fails on the first attempt — the
+# out-of-process analogue of vcrpy raising CannotOverwriteExistingCassetteException
+# synchronously. openai/anthropic/langchain retry 408/409/429 and every 5xx
+# (incl. the old 599 we used), which under a deck's many ``.batch()`` calls
+# amplified one miss into 3x the requests + backoff and blew past the build's
+# job timeout (issue #165 P3, measured). A 4xx like 404 raises immediately
+# (NotFoundError) with no retry. The miss is still identified by its
+# ``clm_replay_miss`` body, not this status (see ``_is_replay_miss_marker``),
+# so it never collides with a legitimately recorded 404 response.
+_REPLAY_MISS_STATUS = 404
 
 
 class _Target:
@@ -148,8 +160,8 @@ class ClmReplayAddon:
         ``X-CLM-Cassette`` tag, strips it, and either serves a cassette hit
         (matched with the vcrpy matcher chain incl. JSON-semantic bodies) or —
         in a strict mode (``replay`` / ``once`` with an existing cassette) —
-        synthesizes a 599 on miss so the worker fails cleanly instead of
-        escaping to the network.
+        synthesizes a non-retryable 404 on miss so the worker fails cleanly
+        and fast instead of escaping to the network.
       * ``response(flow)`` persists a real upstream response into the flow's
         target cassette (eagerly, so a kernel/proxy kill cannot lose
         recordings), recording the *filtered* request so the on-disk cassette
@@ -266,7 +278,7 @@ class ClmReplayAddon:
         filtered = self._filter_request(flow.request)
         if filtered is None:
             # ignore_hosts (e.g. LangSmith telemetry) or an unfilterable request:
-            # forward upstream untouched, record nothing, never 599.
+            # forward upstream untouched, record nothing, never a miss response.
             flow.metadata[_FLOW_IGNORED_KEY] = True
             return
 
@@ -296,7 +308,9 @@ class ClmReplayAddon:
             return  # ignore_hosts / unfilterable: never record
         if flow.metadata.get(_FLOW_SERVED_KEY):
             return  # served from cassette this build — nothing new to record
-        if flow.response.status_code == 599 and self._is_replay_miss_marker(flow.response):
+        if flow.response.status_code == _REPLAY_MISS_STATUS and self._is_replay_miss_marker(
+            flow.response
+        ):
             return  # synthetic miss; never went upstream
 
         target = self._target_for(flow.metadata.get(_FLOW_TAG_KEY))
@@ -392,10 +406,10 @@ class ClmReplayAddon:
         absent → record-and-serve like new-episodes). This is the per-target
         resolution of vcrpy's record-mode semantics:
 
-        * ``replay``          → serve hits, 599 on miss, never record;
+        * ``replay``          → serve hits, 404 on miss, never record;
         * ``new-episodes``    → serve hits, record misses;
         * ``refresh``/``record`` → never serve, always record, overwrite;
-        * ``once`` + present  → serve hits, 599 on miss, never record;
+        * ``once`` + present  → serve hits, 404 on miss, never record;
         * ``once`` + absent   → serve hits, record misses.
         """
         mode = self._mode
@@ -438,28 +452,43 @@ class ClmReplayAddon:
             return None
 
     def _replay_miss_response(self, flow: http.HTTPFlow, target: _Target) -> http.Response:
-        # A strict-replay miss returns HTTP 599 so the request never escapes to
-        # the network. This is the out-of-process analogue of vcrpy's in-kernel
-        # CannotOverwriteExistingCassetteException: the kernel's HTTP SDK
-        # (openai/anthropic/langchain) surfaces the 599 as an APIStatusError →
-        # cell error → the #93 fail-on-error policy → non-zero build exit.
-        # SDKs treat 5xx as retryable, so a miss is briefly retried (bounded by
-        # the SDK's max_retries, typically 2-3) before it raises — it cannot
-        # hang or silently pass. Defense-in-depth against an unbounded/raised
-        # SDK retry ceiling: the replay-engaged per-cell timeout
-        # (``notebook_processor._HTTP_REPLAY_DEFAULT_CELL_TIMEOUT``, default
-        # 600s) bounds any stall regardless of SDK behavior.
+        # A strict-replay miss returns a NON-RETRYABLE 4xx (``_REPLAY_MISS_STATUS``)
+        # so the request never escapes to the network AND the kernel's SDK raises
+        # on the FIRST attempt — the out-of-process analogue of vcrpy raising
+        # CannotOverwriteExistingCassetteException synchronously. The SDK surfaces
+        # it as an APIStatusError (NotFoundError) → cell error → the #93
+        # fail-on-error policy → non-zero build exit, fast. (Using a 5xx such as
+        # the old 599 made the SDK retry the miss as a server error, amplifying
+        # one miss into 3x the requests + backoff across a deck's ``.batch()``
+        # calls and stalling the build until its job timeout — issue #165 P3.)
+        # ``Connection: close`` keeps a flood of misses from piling onto one
+        # pooled connection.
+        #
+        # The body uses the ``{"error": {message, type, code}}`` envelope the
+        # LLM SDKs expect, so the kernel surfaces a clean
+        # ``NotFoundError: clm_replay_miss: …`` instead of a confusing pydantic
+        # "invalid error body" complaint — a loud, *clear* failure (the gate-7
+        # goal). The top-level ``clm_replay_miss`` flag is the marker
+        # ``_is_replay_miss_marker`` keys on (status-independent).
+        method = flow.request.method
+        url = flow.request.pretty_url
+        message = f"clm_replay_miss: no recorded interaction for {method} {url} in cassette {target.canonical}"
         return http.Response.make(
-            599,
+            _REPLAY_MISS_STATUS,
             json.dumps(
                 {
-                    "error": "clm_replay_miss",
-                    "method": flow.request.method,
-                    "url": flow.request.pretty_url,
+                    "error": {
+                        "message": message,
+                        "type": "clm_replay_miss",
+                        "code": "clm_replay_miss",
+                    },
+                    "clm_replay_miss": True,
+                    "method": method,
+                    "url": url,
                     "cassette": str(target.canonical),
                 }
             ).encode(),
-            {"Content-Type": "application/json"},
+            {"Content-Type": "application/json", "Connection": "close"},
         )
 
     def _build_reply(self, response: dict) -> http.Response:
@@ -484,7 +513,7 @@ class ClmReplayAddon:
             body = json.loads(response.content or b"{}")
         except (json.JSONDecodeError, ValueError):
             return False
-        return isinstance(body, dict) and body.get("error") == "clm_replay_miss"
+        return isinstance(body, dict) and body.get("clm_replay_miss") is True
 
 
 addons = [ClmReplayAddon()]

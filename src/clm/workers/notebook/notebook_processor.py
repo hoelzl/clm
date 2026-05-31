@@ -137,10 +137,12 @@ except ValueError:
 # this ceiling. An explicit CLM_CELL_TIMEOUT_SECONDS always wins; set
 # CLM_HTTP_REPLAY_CELL_TIMEOUT_SECONDS=0 to opt out of the default.
 #
-# Under the out-of-process mitmproxy transport (issue #165) this same ceiling is
-# the backstop for a strict-replay miss: the addon returns HTTP 599, which the
-# SDK retries as a 5xx (bounded by its max_retries) before raising — this timeout
-# guarantees the cell fails even if a future SDK has an unbounded retry policy.
+# Under the out-of-process mitmproxy transport (issue #165) a strict-replay miss
+# is engineered to fail FAST on its own: the addon returns a non-retryable 4xx
+# (404), so the SDK raises on the first attempt rather than retrying it as a 5xx
+# (an earlier 599 was retried, amplifying a miss across a deck's ``.batch()``
+# calls until this ceiling fired — measured at ~1200s). This timeout now only
+# backstops a genuine unexpected hang, not the expected miss path.
 try:
     _raw_replay_cell_timeout = float(os.environ.get("CLM_HTTP_REPLAY_CELL_TIMEOUT_SECONDS", "600"))
     _HTTP_REPLAY_DEFAULT_CELL_TIMEOUT: int | None = (

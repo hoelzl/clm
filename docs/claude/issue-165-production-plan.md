@@ -136,11 +136,11 @@ matcher functions so behavior is identical by construction.
   content-type is JSON case-insensitively; byte-compare otherwise) — the exact
   `match_on` the in-kernel vcrpy uses. A real LLM JSON POST replay-hits even when
   the live body differs only by key order / separators (smoke test); a byte key
-  would 599-miss. A drift-guard test pins the `FILTER_*` constants + matcher set
+  would miss. A drift-guard test pins the `FILTER_*` constants + matcher set
   to the bootstrap literals.
 - **Strict `once`/`refresh` per target**: `addon._modes_for` resolves
   `(serve, record, overwrite)` per target — `once` is existence-dependent
-  (present → strict replay/599-on-miss; absent → record-and-serve), `refresh`
+  (present → strict replay/404-on-miss; absent → record-and-serve), `refresh`
   never serves and overwrites. `refresh`-overwrite is completed by the new
   `merge_staging_into_canonical(overwrite_existing=…)` (last-seen-staging-wins,
   in-place canonical replacement) wired on for `refresh` in **both** the
@@ -148,12 +148,19 @@ matcher functions so behavior is identical by construction.
   refresh-overwrite gap for both transports. The default (`overwrite_existing=False`)
   additive branch is kept **verbatim** so the vcrpy default path stays
   byte-identical.
-- **Strict-replay-miss → non-zero build exit**: a miss returns the diagnostic
-  HTTP 599 (never escaping to the network). The kernel's SDK surfaces it as an
-  `APIStatusError` → cell error → the #93 fail-on-error policy → non-zero build
-  exit, the same end state as vcrpy's `CannotOverwriteExistingCassetteException`
-  (the 599 is briefly retried by the SDK's 5xx retry, bounded; it never hangs or
-  passes). Gate covered by the existing strict-miss smoke test + #93 policy.
+- **Strict-replay-miss → fast non-zero build exit**: a miss returns a
+  **non-retryable HTTP 404** (`_REPLAY_MISS_STATUS`) with an SDK-shaped
+  `{"error": {message, type, code}}` body and never escapes to the network. The
+  kernel's SDK raises `NotFoundError` on the **first attempt** → cell error → the
+  #93 fail-on-error policy → non-zero build exit, the out-of-process analogue of
+  vcrpy raising `CannotOverwriteExistingCassetteException` synchronously. **The
+  e2e gate caught that the original 599 (a 5xx) was *retried* by the SDK** —
+  measured: a probe showed openai 2.32 retries 599/500/429 (3 calls) but raises
+  on the first attempt for 404/400/422; under a deck's many `.batch()` calls the
+  599 retry amplified one stale-cassette miss into a ~1200s build-timeout hang.
+  The 404 fix makes a forced miss fail the build in seconds with a clean
+  `NotFoundError: clm_replay_miss: …` (validated end-to-end against the #143
+  reproducer; isolated probe shows 1.8s single-attempt vs 3.5s retried).
 - **Kill-survival**: the addon writes the staging cassette eagerly on every
   recorded response (unchanged from P2), so a build-timeout kill of mitmdump
   loses nothing.
@@ -162,25 +169,33 @@ matcher functions so behavior is identical by construction.
   joined on stop (no leak) and `_drain_output` no longer races the thread with
   `communicate()`. Unit-tested against an 800 KiB-output subprocess.
 
-**Gates:** secret/telemetry hygiene (no auth/cookie/api-key, no LangSmith) and
-JSON-match parity (real JSON POSTs replay-hit, no spurious 599) and strict-miss →
-non-zero exit are covered by the new unit + smoke tests; full fast suite green
-(5795 passed).
+**Gates:** secret/telemetry hygiene (no auth/cookie/api-key, no LangSmith),
+JSON-match parity (real JSON POSTs replay-hit, no spurious miss) and strict-miss →
+fast non-zero exit are covered by the new unit + smoke tests; full fast suite
+green (5795 passed).
+
+**E2E gate run against the #143 reproducer (18 committed DE/EN split-deck
+cassettes, dummy key, no network egress):** gates **5 + 6 PASS at production
+scale** — all 18 notebooks re-executed (`--ignore-cache`, 177s), every real LLM
+JSON POST replay-**hit** (exit 0, 0 errors, no miss), the 18 cassettes came out
+**byte-identical**, and the dummy key's auth header was filtered before matching
+so it still matched the real-key recording. Gate **7**: a forced miss (renamed
+cassette) initially exposed a real defect — the 599 retry-amplification hang
+above — now **fixed (non-retryable 404)** and re-validated: a forced miss fails
+the build with a clean `NotFoundError` cell error in seconds, no timeout. The
+only piece still **deferred (needs OPENROUTER credentials + real spend):** the
+record-mode "no-op rebuild grows nothing" half — lower-risk (record byte-identity
+is unit-proven), best run as part of the P5 cutover gate.
 
 **Adversarial review (workflow `wf_7e8803f5-482`, 5 probe-driven lenses → verify):
-1 confirmed, 2 refuted.** Confirmed (MEDIUM, severity overstated by the verdict —
-no correctness bug): the "599 → bounded SDK retry → fail" claim was asserted but
-not documented in-code. Fixed in this branch by documenting it at
-`addon._replay_miss_response` and at `notebook_processor`'s replay cell-timeout —
-the existing 600s per-cell ceiling (`_HTTP_REPLAY_DEFAULT_CELL_TIMEOUT`, issue
-#143 Option-F) is the backstop against any future unbounded SDK retry. Refuted:
-(a) `set-cookie` in `filter_headers` "violates HTTP semantics" — intentional
-vcrpy parity, drift-guarded; (b) kernel-side 599 not explicitly detected — the
-599 is explicit/structured and SDKs fail on it; out of P3 scope. **Deferred (e2e
-gate, not a code change):** a one-off real-LLM no-op-rebuild run to confirm the
-empty cassette git-diff + a deliberate miss fails the build non-zero with the
-real SDK (the strict-miss smoke test + #93 policy cover the mechanism; the e2e
-confirmation needs OPENROUTER credentials).
+1 confirmed, 2 refuted.** Confirmed (MEDIUM): the "599 → bounded SDK retry → fail"
+claim was asserted but unvalidated — the e2e then proved it was actually a
+~1200s hang (599 is a 5xx → SDK-retried → amplified across `.batch()` calls).
+Fixed by switching the miss to a non-retryable 404 (fast first-attempt
+`NotFoundError`), validated by probe + e2e. Refuted: (a) `set-cookie` in
+`filter_headers` "violates HTTP semantics" — intentional vcrpy parity,
+drift-guarded; (b) kernel-side miss not explicitly detected — the miss is
+explicit/structured and SDKs fail on it; out of P3 scope.
 
 The prototype addon lacked parity with the vcrpy bootstrap's load-bearing
 behavior (the design doc wrongly called these "trivial").
@@ -254,13 +269,17 @@ A `127.0.0.1` mitmdump is unreachable inside a container.
    cassettes unchanged — P1.
 5. Secret/telemetry hygiene: no auth/cookie/api-key headers, no LangSmith; no-op
    rebuild grows nothing — P3 ✅ (filter byte-identity vs vcrpy + ignore_hosts;
-   secret-stripping + LangSmith-not-recorded smoke tests).
-6. JSON-match parity: real LLM JSON POSTs replay-hit, no spurious 599 — P3 ✅
+   secret-stripping + LangSmith-not-recorded smoke tests; **e2e: 18 real cassettes
+   replayed byte-identical with a dummy key**).
+6. JSON-match parity: real LLM JSON POSTs replay-hit, no spurious miss — P3 ✅
    (vcr-matcher-chain replay scan incl. `clm_json_body`; JSON-POST replay smoke
-   test). End-to-end real-LLM no-op-rebuild diff still wants a one-off manual run.
-7. Strict-replay failure parity: a miss → non-zero build exit, not swallowed —
-   P3 ✅ via the 599 → SDK `APIStatusError` → #93 policy (strict-miss smoke test
-   asserts the 599; #93 turns it into a non-zero exit).
+   test; **e2e: 18-notebook real replay, exit 0, no miss**). Record-mode no-op
+   "grows nothing" half still wants a one-off real-LLM run (OPENROUTER creds).
+7. Strict-replay failure parity: a miss → *fast* non-zero build exit, not
+   swallowed — P3 ✅ via a **non-retryable 404** → SDK `NotFoundError` → #93
+   policy. **e2e-validated:** the original 599 (a 5xx) was SDK-retried into a
+   ~1200s timeout hang; the 404 fix fails a forced miss in seconds with a clean
+   cell error (probe + reproducer build).
 8. Concurrency routing: DE/EN multi-topic routes correctly, no contamination;
    split fallback resolves — P2.
 9. Default-unchanged: transport unset ⇒ build bit-identical to vcrpy (✅ tests).
