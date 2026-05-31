@@ -393,7 +393,9 @@ class Course(NotebookMixin):
             canonical_paths.add(canonical)
         return canonical_paths
 
-    def merge_mitmproxy_cassette_staging(self, build_id: str | None = None) -> int:
+    def merge_mitmproxy_cassette_staging(
+        self, build_id: str | None = None, *, mode: str | None = None
+    ) -> int:
         """Fold per-target staging files written by the mitmproxy transport.
 
         The out-of-process transport (issue #165) records into per-(topic,
@@ -415,6 +417,10 @@ class Course(NotebookMixin):
         concurrent build still recording) is left untouched. A no-op for
         builds that did not use the transport.
 
+        ``mode`` is the CLM http-replay mode; ``refresh`` folds with
+        ``overwrite_existing=True`` so a re-recorded interaction supersedes the
+        stale canonical entry (issue #165 P3), matching vcrpy ``all`` semantics.
+
         Returns the number of staging files folded into canonical.
         """
         canonical_paths = self._collect_http_replay_canonical_paths()
@@ -427,6 +433,7 @@ class Course(NotebookMixin):
             write_completion_marker,
         )
 
+        overwrite_existing = mode == "refresh"
         folded = 0
         for canonical in sorted(canonical_paths):
             if not canonical.parent.is_dir():
@@ -443,6 +450,7 @@ class Course(NotebookMixin):
                 merged = merge_staging_into_canonical(
                     CassettePaths(canonical=canonical, staging=synthetic),
                     sweep_orphans=False,
+                    overwrite_existing=overwrite_existing,
                 )
             except Exception as exc:  # noqa: BLE001 — never mask the build result
                 logger.warning(

@@ -167,12 +167,19 @@ def _maybe_start_mitmproxy_transport(mode: str | None, jobs_db_path: Path):
     import certifi
 
     from clm.infrastructure.http_replay_mitm import MitmproxyManager
+    from clm.workers.notebook.notebook_processor import resolve_http_replay_ignore_hosts
 
     base = Path(jobs_db_path).resolve().parent / "mitm"
     base.mkdir(parents=True, exist_ok=True)
     cassette = base / "transport.http-cassette.yaml"
     confdir = base / "confdir"
-    manager = MitmproxyManager(cassette_path=cassette, mode=mode, confdir=confdir)
+    # Same telemetry-suppression policy as the in-kernel vcrpy path: LangSmith
+    # by default, overridable via CLM_HTTP_REPLAY_IGNORE_HOSTS. The addon
+    # forwards these hosts but never records them into a cassette.
+    ignore_hosts = resolve_http_replay_ignore_hosts()
+    manager = MitmproxyManager(
+        cassette_path=cassette, mode=mode, confdir=confdir, ignore_hosts=ignore_hosts
+    )
     manager.start()
 
     # mitmdump writes its CA during startup; the manager only polls the port,
@@ -1558,7 +1565,9 @@ async def main_build(
             # never reaches this point) stay markerless and are discarded by the
             # next build's pre-build sweep.
             try:
-                course.merge_mitmproxy_cassette_staging(mitm_manager.build_id)
+                course.merge_mitmproxy_cassette_staging(
+                    mitm_manager.build_id, mode=config.http_replay_mode
+                )
             except Exception as e:
                 logger.error(f"Failed to merge mitmproxy cassettes: {e}", exc_info=True)
 

@@ -136,6 +136,11 @@ except ValueError:
 # LLM/RAG decks that use replay finish in seconds, so only a genuine hang reaches
 # this ceiling. An explicit CLM_CELL_TIMEOUT_SECONDS always wins; set
 # CLM_HTTP_REPLAY_CELL_TIMEOUT_SECONDS=0 to opt out of the default.
+#
+# Under the out-of-process mitmproxy transport (issue #165) this same ceiling is
+# the backstop for a strict-replay miss: the addon returns HTTP 599, which the
+# SDK retries as a 5xx (bounded by its max_retries) before raising — this timeout
+# guarantees the cell fails even if a future SDK has an unbounded retry policy.
 try:
     _raw_replay_cell_timeout = float(os.environ.get("CLM_HTTP_REPLAY_CELL_TIMEOUT_SECONDS", "600"))
     _HTTP_REPLAY_DEFAULT_CELL_TIMEOUT: int | None = (
@@ -181,6 +186,23 @@ _HTTP_REPLAY_BOOTSTRAP_MARKER = "http_replay"
 # we encounter other telemetry endpoints with the same shape, or override
 # at build time via ``CLM_HTTP_REPLAY_IGNORE_HOSTS`` (comma-separated).
 _DEFAULT_HTTP_REPLAY_IGNORE_HOSTS = ("api.smith.langchain.com",)
+
+
+def resolve_http_replay_ignore_hosts() -> tuple[str, ...]:
+    """Resolve the http-replay ignore-hosts list from the environment.
+
+    Unset ``CLM_HTTP_REPLAY_IGNORE_HOSTS`` → the default
+    (:data:`_DEFAULT_HTTP_REPLAY_IGNORE_HOSTS`); set (even to the empty string)
+    → the comma-separated override, where an empty string means "record every
+    host". Shared by the in-kernel vcrpy bootstrap injection and the
+    out-of-process mitmproxy transport (build.py) so both honour the same
+    telemetry-suppression policy.
+    """
+    raw = os.environ.get("CLM_HTTP_REPLAY_IGNORE_HOSTS")
+    if raw is None:
+        return _DEFAULT_HTTP_REPLAY_IGNORE_HOSTS
+    return tuple(host.strip() for host in raw.split(",") if host.strip())
+
 
 _HTTP_REPLAY_BOOTSTRAP_TEMPLATE = """\
 # CLM HTTP REPLAY BOOTSTRAP - DO NOT EDIT
@@ -2124,7 +2146,10 @@ class NotebookProcessor:
             )
 
         try:
-            merged = merge_staging_into_canonical(paths)
+            # ``refresh`` (vcrpy ``all``) re-records every interaction, so a
+            # freshly recorded response must supersede the stale canonical entry
+            # rather than being dropped by first-seen dedup (issue #165 P3).
+            merged = merge_staging_into_canonical(paths, overwrite_existing=(mode == "refresh"))
         except Exception as exc:  # noqa: BLE001 — defensive: never let merge mask
             #  the original notebook execution error.
             logger.exception(
@@ -2191,14 +2216,7 @@ class NotebookProcessor:
             trace_max_body = int(trace_max_body_raw) if trace_max_body_raw else 2048
         except ValueError:
             trace_max_body = 2048
-        ignore_hosts_raw = os.environ.get("CLM_HTTP_REPLAY_IGNORE_HOSTS")
-        ignore_hosts: tuple[str, ...]
-        if ignore_hosts_raw is None:
-            ignore_hosts = _DEFAULT_HTTP_REPLAY_IGNORE_HOSTS
-        else:
-            ignore_hosts = tuple(
-                host.strip() for host in ignore_hosts_raw.split(",") if host.strip()
-            )
+        ignore_hosts = resolve_http_replay_ignore_hosts()
         _inject_http_replay_bootstrap(
             processed_nb,
             str(paths.staging),

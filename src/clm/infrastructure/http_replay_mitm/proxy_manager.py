@@ -12,6 +12,7 @@ is follow-up work; see the design doc for the integration plan.
 
 from __future__ import annotations
 
+import collections
 import logging
 import os
 import shutil
@@ -19,6 +20,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -36,6 +38,12 @@ _STARTUP_TIMEOUT_SECONDS = 10.0
 # How long we wait for graceful shutdown before sending SIGKILL/terminate.
 # mitmdump flushes flow streams on exit, so we want enough time for that.
 _SHUTDOWN_GRACE_SECONDS = 5.0
+
+# Bounded ring buffer of mitmdump stdout lines. A reader thread drains the
+# pipe continuously so a multi-hour build can never deadlock on a full
+# OS pipe buffer (~64 KiB) while mitmdump blocks on write; we keep only the
+# tail, which is all startup-failure / shutdown diagnostics need.
+_OUTPUT_RING_LINES = 1000
 
 
 class MitmproxyError(RuntimeError):
@@ -61,6 +69,7 @@ class MitmproxyManager:
         listen_port: int | None = None,
         confdir: Path | None = None,
         extra_args: list[str] | None = None,
+        ignore_hosts: tuple[str, ...] | list[str] = (),
     ) -> None:
         self.cassette_path = Path(cassette_path)
         self.mode = mode
@@ -72,13 +81,19 @@ class MitmproxyManager:
         # makes the prototype easier to reason about.
         self.confdir = Path(confdir) if confdir is not None else None
         self.extra_args = extra_args or []
+        # Hosts the addon forwards but never records (LangSmith telemetry by
+        # default); passed through to the addon as ``clm_ignore_hosts``.
+        self.ignore_hosts = tuple(ignore_hosts)
         # Per-build id: the addon names its staging files
         # ``<cassette>.staging-mitm-<build_id>`` so the host can mark
         # exactly this build's recordings complete after the proxy stops
         # (see ``Course.merge_mitmproxy_cassette_staging``).
         self.build_id = uuid.uuid4().hex
         self._process: subprocess.Popen | None = None
-        self._log_file = None
+        # Reader thread + bounded ring buffer draining mitmdump stdout so the
+        # pipe never fills and blocks the proxy on a long build.
+        self._output: collections.deque[str] = collections.deque(maxlen=_OUTPUT_RING_LINES)
+        self._reader_thread: threading.Thread | None = None
 
     @property
     def proxy_url(self) -> str:
@@ -156,6 +171,8 @@ class MitmproxyManager:
             f"clm_mode={self.mode}",
             "--set",
             f"clm_build_id={self.build_id}",
+            "--set",
+            f"clm_ignore_hosts={','.join(self.ignore_hosts)}",
             # Quiet flow logging — the addon emits its own structured logs.
             "--set",
             "termlog_verbosity=warn",
@@ -185,6 +202,7 @@ class MitmproxyManager:
             stderr=subprocess.STDOUT,
             creationflags=creationflags,
         )
+        self._start_reader()
 
         try:
             self._wait_for_ready()
@@ -220,6 +238,38 @@ class MitmproxyManager:
             except subprocess.TimeoutExpired:
                 logger.error("mitmdump survived SIGKILL; leaking process")
 
+        # The reader thread exits when the pipe hits EOF (process gone). Join
+        # it so we don't leak a thread per build and the ring buffer is final.
+        reader = self._reader_thread
+        self._reader_thread = None
+        if reader is not None:
+            reader.join(timeout=2.0)
+
+    def _start_reader(self) -> None:
+        """Spawn a daemon thread that drains mitmdump stdout into the ring buffer.
+
+        Without a continuous drain, a long build can fill the OS pipe buffer;
+        mitmdump then blocks on its next write and the proxy stalls — a silent
+        multi-hour-build deadlock. The thread reads until EOF (process exit).
+        """
+        if self._process is None or self._process.stdout is None:
+            return
+
+        stream = self._process.stdout
+
+        def _pump() -> None:
+            try:
+                for raw in iter(stream.readline, b""):
+                    self._output.append(raw.decode("utf-8", errors="replace").rstrip("\r\n"))
+            except (ValueError, OSError):
+                # Stream closed underneath us during shutdown — expected.
+                return
+
+        self._reader_thread = threading.Thread(
+            target=_pump, name="mitmdump-stdout-reader", daemon=True
+        )
+        self._reader_thread.start()
+
     def _wait_for_ready(self) -> None:
         """Poll the listen port until it accepts a TCP connection or we time out."""
         assert self._process is not None
@@ -243,13 +293,17 @@ class MitmproxyManager:
         )
 
     def _drain_output(self) -> str:
-        if self._process is None or self._process.stdout is None:
-            return ""
-        try:
-            data, _ = self._process.communicate(timeout=1.0)
-            return (data or b"").decode("utf-8", errors="replace")
-        except subprocess.TimeoutExpired:
-            return ""
+        """Return mitmdump's recent stdout (the ring buffer's tail).
+
+        The reader thread owns the pipe, so we must not call ``communicate()``
+        here (it would race the thread on the same fd). When the process has
+        exited we give the reader a brief moment to flush the final lines, then
+        snapshot the buffer.
+        """
+        reader = self._reader_thread
+        if reader is not None and self._process is not None and self._process.poll() is not None:
+            reader.join(timeout=1.0)
+        return "\n".join(self._output)
 
 
 def _locate_mitmdump() -> str:

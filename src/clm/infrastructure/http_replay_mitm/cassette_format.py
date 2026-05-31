@@ -28,21 +28,52 @@ vcrpy would have written for the same HTTP exchange.
 from __future__ import annotations
 
 import copy
+import functools
+import json
 import os
 import uuid
 from collections import defaultdict
 from collections.abc import Iterable
 from pathlib import Path
 
-# vcr is used purely as a serializer here. Importing these names does not
-# patch httpcore/urllib3 (verified: patching only activates when a VCR
-# cassette context is entered). The isolated mitmdump environment must
-# therefore have vcrpy installed alongside mitmproxy.
-from vcr.filters import decode_response
+# vcr is used purely as a serializer + filter/matcher library here. Importing
+# these names does not patch httpcore/urllib3 (verified: patching only
+# activates when a VCR cassette context is entered). The isolated mitmdump
+# environment must therefore have vcrpy installed alongside mitmproxy.
+from vcr import matchers as _vcr_matchers
+from vcr.filters import (
+    decode_response,
+)
+from vcr.filters import (
+    replace_headers as _vcr_replace_headers,
+)
+from vcr.filters import (
+    replace_post_data_parameters as _vcr_replace_post_data_parameters,
+)
+from vcr.filters import (
+    replace_query_parameters as _vcr_replace_query_parameters,
+)
 from vcr.persisters.filesystem import FilesystemPersister
 from vcr.request import Request
 from vcr.serialize import serialize as _vcr_serialize
 from vcr.serializers import yamlserializer
+
+# ---------------------------------------------------------------------------
+# Secret/telemetry filtering + matching parity (issue #165, P3)
+# ---------------------------------------------------------------------------
+# These MUST mirror the values baked into the in-kernel vcrpy bootstrap
+# (``notebook_processor._HTTP_REPLAY_BOOTSTRAP_TEMPLATE``'s
+# ``_clm_vcr_instance``) so a mitmproxy-recorded cassette is filtered and
+# matched byte-identically to a vcrpy-recorded one. A drift-guard test
+# (``test_http_replay_mitm_cassette_format.py``) asserts they stay in lockstep.
+#
+# ``filter_headers`` removes secret-bearing *request* headers (vcrpy filters
+# request headers only; response ``set-cookie`` is left as vcrpy leaves it).
+# ``filter_query_parameters`` / ``filter_post_data_parameters`` strip secrets
+# from the URL query and JSON/form request body respectively.
+FILTER_HEADERS = ["authorization", "cookie", "x-api-key", "set-cookie"]
+FILTER_POST_DATA_PARAMETERS = ["password", "token", "api_key"]
+FILTER_QUERY_PARAMETERS = ["api_key", "token"]
 
 # A single recorded HTTP interaction: a vcr Request paired with the
 # serialized-response dict (``{"status", "headers", "body"}``) that vcrpy
@@ -187,6 +218,145 @@ def fingerprint(request: Request) -> tuple[str, str, bytes]:
         getattr(request, "uri", ""),
         body_bytes,
     )
+
+
+def build_request_filter(
+    *,
+    filter_headers: Iterable[object] = FILTER_HEADERS,
+    filter_query_parameters: Iterable[object] = FILTER_QUERY_PARAMETERS,
+    filter_post_data_parameters: Iterable[object] = FILTER_POST_DATA_PARAMETERS,
+    ignore_hosts: Iterable[str] = (),
+):
+    """Return ``before_record_request(Request) -> Request | None``.
+
+    Reconstructs vcrpy's own ``VCR._build_before_record_request`` closure from
+    the *public* ``vcr.filters`` functions so a request is filtered exactly as
+    the in-kernel vcrpy path filters it:
+
+    * each filter-list entry maps to a ``(name, None)`` removal,
+    * filters run header → query → post-data (the order vcrpy uses), each
+      after a defensive ``copy.deepcopy`` so the caller's request is untouched,
+    * an ignore-host check then returns ``None`` to signal "do not record" —
+      the addon treats that as "pass straight through to the network", the
+      out-of-process analogue of vcrpy's ``ignore_hosts``.
+
+    Because the recorded request is the *filtered* one and the replay lookup
+    filters the incoming request the same way before matching, secret removal
+    never breaks matching (both sides drop the same headers/params) and the
+    cassette never carries ``authorization``/``cookie``/``x-api-key`` request
+    headers, ``api_key``/``token`` query params, or ``password``/``token``/
+    ``api_key`` body params.
+    """
+    funcs = []
+    if filter_headers:
+        replacements = [h if isinstance(h, tuple) else (h, None) for h in filter_headers]
+        funcs.append(functools.partial(_vcr_replace_headers, replacements=replacements))
+    if filter_query_parameters:
+        replacements = [p if isinstance(p, tuple) else (p, None) for p in filter_query_parameters]
+        funcs.append(functools.partial(_vcr_replace_query_parameters, replacements=replacements))
+    if filter_post_data_parameters:
+        replacements = [
+            p if isinstance(p, tuple) else (p, None) for p in filter_post_data_parameters
+        ]
+        funcs.append(
+            functools.partial(_vcr_replace_post_data_parameters, replacements=replacements)
+        )
+    hosts_to_ignore = set(ignore_hosts)
+
+    def before_record_request(request: Request) -> Request | None:
+        request = copy.deepcopy(request)
+        for fn in funcs:
+            if request is None:
+                break
+            request = fn(request)
+        if request is not None and getattr(request, "host", None) in hosts_to_ignore:
+            return None
+        return request
+
+    return before_record_request
+
+
+def clm_json_body_matcher(r1: Request, r2: Request) -> None:
+    """JSON-semantic request-body matcher (vcr matcher protocol).
+
+    A verbatim mirror of the in-kernel ``_clm_json_body_matcher`` in
+    ``notebook_processor._HTTP_REPLAY_BOOTSTRAP_TEMPLATE``: when both requests
+    carry a JSON content-type (case-insensitive), parse both bodies as JSON and
+    compare the parsed values; otherwise byte-compare. Raises
+    ``AssertionError`` on mismatch (the convention vcr's matcher chain expects).
+
+    This is why a real LLM JSON ``POST`` replay-hits instead of 599-missing: a
+    byte-exact body key would diverge whenever vcrpy's
+    ``filter_post_data_parameters`` re-dumped the JSON with default separators
+    at record time but the live body uses compact separators. **Keep this in
+    lockstep with the bootstrap's matcher** (drift-guard test asserts it).
+    """
+
+    def _body_bytes(req: Request) -> bytes:
+        body = req.body
+        if body is None:
+            return b""
+        if isinstance(body, (bytes, bytearray)):
+            return bytes(body)
+        if isinstance(body, str):
+            return body.encode("utf-8", errors="replace")
+        read = getattr(body, "read", None)
+        if callable(read):
+            data = read()
+            seek = getattr(body, "seek", None)
+            if callable(seek):
+                try:
+                    seek(0)
+                except Exception:  # noqa: BLE001 — best-effort rewind
+                    pass
+            return data if isinstance(data, bytes) else str(data).encode("utf-8", errors="replace")
+        return str(body).encode("utf-8", errors="replace")
+
+    def _is_json(req: Request) -> bool:
+        headers = getattr(req, "headers", {}) or {}
+        for k, v in headers.items():
+            if str(k).lower() == "content-type":
+                val = v[0] if isinstance(v, (list, tuple)) and v else v
+                return "application/json" in str(val).lower()
+        return False
+
+    b1 = _body_bytes(r1)
+    b2 = _body_bytes(r2)
+    if _is_json(r1) and _is_json(r2):
+        try:
+            p1 = json.loads(b1) if b1 else None
+            p2 = json.loads(b2) if b2 else None
+            if p1 != p2:
+                raise AssertionError
+            return
+        except (ValueError, TypeError):
+            pass  # fall through to byte comparison
+    if b1 != b2:
+        raise AssertionError
+
+
+# The match key mirrors the bootstrap's
+# ``match_on=("method","scheme","host","port","path","query","clm_json_body")``
+# exactly — the request *body* (JSON-semantic) is part of the key so a stale
+# cassette fails loudly rather than serving the wrong recorded interaction.
+REPLAY_MATCHERS = (
+    _vcr_matchers.method,
+    _vcr_matchers.scheme,
+    _vcr_matchers.host,
+    _vcr_matchers.port,
+    _vcr_matchers.path,
+    _vcr_matchers.query,
+    clm_json_body_matcher,
+)
+
+
+def requests_match(incoming: Request, recorded: Request) -> bool:
+    """Return ``True`` iff ``incoming`` matches ``recorded`` under CLM's
+    match_on — the exact matcher set the in-kernel vcrpy uses. Reusing
+    ``vcr.matchers.requests_match`` keeps the replay equivalence classes
+    identical to vcrpy's (e.g. ``query`` is order-insensitive, JSON bodies
+    compare by value)."""
+    return bool(_vcr_matchers.requests_match(incoming, recorded, list(REPLAY_MATCHERS)))
 
 
 def serialize_interactions(interactions: Iterable[Interaction]) -> str:

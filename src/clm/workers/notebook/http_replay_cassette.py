@@ -120,6 +120,7 @@ def merge_staging_into_canonical(
     paths: CassettePaths,
     *,
     sweep_orphans: bool = False,
+    overwrite_existing: bool = False,
 ) -> int:
     """Merge per-worker staging files into the canonical cassette.
 
@@ -155,6 +156,16 @@ def merge_staging_into_canonical(
             per-worker post-execution invocation), markerless staging
             files are left untouched — they may belong to a concurrent
             worker that hasn't completed yet.
+        overwrite_existing: Mode-aware merge for ``refresh`` (vcrpy ``all``).
+            When ``True`` a staging interaction **wins** over a canonical
+            interaction with the same fingerprint (last-seen within staging
+            wins, so a freshly recorded response replaces a stale one) while
+            preserving canonical position for minimal diff churn. When
+            ``False`` (default — ``new-episodes`` / ``once`` / ``replay`` and
+            every pre-build sweep) the long-standing first-seen-wins behavior
+            is used, byte-identical to before this parameter existed. This is
+            the producer-agnostic fix for the refresh-overwrite gap (issue
+            #165 P3) and benefits both the vcrpy and mitmproxy transports.
 
     Returns:
         Number of staging files folded into the canonical (markered
@@ -234,51 +245,121 @@ def merge_staging_into_canonical(
                         f"before merge ({type(exc).__name__}: {exc}); treating as empty."
                     )
 
-            seen_keys = {_dedup_key(req) for req in canonical_requests}
-            merged_requests = list(canonical_requests)
-            merged_responses = list(canonical_responses)
-
-            for staging_path in markered:
-                try:
-                    staging_requests, staging_responses = FilesystemPersister.load_cassette(
-                        staging_path, serializer=yamlserializer
-                    )
-                except Exception as exc:  # noqa: BLE001 — defensive
-                    logger.warning(
-                        f"Could not load staging cassette '{staging_path}' "
-                        f"({type(exc).__name__}: {exc}); skipping."
-                    )
+            # ``overwrite_existing`` lets a staging interaction replace a
+            # canonical one with the same fingerprint (refresh/``all``); the
+            # default first-seen-wins path is kept verbatim so a no-op build's
+            # cassette stays byte-identical to before this parameter existed.
+            if overwrite_existing:
+                # Last-seen within staging wins (a freshly recorded response
+                # supersedes an earlier/seeded one); canonical entries are
+                # replaced in place to keep the diff minimal, and genuinely new
+                # staging entries are appended in first-seen order.
+                staging_value: dict[tuple, tuple] = {}
+                staging_order: list[tuple] = []
+                for staging_path in markered:
+                    try:
+                        staging_requests, staging_responses = FilesystemPersister.load_cassette(
+                            staging_path, serializer=yamlserializer
+                        )
+                    except Exception as exc:  # noqa: BLE001 — defensive
+                        logger.warning(
+                            f"Could not load staging cassette '{staging_path}' "
+                            f"({type(exc).__name__}: {exc}); skipping."
+                        )
+                        _trace(
+                            "cassette.merge.decision",
+                            {
+                                "staging": str(staging_path),
+                                "decision": "load_failed",
+                                "exc_type": type(exc).__name__,
+                            },
+                        )
+                        continue
+                    folded_from_this = 0
+                    duplicates_in_this = 0
+                    for request, response in zip(staging_requests, staging_responses, strict=False):
+                        key = _dedup_key(request)
+                        if key in staging_value:
+                            duplicates_in_this += 1
+                        else:
+                            staging_order.append(key)
+                            folded_from_this += 1
+                        staging_value[key] = (request, response)  # last-seen wins
                     _trace(
                         "cassette.merge.decision",
                         {
                             "staging": str(staging_path),
-                            "decision": "load_failed",
-                            "exc_type": type(exc).__name__,
+                            "decision": "folded_overwrite",
+                            "marker_present": True,
+                            "interactions_loaded": len(staging_requests),
+                            "interactions_folded": folded_from_this,
+                            "interactions_deduped": duplicates_in_this,
                         },
                     )
-                    continue
-                folded_from_this = 0
-                duplicates_in_this = 0
-                for request, response in zip(staging_requests, staging_responses, strict=False):
+                merged_requests = []
+                merged_responses = []
+                placed: set = set()
+                for request, response in zip(canonical_requests, canonical_responses, strict=False):
                     key = _dedup_key(request)
-                    if key in seen_keys:
-                        duplicates_in_this += 1
+                    if key in staging_value:
+                        new_request, new_response = staging_value[key]
+                        merged_requests.append(new_request)
+                        merged_responses.append(new_response)
+                        placed.add(key)
+                    else:
+                        merged_requests.append(request)
+                        merged_responses.append(response)
+                for key in staging_order:
+                    if key not in placed:
+                        new_request, new_response = staging_value[key]
+                        merged_requests.append(new_request)
+                        merged_responses.append(new_response)
+            else:
+                seen_keys = {_dedup_key(req) for req in canonical_requests}
+                merged_requests = list(canonical_requests)
+                merged_responses = list(canonical_responses)
+
+                for staging_path in markered:
+                    try:
+                        staging_requests, staging_responses = FilesystemPersister.load_cassette(
+                            staging_path, serializer=yamlserializer
+                        )
+                    except Exception as exc:  # noqa: BLE001 — defensive
+                        logger.warning(
+                            f"Could not load staging cassette '{staging_path}' "
+                            f"({type(exc).__name__}: {exc}); skipping."
+                        )
+                        _trace(
+                            "cassette.merge.decision",
+                            {
+                                "staging": str(staging_path),
+                                "decision": "load_failed",
+                                "exc_type": type(exc).__name__,
+                            },
+                        )
                         continue
-                    merged_requests.append(request)
-                    merged_responses.append(response)
-                    seen_keys.add(key)
-                    folded_from_this += 1
-                _trace(
-                    "cassette.merge.decision",
-                    {
-                        "staging": str(staging_path),
-                        "decision": "folded",
-                        "marker_present": True,
-                        "interactions_loaded": len(staging_requests),
-                        "interactions_folded": folded_from_this,
-                        "interactions_deduped": duplicates_in_this,
-                    },
-                )
+                    folded_from_this = 0
+                    duplicates_in_this = 0
+                    for request, response in zip(staging_requests, staging_responses, strict=False):
+                        key = _dedup_key(request)
+                        if key in seen_keys:
+                            duplicates_in_this += 1
+                            continue
+                        merged_requests.append(request)
+                        merged_responses.append(response)
+                        seen_keys.add(key)
+                        folded_from_this += 1
+                    _trace(
+                        "cassette.merge.decision",
+                        {
+                            "staging": str(staging_path),
+                            "decision": "folded",
+                            "marker_present": True,
+                            "interactions_loaded": len(staging_requests),
+                            "interactions_folded": folded_from_this,
+                            "interactions_deduped": duplicates_in_this,
+                        },
+                    )
 
             # Only rewrite canonical if we actually folded markered
             # work in. Pre-build sweeps that find only markerless

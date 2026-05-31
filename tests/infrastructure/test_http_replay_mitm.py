@@ -52,15 +52,39 @@ class _CountingHandler(BaseHTTPRequestHandler):
     """
 
     upstream_hits = 0
+    # Records the (method, path, headers) the upstream actually saw — used by
+    # tests that need to assert what reached the network (e.g. the routing tag
+    # was stripped before forwarding upstream).
+    last_seen: dict | None = None
 
-    def do_GET(self) -> None:  # noqa: N802 — required by BaseHTTPRequestHandler
-        type(self).upstream_hits += 1
-        body = json.dumps({"path": self.path, "hit": type(self).upstream_hits}).encode()
+    def _respond(self, payload: dict) -> None:
+        body = json.dumps(payload).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def do_GET(self) -> None:  # noqa: N802 — required by BaseHTTPRequestHandler
+        type(self).upstream_hits += 1
+        type(self).last_seen = {"method": "GET", "path": self.path, "headers": dict(self.headers)}
+        # Echo only the path without the query string: a real API never reflects
+        # your api_key/token query params back into its response body (and
+        # responses are not secret-filtered), so reflecting them here would be
+        # an unrealistic test-only secret leak.
+        self._respond({"path": self.path.split("?", 1)[0], "hit": type(self).upstream_hits})
+
+    def do_POST(self) -> None:  # noqa: N802 — required by BaseHTTPRequestHandler
+        type(self).upstream_hits += 1
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        raw = self.rfile.read(length) if length else b""
+        type(self).last_seen = {
+            "method": "POST",
+            "path": self.path,
+            "headers": dict(self.headers),
+            "body": raw.decode("utf-8", errors="replace"),
+        }
+        self._respond({"path": self.path.split("?", 1)[0], "hit": type(self).upstream_hits})
 
     def log_message(self, *_args, **_kwargs) -> None:  # silence stderr noise
         return
@@ -70,6 +94,7 @@ class _CountingHandler(BaseHTTPRequestHandler):
 def upstream_server() -> Iterator[str]:
     """Run a localhost HTTP server in a thread for the duration of one test."""
     _CountingHandler.upstream_hits = 0
+    _CountingHandler.last_seen = None
     server = HTTPServer(("127.0.0.1", 0), _CountingHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -87,15 +112,40 @@ def cassette_path(tmp_path: Path) -> Path:
     return tmp_path / "smoke.http-cassette.yaml"
 
 
-def _get_via_proxy(url: str, proxy_url: str, tag: str | None = None) -> requests.Response:
-    headers = {"X-CLM-Cassette": tag} if tag is not None else None
+def _get_via_proxy(
+    url: str,
+    proxy_url: str,
+    tag: str | None = None,
+    extra_headers: dict | None = None,
+) -> requests.Response:
+    headers = dict(extra_headers or {})
+    if tag is not None:
+        headers["X-CLM-Cassette"] = tag
     return requests.get(
         url,
-        headers=headers,
+        headers=headers or None,
         proxies={"http": proxy_url, "https": proxy_url},
         # mitmproxy intercepts HTTP cleanly; HTTPS would need CA trust
         # set up. The smoke test stays on HTTP for simplicity — see the
         # design doc for the HTTPS story.
+        timeout=10.0,
+    )
+
+
+def _post_json_via_proxy(
+    url: str,
+    proxy_url: str,
+    body: bytes,
+    tag: str | None = None,
+) -> requests.Response:
+    headers = {"Content-Type": "application/json"}
+    if tag is not None:
+        headers["X-CLM-Cassette"] = tag
+    return requests.post(
+        url,
+        data=body,
+        headers=headers,
+        proxies={"http": proxy_url, "https": proxy_url},
         timeout=10.0,
     )
 
@@ -267,6 +317,137 @@ def test_once_mode_starts_without_existing_catchall(
     assert response.status_code == 200
     # A miss in once mode records into the tagged per-cassette staging file.
     assert _staging_files(cass), "once should record a miss into per-cassette staging"
+
+
+def _fold_staging_to_canonical(canonical: Path, staging: Path) -> None:
+    """Drive the real host marker+merge so the recorded staging lands in the
+    canonical cassette (what a subsequent replay-mode proxy loads from)."""
+    from clm.workers.notebook.http_replay_cassette import (
+        CassettePaths,
+        merge_staging_into_canonical,
+        write_completion_marker,
+    )
+
+    paths = CassettePaths(canonical=canonical, staging=staging)
+    write_completion_marker(paths)
+    merge_staging_into_canonical(paths)
+
+
+def test_secret_request_headers_and_params_stripped_from_recording(
+    upstream_server: str, cassette_path: Path, tmp_path: Path
+) -> None:
+    """P3 secret hygiene: ``authorization``/``x-api-key`` headers and
+    ``api_key``/``token`` query params never reach the recorded cassette."""
+    confdir = tmp_path / "mitm-confdir"
+    cass = tmp_path / "topicS" / "_cassettes" / "slidesS.http-cassette.yaml"
+
+    with MitmproxyManager(
+        cassette_path=cassette_path, mode="new-episodes", confdir=confdir
+    ) as proxy:
+        resp = _get_via_proxy(
+            f"{upstream_server}/secret?api_key=SHHH&token=TTT&keep=1",
+            proxy.proxy_url,
+            tag=str(cass),
+            extra_headers={"Authorization": "Bearer SUPERSECRET", "X-API-Key": "KKK"},
+        )
+    assert resp.status_code == 200
+
+    staging = _staging_files(cass)
+    assert len(staging) == 1, staging
+    text = staging[0].read_text(encoding="utf-8")
+    # Secret-bearing headers / params must be absent; the cassette is committed.
+    assert "SUPERSECRET" not in text
+    assert "authorization" not in text.lower()
+    assert "x-api-key" not in text.lower()
+    assert "api_key" not in text and "SHHH" not in text
+    assert "token" not in text and "TTT" not in text
+    # The non-secret query param survives (the request is still recorded).
+    assert "keep=1" in text
+
+
+def test_ignore_hosts_forwarded_but_not_recorded(
+    upstream_server: str, cassette_path: Path, tmp_path: Path
+) -> None:
+    """P3 telemetry hygiene: an ignore_hosts host is forwarded upstream but
+    never recorded (the LangSmith case, exercised here against localhost)."""
+    confdir = tmp_path / "mitm-confdir"
+    cass = tmp_path / "topicI" / "_cassettes" / "slidesI.http-cassette.yaml"
+
+    with MitmproxyManager(
+        cassette_path=cassette_path,
+        mode="new-episodes",
+        confdir=confdir,
+        ignore_hosts=("127.0.0.1",),
+    ) as proxy:
+        resp = _get_via_proxy(f"{upstream_server}/telemetry", proxy.proxy_url, tag=str(cass))
+
+    assert resp.status_code == 200  # forwarded to upstream
+    assert _CountingHandler.upstream_hits == 1  # reached the network
+    assert not _staging_files(cass)  # but nothing recorded
+    # Nor did it land in the catch-all.
+    if cassette_path.exists():
+        assert "/telemetry" not in cassette_path.read_text(encoding="utf-8")
+
+
+def test_json_post_replays_with_semantically_equal_body(
+    upstream_server: str, cassette_path: Path, tmp_path: Path
+) -> None:
+    """P3 JSON-match parity: a JSON POST replay-hits even when the live body
+    differs from the recorded one only by key order / separators — a byte-exact
+    key would spuriously 599-miss every real LLM POST."""
+    confdir = tmp_path / "mitm-confdir"
+    cass = tmp_path / "topicJ" / "_cassettes" / "slidesJ.http-cassette.yaml"
+    target = f"{upstream_server}/chat"
+
+    # 1. Record a JSON POST.
+    with MitmproxyManager(
+        cassette_path=cassette_path, mode="new-episodes", confdir=confdir
+    ) as proxy:
+        _post_json_via_proxy(target, proxy.proxy_url, b'{"model":"x","n":1}', tag=str(cass))
+    assert _CountingHandler.upstream_hits == 1
+    staging = _staging_files(cass)
+    assert len(staging) == 1
+    _fold_staging_to_canonical(cass, staging[0])
+
+    # 2. Replay with a semantically-identical but textually-different body.
+    with MitmproxyManager(cassette_path=cassette_path, mode="replay", confdir=confdir) as proxy:
+        replayed = _post_json_via_proxy(
+            target, proxy.proxy_url, b'{"n": 1, "model": "x"}', tag=str(cass)
+        )
+    assert replayed.status_code == 200, replayed.text
+    assert _CountingHandler.upstream_hits == 1, "JSON POST must replay-hit, not escape upstream"
+
+
+def test_refresh_rerecords_while_replay_serves_existing_cassette(
+    upstream_server: str, cassette_path: Path, tmp_path: Path
+) -> None:
+    """P3 once/refresh semantics: ``replay`` serves an existing cassette
+    (no upstream hit) while ``refresh`` ignores it and re-hits upstream."""
+    confdir = tmp_path / "mitm-confdir"
+    cass = tmp_path / "topicR" / "_cassettes" / "slidesR.http-cassette.yaml"
+    target = f"{upstream_server}/seeded"
+
+    # Seed a canonical cassette by recording once and folding.
+    with MitmproxyManager(
+        cassette_path=cassette_path, mode="new-episodes", confdir=confdir
+    ) as proxy:
+        _get_via_proxy(target, proxy.proxy_url, tag=str(cass))
+    _fold_staging_to_canonical(cass, _staging_files(cass)[0])
+    assert cass.exists()
+
+    # replay: served from cassette, upstream untouched.
+    _CountingHandler.upstream_hits = 0
+    with MitmproxyManager(cassette_path=cassette_path, mode="replay", confdir=confdir) as proxy:
+        r1 = _get_via_proxy(target, proxy.proxy_url, tag=str(cass))
+    assert r1.status_code == 200
+    assert _CountingHandler.upstream_hits == 0, "replay must serve the existing cassette"
+
+    # refresh: ignores the existing cassette and re-hits upstream.
+    _CountingHandler.upstream_hits = 0
+    with MitmproxyManager(cassette_path=cassette_path, mode="refresh", confdir=confdir) as proxy:
+        r2 = _get_via_proxy(target, proxy.proxy_url, tag=str(cass))
+    assert r2.status_code == 200
+    assert _CountingHandler.upstream_hits == 1, "refresh must re-hit upstream, not serve cassette"
 
 
 def test_env_vars_exposes_proxy_url(cassette_path: Path, tmp_path: Path) -> None:

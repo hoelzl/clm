@@ -220,6 +220,125 @@ def test_round_trip_load(tmp_path):
     assert loaded_resp["body"]["string"] == _POST_JSON[7]
 
 
+def test_filter_byte_identical_to_vcrpy_before_record_request():
+    """Our request filter must drop exactly what vcrpy's own
+    ``before_record_request`` drops, byte-for-byte — so a mitmproxy-recorded
+    cassette is indistinguishable from a vcrpy-recorded one after filtering."""
+    import vcr
+
+    ignore = ("api.smith.langchain.com",)
+    vcrpy_filter = vcr.VCR(
+        filter_headers=cf.FILTER_HEADERS,
+        filter_query_parameters=cf.FILTER_QUERY_PARAMETERS,
+        filter_post_data_parameters=cf.FILTER_POST_DATA_PARAMETERS,
+        ignore_hosts=ignore,
+        decode_compressed_response=True,
+    )._build_before_record_request({})
+    ours = cf.build_request_filter(ignore_hosts=ignore)
+
+    cases = [
+        (
+            "POST",
+            "https://openrouter.ai/api/v1/chat?api_key=S&model=x&token=T",
+            [
+                (b"authorization", b"Bearer S"),
+                (b"content-type", b"application/json"),
+                (b"x-api-key", b"K"),
+                (b"accept", b"application/json"),
+            ],
+            b'{"model":"x","api_key":"S","password":"p","messages":[{"role":"user","content":"hi"}]}',
+        ),
+        ("GET", "https://example.com/x?token=T&q=1", [(b"cookie", b"sid=abc")], b""),
+        (
+            "POST",
+            "https://o.ai/v1",
+            [(b"content-type", b"application/json; charset=utf-8")],
+            b'{"k":1}',
+        ),
+    ]
+    for method, url, fields, body in cases:
+        ref = vcrpy_filter(cf.vcr_request_from_parts(method, url, fields, body))
+        got = ours(cf.vcr_request_from_parts(method, url, fields, body))
+        assert ref._to_dict() == got._to_dict(), url
+
+
+def test_filter_removes_secrets():
+    """The filtered request carries no secret headers / query / body params."""
+    f = cf.build_request_filter()
+    req = cf.vcr_request_from_parts(
+        "POST",
+        "https://openrouter.ai/api/v1/chat?api_key=SECRET&model=x&token=TT",
+        [
+            (b"authorization", b"Bearer SECRET"),
+            (b"x-api-key", b"K"),
+            (b"content-type", b"application/json"),
+        ],
+        b'{"model":"x","api_key":"SECRET","password":"pw"}',
+    )
+    filtered = f(req)
+    header_names = {k.lower() for k in filtered.headers}
+    assert "authorization" not in header_names
+    assert "x-api-key" not in header_names
+    assert "api_key" not in filtered.uri and "token" not in filtered.uri
+    body = filtered.body or b""
+    assert b"SECRET" not in body and b"api_key" not in body and b"password" not in body
+
+
+def test_filter_ignore_host_returns_none():
+    f = cf.build_request_filter(ignore_hosts=("api.smith.langchain.com",))
+    ignored = cf.vcr_request_from_parts("POST", "https://api.smith.langchain.com/runs", [], b"{}")
+    kept = cf.vcr_request_from_parts("POST", "https://openrouter.ai/v1", [], b"{}")
+    assert f(ignored) is None
+    assert f(kept) is not None
+
+
+def test_json_body_matcher_semantic_and_byte_fallback():
+    json_h = [(b"content-type", b"application/json")]
+    compact = cf.vcr_request_from_parts("POST", "https://o.ai/c", json_h, b'{"a":1,"b":2}')
+    reordered = cf.vcr_request_from_parts("POST", "https://o.ai/c", json_h, b'{"b": 2, "a": 1}')
+    different = cf.vcr_request_from_parts("POST", "https://o.ai/c", json_h, b'{"a":9}')
+    assert cf.requests_match(compact, reordered)  # JSON value equality
+    assert not cf.requests_match(compact, different)
+
+    text_h = [(b"content-type", b"text/plain")]
+    t1 = cf.vcr_request_from_parts("POST", "https://o.ai/t", text_h, b"hello")
+    t2 = cf.vcr_request_from_parts("POST", "https://o.ai/t", text_h, b"hello")
+    t3 = cf.vcr_request_from_parts("POST", "https://o.ai/t", text_h, b"world")
+    assert cf.requests_match(t1, t2)  # byte equality
+    assert not cf.requests_match(t1, t3)
+
+
+def test_requests_match_query_order_insensitive_and_path_sensitive():
+    a = cf.vcr_request_from_parts("GET", "https://o.ai/x?a=1&b=2", [], b"")
+    b = cf.vcr_request_from_parts("GET", "https://o.ai/x?b=2&a=1", [], b"")
+    other_path = cf.vcr_request_from_parts("GET", "https://o.ai/y?a=1&b=2", [], b"")
+    assert cf.requests_match(a, b)  # query matcher sorts
+    assert not cf.requests_match(a, other_path)
+
+
+def test_filter_constants_and_matchers_match_bootstrap():
+    """Drift guard: cassette_format's filter constants + match_on must stay in
+    lockstep with the in-kernel vcrpy bootstrap, or a mitmproxy cassette would
+    filter/match differently from a vcrpy one."""
+    from clm.workers.notebook import notebook_processor as nbp
+
+    template = nbp._HTTP_REPLAY_BOOTSTRAP_TEMPLATE
+    assert 'filter_headers=["authorization", "cookie", "x-api-key", "set-cookie"]' in template
+    assert 'filter_post_data_parameters=["password", "token", "api_key"]' in template
+    assert 'filter_query_parameters=["api_key", "token"]' in template
+    assert (
+        'match_on=("method", "scheme", "host", "port", "path", "query", "clm_json_body")'
+        in template
+    )
+
+    assert cf.FILTER_HEADERS == ["authorization", "cookie", "x-api-key", "set-cookie"]
+    assert cf.FILTER_POST_DATA_PARAMETERS == ["password", "token", "api_key"]
+    assert cf.FILTER_QUERY_PARAMETERS == ["api_key", "token"]
+    names = [m.__name__ for m in cf.REPLAY_MATCHERS]
+    assert names[:6] == ["method", "scheme", "host", "port", "path", "query"]
+    assert "json_body" in names[6]
+
+
 def test_merge_helper_loads_bridge_cassette(tmp_path):
     """The host-side merge must consume a bridge-written cassette unchanged."""
     from clm.workers.notebook.http_replay_cassette import (

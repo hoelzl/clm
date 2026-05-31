@@ -32,6 +32,7 @@ import json
 import logging
 import sys
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 
 from mitmproxy import ctx, http
@@ -56,23 +57,18 @@ except ImportError:  # mitmdump interpreter — import the sibling by path
         _CF_IMPORT_ERROR = exc
 
 
-# Mode mapping mirrors vcrpy semantics one-for-one. ``disabled`` is
-# handled by the manager (it doesn't start mitmproxy at all), so the
-# addon never sees it.
-MODE_REPLAY = "replay"  # serve from cassette, error on miss
-MODE_RECORD = "record"  # always hit upstream, record (overwrite)
+# CLM HTTP-replay modes (the four CLM exposes; ``disabled`` is handled by the
+# manager — it doesn't start mitmproxy at all — so the addon never sees it).
+# These map 1:1 to vcrpy record modes: replay→none, once→once,
+# new-episodes→new_episodes, refresh→all. ``record`` is kept as an alias of
+# refresh for defensiveness (CLM does not emit it). The serve/record/overwrite
+# semantics each implies are computed per-target in ``_modes_for`` because
+# ``once`` depends on whether the target cassette already exists.
+MODE_REPLAY = "replay"  # serve from cassette, 599 on miss, never record
+MODE_RECORD = "record"  # alias of refresh (not emitted by CLM)
 MODE_NEW_EPISODES = "new-episodes"  # serve cassette hits, record misses
 MODE_REFRESH = "refresh"  # always hit upstream, overwrite cassette
-MODE_ONCE = "once"  # like new-episodes but cassette must exist
-
-# Modes that serve recorded responses from the cassette.
-_REPLAY_CAPABLE = (MODE_REPLAY, MODE_NEW_EPISODES, MODE_ONCE)
-# Modes that persist newly observed interactions.
-_RECORD_CAPABLE = (MODE_RECORD, MODE_NEW_EPISODES, MODE_REFRESH, MODE_ONCE)
-# Modes that preserve (rather than overwrite) existing cassette entries
-# when writing the *catch-all* cassette in full (tagged staging files only
-# ever hold the build's new interactions; the host merge folds them).
-_ADDITIVE = (MODE_NEW_EPISODES, MODE_ONCE)
+MODE_ONCE = "once"  # cassette present → strict replay; absent → record
 
 # Per-request worker tag identifying the destination cassette (lower-cased
 # because HTTP header lookups are case-insensitive and HTTP/2 lowercases).
@@ -81,6 +77,10 @@ _TAG_HEADER = "x-clm-cassette"
 # header (the tag must not be forwarded upstream or recorded).
 _FLOW_TAG_KEY = "clm_cassette_tag"
 _FLOW_SERVED_KEY = "clm_served_from_cache"
+# Set when request() decided this flow must NOT be recorded (an ``ignore_hosts``
+# host such as LangSmith telemetry, or an unfilterable request): it is forwarded
+# upstream untouched and response() skips persisting it.
+_FLOW_IGNORED_KEY = "clm_ignored_no_record"
 
 # Staging filename infix. Must start with ``.staging-`` so the host-side
 # ``merge_staging_into_canonical`` glob (``<name>.staging-*``) finds it. The
@@ -97,7 +97,16 @@ _SERVE_DROP_HEADERS = frozenset({"content-length", "transfer-encoding"})
 class _Target:
     """One destination cassette and its in-build recording/replay state."""
 
-    __slots__ = ("canonical", "write_path", "is_staging", "loaded", "index", "interactions", "seen")
+    __slots__ = (
+        "canonical",
+        "write_path",
+        "is_staging",
+        "loaded",
+        "cassette_existed",
+        "recorded",
+        "to_write",
+        "seen",
+    )
 
     def __init__(self, canonical: Path, write_path: Path, *, is_staging: bool) -> None:
         # Where the interactions ultimately live (replay source; merge target).
@@ -108,8 +117,21 @@ class _Target:
         self.write_path = write_path
         self.is_staging = is_staging
         self.loaded = False
-        self.index: dict[tuple[str, str, bytes], dict] = {}
-        self.interactions: list = []
+        # Whether the canonical cassette existed when first referenced this
+        # build — the discriminator for ``once`` (present → strict replay).
+        self.cassette_existed = False
+        # Replay match corpus: existing canonical entries (replay-capable
+        # modes) plus interactions recorded this build. Scanned pairwise with
+        # the vcrpy matcher chain so JSON bodies match semantically.
+        self.recorded: list[tuple] = []
+        # What gets serialized to ``write_path``. For a tagged staging file
+        # this holds only this build's new interactions (the host merge folds
+        # them into canonical); for the untagged catch-all it holds the full
+        # cassette (seeded existing entries + new) so the in-place rewrite
+        # preserves prior recordings.
+        self.to_write: list[tuple] = []
+        # Fingerprints already recorded this build (dedup; mirrors the host
+        # merge's ``_dedup_key`` so the addon and merge agree).
         self.seen: set[tuple[str, str, bytes]] = set()
 
 
@@ -118,15 +140,20 @@ class ClmReplayAddon:
 
     Lifecycle:
       * ``load(loader)`` declares the options the manager passes.
-      * ``running()`` records the mode + catch-all cassette and a per-build
-        id used to name staging files.
-      * ``request(flow)`` routes by the ``X-CLM-Cassette`` tag, strips it,
-        and either serves a cassette hit (short-circuit) or — in strict
-        ``replay`` mode — synthesizes a 599 on miss so the worker fails
-        cleanly instead of escaping to the network.
-      * ``response(flow)`` persists a real upstream response into the
-        flow's target cassette (eagerly, so a kernel/proxy kill cannot
-        lose recordings) unless the mode forbids it.
+      * ``running()`` records the mode + catch-all cassette + a per-build id
+        used to name staging files, and builds the secret/ignore-host request
+        filter (parity with the in-kernel vcrpy ``before_record_request``).
+      * ``request(flow)`` filters the request (dropping secrets; ignore_hosts
+        → pass straight through, never recorded), routes by the
+        ``X-CLM-Cassette`` tag, strips it, and either serves a cassette hit
+        (matched with the vcrpy matcher chain incl. JSON-semantic bodies) or —
+        in a strict mode (``replay`` / ``once`` with an existing cassette) —
+        synthesizes a 599 on miss so the worker fails cleanly instead of
+        escaping to the network.
+      * ``response(flow)`` persists a real upstream response into the flow's
+        target cassette (eagerly, so a kernel/proxy kill cannot lose
+        recordings), recording the *filtered* request so the on-disk cassette
+        is byte-identical to a vcrpy-recorded one, unless the mode forbids it.
 
     The ``.completed`` markers that tell the host merge a staging file is
     safe to fold are written by the **host** in the build's ``finally``
@@ -141,6 +168,10 @@ class ClmReplayAddon:
         self._mode: str = MODE_REPLAY
         self._default_cassette: Path | None = None
         self._build_id: str = ""
+        # Built in running() from clm_ignore_hosts: filters secrets out of every
+        # recorded request and returns None for ignore_hosts so telemetry passes
+        # straight through (never recorded). Mirrors the in-kernel vcrpy filters.
+        self._request_filter: Callable[..., object] | None = None
         # Keyed by canonical-path string; "" is the untagged catch-all.
         self._targets: dict[str, _Target] = {}
 
@@ -156,7 +187,7 @@ class ClmReplayAddon:
             name="clm_mode",
             typespec=str,
             default=MODE_REPLAY,
-            help="CLM replay mode: replay | record | new-episodes | refresh | once.",
+            help="CLM replay mode: replay | new-episodes | refresh | once.",
         )
         loader.add_option(
             name="clm_build_id",
@@ -164,6 +195,13 @@ class ClmReplayAddon:
             default="",
             help="Per-build id used to name staging files so the host can "
             "mark this build's recordings complete.",
+        )
+        loader.add_option(
+            name="clm_ignore_hosts",
+            typespec=str,
+            default="",
+            help="Comma-separated hosts whose traffic is forwarded but never "
+            "recorded (LangSmith telemetry by default). Mirrors vcrpy ignore_hosts.",
         )
 
     def running(self) -> None:
@@ -182,25 +220,26 @@ class ClmReplayAddon:
         cassette_path_str = ctx.options.clm_cassette_path
         self._default_cassette = Path(cassette_path_str) if cassette_path_str else None
 
-        # NOTE: vcrpy's strict ``once`` (cassette-must-exist) and ``refresh``
-        # (overwrite) semantics are not enforced per target under the
-        # out-of-process transport yet. The Phase-0 model had a single shared
-        # cassette, so this method could existence-check / unlink it; but under
-        # P2's per-(topic,language,kind) tag routing, ``clm_cassette_path`` is
-        # only the build-scratch *catch-all* (created empty on every fresh
-        # build — see build.py). A ``once`` existence check against it would
-        # wrongly abort the proxy at startup, and a ``refresh`` unlink of it
-        # would clear nothing real. So we do neither here. Until per-target
-        # strict semantics land (issue #165 P3), ``once`` behaves like
-        # ``new-episodes`` (serve cassette hits, record misses) and ``refresh``
-        # records fresh interactions additively (the host merge dedups against
-        # canonical — the same imperfect overwrite the in-process vcrpy path
-        # exhibits today). The mode sets above encode this routing.
+        ignore_hosts = tuple(
+            h.strip() for h in (ctx.options.clm_ignore_hosts or "").split(",") if h.strip()
+        )
+        # The before_record_request closure: removes secret headers
+        # (authorization/cookie/x-api-key), strips api_key/token query params and
+        # password/token/api_key body params, and returns None for ignore_hosts.
+        # filter_* default to cassette_format's constants (kept in lockstep with
+        # the in-kernel vcrpy bootstrap by a drift-guard test).
+        self._request_filter = cf.build_request_filter(ignore_hosts=ignore_hosts)
+
+        # ``once``/``refresh`` strictness is resolved per target in
+        # ``_modes_for`` (``once`` depends on whether the target cassette
+        # already exists), so there is nothing to existence-check or unlink
+        # here — ``clm_cassette_path`` is only the build-scratch catch-all.
 
         logger.info(
-            "Addon ready: mode=%s default_cassette=%s build=%s",
+            "Addon ready: mode=%s default_cassette=%s ignore_hosts=%s build=%s",
             self._mode,
             self._default_cassette,
+            ignore_hosts,
             self._build_id,
         )
 
@@ -221,37 +260,40 @@ class ClmReplayAddon:
             # recorded into the cassette.
             del flow.request.headers[_TAG_HEADER]
 
+        # Filter first: secrets are removed and an ignore_hosts host yields None.
+        # The filtered request is what we match against (and what we record), so
+        # secret removal and matching stay consistent on both sides.
+        filtered = self._filter_request(flow.request)
+        if filtered is None:
+            # ignore_hosts (e.g. LangSmith telemetry) or an unfilterable request:
+            # forward upstream untouched, record nothing, never 599.
+            flow.metadata[_FLOW_IGNORED_KEY] = True
+            return
+
         target = self._target_for(tag)
         if target is None:
             return  # untagged with no catch-all configured -> pass through
 
         self._ensure_loaded(target)
-        key = self._request_key(flow.request)
-        cached = target.index.get(key)
-        if cached is not None:
-            flow.response = self._build_reply(cached)
-            flow.metadata[_FLOW_SERVED_KEY] = True
-            return
+        serve, record, _overwrite = self._modes_for(target.cassette_existed)
 
-        if self._mode == MODE_REPLAY:
-            flow.response = http.Response.make(
-                599,
-                json.dumps(
-                    {
-                        "error": "clm_replay_miss",
-                        "method": flow.request.method,
-                        "url": flow.request.pretty_url,
-                        "cassette": str(target.canonical),
-                    }
-                ).encode(),
-                {"Content-Type": "application/json"},
-            )
+        if serve:
+            for rec_request, rec_response in target.recorded:
+                if cf.requests_match(filtered, rec_request):
+                    flow.response = self._build_reply(rec_response)
+                    flow.metadata[_FLOW_SERVED_KEY] = True
+                    return
+
+        if not record:
+            # Strict replay (``replay``, or ``once`` with an existing cassette):
+            # a miss must fail loudly, never escaping to the real network.
+            flow.response = self._replay_miss_response(flow, target)
 
     def response(self, flow: http.HTTPFlow) -> None:
         if cf is None or flow.response is None:
             return
-        if self._mode not in _RECORD_CAPABLE:
-            return
+        if flow.metadata.get(_FLOW_IGNORED_KEY):
+            return  # ignore_hosts / unfilterable: never record
         if flow.metadata.get(_FLOW_SERVED_KEY):
             return  # served from cassette this build — nothing new to record
         if flow.response.status_code == 599 and self._is_replay_miss_marker(flow.response):
@@ -260,13 +302,15 @@ class ClmReplayAddon:
         target = self._target_for(flow.metadata.get(_FLOW_TAG_KEY))
         if target is None:
             return
+        self._ensure_loaded(target)
+        _serve, record, _overwrite = self._modes_for(target.cassette_existed)
+        if not record:
+            return
 
-        request = cf.vcr_request_from_parts(
-            flow.request.method,
-            flow.request.url,
-            flow.request.headers.fields,
-            flow.request.raw_content or b"",
-        )
+        request = self._filter_request(flow.request)
+        if request is None:
+            return  # defensive: should have been flagged ignored in request()
+
         key = cf.fingerprint(request)
         if key in target.seen:
             return  # already recorded this build — keep the eager rewrite cheap
@@ -278,11 +322,11 @@ class ClmReplayAddon:
             flow.response.raw_content or b"",
             decode_compressed=True,
         )
-        target.interactions.append((request, response))
-        target.index[key] = response
+        target.recorded.append((request, response))
+        target.to_write.append((request, response))
         target.seen.add(key)
         # Eager rewrite so a build-timeout kill of mitmdump loses nothing.
-        cf.write_cassette(target.write_path, target.interactions)
+        cf.write_cassette(target.write_path, target.to_write)
 
     # -- routing ---------------------------------------------------------
 
@@ -309,7 +353,14 @@ class ClmReplayAddon:
         if target.loaded:
             return
         target.loaded = True
-        if self._mode not in _REPLAY_CAPABLE or not target.canonical.exists():
+        existed = target.canonical.exists()
+        target.cassette_existed = existed
+        _serve, _record, overwrite = self._modes_for(existed)
+        # ``refresh``/``record`` (overwrite) starts from a clean slate — never
+        # seed the match corpus (we always hit upstream) nor ``to_write`` (the
+        # cassette is rewritten from this build only). Nothing to load if the
+        # canonical doesn't exist yet either.
+        if overwrite or not existed:
             return
         try:
             interactions = cf.load_interactions(target.canonical)
@@ -322,22 +373,94 @@ class ClmReplayAddon:
             )
             return
         for request, response in interactions:
-            key = cf.fingerprint(request)
-            target.index[key] = response
-            target.seen.add(key)
-            # The catch-all rewrites the whole cassette, so it must keep
-            # existing entries; tagged staging files hold only new
-            # interactions (the host merge folds them into canonical).
-            if not target.is_staging and self._mode in _ADDITIVE:
-                target.interactions.append((request, response))
+            target.recorded.append((request, response))
+            target.seen.add(cf.fingerprint(request))
+            # The catch-all rewrites the whole cassette in place, so it must
+            # keep existing entries; tagged staging files hold only this
+            # build's new interactions (the host merge folds them into
+            # canonical). ``to_write`` is never serialized in non-recording
+            # modes, so seeding it for the catch-all is harmless there.
+            if not target.is_staging:
+                target.to_write.append((request, response))
 
     # -- helpers ---------------------------------------------------------
 
-    def _request_key(self, request: http.Request) -> tuple[str, str, bytes]:
-        vcr_request = cf.vcr_request_from_parts(
-            request.method, request.url, request.headers.fields, request.raw_content or b""
+    def _modes_for(self, cassette_existed: bool) -> tuple[bool, bool, bool]:
+        """Return ``(serve, record, overwrite)`` for the current mode.
+
+        Only ``once`` depends on ``cassette_existed`` (present → strict replay,
+        absent → record-and-serve like new-episodes). This is the per-target
+        resolution of vcrpy's record-mode semantics:
+
+        * ``replay``          → serve hits, 599 on miss, never record;
+        * ``new-episodes``    → serve hits, record misses;
+        * ``refresh``/``record`` → never serve, always record, overwrite;
+        * ``once`` + present  → serve hits, 599 on miss, never record;
+        * ``once`` + absent   → serve hits, record misses.
+        """
+        mode = self._mode
+        if mode == MODE_NEW_EPISODES:
+            return (True, True, False)
+        if mode in (MODE_REFRESH, MODE_RECORD):
+            return (False, True, True)
+        if mode == MODE_ONCE:
+            return (True, False, False) if cassette_existed else (True, True, False)
+        # MODE_REPLAY and any unknown mode: strict replay is the safe default.
+        return (True, False, False)
+
+    def _filter_request(self, request: http.Request):
+        """Build the filtered vcr Request for matching/recording, or ``None``.
+
+        ``None`` means "do not record, pass straight through" — either an
+        ignore_hosts host or (defensively) a request the vcrpy filters could not
+        process. Returning the unfiltered request is never an option: it could
+        leak a secret-bearing ``authorization`` header into the cassette.
+        """
+        request_filter = self._request_filter
+        if request_filter is None:
+            # running() always builds the filter before any flow is handled;
+            # if it somehow hasn't, fail safe (don't record) rather than leak.
+            return None
+        try:
+            vcr_request = cf.vcr_request_from_parts(
+                request.method,
+                request.url,
+                request.headers.fields,
+                request.raw_content or b"",
+            )
+            return request_filter(vcr_request)
+        except Exception as exc:  # noqa: BLE001 — never crash the proxy
+            logger.warning(
+                "Request filtering failed (%s: %s); forwarding without recording",
+                type(exc).__name__,
+                exc,
+            )
+            return None
+
+    def _replay_miss_response(self, flow: http.HTTPFlow, target: _Target) -> http.Response:
+        # A strict-replay miss returns HTTP 599 so the request never escapes to
+        # the network. This is the out-of-process analogue of vcrpy's in-kernel
+        # CannotOverwriteExistingCassetteException: the kernel's HTTP SDK
+        # (openai/anthropic/langchain) surfaces the 599 as an APIStatusError →
+        # cell error → the #93 fail-on-error policy → non-zero build exit.
+        # SDKs treat 5xx as retryable, so a miss is briefly retried (bounded by
+        # the SDK's max_retries, typically 2-3) before it raises — it cannot
+        # hang or silently pass. Defense-in-depth against an unbounded/raised
+        # SDK retry ceiling: the replay-engaged per-cell timeout
+        # (``notebook_processor._HTTP_REPLAY_DEFAULT_CELL_TIMEOUT``, default
+        # 600s) bounds any stall regardless of SDK behavior.
+        return http.Response.make(
+            599,
+            json.dumps(
+                {
+                    "error": "clm_replay_miss",
+                    "method": flow.request.method,
+                    "url": flow.request.pretty_url,
+                    "cassette": str(target.canonical),
+                }
+            ).encode(),
+            {"Content-Type": "application/json"},
         )
-        return cf.fingerprint(vcr_request)
 
     def _build_reply(self, response: dict) -> http.Response:
         status_code, header_pairs, content = cf.response_dict_to_reply_parts(response)
