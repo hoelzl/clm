@@ -128,6 +128,40 @@ try:
 except ValueError:
     CELL_EXECUTION_TIMEOUT = None
 
+# Defense-in-depth (issue #143): when HTTP replay is engaged, the kernel runs the
+# vcrpy bootstrap, which historically could deadlock a cell silently until the
+# build-level job timeout fired. The root-cause leak is fixed in the bootstrap,
+# but to keep any *future* replay-layer hang from stalling a whole build we default
+# a generous per-cell timeout for replay-engaged jobs only. Real cells in the
+# LLM/RAG decks that use replay finish in seconds, so only a genuine hang reaches
+# this ceiling. An explicit CLM_CELL_TIMEOUT_SECONDS always wins; set
+# CLM_HTTP_REPLAY_CELL_TIMEOUT_SECONDS=0 to opt out of the default.
+try:
+    _raw_replay_cell_timeout = float(os.environ.get("CLM_HTTP_REPLAY_CELL_TIMEOUT_SECONDS", "600"))
+    _HTTP_REPLAY_DEFAULT_CELL_TIMEOUT: int | None = (
+        int(_raw_replay_cell_timeout) if _raw_replay_cell_timeout > 0 else None
+    )
+except ValueError:
+    _HTTP_REPLAY_DEFAULT_CELL_TIMEOUT = 600
+
+
+def _effective_cell_timeout(payload: "NotebookPayload") -> int | None:
+    """Resolve the per-cell nbclient timeout for a single notebook job.
+
+    An explicit ``CLM_CELL_TIMEOUT_SECONDS`` always wins. Otherwise, when HTTP
+    replay is engaged for this job (any mode but ``disabled``), fall back to the
+    generous replay default so a replay-layer hang surfaces as a clean
+    ``CellTimeoutError`` instead of stalling to the build-level job timeout
+    (issue #143). Non-replay builds keep the historical no-timeout behavior.
+    """
+    if CELL_EXECUTION_TIMEOUT is not None:
+        return CELL_EXECUTION_TIMEOUT
+    mode = getattr(payload, "http_replay_mode", None)
+    if mode and mode != "disabled":
+        return _HTTP_REPLAY_DEFAULT_CELL_TIMEOUT
+    return None
+
+
 # Mapping from CLM HTTP replay modes to vcrpy record_mode values.
 # "disabled" is intentionally absent — in that mode the bootstrap cell
 # is not injected at all.
@@ -380,6 +414,51 @@ def _clm_eager_append(request, response):
 _clm_cassette.append = _clm_eager_append
 # Belt-and-suspenders: graceful kernel shutdown still flushes via ``__exit__``.
 _clm_atexit.register(_clm_ctx.__exit__, None, None, None)
+
+# --- CLM fix for issue #143: vcrpy httpcore connection-pool leak ---
+# vcrpy 8.1.x's httpcore stubs read the response body and swap ``.stream`` for a
+# buffered ByteStream but never ``close()`` the original httpcore ``Response``, so
+# the pooled connection is never returned. httpx later closes vcrpy's *replacement*
+# ByteStream (a no-op), not the original, so every recorded request leaks one
+# pooled connection. A langchain ``.batch()`` burst then exhausts the pool and the
+# worker threads block forever in ``httpcore.connection_pool.wait_for_connection``
+# (the silent Stage-3 deadlock). Reinstall the two stub functions with an explicit
+# close before the stream swap. vcrpy's installed wrappers resolve these names from
+# the ``httpcore_stubs`` module globals at call time, so reassigning them here takes
+# effect even though the cassette is already entered.
+import vcr.stubs.httpcore_stubs as _clm_hcs
+def _clm_vcr_handle_request(cassette, real_handle_request, self, real_request):
+    real_request_body = b"".join(real_request.stream)
+    real_request.stream = _clm_hcs.ByteStream(real_request_body)
+    vcr_request, vcr_response = _clm_hcs._vcr_request(cassette, real_request, real_request_body)
+    if vcr_response:
+        return vcr_response
+    real_response = real_handle_request(self, real_request)
+    real_response_content = b"".join(real_response.stream)
+    try:
+        real_response.close()
+    except Exception:
+        pass
+    real_response.stream = _clm_hcs.ByteStream(real_response_content)
+    _clm_hcs._record_responses(cassette, vcr_request, real_response, real_response_content)
+    return real_response
+_clm_hcs._vcr_handle_request = _clm_vcr_handle_request
+async def _clm_vcr_handle_async_request(cassette, real_handle_async_request, self, real_request):
+    real_request_body = b"".join([_p async for _p in real_request.stream])
+    real_request.stream = _clm_hcs.ByteStream(real_request_body)
+    vcr_request, vcr_response = _clm_hcs._vcr_request(cassette, real_request, real_request_body)
+    if vcr_response:
+        return vcr_response
+    real_response = await real_handle_async_request(self, real_request)
+    real_response_content = b"".join([_p async for _p in real_response.stream])
+    try:
+        await real_response.aclose()
+    except Exception:
+        pass
+    real_response.stream = _clm_hcs.ByteStream(real_response_content)
+    _clm_hcs._record_responses(cassette, vcr_request, real_response, real_response_content)
+    return real_response
+_clm_hcs._vcr_handle_async_request = _clm_vcr_handle_async_request
 """
 
 
@@ -1695,15 +1774,19 @@ class NotebookProcessor:
             # Expose the correlation id to the preprocessor's per-cell
             # timing logs (issue #143 instrumentation).
             self._current_cid = cid
-            if CELL_EXECUTION_TIMEOUT is not None:
+            cell_timeout = _effective_cell_timeout(payload)
+            if cell_timeout is not None:
                 logger.info(
-                    "%s: per-cell execution timeout active: %ss (CLM_CELL_TIMEOUT_SECONDS)",
+                    "%s: per-cell execution timeout active: %ss%s",
                     cid,
-                    CELL_EXECUTION_TIMEOUT,
+                    cell_timeout,
+                    ""
+                    if CELL_EXECUTION_TIMEOUT is not None
+                    else " (http-replay default; set CLM_CELL_TIMEOUT_SECONDS to override)",
                 )
             ep = TrackingExecutePreprocessor(
                 self,
-                timeout=CELL_EXECUTION_TIMEOUT,
+                timeout=cell_timeout,
                 startup_timeout=300,
                 allow_errors=payload.skip_errors,
             )

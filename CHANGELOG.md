@@ -108,6 +108,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **HTTP-replay builds no longer deadlock on a `.batch()` cell
+  ([#143](https://github.com/hoelzl/clm/issues/143)).** vcrpy 8.1.x's httpcore
+  stub reads the response body and swaps `response.stream` for a buffered
+  `ByteStream` but never `close()`s the original httpcore `Response`, so every
+  recorded request leaked one pooled connection. A LangChain `.batch()` /
+  `RunnableParallel` burst then exhausted httpcore's connection pool and the
+  worker threads blocked forever in `wait_for_connection`, hanging the Stage-3
+  HTML build until the build-level job timeout fired (and, before
+  [#157](https://github.com/hoelzl/clm/issues/157), doing so silently). The
+  HTTP-replay bootstrap now reinstalls vcrpy's sync and async httpcore stubs
+  with an explicit `close()`/`aclose()` before the stream swap, returning the
+  connection to the pool; the recorded bytes are unchanged, so cassettes stay
+  byte-identical. As a defense-in-depth safety net, replay-engaged jobs now also
+  default a generous per-cell timeout (`CLM_HTTP_REPLAY_CELL_TIMEOUT_SECONDS`,
+  default `600`s; set `0` to opt out, `CLM_CELL_TIMEOUT_SECONDS` overrides) so
+  any *future* replay-layer hang fails as a clean cell timeout instead of
+  stalling to the job timeout. The strategic follow-up — replacing in-process
+  vcrpy with an out-of-process transport — is tracked in
+  [#165](https://github.com/hoelzl/clm/issues/165).
 - **Split and bilingual builds now produce byte-equivalent output
   ([#133](https://github.com/hoelzl/clm/issues/133)).** The notebook
   processor strips jupytext's `lines_to_next_cell` cell metadata from build
