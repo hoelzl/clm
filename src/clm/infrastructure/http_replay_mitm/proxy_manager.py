@@ -5,9 +5,12 @@ a child of the ``clm build`` parent process: locating the executable,
 picking a free port, loading our addon, waiting for the proxy to accept
 TCP connections before workers spawn, and graceful shutdown.
 
-This is prototype scope — the manager is functional and used by the
-smoke test, but is not yet integrated into ``clm build``. Wiring that up
-is follow-up work; see the design doc for the integration plan.
+Integrated into ``clm build`` behind ``CLM_HTTP_REPLAY_TRANSPORT=mitmproxy``
+(issue #165): the build starts one manager for the whole run and stops it in
+its ``finally``. The bind host is ``127.0.0.1`` for Direct-only builds and
+``0.0.0.0`` when Docker workers must reach the proxy via ``host.docker.internal``
+(P4); same-host clients and the readiness poll always connect via loopback
+(:meth:`_client_host`).
 """
 
 from __future__ import annotations
@@ -77,8 +80,8 @@ class MitmproxyManager:
         self._configured_port = listen_port
         self.listen_port: int | None = None  # set on start
         # mitmproxy stores its CA + config under ``confdir``. Per-build
-        # isolation keeps the CA out of the user's home directory and
-        # makes the prototype easier to reason about.
+        # isolation keeps the CA out of the user's home directory and gives
+        # each build its own short-lived CA.
         self.confdir = Path(confdir) if confdir is not None else None
         self.extra_args = extra_args or []
         # Hosts the addon forwards but never records (LangSmith telemetry by
@@ -95,11 +98,28 @@ class MitmproxyManager:
         self._output: collections.deque[str] = collections.deque(maxlen=_OUTPUT_RING_LINES)
         self._reader_thread: threading.Thread | None = None
 
+    def _client_host(self) -> str:
+        """Loopback-reachable host clients use to connect to the proxy.
+
+        When we bind the IPv4 wildcard (``0.0.0.0`` / empty, for Docker
+        reachability — see :meth:`start`), clients on the same machine must
+        still connect via loopback — ``connect("0.0.0.0")`` is invalid on
+        Windows and unreliable elsewhere. Direct-mode workers and our own
+        readiness poll therefore use ``127.0.0.1``. When we bind a concrete
+        host we connect to exactly that host.
+
+        Only IPv4 is supported: ``build`` only ever emits ``0.0.0.0`` or
+        ``127.0.0.1``, and :func:`_pick_free_port` binds an ``AF_INET`` socket.
+        """
+        if self.listen_host in ("0.0.0.0", ""):
+            return "127.0.0.1"
+        return self.listen_host
+
     @property
     def proxy_url(self) -> str:
         if self.listen_port is None:
             raise MitmproxyError("Proxy not started; listen_port unknown")
-        return f"http://{self.listen_host}:{self.listen_port}"
+        return f"http://{self._client_host()}:{self.listen_port}"
 
     @property
     def ca_cert_path(self) -> Path:
@@ -113,13 +133,15 @@ class MitmproxyManager:
         return confdir / "mitmproxy-ca-cert.pem"
 
     def env_vars(self, *, include_ca: bool = False) -> dict[str, str]:
-        """Environment variables to merge into worker subprocesses.
+        """Loopback proxy (and optionally CA) env vars for a worker process.
 
-        When ``include_ca`` is true, also exports cert-bundle paths so
-        Python HTTP libraries trust the proxy for HTTPS interception.
-        We default this off because the CA cert is only generated on
-        first run; the smoke test exercises HTTP-only paths and doesn't
-        need it.
+        Convenience helper; the integrated ``clm build`` path does not call it
+        — it splices a combined certifi+proxy-CA bundle into ``os.environ`` for
+        Direct workers (``build._maybe_start_mitmproxy_transport``) and mounts
+        the CA per Docker container (``worker_executor._mitmproxy_docker_env``).
+        ``include_ca`` defaults off because the CA cert is only written once
+        mitmdump has started; callers that need HTTPS interception must ensure
+        the cert exists first.
         """
         env: dict[str, str] = {
             "HTTP_PROXY": self.proxy_url,
@@ -283,7 +305,7 @@ class MitmproxyManager:
                     f"mitmdump exited during startup (rc={self._process.returncode}):\n{output}"
                 )
             try:
-                with socket.create_connection((self.listen_host, self.listen_port), timeout=0.2):
+                with socket.create_connection((self._client_host(), self.listen_port), timeout=0.2):
                     return
             except OSError:
                 time.sleep(0.05)
@@ -352,9 +374,9 @@ def _pick_free_port(host: str) -> int:
     """Bind to port 0 and let the OS pick a free port, then release.
 
     There is a small TOCTOU window between releasing the port here and
-    mitmdump binding it — acceptable for a prototype on localhost. A
-    production version could keep the socket open and hand the fd to
-    the child (Unix) or accept the small risk on Windows.
+    mitmdump binding it; on a single host this is acceptable. ``host`` is
+    always an IPv4 address (``0.0.0.0`` or ``127.0.0.1``), matching the
+    ``AF_INET`` socket below.
     """
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind((host, 0))

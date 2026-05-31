@@ -232,19 +232,69 @@ behavior (the design doc wrongly called these "trivial").
   secrets/LangSmith; real LLM JSON POSTs replay-hit (no spurious 599); a
   deliberate miss fails the build non-zero.
 
-## P4 — Docker worker support  ·  ~3–5 d  ·  risk: high  ·  separately gated
+## P4 — Docker worker support  ·  ~3–5 d  ·  risk: high  ·  **DONE**
 
-A `127.0.0.1` mitmdump is unreachable inside a container.
+**Status (done):** Docker notebook workers now reach the proxy and the full
+record→merge→replay round-trip works inside a container.
 
-- Rewrite the container env host to `host.docker.internal` (mirror the
-  `CLM_API_URL` pattern; `extra_hosts: host-gateway` is already set); add
-  `HTTP(S)_PROXY` + `SSL_CERT_FILE` to the Docker env allowlist; mount + trust
-  the per-build CA inside the container.
-- **Gate:** a Docker-worker build completes an HTTPS LLM round-trip via
-  `host.docker.internal` with CA trust. **If infeasible:** Docker stays
-  vcrpy-only and vcrpy is retained for it — this does not block Direct-mode
-  mitmproxy, but vcrpy deletion is gated on Docker being supported or explicitly
-  scoped out.
+- **Wildcard bind, scoped:** `build._maybe_start_mitmproxy_transport` binds the
+  proxy `0.0.0.0` (so containers reach it via `host.docker.internal`) **only when
+  a Docker _notebook_ worker is configured** (`_build_has_docker_notebook_worker`);
+  Direct-only and diagram-only-Docker builds keep the `127.0.0.1` bind. The
+  `os.environ` proxy URL stays a loopback address — `MitmproxyManager._client_host`
+  returns `127.0.0.1` for a wildcard bind so Direct workers and the readiness poll
+  connect via loopback (`connect("0.0.0.0")` is invalid on Windows); the bind host
+  itself stays the wildcard.
+- **Per-container injection:** `DockerWorkerExecutor` injects into the **notebook**
+  container only (`worker_executor._mitmproxy_docker_env`): `HTTP(S)_PROXY` rewritten
+  host→`host.docker.internal` (preserving the port), `NO_PROXY=host.docker.internal`
+  so worker↔CLM-REST-API traffic (`CLM_API_URL`) **bypasses** the proxy (else worker
+  registration would replay-miss and stall the build), a **read-only CA-bundle bind
+  mount** + `SSL_CERT_FILE`/`REQUESTS_CA_BUNDLE`/`CURL_CA_BUNDLE`, and
+  `CLM_HTTP_REPLAY_TRANSPORT` passthrough. `host.docker.internal` is a shared
+  `_DOCKER_HOST_ALIAS` constant used by both the API-URL build and `NO_PROXY` so they
+  cannot drift. `extra_hosts host-gateway` was already set.
+- **Host-namespace cassette tag:** `_resolve_mitmproxy_tag` resolves the
+  `X-CLM-Cassette` tag against `payload.source_topic_dir` (the **host** path) — the
+  proxy + `merge_mitmproxy_cassette_staging` run host-side, so a container `/source`
+  path would write staging to a bogus host location. The vcrpy path still uses the
+  container `source_dir` (its in-container kernel writes there).
+
+**Gate (PASSED):** a real Docker notebook-worker build completed the
+record→merge→replay round-trip via `host.docker.internal` with CA trust: the
+container's HTTPS GET was intercepted (200), worker registration succeeded through
+`NO_PROXY`, staging landed at the **host** canonical path, and an offline replay (the
+recorded body was tampered to a sentinel) served the cassette — proving the
+replay-mode proxy never forwards upstream. The lite image (no `vcr` installed) ran
+fine, confirming the transport drops the kernel's vcr dependency.
+
+**Caveats / follow-ups (confirmed by the P4 adversarial review; behind the opt-in
+flag, default-unset unaffected):**
+
+- **Open-proxy LAN exposure (MEDIUM):** the `0.0.0.0` bind makes the proxy an
+  unauthenticated listener on the LAN for the build's duration; in record-capable
+  modes (default non-CI is `new-episodes`) it can relay/record arbitrary traffic and
+  attacker-supplied responses could be merged into committed cassettes. This mirrors
+  the existing `0.0.0.0` `WorkerApiServer` and is now scoped to Docker-notebook builds.
+  **Hardening follow-up:** bind the docker-bridge gateway IP instead of all interfaces,
+  or enable `mitmdump --proxyauth` with a per-build credential injected alongside
+  `HTTP(S)_PROXY`.
+- **Image must contain mitmproxy-aware CLM (MEDIUM):** the in-container tag bootstrap /
+  vcrpy-skip live in `notebook_processor`, so the worker **image must be built from a
+  CLM version that has the mitmproxy transport** (≥ the P2 tag-bootstrap). A pre-mitmproxy
+  image silently mis-routes record-mode traffic to the catch-all (strict modes fail loud
+  via the 404-miss). The E2E gate validated against a **source-shadowed** lite image (the
+  local prebuilt image is 1.5.0); production needs a rebuilt image. There is no host↔image
+  version negotiation — a runtime guard is a possible follow-up.
+- **Firewall opacity (NIT):** the host readiness poll proves only loopback reachability,
+  not docker-bridge reachability; a firewall blocking the bridge→proxy port surfaces as
+  generic LLM connection failures bounded by `max_job_time` + the #93 fail-on-error policy,
+  not a clear "proxy unreachable". A container-side preflight is a possible follow-up.
+- **Nested-subdir notebooks (LOW):** an http-replay notebook must keep its cassette beside
+  the notebook at the topic root; a notebook nested in a sub-dir diverges the tag (topic-dir)
+  from the merge (notebook-parent) and would misplace record-mode staging (replay unaffected).
+  Pre-existing in the vcrpy direct path; converging is a separate follow-up touching both
+  transports.
 
 ## P5 — trace-harness re-port + vcrpy retirement  ·  ~3–5 d  ·  risk: medium
 
@@ -296,8 +346,10 @@ flag with its parity gate; nothing changes the default until P5.
 - **Routing mechanism (P2):** per-request worker tagging vs per-worker proxies.
   Tagging keeps the proven single-proxy model and one cassette-merge path;
   per-worker proxies re-open port management. Recommendation: tagging.
-- **Docker in v1 (P4):** support now, or ship Direct-only and keep vcrpy for
-  Docker? The recordings/CI footprint determines urgency.
+- **Docker in v1 (P4):** ~~support now, or ship Direct-only and keep vcrpy for
+  Docker?~~ **Resolved: supported now** (P4 DONE) — Docker notebook workers reach
+  the proxy via `host.docker.internal` with CA trust, gate passed. Remaining items
+  are the P4 hardening follow-ups (proxyauth/bridge-bind; production image rebuild).
 - **Upstream-first:** if the upstream vcrpy `close()` + scoped `force_reset`
   patches (`docs/claude/vcrpy-upstream-patches.md`) land, the #143/#129 forks
   retire independently — reducing the urgency delta but not the cross-process

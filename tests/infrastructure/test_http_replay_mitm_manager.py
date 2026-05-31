@@ -70,3 +70,41 @@ def test_reader_thread_joined_and_output_available_after_exit(tmp_path) -> None:
         time.sleep(0.02)
 
     assert "hello from child" in mgr._drain_output()
+
+
+class TestClientHostAndProxyUrl:
+    """Bind/loopback host separation for Docker reachability (issue #165 P4).
+
+    When the proxy binds a wildcard address so containers can reach it via
+    ``host.docker.internal``, same-host clients (Direct workers, the readiness
+    poll) must still connect via loopback — ``connect("0.0.0.0")`` is invalid
+    on Windows.
+    """
+
+    def test_loopback_bind_is_unchanged(self) -> None:
+        mgr = MitmproxyManager(cassette_path="unused.yaml", listen_host="127.0.0.1")
+        mgr.listen_port = 54321
+        assert mgr._client_host() == "127.0.0.1"
+        assert mgr.proxy_url == "http://127.0.0.1:54321"
+
+    def test_wildcard_bind_connects_via_loopback(self) -> None:
+        mgr = MitmproxyManager(cassette_path="unused.yaml", listen_host="0.0.0.0")
+        mgr.listen_port = 54321
+        # Bind address stays the wildcard (what mitmdump --listen-host gets)...
+        assert mgr.listen_host == "0.0.0.0"
+        # ...but clients/poll use loopback so connect() is valid on Windows.
+        assert mgr._client_host() == "127.0.0.1"
+        assert mgr.proxy_url == "http://127.0.0.1:54321"
+
+    def test_empty_host_is_treated_as_wildcard(self) -> None:
+        # An empty listen_host binds all IPv4 interfaces (INADDR_ANY), so
+        # clients/poll must still use loopback.
+        mgr = MitmproxyManager(cassette_path="unused.yaml", listen_host="")
+        mgr.listen_port = 7
+        assert mgr._client_host() == "127.0.0.1"
+
+    def test_concrete_host_is_used_verbatim(self) -> None:
+        mgr = MitmproxyManager(cassette_path="unused.yaml", listen_host="192.168.1.5")
+        mgr.listen_port = 8080
+        assert mgr._client_host() == "192.168.1.5"
+        assert mgr.proxy_url == "http://192.168.1.5:8080"

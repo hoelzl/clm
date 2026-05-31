@@ -9,6 +9,7 @@ resolution and confirm the kernel's httpcore is never patched.
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 from nbformat.v4 import new_code_cell, new_notebook
@@ -72,11 +73,31 @@ def test_resolve_mitmproxy_tag_uses_payload_cassette_name(monkeypatch, tmp_path)
     assert tag == str(tmp_path / "_cassettes" / "slides.http-cassette.yaml")
 
 
-def test_resolve_mitmproxy_tag_prefers_source_dir(monkeypatch, tmp_path):
-    """Docker-style source mount (``source_dir``) wins over source_topic_dir."""
+def test_resolve_mitmproxy_tag_uses_host_topic_dir_not_container_source_dir(monkeypatch, tmp_path):
+    """The tag must name a HOST path even in Docker mode (issue #165 P4).
+
+    The proxy and the host-side merge run on the host, so a container-mapped
+    ``source_dir`` (``/source/...``) would make the proxy write staging to a
+    bogus host path and the merge would never find it. The host
+    ``source_topic_dir`` therefore wins over the container ``source_dir``.
+    """
     monkeypatch.setenv("CLM_HTTP_REPLAY_TRANSPORT", "mitmproxy")
     proc = NotebookProcessor(CompletedOutput(format="code"))
-    payload = _payload(source_topic_dir="/host/elsewhere")
+    host_dir = tmp_path / "host_topic"
+    container_dir = Path("/source/topic")  # what a Docker worker would pass
+    payload = _payload(source_topic_dir=str(host_dir))
+
+    tag = proc._resolve_mitmproxy_tag(payload, container_dir)
+
+    # Resolved against the host dir, NOT the container /source path.
+    assert tag == str(host_dir / "_cassettes" / "slides.http-cassette.yaml")
+
+
+def test_resolve_mitmproxy_tag_falls_back_to_source_dir_when_no_host_dir(monkeypatch, tmp_path):
+    """If no host ``source_topic_dir`` is available, fall back to ``source_dir``."""
+    monkeypatch.setenv("CLM_HTTP_REPLAY_TRANSPORT", "mitmproxy")
+    proc = NotebookProcessor(CompletedOutput(format="code"))
+    payload = _payload(source_topic_dir=None)
 
     tag = proc._resolve_mitmproxy_tag(payload, tmp_path)
 
@@ -89,6 +110,13 @@ def test_resolve_mitmproxy_tag_none_when_disabled(monkeypatch, tmp_path):
     assert proc._resolve_mitmproxy_tag(_payload(http_replay_mode="disabled"), tmp_path) is None
     assert proc._resolve_mitmproxy_tag(_payload(http_replay_mode=None), tmp_path) is None
     assert proc._resolve_mitmproxy_tag(_payload(http_replay_cassette_name=None), tmp_path) is None
+
+
+def test_resolve_mitmproxy_tag_none_when_no_dir_available(monkeypatch):
+    """No host source_topic_dir and no container source_dir -> no tag."""
+    monkeypatch.setenv("CLM_HTTP_REPLAY_TRANSPORT", "mitmproxy")
+    proc = NotebookProcessor(CompletedOutput(format="code"))
+    assert proc._resolve_mitmproxy_tag(_payload(source_topic_dir=None), None) is None
 
 
 def test_maybe_inject_chooses_tag_bootstrap_under_transport(monkeypatch, tmp_path):

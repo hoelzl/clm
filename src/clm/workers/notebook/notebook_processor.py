@@ -2068,15 +2068,37 @@ class NotebookProcessor:
         """Resolve the ``X-CLM-Cassette`` routing tag for the mitmproxy transport.
 
         The tag is the absolute canonical cassette path this notebook's
-        traffic belongs to. It is resolved exactly like the vcrpy path's
-        :meth:`_resolve_cassette_paths` (same ``payload.http_replay_cassette_name``
-        — which already carries the split-deck base-cassette fallback for
-        ``replay`` and the strict language-specific name for record modes,
-        issue #159 — and the same ``resolve_paths`` canonical computation),
-        so the proxy's per-target staging file lands beside the very
-        cassette the host-side merge will fold it into. Returns ``None``
-        when the topic did not opt into a replay-capable mode or no
-        cassette / writable target dir resolves.
+        traffic belongs to. It uses the same ``payload.http_replay_cassette_name``
+        as the vcrpy path's :meth:`_resolve_cassette_paths` (which already
+        carries the split-deck base-cassette fallback for ``replay`` and the
+        strict language-specific name for record modes, issue #159) and the
+        same ``resolve_paths`` canonical computation.
+
+        **Host namespace (issue #165 P4):** unlike the vcrpy path — where the
+        in-container *kernel* writes the staging cassette and therefore needs
+        the container-mapped ``source_dir`` (``/source/...``) — the mitmproxy
+        proxy and the ``merge_mitmproxy_cassette_staging`` host step run on the
+        **host**. The tag must therefore name a **host** path so the proxy
+        writes ``<tag>.staging-mitm-<build_id>`` beside the real canonical
+        cassette the host-side merge folds it into. We resolve against
+        ``payload.source_topic_dir`` (the host topic dir in both Direct and
+        Docker modes — Docker workers derive their container ``source_dir``
+        *from* it) and fall back to the container ``source_dir`` only if no
+        host path is available. In Direct mode the two are identical, so this
+        is a no-op there. Returns ``None`` when the topic did not opt into a
+        replay-capable mode or no cassette / target dir resolves.
+
+        **Invariant:** an http-replay notebook must keep its cassette beside the
+        notebook at the topic root (the ``_cassettes/`` dir under
+        ``source_topic_dir``). ``cassette_name`` is resolved relative to the
+        notebook's own parent while the tag here resolves against
+        ``source_topic_dir``; for a notebook nested in a sub-directory of the
+        topic the two diverge, so the proxy would write staging to a dir the
+        host-side merge (``Course.merge_mitmproxy_cassette_staging``) does not
+        scan and a record-mode recording would be misplaced (replay is
+        unaffected — it reads the committed canonical). This mirrors the
+        existing vcrpy direct path's topic-dir-based resolution; converging
+        nested layouts is a separate follow-up touching both transports.
         """
         mode = payload.http_replay_mode
         if not mode or mode == "disabled" or mode not in _HTTP_REPLAY_MODE_TO_VCR_MODE:
@@ -2084,10 +2106,10 @@ class NotebookProcessor:
         cassette_name = payload.http_replay_cassette_name
         if not cassette_name:
             return None
-        if source_dir is not None:
-            target_dir: Path = source_dir
-        elif payload.source_topic_dir:
-            target_dir = Path(payload.source_topic_dir)
+        if payload.source_topic_dir:
+            target_dir: Path = Path(payload.source_topic_dir)
+        elif source_dir is not None:
+            target_dir = source_dir
         else:
             return None
         from .http_replay_cassette import resolve_paths

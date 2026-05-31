@@ -131,7 +131,35 @@ def _resolve_fail_on_missing_xref(cli_value: bool | None, resolved_http_replay_m
     return resolved_http_replay_mode == "replay"
 
 
-def _maybe_start_mitmproxy_transport(mode: str | None, jobs_db_path: Path):
+def _build_has_docker_notebook_worker(worker_config: object | None) -> bool:
+    """True when this build will start a Docker-mode **notebook** worker.
+
+    Only the notebook worker makes the LLM HTTP traffic the replay proxy
+    intercepts (plantuml/drawio/jupyterlite never touch it). A ``127.0.0.1``
+    proxy is unreachable from inside a container, so a Docker notebook worker
+    forces the mitmproxy transport to bind a wildcard address (``0.0.0.0``)
+    that the container reaches via ``host.docker.internal`` (issue #165 P4).
+
+    Scoping to the notebook worker keeps the wider ``0.0.0.0`` bind (and its
+    LAN-exposure window — see ``_maybe_start_mitmproxy_transport``) off builds
+    whose only Docker workers are diagram converters that never use the proxy.
+    ``None`` worker_config (older callers / tests) is treated as Direct-only.
+    """
+    if worker_config is None:
+        return False
+    try:
+        return any(
+            c.worker_type == "notebook" and c.execution_mode == "docker" and c.count > 0
+            for c in worker_config.get_all_worker_configs()  # type: ignore[attr-defined]
+        )
+    except Exception:  # noqa: BLE001 — detection must never break the build
+        logger.debug("Could not resolve worker execution modes; assuming Direct-only")
+        return False
+
+
+def _maybe_start_mitmproxy_transport(
+    mode: str | None, jobs_db_path: Path, worker_config: object | None = None
+):
     """Start an out-of-process mitmproxy HTTP-replay transport when opted in.
 
     Experimental (issue #165). Opt in with ``CLM_HTTP_REPLAY_TRANSPORT=mitmproxy``;
@@ -151,7 +179,14 @@ def _maybe_start_mitmproxy_transport(mode: str | None, jobs_db_path: Path):
     per-(topic,language,kind) staging files folded into their canonicals
     after the proxy stops (see ``Course.merge_mitmproxy_cassette_staging``).
     The ``transport.http-cassette.yaml`` here is only the catch-all for any
-    untagged traffic. Direct-mode only; Docker support is a later phase.
+    untagged traffic.
+
+    **Docker (P4):** when ``worker_config`` reports any Docker-mode worker the
+    proxy binds ``0.0.0.0`` so containers can reach it via
+    ``host.docker.internal``; the ``os.environ`` proxy URL stays a loopback
+    address (``MitmproxyManager.proxy_url``) for Direct workers and the
+    readiness poll, while the Docker executor rewrites the host and mounts the
+    CA per container. Direct-only builds keep binding ``127.0.0.1`` unchanged.
     """
     import os as _os
 
@@ -173,12 +208,26 @@ def _maybe_start_mitmproxy_transport(mode: str | None, jobs_db_path: Path):
     base.mkdir(parents=True, exist_ok=True)
     cassette = base / "transport.http-cassette.yaml"
     confdir = base / "confdir"
+    # Bind a wildcard address only when a Docker notebook worker must reach us
+    # via host.docker.internal; Direct-only (and diagram-only-Docker) builds keep
+    # the loopback bind so the replay proxy is never exposed beyond the host.
+    # NOTE (issue #165 P4 hardening follow-up): a 0.0.0.0 bind makes the proxy an
+    # unauthenticated listener on the LAN for the build's duration; in
+    # record-capable modes it can relay/record arbitrary traffic. This mirrors the
+    # existing 0.0.0.0 WorkerApiServer and is gated to opt-in Docker builds, but a
+    # future hardening should bind the docker-bridge gateway IP or add
+    # mitmdump --proxyauth with a per-build credential.
+    listen_host = "0.0.0.0" if _build_has_docker_notebook_worker(worker_config) else "127.0.0.1"
     # Same telemetry-suppression policy as the in-kernel vcrpy path: LangSmith
     # by default, overridable via CLM_HTTP_REPLAY_IGNORE_HOSTS. The addon
     # forwards these hosts but never records them into a cassette.
     ignore_hosts = resolve_http_replay_ignore_hosts()
     manager = MitmproxyManager(
-        cassette_path=cassette, mode=mode, confdir=confdir, ignore_hosts=ignore_hosts
+        cassette_path=cassette,
+        mode=mode,
+        listen_host=listen_host,
+        confdir=confdir,
+        ignore_hosts=ignore_hosts,
     )
     manager.start()
 
@@ -1510,8 +1559,12 @@ async def main_build(
 
     # Experimental out-of-process HTTP-replay transport (issue #165). Must run
     # BEFORE workers spawn so they inherit HTTP(S)_PROXY + the CA bundle via
-    # os.environ.copy(). No-op unless CLM_HTTP_REPLAY_TRANSPORT=mitmproxy.
-    mitm_manager = _maybe_start_mitmproxy_transport(config.http_replay_mode, config.jobs_db_path)
+    # os.environ.copy() (Direct) or the per-container injection (Docker, P4).
+    # No-op unless CLM_HTTP_REPLAY_TRANSPORT=mitmproxy. ``worker_config`` lets
+    # it bind 0.0.0.0 when Docker workers will reach it via host.docker.internal.
+    mitm_manager = _maybe_start_mitmproxy_transport(
+        config.http_replay_mode, config.jobs_db_path, worker_config=worker_config
+    )
 
     output_formatter.show_startup_message("Starting workers...")
     started_workers = start_managed_workers(lifecycle_manager, worker_config)

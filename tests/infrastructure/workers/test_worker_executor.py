@@ -12,10 +12,12 @@ import pytest
 
 from clm.infrastructure.database.schema import init_database
 from clm.infrastructure.workers.worker_executor import (
+    _MITM_CA_CONTAINER_PATH,
     DirectWorkerExecutor,
     DockerWorkerExecutor,
     WorkerConfig,
     WorkerExecutor,
+    _mitmproxy_docker_env,
 )
 
 
@@ -508,3 +510,177 @@ class TestDockerWorkerExecutor:
         # Simulate container stopped
         mock_container.status = "exited"
         assert executor.is_worker_running(worker_id) is False
+
+
+class TestMitmproxyDockerEnv:
+    """The mitmproxy transport's per-container env + CA mount (issue #165 P4)."""
+
+    def test_inactive_is_noop(self) -> None:
+        assert _mitmproxy_docker_env({}) == ({}, None)
+        # A different transport value is also a no-op.
+        assert _mitmproxy_docker_env({"CLM_HTTP_REPLAY_TRANSPORT": "vcrpy"}) == ({}, None)
+
+    def test_active_without_proxy_is_noop(self) -> None:
+        # Defensive: transport flag set but build.py never exported a proxy URL.
+        assert _mitmproxy_docker_env({"CLM_HTTP_REPLAY_TRANSPORT": "mitmproxy"}) == ({}, None)
+
+    def test_rewrites_loopback_proxy_to_host_docker_internal(self) -> None:
+        env, mount = _mitmproxy_docker_env(
+            {
+                "CLM_HTTP_REPLAY_TRANSPORT": "mitmproxy",
+                "HTTP_PROXY": "http://127.0.0.1:63564",
+            }
+        )
+        assert env["HTTP_PROXY"] == "http://host.docker.internal:63564"
+        assert env["HTTPS_PROXY"] == "http://host.docker.internal:63564"
+        assert env["http_proxy"] == "http://host.docker.internal:63564"
+        assert env["https_proxy"] == "http://host.docker.internal:63564"
+        # The kernel must skip the vcrpy bootstrap and inject the tag bootstrap.
+        assert env["CLM_HTTP_REPLAY_TRANSPORT"] == "mitmproxy"
+        assert mount is None
+
+    def test_no_proxy_excludes_the_api_host(self) -> None:
+        """Worker<->CLM REST API traffic must bypass the replay proxy, or worker
+        registration would be replayed as a cassette miss and stall the build."""
+        env, _ = _mitmproxy_docker_env(
+            {"CLM_HTTP_REPLAY_TRANSPORT": "mitmproxy", "HTTP_PROXY": "http://127.0.0.1:1"}
+        )
+        assert env["NO_PROXY"] == "host.docker.internal"
+        assert env["no_proxy"] == "host.docker.internal"
+
+    def test_prefers_https_proxy_over_http_proxy(self) -> None:
+        env, _ = _mitmproxy_docker_env(
+            {
+                "CLM_HTTP_REPLAY_TRANSPORT": "mitmproxy",
+                "HTTP_PROXY": "http://127.0.0.1:1",
+                "HTTPS_PROXY": "http://127.0.0.1:63564",
+            }
+        )
+        assert env["HTTPS_PROXY"] == "http://host.docker.internal:63564"
+
+    def test_mounts_ca_bundle_and_points_cert_vars_at_it(self, tmp_path) -> None:
+        ca = tmp_path / "ca-bundle.pem"
+        ca.write_bytes(b"-----BEGIN CERTIFICATE-----\n")
+        env, mount = _mitmproxy_docker_env(
+            {
+                "CLM_HTTP_REPLAY_TRANSPORT": "mitmproxy",
+                "HTTP_PROXY": "http://127.0.0.1:63564",
+                "SSL_CERT_FILE": str(ca),
+            }
+        )
+        assert mount == (str(ca.absolute()), _MITM_CA_CONTAINER_PATH)
+        assert env["SSL_CERT_FILE"] == _MITM_CA_CONTAINER_PATH
+        assert env["REQUESTS_CA_BUNDLE"] == _MITM_CA_CONTAINER_PATH
+        assert env["CURL_CA_BUNDLE"] == _MITM_CA_CONTAINER_PATH
+
+    def test_missing_ca_file_skips_mount(self) -> None:
+        env, mount = _mitmproxy_docker_env(
+            {
+                "CLM_HTTP_REPLAY_TRANSPORT": "mitmproxy",
+                "HTTP_PROXY": "http://127.0.0.1:63564",
+                "SSL_CERT_FILE": "/nonexistent/ca.pem",
+            }
+        )
+        assert mount is None
+        assert "SSL_CERT_FILE" not in env  # don't point at a path we didn't mount
+
+    def test_malformed_proxy_port_is_handled(self) -> None:
+        # build.py always emits a well-formed loopback URL, but the urlsplit
+        # .port ValueError branch must degrade gracefully (no port, no raise).
+        env, _ = _mitmproxy_docker_env(
+            {"CLM_HTTP_REPLAY_TRANSPORT": "mitmproxy", "HTTP_PROXY": "http://127.0.0.1:notaport"}
+        )
+        assert env["HTTP_PROXY"] == "http://host.docker.internal"
+        assert env["HTTPS_PROXY"] == "http://host.docker.internal"
+
+
+class TestDockerWorkerExecutorMitmproxy:
+    """start_worker wires the mitmproxy transport into the container (#165 P4)."""
+
+    def _run_start_worker(self, db_path, workspace_path, worker_type="notebook"):
+        import docker.errors
+
+        mock_client = MagicMock()
+        mock_container = MagicMock()
+        mock_container.id = "deadbeefcafe"
+        mock_client.containers.run.return_value = mock_container
+        mock_client.containers.get.side_effect = docker.errors.NotFound("nope")
+
+        executor = DockerWorkerExecutor(
+            docker_client=mock_client, db_path=db_path, workspace_path=workspace_path
+        )
+        config = WorkerConfig(
+            worker_type=worker_type,
+            count=1,
+            execution_mode="docker",
+            image=f"{worker_type}:latest",
+        )
+        executor.start_worker(worker_type, 0, config)
+        return mock_client.containers.run.call_args
+
+    @patch("docker.DockerClient")
+    def test_injects_proxy_ca_and_transport_when_active(
+        self, _mock_docker, db_path, workspace_path, tmp_path, monkeypatch
+    ):
+        ca = tmp_path / "ca-bundle.pem"
+        ca.write_bytes(b"-----BEGIN CERTIFICATE-----\n")
+        monkeypatch.setenv("CLM_HTTP_REPLAY_TRANSPORT", "mitmproxy")
+        monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:63564")
+        monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:63564")
+        monkeypatch.setenv("SSL_CERT_FILE", str(ca))
+
+        call_args = self._run_start_worker(db_path, workspace_path)
+        env = call_args.kwargs["environment"]
+        volumes = call_args.kwargs["volumes"]
+
+        # Proxy rewritten to the container's route back to the host.
+        assert env["HTTPS_PROXY"] == "http://host.docker.internal:63564"
+        # API traffic stays off the proxy.
+        assert env["NO_PROXY"] == "host.docker.internal"
+        # Kernel skips vcrpy + injects the tag bootstrap.
+        assert env["CLM_HTTP_REPLAY_TRANSPORT"] == "mitmproxy"
+        # CA bundle mounted read-only and trusted.
+        assert env["SSL_CERT_FILE"] == _MITM_CA_CONTAINER_PATH
+        assert volumes[str(ca.absolute())] == {"bind": _MITM_CA_CONTAINER_PATH, "mode": "ro"}
+        # extra_hosts host-gateway is already set by the executor (precondition for P4).
+        assert call_args.kwargs["extra_hosts"] == {"host.docker.internal": "host-gateway"}
+
+    @patch("docker.DockerClient")
+    def test_no_injection_when_transport_inactive(
+        self, _mock_docker, db_path, workspace_path, monkeypatch
+    ):
+        monkeypatch.delenv("CLM_HTTP_REPLAY_TRANSPORT", raising=False)
+        monkeypatch.delenv("HTTP_PROXY", raising=False)
+        monkeypatch.delenv("HTTPS_PROXY", raising=False)
+
+        call_args = self._run_start_worker(db_path, workspace_path)
+        env = call_args.kwargs["environment"]
+        volumes = call_args.kwargs["volumes"]
+
+        assert "HTTPS_PROXY" not in env
+        assert "NO_PROXY" not in env
+        assert "CLM_HTTP_REPLAY_TRANSPORT" not in env
+        assert _MITM_CA_CONTAINER_PATH not in [v.get("bind") for v in volumes.values()]
+
+    @patch("docker.DockerClient")
+    def test_no_injection_for_non_notebook_worker(
+        self, _mock_docker, db_path, workspace_path, tmp_path, monkeypatch
+    ):
+        # Only the notebook worker uses the replay proxy; a docker plantuml/
+        # drawio container must not get the proxy env or the CA mount even when
+        # the transport is active.
+        ca = tmp_path / "ca-bundle.pem"
+        ca.write_bytes(b"-----BEGIN CERTIFICATE-----\n")
+        monkeypatch.setenv("CLM_HTTP_REPLAY_TRANSPORT", "mitmproxy")
+        monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:63564")
+        monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:63564")
+        monkeypatch.setenv("SSL_CERT_FILE", str(ca))
+
+        call_args = self._run_start_worker(db_path, workspace_path, worker_type="plantuml")
+        env = call_args.kwargs["environment"]
+        volumes = call_args.kwargs["volumes"]
+
+        assert "HTTPS_PROXY" not in env
+        assert "NO_PROXY" not in env
+        assert "CLM_HTTP_REPLAY_TRANSPORT" not in env
+        assert str(ca.absolute()) not in volumes
