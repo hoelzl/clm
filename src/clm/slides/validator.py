@@ -20,6 +20,7 @@ from clm.core.topic_resolver import (
     find_slide_files_recursive,
     matches_for_binding,
 )
+from clm.infrastructure.utils.path_utils import split_lang_suffix
 from clm.notebooks.slide_parser import Cell, parse_cells
 from clm.slides.pairing import (
     TITLE_SLIDE_ID,
@@ -382,84 +383,101 @@ def _check_workshop_headings(cells: list[Cell], file_path: str) -> list[Finding]
     return findings
 
 
-def _check_pairing(cells: list[Cell], file_path: str) -> list[Finding]:
-    """Check DE/EN cell pairing: count, position, and tag consistency."""
+def _check_pairing(cells: list[Cell], file_path: str, *, is_split: bool = False) -> list[Finding]:
+    """Check DE/EN cell pairing: count, position, and tag consistency.
+
+    When ``is_split`` is set the file is a single-language split half
+    (``*.de.py`` / ``*.en.py``), so the genuinely *bilingual* sub-checks —
+    DE/EN count parity, positional tag/type pairing, and DE/EN adjacency —
+    are skipped: a split file legitimately carries cells of only one
+    language, and running them would fire a false count mismatch on every
+    converted deck (issue #160). Cross-file shared-cell parity between the
+    two halves is validated separately by :func:`_check_shared_cell_parity`.
+
+    The per-file ``slide_id`` integrity checks (presence, slug format,
+    uniqueness, narrative adjacency) always run — they apply equally to a
+    single-language file and never misfire on one (no DE/EN slide groups
+    form, so the pair-consistency clause is a no-op).
+    """
     findings: list[Finding] = []
 
-    # Collect language-tagged content cells (skip j2, notes, voiceover)
-    de_cells: list[Cell] = []
-    en_cells: list[Cell] = []
+    if not is_split:
+        # Collect language-tagged content cells (skip j2, notes, voiceover)
+        de_cells: list[Cell] = []
+        en_cells: list[Cell] = []
 
-    for cell in cells:
-        meta = cell.metadata
-        if meta.is_j2 or meta.is_narrative:
-            continue
-        if meta.lang == "de":
-            de_cells.append(cell)
-        elif meta.lang == "en":
-            en_cells.append(cell)
+        for cell in cells:
+            meta = cell.metadata
+            if meta.is_j2 or meta.is_narrative:
+                continue
+            if meta.lang == "de":
+                de_cells.append(cell)
+            elif meta.lang == "en":
+                en_cells.append(cell)
 
-    # Count mismatch
-    if len(de_cells) != len(en_cells):
-        findings.append(
-            Finding(
-                severity="error",
-                category="pairing",
-                file=file_path,
-                line=1,
-                message=(
-                    f"DE/EN cell count mismatch: {len(de_cells)} German, {len(en_cells)} English"
-                ),
-                suggestion="Each German cell should have a corresponding English cell",
-            )
-        )
-
-    # Positional pairing — check tags match between pairs
-    for i, (de, en) in enumerate(zip(de_cells, en_cells, strict=False)):
-        de_tags = set(de.metadata.tags)
-        en_tags = set(en.metadata.tags)
-
-        if de_tags != en_tags:
-            findings.append(
-                Finding(
-                    severity="warning",
-                    category="pairing",
-                    file=file_path,
-                    line=de.line_number,
-                    message=(
-                        f"Tag mismatch in DE/EN pair {i + 1}: "
-                        f"DE={sorted(de_tags)}, EN={sorted(en_tags)}"
-                    ),
-                    suggestion="Paired DE/EN cells should have the same tags",
-                )
-            )
-
-        # Check cell type consistency
-        if de.metadata.cell_type != en.metadata.cell_type:
+        # Count mismatch
+        if len(de_cells) != len(en_cells):
             findings.append(
                 Finding(
                     severity="error",
                     category="pairing",
                     file=file_path,
-                    line=de.line_number,
+                    line=1,
                     message=(
-                        f"Cell type mismatch in DE/EN pair {i + 1}: "
-                        f"DE={de.metadata.cell_type}, EN={en.metadata.cell_type}"
+                        f"DE/EN cell count mismatch: "
+                        f"{len(de_cells)} German, {len(en_cells)} English"
                     ),
-                    suggestion="Paired DE/EN cells should have the same cell type",
+                    suggestion="Each German cell should have a corresponding English cell",
                 )
             )
 
-    # Adjacency check — paired DE/EN cells should not have other lang-tagged
-    # or narrative cells between them. The canonical layout produced by
-    # ``normalize-slides`` is::
-    #
-    #     [de content] [en content] [de voiceover] [en voiceover]
-    #
-    # A common violation introduced by classroom/video deck merges is
-    # ``[de slide] [de voiceover] [en slide] [en voiceover]`` — voiceover
-    # wedged between the DE and EN halves of a content pair.
-    findings.extend(_check_ordering(cells, file_path))
+        # Positional pairing — check tags match between pairs
+        for i, (de, en) in enumerate(zip(de_cells, en_cells, strict=False)):
+            de_tags = set(de.metadata.tags)
+            en_tags = set(en.metadata.tags)
+
+            if de_tags != en_tags:
+                findings.append(
+                    Finding(
+                        severity="warning",
+                        category="pairing",
+                        file=file_path,
+                        line=de.line_number,
+                        message=(
+                            f"Tag mismatch in DE/EN pair {i + 1}: "
+                            f"DE={sorted(de_tags)}, EN={sorted(en_tags)}"
+                        ),
+                        suggestion="Paired DE/EN cells should have the same tags",
+                    )
+                )
+
+            # Check cell type consistency
+            if de.metadata.cell_type != en.metadata.cell_type:
+                findings.append(
+                    Finding(
+                        severity="error",
+                        category="pairing",
+                        file=file_path,
+                        line=de.line_number,
+                        message=(
+                            f"Cell type mismatch in DE/EN pair {i + 1}: "
+                            f"DE={de.metadata.cell_type}, EN={en.metadata.cell_type}"
+                        ),
+                        suggestion="Paired DE/EN cells should have the same cell type",
+                    )
+                )
+
+        # Adjacency check — paired DE/EN cells should not have other lang-tagged
+        # or narrative cells between them. The canonical layout produced by
+        # ``normalize-slides`` is::
+        #
+        #     [de content] [en content] [de voiceover] [en voiceover]
+        #
+        # A common violation introduced by classroom/video deck merges is
+        # ``[de slide] [de voiceover] [en slide] [en voiceover]`` — voiceover
+        # wedged between the DE and EN halves of a content pair.
+        findings.extend(_check_ordering(cells, file_path))
+
     findings.extend(_check_slide_ids(cells, file_path))
 
     return findings
@@ -1180,7 +1198,12 @@ def validate_file(
     if "tags" in check_set:
         findings.extend(_check_tags(cells, file_str))
     if "pairing" in check_set:
-        findings.extend(_check_pairing(cells, file_str))
+        # Split halves (``*.de.py`` / ``*.en.py``) carry a single language,
+        # so the bilingual DE/EN count/adjacency checks don't apply — see
+        # _check_pairing (issue #160). Cross-file parity is validated by the
+        # directory/course entrypoints via _check_shared_cell_parity.
+        is_split = split_lang_suffix(path) is not None
+        findings.extend(_check_pairing(cells, file_str, is_split=is_split))
 
     # Review material extraction
     review_checks = check_set & ALL_REVIEW_CHECKS

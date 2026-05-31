@@ -108,6 +108,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **`clm validate` no longer false-errors on split slide files
+  ([#160](https://github.com/hoelzl/clm/issues/160)).** The bilingual DE/EN
+  `pairing` sub-checks — cell-count parity, per-pair tag/type consistency, and
+  DE/EN adjacency — are now skipped on single-language split halves
+  (`*.de.py` / `*.en.py`), detected via the same `.de`/`.en` stem logic the
+  build-time split routing uses. A `.de.py` legitimately contains only German
+  cells, so the old unconditional check reported a spurious
+  `DE/EN cell count mismatch: N German, 0 English` on every converted deck,
+  burying real findings as the language-split migration proceeds. The
+  applicable checks are unchanged: `format`, `tags`, the per-language review
+  checks, and the per-file `slide_id` integrity checks still run on split
+  files, and the cross-file shared-cell parity diff between a `.de.py` /
+  `.en.py` pair is still applied. Bilingual decks (no `.de`/`.en` suffix) are
+  unaffected — the full pairing check still runs.
 - **HTTP-replay builds no longer deadlock on a `.batch()` cell
   ([#143](https://github.com/hoelzl/clm/issues/143)).** vcrpy 8.1.x's httpcore
   stub reads the response body and swaps `response.stream` for a buffered
