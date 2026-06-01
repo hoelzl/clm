@@ -149,6 +149,36 @@ def test_item2_duplicate_construct_non_last_edit_propagates(tmp_path: Path):
     assert 'print("b")' in en_text  # the unchanged sibling is intact
 
 
+def test_item2b_localized_idless_code_edit_is_retranslated(tmp_path: Path):
+    # An id-less LOCALIZED code cell edited (body changed, construct stable) must
+    # be re-translated. Its ("L", kind) signature is unchanged by a body edit, so
+    # the group is force-rebuilt because the cell drifted from baseline (Phase 3b).
+    # Direction comes from a co-occurring narrative edit (single-language workflow).
+    de = _slide("de", "g", "# ## G") + _code_localized_idless("de", '# Komm\nprint("a")')
+    en = _slide("en", "g", "# ## G") + _code_localized_idless("en", '# Comment\nprint("a")')
+    de_path, en_path = _write_pair(tmp_path, de, en)
+
+    cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+    translator = CountingTranslator()
+    judge = CountingJudge()
+    try:
+        _seed(cache, de_path, en_path)
+        de_path.write_text(
+            _slide("de", "g", "# ## G erweitert")  # narrative edit -> keyed direction
+            + _code_localized_idless("de", '# Komm\nprint("b")'),  # localized code edited
+            encoding="utf-8",
+        )
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+        apply_plan(plan, judge=judge, translator=translator, watermark_cache=cache)
+    finally:
+        cache.close()
+
+    assert plan.count("edit") == 1  # the narrative edit supplies the direction
+    # The drifted localized code cell was re-translated (group force-rebuilt).
+    retranslated = [body for (_r, _sl, _tl, body) in translator.calls if 'print("b")' in body]
+    assert retranslated, f"the edited localized code must be re-translated; got {translator.calls}"
+
+
 # ---------------------------------------------------------------------------
 # Item 3 — FIXED (Phase 2): an unchanged id-less localized code cell is spliced
 # verbatim on a sibling-triggered rebuild, never re-translated.
