@@ -34,13 +34,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from clm.notebooks.slide_parser import Cell, parse_cells
+from clm.notebooks.slide_parser import Cell, CellMetadata, parse_cells
 from clm.slides.sync_writeback import cell_content_hash, construct_of, role_of
 
 if TYPE_CHECKING:
     from clm.infrastructure.llm.cache import SyncWatermarkCache
 
 __all__ = [
+    "MEMBERSHIP_ROLES",
     "BaselineCell",
     "CurrentCell",
     "PlanIssue",
@@ -50,11 +51,33 @@ __all__ = [
     "classify_changes",
     "ordered_sync_cells",
     "render_plan",
+    "watermark_rows",
 ]
 
 # Roles that lead a slide group; narrative roles (voiceover/notes/code/aux)
 # belong to the most recent slide group rather than starting their own.
 _SLIDE_ROLES = {"slide", "subslide"}
+
+# Synthetic roles for the *membership-widened* rows (Issue #190 §5.3): cells the
+# per-cell engine does not own (``role_of`` is ``None``) but which the watermark
+# now records so the anchor pass can locate them. The classifier filters these
+# out (:func:`_baseline_from_watermark`), so move detection / pairing is
+# unchanged; only the Phase 2+ anchor reuse reads them.
+NEUTRAL_CODE_ROLE = "neutral-code"
+NEUTRAL_MARKDOWN_ROLE = "neutral-markdown"
+LOCALIZED_CODE_ROLE = "localized-code"
+LOCALIZED_MARKDOWN_ROLE = "localized-markdown"
+MEMBERSHIP_ROLES = frozenset(
+    {NEUTRAL_CODE_ROLE, NEUTRAL_MARKDOWN_ROLE, LOCALIZED_CODE_ROLE, LOCALIZED_MARKDOWN_ROLE}
+)
+
+
+def _membership_role(metadata: CellMetadata) -> str:
+    """The synthetic membership role for a non-j2 cell with no per-cell role."""
+    is_code = metadata.cell_type == "code"
+    if metadata.lang is None:
+        return NEUTRAL_CODE_ROLE if is_code else NEUTRAL_MARKDOWN_ROLE
+    return LOCALIZED_CODE_ROLE if is_code else LOCALIZED_MARKDOWN_ROLE
 
 
 # ---------------------------------------------------------------------------
@@ -225,14 +248,60 @@ def ordered_sync_cells(cells: list[Cell], expected_lang: str) -> list[CurrentCel
     return out
 
 
+def watermark_rows(
+    cells: list[Cell],
+) -> dict[str, list[tuple[int, str | None, str, str, str | None]]]:
+    """Every non-j2 cell as watermark 5-tuples, partitioned by ``de``/``en``/``shared``.
+
+    Membership widening (Issue #190 §5.3): the watermark records *every* non-j2
+    cell, not just the per-cell-synced ones. A cell with a real role
+    (``role_of != None``) keeps it; a membership-only cell gets a synthetic role
+    (:data:`MEMBERSHIP_ROLES`). The partition is the cell's language — ``shared``
+    for language-neutral cells, which the single-entity model tracks once.
+    Positions are per-partition file order; only their *relative* order is load-
+    bearing (the classifier sorts by it), so interleaved membership rows do not
+    perturb the legacy view once they are filtered out
+    (:func:`_baseline_from_watermark`).
+    """
+    out: dict[str, list[tuple[int, str | None, str, str, str | None]]] = {
+        "de": [],
+        "en": [],
+        "shared": [],
+    }
+    pos = {"de": 0, "en": 0, "shared": 0}
+    for cell in cells:
+        meta = cell.metadata
+        if meta.is_j2:
+            continue
+        real = role_of(meta)
+        role = real if real is not None else _membership_role(meta)
+        partition = meta.lang if meta.lang in ("de", "en") else "shared"
+        out[partition].append(
+            (
+                pos[partition],
+                meta.slide_id,
+                role,
+                cell_content_hash(cell.content),
+                construct_of(meta, cell.content),
+            )
+        )
+        pos[partition] += 1
+    return out
+
+
 def _baseline_from_watermark(
     rows: list[tuple[int, str | None, str, str, str | None]],
 ) -> list[BaselineCell]:
-    # ``construct`` (5th element) is stored for the Issue #190 anchor pass but is
-    # not yet consumed by this classifier (Phase 1a populates; Phase 2 consumes).
+    # Filter out the membership-widened rows (Issue #190 §5.3): the classifier
+    # reconciles only the per-cell-synced (real-role) cells, exactly as before
+    # the widening. The synthetic rows interleave by position, but only their
+    # relative order matters to move detection — and that is preserved — so the
+    # legacy diff is byte-stable. ``construct`` is carried for the Phase 2 anchor
+    # reuse but not consumed here.
     return [
         BaselineCell(position=pos, slide_id=sid, role=role, content_hash=chash)
         for (pos, sid, role, chash, _construct) in rows
+        if role not in MEMBERSHIP_ROLES
     ]
 
 
