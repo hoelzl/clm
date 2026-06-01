@@ -108,14 +108,10 @@ class OpenRouterSlideTranslator:
     prompt_version: str = "translate-v1"
 
     def _client(self):  # pragma: no cover - thin network adapter
-        import os
+        # Shared with the edit judge so key/base resolution stays in one place.
+        from clm.infrastructure.llm.openrouter_client import build_openrouter_client
 
-        import openai
-
-        key = (
-            self.api_key or os.environ.get("OPENROUTER_API_KEY") or os.environ.get("OPENAI_API_KEY")
-        )
-        return openai.OpenAI(base_url=self.api_base, api_key=key)
+        return build_openrouter_client(api_base=self.api_base, api_key=self.api_key)
 
     def translate(
         self,

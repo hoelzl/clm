@@ -209,15 +209,26 @@ both decks.
 
 - The pair arguments (`DE_PATH EN_PATH`), `--interactive`, `--json`,
   `--llm-model`, `--ollama-url`, `--llm-timeout`, `--cache-dir`, and
-  `--no-cache` are unchanged in spelling. `--interactive` still prompts
-  per proposal (now `[a]pply / [s]kip / [q]uit`, plus
-  `[d]e-wins / [e]n-wins` on a conflict) before a single atomic apply.
+  `--no-cache` are unchanged in spelling (but see What's new — the
+  `--llm-model` *default* now depends on the new `--provider`).
+  `--interactive` still prompts per proposal (now
+  `[a]pply / [s]kip / [q]uit`, plus `[d]e-wins / [e]n-wins` on a
+  conflict) before a single atomic apply.
 - Exit codes keep their buckets: `0` clean, `1` something left for
   review (a skipped proposal / unresolved conflict), `2` a structural
   error (classifier error, missing target cell, or the edit LLM down).
 
 ### What's new
 
+- `--provider [openrouter|local]` (default `openrouter`) selects the
+  edit-reconciliation judge backend, and `$CLM_SYNC_PROVIDER` sets a
+  persistent default. The edit judge previously was always the local
+  Ollama model; it now defaults to **Claude Sonnet via OpenRouter** (much
+  faster), which needs `$OPENROUTER_API_KEY` (or `$OPENAI_API_KEY`). Pass
+  `--provider local` for the offline Ollama judge. The judge model is
+  still `--llm-model`, but its default now depends on `--provider`
+  (`anthropic/claude-sonnet-4-6` for openrouter, `qwen3:30b` for local).
+  See Issue #167.
 - `--translation-model TEXT` (default `anthropic/claude-sonnet-4-6`)
   picks the OpenRouter model that translates brand-new slides on the add
   path. It needs `$OPENROUTER_API_KEY` (or `$OPENAI_API_KEY`); without a

@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **`clm slides sync --provider {openrouter,local}`** (and the
+  `$CLM_SYNC_PROVIDER` default) to choose the edit-reconciliation judge
+  backend. The edit judge now **defaults to Claude Sonnet via OpenRouter**
+  (much faster than the local Ollama model that was the only option before);
+  pass `--provider local` for the offline Ollama judge. The OpenRouter backend
+  needs `$OPENROUTER_API_KEY` (or `$OPENAI_API_KEY`); without a key, edits are
+  recorded as errors (exit 2) instead of guessed. `--llm-model`'s default now
+  depends on `--provider` (`anthropic/claude-sonnet-4-6` for openrouter,
+  `qwen3:30b` for local). The OpenRouter client construction is shared with the
+  new-slide translator. A step toward per-purpose model configurability
+  (#167).
 - **`clm completion <shell>`.** New command that emits a shell completion
   activation script for `bash`, `zsh`, `fish`, or `powershell`. Bash/Zsh/Fish
   use Click's native completion generator; **PowerShell** support (the gap in
