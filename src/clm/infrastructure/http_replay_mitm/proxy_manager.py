@@ -34,9 +34,48 @@ logger = logging.getLogger(__name__)
 # Path to the addon module so we can pass it to ``mitmdump --scripts``.
 _ADDON_PATH = Path(__file__).parent / "addon.py"
 
-# How long we wait for the proxy to accept TCP connections before
-# giving up. Local startup is typically <500ms; cap conservatively.
-_STARTUP_TIMEOUT_SECONDS = 10.0
+# How long we wait for the proxy to accept TCP connections before giving up.
+# Local mitmdump startup is typically <500ms, but a loaded host — heavy xdist
+# parallelism, or background OS work like Windows installing updates — can push
+# the port-bind well past that. The readiness poll returns the instant the port
+# accepts, so a generous default is nearly free on the happy path; the full
+# budget only elapses for an *alive-but-not-yet-listening* process (a genuine
+# crash short-circuits via ``poll()``). ``CLM_MITM_STARTUP_TIMEOUT`` (seconds)
+# overrides it for CI or build hosts that need more headroom.
+_DEFAULT_STARTUP_TIMEOUT_SECONDS = 30.0
+_STARTUP_TIMEOUT_ENV = "CLM_MITM_STARTUP_TIMEOUT"
+
+
+def _startup_timeout_seconds() -> float:
+    """Resolve the proxy-readiness budget, honouring ``CLM_MITM_STARTUP_TIMEOUT``.
+
+    Returns the env override when it parses to a positive number, otherwise
+    ``_DEFAULT_STARTUP_TIMEOUT_SECONDS``. An unparseable or non-positive value
+    is ignored with a warning so a typo can't silently disable the wait.
+    """
+    raw = os.environ.get(_STARTUP_TIMEOUT_ENV)
+    if raw is None:
+        return _DEFAULT_STARTUP_TIMEOUT_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning(
+            "Ignoring non-numeric %s=%r; using default %.1fs.",
+            _STARTUP_TIMEOUT_ENV,
+            raw,
+            _DEFAULT_STARTUP_TIMEOUT_SECONDS,
+        )
+        return _DEFAULT_STARTUP_TIMEOUT_SECONDS
+    if value <= 0:
+        logger.warning(
+            "Ignoring non-positive %s=%r; using default %.1fs.",
+            _STARTUP_TIMEOUT_ENV,
+            raw,
+            _DEFAULT_STARTUP_TIMEOUT_SECONDS,
+        )
+        return _DEFAULT_STARTUP_TIMEOUT_SECONDS
+    return value
+
 
 # How long we wait for graceful shutdown before sending SIGKILL/terminate.
 # mitmdump flushes flow streams on exit, so we want enough time for that.
@@ -305,7 +344,8 @@ class MitmproxyManager:
         assert self._process is not None
         assert self.listen_port is not None
 
-        deadline = time.monotonic() + _STARTUP_TIMEOUT_SECONDS
+        timeout = _startup_timeout_seconds()
+        deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if self._process.poll() is not None:
                 output = self._drain_output()
@@ -318,8 +358,19 @@ class MitmproxyManager:
             except OSError:
                 time.sleep(0.05)
         output = self._drain_output()
+        # Distinguish the two ways the budget can elapse so the error is
+        # actionable. A still-running process bound too slowly — the host is
+        # likely overloaded and the remedy is more time, not a code change. A
+        # process that has since exited is a genuine startup failure.
+        if self._process.poll() is None:
+            raise MitmproxyError(
+                f"mitmdump did not become ready within {timeout:.1f}s and is still "
+                f"starting — the host may be overloaded. Set {_STARTUP_TIMEOUT_ENV} "
+                f"(seconds) to allow more time if this recurs.\n{output}"
+            )
         raise MitmproxyError(
-            f"mitmdump did not become ready within {_STARTUP_TIMEOUT_SECONDS:.1f}s:\n{output}"
+            f"mitmdump exited (rc={self._process.returncode}) without becoming ready "
+            f"within {timeout:.1f}s:\n{output}"
         )
 
     def _drain_output(self) -> str:

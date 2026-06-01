@@ -12,6 +12,8 @@ import subprocess
 import sys
 import time
 
+import pytest
+
 from clm.infrastructure.http_replay_mitm import proxy_manager
 from clm.infrastructure.http_replay_mitm.proxy_manager import MitmproxyManager
 
@@ -143,3 +145,90 @@ class TestStartCommandTraceDir:
     def test_no_trace_dir_omits_clm_trace_dir_set(self, monkeypatch) -> None:
         cmd = self._captured_cmd(monkeypatch)
         assert not any("clm_trace_dir=" in str(part) for part in cmd)
+
+
+def _raise_oserror(*_args, **_kwargs):
+    """Stand-in for ``socket.create_connection`` that always refuses."""
+    raise OSError("connection refused")
+
+
+class _ReadyFakeProc:
+    """Minimal ``Popen`` stand-in for ``_wait_for_ready`` diagnostics.
+
+    ``rc=None`` models an alive-but-not-listening process (the overload case);
+    a non-None ``rc`` models a process that has already exited.
+    """
+
+    def __init__(self, rc: int | None = None) -> None:
+        self._rc = rc
+        self.returncode = rc
+
+    def poll(self) -> int | None:
+        return self._rc
+
+
+class TestStartupTimeoutResolution:
+    """``_startup_timeout_seconds`` honours ``CLM_MITM_STARTUP_TIMEOUT`` (issue #184).
+
+    The readiness budget is generous by default because a loaded host can bind
+    the port well past the old 10s, but it stays overridable for hosts that
+    need even more headroom. A typo must not silently disable the wait.
+    """
+
+    def test_default_when_unset(self, monkeypatch) -> None:
+        monkeypatch.delenv(proxy_manager._STARTUP_TIMEOUT_ENV, raising=False)
+        assert (
+            proxy_manager._startup_timeout_seconds()
+            == proxy_manager._DEFAULT_STARTUP_TIMEOUT_SECONDS
+        )
+
+    def test_valid_override_is_used(self, monkeypatch) -> None:
+        monkeypatch.setenv(proxy_manager._STARTUP_TIMEOUT_ENV, "45")
+        assert proxy_manager._startup_timeout_seconds() == 45.0
+
+    def test_non_numeric_falls_back_to_default(self, monkeypatch) -> None:
+        monkeypatch.setenv(proxy_manager._STARTUP_TIMEOUT_ENV, "soon")
+        assert (
+            proxy_manager._startup_timeout_seconds()
+            == proxy_manager._DEFAULT_STARTUP_TIMEOUT_SECONDS
+        )
+
+    def test_non_positive_falls_back_to_default(self, monkeypatch) -> None:
+        monkeypatch.setenv(proxy_manager._STARTUP_TIMEOUT_ENV, "0")
+        assert (
+            proxy_manager._startup_timeout_seconds()
+            == proxy_manager._DEFAULT_STARTUP_TIMEOUT_SECONDS
+        )
+
+
+class TestWaitForReadyDiagnostics:
+    """The readiness timeout message distinguishes overload from a crash (issue #184)."""
+
+    def test_overloaded_process_still_starting_points_to_env_knob(self, monkeypatch) -> None:
+        # Tiny budget + a port that never accepts exercises the timeout path
+        # without waiting the real default.
+        monkeypatch.setenv(proxy_manager._STARTUP_TIMEOUT_ENV, "0.2")
+        monkeypatch.setattr(proxy_manager.socket, "create_connection", _raise_oserror)
+        mgr = _manager()
+        mgr._process = _ReadyFakeProc(rc=None)  # alive, never binds
+        mgr.listen_port = 65000
+
+        with pytest.raises(proxy_manager.MitmproxyError) as excinfo:
+            mgr._wait_for_ready()
+        msg = str(excinfo.value)
+        assert "overloaded" in msg.lower()
+        assert proxy_manager._STARTUP_TIMEOUT_ENV in msg
+        assert "0.2s" in msg  # reports the resolved budget, not the default
+
+    def test_exited_process_reports_crash_not_overload(self, monkeypatch) -> None:
+        monkeypatch.setattr(proxy_manager.socket, "create_connection", _raise_oserror)
+        mgr = _manager()
+        mgr._process = _ReadyFakeProc(rc=7)  # already exited
+        mgr.listen_port = 65000
+
+        with pytest.raises(proxy_manager.MitmproxyError) as excinfo:
+            mgr._wait_for_ready()
+        msg = str(excinfo.value)
+        assert "exited during startup" in msg
+        assert "rc=7" in msg
+        assert "overloaded" not in msg.lower()
