@@ -24,7 +24,7 @@ from clm.infrastructure.llm.cache import SyncAlignmentCache, SyncWatermarkCache
 from clm.infrastructure.llm.ollama_client import SyncProposal
 from clm.notebooks.slide_parser import parse_cells
 from clm.slides.sync_apply import _resolve_alignment, apply_plan
-from clm.slides.sync_plan import build_sync_plan, watermark_rows
+from clm.slides.sync_plan import build_sync_plan, render_explain, watermark_rows
 from clm.slides.sync_recover import (
     NEW,
     RegionCell,
@@ -971,3 +971,62 @@ def test_item3_duplicate_construct_does_not_splice_wrong_twin(tmp_path: Path):
     # Neither cell is dropped or duplicated — both bodies survive exactly once.
     assert en_text.count("compute_a()") == 1
     assert en_text.count("compute_b()") == 1
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 — `clm slides sync --explain` anchor-diff dump (§13)
+# ---------------------------------------------------------------------------
+
+
+def test_explain_dumps_anchor_diff(tmp_path: Path):
+    # The diagnostic shows each cell's content anchor + drift vs the watermark, the
+    # neutral propagation direction, and drifted slide_ids — read-only.
+    base_fn = "def fn():\n    pass"
+    de = (
+        _slide("de", "a", "# ## A") + _code_shared("import time") + _code_idd_neutral("fn", base_fn)
+    )
+    en = (
+        _slide("en", "a", "# ## A") + _code_shared("import time") + _code_idd_neutral("fn", base_fn)
+    )
+    de_path, en_path = _write_pair(tmp_path, de, en)
+
+    cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+    try:
+        _seed(cache, de_path, en_path)
+        # Edit the neutral shared cell (body change, construct stable) AND drift the
+        # id'd cell's construct (def fn -> import os) on DE only.
+        de_path.write_text(
+            _slide("de", "a", "# ## A")
+            + _code_shared("import time\nx = 1")  # ~ edited (construct import-time stable)
+            + _code_idd_neutral("fn", "import os"),  # construct drifted function-fn -> import-os
+            encoding="utf-8",
+        )
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+        text = render_explain(de_path, en_path, plan=plan, watermark_cache=cache)
+    finally:
+        cache.close()
+
+    assert "anchor diff" in text
+    assert "legend:" in text
+    assert "SHARED (language-neutral)" in text
+    assert "construct:import-time" in text  # the neutral cell's anchor
+    assert "neutral propagation direction: de->en" in text
+    assert "drifted slide_ids" in text
+    assert '"fn": was function-fn → now import-os' in text  # the §9 candidate
+    assert "plan:" in text
+
+
+def test_explain_without_watermark_reads_everything_as_new(tmp_path: Path):
+    # With no watermark for the pair, the dump still renders and marks every cell new.
+    de = _slide("de", "a", "# ## A") + _code_shared("import time")
+    en = _slide("en", "a", "# ## A") + _code_shared("import time")
+    de_path, en_path = _write_pair(tmp_path, de, en)
+    cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+    try:
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+        text = render_explain(de_path, en_path, plan=plan, watermark_cache=cache)
+    finally:
+        cache.close()
+
+    assert "no watermark for this pair" in text
+    assert "+  " in text  # at least one cell marked new

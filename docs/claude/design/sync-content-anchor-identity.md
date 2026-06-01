@@ -505,6 +505,20 @@ invariant. Gate releases on `pytest -m "not docker"`.
      construction. The no-op corpus harness held at 81/212, 0 violations through all
      of Phase 5 (recovery is opt-in; the default path is untouched).
 6. **Docs + `--explain`** (§13): info topics, migration entry, anchor-diff dump.
+   - **✅ Shipped.** `clm slides sync --explain` (`render_explain` in `sync_plan.py`)
+     — a read-only anchor-diff dump: per-cell anchor (`id:`/`construct:`/`hash:`)
+     with `=`/`~`/`+`/`-` status vs the watermark, per partition (de/en/shared),
+     plus the neutral propagation direction and the drifted-`slide_id`
+     (id-migration) candidates, then the ordinary plan. Mutually exclusive with
+     `--interactive`/`--json`; writes nothing and uses no LLM (rendered while the
+     watermark cache is still open). **Info topics** (the Maintenance Rule): a
+     "Content-anchor sync (Issue #190)" prose block + the `--explain` /
+     `--llm-recover` / `--recovery-model` rows and examples in
+     `info_topics/commands.md`; an additive-no-break "Content-anchor sync" section
+     in `info_topics/migration.md` (the behavior improvements + the watermark
+     `construct` column auto-migration); and a "Slide Sync" env-var subsection in
+     `docs/user-guide/configuration.md` documenting `CLM_SYNC_PROVIDER` and
+     `CLM_SYNC__SHARED_DIVERGENCE`.
 
 ## 15. Open / deferred
 

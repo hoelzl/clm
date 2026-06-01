@@ -66,7 +66,13 @@ from clm.infrastructure.llm.openrouter_client import (
     has_openrouter_api_key,
 )
 from clm.slides.sync_apply import ApplyResult, apply_plan
-from clm.slides.sync_plan import PlanIssue, SyncPlan, build_sync_plan, render_plan
+from clm.slides.sync_plan import (
+    PlanIssue,
+    SyncPlan,
+    build_sync_plan,
+    render_explain,
+    render_plan,
+)
 from clm.slides.sync_plan_walker import PlanWalkResult, WalkerOptions, run_plan_walker
 from clm.slides.sync_recover import DEFAULT_RECOVERY_MODEL, OpenRouterAlignmentRecoverer
 from clm.slides.sync_translate import DEFAULT_TRANSLATION_MODEL, OpenRouterSlideTranslator
@@ -104,6 +110,19 @@ CACHE_DB_NAME = "clm-llm.sqlite"
         "Walk each proposal and choose [a]pply / [s]kip / [q]uit "
         "([d]e-wins / [e]n-wins for a conflict) before a single atomic apply. "
         "Mutually exclusive with --dry-run and --json."
+    ),
+)
+@click.option(
+    "--explain",
+    is_flag=True,
+    default=False,
+    help=(
+        "Diagnostic: print the content-anchor diff — each cell's anchor "
+        "(id:/construct:/hash:) and whether it is unchanged/edited/new/removed vs "
+        "the watermark, the neutral-cell propagation direction, and any drifted "
+        "slide_ids (id-migration candidates) — then the plan, and write nothing. A "
+        "read-only superset of --dry-run for understanding why a cell did or did not "
+        "sync (Issue #190). Mutually exclusive with --interactive and --json."
     ),
 )
 @click.option(
@@ -207,6 +226,7 @@ def slides_sync_cmd(
     en_path: Path,
     dry_run: bool,
     interactive: bool,
+    explain: bool,
     provider: str,
     llm_model: str | None,
     ollama_url: str | None,
@@ -235,6 +255,9 @@ def slides_sync_cmd(
         translated + inserted, a shared slide_id minted onto both decks) and
         advances the watermark. Nothing is committed — review with ``git diff``.
       * --dry-run: prints the plan and writes nothing.
+      * --explain: prints the content-anchor diff (per-cell anchor + drift,
+        the neutral propagation direction, drifted slide_ids) then the plan,
+        and writes nothing — a read-only diagnostic.
       * --interactive: prompts per proposal before a single atomic apply.
       * A cell edited on both sides since the last sync is isolated as a
         conflict (left untouched, listed in the summary) rather than guessed.
@@ -246,13 +269,22 @@ def slides_sync_cmd(
             "--interactive and --dry-run are mutually exclusive "
             "(--dry-run writes nothing; --interactive applies after prompting)"
         )
+    if explain and interactive:
+        raise click.UsageError(
+            "--explain and --interactive are mutually exclusive (--explain writes nothing)"
+        )
+    if explain and as_json:
+        raise click.UsageError(
+            "--explain and --json are mutually exclusive "
+            "(--explain is a human-readable diagnostic; use --dry-run --json for the structured plan)"
+        )
 
     # Load the project .env before resolving the judge/translator, so keys kept
     # only in .env (the usual course-repo layout) are found. Without this, every
     # add defers and every edit errors as "LLM unavailable" even though the keys
-    # exist on disk (the reported sync bug). Skipped for --dry-run (no LLM) and
-    # when --no-env-file is given.
-    if not no_env_file and not dry_run:
+    # exist on disk (the reported sync bug). Skipped for --dry-run / --explain (no
+    # LLM) and when --no-env-file is given.
+    if not no_env_file and not dry_run and not explain:
         from clm.cli.env_loading import load_env_files
 
         load_env_files(de_path.parent, en_path.parent)
@@ -268,10 +300,18 @@ def slides_sync_cmd(
     plan: SyncPlan
     apply_result: ApplyResult | None = None
     walk: PlanWalkResult | None = None
+    explain_text: str | None = None
     try:
         plan = build_sync_plan(de_path, en_path, watermark_cache=watermark_cache)
 
-        if dry_run:
+        if explain:
+            mode = "explain"
+            # Render while the watermark cache is still open (the finally closes it);
+            # --explain writes nothing and uses no LLM, like --dry-run.
+            explain_text = render_explain(
+                de_path, en_path, plan=plan, watermark_cache=watermark_cache
+            )
+        elif dry_run:
             mode = "dry-run"
         elif interactive:
             mode = "interactive"
@@ -313,7 +353,9 @@ def slides_sync_cmd(
         _plan_exit_code(plan) if apply_result is None else _apply_exit_code(plan, apply_result)
     )
 
-    if as_json:
+    if mode == "explain":
+        click.echo(explain_text)
+    elif as_json:
         click.echo(json.dumps(_to_dict(plan, apply_result, walk, mode, exit_code), indent=2))
     else:
         _print_human(plan, apply_result, walk, mode=mode)

@@ -583,3 +583,51 @@ class TestNoBaseline:
         )
         assert result.exit_code == 0, result.output
         assert "baseline=none" in result.output
+
+
+class TestExplain:
+    """`--explain` is a read-only anchor-diff diagnostic (Issue #190 Phase 6)."""
+
+    def test_explain_prints_anchor_diff_and_writes_nothing(
+        self, cli_runner: CliRunner, tmp_path: Path
+    ):
+        de_path, en_path, cache_dir = _edit_scenario(tmp_path)
+        before_de = de_path.read_text(encoding="utf-8")
+        before_en = en_path.read_text(encoding="utf-8")
+        result = cli_runner.invoke(
+            slides_sync_cmd,
+            [str(de_path), str(en_path), "--explain", "--cache-dir", str(cache_dir)],
+        )
+        out = _combined(result)
+        assert result.exit_code in (0, 1), out  # read-only: clean / would-change
+        assert "anchor diff" in out
+        assert "legend:" in out
+        assert "plan:" in out
+        # Writes nothing — both decks are byte-identical afterwards.
+        assert de_path.read_text(encoding="utf-8") == before_de
+        assert en_path.read_text(encoding="utf-8") == before_en
+
+    def test_explain_and_interactive_rejected(self, cli_runner: CliRunner, tmp_path: Path):
+        de_path, en_path, cache_dir = _edit_scenario(tmp_path)
+        result = cli_runner.invoke(
+            slides_sync_cmd,
+            [
+                str(de_path),
+                str(en_path),
+                "--explain",
+                "--interactive",
+                "--cache-dir",
+                str(cache_dir),
+            ],
+        )
+        assert result.exit_code != 0
+        assert "mutually exclusive" in _combined(result)
+
+    def test_explain_and_json_rejected(self, cli_runner: CliRunner, tmp_path: Path):
+        de_path, en_path, cache_dir = _edit_scenario(tmp_path)
+        result = cli_runner.invoke(
+            slides_sync_cmd,
+            [str(de_path), str(en_path), "--explain", "--json", "--cache-dir", str(cache_dir)],
+        )
+        assert result.exit_code != 0
+        assert "mutually exclusive" in _combined(result)

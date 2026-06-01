@@ -43,6 +43,7 @@ from clm.slides.sync_writeback import (
     cell_content_hash,
     construct_of,
     role_of,
+    row_anchor,
 )
 
 if TYPE_CHECKING:
@@ -60,6 +61,7 @@ __all__ = [
     "build_sync_plan",
     "classify_changes",
     "ordered_sync_cells",
+    "render_explain",
     "render_plan",
     "watermark_rows",
 ]
@@ -1213,4 +1215,139 @@ def render_plan(plan: SyncPlan) -> str:
         lines.append(f"{p.kind}{direction} {sid}/{p.role}{suffix}{detail}")
     lines.append("")
     lines.append(plan.summary())
+    return "\n".join(lines)
+
+
+def _anchor_diff_section(
+    label: str,
+    base_rows: list[tuple[int, str | None, str, str, str | None]],
+    cur_rows: list[tuple[int, str | None, str, str, str | None]],
+) -> list[str]:
+    """Format one partition's anchor-keyed diff (the §6 pass, made visible).
+
+    Status per current cell against the watermark: ``=`` unchanged (anchor + hash
+    match), ``~`` edited (anchor matches, hash differs), ``+`` new (anchor absent
+    from the baseline). Anchors present in the baseline but gone from the current
+    deck are listed as ``-`` (removed). A construct anchor is not content-unique, so
+    matching is by anchor→{hashes} multimap (a diagnostic, last-writer-wins-free).
+    """
+    base_anchor_hashes: dict[str, set[str]] = {}
+    for _pos, sid, _role, chash, construct in base_rows:
+        base_anchor_hashes.setdefault(row_anchor(sid, construct, chash), set()).add(chash)
+
+    n = len(cur_rows)
+    lines = [f"{label} ({n} cell{'s' if n != 1 else ''}):"]
+    seen: set[str] = set()
+    for pos, sid, role, chash, construct in cur_rows:
+        anchor = row_anchor(sid, construct, chash)
+        seen.add(anchor)
+        if anchor in base_anchor_hashes:
+            status = "=" if chash in base_anchor_hashes[anchor] else "~"
+        else:
+            status = "+"
+        lines.append(f"  #{pos:<3} {status}  {anchor:<36} {role}")
+    for anchor in base_anchor_hashes:
+        if anchor not in seen:
+            lines.append(f"  ·    -  {anchor:<36} (removed)")
+    if not cur_rows and not base_anchor_hashes:
+        lines.append("  (none)")
+    return lines
+
+
+def _drifted_id_lines(
+    de_cells: list[Cell],
+    watermark_cache: SyncWatermarkCache | None,
+    de_path: Path,
+    en_path: Path,
+) -> list[str]:
+    """List id'd code cells whose construct drifted from the baseline (§9 candidates).
+
+    A cell wearing a ``slide_id`` whose *current* construct no longer matches the
+    construct the watermark recorded for that id is an id-migration candidate (the
+    author split or renamed it). Scans the DE file, which carries the neutral and
+    DE-localized id'd code; the EN twin shares the id (``de_id == en_id``).
+    """
+    if watermark_cache is None:
+        return []
+    base_construct: dict[str, str] = {}
+    for partition in ("de", "en", "shared"):
+        for _pos, sid, _role, _hash, construct in watermark_cache.get_deck(
+            str(de_path), str(en_path), partition
+        ):
+            if sid is not None and construct is not None:
+                base_construct.setdefault(sid, construct)
+    out: list[str] = []
+    for cell in de_cells:
+        meta = cell.metadata
+        if meta.is_j2 or meta.cell_type != "code" or meta.slide_id is None:
+            continue
+        current = construct_of(meta, cell.content)
+        base = base_construct.get(meta.slide_id)
+        if base is not None and current is not None and current != base:
+            out.append(f'  "{meta.slide_id}": was {base} → now {current}')
+    return out
+
+
+def render_explain(
+    de_path: Path,
+    en_path: Path,
+    *,
+    plan: SyncPlan,
+    watermark_cache: SyncWatermarkCache | None,
+) -> str:
+    """Anchor-level diagnostic for ``clm slides sync --explain`` (Issue #190 §13).
+
+    Dumps the content-anchor view the engine works in — every non-j2 cell's anchor
+    (``id:`` / ``construct:`` / ``hash:``) and whether it is unchanged / edited /
+    new / removed against the watermark baseline (the §6 anchor-keyed diff made
+    visible) — then the neutral-cell propagation direction, any drifted ``slide_id``s
+    (the §9 id-migration candidates), and finally the ordinary plan. Read-only:
+    ``--explain`` writes nothing, like ``--dry-run``.
+    """
+    lines = [
+        f"anchor diff — {de_path.name} / {en_path.name}",
+        f"baseline: {plan.baseline_source}",
+    ]
+    has_baseline = watermark_cache is not None and watermark_cache.has_pair(
+        str(de_path), str(en_path)
+    )
+    if not has_baseline:
+        lines.append("  (no watermark for this pair — every cell reads as new; legend +)")
+    lines.append("  legend: = unchanged  ~ edited  + new  - removed")
+    lines.append("")
+
+    de_cells = parse_cells(de_path.read_text(encoding="utf-8"))
+    en_cells = parse_cells(en_path.read_text(encoding="utf-8"))
+    de_current = watermark_rows(de_cells)
+    en_current = watermark_rows(en_cells)
+    current_by_partition = {
+        "de": de_current["de"],
+        "en": en_current["en"],
+        # Neutral cells are recorded once from DE under the single-entity partition.
+        "shared": de_current["shared"],
+    }
+    for label, partition in (
+        ("DE (localized + keyed)", "de"),
+        ("EN (localized + keyed)", "en"),
+        ("SHARED (language-neutral)", "shared"),
+    ):
+        base_rows = (
+            watermark_cache.get_deck(str(de_path), str(en_path), partition)
+            if watermark_cache is not None
+            else []
+        )
+        lines.extend(_anchor_diff_section(label, base_rows, current_by_partition[partition]))
+        lines.append("")
+
+    lines.append(
+        "neutral propagation direction: "
+        + (plan.anchor_direction if plan.anchor_direction else "none (halves agree)")
+    )
+    drifted = _drifted_id_lines(de_cells, watermark_cache, de_path, en_path)
+    lines.append("drifted slide_ids (id-migration candidates):")
+    lines.extend(drifted if drifted else ["  (none)"])
+    lines.append("")
+
+    lines.append("plan:")
+    lines.append(render_plan(plan))
     return "\n".join(lines)

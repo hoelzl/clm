@@ -743,6 +743,34 @@ A localized code cell with a `slide_id` is reconciled per cell (its body
 re-translated on an edit); language-neutral and id-less code is propagated
 structurally, so it is **not** minted a `slide_id`.
 
+**Content-anchor sync (Issue #190).** Cell identity is tracked in the watermark
+by a **content anchor** (`hand slide_id > construct slug > content hash`), never
+written into the file, so a deck stays id-light yet syncs precisely:
+
+- **Code-only edits propagate.** Editing *only* a language-neutral code cell on
+  one side — no narrative or id change — is now detected (the anchor diff sees
+  which half drifted) and copied verbatim to the twin. Previously such an edit was
+  silently dropped.
+- **Unchanged localized code is never re-translated.** When a slide group is
+  rebuilt for a sibling's sake, an unchanged id-less localized code cell is spliced
+  verbatim by its anchor instead of being re-translated — no churn, no LLM spend.
+- **A drifted `slide_id` is migrated back.** If you split an id'd code cell (e.g.
+  add an `import` above a `def`, leaving the id on the import half), the id is
+  moved back onto the cell whose construct it names and a fresh slug is minted on
+  the orphan — one targeted header write each, no LLM, symmetric across both decks
+  (`de_id == en_id` is preserved).
+- **A neutral cell edited *differently* on both decks auto-heals with a warning**
+  (the winning side is the one with a keyed direction, else the newer file). Set
+  `CLM_SYNC__SHARED_DIVERGENCE=error` to surface it as an error and write nothing
+  instead. A neutral cell edited *incompatibly* on both decks (different cells) is
+  an error — never silently reverted.
+- **Genuinely ambiguous id realignment** (a function renamed *while* a cell was
+  split, an unresolvable tie) is left untouched and re-surfaces next run, unless
+  you opt in with `--llm-recover` (above).
+
+Use `--explain` to see the anchor-level view (per-cell anchor + drift, the
+propagation direction, drifted ids) for any pair.
+
 ```
 clm slides sync [OPTIONS] DE_PATH EN_PATH
 ```
@@ -750,12 +778,15 @@ clm slides sync [OPTIONS] DE_PATH EN_PATH
 | Option | Description |
 |--------|-------------|
 | `--dry-run` | Classify only: print the plan and write nothing. (The default, without this flag, writes the agreed changes to the working tree.) |
+| `--explain` | Diagnostic: print the **content-anchor diff** — each cell's anchor (`id:` / `construct:` / `hash:`) and whether it is unchanged / edited / new / removed vs the watermark, the neutral-cell propagation direction, and any drifted `slide_id`s (id-migration candidates) — then the plan, and write nothing. A read-only superset of `--dry-run` for understanding *why* a cell did or did not sync. Mutually exclusive with `--interactive` and `--json`. |
 | `--interactive` | Walk each proposal and choose `[a]pply / [s]kip / [q]uit` (`[d]e-wins / [e]n-wins` for a conflict) before a single atomic apply. Mutually exclusive with `--dry-run` and `--json`. |
 | `--provider [openrouter\|local]` | Backend for the edit-reconciliation judge: `openrouter` (Claude Sonnet via OpenRouter, the default — needs `$OPENROUTER_API_KEY` / `$OPENAI_API_KEY`) or `local` (the Ollama daemon — offline, slower). Overridable with `$CLM_SYNC_PROVIDER`. |
 | `--llm-model TEXT` | Model for the edit-reconciliation judge. Default depends on `--provider`: `anthropic/claude-sonnet-4-6` (openrouter) or `qwen3:30b` (local). |
 | `--ollama-url TEXT` | Base URL of the Ollama daemon (only used with `--provider local`; default: `$OLLAMA_URL` or `http://localhost:11434`). |
 | `--llm-timeout SECONDS` | Per-call timeout for the edit judge. Provider-aware default: 120s for `openrouter` (fast hosted model), 300s for `local` (a large local reasoning model can spend minutes "thinking"). |
 | `--translation-model TEXT` | OpenRouter model used to translate brand-new slides for the add path (default: `anthropic/claude-sonnet-4-6`). Needs `$OPENROUTER_API_KEY` / `$OPENAI_API_KEY`; adds defer when absent. |
+| `--llm-recover` | **Opt into the bounded-LLM recovery tier (default off).** When the deterministic id-migration is stuck on an *ambiguous* drifted `slide_id` (a function renamed while a cell was split, an unresolvable tie), ask Claude (Opus, via OpenRouter) for a **validated, body-free** id↔cell alignment. Without this flag such a region is left untouched and re-surfaces next run. The model only ever sees content anchors (construct + hash + id), never cell source, and its map is validated (it can never drop a stable `slide_id`) before any header is written. Needs `$OPENROUTER_API_KEY` / `$OPENAI_API_KEY`. |
+| `--recovery-model TEXT` | OpenRouter model for `--llm-recover` alignment (default: `anthropic/claude-opus-4`). |
 | `--cache-dir PATH` | Directory holding the structural watermark. Lookup order: flag → `$CLM_CACHE_DIR` → `tool.clm.cache_dir` in `pyproject.toml` → `<cwd>/.clm-cache/`. |
 | `--no-cache` | Do not read or write the watermark. Every run then re-derives its baseline from git `HEAD` and no synced state is persisted. |
 | `--no-env-file` | Do not auto-load a `.env` file. By default sync loads the first `.env` found above each deck (without overriding already-set variables), so keys kept in the project `.env` reach the judge/translator. |
@@ -788,6 +819,12 @@ clm slides sync slides/topic/intro.de.py slides/topic/intro.en.py
 
 # Preview the plan first — write nothing.
 clm slides sync intro.de.py intro.en.py --dry-run
+
+# Understand the anchor-level view (per-cell drift, direction, drifted ids).
+clm slides sync intro.de.py intro.en.py --explain
+
+# Let an LLM realign a genuinely ambiguous split (opt-in, off by default).
+clm slides sync intro.de.py intro.en.py --llm-recover
 
 # Walk each proposal, resolving conflicts as you go.
 clm slides sync intro.de.py intro.en.py --interactive
