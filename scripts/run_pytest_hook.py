@@ -37,11 +37,37 @@ LEAKING_GIT_VARS = (
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
 )
 
+# Cap how many workers ``-n auto`` (set in ``pyproject.toml`` ``addopts``)
+# spins up for the pre-commit fast suite. On a high-core developer machine
+# ``auto`` resolves to one worker per logical CPU (e.g. 64). Many tests fork
+# heavyweight subprocesses (mitmdump, Jupyter kernels, worker API servers), so
+# that many workers oversubscribes the box: process startups miss tight
+# readiness ceilings and flake (the 10s mitmdump timeout, worker-registration
+# starvation under xdist, heartbeat slow-write trips, ephemeral port clashes).
+# Benchmarking the fast suite across 12-64 workers on a 64-thread box showed
+# wall-clock is flat/noise-dominated in this range, so capping costs no real
+# speed while removing the contention that drives the flakes.
+#
+# ``xdist`` honours ``PYTEST_XDIST_AUTO_NUM_WORKERS`` to decide what ``auto``
+# becomes, so we set it here for the hook only. This:
+#   * is a no-op on machines with <= ``_MAX_AUTO_WORKERS`` logical CPUs (their
+#     ``auto`` is already at or below the cap);
+#   * never touches CI, which doesn't run this wrapper and resolves ``auto`` to
+#     its ~2-4 vCPUs anyway;
+#   * leaves a manual ``pytest`` run untouched;
+#   * respects an explicit ``PYTEST_XDIST_AUTO_NUM_WORKERS`` the developer has
+#     already exported (``setdefault``).
+_MAX_AUTO_WORKERS = 16
+
 
 def main() -> int:
     env = os.environ.copy()
     for var in LEAKING_GIT_VARS:
         env.pop(var, None)
+    env.setdefault(
+        "PYTEST_XDIST_AUTO_NUM_WORKERS",
+        str(min(_MAX_AUTO_WORKERS, os.cpu_count() or _MAX_AUTO_WORKERS)),
+    )
     result = subprocess.run(
         ["uv", "run", "pytest", *sys.argv[1:]],
         env=env,
