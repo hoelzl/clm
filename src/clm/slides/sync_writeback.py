@@ -25,7 +25,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from clm.notebooks.slide_parser import CellMetadata, parse_cell_header
+from clm.slides.code_cell_extract import extract_from_code
 from clm.slides.raw_cells import RawCell, reconstruct, split_cells
+from clm.slides.slug import slugify
 
 if TYPE_CHECKING:
     from clm.infrastructure.llm.cache import SyncSnapshotCache
@@ -35,8 +37,10 @@ if TYPE_CHECKING:
 __all__ = [
     "CODE_ROLE",
     "FileState",
+    "anchor_of",
     "build_twin_cell",
     "cell_content_hash",
+    "construct_of",
     "record_snapshot",
     "role_of",
     "swap_lang",
@@ -135,6 +139,45 @@ def cell_content_hash(text: str) -> str:
     the same way before hashing so re-runs find a matching cache row.
     """
     return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()
+
+
+def construct_of(metadata: CellMetadata, body: str) -> str | None:
+    """The deterministic *construct* component of a cell's content anchor.
+
+    For a code cell, the AST construct name from :func:`extract_from_code`
+    slugified — ``"function my_fun"`` → ``"function-my-fun"``, ``"class X"`` →
+    ``"class-x"``, ``"import time"`` → ``"import-time"``. ``None`` for non-code,
+    j2, or unparsable cells (shell escapes, magic, half-finished stubs) — the
+    anchor then falls back to the slide_id or the content hash. A pure function
+    of content, so it is always re-derivable and adds no header churn
+    (Issue #190 §4). ``body`` is the cell body as the parser yields it (a code
+    cell's raw Python, no ``# `` prefix).
+    """
+    if metadata.is_j2 or metadata.cell_type != "code":
+        return None
+    extraction = extract_from_code(body)
+    if extraction is None:
+        return None
+    return slugify(extraction.text) or None
+
+
+def anchor_of(metadata: CellMetadata, body: str) -> str:
+    """The content-derived identity of a cell: ``hand slide_id > construct > hash``.
+
+    The Issue #190 §4 anchor — stable across translations and immune to the git
+    commit cadence, and **never written into the file**. The three components are
+    prefixed (``id:`` / ``construct:`` / ``hash:``) so a hand id ``"foo"`` and a
+    construct slug ``"foo"`` can never collide. The hash branch reuses
+    :func:`cell_content_hash`, so it hashes the *same* canonical stripped form as
+    the watermark's ``content_hash`` (else CRLF/LF drift would re-introduce the
+    item-3 churn this anchor exists to remove).
+    """
+    if metadata.slide_id is not None:
+        return f"id:{metadata.slide_id}"
+    construct = construct_of(metadata, body)
+    if construct is not None:
+        return f"construct:{construct}"
+    return f"hash:{cell_content_hash(body)}"
 
 
 _LANG_ATTR_RE = re.compile(r'lang="[^"]*"')

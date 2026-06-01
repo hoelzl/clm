@@ -58,7 +58,7 @@ from clm.infrastructure.llm.cache import SyncWatermarkCache  # noqa: E402
 from clm.infrastructure.llm.ollama_client import SyncProposal  # noqa: E402
 from clm.notebooks.slide_parser import Cell, parse_cells  # noqa: E402
 from clm.slides.sync_apply import apply_plan  # noqa: E402
-from clm.slides.sync_plan import build_sync_plan, ordered_sync_cells  # noqa: E402
+from clm.slides.sync_plan import build_sync_plan, watermark_rows  # noqa: E402
 from clm.slides.sync_writeback import role_of  # noqa: E402
 
 # Default corpus location (overridable via --corpus or $CLM_SYNC_CORPUS_DIR).
@@ -158,15 +158,18 @@ class NoopResult:
 
 
 def _seed_watermark(cache: SyncWatermarkCache, de_path: Path, en_path: Path) -> None:
-    """Record the pair's current sync-cell state as the watermark baseline."""
-    for lang, path in (("de", de_path), ("en", en_path)):
-        cells = ordered_sync_cells(parse_cells(path.read_text(encoding="utf-8")), lang)
-        cache.put_deck(
-            de_path=str(de_path),
-            en_path=str(en_path),
-            lang=lang,
-            cells=[(c.position, c.slide_id, c.role, c.content_hash) for c in cells],
-        )
+    """Record the pair's current state as the watermark baseline.
+
+    Mirrors ``sync_apply._record_watermark``: the membership-widened de/en/shared
+    partitions, so the seeded baseline matches what a real clean apply records.
+    """
+    de_rows = watermark_rows(parse_cells(de_path.read_text(encoding="utf-8")))
+    en_rows = watermark_rows(parse_cells(en_path.read_text(encoding="utf-8")))
+    cache.put_deck(de_path=str(de_path), en_path=str(en_path), lang="de", cells=de_rows["de"])
+    cache.put_deck(de_path=str(de_path), en_path=str(en_path), lang="en", cells=en_rows["en"])
+    cache.put_deck(
+        de_path=str(de_path), en_path=str(en_path), lang="shared", cells=de_rows["shared"]
+    )
 
 
 def noop_probe(de_path: Path, en_path: Path) -> NoopResult:

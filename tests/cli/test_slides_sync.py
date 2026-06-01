@@ -77,7 +77,9 @@ def _seed_watermark(
                 de_path=str(de_path),
                 en_path=str(en_path),
                 lang=lang,
-                cells=[(c.position, c.slide_id, c.role, c.content_hash) for c in cells],
+                cells=[
+                    (c.position, c.slide_id, c.role, c.content_hash, c.construct) for c in cells
+                ],
             )
     finally:
         wm.close()

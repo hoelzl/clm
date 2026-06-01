@@ -1,17 +1,15 @@
-"""Executable documentation of the two *serious* ``clm slides sync`` limitations
-(Issue #190 items 2 & 3) as they behave **today**.
+"""Behavioral tests for the two *serious* ``clm slides sync`` limitations
+(Issue #190 items 2 & 3).
 
-These tests pin the broken-today behavior so the Phase 2/3 fixes have a precise
-flip-point and the no-op corpus harness has a mechanism to point at:
-
-* **item 2** — a code-only edit to a *language-neutral* shared cell produces no
-  proposal, so the sync silently fails to propagate it and the two split halves
-  diverge. Phase 3 (the anchor-keyed diff + deterministic copy-to-twin) makes
-  the edit propagate; flip ``test_item2_*`` then.
-* **item 3** — when a slide group is rebuilt for a *sibling's* sake, an unchanged
-  id-less localized code cell in it is re-translated, because its ``("L", kind)``
-  structural signature cannot prove it is unchanged. Phase 2 (anchor + content
-  hash verbatim reuse) splices it without translating; flip ``test_item3_*`` then.
+* **item 2** — *still broken (Phase 3 will fix)*: a code-only edit to a
+  *language-neutral* shared cell produces no proposal, so the sync silently fails
+  to propagate it and the two split halves diverge. ``test_item2_*`` pins the
+  broken-today behavior; flip it when Phase 3 (the anchor-keyed diff +
+  deterministic copy-to-twin) lands.
+* **item 3** — *FIXED (Phase 2)*: when a slide group is rebuilt for a *sibling's*
+  sake, an unchanged id-less localized code cell is spliced verbatim by its
+  content anchor instead of being re-translated. ``test_item3_*`` asserts the fix
+  (the translator is never called for the unchanged cell).
 
 Tiny synthetic decks, fast suite, no corpus, no network (the translator/judge
 are counting stand-ins).
@@ -26,7 +24,7 @@ from clm.infrastructure.llm.cache import SyncWatermarkCache
 from clm.infrastructure.llm.ollama_client import SyncProposal
 from clm.notebooks.slide_parser import parse_cells
 from clm.slides.sync_apply import apply_plan
-from clm.slides.sync_plan import build_sync_plan, ordered_sync_cells
+from clm.slides.sync_plan import build_sync_plan, watermark_rows
 
 # ---------------------------------------------------------------------------
 # Deck builders + no-LLM spies
@@ -56,14 +54,14 @@ def _write_pair(tmp_path: Path, de: str, en: str) -> tuple[Path, Path]:
 
 
 def _seed(cache: SyncWatermarkCache, de_path: Path, en_path: Path) -> None:
-    for lang, path in (("de", de_path), ("en", en_path)):
-        cells = ordered_sync_cells(parse_cells(path.read_text(encoding="utf-8")), lang)
-        cache.put_deck(
-            de_path=str(de_path),
-            en_path=str(en_path),
-            lang=lang,
-            cells=[(c.position, c.slide_id, c.role, c.content_hash) for c in cells],
-        )
+    """Seed the membership-widened watermark exactly as ``_record_watermark`` does."""
+    de_rows = watermark_rows(parse_cells(de_path.read_text(encoding="utf-8")))
+    en_rows = watermark_rows(parse_cells(en_path.read_text(encoding="utf-8")))
+    cache.put_deck(de_path=str(de_path), en_path=str(en_path), lang="de", cells=de_rows["de"])
+    cache.put_deck(de_path=str(de_path), en_path=str(en_path), lang="en", cells=en_rows["en"])
+    cache.put_deck(
+        de_path=str(de_path), en_path=str(en_path), lang="shared", cells=de_rows["shared"]
+    )
 
 
 @dataclass
@@ -122,11 +120,12 @@ def test_item2_neutral_code_only_edit_is_silently_dropped(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# Item 3 — an unchanged id-less localized code cell is re-translated on rebuild
+# Item 3 — FIXED (Phase 2): an unchanged id-less localized code cell is spliced
+# verbatim on a sibling-triggered rebuild, never re-translated.
 # ---------------------------------------------------------------------------
 
 
-def test_item3_group_rebuild_retranslates_unchanged_localized_code(tmp_path: Path):
+def test_item3_unchanged_localized_code_is_reused_not_retranslated(tmp_path: Path):
     de = (
         _slide("de", "g", "# ## G")
         + _code_shared("import time")
@@ -160,10 +159,98 @@ def test_item3_group_rebuild_retranslates_unchanged_localized_code(tmp_path: Pat
 
     # The narrative edit is the only per-cell proposal; it supplies the direction.
     assert plan.count("edit") == 1
-    # TODAY: the unchanged localized code cell is re-translated as a bystander of
-    # the sibling-triggered group rebuild.
-    retranslated = [body for (role, _sl, _tl, body) in translator.calls if "Kommentar" in body]
-    assert retranslated, (
-        f"expected the unchanged localized code to be re-translated; got {translator.calls}"
+    # FIXED: the unchanged localized code cell (anchor construct:x, same content
+    # hash as baseline) is spliced verbatim — the translator is never called for it.
+    retranslated = [body for (_role, _sl, _tl, body) in translator.calls if "Kommentar" in body]
+    assert retranslated == [], (
+        f"unchanged localized code must be spliced verbatim, not re-translated; "
+        f"got {translator.calls}"
     )
-    # (Phase 2 splices it verbatim by anchor+hash; assert `retranslated == []` then.)
+    # The EN twin is preserved verbatim (still its own '# Comment', not a verbatim
+    # copy of DE's '# Kommentar' that a re-translation stand-in would have produced).
+    en_text = en_path.read_text(encoding="utf-8")
+    assert "# Comment" in en_text
+    assert "# Kommentar" not in en_text
+    # The sibling that triggered the rebuild (neutral code) still propagated.
+    assert "import os" in en_text
+
+
+def test_item3_changed_localized_code_is_still_retranslated(tmp_path: Path):
+    # The reuse must NOT over-fire: a genuinely EDITED localized code cell — same
+    # construct anchor (construct:x), different content hash — is re-translated,
+    # not spliced from the stale target twin.
+    de = (
+        _slide("de", "g", "# ## G")
+        + _code_shared("import time")
+        + _code_localized_idless("de", "# Kommentar\nx = 1")
+    )
+    en = (
+        _slide("en", "g", "# ## G")
+        + _code_shared("import time")
+        + _code_localized_idless("en", "# Comment\nx = 1")
+    )
+    de_path, en_path = _write_pair(tmp_path, de, en)
+
+    cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+    translator = CountingTranslator()
+    judge = CountingJudge()
+    try:
+        _seed(cache, de_path, en_path)
+        de_path.write_text(
+            _slide("de", "g", "# ## G erweitert")  # narrative edit -> direction
+            + _code_shared("import time\nimport os")  # neutral edit -> rebuild
+            + _code_localized_idless("de", "# Kommentar\nx = 1\nprint(x)"),  # CHANGED body
+            encoding="utf-8",
+        )
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+        apply_plan(plan, judge=judge, translator=translator, watermark_cache=cache)
+    finally:
+        cache.close()
+
+    # The changed localized cell was re-translated (its baseline hash no longer
+    # matches), so the translator WAS called for it.
+    retranslated = [body for (_role, _sl, _tl, body) in translator.calls if "print(x)" in body]
+    assert retranslated, f"a changed localized cell must be re-translated; got {translator.calls}"
+
+
+def test_item3_duplicate_construct_does_not_splice_wrong_twin(tmp_path: Path):
+    # Two id-less localized code cells in one group share a construct anchor
+    # (both `result = ...` -> construct:result). The reuse path must NOT splice an
+    # arbitrary first-match twin (which dropped one cell and duplicated the other —
+    # Issue #190 review, the critical finding). A non-unique anchor disables reuse;
+    # both cells translate, so both EN twins survive verbatim.
+    de = (
+        _slide("de", "g", "# ## G")
+        + _code_shared("import time")
+        + _code_localized_idless("de", "# A\nresult = compute_a()")
+        + _code_localized_idless("de", "# B\nresult = compute_b()")
+    )
+    en = (
+        _slide("en", "g", "# ## G")
+        + _code_shared("import time")
+        + _code_localized_idless("en", "# A\nresult = compute_a()")
+        + _code_localized_idless("en", "# B\nresult = compute_b()")
+    )
+    de_path, en_path = _write_pair(tmp_path, de, en)
+
+    cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+    translator = CountingTranslator()
+    judge = CountingJudge()
+    try:
+        _seed(cache, de_path, en_path)
+        de_path.write_text(
+            _slide("de", "g", "# ## G erweitert")  # narrative edit -> direction
+            + _code_shared("import time\nimport os")  # neutral edit -> rebuild
+            + _code_localized_idless("de", "# A\nresult = compute_a()")  # unchanged
+            + _code_localized_idless("de", "# B\nresult = compute_b()"),  # unchanged
+            encoding="utf-8",
+        )
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+        apply_plan(plan, judge=judge, translator=translator, watermark_cache=cache)
+    finally:
+        cache.close()
+
+    en_text = en_path.read_text(encoding="utf-8")
+    # Neither cell is dropped or duplicated — both bodies survive exactly once.
+    assert en_text.count("compute_a()") == 1
+    assert en_text.count("compute_b()") == 1

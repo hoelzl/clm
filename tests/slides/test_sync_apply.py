@@ -36,7 +36,7 @@ def _seed_watermark(cache: SyncWatermarkCache, de_path: Path, en_path: Path) -> 
             de_path=str(de_path),
             en_path=str(en_path),
             lang=lang,
-            cells=[(c.position, c.slide_id, c.role, c.content_hash) for c in cells],
+            cells=[(c.position, c.slide_id, c.role, c.content_hash, c.construct) for c in cells],
         )
 
 
@@ -1368,7 +1368,7 @@ class TestPartialWatermarkAdvance:
             plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
             apply_plan(plan, judge=_update_judge("# ## A-en2"), watermark_cache=cache)
             wm_de = [
-                (p, s, r) for (p, s, r, _h) in cache.get_deck(str(de_path), str(en_path), "de")
+                (p, s, r) for (p, s, r, _h, _c) in cache.get_deck(str(de_path), str(en_path), "de")
             ]
         finally:
             cache.close()

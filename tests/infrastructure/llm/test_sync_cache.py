@@ -238,66 +238,87 @@ class TestSyncWatermarkCache:
 
     def test_put_and_get_deck_ordered(self, watermarks):
         cells = [
-            (0, "intro", "slide", "h0"),
-            (1, "intro", "voiceover", "h1"),
-            (2, "topic", "slide", "h2"),
+            (0, "intro", "slide", "h0", None),
+            (1, "intro", "voiceover", "h1", None),
+            (2, "topic", "slide", "h2", None),
         ]
         watermarks.put_deck(de_path="a.de.py", en_path="a.en.py", lang="de", cells=cells)
         assert watermarks.get_deck("a.de.py", "a.en.py", "de") == cells
         assert watermarks.has_pair("a.de.py", "a.en.py") is True
 
     def test_nullable_slide_id(self, watermarks):
-        cells = [(0, None, "slide", "h0"), (1, "topic", "slide", "h1")]
+        cells = [(0, None, "slide", "h0", None), (1, "topic", "slide", "h1", None)]
         watermarks.put_deck(de_path="a.de.py", en_path="a.en.py", lang="en", cells=cells)
         got = watermarks.get_deck("a.de.py", "a.en.py", "en")
         assert got[0][1] is None
         assert got == cells
 
+    def test_construct_roundtrips(self, watermarks):
+        # The Issue #190 §5 anchor construct column: stored and returned as the
+        # 5th tuple element; nullable for non-code rows.
+        cells = [
+            (0, None, "localized-code", "h0", "function-my-fun"),
+            (1, "intro", "slide", "h1", None),
+        ]
+        watermarks.put_deck(de_path="a.de.py", en_path="a.en.py", lang="de", cells=cells)
+        assert watermarks.get_deck("a.de.py", "a.en.py", "de") == cells
+
+    def test_shared_partition_accepted(self, watermarks):
+        # Language-neutral cells are tracked once under the "shared" partition.
+        cells = [(0, None, "neutral-code", "h0", "import-time")]
+        watermarks.put_deck(de_path="a.de.py", en_path="a.en.py", lang="shared", cells=cells)
+        assert watermarks.get_deck("a.de.py", "a.en.py", "shared") == cells
+        # "shared" is isolated from the localized partitions.
+        assert watermarks.get_deck("a.de.py", "a.en.py", "de") == []
+
     def test_languages_are_isolated(self, watermarks):
         watermarks.put_deck(
-            de_path="a.de.py", en_path="a.en.py", lang="de", cells=[(0, "x", "slide", "dh")]
+            de_path="a.de.py", en_path="a.en.py", lang="de", cells=[(0, "x", "slide", "dh", None)]
         )
         watermarks.put_deck(
-            de_path="a.de.py", en_path="a.en.py", lang="en", cells=[(0, "x", "slide", "eh")]
+            de_path="a.de.py", en_path="a.en.py", lang="en", cells=[(0, "x", "slide", "eh", None)]
         )
-        assert watermarks.get_deck("a.de.py", "a.en.py", "de") == [(0, "x", "slide", "dh")]
-        assert watermarks.get_deck("a.de.py", "a.en.py", "en") == [(0, "x", "slide", "eh")]
+        assert watermarks.get_deck("a.de.py", "a.en.py", "de") == [(0, "x", "slide", "dh", None)]
+        assert watermarks.get_deck("a.de.py", "a.en.py", "en") == [(0, "x", "slide", "eh", None)]
 
     def test_put_deck_replaces_atomically(self, watermarks):
         watermarks.put_deck(
             de_path="a.de.py",
             en_path="a.en.py",
             lang="de",
-            cells=[(0, "a", "slide", "h0"), (1, "b", "slide", "h1")],
+            cells=[(0, "a", "slide", "h0", None), (1, "b", "slide", "h1", None)],
         )
         # Rewrite with a shorter, different deck — old rows must be gone.
         watermarks.put_deck(
-            de_path="a.de.py", en_path="a.en.py", lang="de", cells=[(0, "c", "slide", "h2")]
+            de_path="a.de.py", en_path="a.en.py", lang="de", cells=[(0, "c", "slide", "h2", None)]
         )
-        assert watermarks.get_deck("a.de.py", "a.en.py", "de") == [(0, "c", "slide", "h2")]
+        assert watermarks.get_deck("a.de.py", "a.en.py", "de") == [(0, "c", "slide", "h2", None)]
 
     def test_invalid_lang_raises(self, watermarks):
         with pytest.raises(ValueError, match="lang must be"):
             watermarks.put_deck(
-                de_path="a.de.py", en_path="a.en.py", lang="fr", cells=[(0, "x", "slide", "h")]
+                de_path="a.de.py",
+                en_path="a.en.py",
+                lang="fr",
+                cells=[(0, "x", "slide", "h", None)],
             )
 
     def test_pairs_are_isolated(self, watermarks):
         watermarks.put_deck(
-            de_path="a.de.py", en_path="a.en.py", lang="de", cells=[(0, "x", "slide", "ah")]
+            de_path="a.de.py", en_path="a.en.py", lang="de", cells=[(0, "x", "slide", "ah", None)]
         )
         watermarks.put_deck(
-            de_path="b.de.py", en_path="b.en.py", lang="de", cells=[(0, "y", "slide", "bh")]
+            de_path="b.de.py", en_path="b.en.py", lang="de", cells=[(0, "y", "slide", "bh", None)]
         )
-        assert watermarks.get_deck("a.de.py", "a.en.py", "de") == [(0, "x", "slide", "ah")]
-        assert watermarks.get_deck("b.de.py", "b.en.py", "de") == [(0, "y", "slide", "bh")]
+        assert watermarks.get_deck("a.de.py", "a.en.py", "de") == [(0, "x", "slide", "ah", None)]
+        assert watermarks.get_deck("b.de.py", "b.en.py", "de") == [(0, "y", "slide", "bh", None)]
 
     def test_clear_pair(self, watermarks):
         watermarks.put_deck(
-            de_path="a.de.py", en_path="a.en.py", lang="de", cells=[(0, "x", "slide", "h")]
+            de_path="a.de.py", en_path="a.en.py", lang="de", cells=[(0, "x", "slide", "h", None)]
         )
         watermarks.put_deck(
-            de_path="a.de.py", en_path="a.en.py", lang="en", cells=[(0, "x", "slide", "h")]
+            de_path="a.de.py", en_path="a.en.py", lang="en", cells=[(0, "x", "slide", "h", None)]
         )
         removed = watermarks.clear_pair("a.de.py", "a.en.py")
         assert removed == 2
@@ -307,14 +328,42 @@ class TestSyncWatermarkCache:
         path = tmp_path / "clm-llm.sqlite"
         first = SyncWatermarkCache(path)
         first.put_deck(
-            de_path="a.de.py", en_path="a.en.py", lang="de", cells=[(0, "x", "slide", "h")]
+            de_path="a.de.py", en_path="a.en.py", lang="de", cells=[(0, "x", "slide", "h", "c0")]
         )
         first.close()
         second = SyncWatermarkCache(path)
         try:
-            assert second.get_deck("a.de.py", "a.en.py", "de") == [(0, "x", "slide", "h")]
+            assert second.get_deck("a.de.py", "a.en.py", "de") == [(0, "x", "slide", "h", "c0")]
         finally:
             second.close()
+
+    def test_construct_column_migrates_onto_legacy_table(self, tmp_path: Path):
+        # A pre-#190 table (no construct column) must gain it additively, with
+        # existing rows backfilling to NULL — not a wipe.
+        import sqlite3
+
+        path = tmp_path / "clm-llm.sqlite"
+        legacy = sqlite3.connect(str(path))
+        legacy.execute(
+            """CREATE TABLE sync_watermarks (
+                de_path TEXT NOT NULL, en_path TEXT NOT NULL, lang TEXT NOT NULL,
+                position INTEGER NOT NULL, slide_id TEXT, role TEXT NOT NULL,
+                content_hash TEXT NOT NULL, synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (de_path, en_path, lang, position)
+            )"""
+        )
+        legacy.execute(
+            "INSERT INTO sync_watermarks (de_path, en_path, lang, position, slide_id, role, "
+            "content_hash) VALUES ('a.de.py', 'a.en.py', 'de', 0, 'x', 'slide', 'h')"
+        )
+        legacy.commit()
+        legacy.close()
+
+        migrated = SyncWatermarkCache(path)  # _migrate runs the ALTER
+        try:
+            assert migrated.get_deck("a.de.py", "a.en.py", "de") == [(0, "x", "slide", "h", None)]
+        finally:
+            migrated.close()
 
     def test_coexists_with_other_caches(self, tmp_path: Path):
         path = tmp_path / "clm-llm.sqlite"
@@ -322,7 +371,10 @@ class TestSyncWatermarkCache:
         snap = SyncSnapshotCache(path)
         try:
             wm.put_deck(
-                de_path="a.de.py", en_path="a.en.py", lang="de", cells=[(0, "x", "slide", "h")]
+                de_path="a.de.py",
+                en_path="a.en.py",
+                lang="de",
+                cells=[(0, "x", "slide", "h", None)],
             )
             snap.put(
                 de_path="a.de.py",
@@ -333,7 +385,7 @@ class TestSyncWatermarkCache:
                 en_hash="eh",
                 direction="de->en",
             )
-            assert wm.get_deck("a.de.py", "a.en.py", "de") == [(0, "x", "slide", "h")]
+            assert wm.get_deck("a.de.py", "a.en.py", "de") == [(0, "x", "slide", "h", None)]
             assert snap.get("a.de.py", "a.en.py", "x", "slide") == ("dh", "eh", "de->en")
         finally:
             snap.close()
@@ -341,9 +393,9 @@ class TestSyncWatermarkCache:
 
     def test_iter_entries(self, watermarks):
         watermarks.put_deck(
-            de_path="a.de.py", en_path="a.en.py", lang="de", cells=[(0, "x", "slide", "h")]
+            de_path="a.de.py", en_path="a.en.py", lang="de", cells=[(0, "x", "slide", "h", "c0")]
         )
         rows = watermarks.iter_entries()
         assert len(rows) == 1
-        # (de_path, en_path, lang, position, slide_id, role, content_hash, synced_at)
-        assert rows[0][:7] == ("a.de.py", "a.en.py", "de", 0, "x", "slide", "h")
+        # (de_path, en_path, lang, position, slide_id, role, content_hash, construct, synced_at)
+        assert rows[0][:8] == ("a.de.py", "a.en.py", "de", 0, "x", "slide", "h", "c0")

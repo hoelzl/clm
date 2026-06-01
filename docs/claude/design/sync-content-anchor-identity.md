@@ -392,8 +392,44 @@ invariant. Gate releases on `pytest -m "not docker"`.
    item-2 exposure 8,014, item-3 exposure 1,702, 0 invariant violations.
 1. **Widen the watermark** (§5): `construct` migration, 5-tuples, `"shared"`
    partition, membership. `anchor_of` chokepoint. No behavior change yet.
+   - **Phase 1a ✅ shipped.** Additive `construct` column (`_migrate` ALTER for
+     legacy tables); `get_deck`/`put_deck` 5-tuples
+     `(position, slide_id, role, content_hash, construct)`; `put_deck` accepts
+     the `"shared"` partition; `anchor_of`/`construct_of` chokepoint in
+     `sync_writeback` (`hand id > construct slug > sha256`, prefixed so the three
+     namespaces can't collide); `CurrentCell.construct` populated via
+     `ordered_sync_cells` and written by `_record_watermark[_partial]`. The
+     recorded **row set is unchanged** (still `role_of != None`), so positions —
+     and thus move detection — are untouched: the no-op corpus harness still
+     reports 81/212 noop, 0 violations. `construct` flows end-to-end (real
+     values like `function-run-chatbot` on localized id'd code).
+   - **Phase 1b (deferred — needs a design call).** *Membership widening* —
+     recording every non-j2 cell (neutral under `"shared"`, localized id-less
+     under its lang with a synthetic role). **Trap:** the classifier keys move
+     detection on `position` among the `role_of != None` subset; naively
+     recording *more* cells shifts those positions and would manufacture spurious
+     moves (a real behavior change the harness would catch). Phase 1b must give
+     the widened rows a **separate position space** (or have the classifier
+     re-derive positions from the filtered subset) so the legacy view is
+     byte-stable. Until then nothing consumes the `"shared"` partition.
 2. **Item 3 first** (§8): anchor+hash verbatim reuse in `sync_code`. Highest
    value, lowest risk, one isolated function.
+   - **✅ Shipped.** `_rebuild_region` gained a reuse path: an id-less localized
+     code cell whose anchor is in the baseline with the *same* content hash is
+     spliced verbatim from the current target twin (located by the same
+     construct-based anchor) instead of re-translated. Plumbed via
+     `_baseline_anchor_hashes` (built from the widened watermark) →
+     `apply_code_structure(..., baseline_anchors)` → `_rebuild_region`. The
+     `("L", kind)` signature was **left as-is** (deliberately): the reuse path
+     alone fixes the core item-3 churn, and making the signature content-aware
+     can't help without a language-specific hash (which breaks cross-language
+     matching) — propagating a *changed* localized cell whose group signature is
+     otherwise stable is Phase 3's anchor-diff job, not this one. Construct-based
+     anchors are language-agnostic so de/en twins share them; hash-fallback cells
+     never reuse (the honest §12 residual). No-watermark runs translate as before.
+     Verified: `test_sync_limitations.py` flips (unchanged → reused, changed →
+     still re-translated), and the no-op harness holds at 81/212, 0 violations
+     with a membership-widened seed.
 3. **Item 2** (§7): the `align_anchored` pass (§6) + single-entity neutral model
    + auto-heal/warn. The largest new module; default-on-overridable (mirroring
    the #166 default-flip).

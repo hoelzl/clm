@@ -37,6 +37,7 @@ import logging
 import os
 import re
 import tempfile
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -46,7 +47,13 @@ from clm.notebooks.slide_parser import parse_cell_header, parse_cells
 from clm.slides.raw_cells import RawCell
 from clm.slides.slug import resolve_collision, slugify
 from clm.slides.sync_code import apply_code_structure
-from clm.slides.sync_plan import Proposal, SyncPlan, ordered_sync_cells
+from clm.slides.sync_plan import (
+    MEMBERSHIP_ROLES,
+    Proposal,
+    SyncPlan,
+    ordered_sync_cells,
+    watermark_rows,
+)
 from clm.slides.sync_translate import TranslationError
 from clm.slides.sync_writeback import (
     CODE_ROLE,
@@ -219,7 +226,8 @@ def apply_plan(
     # groups, reusing the narrative / aux / id'd-code twins the steps above just
     # placed. Cross-group code moves fall out of rebuilding both groups from the
     # source. Runs after adds/moves so every twin it pulls is in place.
-    apply_code_structure(plan, de_state, en_state, translator, result)
+    baseline_anchors = _baseline_anchor_hashes(watermark_cache, plan.de_path, plan.en_path)
+    apply_code_structure(plan, de_state, en_state, translator, result, baseline_anchors)
 
     # Fail-safe: a complete resolution leaves no duplicate id behind. If one
     # survives (a should-not-happen bug), error so the watermark cannot advance
@@ -1068,20 +1076,75 @@ def content_index(path: Path, lang: str) -> dict[tuple[str, str], str]:
     return index
 
 
+def _row_anchor(slide_id: str | None, construct: str | None, content_hash: str) -> str:
+    """The content anchor of a watermark row (mirrors :func:`sync_writeback.anchor_of`).
+
+    Derives the same ``id: > construct: > hash:`` identity from a stored row that
+    ``anchor_of`` derives from a live cell, so the structural pass can match a
+    current cell against its baseline by anchor.
+    """
+    if slide_id is not None:
+        return f"id:{slide_id}"
+    if construct is not None:
+        return f"construct:{construct}"
+    return f"hash:{content_hash}"
+
+
+def _baseline_anchor_hashes(
+    cache: SyncWatermarkCache | None,
+    de_path: Path,
+    en_path: Path,
+) -> dict[str, dict[str, str]]:
+    """Per-language ``{anchor: content_hash}`` of the last-synced state.
+
+    Built from the widened watermark (every non-j2 cell). The structural pass
+    uses it to tell an UNCHANGED id-less localized code cell (anchor present with
+    the same hash) from an edited one, so the former is reused verbatim instead of
+    re-translated (Issue #190 item 3 / §8). Empty when there is no watermark — the
+    structural pass then translates as before.
+    """
+    out: dict[str, dict[str, str]] = {"de": {}, "en": {}}
+    if cache is None:
+        return out
+    for lang in ("de", "en"):
+        rows = cache.get_deck(str(de_path), str(en_path), lang)
+        anchors = [_row_anchor(sid, construct, chash) for (_p, sid, _r, chash, construct) in rows]
+        # A construct anchor is only a *name* (``extract_from_code``), so it is not
+        # content-unique: two cells sharing it (two ``import os``, two
+        # ``def solution``) cannot be told apart by anchor. Admit an anchor to the
+        # reuse set only when it occurs exactly once — a non-unique anchor cannot
+        # reliably locate a twin, so its cells re-translate (the honest §12
+        # residual) rather than risk a wrong-twin splice (Issue #190 review).
+        counts = Counter(anchors)
+        for anchor, (_p, _sid, _r, chash, _c) in zip(anchors, rows, strict=True):
+            if counts[anchor] == 1:
+                out[lang][anchor] = chash
+    return out
+
+
 def _record_watermark(
     cache: SyncWatermarkCache,
     de_path: Path,
     en_path: Path,
 ) -> None:
-    """Record both decks' post-apply state as the new baseline."""
-    for lang, path in (("de", de_path), ("en", en_path)):
-        cells = ordered_sync_cells(parse_cells(path.read_text(encoding="utf-8")), lang)
-        cache.put_deck(
-            de_path=str(de_path),
-            en_path=str(en_path),
-            lang=lang,
-            cells=[(c.position, c.slide_id, c.role, c.content_hash) for c in cells],
-        )
+    """Record both decks' post-apply state as the new baseline.
+
+    Membership-widened (Issue #190 §5.3): every non-j2 cell is recorded — the
+    per-cell-synced cells under ``de``/``en`` and the language-neutral cells once
+    under ``shared`` — so the Phase 2 anchor pass can locate id-less localized and
+    shared cells. The classifier still reads only the real-role rows
+    (``_baseline_from_watermark`` filters the synthetic membership roles), so this
+    does not change its behavior.
+    """
+    de_rows = watermark_rows(parse_cells(de_path.read_text(encoding="utf-8")))
+    en_rows = watermark_rows(parse_cells(en_path.read_text(encoding="utf-8")))
+    cache.put_deck(de_path=str(de_path), en_path=str(en_path), lang="de", cells=de_rows["de"])
+    cache.put_deck(de_path=str(de_path), en_path=str(en_path), lang="en", cells=en_rows["en"])
+    # Neutral cells are byte-identical across halves (the unify invariant), so the
+    # single-entity "shared" partition is recorded once from the DE file.
+    cache.put_deck(
+        de_path=str(de_path), en_path=str(en_path), lang="shared", cells=de_rows["shared"]
+    )
 
 
 def _eligible_for_partial_advance(plan: SyncPlan, result: ApplyResult) -> bool:
@@ -1138,17 +1201,23 @@ def _record_watermark_partial(
     cannot faithfully preserve it there, so we hold the whole watermark and let
     the conflict re-surface instead of dropping it.
     """
-    old: dict[str, dict[tuple[str, str], str]] = {}
-    cells_by_lang = {
-        "de": ordered_sync_cells(parse_cells(de_path.read_text(encoding="utf-8")), "de"),
-        "en": ordered_sync_cells(parse_cells(en_path.read_text(encoding="utf-8")), "en"),
+    parsed = {
+        "de": parse_cells(de_path.read_text(encoding="utf-8")),
+        "en": parse_cells(en_path.read_text(encoding="utf-8")),
     }
+    cells_by_lang = {
+        "de": ordered_sync_cells(parsed["de"], "de"),
+        "en": ordered_sync_cells(parsed["en"], "en"),
+    }
+    old: dict[str, dict[tuple[str, str], str]] = {}
     current: dict[str, set[tuple[str, str]]] = {}
     for lang in ("de", "en"):
         old[lang] = {
             (sid, role): chash
-            for (_pos, sid, role, chash) in cache.get_deck(str(de_path), str(en_path), lang)
-            if sid is not None
+            for (_pos, sid, role, chash, _construct) in cache.get_deck(
+                str(de_path), str(en_path), lang
+            )
+            if sid is not None and role not in MEMBERSHIP_ROLES
         }
         current[lang] = {
             (c.slide_id, c.role) for c in cells_by_lang[lang] if c.slide_id is not None
@@ -1159,14 +1228,20 @@ def _record_watermark_partial(
         if key not in current["de"] or key not in current["en"]:
             return False
 
+    # Re-record the membership-widened watermark (Issue #190 §5.3), holding only
+    # the legacy deferred keys at their pre-conflict baseline. A content-only pass
+    # leaves structure (and every neutral / id-less cell) unchanged, so the
+    # membership rows re-derive faithfully from the current files.
+    widened = {"de": watermark_rows(parsed["de"]), "en": watermark_rows(parsed["en"])}
     for lang in ("de", "en"):
-        rows: list[tuple[int, str | None, str, str]] = []
-        for c in cells_by_lang[lang]:
-            if c.slide_id is not None and (c.slide_id, c.role) in preserve_keys:
+        rows: list[tuple[int, str | None, str, str, str | None]] = []
+        for pos, sid, role, chash, construct in widened[lang][lang]:
+            if role not in MEMBERSHIP_ROLES and sid is not None and (sid, role) in preserve_keys:
                 # Hold the deferral at its pre-conflict baseline so it re-surfaces.
-                chash = old[lang][(c.slide_id, c.role)]
-            else:
-                chash = c.content_hash  # bank: applied / in_sync / unchanged
-            rows.append((c.position, c.slide_id, c.role, chash))
+                chash = old[lang][(sid, role)]
+            rows.append((pos, sid, role, chash, construct))
         cache.put_deck(de_path=str(de_path), en_path=str(en_path), lang=lang, cells=rows)
+    cache.put_deck(
+        de_path=str(de_path), en_path=str(en_path), lang="shared", cells=widened["de"]["shared"]
+    )
     return True
