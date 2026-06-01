@@ -86,16 +86,20 @@ def _seed_watermark(
 def _stub_judge(
     monkeypatch, proposed_text: str, *, verdict: str = "update", reason: str = ""
 ) -> None:
-    """Patch the CLI to skip the Ollama liveness check and use a static judge."""
+    """Patch the CLI's judge factory to return a static judge.
+
+    Provider-agnostic: it replaces ``_resolve_judge`` itself, so these tests
+    exercise the engine wiring identically whether the (now default) OpenRouter
+    backend or ``--provider local`` is selected, with no live LLM.
+    """
     from clm.cli.commands import slides_sync as cmd
     from clm.infrastructure.llm.ollama_client import StaticSyncJudge, SyncProposal
 
     proposal = SyncProposal(verdict=verdict, proposed_text=proposed_text, reason=reason)
-    monkeypatch.setattr(cmd, "is_available", lambda _judge: True)
     monkeypatch.setattr(
         cmd,
-        "OllamaSyncJudge",
-        lambda **_kw: StaticSyncJudge(default_proposal=proposal),
+        "_resolve_judge",
+        lambda *_args, **_kwargs: StaticSyncJudge(default_proposal=proposal),
     )
 
 
@@ -342,6 +346,8 @@ class TestOllamaUnavailable:
             [
                 str(de_path),
                 str(en_path),
+                "--provider",
+                "local",
                 "--ollama-url",
                 "http://127.0.0.1:1",  # nothing listens here
                 "--llm-timeout",
@@ -356,6 +362,93 @@ class TestOllamaUnavailable:
         assert "Ollama is not reachable" in (result.stderr or "")
         assert "1 error(s)" in result.output
         assert "watermark held" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Provider switch (openrouter default, local opt-in)
+# ---------------------------------------------------------------------------
+
+
+class TestProvider:
+    def test_default_provider_is_openrouter_and_needs_key(
+        self, cli_runner: CliRunner, tmp_path: Path, monkeypatch
+    ):
+        # No --provider → openrouter; with no key the judge is unavailable, so
+        # the lone edit is recorded as an error (exit 2) and the watermark holds.
+        monkeypatch.delenv("CLM_SYNC_PROVIDER", raising=False)
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        de_path, en_path, cache_dir = _edit_scenario(tmp_path)
+
+        result = cli_runner.invoke(
+            slides_sync_cmd,
+            [str(de_path), str(en_path), "--cache-dir", str(cache_dir)],
+        )
+
+        assert result.exit_code == 2, result.output
+        assert "OPENROUTER_API_KEY" in (result.stderr or "")
+        assert "1 error(s)" in result.output
+        assert "watermark held" in result.output
+
+    def test_default_provider_openrouter_with_key_applies(
+        self, cli_runner: CliRunner, tmp_path: Path, monkeypatch
+    ):
+        # With a key present the default openrouter branch builds an
+        # OpenRouterSyncJudge (here swapped for a static one) and applies.
+        from clm.cli.commands import slides_sync as cmd
+        from clm.infrastructure.llm.ollama_client import StaticSyncJudge, SyncProposal
+
+        monkeypatch.delenv("CLM_SYNC_PROVIDER", raising=False)
+        monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+        proposal = SyncProposal(verdict="update", proposed_text=_EN_PROPOSAL, reason="")
+        monkeypatch.setattr(
+            cmd, "OpenRouterSyncJudge", lambda **_kw: StaticSyncJudge(default_proposal=proposal)
+        )
+        de_path, en_path, cache_dir = _edit_scenario(tmp_path)
+
+        result = cli_runner.invoke(
+            slides_sync_cmd,
+            [str(de_path), str(en_path), "--cache-dir", str(cache_dir)],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "Point one" in en_path.read_text(encoding="utf-8")
+        assert "applied: 1 edit" in result.output
+
+    def test_env_var_selects_local_backend(
+        self, cli_runner: CliRunner, tmp_path: Path, monkeypatch
+    ):
+        # $CLM_SYNC_PROVIDER=local routes to Ollama even without --provider; an
+        # unreachable daemon proves the local branch (not openrouter) was taken.
+        monkeypatch.setenv("CLM_SYNC_PROVIDER", "local")
+        de_path, en_path, cache_dir = _edit_scenario(tmp_path)
+
+        result = cli_runner.invoke(
+            slides_sync_cmd,
+            [
+                str(de_path),
+                str(en_path),
+                "--ollama-url",
+                "http://127.0.0.1:1",
+                "--llm-timeout",
+                "1.0",
+                "--cache-dir",
+                str(cache_dir),
+            ],
+        )
+
+        assert result.exit_code == 2, result.output
+        assert "Ollama is not reachable" in (result.stderr or "")
+
+    def test_unknown_provider_is_rejected(self, cli_runner: CliRunner, tmp_path: Path):
+        de_path, en_path = _write_pair(tmp_path, _DE_BASE, _EN_BASE)
+        result = cli_runner.invoke(
+            slides_sync_cmd,
+            [str(de_path), str(en_path), "--provider", "bogus", "--no-cache"],
+        )
+        assert result.exit_code == 2
+        combined = _combined(result).lower()
+        assert "invalid" in combined or "bogus" in combined
 
 
 # ---------------------------------------------------------------------------

@@ -25,9 +25,12 @@ Modes:
   ``[a]pply`` / ``[s]kip`` / ``[q]uit`` (``[d]e-wins`` / ``[e]n-wins`` for a
   conflict) before a single atomic apply.
 
-Edits are reconciled by the local Ollama :class:`SyncJudge`; brand-new slides are
-translated by an OpenRouter :class:`SlideTranslator` (Claude Sonnet). When the
-judge is unreachable, edits are recorded as errors; when no translator key is
+Edits are reconciled by a :class:`SyncJudge` whose backend is selectable with
+``--provider`` (or ``$CLM_SYNC_PROVIDER``): ``openrouter`` (the default — Claude
+Sonnet via OpenRouter, fast) or ``local`` (the offline Ollama model, slower).
+Brand-new slides are always translated by an OpenRouter :class:`SlideTranslator`
+(Claude Sonnet). When the judge backend is unavailable (Ollama unreachable, or
+no OpenRouter key), edits are recorded as errors; when no translator key is
 configured, adds defer.
 
 Exit codes:
@@ -40,6 +43,7 @@ Exit codes:
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -51,6 +55,11 @@ from clm.infrastructure.llm.ollama_client import (
     DEFAULT_SYNC_MODEL,
     OllamaSyncJudge,
     is_available,
+)
+from clm.infrastructure.llm.openrouter_client import (
+    DEFAULT_SYNC_JUDGE_MODEL,
+    OpenRouterSyncJudge,
+    has_openrouter_api_key,
 )
 from clm.slides.sync_apply import ApplyResult, apply_plan
 from clm.slides.sync_plan import PlanIssue, SyncPlan, build_sync_plan, render_plan
@@ -92,15 +101,32 @@ CACHE_DB_NAME = "clm-llm.sqlite"
     ),
 )
 @click.option(
+    "--provider",
+    type=click.Choice(["openrouter", "local"]),
+    default=lambda: os.environ.get("CLM_SYNC_PROVIDER") or "openrouter",
+    show_default="openrouter (or $CLM_SYNC_PROVIDER)",
+    help=(
+        "Backend for the edit-reconciliation judge: 'openrouter' (Claude Sonnet "
+        "via OpenRouter — fast, needs $OPENROUTER_API_KEY or $OPENAI_API_KEY) or "
+        "'local' (the Ollama daemon — offline, slower). Overridable with "
+        "$CLM_SYNC_PROVIDER."
+    ),
+)
+@click.option(
     "--llm-model",
-    default=DEFAULT_SYNC_MODEL,
-    show_default=True,
-    help="Ollama model used for the edit-reconciliation judge.",
+    default=None,
+    help=(
+        "Model for the edit-reconciliation judge. Default depends on --provider: "
+        f"'{DEFAULT_SYNC_JUDGE_MODEL}' for openrouter, '{DEFAULT_SYNC_MODEL}' for local."
+    ),
 )
 @click.option(
     "--ollama-url",
     default=None,
-    help="Base URL of the Ollama daemon. Defaults to $OLLAMA_URL or http://localhost:11434.",
+    help=(
+        "Base URL of the Ollama daemon (only used with --provider local). "
+        "Defaults to $OLLAMA_URL or http://localhost:11434."
+    ),
 )
 @click.option(
     "--llm-timeout",
@@ -141,7 +167,8 @@ def slides_sync_cmd(
     en_path: Path,
     dry_run: bool,
     interactive: bool,
-    llm_model: str,
+    provider: str,
+    llm_model: str | None,
     ollama_url: str | None,
     llm_timeout: float,
     translation_model: str,
@@ -160,9 +187,10 @@ def slides_sync_cmd(
         state) to classify per-cell add / edit / move / remove / conflict
         changes — direction is decided per cell, not globally.
       * Default: writes the agreed changes to the working tree in one pass
-        (edits reconciled by the local LLM, new slides translated + inserted,
-        a shared slide_id minted onto both decks) and advances the watermark.
-        Nothing is committed — review with ``git diff``.
+        (edits reconciled by the selected judge — Claude Sonnet via OpenRouter
+        by default, or local Ollama with --provider local — new slides
+        translated + inserted, a shared slide_id minted onto both decks) and
+        advances the watermark. Nothing is committed — review with ``git diff``.
       * --dry-run: prints the plan and writes nothing.
       * --interactive: prompts per proposal before a single atomic apply.
       * A cell edited on both sides since the last sync is isolated as a
@@ -191,7 +219,7 @@ def slides_sync_cmd(
             mode = "dry-run"
         elif interactive:
             mode = "interactive"
-            judge = _resolve_judge(llm_model, ollama_url, llm_timeout)
+            judge = _resolve_judge(provider, llm_model, ollama_url, llm_timeout)
             translator = OpenRouterSlideTranslator(model=translation_model)
             for issue in plan.issues:
                 click.echo(_issue_line(issue))
@@ -205,7 +233,7 @@ def slides_sync_cmd(
             apply_result = walk.apply_result
         else:
             mode = "apply"
-            judge = _resolve_judge(llm_model, ollama_url, llm_timeout)
+            judge = _resolve_judge(provider, llm_model, ollama_url, llm_timeout)
             translator = OpenRouterSlideTranslator(model=translation_model)
             apply_result = apply_plan(
                 plan,
@@ -229,21 +257,45 @@ def slides_sync_cmd(
     sys.exit(exit_code)
 
 
-def _resolve_judge(llm_model: str, ollama_url: str | None, llm_timeout: float) -> SyncJudge | None:
-    """Construct the edit judge, or ``None`` (with a warning) when unreachable.
+def _resolve_judge(
+    provider: str,
+    llm_model: str | None,
+    ollama_url: str | None,
+    llm_timeout: float,
+) -> SyncJudge | None:
+    """Construct the edit judge for ``provider``, or ``None`` (with a warning).
 
     A ``None`` judge records each edit proposal as an LLM-unavailable error, so
     the run still completes and surfaces exactly what could not be reconciled.
+    The ``--llm-model`` default is resolved per provider here so a bare run
+    picks the right model for the chosen backend.
     """
-    judge = OllamaSyncJudge(model=llm_model, base_url=ollama_url, timeout=llm_timeout)
-    if is_available(judge):
-        return judge
-    click.echo(
-        f"warning: Ollama is not reachable at {judge.base_url}; "
-        "every edit will be recorded as an LLM-unavailable error.",
-        err=True,
-    )
-    return None
+    if provider == "local":
+        ollama_judge = OllamaSyncJudge(
+            model=llm_model or DEFAULT_SYNC_MODEL,
+            base_url=ollama_url,
+            timeout=llm_timeout,
+        )
+        if is_available(ollama_judge):
+            return ollama_judge
+        click.echo(
+            f"warning: Ollama is not reachable at {ollama_judge.base_url}; "
+            "every edit will be recorded as an LLM-unavailable error. "
+            "Set --provider openrouter (the default) to use a hosted model.",
+            err=True,
+        )
+        return None
+
+    # provider == "openrouter"
+    if not has_openrouter_api_key():
+        click.echo(
+            "warning: OPENROUTER_API_KEY (or OPENAI_API_KEY) is not set; "
+            "every edit will be recorded as an LLM-unavailable error. "
+            "Set a key, or use --provider local for the offline Ollama judge.",
+            err=True,
+        )
+        return None
+    return OpenRouterSyncJudge(model=llm_model or DEFAULT_SYNC_JUDGE_MODEL, timeout=llm_timeout)
 
 
 # ---------------------------------------------------------------------------

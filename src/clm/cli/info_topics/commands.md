@@ -706,13 +706,18 @@ surfaced as a `conflict`: both decks are left untouched and it is listed
 in the summary. Resolve it with `--interactive` (`[d]e-wins` /
 `[e]n-wins`) or by editing one side and re-running.
 
-**Two LLMs.** Edits are reconciled by the local Ollama judge
-(`--llm-model`, default `qwen3:30b`). Brand-new slides are translated by
-an OpenRouter model (`--translation-model`, default
-`anthropic/claude-sonnet-4-6`), which needs `$OPENROUTER_API_KEY` (or
-`$OPENAI_API_KEY`); without a key, add proposals defer. When Ollama is
-unreachable, edit proposals are recorded as errors (exit 2) rather than
-guessed.
+**Two LLMs.** Edits are reconciled by a judge whose backend you pick
+with `--provider`: **`openrouter`** (the default — Claude Sonnet via
+OpenRouter, fast) or **`local`** (the Ollama daemon — offline but
+slower). Set a persistent default with `$CLM_SYNC_PROVIDER`. The judge
+model is `--llm-model` (default `anthropic/claude-sonnet-4-6` for
+openrouter, `qwen3:30b` for local). The OpenRouter backend needs
+`$OPENROUTER_API_KEY` (or `$OPENAI_API_KEY`). Brand-new slides are
+always translated by an OpenRouter model (`--translation-model`, default
+`anthropic/claude-sonnet-4-6`), which needs the same key; without a key,
+add proposals defer. When the judge backend is unavailable (Ollama
+unreachable, or no OpenRouter key), edit proposals are recorded as
+errors (exit 2) rather than guessed.
 
 Cells synced: markdown `slide` / `subslide` cells and narrative
 `voiceover` / `notes` cells. Shared code cells are intentionally
@@ -727,8 +732,9 @@ clm slides sync [OPTIONS] DE_PATH EN_PATH
 |--------|-------------|
 | `--dry-run` | Classify only: print the plan and write nothing. (The default, without this flag, writes the agreed changes to the working tree.) |
 | `--interactive` | Walk each proposal and choose `[a]pply / [s]kip / [q]uit` (`[d]e-wins / [e]n-wins` for a conflict) before a single atomic apply. Mutually exclusive with `--dry-run` and `--json`. |
-| `--llm-model TEXT` | Ollama model for the edit-reconciliation judge (default: `qwen3:30b`). |
-| `--ollama-url TEXT` | Base URL of the Ollama daemon (default: `$OLLAMA_URL` or `http://localhost:11434`). |
+| `--provider [openrouter\|local]` | Backend for the edit-reconciliation judge: `openrouter` (Claude Sonnet via OpenRouter, the default — needs `$OPENROUTER_API_KEY` / `$OPENAI_API_KEY`) or `local` (the Ollama daemon — offline, slower). Overridable with `$CLM_SYNC_PROVIDER`. |
+| `--llm-model TEXT` | Model for the edit-reconciliation judge. Default depends on `--provider`: `anthropic/claude-sonnet-4-6` (openrouter) or `qwen3:30b` (local). |
+| `--ollama-url TEXT` | Base URL of the Ollama daemon (only used with `--provider local`; default: `$OLLAMA_URL` or `http://localhost:11434`). |
 | `--llm-timeout SECONDS` | Per-call timeout for the edit judge (default: 120s — cold-load on a 30B local model can exceed 60s). |
 | `--translation-model TEXT` | OpenRouter model used to translate brand-new slides for the add path (default: `anthropic/claude-sonnet-4-6`). Needs `$OPENROUTER_API_KEY` / `$OPENAI_API_KEY`; adds defer when absent. |
 | `--cache-dir PATH` | Directory holding the structural watermark. Lookup order: flag → `$CLM_CACHE_DIR` → `tool.clm.cache_dir` in `pyproject.toml` → `<cwd>/.clm-cache/`. |
@@ -765,6 +771,9 @@ clm slides sync intro.de.py intro.en.py --dry-run
 
 # Walk each proposal, resolving conflicts as you go.
 clm slides sync intro.de.py intro.en.py --interactive
+
+# Use the offline local Ollama judge instead of OpenRouter.
+clm slides sync intro.de.py intro.en.py --provider local
 
 # Machine-readable plan for tooling.
 clm slides sync intro.de.py intro.en.py --dry-run --json
@@ -2105,6 +2114,8 @@ Create and manage ZIP archives of course output.
 | `CLM_LLM__API_BASE` | API base URL (e.g. `https://openrouter.ai/api/v1`) |
 | `CLM_LLM__MAX_CONCURRENT` | Max parallel LLM calls (default: 3) |
 | `CLM_LLM__TEMPERATURE` | LLM sampling temperature (default: 0.3) |
+| `CLM_SYNC_PROVIDER` | Default edit-judge backend for `clm slides sync`: `openrouter` (default) or `local`. Overridden by `--provider`. |
+| `OPENROUTER_API_KEY` | OpenRouter API key for `clm slides sync` (edit judge + new-slide translation); falls back to `OPENAI_API_KEY`. |
 | `CLM_RECORDINGS__OBS_OUTPUT_DIR` | Directory where OBS saves recordings |
 | `CLM_RECORDINGS__ACTIVE_COURSE` | Currently active course ID |
 | `CLM_RECORDINGS__AUTO_PROCESS` | Auto-process recordings when detected (default: false) |
