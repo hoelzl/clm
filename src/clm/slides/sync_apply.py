@@ -49,10 +49,22 @@ from clm.slides.slug import resolve_collision, slugify
 from clm.slides.sync_code import apply_code_structure
 from clm.slides.sync_plan import (
     MEMBERSHIP_ROLES,
+    NEUTRAL_CODE_ROLE,
     Proposal,
     SyncPlan,
     ordered_sync_cells,
     watermark_rows,
+)
+from clm.slides.sync_recover import (
+    NEW,
+    NONE,
+    AlignmentInvalid,
+    RecoveryError,
+    RegionCell,
+    decode_mapping,
+    encode_mapping,
+    region_fingerprint,
+    validate_alignment,
 )
 from clm.slides.sync_translate import TranslationError
 from clm.slides.sync_writeback import (
@@ -66,8 +78,9 @@ from clm.slides.sync_writeback import (
 )
 
 if TYPE_CHECKING:
-    from clm.infrastructure.llm.cache import SyncWatermarkCache
+    from clm.infrastructure.llm.cache import SyncAlignmentCache, SyncWatermarkCache
     from clm.infrastructure.llm.ollama_client import SyncJudge
+    from clm.slides.sync_recover import AlignmentRecoverer
     from clm.slides.sync_translate import SlideTranslator
 
 _SLIDE_ID_RE = re.compile(r'\s*slide_id="[^"]*"')
@@ -134,6 +147,8 @@ def apply_plan(
     translator: SlideTranslator | None = None,
     watermark_cache: SyncWatermarkCache | None = None,
     decisions: dict[int, str] | None = None,
+    recoverer: AlignmentRecoverer | None = None,
+    alignment_cache: SyncAlignmentCache | None = None,
 ) -> ApplyResult:
     """Apply ``plan``'s proposals to the decks and advance the watermark.
 
@@ -154,6 +169,13 @@ def apply_plan(
     proposal is counted as ``deferred`` so the watermark cannot advance over it.
     Add / rename proposals are always applied (they are non-destructive and the
     counterpart is reviewed in the resulting ``git diff``).
+
+    ``recoverer`` (with ``alignment_cache``) is the opt-in bounded-LLM tier
+    (``--llm-recover``, Issue #190 §10 / Phase 5): when the deterministic
+    id-migration (§9) is stuck on an *ambiguous* drifted id — a function renamed
+    while a cell was split, an unresolvable tie — the recoverer re-identifies the
+    neutral code region with a validated, cached, body-free alignment map. ``None``
+    (the default) leaves the ambiguous region untouched to re-surface next run.
     """
     result = ApplyResult()
 
@@ -234,7 +256,9 @@ def apply_plan(
     # cell, the slide_id is left on the wrong half. Move it back onto the cell whose
     # construct it names BEFORE the structural pass propagates, so the corrected ids
     # ride along to the twin.
-    _migrate_drifted_ids(plan, de_state, en_state, watermark_cache, result)
+    _migrate_drifted_ids(
+        plan, de_state, en_state, watermark_cache, result, recoverer, alignment_cache
+    )
 
     baseline_anchors = _baseline_anchor_hashes(watermark_cache, plan.de_path, plan.en_path)
     apply_code_structure(plan, de_state, en_state, translator, result, baseline_anchors)
@@ -1154,6 +1178,8 @@ def _migrate_drifted_ids(
     en_state: FileState,
     cache: SyncWatermarkCache | None,
     result: ApplyResult,
+    recoverer: AlignmentRecoverer | None = None,
+    alignment_cache: SyncAlignmentCache | None = None,
 ) -> None:
     """Move a slide_id that drifted off its construct back onto the right cell (§9).
 
@@ -1178,14 +1204,38 @@ def _migrate_drifted_ids(
     recurring guard) or a co-occurring function rename — are left for §10 recovery.
     (Localized id'd cells, which need a symmetric paired ``de_id==en_id`` write, are
     deferred.)
+
+    **Localized** id'd code cells (``lang=``, Phase 5d) are migrated through a
+    separate *paired* chokepoint (:func:`_migrate_localized_paired`): their twins
+    differ across decks (translated bodies) and the structural pass cannot carry a
+    header-only id change between them, so the move is stamped onto **both** decks'
+    twins at once to keep ``de_id == en_id``.
+
+    When *every* deterministic tier is stuck on an ambiguous region (it made no
+    move) and a ``recoverer`` is configured (``--llm-recover``), escalate the
+    **neutral** region to the bounded-LLM alignment tier
+    (:func:`_recover_drifted_ids`). If any deterministic move landed this pass, the
+    tiers are **not** mixed — remaining ambiguity re-surfaces next run once the
+    clean moves are baselined.
     """
     if _effective_direction(plan) is None:
         return
+    before = result.applied_migrate
     baseline_constructs, baseline_hashes = _baseline_shared(cache, plan.de_path, plan.en_path)
-    if not baseline_constructs:
-        return
-    _migrate_one_deck(de_state, baseline_constructs, baseline_hashes, result)
-    _migrate_one_deck(en_state, baseline_constructs, baseline_hashes, result)
+    if baseline_constructs:
+        _migrate_one_deck(de_state, baseline_constructs, baseline_hashes, result)
+        _migrate_one_deck(en_state, baseline_constructs, baseline_hashes, result)
+    loc_constructs, loc_de_hashes, loc_en_hashes = _baseline_localized(
+        cache, plan.de_path, plan.en_path
+    )
+    if loc_constructs:
+        _migrate_localized_paired(
+            de_state, en_state, loc_constructs, loc_de_hashes, loc_en_hashes, result
+        )
+    if recoverer is not None and baseline_constructs and result.applied_migrate == before:
+        _recover_drifted_ids(
+            plan, de_state, en_state, cache, baseline_constructs, recoverer, alignment_cache, result
+        )
 
 
 def _migrate_one_deck(
@@ -1240,6 +1290,326 @@ def _migrate_one_deck(
         state.dirty = True
         result.applied_migrate += 1
         idless_by_construct.pop(base_construct, None)  # at most one migration per construct
+
+
+def _baseline_localized(
+    cache: SyncWatermarkCache | None, de_path: Path, en_path: Path
+) -> tuple[dict[str, str], set[str], set[str]]:
+    """Baseline ``{slide_id: construct}`` for localized id'd code, + per-deck hashes.
+
+    Localized cells live in the ``de``/``en`` partitions (not ``shared``): an id'd
+    one carries the real :data:`CODE_ROLE`. The construct of a given ``slide_id`` is
+    language-neutral (a function/class name does not translate), so the two decks
+    agree — it is read from the ``de`` partition. The per-deck content-hash sets
+    (every recorded row of each deck) let the paired migration tell a genuine
+    split-product (a *new* cell) from a pre-existing one (each deck checked against
+    its own baseline, since localized bodies differ across decks).
+    """
+    constructs: dict[str, str] = {}
+    de_hashes: set[str] = set()
+    en_hashes: set[str] = set()
+    if cache is None:
+        return constructs, de_hashes, en_hashes
+    for _pos, sid, role, chash, construct in cache.get_deck(str(de_path), str(en_path), "de"):
+        de_hashes.add(chash)
+        if role == CODE_ROLE and sid is not None and construct is not None:
+            constructs.setdefault(sid, construct)
+    for _pos, _sid, _role, chash, _construct in cache.get_deck(str(de_path), str(en_path), "en"):
+        en_hashes.add(chash)
+    return constructs, de_hashes, en_hashes
+
+
+def _localized_code_index(
+    state: FileState, baseline_hashes: set[str]
+) -> tuple[dict[str, RawCell], dict[str, list[RawCell]], Counter]:
+    """Index one deck's localized code cells for the paired migration.
+
+    Returns ``(idd_by_slide_id, new_idless_by_construct, construct_count)``: the
+    id'd cells keyed by their ``slide_id``, the **new** (hash absent from this
+    deck's baseline) id-less cells grouped by construct, and the per-construct count
+    over all localized code cells (the uniqueness guard).
+    """
+    idd: dict[str, RawCell] = {}
+    idless_by_construct: dict[str, list[RawCell]] = {}
+    construct_count: Counter = Counter()
+    for cell in state.cells:
+        meta = cell.metadata
+        if meta.is_j2 or meta.lang is None or meta.cell_type != "code":
+            continue  # localized code cells only
+        construct = construct_of(meta, cell.body)
+        if construct is None:
+            continue
+        construct_count[construct] += 1
+        if meta.slide_id is not None:
+            idd[meta.slide_id] = cell
+        elif cell_content_hash(cell.body) not in baseline_hashes:
+            idless_by_construct.setdefault(construct, []).append(cell)
+    return idd, idless_by_construct, construct_count
+
+
+def _migrate_localized_paired(
+    de_state: FileState,
+    en_state: FileState,
+    baseline_constructs: dict[str, str],
+    de_hashes: set[str],
+    en_hashes: set[str],
+    result: ApplyResult,
+) -> None:
+    """Move a drifted localized slide_id symmetrically on both decks (§9 / Phase 5d).
+
+    The localized analogue of :func:`_migrate_one_deck`: when an id'd localized code
+    cell is split on **both** decks — the id left wearing the wrong construct while a
+    new id-less twin carries the construct the id names — move the id onto both new
+    twins and mint one shared fresh slug onto both orphans. Both decks are written in
+    lockstep so ``_slide_ids_pair``'s ``de_id == en_id`` invariant holds (the
+    structural pass cannot carry a header-only change between the two translated,
+    non-byte-identical twins).
+
+    Conservative by construction — every guard must hold or the id is left for §10:
+    the id must be present and drifted on **both** decks, the two twins must have
+    drifted to the **same** construct, the baseline construct must be unique on each
+    deck, and each deck must have exactly one **new** id-less cell carrying it.
+    """
+    de_idd, de_idless, de_count = _localized_code_index(de_state, de_hashes)
+    en_idd, en_idless, en_count = _localized_code_index(en_state, en_hashes)
+    used_ids = {c.metadata.slide_id for c in de_state.cells if c.metadata.slide_id}
+    used_ids |= {c.metadata.slide_id for c in en_state.cells if c.metadata.slide_id}
+    for sid, base_construct in baseline_constructs.items():
+        de_cell = de_idd.get(sid)
+        en_cell = en_idd.get(sid)
+        if de_cell is None or en_cell is None:
+            continue  # the id must be a twinned pair present on both decks
+        de_cur = construct_of(de_cell.metadata, de_cell.body)
+        en_cur = construct_of(en_cell.metadata, en_cell.body)
+        if de_cur is None or en_cur is None:
+            continue
+        if de_cur == base_construct or en_cur == base_construct:
+            continue  # not drifted on both decks -> asymmetric or no-op, defer
+        if de_cur != en_cur:
+            continue  # twins drifted to different constructs -> ambiguous, defer
+        if de_count[base_construct] != 1 or en_count[base_construct] != 1:
+            continue  # base construct not unique on some deck -> ambiguous, defer
+        de_targets = de_idless.get(base_construct, [])
+        en_targets = en_idless.get(base_construct, [])
+        if len(de_targets) != 1 or len(en_targets) != 1:
+            continue  # no unique NEW split-product on both decks -> defer
+        _stamp_slide_id(de_targets[0], sid)  # the id follows its construct, on both decks
+        _stamp_slide_id(en_targets[0], sid)
+        new_slug = resolve_collision(de_cur, used_ids)  # de_cur == en_cur (neutral construct)
+        used_ids.add(new_slug)
+        _stamp_slide_id(de_cell, new_slug)  # both orphans get the same fresh slug
+        _stamp_slide_id(en_cell, new_slug)
+        de_state.dirty = True
+        en_state.dirty = True
+        result.applied_migrate += 2  # one logical move, written to two decks
+        de_idless.pop(base_construct, None)
+        en_idless.pop(base_construct, None)
+
+
+def _neutral_code_cells(state: FileState) -> list[RawCell]:
+    """The deck's language-neutral code cells in document order (the §9/§10 region).
+
+    Includes unparsable (``construct is None``) code cells so the region matches
+    the watermark's ``neutral-code`` rows one-to-one — both index by the same cell
+    set, so a recovery map's indices line up on either side.
+    """
+    return [
+        cell
+        for cell in state.cells
+        if not cell.metadata.is_j2
+        and cell.metadata.lang is None
+        and cell.metadata.cell_type == "code"
+    ]
+
+
+def _region_of(cells: list[RawCell]) -> list[RegionCell]:
+    """The body-free :class:`RegionCell` view of an ordered neutral-code cell list."""
+    return [
+        RegionCell(
+            slide_id=cell.metadata.slide_id,
+            construct=construct_of(cell.metadata, cell.body),
+            content_hash=cell_content_hash(cell.body),
+        )
+        for cell in cells
+    ]
+
+
+def _shared_region(
+    cache: SyncWatermarkCache | None, de_path: Path, en_path: Path
+) -> list[RegionCell]:
+    """The baseline neutral-**code** region from the watermark ``shared`` partition.
+
+    Filters the membership-widened ``shared`` rows to the ``neutral-code`` role so
+    the base region covers exactly the cells :func:`_neutral_code_cells` yields live
+    (neutral markdown is excluded). Position order is preserved.
+    """
+    if cache is None:
+        return []
+    return [
+        RegionCell(slide_id=sid, construct=construct, content_hash=chash)
+        for (_pos, sid, role, chash, construct) in cache.get_deck(
+            str(de_path), str(en_path), "shared"
+        )
+        if role == NEUTRAL_CODE_ROLE
+    ]
+
+
+def _has_drifted_id(baseline_constructs: dict[str, str], region: list[RegionCell]) -> bool:
+    """Whether some current cell wears an id whose baseline construct it no longer names.
+
+    The escalation trigger: only a genuine id-vs-construct drift is worth the LLM —
+    a region with no drifted id has nothing to recover, so the recoverer never fires.
+    """
+    for cell in region:
+        if cell.slide_id is None:
+            continue
+        base = baseline_constructs.get(cell.slide_id)
+        if base is not None and cell.construct is not None and cell.construct != base:
+            return True
+    return False
+
+
+def _recover_drifted_ids(
+    plan: SyncPlan,
+    de_state: FileState,
+    en_state: FileState,
+    cache: SyncWatermarkCache | None,
+    baseline_constructs: dict[str, str],
+    recoverer: AlignmentRecoverer,
+    alignment_cache: SyncAlignmentCache | None,
+    result: ApplyResult,
+) -> None:
+    """Bounded-LLM recovery of an ambiguous drifted-id region (§10 / Phase 5).
+
+    Fires only when the deterministic §9 pass is stuck (its caller gates on
+    ``applied_migrate`` unchanged). Builds the body-free base/current regions, asks
+    the ``recoverer`` for a validated id↔cell map (cached by region fingerprints),
+    and applies it **symmetrically** to both decks (neutral cells are byte-identical
+    across halves, so the same map keeps ``de_id == en_id``).
+
+    Any failure — the decks out of unify, no real drift, the recoverer down, or a
+    map that fails :func:`validate_alignment` — **safe-aborts**: the region is left
+    untouched and the pass is marked ``deferred`` (which holds the watermark, so the
+    region re-surfaces next run) rather than erroring (which would block the whole
+    deck's write). A wrong id is worse than a deferred one.
+    """
+    de_cells = _neutral_code_cells(de_state)
+    en_cells = _neutral_code_cells(en_state)
+    current_region = _region_of(de_cells)
+    # The map is derived from DE's region and applied to BOTH decks by index, so the
+    # two neutral regions must be byte-identical (the unify invariant). Require it
+    # explicitly — a content divergence with the *same* length would otherwise let a
+    # DE-derived map mis-stamp EN. A divergence is the align_anchored pass's job, not
+    # the migration's; defer rather than risk de_id != en_id.
+    if current_region != _region_of(en_cells):
+        return
+    if not _has_drifted_id(baseline_constructs, current_region):
+        return  # nothing genuinely drifted -> do not spend the LLM
+    base_region = _shared_region(cache, plan.de_path, plan.en_path)
+    if not base_region:
+        return
+    # Only escalate when there is a genuine realignment target: a *new* id-less
+    # neutral code cell (a split product — its content is absent from the baseline).
+    # A pure in-place rename has none (its only change is an id'd cell whose body
+    # changed), so there is nothing to realign — leaving it to re-baseline keeps its
+    # stable slide_id, instead of handing the region to the LLM, which could strip
+    # the id (Issue #190 Phase 5 review). validate_alignment is the hard backstop (it
+    # refuses to drop a worn id); this just avoids a pointless, re-surfacing LLM call
+    # when no split occurred.
+    baseline_hashes = {c.content_hash for c in base_region}
+    if not any(
+        c.slide_id is None and c.content_hash not in baseline_hashes for c in current_region
+    ):
+        return
+
+    mapping = _resolve_alignment(recoverer, alignment_cache, base_region, current_region)
+    if mapping is None:
+        # Safe-abort: leave the region untouched, hold the watermark so it
+        # re-surfaces. Not an error — that would block the whole pass's write.
+        result.deferred += 1
+        return
+    _apply_alignment(de_state, de_cells, mapping, result)
+    _apply_alignment(en_state, en_cells, mapping, result)
+
+
+def _resolve_alignment(
+    recoverer: AlignmentRecoverer,
+    alignment_cache: SyncAlignmentCache | None,
+    base_region: list[RegionCell],
+    current_region: list[RegionCell],
+) -> dict[int, str] | None:
+    """A validated alignment map for the region pair, or ``None`` to safe-abort.
+
+    Prefers a cached, re-validated map (no LLM spend); on a miss it calls the
+    recoverer once and caches only a *valid* result. Every path that cannot produce
+    a sound map returns ``None`` so the caller defers the region.
+    """
+    fp_base = region_fingerprint(base_region)
+    fp_cur = region_fingerprint(current_region)
+    pv = recoverer.prompt_version
+    if alignment_cache is not None:
+        cached = alignment_cache.get(fp_base, fp_cur, pv)
+        if cached is not None:
+            try:
+                return validate_alignment(decode_mapping(cached), base_region, current_region)
+            except AlignmentInvalid:
+                logger.warning("llm-recover: cached alignment failed validation; re-deriving")
+    try:
+        raw = recoverer.recover(base_region=base_region, current_region=current_region)
+        mapping = validate_alignment(raw, base_region, current_region)
+    except (RecoveryError, AlignmentInvalid) as exc:
+        logger.warning("llm-recover: alignment unavailable/invalid (%s); region deferred", exc)
+        return None
+    if alignment_cache is not None:
+        alignment_cache.put(fp_base, fp_cur, pv, encode_mapping(mapping))
+    return mapping
+
+
+def _apply_alignment(
+    state: FileState,
+    region_cells: list[RawCell],
+    mapping: dict[int, str],
+    result: ApplyResult,
+) -> None:
+    """Apply a validated alignment map to one deck's neutral-code region.
+
+    Each region cell is re-identified to the id the map assigns: a base ``slide_id``
+    (continuation), a freshly-minted content slug (:data:`NEW`), or no id
+    (:data:`NONE`). ``used_ids`` spans the whole deck so a minted slug never collides;
+    processing both decks with the same map and an identically-evolving ``used_ids``
+    keeps ``de_id == en_id``. Cells already carrying the assigned id are no-ops.
+    """
+    used_ids = {cell.metadata.slide_id for cell in state.cells if cell.metadata.slide_id}
+    for idx, cell in enumerate(region_cells):
+        target = mapping.get(idx)
+        if target is None:
+            continue  # defensive: validation guarantees total coverage
+        current_id = cell.metadata.slide_id
+        if target == NONE:
+            desired: str | None = None
+        elif target == NEW:
+            construct = construct_of(cell.metadata, cell.body)
+            if construct is None:
+                continue  # validation forbids NEW on a construct-less cell; defensive
+            desired = resolve_collision(construct, used_ids)
+        else:
+            desired = target  # a base id (continuation)
+        if desired == current_id:
+            continue
+        if desired is None:
+            _clear_slide_id(cell)
+        else:
+            used_ids.add(desired)
+            _stamp_slide_id(cell, desired)
+        state.dirty = True
+        result.applied_migrate += 1
+
+
+def _clear_slide_id(cell: RawCell) -> None:
+    """Remove any ``slide_id="…"`` from a cell header (the inverse of stamping)."""
+    header = _SLIDE_ID_RE.sub("", cell.lines[0]).rstrip()
+    cell.lines[0] = header
+    cell.metadata = parse_cell_header(header)
 
 
 def _record_watermark(

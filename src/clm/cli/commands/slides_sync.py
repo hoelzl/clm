@@ -50,7 +50,11 @@ from typing import TYPE_CHECKING
 
 import click
 
-from clm.infrastructure.llm.cache import SyncWatermarkCache, resolve_cache_dir
+from clm.infrastructure.llm.cache import (
+    SyncAlignmentCache,
+    SyncWatermarkCache,
+    resolve_cache_dir,
+)
 from clm.infrastructure.llm.ollama_client import (
     DEFAULT_SYNC_MODEL,
     OllamaSyncJudge,
@@ -64,10 +68,12 @@ from clm.infrastructure.llm.openrouter_client import (
 from clm.slides.sync_apply import ApplyResult, apply_plan
 from clm.slides.sync_plan import PlanIssue, SyncPlan, build_sync_plan, render_plan
 from clm.slides.sync_plan_walker import PlanWalkResult, WalkerOptions, run_plan_walker
+from clm.slides.sync_recover import DEFAULT_RECOVERY_MODEL, OpenRouterAlignmentRecoverer
 from clm.slides.sync_translate import DEFAULT_TRANSLATION_MODEL, OpenRouterSlideTranslator
 
 if TYPE_CHECKING:
     from clm.infrastructure.llm.ollama_client import SyncJudge
+    from clm.slides.sync_recover import AlignmentRecoverer
 
 CACHE_DB_NAME = "clm-llm.sqlite"
 
@@ -149,6 +155,25 @@ CACHE_DB_NAME = "clm-llm.sqlite"
     ),
 )
 @click.option(
+    "--llm-recover",
+    is_flag=True,
+    default=False,
+    help=(
+        "Opt into the bounded-LLM recovery tier (Issue #190 §10): when the "
+        "deterministic id-migration is stuck on an ambiguous drifted slide_id "
+        "(a function renamed while a cell was split, an unresolvable tie), ask "
+        "Claude (Opus, via OpenRouter) for a validated, body-free id↔cell "
+        "alignment. Default off — without it such a region is left untouched and "
+        "re-surfaces next run. Needs $OPENROUTER_API_KEY (or $OPENAI_API_KEY)."
+    ),
+)
+@click.option(
+    "--recovery-model",
+    default=DEFAULT_RECOVERY_MODEL,
+    show_default=True,
+    help="OpenRouter model for --llm-recover alignment (a strong reasoning model).",
+)
+@click.option(
     "--cache-dir",
     type=click.Path(path_type=Path),
     default=None,
@@ -187,6 +212,8 @@ def slides_sync_cmd(
     ollama_url: str | None,
     llm_timeout: float | None,
     translation_model: str,
+    llm_recover: bool,
+    recovery_model: str,
     cache_dir: Path | None,
     no_cache: bool,
     no_env_file: bool,
@@ -231,9 +258,12 @@ def slides_sync_cmd(
         load_env_files(de_path.parent, en_path.parent)
 
     watermark_cache: SyncWatermarkCache | None = None
+    alignment_cache: SyncAlignmentCache | None = None
     if not no_cache:
         cache_root = resolve_cache_dir(cli_override=cache_dir)
         watermark_cache = SyncWatermarkCache(cache_root / CACHE_DB_NAME)
+        if llm_recover and not dry_run:
+            alignment_cache = SyncAlignmentCache(cache_root / CACHE_DB_NAME)
 
     plan: SyncPlan
     apply_result: ApplyResult | None = None
@@ -247,6 +277,7 @@ def slides_sync_cmd(
             mode = "interactive"
             judge = _resolve_judge(provider, llm_model, ollama_url, llm_timeout)
             translator = OpenRouterSlideTranslator(model=translation_model)
+            recoverer = _resolve_recoverer(llm_recover, recovery_model)
             for issue in plan.issues:
                 click.echo(_issue_line(issue))
             walk = run_plan_walker(
@@ -255,21 +286,28 @@ def slides_sync_cmd(
                 translator=translator,
                 watermark_cache=watermark_cache,
                 options=WalkerOptions(),
+                recoverer=recoverer,
+                alignment_cache=alignment_cache,
             )
             apply_result = walk.apply_result
         else:
             mode = "apply"
             judge = _resolve_judge(provider, llm_model, ollama_url, llm_timeout)
             translator = OpenRouterSlideTranslator(model=translation_model)
+            recoverer = _resolve_recoverer(llm_recover, recovery_model)
             apply_result = apply_plan(
                 plan,
                 judge=judge,
                 translator=translator,
                 watermark_cache=watermark_cache,
+                recoverer=recoverer,
+                alignment_cache=alignment_cache,
             )
     finally:
         if watermark_cache is not None:
             watermark_cache.close()
+        if alignment_cache is not None:
+            alignment_cache.close()
 
     exit_code = (
         _plan_exit_code(plan) if apply_result is None else _apply_exit_code(plan, apply_result)
@@ -343,6 +381,25 @@ def _resolve_judge(
         model=llm_model or DEFAULT_SYNC_JUDGE_MODEL,
         timeout=_resolve_timeout(llm_timeout, _DEFAULT_TIMEOUT_OPENROUTER),
     )
+
+
+def _resolve_recoverer(llm_recover: bool, recovery_model: str) -> AlignmentRecoverer | None:
+    """The bounded-LLM alignment recoverer for ``--llm-recover``, or ``None``.
+
+    ``None`` (the default, or a missing key) leaves an ambiguous drifted-id region
+    untouched to re-surface next run — recovery is strictly opt-in and degrades
+    gracefully when no OpenRouter key is configured (warning, not error).
+    """
+    if not llm_recover:
+        return None
+    if not has_openrouter_api_key():
+        click.echo(
+            "warning: --llm-recover needs OPENROUTER_API_KEY (or OPENAI_API_KEY); "
+            "ambiguous id-migration regions will be left for review instead.",
+            err=True,
+        )
+        return None
+    return OpenRouterAlignmentRecoverer(model=recovery_model)
 
 
 # ---------------------------------------------------------------------------
