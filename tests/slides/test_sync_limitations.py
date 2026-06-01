@@ -55,6 +55,11 @@ def _code_idd_neutral(sid: str, body: str) -> str:
     return f'# %% tags=["keep"] slide_id="{sid}"\n{body}\n'
 
 
+def _code_localized_idd(lang: str, sid: str, body: str) -> str:
+    """A localized code cell carrying a slide_id (the Phase 5d paired shape)."""
+    return f'# %% lang="{lang}" tags=["keep"] slide_id="{sid}"\n{body}\n'
+
+
 def _write_pair(tmp_path: Path, de: str, en: str) -> tuple[Path, Path]:
     de_path = tmp_path / "deck.de.py"
     en_path = tmp_path / "deck.en.py"
@@ -663,6 +668,128 @@ def test_phase5_alignment_is_cached_and_reused(tmp_path: Path):
         assert r2.calls == 0  # served from cache, recoverer never called
     finally:
         align_cache.close()
+
+
+# ---------------------------------------------------------------------------
+# Phase 5d — symmetric localized id-migration paired chokepoint (§9 localized)
+# ---------------------------------------------------------------------------
+
+
+def test_phase5d_localized_id_migration_is_paired(tmp_path: Path):
+    # A LOCALIZED id'd code cell (lang=) is split on both decks: the id is left on
+    # the new import while the def — translated differently per deck — is id-less.
+    # The paired chokepoint moves the id onto BOTH decks' def twins and mints one
+    # shared slug onto BOTH import orphans, keeping de_id == en_id (the structural
+    # pass cannot carry a header-only change between the two translated bodies).
+    de0 = _slide("de", "g", "# ## G") + _code_localized_idd(
+        "de", "greet", 'def greet():\n    print("Hallo")'
+    )
+    en0 = _slide("en", "g", "# ## G") + _code_localized_idd(
+        "en", "greet", 'def greet():\n    print("Hello")'
+    )
+    de_path, en_path = _write_pair(tmp_path, de0, en0)
+    cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+    try:
+        _seed(cache, de_path, en_path)
+        de_path.write_text(
+            _slide("de", "g", "# ## G erweitert")  # narrative edit -> direction de->en
+            + _code_localized_idd("de", "greet", "import time")  # id left on the import
+            + _code_localized_idless("de", 'def greet():\n    time.sleep(1)\n    print("Hallo")'),
+            encoding="utf-8",
+        )
+        en_path.write_text(
+            _slide("en", "g", "# ## G")
+            + _code_localized_idd("en", "greet", "import time")
+            + _code_localized_idless("en", 'def greet():\n    time.sleep(1)\n    print("Hello")'),
+            encoding="utf-8",
+        )
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+        result = apply_plan(
+            plan, judge=CountingJudge(), translator=CountingTranslator(), watermark_cache=cache
+        )
+    finally:
+        cache.close()
+
+    assert result.applied_migrate == 2  # one logical move, written to both decks
+    de_by_id = {
+        c.metadata.slide_id: c
+        for c in parse_cells(de_path.read_text(encoding="utf-8"))
+        if c.metadata.slide_id
+    }
+    en_by_id = {
+        c.metadata.slide_id: c
+        for c in parse_cells(en_path.read_text(encoding="utf-8"))
+        if c.metadata.slide_id
+    }
+    # The id followed its construct on BOTH decks, preserving the translated bodies.
+    assert "def greet" in de_by_id["greet"].content and "Hallo" in de_by_id["greet"].content
+    assert "def greet" in en_by_id["greet"].content and "Hello" in en_by_id["greet"].content
+    assert "import time" in de_by_id["import-time"].content
+    assert "import time" in en_by_id["import-time"].content
+    assert set(de_by_id) == set(en_by_id)  # de_id == en_id preserved (no divergence)
+
+
+def test_phase5d_no_migration_when_only_one_deck_split(tmp_path: Path):
+    # Asymmetric: only DE splits the localized cell; EN's twin still wears the id on
+    # the un-split def. The paired guard requires drift on BOTH decks, so no move.
+    de0 = _slide("de", "g", "# ## G") + _code_localized_idd(
+        "de", "greet", 'def greet():\n    print("Hallo")'
+    )
+    en0 = _slide("en", "g", "# ## G") + _code_localized_idd(
+        "en", "greet", 'def greet():\n    print("Hello")'
+    )
+    de_path, en_path = _write_pair(tmp_path, de0, en0)
+    cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+    try:
+        _seed(cache, de_path, en_path)
+        de_path.write_text(
+            _slide("de", "g", "# ## G erweitert")
+            + _code_localized_idd("de", "greet", "import time")
+            + _code_localized_idless("de", 'def greet():\n    time.sleep(1)\n    print("Hallo")'),
+            encoding="utf-8",
+        )
+        # EN untouched (greet still on the def).
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+        result = apply_plan(
+            plan, judge=CountingJudge(), translator=CountingTranslator(), watermark_cache=cache
+        )
+    finally:
+        cache.close()
+
+    assert result.applied_migrate == 0  # asymmetric split -> paired guard declines
+
+
+def test_phase5d_no_false_move_localized_without_new_twin(tmp_path: Path):
+    # The localized id'd construct changes on both decks (genuine replacement), but
+    # there is NO new id-less twin carrying the old construct. The paired migration
+    # must not fire (it is not an unambiguous split).
+    de0 = _slide("de", "g", "# ## G") + _code_localized_idd(
+        "de", "greet", 'def greet():\n    print("Hallo")'
+    )
+    en0 = _slide("en", "g", "# ## G") + _code_localized_idd(
+        "en", "greet", 'def greet():\n    print("Hello")'
+    )
+    de_path, en_path = _write_pair(tmp_path, de0, en0)
+    cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+    try:
+        _seed(cache, de_path, en_path)
+        de_path.write_text(
+            _slide("de", "g", "# ## G erweitert")
+            + _code_localized_idd("de", "greet", "import time"),  # replaced, no def twin
+            encoding="utf-8",
+        )
+        en_path.write_text(
+            _slide("en", "g", "# ## G") + _code_localized_idd("en", "greet", "import time"),
+            encoding="utf-8",
+        )
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+        result = apply_plan(
+            plan, judge=CountingJudge(), translator=CountingTranslator(), watermark_cache=cache
+        )
+    finally:
+        cache.close()
+
+    assert result.applied_migrate == 0  # no id-less construct twin -> no migration
 
 
 # ---------------------------------------------------------------------------

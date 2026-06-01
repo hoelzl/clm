@@ -1205,22 +1205,34 @@ def _migrate_drifted_ids(
     (Localized id'd cells, which need a symmetric paired ``de_id==en_id`` write, are
     deferred.)
 
-    When the deterministic pass is fully *stuck* on such an ambiguous region (it
-    made no move) and a ``recoverer`` is configured (``--llm-recover``), escalate to
-    the bounded-LLM alignment tier (:func:`_recover_drifted_ids`). If the
-    deterministic pass already resolved at least one id this region, the two tiers
-    are **not** mixed — any remaining ambiguity re-surfaces next run once the clean
-    moves are baselined.
+    **Localized** id'd code cells (``lang=``, Phase 5d) are migrated through a
+    separate *paired* chokepoint (:func:`_migrate_localized_paired`): their twins
+    differ across decks (translated bodies) and the structural pass cannot carry a
+    header-only id change between them, so the move is stamped onto **both** decks'
+    twins at once to keep ``de_id == en_id``.
+
+    When *every* deterministic tier is stuck on an ambiguous region (it made no
+    move) and a ``recoverer`` is configured (``--llm-recover``), escalate the
+    **neutral** region to the bounded-LLM alignment tier
+    (:func:`_recover_drifted_ids`). If any deterministic move landed this pass, the
+    tiers are **not** mixed — remaining ambiguity re-surfaces next run once the
+    clean moves are baselined.
     """
     if _effective_direction(plan) is None:
         return
-    baseline_constructs, baseline_hashes = _baseline_shared(cache, plan.de_path, plan.en_path)
-    if not baseline_constructs:
-        return
     before = result.applied_migrate
-    _migrate_one_deck(de_state, baseline_constructs, baseline_hashes, result)
-    _migrate_one_deck(en_state, baseline_constructs, baseline_hashes, result)
-    if recoverer is not None and result.applied_migrate == before:
+    baseline_constructs, baseline_hashes = _baseline_shared(cache, plan.de_path, plan.en_path)
+    if baseline_constructs:
+        _migrate_one_deck(de_state, baseline_constructs, baseline_hashes, result)
+        _migrate_one_deck(en_state, baseline_constructs, baseline_hashes, result)
+    loc_constructs, loc_de_hashes, loc_en_hashes = _baseline_localized(
+        cache, plan.de_path, plan.en_path
+    )
+    if loc_constructs:
+        _migrate_localized_paired(
+            de_state, en_state, loc_constructs, loc_de_hashes, loc_en_hashes, result
+        )
+    if recoverer is not None and baseline_constructs and result.applied_migrate == before:
         _recover_drifted_ids(
             plan, de_state, en_state, cache, baseline_constructs, recoverer, alignment_cache, result
         )
@@ -1278,6 +1290,120 @@ def _migrate_one_deck(
         state.dirty = True
         result.applied_migrate += 1
         idless_by_construct.pop(base_construct, None)  # at most one migration per construct
+
+
+def _baseline_localized(
+    cache: SyncWatermarkCache | None, de_path: Path, en_path: Path
+) -> tuple[dict[str, str], set[str], set[str]]:
+    """Baseline ``{slide_id: construct}`` for localized id'd code, + per-deck hashes.
+
+    Localized cells live in the ``de``/``en`` partitions (not ``shared``): an id'd
+    one carries the real :data:`CODE_ROLE`. The construct of a given ``slide_id`` is
+    language-neutral (a function/class name does not translate), so the two decks
+    agree — it is read from the ``de`` partition. The per-deck content-hash sets
+    (every recorded row of each deck) let the paired migration tell a genuine
+    split-product (a *new* cell) from a pre-existing one (each deck checked against
+    its own baseline, since localized bodies differ across decks).
+    """
+    constructs: dict[str, str] = {}
+    de_hashes: set[str] = set()
+    en_hashes: set[str] = set()
+    if cache is None:
+        return constructs, de_hashes, en_hashes
+    for _pos, sid, role, chash, construct in cache.get_deck(str(de_path), str(en_path), "de"):
+        de_hashes.add(chash)
+        if role == CODE_ROLE and sid is not None and construct is not None:
+            constructs.setdefault(sid, construct)
+    for _pos, _sid, _role, chash, _construct in cache.get_deck(str(de_path), str(en_path), "en"):
+        en_hashes.add(chash)
+    return constructs, de_hashes, en_hashes
+
+
+def _localized_code_index(
+    state: FileState, baseline_hashes: set[str]
+) -> tuple[dict[str, RawCell], dict[str, list[RawCell]], Counter]:
+    """Index one deck's localized code cells for the paired migration.
+
+    Returns ``(idd_by_slide_id, new_idless_by_construct, construct_count)``: the
+    id'd cells keyed by their ``slide_id``, the **new** (hash absent from this
+    deck's baseline) id-less cells grouped by construct, and the per-construct count
+    over all localized code cells (the uniqueness guard).
+    """
+    idd: dict[str, RawCell] = {}
+    idless_by_construct: dict[str, list[RawCell]] = {}
+    construct_count: Counter = Counter()
+    for cell in state.cells:
+        meta = cell.metadata
+        if meta.is_j2 or meta.lang is None or meta.cell_type != "code":
+            continue  # localized code cells only
+        construct = construct_of(meta, cell.body)
+        if construct is None:
+            continue
+        construct_count[construct] += 1
+        if meta.slide_id is not None:
+            idd[meta.slide_id] = cell
+        elif cell_content_hash(cell.body) not in baseline_hashes:
+            idless_by_construct.setdefault(construct, []).append(cell)
+    return idd, idless_by_construct, construct_count
+
+
+def _migrate_localized_paired(
+    de_state: FileState,
+    en_state: FileState,
+    baseline_constructs: dict[str, str],
+    de_hashes: set[str],
+    en_hashes: set[str],
+    result: ApplyResult,
+) -> None:
+    """Move a drifted localized slide_id symmetrically on both decks (§9 / Phase 5d).
+
+    The localized analogue of :func:`_migrate_one_deck`: when an id'd localized code
+    cell is split on **both** decks — the id left wearing the wrong construct while a
+    new id-less twin carries the construct the id names — move the id onto both new
+    twins and mint one shared fresh slug onto both orphans. Both decks are written in
+    lockstep so ``_slide_ids_pair``'s ``de_id == en_id`` invariant holds (the
+    structural pass cannot carry a header-only change between the two translated,
+    non-byte-identical twins).
+
+    Conservative by construction — every guard must hold or the id is left for §10:
+    the id must be present and drifted on **both** decks, the two twins must have
+    drifted to the **same** construct, the baseline construct must be unique on each
+    deck, and each deck must have exactly one **new** id-less cell carrying it.
+    """
+    de_idd, de_idless, de_count = _localized_code_index(de_state, de_hashes)
+    en_idd, en_idless, en_count = _localized_code_index(en_state, en_hashes)
+    used_ids = {c.metadata.slide_id for c in de_state.cells if c.metadata.slide_id}
+    used_ids |= {c.metadata.slide_id for c in en_state.cells if c.metadata.slide_id}
+    for sid, base_construct in baseline_constructs.items():
+        de_cell = de_idd.get(sid)
+        en_cell = en_idd.get(sid)
+        if de_cell is None or en_cell is None:
+            continue  # the id must be a twinned pair present on both decks
+        de_cur = construct_of(de_cell.metadata, de_cell.body)
+        en_cur = construct_of(en_cell.metadata, en_cell.body)
+        if de_cur is None or en_cur is None:
+            continue
+        if de_cur == base_construct or en_cur == base_construct:
+            continue  # not drifted on both decks -> asymmetric or no-op, defer
+        if de_cur != en_cur:
+            continue  # twins drifted to different constructs -> ambiguous, defer
+        if de_count[base_construct] != 1 or en_count[base_construct] != 1:
+            continue  # base construct not unique on some deck -> ambiguous, defer
+        de_targets = de_idless.get(base_construct, [])
+        en_targets = en_idless.get(base_construct, [])
+        if len(de_targets) != 1 or len(en_targets) != 1:
+            continue  # no unique NEW split-product on both decks -> defer
+        _stamp_slide_id(de_targets[0], sid)  # the id follows its construct, on both decks
+        _stamp_slide_id(en_targets[0], sid)
+        new_slug = resolve_collision(de_cur, used_ids)  # de_cur == en_cur (neutral construct)
+        used_ids.add(new_slug)
+        _stamp_slide_id(de_cell, new_slug)  # both orphans get the same fresh slug
+        _stamp_slide_id(en_cell, new_slug)
+        de_state.dirty = True
+        en_state.dirty = True
+        result.applied_migrate += 2  # one logical move, written to two decks
+        de_idless.pop(base_construct, None)
+        en_idless.pop(base_construct, None)
 
 
 def _neutral_code_cells(state: FileState) -> list[RawCell]:
