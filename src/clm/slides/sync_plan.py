@@ -39,7 +39,6 @@ from clm.slides.sync_writeback import (
     cell_content_hash,
     construct_of,
     role_of,
-    row_anchor,
 )
 
 if TYPE_CHECKING:
@@ -304,17 +303,22 @@ def watermark_rows(
     return out
 
 
-def _shared_anchor_map(cells: list[Cell]) -> dict[str, str]:
-    """``anchor -> content_hash`` for the language-neutral (``shared``) cells of a file.
+def _shared_hashes(cells: list[Cell]) -> list[str]:
+    """Ordered content hashes of the language-neutral (``shared``) cells of a file.
 
-    The non-keyed half of the item-2 picture: cells the per-cell classifier never
-    sees. Keyed off the same partitioning as :func:`watermark_rows`, so a current
-    file and its watermark baseline are compared apples-to-apples.
+    An **ordered sequence**, deliberately *not* an ``anchor -> hash`` map: a
+    construct anchor is only a name (``extract_from_code``), so it is not
+    content-unique — two neutral cells sharing one (two ``import os``, two
+    ``def solution``, two ``print(...)``) would collapse last-writer-wins in a map
+    and hide a one-sided edit to the non-last one, silently reintroducing the very
+    item-2 drop this detects (Issue #190 review). The ``shared`` partition is
+    intrinsically ordered (``watermark_rows`` records positions) and byte-identical
+    across halves under ``unify``, so an ordered-hash compare is simultaneously the
+    unify check (de == en) and the drift check (current vs baseline), with no
+    anchor-uniqueness assumption — mirroring the Counter / unique-match guards the
+    Phase 2 anchor paths already apply.
     """
-    return {
-        row_anchor(sid, construct, chash): chash
-        for (_pos, sid, _role, chash, construct) in watermark_rows(cells)["shared"]
-    }
+    return [chash for (_pos, _sid, _role, chash, _construct) in watermark_rows(cells)["shared"]]
 
 
 @dataclass(frozen=True)
@@ -328,7 +332,7 @@ class AnchorAlignment:
 def align_anchored(
     de_cells: list[Cell],
     en_cells: list[Cell],
-    baseline_shared: dict[str, str],
+    baseline_shared: list[str],
 ) -> AnchorAlignment:
     """Detect a code-only (language-neutral) change the keyed classifier missed.
 
@@ -346,8 +350,8 @@ def align_anchored(
     consult the baseline to decide which side drifted (the propagation direction);
     if the baseline can't disambiguate, it is a divergence (handled in Phase 3c).
     """
-    de_shared = _shared_anchor_map(de_cells)
-    en_shared = _shared_anchor_map(en_cells)
+    de_shared = _shared_hashes(de_cells)
+    en_shared = _shared_hashes(en_cells)
     if de_shared == en_shared:
         return AnchorAlignment(direction=None, diverged=False)
     de_drifted = de_shared != baseline_shared
@@ -987,7 +991,7 @@ def build_sync_plan(
 
     de_baseline: list[BaselineCell] | None = None
     en_baseline: list[BaselineCell] | None = None
-    baseline_shared: dict[str, str] | None = None
+    baseline_shared: list[str] | None = None
     source = "none"
 
     if watermark_cache is not None and watermark_cache.has_pair(str(de_path), str(en_path)):
@@ -997,12 +1001,15 @@ def build_sync_plan(
         en_baseline = _baseline_from_watermark(
             watermark_cache.get_deck(str(de_path), str(en_path), "en")
         )
-        baseline_shared = {
-            row_anchor(sid, construct, chash): chash
-            for (_pos, sid, _role, chash, construct) in watermark_cache.get_deck(
+        # Ordered content hashes of the baseline's neutral cells (position order),
+        # matching _shared_hashes — see align_anchored for why this is a sequence,
+        # not an anchor map.
+        baseline_shared = [
+            chash
+            for (_pos, _sid, _role, chash, _construct) in watermark_cache.get_deck(
                 str(de_path), str(en_path), "shared"
             )
-        }
+        ]
         source = "watermark"
     elif allow_git_fallback:
         gb_de = _baseline_from_git_head(de_path)

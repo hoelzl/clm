@@ -12,7 +12,7 @@ from clm.notebooks.slide_parser import parse_cells
 from clm.slides.sync_plan import (
     MEMBERSHIP_ROLES,
     _baseline_from_watermark,
-    _shared_anchor_map,
+    _shared_hashes,
     align_anchored,
     ordered_sync_cells,
     watermark_rows,
@@ -162,7 +162,7 @@ class TestAlignAnchored:
         assert not a.diverged
 
     def test_de_drift_gives_de_to_en(self):
-        baseline = _shared_anchor_map(parse_cells(self._BASE))
+        baseline = _shared_hashes(parse_cells(self._BASE))
         de = '# %% tags=["keep"]\nimport time\nx = 1\n'  # DE edited the shared cell
         en = self._BASE  # EN unchanged
         a = align_anchored(parse_cells(de), parse_cells(en), baseline)
@@ -170,7 +170,7 @@ class TestAlignAnchored:
         assert not a.diverged
 
     def test_en_drift_gives_en_to_de(self):
-        baseline = _shared_anchor_map(parse_cells(self._BASE))
+        baseline = _shared_hashes(parse_cells(self._BASE))
         de = self._BASE
         en = '# %% tags=["keep"]\nimport time\nx = 1\n'
         a = align_anchored(parse_cells(de), parse_cells(en), baseline)
@@ -178,9 +178,22 @@ class TestAlignAnchored:
         assert not a.diverged
 
     def test_both_sides_drift_diverges(self):
-        baseline = _shared_anchor_map(parse_cells(self._BASE))
+        baseline = _shared_hashes(parse_cells(self._BASE))
         de = '# %% tags=["keep"]\nimport time\nx = 1\n'  # DE: -> construct x
         en = '# %% tags=["keep"]\nimport time\ny = 2\n'  # EN: -> construct y (differs)
         a = align_anchored(parse_cells(de), parse_cells(en), baseline)
         assert a.diverged
         assert a.direction is None
+
+    def test_duplicate_construct_non_last_edit_is_not_masked(self):
+        # Two neutral cells share construct:print. Editing the NON-LAST one on DE
+        # must still be detected — an anchor map would collapse last-writer-wins
+        # and silently drop it (Issue #190 review). The ordered-hash compare sees
+        # it.
+        base = '# %% tags=["keep"]\nprint("a")\n# %% tags=["keep"]\nprint("b")\n'
+        de = '# %% tags=["keep"]\nprint("z")\n# %% tags=["keep"]\nprint("b")\n'  # P1 edited
+        en = base  # EN unchanged
+        baseline = _shared_hashes(parse_cells(base))
+        a = align_anchored(parse_cells(de), parse_cells(en), baseline)
+        assert a.direction == "de->en"
+        assert not a.diverged

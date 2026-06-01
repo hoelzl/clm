@@ -120,6 +120,35 @@ def test_item2_neutral_code_only_edit_propagates_verbatim(tmp_path: Path):
     assert "x = 1" in en_path.read_text(encoding="utf-8")
 
 
+def test_item2_duplicate_construct_non_last_edit_propagates(tmp_path: Path):
+    # Two neutral cells share construct:print. Editing the NON-LAST one must still
+    # propagate — an anchor-keyed map would collapse them last-writer-wins and
+    # silently drop the edit (Issue #190 review). The ordered-hash detector sees it.
+    de = _slide("de", "a", "# ## A") + _code_shared('print("a")') + _code_shared('print("b")')
+    en = _slide("en", "a", "# ## A") + _code_shared('print("a")') + _code_shared('print("b")')
+    de_path, en_path = _write_pair(tmp_path, de, en)
+
+    cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+    translator = CountingTranslator()
+    judge = CountingJudge()
+    try:
+        _seed(cache, de_path, en_path)
+        de_path.write_text(
+            _slide("de", "a", "# ## A") + _code_shared('print("z")') + _code_shared('print("b")'),
+            encoding="utf-8",
+        )
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+        apply_plan(plan, judge=judge, translator=translator, watermark_cache=cache)
+    finally:
+        cache.close()
+
+    assert plan.anchor_direction == "de->en"
+    en_text = en_path.read_text(encoding="utf-8")
+    assert 'print("z")' in en_text  # the non-last edit propagated
+    assert 'print("a")' not in en_text
+    assert 'print("b")' in en_text  # the unchanged sibling is intact
+
+
 # ---------------------------------------------------------------------------
 # Item 3 — FIXED (Phase 2): an unchanged id-less localized code cell is spliced
 # verbatim on a sibling-triggered rebuild, never re-translated.
