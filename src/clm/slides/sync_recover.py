@@ -179,13 +179,24 @@ def decode_mapping(text: str) -> dict[int, str]:
 # ---------------------------------------------------------------------------
 
 
-def _pinned_ids(base_region: list[RegionCell]) -> dict[str, str]:
-    """``content_hash → slide_id`` for base cells a hash can *unambiguously* pin.
+def _pinned_assignments(base_region: list[RegionCell]) -> dict[str, str]:
+    """``content_hash → required assignment`` for base cells a hash can pin.
 
-    A current cell byte-identical to such a base cell is provably unchanged and
-    must keep that id. A hash shared by two base cells, or by an id'd and an
-    id-less cell, is ambiguous and is excluded — the recurring content-anchor
-    non-uniqueness guard (cf. the Counter / ordered-sequence guards elsewhere).
+    A current cell byte-identical to an *unchanged* base cell is provably
+    unchanged and may not be re-identified by the model. The pin is
+    **bidirectional**:
+
+    - a hash that uniquely identifies an **id'd** base cell pins its ``slide_id``
+      (an unchanged id'd cell keeps its id), and
+    - a hash that uniquely identifies an **id-less** base cell pins :data:`NONE`
+      (an unchanged id-less cell stays id-less — the model may not mint a spurious
+      id onto unchanged content, which would re-introduce the churn the whole
+      design avoids).
+
+    A hash shared by two base cells, or by an id'd and an id-less cell, is
+    ambiguous and is excluded — the recurring content-anchor non-uniqueness guard
+    (cf. the Counter / ordered-sequence guards elsewhere). Only genuinely *changed*
+    cells (a new content hash) are left for the model to decide.
     """
     by_hash: dict[str, set[str | None]] = {}
     for cell in base_region:
@@ -194,8 +205,7 @@ def _pinned_ids(base_region: list[RegionCell]) -> dict[str, str]:
     for chash, ids in by_hash.items():
         if len(ids) == 1:
             only = next(iter(ids))
-            if only is not None:
-                pinned[chash] = only
+            pinned[chash] = only if only is not None else NONE
     return pinned
 
 
@@ -216,9 +226,12 @@ def validate_alignment(
        ``slide_id`` that exists in the base region (no invented ids).
     3. **Injective on base ids** — no base ``slide_id`` is assigned to two current
        cells (an id identifies one cell).
-    4. **Unchanged-anchors pinned** — a current cell byte-identical to an
-       unambiguously-id'd base cell must be assigned that id (the model may not
-       reassign a provably-unchanged cell).
+    4. **Unchanged-anchors pinned** (bidirectional) — a current cell
+       byte-identical to an unambiguously-identified base cell must keep that
+       cell's identity: its ``slide_id`` if the base cell had one, else
+       :data:`NONE` (an unchanged id-less cell stays id-less, so the model cannot
+       mint a spurious id onto unchanged content). Only genuinely *changed* cells
+       are left for the model.
     5. **``NEW`` is nameable** — :data:`NEW` is only valid on a cell with a
        construct (there must be something to mint a slug from).
     """
@@ -242,13 +255,13 @@ def validate_alignment(
     if duplicated:
         raise AlignmentInvalid(f"base ids assigned to multiple current cells: {duplicated}")
 
-    pinned = _pinned_ids(base_region)
+    pinned = _pinned_assignments(base_region)
     for idx, cell in enumerate(current_region):
         forced = pinned.get(cell.content_hash)
         if forced is not None and mapping[idx] != forced:
             raise AlignmentInvalid(
-                f"index {idx} is byte-identical to base id {forced!r} "
-                f"but was mapped to {mapping[idx]!r}"
+                f"index {idx} is byte-identical to an unchanged base cell pinned to "
+                f"{forced!r} but was mapped to {mapping[idx]!r}"
             )
     return mapping
 

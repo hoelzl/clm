@@ -46,9 +46,10 @@ from clm.slides.sync_apply import (
 )
 
 if TYPE_CHECKING:
-    from clm.infrastructure.llm.cache import SyncWatermarkCache
+    from clm.infrastructure.llm.cache import SyncAlignmentCache, SyncWatermarkCache
     from clm.infrastructure.llm.ollama_client import SyncJudge
     from clm.slides.sync_plan import Proposal, SyncPlan
+    from clm.slides.sync_recover import AlignmentRecoverer
     from clm.slides.sync_translate import SlideTranslator
 
 
@@ -195,6 +196,8 @@ def run_plan_walker(
     translator: SlideTranslator | None = None,
     watermark_cache: SyncWatermarkCache | None = None,
     options: WalkerOptions | None = None,
+    recoverer: AlignmentRecoverer | None = None,
+    alignment_cache: SyncAlignmentCache | None = None,
 ) -> PlanWalkResult:
     """Walk ``plan``'s proposals, prompt per proposal, then apply once.
 
@@ -255,6 +258,8 @@ def run_plan_walker(
         translator=translator,
         watermark_cache=watermark_cache,
         decisions=decisions,
+        recoverer=recoverer,
+        alignment_cache=alignment_cache,
     )
     return PlanWalkResult(plan=plan, apply_result=apply_result, actions=actions)
 

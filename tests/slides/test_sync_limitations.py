@@ -20,11 +20,16 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from clm.infrastructure.llm.cache import SyncWatermarkCache
+from clm.infrastructure.llm.cache import SyncAlignmentCache, SyncWatermarkCache
 from clm.infrastructure.llm.ollama_client import SyncProposal
 from clm.notebooks.slide_parser import parse_cells
-from clm.slides.sync_apply import apply_plan
+from clm.slides.sync_apply import _resolve_alignment, apply_plan
 from clm.slides.sync_plan import build_sync_plan, watermark_rows
+from clm.slides.sync_recover import (
+    NEW,
+    RegionCell,
+    StaticAlignmentRecoverer,
+)
 
 # ---------------------------------------------------------------------------
 # Deck builders + no-LLM spies
@@ -467,6 +472,197 @@ def test_phase4_id_migration_is_symmetric_across_decks(tmp_path: Path):
         assert "import time" in by_id["import-time"].content
         ids.append(sorted(by_id))
     assert ids[0] == ids[1]  # identical slide_ids on both decks — no divergence
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 — bounded LLM recovery of an ambiguous drifted-id region (§10)
+# ---------------------------------------------------------------------------
+
+
+def _split_renamed_both_decks(tmp_path: Path):
+    """Seed a watermark, then split+RENAME the def on both decks (de narrative
+    edit supplies the direction). Returns (de_path, en_path, cache). The rename
+    means the deterministic §9 construct match fails → recovery territory."""
+    base_def = 'def my_fun():\n    print("foo")'
+    de0 = _slide("de", "g", "# ## G") + _code_idd_neutral("def-my-fun", base_def)
+    en0 = _slide("en", "g", "# ## G") + _code_idd_neutral("def-my-fun", base_def)
+    de_path, en_path = _write_pair(tmp_path, de0, en0)
+    cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+    _seed(cache, de_path, en_path)
+    # Both decks: import wears the id; the def is RENAMED (my_function) and id-less.
+    renamed = 'def my_function():\n    time.sleep(1)\n    print("foo")'
+    de_path.write_text(
+        _slide("de", "g", "# ## G erweitert")  # de narrative edit -> direction de->en
+        + _code_idd_neutral("def-my-fun", "import time")
+        + _code_shared(renamed),
+        encoding="utf-8",
+    )
+    en_path.write_text(
+        _slide("en", "g", "# ## G")
+        + _code_idd_neutral("def-my-fun", "import time")
+        + _code_shared(renamed),
+        encoding="utf-8",
+    )
+    return de_path, en_path, cache
+
+
+def test_phase5_llm_recover_resolves_renamed_split(tmp_path: Path):
+    # The deterministic §9 migration is stuck (the def was renamed, so no id-less
+    # cell carries the baseline construct). With --llm-recover, the recoverer maps
+    # the import as new and the renamed def as the def-my-fun continuation; the
+    # engine applies it symmetrically to both decks. Resolved ONCE, applied to both.
+    de_path, en_path, cache = _split_renamed_both_decks(tmp_path)
+    recoverer = StaticAlignmentRecoverer(mapping={0: NEW, 1: "def-my-fun"})
+    try:
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+        result = apply_plan(
+            plan,
+            judge=CountingJudge(),
+            translator=CountingTranslator(),
+            watermark_cache=cache,
+            recoverer=recoverer,
+        )
+    finally:
+        cache.close()
+
+    assert recoverer.calls == 1  # resolved once, applied to both decks
+    assert result.applied_migrate == 4  # 2 cells re-identified on each of 2 decks
+    for path in (de_path, en_path):
+        by_id = {
+            c.metadata.slide_id: c
+            for c in parse_cells(path.read_text(encoding="utf-8"))
+            if c.metadata.slide_id
+        }
+        assert "def my_function" in by_id["def-my-fun"].content  # id followed the rename
+        assert "import time" in by_id["import-time"].content  # orphan got a content slug
+
+
+def test_phase5_no_recover_leaves_region_untouched(tmp_path: Path):
+    # Without --llm-recover (recoverer=None), the ambiguous region is left for
+    # review: no migration, no error (the pre-Phase-5 behavior).
+    de_path, en_path, cache = _split_renamed_both_decks(tmp_path)
+    try:
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+        result = apply_plan(
+            plan, judge=CountingJudge(), translator=CountingTranslator(), watermark_cache=cache
+        )
+    finally:
+        cache.close()
+
+    assert result.applied_migrate == 0
+    by_id = {
+        c.metadata.slide_id: c
+        for c in parse_cells(de_path.read_text(encoding="utf-8"))
+        if c.metadata.slide_id
+    }
+    assert "import time" in by_id["def-my-fun"].content  # id still on the import (untouched)
+
+
+def test_phase5_invalid_map_safe_aborts(tmp_path: Path):
+    # A recoverer that returns an unsound map (an invented id) must safe-abort: the
+    # region is deferred and left untouched, never half-applied, and not an error
+    # (so the rest of the deck still writes).
+    de_path, en_path, cache = _split_renamed_both_decks(tmp_path)
+    recoverer = StaticAlignmentRecoverer(mapping={0: "not-a-base-id", 1: "def-my-fun"})
+    try:
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+        result = apply_plan(
+            plan,
+            judge=CountingJudge(),
+            translator=CountingTranslator(),
+            watermark_cache=cache,
+            recoverer=recoverer,
+        )
+    finally:
+        cache.close()
+
+    assert result.applied_migrate == 0
+    assert result.deferred >= 1  # safe-aborted -> region deferred, re-surfaces next run
+    assert result.errors == []  # a deferral, not a blocking error
+    assert not result.watermark_recorded  # held so the region re-surfaces
+
+
+def test_phase5_recoverer_failure_safe_aborts(tmp_path: Path):
+    # The recoverer being down (RecoveryError) safe-aborts the same way.
+    de_path, en_path, cache = _split_renamed_both_decks(tmp_path)
+    recoverer = StaticAlignmentRecoverer(raise_error=True)
+    try:
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+        result = apply_plan(
+            plan,
+            judge=CountingJudge(),
+            translator=CountingTranslator(),
+            watermark_cache=cache,
+            recoverer=recoverer,
+        )
+    finally:
+        cache.close()
+
+    assert result.applied_migrate == 0
+    assert result.deferred >= 1
+    assert result.errors == []
+
+
+def test_phase5_deterministic_case_does_not_call_recoverer(tmp_path: Path):
+    # When the deterministic §9 migration CAN resolve the split (the def keeps its
+    # name), the two tiers are not mixed — the recoverer is never consulted.
+    base_def = 'def my_fun():\n    print("foo")'
+    de0 = _slide("de", "g", "# ## G") + _code_idd_neutral("def-my-fun", base_def)
+    en0 = _slide("en", "g", "# ## G") + _code_idd_neutral("def-my-fun", base_def)
+    de_path, en_path = _write_pair(tmp_path, de0, en0)
+    cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+    recoverer = StaticAlignmentRecoverer(raise_error=True)  # would blow up if called
+    try:
+        _seed(cache, de_path, en_path)
+        de_path.write_text(
+            _slide("de", "g", "# ## G erweitert")
+            + _code_idd_neutral("def-my-fun", "import time")
+            + _code_shared('def my_fun():\n    time.sleep(1)\n    print("foo")'),  # SAME name
+            encoding="utf-8",
+        )
+        en_path.write_text(
+            _slide("en", "g", "# ## G")
+            + _code_idd_neutral("def-my-fun", "import time")
+            + _code_shared('def my_fun():\n    time.sleep(1)\n    print("foo")'),
+            encoding="utf-8",
+        )
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+        result = apply_plan(
+            plan,
+            judge=CountingJudge(),
+            translator=CountingTranslator(),
+            watermark_cache=cache,
+            recoverer=recoverer,
+        )
+    finally:
+        cache.close()
+
+    assert recoverer.calls == 0  # deterministic handled it; LLM not consulted
+    assert result.applied_migrate == 2  # one move per deck (the def kept its name)
+
+
+def test_phase5_alignment_is_cached_and_reused(tmp_path: Path):
+    # The validated map is cached by region fingerprint: a second resolve with a
+    # recoverer that would FAIL still succeeds from the cache (no LLM re-spend).
+    base = [RegionCell("def-my-fun", "function-my-fun", "h0")]
+    current = [
+        RegionCell("def-my-fun", "import-time", "h1"),
+        RegionCell(None, "function-my-function", "h2"),
+    ]
+    align_cache = SyncAlignmentCache(tmp_path / "clm-llm.sqlite")
+    try:
+        r1 = StaticAlignmentRecoverer(mapping={0: NEW, 1: "def-my-fun"})
+        first = _resolve_alignment(r1, align_cache, base, current)
+        assert first == {0: NEW, 1: "def-my-fun"}
+        assert r1.calls == 1
+        assert len(align_cache.iter_entries()) == 1  # written through
+
+        r2 = StaticAlignmentRecoverer(raise_error=True)  # cache hit must avoid this
+        second = _resolve_alignment(r2, align_cache, base, current)
+        assert second == {0: NEW, 1: "def-my-fun"}
+        assert r2.calls == 0  # served from cache, recoverer never called
+    finally:
+        align_cache.close()
 
 
 # ---------------------------------------------------------------------------

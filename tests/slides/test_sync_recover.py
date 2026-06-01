@@ -145,6 +145,20 @@ class TestValidateAlignment:
         current = [_cell("x", "function-f", "h0")]
         assert validate_alignment({0: "x"}, base, current) == {0: "x"}
 
+    def test_unchanged_idless_cell_must_stay_idless(self):
+        # current[0] is byte-identical (h0) to an unchanged *id-less* base cell, so
+        # it must map to NONE — the model may not mint a spurious id onto unchanged
+        # content (that would re-introduce the churn the design avoids).
+        base = [_cell(None, "function-f", "h0"), _cell("x", "function-g", "h1")]
+        current = [_cell(None, "function-f", "h0")]
+        with pytest.raises(AlignmentInvalid, match="pinned to 'none'"):
+            validate_alignment({0: "x"}, base, current)
+
+    def test_unchanged_idless_cell_mapped_none_passes(self):
+        base = [_cell(None, "function-f", "h0")]
+        current = [_cell(None, "function-f", "h0")]
+        assert validate_alignment({0: NONE}, base, current) == {0: NONE}
+
     def test_new_on_constructless_cell_aborts(self):
         base = [_cell("x", "function-f", "h0")]
         current = [_cell(None, None, "h1")]  # unnameable (no construct)
