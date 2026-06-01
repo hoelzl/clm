@@ -134,11 +134,13 @@ class TestValidateAlignment:
             validate_alignment({0: "x", 1: "x"}, base, current)
 
     def test_unchanged_cell_must_keep_its_id(self):
-        # current[0] is byte-identical (h0) to base id x → it MUST map to x.
+        # current[0] is byte-identical (h0) to base id x → it MUST map to x. The map
+        # tries to move x onto the changed cell[1] and blank cell[0]; x is still
+        # reassigned (so the drop-check passes), isolating the PIN violation.
         base = [_cell("x", "function-f", "h0"), _cell("y", "function-g", "h1")]
         current = [_cell("x", "function-f", "h0"), _cell(None, "function-g2", "h2")]
         with pytest.raises(AlignmentInvalid, match="byte-identical"):
-            validate_alignment({0: "y", 1: NONE}, base, current)
+            validate_alignment({0: NONE, 1: "x"}, base, current)
 
     def test_pinned_assignment_passes(self):
         base = [_cell("x", "function-f", "h0")]
@@ -180,6 +182,23 @@ class TestValidateAlignment:
 
     def test_empty_current_region_is_trivially_valid(self):
         assert validate_alignment({}, [_cell("x", "f", "h0")], []) == {}
+
+    def test_rejects_dropping_a_worn_base_id(self):
+        # A current cell wears base id 'x' (renamed in place, hash changed so it is
+        # not pinned) but the map sends it to NEW without reassigning 'x' anywhere —
+        # that would silently strip a stable id. Reject (Phase 5 review, the HIGH
+        # finding). Recovery re-identifies; it never destroys identity.
+        base = [_cell("x", "function-f", "h0")]
+        current = [_cell("x", "function-g", "h1")]  # still wears x, body changed
+        with pytest.raises(AlignmentInvalid, match="drops currently-worn base ids"):
+            validate_alignment({0: NEW}, base, current)
+
+    def test_allows_moving_a_worn_base_id_to_a_split_product(self):
+        # Moving 'x' onto a new id-less twin (a genuine split) is fine — 'x' is
+        # reassigned, not dropped.
+        base = [_cell("x", "function-f", "h0")]
+        current = [_cell("x", "import-t", "h1"), _cell(None, "function-f2", "h2")]
+        assert validate_alignment({0: NEW, 1: "x"}, base, current) == {0: NEW, 1: "x"}
 
 
 # ---------------------------------------------------------------------------
@@ -230,3 +249,21 @@ class TestPromptBuilding:
         rec = OpenRouterAlignmentRecoverer()
         assert rec.prompt_version
         assert rec.model
+
+
+# ---------------------------------------------------------------------------
+# Cache-key soundness — the model is folded into prompt_version (Phase 5 review)
+# ---------------------------------------------------------------------------
+
+
+class TestModelInCacheKey:
+    def test_model_is_folded_into_prompt_version(self):
+        a = OpenRouterAlignmentRecoverer(model="anthropic/claude-opus-4")
+        b = OpenRouterAlignmentRecoverer(model="anthropic/claude-sonnet-4-6")
+        # A model switch must change the cache key, else run B serves run A's map.
+        assert a.prompt_version != b.prompt_version
+        assert "claude-opus-4" in a.prompt_version
+
+    def test_explicit_prompt_version_is_respected(self):
+        rec = OpenRouterAlignmentRecoverer(model="m", prompt_version="pinned")
+        assert rec.prompt_version == "pinned"

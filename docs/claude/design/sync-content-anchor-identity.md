@@ -317,6 +317,13 @@ ties (two `def my_fun`, many bare imports) — escalate to Claude, **bounded**:
   untouched and re-surfaces next run; the LLM fires only under an explicit
   `--llm-recover`.
 
+**Shipped (Phase 5).** `slides/sync_recover.py` + the `sync_alignments` table; the
+recoverer is body-free (constructs/hashes/ids only — no source reaches the model),
+validated (`validate_alignment`, safe-abort on any failure), cached, and opt-in.
+It is wired to the **neutral** §9 escalation only; the deterministic localized
+chokepoint (§9, Phase 5d) handles the localized id-move without an LLM. See §14
+phase 5 for the component breakdown.
+
 Change-signal reliability (the maintainer asked which sources to trust):
 
 | Signal | Use |
@@ -472,6 +479,31 @@ invariant. Gate releases on `pytest -m "not docker"`.
      fails). `result.applied_migrate` counts the moves.
 5. **Bounded Opus recovery** (§10): `sync_alignments` table; `--llm-recover`
    (default off); validate-and-safe-abort.
+   - **✅ Shipped.** **5a:** `SyncAlignmentCache` (`infrastructure/llm/cache.py`) —
+     additive `sync_alignments` table keyed `(base_region_hash,
+     current_region_hash, prompt_version)`, storing only *validated* maps. **5b:**
+     new `slides/sync_recover.py` — the `AlignmentRecoverer` protocol
+     (`StaticAlignmentRecoverer` for tests, `OpenRouterAlignmentRecoverer` =
+     Claude Opus), a **body-free** `RegionCell` (slide_id / construct /
+     content_hash — never source), `region_fingerprint` (sound cache key), and
+     `validate_alignment` — the hard gate: total over the current cells, ids only
+     from the base set, injective on base ids, **bidirectional** unchanged-anchor
+     pinning (an unchanged id'd cell keeps its id; an unchanged *id-less* cell
+     stays id-less, so the model can't mint a spurious id onto unchanged content),
+     `new` only on a nameable cell. Any failure → `AlignmentInvalid`. **5c:** wired
+     to the §9 escalation — `_migrate_drifted_ids` fires `_recover_drifted_ids`
+     only when *every* deterministic tier was stuck (no move this pass; tiers are
+     never mixed), resolves a map **once** (cached) and applies it **symmetrically**
+     to both decks; any failure **safe-aborts** by marking the region `deferred`
+     (holds the watermark → re-surfaces next run) rather than erroring (which would
+     block the whole deck's write). `clm slides sync --llm-recover` (default off) +
+     `--recovery-model`, plumbed through batch + interactive apply; a missing key
+     degrades to a warning. **5d (localized chokepoint):** `_migrate_localized_paired`
+     extends the deterministic migration to **localized** id'd code cells via one
+     both-deck write (the twins differ by translation, so the body-keyed structural
+     pass can't carry a header-only id change) — keeping `de_id == en_id` by
+     construction. The no-op corpus harness held at 81/212, 0 violations through all
+     of Phase 5 (recovery is opt-in; the default path is untouched).
 6. **Docs + `--explain`** (§13): info topics, migration entry, anchor-diff dump.
 
 ## 15. Open / deferred

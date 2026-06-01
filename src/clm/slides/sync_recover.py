@@ -234,6 +234,12 @@ def validate_alignment(
        are left for the model.
     5. **``NEW`` is nameable** — :data:`NEW` is only valid on a cell with a
        construct (there must be something to mint a slug from).
+    6. **No stable id dropped** — every base ``slide_id`` *currently worn* by a
+       region cell must be reassigned somewhere in the map (kept or moved), never
+       silently replaced by a minted/``none`` slug. Without this a pure in-place
+       rename (the id'd cell's only change) could map the cell to ``new`` and strip
+       its ``slide_id`` — exactly the cross-reference/voiceover churn #190 exists to
+       prevent (Phase 5 review). Recovery re-identifies; it never destroys identity.
     """
     n = len(current_region)
     if set(mapping) != set(range(n)):
@@ -254,6 +260,13 @@ def validate_alignment(
     duplicated = sorted(x for x, count in Counter(assigned).items() if count > 1)
     if duplicated:
         raise AlignmentInvalid(f"base ids assigned to multiple current cells: {duplicated}")
+
+    worn = {c.slide_id for c in current_region if c.slide_id in base_ids}
+    dropped = sorted(worn - set(mapping.values()))
+    if dropped:
+        raise AlignmentInvalid(
+            f"map drops currently-worn base ids (would strip a stable id): {dropped}"
+        )
 
     pinned = _pinned_assignments(base_region)
     for idx, cell in enumerate(current_region):
@@ -359,6 +372,11 @@ class OpenRouterAlignmentRecoverer:
     Raises :class:`RecoveryError` on any transport/parse failure so the caller
     safe-aborts that region rather than crashing the whole sync. The result is
     *not* trusted — :func:`validate_alignment` gates it before it is applied.
+
+    ``prompt_version`` (the third component of the alignment cache key) folds in the
+    ``model`` so switching ``--recovery-model`` does not silently serve a different
+    model's cached map (Phase 5 review): the resolved version is
+    ``"{RECOVERY_PROMPT_VERSION}:{model}"`` unless an explicit version is passed.
     """
 
     model: str = DEFAULT_RECOVERY_MODEL
@@ -368,6 +386,12 @@ class OpenRouterAlignmentRecoverer:
     max_tokens: int = 2048
     timeout: float = 120.0
     prompt_version: str = RECOVERY_PROMPT_VERSION
+
+    def __post_init__(self) -> None:
+        # Bake the model into the cache identity so a model change re-queries
+        # instead of reusing another model's alignment (cache-key soundness).
+        if self.prompt_version == RECOVERY_PROMPT_VERSION:
+            self.prompt_version = f"{RECOVERY_PROMPT_VERSION}:{self.model}"
 
     def _client(self):  # pragma: no cover - thin network adapter
         from clm.infrastructure.llm.openrouter_client import build_openrouter_client

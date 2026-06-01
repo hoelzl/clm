@@ -646,6 +646,50 @@ def test_phase5_deterministic_case_does_not_call_recoverer(tmp_path: Path):
     assert result.applied_migrate == 2  # one move per deck (the def kept its name)
 
 
+def test_phase5_pure_rename_does_not_strip_id(tmp_path: Path):
+    # A pure IN-PLACE rename (no split, no new cell) must NOT escalate to the LLM:
+    # there is no realignment target, so the stable id is kept and re-baselined.
+    # Even a recoverer that WOULD strip the id (mapping {0: NEW}) is never consulted
+    # — and validate_alignment would reject that map anyway (Phase 5 review, HIGH).
+    base = 'def my_fun():\n    print("foo")'
+    de0 = _slide("de", "g", "# ## G") + _code_idd_neutral("def-my-fun", base)
+    en0 = _slide("en", "g", "# ## G") + _code_idd_neutral("def-my-fun", base)
+    de_path, en_path = _write_pair(tmp_path, de0, en0)
+    cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+    recoverer = StaticAlignmentRecoverer(mapping={0: NEW})  # would strip the id if called
+    try:
+        _seed(cache, de_path, en_path)
+        renamed = 'def my_function():\n    print("foo")'  # renamed IN PLACE, no split
+        de_path.write_text(
+            _slide("de", "g", "# ## G erweitert") + _code_idd_neutral("def-my-fun", renamed),
+            encoding="utf-8",
+        )
+        en_path.write_text(
+            _slide("en", "g", "# ## G") + _code_idd_neutral("def-my-fun", renamed),
+            encoding="utf-8",
+        )
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+        result = apply_plan(
+            plan,
+            judge=CountingJudge(),
+            translator=CountingTranslator(),
+            watermark_cache=cache,
+            recoverer=recoverer,
+        )
+    finally:
+        cache.close()
+
+    assert recoverer.calls == 0  # no split product -> recovery not even consulted
+    assert result.applied_migrate == 0  # the stable id is kept, not churned
+    for path in (de_path, en_path):
+        ids = {
+            c.metadata.slide_id
+            for c in parse_cells(path.read_text(encoding="utf-8"))
+            if c.metadata.slide_id
+        }
+        assert "def-my-fun" in ids  # stable id preserved across the rename
+
+
 def test_phase5_alignment_is_cached_and_reused(tmp_path: Path):
     # The validated map is cached by region fingerprint: a second resolve with a
     # recoverer that would FAIL still succeeds from the cache (no LLM re-spend).

@@ -1495,13 +1495,31 @@ def _recover_drifted_ids(
     """
     de_cells = _neutral_code_cells(de_state)
     en_cells = _neutral_code_cells(en_state)
-    if len(de_cells) != len(en_cells):
-        return  # neutral halves out of unify — not the migration's job to reconcile
     current_region = _region_of(de_cells)
+    # The map is derived from DE's region and applied to BOTH decks by index, so the
+    # two neutral regions must be byte-identical (the unify invariant). Require it
+    # explicitly — a content divergence with the *same* length would otherwise let a
+    # DE-derived map mis-stamp EN. A divergence is the align_anchored pass's job, not
+    # the migration's; defer rather than risk de_id != en_id.
+    if current_region != _region_of(en_cells):
+        return
     if not _has_drifted_id(baseline_constructs, current_region):
         return  # nothing genuinely drifted -> do not spend the LLM
     base_region = _shared_region(cache, plan.de_path, plan.en_path)
     if not base_region:
+        return
+    # Only escalate when there is a genuine realignment target: a *new* id-less
+    # neutral code cell (a split product — its content is absent from the baseline).
+    # A pure in-place rename has none (its only change is an id'd cell whose body
+    # changed), so there is nothing to realign — leaving it to re-baseline keeps its
+    # stable slide_id, instead of handing the region to the LLM, which could strip
+    # the id (Issue #190 Phase 5 review). validate_alignment is the hard backstop (it
+    # refuses to drop a worn id); this just avoids a pointless, re-surfacing LLM call
+    # when no split occurred.
+    baseline_hashes = {c.content_hash for c in base_region}
+    if not any(
+        c.slide_id is None and c.content_hash not in baseline_hashes for c in current_region
+    ):
         return
 
     mapping = _resolve_alignment(recoverer, alignment_cache, base_region, current_region)
