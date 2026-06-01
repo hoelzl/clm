@@ -43,6 +43,7 @@ __all__ = [
     "construct_of",
     "record_snapshot",
     "role_of",
+    "row_anchor",
     "swap_lang",
     "target_path_for_outcome",
 ]
@@ -178,6 +179,20 @@ def anchor_of(metadata: CellMetadata, body: str) -> str:
     if construct is not None:
         return f"construct:{construct}"
     return f"hash:{cell_content_hash(body)}"
+
+
+def row_anchor(slide_id: str | None, construct: str | None, content_hash: str) -> str:
+    """The content anchor of a stored watermark row — the row-side :func:`anchor_of`.
+
+    Derives the same ``id: > construct: > hash:`` identity from a persisted row
+    that :func:`anchor_of` derives from a live cell, so the anchor passes can match
+    a current cell against its baseline. The two must stay in lockstep.
+    """
+    if slide_id is not None:
+        return f"id:{slide_id}"
+    if construct is not None:
+        return f"construct:{construct}"
+    return f"hash:{content_hash}"
 
 
 _LANG_ATTR_RE = re.compile(r'lang="[^"]*"')

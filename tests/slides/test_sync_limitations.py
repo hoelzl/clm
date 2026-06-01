@@ -1,11 +1,10 @@
 """Behavioral tests for the two *serious* ``clm slides sync`` limitations
-(Issue #190 items 2 & 3).
+(Issue #190 items 2 & 3) — both now FIXED.
 
-* **item 2** — *still broken (Phase 3 will fix)*: a code-only edit to a
-  *language-neutral* shared cell produces no proposal, so the sync silently fails
-  to propagate it and the two split halves diverge. ``test_item2_*`` pins the
-  broken-today behavior; flip it when Phase 3 (the anchor-keyed diff +
-  deterministic copy-to-twin) lands.
+* **item 2** — *FIXED (Phase 3a)*: a code-only edit to a *language-neutral*
+  shared cell is detected by the anchor diff (``align_anchored``) — which side
+  drifted from the watermark gives the direction — and the structural pass copies
+  it verbatim to the twin, no LLM. ``test_item2_*`` asserts the fix.
 * **item 3** — *FIXED (Phase 2)*: when a slide group is rebuilt for a *sibling's*
   sake, an unchanged id-less localized code cell is spliced verbatim by its
   content anchor instead of being re-translated. ``test_item3_*`` asserts the fix
@@ -17,6 +16,7 @@ are counting stand-ins).
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -86,11 +86,12 @@ class CountingJudge:
 
 
 # ---------------------------------------------------------------------------
-# Item 2 — a code-only change to a neutral shared cell is not propagated
+# Item 2 — FIXED (Phase 3a): a code-only change to a neutral shared cell is
+# detected by the anchor diff and copied verbatim to the twin (no LLM).
 # ---------------------------------------------------------------------------
 
 
-def test_item2_neutral_code_only_edit_is_silently_dropped(tmp_path: Path):
+def test_item2_neutral_code_only_edit_propagates_verbatim(tmp_path: Path):
     de = _slide("de", "a", "# ## A") + _code_shared("import time")
     en = _slide("en", "a", "# ## A") + _code_shared("import time")
     de_path, en_path = _write_pair(tmp_path, de, en)
@@ -100,23 +101,198 @@ def test_item2_neutral_code_only_edit_is_silently_dropped(tmp_path: Path):
     judge = CountingJudge()
     try:
         _seed(cache, de_path, en_path)
-        # Author edits ONLY the shared, language-neutral code cell on DE.
+        # Author edits ONLY the shared, language-neutral code cell on DE — no
+        # narrative or id'd change, so the keyed classifier produces no proposal.
         de_path.write_text(
             _slide("de", "a", "# ## A") + _code_shared("import time\nx = 1"),
             encoding="utf-8",
         )
         plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
-        result = apply_plan(plan, judge=judge, translator=translator, watermark_cache=cache)
+        apply_plan(plan, judge=judge, translator=translator, watermark_cache=cache)
     finally:
         cache.close()
 
-    # TODAY: the edit is invisible to the engine — no proposal, no direction.
-    assert plan.is_noop
-    assert result.applied == 0
+    # FIXED: the anchor diff detects DE drifted -> de->en direction; no keyed
+    # proposal, so it is NOT a no-op.
+    assert not plan.is_noop
+    assert plan.anchor_direction == "de->en"
+    # A neutral cell is shared verbatim — copied to the EN twin, never translated.
     assert translator.calls == []
-    # The shared code on EN is NOT updated, so the split halves now diverge.
-    assert "x = 1" not in en_path.read_text(encoding="utf-8")
-    # (Phase 3 propagates this; flip the four assertions above then.)
+    assert "x = 1" in en_path.read_text(encoding="utf-8")
+
+
+def test_item2_duplicate_construct_non_last_edit_propagates(tmp_path: Path):
+    # Two neutral cells share construct:print. Editing the NON-LAST one must still
+    # propagate — an anchor-keyed map would collapse them last-writer-wins and
+    # silently drop the edit (Issue #190 review). The ordered-hash detector sees it.
+    de = _slide("de", "a", "# ## A") + _code_shared('print("a")') + _code_shared('print("b")')
+    en = _slide("en", "a", "# ## A") + _code_shared('print("a")') + _code_shared('print("b")')
+    de_path, en_path = _write_pair(tmp_path, de, en)
+
+    cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+    translator = CountingTranslator()
+    judge = CountingJudge()
+    try:
+        _seed(cache, de_path, en_path)
+        de_path.write_text(
+            _slide("de", "a", "# ## A") + _code_shared('print("z")') + _code_shared('print("b")'),
+            encoding="utf-8",
+        )
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+        apply_plan(plan, judge=judge, translator=translator, watermark_cache=cache)
+    finally:
+        cache.close()
+
+    assert plan.anchor_direction == "de->en"
+    en_text = en_path.read_text(encoding="utf-8")
+    assert 'print("z")' in en_text  # the non-last edit propagated
+    assert 'print("a")' not in en_text
+    assert 'print("b")' in en_text  # the unchanged sibling is intact
+
+
+def test_item2b_localized_idless_code_edit_is_retranslated(tmp_path: Path):
+    # An id-less LOCALIZED code cell edited (body changed, construct stable) must
+    # be re-translated. Its ("L", kind) signature is unchanged by a body edit, so
+    # the group is force-rebuilt because the cell drifted from baseline (Phase 3b).
+    # Direction comes from a co-occurring narrative edit (single-language workflow).
+    de = _slide("de", "g", "# ## G") + _code_localized_idless("de", '# Komm\nprint("a")')
+    en = _slide("en", "g", "# ## G") + _code_localized_idless("en", '# Comment\nprint("a")')
+    de_path, en_path = _write_pair(tmp_path, de, en)
+
+    cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+    translator = CountingTranslator()
+    judge = CountingJudge()
+    try:
+        _seed(cache, de_path, en_path)
+        de_path.write_text(
+            _slide("de", "g", "# ## G erweitert")  # narrative edit -> keyed direction
+            + _code_localized_idless("de", '# Komm\nprint("b")'),  # localized code edited
+            encoding="utf-8",
+        )
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+        apply_plan(plan, judge=judge, translator=translator, watermark_cache=cache)
+    finally:
+        cache.close()
+
+    assert plan.count("edit") == 1  # the narrative edit supplies the direction
+    # The drifted localized code cell was re-translated (group force-rebuilt).
+    retranslated = [body for (_r, _sl, _tl, body) in translator.calls if 'print("b")' in body]
+    assert retranslated, f"the edited localized code must be re-translated; got {translator.calls}"
+
+
+# ---------------------------------------------------------------------------
+# Phase 3c — shared-cell divergence (both decks edited the same neutral cell)
+# ---------------------------------------------------------------------------
+
+
+def _diverge(tmp_path: Path) -> tuple[Path, Path, SyncWatermarkCache]:
+    """Seed a synced pair, then edit the SAME neutral cell differently on both halves."""
+    de = _slide("de", "a", "# ## A") + _code_shared("import time")
+    en = _slide("en", "a", "# ## A") + _code_shared("import time")
+    de_path, en_path = _write_pair(tmp_path, de, en)
+    cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+    _seed(cache, de_path, en_path)
+    de_path.write_text(
+        _slide("de", "a", "# ## A") + _code_shared("import time\nx = 1"), encoding="utf-8"
+    )
+    en_path.write_text(
+        _slide("en", "a", "# ## A") + _code_shared("import time\ny = 2"), encoding="utf-8"
+    )
+    return de_path, en_path, cache
+
+
+def test_shared_divergence_auto_heals_toward_newer_file(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("CLM_SYNC__SHARED_DIVERGENCE", raising=False)  # default auto-heal
+    de_path, en_path, cache = _diverge(tmp_path)
+    os.utime(en_path, (1_600_000_000, 1_600_000_000))  # EN older
+    os.utime(de_path, (1_600_000_900, 1_600_000_900))  # DE newer -> DE wins
+    translator = CountingTranslator()
+    judge = CountingJudge()
+    try:
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+        apply_plan(plan, judge=judge, translator=translator, watermark_cache=cache)
+    finally:
+        cache.close()
+
+    assert plan.anchor_direction == "de->en"  # newer (DE) won
+    assert any(i.severity == "warning" for i in plan.issues)
+    assert not plan.has_errors
+    en_text = en_path.read_text(encoding="utf-8")
+    assert "x = 1" in en_text  # DE's version healed onto EN
+    assert "y = 2" not in en_text
+
+
+def test_shared_divergence_error_mode_surfaces_and_writes_nothing(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("CLM_SYNC__SHARED_DIVERGENCE", "error")
+    de_path, en_path, cache = _diverge(tmp_path)
+    en_before = en_path.read_bytes()
+    translator = CountingTranslator()
+    judge = CountingJudge()
+    try:
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+        apply_plan(plan, judge=judge, translator=translator, watermark_cache=cache)
+    finally:
+        cache.close()
+
+    assert plan.has_errors
+    assert plan.anchor_direction is None
+    assert en_path.read_bytes() == en_before  # error -> the buffered apply writes nothing
+
+
+def test_shared_divergence_no_winner_errors(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("CLM_SYNC__SHARED_DIVERGENCE", raising=False)
+    de_path, en_path, cache = _diverge(tmp_path)
+    os.utime(de_path, (1_600_000_000, 1_600_000_000))  # mtimes tie, no keyed edit
+    os.utime(en_path, (1_600_000_000, 1_600_000_000))
+    try:
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+    finally:
+        cache.close()
+
+    assert plan.has_errors  # no winner -> error even in auto-heal mode
+    assert plan.anchor_direction is None
+
+
+def test_independent_cross_cell_edits_error_without_reverting(tmp_path: Path, monkeypatch):
+    # DE edits neutral cell A; EN edits a DIFFERENT neutral cell B (two compatible
+    # one-sided edits). A whole-file divergence verdict + auto-heal would pick one
+    # winner and silently REVERT the other's edit (Phase 3c review, the data-loss
+    # bug). Cell-precise classification makes this irreconcilable -> error -> the
+    # buffered apply writes nothing, so NEITHER edit is lost.
+    monkeypatch.delenv("CLM_SYNC__SHARED_DIVERGENCE", raising=False)  # default auto-heal
+    de = _slide("de", "a", "# ## A") + _code_shared("import time") + _code_shared("import os")
+    en = _slide("en", "a", "# ## A") + _code_shared("import time") + _code_shared("import os")
+    de_path, en_path = _write_pair(tmp_path, de, en)
+    cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+    try:
+        _seed(cache, de_path, en_path)
+        de_path.write_text(
+            _slide("de", "a", "# ## A")
+            + _code_shared("import time\nx = 1")
+            + _code_shared("import os"),
+            encoding="utf-8",
+        )
+        en_path.write_text(
+            _slide("en", "a", "# ## A")
+            + _code_shared("import time")
+            + _code_shared("import os\ny = 2"),
+            encoding="utf-8",
+        )
+        os.utime(
+            de_path, (1_600_000_900, 1_600_000_900)
+        )  # DE newer -> would have won + reverted EN
+        os.utime(en_path, (1_600_000_000, 1_600_000_000))
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+        apply_plan(
+            plan, judge=CountingJudge(), translator=CountingTranslator(), watermark_cache=cache
+        )
+    finally:
+        cache.close()
+
+    assert plan.has_errors
+    assert plan.anchor_direction is None
+    assert "x = 1" in de_path.read_text(encoding="utf-8")  # DE's edit preserved
+    assert "y = 2" in en_path.read_text(encoding="utf-8")  # EN's edit NOT reverted
 
 
 # ---------------------------------------------------------------------------

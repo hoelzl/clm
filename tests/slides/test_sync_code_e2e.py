@@ -25,7 +25,7 @@ from clm.cli.commands.slides_sync import CACHE_DB_NAME, slides_sync_cmd
 from clm.infrastructure.llm.cache import SyncWatermarkCache
 from clm.infrastructure.llm.ollama_client import SyncProposal
 from clm.notebooks.slide_parser import parse_cells
-from clm.slides.sync_plan import ordered_sync_cells
+from clm.slides.sync_plan import watermark_rows
 from clm.slides.sync_translate import TranslationError
 from clm.slides.sync_writeback import role_of
 
@@ -304,16 +304,15 @@ def _seed_watermark(cache_dir: Path, de_path: Path, en_path: Path, de: str, en: 
     cache_dir.mkdir(parents=True, exist_ok=True)
     wm = SyncWatermarkCache(cache_dir / CACHE_DB_NAME)
     try:
-        for lang, text in (("de", de), ("en", en)):
-            cells = ordered_sync_cells(parse_cells(text), lang)
-            wm.put_deck(
-                de_path=str(de_path),
-                en_path=str(en_path),
-                lang=lang,
-                cells=[
-                    (c.position, c.slide_id, c.role, c.content_hash, c.construct) for c in cells
-                ],
-            )
+        # Membership-widened, mirroring sync_apply._record_watermark — so the
+        # baseline carries the "shared" partition the item-2 anchor diff needs.
+        de_rows = watermark_rows(parse_cells(de))
+        en_rows = watermark_rows(parse_cells(en))
+        wm.put_deck(de_path=str(de_path), en_path=str(en_path), lang="de", cells=de_rows["de"])
+        wm.put_deck(de_path=str(de_path), en_path=str(en_path), lang="en", cells=en_rows["en"])
+        wm.put_deck(
+            de_path=str(de_path), en_path=str(en_path), lang="shared", cells=de_rows["shared"]
+        )
     finally:
         wm.close()
 

@@ -433,6 +433,29 @@ invariant. Gate releases on `pytest -m "not docker"`.
 3. **Item 2** (§7): the `align_anchored` pass (§6) + single-entity neutral model
    + auto-heal/warn. The largest new module; default-on-overridable (mirroring
    the #166 default-flip).
+   - **✅ Shipped (3a/3b/3c).** Chosen mechanism: **structural-pass reuse**, not
+     proposal-emission — `align_anchored` produces a direction (and a divergence
+     verdict); the existing `apply_code_structure` does the propagation.
+     **3a (neutral, §7a):** `align_anchored` compares the `shared` partition as an
+     *ordered hash sequence* (`_shared_hashes`, **not** an anchor map — a construct
+     anchor isn't content-unique, so a map collapses duplicates last-writer-wins;
+     this is the recurring guard, applied here too). It gates first on whether the
+     halves even disagree (robust to a pre-1b / no-`shared` watermark), then on
+     which side drifted vs baseline → `anchor_direction`, consumed by the
+     structural pass as a fallback when the keyed walk has none; the neutral cell's
+     `("S", body)` signature already differs, so its group rebuilds and `_copy_cell`
+     splices it verbatim (no LLM). **3b (localized id-less, §7b):** a body edit
+     leaves the `("L", kind)` signature unchanged, so `apply_code_structure`
+     force-rebuilds a group when it holds a localized id-less cell whose anchor is
+     in the (Counter-deduped) baseline with a changed hash; the changed cell is
+     re-translated, unchanged siblings reused (Phase 2). **3c (divergence, §7a):**
+     a shared cell edited differently on both decks → `_resolve_divergence_winner`
+     (keyed direction → newer mtime → none); auto-heal propagates the winner with a
+     *warning* (default), `CLM_SYNC__SHARED_DIVERGENCE=error` surfaces it as an
+     error and (via the Phase 0 buffered swap) writes nothing. The no-op harness
+     held at 81/212, 0 violations through all three. Residuals: an *isolated*
+     localized-only edit with no other direction signal, and a construct-renaming
+     edit, are §10 territory.
 4. **Deterministic `def-my-fun` id-migration** (§9): the one gated file-write,
    strictly scoped to already-id'd, drifted cells; symmetric localized chokepoint.
 5. **Bounded Opus recovery** (§10): `sync_alignments` table; `--llm-recover`

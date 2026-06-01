@@ -61,6 +61,7 @@ from clm.slides.sync_writeback import (
     build_twin_cell,
     cell_content_hash,
     role_of,
+    row_anchor,
 )
 
 if TYPE_CHECKING:
@@ -1076,20 +1077,6 @@ def content_index(path: Path, lang: str) -> dict[tuple[str, str], str]:
     return index
 
 
-def _row_anchor(slide_id: str | None, construct: str | None, content_hash: str) -> str:
-    """The content anchor of a watermark row (mirrors :func:`sync_writeback.anchor_of`).
-
-    Derives the same ``id: > construct: > hash:`` identity from a stored row that
-    ``anchor_of`` derives from a live cell, so the structural pass can match a
-    current cell against its baseline by anchor.
-    """
-    if slide_id is not None:
-        return f"id:{slide_id}"
-    if construct is not None:
-        return f"construct:{construct}"
-    return f"hash:{content_hash}"
-
-
 def _baseline_anchor_hashes(
     cache: SyncWatermarkCache | None,
     de_path: Path,
@@ -1108,7 +1095,7 @@ def _baseline_anchor_hashes(
         return out
     for lang in ("de", "en"):
         rows = cache.get_deck(str(de_path), str(en_path), lang)
-        anchors = [_row_anchor(sid, construct, chash) for (_p, sid, _r, chash, construct) in rows]
+        anchors = [row_anchor(sid, construct, chash) for (_p, sid, _r, chash, construct) in rows]
         # A construct anchor is only a *name* (``extract_from_code``), so it is not
         # content-unique: two cells sharing it (two ``import os``, two
         # ``def solution``) cannot be told apart by anchor. Admit an anchor to the

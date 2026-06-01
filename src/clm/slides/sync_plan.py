@@ -29,24 +29,34 @@ since the last sync* — a git-immune signal that survives committing the deck.
 
 from __future__ import annotations
 
+import logging
+import os
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+logger = logging.getLogger(__name__)
+
 from clm.notebooks.slide_parser import Cell, CellMetadata, parse_cells
-from clm.slides.sync_writeback import cell_content_hash, construct_of, role_of
+from clm.slides.sync_writeback import (
+    cell_content_hash,
+    construct_of,
+    role_of,
+)
 
 if TYPE_CHECKING:
     from clm.infrastructure.llm.cache import SyncWatermarkCache
 
 __all__ = [
     "MEMBERSHIP_ROLES",
+    "AnchorAlignment",
     "BaselineCell",
     "CurrentCell",
     "PlanIssue",
     "Proposal",
     "SyncPlan",
+    "align_anchored",
     "build_sync_plan",
     "classify_changes",
     "ordered_sync_cells",
@@ -155,6 +165,10 @@ class SyncPlan:
     proposals: list[Proposal] = field(default_factory=list)
     issues: list[PlanIssue] = field(default_factory=list)
     in_sync_count: int = 0
+    # Direction a code-only (language-neutral) change must propagate when the
+    # keyed classifier found none — the Issue #190 item-2 signal. ``None`` when
+    # no non-keyed cell drifted. Consumed by the structural pass (sync_code).
+    anchor_direction: str | None = None
 
     @property
     def has_baseline(self) -> bool:
@@ -166,8 +180,12 @@ class SyncPlan:
 
     @property
     def is_noop(self) -> bool:
-        """True when there is nothing to apply (and nothing went wrong)."""
-        return not self.proposals and not self.has_errors
+        """True when there is nothing to apply (and nothing went wrong).
+
+        A neutral code-only edit (item 2) produces no proposal but sets
+        ``anchor_direction``, so it is *not* a no-op even with an empty plan.
+        """
+        return not self.proposals and not self.has_errors and self.anchor_direction is None
 
     def count(self, kind: str) -> int:
         return sum(1 for p in self.proposals if p.kind == kind)
@@ -287,6 +305,167 @@ def watermark_rows(
         )
         pos[partition] += 1
     return out
+
+
+def _shared_hashes(cells: list[Cell]) -> list[str]:
+    """Ordered content hashes of the language-neutral (``shared``) cells of a file.
+
+    An **ordered sequence**, deliberately *not* an ``anchor -> hash`` map: a
+    construct anchor is only a name (``extract_from_code``), so it is not
+    content-unique — two neutral cells sharing one (two ``import os``, two
+    ``def solution``, two ``print(...)``) would collapse last-writer-wins in a map
+    and hide a one-sided edit to the non-last one, silently reintroducing the very
+    item-2 drop this detects (Issue #190 review). The ``shared`` partition is
+    intrinsically ordered (``watermark_rows`` records positions) and byte-identical
+    across halves under ``unify``, so an ordered-hash compare is simultaneously the
+    unify check (de == en) and the drift check (current vs baseline), with no
+    anchor-uniqueness assumption — mirroring the Counter / unique-match guards the
+    Phase 2 anchor paths already apply.
+    """
+    return [chash for (_pos, _sid, _role, chash, _construct) in watermark_rows(cells)["shared"]]
+
+
+@dataclass(frozen=True)
+class AnchorAlignment:
+    """How the language-neutral cells drifted, and what the sync should do.
+
+    - ``direction`` set, ``diverged``/``irreconcilable`` false → a clean one-sided
+      drift to propagate.
+    - ``diverged`` → a *same-cell* §7a conflict (both decks edited the same neutral
+      cell differently); apply the §7a winner policy. ``direction``, if set, is the
+      only **safe** healing direction (the other side also has independent edits to
+      preserve); ``None`` means either direction is safe → use winner-selection.
+    - ``irreconcilable`` → the two decks edited **different** neutral cells, so no
+      single propagation direction can reconcile them without reverting one →
+      surface an error, never auto-heal (Issue #190 Phase 3c review).
+    """
+
+    direction: str | None
+    diverged: bool = False
+    irreconcilable: bool = False
+
+
+def align_anchored(
+    de_cells: list[Cell],
+    en_cells: list[Cell],
+    baseline_shared: list[str],
+) -> AnchorAlignment:
+    """Detect a code-only (language-neutral) change the keyed classifier missed.
+
+    Issue #190 item 2 (Phase 3a/3c). A neutral shared cell is byte-identical across
+    the split halves (the ``unify`` invariant), and the keyed engine never sees
+    it — so an author editing one half alone yields no proposal and no direction,
+    and the change is silently dropped.
+
+    First gate on whether the halves even **disagree**: if every neutral cell is
+    byte-identical across de and en, ``unify`` holds and there is nothing to
+    propagate, *whatever the baseline says*. This keeps the pass robust to a
+    watermark with no recorded ``shared`` partition (a deck with no neutral cells,
+    or a pre-Phase-1b baseline), which must not be mistaken for a divergence.
+
+    When the halves disagree, classify **per cell** (positionally) against the
+    baseline — a whole-file verdict would conflate "de edited cell A, en edited a
+    *different* cell B" (two compatible edits) with a real conflict, and then
+    auto-healing one direction would silently revert the other's edit (the Phase 3c
+    review's data-loss finding). A *loser-only* drift (a cell one half changed and
+    the other left at baseline) cannot be overwritten safely; if both halves have
+    one, no single direction is safe → irreconcilable.
+    """
+    de_shared = _shared_hashes(de_cells)
+    en_shared = _shared_hashes(en_cells)
+    if de_shared == en_shared:
+        return AnchorAlignment(direction=None)
+
+    if not baseline_shared:
+        # The halves disagree but no ``shared`` baseline was recorded (a
+        # pre-Phase-1b watermark, or a deck synced before membership widening).
+        # We cannot tell which half drifted, so defer entirely to the keyed
+        # direction rather than inventing a divergence/error. A later clean sync
+        # records the partition, after which analysis proceeds normally.
+        return AnchorAlignment(direction=None)
+
+    # Positional classification needs the three sequences aligned; a length change
+    # means a neutral cell was added/removed. Then a one-sided structural change is
+    # a clean direction, but a both-sided one cannot be positionally reconciled.
+    if not (len(de_shared) == len(en_shared) == len(baseline_shared)):
+        de_drifted = de_shared != baseline_shared
+        en_drifted = en_shared != baseline_shared
+        if de_drifted and not en_drifted:
+            return AnchorAlignment(direction="de->en")
+        if en_drifted and not de_drifted:
+            return AnchorAlignment(direction="en->de")
+        return AnchorAlignment(direction=None, irreconcilable=True)
+
+    de_only = en_only = conflict = False
+    for d, e, b in zip(de_shared, en_shared, baseline_shared, strict=True):
+        if d == e:
+            continue
+        if d != b and e != b:
+            conflict = True  # same cell, both edited differently — the §7a case
+        elif d != b:
+            de_only = True  # de edited a cell en left at baseline
+        else:
+            en_only = True  # en edited a cell de left at baseline
+
+    if de_only and en_only:
+        # Independent edits to DIFFERENT neutral cells — a single direction would
+        # revert one. Refuse to guess.
+        return AnchorAlignment(direction=None, irreconcilable=True)
+    if de_only:
+        # de carries the only loser-safe edits; de->en is the one safe direction.
+        return AnchorAlignment(direction="de->en", diverged=conflict)
+    if en_only:
+        return AnchorAlignment(direction="en->de", diverged=conflict)
+    # Only same-cell conflicts: either direction is §7a-safe → winner-selection.
+    return AnchorAlignment(direction=None, diverged=True)
+
+
+# ``CLM_SYNC__SHARED_DIVERGENCE`` (the §7a knob): how to handle a language-neutral
+# cell edited differently on both decks. ``auto-heal`` propagates the winning side
+# with a warning; ``error`` surfaces it and writes nothing.
+_SHARED_DIVERGENCE_ENV = "CLM_SYNC__SHARED_DIVERGENCE"
+
+
+def _shared_divergence_mode() -> str:
+    """The ``sync.shared_divergence`` mode: ``auto-heal`` (default) or ``error``."""
+    value = os.environ.get(_SHARED_DIVERGENCE_ENV, "auto-heal").strip().lower()
+    if value not in ("auto-heal", "error"):
+        logger.warning(
+            "%s=%r is invalid (expected 'auto-heal' or 'error'); using 'auto-heal'",
+            _SHARED_DIVERGENCE_ENV,
+            value,
+        )
+        return "auto-heal"
+    return value
+
+
+def _keyed_direction(plan: SyncPlan) -> str | None:
+    """The single keyed propagation direction of the plan, or ``None``."""
+    directions = {p.direction for p in plan.proposals if p.direction in ("de->en", "en->de")}
+    return next(iter(directions)) if len(directions) == 1 else None
+
+
+def _resolve_divergence_winner(plan: SyncPlan, de_path: Path, en_path: Path) -> str | None:
+    """Pick the winning direction for a diverged shared cell (§7a), or ``None``.
+
+    Precedence: (i) the run's established keyed edit direction (the deck the author
+    touched this session — the common case); else (ii) the newer-mtime file as a
+    tiebreak; else (iii) ``None`` — no signal, cannot heal, treat as an error even
+    in auto-heal mode.
+    """
+    keyed = _keyed_direction(plan)
+    if keyed is not None:
+        return keyed
+    try:
+        de_mtime = de_path.stat().st_mtime
+        en_mtime = en_path.stat().st_mtime
+    except OSError:
+        return None
+    if de_mtime > en_mtime:
+        return "de->en"
+    if en_mtime > de_mtime:
+        return "en->de"
+    return None
 
 
 def _baseline_from_watermark(
@@ -917,6 +1096,7 @@ def build_sync_plan(
 
     de_baseline: list[BaselineCell] | None = None
     en_baseline: list[BaselineCell] | None = None
+    baseline_shared: list[str] | None = None
     source = "none"
 
     if watermark_cache is not None and watermark_cache.has_pair(str(de_path), str(en_path)):
@@ -926,6 +1106,15 @@ def build_sync_plan(
         en_baseline = _baseline_from_watermark(
             watermark_cache.get_deck(str(de_path), str(en_path), "en")
         )
+        # Ordered content hashes of the baseline's neutral cells (position order),
+        # matching _shared_hashes — see align_anchored for why this is a sequence,
+        # not an anchor map.
+        baseline_shared = [
+            chash
+            for (_pos, _sid, _role, chash, _construct) in watermark_cache.get_deck(
+                str(de_path), str(en_path), "shared"
+            )
+        ]
         source = "watermark"
     elif allow_git_fallback:
         gb_de = _baseline_from_git_head(de_path)
@@ -934,7 +1123,7 @@ def build_sync_plan(
             de_baseline, en_baseline = gb_de, gb_en
             source = "git-head"
 
-    return classify_changes(
+    plan = classify_changes(
         de_current,
         en_current,
         de_baseline,
@@ -943,6 +1132,71 @@ def build_sync_plan(
         en_path=en_path,
         baseline_source=source,
     )
+
+    # Item-2 (Phase 3a): detect a language-neutral code-only change the keyed
+    # classifier cannot see, and hand its direction to the structural pass. Only
+    # against a real (watermark) baseline; the keyed direction, when present,
+    # already drives the structural pass, so the anchor direction is a *fallback*.
+    if baseline_shared is not None:
+        alignment = align_anchored(de_cells, en_cells, baseline_shared)
+        if alignment.irreconcilable:
+            plan.issues.append(
+                PlanIssue(
+                    severity="error",
+                    slide_id=None,
+                    reason="language-neutral cells were edited independently on both "
+                    "decks (different cells); a single-direction sync cannot reconcile "
+                    "them without reverting one — resolve manually",
+                )
+            )
+        elif alignment.diverged:
+            _apply_divergence(plan, de_path, en_path, forced=alignment.direction)
+        else:
+            plan.anchor_direction = alignment.direction
+
+    return plan
+
+
+def _apply_divergence(
+    plan: SyncPlan, de_path: Path, en_path: Path, *, forced: str | None = None
+) -> None:
+    """Resolve a same-cell shared divergence per the §7a policy.
+
+    ``auto-heal`` (default): propagate the winning side and emit a *warning*; the
+    heal is written but the watermark is held by the issue, so a second run
+    confirms it. ``error`` mode — or auto-heal with no determinable winner — emits
+    an *error* issue, so the buffered apply writes nothing and the divergence is
+    surfaced rather than guessed. ``forced`` is the only loser-safe direction when
+    one side also carries independent edits; otherwise the winner is selected
+    (keyed direction → newer mtime).
+    """
+    mode = _shared_divergence_mode()
+    winner = forced if forced is not None else _resolve_divergence_winner(plan, de_path, en_path)
+    if winner is not None and mode == "auto-heal":
+        plan.anchor_direction = winner
+        plan.issues.append(
+            PlanIssue(
+                severity="warning",
+                slide_id=None,
+                reason=f"a language-neutral cell diverged on both decks; auto-healed "
+                f"toward {winner} (set CLM_SYNC__SHARED_DIVERGENCE=error to surface "
+                f"instead) — review the git diff",
+            )
+        )
+    else:
+        detail = (
+            "CLM_SYNC__SHARED_DIVERGENCE=error"
+            if winner is not None
+            else "no winner (edited on both decks, mtimes tie)"
+        )
+        plan.issues.append(
+            PlanIssue(
+                severity="error",
+                slide_id=None,
+                reason=f"a language-neutral cell diverged on both decks; {detail} — "
+                f"resolve manually",
+            )
+        )
 
 
 def render_plan(plan: SyncPlan) -> str:
