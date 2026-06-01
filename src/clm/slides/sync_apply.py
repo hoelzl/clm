@@ -60,6 +60,7 @@ from clm.slides.sync_writeback import (
     FileState,
     build_twin_cell,
     cell_content_hash,
+    construct_of,
     role_of,
     row_anchor,
 )
@@ -104,6 +105,7 @@ class ApplyResult:
     applied_move: int = 0
     applied_add: int = 0
     applied_rename: int = 0
+    applied_migrate: int = 0  # a drifted slide_id moved back onto its construct (§9)
     in_sync: int = 0  # an edit the judge decided needed no change
     deferred: int = 0  # conflict (or moves/adds declined this pass)
     watermark_recorded: bool = False
@@ -117,6 +119,7 @@ class ApplyResult:
             + self.applied_move
             + self.applied_add
             + self.applied_rename
+            + self.applied_migrate
         )
 
     @property
@@ -227,6 +230,12 @@ def apply_plan(
     # groups, reusing the narrative / aux / id'd-code twins the steps above just
     # placed. Cross-group code moves fall out of rebuilding both groups from the
     # source. Runs after adds/moves so every twin it pulls is in place.
+    # Deterministic id-migration (Issue #190 §9): if the author split an id'd code
+    # cell, the slide_id is left on the wrong half. Move it back onto the cell whose
+    # construct it names BEFORE the structural pass propagates, so the corrected ids
+    # ride along to the twin.
+    _migrate_drifted_ids(plan, de_state, en_state, watermark_cache, result)
+
     baseline_anchors = _baseline_anchor_hashes(watermark_cache, plan.de_path, plan.en_path)
     apply_code_structure(plan, de_state, en_state, translator, result, baseline_anchors)
 
@@ -1107,6 +1116,104 @@ def _baseline_anchor_hashes(
             if counts[anchor] == 1:
                 out[lang][anchor] = chash
     return out
+
+
+def _effective_direction(plan: SyncPlan) -> str | None:
+    """The pass's single propagation direction: keyed proposals, else anchor diff."""
+    keyed = {p.direction for p in plan.proposals if p.direction in ("de->en", "en->de")}
+    if len(keyed) == 1:
+        return next(iter(keyed))
+    return plan.anchor_direction
+
+
+def _baseline_constructs(
+    cache: SyncWatermarkCache | None, de_path: Path, en_path: Path
+) -> dict[str, str]:
+    """Per-slide-id baseline AST construct slug from the widened watermark (§9).
+
+    A cell wearing an id whose *current* construct no longer matches this baseline
+    has drifted off its content — the signal the id-migration keys on.
+    """
+    out: dict[str, str] = {}
+    if cache is None:
+        return out
+    for lang in ("de", "en", "shared"):
+        for _pos, sid, _role, _chash, construct in cache.get_deck(str(de_path), str(en_path), lang):
+            if sid is not None and construct is not None:
+                out.setdefault(sid, construct)
+    return out
+
+
+def _migrate_drifted_ids(
+    plan: SyncPlan,
+    de_state: FileState,
+    en_state: FileState,
+    cache: SyncWatermarkCache | None,
+    result: ApplyResult,
+) -> None:
+    """Move a slide_id that drifted off its construct back onto the right cell (§9).
+
+    Scoped to language-**neutral** code cells (the maintainer's def-my-fun example):
+    when the author splits an id'd cell — e.g. adds an ``import`` above a ``def``,
+    leaving the id on the import — the id wears the wrong construct while a
+    *different* id-less cell carries the construct the id names in the baseline. The
+    mismatch is unambiguous, so move the id down and mint a fresh content slug on the
+    orphan: one targeted header write each, no LLM. Runs on the propagation **source**
+    deck only; the structural pass then carries the corrected ids to the twin.
+    Ambiguous cases — no/duplicate construct match (the recurring non-uniqueness
+    guard) or a co-occurring function rename — are left untouched for §10 recovery.
+    (Localized id'd cells need a symmetric both-deck write; deferred.)
+    """
+    direction = _effective_direction(plan)
+    if direction is None:
+        return
+    source = de_state if direction == "de->en" else en_state
+    baseline = _baseline_constructs(cache, plan.de_path, plan.en_path)
+    if not baseline:
+        return
+
+    used_ids = {
+        cell.metadata.slide_id
+        for st in (de_state, en_state)
+        for cell in st.cells
+        if cell.metadata.slide_id
+    }
+    idless_by_construct: dict[str, list[RawCell]] = {}
+    construct_count: Counter = Counter()
+    for cell in source.cells:
+        meta = cell.metadata
+        if meta.is_j2 or meta.lang is not None:
+            continue  # neutral cells only
+        construct = construct_of(meta, cell.body)
+        if construct is None:
+            continue
+        construct_count[construct] += 1
+        if meta.slide_id is None:
+            idless_by_construct.setdefault(construct, []).append(cell)
+
+    for cell in list(source.cells):
+        meta = cell.metadata
+        if meta.is_j2 or meta.lang is not None or meta.slide_id is None:
+            continue
+        base_construct = baseline.get(meta.slide_id)
+        current_construct = construct_of(meta, cell.body)
+        if (
+            base_construct is None
+            or current_construct is None
+            or current_construct == base_construct
+        ):
+            continue  # the id still names its content (or there is nothing to key on)
+        targets = idless_by_construct.get(base_construct, [])
+        if len(targets) != 1 or construct_count[base_construct] != 1:
+            continue  # ambiguous (no/duplicate match) -> defer to §10 recovery
+        sid = meta.slide_id
+        _stamp_slide_id(targets[0], sid)  # the id follows its construct
+        new_slug = resolve_collision(current_construct, used_ids)
+        used_ids.add(new_slug)
+        _stamp_slide_id(cell, new_slug)  # the orphan gets a fresh content slug
+        source.dirty = True
+        result.applied_migrate += 1
+        idless_by_construct.pop(base_construct, None)  # at most one migration per construct
 
 
 def _record_watermark(

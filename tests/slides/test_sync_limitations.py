@@ -45,6 +45,11 @@ def _code_localized_idless(lang: str, body: str) -> str:
     return f'# %% lang="{lang}"\n{body}\n'
 
 
+def _code_idd_neutral(sid: str, body: str) -> str:
+    """A language-neutral code cell carrying a slide_id (the def-my-fun shape)."""
+    return f'# %% tags=["keep"] slide_id="{sid}"\n{body}\n'
+
+
 def _write_pair(tmp_path: Path, de: str, en: str) -> tuple[Path, Path]:
     de_path = tmp_path / "deck.de.py"
     en_path = tmp_path / "deck.en.py"
@@ -293,6 +298,85 @@ def test_independent_cross_cell_edits_error_without_reverting(tmp_path: Path, mo
     assert plan.anchor_direction is None
     assert "x = 1" in de_path.read_text(encoding="utf-8")  # DE's edit preserved
     assert "y = 2" in en_path.read_text(encoding="utf-8")  # EN's edit NOT reverted
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 — deterministic def-my-fun id-migration (§9)
+# ---------------------------------------------------------------------------
+
+
+def test_phase4_def_my_fun_id_migration(tmp_path: Path):
+    # The author splits an id'd neutral code cell — adds `import time` above the
+    # def, leaving slide_id="def-my-fun" on the import. The id has drifted off its
+    # construct; a different id-less cell now carries `function my_fun`. The sync
+    # deterministically moves the id back to the def cell and mints a content slug
+    # on the orphan import — no LLM — and propagates the corrected ids to the twin.
+    de = _slide("de", "s", "# ## S") + _code_idd_neutral(
+        "def-my-fun", 'def my_fun():\n    print("foo")'
+    )
+    en = _slide("en", "s", "# ## S") + _code_idd_neutral(
+        "def-my-fun", 'def my_fun():\n    print("foo")'
+    )
+    de_path, en_path = _write_pair(tmp_path, de, en)
+
+    cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+    translator = CountingTranslator()
+    judge = CountingJudge()
+    try:
+        _seed(cache, de_path, en_path)
+        de_path.write_text(
+            _slide("de", "s", "# ## S")
+            + _code_idd_neutral("def-my-fun", "import time")  # id left on the import half
+            + _code_shared('def my_fun():\n    time.sleep(1)\n    print("foo")'),  # id-less def
+            encoding="utf-8",
+        )
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+        result = apply_plan(plan, judge=judge, translator=translator, watermark_cache=cache)
+    finally:
+        cache.close()
+
+    assert result.applied_migrate == 1
+    assert translator.calls == []  # deterministic, no LLM
+    for path in (de_path, en_path):  # corrected ids on BOTH decks (neutral -> symmetric)
+        by_id = {
+            c.metadata.slide_id: c
+            for c in parse_cells(path.read_text(encoding="utf-8"))
+            if c.metadata.slide_id
+        }
+        assert "def my_fun" in by_id["def-my-fun"].content  # id followed its construct
+        assert "time.sleep(1)" in by_id["def-my-fun"].content  # the edited body came too
+        assert "import time" in by_id["import-time"].content  # orphan got a content slug
+
+
+def test_phase4_no_migration_without_matching_idless_cell(tmp_path: Path):
+    # The id drifted (def -> import on the SAME cell) but there is NO id-less cell
+    # carrying the old construct (no split — a genuine replacement). The migration
+    # must NOT fire (it is not an unambiguous id-move); the cell is left for the
+    # ordinary edit/structural path.
+    de = _slide("de", "s", "# ## S") + _code_idd_neutral(
+        "def-my-fun", 'def my_fun():\n    print("foo")'
+    )
+    en = _slide("en", "s", "# ## S") + _code_idd_neutral(
+        "def-my-fun", 'def my_fun():\n    print("foo")'
+    )
+    de_path, en_path = _write_pair(tmp_path, de, en)
+
+    cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+    try:
+        _seed(cache, de_path, en_path)
+        de_path.write_text(
+            _slide("de", "s", "# ## S")
+            + _code_idd_neutral("def-my-fun", "import time"),  # replaced
+            encoding="utf-8",
+        )
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+        result = apply_plan(
+            plan, judge=CountingJudge(), translator=CountingTranslator(), watermark_cache=cache
+        )
+    finally:
+        cache.close()
+
+    assert result.applied_migrate == 0  # no id-less construct match -> no migration
 
 
 # ---------------------------------------------------------------------------
