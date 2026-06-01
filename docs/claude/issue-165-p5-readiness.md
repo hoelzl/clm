@@ -186,6 +186,12 @@ $env:CLM_HTTP_REPLAY_TRANSPORT = "mitmproxy"
 $Repro = "C:\Users\tc\Programming\Python\Tests\clm-bug-repros\issue-143-cassette-connection-pool-deadlock"
 ```
 
+Optional tuning: `CLM_MITM_STARTUP_TIMEOUT` (seconds) overrides the proxy
+readiness budget. The default is 30s; raise it only if `mitmdump did not become
+ready` fires on a loaded host. The timeout error names this var, and
+distinguishes an overloaded-but-still-starting proxy from a genuine crash
+(issue #184).
+
 | Gate | How to run | PASS criterion |
 |---|---|---|
 | 3 byte-identity, 4 tooling | `pytest tests/infrastructure/test_http_replay_mitm_cassette_format.py` | green (skip-safe w/o mitmdump) |
