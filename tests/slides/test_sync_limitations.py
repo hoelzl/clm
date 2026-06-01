@@ -211,3 +211,46 @@ def test_item3_changed_localized_code_is_still_retranslated(tmp_path: Path):
     # matches), so the translator WAS called for it.
     retranslated = [body for (_role, _sl, _tl, body) in translator.calls if "print(x)" in body]
     assert retranslated, f"a changed localized cell must be re-translated; got {translator.calls}"
+
+
+def test_item3_duplicate_construct_does_not_splice_wrong_twin(tmp_path: Path):
+    # Two id-less localized code cells in one group share a construct anchor
+    # (both `result = ...` -> construct:result). The reuse path must NOT splice an
+    # arbitrary first-match twin (which dropped one cell and duplicated the other —
+    # Issue #190 review, the critical finding). A non-unique anchor disables reuse;
+    # both cells translate, so both EN twins survive verbatim.
+    de = (
+        _slide("de", "g", "# ## G")
+        + _code_shared("import time")
+        + _code_localized_idless("de", "# A\nresult = compute_a()")
+        + _code_localized_idless("de", "# B\nresult = compute_b()")
+    )
+    en = (
+        _slide("en", "g", "# ## G")
+        + _code_shared("import time")
+        + _code_localized_idless("en", "# A\nresult = compute_a()")
+        + _code_localized_idless("en", "# B\nresult = compute_b()")
+    )
+    de_path, en_path = _write_pair(tmp_path, de, en)
+
+    cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+    translator = CountingTranslator()
+    judge = CountingJudge()
+    try:
+        _seed(cache, de_path, en_path)
+        de_path.write_text(
+            _slide("de", "g", "# ## G erweitert")  # narrative edit -> direction
+            + _code_shared("import time\nimport os")  # neutral edit -> rebuild
+            + _code_localized_idless("de", "# A\nresult = compute_a()")  # unchanged
+            + _code_localized_idless("de", "# B\nresult = compute_b()"),  # unchanged
+            encoding="utf-8",
+        )
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+        apply_plan(plan, judge=judge, translator=translator, watermark_cache=cache)
+    finally:
+        cache.close()
+
+    en_text = en_path.read_text(encoding="utf-8")
+    # Neither cell is dropped or duplicated — both bodies survive exactly once.
+    assert en_text.count("compute_a()") == 1
+    assert en_text.count("compute_b()") == 1

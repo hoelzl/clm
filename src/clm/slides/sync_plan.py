@@ -292,16 +292,24 @@ def watermark_rows(
 def _baseline_from_watermark(
     rows: list[tuple[int, str | None, str, str, str | None]],
 ) -> list[BaselineCell]:
-    # Filter out the membership-widened rows (Issue #190 §5.3): the classifier
-    # reconciles only the per-cell-synced (real-role) cells, exactly as before
-    # the widening. The synthetic rows interleave by position, but only their
-    # relative order matters to move detection — and that is preserved — so the
-    # legacy diff is byte-stable. ``construct`` is carried for the Phase 2 anchor
-    # reuse but not consumed here.
-    return [
-        BaselineCell(position=pos, slide_id=sid, role=role, content_hash=chash)
-        for (pos, sid, role, chash, _construct) in rows
+    # Drop the membership-widened rows (Issue #190 §5.3) and **re-index** the
+    # survivors into the legacy-only position space. The stored positions count
+    # *all* non-j2 cells of the partition, but the classifier compares baseline
+    # positions against ``ordered_sync_cells`` positions, which count only the
+    # real-role cells. Most consumers read position through a sort (relative
+    # order), but ``_resolve_duplicates`` compares it by *absolute* difference —
+    # so the spaces must match. The rows are in file order, so ``enumerate``
+    # reproduces exactly the indices ``ordered_sync_cells`` (and
+    # ``_baseline_from_git_head``) assign. ``construct`` is carried in the raw
+    # watermark for the Phase 2 anchor reuse but is not consumed by the classifier.
+    legacy = [
+        (sid, role, chash)
+        for (_pos, sid, role, chash, _construct) in rows
         if role not in MEMBERSHIP_ROLES
+    ]
+    return [
+        BaselineCell(position=i, slide_id=sid, role=role, content_hash=chash)
+        for i, (sid, role, chash) in enumerate(legacy)
     ]
 
 

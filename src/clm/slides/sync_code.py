@@ -325,10 +325,20 @@ def _reuse_unchanged_twin(
 
 
 def _find_by_anchor(cells: list[RawCell], anchor: str) -> RawCell | None:
-    for cell in cells:
-        if not cell.metadata.is_j2 and anchor_of(cell.metadata, cell.body) == anchor:
-            return cell
-    return None
+    """The single target cell carrying ``anchor``, or ``None`` if absent/ambiguous.
+
+    Returns ``None`` when *more than one* cell matches: a construct anchor is only
+    a name, so a duplicate (two ``import os``, two ``def greet``) cannot reliably
+    name a twin — splicing an arbitrary first match would drop one cell and
+    duplicate the other (silent cross-deck corruption). The ambiguous cells then
+    translate normally (Issue #190 review).
+    """
+    matches = [
+        cell
+        for cell in cells
+        if not cell.metadata.is_j2 and anchor_of(cell.metadata, cell.body) == anchor
+    ]
+    return matches[0] if len(matches) == 1 else None
 
 
 def _translate(

@@ -37,6 +37,7 @@ import logging
 import os
 import re
 import tempfile
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -1106,8 +1107,18 @@ def _baseline_anchor_hashes(
     if cache is None:
         return out
     for lang in ("de", "en"):
-        for _pos, sid, _role, chash, construct in cache.get_deck(str(de_path), str(en_path), lang):
-            out[lang][_row_anchor(sid, construct, chash)] = chash
+        rows = cache.get_deck(str(de_path), str(en_path), lang)
+        anchors = [_row_anchor(sid, construct, chash) for (_p, sid, _r, chash, construct) in rows]
+        # A construct anchor is only a *name* (``extract_from_code``), so it is not
+        # content-unique: two cells sharing it (two ``import os``, two
+        # ``def solution``) cannot be told apart by anchor. Admit an anchor to the
+        # reuse set only when it occurs exactly once — a non-unique anchor cannot
+        # reliably locate a twin, so its cells re-translate (the honest §12
+        # residual) rather than risk a wrong-twin splice (Issue #190 review).
+        counts = Counter(anchors)
+        for anchor, (_p, _sid, _r, chash, _c) in zip(anchors, rows, strict=True):
+            if counts[anchor] == 1:
+                out[lang][anchor] = chash
     return out
 
 

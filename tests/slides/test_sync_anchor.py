@@ -11,6 +11,7 @@ from __future__ import annotations
 from clm.notebooks.slide_parser import parse_cells
 from clm.slides.sync_plan import (
     MEMBERSHIP_ROLES,
+    _baseline_from_watermark,
     ordered_sync_cells,
     watermark_rows,
 )
@@ -125,3 +126,19 @@ class TestWatermarkRows:
         legacy = [(r[1], r[2]) for r in watermark_rows(cells)["de"] if r[2] not in MEMBERSHIP_ROLES]
         expected = [(c.slide_id, c.role) for c in ordered_sync_cells(cells, "de")]
         assert legacy == expected
+
+    def test_baseline_reindexes_legacy_positions_past_membership_rows(self):
+        # _baseline_from_watermark must re-index the real-role survivors into the
+        # legacy-only position space (0,1,...), NOT pass the membership-inflated
+        # stored positions through — else _resolve_duplicates' abs(pos - base.pos)
+        # picks the wrong copy as "original" (Issue #190 review finding 2).
+        rows = [
+            (0, None, "localized-code", "h0", "x"),  # membership row, dropped
+            (1, "dup", "slide", "h1", None),  # legacy: stored pos 1 -> re-indexed 0
+            (2, "dup", "voiceover", "h2", None),  # legacy: stored pos 2 -> re-indexed 1
+        ]
+        base = _baseline_from_watermark(rows)
+        assert [(b.position, b.slide_id, b.role) for b in base] == [
+            (0, "dup", "slide"),
+            (1, "dup", "voiceover"),
+        ]
