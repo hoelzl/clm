@@ -1132,6 +1132,16 @@ class Course(NotebookMixin):
             for lang, format_, kind, output_dir in output_specs(
                 self, self.output_root, file.skip_html
             ):
+                # Phase 6: a split source file (``.de.py`` / ``.en.py``) only
+                # emits output for its tagged language, so it can never collide
+                # with its companion. Mirror the build-time gating in
+                # ``NotebookFile.get_processing_operation`` — without it, a
+                # split pair is falsely flagged as a duplicate because each
+                # file's single-language title fills both ``Text`` slots (see
+                # ``find_notebook_titles``).
+                if file.output_language_filter is not None and lang != file.output_language_filter:
+                    continue
+
                 ext = ext_for(format_, file.prog_lang)
                 file_name = file.file_name(lang, ext)
                 actual_output_dir = file.output_dir(output_dir, lang)
