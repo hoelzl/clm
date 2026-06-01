@@ -298,7 +298,11 @@ class TestDeferredAndWatermark:
 
     def test_one_edit_error_does_not_block_a_remove(self, tmp_path: Path):
         # A plan with a remove (deterministic) and an edit that errors (no
-        # judge): the remove still applies; the error is recorded.
+        # judge): the per-proposal loop is not aborted by the edit error — the
+        # remove is still *processed* in memory (applied_remove == 1). But the
+        # buffered temp-swap (Issue #190 item 1) makes the *disk write* atomic:
+        # because the pass errored, NEITHER deck is written, so the (in-memory)
+        # remove is rolled back on disk and EN keeps both slides.
         de_path, en_path = _write_pair(
             tmp_path,
             _slide("de", "a", "# ## A") + _slide("de", "b", "# ## B"),
@@ -311,14 +315,134 @@ class TestDeferredAndWatermark:
         plan.proposals.append(Proposal(kind="edit", role="slide", direction="de->en", slide_id="a"))
         result = apply_plan(plan, judge=None, watermark_cache=None)
 
-        assert result.applied_remove == 1
+        assert result.applied_remove == 1  # processed in memory (loop not aborted)
         assert result.has_errors  # the edit had no judge
         en_ids = [
             c.metadata.slide_id
             for c in parse_cells(en_path.read_text("utf-8"))
             if c.metadata.slide_id
         ]
-        assert en_ids == ["a"]
+        assert en_ids == ["a", "b"]  # erroring pass writes nothing — remove not persisted
+
+
+# ---------------------------------------------------------------------------
+# apply_plan — buffered temp-swap atomicity (Issue #190 item 1)
+# ---------------------------------------------------------------------------
+
+
+class TestAtomicWrites:
+    def test_render_matches_flush_bytes(self, tmp_path: Path):
+        # The temp-swap writes FileState.render() verbatim; it must reproduce
+        # flush()'s exact bytes, or the "clean path is byte-identical to today"
+        # contract breaks.
+        path = tmp_path / "deck.en.py"
+        path.write_text(
+            _slide("en", "a", "# ## A") + _slide("en", "b", "# ## B"),
+            encoding="utf-8",
+        )
+        state = FileState.load(path)
+        assert state.replace_cell_body("a", "slide", "# ## A\n# - one") is True
+        rendered = state.render()
+        state.flush()
+        assert path.read_bytes() == rendered.encode("utf-8")
+
+    def test_clean_pass_persists_and_leaves_no_temp_file(self, tmp_path: Path):
+        de = _slide("de", "intro", "# ## Einleitung\n# - eins")
+        en = _slide("en", "intro", "# ## Introduction\n# - one")
+        de_path, en_path = _write_pair(tmp_path, de, en)
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_watermark(cache, de_path, en_path)
+            de_path.write_text(
+                _slide("de", "intro", "# ## Einleitung\n# - eins\n# - zwei"), encoding="utf-8"
+            )
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            judge = _update_judge("# ## Introduction\n# - one\n# - two")
+            result = apply_plan(plan, judge=judge, watermark_cache=cache)
+        finally:
+            cache.close()
+
+        assert not result.has_errors
+        assert result.applied_edit == 1
+        assert "- two" in en_path.read_text(encoding="utf-8")
+        # The atomic os.replace must leave no stray temp file behind.
+        assert [p.name for p in tmp_path.iterdir() if p.suffix == ".tmp"] == []
+
+    def test_clean_add_writes_both_decks(self, tmp_path: Path):
+        # An id-less add mints an id onto the DE source AND inserts the twin on
+        # EN, so a clean pass must persist BOTH decks through the temp-swap.
+        de_path, en_path = _write_pair(
+            tmp_path, _slide("de", "a", "# ## A"), _slide("en", "a", "# ## A")
+        )
+        de_before = de_path.read_bytes()
+        en_before = en_path.read_bytes()
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_watermark(cache, de_path, en_path)
+            de_path.write_text(
+                _slide("de", "a", "# ## A") + _slide_idless("de", "# ## Neu"),
+                encoding="utf-8",
+            )
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            translator = StaticSlideTranslator(mapping={"# ## Neu": "# ## New"})
+            result = apply_plan(plan, judge=None, translator=translator, watermark_cache=cache)
+        finally:
+            cache.close()
+
+        assert not result.has_errors
+        assert result.applied_add == 1
+        assert de_path.read_bytes() != de_before  # DE got the minted id
+        assert en_path.read_bytes() != en_before  # EN got the inserted twin
+        assert "# ## New" in en_path.read_text(encoding="utf-8")
+        assert [p.name for p in tmp_path.iterdir() if p.suffix == ".tmp"] == []
+
+    def test_erroring_pass_writes_neither_deck(self, tmp_path: Path):
+        # A successful edit (dirties EN in memory) followed by a proposal that
+        # errors: the buffered swap rolls the WHOLE pass back, so the successful
+        # edit is not persisted. Pre-#190 the code flushed it.
+        de = _slide("de", "a", "# ## A") + _slide("de", "b", "# ## B")
+        en = _slide("en", "a", "# ## A") + _slide("en", "b", "# ## B")
+        de_path, en_path = _write_pair(tmp_path, de, en)
+        de_before = de_path.read_bytes()
+        en_before = en_path.read_bytes()
+
+        plan = SyncPlan(de_path=de_path, en_path=en_path, baseline_source="watermark")
+        # edit "a": the judge rewrites it -> succeeds, dirties EN in memory.
+        plan.proposals.append(Proposal(kind="edit", role="slide", direction="de->en", slide_id="a"))
+        # remove a ghost cell: target not found -> apply-time error.
+        plan.proposals.append(
+            Proposal(kind="remove", role="slide", direction="de->en", slide_id="ghost")
+        )
+        result = apply_plan(plan, judge=_update_judge("# ## A (updated)"), watermark_cache=None)
+
+        assert result.has_errors
+        assert result.applied_edit == 1  # the edit succeeded in memory...
+        assert en_path.read_bytes() == en_before  # ...but the erroring pass wrote nothing
+        assert de_path.read_bytes() == de_before
+        assert [p.name for p in tmp_path.iterdir() if p.suffix == ".tmp"] == []
+
+    def test_classifier_error_also_rolls_back_a_valid_edit(self, tmp_path: Path):
+        # A *classifier* error (plan.has_errors, e.g. an unresolvable duplicate id)
+        # coexisting with a valid edit: the whole pass rolls back even though no
+        # apply-time error occurred. This honors design §11 ("write only if the
+        # whole pass is error-free") and future-proofs the later phases that add
+        # classifier errors not backed by a physical residual-duplicate fail-safe.
+        de = _slide("de", "a", "# ## A") + _slide("de", "b", "# ## B")
+        en = _slide("en", "a", "# ## A") + _slide("en", "b", "# ## B")
+        de_path, en_path = _write_pair(tmp_path, de, en)
+        en_before = en_path.read_bytes()
+
+        plan = SyncPlan(de_path=de_path, en_path=en_path, baseline_source="watermark")
+        plan.issues.append(
+            PlanIssue(severity="error", slide_id="b", reason="duplicate slide_id (synthetic)")
+        )
+        plan.proposals.append(Proposal(kind="edit", role="slide", direction="de->en", slide_id="a"))
+        result = apply_plan(plan, judge=_update_judge("# ## A (updated)"), watermark_cache=None)
+
+        assert plan.has_errors
+        assert not result.has_errors  # no APPLY-time error
+        assert result.applied_edit == 1  # the edit succeeded in memory...
+        assert en_path.read_bytes() == en_before  # ...but the classifier-error pass wrote nothing
 
 
 # ---------------------------------------------------------------------------

@@ -384,16 +384,26 @@ class FileState:
             return
         _set_trailing_blanks(original_last, sep)
 
-    def flush(self) -> None:
-        if not self.dirty:
-            return
+    def render(self) -> str:
+        """The exact text :meth:`flush` would write, computed without touching disk.
+
+        Factored out of :meth:`flush` so a buffered / atomic writer (the Issue
+        #190 temp-swap in :mod:`clm.slides.sync_apply`) can reproduce the same
+        bytes and swap the file in a single step. Mirrors flush's terminal-newline
+        restoration exactly; only meaningful to persist when :attr:`dirty`.
+        """
         text = reconstruct(self.preamble, self.cells)
         # Deleting the file's last cell drops the trailing-newline element
         # that ``split_cells`` parked on it; restore the original terminal
         # newline so a remove never emits a "No newline at end of file" diff.
         if self.ends_with_newline and not text.endswith("\n"):
             text += "\n"
-        self.path.write_text(text, encoding="utf-8", newline="\n")
+        return text
+
+    def flush(self) -> None:
+        if not self.dirty:
+            return
+        self.path.write_text(self.render(), encoding="utf-8", newline="\n")
         self.dirty = False
 
     @staticmethod
