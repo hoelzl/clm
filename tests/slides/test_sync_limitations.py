@@ -1,11 +1,10 @@
 """Behavioral tests for the two *serious* ``clm slides sync`` limitations
-(Issue #190 items 2 & 3).
+(Issue #190 items 2 & 3) — both now FIXED.
 
-* **item 2** — *still broken (Phase 3 will fix)*: a code-only edit to a
-  *language-neutral* shared cell produces no proposal, so the sync silently fails
-  to propagate it and the two split halves diverge. ``test_item2_*`` pins the
-  broken-today behavior; flip it when Phase 3 (the anchor-keyed diff +
-  deterministic copy-to-twin) lands.
+* **item 2** — *FIXED (Phase 3a)*: a code-only edit to a *language-neutral*
+  shared cell is detected by the anchor diff (``align_anchored``) — which side
+  drifted from the watermark gives the direction — and the structural pass copies
+  it verbatim to the twin, no LLM. ``test_item2_*`` asserts the fix.
 * **item 3** — *FIXED (Phase 2)*: when a slide group is rebuilt for a *sibling's*
   sake, an unchanged id-less localized code cell is spliced verbatim by its
   content anchor instead of being re-translated. ``test_item3_*`` asserts the fix
@@ -86,11 +85,12 @@ class CountingJudge:
 
 
 # ---------------------------------------------------------------------------
-# Item 2 — a code-only change to a neutral shared cell is not propagated
+# Item 2 — FIXED (Phase 3a): a code-only change to a neutral shared cell is
+# detected by the anchor diff and copied verbatim to the twin (no LLM).
 # ---------------------------------------------------------------------------
 
 
-def test_item2_neutral_code_only_edit_is_silently_dropped(tmp_path: Path):
+def test_item2_neutral_code_only_edit_propagates_verbatim(tmp_path: Path):
     de = _slide("de", "a", "# ## A") + _code_shared("import time")
     en = _slide("en", "a", "# ## A") + _code_shared("import time")
     de_path, en_path = _write_pair(tmp_path, de, en)
@@ -100,23 +100,24 @@ def test_item2_neutral_code_only_edit_is_silently_dropped(tmp_path: Path):
     judge = CountingJudge()
     try:
         _seed(cache, de_path, en_path)
-        # Author edits ONLY the shared, language-neutral code cell on DE.
+        # Author edits ONLY the shared, language-neutral code cell on DE — no
+        # narrative or id'd change, so the keyed classifier produces no proposal.
         de_path.write_text(
             _slide("de", "a", "# ## A") + _code_shared("import time\nx = 1"),
             encoding="utf-8",
         )
         plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
-        result = apply_plan(plan, judge=judge, translator=translator, watermark_cache=cache)
+        apply_plan(plan, judge=judge, translator=translator, watermark_cache=cache)
     finally:
         cache.close()
 
-    # TODAY: the edit is invisible to the engine — no proposal, no direction.
-    assert plan.is_noop
-    assert result.applied == 0
+    # FIXED: the anchor diff detects DE drifted -> de->en direction; no keyed
+    # proposal, so it is NOT a no-op.
+    assert not plan.is_noop
+    assert plan.anchor_direction == "de->en"
+    # A neutral cell is shared verbatim — copied to the EN twin, never translated.
     assert translator.calls == []
-    # The shared code on EN is NOT updated, so the split halves now diverge.
-    assert "x = 1" not in en_path.read_text(encoding="utf-8")
-    # (Phase 3 propagates this; flip the four assertions above then.)
+    assert "x = 1" in en_path.read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------

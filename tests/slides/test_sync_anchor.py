@@ -12,6 +12,8 @@ from clm.notebooks.slide_parser import parse_cells
 from clm.slides.sync_plan import (
     MEMBERSHIP_ROLES,
     _baseline_from_watermark,
+    _shared_anchor_map,
+    align_anchored,
     ordered_sync_cells,
     watermark_rows,
 )
@@ -142,3 +144,43 @@ class TestWatermarkRows:
             (0, "dup", "slide"),
             (1, "dup", "voiceover"),
         ]
+
+
+class TestAlignAnchored:
+    """The Issue #190 item-2 direction detector (Phase 3a)."""
+
+    _BASE = '# %% tags=["keep"]\nimport time\n'
+
+    def test_halves_agree_is_noop_even_with_empty_baseline(self):
+        # The robustness gate: if both halves agree on every neutral cell (unify
+        # holds), there is nothing to propagate regardless of the baseline — incl.
+        # an empty baseline from a pre-Phase-1b watermark.
+        de = '# %% [markdown] lang="de" tags=["slide"] slide_id="s"\n# T\n' + self._BASE
+        en = '# %% [markdown] lang="en" tags=["slide"] slide_id="s"\n# T\n' + self._BASE
+        a = align_anchored(parse_cells(de), parse_cells(en), {})
+        assert a.direction is None
+        assert not a.diverged
+
+    def test_de_drift_gives_de_to_en(self):
+        baseline = _shared_anchor_map(parse_cells(self._BASE))
+        de = '# %% tags=["keep"]\nimport time\nx = 1\n'  # DE edited the shared cell
+        en = self._BASE  # EN unchanged
+        a = align_anchored(parse_cells(de), parse_cells(en), baseline)
+        assert a.direction == "de->en"
+        assert not a.diverged
+
+    def test_en_drift_gives_en_to_de(self):
+        baseline = _shared_anchor_map(parse_cells(self._BASE))
+        de = self._BASE
+        en = '# %% tags=["keep"]\nimport time\nx = 1\n'
+        a = align_anchored(parse_cells(de), parse_cells(en), baseline)
+        assert a.direction == "en->de"
+        assert not a.diverged
+
+    def test_both_sides_drift_diverges(self):
+        baseline = _shared_anchor_map(parse_cells(self._BASE))
+        de = '# %% tags=["keep"]\nimport time\nx = 1\n'  # DE: -> construct x
+        en = '# %% tags=["keep"]\nimport time\ny = 2\n'  # EN: -> construct y (differs)
+        a = align_anchored(parse_cells(de), parse_cells(en), baseline)
+        assert a.diverged
+        assert a.direction is None

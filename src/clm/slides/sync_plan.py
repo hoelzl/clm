@@ -35,18 +35,25 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from clm.notebooks.slide_parser import Cell, CellMetadata, parse_cells
-from clm.slides.sync_writeback import cell_content_hash, construct_of, role_of
+from clm.slides.sync_writeback import (
+    cell_content_hash,
+    construct_of,
+    role_of,
+    row_anchor,
+)
 
 if TYPE_CHECKING:
     from clm.infrastructure.llm.cache import SyncWatermarkCache
 
 __all__ = [
     "MEMBERSHIP_ROLES",
+    "AnchorAlignment",
     "BaselineCell",
     "CurrentCell",
     "PlanIssue",
     "Proposal",
     "SyncPlan",
+    "align_anchored",
     "build_sync_plan",
     "classify_changes",
     "ordered_sync_cells",
@@ -155,6 +162,10 @@ class SyncPlan:
     proposals: list[Proposal] = field(default_factory=list)
     issues: list[PlanIssue] = field(default_factory=list)
     in_sync_count: int = 0
+    # Direction a code-only (language-neutral) change must propagate when the
+    # keyed classifier found none — the Issue #190 item-2 signal. ``None`` when
+    # no non-keyed cell drifted. Consumed by the structural pass (sync_code).
+    anchor_direction: str | None = None
 
     @property
     def has_baseline(self) -> bool:
@@ -166,8 +177,12 @@ class SyncPlan:
 
     @property
     def is_noop(self) -> bool:
-        """True when there is nothing to apply (and nothing went wrong)."""
-        return not self.proposals and not self.has_errors
+        """True when there is nothing to apply (and nothing went wrong).
+
+        A neutral code-only edit (item 2) produces no proposal but sets
+        ``anchor_direction``, so it is *not* a no-op even with an empty plan.
+        """
+        return not self.proposals and not self.has_errors and self.anchor_direction is None
 
     def count(self, kind: str) -> int:
         return sum(1 for p in self.proposals if p.kind == kind)
@@ -287,6 +302,61 @@ def watermark_rows(
         )
         pos[partition] += 1
     return out
+
+
+def _shared_anchor_map(cells: list[Cell]) -> dict[str, str]:
+    """``anchor -> content_hash`` for the language-neutral (``shared``) cells of a file.
+
+    The non-keyed half of the item-2 picture: cells the per-cell classifier never
+    sees. Keyed off the same partitioning as :func:`watermark_rows`, so a current
+    file and its watermark baseline are compared apples-to-apples.
+    """
+    return {
+        row_anchor(sid, construct, chash): chash
+        for (_pos, sid, _role, chash, construct) in watermark_rows(cells)["shared"]
+    }
+
+
+@dataclass(frozen=True)
+class AnchorAlignment:
+    """Which side's language-neutral cells drifted from the watermark baseline."""
+
+    direction: str | None  # "de->en" | "en->de" | None
+    diverged: bool  # both sides drifted the shared cells (the §7a conflict)
+
+
+def align_anchored(
+    de_cells: list[Cell],
+    en_cells: list[Cell],
+    baseline_shared: dict[str, str],
+) -> AnchorAlignment:
+    """Detect a code-only (language-neutral) change the keyed classifier missed.
+
+    Issue #190 item 2 (Phase 3a). A neutral shared cell is byte-identical across
+    the split halves (the ``unify`` invariant), and the keyed engine never sees
+    it — so an author editing one half alone yields no proposal and no direction,
+    and the change is silently dropped.
+
+    First gate on whether the halves even **disagree**: if every neutral cell is
+    byte-identical across de and en, ``unify`` holds and there is nothing to
+    propagate, *whatever the baseline says*. This is the common case and it keeps
+    the pass robust to a watermark with no recorded ``shared`` partition — a
+    deck with no neutral cells, or a baseline written by a pre-Phase-1b CLM — which
+    must not be mistaken for a divergence. Only when the halves disagree do we
+    consult the baseline to decide which side drifted (the propagation direction);
+    if the baseline can't disambiguate, it is a divergence (handled in Phase 3c).
+    """
+    de_shared = _shared_anchor_map(de_cells)
+    en_shared = _shared_anchor_map(en_cells)
+    if de_shared == en_shared:
+        return AnchorAlignment(direction=None, diverged=False)
+    de_drifted = de_shared != baseline_shared
+    en_drifted = en_shared != baseline_shared
+    if de_drifted and not en_drifted:
+        return AnchorAlignment(direction="de->en", diverged=False)
+    if en_drifted and not de_drifted:
+        return AnchorAlignment(direction="en->de", diverged=False)
+    return AnchorAlignment(direction=None, diverged=True)
 
 
 def _baseline_from_watermark(
@@ -917,6 +987,7 @@ def build_sync_plan(
 
     de_baseline: list[BaselineCell] | None = None
     en_baseline: list[BaselineCell] | None = None
+    baseline_shared: dict[str, str] | None = None
     source = "none"
 
     if watermark_cache is not None and watermark_cache.has_pair(str(de_path), str(en_path)):
@@ -926,6 +997,12 @@ def build_sync_plan(
         en_baseline = _baseline_from_watermark(
             watermark_cache.get_deck(str(de_path), str(en_path), "en")
         )
+        baseline_shared = {
+            row_anchor(sid, construct, chash): chash
+            for (_pos, sid, _role, chash, construct) in watermark_cache.get_deck(
+                str(de_path), str(en_path), "shared"
+            )
+        }
         source = "watermark"
     elif allow_git_fallback:
         gb_de = _baseline_from_git_head(de_path)
@@ -934,7 +1011,7 @@ def build_sync_plan(
             de_baseline, en_baseline = gb_de, gb_en
             source = "git-head"
 
-    return classify_changes(
+    plan = classify_changes(
         de_current,
         en_current,
         de_baseline,
@@ -943,6 +1020,27 @@ def build_sync_plan(
         en_path=en_path,
         baseline_source=source,
     )
+
+    # Item-2 (Phase 3a): detect a language-neutral code-only change the keyed
+    # classifier cannot see, and hand its direction to the structural pass. Only
+    # against a real (watermark) baseline; the keyed direction, when present,
+    # already drives the structural pass, so the anchor direction is a *fallback*.
+    if baseline_shared is not None:
+        alignment = align_anchored(de_cells, en_cells, baseline_shared)
+        if alignment.diverged:
+            plan.issues.append(
+                PlanIssue(
+                    severity="warning",
+                    slide_id=None,
+                    reason="a language-neutral cell drifted on both decks; not "
+                    "propagated (resolve manually) — shared-divergence auto-heal "
+                    "is pending Phase 3c",
+                )
+            )
+        else:
+            plan.anchor_direction = alignment.direction
+
+    return plan
 
 
 def render_plan(plan: SyncPlan) -> str:

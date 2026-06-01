@@ -77,6 +77,13 @@ def apply_code_structure(
     """
     direction = _single_direction(plan)
     if direction is None:
+        # Item-2 fallback (Issue #190 §7): a code-only change to a language-neutral
+        # cell produces no keyed proposal, so the keyed walk yields no direction.
+        # The anchor diff (build_sync_plan) detected which half drifted — use it so
+        # the neutral cell is copied verbatim to its twin (the group's ("S", body)
+        # signature already differs, so it rebuilds).
+        direction = plan.anchor_direction
+    if direction is None:
         return
     if direction == "en->de":
         source_state, target_state, source_lang, target_lang = en_state, de_state, "en", "de"
