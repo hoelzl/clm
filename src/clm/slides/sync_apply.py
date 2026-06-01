@@ -1080,7 +1080,7 @@ def _record_watermark(
             de_path=str(de_path),
             en_path=str(en_path),
             lang=lang,
-            cells=[(c.position, c.slide_id, c.role, c.content_hash) for c in cells],
+            cells=[(c.position, c.slide_id, c.role, c.content_hash, c.construct) for c in cells],
         )
 
 
@@ -1147,7 +1147,9 @@ def _record_watermark_partial(
     for lang in ("de", "en"):
         old[lang] = {
             (sid, role): chash
-            for (_pos, sid, role, chash) in cache.get_deck(str(de_path), str(en_path), lang)
+            for (_pos, sid, role, chash, _construct) in cache.get_deck(
+                str(de_path), str(en_path), lang
+            )
             if sid is not None
         }
         current[lang] = {
@@ -1160,13 +1162,13 @@ def _record_watermark_partial(
             return False
 
     for lang in ("de", "en"):
-        rows: list[tuple[int, str | None, str, str]] = []
+        rows: list[tuple[int, str | None, str, str, str | None]] = []
         for c in cells_by_lang[lang]:
             if c.slide_id is not None and (c.slide_id, c.role) in preserve_keys:
                 # Hold the deferral at its pre-conflict baseline so it re-surfaces.
                 chash = old[lang][(c.slide_id, c.role)]
             else:
                 chash = c.content_hash  # bank: applied / in_sync / unchanged
-            rows.append((c.position, c.slide_id, c.role, chash))
+            rows.append((c.position, c.slide_id, c.role, chash, c.construct))
         cache.put_deck(de_path=str(de_path), en_path=str(en_path), lang=lang, cells=rows)
     return True

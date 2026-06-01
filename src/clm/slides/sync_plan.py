@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from clm.notebooks.slide_parser import Cell, parse_cells
-from clm.slides.sync_writeback import cell_content_hash, role_of
+from clm.slides.sync_writeback import cell_content_hash, construct_of, role_of
 
 if TYPE_CHECKING:
     from clm.infrastructure.llm.cache import SyncWatermarkCache
@@ -81,6 +81,7 @@ class CurrentCell:
     role: str
     content_hash: str
     line_number: int  # 1-based header line, for anchoring / messaging
+    construct: str | None = None  # AST construct slug (Issue #190 §4); None for non-code
 
 
 @dataclass
@@ -217,6 +218,7 @@ def ordered_sync_cells(cells: list[Cell], expected_lang: str) -> list[CurrentCel
                 role=role,
                 content_hash=cell_content_hash(cell.content),
                 line_number=cell.line_number,
+                construct=construct_of(cell.metadata, cell.content),
             )
         )
         position += 1
@@ -224,11 +226,13 @@ def ordered_sync_cells(cells: list[Cell], expected_lang: str) -> list[CurrentCel
 
 
 def _baseline_from_watermark(
-    rows: list[tuple[int, str | None, str, str]],
+    rows: list[tuple[int, str | None, str, str, str | None]],
 ) -> list[BaselineCell]:
+    # ``construct`` (5th element) is stored for the Issue #190 anchor pass but is
+    # not yet consumed by this classifier (Phase 1a populates; Phase 2 consumes).
     return [
         BaselineCell(position=pos, slide_id=sid, role=role, content_hash=chash)
-        for (pos, sid, role, chash) in rows
+        for (pos, sid, role, chash, _construct) in rows
     ]
 
 

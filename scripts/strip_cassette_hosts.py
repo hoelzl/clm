@@ -74,7 +74,9 @@ def strip_cassette(
     try:
         requests, responses = FilesystemPersister.load_cassette(path, serializer=yamlserializer)
     except Exception as exc:  # noqa: BLE001 — defensive
-        print(f"  ! skipping {path.name}: load failed ({type(exc).__name__}: {exc})", file=sys.stderr)
+        print(
+            f"  ! skipping {path.name}: load failed ({type(exc).__name__}: {exc})", file=sys.stderr
+        )
         return (0, 0)
 
     before = len(requests)

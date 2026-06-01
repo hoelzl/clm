@@ -511,10 +511,16 @@ class SyncWatermarkCache:
                     slide_id     TEXT,
                     role         TEXT NOT NULL,
                     content_hash TEXT NOT NULL,
+                    construct    TEXT,
                     synced_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY (de_path, en_path, lang, position)
                 )"""
             )
+            self._conn.commit()
+        elif "construct" not in columns:
+            # Additive migration (Issue #190 §5): the content-anchor construct
+            # slug. Nullable, so existing rows backfill to NULL harmlessly.
+            self._conn.execute("ALTER TABLE sync_watermarks ADD COLUMN construct TEXT")
             self._conn.commit()
 
     def get_deck(
@@ -522,19 +528,19 @@ class SyncWatermarkCache:
         de_path: str,
         en_path: str,
         lang: str,
-    ) -> list[tuple[int, str | None, str, str]]:
+    ) -> list[tuple[int, str | None, str, str, str | None]]:
         """Return the watermark for one deck, ordered by position.
 
-        Tuples are ``(position, slide_id, role, content_hash)``;
-        ``slide_id`` is ``None`` for id-less rows. An empty list means the
-        deck has no watermark (cold start for this pair).
+        Tuples are ``(position, slide_id, role, content_hash, construct)``;
+        ``slide_id`` and ``construct`` are ``None`` for id-less / non-code rows.
+        An empty list means the deck has no watermark (cold start for this pair).
         """
         rows = self._conn.execute(
-            "SELECT position, slide_id, role, content_hash FROM sync_watermarks "
+            "SELECT position, slide_id, role, content_hash, construct FROM sync_watermarks "
             "WHERE de_path=? AND en_path=? AND lang=? ORDER BY position",
             (de_path, en_path, lang),
         ).fetchall()
-        return [(r[0], r[1], r[2], r[3]) for r in rows]
+        return [(r[0], r[1], r[2], r[3], r[4]) for r in rows]
 
     def put_deck(
         self,
@@ -542,17 +548,19 @@ class SyncWatermarkCache:
         de_path: str,
         en_path: str,
         lang: str,
-        cells: list[tuple[int, str | None, str, str]],
+        cells: list[tuple[int, str | None, str, str, str | None]],
     ) -> None:
         """Replace the watermark for one deck atomically.
 
         ``cells`` is an ordered list of ``(position, slide_id, role,
-        content_hash)``. The whole ``(de_path, en_path, lang)`` slice is
-        deleted and rewritten in a single transaction so a deck's watermark
-        is never observed half-updated.
+        content_hash, construct)``. ``lang`` is ``de`` / ``en`` for localized
+        decks or ``shared`` for the single-entity language-neutral partition
+        (Issue #190 §5). The whole ``(de_path, en_path, lang)`` slice is deleted
+        and rewritten in a single transaction so a deck's watermark is never
+        observed half-updated.
         """
-        if lang not in ("de", "en"):
-            raise ValueError(f"lang must be 'de' or 'en', got {lang!r}")
+        if lang not in ("de", "en", "shared"):
+            raise ValueError(f"lang must be 'de', 'en', or 'shared', got {lang!r}")
         with self._conn:  # single transaction (BEGIN/COMMIT or ROLLBACK)
             self._conn.execute(
                 "DELETE FROM sync_watermarks WHERE de_path=? AND en_path=? AND lang=?",
@@ -560,11 +568,11 @@ class SyncWatermarkCache:
             )
             self._conn.executemany(
                 "INSERT INTO sync_watermarks "
-                "(de_path, en_path, lang, position, slide_id, role, content_hash) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "(de_path, en_path, lang, position, slide_id, role, content_hash, construct) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 [
-                    (de_path, en_path, lang, position, slide_id, role, content_hash)
-                    for (position, slide_id, role, content_hash) in cells
+                    (de_path, en_path, lang, position, slide_id, role, content_hash, construct)
+                    for (position, slide_id, role, content_hash, construct) in cells
                 ],
             )
 
@@ -585,18 +593,21 @@ class SyncWatermarkCache:
         self._conn.commit()
         return cursor.rowcount
 
-    def iter_entries(self) -> list[tuple[str, str, str, int, str | None, str, str, str]]:
+    def iter_entries(
+        self,
+    ) -> list[tuple[str, str, str, int, str | None, str, str, str | None, str]]:
         """Return every watermark row for a future ``sync --dump``.
 
         Tuples are ``(de_path, en_path, lang, position, slide_id, role,
-        content_hash, synced_at)`` ordered by pair, language, and position.
+        content_hash, construct, synced_at)`` ordered by pair, language, and
+        position.
         """
         rows = self._conn.execute(
             "SELECT de_path, en_path, lang, position, slide_id, role, "
-            "content_hash, synced_at "
+            "content_hash, construct, synced_at "
             "FROM sync_watermarks ORDER BY de_path, en_path, lang, position"
         ).fetchall()
-        return [(r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7]) for r in rows]
+        return [(r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8]) for r in rows]
 
     def close(self) -> None:
         self._conn.close()

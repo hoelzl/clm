@@ -392,6 +392,26 @@ invariant. Gate releases on `pytest -m "not docker"`.
    item-2 exposure 8,014, item-3 exposure 1,702, 0 invariant violations.
 1. **Widen the watermark** (§5): `construct` migration, 5-tuples, `"shared"`
    partition, membership. `anchor_of` chokepoint. No behavior change yet.
+   - **Phase 1a ✅ shipped.** Additive `construct` column (`_migrate` ALTER for
+     legacy tables); `get_deck`/`put_deck` 5-tuples
+     `(position, slide_id, role, content_hash, construct)`; `put_deck` accepts
+     the `"shared"` partition; `anchor_of`/`construct_of` chokepoint in
+     `sync_writeback` (`hand id > construct slug > sha256`, prefixed so the three
+     namespaces can't collide); `CurrentCell.construct` populated via
+     `ordered_sync_cells` and written by `_record_watermark[_partial]`. The
+     recorded **row set is unchanged** (still `role_of != None`), so positions —
+     and thus move detection — are untouched: the no-op corpus harness still
+     reports 81/212 noop, 0 violations. `construct` flows end-to-end (real
+     values like `function-run-chatbot` on localized id'd code).
+   - **Phase 1b (deferred — needs a design call).** *Membership widening* —
+     recording every non-j2 cell (neutral under `"shared"`, localized id-less
+     under its lang with a synthetic role). **Trap:** the classifier keys move
+     detection on `position` among the `role_of != None` subset; naively
+     recording *more* cells shifts those positions and would manufacture spurious
+     moves (a real behavior change the harness would catch). Phase 1b must give
+     the widened rows a **separate position space** (or have the classifier
+     re-derive positions from the filtered subset) so the legacy view is
+     byte-stable. Until then nothing consumes the `"shared"` partition.
 2. **Item 3 first** (§8): anchor+hash verbatim reuse in `sync_code`. Highest
    value, lowest risk, one isolated function.
 3. **Item 2** (§7): the `align_anchored` pass (§6) + single-entity neutral model
