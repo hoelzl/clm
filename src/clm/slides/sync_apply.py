@@ -1126,22 +1126,26 @@ def _effective_direction(plan: SyncPlan) -> str | None:
     return plan.anchor_direction
 
 
-def _baseline_constructs(
+def _baseline_shared(
     cache: SyncWatermarkCache | None, de_path: Path, en_path: Path
-) -> dict[str, str]:
-    """Per-slide-id baseline AST construct slug from the widened watermark (§9).
+) -> tuple[dict[str, str], set[str]]:
+    """Baseline ``{slide_id: construct}`` and the set of content hashes, ``shared`` only.
 
-    A cell wearing an id whose *current* construct no longer matches this baseline
-    has drifted off its content — the signal the id-migration keys on.
+    The §9 migration only touches language-neutral code cells, which live in the
+    ``shared`` partition — so the baseline is read from there alone (a slide_id
+    reused across partitions must not borrow another partition's construct). The
+    content-hash set lets the migration tell a genuine split-product (a *new* cell)
+    from a pre-existing cell that merely shares a construct name.
     """
-    out: dict[str, str] = {}
+    constructs: dict[str, str] = {}
+    hashes: set[str] = set()
     if cache is None:
-        return out
-    for lang in ("de", "en", "shared"):
-        for _pos, sid, _role, _chash, construct in cache.get_deck(str(de_path), str(en_path), lang):
-            if sid is not None and construct is not None:
-                out.setdefault(sid, construct)
-    return out
+        return constructs, hashes
+    for _pos, sid, _role, chash, construct in cache.get_deck(str(de_path), str(en_path), "shared"):
+        hashes.add(chash)
+        if sid is not None and construct is not None:
+            constructs.setdefault(sid, construct)
+    return constructs, hashes
 
 
 def _migrate_drifted_ids(
@@ -1155,32 +1159,46 @@ def _migrate_drifted_ids(
 
     Scoped to language-**neutral** code cells (the maintainer's def-my-fun example):
     when the author splits an id'd cell — e.g. adds an ``import`` above a ``def``,
-    leaving the id on the import — the id wears the wrong construct while a
-    *different* id-less cell carries the construct the id names in the baseline. The
-    mismatch is unambiguous, so move the id down and mint a fresh content slug on the
-    orphan: one targeted header write each, no LLM. Runs on the propagation **source**
-    deck only; the structural pass then carries the corrected ids to the twin.
-    Ambiguous cases — no/duplicate construct match (the recurring non-uniqueness
-    guard) or a co-occurring function rename — are left untouched for §10 recovery.
-    (Localized id'd cells need a symmetric both-deck write; deferred.)
-    """
-    direction = _effective_direction(plan)
-    if direction is None:
-        return
-    source = de_state if direction == "de->en" else en_state
-    baseline = _baseline_constructs(cache, plan.de_path, plan.en_path)
-    if not baseline:
-        return
+    leaving the id on the import — the id wears the wrong construct while a *new*
+    id-less cell carries the construct the id names in the baseline. Move the id
+    down and mint a fresh content slug on the orphan: one targeted header write each,
+    no LLM.
 
-    used_ids = {
-        cell.metadata.slide_id
-        for st in (de_state, en_state)
-        for cell in st.cells
-        if cell.metadata.slide_id
-    }
+    Applied to **both** decks (not just the propagation source): neutral cells are
+    byte-identical across the split halves, so the move is deterministic on each,
+    and the structural pass — which keys on the cell *body*, blind to a header-only
+    id change — cannot be relied on to carry a migrated id to the twin (it would
+    leave a silent cross-deck slide_id divergence). The direction merely gates
+    *whether* a migration pass is active (so an idle no-op never writes).
+
+    The matched id-less cell must be **new** (its content hash absent from the
+    baseline), which distinguishes a real split-product from an unrelated
+    pre-existing cell that coincidentally shares the construct name (the Phase 4
+    review's false-move finding). Ambiguous cases — a non-unique construct (the
+    recurring guard) or a co-occurring function rename — are left for §10 recovery.
+    (Localized id'd cells, which need a symmetric paired ``de_id==en_id`` write, are
+    deferred.)
+    """
+    if _effective_direction(plan) is None:
+        return
+    baseline_constructs, baseline_hashes = _baseline_shared(cache, plan.de_path, plan.en_path)
+    if not baseline_constructs:
+        return
+    _migrate_one_deck(de_state, baseline_constructs, baseline_hashes, result)
+    _migrate_one_deck(en_state, baseline_constructs, baseline_hashes, result)
+
+
+def _migrate_one_deck(
+    state: FileState,
+    baseline_constructs: dict[str, str],
+    baseline_hashes: set[str],
+    result: ApplyResult,
+) -> None:
+    """Apply the §9 id-migration to one deck's neutral code cells (see caller)."""
+    used_ids = {cell.metadata.slide_id for cell in state.cells if cell.metadata.slide_id}
     idless_by_construct: dict[str, list[RawCell]] = {}
     construct_count: Counter = Counter()
-    for cell in source.cells:
+    for cell in state.cells:
         meta = cell.metadata
         if meta.is_j2 or meta.lang is not None:
             continue  # neutral cells only
@@ -1191,11 +1209,11 @@ def _migrate_drifted_ids(
         if meta.slide_id is None:
             idless_by_construct.setdefault(construct, []).append(cell)
 
-    for cell in list(source.cells):
+    for cell in list(state.cells):
         meta = cell.metadata
         if meta.is_j2 or meta.lang is not None or meta.slide_id is None:
             continue
-        base_construct = baseline.get(meta.slide_id)
+        base_construct = baseline_constructs.get(meta.slide_id)
         current_construct = construct_of(meta, cell.body)
         if (
             base_construct is None
@@ -1203,15 +1221,23 @@ def _migrate_drifted_ids(
             or current_construct == base_construct
         ):
             continue  # the id still names its content (or there is nothing to key on)
-        targets = idless_by_construct.get(base_construct, [])
-        if len(targets) != 1 or construct_count[base_construct] != 1:
-            continue  # ambiguous (no/duplicate match) -> defer to §10 recovery
+        if construct_count[base_construct] != 1:
+            continue  # the construct is not unique in this deck -> ambiguous, defer
+        # The target must be a NEW cell (a split-product), not a pre-existing one
+        # that merely shares the construct name (the review's false-move finding).
+        targets = [
+            c
+            for c in idless_by_construct.get(base_construct, [])
+            if cell_content_hash(c.body) not in baseline_hashes
+        ]
+        if len(targets) != 1:
+            continue
         sid = meta.slide_id
         _stamp_slide_id(targets[0], sid)  # the id follows its construct
         new_slug = resolve_collision(current_construct, used_ids)
         used_ids.add(new_slug)
         _stamp_slide_id(cell, new_slug)  # the orphan gets a fresh content slug
-        source.dirty = True
+        state.dirty = True
         result.applied_migrate += 1
         idless_by_construct.pop(base_construct, None)  # at most one migration per construct
 

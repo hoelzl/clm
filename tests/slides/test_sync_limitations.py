@@ -379,6 +379,96 @@ def test_phase4_no_migration_without_matching_idless_cell(tmp_path: Path):
     assert result.applied_migrate == 0  # no id-less construct match -> no migration
 
 
+def test_phase4_no_false_move_to_unrelated_preexisting_cell(tmp_path: Path):
+    # An id'd cell's construct changes via a legitimate edit (import os -> config),
+    # and an UNRELATED, pre-existing id-less cell happens to carry the old construct
+    # (import os). The migration must NOT move the id onto that unrelated cell — it
+    # is not a split-product (its content is in the baseline). (Review finding.)
+    de = (
+        _slide("de", "s", "# ## S")
+        + _code_idd_neutral("setup", "import os\nsetup_run()")
+        + _code_shared("import os\nother_run()")  # unrelated, id-less, same construct
+    )
+    en = (
+        _slide("en", "s", "# ## S")
+        + _code_idd_neutral("setup", "import os\nsetup_run()")
+        + _code_shared("import os\nother_run()")
+    )
+    de_path, en_path = _write_pair(tmp_path, de, en)
+
+    cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+    try:
+        _seed(cache, de_path, en_path)
+        de_path.write_text(
+            _slide("de", "s", "# ## S")
+            + _code_idd_neutral("setup", "config = load()\nsetup_run()")  # construct changed
+            + _code_shared("import os\nother_run()"),  # unrelated cell unchanged
+            encoding="utf-8",
+        )
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+        result = apply_plan(
+            plan, judge=CountingJudge(), translator=CountingTranslator(), watermark_cache=cache
+        )
+    finally:
+        cache.close()
+
+    assert result.applied_migrate == 0  # no false move
+    by_id = {
+        c.metadata.slide_id: c
+        for c in parse_cells(de_path.read_text(encoding="utf-8"))
+        if c.metadata.slide_id
+    }
+    assert "config = load()" in by_id["setup"].content  # the id stayed on the edited cell
+
+
+def test_phase4_id_migration_is_symmetric_across_decks(tmp_path: Path):
+    # The def-my-fun split is present byte-identically on BOTH decks (and a narrative
+    # edit supplies the direction). The migration must write BOTH decks — the
+    # structural pass keys on the body and can't carry a header-only id change — so
+    # the corrected ids must NOT diverge across de/en. (Review finding, critical.)
+    base_def = 'def my_fun():\n    print("foo")'
+    new_def = 'def my_fun():\n    time.sleep(1)\n    print("foo")'
+    de0 = _slide("de", "g", "# ## G") + _code_idd_neutral("def-my-fun", base_def)
+    en0 = _slide("en", "g", "# ## G") + _code_idd_neutral("def-my-fun", base_def)
+    de_path, en_path = _write_pair(tmp_path, de0, en0)
+
+    cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+    try:
+        _seed(cache, de_path, en_path)
+        # Both decks split identically; only DE's narrative changes (the direction).
+        de_path.write_text(
+            _slide("de", "g", "# ## G erweitert")
+            + _code_idd_neutral("def-my-fun", "import time")
+            + _code_shared(new_def),
+            encoding="utf-8",
+        )
+        en_path.write_text(
+            _slide("en", "g", "# ## G")
+            + _code_idd_neutral("def-my-fun", "import time")
+            + _code_shared(new_def),
+            encoding="utf-8",
+        )
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+        result = apply_plan(
+            plan, judge=CountingJudge(), translator=CountingTranslator(), watermark_cache=cache
+        )
+    finally:
+        cache.close()
+
+    assert result.applied_migrate == 2  # migrated on BOTH decks
+    ids = []
+    for path in (de_path, en_path):
+        by_id = {
+            c.metadata.slide_id: c
+            for c in parse_cells(path.read_text(encoding="utf-8"))
+            if c.metadata.slide_id
+        }
+        assert "def my_fun" in by_id["def-my-fun"].content
+        assert "import time" in by_id["import-time"].content
+        ids.append(sorted(by_id))
+    assert ids[0] == ids[1]  # identical slide_ids on both decks — no divergence
+
+
 # ---------------------------------------------------------------------------
 # Item 3 — FIXED (Phase 2): an unchanged id-less localized code cell is spliced
 # verbatim on a sibling-triggered rebuild, never re-translated.
