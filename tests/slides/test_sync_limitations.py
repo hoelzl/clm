@@ -16,6 +16,7 @@ are counting stand-ins).
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -177,6 +178,79 @@ def test_item2b_localized_idless_code_edit_is_retranslated(tmp_path: Path):
     # The drifted localized code cell was re-translated (group force-rebuilt).
     retranslated = [body for (_r, _sl, _tl, body) in translator.calls if 'print("b")' in body]
     assert retranslated, f"the edited localized code must be re-translated; got {translator.calls}"
+
+
+# ---------------------------------------------------------------------------
+# Phase 3c — shared-cell divergence (both decks edited the same neutral cell)
+# ---------------------------------------------------------------------------
+
+
+def _diverge(tmp_path: Path) -> tuple[Path, Path, SyncWatermarkCache]:
+    """Seed a synced pair, then edit the SAME neutral cell differently on both halves."""
+    de = _slide("de", "a", "# ## A") + _code_shared("import time")
+    en = _slide("en", "a", "# ## A") + _code_shared("import time")
+    de_path, en_path = _write_pair(tmp_path, de, en)
+    cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+    _seed(cache, de_path, en_path)
+    de_path.write_text(
+        _slide("de", "a", "# ## A") + _code_shared("import time\nx = 1"), encoding="utf-8"
+    )
+    en_path.write_text(
+        _slide("en", "a", "# ## A") + _code_shared("import time\ny = 2"), encoding="utf-8"
+    )
+    return de_path, en_path, cache
+
+
+def test_shared_divergence_auto_heals_toward_newer_file(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("CLM_SYNC__SHARED_DIVERGENCE", raising=False)  # default auto-heal
+    de_path, en_path, cache = _diverge(tmp_path)
+    os.utime(en_path, (1_600_000_000, 1_600_000_000))  # EN older
+    os.utime(de_path, (1_600_000_900, 1_600_000_900))  # DE newer -> DE wins
+    translator = CountingTranslator()
+    judge = CountingJudge()
+    try:
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+        apply_plan(plan, judge=judge, translator=translator, watermark_cache=cache)
+    finally:
+        cache.close()
+
+    assert plan.anchor_direction == "de->en"  # newer (DE) won
+    assert any(i.severity == "warning" for i in plan.issues)
+    assert not plan.has_errors
+    en_text = en_path.read_text(encoding="utf-8")
+    assert "x = 1" in en_text  # DE's version healed onto EN
+    assert "y = 2" not in en_text
+
+
+def test_shared_divergence_error_mode_surfaces_and_writes_nothing(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("CLM_SYNC__SHARED_DIVERGENCE", "error")
+    de_path, en_path, cache = _diverge(tmp_path)
+    en_before = en_path.read_bytes()
+    translator = CountingTranslator()
+    judge = CountingJudge()
+    try:
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+        apply_plan(plan, judge=judge, translator=translator, watermark_cache=cache)
+    finally:
+        cache.close()
+
+    assert plan.has_errors
+    assert plan.anchor_direction is None
+    assert en_path.read_bytes() == en_before  # error -> the buffered apply writes nothing
+
+
+def test_shared_divergence_no_winner_errors(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("CLM_SYNC__SHARED_DIVERGENCE", raising=False)
+    de_path, en_path, cache = _diverge(tmp_path)
+    os.utime(de_path, (1_600_000_000, 1_600_000_000))  # mtimes tie, no keyed edit
+    os.utime(en_path, (1_600_000_000, 1_600_000_000))
+    try:
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+    finally:
+        cache.close()
+
+    assert plan.has_errors  # no winner -> error even in auto-heal mode
+    assert plan.anchor_direction is None
 
 
 # ---------------------------------------------------------------------------

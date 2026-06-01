@@ -29,10 +29,14 @@ since the last sync* — a git-immune signal that survives committing the deck.
 
 from __future__ import annotations
 
+import logging
+import os
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+logger = logging.getLogger(__name__)
 
 from clm.notebooks.slide_parser import Cell, CellMetadata, parse_cells
 from clm.slides.sync_writeback import (
@@ -361,6 +365,54 @@ def align_anchored(
     if en_drifted and not de_drifted:
         return AnchorAlignment(direction="en->de", diverged=False)
     return AnchorAlignment(direction=None, diverged=True)
+
+
+# ``CLM_SYNC__SHARED_DIVERGENCE`` (the §7a knob): how to handle a language-neutral
+# cell edited differently on both decks. ``auto-heal`` propagates the winning side
+# with a warning; ``error`` surfaces it and writes nothing.
+_SHARED_DIVERGENCE_ENV = "CLM_SYNC__SHARED_DIVERGENCE"
+
+
+def _shared_divergence_mode() -> str:
+    """The ``sync.shared_divergence`` mode: ``auto-heal`` (default) or ``error``."""
+    value = os.environ.get(_SHARED_DIVERGENCE_ENV, "auto-heal").strip().lower()
+    if value not in ("auto-heal", "error"):
+        logger.warning(
+            "%s=%r is invalid (expected 'auto-heal' or 'error'); using 'auto-heal'",
+            _SHARED_DIVERGENCE_ENV,
+            value,
+        )
+        return "auto-heal"
+    return value
+
+
+def _keyed_direction(plan: SyncPlan) -> str | None:
+    """The single keyed propagation direction of the plan, or ``None``."""
+    directions = {p.direction for p in plan.proposals if p.direction in ("de->en", "en->de")}
+    return next(iter(directions)) if len(directions) == 1 else None
+
+
+def _resolve_divergence_winner(plan: SyncPlan, de_path: Path, en_path: Path) -> str | None:
+    """Pick the winning direction for a diverged shared cell (§7a), or ``None``.
+
+    Precedence: (i) the run's established keyed edit direction (the deck the author
+    touched this session — the common case); else (ii) the newer-mtime file as a
+    tiebreak; else (iii) ``None`` — no signal, cannot heal, treat as an error even
+    in auto-heal mode.
+    """
+    keyed = _keyed_direction(plan)
+    if keyed is not None:
+        return keyed
+    try:
+        de_mtime = de_path.stat().st_mtime
+        en_mtime = en_path.stat().st_mtime
+    except OSError:
+        return None
+    if de_mtime > en_mtime:
+        return "de->en"
+    if en_mtime > de_mtime:
+        return "en->de"
+    return None
 
 
 def _baseline_from_watermark(
@@ -1035,19 +1087,49 @@ def build_sync_plan(
     if baseline_shared is not None:
         alignment = align_anchored(de_cells, en_cells, baseline_shared)
         if alignment.diverged:
-            plan.issues.append(
-                PlanIssue(
-                    severity="warning",
-                    slide_id=None,
-                    reason="a language-neutral cell drifted on both decks; not "
-                    "propagated (resolve manually) — shared-divergence auto-heal "
-                    "is pending Phase 3c",
-                )
-            )
+            _apply_divergence(plan, de_path, en_path)
         else:
             plan.anchor_direction = alignment.direction
 
     return plan
+
+
+def _apply_divergence(plan: SyncPlan, de_path: Path, en_path: Path) -> None:
+    """Resolve a both-decks shared-cell divergence per the §7a policy.
+
+    ``auto-heal`` (default): propagate the winning side (keyed direction → newer
+    mtime) and emit a *warning*; the heal is written but the watermark is held by
+    the issue, so a second run confirms it. ``error`` mode — or auto-heal with no
+    determinable winner — emits an *error* issue, so the buffered apply writes
+    nothing and the divergence is surfaced rather than guessed.
+    """
+    mode = _shared_divergence_mode()
+    winner = _resolve_divergence_winner(plan, de_path, en_path)
+    if winner is not None and mode == "auto-heal":
+        plan.anchor_direction = winner
+        plan.issues.append(
+            PlanIssue(
+                severity="warning",
+                slide_id=None,
+                reason=f"a language-neutral cell diverged on both decks; auto-healed "
+                f"toward {winner} (set CLM_SYNC__SHARED_DIVERGENCE=error to surface "
+                f"instead) — review the git diff",
+            )
+        )
+    else:
+        detail = (
+            "CLM_SYNC__SHARED_DIVERGENCE=error"
+            if winner is not None
+            else "no winner (edited on both decks, mtimes tie)"
+        )
+        plan.issues.append(
+            PlanIssue(
+                severity="error",
+                slide_id=None,
+                reason=f"a language-neutral cell diverged on both decks; {detail} — "
+                f"resolve manually",
+            )
+        )
 
 
 def render_plan(plan: SyncPlan) -> str:
