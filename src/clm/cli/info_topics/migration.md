@@ -233,6 +233,23 @@ both decks.
   picks the OpenRouter model that translates brand-new slides on the add
   path. It needs `$OPENROUTER_API_KEY` (or `$OPENAI_API_KEY`); without a
   key, add proposals defer (everything else still applies).
+- **Code cells and auxiliary markdown now sync too** (previously only
+  `slide` / `subslide` / `voiceover` / `notes` markdown was propagated). A
+  **language-neutral** code cell (no `lang=`) is copied **verbatim** across
+  both halves; a **localized** code cell (`lang=`) and `alt` / untagged
+  markdown are twinned and translated; a new slide brings its code along, and
+  code moved between slide groups follows. If you used to hand-edit code on
+  both halves to keep them in step, sync now does it for you — new code cells
+  are **not** minted a `slide_id` (they stay id-less, kept consistent
+  structurally).
+- **The project `.env` is loaded automatically.** Sync walks up from each
+  deck and loads the first `.env` it finds (without overriding already-set
+  variables), so an `$OPENROUTER_API_KEY` / `$OPENAI_API_KEY` kept in `.env`
+  (not exported) is now found — previously every brand-new-slide translation
+  silently deferred. Pass `--no-env-file` to skip it.
+- A transient judge / translation failure now **retries with backoff** instead
+  of dropping the cell, and the `--llm-timeout` default is provider-aware
+  (120s for `openrouter`, 300s for `local`).
 
 ### How to migrate
 
