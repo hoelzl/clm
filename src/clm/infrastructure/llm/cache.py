@@ -373,6 +373,108 @@ class SyncCache:
         self._conn.close()
 
 
+class SyncAlignmentCache:
+    """Cache bounded-LLM (Opus) *alignment* recoveries for the sync engine.
+
+    Issue #190 §10 / Phase 5. When the deterministic id-migration (§9) cannot
+    decide which ``slide_id`` belongs on which cell — a simultaneous function
+    rename, a true N:1 split/merge, ambiguous ties (two ``def my_fun``, many bare
+    imports) — the sync engine may escalate (only under ``--llm-recover``) to a
+    **body-free, alignment-only** model call that returns an ``id ↔ cell`` *map*,
+    never free-form edits. That map is validated and applied deterministically.
+
+    A row memoizes *"the recoverer was asked to align this base region against
+    this current region, and here is the (validated) map it returned"*, so a
+    re-run over the same region short-circuits to the cached map and never
+    re-spends on the LLM. Keyed by ``(base_region_hash, current_region_hash,
+    prompt_version)`` — the two region fingerprints fully determine the question,
+    and the prompt version invalidates the cache when the prompt/model contract
+    changes (cf. :class:`SyncCache`, :class:`TitleSuggestionCache`).
+
+    ``alignment`` is the recoverer's verbatim JSON map (a current-cell → base
+    ``slide_id`` / ``"new"`` mapping). Only *successfully validated* maps are
+    cached: a safe-aborted recovery records nothing, so a fixed prompt re-derives
+    it on the next run.
+
+    Shares the same SQLite file as the other LLM caches; lives in its own table.
+    """
+
+    def __init__(self, db_path: Path):
+        self.db_path = db_path
+        self._conn = sqlite3.connect(str(db_path))
+        self._migrate()
+
+    def _migrate(self) -> None:
+        cursor = self._conn.execute("PRAGMA table_info(sync_alignments)")
+        columns = {row[1] for row in cursor.fetchall()}
+        if not columns:
+            self._conn.execute(
+                """CREATE TABLE sync_alignments (
+                    base_region_hash    TEXT NOT NULL,
+                    current_region_hash TEXT NOT NULL,
+                    prompt_version      TEXT NOT NULL,
+                    alignment           TEXT NOT NULL,
+                    created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (base_region_hash, current_region_hash, prompt_version)
+                )"""
+            )
+            self._conn.commit()
+
+    def get(
+        self,
+        base_region_hash: str,
+        current_region_hash: str,
+        prompt_version: str,
+    ) -> str | None:
+        """Return the cached alignment JSON for the region pair, or ``None``."""
+        row = self._conn.execute(
+            "SELECT alignment FROM sync_alignments "
+            "WHERE base_region_hash=? AND current_region_hash=? AND prompt_version=?",
+            (base_region_hash, current_region_hash, prompt_version),
+        ).fetchone()
+        return row[0] if row else None
+
+    def put(
+        self,
+        base_region_hash: str,
+        current_region_hash: str,
+        prompt_version: str,
+        alignment: str,
+    ) -> None:
+        self._conn.execute(
+            """INSERT OR REPLACE INTO sync_alignments
+               (base_region_hash, current_region_hash, prompt_version, alignment)
+               VALUES (?, ?, ?, ?)""",
+            (base_region_hash, current_region_hash, prompt_version, alignment),
+        )
+        self._conn.commit()
+
+    def invalidate_prompt_version(self, prompt_version: str) -> int:
+        """Delete entries whose prompt version no longer matches."""
+        cursor = self._conn.execute(
+            "DELETE FROM sync_alignments WHERE prompt_version!=?",
+            (prompt_version,),
+        )
+        self._conn.commit()
+        return cursor.rowcount
+
+    def iter_entries(self) -> list[tuple[str, str, str, str, str]]:
+        """Return every cached entry, most-recent first.
+
+        Tuples are ``(base_region_hash, current_region_hash, prompt_version,
+        alignment, created_at)``.
+        """
+        rows = self._conn.execute(
+            "SELECT base_region_hash, current_region_hash, prompt_version, "
+            "alignment, created_at "
+            "FROM sync_alignments ORDER BY created_at DESC, base_region_hash"
+        ).fetchall()
+        return [(r[0], r[1], r[2], r[3], r[4]) for r in rows]
+
+    def close(self) -> None:
+        self._conn.close()
+
+
 class SyncSnapshotCache:
     """Per-(file, slide_id, role) snapshot of the last accepted sync state.
 

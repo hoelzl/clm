@@ -6,7 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from clm.infrastructure.llm.cache import SyncCache, SyncSnapshotCache, SyncWatermarkCache
+from clm.infrastructure.llm.cache import (
+    SyncAlignmentCache,
+    SyncCache,
+    SyncSnapshotCache,
+    SyncWatermarkCache,
+)
 
 
 @pytest.fixture
@@ -399,3 +404,99 @@ class TestSyncWatermarkCache:
         assert len(rows) == 1
         # (de_path, en_path, lang, position, slide_id, role, content_hash, construct, synced_at)
         assert rows[0][:8] == ("a.de.py", "a.en.py", "de", 0, "x", "slide", "h", "c0")
+
+
+# ---------------------------------------------------------------------------
+# SyncAlignmentCache (Issue #190, Phase 5 — bounded LLM recovery)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def alignments(tmp_path: Path):
+    c = SyncAlignmentCache(tmp_path / "clm-llm.sqlite")
+    try:
+        yield c
+    finally:
+        c.close()
+
+
+class TestSyncAlignmentCache:
+    def test_miss(self, alignments):
+        assert alignments.get("base", "current", "v1") is None
+
+    def test_round_trip(self, alignments):
+        alignments.put("base", "current", "v1", '{"0": "def-my-fun", "1": "new"}')
+        assert alignments.get("base", "current", "v1") == '{"0": "def-my-fun", "1": "new"}'
+
+    def test_overwrite_same_key(self, alignments):
+        alignments.put("base", "current", "v1", '{"0": "a"}')
+        alignments.put("base", "current", "v1", '{"0": "b"}')
+        assert alignments.get("base", "current", "v1") == '{"0": "b"}'
+
+    def test_base_region_hash_in_key(self, alignments):
+        alignments.put("base1", "current", "v1", '{"0": "p1"}')
+        alignments.put("base2", "current", "v1", '{"0": "p2"}')
+        assert alignments.get("base1", "current", "v1") == '{"0": "p1"}'
+        assert alignments.get("base2", "current", "v1") == '{"0": "p2"}'
+
+    def test_current_region_hash_in_key(self, alignments):
+        alignments.put("base", "current1", "v1", '{"0": "p1"}')
+        alignments.put("base", "current2", "v1", '{"0": "p2"}')
+        assert alignments.get("base", "current1", "v1") == '{"0": "p1"}'
+        assert alignments.get("base", "current2", "v1") == '{"0": "p2"}'
+
+    def test_prompt_version_in_key(self, alignments):
+        alignments.put("base", "current", "v1", '{"0": "v1"}')
+        alignments.put("base", "current", "v2", '{"0": "v2"}')
+        assert alignments.get("base", "current", "v1") == '{"0": "v1"}'
+        assert alignments.get("base", "current", "v2") == '{"0": "v2"}'
+
+    def test_invalidate_prompt_version(self, alignments):
+        alignments.put("b1", "c", "v1", '{"0": "p1"}')
+        alignments.put("b2", "c", "v1", '{"0": "p2"}')
+        alignments.put("b3", "c", "v2", '{"0": "p3"}')
+        removed = alignments.invalidate_prompt_version("v2")
+        assert removed == 2
+        assert alignments.get("b1", "c", "v1") is None
+        assert alignments.get("b3", "c", "v2") == '{"0": "p3"}'
+
+    def test_iter_entries_empty(self, alignments):
+        assert alignments.iter_entries() == []
+
+    def test_iter_entries_returns_all_rows(self, alignments):
+        alignments.put("b1", "c1", "v1", '{"0": "a"}')
+        alignments.put("b2", "c2", "v1", '{"0": "b"}')
+        rows = alignments.iter_entries()
+        assert len(rows) == 2
+        # (base_region_hash, current_region_hash, prompt_version, alignment, created_at)
+        keys = {(row[0], row[1]) for row in rows}
+        assert keys == {("b1", "c1"), ("b2", "c2")}
+
+    def test_survives_close_and_reopen(self, tmp_path: Path):
+        path = tmp_path / "clm-llm.sqlite"
+        first = SyncAlignmentCache(path)
+        first.put("base", "current", "v1", '{"0": "kept"}')
+        first.close()
+        second = SyncAlignmentCache(path)
+        try:
+            assert second.get("base", "current", "v1") == '{"0": "kept"}'
+        finally:
+            second.close()
+
+    def test_coexists_with_other_caches(self, tmp_path: Path):
+        path = tmp_path / "clm-llm.sqlite"
+        align = SyncAlignmentCache(path)
+        wm = SyncWatermarkCache(path)
+        try:
+            align.put("base", "current", "v1", '{"0": "align"}')
+            wm.put_deck(
+                de_path="a.de.py",
+                en_path="a.en.py",
+                lang="de",
+                cells=[(0, "x", "slide", "h", None)],
+            )
+            assert align.get("base", "current", "v1") == '{"0": "align"}'
+            assert wm.get_deck("a.de.py", "a.en.py", "de") == [(0, "x", "slide", "h", None)]
+        finally:
+            wm.close()
+            align.close()
