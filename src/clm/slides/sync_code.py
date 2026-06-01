@@ -38,7 +38,14 @@ from typing import TYPE_CHECKING
 
 from clm.slides.raw_cells import RawCell
 from clm.slides.sync_translate import TranslationError
-from clm.slides.sync_writeback import CODE_ROLE, FileState, build_twin_cell, role_of
+from clm.slides.sync_writeback import (
+    CODE_ROLE,
+    FileState,
+    anchor_of,
+    build_twin_cell,
+    cell_content_hash,
+    role_of,
+)
 
 if TYPE_CHECKING:
     from clm.slides.sync_apply import ApplyResult
@@ -54,12 +61,19 @@ def apply_code_structure(
     en_state: FileState,
     translator: SlideTranslator | None,
     result: ApplyResult,
+    baseline_anchors: dict[str, dict[str, str]] | None = None,
 ) -> None:
     """Propagate language-neutral / id-less-localized cells and fix group order.
 
     Mutates the target deck's :class:`FileState` in place (and marks it dirty)
     for every slide group whose structure drifted from the source. No-op when
     the run has no single propagation direction.
+
+    ``baseline_anchors`` is the per-language ``{anchor: content_hash}`` of the
+    last-synced state (from the widened watermark). When a rebuilt id-less
+    localized code cell is **unchanged** (its source-side anchor is in the
+    baseline with the same content hash), the existing target twin is spliced
+    verbatim instead of re-translated — Issue #190 item 3 (§8).
     """
     direction = _single_direction(plan)
     if direction is None:
@@ -68,6 +82,7 @@ def apply_code_structure(
         source_state, target_state, source_lang, target_lang = en_state, de_state, "en", "de"
     else:
         source_state, target_state, source_lang, target_lang = de_state, en_state, "de", "en"
+    src_anchors = (baseline_anchors or {}).get(source_lang, {})
 
     src_head, src_groups = _split_groups(source_state.cells)
     tgt_head, tgt_groups = _split_groups(target_state.cells)
@@ -93,7 +108,14 @@ def apply_code_structure(
             emit(tgt_region, was_rebuilt=False)
             return
         rebuilt = _rebuild_region(
-            src_region, tgt_region, target_state, source_lang, target_lang, translator, result
+            src_region,
+            tgt_region,
+            target_state,
+            source_lang,
+            target_lang,
+            translator,
+            result,
+            src_anchors,
         )
         if rebuilt is None:
             # A translation needed for the rebuild failed (no translator, or it
@@ -216,6 +238,7 @@ def _rebuild_region(
     target_lang: str,
     translator: SlideTranslator | None,
     result: ApplyResult,
+    src_anchors: dict[str, str] | None = None,
 ) -> list[RawCell] | None:
     """Rebuild a target region to mirror the source region's cell order.
 
@@ -262,6 +285,15 @@ def _rebuild_region(
         elif meta.lang is None:
             out.append(_copy_cell(cell))  # language-neutral: shared verbatim
         elif meta.lang == source_lang:
+            # Item-3 reuse (§8): an UNCHANGED id-less localized cell keeps its
+            # existing target twin verbatim instead of being re-translated. It is
+            # "unchanged" iff its source-side anchor is in the baseline with the
+            # same content hash; the twin is located in the current target region
+            # by the same (language-agnostic, construct-based) anchor.
+            reused = _reuse_unchanged_twin(cell, tgt_cells, src_anchors)
+            if reused is not None:
+                out.append(reused)
+                continue
             kind = CODE_ROLE if meta.cell_type == "code" else "markdown"
             body = _translate(cell, source_lang, target_lang, kind, translator, result)
             if body is None:
@@ -269,6 +301,34 @@ def _rebuild_region(
             out.append(build_twin_cell(cell, target_lang, body))
         # else: an other-language cell in the source deck — should not occur; skip.
     return out
+
+
+def _reuse_unchanged_twin(
+    cell: RawCell, tgt_cells: list[RawCell], src_anchors: dict[str, str] | None
+) -> RawCell | None:
+    """Return the existing target twin to splice verbatim, or ``None`` to translate.
+
+    Reuse fires only when (a) the source cell's anchor is in the baseline with the
+    *same* content hash — proving the source is unchanged since the last sync — and
+    (b) the current target region holds a cell with that same anchor (the twin).
+    A construct-based anchor is language-agnostic, so the de/en copies of the same
+    code share it; a hash-fallback anchor differs across languages, so such cells
+    never reuse (they translate, the honest §12 residual). ``None`` ``src_anchors``
+    (no watermark) disables reuse — the pre-#190 always-translate behavior.
+    """
+    if not src_anchors:
+        return None
+    anchor = anchor_of(cell.metadata, cell.body)
+    if src_anchors.get(anchor) != cell_content_hash(cell.body):
+        return None
+    return _find_by_anchor(tgt_cells, anchor)
+
+
+def _find_by_anchor(cells: list[RawCell], anchor: str) -> RawCell | None:
+    for cell in cells:
+        if not cell.metadata.is_j2 and anchor_of(cell.metadata, cell.body) == anchor:
+            return cell
+    return None
 
 
 def _translate(

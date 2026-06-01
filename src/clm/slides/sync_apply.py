@@ -225,7 +225,8 @@ def apply_plan(
     # groups, reusing the narrative / aux / id'd-code twins the steps above just
     # placed. Cross-group code moves fall out of rebuilding both groups from the
     # source. Runs after adds/moves so every twin it pulls is in place.
-    apply_code_structure(plan, de_state, en_state, translator, result)
+    baseline_anchors = _baseline_anchor_hashes(watermark_cache, plan.de_path, plan.en_path)
+    apply_code_structure(plan, de_state, en_state, translator, result, baseline_anchors)
 
     # Fail-safe: a complete resolution leaves no duplicate id behind. If one
     # survives (a should-not-happen bug), error so the watermark cannot advance
@@ -1072,6 +1073,42 @@ def content_index(path: Path, lang: str) -> dict[tuple[str, str], str]:
             continue
         index.setdefault((sid, role), cell.content)
     return index
+
+
+def _row_anchor(slide_id: str | None, construct: str | None, content_hash: str) -> str:
+    """The content anchor of a watermark row (mirrors :func:`sync_writeback.anchor_of`).
+
+    Derives the same ``id: > construct: > hash:`` identity from a stored row that
+    ``anchor_of`` derives from a live cell, so the structural pass can match a
+    current cell against its baseline by anchor.
+    """
+    if slide_id is not None:
+        return f"id:{slide_id}"
+    if construct is not None:
+        return f"construct:{construct}"
+    return f"hash:{content_hash}"
+
+
+def _baseline_anchor_hashes(
+    cache: SyncWatermarkCache | None,
+    de_path: Path,
+    en_path: Path,
+) -> dict[str, dict[str, str]]:
+    """Per-language ``{anchor: content_hash}`` of the last-synced state.
+
+    Built from the widened watermark (every non-j2 cell). The structural pass
+    uses it to tell an UNCHANGED id-less localized code cell (anchor present with
+    the same hash) from an edited one, so the former is reused verbatim instead of
+    re-translated (Issue #190 item 3 / §8). Empty when there is no watermark — the
+    structural pass then translates as before.
+    """
+    out: dict[str, dict[str, str]] = {"de": {}, "en": {}}
+    if cache is None:
+        return out
+    for lang in ("de", "en"):
+        for _pos, sid, _role, chash, construct in cache.get_deck(str(de_path), str(en_path), lang):
+            out[lang][_row_anchor(sid, construct, chash)] = chash
+    return out
 
 
 def _record_watermark(

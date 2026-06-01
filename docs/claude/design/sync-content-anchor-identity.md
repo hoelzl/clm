@@ -414,6 +414,22 @@ invariant. Gate releases on `pytest -m "not docker"`.
      byte-stable. Until then nothing consumes the `"shared"` partition.
 2. **Item 3 first** (§8): anchor+hash verbatim reuse in `sync_code`. Highest
    value, lowest risk, one isolated function.
+   - **✅ Shipped.** `_rebuild_region` gained a reuse path: an id-less localized
+     code cell whose anchor is in the baseline with the *same* content hash is
+     spliced verbatim from the current target twin (located by the same
+     construct-based anchor) instead of re-translated. Plumbed via
+     `_baseline_anchor_hashes` (built from the widened watermark) →
+     `apply_code_structure(..., baseline_anchors)` → `_rebuild_region`. The
+     `("L", kind)` signature was **left as-is** (deliberately): the reuse path
+     alone fixes the core item-3 churn, and making the signature content-aware
+     can't help without a language-specific hash (which breaks cross-language
+     matching) — propagating a *changed* localized cell whose group signature is
+     otherwise stable is Phase 3's anchor-diff job, not this one. Construct-based
+     anchors are language-agnostic so de/en twins share them; hash-fallback cells
+     never reuse (the honest §12 residual). No-watermark runs translate as before.
+     Verified: `test_sync_limitations.py` flips (unchanged → reused, changed →
+     still re-translated), and the no-op harness holds at 81/212, 0 violations
+     with a membership-widened seed.
 3. **Item 2** (§7): the `align_anchored` pass (§6) + single-entity neutral model
    + auto-heal/warn. The largest new module; default-on-overridable (mirroring
    the #166 default-flip).
