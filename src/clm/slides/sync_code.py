@@ -19,17 +19,21 @@ each *changed* slide group from the source deck:
 - a **language-neutral** cell is copied verbatim;
 - an **id-less localized** cell is translated.
 
-A group is rebuilt only when its *structural signature* (the order of role
-cells, the verbatim text of shared cells, and the kinds of id-less localized
-cells — all language-agnostic) differs between source and target. A pure
-narrative edit leaves the signature unchanged, so narrative-only passes never
-touch a group here. Cells the author **moved between groups** fall out for free,
-because each group is rebuilt from its current source membership.
+A group is rebuilt when its *structural signature* (the order of role cells, the
+verbatim text of shared cells, and the kinds of id-less localized cells — all
+language-agnostic) differs between source and target, **or** when it holds an
+id-less localized cell whose content drifted from the baseline (Issue #190 item
+2b: a body edit leaves the ``("L", kind)`` signature unchanged, so the drift is
+detected against the widened watermark instead). A pure narrative edit leaves
+both unchanged, so narrative-only passes never touch a group here. Cells the
+author **moved between groups** fall out for free, because each group is rebuilt
+from its current source membership.
 
-Direction is taken from the run's narrative proposals (the single-language
-workflow edits one deck): a uniform ``en->de`` / ``de->en`` selects the source.
-A pass with no determinable single direction (cold start, or cells edited both
-ways) skips this structural step.
+Direction is the run's single propagation direction: the keyed narrative
+proposals when present, else the ``anchor_direction`` the item-2 detector
+inferred from which half drifted its language-neutral cells (Issue #190 §7). A
+pass with no determinable direction (cold start, or cells edited both ways) skips
+this structural step.
 """
 
 from __future__ import annotations
@@ -77,6 +81,13 @@ def apply_code_structure(
     """
     direction = _single_direction(plan)
     if direction is None:
+        # Item-2 fallback (Issue #190 §7): a code-only change to a language-neutral
+        # cell produces no keyed proposal, so the keyed walk yields no direction.
+        # The anchor diff (build_sync_plan) detected which half drifted — use it so
+        # the neutral cell is copied verbatim to its twin (the group's ("S", body)
+        # signature already differs, so it rebuilds).
+        direction = plan.anchor_direction
+    if direction is None:
         return
     if direction == "en->de":
         source_state, target_state, source_lang, target_lang = en_state, de_state, "en", "de"
@@ -104,7 +115,9 @@ def apply_code_structure(
             rebuilt_ids.update(id(c) for c in region)
 
     def reconcile(src_region: list[RawCell], tgt_region: list[RawCell]) -> None:
-        if _signature(src_region) == _signature(tgt_region):
+        if _signature(src_region) == _signature(tgt_region) and not _region_has_localized_drift(
+            src_region, src_anchors
+        ):
             emit(tgt_region, was_rebuilt=False)
             return
         rebuilt = _rebuild_region(
@@ -223,6 +236,33 @@ def _signature(cells: list[RawCell]) -> list[tuple]:
         else:
             sig.append(("L", "code" if meta.cell_type == "code" else "markdown"))
     return sig
+
+
+def _region_has_localized_drift(
+    src_region: list[RawCell], src_anchors: dict[str, str] | None
+) -> str | None:
+    """Whether the source region holds an id-less localized cell edited since baseline.
+
+    Item-2b (§7b). A localized id-less code cell that changed must be re-translated,
+    but its ``("L", kind)`` signature is unchanged by a body edit, so the group
+    would not otherwise rebuild. Detect the drift via the baseline anchor→hash map
+    (``baseline_anchors`` for the source language): the cell's anchor is recorded
+    but its current content hash differs. Returns the drifted cell's anchor (truthy)
+    or ``None``. ``src_anchors`` is already de-duplicated (the Phase 2 ``Counter``
+    guard), so a non-unique construct anchor is simply absent — that cell does not
+    force a rebuild (the honest §12 residual), never a wrong one.
+    """
+    if not src_anchors:
+        return None
+    for cell in src_region:
+        meta = cell.metadata
+        if meta.is_j2 or meta.lang is None or role_of(meta) is not None:
+            continue  # only id-less LOCALIZED cells (role_of None, lang set)
+        anchor = anchor_of(meta, cell.body)
+        baseline_hash = src_anchors.get(anchor)
+        if baseline_hash is not None and baseline_hash != cell_content_hash(cell.body):
+            return anchor
+    return None
 
 
 # ---------------------------------------------------------------------------
