@@ -22,16 +22,23 @@ Scope of this engine:
   silent.
 
 Atomicity: each proposal is all-or-nothing for its target cell; the two decks
-are flushed once at the end. The **watermark advances only on a complete,
-clean apply** (no deferred proposals, no errors) — so un-applied work can
-never be silently baked into the baseline and lost.
+are persisted once at the end, via a buffered temp-swap (Issue #190 item 1)
+that writes **nothing** unless the whole pass is error-free — so a mid-pass
+failure (e.g. an LLM error) can never leave a half-applied deck on disk. Each
+deck's new text is rendered in memory and swapped in with an atomic
+``os.replace``. The **watermark advances only on a complete, clean apply** (no
+deferred proposals, no errors) — so un-applied work can never be silently baked
+into the baseline and lost.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import re
+import tempfile
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from clm.infrastructure.llm.ollama_client import OllamaError
@@ -50,8 +57,6 @@ from clm.slides.sync_writeback import (
 )
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from clm.infrastructure.llm.cache import SyncWatermarkCache
     from clm.infrastructure.llm.ollama_client import SyncJudge
     from clm.slides.sync_translate import SlideTranslator
@@ -125,8 +130,10 @@ def apply_plan(
     records each edit as an error). ``translator`` produces the counterpart for
     a brand-new id-less slide (``None`` defers adds). Applies remove / edit /
     move / id-less add; conflicts and id-carrying adds are ``deferred``. The two
-    decks are flushed once; the watermark advances only on a clean, complete
-    apply.
+    decks are persisted once at the end via a buffered temp-swap, but **only on
+    an error-free pass** (no apply-time or classifier error) — an erroring pass
+    writes neither deck (Issue #190 item 1). The watermark advances only on a
+    clean, complete apply.
 
     ``decisions`` drives interactive review (``None`` = the batch default, which
     applies every deterministic kind and defers conflicts). When provided, it
@@ -196,7 +203,9 @@ def apply_plan(
 
     # Adds run before moves so a freshly-inserted slide takes part in any
     # reorder. Adds are sticky via the stamped id (a re-run no longer sees an
-    # id-less cell), so unlike moves they do not require a clean pass.
+    # id-less cell), so unlike moves they apply even on a *deferred* (non-clean)
+    # pass — but, like every cell, the stamped id only reaches disk on an
+    # error-free pass (the end-of-pass flush is gated on no errors).
     _apply_adds(de_state, en_state, result, plan, translator)
 
     # Moves are applied last, and only if the rest of the pass is clean (so the
@@ -222,8 +231,21 @@ def apply_plan(
     if not result.errors and result.deferred == 0 and not plan.has_errors:
         _flag_cross_deck_orphans(de_state, en_state, result)
 
-    de_state.flush()
-    en_state.flush()
+    # Buffered temp-swap (Issue #190 item 1): persist both decks atomically, and
+    # ONLY when the whole pass is error-free — neither an apply-time error
+    # (``result.has_errors``) nor a classifier error (``plan.has_errors``, e.g. an
+    # unresolvable duplicate id). This matches design §11 ("write only if the
+    # whole pass is error-free") and future-proofs the later phases that add new
+    # classifier errors (§6/§10) which are *not* backed by a physical residual
+    # duplicate, so they would otherwise slip the result-error fail-safe. A
+    # *deferred*-but-error-free pass still writes — applying the deterministic
+    # edits and partial-advancing the watermark is the designed outcome; only a
+    # genuine error rolls the whole pass back, so a mid-pass LLM failure never
+    # leaves a half-applied deck on disk. The watermark advance below
+    # independently declines on any plan issue / error, so "wrote nothing" and
+    # "held the watermark" stay consistent.
+    if not result.has_errors and not plan.has_errors:
+        _flush_states_atomically(de_state, en_state)
 
     # Watermark advance. A fully clean pass advances the whole deck. A
     # *content-only* partial pass (edits/conflicts only, so structure is
@@ -523,8 +545,10 @@ def _apply_adds(
       defeat it) is re-minted to a fresh id — its companions follow by
       group-adjacency — leaving the original alone, then handled like an add.
 
-    All cases are sticky (the id is on disk afterward), so they apply regardless
-    of whether the rest of the pass is clean.
+    All cases are sticky: the id is stamped into the in-memory deck and reaches
+    disk on any error-free pass, so they apply even on a *deferred* pass. An
+    erroring pass writes nothing (the end-of-pass flush is error-gated) and the
+    add simply re-surfaces next run.
     """
     add_props = [p for p in plan.proposals if p.kind == "add"]
     rename_props = [p for p in plan.proposals if p.kind == "rename"]
@@ -978,6 +1002,47 @@ def _group_reorder(cells: list[RawCell], source_order: list[str]) -> list[RawCel
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _flush_states_atomically(de_state: FileState, en_state: FileState) -> None:
+    """Persist both decks via a per-deck temp-file + atomic ``os.replace`` swap.
+
+    Issue #190 item 1: the previous code called :meth:`FileState.flush` on each
+    deck unconditionally, so a pass that errored mid-way still persisted the edits
+    that happened to succeed. Here both decks' new text is rendered in memory
+    first and each file is replaced in a single atomic step, so a crash can never
+    leave a half-written deck. (The two files are still two writes — the only
+    residual non-atomic window is the gap between the two ``os.replace`` calls,
+    narrowed as far as a two-file swap allows.) The caller gates this on an
+    error-free pass, so an erroring pass writes nothing at all.
+
+    Bytes are identical to the old per-deck ``flush`` path: :meth:`FileState.render`
+    reuses flush's reconstruct + terminal-newline contract, and the swap writes
+    utf-8 / LF with no newline translation.
+    """
+    pending = [(state, state.render()) for state in (de_state, en_state) if state.dirty]
+    for state, text in pending:
+        _atomic_write_text(state.path, text)
+        state.dirty = False
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Atomically write ``text`` to ``path`` via a same-directory temp file.
+
+    Same byte contract as :meth:`FileState.flush` (utf-8, LF, no translation).
+    The temp file is created in ``path``'s own directory so ``os.replace`` is a
+    true same-filesystem atomic swap (incl. on Windows, where it replaces an
+    existing destination); on any failure the temp file is removed and the
+    destination is left untouched.
+    """
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
+    os.close(fd)
+    try:
+        Path(tmp_name).write_text(text, encoding="utf-8", newline="\n")
+        os.replace(tmp_name, str(path))
+    except BaseException:
+        Path(tmp_name).unlink(missing_ok=True)
+        raise
 
 
 def content_index(path: Path, lang: str) -> dict[tuple[str, str], str]:

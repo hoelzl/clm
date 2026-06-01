@@ -94,6 +94,25 @@ course, and authoring style can be adjusted to *reduce* the localized-id-less
 population if that smooths the process — so the design should make the
 language-neutral path the cheap, dominant one and keep the localized path simple.
 
+**Phase-0 measured baseline (2026-06-01, `scripts/sync_corpus_harness.py`).** The
+harness reproduces the §3 census exactly (md 10,861; code 8,926; localized
+744 id-less + 192 id'd = 936; def-my-fun neutral+localized id'd = 356 + 192 =
+548; cells-with-id 6,638; 20,635 cells − 848 `# j2` = 19,787), and pins the
+churn the two serious limitations expose today:
+
+| Baseline | Count | Phase that drives it to 0 |
+|---|--:|---|
+| **item 2** silent-drop exposure (neutral cells with no per-cell role) | **8,014** (7,634 neutral id-less code + 356 neutral id'd code + 24 neutral md) | Phase 3 |
+| **item 3** needless-re-translation exposure (id-less localized cells) | **1,702** (744 code + 958 md) | Phase 2 |
+| item-3 blast radius | 948 groups expose ≥1, max 10 in one group | — |
+| no-op invariant | 81 / 212 pairs already post-sync-clean; **0 violations** | every phase must hold |
+
+(The other 131 pairs are *not yet synced* — they carry 3,793 id-less narrative
+cells that predate #166 adoption, a data condition, not engine churn.) The
+mechanism for each limitation is pinned as a fast, synthetic flip-test in
+`tests/slides/test_sync_limitations.py`; the corpus invariant + magnitude in the
+`slow`/`integration` `tests/slides/test_sync_corpus_noop.py`.
+
 ## 4. Core decision — identity in the DB, via content anchors
 
 **Give every cell a content-derived *anchor*, computed at sync time and stored in
@@ -319,6 +338,17 @@ protects the *watermark* advance, not the disk write. Wrap the two flushes in a
 on any error, write nothing and surface the deferral. This is a clean
 prerequisite that every later phase relies on.
 
+**Shipped (Phase 0).** `FileState.render()` factors the exact flush bytes out of
+`flush()` (no behaviour change for the v1/v2 walkers that still call `flush`),
+and `apply_plan` now calls `_flush_states_atomically(de_state, en_state)` —
+gated on `not result.has_errors` — which renders both decks in memory and swaps
+each in with `_atomic_write_text` (same-dir temp file + `os.replace`, utf-8/LF,
+byte-identical to the old path). A deferred-but-error-free pass still writes (the
+applied edits + partial-advance are the designed outcome); only a genuine error
+rolls the whole pass back. The one residual gap — the window *between* the two
+`os.replace` calls — is as small as a two-file write allows. Interactive
+`--interactive` inherits this (the walker routes through `apply_plan`).
+
 ## 12. Guardrails & failure modes
 
 | Situation | Handling |
@@ -353,11 +383,13 @@ prerequisite that every later phase relies on.
 Each phase is independently testable in the fast suite and preserves the no-op
 invariant. Gate releases on `pytest -m "not docker"`.
 
-0. **Atomicity + harness.** Buffered temp-swap (§11). A no-op regression harness
-   over the real 212-deck / ~20k-cell corpus asserting a clean re-run writes zero
-   bytes and makes zero LLM calls. *This is the make-or-break invariant every
-   later phase must preserve* — and it doubles as a measurement of how much churn
-   items 2 & 3 produce today.
+0. **Atomicity + harness. ✅ Shipped (2026-06-01).** Buffered temp-swap (§11).
+   A no-op regression harness (`scripts/sync_corpus_harness.py`) over the real
+   212-deck / ~20k-cell corpus asserting a clean re-run writes zero bytes and
+   makes zero LLM calls — backstop in `tests/slides/test_sync_corpus_noop.py`
+   (`slow`/`integration`), mechanism flip-tests in
+   `tests/slides/test_sync_limitations.py` (fast). Measured baseline in §3:
+   item-2 exposure 8,014, item-3 exposure 1,702, 0 invariant violations.
 1. **Widen the watermark** (§5): `construct` migration, 5-tuples, `"shared"`
    partition, membership. `anchor_of` chokepoint. No behavior change yet.
 2. **Item 3 first** (§8): anchor+hash verbatim reuse in `sync_code`. Highest
