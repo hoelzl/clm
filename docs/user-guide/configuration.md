@@ -212,6 +212,18 @@ Can also be set in `[git]` section of config files or `<remote-template>` in cou
 Set `CLM_LLM__API_BASE` to your provider's OpenAI-compatible endpoint
 and `CLM_LLM__API_KEY` (or `OPENAI_API_KEY`) to authenticate.
 
+### Slide Sync (`clm slides sync`)
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `CLM_SYNC_PROVIDER` | Default backend for the edit-reconciliation judge: `openrouter` (Claude Sonnet via OpenRouter) or `local` (the offline Ollama daemon). The `--provider` flag overrides it. | `openrouter` |
+| `CLM_SYNC__SHARED_DIVERGENCE` | How to handle a **language-neutral** code cell edited *differently* on both decks (a divergence the single-entity model would otherwise have to guess). `auto-heal` propagates the winning side (keyed direction, else newer file) and emits a **warning**; `error` surfaces it and writes nothing, so you resolve it by hand. | `auto-heal` |
+
+The OpenRouter backends (the judge, the brand-new-slide translator, and the
+opt-in `--llm-recover` alignment recoverer) authenticate with
+`OPENROUTER_API_KEY` (or `OPENAI_API_KEY`), which `clm slides sync` also picks up
+from a project `.env` automatically (pass `--no-env-file` to skip).
+
 ### Performance
 
 | Variable | Description | Default |

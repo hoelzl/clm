@@ -251,6 +251,39 @@ both decks.
   of dropping the cell, and the `--llm-timeout` default is provider-aware
   (120s for `openrouter`, 300s for `local`).
 
+### Content-anchor sync (Issue #190 — additive, no break)
+
+CLM {version} tracks cell identity in the watermark by a **content anchor**
+(`hand slide_id > construct slug > content hash`, never written into the file),
+which fixes the sync limitations that used to lose code edits or churn
+translations. These are behavior *improvements* — no change is required in a
+course repo — but agents driving `clm slides sync` should know:
+
+- **A code-only edit to a language-neutral code cell now propagates.** Editing
+  *only* a neutral (`# %%`, no `lang=`) code cell on one half — with no narrative
+  or id change — used to be **silently dropped**; it is now copied verbatim to the
+  twin. If a past sync left the two halves' code out of step, the next sync repairs
+  it.
+- **Unchanged localized code is no longer re-translated** when its slide group is
+  rebuilt for a sibling's sake — it is spliced verbatim by its anchor, so re-runs
+  are churn-free and spend no LLM.
+- **A drifted `slide_id` is migrated back deterministically.** Split an id'd code
+  cell (e.g. add an `import` above a `def`, leaving the id on the import) and the
+  next sync moves the id onto the cell whose construct it names, minting a fresh
+  slug on the orphan — symmetric across both decks (`de_id == en_id` preserved),
+  no LLM.
+- **A neutral cell edited differently on both decks auto-heals with a warning.**
+  Set `CLM_SYNC__SHARED_DIVERGENCE=error` (see `clm info` / the configuration
+  guide) to surface it as an error and write nothing instead.
+- **New flags:** `--explain` (a read-only content-anchor diff — see why a cell did
+  or did not sync), and the opt-in `--llm-recover` / `--recovery-model` (default
+  off) for *genuinely ambiguous* id realignment (a function renamed while a cell
+  was split). Without `--llm-recover`, an ambiguous region is left untouched and
+  re-surfaces next run.
+- **Watermark schema:** the `sync_watermarks` table gains a nullable `construct`
+  column, migrated automatically on first use; pre-#190 caches upgrade in place
+  (existing rows backfill to `NULL`). No action needed.
+
 ### How to migrate
 
 ```bash
