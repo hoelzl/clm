@@ -1024,11 +1024,13 @@ class TestApplyRename:
         assert result.watermark_recorded is False
         assert en_path.read_text(encoding="utf-8") == before_en  # EN untouched
 
-    def test_malformed_copy_companion_is_safe(self, tmp_path: Path):
+    def test_malformed_copy_companion_is_propagated_consistently(self, tmp_path: Path):
         # A copied group whose companion carries a DIFFERENT id than its slide.
-        # The slide renames, but the mismatched companion is left to normal
-        # pairing (an id-carrying add -> deferred), so the watermark cannot
-        # advance over the divergence.
+        # The slide renames; the mismatched companion is a cell present on DE
+        # only with an id unknown to the baseline, so it is now an *id-carrying
+        # add* and is propagated to EN (id-carrying adds used to be out of scope
+        # and deferred). The safety property holds the new way: the decks end
+        # with a CONSISTENT key set rather than a silent cross-deck divergence.
         de = _slide("de", "intro", "# ## Einleitung") + _vo("de", "intro", "# Sprechertext")
         en = _slide("en", "intro", "# ## Introduction") + _vo("en", "intro", "# Narration")
         de_path, en_path = _write_pair(tmp_path, de, en)
@@ -1048,9 +1050,13 @@ class TestApplyRename:
         finally:
             cache.close()
 
-        # Not silently baselined: the mismatched companion forces a deferral.
-        assert result.deferred >= 1
-        assert result.watermark_recorded is False
+        # No silent cross-deck divergence: both decks carry the same sync keys,
+        # including the once-orphaned companion now propagated to EN.
+        assert not result.has_errors, result.errors
+        de_keys = set(_keys_of(de_path, "de"))
+        en_keys = set(_keys_of(en_path, "en"))
+        assert de_keys == en_keys
+        assert ("weird", "voiceover") in en_keys
 
 
 # ---------------------------------------------------------------------------

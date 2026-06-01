@@ -21,6 +21,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
+from clm.infrastructure.llm.retry import call_with_retries
+
 logger = logging.getLogger(__name__)
 
 __all__ = [
@@ -121,13 +123,14 @@ class OpenRouterSlideTranslator:
         target_lang: str,
         role: str,
     ) -> str:  # pragma: no cover - exercised via mocked client / integration
-        system = _SYSTEM_PROMPT.format(
+        system = _system_prompt_for(role).format(
             source_lang=_LANG_NAMES.get(source_lang, source_lang),
             target_lang=_LANG_NAMES.get(target_lang, target_lang),
             role=role,
         )
-        try:
-            response = self._client().chat.completions.create(
+
+        def _create():
+            return self._client().chat.completions.create(
                 model=self.model,
                 messages=[
                     {"role": "system", "content": system},
@@ -135,6 +138,12 @@ class OpenRouterSlideTranslator:
                 ],
                 temperature=self.temperature,
                 max_tokens=self.max_tokens,
+            )
+
+        # Retry transient failures so one flaky call does not defer a new slide.
+        try:
+            response = call_with_retries(
+                _create, exc=Exception, label=f"slide translation ({self.model})"
             )
         except Exception as exc:
             raise TranslationError(f"translation LLM call failed: {exc}") from exc
@@ -157,3 +166,25 @@ _SYSTEM_PROMPT = (
     "spans and identifiers, URLs, and slide directives. Do not add, drop, or reorder "
     "lines. Return only the translated cell body, no commentary, no code fences."
 )
+
+# Code cells are NOT comment-prefixed: they are runnable Python. Only the
+# human-facing text inside them (string literals shown to the learner, comments)
+# differs across languages; the code itself is language-neutral and must stay
+# byte-identical so the cell still runs and the two decks share one logic.
+_CODE_SYSTEM_PROMPT = (
+    "You localize a single Python code cell of a {source_lang} programming-course "
+    "slide deck into its {target_lang} counterpart. Return runnable Python, NOT "
+    "Markdown. Translate ONLY human-facing natural-language text: the contents of "
+    "string literals that are shown to a learner (e.g. example prompts, questions, "
+    "user-visible messages) and code comments. Keep EVERYTHING else byte-identical: "
+    "all identifiers, function/variable/class names, keywords, imports, attribute "
+    "and method names, dict keys, operators, numbers, structure, indentation, and "
+    "string literals that are technical (model names, URLs, format strings, JSON "
+    'keys like "role"/"content"/"system"/"user"). Do not add, drop, reorder, '
+    "or reformat lines. Return only the cell body, no commentary, no code fences."
+)
+
+
+def _system_prompt_for(role: str) -> str:
+    """Pick the system prompt for a cell ``role`` (code cells are not Markdown)."""
+    return _CODE_SYSTEM_PROMPT if role == "code" else _SYSTEM_PROMPT

@@ -719,10 +719,29 @@ add proposals defer. When the judge backend is unavailable (Ollama
 unreachable, or no OpenRouter key), edit proposals are recorded as
 errors (exit 2) rather than guessed.
 
-Cells synced: markdown `slide` / `subslide` cells and narrative
-`voiceover` / `notes` cells. Shared code cells are intentionally
-excluded — split companions must keep them byte-identical, enforced by
-the split-source validator instead.
+**`.env` is loaded automatically.** Before resolving the judge and
+translator, sync walks up from each deck's directory and loads the first
+`.env` it finds (without overriding already-exported variables), so
+`$OPENROUTER_API_KEY` / `$OPENAI_API_KEY` kept in the project `.env` (the
+usual course-repo layout) are picked up. Pass `--no-env-file` to skip
+this; `--dry-run` never loads `.env` (it uses no LLM).
+
+Cells synced: **all** sync-relevant cells, not only narrative markdown:
+
+- markdown `slide` / `subslide` cells and narrative `voiceover` / `notes`
+  cells (reconciled by the judge);
+- **auxiliary markdown** carrying a `slide_id` but no narrative tag (an
+  `alt` solution note, an untagged explanatory cell) — twinned/translated
+  like narrative;
+- **code cells**: a **language-neutral** code cell (no `lang=`) is copied
+  **verbatim** across both halves; a **localized** code cell (`lang=` —
+  e.g. one whose string literals are shown to the learner) is **twinned and
+  translated**, keeping the code itself byte-identical. New slides bring
+  their code along, and code an author moves between slide groups follows.
+
+A localized code cell with a `slide_id` is reconciled per cell (its body
+re-translated on an edit); language-neutral and id-less code is propagated
+structurally, so it is **not** minted a `slide_id`.
 
 ```
 clm slides sync [OPTIONS] DE_PATH EN_PATH
@@ -735,10 +754,11 @@ clm slides sync [OPTIONS] DE_PATH EN_PATH
 | `--provider [openrouter\|local]` | Backend for the edit-reconciliation judge: `openrouter` (Claude Sonnet via OpenRouter, the default — needs `$OPENROUTER_API_KEY` / `$OPENAI_API_KEY`) or `local` (the Ollama daemon — offline, slower). Overridable with `$CLM_SYNC_PROVIDER`. |
 | `--llm-model TEXT` | Model for the edit-reconciliation judge. Default depends on `--provider`: `anthropic/claude-sonnet-4-6` (openrouter) or `qwen3:30b` (local). |
 | `--ollama-url TEXT` | Base URL of the Ollama daemon (only used with `--provider local`; default: `$OLLAMA_URL` or `http://localhost:11434`). |
-| `--llm-timeout SECONDS` | Per-call timeout for the edit judge (default: 120s — cold-load on a 30B local model can exceed 60s). |
+| `--llm-timeout SECONDS` | Per-call timeout for the edit judge. Provider-aware default: 120s for `openrouter` (fast hosted model), 300s for `local` (a large local reasoning model can spend minutes "thinking"). |
 | `--translation-model TEXT` | OpenRouter model used to translate brand-new slides for the add path (default: `anthropic/claude-sonnet-4-6`). Needs `$OPENROUTER_API_KEY` / `$OPENAI_API_KEY`; adds defer when absent. |
 | `--cache-dir PATH` | Directory holding the structural watermark. Lookup order: flag → `$CLM_CACHE_DIR` → `tool.clm.cache_dir` in `pyproject.toml` → `<cwd>/.clm-cache/`. |
 | `--no-cache` | Do not read or write the watermark. Every run then re-derives its baseline from git `HEAD` and no synced state is persisted. |
+| `--no-env-file` | Do not auto-load a `.env` file. By default sync loads the first `.env` found above each deck (without overriding already-set variables), so keys kept in the project `.env` reach the judge/translator. |
 | `--json` | Emit a JSON report instead of human-readable lines. |
 
 Exit codes: `0` clean (every change applied, or nothing to do, with no

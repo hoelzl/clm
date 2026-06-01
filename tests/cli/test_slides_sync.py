@@ -456,6 +456,119 @@ class TestProvider:
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture
+def restore_api_keys():
+    """Snapshot and restore key env vars a ``.env`` load would mutate.
+
+    ``load_dotenv`` writes straight into ``os.environ`` (monkeypatch can't undo
+    that), so without this a loaded test key would leak into later tests.
+    """
+    import os
+
+    keys = ("OPENROUTER_API_KEY", "OPENAI_API_KEY")
+    saved = {k: os.environ.get(k) for k in keys}
+    yield
+    for k, v in saved.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+
+
+class TestEnvFileLoading:
+    """Bug: sync checked only the process env, so keys kept in the project
+    ``.env`` (the usual course-repo layout, read by notebooks via
+    ``load_dotenv``) were invisible — every add deferred and every edit errored
+    as 'LLM unavailable'."""
+
+    def _swap_openrouter_judge(self, monkeypatch) -> None:
+        from clm.cli.commands import slides_sync as cmd
+        from clm.infrastructure.llm.ollama_client import StaticSyncJudge, SyncProposal
+
+        proposal = SyncProposal(verdict="update", proposed_text=_EN_PROPOSAL, reason="")
+        monkeypatch.setattr(
+            cmd, "OpenRouterSyncJudge", lambda **_kw: StaticSyncJudge(default_proposal=proposal)
+        )
+
+    def test_key_in_dotenv_is_loaded_so_default_judge_runs(
+        self, cli_runner: CliRunner, tmp_path: Path, monkeypatch, restore_api_keys
+    ):
+        # Key lives ONLY in .env, not exported. Before the fix the openrouter
+        # judge sees no key → records the edit as an error (exit 2). After the
+        # fix .env is loaded → the judge runs → the edit applies (exit 0).
+        monkeypatch.delenv("CLM_SYNC_PROVIDER", raising=False)
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        self._swap_openrouter_judge(monkeypatch)
+        de_path, en_path, cache_dir = _edit_scenario(tmp_path)
+        (tmp_path / ".env").write_text("OPENROUTER_API_KEY=sk-from-dotenv\n", encoding="utf-8")
+
+        result = cli_runner.invoke(
+            slides_sync_cmd,
+            [str(de_path), str(en_path), "--cache-dir", str(cache_dir)],
+        )
+
+        assert result.exit_code == 0, _combined(result)
+        assert "Point one" in en_path.read_text(encoding="utf-8")
+        assert "applied: 1 edit" in result.output
+
+    def test_dotenv_found_by_walking_up_from_deck_dir(
+        self, cli_runner: CliRunner, tmp_path: Path, monkeypatch, restore_api_keys
+    ):
+        # .env at the project root, decks in a nested topic dir (the real layout).
+        monkeypatch.delenv("CLM_SYNC_PROVIDER", raising=False)
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        self._swap_openrouter_judge(monkeypatch)
+        (tmp_path / ".env").write_text("OPENROUTER_API_KEY=sk-root\n", encoding="utf-8")
+        deck_dir = tmp_path / "slides" / "topic_010"
+        deck_dir.mkdir(parents=True)
+        cache_dir = tmp_path / "cache"
+        de_path, en_path = _write_pair(deck_dir, _DE_EDITED, _EN_BASE)
+        _seed_watermark(cache_dir, de_path, en_path, de_text=_DE_BASE, en_text=_EN_BASE)
+
+        result = cli_runner.invoke(
+            slides_sync_cmd,
+            [str(de_path), str(en_path), "--cache-dir", str(cache_dir)],
+        )
+
+        assert result.exit_code == 0, _combined(result)
+        assert "applied: 1 edit" in result.output
+
+    def test_no_env_file_flag_skips_dotenv(
+        self, cli_runner: CliRunner, tmp_path: Path, monkeypatch, restore_api_keys
+    ):
+        # With --no-env-file the .env key stays invisible → judge unavailable.
+        monkeypatch.delenv("CLM_SYNC_PROVIDER", raising=False)
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        self._swap_openrouter_judge(monkeypatch)
+        de_path, en_path, cache_dir = _edit_scenario(tmp_path)
+        (tmp_path / ".env").write_text("OPENROUTER_API_KEY=sk-from-dotenv\n", encoding="utf-8")
+
+        result = cli_runner.invoke(
+            slides_sync_cmd,
+            [str(de_path), str(en_path), "--no-env-file", "--cache-dir", str(cache_dir)],
+        )
+
+        assert result.exit_code == 2, _combined(result)
+        assert "OPENROUTER_API_KEY" in (result.stderr or "")
+
+
+class TestResolveTimeout:
+    """A non-positive --llm-timeout must fall back to the provider default
+    (a negative value would otherwise crash urllib with an uncaught ValueError
+    on the local path)."""
+
+    def test_clamps_non_positive_to_provider_default(self):
+        from clm.cli.commands.slides_sync import _resolve_timeout
+
+        assert _resolve_timeout(None, 120.0) == 120.0
+        assert _resolve_timeout(0, 120.0) == 120.0
+        assert _resolve_timeout(-5.0, 300.0) == 300.0
+        assert _resolve_timeout(45.0, 120.0) == 45.0  # a positive value is honored
+
+
 class TestNoBaseline:
     def test_no_watermark_no_git_reports_baseline_none(self, cli_runner: CliRunner, tmp_path: Path):
         # Identical ids on both sides, no watermark, tmp dir is not a git repo:

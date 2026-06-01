@@ -56,7 +56,6 @@ __all__ = [
     "APPLY",
     "AUTO",
     "DE_WINS",
-    "DEFERRED",
     "EN_WINS",
     "QUIT",
     "SKIP",
@@ -74,8 +73,7 @@ SKIP = "skip"
 QUIT = "quit"
 DE_WINS = "de-wins"
 EN_WINS = "en-wins"
-AUTO = "auto"  # id-less add / rename, applied without prompting
-DEFERRED = "deferred"  # id-carrying add — apply_plan defers it (follow-up scope)
+AUTO = "auto"  # add (id-less or id-carrying) / rename, applied without prompting
 
 _GATED_KINDS = {"edit", "remove", "move"}
 _AUTO_KINDS = {"add", "rename"}
@@ -141,11 +139,10 @@ class PlanWalkResult:
 
     @property
     def auto_applied(self) -> int:
-        """id-less add / rename proposals routed for auto-apply.
+        """add / rename proposals routed for auto-apply (id-less or id-carrying).
 
-        Excludes id-carrying adds, which the engine defers (they carry the
-        :data:`DEFERRED` action). Reflects what was *routed*; what was actually
-        written is ``apply_result.applied_add + apply_result.applied_rename``.
+        Reflects what was *routed*; what was actually written is
+        ``apply_result.applied_add + apply_result.applied_rename``.
         """
         return self._count(action=AUTO)
 
@@ -222,16 +219,12 @@ def run_plan_walker(
 
         if kind in _AUTO_KINDS:
             echo(render_proposal(proposal, de_bodies, en_bodies))
-            # An id-carrying "add" is a missing-counterpart case that apply_plan
-            # defers unconditionally (out of v1 scope) — never claim it was
-            # applied. id-less adds and renames are auto-applied (and reviewed in
-            # the resulting git diff).
-            if kind == "add" and proposal.slide_id is not None:
-                echo("  → deferred (id-carrying add; missing-counterpart follow-up)")
-                actions.append(_action(proposal, DEFERRED))
-            else:
-                echo("  → will auto-apply (add/rename; counterpart reviewed in git diff)")
-                actions.append(_action(proposal, AUTO))
+            # add (id-less or id-carrying) and rename are non-destructive, so
+            # they auto-apply (translate + insert; the counterpart is reviewed in
+            # the resulting git diff). An id-carrying add inserts the twin under
+            # the existing id; an id-less add mints one.
+            echo("  → will auto-apply (add/rename; counterpart reviewed in git diff)")
+            actions.append(_action(proposal, AUTO))
             continue
 
         if quitting:

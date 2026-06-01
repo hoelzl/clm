@@ -38,9 +38,16 @@ from clm.infrastructure.llm.ollama_client import OllamaError
 from clm.notebooks.slide_parser import parse_cell_header, parse_cells
 from clm.slides.raw_cells import RawCell
 from clm.slides.slug import resolve_collision, slugify
+from clm.slides.sync_code import apply_code_structure
 from clm.slides.sync_plan import Proposal, SyncPlan, ordered_sync_cells
 from clm.slides.sync_translate import TranslationError
-from clm.slides.sync_writeback import FileState, cell_content_hash, role_of
+from clm.slides.sync_writeback import (
+    CODE_ROLE,
+    FileState,
+    build_twin_cell,
+    cell_content_hash,
+    role_of,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -160,7 +167,9 @@ def apply_plan(
                 _note_deferred(deferred_keys, proposal)
         elif kind == "edit":
             if _accepted(decisions, proposal):
-                _apply_edit(proposal, de_state, en_state, de_content, en_content, judge, result)
+                _apply_edit(
+                    proposal, de_state, en_state, de_content, en_content, judge, translator, result
+                )
             else:
                 result.deferred += 1
                 _note_deferred(deferred_keys, proposal)
@@ -179,6 +188,7 @@ def apply_plan(
                 de_content,
                 en_content,
                 judge,
+                translator,
                 result,
                 deferred_keys,
             )
@@ -193,6 +203,14 @@ def apply_plan(
     # watermark will advance and the reorder stays idempotent).
     if moves:
         _apply_moves(moves, de_state, en_state, result, plan)
+
+    # Structural pass: propagate the cells the per-(slide_id, role) walk does not
+    # reach — language-neutral code (copied verbatim across halves), id-less
+    # localized code (translated) — and rebuild the cell order of changed slide
+    # groups, reusing the narrative / aux / id'd-code twins the steps above just
+    # placed. Cross-group code moves fall out of rebuilding both groups from the
+    # source. Runs after adds/moves so every twin it pulls is in place.
+    apply_code_structure(plan, de_state, en_state, translator, result)
 
     # Fail-safe: a complete resolution leaves no duplicate id behind. If one
     # survives (a should-not-happen bug), error so the watermark cannot advance
@@ -281,6 +299,7 @@ def _apply_conflict(
     de_content: dict[tuple[str, str], str],
     en_content: dict[tuple[str, str], str],
     judge: SyncJudge | None,
+    translator: SlideTranslator | None,
     result: ApplyResult,
     deferred_keys: set[tuple[str, str]],
 ) -> None:
@@ -300,6 +319,7 @@ def _apply_conflict(
             de_content,
             en_content,
             judge,
+            translator,
             result,
         )
     elif decision == DECISION_EN_WINS:
@@ -310,6 +330,7 @@ def _apply_conflict(
             de_content,
             en_content,
             judge,
+            translator,
             result,
         )
     else:
@@ -390,27 +411,36 @@ def _apply_edit(
     de_content: dict[tuple[str, str], str],
     en_content: dict[tuple[str, str], str],
     judge: SyncJudge | None,
+    translator: SlideTranslator | None,
     result: ApplyResult,
 ) -> None:
     if proposal.slide_id is None:
         result.errors.append(f"edit {proposal.role}: proposal has no slide_id")
         return
-    key = (proposal.slide_id, proposal.role)
+    sid = proposal.slide_id
+    key = (sid, proposal.role)
     if proposal.direction == "de->en":
         source_lang, target_lang = "de", "en"
         source_body = de_content.get(key, "")
         target_body = en_content.get(key, "")
-        target_state = en_state
+        source_state, target_state = de_state, en_state
     else:
         source_lang, target_lang = "en", "de"
         source_body = en_content.get(key, "")
         target_body = de_content.get(key, "")
-        target_state = de_state
+        source_state, target_state = en_state, de_state
+
+    # A localized code cell is reconciled by re-translating the source body (the
+    # markdown judge's prompt does not fit runnable code); only the human-facing
+    # string literals / comments differ across languages.
+    if proposal.role == CODE_ROLE:
+        _apply_code_edit(
+            sid, source_state, target_state, source_lang, target_lang, translator, result
+        )
+        return
 
     if judge is None:
-        result.errors.append(
-            f"edit {proposal.slide_id}/{proposal.role}: no judge (LLM unavailable)"
-        )
+        result.errors.append(f"edit {sid}/{proposal.role}: no judge (LLM unavailable)")
         return
 
     try:
@@ -418,20 +448,51 @@ def _apply_edit(
             source_body, target_body, source_lang=source_lang, target_lang=target_lang
         )
     except OllamaError as exc:
-        logger.info("edit judge failed on %s/%s: %s", proposal.slide_id, proposal.role, exc)
-        result.errors.append(f"edit {proposal.slide_id}/{proposal.role}: {exc}")
+        logger.info("edit judge failed on %s/%s: %s", sid, proposal.role, exc)
+        result.errors.append(f"edit {sid}/{proposal.role}: {exc}")
         return
 
     if sync_proposal.verdict != "update":
         result.in_sync += 1
         return
 
-    if target_state.replace_cell_body(
-        proposal.slide_id, proposal.role, sync_proposal.proposed_text
-    ):
+    if target_state.replace_cell_body(sid, proposal.role, sync_proposal.proposed_text):
         result.applied_edit += 1
     else:
-        result.errors.append(f"edit {proposal.slide_id}/{proposal.role}: target cell not found")
+        result.errors.append(f"edit {sid}/{proposal.role}: target cell not found")
+
+
+def _apply_code_edit(
+    sid: str,
+    source_state: FileState,
+    target_state: FileState,
+    source_lang: str,
+    target_lang: str,
+    translator: SlideTranslator | None,
+    result: ApplyResult,
+) -> None:
+    """Reconcile a localized code cell edit by re-translating the source body."""
+    if translator is None:
+        result.errors.append(f"edit {sid}/code: no translator (LLM unavailable)")
+        return
+    src_cell = source_state.find_cell(sid, CODE_ROLE)
+    if src_cell is None:
+        result.errors.append(f"edit {sid}/code: source cell not found")
+        return
+    try:
+        new_body = translator.translate(
+            source_body=src_cell.body.rstrip("\n"),
+            source_lang=source_lang,
+            target_lang=target_lang,
+            role=CODE_ROLE,
+        )
+    except TranslationError as exc:
+        result.errors.append(f"edit {sid}/code: translation failed: {exc}")
+        return
+    if target_state.replace_cell_body(sid, CODE_ROLE, new_body):
+        result.applied_edit += 1
+    else:
+        result.errors.append(f"edit {sid}/code: target cell not found")
 
 
 # ---------------------------------------------------------------------------
@@ -446,10 +507,14 @@ def _apply_adds(
     plan: SyncPlan,
     translator: SlideTranslator | None,
 ) -> None:
-    """Translate, mint, and insert counterparts for new and copy-pasted slides.
+    """Translate and insert counterparts for new and copy-pasted cells.
 
-    One deck walk per direction handles two cases:
+    Three cases:
 
+    - **id-carrying add**: a new cell already minted with a ``slide_id`` on one
+      side only — translate and insert the twin under the *same* id at its
+      source anchor (:func:`_add_idcarrying_one_direction`). Covers a new id'd
+      slide, narrative companion, aux-markdown cell, or localized code cell.
     - **add** (id-less cell): a new slide mints a fresh EN-authority id stamped
       onto *both* siblings; a narrative companion inherits the preceding slide's
       id; the translated counterpart is inserted on the other deck.
@@ -458,9 +523,8 @@ def _apply_adds(
       defeat it) is re-minted to a fresh id — its companions follow by
       group-adjacency — leaving the original alone, then handled like an add.
 
-    id-carrying "missing counterpart" adds are out of scope and deferred. Both
-    cases are sticky via the stamp, so they apply regardless of whether the rest
-    of the pass is clean.
+    All cases are sticky (the id is on disk afterward), so they apply regardless
+    of whether the rest of the pass is clean.
     """
     add_props = [p for p in plan.proposals if p.kind == "add"]
     rename_props = [p for p in plan.proposals if p.kind == "rename"]
@@ -468,15 +532,31 @@ def _apply_adds(
         return
 
     idd = [p for p in add_props if p.slide_id is not None]
-    if idd:
-        result.deferred += len(idd)  # missing-counterpart adds: a follow-up
-
     idless = [p for p in add_props if p.slide_id is None]
-    if len(idless) + len(rename_props) == 0:
-        return
+
     if translator is None:
-        result.deferred += len(idless) + len(rename_props)
+        result.deferred += len(idd) + len(idless) + len(rename_props)
         result.errors.append("add/rename present but no translator available")
+        return
+
+    # id-carrying adds: a new cell (slide / subslide / narrative / aux markdown /
+    # localized code) already minted with a slide_id on one side only — e.g. a
+    # deck whose ids were assigned before the split, where the author then adds a
+    # new id'd slide on one half. Translate and insert the twin under the *same*
+    # id (no minting, no collision) at its source-order anchor.
+    if idd:
+        de_keys = {(p.slide_id, p.role) for p in idd if p.direction == "de->en"}
+        en_keys = {(p.slide_id, p.role) for p in idd if p.direction == "en->de"}
+        if de_keys:
+            _add_idcarrying_one_direction(
+                de_state, en_state, "de", "en", de_keys, translator, result
+            )
+        if en_keys:
+            _add_idcarrying_one_direction(
+                en_state, de_state, "en", "de", en_keys, translator, result
+            )
+
+    if len(idless) + len(rename_props) == 0:
         return
 
     process_idless = True
@@ -508,6 +588,48 @@ def _apply_adds(
     _add_one_direction(
         en_state, de_state, "en", "de", translator, used_ids, result, en_copy_ids, process_idless
     )
+
+
+def _add_idcarrying_one_direction(
+    source_state: FileState,
+    target_state: FileState,
+    source_lang: str,
+    target_lang: str,
+    add_keys: set[tuple[str | None, str]],
+    translator: SlideTranslator,
+    result: ApplyResult,
+) -> None:
+    """Insert the twin of each id-carrying new cell, under the same id, at anchor.
+
+    Walks the source deck once. A sync cell whose ``(slide_id, role)`` is in
+    ``add_keys`` is brand-new (present on the source only): translate it, build
+    a twin that preserves its id, tags, and cell type (markdown vs code) with the
+    language swapped, and insert it after the previously-seen cell that already
+    exists on the target. Any other sync cell is an existing one whose twin is
+    already on the target and serves as the running anchor. Language-neutral /
+    id-less cells are skipped here (handled structurally by
+    :mod:`clm.slides.sync_code`); the structural pass later rebuilds the order of
+    every changed group, so the anchor here only needs to be *near* right.
+    """
+    anchor: tuple[str, str] | None = None
+    for cell in list(source_state.cells):
+        role = role_of(cell.metadata)
+        if role is None or cell.metadata.lang != source_lang:
+            continue
+        sid = cell.metadata.slide_id
+        if sid is None:
+            continue
+        key = (sid, role)
+        if key not in add_keys:
+            anchor = key  # an existing cell already twinned on the target
+            continue
+        target_body = _translate(cell, source_lang, target_lang, translator, role, result)
+        if target_body is None:
+            continue  # _translate recorded the deferral/error; keep the anchor
+        twin = build_twin_cell(cell, target_lang, target_body)
+        _insert_at_anchor(target_state, anchor, twin)
+        result.applied_add += 1
+        anchor = key
 
 
 def _identify_copy_slides(

@@ -655,6 +655,51 @@ Original Phase 5 spec (for reference):
 - **Exit:** the one-command workflow is live end-to-end, docs are
   version-accurate, and `pytest -m "not docker"` is green.
 
+### Phase 6 — Code cells + auxiliary markdown (the structural pass)
+
+**Status: ✅ implemented 2026-06-01.** Phases 1–5 scoped sync to narrative
+`(slide_id, role)` markdown only; a real editing pass (the `review_w01_w06`
+repro) showed that dropping every **code cell** and every untagged / `alt`
+markdown cell makes the result incoherent (translated headings over stale code).
+Phase 6 closes that gap **without changing the watermark schema**:
+
+- **Role extension** (`sync_writeback.role_of`, the one predicate the classifier
+  and apply engine both use): a **localized** code cell (`lang=` *and*
+  `slide_id`) gets the synthetic role `"code"`; an **aux** markdown cell (a
+  `slide_id` but no narrative tag) gets its first tag, else `"markdown"`. These
+  flow through the existing per-cell add/edit/move/conflict machinery. A code
+  `edit` is reconciled by **re-translating** the source body (a code-aware
+  translator prompt), not the markdown judge.
+- **id-carrying adds** (`sync_apply._add_idcarrying_one_direction`): a new cell
+  minted with a `slide_id` on one side only is translated and inserted under the
+  **same** id (no minting, no collision). Previously deferred as out-of-scope.
+- **Structural pass** (`sync_code.apply_code_structure`), run after the per-cell
+  apply: for each slide group whose **structural signature** drifted from the
+  edited side, rebuild its cell order from the source — **language-neutral**
+  cells (no `lang`) copied verbatim, **id-less localized** cells translated, and
+  every per-cell-synced cell pulled back in by `(slide_id, role)`. The signature
+  is language-agnostic (`("R", role)` for sync cells, `("S", body)` for shared,
+  `("L", kind)` for id-less localized, `("J",)` for a j2 header) so a narrative
+  edit or a `header_en`/`header_de` difference never triggers a rebuild, while a
+  code/shared change or a cross-group code move does. Untouched groups stay
+  byte-for-byte. Direction comes from the run's proposals (uniform `en->de` /
+  `de->en`); a pass with no single direction skips the structural step.
+
+Key invariants kept: language-neutral / id-less code is **never** minted a
+`slide_id` (so re-runs stay no-ops via the source-vs-target signature, not the
+watermark), and the j2 header macro is treated as language-specific
+(target's own header is kept). Also in this phase: `clm slides sync` loads the
+project `.env` (`cli/env_loading.py`, shared with `clm build`) so keys kept in
+`.env` reach the judge/translator; the OpenRouter judge/translator retry
+transient failures with backoff (`infrastructure/llm/retry.py`); and the local
+`--llm-timeout` default is provider-aware (300s).
+
+Known limitations (documented, surfaced — not silent): a *code-only* change with
+**no** narrative/id'd proposal and identical shared cells provides no direction
+signal and is not propagated (an author virtually always also touches a
+slide/voiceover); and an unchanged **id-less** localized code cell inside a group
+rebuilt for another reason is re-translated (churn, not corruption).
+
 ### Dependency graph
 
 ```
@@ -663,5 +708,6 @@ Phase 1 (watermark + classifier)
    │      └── Phase 3 (translation + minting)  ← also needs the translator/prompt suite
    │             └── Phase 4 (walker + conflict UX)
    │                    └── Phase 5 (default-flip + docs)
+   │                           └── Phase 6 (code cells + aux markdown; structural pass)
    └── (per-cell direction lands in Phase 1; old-inference deprecation in Phase 5)
 ```

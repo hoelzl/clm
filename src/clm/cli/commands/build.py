@@ -278,18 +278,13 @@ def _maybe_start_mitmproxy_transport(
 def _find_env_file(start_dir: Path) -> Path | None:
     """Walk up from start_dir looking for a .env file.
 
-    Returns the path to the first .env file found, or None.
+    Returns the path to the first .env file found, or None. Thin wrapper over
+    the shared :func:`clm.cli.env_loading.find_env_file` (kept under this name
+    for the build command's existing callers and tests).
     """
-    search_dir = start_dir
-    while True:
-        candidate = search_dir / ".env"
-        if candidate.is_file():
-            return candidate
-        parent = search_dir.parent
-        if parent == search_dir:
-            break
-        search_dir = parent
-    return None
+    from clm.cli.env_loading import find_env_file
+
+    return find_env_file(start_dir)
 
 
 @dataclass

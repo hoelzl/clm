@@ -444,11 +444,11 @@ class TestAutoAdd:
         assert result.apply_result.has_errors
         assert result.exit_code == 2
 
-    def test_idcarrying_add_is_deferred_not_auto(self, tmp_path: Path):
-        # An id-carrying "missing counterpart" add (a slide_id present on one
-        # deck only) is out of v1 scope: apply_plan defers it unconditionally.
-        # The walker must NOT label it auto-applied or promise a git diff that
-        # was never written — it records a DEFERRED action instead.
+    def test_idcarrying_add_is_auto_applied(self, tmp_path: Path):
+        # An id-carrying add (a slide_id present on one deck only, unknown to the
+        # baseline) is a brand-new slide the author wrote with an id already on
+        # it. The walker auto-applies it: translate + insert the twin under the
+        # SAME id, reviewed in the resulting git diff.
         de_path, en_path = _write_pair(
             tmp_path,
             _slide("de", "a", "# ## A") + _slide("de", "b", "# ## B-de"),
@@ -461,16 +461,16 @@ class TestAutoAdd:
         assert add.slide_id == "b"  # id-carrying, not id-less
 
         translator = StaticSlideTranslator(mapping={"# ## B-de": "# ## B-en"})  # fully mapped
-        before_en = en_path.read_text("utf-8")
         result, lines = _walk(plan, [], translator=translator)
 
-        assert result.auto_applied == 0  # NOT counted as auto-applied
-        assert result.apply_result.applied_add == 0
-        assert result.apply_result.deferred >= 1
-        assert any("deferred (id-carrying add" in line for line in lines)
-        assert not any("will auto-apply" in line for line in lines)
-        assert en_path.read_text("utf-8") == before_en  # deck untouched
-        assert result.exit_code == 1
+        assert result.auto_applied == 1
+        assert result.apply_result.applied_add == 1
+        assert result.apply_result.deferred == 0
+        assert any("will auto-apply" in line for line in lines)
+        en_text = en_path.read_text("utf-8")
+        assert "# ## B-en" in en_text  # translated counterpart inserted
+        assert 'slide_id="b"' in en_text  # under the same id (no minting)
+        assert result.exit_code == 0
 
 
 # ---------------------------------------------------------------------------
