@@ -185,6 +185,28 @@ class TestAlignAnchored:
         assert a.diverged
         assert a.direction is None
 
+    def test_empty_baseline_defers_even_when_halves_disagree(self):
+        # A pre-Phase-1b watermark (no shared partition) + a real one-sided neutral
+        # edit: we can't tell which half drifted, so defer to the keyed direction —
+        # NOT a divergence/error (which would falsely block a legit edit).
+        de = '# %% tags=["keep"]\nimport time\n'
+        en = '# %% tags=["keep"]\nimport time\nx = 1\n'  # halves disagree
+        a = align_anchored(parse_cells(de), parse_cells(en), [])  # empty baseline
+        assert a.direction is None
+        assert not a.diverged
+        assert not a.irreconcilable
+
+    def test_independent_cross_cell_edits_are_irreconcilable(self):
+        # DE edits cell A, EN edits a DIFFERENT cell B (positional): no single
+        # direction is safe -> irreconcilable (never silently revert one).
+        base = '# %% tags=["keep"]\nA = 1\n# %% tags=["keep"]\nB = 1\n'
+        de = '# %% tags=["keep"]\nA = 2\n# %% tags=["keep"]\nB = 1\n'  # DE edited A
+        en = '# %% tags=["keep"]\nA = 1\n# %% tags=["keep"]\nB = 2\n'  # EN edited B
+        baseline = _shared_hashes(parse_cells(base))
+        a = align_anchored(parse_cells(de), parse_cells(en), baseline)
+        assert a.irreconcilable
+        assert a.direction is None
+
     def test_duplicate_construct_non_last_edit_is_not_masked(self):
         # Two neutral cells share construct:print. Editing the NON-LAST one on DE
         # must still be detected — an anchor map would collapse last-writer-wins

@@ -253,6 +253,48 @@ def test_shared_divergence_no_winner_errors(tmp_path: Path, monkeypatch):
     assert plan.anchor_direction is None
 
 
+def test_independent_cross_cell_edits_error_without_reverting(tmp_path: Path, monkeypatch):
+    # DE edits neutral cell A; EN edits a DIFFERENT neutral cell B (two compatible
+    # one-sided edits). A whole-file divergence verdict + auto-heal would pick one
+    # winner and silently REVERT the other's edit (Phase 3c review, the data-loss
+    # bug). Cell-precise classification makes this irreconcilable -> error -> the
+    # buffered apply writes nothing, so NEITHER edit is lost.
+    monkeypatch.delenv("CLM_SYNC__SHARED_DIVERGENCE", raising=False)  # default auto-heal
+    de = _slide("de", "a", "# ## A") + _code_shared("import time") + _code_shared("import os")
+    en = _slide("en", "a", "# ## A") + _code_shared("import time") + _code_shared("import os")
+    de_path, en_path = _write_pair(tmp_path, de, en)
+    cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+    try:
+        _seed(cache, de_path, en_path)
+        de_path.write_text(
+            _slide("de", "a", "# ## A")
+            + _code_shared("import time\nx = 1")
+            + _code_shared("import os"),
+            encoding="utf-8",
+        )
+        en_path.write_text(
+            _slide("en", "a", "# ## A")
+            + _code_shared("import time")
+            + _code_shared("import os\ny = 2"),
+            encoding="utf-8",
+        )
+        os.utime(
+            de_path, (1_600_000_900, 1_600_000_900)
+        )  # DE newer -> would have won + reverted EN
+        os.utime(en_path, (1_600_000_000, 1_600_000_000))
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+        apply_plan(
+            plan, judge=CountingJudge(), translator=CountingTranslator(), watermark_cache=cache
+        )
+    finally:
+        cache.close()
+
+    assert plan.has_errors
+    assert plan.anchor_direction is None
+    assert "x = 1" in de_path.read_text(encoding="utf-8")  # DE's edit preserved
+    assert "y = 2" in en_path.read_text(encoding="utf-8")  # EN's edit NOT reverted
+
+
 # ---------------------------------------------------------------------------
 # Item 3 — FIXED (Phase 2): an unchanged id-less localized code cell is spliced
 # verbatim on a sibling-triggered rebuild, never re-translated.
