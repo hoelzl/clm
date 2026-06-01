@@ -458,6 +458,18 @@ invariant. Gate releases on `pytest -m "not docker"`.
      edit, are §10 territory.
 4. **Deterministic `def-my-fun` id-migration** (§9): the one gated file-write,
    strictly scoped to already-id'd, drifted cells; symmetric localized chokepoint.
+   - **✅ Shipped (neutral case).** `_migrate_drifted_ids` (sync_apply) runs on the
+     propagation **source** deck before the structural pass: a language-neutral
+     code cell wearing a `slide_id` whose *current* construct ≠ the watermark's
+     baseline construct for that id, **and** a unique id-less cell carrying the
+     baseline construct → move the id onto that cell (`_stamp_slide_id`) and mint a
+     fresh content slug on the orphan. One header write each, no LLM; the corrected
+     ids ride to the twin via the §7 propagation (so both byte-identical neutral
+     copies stay consistent). Gated by the same uniqueness guard as the other
+     anchor paths (no/duplicate construct match → skip). Residuals deferred to §10:
+     **localized** id'd cells (need the symmetric both-deck `_slide_ids_pair`
+     chokepoint) and a co-occurring **function rename** (the construct match also
+     fails). `result.applied_migrate` counts the moves.
 5. **Bounded Opus recovery** (§10): `sync_alignments` table; `--llm-recover`
    (default off); validate-and-safe-abort.
 6. **Docs + `--explain`** (§13): info topics, migration entry, anchor-diff dump.
