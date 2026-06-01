@@ -19,11 +19,12 @@ the same primitives the v2 walker shipped with — extracted so a
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from clm.notebooks.slide_parser import CellMetadata
+from clm.notebooks.slide_parser import CellMetadata, parse_cell_header
 from clm.slides.raw_cells import RawCell, reconstruct, split_cells
 
 if TYPE_CHECKING:
@@ -32,32 +33,63 @@ if TYPE_CHECKING:
 
 
 __all__ = [
+    "CODE_ROLE",
     "FileState",
+    "build_twin_cell",
     "cell_content_hash",
     "record_snapshot",
     "role_of",
+    "swap_lang",
     "target_path_for_outcome",
 ]
 
-# Tags that identify a sync-relevant cell's role. Duplicated from
+# Markdown tags that name a narrative sync role. Duplicated from
 # ``clm.slides.sync`` / ``clm.slides.sync_plan`` to keep this low-level
 # write module free of an import cycle (sync_plan imports this module).
 _SYNC_ROLE_TAGS = {"slide", "subslide", "voiceover", "notes"}
 
+# The synthetic role for a localized (``lang=``) code cell that also carries a
+# ``slide_id``: it has a stable cross-language identity, so it is reconciled
+# per-cell like a narrative cell (its body translated rather than judged — see
+# ``sync_apply._apply_edit``). Language-neutral or id-less code is handled
+# structurally by :mod:`clm.slides.sync_code`, not through a role.
+CODE_ROLE = "code"
+
 
 def role_of(metadata: CellMetadata) -> str | None:
-    """Return the sync role of a cell from its metadata, or ``None``.
+    """Return the per-cell sync role of a cell from its metadata, or ``None``.
 
-    Public so :mod:`clm.slides.sync_apply` reuses the exact same predicate
-    instead of keeping its own copy.
+    The cells reconciled **per (slide_id, role)** by the Issue #166 engine:
+
+    - narrative markdown tagged ``slide`` / ``subslide`` / ``voiceover`` /
+      ``notes`` → that tag;
+    - auxiliary markdown carrying a ``slide_id`` but **no** narrative tag (an
+      ``alt`` solution note, or an untagged explanatory cell) → its first tag,
+      else ``"markdown"`` — so it too has a stable per-cell identity;
+    - a **localized** code cell (has both ``lang`` and ``slide_id``) →
+      :data:`CODE_ROLE`.
+
+    Everything else (j2 headers, language-neutral code, id-less code) returns
+    ``None``: it is not reconciled per-cell. Language-neutral / id-less code is
+    propagated structurally by :mod:`clm.slides.sync_code`. Public so
+    :mod:`clm.slides.sync_apply` and :mod:`clm.slides.sync_plan` reuse the exact
+    same predicate instead of keeping divergent copies.
     """
     if metadata.is_j2:
         return None
-    if metadata.cell_type != "markdown":
+    if metadata.cell_type == "code":
+        # A localized id'd code cell is twinned per-cell; bare/id-less code is
+        # structural (handled by sync_code), so it has no per-cell role.
+        if metadata.lang is not None and metadata.slide_id is not None:
+            return CODE_ROLE
         return None
+    # markdown: a narrative tag wins; otherwise an id-carrying aux cell still
+    # syncs under a per-cell role derived from its (non-narrative) tag.
     for tag in metadata.tags:
         if tag in _SYNC_ROLE_TAGS:
             return tag
+    if metadata.slide_id is not None:
+        return metadata.tags[0] if metadata.tags else "markdown"
     return None
 
 
@@ -103,6 +135,40 @@ def cell_content_hash(text: str) -> str:
     the same way before hashing so re-runs find a matching cache row.
     """
     return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()
+
+
+_LANG_ATTR_RE = re.compile(r'lang="[^"]*"')
+
+
+def swap_lang(header: str, lang: str) -> str:
+    """Return ``header`` with its ``lang="…"`` set to ``lang`` (inserted if absent).
+
+    Used to build a target-language twin of a source cell while keeping its
+    slide_id, tags, and markdown-vs-code cell type verbatim.
+    """
+    if _LANG_ATTR_RE.search(header):
+        return _LANG_ATTR_RE.sub(f'lang="{lang}"', header)
+    if "[markdown]" in header:
+        return header.replace("[markdown]", f'[markdown] lang="{lang}"', 1)
+    return header.replace("# %%", f'# %% lang="{lang}"', 1)
+
+
+def build_twin_cell(source_cell: RawCell, target_lang: str, target_body: str) -> RawCell:
+    """Build the target-language twin of ``source_cell``.
+
+    Preserves the source header verbatim except for the language attribute (so
+    slide_id, tags, and the markdown-vs-code cell type carry over), and uses the
+    translated ``target_body`` bare (no leading/trailing blank lines) — the
+    caller's insert primitive grants the deck's separator based on final
+    position.
+    """
+    header = swap_lang(source_cell.lines[0], target_lang)
+    body_lines = target_body.split("\n")
+    while body_lines and body_lines[0] == "":
+        body_lines.pop(0)
+    while body_lines and body_lines[-1] == "":
+        body_lines.pop()
+    return RawCell(lines=[header, *body_lines], line_number=0, metadata=parse_cell_header(header))
 
 
 def record_snapshot(
@@ -233,15 +299,23 @@ class FileState:
     def separator_blanks(self) -> int:
         """The deck's inter-cell blank-line gap (0 = tight, 1 = blank-separated).
 
-        Read from the first cell, which is always non-last when there are two
-        or more cells, so its trailing-blank count reflects the *separator*
-        convention rather than the terminal-newline artifact the last cell
-        carries. Compute it **before** a structural mutation. Non-uniform
-        decks fall back to the first gap (documented limitation).
+        The **most common** trailing-blank count among the non-last cells, with
+        j2 header cells excluded. The first cell is often a ``# j2`` header that
+        sits tight against its sibling macro call (gap 0) even though the rest of
+        the deck is blank-separated (gap 1); reading only ``cells[0]`` then
+        mis-reports the convention as tight. The last cell is excluded because it
+        carries the terminal-newline artifact, not a separator. Compute **before**
+        a structural mutation. A genuinely non-uniform deck falls back to its
+        dominant gap (documented limitation).
         """
         if len(self.cells) < 2:
             return 0
-        return _trailing_blanks(self.cells[0])
+        from collections import Counter
+
+        counts = [_trailing_blanks(c) for c in self.cells[:-1] if not c.metadata.is_j2]
+        if not counts:
+            counts = [_trailing_blanks(self.cells[0])]
+        return Counter(counts).most_common(1)[0][0]
 
     def insert_after(self, slide_id: str, role: str, new_cell: RawCell) -> bool:
         """Insert ``new_cell`` immediately after the ``(slide_id, role)`` cell.

@@ -177,6 +177,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **`clm slides sync` now propagates code cells and auxiliary markdown, not
+  only narrative markdown.** The single-language sync previously classified and
+  propagated *only* `slide` / `subslide` / `voiceover` / `notes` markdown; every
+  code cell and every untagged / `alt` markdown cell was silently dropped — a
+  workshop rewrite would leave the translated heading sitting over the **old**
+  code, and a new slide's runnable code never reached the other half. Sync now
+  handles the full cell set: a **language-neutral** code cell (no `lang=`) is
+  copied **verbatim** across both halves; a **localized** code cell (`lang=`,
+  with a `slide_id`) is **twinned and re-translated** on an edit (only its
+  string literals/comments change — the code stays byte-identical); an id-less
+  localized code cell is translated; auxiliary markdown (`alt` or untagged,
+  carrying a `slide_id`) syncs like narrative; a new slide brings its code
+  along; and code an author **moves between slide groups** follows. A new
+  structural pass rebuilds the cell order of each *changed* slide group from the
+  edited side, leaving untouched groups byte-for-byte intact. Also implements
+  **id-carrying adds** (a new slide/cell authored with a `slide_id` already on
+  it, present on one side only) — translated and inserted under the same id
+  rather than deferred.
+- **`clm slides sync` now loads the project `.env`.** It checked only the
+  process environment for the OpenRouter/OpenAI key, so a key kept in `.env`
+  (the usual course-repo layout, read by notebooks via `load_dotenv()`) was
+  invisible and every brand-new-slide translation silently deferred. Sync now
+  walks up from each deck's directory and loads the first `.env` it finds
+  (without overriding already-exported variables) before resolving the
+  judge/translator. Add `--no-env-file` to opt out; `--dry-run` never loads it.
+- **A transient edit-judge / translation failure no longer drops a cell.** A
+  single timeout or rate-limit on a hosted call previously errored the cell
+  outright and the run proceeded with a partial result; the OpenRouter judge and
+  translator now retry with bounded exponential backoff, and the **local**
+  `--llm-timeout` default is raised to 300s (a large local reasoning model can
+  legitimately spend minutes on a substantial cell, which the 120s default
+  starved). A persistently-unavailable backend is still surfaced as an error,
+  never guessed.
 - **Cross-references (`clm:`) now actually render as working links
   ([#17](https://github.com/hoelzl/clm/issues/17)).** Two defects made the
   feature a no-op end-to-end as first merged: (1) the notebook worker

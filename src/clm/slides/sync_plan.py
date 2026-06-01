@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from clm.notebooks.slide_parser import Cell, parse_cells
-from clm.slides.sync_writeback import cell_content_hash
+from clm.slides.sync_writeback import cell_content_hash, role_of
 
 if TYPE_CHECKING:
     from clm.infrastructure.llm.cache import SyncWatermarkCache
@@ -52,18 +52,8 @@ __all__ = [
     "render_plan",
 ]
 
-# Roles that participate in cross-language sync. Mirrors
-# ``clm.slides.sync._ROLE_TAGS`` (duplicated to keep this module independent of
-# the engine module and avoid a circular import).
-_ROLE_TAGS = {
-    "slide": "slide",
-    "subslide": "subslide",
-    "voiceover": "voiceover",
-    "notes": "notes",
-}
-
-# Roles that lead a slide group; narrative roles (voiceover/notes) belong to the
-# most recent slide group rather than starting their own.
+# Roles that lead a slide group; narrative roles (voiceover/notes/code/aux)
+# belong to the most recent slide group rather than starting their own.
 _SLIDE_ROLES = {"slide", "subslide"}
 
 
@@ -197,15 +187,12 @@ class SyncPlan:
 
 
 def _role_for_cell(cell: Cell) -> str | None:
-    if cell.metadata.is_j2:
-        return None
-    if cell.metadata.cell_type != "markdown":
-        return None
-    for tag in cell.metadata.tags:
-        role = _ROLE_TAGS.get(tag)
-        if role is not None:
-            return role
-    return None
+    """Per-cell sync role of ``cell`` (delegates to the canonical predicate).
+
+    Kept as a thin wrapper so the classifier and the apply engine can never
+    disagree about which cells participate in per-cell reconciliation.
+    """
+    return role_of(cell.metadata)
 
 
 def ordered_sync_cells(cells: list[Cell], expected_lang: str) -> list[CurrentCell]:

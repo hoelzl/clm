@@ -131,9 +131,13 @@ CACHE_DB_NAME = "clm-llm.sqlite"
 @click.option(
     "--llm-timeout",
     type=float,
-    default=120.0,
-    show_default=True,
-    help="Per-call timeout (seconds) for the edit judge.",
+    default=None,
+    show_default="120 (openrouter) / 300 (local)",
+    help=(
+        "Per-call timeout (seconds) for the edit judge. Defaults are "
+        "provider-aware: 120s for openrouter (fast hosted model) and 300s for "
+        "local (a large local reasoning model can spend minutes 'thinking')."
+    ),
 )
 @click.option(
     "--translation-model",
@@ -161,6 +165,17 @@ CACHE_DB_NAME = "clm-llm.sqlite"
         "baseline from git HEAD and no synced state is persisted."
     ),
 )
+@click.option(
+    "--no-env-file",
+    is_flag=True,
+    default=False,
+    help=(
+        "Do not auto-load a .env file. By default sync walks up from each deck's "
+        "directory and loads the first .env found (without overriding already-set "
+        "variables), so $OPENROUTER_API_KEY / $OPENAI_API_KEY kept in the project "
+        ".env are available to the judge and translator."
+    ),
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit a JSON report.")
 def slides_sync_cmd(
     de_path: Path,
@@ -170,10 +185,11 @@ def slides_sync_cmd(
     provider: str,
     llm_model: str | None,
     ollama_url: str | None,
-    llm_timeout: float,
+    llm_timeout: float | None,
     translation_model: str,
     cache_dir: Path | None,
     no_cache: bool,
+    no_env_file: bool,
     as_json: bool,
 ) -> None:
     """Bring a split DE/EN deck pair into sync after editing one side.
@@ -203,6 +219,16 @@ def slides_sync_cmd(
             "--interactive and --dry-run are mutually exclusive "
             "(--dry-run writes nothing; --interactive applies after prompting)"
         )
+
+    # Load the project .env before resolving the judge/translator, so keys kept
+    # only in .env (the usual course-repo layout) are found. Without this, every
+    # add defers and every edit errors as "LLM unavailable" even though the keys
+    # exist on disk (the reported sync bug). Skipped for --dry-run (no LLM) and
+    # when --no-env-file is given.
+    if not no_env_file and not dry_run:
+        from clm.cli.env_loading import load_env_files
+
+        load_env_files(de_path.parent, en_path.parent)
 
     watermark_cache: SyncWatermarkCache | None = None
     if not no_cache:
@@ -257,24 +283,42 @@ def slides_sync_cmd(
     sys.exit(exit_code)
 
 
+# Provider-aware default per-call timeout. A large local reasoning model
+# (qwen3:30b) can legitimately spend minutes on a substantial cell, so the
+# 120s default that the hosted model is fine with starved the local judge and
+# dropped most edits (the reported sync bug); give local a wider budget.
+_DEFAULT_TIMEOUT_OPENROUTER = 120.0
+_DEFAULT_TIMEOUT_LOCAL = 300.0
+
+
+def _resolve_timeout(value: float | None, default: float) -> float:
+    """The effective per-call timeout: ``value`` if positive, else ``default``.
+
+    A non-positive timeout is meaningless and is rejected by ``urllib`` (a
+    negative one raises an uncaught ``ValueError`` on the local path), so a
+    ``<= 0`` value falls back to the provider default rather than crashing.
+    """
+    return value if value is not None and value > 0 else default
+
+
 def _resolve_judge(
     provider: str,
     llm_model: str | None,
     ollama_url: str | None,
-    llm_timeout: float,
+    llm_timeout: float | None,
 ) -> SyncJudge | None:
     """Construct the edit judge for ``provider``, or ``None`` (with a warning).
 
     A ``None`` judge records each edit proposal as an LLM-unavailable error, so
     the run still completes and surfaces exactly what could not be reconciled.
-    The ``--llm-model`` default is resolved per provider here so a bare run
-    picks the right model for the chosen backend.
+    The ``--llm-model`` and ``--llm-timeout`` defaults are resolved per provider
+    here so a bare run picks the right model and timeout for the chosen backend.
     """
     if provider == "local":
         ollama_judge = OllamaSyncJudge(
             model=llm_model or DEFAULT_SYNC_MODEL,
             base_url=ollama_url,
-            timeout=llm_timeout,
+            timeout=_resolve_timeout(llm_timeout, _DEFAULT_TIMEOUT_LOCAL),
         )
         if is_available(ollama_judge):
             return ollama_judge
@@ -295,7 +339,10 @@ def _resolve_judge(
             err=True,
         )
         return None
-    return OpenRouterSyncJudge(model=llm_model or DEFAULT_SYNC_JUDGE_MODEL, timeout=llm_timeout)
+    return OpenRouterSyncJudge(
+        model=llm_model or DEFAULT_SYNC_JUDGE_MODEL,
+        timeout=_resolve_timeout(llm_timeout, _DEFAULT_TIMEOUT_OPENROUTER),
+    )
 
 
 # ---------------------------------------------------------------------------

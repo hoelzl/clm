@@ -36,6 +36,7 @@ from clm.infrastructure.llm.ollama_client import (
     SyncProposal,
     parse_sync_response,
 )
+from clm.infrastructure.llm.retry import call_with_retries
 from clm.infrastructure.llm.sync_prompts import (
     SYNC_PROMPT_VERSION,
     SYNC_SYSTEM_PROMPT,
@@ -137,8 +138,9 @@ class OpenRouterSyncJudge:
             source_lang=source_lang,
             target_lang=target_lang,
         )
-        try:
-            response = build_openrouter_client(
+
+        def _create():  # pragma: no cover - thin network adapter
+            return build_openrouter_client(
                 api_base=self.api_base,
                 api_key=self.api_key,
                 timeout=self.timeout,
@@ -150,6 +152,13 @@ class OpenRouterSyncJudge:
                 ],
                 temperature=self.temperature,
                 max_tokens=self.max_tokens,
+            )
+
+        # Retry transient failures (rate-limit / connection blip / 5xx) so one
+        # flaky call does not drop the edit; a persistent failure still raises.
+        try:
+            response = call_with_retries(
+                _create, exc=Exception, label=f"OpenRouter sync judge ({self.model})"
             )
         except Exception as exc:  # noqa: BLE001 - normalize to the protocol's error type
             raise OllamaError(f"OpenRouter sync judge call failed: {exc}") from exc
