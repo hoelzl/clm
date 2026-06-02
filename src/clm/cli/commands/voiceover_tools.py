@@ -101,6 +101,18 @@ def inline_voiceover_cmd(
         click.echo(json.dumps(_inline_to_dict(result), indent=2))
     else:
         click.echo(result.summary)
+        # In dry-run, show where each voiceover will land so a relocation
+        # is visible before the file is written.
+        if dry_run and result.placements:
+            for p in result.placements:
+                if p.status == "unmatched":
+                    click.echo(
+                        f"  ? {p.for_slide or '<no for_slide>'}: no matching slide — appended at end"
+                    )
+                else:
+                    where = f"after line {p.after_line}" if p.after_line else "at end"
+                    marker = "!" if p.status == "relocated" else "+"
+                    click.echo(f"  {marker} {p.for_slide}: {p.status} {where}")
 
 
 def _extraction_to_dict(result: ExtractionResult) -> dict:
@@ -120,7 +132,18 @@ def _inline_to_dict(result: InlineResult) -> dict:
         "companion_file": result.companion_file,
         "cells_inlined": result.cells_inlined,
         "unmatched_cells": result.unmatched_cells,
+        "relocated_cells": result.relocated_cells,
         "companion_deleted": result.companion_deleted,
         "dry_run": result.dry_run,
         "summary": result.summary,
+        "placements": [
+            {
+                "for_slide": p.for_slide,
+                "anchor": p.anchor,
+                "status": p.status,
+                "after_line": p.after_line,
+                "after_header": p.after_header,
+            }
+            for p in result.placements
+        ],
     }
