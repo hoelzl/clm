@@ -407,10 +407,17 @@ within one bilingual file.
   id-less (parity holds either way); true EN-authority is the generative step / `sync`.
   (`extract-voiceover` twin-awareness still TODO; strongly related to §8 — arguably
   these per-file ops should not be normal user commands at all.)
-- **Generative:** pair-aware `assign-ids` over *both* halves — establish
-  correspondence (neutral=byte, code=construct, markdown=positional), mint EN-authority
-  ids onto both, deterministic for structurally-parallel decks, escalating to the
-  defensive refusal (or the existing #166 LLM sync path) on genuine misalignment.
+- **Generative:** ✅ **BUILT 2026-06-03** — pair-aware `assign-ids` over *both* halves.
+  `assign_ids_in_split_pair` reconstructs the bilingual deck (`unify`), runs the existing
+  paired EN-authority assign over it, and routes the ids back (`split`); `assign_ids_in_directory`
+  detects `.de.py`/`.en.py` pairs and routes them through it (deterministic EN-authority, not
+  order-dependent). **Safety: a byte-faithful round-trip check** — `split(unify(de,en)) == (de,en)`
+  — gates it; `unify` is best-effort for solos/misalignment, so the round-trip guard (not just
+  "unify raised") prevents assign→split from reordering/moving cells. Non-round-trippable pairs
+  (divergent shared cells) fall back to the per-file defensive; the detective flags residual
+  divergence. Harness `born-split-assign-ids-directory` = EN-authority parity (preserve); 5 new
+  `TestSplitGenerative` tests. Markdown-positional / construct correspondence is implicit in
+  `unify`'s structural matching (no separate anchor logic needed).
 
 **Open design questions for #162:**
 1. How often are real `.de`/`.en` pairs structurally parallel vs misaligned? (Answered
@@ -529,11 +536,12 @@ corpus no-op invariant + real-deck round-trip **skip**. To build justified confi
    the harness (two rows flipped to preserve) + new unit tests; full fast suite green.
 3. **#162 keystone** (§7) — **detective ✅ DONE** (cross-file `slide_id` parity warning in
    `clm validate`, dir/course + single-file-with-twin; `commit-without-sync` → break-loud).
-   **defensive ✅ DONE 2026-06-03** (twin-aware `assign_ids_in_file`; both assign-ids rows →
-   preserve). **Next:** generative pair-aware minting for born-split (true EN-authority) +
-   `extract-voiceover` twin-awareness + companion `for_slide` parity (the both-language
-   voiceover compat check). Harness now 12 preserve / 1 break-loud / 2 break-silent
-   (extract-then-split + build-merge observe-only).
+   **defensive ✅ DONE** (twin-aware `assign_ids_in_file`) + **generative ✅ DONE 2026-06-03**
+   (`assign_ids_in_split_pair` / directory routing; EN-authority via unify→assign→split with a
+   byte-faithful round-trip guard). All three #162 legs landed. **Next:** `extract-voiceover`
+   twin-awareness + companion `for_slide` parity (the both-language voiceover compat check), and
+   the `extract-then-split` companion seam (§10). Harness now 13 preserve / 1 break-loud /
+   2 break-silent (extract-then-split + build-merge observe-only).
 4. **Command-surface rethink** (§8) — fold/hide/guard, with info-topic updates.
 5. **Pre-commit gate** (§9) + voiceover hardening (§10) + verification additions (§11).
 6. **Sync CLI pairing guard** (§3 Tier-2) + single-path/batch UX.

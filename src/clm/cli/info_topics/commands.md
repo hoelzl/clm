@@ -646,17 +646,22 @@ Special cases:
 - An id prefixed with `!` (e.g. `slide_id="!intro"`) is the
   **preserve marker** — never regenerated, even under `--force`. The
   `!` is source-level only; references elsewhere use the bare form.
-- **Split-file twin awareness (since CLM {version}, issue #162).** On a
-  split half (`*.de.py` / `*.en.py`) whose twin exists on disk and has the
-  same number of slide/subslide cells, an **id-less** slide adopts the
-  twin's `slide_id` for the positionally-corresponding slide instead of
-  minting a divergent slug from its own heading — so the two halves stay in
-  `slide_id` parity (the cross-language join key). When both halves are
-  id-less, run order decides which language's slug wins, but parity holds;
-  for true EN-authoritative ids, route structural changes through
-  `clm slides sync`. When the halves have different slide counts the reuse
-  is skipped (positional correspondence is unreliable) and the divergence is
-  left for `clm validate`'s #162 detective to flag.
+- **Split-file id consistency (since CLM {version}, issue #162).** `slide_id`
+  is the cross-language join key, so the two halves of a split deck must agree
+  on it. assign-ids keeps that automatically, two ways:
+  - **Directory / course run** (`clm slides assign-ids slides/`) — a
+    `*.de.py` / `*.en.py` pair is minted **EN-authority** across *both*
+    halves at once: the slug derives from the EN heading and the same id is
+    stamped on both, deterministic regardless of file order (the same policy
+    as a bilingual file). A pair that is not byte-faithfully unifiable
+    (divergent shared cells) falls back to the per-file path below.
+  - **Single-file run** (`clm slides assign-ids slides_x.de.py`) — when the
+    twin exists on disk with a matching slide count, an **id-less** slide
+    adopts the twin's `slide_id` for the positionally-corresponding slide
+    instead of minting a divergent slug. When both halves are id-less the
+    first-assigned half's slug wins (parity still holds; for EN-authority use
+    the directory run or `clm slides sync`). Mismatched slide counts skip the
+    reuse and leave the divergence for `clm validate`'s #162 detective.
 
 ```
 clm slides assign-ids [OPTIONS] PATH

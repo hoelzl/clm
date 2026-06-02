@@ -80,13 +80,17 @@ directory/course validate **and** on a single-file validate when the twin
 exists on disk — so a pre-commit hook (`clm validate slides/ --fail-on warning`,
 or per-file in a PostToolUse hook) catches a divergence before it ships.
 
-Since CLM {version} `clm slides assign-ids` is also **twin-aware** on a split
-half (the #162 *defensive*): an id-less slide adopts the sibling file's
-`slide_id` for the positionally-corresponding slide instead of minting a
-divergent slug, when the twin exists on disk with a matching slide count. This
-keeps per-file `assign-ids` from silently diverging the halves; when both are
-id-less the first-assigned half's slug wins (parity still holds). For
-EN-authoritative ids across a born-split deck, prefer `clm slides sync`.
+Since CLM {version} `clm slides assign-ids` keeps the two halves consistent
+automatically. A **directory / course run** mints **EN-authority** ids across a
+`.de.py` / `.en.py` pair at once (the #162 *generative*): the slug derives from
+the EN heading and the same id is stamped on both, deterministic regardless of
+file order. A **single-file run** is **twin-aware** (the #162 *defensive*): an
+id-less slide adopts the sibling's `slide_id` when the twin exists on disk with
+a matching slide count; when both halves are id-less the first-assigned half's
+slug wins (parity still holds — use the directory run or `clm slides sync` for
+EN-authority). A pair that is not byte-faithfully unifiable (divergent shared
+cells) falls back to the per-file path, and `clm validate`'s #162 detective
+flags any residual divergence.
 
 ## Slide format redesign: `clm validate` enforces `slide_id` (warning now, error in 1.7)
 

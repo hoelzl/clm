@@ -43,7 +43,11 @@ if __package__ in (None, ""):  # pragma: no cover - import shim
 from clm.infrastructure.llm.cache import SyncWatermarkCache  # noqa: E402
 from clm.infrastructure.llm.ollama_client import SyncProposal  # noqa: E402
 from clm.notebooks.slide_parser import parse_cells  # noqa: E402
-from clm.slides.assign_ids import AssignOptions, assign_ids_in_file  # noqa: E402
+from clm.slides.assign_ids import (  # noqa: E402
+    AssignOptions,
+    assign_ids_in_directory,
+    assign_ids_in_file,
+)
 from clm.slides.split import (  # noqa: E402
     SplitError,
     UnifyError,
@@ -301,6 +305,20 @@ def run_assign_ids_pair(pair: SplitPair, workdir: Path, stem: str = "slides_demo
     )
 
 
+def run_assign_ids_directory(
+    pair: SplitPair, workdir: Path, stem: str = "slides_demo"
+) -> SplitPair:
+    """Write a split pair to disk and run directory ``assign-ids`` — the
+    generative EN-authority path: split pairs are minted across both halves at
+    once (the same id, derived from the EN heading)."""
+    de_path, en_path = pair.write(workdir, stem=stem)
+    assign_ids_in_directory(workdir, AssignOptions())
+    return SplitPair(
+        de=de_path.read_text(encoding="utf-8"),
+        en=en_path.read_text(encoding="utf-8"),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Classification framework
 # ---------------------------------------------------------------------------
@@ -356,9 +374,16 @@ def _base() -> SplitPair:
     return SplitPair.from_bilingual(baseline_bilingual())
 
 
-def _split_header(macro: str) -> str:
-    """A split (single-language) preamble — replace the bilingual header macro."""
-    return HEADER_PREAMBLE.replace('# {{ header("Titel DE", "Title EN") }}', f"# {{{{ {macro} }}}}")
+def born_split_pair(de_title: str = "Mein Thema", en_title: str = "My Topic") -> SplitPair:
+    """A *born-split* pair (no bilingual ancestor) — both halves id-less, with
+    valid split headers. Built by splitting an id-less bilingual deck so the
+    header macros (``import header_de`` / ``header_en``) are exactly what
+    ``split`` produces (a hand-edited macro call alone leaves ``import header``
+    and breaks ``unify``). The two headings differ by language so EN-authority
+    is observable.
+    """
+    bilingual = HEADER_PREAMBLE + slide_cell("de", de_title) + slide_cell("en", en_title)
+    return SplitPair.from_bilingual(bilingual)
 
 
 def _sync_signaled(out: SyncOutcome) -> tuple[bool, str]:
@@ -491,15 +516,34 @@ def m_add_then_assign_ids_per_file(workdir: Path) -> _RetTuple:
 
 
 def m_born_split_assign_ids(workdir: Path) -> _RetTuple:
-    de = _split_header('header_de("Titel DE")') + slide_cell("de", "Mein Thema")
-    en = _split_header('header_en("Title EN")') + slide_cell("en", "My Topic")
-    result = run_assign_ids_pair(SplitPair(de=de, en=en), workdir)
+    # Born-split pair, both halves id-less, different headings. Per-file
+    # assign-ids (defensive): the first half mints, the second reuses -> parity.
+    result = run_assign_ids_pair(born_split_pair(), workdir)
     detail = id_parity(result.de, result.en)
     return (
         (["id_parity"] if detail else []),
         False,
         "",
         detail or f"twin-aware reuse: ids matched {slide_ids(result.de)}",
+    )
+
+
+def m_born_split_assign_ids_directory(workdir: Path) -> _RetTuple:
+    # Generative (#162): `assign-ids` over the directory mints EN-authority ids
+    # across both halves of a born-split pair at once (deterministic, not
+    # order-dependent). The EN heading "My Topic" -> "my-topic" wins on both.
+    result = run_assign_ids_directory(born_split_pair(), workdir)
+    detail = id_parity(result.de, result.en)
+    if detail:
+        return ["id_parity"], False, "", detail
+    en_authority = slide_ids(result.de) == ["my-topic"]
+    return (
+        ([] if en_authority else ["en_authority"]),
+        False,
+        "",
+        f"EN-authority parity: {slide_ids(result.de)}"
+        if en_authority
+        else f"parity but slug not EN-authority: {slide_ids(result.de)}",
     )
 
 
@@ -693,6 +737,15 @@ MUTATIONS: list[Mutation] = [
         m_add_then_assign_ids_per_file,
     ),
     Mutation("born-split-assign-ids", "assign-ids", PRESERVE, True, m_born_split_assign_ids),
+    # #162 generative: directory assign-ids mints EN-authority ids across both
+    # halves at once (deterministic, order-independent).
+    Mutation(
+        "born-split-assign-ids-directory",
+        "assign-ids",
+        PRESERVE,
+        True,
+        m_born_split_assign_ids_directory,
+    ),
     # #162 detective landed: the pre-commit gate (`clm validate`) now catches a
     # committed split-half divergence — break-silent -> break-loud.
     Mutation("commit-without-sync", "no-gate", BREAK_LOUD, True, m_commit_without_sync),

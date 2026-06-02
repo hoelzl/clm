@@ -74,6 +74,7 @@ __all__ = [
     "assign_ids_for_text",
     "assign_ids_in_directory",
     "assign_ids_in_file",
+    "assign_ids_in_split_pair",
 ]
 
 
@@ -831,15 +832,105 @@ def assign_ids_in_file(path: Path, options: AssignOptions) -> AssignResult:
     return result
 
 
+def assign_ids_in_split_pair(
+    de_path: Path, en_path: Path, options: AssignOptions
+) -> AssignResult | None:
+    """Generative #162: mint **EN-authority** slide_ids onto *both* halves of a
+    split pair at once.
+
+    Reconstructs the bilingual deck (``unify``), runs the normal paired
+    assign-ids over it — which already derives each slide's slug from its EN
+    cell and stamps the *same* id onto the DE/EN twin — then routes the ids back
+    onto the two halves (``split``). Unlike the per-file defensive (which
+    preserves parity but lets the first-assigned half's slug win), this is
+    deterministic EN-authority regardless of order, matching how ids are minted
+    in a bilingual file.
+
+    Returns ``None`` when the pair is not unifiable (structurally misaligned or
+    divergent shared cells) so the caller can fall back to the per-file
+    defensive path; the validator's #162 detective then surfaces any residual
+    divergence.
+    """
+    from clm.slides.split import SplitError, UnifyError, split_text, unify_texts
+
+    de_text = de_path.read_text(encoding="utf-8")
+    en_text = en_path.read_text(encoding="utf-8")
+    try:
+        unified = unify_texts(de_text, en_text)
+        # Proceed only when unify is *byte-faithful*: split(unify(de, en)) == (de, en).
+        # ``unify`` is best-effort for solo / misaligned cells, so a structurally
+        # divergent pair can unify without raising — but then the assign->split
+        # round-trip could reorder or move cells. Verifying the id-less round-trip
+        # guarantees that adding ids and splitting back cannot corrupt the files;
+        # otherwise fall back to the per-file defensive (the #162 detective then
+        # surfaces the residual divergence).
+        rt_de, rt_en = split_text(unified)
+    except (SplitError, UnifyError):
+        return None
+    if (rt_de, rt_en) != (de_text, en_text):
+        return None
+
+    unified_new, result = assign_ids_for_text(unified, en_path, options)
+    result.files_visited = 2
+    result.files_modified = 0
+    if options.report_only or unified_new == unified:
+        return result
+
+    try:
+        de_new, en_new = split_text(unified_new)
+    except SplitError:  # pragma: no cover - unify succeeded, split should too
+        return None
+
+    if de_new != de_text:
+        de_path.write_text(de_new, encoding="utf-8", newline="\n")
+        result.files_modified += 1
+    if en_new != en_text:
+        en_path.write_text(en_new, encoding="utf-8", newline="\n")
+        result.files_modified += 1
+    return result
+
+
+def _merge_result(combined: AssignResult, result: AssignResult) -> None:
+    combined.files_visited += result.files_visited
+    combined.files_modified += result.files_modified
+    combined.assignments.extend(result.assignments)
+    combined.refusals.extend(result.refusals)
+
+
 def assign_ids_in_directory(path: Path, options: AssignOptions) -> AssignResult:
-    """Recurse over a directory and process every slide file we find."""
+    """Recurse over a directory and process every slide file we find.
+
+    Split ``.de.py`` / ``.en.py`` pairs are minted **EN-authority** across both
+    halves at once (:func:`assign_ids_in_split_pair`); a pair that is not
+    unifiable falls back to processing each half with the per-file twin-aware
+    path. Bilingual and unpaired files go through :func:`assign_ids_in_file`.
+    """
     from clm.core.topic_resolver import find_slide_files_recursive
 
     combined = AssignResult()
-    for slide_file in find_slide_files_recursive(path):
-        result = assign_ids_in_file(slide_file, options)
-        combined.files_visited += result.files_visited
-        combined.files_modified += result.files_modified
-        combined.assignments.extend(result.assignments)
-        combined.refusals.extend(result.refusals)
+    files = list(find_slide_files_recursive(path))
+    fileset = set(files)
+    handled: set[Path] = set()
+
+    for slide_file in files:
+        if slide_file in handled:
+            continue
+        twin = _split_twin(slide_file)
+        if twin is not None and twin in fileset:
+            de_path, en_path = (
+                (slide_file, twin) if split_lang_suffix(slide_file) == "de" else (twin, slide_file)
+            )
+            pair_result = assign_ids_in_split_pair(de_path, en_path, options)
+            if pair_result is not None:
+                _merge_result(combined, pair_result)
+            else:
+                # Not unifiable — fall back to the per-file defensive on each.
+                _merge_result(combined, assign_ids_in_file(de_path, options))
+                _merge_result(combined, assign_ids_in_file(en_path, options))
+            handled.add(de_path)
+            handled.add(en_path)
+        else:
+            _merge_result(combined, assign_ids_in_file(slide_file, options))
+            handled.add(slide_file)
+
     return combined
