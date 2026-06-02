@@ -88,6 +88,16 @@ SKIP_OUTPUT_FILE_PATTERNS = [
     re.compile(r".*\.http-cassette\.yaml$"),
     re.compile(r".*\.http-cassette\.yaml\.staging-.*$"),
     re.compile(r".*\.http-cassette\.yaml\.staging-.*\.completed$"),
+    # Separated-voiceover companions: ``voiceover_<stem>.py`` and its split
+    # ``.de.py`` / ``.en.py`` forms (see ``slides.voiceover_tools.companion_path``).
+    # Unlike cassettes these are NOT invisible everywhere — they stay available
+    # as *source*: the build merges their narration into the slide notebook at
+    # payload time (``ProcessNotebookOperation.payload`` reads the companion
+    # directly from source). They must only be kept out of (a) public/speaker
+    # OUTPUT and (b) the kernel ``other_files`` payload (the raw author file is
+    # never read at runtime). ``is_ignored_file_for_output`` governs exactly
+    # those two; source mounts do not consult it, so workers still see it.
+    re.compile(r"voiceover_.*\.py$"),
 ]
 
 # Parallel glob form of ``SKIP_OUTPUT_FILE_PATTERNS`` for consumers that
@@ -97,6 +107,7 @@ SKIP_OUTPUT_FILE_GLOBS = [
     "*.http-cassette.yaml",
     "*.http-cassette.yaml.staging-*",
     "*.http-cassette.yaml.staging-*.completed",
+    "voiceover_*.py",  # separated-voiceover companions — output-suppressed (see above)
 ]
 
 PLANTUML_EXTENSIONS = frozenset({".pu", ".puml", ".plantuml"})

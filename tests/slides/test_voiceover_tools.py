@@ -8,6 +8,7 @@ import pytest
 
 from clm.slides.split import split_text
 from clm.slides.voiceover_tools import (
+    VoiceoverError,
     companion_path,
     extract_voiceover,
     inline_voiceover,
@@ -218,6 +219,49 @@ class TestExtractVoiceover:
         slide_text = slide_file.read_text(encoding="utf-8")
         assert "slide_id=" in slide_text
 
+    def test_refuses_to_clobber_existing_companion_without_force(self, tmp_path: Path):
+        """Re-extracting onto an existing companion would discard content that
+        lives only in the companion — refuse without ``force`` (Tier-1 fix)."""
+        slide_file = tmp_path / "slides_intro.py"
+        slide_file.write_text(SLIDE_WITH_VOICEOVER, encoding="utf-8")
+        extract_voiceover(slide_file)
+        comp = tmp_path / "voiceover_intro.py"
+        # A hand-edit that lives ONLY in the companion (not in the slide).
+        comp.write_text(
+            comp.read_text(encoding="utf-8")
+            + '\n# %% [markdown] lang="de" tags=["voiceover"] for_slide="x"\n# hand edit\n',
+            encoding="utf-8",
+        )
+        before = comp.read_text(encoding="utf-8")
+        # Re-add a voiceover cell so the empty-vo early-return does not fire.
+        slide_file.write_text(
+            slide_file.read_text(encoding="utf-8")
+            + '# %% [markdown] lang="de" tags=["voiceover"] slide_id="thema"\n# new vo\n',
+            encoding="utf-8",
+        )
+        with pytest.raises(VoiceoverError, match="refusing to overwrite"):
+            extract_voiceover(slide_file)
+        # The companion (and its hand-edit) survives untouched.
+        assert comp.read_text(encoding="utf-8") == before
+
+    def test_force_rebuilds_existing_companion(self, tmp_path: Path):
+        slide_file = tmp_path / "slides_intro.py"
+        slide_file.write_text(SLIDE_WITH_VOICEOVER, encoding="utf-8")
+        extract_voiceover(slide_file)
+        comp = tmp_path / "voiceover_intro.py"
+        comp.write_text("# stale placeholder\n", encoding="utf-8")
+        # Re-add a voiceover cell so there is something to extract.
+        slide_file.write_text(
+            slide_file.read_text(encoding="utf-8")
+            + '# %% [markdown] lang="de" tags=["voiceover"] slide_id="thema"\n# fresh vo\n',
+            encoding="utf-8",
+        )
+        result = extract_voiceover(slide_file, force=True)
+        assert result.cells_extracted >= 1
+        rebuilt = comp.read_text(encoding="utf-8")
+        assert "stale placeholder" not in rebuilt
+        assert "fresh vo" in rebuilt
+
 
 # ---------------------------------------------------------------------------
 # inline_voiceover — basic
@@ -281,6 +325,42 @@ class TestInlineVoiceover:
 
         slide_text = slide_file.read_text(encoding="utf-8")
         assert "for_slide=" not in slide_text
+
+    def test_partial_inline_retains_only_unmatched(self, tmp_path: Path):
+        """Matched cells are inlined; the companion is rewritten to hold only the
+        unmatched remainder (recoverable), never destroyed (Tier-1 fix)."""
+        slide_file = tmp_path / "slides_intro.py"
+        slide_file.write_text(
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="one"\n# ## One\n'
+            '# %% [markdown] lang="de" tags=["voiceover"] slide_id="one"\n# VO one\n'
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="two"\n# ## Two\n'
+            '# %% [markdown] lang="de" tags=["voiceover"] slide_id="two"\n# VO two\n',
+            encoding="utf-8",
+        )
+        extract_voiceover(slide_file)
+        comp = tmp_path / "voiceover_intro.py"
+        # Rename slide "two" so its companion cell can no longer match.
+        slide_file.write_text(
+            slide_file.read_text(encoding="utf-8").replace(
+                'slide_id="two"', 'slide_id="renamed-two"'
+            ),
+            encoding="utf-8",
+        )
+
+        result = inline_voiceover(slide_file)
+
+        assert result.cells_inlined == 1
+        assert result.unmatched_cells == 1
+        assert result.companion_deleted is False
+        assert result.companion_retained is True
+
+        slide_text = slide_file.read_text(encoding="utf-8")
+        assert "VO one" in slide_text  # matched cell inlined
+        assert "VO two" not in slide_text  # unmatched NOT stranded in the slide
+
+        comp_text = comp.read_text(encoding="utf-8")
+        assert "VO two" in comp_text  # unmatched kept in companion
+        assert "VO one" not in comp_text  # matched removed from companion
 
 
 # ---------------------------------------------------------------------------
@@ -394,7 +474,8 @@ x = 1
         assert 'tags=["voiceover"]' not in slide_text
 
     def test_inline_with_unmatched_cells(self, tmp_path: Path):
-        """Companion cells with unknown for_slide are appended at the end."""
+        """Unmatched companion cells are *retained in the companion*, not dumped
+        into the slide nor destroyed (Tier-1 data-loss fix)."""
         slide_file = tmp_path / "slides_test.py"
         slide_text = """\
 # %% [markdown] lang="de" tags=["slide"] slide_id="intro"
@@ -413,9 +494,13 @@ x = 1
 
         assert result.unmatched_cells == 1
         assert result.cells_inlined == 0
-        # Unmatched cells are appended at the end
-        final_text = slide_file.read_text(encoding="utf-8")
-        assert "This has no matching slide." in final_text
+        # The companion is preserved (recoverable source of truth), not deleted.
+        assert result.companion_deleted is False
+        assert result.companion_retained is True
+        assert comp.exists()
+        assert "This has no matching slide." in comp.read_text(encoding="utf-8")
+        # The unmatched narration is NOT stranded in the slide file.
+        assert "This has no matching slide." not in slide_file.read_text(encoding="utf-8")
 
     def test_j2_cells_untouched(self, tmp_path: Path):
         """j2 cells should not be extracted or have slide_ids."""
@@ -1244,6 +1329,7 @@ class TestAnchorAmbiguityAndScoping:
         f = tmp_path / "slides_x.py"
         f.write_text(deck, encoding="utf-8", newline="\n")
         extract_voiceover(f)
+        comp = companion_path(f)
         # Rename the owning slide between extract and inline.
         t = f.read_text(encoding="utf-8").replace('slide_id="two"', 'slide_id="two-renamed"')
         f.write_text(t, encoding="utf-8", newline="\n")
@@ -1253,8 +1339,12 @@ class TestAnchorAmbiguityAndScoping:
 
         assert res.unmatched_cells == 1
         assert res.relocated_cells == 0
-        # Appended at the end — never inserted into the foreign group one.
-        assert out.index("VO belongs to group TWO.") > out.index("## Group Two")
+        # Never inserted into the foreign group one — and, per the Tier-1 fix,
+        # not stranded in the slide at all: it is retained in the companion
+        # (recoverable) so the author can fix the slide_id and re-run inline.
+        assert res.companion_retained is True
+        assert "VO belongs to group TWO." not in out
+        assert "VO belongs to group TWO." in comp.read_text(encoding="utf-8")
 
     def test_renamed_for_slide_in_build_merge_reports_unmatched(self):
         """merge_voiceover_text must report the unmatched id, not silently

@@ -48,14 +48,14 @@ def outcomes(harness):
 
 # The known silent footguns the harness must keep surfacing — a refactor that
 # zeroes the work-list out (e.g. by neutering a runner) should fail here, not
-# quietly report "all green".
+# quietly report "all green". The two voiceover Tier-1 data-loss breaks
+# (inline-after-rename, re-extract-over-edited-companion) were hardened and now
+# classify ``preserve``; the remainder are the open work-list.
 _KNOWN_SILENT_BREAKS = {
     "add-then-assign-ids-per-file",
     "born-split-assign-ids",
     "commit-without-sync",
     "extract-then-split",
-    "inline-after-rename",
-    "re-extract-over-edited-companion",
 }
 
 

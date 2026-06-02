@@ -39,6 +39,32 @@ Voiceover and notes cells inherit the id of the preceding slide
 `clm info commands` → `clm slides assign-ids` for the full flag
 matrix.
 
+## Voiceover extract/inline: data-loss hardening ({version})
+
+CLM {version} closes two ways `clm voiceover extract` / `inline` could lose
+authored narration. Both are safe-by-default behavior changes; scripts that
+relied on the old behavior may need a flag or an exit-code check.
+
+- **`inline` no longer destroys the companion when a cell is unmatched.**
+  Previously, if a voiceover's owning `slide_id` had been renamed (so its
+  `for_slide` no longer matched), inline stranded that cell at the end of the
+  slide file (stripped of `for_slide`/`vo_anchor`) and **deleted the companion
+  anyway**, exit 0. Now inline places only the cells it can match, **keeps the
+  companion** rewritten to the unmatched remainder (anchors intact), and
+  **exits non-zero**. Recover by fixing the `slide_id`(s) and re-running
+  inline. *Migration:* a script that treated inline as "always consumes the
+  companion" must handle the non-zero exit / surviving companion; check
+  `companion_retained` / `unmatched_cells` in `--json`.
+
+- **`extract` refuses to overwrite an existing companion without `--force`.**
+  The companion is rebuilt from the slide's current voiceover cells, so a blind
+  re-extract discarded anything living only in the companion. Extract now
+  raises (writing nothing) unless `--force` is passed. *Migration:* add
+  `--force` to any pipeline that intentionally rebuilds the companion.
+
+These are also surfaced by the new fast-suite `tests/slides/test_edit_dynamics.py`
+cross-command harness (`scripts/edit_dynamics_harness.py`).
+
 ## Slide format redesign: `clm validate` enforces `slide_id` (warning now, error in 1.7)
 
 CLM {version} also ships **Phase 3** of the slide-format-redesign:

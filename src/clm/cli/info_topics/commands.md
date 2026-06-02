@@ -1042,12 +1042,20 @@ slide group. It is body-only and occurrence-qualified, so editing a
 sibling cell's tags, inserting unrelated slides, or the build's blank-line
 cleanup between extract and inline does not move the voiceover.
 
+Since CLM {version}, extract **refuses to overwrite an existing companion**
+unless `--force` is given (it raises rather than writing, leaving both files
+untouched). The companion is *rebuilt* from the slide's current voiceover
+cells, so a blind overwrite would discard anything that lives only in the
+companion (hand-edits, or cells whose owning slide was removed). This
+mirrors `clm slides split`'s `--force` contract.
+
 ```
 clm voiceover extract [OPTIONS] FILE
 ```
 
 | Option | Description |
 |--------|-------------|
+| `--force` | Overwrite an existing companion (rebuilds it from the slide's voiceover cells, discarding companion-only content). Without it, an existing companion is left untouched and the command errors. |
 | `--dry-run` | Preview changes without modifying files |
 | `--json` | Output as JSON |
 
@@ -1056,6 +1064,7 @@ Examples:
 ```bash
 clm voiceover extract slides_intro.py
 clm voiceover extract slides_intro.py --dry-run
+clm voiceover extract slides_intro.py --force
 ```
 
 ### `clm voiceover inline`
@@ -1063,23 +1072,32 @@ clm voiceover extract slides_intro.py --dry-run
 *Deprecated alias: `clm inline-voiceover` (removed in 1.7).*
 
 Inline voiceover cells from a companion `voiceover_*.py` file back into the
-slide file, deletes the companion file after successful inlining.
+slide file. The companion is deleted **only when every cell is placed**.
 
 Since CLM {version}, each voiceover is re-inserted immediately after the
 predecessor cell recorded in its `vo_anchor` (resolved within the owning
 slide group only — it never crosses into another slide). If that anchor
 cell was edited away or removed, inline falls back to the end of the
 `for_slide` group and counts the cell as **relocated**; if the owning slide
-is gone entirely, the cell is **unmatched** and appended at the end. Both
-cases are reported rather than silently misplaced:
+is gone entirely (e.g. its `slide_id` was renamed), the cell is
+**unmatched**. Both cases are reported rather than silently misplaced:
 
+- **Unmatched cells are no longer dumped at the end of the slide.** Since
+  CLM {version}, when any cell is unmatched the companion is **kept**,
+  rewritten to hold exactly the unmatched remainder (with `for_slide` /
+  `vo_anchor` intact), and the command **exits non-zero** — so a clean,
+  recoverable source of truth always survives. Fix the slide `slide_id`(s)
+  and re-run inline to place the rest. (Previously the companion was
+  deleted unconditionally and the leftovers stranded at EOF — a data-loss
+  footgun.)
 - The text summary appends `N cell(s) relocated …` / `N cell(s) could not
-  be matched …`.
+  be matched …` / `companion … retained …`.
 - `--dry-run` prints a per-cell placement line — `+` anchored, `!`
   relocated, `?` unmatched — with the target line, so you can confirm
   placement before writing.
-- `--json` adds `relocated_cells` and a `placements` array (each entry:
-  `for_slide`, `anchor`, `status`, `after_line`, `after_header`).
+- `--json` adds `relocated_cells`, `companion_retained`, and a `placements`
+  array (each entry: `for_slide`, `anchor`, `status`, `after_line`,
+  `after_header`).
 
 ```
 clm voiceover inline [OPTIONS] FILE
@@ -1088,7 +1106,7 @@ clm voiceover inline [OPTIONS] FILE
 | Option | Description |
 |--------|-------------|
 | `--dry-run` | Preview changes (incl. per-cell placement report) without modifying files |
-| `--json` | Output as JSON (incl. `relocated_cells` and `placements`) |
+| `--json` | Output as JSON (incl. `relocated_cells`, `companion_retained`, `placements`) |
 
 Examples:
 

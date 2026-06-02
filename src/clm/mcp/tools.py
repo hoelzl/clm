@@ -36,7 +36,7 @@ from clm.slides.validator import ValidationResult
 from clm.slides.validator import validate_course as _validate_course
 from clm.slides.validator import validate_directory as _validate_directory
 from clm.slides.validator import validate_file as _validate_file
-from clm.slides.voiceover_tools import ExtractionResult, InlineResult
+from clm.slides.voiceover_tools import ExtractionResult, InlineResult, VoiceoverError
 from clm.slides.voiceover_tools import extract_voiceover as _extract_voiceover
 from clm.slides.voiceover_tools import inline_voiceover as _inline_voiceover
 
@@ -604,6 +604,7 @@ async def handle_extract_voiceover(
     file: str,
     data_dir: Path,
     *,
+    force: bool = False,
     dry_run: bool = False,
 ) -> str:
     """Extract voiceover cells from a slide file to a companion file.
@@ -611,16 +612,22 @@ async def handle_extract_voiceover(
     Args:
         file: Path to the slide file (absolute or relative to data_dir).
         data_dir: Root data directory.
+        force: Overwrite an existing companion file (rebuilds it from the
+            slide's voiceover cells, discarding companion-only content).
         dry_run: If ``True``, preview without writing files.
 
     Returns:
-        JSON string with extraction results.
+        JSON string with extraction results, or a ``{"error": ...}`` object
+        when an existing companion would be clobbered without ``force``.
     """
     target = Path(file)
     if not target.is_absolute():
         target = data_dir / target
 
-    result = _extract_voiceover(target, dry_run=dry_run)
+    try:
+        result = _extract_voiceover(target, force=force, dry_run=dry_run)
+    except VoiceoverError as e:
+        return json.dumps({"error": str(e)}, indent=2)
     return json.dumps(_extraction_result_to_dict(result), indent=2)
 
 
@@ -638,6 +645,7 @@ def _inline_result_to_dict(result: InlineResult) -> dict:
         "unmatched_cells": result.unmatched_cells,
         "relocated_cells": result.relocated_cells,
         "companion_deleted": result.companion_deleted,
+        "companion_retained": result.companion_retained,
         "dry_run": result.dry_run,
         "summary": result.summary,
     }

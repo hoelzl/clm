@@ -247,6 +247,7 @@ def create_server(data_dir: Path) -> FastMCP:
     @mcp.tool()
     async def extract_voiceover(
         file: str,
+        force: bool = False,
         dry_run: bool = False,
     ) -> str:
         """Extract voiceover cells from a slide file to a companion file.
@@ -254,13 +255,17 @@ def create_server(data_dir: Path) -> FastMCP:
         Moves voiceover and notes cells to a companion voiceover_*.py
         file, linked via slide_id/for_slide metadata.  Content cells
         without slide_id get auto-generated IDs before extraction.
+        Refuses to overwrite an existing companion unless force is set
+        (returns an ``{"error": ...}`` object in that case).
 
         Args:
             file: Path to the slide file (absolute, or relative to the
                 data directory).
+            force: Overwrite an existing companion (rebuilds it from the
+                slide's voiceover cells, discarding companion-only content).
             dry_run: If True, preview without writing files.
         """
-        return await handle_extract_voiceover(file, data_dir, dry_run=dry_run)
+        return await handle_extract_voiceover(file, data_dir, force=force, dry_run=dry_run)
 
     @mcp.tool()
     async def inline_voiceover(
@@ -271,7 +276,9 @@ def create_server(data_dir: Path) -> FastMCP:
 
         Merges voiceover cells from the companion voiceover_*.py file
         back into the slide file, matching via for_slide/slide_id
-        metadata.  Deletes the companion file after successful inlining.
+        metadata.  Deletes the companion only when every cell is placed;
+        if any cell is unmatched the companion is kept with the leftovers
+        (see ``companion_retained`` / ``unmatched_cells`` in the result).
 
         Args:
             file: Path to the slide file (absolute, or relative to the

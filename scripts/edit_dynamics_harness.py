@@ -54,6 +54,7 @@ from clm.slides.split import (  # noqa: E402
 from clm.slides.sync_apply import ApplyResult, apply_plan  # noqa: E402
 from clm.slides.sync_plan import SyncPlan, build_sync_plan, watermark_rows  # noqa: E402
 from clm.slides.voiceover_tools import (  # noqa: E402
+    VoiceoverError,
     companion_path,
     extract_voiceover,
     inline_voiceover,
@@ -565,14 +566,18 @@ def m_inline_after_rename(workdir: Path) -> _RetTuple:
     txt = slide.read_text(encoding="utf-8").replace('slide_id="intro"', 'slide_id="introduction"')
     slide.write_text(txt, encoding="utf-8", newline="\n")
     ires = inline_voiceover(slide)
-    destroyed = ires.companion_deleted and not comp.exists() and ires.unmatched_cells > 0
+    # Fixed: the unmatched cell is retained in the companion (recoverable),
+    # not destroyed; the CLI also exits non-zero on unmatched.
+    vo_recoverable = comp.exists() and "Voiceover DE for intro" in comp.read_text(encoding="utf-8")
+    destroyed = ires.unmatched_cells > 0 and not vo_recoverable
+    signaled = ires.companion_retained or ires.unmatched_cells > 0
     return (
         (["companion_destroyed"] if destroyed else []),
-        False,  # exit 0, raises nothing — silent to the user
-        "",
-        f"companion unlinked with unmatched={ires.unmatched_cells}; exit 0, no backup"
-        if destroyed
-        else f"unmatched={ires.unmatched_cells}, companion_deleted={ires.companion_deleted}",
+        signaled,
+        "companion_retained + unmatched>0 (CLI exits non-zero)" if signaled else "",
+        f"companion retained with unmatched={ires.unmatched_cells}, recoverable"
+        if not destroyed
+        else f"companion unlinked with unmatched={ires.unmatched_cells}; data lost",
     )
 
 
@@ -593,15 +598,21 @@ def m_re_extract_over_edited_companion(workdir: Path) -> _RetTuple:
         encoding="utf-8",
         newline="\n",
     )
-    extract_voiceover(slide)
-    lost = "HAND EDITED narration" not in comp.read_text(encoding="utf-8")
+    # Fixed: re-extract refuses without force rather than clobbering the
+    # hand-edited companion.
+    try:
+        extract_voiceover(slide)
+        refused = False
+    except VoiceoverError:
+        refused = True
+    preserved = "HAND EDITED narration" in comp.read_text(encoding="utf-8")
     return (
-        (["companion_clobbered"] if lost else []),
-        False,
-        "",
-        "hand-edited companion content lost on re-extract (no --force/guard)"
-        if lost
-        else "edit preserved",
+        ([] if preserved else ["companion_clobbered"]),
+        refused,
+        "VoiceoverError: refused without --force" if refused else "",
+        "hand-edit preserved (extract refused without --force)"
+        if preserved
+        else "hand-edited companion content clobbered on re-extract",
     )
 
 
@@ -660,11 +671,14 @@ MUTATIONS: list[Mutation] = [
     Mutation("born-split-assign-ids", "assign-ids", BREAK_SILENT, True, m_born_split_assign_ids),
     Mutation("commit-without-sync", "no-gate", BREAK_SILENT, True, m_commit_without_sync),
     Mutation("extract-then-split", "extract+split", BREAK_SILENT, True, m_extract_then_split),
-    Mutation("inline-after-rename", "inline", BREAK_SILENT, True, m_inline_after_rename),
+    # Tier-1 data-loss fixes landed: inline now retains the companion with the
+    # unmatched cell (recoverable) and exits non-zero; extract refuses to clobber
+    # an existing companion without --force. Both flipped break-silent -> preserve.
+    Mutation("inline-after-rename", "inline", PRESERVE, True, m_inline_after_rename),
     Mutation(
         "re-extract-over-edited-companion",
         "extract",
-        BREAK_SILENT,
+        PRESERVE,
         True,
         m_re_extract_over_edited_companion,
     ),

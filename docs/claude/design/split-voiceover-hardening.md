@@ -79,6 +79,17 @@ corrections are load-bearing for prioritization, so they are recorded explicitly
 
 ### Tier 1 — confirmed data loss, cheap fixes (do first)
 
+> **✅ ALL THREE FIXED (roadmap step 2, 2026-06-03).** (1) `voiceover_*.py` added to
+> `SKIP_OUTPUT_FILE_PATTERNS` + `SKIP_OUTPUT_FILE_GLOBS` (output-copy + recursive-dir-copy
+> vectors) — kept available as build source, suppressed only from output + kernel payload.
+> (2) `inline_voiceover` now retains the companion (rewritten to the unmatched remainder,
+> anchors intact) instead of unlinking it, and the CLI exits non-zero on unmatched. (3)
+> `extract_voiceover` gains `force=` / `--force` and refuses to clobber an existing companion
+> otherwise (checked *before* the slide is rewritten). New `VoiceoverError`; CLI/MCP wrap it.
+> Harness rows `inline-after-rename` + `re-extract-over-edited-companion` flipped break-silent →
+> preserve; new unit tests in `test_voiceover_tools.py` + `path_utils_test.py`. Original analysis
+> retained below.
+
 1. **Voiceover companion leaks into student output.** **[verified, worse than first
    reported].** `voiceover_*.py` is classified as a `DataFile`
    (`course_file.py:152-163`; `is_slides_file` requires `slides_`/`topic_`/`project_`
@@ -502,8 +513,9 @@ corpus no-op invariant + real-deck round-trip **skip**. To build justified confi
    `scripts/edit_dynamics_harness.py` + `tests/slides/test_edit_dynamics.py` (8 preserve /
    7 break-silent / 0 error, no drift). The seven break-silent rows are the work-list for
    steps 2–5; the sync funnel is now regression-guarded in the fast suite.
-2. **Tier-1 data-loss fixes** (§3) — vo output leak; inline unlink guard; extract
-   `--force`. Cheap, verified, immediate work-loss prevention.
+2. ~~**Tier-1 data-loss fixes**~~ ✅ **DONE 2026-06-03** (§3) — vo output leak;
+   inline retains-companion-on-unmatched + non-zero exit; extract `--force`. Verified by
+   the harness (two rows flipped to preserve) + new unit tests; full fast suite green.
 3. **#162 keystone** (§7) — detective (the gate's core check) + defensive twin-aware
    `assign-ids`/`extract`; generative pair-aware minting for born-split.
 4. **Command-surface rethink** (§8) — fold/hide/guard, with info-topic updates.
