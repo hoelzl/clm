@@ -1032,6 +1032,16 @@ Extract voiceover and notes cells from a slide file to a companion
 `voiceover_*.py` file, linked via `slide_id`/`for_slide` metadata.
 Content cells without `slide_id` get auto-generated IDs before extraction.
 
+Since CLM {version}, each extracted cell also records a `vo_anchor`
+attribute identifying its **immediate predecessor cell** — `id:<slide_id>`
+when that cell carries an id, otherwise `fp:<body-fingerprint>` — with a
+trailing `#<n>` occurrence ordinal to disambiguate repeated cells in the
+same slide group. `vo_anchor` lets `clm voiceover inline` restore each
+voiceover to its **exact** original position rather than to the end of its
+slide group. It is body-only and occurrence-qualified, so editing a
+sibling cell's tags, inserting unrelated slides, or the build's blank-line
+cleanup between extract and inline does not move the voiceover.
+
 ```
 clm voiceover extract [OPTIONS] FILE
 ```
@@ -1053,8 +1063,23 @@ clm voiceover extract slides_intro.py --dry-run
 *Deprecated alias: `clm inline-voiceover` (removed in 1.7).*
 
 Inline voiceover cells from a companion `voiceover_*.py` file back into the
-slide file, matching via `for_slide`/`slide_id` metadata. Deletes the companion
-file after successful inlining.
+slide file, deletes the companion file after successful inlining.
+
+Since CLM {version}, each voiceover is re-inserted immediately after the
+predecessor cell recorded in its `vo_anchor` (resolved within the owning
+slide group only — it never crosses into another slide). If that anchor
+cell was edited away or removed, inline falls back to the end of the
+`for_slide` group and counts the cell as **relocated**; if the owning slide
+is gone entirely, the cell is **unmatched** and appended at the end. Both
+cases are reported rather than silently misplaced:
+
+- The text summary appends `N cell(s) relocated …` / `N cell(s) could not
+  be matched …`.
+- `--dry-run` prints a per-cell placement line — `+` anchored, `!`
+  relocated, `?` unmatched — with the target line, so you can confirm
+  placement before writing.
+- `--json` adds `relocated_cells` and a `placements` array (each entry:
+  `for_slide`, `anchor`, `status`, `after_line`, `after_header`).
 
 ```
 clm voiceover inline [OPTIONS] FILE
@@ -1062,8 +1087,8 @@ clm voiceover inline [OPTIONS] FILE
 
 | Option | Description |
 |--------|-------------|
-| `--dry-run` | Preview changes without modifying files |
-| `--json` | Output as JSON |
+| `--dry-run` | Preview changes (incl. per-cell placement report) without modifying files |
+| `--json` | Output as JSON (incl. `relocated_cells` and `placements`) |
 
 Examples:
 

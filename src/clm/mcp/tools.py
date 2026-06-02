@@ -636,6 +636,7 @@ def _inline_result_to_dict(result: InlineResult) -> dict:
         "companion_file": result.companion_file,
         "cells_inlined": result.cells_inlined,
         "unmatched_cells": result.unmatched_cells,
+        "relocated_cells": result.relocated_cells,
         "companion_deleted": result.companion_deleted,
         "dry_run": result.dry_run,
         "summary": result.summary,

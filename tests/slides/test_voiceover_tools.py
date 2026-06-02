@@ -847,3 +847,459 @@ class TestSplitDeckVoiceover:
         assert "for_slide=" not in en_final
         assert _lang_cell_count(de_final, "en") == 0
         assert _lang_cell_count(en_final, "de") == 0
+
+
+# ---------------------------------------------------------------------------
+# Positional anchors (vo_anchor): restore voiceovers to their *exact*
+# position on inline, not just the end of their slide group.
+#
+# Regression for the report where extract -> edit -> inline moved two
+# voiceovers: a mid-group voiceover collapsed to the group end, and a
+# voiceover sailed past trailing non-slide cells to the bottom of the file.
+# ---------------------------------------------------------------------------
+
+
+# A deck that exercises both failure modes:
+#   * "intro" group: a voiceover in the MIDDLE of the group (between the
+#     heading and a code cell) plus one after the code cell.
+#   * "outro" group: a voiceover right after the heading, followed by
+#     untagged prose and an `answer` cell that carry no slide_id (the
+#     greedy forward-walk used to treat these as continuation and pushed
+#     the voiceover to the very end).
+DECK_POSITIONAL = """\
+# %% [markdown] lang="de" tags=["slide"] slide_id="intro"
+# ## Intro
+
+# %% [markdown] lang="de" tags=["voiceover"]
+# VO right after intro heading.
+
+# %% [markdown] lang="de"
+# Some prose without an id.
+
+# %% lang="de"
+code_cell = 1
+
+# %% [markdown] lang="de" tags=["voiceover"]
+# VO after the code cell.
+
+# %% [markdown] lang="de" tags=["slide"] slide_id="outro"
+# ## Outro
+
+# %% [markdown] lang="de" tags=["voiceover"]
+# VO right after outro heading.
+
+# %% [markdown] lang="de"
+# Q&A prose, no id.
+
+# %% [markdown] lang="de" tags=["answer"]
+# An answer cell, no id.
+"""
+
+
+def _assert_order(text: str, *needles: str) -> None:
+    """Assert ``needles`` appear in ``text`` in the given relative order."""
+    positions = []
+    for n in needles:
+        assert n in text, f"missing: {n!r}"
+        positions.append(text.index(n))
+    assert positions == sorted(positions), f"out of order: {list(zip(needles, positions))}"
+
+
+class TestPositionalAnchors:
+    def test_round_trip_is_idempotent(self, tmp_path: Path):
+        """With no edits, repeated extract -> inline reaches a fixed point.
+
+        (The first extract may add auto-generated slide_ids to narrative
+        cells that lack them — documented behavior — so byte-identity is
+        asserted against that stabilized baseline, not the raw input.)
+        """
+        slide_file = tmp_path / "slides_pos.py"
+        slide_file.write_text(DECK_POSITIONAL, encoding="utf-8", newline="\n")
+
+        extract_voiceover(slide_file)
+        inline_voiceover(slide_file)
+        baseline = slide_file.read_text(encoding="utf-8")
+
+        extract_voiceover(slide_file)
+        inline_voiceover(slide_file)
+        assert slide_file.read_text(encoding="utf-8") == baseline
+
+    def test_fully_ided_deck_round_trip_byte_identical(self, tmp_path: Path):
+        """A deck where every cell already carries its id round-trips exactly.
+
+        This is the real-world authoring case (the reported deck) where
+        extract adds nothing, so the round-trip must be a perfect inverse.
+        """
+        text = """\
+# %% [markdown] lang="de" tags=["slide"] slide_id="intro"
+# ## Intro
+
+# %% [markdown] lang="de" tags=["voiceover"] slide_id="intro"
+# VO right after intro heading.
+
+# %% tags=["keep"] slide_id="code"
+x = 1
+
+# %% [markdown] lang="de" tags=["voiceover"] slide_id="code"
+# VO after the code cell.
+
+# %% [markdown] lang="de" tags=["subslide"] slide_id="outro"
+# ## Outro
+
+# %% [markdown] lang="de" tags=["voiceover"] slide_id="outro"
+# VO after outro.
+
+# %% [markdown] lang="de" tags=["answer"] slide_id="outro"
+# An answer cell.
+"""
+        slide_file = tmp_path / "slides_ids.py"
+        slide_file.write_text(text, encoding="utf-8", newline="\n")
+
+        result = extract_voiceover(slide_file)
+        assert result.ids_generated == 0  # nothing to add
+        inline_voiceover(slide_file)
+
+        assert slide_file.read_text(encoding="utf-8") == text
+
+    def test_mid_group_voiceover_stays_in_place(self, tmp_path: Path):
+        """A voiceover between heading and code must not collapse to the end."""
+        slide_file = tmp_path / "slides_pos.py"
+        slide_file.write_text(DECK_POSITIONAL, encoding="utf-8", newline="\n")
+
+        extract_voiceover(slide_file)
+        inline_voiceover(slide_file)
+        out = slide_file.read_text(encoding="utf-8")
+
+        _assert_order(
+            out,
+            "## Intro",
+            "VO right after intro heading.",
+            "Some prose without an id.",
+            "code_cell = 1",
+            "VO after the code cell.",
+            "## Outro",
+        )
+
+    def test_voiceover_not_pushed_past_trailing_cells(self, tmp_path: Path):
+        """A voiceover must stay under its slide, above id-less answer cells."""
+        slide_file = tmp_path / "slides_pos.py"
+        slide_file.write_text(DECK_POSITIONAL, encoding="utf-8", newline="\n")
+
+        extract_voiceover(slide_file)
+        inline_voiceover(slide_file)
+        out = slide_file.read_text(encoding="utf-8")
+
+        _assert_order(
+            out,
+            "## Outro",
+            "VO right after outro heading.",
+            "Q&A prose, no id.",
+            "An answer cell, no id.",
+        )
+
+    def test_edits_between_extract_and_inline_do_not_move_voiceovers(self, tmp_path: Path):
+        """The reported scenario: tag a sibling cell + insert a new slide."""
+        slide_file = tmp_path / "slides_pos.py"
+        slide_file.write_text(DECK_POSITIONAL, encoding="utf-8", newline="\n")
+
+        extract_voiceover(slide_file)
+
+        # Edit 1: add a tag to the code cell (header-only change — the
+        # body fingerprint that anchors VO#2 must survive this).
+        # Edit 2: insert a brand-new slide before "outro".
+        text = slide_file.read_text(encoding="utf-8")
+        text = text.replace(
+            '# %% lang="de"\ncode_cell = 1', '# %% lang="de" tags=["keep"]\ncode_cell = 1'
+        )
+        new_slide = (
+            '# %% [markdown] lang="de" tags=["subslide"] slide_id="inserted"\n'
+            "# ## Inserted Slide\n\n"
+        )
+        text = text.replace(
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="outro"',
+            new_slide + '# %% [markdown] lang="de" tags=["slide"] slide_id="outro"',
+            1,
+        )
+        slide_file.write_text(text, encoding="utf-8", newline="\n")
+
+        result = inline_voiceover(slide_file)
+        out = slide_file.read_text(encoding="utf-8")
+
+        assert result.relocated_cells == 0
+        assert result.unmatched_cells == 0
+        # Both intro voiceovers are still anchored correctly despite the
+        # keep-tag edit, and the outro voiceover is unaffected by the new
+        # slide inserted above it.
+        _assert_order(
+            out,
+            "## Intro",
+            "VO right after intro heading.",
+            "code_cell = 1",
+            "VO after the code cell.",
+            "## Inserted Slide",
+            "## Outro",
+            "VO right after outro heading.",
+            "An answer cell, no id.",
+        )
+
+    def test_consecutive_voiceovers_preserve_order(self, tmp_path: Path):
+        """Two voiceovers sharing one anchor must keep document order."""
+        text = """\
+# %% [markdown] lang="de" tags=["slide"] slide_id="s"
+# ## S
+
+# %% [markdown] lang="de" tags=["voiceover"]
+# First voiceover.
+
+# %% [markdown] lang="de" tags=["voiceover"]
+# Second voiceover.
+
+# %% tags=["keep"]
+x = 1
+"""
+        slide_file = tmp_path / "slides_seq.py"
+        slide_file.write_text(text, encoding="utf-8", newline="\n")
+
+        extract_voiceover(slide_file)
+        inline_voiceover(slide_file)
+        out = slide_file.read_text(encoding="utf-8")
+
+        _assert_order(out, "## S", "First voiceover.", "Second voiceover.", "x = 1")
+
+    def test_deleted_anchor_cell_relocates_and_reports(self, tmp_path: Path):
+        """If the anchor predecessor is removed, fall back + report a relocation."""
+        slide_file = tmp_path / "slides_pos.py"
+        slide_file.write_text(DECK_POSITIONAL, encoding="utf-8", newline="\n")
+
+        extract_voiceover(slide_file)
+
+        # Delete the code cell that anchors "VO after the code cell."
+        text = slide_file.read_text(encoding="utf-8")
+        text = text.replace('# %% lang="de"\ncode_cell = 1\n', "")
+        slide_file.write_text(text, encoding="utf-8", newline="\n")
+
+        result = inline_voiceover(slide_file)
+        out = slide_file.read_text(encoding="utf-8")
+
+        assert result.relocated_cells == 1
+        assert result.unmatched_cells == 0
+        # The relocated voiceover is still present (now at the intro group end).
+        assert "VO after the code cell." in out
+        # It must not have leaked past the outro heading.
+        _assert_order(out, "VO after the code cell.", "## Outro")
+
+    def test_dry_run_reports_placements(self, tmp_path: Path):
+        slide_file = tmp_path / "slides_pos.py"
+        slide_file.write_text(DECK_POSITIONAL, encoding="utf-8", newline="\n")
+
+        extract_voiceover(slide_file)
+        result = inline_voiceover(slide_file, dry_run=True)
+
+        assert len(result.placements) == 3
+        assert all(p.status == "anchored" for p in result.placements)
+        assert all(p.after_line is not None for p in result.placements)
+
+    def test_legacy_companion_without_anchor_still_places(self, tmp_path: Path):
+        """A hand-written companion lacking vo_anchor uses the group-end path."""
+        slide_file = tmp_path / "slides_legacy.py"
+        slide_file.write_text(
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="intro"\n# ## Intro\n',
+            encoding="utf-8",
+            newline="\n",
+        )
+        comp = tmp_path / "voiceover_legacy.py"
+        comp.write_text(
+            '# %% [markdown] lang="de" tags=["voiceover"] for_slide="intro"\n# Legacy VO.\n',
+            encoding="utf-8",
+            newline="\n",
+        )
+
+        result = inline_voiceover(slide_file)
+
+        assert result.cells_inlined == 1
+        assert result.relocated_cells == 0  # no anchor recorded -> not a relocation
+        assert result.unmatched_cells == 0
+        assert result.placements[0].status == "placed"
+        out = slide_file.read_text(encoding="utf-8")
+        assert "Legacy VO." in out
+        assert "vo_anchor" not in out
+        assert "for_slide" not in out
+
+    def test_build_merge_honors_anchor(self, tmp_path: Path):
+        """The build path (merge_voiceover_text) also restores mid-group order."""
+        slide_file = tmp_path / "slides_pos.py"
+        slide_file.write_text(DECK_POSITIONAL, encoding="utf-8", newline="\n")
+        extract_voiceover(slide_file)
+
+        slide_after = slide_file.read_text(encoding="utf-8")
+        comp = (tmp_path / "voiceover_pos.py").read_text(encoding="utf-8")
+
+        merged, unmatched = merge_voiceover_text(slide_after, comp)
+
+        assert unmatched == []
+        # vo_anchor must never leak into the merged notebook.
+        assert "vo_anchor" not in merged
+        _assert_order(
+            merged,
+            "## Intro",
+            "VO right after intro heading.",
+            "code_cell = 1",
+            "VO after the code cell.",
+            "## Outro",
+            "VO right after outro heading.",
+            "An answer cell, no id.",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Anchor-ambiguity & scoping regressions.
+#
+# These cover defects surfaced by an adversarial review of the positional
+# anchor fix: a slide_id or body fingerprint is NOT unique within a group,
+# the owning slide_id may be renamed/absent, bilingual groups interleave,
+# and extract's blank-line cleanup must not desync the fingerprint.
+# ---------------------------------------------------------------------------
+
+
+def _round_trip(tmp_path: Path, deck: str, name: str = "slides_x.py"):
+    """extract -> inline a deck; return (final_text, InlineResult)."""
+    f = tmp_path / name
+    f.write_text(deck, encoding="utf-8", newline="\n")
+    extract_voiceover(f)
+    result = inline_voiceover(f)
+    return f.read_text(encoding="utf-8"), result
+
+
+class TestAnchorAmbiguityAndScoping:
+    def test_fp_collision_identical_bodies_keep_their_own_voiceover(self, tmp_path: Path):
+        """Two identical-body cells in one group: each keeps its own VO.
+
+        Without an occurrence ordinal both fp anchors resolve to the first
+        copy, clustering both voiceovers there and stripping the second.
+        """
+        deck = (
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="demo"\n# ## Demo\n\n'
+            '# %% tags=["keep"]\nprint(result)\n\n'
+            '# %% [markdown] lang="de" tags=["voiceover"]\n# Explains the FIRST print.\n\n'
+            '# %% tags=["keep"]\nprint(result)\n\n'
+            '# %% [markdown] lang="de" tags=["voiceover"]\n# Explains the SECOND print.\n'
+        )
+        out, res = _round_trip(tmp_path, deck)
+        p1 = out.index("print(result)")
+        p2 = out.index("print(result)", p1 + 1)
+        v1 = out.index("Explains the FIRST")
+        v2 = out.index("Explains the SECOND")
+        assert p1 < v1 < p2 < v2
+        assert res.relocated_cells == 0
+
+    def test_fp_collision_in_build_merge(self, tmp_path: Path):
+        """The build path resolves colliding fp anchors to the right copy."""
+        deck = (
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="demo"\n# ## Demo\n\n'
+            '# %% tags=["keep"]\nprint(result)\n\n'
+            '# %% [markdown] lang="de" tags=["voiceover"]\n# Explains the FIRST print.\n\n'
+            '# %% tags=["keep"]\nprint(result)\n\n'
+            '# %% [markdown] lang="de" tags=["voiceover"]\n# Explains the SECOND print.\n'
+        )
+        f = tmp_path / "slides_demo.py"
+        f.write_text(deck, encoding="utf-8", newline="\n")
+        extract_voiceover(f)
+        slide_after = f.read_text(encoding="utf-8")
+        comp = (tmp_path / "voiceover_demo.py").read_text(encoding="utf-8")
+
+        merged, unmatched = merge_voiceover_text(slide_after, comp)
+
+        assert unmatched == []
+        _assert_order(
+            merged,
+            "print(result)",
+            "Explains the FIRST print.",
+            "Explains the SECOND print.",
+        )
+        # The second VO must sit after the SECOND print, not the first.
+        p2 = merged.index("print(result)", merged.index("print(result)") + 1)
+        assert merged.index("Explains the SECOND print.") > p2
+
+    def test_id_collision_two_cells_share_slide_id(self, tmp_path: Path):
+        """A VO after the 2nd of two cells sharing a slide_id stays there."""
+        deck = (
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="p"\n# ## Para\n\n'
+            '# %% lang="de" slide_id="p"\nfirst_line = 1\n\n'
+            '# %% [markdown] lang="de" tags=["voiceover"]\n# VO after the SECOND p-cell.\n'
+        )
+        out, res = _round_trip(tmp_path, deck)
+        assert out.index("first_line = 1") < out.index("VO after the SECOND p-cell.")
+        assert res.relocated_cells == 0
+
+    def test_renamed_for_slide_is_unmatched_not_misplaced(self, tmp_path: Path):
+        """If the owning slide_id is renamed, the VO is unmatched, not dropped
+        into a foreign group that happens to share a body fingerprint."""
+        deck = (
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="one"\n# ## Group One\n\n'
+            '# %% lang="de"\nimport os\n\n'
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="two"\n# ## Group Two\n\n'
+            '# %% lang="de"\nimport os\n\n'
+            '# %% [markdown] lang="de" tags=["voiceover"]\n# VO belongs to group TWO.\n'
+        )
+        f = tmp_path / "slides_x.py"
+        f.write_text(deck, encoding="utf-8", newline="\n")
+        extract_voiceover(f)
+        # Rename the owning slide between extract and inline.
+        t = f.read_text(encoding="utf-8").replace('slide_id="two"', 'slide_id="two-renamed"')
+        f.write_text(t, encoding="utf-8", newline="\n")
+
+        res = inline_voiceover(f)
+        out = f.read_text(encoding="utf-8")
+
+        assert res.unmatched_cells == 1
+        assert res.relocated_cells == 0
+        # Appended at the end — never inserted into the foreign group one.
+        assert out.index("VO belongs to group TWO.") > out.index("## Group Two")
+
+    def test_renamed_for_slide_in_build_merge_reports_unmatched(self):
+        """merge_voiceover_text must report the unmatched id, not silently
+        place the VO into a body-identical foreign group."""
+        slide = (
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="one"\n# ## Group One\n\n'
+            '# %% lang="de"\nimport os\n\n'
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="two-renamed"\n# ## Group Two\n\n'
+            '# %% lang="de"\nimport os\n'
+        )
+        comp = (
+            '# %% [markdown] lang="de" tags=["voiceover"] for_slide="two" '
+            'vo_anchor="fp:deadbeef0000#0"\n# VO belongs to group TWO.\n'
+        )
+        merged, unmatched = merge_voiceover_text(slide, comp)
+
+        assert unmatched == ["two"]
+        assert "VO belongs to group TWO." not in merged
+
+    def test_bilingual_group_not_truncated_by_other_language_twin(self, tmp_path: Path):
+        """In a bilingual deck, a DE voiceover after a DE continuation cell
+        that follows the EN twin returns to its predecessor, not the heading."""
+        deck = (
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="a"\n# ## A DE\n\n'
+            '# %% [markdown] lang="en" tags=["slide"] slide_id="a"\n# ## A EN\n\n'
+            '# %% [markdown] lang="de"\n# de prose A.\n\n'
+            '# %% [markdown] lang="de" tags=["voiceover"]\n# DE VO for A.\n\n'
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="b"\n# ## B DE\n'
+        )
+        out, res = _round_trip(tmp_path, deck)
+        # VO returns after its real predecessor, not hoisted above it.
+        assert out.index("de prose A.") < out.index("DE VO for A.")
+        # ...and not wedged between the de/en heading pair.
+        assert out.index("## A EN") < out.index("DE VO for A.")
+        assert res.relocated_cells == 0
+
+    def test_fingerprint_invariant_to_internal_blank_lines(self, tmp_path: Path):
+        """A predecessor with 2+ internal blank lines still anchors after
+        extract's \\n{3,} -> \\n\\n cleanup mutates its body."""
+        deck = (
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="s"\n# ## Slide\n\n'
+            '# %% lang="de"\na = 1\n\n\n\nb = 2\n\n'
+            '# %% [markdown] lang="de" tags=["voiceover"]\n# VO after the multi-blank cell.\n\n'
+            '# %% lang="de"\ntrailing = 99\n'
+        )
+        out, res = _round_trip(tmp_path, deck)
+        assert res.relocated_cells == 0
+        _assert_order(out, "b = 2", "VO after the multi-blank cell.", "trailing = 99")

@@ -15,9 +15,11 @@ keyed by ``slide_id`` via each cell's ``for_slide`` attribute.
 
 from __future__ import annotations
 
+import hashlib
 import re
+from collections import defaultdict
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from clm.notebooks.slide_parser import parse_cell_header, parse_cells
@@ -60,6 +62,21 @@ class ExtractionResult:
 
 
 @dataclass
+class Placement:
+    """Where a single voiceover cell will be (or was) inlined.
+
+    Surfaced for dry-run reporting and JSON output so a relocation is
+    visible *before* the file is written, rather than discovered later.
+    """
+
+    for_slide: str | None
+    anchor: str | None
+    status: str  # "anchored" | "placed" | "relocated" | "unmatched"
+    after_line: int | None = None
+    after_header: str | None = None
+
+
+@dataclass
 class InlineResult:
     """Result of inlining voiceover cells from a companion file."""
 
@@ -67,8 +84,10 @@ class InlineResult:
     companion_file: str
     cells_inlined: int = 0
     unmatched_cells: int = 0
+    relocated_cells: int = 0
     companion_deleted: bool = False
     dry_run: bool = False
+    placements: list[Placement] = field(default_factory=list)
 
     @property
     def summary(self) -> str:
@@ -80,6 +99,11 @@ class InlineResult:
             )
         else:
             parts.append(f"{prefix}No voiceover cells to inline.")
+        if self.relocated_cells:
+            parts.append(
+                f"{self.relocated_cells} cell(s) relocated to the end of their slide "
+                f"(original anchor cell was edited or removed)"
+            )
         if self.unmatched_cells:
             parts.append(
                 f"{self.unmatched_cells} cell(s) could not be matched "
@@ -132,19 +156,170 @@ def _ensure_slide_ids(cells: list[_RawCell], path: Path) -> int:
     return len(changes)
 
 
-def _build_for_slide_header(
+# ---------------------------------------------------------------------------
+# Positional anchors
+#
+# ``for_slide`` records the *owning slide* of a voiceover cell — coarse
+# enough for the build merge and ``voiceover sync``, but it cannot say
+# *where among that slide's continuation cells* the voiceover originally
+# sat. ``vo_anchor`` records the voiceover's immediate predecessor content
+# cell so ``inline`` can restore it to its exact position instead of
+# dumping every voiceover at the end of its slide group.
+#
+# The anchor is either ``id:<slide_id>`` (when the predecessor carries a
+# slide_id — the common "right after the heading" case) or
+# ``fp:<fingerprint>`` of the predecessor's body. The fingerprint is
+# body-only on purpose: header-tag edits (e.g. adding ``keep``) between
+# extract and inline must not break the anchor.
+#
+# Neither a slide_id nor a body fingerprint is guaranteed unique *within*
+# one slide group (repeated boilerplate code cells, two cells sharing a
+# slide_id, a de/en pair). So the token also carries a 0-based occurrence
+# ordinal — ``id:<sid>#<n>`` / ``fp:<hash>#<n>`` — meaning "the n-th cell
+# in the group matching this token". Resolution is always scoped to the
+# owning slide group; it never searches across groups.
+# ---------------------------------------------------------------------------
+
+_FOR_SLIDE_RE = re.compile(r'\s*for_slide="[^"]*"')
+_VO_ANCHOR_RE = re.compile(r'\s*vo_anchor="[^"]*"')
+_VO_ANCHOR_VALUE_RE = re.compile(r'vo_anchor="([^"]*)"')
+
+
+def _body_fingerprint(cell: _RawCell) -> str:
+    """Return a short, stable fingerprint of a cell's body.
+
+    Blank lines are dropped entirely (not just leading/trailing) so the
+    fingerprint is invariant under the ``\\n{3,}`` -> ``\\n\\n`` blank-line
+    cleanup that ``extract`` applies to the whole slide text *after* the
+    anchor is recorded. Trailing whitespace is stripped and the cell type
+    is folded in to avoid markdown/code collisions.
+    """
+    body_lines = [ln.rstrip() for ln in cell.lines[1:]]
+    body_lines = [ln for ln in body_lines if ln]
+    norm = "\n".join(body_lines)
+    payload = f"{cell.metadata.cell_type}\x00{norm}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+
+
+def _anchor_key(cell: _RawCell) -> tuple[str, str]:
+    """Return the ``(kind, value)`` half of an anchor for ``cell``."""
+    sid = cell.metadata.slide_id
+    if sid:
+        return ("id", sid)
+    return ("fp", _body_fingerprint(cell))
+
+
+def _anchor_candidates(
+    cells: list[_RawCell],
+    bounds: tuple[int, int],
+    kind: str,
+    value: str,
+    vo_lang: str | None,
+) -> list[int]:
+    """Indices within ``bounds`` matching an anchor ``(kind, value)``.
+
+    Returned in document order. Narrative/j2 cells and cells of a
+    conflicting language are excluded so the occurrence ordinal counts the
+    same content cells at extract time and at inline time.
+    """
+    lo, hi = bounds
+    out: list[int] = []
+    for i in range(lo, hi):
+        meta = cells[i].metadata
+        if meta.is_narrative or meta.is_j2:
+            continue
+        if vo_lang and meta.lang and meta.lang != vo_lang:
+            continue
+        if kind == "id" and meta.slide_id == value:
+            out.append(i)
+        elif kind == "fp" and _body_fingerprint(cells[i]) == value:
+            out.append(i)
+    return out
+
+
+def _anchor_token(
+    cells: list[_RawCell],
+    pred_idx: int,
+    bounds: tuple[int, int],
+    vo_lang: str | None,
+) -> str:
+    """Build the occurrence-qualified anchor token for a predecessor cell.
+
+    ``bounds`` is the predecessor's owning slide group. The ordinal is the
+    predecessor's position among same-token candidates in that group, so a
+    voiceover after the second of two identical cells resolves back to the
+    second, not the first.
+    """
+    kind, value = _anchor_key(cells[pred_idx])
+    candidates = _anchor_candidates(cells, bounds, kind, value, vo_lang)
+    occ = candidates.index(pred_idx) if pred_idx in candidates else 0
+    return f"{kind}:{value}#{occ}"
+
+
+def _parse_vo_anchor(header: str) -> str | None:
+    """Extract the ``vo_anchor`` token from a cell header, if present."""
+    m = _VO_ANCHOR_VALUE_RE.search(header)
+    return m.group(1) if m else None
+
+
+def _split_anchor(anchor: str) -> tuple[str, str, int]:
+    """Parse ``kind:value#occ`` into ``(kind, value, occ)``.
+
+    A legacy token without the ``#occ`` suffix yields occurrence 0.
+    """
+    kind, _, rest = anchor.partition(":")
+    value, _, occ_s = rest.partition("#")
+    occ = int(occ_s) if occ_s.isdigit() else 0
+    return kind, value, occ
+
+
+def _find_predecessor_index(
+    cells: list[_RawCell],
+    voiceover_idx: int,
+    vo_lang: str | None,
+) -> int | None:
+    """Index of the content cell immediately preceding a voiceover cell.
+
+    Walks backward over j2 and narrative cells (other voiceover/notes
+    cells) and over cells of a conflicting language, returning the first
+    real content cell. Returns ``None`` if the voiceover has no content
+    cell above it.
+    """
+    for i in range(voiceover_idx - 1, -1, -1):
+        meta = cells[i].metadata
+        if meta.is_j2 or meta.is_narrative:
+            continue
+        if meta.lang is not None and vo_lang is not None and meta.lang != vo_lang:
+            continue
+        return i
+    return None
+
+
+def _build_voiceover_header(
     voiceover_cell: _RawCell,
     slide_id: str,
+    anchor: str | None,
 ) -> str:
-    """Build a voiceover cell header with ``for_slide`` metadata.
+    """Build a companion header carrying ``for_slide`` and ``vo_anchor``.
 
-    If the cell already has ``for_slide``, update it.  Otherwise add it.
+    Any pre-existing ``for_slide`` / ``vo_anchor`` attributes are dropped
+    first so the operation is idempotent, then re-appended. Other
+    attributes (``slide_id``, ``tags``, ``lang``) are preserved in place.
     """
     header = voiceover_cell.header
-    existing = re.search(r'for_slide="[^"]*"', header)
-    if existing:
-        return header[: existing.start()] + f'for_slide="{slide_id}"' + header[existing.end() :]
-    return header.rstrip() + f' for_slide="{slide_id}"'
+    header = _VO_ANCHOR_RE.sub("", header)
+    header = _FOR_SLIDE_RE.sub("", header).rstrip()
+    header += f' for_slide="{slide_id}"'
+    if anchor:
+        header += f' vo_anchor="{anchor}"'
+    return header
+
+
+def _strip_author_attrs(header: str) -> str:
+    """Remove ``for_slide`` / ``vo_anchor`` — author-only companion attrs."""
+    header = _VO_ANCHOR_RE.sub("", header)
+    header = _FOR_SLIDE_RE.sub("", header)
+    return header
 
 
 def _find_owning_slide_id(cells: list[_RawCell], voiceover_idx: int) -> str | None:
@@ -207,13 +382,24 @@ def extract_voiceover(
     # Auto-generate slide_ids for cells that need them
     result.ids_generated = _ensure_slide_ids(cells, path)
 
-    # Build companion cells with for_slide metadata
+    # Build companion cells with for_slide metadata (owning slide) and a
+    # vo_anchor (immediate predecessor, occurrence-qualified) so inline can
+    # restore the exact position rather than the slide-group end.
+    id_map = _build_slide_id_to_cell_map(cells)
     companion_cells: list[_RawCell] = []
     for idx in vo_indices:
         vo_cell = cells[idx]
+        vo_lang = vo_cell.metadata.lang
         slide_id = _find_owning_slide_id(cells, idx)
         if slide_id:
-            new_header = _build_for_slide_header(vo_cell, slide_id)
+            pred_idx = _find_predecessor_index(cells, idx, vo_lang)
+            bounds = _slide_group_bounds(cells, slide_id, vo_lang, id_map)
+            anchor = (
+                _anchor_token(cells, pred_idx, bounds, vo_lang)
+                if pred_idx is not None and bounds is not None
+                else None
+            )
+            new_header = _build_voiceover_header(vo_cell, slide_id, anchor)
             vo_cell.lines[0] = new_header
             vo_cell.metadata = parse_cell_header(new_header)
 
@@ -279,24 +465,23 @@ def merge_voiceover_text(
             unmatched_ids.append("<no for_slide>")
             continue
 
-        insert_after = _find_insertion_point(slide_cells, for_slide, vo_cell.metadata.lang, id_map)
+        insert_after, status = _plan_insertion(slide_cells, vo_cell, id_map)
         if insert_after is None:
             unmatched_ids.append(for_slide)
             continue
 
+        # vo_anchor is an author-only positional hint; never leak it into
+        # the merged notebook the build consumes. (for_slide is left as-is
+        # to preserve existing build output.)
+        vo_cell.lines[0] = _VO_ANCHOR_RE.sub("", vo_cell.header)
+        vo_cell.metadata = parse_cell_header(vo_cell.lines[0])
         insertions.append((insert_after, vo_cell))
 
     if not insertions and not unmatched_ids:
         return slide_text, []
 
-    if insertions:
-        # Sort insertions by position (descending) to keep indices stable
-        insertions.sort(key=lambda x: x[0], reverse=True)
-
-        for insert_after, vo_cell in insertions:
-            slide_cells.insert(insert_after + 1, vo_cell)
-
-    merged_text = _reconstruct(preamble, slide_cells)
+    merged_cells = _apply_insertions(slide_cells, insertions, [])
+    merged_text = _reconstruct(preamble, merged_cells)
     return merged_text, unmatched_ids
 
 
@@ -364,6 +549,160 @@ def _find_insertion_point(
     return insert_after
 
 
+def _slide_group_bounds(
+    cells: list[_RawCell],
+    for_slide: str,
+    vo_lang: str | None,
+    id_map: dict[str, list[int]],
+) -> tuple[int, int] | None:
+    """Return ``(start, end)`` cell indices of a slide group, or None.
+
+    ``start`` is the slide-start cell carrying ``for_slide`` (preferring a
+    language match); ``end`` is the index of the next slide-start after it
+    (exclusive), or ``len(cells)``. Used to scope anchor matching so a
+    fingerprint can only resolve within its own slide group.
+
+    The ``end`` scan is language-aware: in an interleaved bilingual deck
+    the next slide-start may be the *other* language's twin carrying the
+    same slide_id, which would otherwise truncate the group before its own
+    continuation cells. Slide-starts whose language differs from ``vo_lang``
+    do not close the group.
+    """
+    indices = id_map.get(for_slide)
+    if not indices:
+        return None
+
+    start: int | None = None
+    for idx in indices:
+        cell = cells[idx]
+        if not cell.metadata.is_slide_start:
+            continue
+        if vo_lang is None or cell.metadata.lang is None or cell.metadata.lang == vo_lang:
+            start = idx
+    if start is None:
+        start = indices[0]
+
+    end = len(cells)
+    for i in range(start + 1, len(cells)):
+        meta = cells[i].metadata
+        if not meta.is_slide_start:
+            continue
+        if vo_lang is not None and meta.lang is not None and meta.lang != vo_lang:
+            continue
+        end = i
+        break
+    return start, end
+
+
+def _resolve_in_group(
+    cells: list[_RawCell],
+    bounds: tuple[int, int],
+    kind: str,
+    value: str,
+    occ: int,
+    vo_lang: str | None,
+) -> int | None:
+    """Pick the ``occ``-th in-group cell matching an anchor ``(kind, value)``.
+
+    Returns ``None`` when there is no such occurrence (e.g. a duplicate
+    predecessor was deleted) so the caller can fall back to the legacy
+    group-end placement and *report* the relocation rather than silently
+    binding to the wrong (first) occurrence.
+    """
+    candidates = _anchor_candidates(cells, bounds, kind, value, vo_lang)
+    if occ < len(candidates):
+        return candidates[occ]
+    return None
+
+
+def _match_anchor(
+    cells: list[_RawCell],
+    for_slide: str | None,
+    anchor: str,
+    vo_lang: str | None,
+    id_map: dict[str, list[int]],
+) -> int | None:
+    """Resolve a ``vo_anchor`` to the index of its predecessor cell.
+
+    Matching is strictly scoped to the owning slide group: a fingerprint or
+    slide_id can only resolve within ``for_slide``'s group, and to the
+    recorded occurrence within it. Returns the index of the cell after
+    which the voiceover should be inserted, or ``None`` if the predecessor
+    is not found there (the caller then falls back and reports it).
+
+    When ``for_slide`` is present but absent from the slide (e.g. its owning
+    slide_id was renamed), this returns ``None`` rather than searching other
+    groups — a whole-file search could silently drop the voiceover into a
+    foreign slide that happens to share a body fingerprint. The whole-file
+    best-effort is used only for an anchor with no ``for_slide`` at all
+    (hand-authored companions).
+    """
+    kind, value, occ = _split_anchor(anchor)
+
+    if for_slide:
+        bounds = _slide_group_bounds(cells, for_slide, vo_lang, id_map)
+        if bounds is None:
+            return None
+        return _resolve_in_group(cells, bounds, kind, value, occ, vo_lang)
+
+    return _resolve_in_group(cells, (0, len(cells)), kind, value, occ, vo_lang)
+
+
+def _plan_insertion(
+    cells: list[_RawCell],
+    vo_cell: _RawCell,
+    id_map: dict[str, list[int]],
+) -> tuple[int | None, str]:
+    """Decide where a single voiceover cell should be inserted.
+
+    Returns ``(insert_after_index, status)`` where status is one of
+    ``"anchored"`` (exact predecessor match), ``"placed"`` (legacy
+    for_slide group-end, no anchor recorded), ``"relocated"`` (an anchor
+    was recorded but its predecessor is gone, fell back to group end), or
+    ``"unmatched"`` (no placement found). ``insert_after_index`` is
+    ``None`` only for ``"unmatched"``.
+    """
+    for_slide = vo_cell.metadata.for_slide
+    anchor = _parse_vo_anchor(vo_cell.header)
+    vo_lang = vo_cell.metadata.lang
+
+    if anchor:
+        idx = _match_anchor(cells, for_slide, anchor, vo_lang, id_map)
+        if idx is not None:
+            return idx, "anchored"
+
+    if for_slide:
+        idx = _find_insertion_point(cells, for_slide, vo_lang, id_map)
+        if idx is not None:
+            return idx, ("relocated" if anchor else "placed")
+
+    return None, "unmatched"
+
+
+def _apply_insertions(
+    cells: list[_RawCell],
+    insertions: list[tuple[int, _RawCell]],
+    unmatched: list[_RawCell],
+) -> list[_RawCell]:
+    """Rebuild the cell list with voiceovers inserted after their anchors.
+
+    ``insertions`` must be in companion (document) order. Multiple
+    voiceovers sharing the same ``insert_after`` index are emitted in that
+    order — a plain index-shifting ``list.insert`` reverses such groups.
+    ``unmatched`` cells are appended at the end.
+    """
+    by_after: dict[int, list[_RawCell]] = defaultdict(list)
+    for insert_after, vo_cell in insertions:
+        by_after[insert_after].append(vo_cell)
+
+    new_cells: list[_RawCell] = []
+    for i, cell in enumerate(cells):
+        new_cells.append(cell)
+        new_cells.extend(by_after.get(i, ()))
+    new_cells.extend(unmatched)
+    return new_cells
+
+
 def inline_voiceover(
     path: Path,
     *,
@@ -404,46 +743,57 @@ def inline_voiceover(
     # Build slide_id → cell index map for the slide file
     id_map = _build_slide_id_to_cell_map(slide_cells)
 
-    # Process companion cells: group by for_slide, then insert
-    # We work in reverse insertion order to keep indices stable
-    insertions: list[tuple[int, _RawCell]] = []  # (insert_after_idx, cell)
+    # Plan each companion cell against the (edited) slide file. Voiceovers
+    # are anchored to their original predecessor cell so they return to
+    # their exact position; if that anchor is gone we fall back to the end
+    # of the owning slide group and record a relocation.
+    insertions: list[tuple[int, _RawCell]] = []  # (insert_after_idx, cell) in companion order
     unmatched: list[_RawCell] = []
 
     for vo_cell in companion_cells:
+        anchor = _parse_vo_anchor(vo_cell.header)
         for_slide = vo_cell.metadata.for_slide
-        if not for_slide:
-            unmatched.append(vo_cell)
-            continue
+        insert_after, status = _plan_insertion(slide_cells, vo_cell, id_map)
 
-        insert_after = _find_insertion_point(slide_cells, for_slide, vo_cell.metadata.lang, id_map)
         if insert_after is None:
+            result.unmatched_cells += 1
+            result.placements.append(Placement(for_slide, anchor, "unmatched"))
             unmatched.append(vo_cell)
             continue
 
-        # Strip for_slide from the header (it was added during extraction)
-        clean_header = re.sub(r'\s*for_slide="[^"]*"', "", vo_cell.header)
+        if status == "relocated":
+            result.relocated_cells += 1
+        anchor_cell = slide_cells[insert_after]
+        result.placements.append(
+            Placement(
+                for_slide,
+                anchor,
+                status,
+                after_line=anchor_cell.line_number,
+                after_header=anchor_cell.header,
+            )
+        )
+        insertions.append((insert_after, vo_cell))
+
+    # Strip the author-only companion attributes before the cells land
+    # back in the slide file.
+    for _, vo_cell in insertions:
+        clean_header = _strip_author_attrs(vo_cell.header)
+        vo_cell.lines[0] = clean_header
+        vo_cell.metadata = parse_cell_header(clean_header)
+    for vo_cell in unmatched:
+        clean_header = _strip_author_attrs(vo_cell.header)
         vo_cell.lines[0] = clean_header
         vo_cell.metadata = parse_cell_header(clean_header)
 
-        insertions.append((insert_after, vo_cell))
-
     result.cells_inlined = len(insertions)
-    result.unmatched_cells = len(unmatched)
 
     if not insertions and not unmatched:
         return result
 
     if not dry_run:
-        # Sort insertions by position (descending) to keep indices stable
-        insertions.sort(key=lambda x: x[0], reverse=True)
-
-        for insert_after, vo_cell in insertions:
-            slide_cells.insert(insert_after + 1, vo_cell)
-
-        # Append any unmatched cells at the end
-        slide_cells.extend(unmatched)
-
-        new_text = _reconstruct(preamble, slide_cells)
+        new_cells = _apply_insertions(slide_cells, insertions, unmatched)
+        new_text = _reconstruct(preamble, new_cells)
         path.write_text(new_text, encoding="utf-8", newline="\n")
 
         comp.unlink()
