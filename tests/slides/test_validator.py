@@ -880,6 +880,131 @@ class TestSplitFilePairing:
         assert len(parity_errors) == 1
 
 
+class TestSplitTagParity:
+    """Cross-language tag-set parity for split pairs (Issue #198)."""
+
+    @staticmethod
+    def _tag_warnings(result):
+        return [
+            f for f in result.findings if f.severity == "warning" and "mismatched tags" in f.message
+        ]
+
+    def test_mismatched_localized_code_tag_warns(self, tmp_path):
+        # The exact #198 case: a localized (lang) code cell with no slide_id whose
+        # `keep` tag was added on one half only. _check_shared_cell_parity never
+        # sees it (it's not a shared cell); the tag-parity check must catch it.
+        topic = tmp_path / "topic"
+        topic.mkdir()
+        _write_slide(
+            topic,
+            "slides_rag.de.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"] slide_id="intro"
+            # ## Einführung
+
+            # %% lang="de" tags=["keep"]
+            antwort = invoke("Frage")
+            """,
+        )
+        _write_slide(
+            topic,
+            "slides_rag.en.py",
+            """\
+            # %% [markdown] lang="en" tags=["slide"] slide_id="intro"
+            # ## Introduction
+
+            # %% lang="en"
+            answer = invoke("question")
+            """,
+        )
+        result = validate_directory(topic, checks=["pairing"])
+        warnings = self._tag_warnings(result)
+        assert len(warnings) == 1
+        assert "only on DE: ['keep']" in warnings[0].message
+
+    def test_mismatched_markdown_tag_warns(self, tmp_path):
+        topic = tmp_path / "topic"
+        topic.mkdir()
+        _write_slide(
+            topic,
+            "slides_a.de.py",
+            """\
+            # %% [markdown] lang="de" tags=["subslide", "keep"] slide_id="vec"
+            # ## Vektoren
+            """,
+        )
+        _write_slide(
+            topic,
+            "slides_a.en.py",
+            """\
+            # %% [markdown] lang="en" tags=["subslide"] slide_id="vec"
+            # ## Vectors
+            """,
+        )
+        result = validate_directory(topic, checks=["pairing"])
+        warnings = self._tag_warnings(result)
+        assert len(warnings) == 1
+        assert "only on DE: ['keep']" in warnings[0].message
+
+    def test_matched_tags_clean(self, tmp_path):
+        topic = tmp_path / "topic"
+        topic.mkdir()
+        _write_slide(
+            topic,
+            "slides_a.de.py",
+            """\
+            # %% [markdown] lang="de" tags=["subslide", "keep"] slide_id="vec"
+            # ## Vektoren
+
+            # %% lang="de" tags=["keep"]
+            antwort = invoke("Frage")
+            """,
+        )
+        _write_slide(
+            topic,
+            "slides_a.en.py",
+            """\
+            # %% [markdown] lang="en" tags=["keep", "subslide"] slide_id="vec"
+            # ## Vectors
+
+            # %% lang="en" tags=["keep"]
+            answer = invoke("question")
+            """,
+        )
+        result = validate_directory(topic, checks=["pairing"])
+        # Tag order differs ("subslide","keep" vs "keep","subslide") but the sets
+        # match, so no warning.
+        assert self._tag_warnings(result) == []
+
+    def test_length_mismatch_is_silent_on_tags(self, tmp_path):
+        # A structural divergence (an extra cell on one half) must not produce a
+        # tag-parity warning — positional pairing would be unreliable, so the
+        # check bows out (the count itself is the shared-cell parity's concern).
+        topic = tmp_path / "topic"
+        topic.mkdir()
+        _write_slide(
+            topic,
+            "slides_a.de.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"] slide_id="a"
+            # ## A
+
+            # %% [markdown] lang="de" tags=["subslide", "keep"] slide_id="b"
+            # ## B
+            """,
+        )
+        _write_slide(
+            topic,
+            "slides_a.en.py",
+            """\
+            # %% [markdown] lang="en" tags=["slide"] slide_id="a"
+            # ## A
+            """,
+        )
+        result = validate_directory(topic, checks=["pairing"])
+        assert self._tag_warnings(result) == []
+
+
 class TestCheckOrdering:
     """DE/EN adjacency checks (canonical layout)."""
 

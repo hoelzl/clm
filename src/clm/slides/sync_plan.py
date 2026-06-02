@@ -64,6 +64,7 @@ __all__ = [
     "render_explain",
     "render_plan",
     "watermark_rows",
+    "watermark_tag_map",
 ]
 
 # Roles that lead a slide group; narrative roles (voiceover/notes/code/aux)
@@ -105,6 +106,10 @@ class BaselineCell:
     slide_id: str | None
     role: str
     content_hash: str
+    # Tag set at the last sync (Issue #198). ``None`` means "undeterminable" — a
+    # pre-#198 watermark row that recorded no tags — so the classifier never
+    # guesses a tag direction from it. An empty frozenset is a *known* no-tags cell.
+    tags: frozenset[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -117,18 +122,21 @@ class CurrentCell:
     content_hash: str
     line_number: int  # 1-based header line, for anchoring / messaging
     construct: str | None = None  # AST construct slug (Issue #190 §4); None for non-code
+    tags: frozenset[str] = frozenset()  # current tag set (Issue #198)
 
 
 @dataclass
 class Proposal:
     """One cross-language change the sync would make.
 
-    ``kind`` is ``add`` / ``edit`` / ``move`` / ``remove`` / ``conflict`` /
-    ``rename``. ``direction`` is ``"de->en"`` / ``"en->de"`` (the side that
-    drifted is the source), or ``None`` for a conflict. ``slide_id`` is ``None``
-    for an id-less add, and the *duplicated* id for a ``rename``. Positions are
-    0-based indices among sync-relevant cells and are best-effort context for
-    later phases (anchoring, walker rendering).
+    ``kind`` is ``add`` / ``edit`` / ``retag`` / ``move`` / ``remove`` /
+    ``conflict`` / ``rename``. ``direction`` is ``"de->en"`` / ``"en->de"`` (the
+    side that drifted is the source), or ``None`` for a conflict. ``slide_id`` is
+    ``None`` for an id-less add, and the *duplicated* id for a ``rename``. A
+    ``retag`` mirrors a tag-only edit (the content hash is unchanged) onto the
+    other half (Issue #198). Positions are 0-based indices among sync-relevant
+    cells and are best-effort context for later phases (anchoring, walker
+    rendering).
 
     ``content_hash`` is set on a ``rename`` proposal: it identifies which of the
     duplicate-id cells is the copy (the apply re-mints the cell matching this
@@ -202,6 +210,7 @@ class SyncPlan:
             parts = [
                 f"{self.count('add')} add",
                 f"{self.count('edit')} edit",
+                f"{self.count('retag')} retag",
                 f"{self.count('move')} move",
                 f"{self.count('remove')} remove",
                 f"{self.count('conflict')} conflict",
@@ -262,6 +271,7 @@ def ordered_sync_cells(cells: list[Cell], expected_lang: str) -> list[CurrentCel
                 content_hash=cell_content_hash(cell.content),
                 line_number=cell.line_number,
                 construct=construct_of(cell.metadata, cell.content),
+                tags=frozenset(cell.metadata.tags),
             )
         )
         position += 1
@@ -305,6 +315,27 @@ def watermark_rows(
                 construct_of(meta, cell.content),
             )
         )
+        pos[partition] += 1
+    return out
+
+
+def watermark_tag_map(cells: list[Cell]) -> dict[str, dict[int, frozenset[str]]]:
+    """Per-cell tag sets, partitioned and positioned exactly like :func:`watermark_rows`.
+
+    Issue #198: the watermark records each non-j2 cell's tag set (keyed by the
+    same per-partition position ``watermark_rows`` assigns) so a later sync can
+    detect a tag-only edit — invisible to the content hash — and mirror it across
+    the split halves. Kept beside ``watermark_rows`` and iterating identically so
+    the two never drift out of position lock-step.
+    """
+    out: dict[str, dict[int, frozenset[str]]] = {"de": {}, "en": {}, "shared": {}}
+    pos = {"de": 0, "en": 0, "shared": 0}
+    for cell in cells:
+        meta = cell.metadata
+        if meta.is_j2:
+            continue
+        partition = meta.lang if meta.lang in ("de", "en") else "shared"
+        out[partition][pos[partition]] = frozenset(meta.tags)
         pos[partition] += 1
     return out
 
@@ -472,6 +503,7 @@ def _resolve_divergence_winner(plan: SyncPlan, de_path: Path, en_path: Path) -> 
 
 def _baseline_from_watermark(
     rows: list[tuple[int, str | None, str, str, str | None]],
+    tags_by_position: dict[int, frozenset[str]] | None = None,
 ) -> list[BaselineCell]:
     # Drop the membership-widened rows (Issue #190 §5.3) and **re-index** the
     # survivors into the legacy-only position space. The stored positions count
@@ -483,14 +515,18 @@ def _baseline_from_watermark(
     # reproduces exactly the indices ``ordered_sync_cells`` (and
     # ``_baseline_from_git_head``) assign. ``construct`` is carried in the raw
     # watermark for the Phase 2 anchor reuse but is not consumed by the classifier.
+    # ``tags_by_position`` (Issue #198) maps the *stored* position to the recorded
+    # tag set; ``None`` for a row absent from it (a pre-#198 watermark) leaves the
+    # cell's baseline tags undeterminable so no tag direction is ever guessed.
+    tbp = tags_by_position or {}
     legacy = [
-        (sid, role, chash)
-        for (_pos, sid, role, chash, _construct) in rows
+        (pos, sid, role, chash)
+        for (pos, sid, role, chash, _construct) in rows
         if role not in MEMBERSHIP_ROLES
     ]
     return [
-        BaselineCell(position=i, slide_id=sid, role=role, content_hash=chash)
-        for i, (sid, role, chash) in enumerate(legacy)
+        BaselineCell(position=i, slide_id=sid, role=role, content_hash=chash, tags=tbp.get(pos))
+        for i, (pos, sid, role, chash) in enumerate(legacy)
     ]
 
 
@@ -533,6 +569,7 @@ def _baseline_from_git_head(path: Path) -> list[BaselineCell] | None:
             slide_id=c.slide_id,
             role=c.role,
             content_hash=c.content_hash,
+            tags=c.tags,
         )
         for c in ordered_sync_cells(cells, lang)
     ]
@@ -832,6 +869,9 @@ def classify_changes(
             elif en_st == "edited" and de_st == "same":
                 plan.proposals.append(_edit(sid, role, "en->de", en_now, de_now))
             elif de_st == "same" and en_st == "same":
+                # Content is in sync, but a tag-only edit (invisible to the hash)
+                # may have drifted on one side — mirror it (Issue #198).
+                _maybe_retag(plan, key, role, de_now, en_now, de_base.get(key), en_base.get(key))
                 _emit_same(
                     plan,
                     key,
@@ -1062,7 +1102,75 @@ def _edit(
     )
 
 
-_KIND_ORDER = {"conflict": 0, "remove": 1, "edit": 2, "move": 3, "add": 4, "rename": 5}
+def _maybe_retag(
+    plan: SyncPlan,
+    key: tuple[str, str],
+    role: str,
+    de_now: CurrentCell,
+    en_now: CurrentCell,
+    de_base: BaselineCell | None,
+    en_base: BaselineCell | None,
+) -> None:
+    """Emit a ``retag`` when a cell's tag set drifted on exactly one side.
+
+    Tags are language-independent, so a synced pair carries identical tag sets;
+    the content hash is blind to a tag-only edit (Issue #198). When the halves'
+    tags now disagree, the side whose tags changed from its baseline is the
+    source and its set is mirrored onto the other. Both-sides-changed is a tag
+    conflict, surfaced as a warning rather than guessed. Skipped silently when a
+    baseline tag set is unknown (a pre-#198 watermark) — direction is
+    undeterminable, so we never guess — or when neither side changed (a
+    pre-existing divergence not caused by this edit; the validator flags it).
+    """
+    if de_now.tags == en_now.tags:
+        return  # already consistent — nothing to mirror
+    if de_base is None or en_base is None or de_base.tags is None or en_base.tags is None:
+        return  # no tag baseline to attribute the drift — degrade gracefully
+    de_changed = de_now.tags != de_base.tags
+    en_changed = en_now.tags != en_base.tags
+    if de_changed and not en_changed:
+        plan.proposals.append(_retag(key[0], role, "de->en", de_now, en_now))
+    elif en_changed and not de_changed:
+        plan.proposals.append(_retag(key[0], role, "en->de", en_now, de_now))
+    elif de_changed and en_changed:
+        plan.issues.append(
+            PlanIssue(
+                severity="warning",
+                slide_id=key[0],
+                reason=f"role={role!r} tags changed on both decks "
+                f"(de={sorted(de_now.tags)}, en={sorted(en_now.tags)}); "
+                "not propagated — reconcile tags manually",
+            )
+        )
+
+
+def _retag(
+    slide_id: str,
+    role: str,
+    direction: str,
+    source: CurrentCell,
+    target: CurrentCell,
+) -> Proposal:
+    return Proposal(
+        kind="retag",
+        role=role,
+        direction=direction,
+        slide_id=slide_id,
+        reason=f"tags changed on {direction.split('->')[0].upper()} ({sorted(source.tags)})",
+        source_position=source.position,
+        target_position=target.position,
+    )
+
+
+_KIND_ORDER = {
+    "conflict": 0,
+    "remove": 1,
+    "edit": 2,
+    "retag": 3,
+    "move": 4,
+    "add": 5,
+    "rename": 6,
+}
 
 
 def _proposal_sort_key(p: Proposal) -> tuple:
@@ -1103,10 +1211,12 @@ def build_sync_plan(
 
     if watermark_cache is not None and watermark_cache.has_pair(str(de_path), str(en_path)):
         de_baseline = _baseline_from_watermark(
-            watermark_cache.get_deck(str(de_path), str(en_path), "de")
+            watermark_cache.get_deck(str(de_path), str(en_path), "de"),
+            watermark_cache.get_deck_tags(str(de_path), str(en_path), "de"),
         )
         en_baseline = _baseline_from_watermark(
-            watermark_cache.get_deck(str(de_path), str(en_path), "en")
+            watermark_cache.get_deck(str(de_path), str(en_path), "en"),
+            watermark_cache.get_deck_tags(str(de_path), str(en_path), "en"),
         )
         # Ordered content hashes of the baseline's neutral cells (position order),
         # matching _shared_hashes — see align_anchored for why this is a sequence,

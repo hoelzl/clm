@@ -76,7 +76,7 @@ DE_WINS = "de-wins"
 EN_WINS = "en-wins"
 AUTO = "auto"  # add (id-less or id-carrying) / rename, applied without prompting
 
-_GATED_KINDS = {"edit", "remove", "move"}
+_GATED_KINDS = {"edit", "retag", "remove", "move"}
 _AUTO_KINDS = {"add", "rename"}
 
 
