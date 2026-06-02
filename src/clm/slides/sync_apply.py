@@ -486,11 +486,13 @@ def _apply_retag(
     """Mirror a tag-only edit (#198) by copying the source cell's tags to the target.
 
     Tags are language-independent, so this is a pure header rewrite — no judge or
-    translator. The cell is matched on both decks by ``(slide_id, role)``, so the
-    role tag is carried verbatim and the target's role never changes.
+    translator. An id-carrying cell is matched on both decks by ``(slide_id,
+    role)``, so the role tag is carried verbatim and the target's role never
+    changes. An **id-less localized** cell (Tier C) has no key, so it is targeted
+    by the carried position + tag set instead (:func:`_apply_retag_idless`).
     """
     if proposal.slide_id is None:
-        result.errors.append(f"retag {proposal.role}: proposal has no slide_id")
+        _apply_retag_idless(proposal, de_state, en_state, result)
         return
     sid = proposal.slide_id
     if proposal.direction == "de->en":
@@ -505,6 +507,41 @@ def _apply_retag(
         result.applied_retag += 1
     else:
         result.errors.append(f"retag {sid}/{proposal.role}: target cell not found")
+
+
+def _apply_retag_idless(
+    proposal: Proposal,
+    de_state: FileState,
+    en_state: FileState,
+    result: ApplyResult,
+) -> None:
+    """Mirror a tag-only edit onto an id-less localized twin (Tier C, #198).
+
+    The cell has no ``slide_id``, so the classifier identified it by position
+    among its language's non-j2 cells and carried both the target position and the
+    desired tag set on the proposal (a header rewrite, no LLM). The target is the
+    side that did *not* change; its position equals the source's because the
+    classifier only emits this when the localized streams are structurally aligned
+    (no add/remove/move). :meth:`FileState.replace_idless_localized_tags` refuses
+    if the cell at that position is not id-less localized, so a stream that drifted
+    after planning errors rather than retagging the wrong cell.
+    """
+    if proposal.tags is None or proposal.target_position is None:
+        result.errors.append(f"retag (id-less {proposal.role}): proposal missing tags/position")
+        return
+    if proposal.direction == "de->en":
+        target_state, target_lang = en_state, "en"
+    else:
+        target_state, target_lang = de_state, "de"
+    if target_state.replace_idless_localized_tags(
+        target_lang, proposal.target_position, list(proposal.tags)
+    ):
+        result.applied_retag += 1
+    else:
+        result.errors.append(
+            f"retag (id-less {proposal.role}) at {target_lang} #{proposal.target_position}: "
+            "target cell not found or not id-less localized"
+        )
 
 
 def _apply_edit(

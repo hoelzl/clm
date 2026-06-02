@@ -8,6 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **`clm slides sync` now mirrors a tag-only edit across split halves
+  (#198).** Adding or removing a role-preserving tag (`keep`, `alt`, …) on
+  one half of a split deck used to be silently dropped — the body-hash
+  classifier reported the cell as in sync and the other half was never
+  updated. Sync now emits a dedicated `retag` proposal when a matched cell's
+  tag set drifted from the watermark baseline on **exactly one** side, and
+  mirrors it onto the twin with a header-only rewrite (no LLM — tags are
+  language-independent); a both-sides change is surfaced as a warning rather
+  than guessed. Tier C extends this to **id-less localized cells** (a `lang=`
+  code/markdown cell with no `slide_id`, e.g. the `response = llm.invoke(...)`
+  cell the report hit): they have no per-cell `(slide_id, role)` key, so they
+  are paired by position in their language's cell stream (the membership-widened
+  watermark identity, #190 item 3) and guarded by a per-cell body-hash anchor so
+  a reorder or body edit never mis-mirrors a tag. `clm validate` already flags a
+  committed tag asymmetry it can no longer attribute to one side.
 - **`clm slides sync --provider {openrouter,local}`** (and the
   `$CLM_SYNC_PROVIDER` default) to choose the edit-reconciliation judge
   backend. The edit judge now **defaults to Claude Sonnet via OpenRouter**

@@ -181,7 +181,8 @@ class PlanWalkResult:
             f"{self.conflicts_resolved} conflict(s) resolved, "
             f"{self.skipped} skipped, "
             f"{self.unvisited} unvisited (quit).",
-            f"applied: {r.applied_edit} edit, {r.applied_remove} remove, "
+            f"applied: {r.applied_edit} edit, {r.applied_retag} retag, "
+            f"{r.applied_remove} remove, "
             f"{r.applied_move} move, {r.applied_add} add, {r.applied_rename} rename; "
             f"{r.in_sync} already in sync; {r.deferred} deferred; "
             f"{len(r.errors)} error(s); "
