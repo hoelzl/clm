@@ -575,6 +575,21 @@ class SyncSnapshotCache:
         self._conn.close()
 
 
+def _serialize_tags(tags: frozenset[str]) -> str:
+    """Canonical wire form of a cell's tag set for the watermark ``tags`` column.
+
+    Sorted and comma-joined; tag names are identifiers so a comma never appears
+    inside one. The empty set serializes to ``""`` — a *known* empty set, stored
+    distinctly from a NULL (undeterminable) column. Issue #198.
+    """
+    return ",".join(sorted(tags))
+
+
+def _deserialize_tags(raw: str) -> frozenset[str]:
+    """Inverse of :func:`_serialize_tags`; ``""`` -> the empty set (not ``{""}``)."""
+    return frozenset(raw.split(",")) if raw else frozenset()
+
+
 class SyncWatermarkCache:
     """Ordered, per-language structural watermark of the last synced deck state.
 
@@ -614,15 +629,22 @@ class SyncWatermarkCache:
                     role         TEXT NOT NULL,
                     content_hash TEXT NOT NULL,
                     construct    TEXT,
+                    tags         TEXT,
                     synced_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY (de_path, en_path, lang, position)
                 )"""
             )
             self._conn.commit()
-        elif "construct" not in columns:
-            # Additive migration (Issue #190 §5): the content-anchor construct
-            # slug. Nullable, so existing rows backfill to NULL harmlessly.
-            self._conn.execute("ALTER TABLE sync_watermarks ADD COLUMN construct TEXT")
+        else:
+            # Additive migrations: nullable columns, so existing rows backfill to
+            # NULL harmlessly. ``construct`` (Issue #190 §5) is the content-anchor
+            # slug; ``tags`` (Issue #198) is the cell's tag set, recorded so a
+            # later run can detect a tag-only edit (invisible to the content hash)
+            # and mirror it across the split halves.
+            if "construct" not in columns:
+                self._conn.execute("ALTER TABLE sync_watermarks ADD COLUMN construct TEXT")
+            if "tags" not in columns:
+                self._conn.execute("ALTER TABLE sync_watermarks ADD COLUMN tags TEXT")
             self._conn.commit()
 
     def get_deck(
@@ -651,6 +673,7 @@ class SyncWatermarkCache:
         en_path: str,
         lang: str,
         cells: list[tuple[int, str | None, str, str, str | None]],
+        tags: dict[int, frozenset[str]] | None = None,
     ) -> None:
         """Replace the watermark for one deck atomically.
 
@@ -660,9 +683,16 @@ class SyncWatermarkCache:
         (Issue #190 §5). The whole ``(de_path, en_path, lang)`` slice is deleted
         and rewritten in a single transaction so a deck's watermark is never
         observed half-updated.
+
+        ``tags`` (Issue #198) optionally maps a cell's ``position`` to its tag
+        set, stored in the additive ``tags`` column so a later run can detect a
+        tag-only edit. A position absent from ``tags`` (or ``tags=None``) stores
+        NULL — "tag set unknown" — which the classifier reads as "tag direction
+        undeterminable" and skips, so a pre-#198 watermark degrades gracefully.
         """
         if lang not in ("de", "en", "shared"):
             raise ValueError(f"lang must be 'de', 'en', or 'shared', got {lang!r}")
+        tag_for = tags or {}
         with self._conn:  # single transaction (BEGIN/COMMIT or ROLLBACK)
             self._conn.execute(
                 "DELETE FROM sync_watermarks WHERE de_path=? AND en_path=? AND lang=?",
@@ -670,13 +700,37 @@ class SyncWatermarkCache:
             )
             self._conn.executemany(
                 "INSERT INTO sync_watermarks "
-                "(de_path, en_path, lang, position, slide_id, role, content_hash, construct) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "(de_path, en_path, lang, position, slide_id, role, content_hash, construct, tags) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
-                    (de_path, en_path, lang, position, slide_id, role, content_hash, construct)
+                    (
+                        de_path,
+                        en_path,
+                        lang,
+                        position,
+                        slide_id,
+                        role,
+                        content_hash,
+                        construct,
+                        _serialize_tags(tag_for[position]) if position in tag_for else None,
+                    )
                     for (position, slide_id, role, content_hash, construct) in cells
                 ],
             )
+
+    def get_deck_tags(self, de_path: str, en_path: str, lang: str) -> dict[int, frozenset[str]]:
+        """Return ``{position: tag_set}`` for the rows that recorded a tag set.
+
+        Only rows whose ``tags`` column is non-NULL appear, so the caller can
+        distinguish a *known* empty tag set (present, ``frozenset()``) from an
+        *undeterminable* one (absent — a pre-#198 watermark row). Issue #198.
+        """
+        rows = self._conn.execute(
+            "SELECT position, tags FROM sync_watermarks "
+            "WHERE de_path=? AND en_path=? AND lang=? AND tags IS NOT NULL ORDER BY position",
+            (de_path, en_path, lang),
+        ).fetchall()
+        return {r[0]: _deserialize_tags(r[1]) for r in rows}
 
     def has_pair(self, de_path: str, en_path: str) -> bool:
         """Return True when any watermark row exists for the pair."""

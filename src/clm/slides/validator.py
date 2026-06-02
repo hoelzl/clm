@@ -953,6 +953,67 @@ def _check_shared_cell_parity(de_path: Path, en_path: Path) -> list[Finding]:
     return findings
 
 
+def _check_split_tag_parity(de_path: Path, en_path: Path) -> list[Finding]:
+    """Flag any tag-set asymmetry between the cross-language twins of a split pair.
+
+    A split deck's two halves carry the same cells in the same order — shared
+    (no-``lang``) cells byte-identical, localized cells as language twins. Tags
+    are language-independent, so each cell and its twin must carry the same tag
+    set. A one-sided tag edit (e.g. adding ``keep`` to one half) is invisible to
+    the content *and* to :func:`_check_shared_cell_parity` (which compares only
+    shared cells, so it never sees a localized cell's tags). This check pairs the
+    halves' non-j2 cells positionally and warns on any tag-set mismatch — covering
+    localized markdown *and* id-less localized code (the cell the #198 report hit).
+
+    When the two non-j2 streams differ in length — a structural edit mid-flight,
+    or an add/remove not yet synced — it stays silent rather than mis-pair across
+    the offset; the count itself is a separate concern surfaced by the shared-cell
+    parity check. Issue #198: ``clm slides sync`` mirrors a *recent* one-sided tag
+    edit automatically; this check is the safety net for a committed asymmetry sync
+    can no longer attribute to one side.
+    """
+    findings: list[Finding] = []
+    _, de_cells = split_raw_cells(de_path.read_text(encoding="utf-8"))
+    _, en_cells = split_raw_cells(en_path.read_text(encoding="utf-8"))
+    de_nonj2 = [c for c in de_cells if not c.metadata.is_j2]
+    en_nonj2 = [c for c in en_cells if not c.metadata.is_j2]
+    if len(de_nonj2) != len(en_nonj2):
+        return findings  # structural mismatch — not a tag-parity question
+
+    for i, (de_cell, en_cell) in enumerate(zip(de_nonj2, en_nonj2, strict=True)):
+        de_tags = set(de_cell.metadata.tags)
+        en_tags = set(en_cell.metadata.tags)
+        if de_tags == en_tags:
+            continue
+        only_de = sorted(de_tags - en_tags)
+        only_en = sorted(en_tags - de_tags)
+        detail = ""
+        if only_de:
+            detail += f"; only on DE: {only_de}"
+        if only_en:
+            detail += f"; only on EN: {only_en}"
+        findings.append(
+            Finding(
+                severity="warning",
+                category="pairing",
+                file=str(de_path),
+                line=de_cell.line_number,
+                message=(
+                    f"split pair cell {i + 1} has mismatched tags between "
+                    f"'.de.py' (line {de_cell.line_number}, {sorted(de_tags)}) and "
+                    f"'.en.py' (line {en_cell.line_number} in {en_path.name}, "
+                    f"{sorted(en_tags)}){detail}"
+                ),
+                suggestion=(
+                    "Tags are language-independent and must match across the DE/EN "
+                    "twins. Run `clm slides sync` to mirror a recent one-sided tag "
+                    "edit, or align the tags manually."
+                ),
+            )
+        )
+    return findings
+
+
 def _slide_files_to_split_pairs(slide_files: list[Path]) -> list[tuple[Path, Path]]:
     """Return every detected ``(de_path, en_path)`` pair in ``slide_files``.
 
@@ -1372,6 +1433,7 @@ def validate_directory(
     if "pairing" in check_set:
         for de_path, en_path in _slide_files_to_split_pairs(slide_files):
             all_findings.extend(_check_shared_cell_parity(de_path, en_path))
+            all_findings.extend(_check_split_tag_parity(de_path, en_path))
 
     return ValidationResult(
         files_checked=len(slide_files),
@@ -1424,6 +1486,7 @@ def validate_course(
             if "pairing" in check_set:
                 for de_path, en_path in _slide_files_to_split_pairs(slide_files):
                     all_findings.extend(_check_shared_cell_parity(de_path, en_path))
+                    all_findings.extend(_check_split_tag_parity(de_path, en_path))
 
     return ValidationResult(
         files_checked=files_checked,

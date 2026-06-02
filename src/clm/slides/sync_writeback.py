@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -44,6 +45,7 @@ __all__ = [
     "record_snapshot",
     "role_of",
     "row_anchor",
+    "set_header_tags",
     "swap_lang",
     "target_path_for_outcome",
 ]
@@ -196,6 +198,31 @@ def row_anchor(slide_id: str | None, construct: str | None, content_hash: str) -
 
 
 _LANG_ATTR_RE = re.compile(r'lang="[^"]*"')
+_TAGS_ATTR_RE = re.compile(r"tags=\[[^\]]*\]")
+
+
+def set_header_tags(header: str, tags: Sequence[str]) -> str:
+    """Return ``header`` with its ``tags=[…]`` set to exactly ``tags``.
+
+    Replaces an existing ``tags=[…]`` block in place (keeping its position
+    relative to ``lang=`` / ``slide_id=``), inserts one at the end when absent,
+    or drops the block entirely when ``tags`` is empty. Used to mirror a tag set
+    onto a target cell during a ``retag`` apply (Issue #198) without disturbing
+    the rest of the header (slide_id, lang, markdown-vs-code) or the body. Tag
+    order is preserved from ``tags`` (the source cell's order), matching the
+    ``tags=["a", "b"]`` serialization the normalizer emits.
+    """
+    block = ("tags=[" + ", ".join(f'"{t}"' for t in tags) + "]") if tags else ""
+    match = _TAGS_ATTR_RE.search(header)
+    if match:
+        if block:
+            return header[: match.start()] + block + header[match.end() :]
+        # Removing the block can leave a doubled space; tidy it.
+        stripped = header[: match.start()] + header[match.end() :]
+        return re.sub(r"  +", " ", stripped).rstrip()
+    if not block:
+        return header
+    return header.rstrip() + " " + block
 
 
 def swap_lang(header: str, lang: str) -> str:
@@ -338,6 +365,28 @@ class FileState:
             return False
         self._rewrite_cell_body(cell, new_text)
         self.dirty = True
+        return True
+
+    def replace_cell_tags(self, slide_id: str, role: str, new_tags: Sequence[str]) -> bool:
+        """Set the ``(slide_id, role)`` cell's tag set to ``new_tags`` in place.
+
+        Rewrites only the header's ``tags=[…]`` (Issue #198 tag mirroring),
+        keeping slide_id, lang, cell-type, body, and trailing blanks verbatim —
+        the header-only counterpart of :meth:`replace_cell_body`. Returns
+        ``False`` when no such cell exists; ``True`` (a no-op, not dirtied) when
+        the header already carries exactly ``new_tags``. Because a ``retag`` only
+        ever targets a cell matched by the same ``(slide_id, role)`` key, the
+        role-defining tag is part of ``new_tags`` (or the role is tag-independent,
+        as for a localized code cell), so the cell's role never changes.
+        """
+        cell = self.find_cell(slide_id, role)
+        if cell is None:
+            return False
+        new_header = set_header_tags(cell.lines[0], new_tags)
+        if new_header != cell.lines[0]:
+            cell.lines[0] = new_header
+            cell.metadata = parse_cell_header(new_header)
+            self.dirty = True
         return True
 
     def delete_cell(self, slide_id: str, role: str) -> bool:

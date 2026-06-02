@@ -483,7 +483,8 @@ def _issue_line(issue: PlanIssue) -> str:
 
 def _outcome_line(result: ApplyResult) -> str:
     return (
-        f"applied: {result.applied_edit} edit, {result.applied_remove} remove, "
+        f"applied: {result.applied_edit} edit, {result.applied_retag} retag, "
+        f"{result.applied_remove} remove, "
         f"{result.applied_move} move, {result.applied_add} add, "
         f"{result.applied_rename} rename; {result.in_sync} already in sync; "
         f"{result.deferred} deferred; {len(result.errors)} error(s); "
@@ -549,7 +550,7 @@ def _plan_dict(plan: SyncPlan) -> dict:
         "in_sync": plan.in_sync_count,
         "counts": {
             kind: plan.count(kind)
-            for kind in ("add", "edit", "move", "remove", "conflict", "rename")
+            for kind in ("add", "edit", "retag", "move", "remove", "conflict", "rename")
         },
         "proposals": [
             {
@@ -573,6 +574,7 @@ def _apply_dict(result: ApplyResult) -> dict:
     return {
         "applied": {
             "edit": result.applied_edit,
+            "retag": result.applied_retag,
             "remove": result.applied_remove,
             "move": result.applied_move,
             "add": result.applied_add,

@@ -54,6 +54,7 @@ from clm.slides.sync_plan import (
     SyncPlan,
     ordered_sync_cells,
     watermark_rows,
+    watermark_tag_map,
 )
 from clm.slides.sync_recover import (
     NEW,
@@ -114,6 +115,7 @@ class ApplyResult:
     """Outcome of applying a :class:`SyncPlan`."""
 
     applied_edit: int = 0
+    applied_retag: int = 0  # a tag-only edit mirrored across the split halves (#198)
     applied_remove: int = 0
     applied_move: int = 0
     applied_add: int = 0
@@ -128,6 +130,7 @@ class ApplyResult:
     def applied(self) -> int:
         return (
             self.applied_edit
+            + self.applied_retag
             + self.applied_remove
             + self.applied_move
             + self.applied_add
@@ -210,6 +213,12 @@ def apply_plan(
                 _apply_edit(
                     proposal, de_state, en_state, de_content, en_content, judge, translator, result
                 )
+            else:
+                result.deferred += 1
+                _note_deferred(deferred_keys, proposal)
+        elif kind == "retag":
+            if _accepted(decisions, proposal):
+                _apply_retag(proposal, de_state, en_state, result)
             else:
                 result.deferred += 1
                 _note_deferred(deferred_keys, proposal)
@@ -466,6 +475,36 @@ def _apply_remove(
         result.applied_remove += 1
     else:
         result.errors.append(f"remove {proposal.slide_id}/{proposal.role}: target cell not found")
+
+
+def _apply_retag(
+    proposal: Proposal,
+    de_state: FileState,
+    en_state: FileState,
+    result: ApplyResult,
+) -> None:
+    """Mirror a tag-only edit (#198) by copying the source cell's tags to the target.
+
+    Tags are language-independent, so this is a pure header rewrite — no judge or
+    translator. The cell is matched on both decks by ``(slide_id, role)``, so the
+    role tag is carried verbatim and the target's role never changes.
+    """
+    if proposal.slide_id is None:
+        result.errors.append(f"retag {proposal.role}: proposal has no slide_id")
+        return
+    sid = proposal.slide_id
+    if proposal.direction == "de->en":
+        source_state, target_state = de_state, en_state
+    else:
+        source_state, target_state = en_state, de_state
+    source_cell = source_state.find_cell(sid, proposal.role)
+    if source_cell is None:
+        result.errors.append(f"retag {sid}/{proposal.role}: source cell not found")
+        return
+    if target_state.replace_cell_tags(sid, proposal.role, list(source_cell.metadata.tags)):
+        result.applied_retag += 1
+    else:
+        result.errors.append(f"retag {sid}/{proposal.role}: target cell not found")
 
 
 def _apply_edit(
@@ -1626,14 +1665,36 @@ def _record_watermark(
     (``_baseline_from_watermark`` filters the synthetic membership roles), so this
     does not change its behavior.
     """
-    de_rows = watermark_rows(parse_cells(de_path.read_text(encoding="utf-8")))
-    en_rows = watermark_rows(parse_cells(en_path.read_text(encoding="utf-8")))
-    cache.put_deck(de_path=str(de_path), en_path=str(en_path), lang="de", cells=de_rows["de"])
-    cache.put_deck(de_path=str(de_path), en_path=str(en_path), lang="en", cells=en_rows["en"])
+    de_cells = parse_cells(de_path.read_text(encoding="utf-8"))
+    en_cells = parse_cells(en_path.read_text(encoding="utf-8"))
+    de_rows = watermark_rows(de_cells)
+    en_rows = watermark_rows(en_cells)
+    # Issue #198: record each cell's tag set alongside its row so a later run can
+    # detect a tag-only edit (invisible to the content hash) and mirror it.
+    de_tags = watermark_tag_map(de_cells)
+    en_tags = watermark_tag_map(en_cells)
+    cache.put_deck(
+        de_path=str(de_path),
+        en_path=str(en_path),
+        lang="de",
+        cells=de_rows["de"],
+        tags=de_tags["de"],
+    )
+    cache.put_deck(
+        de_path=str(de_path),
+        en_path=str(en_path),
+        lang="en",
+        cells=en_rows["en"],
+        tags=en_tags["en"],
+    )
     # Neutral cells are byte-identical across halves (the unify invariant), so the
     # single-entity "shared" partition is recorded once from the DE file.
     cache.put_deck(
-        de_path=str(de_path), en_path=str(en_path), lang="shared", cells=de_rows["shared"]
+        de_path=str(de_path),
+        en_path=str(en_path),
+        lang="shared",
+        cells=de_rows["shared"],
+        tags=de_tags["shared"],
     )
 
 
@@ -1723,6 +1784,9 @@ def _record_watermark_partial(
     # leaves structure (and every neutral / id-less cell) unchanged, so the
     # membership rows re-derive faithfully from the current files.
     widened = {"de": watermark_rows(parsed["de"]), "en": watermark_rows(parsed["en"])}
+    # Issue #198: a content-only pass leaves every cell's tags as they are on disk,
+    # so the current tag map is the right baseline for every recorded cell.
+    tag_map = {"de": watermark_tag_map(parsed["de"]), "en": watermark_tag_map(parsed["en"])}
     for lang in ("de", "en"):
         rows: list[tuple[int, str | None, str, str, str | None]] = []
         for pos, sid, role, chash, construct in widened[lang][lang]:
@@ -1730,8 +1794,18 @@ def _record_watermark_partial(
                 # Hold the deferral at its pre-conflict baseline so it re-surfaces.
                 chash = old[lang][(sid, role)]
             rows.append((pos, sid, role, chash, construct))
-        cache.put_deck(de_path=str(de_path), en_path=str(en_path), lang=lang, cells=rows)
+        cache.put_deck(
+            de_path=str(de_path),
+            en_path=str(en_path),
+            lang=lang,
+            cells=rows,
+            tags=tag_map[lang][lang],
+        )
     cache.put_deck(
-        de_path=str(de_path), en_path=str(en_path), lang="shared", cells=widened["de"]["shared"]
+        de_path=str(de_path),
+        en_path=str(en_path),
+        lang="shared",
+        cells=widened["de"]["shared"],
+        tags=tag_map["de"]["shared"],
     )
     return True
