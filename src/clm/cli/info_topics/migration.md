@@ -65,6 +65,26 @@ relied on the old behavior may need a flag or an exit-code check.
 These are also surfaced by the new fast-suite `tests/slides/test_edit_dynamics.py`
 cross-command harness (`scripts/edit_dynamics_harness.py`).
 
+## Cross-file `slide_id` parity detective for split decks ({version}, issue #162)
+
+`slide_id` is the cross-language join key for a split deck: voiceover
+`for_slide` resolution, `clm slides unify` (which requires `de_id == en_id`),
+and `extract`/`inline` all assume the `.de.py` and `.en.py` halves agree on the
+**set and order** of slide ids. A born-split deck, a per-file
+`clm slides assign-ids` run on one half, or a hand-edited id silently diverges
+them.
+
+CLM {version} adds a `clm validate` **`pairing`** check (warning) that flags a
+divergent `slide_id` set or order between a split pair. It runs on a
+directory/course validate **and** on a single-file validate when the twin
+exists on disk — so a pre-commit hook (`clm validate slides/ --fail-on warning`,
+or per-file in a PostToolUse hook) catches a divergence before it ships.
+
+*Recommended:* route structural changes through `clm slides sync` (which
+mints/migrates ids onto both halves consistently) rather than per-file
+`assign-ids`. A twin-aware `assign-ids` that refuses to mint a divergent id is
+the planned follow-up (the #162 defensive).
+
 ## Slide format redesign: `clm validate` enforces `slide_id` (warning now, error in 1.7)
 
 CLM {version} also ships **Phase 3** of the slide-format-redesign:

@@ -53,6 +53,7 @@ from clm.slides.split import (  # noqa: E402
 )
 from clm.slides.sync_apply import ApplyResult, apply_plan  # noqa: E402
 from clm.slides.sync_plan import SyncPlan, build_sync_plan, watermark_rows  # noqa: E402
+from clm.slides.validator import validate_file  # noqa: E402
 from clm.slides.voiceover_tools import (  # noqa: E402
     VoiceoverError,
     companion_path,
@@ -489,14 +490,21 @@ def m_born_split_assign_ids(workdir: Path) -> _RetTuple:
 
 
 def m_commit_without_sync(workdir: Path) -> _RetTuple:
-    # Author adds a slide to one half and commits/builds without ever syncing.
+    # Author adds a slide to one half and commits without ever syncing. The
+    # #162 detective (the pre-commit gate runs `clm validate`) now catches the
+    # divergence loudly even though `build` itself stays permissive.
     base = _base()
     de = base.de + slide_cell("de", "Neuer Slide", sid="extra", bullet="- DE neu")
+    de_path, _ = SplitPair(de=de, en=base.en).write(workdir)
     detail = id_parity(de, base.en)
-    note = (
-        f"{detail}; no gate ran (build stays permissive) -> ships silently" if detail else "in sync"
+    findings = validate_file(de_path).findings
+    caught = any(f.category == "pairing" and "slide_id" in f.message for f in findings)
+    return (
+        (["id_parity"] if detail else []),
+        caught,
+        "validate (detective) reports slide_id divergence" if caught else "",
+        f"{detail}; detective {'CATCHES it' if caught else 'misses it'}" if detail else "in sync",
     )
-    return (["id_parity"] if detail else []), False, "", note
 
 
 # --- voiceover round-trip (expected: preserve) -----------------------------
@@ -669,7 +677,9 @@ MUTATIONS: list[Mutation] = [
         m_add_then_assign_ids_per_file,
     ),
     Mutation("born-split-assign-ids", "assign-ids", BREAK_SILENT, True, m_born_split_assign_ids),
-    Mutation("commit-without-sync", "no-gate", BREAK_SILENT, True, m_commit_without_sync),
+    # #162 detective landed: the pre-commit gate (`clm validate`) now catches a
+    # committed split-half divergence — break-silent -> break-loud.
+    Mutation("commit-without-sync", "no-gate", BREAK_LOUD, True, m_commit_without_sync),
     Mutation("extract-then-split", "extract+split", BREAK_SILENT, True, m_extract_then_split),
     # Tier-1 data-loss fixes landed: inline now retains the companion with the
     # unmatched cell (recoverable) and exits non-zero; extract refuses to clobber

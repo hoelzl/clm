@@ -880,6 +880,156 @@ class TestSplitFilePairing:
         assert len(parity_errors) == 1
 
 
+class TestSplitSlideIdParity:
+    """Cross-file ``slide_id`` parity for split pairs — the #162 detective.
+
+    ``slide_id`` is the cross-language join key (voiceover ``for_slide``,
+    ``unify``, extract/inline). A born-split deck or a per-file ``assign-ids``
+    on one half silently diverges the two halves; this check makes it loud.
+    """
+
+    @staticmethod
+    def _id_findings(result):
+        return [
+            f
+            for f in result.findings
+            if f.severity == "warning" and "slide_id" in f.message and "diverge" in f.message
+        ]
+
+    def _pair(self, parent, de_body: str, en_body: str):
+        _write_slide(parent, "slides_intro.de.py", de_body)
+        _write_slide(parent, "slides_intro.en.py", en_body)
+
+    def test_matching_ids_are_clean(self, tmp_path):
+        topic = tmp_path / "topic"
+        topic.mkdir()
+        self._pair(
+            topic,
+            """\
+            # %% [markdown] lang="de" tags=["slide"] slide_id="intro"
+            # ## Einführung
+
+            # %% [markdown] lang="de" tags=["slide"] slide_id="setup"
+            # ## Aufbau
+            """,
+            """\
+            # %% [markdown] lang="en" tags=["slide"] slide_id="intro"
+            # ## Introduction
+
+            # %% [markdown] lang="en" tags=["slide"] slide_id="setup"
+            # ## Setup
+            """,
+        )
+        result = validate_directory(topic, checks=["pairing"])
+        assert self._id_findings(result) == []
+
+    def test_set_mismatch_is_flagged(self, tmp_path):
+        topic = tmp_path / "topic"
+        topic.mkdir()
+        self._pair(
+            topic,
+            """\
+            # %% [markdown] lang="de" tags=["slide"] slide_id="intro"
+            # ## Einführung
+
+            # %% [markdown] lang="de" tags=["slide"] slide_id="extra"
+            # ## Extra
+            """,
+            """\
+            # %% [markdown] lang="en" tags=["slide"] slide_id="intro"
+            # ## Introduction
+            """,
+        )
+        result = validate_directory(topic, checks=["pairing"])
+        findings = self._id_findings(result)
+        assert len(findings) == 1
+        assert "sets diverge" in findings[0].message
+        assert "extra" in findings[0].message
+
+    def test_order_mismatch_is_flagged(self, tmp_path):
+        topic = tmp_path / "topic"
+        topic.mkdir()
+        self._pair(
+            topic,
+            """\
+            # %% [markdown] lang="de" tags=["slide"] slide_id="a"
+            # ## A
+
+            # %% [markdown] lang="de" tags=["slide"] slide_id="b"
+            # ## B
+            """,
+            """\
+            # %% [markdown] lang="en" tags=["slide"] slide_id="b"
+            # ## B
+
+            # %% [markdown] lang="en" tags=["slide"] slide_id="a"
+            # ## A
+            """,
+        )
+        result = validate_directory(topic, checks=["pairing"])
+        findings = self._id_findings(result)
+        assert len(findings) == 1
+        assert "order diverges" in findings[0].message
+
+    def test_set_mismatch_reported_once_in_directory_run(self, tmp_path):
+        # The per-file pass runs with cross_file_parity=False, so a directory
+        # run reports the divergence exactly once (not once per half).
+        topic = tmp_path / "topic"
+        topic.mkdir()
+        self._pair(
+            topic,
+            """\
+            # %% [markdown] lang="de" tags=["slide"] slide_id="intro"
+            # ## Einführung
+
+            # %% [markdown] lang="de" tags=["slide"] slide_id="extra"
+            # ## Extra
+            """,
+            """\
+            # %% [markdown] lang="en" tags=["slide"] slide_id="intro"
+            # ## Introduction
+            """,
+        )
+        result = validate_directory(topic, checks=["pairing"])
+        assert len(self._id_findings(result)) == 1
+
+    def test_single_file_with_twin_catches_divergence(self, tmp_path):
+        # The single-file path (CLI standalone / pre-commit gate) catches twin
+        # divergence when the sibling exists on disk.
+        self._pair(
+            tmp_path,
+            """\
+            # %% [markdown] lang="de" tags=["slide"] slide_id="intro"
+            # ## Einführung
+
+            # %% [markdown] lang="de" tags=["slide"] slide_id="extra"
+            # ## Extra
+            """,
+            """\
+            # %% [markdown] lang="en" tags=["slide"] slide_id="intro"
+            # ## Introduction
+            """,
+        )
+        result = validate_file(tmp_path / "slides_intro.de.py", checks=["pairing"])
+        assert len(self._id_findings(result)) == 1
+        # Symmetric: editing/validating the EN half catches it too.
+        result_en = validate_file(tmp_path / "slides_intro.en.py", checks=["pairing"])
+        assert len(self._id_findings(result_en)) == 1
+
+    def test_single_file_without_twin_is_silent(self, tmp_path):
+        # A lone .de.py with no .en.py on disk must not error or crash.
+        p = _write_slide(
+            tmp_path,
+            "slides_intro.de.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"] slide_id="intro"
+            # ## Einführung
+            """,
+        )
+        result = validate_file(p, checks=["pairing"])
+        assert self._id_findings(result) == []
+
+
 class TestSplitTagParity:
     """Cross-language tag-set parity for split pairs (Issue #198)."""
 

@@ -539,6 +539,7 @@ adjacency, and — since CLM {version} — **`slide_id` metadata**:
 | duplicate `slide_id` across slide groups | `error` | Group-aware: paired DE/EN cells sharing the EN-derived slug are not a duplicate. Bare-form comparison so `!intro` and `intro` collide. |
 | voiceover/notes `slide_id` ≠ preceding `slide`/`subslide` anchor | `error` | Walk-back skips j2, code, shared (lang-less), and cross-language narrative cells. The j2 `header()` macro anchors `slide_id="title"` for narrative cells that follow it. |
 | paired DE/EN slides carry mismatched bare `slide_id`s | `warning` | Suggested fix: `clm slides assign-ids --force`. |
+| split pair `.de.py` / `.en.py` carry a different `slide_id` set or order | `warning` | **Cross-file** (issue #162): `slide_id` is the cross-language join key for voiceover `for_slide`, `clm slides unify`, and extract/inline. Route structural changes through `clm slides sync`; avoid per-file `clm slides assign-ids` on a split half. Runs on a directory/course validate, and on a single-file validate when the twin exists on disk. |
 | `slide_id` is not a valid kebab-case ASCII slug (≤30 chars) | `warning` | The leading `!` preserve marker is permitted and does not count toward the length cap. |
 
 Since CLM {version}, the **bilingual** `pairing` sub-checks (DE/EN cell
@@ -549,8 +550,12 @@ checks would otherwise report a false `DE/EN cell count mismatch` on every
 converted deck (issue #160). The per-file `slide_id` integrity checks (and
 the `format` / `tags` groups) still run on split files unchanged, and the
 cross-file shared-cell parity diff between a `.de.py` / `.en.py` pair is
-still applied when validating a directory or course spec. Bilingual decks
-(no `.de` / `.en` suffix) are unaffected — the full pairing check still runs.
+still applied when validating a directory or course spec. Since CLM
+{version} the cross-file **`slide_id` parity** check (issue #162) is applied
+the same way — and additionally on a single-file validate when the twin
+exists on disk, so the pre-commit gate and the PostToolUse path catch a
+divergent join key. Bilingual decks (no `.de` / `.en` suffix) are
+unaffected — the full pairing check still runs.
 
 Since CLM {version}, the `tags` check group also verifies **workshop
 scope** (issue #78). The `partial` output kind leaves a workshop's code

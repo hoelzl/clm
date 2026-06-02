@@ -388,10 +388,15 @@ within one bilingual file.
 
 **The triad** (all three needed, per "both, long-term"):
 
-- **Detective (= the pre-commit gate, §9):** enforce the invariant every "silent
-  break" row violates — across `.de`/`.en`, equal `slide_id` sets in equal order
-  (extended to companion `for_slide` sets). This *is* the both-language voiceover
-  compatibility check, for free.
+- **Detective (= the pre-commit gate, §9):** ✅ **BUILT 2026-06-03** — enforce the
+  invariant every "silent break" row violates — across `.de`/`.en`, equal `slide_id`
+  sets in equal order (companion `for_slide` sets still to add). Shipped as a `clm validate`
+  `pairing`-group warning: `_check_split_slide_id_parity` in `validator.py`, wired at
+  dir/course scope **and** the single-file path (`validate_file(cross_file_parity=True)` when
+  a twin exists on disk, so the pre-commit gate / PostToolUse path catch it). Harness
+  `commit-without-sync` flipped break-silent → break-loud ("detective CATCHES it"). 6 new
+  unit tests. Companion `for_slide` parity (the both-language voiceover compatibility check)
+  is the small remaining extension.
 - **Defensive:** the highest-frequency break is **per-file `assign-ids` /
   `extract-voiceover`**. Make them twin-aware — on a split half, consult the sibling
   and refuse to mint a divergent id rather than running blind. (Strongly related to
@@ -516,8 +521,11 @@ corpus no-op invariant + real-deck round-trip **skip**. To build justified confi
 2. ~~**Tier-1 data-loss fixes**~~ ✅ **DONE 2026-06-03** (§3) — vo output leak;
    inline retains-companion-on-unmatched + non-zero exit; extract `--force`. Verified by
    the harness (two rows flipped to preserve) + new unit tests; full fast suite green.
-3. **#162 keystone** (§7) — detective (the gate's core check) + defensive twin-aware
-   `assign-ids`/`extract`; generative pair-aware minting for born-split.
+3. **#162 keystone** (§7) — **detective ✅ DONE 2026-06-03** (cross-file `slide_id` parity
+   warning in `clm validate`, dir/course + single-file-with-twin; `commit-without-sync`
+   flipped break-silent → break-loud). **Next: defensive** twin-aware `assign-ids`/`extract`
+   (refuse to mint a divergent id on a split half) — clears the two assign-ids break-silent
+   rows; then generative pair-aware minting for born-split + companion `for_slide` parity.
 4. **Command-surface rethink** (§8) — fold/hide/guard, with info-topic updates.
 5. **Pre-commit gate** (§9) + voiceover hardening (§10) + verification additions (§11).
 6. **Sync CLI pairing guard** (§3 Tier-2) + single-path/batch UX.
