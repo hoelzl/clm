@@ -32,6 +32,7 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -141,6 +142,13 @@ class Proposal:
     ``content_hash`` is set on a ``rename`` proposal: it identifies which of the
     duplicate-id cells is the copy (the apply re-mints the cell matching this
     hash, leaving the original alone).
+
+    ``tags`` is set on an **id-less localized** ``retag`` (Issue #198 Tier C):
+    such a cell has no ``slide_id``, so the apply cannot find its twin by
+    ``(slide_id, role)`` and instead targets the ``target_position``-th non-j2
+    cell of the target language and writes exactly this tag set onto it. ``None``
+    for an id-carrying ``retag`` (whose tags are read from the matched source
+    cell) and for every other kind.
     """
 
     kind: str
@@ -154,6 +162,7 @@ class Proposal:
     old_position: int | None = None
     new_position: int | None = None
     content_hash: str | None = None  # the copy's hash, for ``rename``
+    tags: tuple[str, ...] | None = None  # desired tag set for an id-less localized ``retag``
 
 
 @dataclass
@@ -1102,6 +1111,39 @@ def _edit(
     )
 
 
+def _retag_direction(
+    de_now: frozenset[str],
+    en_now: frozenset[str],
+    de_base: frozenset[str] | None,
+    en_base: frozenset[str] | None,
+) -> str | None:
+    """Which side a one-sided tag drift came from: the retag decision rule.
+
+    Returns ``"de->en"`` / ``"en->de"`` when exactly one side's tag set drifted
+    from its baseline (that side is the source), ``"both"`` when both drifted
+    (a tag conflict the caller surfaces as a warning), or ``None`` when there is
+    nothing to mirror: the halves already agree, a baseline tag set is unknown (a
+    pre-#198 watermark — direction undeterminable, so never guessed), or neither
+    side changed (a pre-existing divergence the validator flags, not this edit's
+    doing). Shared by the id-carrying (:func:`_maybe_retag`) and the id-less
+    localized (:func:`_classify_localized_idless_retags`) retag paths so the two
+    can never disagree about what counts as a one-sided drift.
+    """
+    if de_now == en_now:
+        return None  # already consistent — nothing to mirror
+    if de_base is None or en_base is None:
+        return None  # no tag baseline to attribute the drift — degrade gracefully
+    de_changed = de_now != de_base
+    en_changed = en_now != en_base
+    if de_changed and not en_changed:
+        return "de->en"
+    if en_changed and not de_changed:
+        return "en->de"
+    if de_changed and en_changed:
+        return "both"
+    return None
+
+
 def _maybe_retag(
     plan: SyncPlan,
     key: tuple[str, str],
@@ -1111,28 +1153,25 @@ def _maybe_retag(
     de_base: BaselineCell | None,
     en_base: BaselineCell | None,
 ) -> None:
-    """Emit a ``retag`` when a cell's tag set drifted on exactly one side.
+    """Emit a ``retag`` when an id'd cell's tag set drifted on exactly one side.
 
     Tags are language-independent, so a synced pair carries identical tag sets;
-    the content hash is blind to a tag-only edit (Issue #198). When the halves'
-    tags now disagree, the side whose tags changed from its baseline is the
-    source and its set is mirrored onto the other. Both-sides-changed is a tag
-    conflict, surfaced as a warning rather than guessed. Skipped silently when a
-    baseline tag set is unknown (a pre-#198 watermark) — direction is
-    undeterminable, so we never guess — or when neither side changed (a
-    pre-existing divergence not caused by this edit; the validator flags it).
+    the content hash is blind to a tag-only edit (Issue #198). Delegates the
+    one-sided-drift decision to :func:`_retag_direction` and mirrors the changed
+    side's tags onto the other; a both-sides-changed tag conflict is surfaced as a
+    warning rather than guessed.
     """
-    if de_now.tags == en_now.tags:
-        return  # already consistent — nothing to mirror
-    if de_base is None or en_base is None or de_base.tags is None or en_base.tags is None:
-        return  # no tag baseline to attribute the drift — degrade gracefully
-    de_changed = de_now.tags != de_base.tags
-    en_changed = en_now.tags != en_base.tags
-    if de_changed and not en_changed:
+    direction = _retag_direction(
+        de_now.tags,
+        en_now.tags,
+        de_base.tags if de_base is not None else None,
+        en_base.tags if en_base is not None else None,
+    )
+    if direction == "de->en":
         plan.proposals.append(_retag(key[0], role, "de->en", de_now, en_now))
-    elif en_changed and not de_changed:
+    elif direction == "en->de":
         plan.proposals.append(_retag(key[0], role, "en->de", en_now, de_now))
-    elif de_changed and en_changed:
+    elif direction == "both":
         plan.issues.append(
             PlanIssue(
                 severity="warning",
@@ -1160,6 +1199,174 @@ def _retag(
         source_position=source.position,
         target_position=target.position,
     )
+
+
+# ---------------------------------------------------------------------------
+# id-less localized tag mirroring (Issue #198 Tier C / #190 item 3)
+# ---------------------------------------------------------------------------
+
+
+def _localized_lang_cells(cells: list[Cell], lang: str) -> list[Cell]:
+    """Non-j2 cells of ``lang`` in document order — the watermark ``lang`` partition.
+
+    Mirrors :func:`watermark_rows`' partitioning exactly (``meta.lang == lang`` and
+    not j2), so the *i*-th cell here lines up with watermark position *i* of that
+    language. Includes both id-carrying localized cells (which anchor the
+    alignment) and the id-less ones whose tags this pass mirrors.
+    """
+    return [c for c in cells if not c.metadata.is_j2 and c.metadata.lang == lang]
+
+
+def _streams_aligned(de_loc: list[Cell], en_loc: list[Cell]) -> bool:
+    """Whether the two localized streams are positional twins (cell-by-cell).
+
+    Requires each positionally-paired ``(de, en)`` cell to agree on per-cell role,
+    cell type, and ``slide_id`` (both id-less, or the *same* id). A reorder or a
+    structural edit breaks this — at which point positional pairing of the id-less
+    cells would be unsound, so the pass declines (the validator's split-tag-parity
+    check still surfaces any standing asymmetry). Lengths are equal by the caller's
+    gate; ``strict=True`` makes that an assertion rather than a silent truncation.
+    """
+    for de_cell, en_cell in zip(de_loc, en_loc, strict=True):
+        if role_of(de_cell.metadata) != role_of(en_cell.metadata):
+            return False
+        if de_cell.metadata.cell_type != en_cell.metadata.cell_type:
+            return False
+        if (de_cell.metadata.slide_id or None) != (en_cell.metadata.slide_id or None):
+            return False
+    return True
+
+
+def _retag_idless(
+    source_cell: Cell, direction: str, position: int, tags: frozenset[str]
+) -> Proposal:
+    """An id-less localized ``retag`` — targets the twin by position, carries tags."""
+    kind_label = "code" if source_cell.metadata.cell_type == "code" else "markdown"
+    return Proposal(
+        kind="retag",
+        role=kind_label,
+        direction=direction,
+        slide_id=None,
+        reason=f"tags changed on {direction.split('->')[0].upper()} "
+        f"({sorted(tags)}) — id-less localized {kind_label}",
+        source_position=position,
+        target_position=position,
+        tags=tuple(source_cell.metadata.tags),
+    )
+
+
+def _classify_localized_idless_retags(
+    de_cells: list[Cell],
+    en_cells: list[Cell],
+    watermark_cache: SyncWatermarkCache,
+    de_path: Path,
+    en_path: Path,
+    plan: SyncPlan,
+) -> None:
+    """Mirror a tag-only edit on an **id-less localized** cell across the halves.
+
+    Issue #198 Tier C (with #190 item 3): the per-cell engine cannot reach an
+    id-less localized cell — ``role_of`` is ``None`` because it has no
+    ``slide_id`` — so a one-sided tag edit on such a cell (the exact cell the #198
+    report hit: a ``lang=`` code cell with no id that gained ``keep``) is invisible
+    to :func:`_maybe_retag`. This pass gives those cells a cross-language identity
+    by **position** in their language's cell stream (the #190 item-3 identity,
+    already recorded in the membership-widened watermark) and applies the same
+    one-sided-drift rule (:func:`_retag_direction`) against the watermark's recorded
+    tag set, emitting an id-less ``retag`` the apply targets by position.
+
+    Conservative by construction — any doubt declines either the whole pass or the
+    individual cell rather than risk mirroring a tag onto the wrong cell:
+
+    - **watermark baseline only** (the caller gates on ``source == "watermark"``):
+      the git-HEAD baseline records no tags for id-less cells, so direction would
+      be undeterminable;
+    - **no ``move``**: a reorder invalidates positional pairing;
+    - **structural alignment**: each language's localized stream must have the same
+      length as the other *and* as its own baseline (so position *i* still names the
+      same cell), and every positionally-paired cell must be a true twin
+      (:func:`_streams_aligned`);
+    - **per-cell body-hash anchor**: even within an aligned, same-length stream, two
+      *id-less* localized cells (both ``role_of`` ``None``, same kind, no id) could be
+      swapped without tripping :func:`_streams_aligned` — and a body edit leaves the
+      ``("L", kind)`` signature unchanged. So a cell is retagged only when **both**
+      halves' current body hash still equals the baseline body hash recorded at that
+      position: a tag-only edit never changes the body, so a hash mismatch means the
+      position now names a *different* (reordered) or *body-edited* cell — leave it to
+      the structural pass / validator instead of guessing;
+    - **body-uniqueness anchor**: the per-position hash check is defeated when two
+      cells share a body (an identical-body swap leaves every position's hash
+      matching), so a position is retagged only when its body hash is **unique** in its
+      language's stream on both the current and the baseline side — the non-unique-anchor
+      guard used throughout the structural pass. Two byte-identical id-less cells are
+      therefore never auto-mirrored (the validator flags any standing asymmetry).
+
+    A both-sides tag change is surfaced as a warning, mirroring the id-carrying path.
+    (Like every classifier warning, a ``both`` tag conflict holds the whole-deck
+    watermark until resolved — a pre-existing property shared with the id-carrying
+    ``_maybe_retag`` ``both`` path and the reorder/ambiguity warnings; see #198.)
+    """
+    if plan.count("move") > 0:
+        return  # a reorder this pass — positional pairing is unsound
+    de_loc = _localized_lang_cells(de_cells, "de")
+    en_loc = _localized_lang_cells(en_cells, "en")
+    de_rows = watermark_cache.get_deck(str(de_path), str(en_path), "de")
+    en_rows = watermark_cache.get_deck(str(de_path), str(en_path), "en")
+    if not (len(de_loc) == len(en_loc) == len(de_rows) == len(en_rows)):
+        return  # structural drift — positions unreliable; validator flags asymmetry
+    if not _streams_aligned(de_loc, en_loc):
+        return  # reordered / mismatched twins — do not trust positional pairing
+
+    de_base_hash = {pos: chash for (pos, _sid, _role, chash, _construct) in de_rows}
+    en_base_hash = {pos: chash for (pos, _sid, _role, chash, _construct) in en_rows}
+    de_cur_hash = [cell_content_hash(c.content) for c in de_loc]
+    en_cur_hash = [cell_content_hash(c.content) for c in en_loc]
+    # A body hash shared by two cells of a language's stream (current OR baseline)
+    # cannot anchor a position against a reorder: two id-less cells with the *same*
+    # body are interchangeable to the per-position hash check, so swapping them would
+    # masquerade as a tag edit and could mirror a tag onto the wrong twin. Decline any
+    # non-unique-bodied position — the same non-unique-anchor guard the structural pass
+    # applies (``_find_by_anchor`` / ``_baseline_anchor_hashes``' ``Counter``). The
+    # validator's split-tag-parity check still flags any standing asymmetry.
+    de_cur_counts = Counter(de_cur_hash)
+    en_cur_counts = Counter(en_cur_hash)
+    de_base_counts = Counter(de_base_hash.values())
+    en_base_counts = Counter(en_base_hash.values())
+    de_base_tags = watermark_cache.get_deck_tags(str(de_path), str(en_path), "de")
+    en_base_tags = watermark_cache.get_deck_tags(str(de_path), str(en_path), "en")
+    for i, (de_cell, en_cell) in enumerate(zip(de_loc, en_loc, strict=True)):
+        # Only the id-less localized cells; id-carrying twins ride the per-cell path.
+        if role_of(de_cell.metadata) is not None or role_of(en_cell.metadata) is not None:
+            continue
+        # Body unchanged on BOTH halves vs the recorded baseline at this position —
+        # else position i no longer names the same cell (reorder) or the body itself
+        # was edited (the structural pass's job), so a tag mirror would be unsound.
+        if de_cur_hash[i] != de_base_hash.get(i) or en_cur_hash[i] != en_base_hash.get(i):
+            continue
+        # ...and that body uniquely anchors the position on BOTH halves (current and
+        # baseline). A duplicated body defeats the hash anchor (an identical-body swap
+        # leaves every position's hash matching), so leave it to the validator.
+        if de_cur_counts[de_cur_hash[i]] != 1 or de_base_counts[de_cur_hash[i]] != 1:
+            continue
+        if en_cur_counts[en_cur_hash[i]] != 1 or en_base_counts[en_cur_hash[i]] != 1:
+            continue
+        de_now = frozenset(de_cell.metadata.tags)
+        en_now = frozenset(en_cell.metadata.tags)
+        direction = _retag_direction(de_now, en_now, de_base_tags.get(i), en_base_tags.get(i))
+        if direction == "de->en":
+            plan.proposals.append(_retag_idless(de_cell, "de->en", i, de_now))
+        elif direction == "en->de":
+            plan.proposals.append(_retag_idless(en_cell, "en->de", i, en_now))
+        elif direction == "both":
+            plan.issues.append(
+                PlanIssue(
+                    severity="warning",
+                    slide_id=None,
+                    reason=f"id-less localized cell #{i} tags changed on both decks "
+                    f"(de={sorted(de_now)}, en={sorted(en_now)}); "
+                    "not propagated — reconcile tags manually",
+                )
+            )
 
 
 _KIND_ORDER = {
@@ -1265,6 +1472,17 @@ def build_sync_plan(
             _apply_divergence(plan, de_path, en_path, forced=alignment.direction)
         else:
             plan.anchor_direction = alignment.direction
+
+    # Tier C (Issue #198 / #190 item 3): mirror a tag-only edit on an id-less
+    # localized cell — the per-cell engine cannot key it (no slide_id) and the
+    # body-hash classifier is blind to a tag change. Only against a real watermark
+    # baseline (the git-HEAD baseline records no id-less tags). Appends id-less
+    # ``retag`` proposals, then re-sorts so they interleave with the keyed plan.
+    if source == "watermark" and watermark_cache is not None:
+        _classify_localized_idless_retags(
+            de_cells, en_cells, watermark_cache, de_path, en_path, plan
+        )
+        plan.proposals.sort(key=_proposal_sort_key)
 
     return plan
 

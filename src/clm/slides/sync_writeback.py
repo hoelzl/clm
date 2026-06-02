@@ -389,6 +389,43 @@ class FileState:
             self.dirty = True
         return True
 
+    def replace_idless_localized_tags(
+        self, lang: str, position: int, new_tags: Sequence[str]
+    ) -> bool:
+        """Set the tags of the ``position``-th ``lang`` cell, if it is id-less localized.
+
+        Tier C of Issue #198: an id-less localized cell (a ``lang=`` cell with no
+        ``slide_id``, so :func:`role_of` is ``None``) has no ``(slide_id, role)``
+        key, so :meth:`replace_cell_tags` cannot find it. The classifier instead
+        identifies it by its **position** among the deck's non-j2 ``lang`` cells —
+        the same per-language ordinal the watermark records — and this method
+        rewrites only that cell's ``tags=[…]`` (body, ``lang``, cell type, trailing
+        blanks verbatim), exactly like :meth:`replace_cell_tags`.
+
+        Returns ``False`` (and dirties nothing) when ``position`` is out of range
+        **or** the cell there is *not* id-less localized — a mismatch means the
+        stream drifted since the plan was built, so the caller surfaces it as an
+        error rather than retagging the wrong cell. ``True`` when the cell is
+        found (a no-op if its tags already match ``new_tags``).
+        """
+        idx = -1
+        for cell in self.cells:
+            meta = cell.metadata
+            if meta.is_j2 or meta.lang != lang:
+                continue
+            idx += 1
+            if idx != position:
+                continue
+            if role_of(meta) is not None:
+                return False  # an id-carrying cell sits here — stream drifted; refuse
+            new_header = set_header_tags(cell.lines[0], new_tags)
+            if new_header != cell.lines[0]:
+                cell.lines[0] = new_header
+                cell.metadata = parse_cell_header(new_header)
+                self.dirty = True
+            return True
+        return False
+
     def delete_cell(self, slide_id: str, role: str) -> bool:
         """Remove the ``(slide_id, role)`` cell, lines and all.
 

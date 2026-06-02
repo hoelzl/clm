@@ -700,6 +700,18 @@ signal and is not propagated (an author virtually always also touches a
 slide/voiceover); and an unchanged **id-less** localized code cell inside a group
 rebuilt for another reason is re-translated (churn, not corruption).
 
+> **Tag-only edits (Issue #198).** A role-preserving tag edit (`keep`/`alt`) is
+> invisible to the body-hash classifier, so it was dropped on the way across the
+> split halves. This is now handled by a dedicated `retag` proposal: an id-carrying
+> cell mirrors via its `(slide_id, role)` key, and an **id-less localized** cell
+> (the gap this design left — `role_of` is `None`, so the per-cell engine never saw
+> it) is paired by its position in the membership-widened watermark (#190 item 3)
+> and guarded by a per-cell body-hash anchor (a tag-only edit never changes the
+> body, so a hash mismatch means a reorder/body-edit and is declined). Tags are
+> language-independent, so the mirror is a header-only rewrite with no LLM. See
+> `slides/sync_plan.py::_classify_localized_idless_retags` and
+> `slides/sync_apply.py::_apply_retag_idless`.
+
 ### Dependency graph
 
 ```
