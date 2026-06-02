@@ -50,9 +50,9 @@ def search_slides_cmd(
 
     \b
     Examples:
-        clm search-slides "decorators"
-        clm search-slides "RAG" --course-spec course-specs/ml.xml
-        clm search-slides "Dekoratoren" -L de
+        clm slides search "decorators"
+        clm slides search "RAG" --course-spec course-specs/ml.xml
+        clm slides search "Dekoratoren" -L de
     """
     slides_dir = (data_dir or Path.cwd()) / "slides"
 

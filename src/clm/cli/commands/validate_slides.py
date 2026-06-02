@@ -66,12 +66,12 @@ def validate_slides_cmd(
 
     \b
     Examples:
-        clm validate-slides slides/module_100/topic_010/slides_intro.py
-        clm validate-slides slides/module_100/topic_010/
-        clm validate-slides slides/module_100/topic_010/ --checks format,tags
-        clm validate-slides course-specs/python-basics.xml
-        clm validate-slides slides/topic/slides_intro.py --quick
-        clm validate-slides slides/topic/slides_intro.py --json
+        clm validate slides/module_100/topic_010/slides_intro.py
+        clm validate slides/module_100/topic_010/
+        clm validate slides/module_100/topic_010/ --checks format,tags
+        clm validate course-specs/python-basics.xml
+        clm validate slides/topic/slides_intro.py --quick
+        clm validate slides/topic/slides_intro.py --json
     """
     if quick:
         if not path.is_file():

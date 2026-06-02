@@ -535,7 +535,7 @@ def _check_pairing(cells: list[Cell], file_path: str, *, is_split: bool = False)
 
         # Adjacency check — paired DE/EN cells should not have other lang-tagged
         # or narrative cells between them. The canonical layout produced by
-        # ``normalize-slides`` is::
+        # ``slides normalize`` is::
         #
         #     [de content] [en content] [de voiceover] [en voiceover]
         #
@@ -626,7 +626,7 @@ def _check_ordering(cells: list[Cell], file_path: str) -> list[Finding]:
     flagging the embedded ``DE_completed`` / ``EN_start`` as intervening.
 
     DE/EN units are paired positionally per category, matching what
-    ``normalize-slides`` does. When counts are mismatched the pairing
+    ``slides normalize`` does. When counts are mismatched the pairing
     check already reports it; this check skips that category to avoid
     cascading noise.
     """
@@ -684,7 +684,7 @@ def _check_ordering(cells: list[Cell], file_path: str) -> list[Finding]:
                             "[de voiceover] [en voiceover]. "
                             "Same-language start/completed pairs are "
                             "permitted to stay grouped. "
-                            "Run `clm normalize-slides` to fix mechanically."
+                            "Run `clm slides normalize` to fix mechanically."
                         ),
                     )
                 )
@@ -1045,7 +1045,7 @@ def _extract_voiceover_gaps(cells: list[Cell], file_path: str) -> list[dict]:
     """Extract cells that lack voiceover for LLM review.
 
     Uses per-language tracking so bilingual slide files are handled
-    correctly. The canonical layout produced by ``normalize-slides`` is:
+    correctly. The canonical layout produced by ``slides normalize`` is:
 
         [de content] [en content] [de voiceover] [en voiceover]
 

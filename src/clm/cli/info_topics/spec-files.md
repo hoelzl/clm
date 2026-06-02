@@ -98,7 +98,7 @@ Optional `<section>` attributes:
 
 | Attribute | Description |
 |-----------|-------------|
-| `enabled` | `"true"` (default) or `"false"`, case-insensitive. A disabled section is dropped from the parsed spec entirely, so `clm build`, `clm outline`, `clm validate-spec`, and all MCP tools ignore it without needing code changes. Disabled sections may omit `<topics>` or reference topic IDs that do not yet exist — they are never built or validated, which lets a full roadmap spec live as a single file instead of carrying a separate `-build.xml` subset. |
+| `enabled` | `"true"` (default) or `"false"`, case-insensitive. A disabled section is dropped from the parsed spec entirely, so `clm build`, `clm outline`, `clm validate`, and all MCP tools ignore it without needing code changes. Disabled sections may omit `<topics>` or reference topic IDs that do not yet exist — they are never built or validated, which lets a full roadmap spec live as a single file instead of carrying a separate `-build.xml` subset. |
 | `id` | Optional stable identifier for the section (e.g. `id="w03"`). Recommended for courses that are frequently filtered, because IDs are stable under reordering and renaming. |
 | `module` | Optional module-directory binding (e.g. `module="module_545_ml_azav_cohort_2026_04"`). When set, every `<topic>` inside this section resolves only against that module — duplicate topic IDs in other modules are ignored. This is the supported mechanism for cohort archives or course variants that share topic IDs with the live module. The value is the literal directory name under `slides/`. Per-topic `module=` (see below) overrides the section default for individual topics. |
 
@@ -395,7 +395,7 @@ parent element.
 - **Local files win.** If a real file already exists at
   `<topic-dir>/<as>`, the local file wins and the included file is
   shadowed. The build emits an `include_shadowed_by_local` warning and
-  `validate-spec` surfaces the same condition as `include_shadowed`.
+  `validate` surfaces the same condition as `include_shadowed`.
   *Exception* (CLM {version}+): when the shadowing file was materialized
   by `clm sync-includes` — i.e., the topic's `.clm-include` ledger lists
   a matching `as_path` + `source` entry — the warning is suppressed, since
@@ -426,7 +426,7 @@ per-topic `.clm-include` ledger so it can clean up safely later. See
 | `include_dependencies` | Info | One per unique include source — lists the source's `pyproject.toml` `[project] dependencies` so authors can confirm the worker environment satisfies them. |
 | `include_section_inheritance` | Info | One per section-level include — lists every topic that inherits it and any topic that overrides it with a different source. |
 
-Run `clm validate-spec` to surface all of the above; `include_source_missing`
+Run `clm validate` to surface all of the above; `include_source_missing`
 also surfaces at build time.
 
 ### `<output-targets>`
@@ -650,7 +650,7 @@ or excluded by `--only-sections` / `enabled="false"`) is reported as
 `--http-replay=replay` (the CI-strict default) and a **warning + dropped
 link** otherwise. Override with `clm build --fail-on-missing-xref /
 --no-fail-on-missing-xref` or the `CLM_FAIL_ON_MISSING_XREF` environment
-variable (mirrors `--fail-on-error`). `clm validate-spec` also reports
+variable (mirrors `--fail-on-error`). `clm validate` also reports
 missing and ambiguous cross-references without a full build.
 
 ## Validation

@@ -1092,7 +1092,7 @@ def _require_slide_ids(
         raise click.UsageError(
             "Companion mode requires a stable slide_id on every slide being "
             f"merged, but slides [{missing_list}]{more} have none.\n"
-            f"Fix: run `clm extract-voiceover {slides}` "
+            f"Fix: run `clm voiceover extract {slides}` "
             "(which auto-generates slide_ids), or pass --no-companion to "
             "merge into the slide file directly."
         )

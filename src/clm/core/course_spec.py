@@ -896,7 +896,7 @@ class CourseSpec:
         topic override beats section default; ``None`` means unbound).
 
         Use this in every consumer that walks the spec to reach the
-        filesystem — ``normalize-slides``, ``validate-slides``, the spec
+        filesystem — ``slides normalize``, ``validate``, the spec
         validator, and ``Course._build_topics`` all share this contract so
         module-bound cohort archives resolve uniformly.
         """

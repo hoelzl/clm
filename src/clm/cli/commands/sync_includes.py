@@ -173,7 +173,7 @@ def sync_includes_cmd(
                 _warn(
                     f"Topic '{binding.topic_id}' did not resolve to a "
                     f"single directory; skipping its includes. Run "
-                    f"`clm validate-spec` to diagnose."
+                    f"`clm validate` to diagnose."
                 )
             continue
 
@@ -271,7 +271,7 @@ def _materialize_include(
 
     if target_path.exists() and existing_entry is None:
         # Untracked path at the target — leave it alone. The shadow
-        # warning surfaces during validate-spec / build; we mirror the
+        # warning surfaces during validate / build; we mirror the
         # "real file wins" rule here.
         summary.shadowed += 1
         _warn(
