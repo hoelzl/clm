@@ -44,9 +44,9 @@ def validate_spec_cmd(
 
     \b
     Examples:
-        clm validate-spec course-specs/python-basics.xml
-        clm validate-spec course-specs/ml-azav.xml --json
-        clm validate-spec course-specs/ml-azav.xml --include-disabled
+        clm validate course-specs/python-basics.xml
+        clm validate course-specs/ml-azav.xml --json
+        clm validate course-specs/ml-azav.xml --include-disabled
     """
     slides_dir = _resolve_slides_dir(data_dir, spec_file)
 

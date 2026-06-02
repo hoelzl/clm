@@ -470,7 +470,7 @@ def _validate_cross_references(
 
     The build path performs the same check with full course context
     (``clm.core.cross_references.validate_cross_references``); this mirror
-    lets authors catch dangling links via ``clm validate-spec`` without a
+    lets authors catch dangling links via ``clm validate`` without a
     full build.
     """
     from clm.core.cross_references import (

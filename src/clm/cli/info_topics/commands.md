@@ -362,7 +362,7 @@ clm outline course.xml --sections-only
 Resolve a topic ID to its filesystem path.
 
 ```
-clm resolve-topic [OPTIONS] TOPIC_ID
+clm topic resolve [OPTIONS] TOPIC_ID
 ```
 
 | Option | Description |
@@ -375,10 +375,10 @@ clm resolve-topic [OPTIONS] TOPIC_ID
 Examples:
 
 ```bash
-clm resolve-topic what_is_ml
-clm resolve-topic "decorators*"
-clm resolve-topic intro --course-spec course-specs/python.xml
-clm resolve-topic intro --module module_545_ml_azav_cohort_2026_04
+clm topic resolve what_is_ml
+clm topic resolve "decorators*"
+clm topic resolve intro --course-spec course-specs/python.xml
+clm topic resolve intro --module module_545_ml_azav_cohort_2026_04
 ```
 
 ### `clm slides search`
@@ -388,7 +388,7 @@ clm resolve-topic intro --module module_545_ml_azav_cohort_2026_04
 Fuzzy search across topic names and slide file titles.
 
 ```
-clm search-slides [OPTIONS] QUERY
+clm slides search [OPTIONS] QUERY
 ```
 
 | Option | Description |
@@ -401,9 +401,9 @@ clm search-slides [OPTIONS] QUERY
 Examples:
 
 ```bash
-clm search-slides decorators
-clm search-slides "RAG introduction" --language en
-clm search-slides lists --course-spec course-specs/python.xml
+clm slides search decorators
+clm slides search "RAG introduction" --language en
+clm slides search lists --course-spec course-specs/python.xml
 ```
 
 ### `clm validate` (spec mode)
@@ -416,7 +416,7 @@ argument is an `.xml` file.
 Validate a course specification XML file for consistency.
 
 ```
-clm validate-spec [OPTIONS] SPEC_FILE
+clm validate [OPTIONS] SPEC_FILE
 ```
 
 Checks that all referenced topic IDs resolve to exactly one existing
@@ -432,9 +432,9 @@ that referenced dir-group paths exist.
 Examples:
 
 ```bash
-clm validate-spec course-specs/python-basics.xml
-clm validate-spec course-specs/ml-azav.xml --json
-clm validate-spec course-specs/ml-azav.xml --include-disabled
+clm validate course-specs/python-basics.xml
+clm validate course-specs/ml-azav.xml --json
+clm validate course-specs/ml-azav.xml --include-disabled
 ```
 
 ### `clm sync-includes`
@@ -484,7 +484,7 @@ Behavior notes:
 - **Unresolved topics are skipped.** If a topic that declares includes
   fails to resolve to exactly one directory under `slides/`, its
   includes are skipped with a warning pointing at
-  `clm validate-spec` for diagnosis.
+  `clm validate` for diagnosis.
 
 Examples:
 
@@ -508,7 +508,7 @@ Validate slide files for format, tag, and pairing correctness. Runs deterministi
 checks and extracts structured review material for content-quality checks.
 
 ```
-clm validate-slides [OPTIONS] PATH
+clm validate [OPTIONS] PATH
 ```
 
 | Option | Description |
@@ -571,9 +571,9 @@ excluded from quick mode.
 Examples:
 
 ```bash
-clm validate-slides slides/module_010/topic_100_intro/slides_intro.py
-clm validate-slides slides/module_010/ --json
-clm validate-slides slides/module_010/topic_100_intro/ --quick
+clm validate slides/module_010/topic_100_intro/slides_intro.py
+clm validate slides/module_010/ --json
+clm validate slides/module_010/topic_100_intro/ --quick
 ```
 
 ### `clm slides normalize`
@@ -584,7 +584,7 @@ Normalize slide files by applying mechanical fixes: tag migration (`alt`→`comp
 workshop tag insertion, DE/EN interleaving, and slide ID auto-generation.
 
 ```
-clm normalize-slides [OPTIONS] PATH
+clm slides normalize [OPTIONS] PATH
 ```
 
 | Option | Description |
@@ -598,10 +598,10 @@ clm normalize-slides [OPTIONS] PATH
 Examples:
 
 ```bash
-clm normalize-slides slides/module_010/topic_100_intro/slides_intro.py
-clm normalize-slides slides/module_010/ --dry-run
-clm normalize-slides slides/module_010/ --operations tag_migration
-clm normalize-slides slides/module_010/ --operations slide_ids --json
+clm slides normalize slides/module_010/topic_100_intro/slides_intro.py
+clm slides normalize slides/module_010/ --dry-run
+clm slides normalize slides/module_010/ --operations tag_migration
+clm slides normalize slides/module_010/ --operations slide_ids --json
 # Pre-conversion: canonicalize start/completed order so the split round-trips exactly
 clm slides normalize slides/module_010/topic_100_intro/ --operations interleaving --canonicalize-start-completed
 ```
@@ -948,7 +948,7 @@ Extract a single-language view of a bilingual slide file. Each cell is
 preceded by an `[original line N]` annotation so edits can be mapped back.
 
 ```
-clm language-view FILE {de|en} [OPTIONS]
+clm slides language-view FILE {de|en} [OPTIONS]
 ```
 
 | Option | Description |
@@ -959,9 +959,9 @@ clm language-view FILE {de|en} [OPTIONS]
 Examples:
 
 ```bash
-clm language-view slides_intro.py de
-clm language-view slides_intro.py en --include-voiceover
-clm language-view slides_intro.py en --include-notes
+clm slides language-view slides_intro.py de
+clm slides language-view slides_intro.py en --include-voiceover
+clm slides language-view slides_intro.py en --include-notes
 ```
 
 ### `clm slides suggest-sync`
@@ -972,7 +972,7 @@ Compare a slide file against git HEAD and detect asymmetric bilingual edits.
 Suggests which cells need translation updates. Does not modify the file.
 
 ```
-clm suggest-sync [OPTIONS] FILE
+clm slides suggest-sync [OPTIONS] FILE
 ```
 
 | Option | Description |
@@ -983,8 +983,8 @@ clm suggest-sync [OPTIONS] FILE
 Examples:
 
 ```bash
-clm suggest-sync slides_intro.py
-clm suggest-sync slides_intro.py --source-language de --json
+clm slides suggest-sync slides_intro.py
+clm slides suggest-sync slides_intro.py --source-language de --json
 ```
 
 ### `clm voiceover extract`
@@ -996,7 +996,7 @@ Extract voiceover and notes cells from a slide file to a companion
 Content cells without `slide_id` get auto-generated IDs before extraction.
 
 ```
-clm extract-voiceover [OPTIONS] FILE
+clm voiceover extract [OPTIONS] FILE
 ```
 
 | Option | Description |
@@ -1007,8 +1007,8 @@ clm extract-voiceover [OPTIONS] FILE
 Examples:
 
 ```bash
-clm extract-voiceover slides_intro.py
-clm extract-voiceover slides_intro.py --dry-run
+clm voiceover extract slides_intro.py
+clm voiceover extract slides_intro.py --dry-run
 ```
 
 ### `clm voiceover inline`
@@ -1020,7 +1020,7 @@ slide file, matching via `for_slide`/`slide_id` metadata. Deletes the companion
 file after successful inlining.
 
 ```
-clm inline-voiceover [OPTIONS] FILE
+clm voiceover inline [OPTIONS] FILE
 ```
 
 | Option | Description |
@@ -1031,8 +1031,8 @@ clm inline-voiceover [OPTIONS] FILE
 Examples:
 
 ```bash
-clm inline-voiceover slides_intro.py
-clm inline-voiceover slides_intro.py --dry-run
+clm voiceover inline slides_intro.py
+clm voiceover inline slides_intro.py --dry-run
 ```
 
 ### `clm authoring rules`
@@ -1043,7 +1043,7 @@ Look up merged authoring rules (common + course-specific) for a course.
 Reads per-course `.authoring.md` files from the `course-specs/` directory.
 
 ```
-clm authoring-rules [OPTIONS]
+clm authoring rules [OPTIONS]
 ```
 
 | Option | Description |
@@ -1058,9 +1058,9 @@ At least one of `--course-spec` or `--slide-path` must be provided.
 Examples:
 
 ```bash
-clm authoring-rules --course-spec python-basics
-clm authoring-rules --slide-path slides/module_010/topic_100_intro/slides_intro.py
-clm authoring-rules --course-spec python-basics --json
+clm authoring rules --course-spec python-basics
+clm authoring rules --slide-path slides/module_010/topic_100_intro/slides_intro.py
+clm authoring rules --course-spec python-basics --json
 ```
 
 ### `clm mcp`
@@ -1453,13 +1453,13 @@ between arguments is preserved.
 | `--propagate-to [de\|en]` | After merging `--lang`, translate the changes into the given target language and update its voiceover cells |
 
 **Companion-file merge (auto-detected):**
-- If a `voiceover_*.py` companion file (as produced by `clm extract-voiceover`)
+- If a `voiceover_*.py` companion file (as produced by `clm voiceover extract`)
   exists next to `SLIDES`, sync reads baseline voiceover from the companion
   (keyed by `for_slide` → `slide_id`) and writes merged output back to the
   companion. The slide file itself is left untouched.
 - Companion mode requires a stable `slide_id` on every slide being merged.
   If any slide is missing one, sync errors out with the exact fix command
-  (run `clm extract-voiceover` to auto-generate ids, or pass `--no-companion`
+  (run `clm voiceover extract` to auto-generate ids, or pass `--no-companion`
   to merge inline).
 - `--no-companion` forces inline merge even if a companion exists; `--companion`
   forces companion mode (companion file is created on first write if missing).

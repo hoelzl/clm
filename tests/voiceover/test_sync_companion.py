@@ -107,7 +107,7 @@ class TestRequireSlideIds:
 
         msg = str(excinfo.value)
         assert "slide_id" in msg
-        assert "clm extract-voiceover" in msg
+        assert "clm voiceover extract" in msg
         assert "--no-companion" in msg
 
     def test_only_checks_slides_in_notes_map(self, tmp_path: Path):

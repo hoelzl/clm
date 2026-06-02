@@ -82,10 +82,10 @@ def normalize_slides_cmd(
 
     \b
     Examples:
-        clm normalize-slides slides/module_100/topic_010/ --dry-run
-        clm normalize-slides slides/module_100/topic_010/
-        clm normalize-slides slides/ --operations tag_migration
-        clm normalize-slides course-specs/python-basics.xml
+        clm slides normalize slides/module_100/topic_010/ --dry-run
+        clm slides normalize slides/module_100/topic_010/
+        clm slides normalize slides/ --operations tag_migration
+        clm slides normalize course-specs/python-basics.xml
     """
     op_list = _parse_operations(operations)
     result = _dispatch(path, op_list, dry_run, data_dir, canonicalize_start_completed)

@@ -5,7 +5,7 @@ each slide in the target file, which slide in the source file (if any)
 it corresponds to. The matching strategy (per proposal §3.3):
 
 1. **Primary key** — ``slide_id`` metadata attribute (stable across
-   edits, written once by ``clm normalize-slides --operations slide_ids``).
+   edits, written once by ``clm slides normalize --operations slide_ids``).
 2. **Fallback** — fuzzy title match on the slide heading.
 3. **Tie-break** — content-fingerprint similarity when titles collide.
 

@@ -45,9 +45,9 @@ def extract_voiceover_cmd(
 
     \b
     Examples:
-        clm extract-voiceover slides/topic/slides_intro.py --dry-run
-        clm extract-voiceover slides/topic/slides_intro.py
-        clm extract-voiceover slides/topic/slides_intro.py --json
+        clm voiceover extract slides/topic/slides_intro.py --dry-run
+        clm voiceover extract slides/topic/slides_intro.py
+        clm voiceover extract slides/topic/slides_intro.py --json
     """
     result = extract_voiceover(path, dry_run=dry_run)
 
@@ -86,9 +86,9 @@ def inline_voiceover_cmd(
 
     \b
     Examples:
-        clm inline-voiceover slides/topic/slides_intro.py --dry-run
-        clm inline-voiceover slides/topic/slides_intro.py
-        clm inline-voiceover slides/topic/slides_intro.py --json
+        clm voiceover inline slides/topic/slides_intro.py --dry-run
+        clm voiceover inline slides/topic/slides_intro.py
+        clm voiceover inline slides/topic/slides_intro.py --json
     """
     comp = companion_path(path)
     if not comp.exists():

@@ -40,9 +40,9 @@ def suggest_sync_cmd(
 
     \b
     Examples:
-        clm suggest-sync slides/topic/slides_intro.py
-        clm suggest-sync slides/topic/slides_intro.py --source-language de
-        clm suggest-sync slides/topic/slides_intro.py --json
+        clm slides suggest-sync slides/topic/slides_intro.py
+        clm slides suggest-sync slides/topic/slides_intro.py --source-language de
+        clm slides suggest-sync slides/topic/slides_intro.py --json
     """
     result = suggest_sync(file, source_language=source_language)
 

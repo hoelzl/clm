@@ -41,9 +41,9 @@ def language_view_cmd(
 
     \b
     Examples:
-        clm language-view slides/topic/slides_intro.py de
-        clm language-view slides/topic/slides_intro.py en --include-voiceover
-        clm language-view slides/topic/slides_intro.py de --include-notes
+        clm slides language-view slides/topic/slides_intro.py de
+        clm slides language-view slides/topic/slides_intro.py en --include-voiceover
+        clm slides language-view slides/topic/slides_intro.py de --include-notes
     """
     output = get_language_view(
         file,

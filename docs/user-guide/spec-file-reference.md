@@ -276,7 +276,7 @@ Optional `<section>` attributes:
 
 | Attribute | Description |
 |-----------|-------------|
-| `enabled` | `"true"` (default) or `"false"`, case-insensitive. A disabled section is dropped from the parsed spec entirely, so `clm build`, `clm outline`, `clm validate-spec`, and all MCP tools ignore it without needing code changes. Disabled sections may omit `<topics>` or reference topic IDs that do not yet exist — they are never built or validated, which lets a full roadmap spec live as a single file instead of carrying a separate `-build.xml` subset. |
+| `enabled` | `"true"` (default) or `"false"`, case-insensitive. A disabled section is dropped from the parsed spec entirely, so `clm build`, `clm outline`, `clm validate`, and all MCP tools ignore it without needing code changes. Disabled sections may omit `<topics>` or reference topic IDs that do not yet exist — they are never built or validated, which lets a full roadmap spec live as a single file instead of carrying a separate `-build.xml` subset. |
 | `id` | Optional stable identifier for the section (e.g. `id="w03"`). Recommended for courses that are frequently filtered with `clm build --only-sections`, because IDs are stable under reordering and renaming. |
 | `module` | Optional module-directory binding (e.g. `module="module_545_ml_azav_cohort_2026_04"`). When set, every `<topic>` inside this section resolves only against that module — duplicate topic IDs in other modules are ignored. This is the supported mechanism for cohort archives or course variants that share topic IDs with a live module. The value is the literal directory name under `slides/`. Per-topic `module=` overrides the section default for individual topics. |
 | `http-replay` | Default `http-replay` value applied to every `<topic>` in the section that does not itself carry an `http-replay` attribute. Same values as the topic-level attribute. |
@@ -298,7 +298,7 @@ Example of a roadmap section deferred until its topics exist:
 Building such a spec (`clm build course.xml`) silently skips the
 disabled section and all its unresolved topic references. Use
 `clm outline course.xml --include-disabled` to see the full roadmap
-including disabled sections, and `clm validate-spec course.xml
+including disabled sections, and `clm validate course.xml
 --include-disabled` to validate disabled sections' topics with a
 `(disabled)` suffix on each finding.
 
@@ -595,7 +595,7 @@ and may add their own additional includes alongside them.
 
 If a file at `<topic>/<as>` already exists on disk in your working tree,
 that local file wins and the include is shadowed. The build emits an
-`include_shadowed_by_local` warning and `clm validate-spec` reports the
+`include_shadowed_by_local` warning and `clm validate` reports the
 same as `include_shadowed`. Delete the local copy (or change `as`) to
 let the include take effect.
 
@@ -612,7 +612,7 @@ stale entry pointing at a different source) still warn.
 
 ### Validation
 
-Run `clm validate-spec course.xml` to surface any include problems
+Run `clm validate course.xml` to surface any include problems
 before a build:
 
 | Category | Severity | Meaning |
