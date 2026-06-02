@@ -80,10 +80,13 @@ directory/course validate **and** on a single-file validate when the twin
 exists on disk — so a pre-commit hook (`clm validate slides/ --fail-on warning`,
 or per-file in a PostToolUse hook) catches a divergence before it ships.
 
-*Recommended:* route structural changes through `clm slides sync` (which
-mints/migrates ids onto both halves consistently) rather than per-file
-`assign-ids`. A twin-aware `assign-ids` that refuses to mint a divergent id is
-the planned follow-up (the #162 defensive).
+Since CLM {version} `clm slides assign-ids` is also **twin-aware** on a split
+half (the #162 *defensive*): an id-less slide adopts the sibling file's
+`slide_id` for the positionally-corresponding slide instead of minting a
+divergent slug, when the twin exists on disk with a matching slide count. This
+keeps per-file `assign-ids` from silently diverging the halves; when both are
+id-less the first-assigned half's slug wins (parity still holds). For
+EN-authoritative ids across a born-split deck, prefer `clm slides sync`.
 
 ## Slide format redesign: `clm validate` enforces `slide_id` (warning now, error in 1.7)
 

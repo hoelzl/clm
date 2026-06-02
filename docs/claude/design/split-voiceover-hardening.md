@@ -397,10 +397,16 @@ within one bilingual file.
   `commit-without-sync` flipped break-silent → break-loud ("detective CATCHES it"). 6 new
   unit tests. Companion `for_slide` parity (the both-language voiceover compatibility check)
   is the small remaining extension.
-- **Defensive:** the highest-frequency break is **per-file `assign-ids` /
-  `extract-voiceover`**. Make them twin-aware — on a split half, consult the sibling
-  and refuse to mint a divergent id rather than running blind. (Strongly related to
-  §8: arguably these per-file ops should not be normal user commands at all.)
+- **Defensive:** ✅ **`assign-ids` BUILT 2026-06-03** — the highest-frequency break.
+  `assign_ids_in_file` is now twin-aware: on a split half whose twin exists on disk
+  with a matching slide count, an **id-less** slide adopts the twin's id
+  (`twin_ids` threaded through `assign_ids_for_cells`/`_for_text`; `source="twin"`)
+  rather than minting a divergent slug; mismatched counts skip reuse (detective flags
+  it). Both assign-ids harness rows flipped break-silent → preserve; 5 new
+  `TestSplitTwinAware` tests. Run-order decides the winning slug when both halves are
+  id-less (parity holds either way); true EN-authority is the generative step / `sync`.
+  (`extract-voiceover` twin-awareness still TODO; strongly related to §8 — arguably
+  these per-file ops should not be normal user commands at all.)
 - **Generative:** pair-aware `assign-ids` over *both* halves — establish
   correspondence (neutral=byte, code=construct, markdown=positional), mint EN-authority
   ids onto both, deterministic for structurally-parallel decks, escalating to the
@@ -521,11 +527,13 @@ corpus no-op invariant + real-deck round-trip **skip**. To build justified confi
 2. ~~**Tier-1 data-loss fixes**~~ ✅ **DONE 2026-06-03** (§3) — vo output leak;
    inline retains-companion-on-unmatched + non-zero exit; extract `--force`. Verified by
    the harness (two rows flipped to preserve) + new unit tests; full fast suite green.
-3. **#162 keystone** (§7) — **detective ✅ DONE 2026-06-03** (cross-file `slide_id` parity
-   warning in `clm validate`, dir/course + single-file-with-twin; `commit-without-sync`
-   flipped break-silent → break-loud). **Next: defensive** twin-aware `assign-ids`/`extract`
-   (refuse to mint a divergent id on a split half) — clears the two assign-ids break-silent
-   rows; then generative pair-aware minting for born-split + companion `for_slide` parity.
+3. **#162 keystone** (§7) — **detective ✅ DONE** (cross-file `slide_id` parity warning in
+   `clm validate`, dir/course + single-file-with-twin; `commit-without-sync` → break-loud).
+   **defensive ✅ DONE 2026-06-03** (twin-aware `assign_ids_in_file`; both assign-ids rows →
+   preserve). **Next:** generative pair-aware minting for born-split (true EN-authority) +
+   `extract-voiceover` twin-awareness + companion `for_slide` parity (the both-language
+   voiceover compat check). Harness now 12 preserve / 1 break-loud / 2 break-silent
+   (extract-then-split + build-merge observe-only).
 4. **Command-surface rethink** (§8) — fold/hide/guard, with info-topic updates.
 5. **Pre-commit gate** (§9) + voiceover hardening (§10) + verification additions (§11).
 6. **Sync CLI pairing guard** (§3 Tier-2) + single-path/batch UX.

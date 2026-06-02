@@ -646,6 +646,17 @@ Special cases:
 - An id prefixed with `!` (e.g. `slide_id="!intro"`) is the
   **preserve marker** — never regenerated, even under `--force`. The
   `!` is source-level only; references elsewhere use the bare form.
+- **Split-file twin awareness (since CLM {version}, issue #162).** On a
+  split half (`*.de.py` / `*.en.py`) whose twin exists on disk and has the
+  same number of slide/subslide cells, an **id-less** slide adopts the
+  twin's `slide_id` for the positionally-corresponding slide instead of
+  minting a divergent slug from its own heading — so the two halves stay in
+  `slide_id` parity (the cross-language join key). When both halves are
+  id-less, run order decides which language's slug wins, but parity holds;
+  for true EN-authoritative ids, route structural changes through
+  `clm slides sync`. When the halves have different slide counts the reuse
+  is skipped (positional correspondence is unreliable) and the divergence is
+  left for `clm validate`'s #162 detective to flag.
 
 ```
 clm slides assign-ids [OPTIONS] PATH

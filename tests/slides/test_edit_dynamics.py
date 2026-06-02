@@ -49,12 +49,11 @@ def outcomes(harness):
 # The known silent footguns the harness must keep surfacing — a refactor that
 # zeroes the work-list out (e.g. by neutering a runner) should fail here, not
 # quietly report "all green". Hardened so far: the two voiceover Tier-1 breaks
-# (now ``preserve``) and ``commit-without-sync`` (now ``break-loud`` — the #162
-# detective gate catches it). The remainder are the open work-list; the two
-# per-file assign-ids breaks are the next target (the #162 defensive).
+# (now ``preserve``), ``commit-without-sync`` (now ``break-loud`` — the #162
+# detective gate catches it), and the two per-file assign-ids breaks (now
+# ``preserve`` — the #162 defensive twin-aware reuse). The open work-list is the
+# cross-command voiceover companion seam.
 _KNOWN_SILENT_BREAKS = {
-    "add-then-assign-ids-per-file",
-    "born-split-assign-ids",
     "extract-then-split",
 }
 

@@ -43,7 +43,7 @@ if __package__ in (None, ""):  # pragma: no cover - import shim
 from clm.infrastructure.llm.cache import SyncWatermarkCache  # noqa: E402
 from clm.infrastructure.llm.ollama_client import SyncProposal  # noqa: E402
 from clm.notebooks.slide_parser import parse_cells  # noqa: E402
-from clm.slides.assign_ids import AssignOptions, assign_ids_for_text  # noqa: E402
+from clm.slides.assign_ids import AssignOptions, assign_ids_in_file  # noqa: E402
 from clm.slides.split import (  # noqa: E402
     SplitError,
     UnifyError,
@@ -285,10 +285,20 @@ def run_sync(
     )
 
 
-def run_assign_ids(text: str, file_name: str, **opts: object) -> tuple[str, object]:
-    """Per-file ``assign-ids`` — mints ids from this file's headings alone."""
-    options = AssignOptions(**opts)  # type: ignore[arg-type]
-    return assign_ids_for_text(text, Path(file_name), options)
+def run_assign_ids_pair(pair: SplitPair, workdir: Path, stem: str = "slides_demo") -> SplitPair:
+    """Write a split pair to disk and run per-file ``assign-ids`` on each half.
+
+    Mirrors the realistic ``clm slides assign-ids slides/`` flow (sorted: the
+    ``.de.py`` half then ``.en.py``). On disk the twin-aware reuse (#162
+    defensive) can fire, so the second half adopts the first half's minted ids.
+    """
+    de_path, en_path = pair.write(workdir, stem=stem)
+    assign_ids_in_file(de_path, AssignOptions())
+    assign_ids_in_file(en_path, AssignOptions())
+    return SplitPair(
+        de=de_path.read_text(encoding="utf-8"),
+        en=en_path.read_text(encoding="utf-8"),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -465,28 +475,32 @@ def m_hand_edit_id_then_sync(workdir: Path) -> _RetTuple:
 
 def m_add_then_assign_ids_per_file(workdir: Path) -> _RetTuple:
     # Author adds the SAME new slide to BOTH halves (id-less), then runs
-    # per-file assign-ids on each — divergent headings slug divergently.
+    # per-file assign-ids on each. Divergent headings would slug divergently —
+    # the #162 defensive (twin-aware reuse) keeps the id in parity.
     base = _base()
     de = base.de + slide_cell("de", "Neuer Abschnitt", bullet="- DE neu")
     en = base.en + slide_cell("en", "New Section", bullet="- EN new")
-    new_de, _ = run_assign_ids(de, "slides_demo.de.py")
-    new_en, _ = run_assign_ids(en, "slides_demo.en.py")
-    detail = id_parity(new_de, new_en)
+    result = run_assign_ids_pair(SplitPair(de=de, en=en), workdir)
+    detail = id_parity(result.de, result.en)
     return (
         (["id_parity"] if detail else []),
         False,
         "",
-        detail or f"ids matched: {slide_ids(new_de)}",
+        detail or f"twin-aware reuse: ids matched {slide_ids(result.de)}",
     )
 
 
 def m_born_split_assign_ids(workdir: Path) -> _RetTuple:
     de = _split_header('header_de("Titel DE")') + slide_cell("de", "Mein Thema")
     en = _split_header('header_en("Title EN")') + slide_cell("en", "My Topic")
-    new_de, _ = run_assign_ids(de, "slides_demo.de.py")
-    new_en, _ = run_assign_ids(en, "slides_demo.en.py")
-    detail = id_parity(new_de, new_en)
-    return (["id_parity"] if detail else []), False, "", detail or "headings slugged identically"
+    result = run_assign_ids_pair(SplitPair(de=de, en=en), workdir)
+    detail = id_parity(result.de, result.en)
+    return (
+        (["id_parity"] if detail else []),
+        False,
+        "",
+        detail or f"twin-aware reuse: ids matched {slide_ids(result.de)}",
+    )
 
 
 def m_commit_without_sync(workdir: Path) -> _RetTuple:
@@ -668,15 +682,17 @@ MUTATIONS: list[Mutation] = [
         "extract-inline-round-trip", "extract+inline", PRESERVE, True, m_extract_inline_round_trip
     ),
     Mutation("unify-split-round-trip", "split+unify", PRESERVE, True, m_unify_split_round_trip),
-    # The work-list — known silent breaks (flip to preserve when fixed).
+    # #162 defensive landed: per-file assign-ids on a split half is now
+    # twin-aware (adopts the sibling's id instead of minting a divergent slug),
+    # so both assign-ids rows flipped break-silent -> preserve.
     Mutation(
         "add-then-assign-ids-per-file",
         "assign-ids",
-        BREAK_SILENT,
+        PRESERVE,
         True,
         m_add_then_assign_ids_per_file,
     ),
-    Mutation("born-split-assign-ids", "assign-ids", BREAK_SILENT, True, m_born_split_assign_ids),
+    Mutation("born-split-assign-ids", "assign-ids", PRESERVE, True, m_born_split_assign_ids),
     # #162 detective landed: the pre-commit gate (`clm validate`) now catches a
     # committed split-half divergence — break-silent -> break-loud.
     Mutation("commit-without-sync", "no-gate", BREAK_LOUD, True, m_commit_without_sync),

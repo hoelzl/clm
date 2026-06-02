@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from clm.infrastructure.llm.ollama_client import StaticTitleSuggester
+from clm.notebooks.slide_parser import parse_cells
 from clm.slides.assign_ids import (
     AssignOptions,
     assign_ids_for_text,
@@ -431,6 +432,88 @@ class TestFileLevel:
         assign_ids_in_file(path, AssignOptions(force=True))
         second = path.read_text(encoding="utf-8")
         assert first == second
+
+
+class TestSplitTwinAware:
+    """#162 defensive: per-file ``assign-ids`` on a split half adopts the twin's
+    ``slide_id`` instead of minting a divergent one, keeping ``de_id == en_id``.
+    """
+
+    @staticmethod
+    def _slide_ids(path: Path) -> list[str | None]:
+        return [
+            c.metadata.slide_id
+            for c in parse_cells(path.read_text(encoding="utf-8"))
+            if c.metadata.is_slide_start
+        ]
+
+    def _pair(self, tmp_path: Path, de: str, en: str) -> tuple[Path, Path]:
+        return (
+            _write(tmp_path, de, "slides_x.de.py"),
+            _write(tmp_path, en, "slides_x.en.py"),
+        )
+
+    def test_idless_half_adopts_twin_id(self, tmp_path: Path):
+        # EN already carries an id; the id-less DE adopts it rather than slugging
+        # "mein-thema" from its own heading.
+        de_path, _ = self._pair(
+            tmp_path,
+            '# %% [markdown] lang="de" tags=["slide"]\n# ## Mein Thema\n',
+            '# %% [markdown] lang="en" tags=["slide"] slide_id="my-topic"\n# ## My Topic\n',
+        )
+        result = assign_ids_in_file(de_path, AssignOptions())
+        assert self._slide_ids(de_path) == ["my-topic"]
+        assert any(a.source == "twin" for a in result.assignments)
+
+    def test_born_split_reaches_parity(self, tmp_path: Path):
+        # Both halves id-less with different headings. Assign DE then EN: the EN
+        # run adopts the DE-minted id, so the halves end up in parity.
+        de_path, en_path = self._pair(
+            tmp_path,
+            '# %% [markdown] lang="de" tags=["slide"]\n# ## Mein Thema\n',
+            '# %% [markdown] lang="en" tags=["slide"]\n# ## My Topic\n',
+        )
+        assign_ids_in_file(de_path, AssignOptions())
+        assign_ids_in_file(en_path, AssignOptions())
+        de_ids = self._slide_ids(de_path)
+        assert de_ids == self._slide_ids(en_path)
+        assert de_ids == ["mein-thema"]  # DE ran first, so its slug wins
+
+    def test_count_mismatch_skips_reuse(self, tmp_path: Path):
+        # Misaligned halves (DE has an extra slide): positional reuse is unsafe,
+        # so DE mints normally and the divergence is left for the validator's
+        # #162 detective.
+        de_path, _ = self._pair(
+            tmp_path,
+            '# %% [markdown] lang="de" tags=["slide"]\n# ## Intro\n'
+            '# %% [markdown] lang="de" tags=["slide"]\n# ## Extra\n',
+            '# %% [markdown] lang="en" tags=["slide"] slide_id="intro"\n# ## Intro\n',
+        )
+        result = assign_ids_in_file(de_path, AssignOptions())
+        assert all(a.source != "twin" for a in result.assignments)
+        assert self._slide_ids(de_path) == ["intro", "extra"]
+
+    def test_no_twin_mints_normally(self, tmp_path: Path):
+        de_path = _write(
+            tmp_path,
+            '# %% [markdown] lang="de" tags=["slide"]\n# ## Mein Thema\n',
+            "slides_x.de.py",
+        )
+        result = assign_ids_in_file(de_path, AssignOptions())
+        assert self._slide_ids(de_path) == ["mein-thema"]
+        assert all(a.source != "twin" for a in result.assignments)
+
+    def test_existing_divergent_id_not_touched_without_force(self, tmp_path: Path):
+        # The defensive only fills id-less cells. A pre-existing divergent id is
+        # left alone (the detective surfaces it); assign-ids must not silently
+        # rewrite it under the no-force default.
+        de_path, _ = self._pair(
+            tmp_path,
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="de-own"\n# ## Thema\n',
+            '# %% [markdown] lang="en" tags=["slide"] slide_id="en-own"\n# ## Topic\n',
+        )
+        assign_ids_in_file(de_path, AssignOptions())
+        assert self._slide_ids(de_path) == ["de-own"]
 
 
 # ---------------------------------------------------------------------------
