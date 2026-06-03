@@ -65,6 +65,27 @@ relied on the old behavior may need a flag or an exit-code check.
 These are also surfaced by the new fast-suite `tests/slides/test_edit_dynamics.py`
 cross-command harness (`scripts/edit_dynamics_harness.py`).
 
+## `clm voiceover extract` auto-pairs on a split half ({version})
+
+CLM {version} makes `clm voiceover extract` produce **both** companions of a
+split deck in one op. When `FILE` is a split half (`<deck>.de.py` /
+`<deck>.en.py`) whose twin exists on disk, extract now mints EN-authority
+`slide_id`s across both halves and extracts both, so the two companions'
+`for_slide` sets agree by construction (closing the per-language footgun where
+extracting each half by hand could mint divergent slugs).
+
+*Migration (behavior change):* a bare `clm voiceover extract <deck>.de.py` that
+used to write only `voiceover_<deck>.de.py` now also writes
+`voiceover_<deck>.en.py`, and the EN-authority pre-mint may stamp `slide_id`s on
+**both** slide halves (so `git diff` shows the `.en` half too). To keep the old
+single-half behavior, pass `--single`. The `--json` output for a paired extract
+is a new shape — `{"paired": true, "companions": [<de>, <en>], …}` — so a
+consumer that reads top-level `cells_extracted` should branch on the `paired`
+key (a single-file/bilingual extract still emits the flat object). A pair that
+is not structurally alignable makes extract **refuse** (reconcile with
+`clm slides sync` first). Bilingual decks (no `.de`/`.en` twin) are unchanged.
+The MCP `extract_voiceover` tool gains matching `both` / `single` parameters.
+
 ## `slides split` / `unify` carry the voiceover companion ({version})
 
 Previously `clm slides split` only split the deck — a sibling voiceover

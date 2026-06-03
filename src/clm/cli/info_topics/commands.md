@@ -1134,9 +1134,25 @@ divergent slug (the #162 defensive). This keeps `de_id == en_id` when you
 extract the two halves separately, so their companions' `for_slide` sets agree
 — without it, per-language extraction would mint independent slugs and one
 language would silently ship with missing narration (which `clm validate`'s
-#162 detectives now flag). For deterministic EN-authority ids across a pair,
-run `clm slides assign-ids <dir>` before extracting; bilingual decks are
-unaffected.
+#162 detectives now flag). Bilingual decks are unaffected.
+
+**Paired extract (auto-pairing), since CLM {version}.** When `FILE` is a split
+half (`<deck>.de.py` / `<deck>.en.py`) whose twin exists on disk, both
+companions are extracted in **one op** by default: the two halves are first
+minted with **EN-authority** `slide_id`s across both at once (the slug comes
+from the EN heading, stamped identically on both halves), then each half is
+extracted, and all writes commit atomically. This is stronger than extracting
+the halves one at a time — the `for_slide` sets agree *by construction* and the
+result is independent of which half you point at. The routing prefix is not
+required, so `apis.de.py` / `apis.en.py` pairs too. Pass `--single` to extract
+only `FILE`'s own companion (the legacy per-half behavior); `--both` forces the
+paired form and errors if there is no twin. If the two halves are not
+structurally alignable (divergent shared cells / mismatched cell count), the
+paired extract **refuses** rather than risk divergence — reconcile them first
+(e.g. `clm slides sync`). A bilingual deck (no `.de`/`.en` twin) always extracts
+a single companion. The `--json` output for a paired extract carries
+`"paired": true` and a `"companions"` array (one entry per half); a single
+extract keeps the flat object.
 
 Since CLM {version}, each extracted cell also records a `vo_anchor`
 attribute identifying its **immediate predecessor cell** — `id:<slide_id>`
@@ -1161,16 +1177,20 @@ clm voiceover extract [OPTIONS] FILE
 
 | Option | Description |
 |--------|-------------|
-| `--force` | Overwrite an existing companion (rebuilds it from the slide's voiceover cells, discarding companion-only content). Without it, an existing companion is left untouched and the command errors. |
+| `--force` | Overwrite an existing companion (rebuilds it from the slide's voiceover cells, discarding companion-only content). Without it, an existing companion is left untouched and the command errors. For a paired extract this is **all-or-nothing**: it refuses if *either* companion exists. |
+| `--both` | Force the paired extract (both companions of a split deck). Auto-detected on a split half whose twin exists; passing `--both` errors if there is no twin. |
+| `--single` | Extract only `FILE`'s own companion, even on a split half whose twin exists — opt out of the default auto-pairing. |
 | `--dry-run` | Preview changes without modifying files |
 | `--json` | Output as JSON |
 
 Examples:
 
 ```bash
-clm voiceover extract slides_intro.py
+clm voiceover extract slides_intro.py                 # bilingual: single companion
+clm voiceover extract slides_intro.de.py              # split half: auto-pairs both companions
+clm voiceover extract slides_intro.de.py --single     # split half: this half only
 clm voiceover extract slides_intro.py --dry-run
-clm voiceover extract slides_intro.py --force
+clm voiceover extract slides_intro.de.py --force
 ```
 
 ### `clm voiceover inline`
@@ -1274,7 +1294,7 @@ The MCP server exposes 11 tools over stdio transport:
 | `normalize_slides` | Apply mechanical fixes (tag migration, interleaving, slide IDs) |
 | `get_language_view` | Extract single-language view with line annotations |
 | `suggest_sync` | Detect asymmetric bilingual edits vs git HEAD |
-| `extract_voiceover` | Move voiceover cells to companion file |
+| `extract_voiceover` | Move voiceover cells to a companion file; on a split half auto-pairs both companions (`both`/`single` params, `"paired"` JSON) |
 | `inline_voiceover` | Merge voiceover cells back from companion file |
 | `course_authoring_rules` | Look up merged authoring rules for a course |
 

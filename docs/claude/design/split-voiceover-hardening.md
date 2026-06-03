@@ -466,7 +466,7 @@ agent/script plumbing, or **(G)** harden with a guard.
 | Command | Why it's risky | Disposition (proposed) |
 |---|---|---|
 | `assign-ids` (per file) | Per-file run on a split half mints **divergent** ids — the #1 silent #162 break. Its core job (id minting) is already done *consistently* by `sync`. | **F + H — DONE (2026-06-03).** F was already real (minting is shared via the `clm.slides.assign_ids` engine, reused by `normalize` and the generative `assign_ids_in_split_pair`). H: `hidden=True` on the command — invocable by name for agents/scripts, gone from `clm slides --help`; docstring + `commands.md`/`migration.md`/README reframed as plumbing, pointing to `sync`/`normalize` as the canonical authoring path. |
-| `voiceover extract` | Single-file, clobbers companion w/o `--force`; per-language only; no cross-language check. | **G now, F later** — add `--force`/guard immediately; longer-term fold extraction into a paired, twin-aware operation (or under `sync`'s umbrella). |
+| `voiceover extract` | Single-file, clobbers companion w/o `--force`; per-language only; no cross-language check. | **G + F — DONE.** G (2026-06-03): `--force`/refuse-clobber. F (2026-06-03): `extract_voiceover_pair` — on a split half whose twin exists, extract **auto-pairs** both companions in one op, minting **EN-authority** ids across both halves first (via `assign_ids_in_split_pair`) so `for_slide` sets agree by construction, then writing all four files via the shared `atomic_write_all`; `--single` opts out, `--both` forces, a non-alignable pair is refused. CLI + MCP (`both`/`single`) + paired JSON shape. NOT folded under `sync` (kept a sibling op — `sync` is deck-identity, extract is narration-relocation). |
 | `voiceover inline` | Destructive: unlinks companion even on unmatched, exit 0, no backup. | **G** — preserve/backup on unmatched, non-zero exit, `--dry-run` default. |
 | `slides split` | Unaware of voiceover companions; extract-then-split silently orphans them. | **G — DONE (2026-06-03).** First-class companion split: `split_in_file` splits a sibling `voiceover_*.py` in lockstep into `voiceover_*.de.py`/`.en.py`, routing cells by `lang`, preserving `for_slide`/`vo_anchor`. Atomic `--force` over deck+companion; byte-identical round trip. |
 | `slides unify` | Ignores companions; can't recombine voiceover. | **G — DONE (2026-06-03).** `unify_in_file` recombines the companion halves into `voiceover_*.py` (inverse of split; missing half treated as empty so narration is never dropped). |
@@ -629,9 +629,14 @@ corpus no-op invariant + real-deck round-trip **skip**. To build justified confi
    (`split_twin` / `split_twin_pair` + the prefix-agnostic `order_split_pair` /
    `split_lang_tag`); `clm slides sync` **pairing guard**; `assign-ids` and
    `suggest-sync` **hidden as plumbing** (`hidden=True`), with `commands.md` /
-   `migration.md` / README updated. **Deferred:** the paired one-op `voiceover
-   extract --both` (auto-pair on a split half; pre-decided surface), and the
-   `slides sync` single-path contract + directory/spec batch mode (additive UX).
+   `migration.md` / README updated. **Paired `voiceover extract` DONE
+   (2026-06-03):** `extract_voiceover_pair` auto-pairs on a split half
+   (EN-authority pre-mint → extract both → atomic four-file write; `--both` /
+   `--single`; CLI + MCP + paired JSON; refuses a non-alignable pair); the
+   shared `atomic_write_all` was promoted to `path_utils` and reused by
+   `split`/`unify`. **Deferred:** the `slides sync` single-path contract +
+   directory/spec batch mode (additive UX) — single-path is next; batch is its
+   own follow-up (`sync DIR` + continue-on-error + `--yes`, pre-decided).
 5. **Pre-commit gate** (§9) + voiceover hardening (§10) + verification additions (§11).
 6. **Sync CLI single-path / batch UX** (§8) on top of the shipped pairing guard.
 7. Forward design: N-file atomicity for separated voiceover (§3 #6); `FileTopic`
@@ -661,10 +666,17 @@ corpus no-op invariant + real-deck round-trip **skip**. To build justified confi
   `cell_content_hash`), `pairing.py`.
 - IDs: `assign_ids.py` (slug/minting; `group_slug` `:301-339`; refusals `:545-568`),
   `slug.py` (`resolve_collision` `:189-201`).
-- Voiceover (slide-side): `voiceover_tools.py` (`companion_path` `:122-136`; extract
-  `:349-424`; `_ensure_slide_ids` — twin-aware id gen, threads `twin_ids` via
-  `assign_ids._twin_ids_for` into `normalizer._apply_slide_ids`; inline `:706-802`;
-  `merge_voiceover_text` `:432-485`; `vo_anchor` `:204-256`).
+- Voiceover (slide-side): `voiceover_tools.py` (`companion_path`; `_plan_extraction`
+  (write-free planner) + thin `extract_voiceover`; **`extract_voiceover_pair`** —
+  paired auto-pair op: `order_split_pair` → all-or-nothing companion guard →
+  `assign_ids_in_split_pair` EN-authority pre-mint (refuse on `None`) → `_plan_extraction`
+  per half → one `atomic_write_all`; `PairedExtractionResult`; `_ensure_slide_ids`
+  twin-aware; inline; `merge_voiceover_text`; `vo_anchor`). Auto-pair derivation:
+  `pairing.derive_split_pair` (prefix-agnostic, disk-aware). CLI `--both`/`--single`
+  + `_paired_extraction_to_dict`; MCP twin + `_paired_extraction_result_to_dict` (kept
+  byte-aligned).
+- Cross-file atomic write: `path_utils.atomic_write_all` (promoted from `split._atomic_write_all`;
+  reused by `split`/`unify` and `extract_voiceover`/`extract_voiceover_pair`).
 - Split/unify: `split.py` (`split_text`; `unify_texts`; `_slide_ids_pair`; force guards;
   companion seam `_plan_companion_split` / `_plan_companion_unify` — lazy `companion_path`
   import, reuse `split_text`/`unify_texts`; `SplitResult`/`UnifyResult` companion fields).

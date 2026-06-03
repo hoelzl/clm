@@ -16,6 +16,8 @@ from clm.slides.pairing import (
     TITLE_SLIDE_ID,
     build_slide_groups,
     build_slide_pairs,
+    derive_split_pair,
+    derive_split_twin,
     is_title_macro_cell,
     order_split_pair,
     split_lang_tag,
@@ -265,3 +267,62 @@ class TestOrderSplitPair:
         assert split_lang_tag(Path("slides_x.en.py")) == "en"
         assert split_lang_tag(Path("apis.py")) is None
         assert split_lang_tag(Path("a.b.c.en.py")) == "en"
+
+
+class TestDeriveSplitTwin:
+    """``derive_split_twin`` / ``derive_split_pair`` — the PREFIX-AGNOSTIC,
+    disk-aware twin derivation for the single-arg CLI surfaces (voiceover extract
+    auto-pair, sync single-path). Unlike ``split_twin`` they work on prefix-less
+    deck names too.
+    """
+
+    def test_twin_found_prefix_less(self, tmp_path: Path):
+        de = tmp_path / "apis.de.py"
+        en = tmp_path / "apis.en.py"
+        de.write_text("# de\n", encoding="utf-8")
+        en.write_text("# en\n", encoding="utf-8")
+        # split_twin (prefix-gated) sees nothing; derive_split_twin does.
+        assert split_twin(de) is None
+        assert derive_split_twin(de) == en
+        assert derive_split_twin(en) == de
+
+    def test_twin_found_with_prefix(self, tmp_path: Path):
+        de = tmp_path / "slides_x.de.py"
+        en = tmp_path / "slides_x.en.py"
+        de.write_text("# de\n", encoding="utf-8")
+        en.write_text("# en\n", encoding="utf-8")
+        assert derive_split_twin(de) == en
+
+    def test_twin_none_when_missing(self, tmp_path: Path):
+        de = tmp_path / "apis.de.py"
+        de.write_text("# de\n", encoding="utf-8")
+        assert derive_split_twin(de) is None
+
+    def test_twin_none_for_non_split(self, tmp_path: Path):
+        bilingual = tmp_path / "apis.py"
+        bilingual.write_text("# both\n", encoding="utf-8")
+        assert derive_split_twin(bilingual) is None
+
+    def test_pair_orders_de_first(self, tmp_path: Path):
+        de = tmp_path / "apis.de.py"
+        en = tmp_path / "apis.en.py"
+        de.write_text("# de\n", encoding="utf-8")
+        en.write_text("# en\n", encoding="utf-8")
+        assert derive_split_pair(de) == (de, en)
+        assert derive_split_pair(en) == (de, en)
+
+    def test_pair_none_when_twin_missing(self, tmp_path: Path):
+        en = tmp_path / "apis.en.py"
+        en.write_text("# en\n", encoding="utf-8")
+        assert derive_split_pair(en) is None
+
+    def test_companion_is_not_a_deck_half(self, tmp_path: Path):
+        # A voiceover companion carries a .de/.en tag but is the OUTPUT of an
+        # extract, not a deck to auto-pair — deriving a twin must return None so
+        # an extract pointed at a companion can't empty both companions.
+        de = tmp_path / "voiceover_x.de.py"
+        en = tmp_path / "voiceover_x.en.py"
+        de.write_text("# de\n", encoding="utf-8")
+        en.write_text("# en\n", encoding="utf-8")
+        assert derive_split_twin(de) is None
+        assert derive_split_pair(de) is None

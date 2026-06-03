@@ -28,6 +28,7 @@ from clm.slides.normalizer import NormalizationResult
 from clm.slides.normalizer import normalize_course as _normalize_course
 from clm.slides.normalizer import normalize_directory as _normalize_directory
 from clm.slides.normalizer import normalize_file as _normalize_file
+from clm.slides.pairing import derive_split_pair as _derive_split_pair
 from clm.slides.search import SearchResult
 from clm.slides.search import search_slides as _search_slides
 from clm.slides.spec_validator import SpecValidationResult
@@ -36,8 +37,14 @@ from clm.slides.validator import ValidationResult
 from clm.slides.validator import validate_course as _validate_course
 from clm.slides.validator import validate_directory as _validate_directory
 from clm.slides.validator import validate_file as _validate_file
-from clm.slides.voiceover_tools import ExtractionResult, InlineResult, VoiceoverError
+from clm.slides.voiceover_tools import (
+    ExtractionResult,
+    InlineResult,
+    PairedExtractionResult,
+    VoiceoverError,
+)
 from clm.slides.voiceover_tools import extract_voiceover as _extract_voiceover
+from clm.slides.voiceover_tools import extract_voiceover_pair as _extract_voiceover_pair
 from clm.slides.voiceover_tools import inline_voiceover as _inline_voiceover
 
 logger = logging.getLogger(__name__)
@@ -600,14 +607,34 @@ def _extraction_result_to_dict(result: ExtractionResult) -> dict:
     }
 
 
+def _paired_extraction_result_to_dict(result: PairedExtractionResult) -> dict:
+    """Paired-extract JSON shape — byte-aligned with the CLI's
+    ``_paired_extraction_to_dict`` (the two serializers are a contract). The
+    ``"paired": true`` discriminator lets consumers branch; a single-file
+    extract keeps emitting the flat dict (no ``paired`` key)."""
+    return {
+        "paired": True,
+        "dry_run": result.dry_run,
+        "ids_minted": result.ids_minted,
+        "companions": [_extraction_result_to_dict(r) for r in result.results],
+        "summary": result.summary,
+    }
+
+
 async def handle_extract_voiceover(
     file: str,
     data_dir: Path,
     *,
     force: bool = False,
     dry_run: bool = False,
+    both: bool = False,
+    single: bool = False,
 ) -> str:
     """Extract voiceover cells from a slide file to a companion file.
+
+    On a split half whose twin exists on disk, both companions are extracted in
+    one EN-authority paired op by default (mirrors the CLI). ``single`` opts out;
+    ``both`` forces the paired form (errors if there is no twin).
 
     Args:
         file: Path to the slide file (absolute or relative to data_dir).
@@ -615,16 +642,32 @@ async def handle_extract_voiceover(
         force: Overwrite an existing companion file (rebuilds it from the
             slide's voiceover cells, discarding companion-only content).
         dry_run: If ``True``, preview without writing files.
+        both: Force the paired extract (both companions of a split deck).
+        single: Extract only ``file``'s own companion, even on a split half.
 
     Returns:
-        JSON string with extraction results, or a ``{"error": ...}`` object
-        when an existing companion would be clobbered without ``force``.
+        JSON string with extraction results (a paired shape carries
+        ``"paired": true``), or a ``{"error": ...}`` object when an existing
+        companion would be clobbered without ``force`` or the pair is invalid.
     """
     target = Path(file)
     if not target.is_absolute():
         target = data_dir / target
 
+    if both and single:
+        return json.dumps({"error": "both and single are mutually exclusive"}, indent=2)
+
+    pair = None if single else _derive_split_pair(target)
+    if both and pair is None:
+        return json.dumps(
+            {"error": f"both requested but '{target.name}' has no split twin on disk"},
+            indent=2,
+        )
+
     try:
+        if pair is not None:
+            paired = _extract_voiceover_pair(pair[0], pair[1], force=force, dry_run=dry_run)
+            return json.dumps(_paired_extraction_result_to_dict(paired), indent=2)
         result = _extract_voiceover(target, force=force, dry_run=dry_run)
     except VoiceoverError as e:
         return json.dumps({"error": str(e)}, indent=2)
