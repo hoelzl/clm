@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from clm.infrastructure.llm.ollama_client import OllamaError
-from clm.notebooks.slide_parser import parse_cell_header, parse_cells
+from clm.notebooks.slide_parser import Cell, parse_cell_header, parse_cells
 from clm.slides.raw_cells import RawCell
 from clm.slides.slug import resolve_collision, slugify
 from clm.slides.sync_code import apply_code_structure
@@ -52,6 +52,7 @@ from clm.slides.sync_plan import (
     NEUTRAL_CODE_ROLE,
     Proposal,
     SyncPlan,
+    TagHold,
     ordered_sync_cells,
     watermark_rows,
     watermark_tag_map,
@@ -305,13 +306,18 @@ def apply_plan(
     # forces every reconciled edit to re-surface next run. Any other partial
     # pass holds the whole watermark (nothing un-applied is ever baselined).
     #
-    # ``not plan.issues`` gates BOTH paths: a both-decks reorder or an ambiguous
-    # de/en state is emitted as a *warning* (no proposal, no error) whose order/
-    # ambiguity is deliberately not reconciled. Advancing over it — on either the
-    # full or the partial path — would bake the new positions and silently lose
-    # the "resolve manually" signal, so any issue holds the whole watermark.
-    if watermark_cache is not None and not plan.issues:
-        if _pass_is_clean(plan, result):
+    # ``not plan.blocking_issues`` gates BOTH paths: a both-decks reorder, an
+    # ambiguous de/en state, or a shared-cell auto-heal is emitted as a *warning*
+    # (no proposal, no error) whose order/ambiguity is deliberately not reconciled.
+    # Advancing over it — on either path — would bake the new positions and
+    # silently lose the "resolve manually" signal, so any such issue holds the
+    # whole watermark. A *tag-only* both-decks conflict (Issue #202), by contrast,
+    # touches no body and is scoped to one cell's tags: it does NOT block, but it
+    # forces the partial path (the full path would record the divergent tags and
+    # silently baseline them), where its own cell's tags are pinned at the old
+    # baseline so the conflict re-surfaces while everything else banks.
+    if watermark_cache is not None and not plan.blocking_issues:
+        if _pass_is_clean(plan, result) and not plan.tag_holds:
             _record_watermark(watermark_cache, plan.de_path, plan.en_path)
             result.watermark_recorded = True
         elif (
@@ -322,7 +328,7 @@ def apply_plan(
             # key), hold the whole watermark rather than risk advancing over it.
             and len(deferred_keys) == result.deferred
             and _record_watermark_partial(
-                watermark_cache, plan.de_path, plan.en_path, deferred_keys
+                watermark_cache, plan.de_path, plan.en_path, deferred_keys, plan.tag_holds
             )
         ):
             result.watermark_recorded = True
@@ -1739,24 +1745,32 @@ def _eligible_for_partial_advance(plan: SyncPlan, result: ApplyResult) -> bool:
     """Whether a per-cell partial watermark advance is safe for this pass.
 
     Restricted to a **content-only** partial pass: every proposal is an
-    ``edit`` or ``conflict`` (no add / remove / move / rename) AND the plan
-    carries **no issues**. The no-issues guard matters: a both-decks reorder or
-    an ambiguous de/en state is emitted as a *warning* (not a proposal and not
-    an error), and its order/ambiguity is deliberately not reconciled — so a
-    pass carrying any issue must hold the whole watermark, else that
-    un-propagated signal would be silently baselined. With neither structural
-    proposals nor issues, both decks' ordered ``(slide_id, role)`` structure is
-    unchanged, so current positions equal baseline positions.
+    ``edit`` / ``conflict`` / ``retag`` (no add / remove / move / rename) AND the
+    plan carries **no blocking issues**. The blocking-issue guard matters: a
+    both-decks reorder or an ambiguous de/en state is emitted as a *warning* (not
+    a proposal and not an error), and its order/ambiguity is deliberately not
+    reconciled — so a pass carrying any such issue must hold the whole watermark,
+    else that un-propagated signal would be silently baselined. A *tag-only*
+    both-decks conflict (Issue #202) is **not** blocking: it touches no body, so
+    the body baseline (and current positions) are unchanged and the partial
+    advance can bank everything while pinning just that cell's tags. With neither
+    structural proposals nor blocking issues, both decks' ordered ``(slide_id,
+    role)`` structure is unchanged, so current positions equal baseline positions.
 
-    Requires a real baseline, no errors, no issues, at least one deferral (a
-    clean pass already did a full advance), and at least one *reconciled write*
-    (``applied_edit > 0``) — there is nothing to bank in a pass that only
-    deferred, so it just holds. Any other partial pass falls back to holding the
-    whole watermark — safe, just noisier on the next run.
+    Requires a real baseline, no errors, and *something to bank*: either a
+    reconciled write co-existing with a deferral (``applied_edit > 0`` and
+    ``deferred > 0`` — a clean pass with neither already did a full advance), or a
+    tag-only hold to pin (Issue #202). Any other partial pass falls back to
+    holding the whole watermark — safe, just noisier on the next run.
     """
-    if not plan.has_baseline or plan.issues or result.errors:
+    if not plan.has_baseline or plan.blocking_issues or result.errors:
         return False
-    if result.deferred <= 0 or result.applied_edit <= 0:
+    # A tag-only hold (#202) is itself a per-cell deferral the partial path banks
+    # around, so it makes the pass eligible on its own (a co-applied clean edit may
+    # have ``deferred == 0``). Absent a tag hold, fall back to the original
+    # content-conflict rule: bank only when a reconciled write and a true deferral
+    # co-exist — there is nothing to bank in a pass that only deferred.
+    if not plan.tag_holds and (result.deferred <= 0 or result.applied_edit <= 0):
         return False
     structural = (
         plan.count("add") + plan.count("remove") + plan.count("move") + plan.count("rename")
@@ -1764,30 +1778,63 @@ def _eligible_for_partial_advance(plan: SyncPlan, result: ApplyResult) -> bool:
     return structural == 0
 
 
+def _tag_hold_position(cells: list[Cell], lang: str, hold: TagHold) -> int | None:
+    """The membership-partition index of the cell a :class:`TagHold` pins (#202).
+
+    An id-less hold carries its ``position`` directly — the watermark ``lang``
+    partition index, identical on both aligned halves (the classifier emits it only
+    once :func:`_streams_aligned` holds). An id-carrying hold is located by
+    ``(slide_id, role)`` among the language's non-j2 cells, counting in the exact
+    per-partition order :func:`watermark_rows` / :func:`watermark_tag_map` assign.
+    Returns ``None`` when an id-carrying cell is absent (so the caller can hold the
+    whole watermark rather than pin the wrong cell).
+    """
+    if hold.position is not None:
+        return hold.position
+    pos = 0
+    for cell in cells:
+        meta = cell.metadata
+        if meta.is_j2 or meta.lang != lang:
+            continue
+        if meta.slide_id == hold.slide_id and role_of(meta) == hold.role:
+            return pos
+        pos += 1
+    return None
+
+
 def _record_watermark_partial(
     cache: SyncWatermarkCache,
     de_path: Path,
     en_path: Path,
     preserve_keys: set[tuple[str, str]],
+    tag_holds: list[TagHold],
 ) -> bool:
     """Advance the watermark per-cell, holding the true deferrals at baseline.
 
     Records the **current** state for every cell — the reconciliation default,
-    matching the full advance — EXCEPT for any ``(slide_id, role)`` in
-    ``preserve_keys`` (an unresolved conflict or a user-skipped edit), which
-    keeps its **old** baseline hash so it re-surfaces next run instead of being
-    silently baselined. An ``in_sync`` edit is *not* a deferral — the judge
-    reconciled it — so it banks like an applied edit.
+    matching the full advance — EXCEPT for two kinds of held cell:
 
-    Valid only on a content-only, issue-free pass (see
+    - any ``(slide_id, role)`` in ``preserve_keys`` (an unresolved conflict or a
+      user-skipped edit) keeps its **old** baseline *body hash* so it re-surfaces
+      next run instead of being silently baselined; and
+    - any cell named by a ``tag_hold`` (Issue #202 — a tag-only both-decks
+      conflict) keeps its **old** baseline *tags* on both halves, so the tag
+      conflict re-surfaces while its body baseline — and every other cell,
+      including a co-applied clean edit — still banks.
+
+    An ``in_sync`` edit is *not* a deferral — the judge reconciled it — so it banks
+    like an applied edit.
+
+    Valid only on a content-only pass with no *blocking* issues (see
     :func:`_eligible_for_partial_advance`): structure is unchanged, so current
     positions equal baseline positions. Returns ``False`` without writing if any
     preserved key is absent from *either* deck's old baseline **or** current
-    cells. The current-cell check matters: a "removed on one deck / edited on the
-    other" collision is classified as a ``conflict`` (not a ``remove``), so it
-    slips the structural gate, yet the cell is gone from the removing deck — we
-    cannot faithfully preserve it there, so we hold the whole watermark and let
-    the conflict re-surface instead of dropping it.
+    cells, or if a tag hold cannot be faithfully located / lacks an old baseline
+    tag set on either half. The current-cell check matters: a "removed on one deck
+    / edited on the other" collision is classified as a ``conflict`` (not a
+    ``remove``), so it slips the structural gate, yet the cell is gone from the
+    removing deck — we cannot faithfully preserve it there, so we hold the whole
+    watermark and let the conflict re-surface instead of dropping it.
     """
     parsed = {
         "de": parse_cells(de_path.read_text(encoding="utf-8")),
@@ -1822,8 +1869,24 @@ def _record_watermark_partial(
     # membership rows re-derive faithfully from the current files.
     widened = {"de": watermark_rows(parsed["de"]), "en": watermark_rows(parsed["en"])}
     # Issue #198: a content-only pass leaves every cell's tags as they are on disk,
-    # so the current tag map is the right baseline for every recorded cell.
+    # so the current tag map is the right baseline for every recorded cell — EXCEPT
+    # the Issue #202 tag holds, whose tags we rewind to the old baseline below.
     tag_map = {"de": watermark_tag_map(parsed["de"]), "en": watermark_tag_map(parsed["en"])}
+    if tag_holds:
+        old_tags = {
+            "de": cache.get_deck_tags(str(de_path), str(en_path), "de"),
+            "en": cache.get_deck_tags(str(de_path), str(en_path), "en"),
+        }
+        for hold in tag_holds:
+            for lang in ("de", "en"):
+                pos = _tag_hold_position(parsed[lang], lang, hold)
+                # A both-decks tag conflict only ever fires with a known baseline on
+                # both halves, so a missing position / tag here means the held cell
+                # could not be faithfully re-located — hold the whole watermark
+                # rather than risk pinning (or silently advancing) the wrong cell.
+                if pos is None or pos not in old_tags[lang]:
+                    return False
+                tag_map[lang][lang][pos] = old_tags[lang][pos]
     for lang in ("de", "en"):
         rows: list[tuple[int, str | None, str, str, str | None]] = []
         for pos, sid, role, chash, construct in widened[lang][lang]:

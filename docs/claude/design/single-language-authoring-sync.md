@@ -597,6 +597,27 @@ monotonically safe (it only adds holds, never advances). 12
 Lesson logged: never seed an adversarial review with an unproven invariant — it
 manufactures false positives.
 
+**Part 2b refinement — tag-only conflicts are scoped, not whole-deck holds (#202,
+✅ 2026-06-04).** The `not plan.issues` gate above is correct for *structural*
+warnings (a both-decks reorder, an ambiguous de/en state, a shared-cell auto-heal)
+— their order/ambiguity can't be partially advanced, so they must hold the whole
+watermark. But it was too broad for a **tag-only both-decks conflict** (the `both`
+branch of the #198/#200/#201 retag paths): such a warning touches no cell *body*,
+yet it held the entire deck's baseline hostage, so a clean edit applied in the same
+pass reached disk but never baselined and re-surfaced as a *phantom `conflict`*
+every run until the unrelated tag conflict was resolved by hand (non-idempotent).
+Fix: a `both` tag warning now carries a `PlanIssue.tag_hold` (`TagHold` — keyed by
+`(slide_id, role)` for an id-carrying cell, by position for an id-less localized
+one). `SyncPlan.blocking_issues` excludes tag-hold issues, so the advance gate
+(top-level + `_eligible_for_partial_advance`) ignores them and the partial advance
+runs; `_record_watermark_partial` then pins **only the held cell's tags** to their
+old baseline (on both halves) — banking every body baseline and the co-applied
+edit, while the tag conflict still re-surfaces (no silent baselining). A tag hold
+also makes a content-only pass eligible on its own, since a co-applied clean edit
+may have `deferred == 0`. The id-carrying (#200) and id-less (#201) `both` paths
+are fixed together. See `sync_plan.py::TagHold` / `SyncPlan.blocking_issues` and
+`sync_apply.py::_record_watermark_partial` / `_tag_hold_position`.
+
 Live `clm slides sync` STILL UNCHANGED (Phase 5 wires the engine + flips the
 default).
 
