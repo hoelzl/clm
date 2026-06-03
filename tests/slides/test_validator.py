@@ -1636,7 +1636,7 @@ class TestCheckOrdering:
 class TestCheckSlideIds:
     """Validate Phase 3's `_check_slide_ids` rules."""
 
-    # -- Missing slide_id: rollout option B (warning, promote to error in 1.7) --
+    # -- Missing slide_id: rollout option B (warning, promote to error in 1.8) --
 
     def test_missing_slide_id_warns(self, tmp_path):
         p = _write_slide(
@@ -1659,7 +1659,7 @@ class TestCheckSlideIds:
         assert all("assign-ids" in f.suggestion for f in warnings)
         # Promotion note belongs in the suggestion so it surfaces in
         # editor hover/quickfix UIs, not just docs.
-        assert all("1.7" in f.suggestion for f in warnings)
+        assert all("1.8" in f.suggestion for f in warnings)
 
     def test_present_slide_id_silent(self, tmp_path):
         p = _write_slide(

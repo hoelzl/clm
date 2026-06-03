@@ -328,7 +328,7 @@ class Kind(StrEnum):
     COMPLETED = "completed"
     TRAINER = "trainer"
     RECORDING = "recording"
-    SPEAKER = "speaker"  # Deprecated alias for RECORDING; removed in CLM 1.7.
+    SPEAKER = "speaker"  # Deprecated alias for RECORDING; removed in CLM 1.8.
     PARTIAL = "partial"
 
 

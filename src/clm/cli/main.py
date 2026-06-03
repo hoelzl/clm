@@ -207,7 +207,7 @@ cli.add_command(jupyterlite_group)
 # ---------------------------------------------------------------------
 # Deprecated top-level aliases (Phase 0). Each old name keeps working
 # with a deprecation notice naming the new invocation. Removal slated
-# for CLM 1.7.
+# for CLM 1.8.
 # ---------------------------------------------------------------------
 cli.add_command(deprecated_alias(normalize_slides_cmd, new_invocation="slides normalize"))
 cli.add_command(deprecated_alias(language_view_cmd, new_invocation="slides language-view"))

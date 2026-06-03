@@ -232,7 +232,7 @@ the safe one — no command was removed and every tool stays fully invocable.
   pair is unchanged; only a directory argument (previously rejected) now triggers
   the sweep.
 
-## Slide format redesign: `clm validate` enforces `slide_id` (warning now, error in 1.7)
+## Slide format redesign: `clm validate` enforces `slide_id` (warning now, error in 1.8)
 
 CLM {version} also ships **Phase 3** of the slide-format-redesign:
 `clm validate` now inspects `slide_id` metadata and reports findings
@@ -244,13 +244,13 @@ modes, so the PostToolUse hook surfaces them at edit time.
 
 | Finding | Severity in {version} | Notes |
 |---------|----------------------|-------|
-| `slide`/`subslide` cell missing `slide_id` | `warning` | **Will become an `error` in CLM 1.7** (same release that retires the Phase 0 deprecation aliases). |
+| `slide`/`subslide` cell missing `slide_id` | `warning` | **Will become an `error` in CLM 1.8** (same release that retires the Phase 0 deprecation aliases). |
 | duplicate `slide_id` across slide groups | `error` | Group-aware: paired DE/EN cells sharing the EN-derived slug are not a duplicate. Bare-form comparison so `!intro` and `intro` collide. |
 | voiceover/notes `slide_id` ≠ preceding `slide`/`subslide` anchor | `error` | Walk-back skips j2, code, shared (lang-less), and cross-language narrative cells. The j2 `header()` macro anchors `slide_id="title"` for narrative cells that follow it. |
 | paired DE/EN slides carry mismatched bare `slide_id`s | `warning` | Fix with `clm slides assign-ids --force`. |
 | `slide_id` value is not a valid kebab-case ASCII slug (≤30 chars) | `warning` | The leading `!` preserve marker is permitted and does not count toward the length cap. |
 
-The two-release window (warning in {version}, error in 1.7) gives
+The two-release window (warning in {version}, error in 1.8) gives
 course repositories time to sweep `clm slides assign-ids` across
 their decks without the hook spamming warnings for unmigrated files.
 
@@ -275,7 +275,7 @@ clm slides assign-ids slides/ --llm-suggest --accept-content-derived
 #    to survive future regeneration: slide_id="!intro".
 
 # 5. Re-validate. Errors (duplicates, narrative adjacency mismatch,
-#    invalid slug) need to be cleared before CLM 1.7.
+#    invalid slug) need to be cleared before CLM 1.8.
 clm validate slides/
 ```
 
@@ -525,7 +525,7 @@ commands moved under new groups for a smaller, more scannable layout:
   notice does not affect exit codes or stdout, so scripts that
   pipe `--json` output through `jq` continue to work; only
   interactive users see the migration hint.
-- **1.7 (planned)**: Old names removed.
+- **1.8 (planned)**: Old names removed.
 
 ### `clm validate` consolidates the two validators
 
@@ -558,7 +558,7 @@ For scripts and CI:
   noticeable lint signal if you forget any.
 
 For interactive use, no action is needed — the old names keep
-working until 1.7, and the deprecation notice tells you the new
+working until 1.8, and the deprecation notice tells you the new
 path each time you invoke an old one.
 
 ## `clm build` no longer wipes the output tree by default
@@ -584,7 +584,7 @@ The new default does the opposite:
 | Flag | Before | After |
 |------|--------|-------|
 | (default) | wipe + restore `.git/` + rebuild | no wipe; hash-aware writes + sweep |
-| `--keep-directory` | opt out of the wipe | **deprecated** no-op alias; will be removed in 1.7 |
+| `--keep-directory` | opt out of the wipe | **deprecated** no-op alias; will be removed in 1.8 |
 | `--incremental` | implies `--keep-directory`; skip cached writes | skip cached writes; implies `--no-sweep` |
 | `--clean` | n/a (new) | opt into the legacy wipe-and-restore flow |
 | `--no-sweep` | n/a (new) | opt out of the post-build sweep |
@@ -600,7 +600,7 @@ output for unchanged content. A few scripts may need an explicit flag:
   are preserved across the wipe, same as before.
 - **You scripted `--keep-directory`.** The flag is now a no-op alias
   with a `DeprecationWarning`; remove it. The flag is removed entirely
-  in CLM 1.7 (originally planned for 1.6 — slipped to align with the
+  in CLM 1.8 (originally planned for 1.6 — slipped to align with the
   Phase 0 CLI-alias removal so users have a single deprecation cliff).
 - **You scripted `--incremental` to avoid the wipe.** Drop `--incremental`
   unless you also want the disk-write skipping it adds on top of the new

@@ -38,7 +38,7 @@ solo and an EN-only solo cannot in general be recovered from the two
 split outputs — the information is gone after the split. Real fixtures
 in PythonCourses always pair tagged cells, so this restriction is
 invisible in practice. Phase 3's validator flags missing slide_id; once
-that promotes to error in 1.7, the canonical pattern is enforced
+that promotes to error in 1.8, the canonical pattern is enforced
 upstream too.
 
 **Voiceover companion split (hardening 2026-06).** A slide file may have a

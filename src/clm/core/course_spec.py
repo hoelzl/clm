@@ -546,8 +546,8 @@ class DirGroupSpec:
 # Valid values for output target configuration. ``speaker`` is the deprecated
 # input alias for ``recording`` — accepted through CLM 1.6 with a
 # DeprecationWarning logged at parse time (see :func:`_normalize_output_kind`).
-# Removal target: CLM 1.7 (originally planned for 1.6 — slipped to align with
-# the Phase 0 CLI-alias removal so users see a single deprecation cliff).
+# Removal target: CLM 1.8 (originally planned for 1.6, then 1.7 — slipped to align
+# with the Phase 0 CLI-alias removal so users see a single deprecation cliff).
 VALID_KINDS: frozenset[str] = frozenset(
     {"code-along", "completed", "trainer", "recording", "speaker", "partial"}
 )
@@ -560,8 +560,8 @@ def _normalize_output_kind(kind: str) -> str:
     speaker notes and voiceover cells. It is preserved as an input alias for
     backwards compatibility but is logged as deprecated and remapped to
     ``recording``. New consumers should never see ``speaker`` once a spec has
-    been normalized through this function. Scheduled for removal in CLM 1.7
-    (originally planned for 1.6).
+    been normalized through this function. Scheduled for removal in CLM 1.8
+    (originally planned for 1.6, then 1.7).
     """
     if kind == "speaker":
         logger.warning(

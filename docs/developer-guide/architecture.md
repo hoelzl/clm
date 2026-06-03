@@ -1027,8 +1027,8 @@ CLI-facing tooling for AI-assisted slide authoring. Powers `clm topic resolve`,
 `clm slides assign-ids`, `clm slides coverage`, `clm slides split` /
 `clm slides unify`, `clm slides sync`, `clm voiceover extract` /
 `clm voiceover inline`, and `clm authoring rules`. (Flat-form aliases —
-`clm resolve-topic`, `clm search-slides`, etc. — still work in 1.6 with
-a deprecation warning; removal in 1.7.)
+`clm resolve-topic`, `clm search-slides`, etc. — still work in 1.7 with
+a deprecation warning; removal in 1.8.)
 
 Key entry points: `tags` (canonical tag sets), `search.search_slides`,
 `spec_validator.validate_spec`, `validator.validate_file`,

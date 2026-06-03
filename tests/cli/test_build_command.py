@@ -1468,7 +1468,7 @@ class TestKeepDirectoryDeprecation:
         deprecation = [w for w in recwarn if issubclass(w.category, DeprecationWarning)]
         assert deprecation, "expected a DeprecationWarning when --keep-directory is used"
         assert "--keep-directory" in str(deprecation[0].message)
-        assert "1.7" in str(deprecation[0].message)
+        assert "1.8" in str(deprecation[0].message)
 
     def test_no_warning_without_flag(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recwarn: pytest.WarningsRecorder

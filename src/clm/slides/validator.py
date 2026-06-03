@@ -698,7 +698,7 @@ def _check_slide_ids(cells: list[Cell], file_path: str) -> list[Finding]:
     """Verify slide_id metadata: presence, format, uniqueness, adjacency, pair-consistency.
 
     Per handover §3 / option B rollout, *missing* slide_ids land at
-    ``warning`` severity (slated for promotion to ``error`` in CLM 1.7
+    ``warning`` severity (slated for promotion to ``error`` in CLM 1.8
     once the PythonCourses migration sweep completes). All other rules
     — duplicate ids, narrative-cell adjacency mismatch, slug-format
     violations, DE/EN pair mismatch — fire at the severity their
@@ -763,7 +763,7 @@ def _check_slide_ids(cells: list[Cell], file_path: str) -> list[Finding]:
                             "Run `clm slides assign-ids <dir>` (EN-authority pair "
                             "minting) — or `clm slides sync` for a split deck — to add "
                             "stable identifiers; avoid per-file `assign-ids` on a single "
-                            "split half (#162). This will become an error in CLM 1.7."
+                            "split half (#162). This will become an error in CLM 1.8."
                         ),
                     )
                 )
@@ -1031,7 +1031,7 @@ def _check_split_slide_id_parity(de_path: Path, en_path: Path) -> list[Finding]:
     Compares the bare (preserve-marker-stripped) slide_ids of slide-start cells
     in source order. Findings are ``warning`` severity, consistent with the rest
     of the slide_id family (the gate runs with ``--fail-on warning``); they may
-    become ``error`` in CLM 1.7 alongside the other slide_id checks.
+    become ``error`` in CLM 1.8 alongside the other slide_id checks.
     """
     findings: list[Finding] = []
     de_file = str(de_path)

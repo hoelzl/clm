@@ -62,7 +62,7 @@ def deprecated_alias(target: click.Command, *, new_invocation: str) -> click.Com
         click.echo(
             f"DeprecationWarning: `clm {old_name}` is deprecated. "
             f"Use `clm {new_invocation}` instead. "
-            f"The alias will be removed in CLM 1.7.",
+            f"The alias will be removed in CLM 1.8.",
             err=True,
         )
         return original_callback(*args, **kwargs)
