@@ -48,6 +48,12 @@ LEAKING_GIT_VARS = (
 # wall-clock is flat/noise-dominated in this range, so capping costs no real
 # speed while removing the contention that drives the flakes.
 #
+# Cap lowered 16 -> 8 (2026-06-04): a 16-worker run *hard-deadlocked* the fast
+# suite during the 1.7.0 release bump's pre-commit commit (worker-registration
+# contention, hung > 5 min, not mere slowness); re-running at 8 committed
+# cleanly. Since wall-clock is flat across this range, 8 trades no real speed for
+# materially more headroom against the contention deadlock.
+#
 # ``xdist`` honours ``PYTEST_XDIST_AUTO_NUM_WORKERS`` to decide what ``auto``
 # becomes, so we set it here for the hook only. This:
 #   * is a no-op on machines with <= ``_MAX_AUTO_WORKERS`` logical CPUs (their
@@ -57,7 +63,7 @@ LEAKING_GIT_VARS = (
 #   * leaves a manual ``pytest`` run untouched;
 #   * respects an explicit ``PYTEST_XDIST_AUTO_NUM_WORKERS`` the developer has
 #     already exported (``setdefault``).
-_MAX_AUTO_WORKERS = 16
+_MAX_AUTO_WORKERS = 8
 
 
 def main() -> int:
