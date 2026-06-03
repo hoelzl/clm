@@ -1,11 +1,13 @@
 """``clm release`` — per-topic solution release to cohort repositories (#208).
 
-Thin CLI over :mod:`clm.release`. Until ``<release-channels>`` spec parsing
-lands (step 3), a channel is identified by explicit paths: its ``--ledger``
-(release intent, in the course source repo), the ``--source`` frozen-build
-output root (which holds the ``.clm-manifest.json`` provenance index), and the
-``--dest`` cohort repository. Step 3 will let a single ``--channel NAME``
-resolve these from the spec and add ``--push``.
+Thin CLI over :mod:`clm.release`. A channel can be addressed two ways:
+
+* ``--channel NAME`` resolves the ledger, the frozen ``--source`` build root,
+  and the ``--dest`` cohort repo from the spec's ``<release-channels>`` block;
+* or those three paths can be passed explicitly (and override resolution).
+
+``clm release sync --push`` (delegating to ``clm git``) is added in a later
+increment.
 """
 
 from __future__ import annotations
@@ -15,7 +17,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import click
+from attrs import frozen
 
+from clm.core.course_paths import resolve_course_paths
 from clm.core.course_spec import CourseSpec
 from clm.core.provenance_manifest import MANIFEST_FILENAME, load_manifest
 from clm.release.frozen_manifest import FROZEN_FILENAME, FrozenManifest
@@ -27,18 +31,62 @@ logger = logging.getLogger(__name__)
 _SPEC_ARG = click.argument(
     "spec_file", type=click.Path(exists=True, dir_okay=False, path_type=Path)
 )
+_CHANNEL_OPT = click.option(
+    "--channel",
+    default="",
+    help="Channel name; resolves --ledger/--source/--dest from the spec's "
+    "<release-channels>. Explicit paths override resolution.",
+)
 _LEDGER_OPT = click.option(
     "--ledger",
     "ledger_path",
-    required=True,
     type=click.Path(path_type=Path),
+    default=None,
     help="Path to the channel's release ledger (created on first add).",
 )
+
+
+@frozen
+class _ResolvedChannel:
+    name: str
+    ledger: Path
+    source: Path | None
+    dest: Path
 
 
 @click.group("release")
 def release_group() -> None:
     """Release solutions to student cohorts, one topic at a time (issue #208)."""
+
+
+def _abs_under(course_root: Path, value: str) -> Path:
+    path = Path(value)
+    return path if path.is_absolute() else course_root / path
+
+
+def _resolve_channel(spec_file: Path, channel_name: str) -> _ResolvedChannel:
+    spec = CourseSpec.from_file(spec_file)
+    channels = spec.release_channels
+    if channels is None:
+        raise click.ClickException(
+            f"{spec_file} has no <release-channels> block; pass explicit "
+            f"--ledger/--source/--dest instead of --channel."
+        )
+    channel = channels.channel(channel_name)
+    if channel is None:
+        available = ", ".join(c.name for c in channels.channels) or "(none defined)"
+        raise click.ClickException(
+            f"Unknown channel {channel_name!r}. Defined channels: {available}."
+        )
+    course_root, _ = resolve_course_paths(spec_file)
+    source_target = next((t for t in spec.output_targets if t.name == channels.source_target), None)
+    source = _abs_under(course_root, source_target.path) if source_target else None
+    return _ResolvedChannel(
+        name=channel_name,
+        ledger=_abs_under(course_root, channel.ledger),
+        source=source,
+        dest=_abs_under(course_root, channel.path),
+    )
 
 
 def _spec_topic_ids(spec_file: Path) -> list[str]:
@@ -48,9 +96,17 @@ def _spec_topic_ids(spec_file: Path) -> list[str]:
 @release_group.command("add")
 @_SPEC_ARG
 @click.argument("topic_ids", nargs=-1, required=True)
+@_CHANNEL_OPT
 @_LEDGER_OPT
-def add_cmd(spec_file: Path, topic_ids: tuple[str, ...], ledger_path: Path) -> None:
+def add_cmd(
+    spec_file: Path, topic_ids: tuple[str, ...], channel: str, ledger_path: Path | None
+) -> None:
     """Append TOPIC_IDS to a channel ledger (validated against the spec)."""
+    if ledger_path is None and channel:
+        ledger_path = _resolve_channel(spec_file, channel).ledger
+    if ledger_path is None:
+        raise click.ClickException("Pass --ledger PATH or --channel NAME.")
+
     known, unknown = partition_known(topic_ids, _spec_topic_ids(spec_file))
     if unknown:
         raise click.ClickException(
@@ -69,6 +125,7 @@ def add_cmd(spec_file: Path, topic_ids: tuple[str, ...], ledger_path: Path) -> N
 
 @release_group.command("status")
 @_SPEC_ARG
+@_CHANNEL_OPT
 @_LEDGER_OPT
 @click.option(
     "--dest",
@@ -77,9 +134,17 @@ def add_cmd(spec_file: Path, topic_ids: tuple[str, ...], ledger_path: Path) -> N
     default=None,
     help="Channel destination repo; when given, also reports frozen state.",
 )
-@click.option("--channel", default="", help="Channel name (for the frozen manifest).")
-def status_cmd(spec_file: Path, ledger_path: Path, dest_path: Path | None, channel: str) -> None:
-    """Show released vs pending topics (and frozen state with --dest)."""
+def status_cmd(
+    spec_file: Path, channel: str, ledger_path: Path | None, dest_path: Path | None
+) -> None:
+    """Show released vs pending topics (and frozen state with --dest/--channel)."""
+    if channel:
+        resolved = _resolve_channel(spec_file, channel)
+        ledger_path = ledger_path or resolved.ledger
+        dest_path = dest_path or resolved.dest
+    if ledger_path is None:
+        raise click.ClickException("Pass --ledger PATH or --channel NAME.")
+
     all_ids = _spec_topic_ids(spec_file)
     ledger = Ledger.load(ledger_path)
     released = ledger.released_set
@@ -103,22 +168,27 @@ def status_cmd(spec_file: Path, ledger_path: Path, dest_path: Path | None, chann
 
 
 @release_group.command("sync")
+@click.argument(
+    "spec_file",
+    required=False,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@_CHANNEL_OPT
 @_LEDGER_OPT
 @click.option(
     "--source",
     "source_path",
-    required=True,
-    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    type=click.Path(path_type=Path),
+    default=None,
     help="Built frozen-source output root (contains .clm-manifest.json).",
 )
 @click.option(
     "--dest",
     "dest_path",
-    required=True,
     type=click.Path(path_type=Path),
+    default=None,
     help="Channel destination repository (created if absent).",
 )
-@click.option("--channel", default="", help="Channel name (recorded in the frozen manifest).")
 @click.option(
     "--refreeze",
     "refreeze_ids",
@@ -128,15 +198,36 @@ def status_cmd(spec_file: Path, ledger_path: Path, dest_path: Path | None, chann
 @click.option("--refreeze-all", is_flag=True, help="Re-copy and re-freeze every released topic.")
 @click.option("--dry-run", is_flag=True, help="Print the plan; copy nothing.")
 def sync_cmd(
-    ledger_path: Path,
-    source_path: Path,
-    dest_path: Path,
+    spec_file: Path | None,
     channel: str,
+    ledger_path: Path | None,
+    source_path: Path | None,
+    dest_path: Path | None,
     refreeze_ids: tuple[str, ...],
     refreeze_all: bool,
     dry_run: bool,
 ) -> None:
-    """Promote released-but-not-frozen topics from SOURCE into the channel DEST."""
+    """Promote released-but-not-frozen topics into a cohort.
+
+    Address the channel either with ``--channel NAME`` (resolved from
+    ``SPEC_FILE``'s <release-channels>) or with explicit
+    ``--ledger``/``--source``/``--dest`` paths.
+    """
+    if channel:
+        if spec_file is None:
+            raise click.ClickException("--channel requires the SPEC_FILE argument.")
+        resolved = _resolve_channel(spec_file, channel)
+        ledger_path = ledger_path or resolved.ledger
+        source_path = source_path or resolved.source
+        dest_path = dest_path or resolved.dest
+
+    if ledger_path is None or source_path is None or dest_path is None:
+        raise click.ClickException(
+            "Specify --channel NAME, or all of --ledger, --source and --dest."
+        )
+    if not source_path.is_dir():
+        raise click.ClickException(f"Source output root not found: {source_path}")
+
     manifest_path = source_path / MANIFEST_FILENAME
     if not manifest_path.is_file():
         raise click.ClickException(
@@ -145,8 +236,9 @@ def sync_cmd(
         )
     manifest = load_manifest(manifest_path)
     ledger = Ledger.load(ledger_path)
+    channel_name = channel or dest_path.name
     frozen_path = dest_path / FROZEN_FILENAME
-    frozen = FrozenManifest.load(frozen_path, channel=channel)
+    frozen = FrozenManifest.load(frozen_path, channel=channel_name)
 
     refreeze = set(ledger.released) if refreeze_all else set(refreeze_ids)
     plan = plan_sync(
@@ -157,7 +249,7 @@ def sync_cmd(
     )
 
     click.echo(
-        f"Channel '{channel or frozen.channel or '?'}': "
+        f"Channel '{channel_name or '?'}': "
         f"skeleton {'copy' if plan.copy_skeleton else 'frozen'} "
         f"({plan.skeleton_file_count} files)"
     )

@@ -98,25 +98,17 @@ def test_sync_copies_released_topic_and_freezes(tmp_path):
 
     result = runner.invoke(
         release_group,
-        [
-            "sync",
-            "--ledger",
-            str(ledger),
-            "--source",
-            str(source),
-            "--dest",
-            str(dest),
-            "--channel",
-            "jan",
-        ],
+        ["sync", "--ledger", str(ledger), "--source", str(source), "--dest", str(dest)],
     )
     assert result.exit_code == 0, result.output
     assert (dest / "Sec/01 Intro.ipynb").is_file()
     assert (dest / "shared/data.csv").is_file()
 
+    # With explicit paths the channel name defaults to the destination dir name.
     frozen = FrozenManifest.load(dest / FROZEN_FILENAME, channel="jan")
     assert frozen.is_frozen("intro")
     assert frozen.skeleton_frozen is True
+    assert frozen.channel == "jan"
 
 
 def test_sync_dry_run_copies_nothing(tmp_path):
@@ -158,3 +150,52 @@ def test_sync_errors_without_manifest(tmp_path):
     )
     assert result.exit_code != 0
     assert "No provenance manifest" in result.output
+
+
+SPEC_WITH_CHANNELS = """
+<course>
+  <name><de>T</de><en>T</en></name>
+  <prog-lang>python</prog-lang>
+  <sections>
+    <section>
+      <name><de>S</de><en>S</en></name>
+      <topics><topic>intro</topic></topics>
+    </section>
+  </sections>
+  <output-targets>
+    <output-target name="src">
+      <path>output/src</path>
+      <kinds><kind>completed</kind></kinds>
+    </output-target>
+  </output-targets>
+  <release-channels source-target="src">
+    <channel name="jan" path="solutions/jan" ledger="release/jan.txt"/>
+  </release-channels>
+</course>
+""".strip()
+
+
+def test_channel_resolves_ledger_source_and_dest_from_spec(tmp_path):
+    runner = CliRunner()
+    course_root = tmp_path
+    # Spec must live in a subdir: resolve_course_paths uses its grandparent.
+    specs_dir = course_root / "course-specs"
+    specs_dir.mkdir()
+    spec_file = specs_dir / "course.xml"
+    spec_file.write_text(SPEC_WITH_CHANNELS, encoding="utf-8")
+
+    # Built frozen source for the "src" output target.
+    _write_source(course_root / "output" / "src")
+
+    add = runner.invoke(release_group, ["add", str(spec_file), "intro", "--channel", "jan"])
+    assert add.exit_code == 0, add.output
+    assert Ledger.load(course_root / "release" / "jan.txt").released == ["intro"]
+
+    sync = runner.invoke(release_group, ["sync", str(spec_file), "--channel", "jan"])
+    assert sync.exit_code == 0, sync.output
+
+    dest = course_root / "solutions" / "jan"
+    assert (dest / "Sec/01 Intro.ipynb").is_file()
+    frozen = FrozenManifest.load(dest / FROZEN_FILENAME, channel="jan")
+    assert frozen.is_frozen("intro")
+    assert frozen.skeleton_frozen is True
