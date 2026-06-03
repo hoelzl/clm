@@ -964,6 +964,17 @@ escalating to error in CLM 1.7) — `unify` pairs adjacent DE/EN cells
 by matching id. Currently Python-only: the slide parser recognises
 only `# %%` cell boundaries; non-Python prog_langs are deferred.
 
+**Voiceover companion.** If SOURCE has a sibling voiceover companion
+(`slides_<name>.py` → `voiceover_<name>.py`), `split` splits it in
+lockstep into `voiceover_<name>.de.py` / `voiceover_<name>.en.py`,
+routing each narration cell by its `lang` and preserving `for_slide` /
+`vo_anchor` verbatim. Without this the companion would be orphaned — the
+build would find no companion next to either split half. `--force`
+covers overwriting existing companion halves, and the refusal is atomic
+(if any deck or companion target exists without `--force`, nothing is
+written). Splitting a deck that has no companion creates no
+`voiceover_*` files.
+
 ### `clm slides unify`
 
 The inverse of `clm slides split`. Combine `<basename>.de.py` and
@@ -997,6 +1008,12 @@ diverges …`. The same divergence is surfaced by
 `clm validate <topic_dir>` and refused at build time — see
 "Split-source build routing" under `clm build` above for the
 build-time gate.
+
+**Voiceover companion.** If the pair has sibling voiceover companions
+(`voiceover_<name>.de.py` / `voiceover_<name>.en.py`), `unify` recombines
+them in lockstep into `voiceover_<name>.py` (next to the bilingual
+target) — the inverse of `split`'s companion split, byte-identical.
+`--force` also covers overwriting an existing companion target.
 
 ### `clm slides language-view`
 

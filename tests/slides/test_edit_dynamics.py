@@ -50,11 +50,14 @@ def outcomes(harness):
 # zeroes the work-list out (e.g. by neutering a runner) should fail here, not
 # quietly report "all green". Hardened so far: the two voiceover Tier-1 breaks
 # (now ``preserve``), ``commit-without-sync`` (now ``break-loud`` — the #162
-# detective gate catches it), and the two per-file assign-ids breaks (now
-# ``preserve`` — the #162 defensive twin-aware reuse). The open work-list is the
-# cross-command voiceover companion seam.
+# detective gate catches it), the two per-file assign-ids breaks (now
+# ``preserve`` — the #162 defensive twin-aware reuse), and ``extract-then-split``
+# (now ``preserve`` — ``split``/``unify`` carry the voiceover companion in
+# lockstep). The one remaining documented break is the observe-only build-merge
+# arm: ``merge_voiceover_text`` returns the unmatched ids, but the ``build``
+# consumer is log-only/exit-0 (escalating that is the next work item).
 _KNOWN_SILENT_BREAKS = {
-    "extract-then-split",
+    "build-merge-unmatched",
 }
 
 

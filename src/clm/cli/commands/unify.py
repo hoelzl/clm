@@ -66,6 +66,13 @@ def unify_cmd(
     the DE file without syncing to EN, or vice versa), unify refuses to
     write — Phase 6's validator extension will surface the same check at
     build time.
+
+    \b
+    If the pair has sibling voiceover companions
+    (``voiceover_<name>.de.py`` / ``voiceover_<name>.en.py``), they are
+    recombined in lockstep into ``voiceover_<name>.py`` — the inverse of
+    ``split``'s companion split. ``--force`` also covers overwriting an
+    existing companion target.
     """
     try:
         result = unify_in_file(
@@ -93,6 +100,9 @@ def _print_human(result: UnifyResult, *, report_only: bool) -> None:
     verb = "would write" if report_only else "wrote"
     note = " (overwrote)" if result.overwrote else ""
     click.echo(f"{prefix}{verb} {result.target}{note}")
+    if result.target_companion:
+        cnote = " (overwrote)" if result.companion_overwrote else ""
+        click.echo(f"{prefix}{verb} {result.target_companion}{cnote}")
 
 
 def _to_dict(result: UnifyResult, *, report_only: bool) -> dict[str, object]:
@@ -102,5 +112,7 @@ def _to_dict(result: UnifyResult, *, report_only: bool) -> dict[str, object]:
         "target": result.target,
         "wrote": result.wrote,
         "overwrote": result.overwrote,
+        "target_companion": result.target_companion,
+        "companion_overwrote": result.companion_overwrote,
         "report_only": report_only,
     }

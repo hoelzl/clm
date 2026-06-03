@@ -65,6 +65,27 @@ relied on the old behavior may need a flag or an exit-code check.
 These are also surfaced by the new fast-suite `tests/slides/test_edit_dynamics.py`
 cross-command harness (`scripts/edit_dynamics_harness.py`).
 
+## `slides split` / `unify` carry the voiceover companion ({version})
+
+Previously `clm slides split` only split the deck — a sibling voiceover
+companion (`slides_<name>.py` → `voiceover_<name>.py`) was left behind,
+orphaned: the build then found no companion next to either
+`slides_<name>.de.py` or `slides_<name>.en.py`, silently dropping the
+narration. CLM {version} splits the companion in lockstep into
+`voiceover_<name>.de.py` / `voiceover_<name>.en.py` (routing each cell by its
+`lang`, preserving `for_slide` / `vo_anchor`), and `clm slides unify`
+recombines them into `voiceover_<name>.py`. The companion round trip is
+byte-identical, the same trust property the deck split already guarantees;
+it relies on the #162 `de_id == en_id` invariant so each narration cell's
+owning slide exists in its language's half.
+
+*Migration:* none required — the behavior is additive and only fires when a
+companion is present. The `split`/`unify` `--force` flag now also covers the
+companion targets, and the refusal is atomic (no file is written if any deck
+*or* companion target exists without `--force`). `--json` output gains
+`source_companion` / `de_companion` / `en_companion` (split) and
+`target_companion` / `companion_overwrote` (unify).
+
 ## Cross-file `slide_id` parity detective for split decks ({version}, issue #162)
 
 `slide_id` is the cross-language join key for a split deck: voiceover

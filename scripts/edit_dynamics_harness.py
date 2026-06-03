@@ -600,26 +600,50 @@ def m_unify_split_round_trip(workdir: Path) -> _RetTuple:
     )
 
 
-# --- cross-command voiceover seams (expected: break-silent) ----------------
+# --- cross-command voiceover seams -----------------------------------------
 
 
 def m_extract_then_split(workdir: Path) -> _RetTuple:
+    # Fixed: `split` now splits a sibling bilingual companion in lockstep into
+    # voiceover_*.de.py / .en.py, preserving for_slide/vo_anchor, so the
+    # narration is never orphaned and the halves round-trip back to the
+    # original companion via `unify`.
     bil = baseline_bilingual(with_voiceover=("intro", "setup"))
     slide = workdir / "slides_demo.py"
     slide.write_text(bil, encoding="utf-8", newline="\n")
     extract_voiceover(slide)  # bilingual voiceover_demo.py
     bilingual_comp = companion_path(slide)
-    split_in_file(slide)  # slides_demo.de.py / .en.py
+    comp_before = bilingual_comp.read_text(encoding="utf-8")
+    split_in_file(slide)  # slides_demo.de.py / .en.py + companion split
     de_comp = companion_path(workdir / "slides_demo.de.py")
     en_comp = companion_path(workdir / "slides_demo.en.py")
-    orphaned = bilingual_comp.exists() and not de_comp.exists() and not en_comp.exists()
+
+    if not (de_comp.exists() and en_comp.exists()):
+        return ["companion_orphan"], False, "", "companion not split; bilingual orphaned"
+
+    de_txt = de_comp.read_text(encoding="utf-8")
+    en_txt = en_comp.read_text(encoding="utf-8")
+    try:
+        recombined = unify_texts(de_txt, en_txt)
+    except (SplitError, UnifyError) as e:
+        return ["companion_round_trip"], True, f"{type(e).__name__}: {e}", "companion unify raised"
+
+    violated: list[str] = []
+    if recombined != comp_before:
+        violated.append("companion_round_trip")
+    if for_slides(de_txt) != for_slides(en_txt):
+        violated.append("for_slide_parity")
+    anchors_kept = "vo_anchor=" in de_txt and "vo_anchor=" in en_txt
+    if not anchors_kept:
+        violated.append("vo_anchor_dropped")
+
     return (
-        (["companion_orphan"] if orphaned else []),
+        violated,
         False,
         "",
-        "bilingual voiceover_demo.py orphaned; no .de/.en companion; split is silent"
-        if orphaned
-        else "companion handled",
+        f"companion split de={for_slides(de_txt)} en={for_slides(en_txt)}; round-trips, anchors kept"
+        if not violated
+        else f"violations: {violated}",
     )
 
 
@@ -749,7 +773,10 @@ MUTATIONS: list[Mutation] = [
     # #162 detective landed: the pre-commit gate (`clm validate`) now catches a
     # committed split-half divergence — break-silent -> break-loud.
     Mutation("commit-without-sync", "no-gate", BREAK_LOUD, True, m_commit_without_sync),
-    Mutation("extract-then-split", "extract+split", BREAK_SILENT, True, m_extract_then_split),
+    # Companion split/unify path landed: `split` splits a sibling voiceover
+    # companion in lockstep (and `unify` recombines it), so extract-then-split
+    # no longer orphans the narration — break-silent -> preserve.
+    Mutation("extract-then-split", "extract+split", PRESERVE, True, m_extract_then_split),
     # Tier-1 data-loss fixes landed: inline now retains the companion with the
     # unmatched cell (recoverable) and exits non-zero; extract refuses to clobber
     # an existing companion without --force. Both flipped break-silent -> preserve.

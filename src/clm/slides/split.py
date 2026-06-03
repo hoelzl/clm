@@ -40,15 +40,62 @@ in PythonCourses always pair tagged cells, so this restriction is
 invisible in practice. Phase 3's validator flags missing slide_id; once
 that promotes to error in 1.7, the canonical pattern is enforced
 upstream too.
+
+**Voiceover companion split (hardening 2026-06).** A slide file may have a
+sibling voiceover companion (``slides_X.py`` → ``voiceover_X.py``, see
+:func:`clm.slides.voiceover_tools.companion_path`). Splitting a bilingual
+deck without touching that companion would orphan it — the build would no
+longer find a companion next to either ``slides_X.de.py`` or
+``slides_X.en.py``. So ``split_in_file`` splits the companion in lockstep
+into ``voiceover_X.de.py`` / ``voiceover_X.en.py``, and ``unify_in_file``
+recombines them. A companion has no header macro — it is just voiceover
+cells carrying ``lang`` (and ``for_slide`` / ``vo_anchor``) — so the same
+:func:`split_text` / :func:`unify_texts` primitives route it by language
+and the round trip is byte-identical. This is well-defined because #162
+guarantees ``de_id == en_id``, so each companion cell's owning slide
+exists in its language's half. The companion dependency is imported
+lazily, so ``split``/``unify`` of a plain deck never touch the voiceover
+layer.
 """
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from clm.slides.raw_cells import RawCell, reconstruct, split_cells
+
+
+def _atomic_write_all(writes: list[tuple[Path, str]]) -> None:
+    """Write several ``(path, text)`` outputs as atomically as the FS allows.
+
+    Every text is first written to a sibling ``*.tmp`` file; only after **all**
+    temp writes succeed are they ``os.replace``-d into place back-to-back. A
+    failure during the temp phase (the common one — disk full, permission)
+    therefore leaves every real target untouched; the replace phase has only a
+    tiny residual window, and leftover temps are cleaned up either way.
+
+    This matters for the companion seam: ``split``/``unify`` write up to four
+    files, and a mid-operation failure with plain per-file writes could leave a
+    split deck without its companion — the very orphaning this seam prevents.
+    Cross-file atomicity is not achievable without a journal, but this upgrades
+    the previous direct per-file writes so the likely failure is safe.
+    """
+    temps: list[tuple[Path, Path]] = []
+    try:
+        for path, text in writes:
+            tmp = path.with_name(path.name + ".tmp")
+            tmp.write_text(text, encoding="utf-8", newline="\n")
+            temps.append((tmp, path))
+        for tmp, path in temps:
+            os.replace(tmp, path)
+    finally:
+        for tmp, _ in temps:
+            if tmp.exists():
+                tmp.unlink()
+
 
 # ---------------------------------------------------------------------------
 # Errors
@@ -74,24 +121,40 @@ class UnifyError(Exception):
 
 @dataclass
 class SplitResult:
-    """Outcome of one :func:`split_in_file` call."""
+    """Outcome of one :func:`split_in_file` call.
+
+    ``de_companion`` / ``en_companion`` are set only when ``source`` had a
+    sibling voiceover companion that was split alongside the deck;
+    ``source_companion`` records the bilingual companion that was read.
+    Companion overwrites are also listed in ``overwrote``.
+    """
 
     source: str
     de_path: str
     en_path: str
     wrote: bool = False
     overwrote: list[str] = field(default_factory=list)
+    source_companion: str | None = None
+    de_companion: str | None = None
+    en_companion: str | None = None
 
 
 @dataclass
 class UnifyResult:
-    """Outcome of one :func:`unify_in_file` call."""
+    """Outcome of one :func:`unify_in_file` call.
+
+    ``target_companion`` is set only when sibling voiceover companions were
+    recombined alongside the deck; ``companion_overwrote`` reports whether
+    that companion target already existed.
+    """
 
     de_source: str
     en_source: str
     target: str
     wrote: bool = False
     overwrote: bool = False
+    target_companion: str | None = None
+    companion_overwrote: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -248,6 +311,45 @@ def _rewrite_import_to_en(cell: RawCell) -> RawCell:
     )
 
 
+@dataclass
+class _CompanionSplitPlan:
+    """A planned split of a sibling voiceover companion (read, not yet written)."""
+
+    source: Path
+    de_path: Path
+    en_path: Path
+    de_text: str
+    en_text: str
+
+
+def _plan_companion_split(source: Path, de_path: Path, en_path: Path) -> _CompanionSplitPlan | None:
+    """Plan splitting ``source``'s voiceover companion in lockstep with the deck.
+
+    Returns ``None`` when ``source`` has no sibling ``voiceover_*.py``.
+    Otherwise reads the bilingual companion and routes its cells by language
+    with the same :func:`split_text` primitive used for the deck — companions
+    carry no header macro, so this is a pure per-language route that preserves
+    each cell's ``for_slide`` / ``vo_anchor`` verbatim. Raising here (e.g. a
+    malformed companion) aborts the whole split before any file is written.
+
+    The ``voiceover_tools`` import is deferred so a plain deck split never
+    pulls in the voiceover layer.
+    """
+    from clm.slides.voiceover_tools import companion_path
+
+    companion = companion_path(source)
+    if not companion.exists():
+        return None
+    comp_de_text, comp_en_text = split_text(companion.read_text(encoding="utf-8"))
+    return _CompanionSplitPlan(
+        source=companion,
+        de_path=companion_path(de_path),
+        en_path=companion_path(en_path),
+        de_text=comp_de_text,
+        en_text=comp_en_text,
+    )
+
+
 def split_in_file(
     source: Path,
     *,
@@ -257,9 +359,13 @@ def split_in_file(
     """Split ``source`` (bilingual ``.py``) into adjacent ``.de.py`` /
     ``.en.py`` companions.
 
-    Refuses if either target exists unless ``force=True``. In ``dry_run``
-    mode no files are written; the result still reports what *would* have
-    been overwritten.
+    If ``source`` has a sibling voiceover companion (``voiceover_*.py``) it is
+    split in lockstep into ``voiceover_*.de.py`` / ``voiceover_*.en.py`` so the
+    deck split never orphans the narration; see the module docstring.
+
+    Refuses if any target (deck or companion half) exists unless ``force=True``.
+    In ``dry_run`` mode no files are written; the result still reports what
+    *would* have been overwritten.
     """
     source = source.resolve()
     de_path = _split_target(source, "de")
@@ -268,11 +374,18 @@ def split_in_file(
     text = source.read_text(encoding="utf-8")
     de_text, en_text = split_text(text)
 
+    companion = _plan_companion_split(source, de_path, en_path)
+
     overwrote: list[str] = []
     if de_path.exists():
         overwrote.append(str(de_path))
     if en_path.exists():
         overwrote.append(str(en_path))
+    if companion is not None:
+        if companion.de_path.exists():
+            overwrote.append(str(companion.de_path))
+        if companion.en_path.exists():
+            overwrote.append(str(companion.en_path))
 
     if overwrote and not force:
         raise SplitError(
@@ -281,8 +394,11 @@ def split_in_file(
         )
 
     if not dry_run:
-        de_path.write_text(de_text, encoding="utf-8", newline="\n")
-        en_path.write_text(en_text, encoding="utf-8", newline="\n")
+        writes = [(de_path, de_text), (en_path, en_text)]
+        if companion is not None:
+            writes.append((companion.de_path, companion.de_text))
+            writes.append((companion.en_path, companion.en_text))
+        _atomic_write_all(writes)
 
     return SplitResult(
         source=str(source),
@@ -290,6 +406,9 @@ def split_in_file(
         en_path=str(en_path),
         wrote=not dry_run,
         overwrote=overwrote,
+        source_companion=str(companion.source) if companion is not None else None,
+        de_companion=str(companion.de_path) if companion is not None else None,
+        en_companion=str(companion.en_path) if companion is not None else None,
     )
 
 
@@ -531,6 +650,36 @@ def _raise_alignment_error(de_cell: RawCell | None, en_cell: RawCell | None) -> 
     raise UnifyError(f"cannot align DE/EN cells — {de_desc}; {en_desc}")
 
 
+@dataclass
+class _CompanionUnifyPlan:
+    """A planned recombination of split voiceover companions (read, not written)."""
+
+    target: Path
+    text: str
+
+
+def _plan_companion_unify(
+    de_source: Path, en_source: Path, target: Path
+) -> _CompanionUnifyPlan | None:
+    """Plan recombining the split voiceover companions of a ``.de`` / ``.en`` pair.
+
+    Returns ``None`` when neither half has a sibling ``voiceover_*.<lang>.py``.
+    A half that is absent is treated as empty so the present narration is never
+    dropped (the inverse of :func:`_plan_companion_split`, which always writes
+    both halves). Raising here (divergent shared companion cell, misalignment)
+    aborts the whole unify before any file is written.
+    """
+    from clm.slides.voiceover_tools import companion_path
+
+    de_comp = companion_path(de_source)
+    en_comp = companion_path(en_source)
+    if not de_comp.exists() and not en_comp.exists():
+        return None
+    de_text = de_comp.read_text(encoding="utf-8") if de_comp.exists() else ""
+    en_text = en_comp.read_text(encoding="utf-8") if en_comp.exists() else ""
+    return _CompanionUnifyPlan(target=companion_path(target), text=unify_texts(de_text, en_text))
+
+
 def unify_in_file(
     de_source: Path,
     en_source: Path,
@@ -542,7 +691,12 @@ def unify_in_file(
     """Unify ``de_source`` + ``en_source`` into a bilingual ``target`` file.
 
     Default ``target`` is derived from ``de_source``: ``foo.de.py`` →
-    ``foo.py``. Refuses to overwrite an existing target unless
+    ``foo.py``. If the pair has sibling voiceover companions
+    (``voiceover_*.de.py`` / ``voiceover_*.en.py``) they are recombined in
+    lockstep into ``voiceover_*.py`` — the inverse of :func:`split_in_file`'s
+    companion split.
+
+    Refuses to overwrite an existing target (deck or companion) unless
     ``force=True``. In ``dry_run`` mode no file is written.
     """
     de_source = de_source.resolve()
@@ -555,12 +709,23 @@ def unify_in_file(
     en_text = en_source.read_text(encoding="utf-8")
     unified = unify_texts(de_text, en_text)
 
+    companion = _plan_companion_unify(de_source, en_source, target)
+
     overwrote = target.exists()
-    if overwrote and not force:
-        raise UnifyError(f"refusing to overwrite existing target without --force: {target}")
+    companion_overwrote = companion is not None and companion.target.exists()
+    if (overwrote or companion_overwrote) and not force:
+        blocking = [str(target)] if overwrote else []
+        if companion_overwrote:
+            blocking.append(str(companion.target))  # type: ignore[union-attr]
+        raise UnifyError(
+            "refusing to overwrite existing target without --force: " + ", ".join(blocking)
+        )
 
     if not dry_run:
-        target.write_text(unified, encoding="utf-8", newline="\n")
+        writes = [(target, unified)]
+        if companion is not None:
+            writes.append((companion.target, companion.text))
+        _atomic_write_all(writes)
 
     return UnifyResult(
         de_source=str(de_source),
@@ -568,6 +733,8 @@ def unify_in_file(
         target=str(target),
         wrote=not dry_run,
         overwrote=overwrote,
+        target_companion=str(companion.target) if companion is not None else None,
+        companion_overwrote=companion_overwrote,
     )
 
 

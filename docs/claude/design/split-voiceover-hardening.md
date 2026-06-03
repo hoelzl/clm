@@ -446,8 +446,8 @@ agent/script plumbing, or **(G)** harden with a guard.
 | `assign-ids` (per file) | Per-file run on a split half mints **divergent** ids — the #1 silent #162 break. Its core job (id minting) is already done *consistently* by `sync`. | **F + H** — fold consistent minting into `sync` / a pair-aware mode (§7 generative); demote the raw per-file command to plumbing (agents/scripts), not a normal authoring step. |
 | `voiceover extract` | Single-file, clobbers companion w/o `--force`; per-language only; no cross-language check. | **G now, F later** — add `--force`/guard immediately; longer-term fold extraction into a paired, twin-aware operation (or under `sync`'s umbrella). |
 | `voiceover inline` | Destructive: unlinks companion even on unmatched, exit 0, no backup. | **G** — preserve/backup on unmatched, non-zero exit, `--dry-run` default. |
-| `slides split` | Unaware of voiceover companions; extract-then-split silently orphans them. | **G** — refuse/warn when a sibling `voiceover_*.py` exists; add a first-class companion split (route vo cells by `lang`, preserve `for_slide`/`vo_anchor`). |
-| `slides unify` | Ignores companions; can't recombine voiceover. | **G** — companion unify path (the inverse of the above). |
+| `slides split` | Unaware of voiceover companions; extract-then-split silently orphans them. | **G — DONE (2026-06-03).** First-class companion split: `split_in_file` splits a sibling `voiceover_*.py` in lockstep into `voiceover_*.de.py`/`.en.py`, routing cells by `lang`, preserving `for_slide`/`vo_anchor`. Atomic `--force` over deck+companion; byte-identical round trip. |
+| `slides unify` | Ignores companions; can't recombine voiceover. | **G — DONE (2026-06-03).** `unify_in_file` recombines the companion halves into `voiceover_*.py` (inverse of split; missing half treated as empty so narration is never dropped). |
 | `slides suggest-sync` | Old single-file read-only suggester; coexists confusingly with the split-pair `sync` (different file layout, opposite write semantics). | **H or remove** — hide as plumbing or retire; steer users to `sync`. |
 | `slides sync` (the funnel) | Two bare path args, no pairing guard, writes by default. | **G** — pairing guard (§3 Tier-2), and consider a **single-path contract** (pass one half or the deck stem; derive the twin + companion) + a directory/spec **batch mode** so the author can't fumble the pair or cross decks. |
 
@@ -490,10 +490,14 @@ Required hardening:
 - Stop the output leak (§3 Tier-1 #1).
 - Stop `inline` destroying its source-of-truth (§3 Tier-1 #2); `extract` `--force`
   (§3 Tier-1 #3).
-- **Companion split/unify path** so extract-then-split / unify don't orphan voiceover
-  (§8): route companion cells by their owning slide's `lang`, preserving
-  `for_slide`/`vo_anchor`. This is well-defined *once* `de_id==en_id` is guaranteed
-  (depends on #162).
+- **Companion split/unify path** — **DONE (2026-06-03)** so extract-then-split / unify
+  don't orphan voiceover (§8): `split_in_file`/`unify_in_file` carry a sibling
+  `voiceover_*.py` in lockstep, routing companion cells by their `lang` and preserving
+  `for_slide`/`vo_anchor`, byte-identically. Reuses `split_text`/`unify_texts` (a
+  companion has no header macro, so the per-language route is the same primitive); the
+  `companion_path` dependency is imported lazily so a plain deck split never touches the
+  voiceover layer. Well-defined because #162 guarantees `de_id==en_id`. The
+  `extract-then-split` harness row flipped break-silent → preserve.
 - **Both-language compatibility check** = companion `for_slide`-set equality across
   `.de`/`.en` (same invariant as the slide check; part of the detective gate).
 - **Build-time escalation** of unmatched `for_slide` from log-only to a surfaced
@@ -538,10 +542,16 @@ corpus no-op invariant + real-deck round-trip **skip**. To build justified confi
    `clm validate`, dir/course + single-file-with-twin; `commit-without-sync` → break-loud).
    **defensive ✅ DONE** (twin-aware `assign_ids_in_file`) + **generative ✅ DONE 2026-06-03**
    (`assign_ids_in_split_pair` / directory routing; EN-authority via unify→assign→split with a
-   byte-faithful round-trip guard). All three #162 legs landed. **Next:** `extract-voiceover`
-   twin-awareness + companion `for_slide` parity (the both-language voiceover compat check), and
-   the `extract-then-split` companion seam (§10). Harness now 13 preserve / 1 break-loud /
-   2 break-silent (extract-then-split + build-merge observe-only).
+   byte-faithful round-trip guard). All three #162 legs landed. Harness now 14 preserve /
+   1 break-loud / 1 break-silent.
+   - **Companion split/unify seam ✅ DONE 2026-06-03** (§8/§10) — `split_in_file`/`unify_in_file`
+     carry a sibling `voiceover_*.py` in lockstep (route by `lang`, preserve
+     `for_slide`/`vo_anchor`, byte-identical round trip; lazy `companion_path` import; CLI +
+     `--json` report companions; info topics updated). `extract-then-split` harness row flipped
+     break-silent → preserve; `tests/slides/test_split.py::TestCompanionSplit`/`TestCompanionUnify`.
+   - **Next:** `extract-voiceover` twin-awareness + companion `for_slide` parity (the both-language
+     voiceover compat check, extends the detective); then the build-merge observe-only escalation
+     (the one remaining break-silent row).
 4. **Command-surface rethink** (§8) — fold/hide/guard, with info-topic updates.
 5. **Pre-commit gate** (§9) + voiceover hardening (§10) + verification additions (§11).
 6. **Sync CLI pairing guard** (§3 Tier-2) + single-path/batch UX.
@@ -566,8 +576,9 @@ corpus no-op invariant + real-deck round-trip **skip**. To build justified confi
 - Voiceover (slide-side): `voiceover_tools.py` (`companion_path` `:122-136`; extract
   `:349-424`; inline `:706-802`; `merge_voiceover_text` `:432-485`; `vo_anchor`
   `:204-256`).
-- Split/unify: `split.py` (`split_text`; `unify_texts`; `_slide_ids_pair` `:420-431`;
-  force guards `:271-281,558-560`).
+- Split/unify: `split.py` (`split_text`; `unify_texts`; `_slide_ids_pair`; force guards;
+  companion seam `_plan_companion_split` / `_plan_companion_unify` — lazy `companion_path`
+  import, reuse `split_text`/`unify_texts`; `SplitResult`/`UnifyResult` companion fields).
 - Build: `build.py` (split-routing abort `:1117-1132`); `topic.py`
   (`add_files_in_dir`/`_add_slide_units` `:318-408`; `FileTopic` `:426-445`);
   `notebook_file.py` (`output_language_filter`, `companion_voiceover_path` `:108-114`);
