@@ -575,6 +575,8 @@ def _apply_slide_ids(
     cells: list[_RawCell],
     path: Path,
     options: AssignOptions | None = None,
+    *,
+    twin_ids: list[str | None] | None = None,
 ) -> tuple[list[Change], list[ReviewItem]]:
     """Assign ``slide_id`` metadata using the shared assign-ids engine.
 
@@ -588,6 +590,11 @@ def _apply_slide_ids(
     the cell headers). We translate its ``AssignedId`` records into the
     normalizer's :class:`Change` records and its ``Refusal`` records
     into :class:`ReviewItem` records.
+
+    ``twin_ids`` is forwarded verbatim to
+    :func:`~clm.slides.assign_ids.assign_ids_for_cells` (the #162 defensive):
+    when supplied, an id-less slide adopts the positionally-corresponding
+    sibling-half id instead of minting a divergent slug.
     """
     from clm.slides.assign_ids import AssignOptions as _AO
     from clm.slides.assign_ids import assign_ids_for_cells
@@ -595,7 +602,7 @@ def _apply_slide_ids(
     if options is None:
         options = _AO()
 
-    result = assign_ids_for_cells(cells, path, options)
+    result = assign_ids_for_cells(cells, path, options, twin_ids=twin_ids)
 
     changes = [
         Change(

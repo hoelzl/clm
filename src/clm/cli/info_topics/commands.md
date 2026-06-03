@@ -1084,6 +1084,17 @@ Extract voiceover and notes cells from a slide file to a companion
 `voiceover_*.py` file, linked via `slide_id`/`for_slide` metadata.
 Content cells without `slide_id` get auto-generated IDs before extraction.
 
+Since CLM {version}, that ID generation is **twin-aware** on a split half
+(`*.de.py` / `*.en.py`): when the sibling exists on disk with a matching slide
+count, an id-less slide adopts the twin's `slide_id` instead of minting a
+divergent slug (the #162 defensive). This keeps `de_id == en_id` when you
+extract the two halves separately, so their companions' `for_slide` sets agree
+— without it, per-language extraction would mint independent slugs and one
+language would silently ship with missing narration (which `clm validate`'s
+#162 detectives now flag). For deterministic EN-authority ids across a pair,
+run `clm slides assign-ids <dir>` before extracting; bilingual decks are
+unaffected.
+
 Since CLM {version}, each extracted cell also records a `vo_anchor`
 attribute identifying its **immediate predecessor cell** — `id:<slide_id>`
 when that cell carries an id, otherwise `fp:<body-fingerprint>` — with a

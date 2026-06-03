@@ -158,13 +158,27 @@ def _is_voiceover_cell(cell: _RawCell) -> bool:
     return cell.metadata.is_narrative
 
 
-def _ensure_slide_ids(cells: list[_RawCell], path: Path) -> int:
+def _ensure_slide_ids(cells: list[_RawCell], path: Path, text: str) -> int:
     """Auto-generate slide_ids for content cells that lack them.
 
-    Delegates to the shared assign-ids engine (via the normalizer
-    adapter). Returns the number of ids assigned.
+    Delegates to the shared assign-ids engine (via the normalizer adapter).
+    Returns the number of ids assigned.
+
+    Twin-aware (#162 defensive): on a split half (``*.de.py`` / ``*.en.py``)
+    whose twin exists on disk with a matching slide count, an **id-less** slide
+    adopts the twin's id for the corresponding slide instead of minting a
+    divergent slug from its own heading. This keeps ``de_id == en_id`` across a
+    per-language extract — without it, extracting each half separately would
+    mint independent slugs and the two companions' ``for_slide`` sets would
+    diverge (which ``clm validate``'s #162 detective would then flag). The twin
+    is read-only; when it has no id for a slide, minting falls back to the
+    normal EN-derived slug. Bilingual files (no ``.de`` / ``.en`` suffix) pass
+    ``twin_ids=None`` and are unaffected.
     """
-    changes, _refusals = _apply_slide_ids(cells, path)
+    from clm.slides.assign_ids import _twin_ids_for
+
+    twin_ids = _twin_ids_for(path, text)
+    changes, _refusals = _apply_slide_ids(cells, path, twin_ids=twin_ids)
     return len(changes)
 
 
@@ -368,7 +382,11 @@ def extract_voiceover(
 
     Content cells without ``slide_id`` get auto-generated IDs before
     extraction.  Voiceover cells are linked to their owning slide via
-    ``for_slide`` metadata.
+    ``for_slide`` metadata. On a split half whose twin exists on disk with a
+    matching slide count, that id generation is **twin-aware** (#162): an
+    id-less slide adopts the twin's id rather than minting a divergent slug, so
+    extracting the ``.de`` and ``.en`` halves separately keeps their companions'
+    ``for_slide`` sets in agreement (see :func:`_ensure_slide_ids`).
 
     The companion is *rebuilt* from the voiceover cells currently in the slide
     file. If a companion already exists it would be overwritten, discarding any
@@ -402,8 +420,9 @@ def extract_voiceover(
     if not vo_indices:
         return result
 
-    # Auto-generate slide_ids for cells that need them
-    result.ids_generated = _ensure_slide_ids(cells, path)
+    # Auto-generate slide_ids for cells that need them (twin-aware on a split
+    # half so a per-language extract keeps de_id == en_id; see _ensure_slide_ids).
+    result.ids_generated = _ensure_slide_ids(cells, path, text)
 
     # Build companion cells with for_slide metadata (owning slide) and a
     # vo_anchor (immediate predecessor, occurrence-qualified) so inline can

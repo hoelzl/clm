@@ -934,6 +934,112 @@ class TestSplitDeckVoiceover:
         assert _lang_cell_count(en_final, "de") == 0
 
 
+class TestExtractTwinAware:
+    """``extract`` id generation is twin-aware on a split half (#162 defensive).
+
+    Extracting the ``.de`` and ``.en`` halves separately must not mint
+    divergent slide_ids — otherwise the two companions' ``for_slide`` sets
+    diverge and one language silently ships missing narration at build.
+    """
+
+    @staticmethod
+    def _born_split_with_vo(tmp_path: Path) -> tuple[Path, Path]:
+        """A born-split (both halves id-less) pair with one inline voiceover
+        per half, written via ``split_text`` so the headers are real."""
+        de_vo = '# %% [markdown] lang="de" tags=["voiceover"]\n#\n# VO DE\n\n'
+        en_vo = '# %% [markdown] lang="en" tags=["voiceover"]\n#\n# VO EN\n\n'
+        bilingual = (
+            "# j2 from 'macros.j2' import header\n"
+            '# {{ header("Titel", "Title") }}\n\n'
+            '# %% [markdown] lang="de" tags=["slide"]\n# ## Mein Thema\n\n'
+            + de_vo
+            + '# %% [markdown] lang="en" tags=["slide"]\n# ## My Topic\n\n'
+            + en_vo
+        )
+        de_text, en_text = split_text(bilingual)
+        de = tmp_path / "slides_x.de.py"
+        en = tmp_path / "slides_x.en.py"
+        de.write_text(de_text, encoding="utf-8", newline="\n")
+        en.write_text(en_text, encoding="utf-8", newline="\n")
+        return de, en
+
+    def test_per_language_extract_converges_to_parity(self, tmp_path: Path):
+        de, en = self._born_split_with_vo(tmp_path)
+        extract_voiceover(de)
+        extract_voiceover(en)  # twin-aware: adopts the DE half's freshly-minted id
+
+        de_after = de.read_text(encoding="utf-8")
+        en_after = en.read_text(encoding="utf-8")
+        # Both halves end on the same id (DE-authority here, since DE was
+        # extracted first) — the #162 invariant holds.
+        assert 'slide_id="mein-thema"' in de_after
+        assert 'slide_id="mein-thema"' in en_after
+        assert 'slide_id="my-topic"' not in en_after
+
+        de_comp = (tmp_path / "voiceover_x.de.py").read_text(encoding="utf-8")
+        en_comp = (tmp_path / "voiceover_x.en.py").read_text(encoding="utf-8")
+        assert 'for_slide="mein-thema"' in de_comp
+        assert 'for_slide="mein-thema"' in en_comp
+
+    def test_adopts_existing_twin_id(self, tmp_path: Path):
+        # EN half already has an id; the id-less DE half must adopt it on
+        # extract rather than minting "mein-thema" from its own heading.
+        de = tmp_path / "slides_x.de.py"
+        en = tmp_path / "slides_x.en.py"
+        de.write_text(
+            '# %% [markdown] lang="de" tags=["slide"]\n# ## Mein Thema\n\n'
+            '# %% [markdown] lang="de" tags=["voiceover"]\n# VO DE\n',
+            encoding="utf-8",
+            newline="\n",
+        )
+        en.write_text(
+            '# %% [markdown] lang="en" tags=["slide"] slide_id="custom-id"\n# ## My Topic\n',
+            encoding="utf-8",
+            newline="\n",
+        )
+        extract_voiceover(de)
+
+        assert 'slide_id="custom-id"' in de.read_text(encoding="utf-8")
+        de_comp = (tmp_path / "voiceover_x.de.py").read_text(encoding="utf-8")
+        assert 'for_slide="custom-id"' in de_comp
+
+    def test_mismatched_slide_count_mints_normally(self, tmp_path: Path):
+        # Structurally misaligned halves (different slide counts): positional
+        # reuse is unsafe, so extract mints normally (no crash, no wrong id) —
+        # the validator's #162 detective surfaces the divergence instead.
+        de = tmp_path / "slides_x.de.py"
+        en = tmp_path / "slides_x.en.py"
+        de.write_text(
+            '# %% [markdown] lang="de" tags=["slide"]\n# ## Mein Thema\n\n'
+            '# %% [markdown] lang="de" tags=["voiceover"]\n# VO DE\n',
+            encoding="utf-8",
+            newline="\n",
+        )
+        en.write_text(
+            '# %% [markdown] lang="en" tags=["slide"] slide_id="a"\n# ## A\n\n'
+            '# %% [markdown] lang="en" tags=["slide"] slide_id="b"\n# ## B\n',
+            encoding="utf-8",
+            newline="\n",
+        )
+        extract_voiceover(de)  # must not raise
+        de_after = de.read_text(encoding="utf-8")
+        assert 'slide_id="mein-thema"' in de_after  # minted from its own heading
+
+    def test_bilingual_extract_unaffected(self, tmp_path: Path):
+        # A bilingual (non-split) file has no twin; twin_ids is None and id
+        # generation is unchanged.
+        p = tmp_path / "slides_x.py"
+        p.write_text(
+            '# %% [markdown] lang="de" tags=["slide"]\n# ## Mein Thema\n\n'
+            '# %% [markdown] lang="de" tags=["voiceover"]\n# VO DE\n',
+            encoding="utf-8",
+            newline="\n",
+        )
+        res = extract_voiceover(p)
+        assert res.cells_extracted == 1
+        assert 'slide_id="mein-thema"' in p.read_text(encoding="utf-8")
+
+
 # ---------------------------------------------------------------------------
 # Positional anchors (vo_anchor): restore voiceovers to their *exact*
 # position on inline, not just the end of their slide group.
