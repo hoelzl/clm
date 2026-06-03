@@ -60,42 +60,12 @@ layer.
 
 from __future__ import annotations
 
-import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from clm.infrastructure.utils.path_utils import atomic_write_all
 from clm.slides.raw_cells import RawCell, reconstruct, split_cells
-
-
-def _atomic_write_all(writes: list[tuple[Path, str]]) -> None:
-    """Write several ``(path, text)`` outputs as atomically as the FS allows.
-
-    Every text is first written to a sibling ``*.tmp`` file; only after **all**
-    temp writes succeed are they ``os.replace``-d into place back-to-back. A
-    failure during the temp phase (the common one — disk full, permission)
-    therefore leaves every real target untouched; the replace phase has only a
-    tiny residual window, and leftover temps are cleaned up either way.
-
-    This matters for the companion seam: ``split``/``unify`` write up to four
-    files, and a mid-operation failure with plain per-file writes could leave a
-    split deck without its companion — the very orphaning this seam prevents.
-    Cross-file atomicity is not achievable without a journal, but this upgrades
-    the previous direct per-file writes so the likely failure is safe.
-    """
-    temps: list[tuple[Path, Path]] = []
-    try:
-        for path, text in writes:
-            tmp = path.with_name(path.name + ".tmp")
-            tmp.write_text(text, encoding="utf-8", newline="\n")
-            temps.append((tmp, path))
-        for tmp, path in temps:
-            os.replace(tmp, path)
-    finally:
-        for tmp, _ in temps:
-            if tmp.exists():
-                tmp.unlink()
-
 
 # ---------------------------------------------------------------------------
 # Errors
@@ -398,7 +368,7 @@ def split_in_file(
         if companion is not None:
             writes.append((companion.de_path, companion.de_text))
             writes.append((companion.en_path, companion.en_text))
-        _atomic_write_all(writes)
+        atomic_write_all(writes)
 
     return SplitResult(
         source=str(source),
@@ -725,7 +695,7 @@ def unify_in_file(
         writes = [(target, unified)]
         if companion is not None:
             writes.append((companion.target, companion.text))
-        _atomic_write_all(writes)
+        atomic_write_all(writes)
 
     return UnifyResult(
         de_source=str(de_source),

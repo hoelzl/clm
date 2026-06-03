@@ -249,6 +249,8 @@ def create_server(data_dir: Path) -> FastMCP:
         file: str,
         force: bool = False,
         dry_run: bool = False,
+        both: bool = False,
+        single: bool = False,
     ) -> str:
         """Extract voiceover cells from a slide file to a companion file.
 
@@ -258,14 +260,23 @@ def create_server(data_dir: Path) -> FastMCP:
         Refuses to overwrite an existing companion unless force is set
         (returns an ``{"error": ...}`` object in that case).
 
+        On a split half (<deck>.de.py / <deck>.en.py) whose twin exists on
+        disk, BOTH companions are extracted in one EN-authority paired op by
+        default (the result carries ``"paired": true``). Pass single=True to
+        extract only this half; both=True forces the paired form.
+
         Args:
             file: Path to the slide file (absolute, or relative to the
                 data directory).
             force: Overwrite an existing companion (rebuilds it from the
                 slide's voiceover cells, discarding companion-only content).
             dry_run: If True, preview without writing files.
+            both: Force the paired extract (both companions of a split deck).
+            single: Extract only this file's companion, even on a split half.
         """
-        return await handle_extract_voiceover(file, data_dir, force=force, dry_run=dry_run)
+        return await handle_extract_voiceover(
+            file, data_dir, force=force, dry_run=dry_run, both=both, single=single
+        )
 
     @mcp.tool()
     async def inline_voiceover(

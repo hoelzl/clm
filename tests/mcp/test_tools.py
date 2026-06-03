@@ -801,6 +801,63 @@ class TestExtractVoiceover:
         assert data["dry_run"] is True
         assert data["cells_extracted"] == 1
 
+    @staticmethod
+    def _split_pair(course_tree):
+        topic = course_tree / "slides" / "module_100_basics" / "topic_010_intro"
+        de = topic / "slides_pair.de.py"
+        en = topic / "slides_pair.en.py"
+        de.write_text(
+            '# %% [markdown] lang="de" tags=["slide"]\n# ## Thema\n\n'
+            '# %% [markdown] lang="de" tags=["voiceover"]\n# VO DE\n',
+            encoding="utf-8",
+        )
+        en.write_text(
+            '# %% [markdown] lang="en" tags=["slide"]\n# ## Topic\n\n'
+            '# %% [markdown] lang="en" tags=["voiceover"]\n# VO EN\n',
+            encoding="utf-8",
+        )
+        return de, en
+
+    async def test_extract_auto_pairs_split_half(self, course_tree):
+        de, _en = self._split_pair(course_tree)
+        result = await handle_extract_voiceover(str(de), course_tree)
+        data = json.loads(result)
+        assert data["paired"] is True
+        assert len(data["companions"]) == 2
+        assert (de.parent / "voiceover_pair.de.py").exists()
+        assert (de.parent / "voiceover_pair.en.py").exists()
+
+    async def test_extract_single_opts_out(self, course_tree):
+        de, _en = self._split_pair(course_tree)
+        result = await handle_extract_voiceover(str(de), course_tree, single=True)
+        data = json.loads(result)
+        assert "paired" not in data
+        assert data["cells_extracted"] == 1
+        assert not (de.parent / "voiceover_pair.en.py").exists()
+
+    def test_paired_serializer_matches_cli(self, tmp_path):
+        # The MCP and CLI paired serializers are a contract — keep them byte-equal.
+        from clm.cli.commands.voiceover_tools import (
+            _paired_extraction_to_dict as cli_dict,
+        )
+        from clm.mcp.tools import _paired_extraction_result_to_dict as mcp_dict
+        from clm.slides.voiceover_tools import extract_voiceover_pair
+
+        de = tmp_path / "slides_x.de.py"
+        en = tmp_path / "slides_x.en.py"
+        de.write_text(
+            '# %% [markdown] lang="de" tags=["slide"]\n# ## Thema\n\n'
+            '# %% [markdown] lang="de" tags=["voiceover"]\n# VO DE\n',
+            encoding="utf-8",
+        )
+        en.write_text(
+            '# %% [markdown] lang="en" tags=["slide"]\n# ## Topic\n\n'
+            '# %% [markdown] lang="en" tags=["voiceover"]\n# VO EN\n',
+            encoding="utf-8",
+        )
+        result = extract_voiceover_pair(de, en)
+        assert cli_dict(result) == mcp_dict(result)
+
 
 class TestInlineVoiceover:
     async def test_inline_returns_json(self, course_tree):

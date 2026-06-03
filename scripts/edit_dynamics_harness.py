@@ -65,6 +65,7 @@ from clm.slides.voiceover_tools import (  # noqa: E402
     VoiceoverError,
     companion_path,
     extract_voiceover,
+    extract_voiceover_pair,
     inline_voiceover,
     merge_voiceover_text,
 )
@@ -751,6 +752,36 @@ def m_extract_per_language_twin_aware(workdir: Path) -> _RetTuple:
     )
 
 
+def m_extract_pair_both_companions(workdir: Path) -> _RetTuple:
+    # Born-split pair (both halves id-less) with inline voiceover. The author
+    # runs the ONE-OP paired extract: EN-authority ids are minted across both
+    # halves first, then each is extracted, so the two companions' for_slide
+    # sets agree by construction — stronger (order-independent) than the
+    # per-language path's twin-adoption parity.
+    pair = born_split_with_voiceover()
+    de_path, en_path = pair.write(workdir)
+    extract_voiceover_pair(de_path, en_path)
+    de_comp = companion_path(de_path)
+    en_comp = companion_path(en_path)
+    if not (de_comp.exists() and en_comp.exists()):
+        return ["companion_missing"], False, "", "paired extract did not produce both companions"
+    de_after = de_path.read_text(encoding="utf-8")
+    en_after = en_path.read_text(encoding="utf-8")
+    de_fs = for_slides(de_comp.read_text(encoding="utf-8"))
+    en_fs = for_slides(en_comp.read_text(encoding="utf-8"))
+    violated: list[str] = []
+    if slide_ids(de_after) != slide_ids(en_after):
+        violated.append("id_parity")
+    if set(de_fs) != set(en_fs):
+        violated.append("for_slide_parity")
+    return (
+        violated,
+        False,
+        "",
+        f"slide_ids de={slide_ids(de_after)} en={slide_ids(en_after)}; for_slide de={de_fs} en={en_fs}",
+    )
+
+
 def m_inline_after_rename(workdir: Path) -> _RetTuple:
     de, _ = split_text(baseline_bilingual(with_voiceover=("intro",)))
     slide = workdir / "slides_demo.de.py"
@@ -911,6 +942,17 @@ MUTATIONS: list[Mutation] = [
         PRESERVE,
         True,
         m_extract_per_language_twin_aware,
+    ),
+    # Paired one-op extract landed (§8 'F later'): `extract` on a split half
+    # auto-pairs, minting EN-authority ids across both halves before extracting,
+    # so the two companions' for_slide sets agree by construction (order-
+    # independent, unlike the per-language row above).
+    Mutation(
+        "extract-pair-both-companions",
+        "extract",
+        PRESERVE,
+        True,
+        m_extract_pair_both_companions,
     ),
     # Tier-1 data-loss fixes landed: inline now retains the companion with the
     # unmatched cell (recoverable) and exits non-zero; extract refuses to clobber

@@ -201,3 +201,46 @@ def order_split_pair(a: Path, b: Path) -> tuple[Path, Path] | None:
     if _split_family(a) != _split_family(b):
         return None
     return (a, b) if ta == "de" else (b, a)
+
+
+def derive_split_twin(path: Path) -> Path | None:
+    """The sibling split half on disk, **prefix-agnostic** (unlike
+    :func:`split_twin`, which is gated on the ``slides_``/``topic_``/``project_``
+    routing prefix). Swaps the ``.de`` ↔ ``.en`` tag in the filename and returns
+    the twin only if it exists on disk; ``None`` when ``path`` carries no
+    ``.de``/``.en`` tag or the twin is absent.
+
+    This is the disk-aware sibling of :func:`order_split_pair`, for the
+    prefix-agnostic CLI surfaces — ``voiceover extract`` auto-pairing and the
+    ``clm slides sync`` single-path contract — which must recognise any
+    ``<deck>.de``/``.en`` pair the author hands over, not just routing-prefixed
+    course files. A **voiceover companion** (``voiceover_*.py``) is deliberately
+    *not* treated as a deck half: it carries a ``.de``/``.en`` tag, but it is the
+    *output* of an extract, never a deck to auto-pair — so a companion passed by
+    mistake derives no twin (preventing a re-extract that would empty both
+    companions).
+    """
+    if path.name.startswith("voiceover_"):
+        return None
+    tag = split_lang_tag(path)
+    if tag is None:
+        return None
+    other = "en" if tag == "de" else "de"
+    parts = path.name.split(".")
+    parts[-2] = other
+    twin = path.with_name(".".join(parts))
+    return twin if twin.exists() else None
+
+
+def derive_split_pair(path: Path) -> tuple[Path, Path] | None:
+    """Ordered ``(de_path, en_path)`` for a split half whose twin exists on disk
+    — the prefix-agnostic, disk-aware analogue of :func:`split_twin_pair`.
+
+    Returns ``None`` when ``path`` is not a ``.de``/``.en`` half or its twin is
+    absent. The result is validated and ordered through :func:`order_split_pair`,
+    so a degenerate non-pair (e.g. cross-family) still yields ``None``.
+    """
+    twin = derive_split_twin(path)
+    if twin is None:
+        return None
+    return order_split_pair(path, twin)

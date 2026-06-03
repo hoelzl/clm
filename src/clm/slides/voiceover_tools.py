@@ -22,6 +22,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from clm.infrastructure.utils.path_utils import atomic_write_all
 from clm.notebooks.slide_parser import parse_cell_header, parse_cells
 from clm.slides.normalizer import (
     _apply_slide_ids,
@@ -29,6 +30,7 @@ from clm.slides.normalizer import (
     _reconstruct,
     _split_raw_cells,
 )
+from clm.slides.pairing import order_split_pair
 
 # ---------------------------------------------------------------------------
 # Result types
@@ -64,6 +66,44 @@ class ExtractionResult:
             parts.append(f"{prefix}No voiceover cells found.")
         if self.ids_generated:
             parts.append(f"{self.ids_generated} slide_id(s) auto-generated")
+        return "; ".join(parts)
+
+
+@dataclass
+class PairedExtractionResult:
+    """Result of a paired extraction over both halves of a split deck.
+
+    Holds the two per-half :class:`ExtractionResult`s (``results[0]`` is the DE
+    half, ``results[1]`` the EN half, by construction) plus the count of
+    EN-authority ``slide_id``s minted across both halves by the pre-extraction
+    pass. The two companions' ``for_slide`` sets agree by construction (the
+    EN-authority mint stamped the same ids on both halves before extraction).
+    """
+
+    results: list[ExtractionResult]
+    ids_minted: int = 0
+    dry_run: bool = False
+
+    @property
+    def de(self) -> ExtractionResult:
+        return self.results[0]
+
+    @property
+    def en(self) -> ExtractionResult:
+        return self.results[1]
+
+    @property
+    def summary(self) -> str:
+        prefix = "[DRY RUN] " if self.dry_run else ""
+        total = sum(r.cells_extracted for r in self.results)
+        comps = [r.companion_file for r in self.results if r.cells_extracted]
+        if comps:
+            head = f"{prefix}paired extract: {total} voiceover cell(s) → {', '.join(comps)}"
+        else:
+            head = f"{prefix}paired extract: no voiceover cells found in either half."
+        parts = [head]
+        if self.ids_minted:
+            parts.append(f"{self.ids_minted} EN-authority slide_id(s) minted across both halves")
         return "; ".join(parts)
 
 
@@ -372,38 +412,44 @@ def _find_owning_slide_id(cells: list[_RawCell], voiceover_idx: int) -> str | No
     return None
 
 
-def extract_voiceover(
-    path: Path,
-    *,
-    force: bool = False,
-    dry_run: bool = False,
-) -> ExtractionResult:
-    """Extract voiceover cells from a slide file to a companion file.
+def _has_voiceover_cells(path: Path) -> bool:
+    """True iff ``path`` contains at least one voiceover/notes cell."""
+    _preamble, cells = _split_raw_cells(path.read_text(encoding="utf-8"))
+    return any(_is_voiceover_cell(c) for c in cells)
 
-    Content cells without ``slide_id`` get auto-generated IDs before
-    extraction.  Voiceover cells are linked to their owning slide via
-    ``for_slide`` metadata. On a split half whose twin exists on disk with a
-    matching slide count, that id generation is **twin-aware** (#162): an
-    id-less slide adopts the twin's id rather than minting a divergent slug, so
-    extracting the ``.de`` and ``.en`` halves separately keeps their companions'
-    ``for_slide`` sets in agreement (see :func:`_ensure_slide_ids`).
 
-    The companion is *rebuilt* from the voiceover cells currently in the slide
-    file. If a companion already exists it would be overwritten, discarding any
-    hand-edits (or previously-extracted cells) that live only in the companion —
-    so, like ``split_in_file``, this refuses without ``force``.
+def _slide_start_ids_of(path: Path) -> list[str | None]:
+    """Ordered ``slide_id``s of the slide/subslide cells in ``path`` (``None``
+    where a slide carries no id)."""
+    return [
+        c.metadata.slide_id
+        for c in parse_cells(path.read_text(encoding="utf-8"))
+        if c.metadata.is_slide_start
+    ]
 
-    Args:
-        path: Path to the ``.py`` slide file.
-        force: Overwrite an existing companion file. Without it, an existing
-            companion raises :class:`VoiceoverError` rather than clobbering it.
-        dry_run: If ``True``, preview without writing files.
 
-    Returns:
-        An :class:`ExtractionResult` describing what was done.
+def _slide_ids_in_parity(de_path: Path, en_path: Path) -> bool:
+    """True iff both halves carry the **same** ordered ``slide_id``s with none
+    missing — the precondition for skipping the EN-authority pre-mint
+    (``mint_ids=False``). An id-less or divergent pair fails this, so the caller
+    refuses rather than letting the per-half mint diverge (#162)."""
+    de_ids = _slide_start_ids_of(de_path)
+    en_ids = _slide_start_ids_of(en_path)
+    return de_ids == en_ids and all(de_ids)
 
-    Raises:
-        VoiceoverError: a companion already exists and ``force`` is not set.
+
+def _plan_extraction(
+    path: Path, *, dry_run: bool
+) -> tuple[ExtractionResult, list[tuple[Path, str]]]:
+    """Compute the extraction result and the ``(path, text)`` writes WITHOUT
+    writing anything.
+
+    Returns ``(result, writes)``. ``writes`` is empty when there are no
+    voiceover cells (nothing to do) or under ``dry_run`` — so an empty list
+    means "do not touch disk". The caller owns the existing-companion force
+    check and the actual commit (via :func:`atomic_write_all`), so the paired
+    path can guard *both* companions up front and write all four files in one
+    atomic batch.
     """
     comp = companion_path(path)
     result = ExtractionResult(
@@ -418,7 +464,7 @@ def extract_voiceover(
     # Check if there are any voiceover cells at all
     vo_indices = [i for i, c in enumerate(cells) if _is_voiceover_cell(c)]
     if not vo_indices:
-        return result
+        return result, []
 
     # Auto-generate slide_ids for cells that need them (twin-aware on a split
     # half so a per-language extract keeps de_id == en_id; see _ensure_slide_ids).
@@ -449,13 +495,59 @@ def extract_voiceover(
 
     result.cells_extracted = len(companion_cells)
 
+    if dry_run:
+        return result, []
+
     # Remove voiceover cells from the slide file
     remaining_cells = [c for i, c in enumerate(cells) if i not in set(vo_indices)]
+    new_slide_text = _reconstruct(preamble, remaining_cells)
+    # Clean up double blank lines left by removal
+    new_slide_text = re.sub(r"\n{3,}", "\n\n", new_slide_text)
+    companion_text = _reconstruct("", companion_cells)
+    return result, [(path, new_slide_text), (comp, companion_text)]
 
-    if not dry_run:
-        # Refuse to clobber an existing companion *before* touching the slide
-        # file — otherwise a raise here would strip voiceover from the slide
-        # and leave no companion (data loss). ``force`` opts into the rebuild.
+
+def extract_voiceover(
+    path: Path,
+    *,
+    force: bool = False,
+    dry_run: bool = False,
+) -> ExtractionResult:
+    """Extract voiceover cells from a slide file to a companion file.
+
+    Content cells without ``slide_id`` get auto-generated IDs before
+    extraction.  Voiceover cells are linked to their owning slide via
+    ``for_slide`` metadata. On a split half whose twin exists on disk with a
+    matching slide count, that id generation is **twin-aware** (#162): an
+    id-less slide adopts the twin's id rather than minting a divergent slug, so
+    extracting the ``.de`` and ``.en`` halves separately keeps their companions'
+    ``for_slide`` sets in agreement (see :func:`_ensure_slide_ids`). For a
+    one-op, EN-authority paired extract over *both* halves, see
+    :func:`extract_voiceover_pair`.
+
+    The companion is *rebuilt* from the voiceover cells currently in the slide
+    file. If a companion already exists it would be overwritten, discarding any
+    hand-edits (or previously-extracted cells) that live only in the companion —
+    so, like ``split_in_file``, this refuses without ``force``.
+
+    Args:
+        path: Path to the ``.py`` slide file.
+        force: Overwrite an existing companion file. Without it, an existing
+            companion raises :class:`VoiceoverError` rather than clobbering it.
+        dry_run: If ``True``, preview without writing files.
+
+    Returns:
+        An :class:`ExtractionResult` describing what was done.
+
+    Raises:
+        VoiceoverError: a companion already exists and ``force`` is not set.
+    """
+    result, writes = _plan_extraction(path, dry_run=dry_run)
+    if writes:
+        # Refuse to clobber an existing companion *before* any write — otherwise
+        # the slide rewrite would strip voiceover and leave no companion (data
+        # loss). ``force`` opts into the rebuild. The two writes commit together.
+        comp = companion_path(path)
         if comp.exists() and not force:
             raise VoiceoverError(
                 f"refusing to overwrite existing companion '{comp.name}' "
@@ -463,18 +555,136 @@ def extract_voiceover(
                 f"voiceover cells; this discards content present only in the "
                 f"companion)"
             )
-
-        # Write the slide file without voiceover cells
-        new_slide_text = _reconstruct(preamble, remaining_cells)
-        # Clean up double blank lines left by removal
-        new_slide_text = re.sub(r"\n{3,}", "\n\n", new_slide_text)
-        path.write_text(new_slide_text, encoding="utf-8", newline="\n")
-
-        # Write the companion file
-        companion_text = _reconstruct("", companion_cells)
-        comp.write_text(companion_text, encoding="utf-8", newline="\n")
-
+        atomic_write_all(writes)
     return result
+
+
+def extract_voiceover_pair(
+    de_path: Path,
+    en_path: Path,
+    *,
+    force: bool = False,
+    dry_run: bool = False,
+    mint_ids: bool = True,
+) -> PairedExtractionResult:
+    """Extract voiceover from *both* halves of a split deck in one op.
+
+    The companion footgun this closes: running ``extract`` once per language by
+    hand can mint divergent slugs on id-less slides, so the two companions'
+    ``for_slide`` sets disagree. Here the two halves are first minted with
+    **EN-authority** ``slide_id``s across both at once
+    (:func:`~clm.slides.assign_ids.assign_ids_in_split_pair`), so each
+    companion's ``for_slide`` set agrees by construction; then each half is
+    extracted and all writes commit in one atomic batch.
+
+    Refuses **loudly** (:class:`VoiceoverError`) when the two halves are not
+    structurally alignable (divergent shared cells / mismatched cell count): the
+    EN-authority pre-mint cannot then guarantee parity, and a silent per-half
+    fallback would reintroduce the exact divergence this op exists to prevent.
+    Reconcile the pair first (e.g. ``clm slides sync``) and retry.
+
+    Args:
+        de_path, en_path: the two halves, in either order (reordered defensively).
+        force: overwrite existing companions — **all-or-nothing** over both
+            halves (refuses if *either* companion exists and ``force`` is unset).
+        dry_run: preview without writing (the pre-mint runs report-only, so no
+            slide ids are written either).
+        mint_ids: run the EN-authority pre-mint (default on). Set ``False`` only
+            when the pair is already known to be in ``slide_id`` parity — chiefly
+            for tests isolating the extraction from the minting.
+
+    Raises:
+        VoiceoverError: the paths are not a valid same-deck ``.de``/``.en`` pair;
+            an existing companion would be clobbered without ``force``; or the
+            pair is not structurally alignable for the EN-authority mint.
+    """
+    ordered = order_split_pair(de_path, en_path)
+    if ordered is None:
+        raise VoiceoverError(
+            f"'{de_path.name}' and '{en_path.name}' are not the two halves of one "
+            f"split deck (expected <deck>.de.py and <deck>.en.py of the same deck); "
+            f"cannot paired-extract."
+        )
+    de_path, en_path = ordered
+
+    # Match single-extract's no-op-on-empty contract FIRST (before the force
+    # guard): if neither half has any voiceover cells there is nothing to
+    # extract, so do nothing — don't refuse on a stale companion and don't
+    # id-stamp a deck with nothing to extract (a per-half extract no-ops here).
+    if not _has_voiceover_cells(de_path) and not _has_voiceover_cells(en_path):
+        return PairedExtractionResult(
+            results=[
+                ExtractionResult(
+                    slide_file=str(de_path),
+                    companion_file=str(companion_path(de_path)),
+                    dry_run=dry_run,
+                ),
+                ExtractionResult(
+                    slide_file=str(en_path),
+                    companion_file=str(companion_path(en_path)),
+                    dry_run=dry_run,
+                ),
+            ],
+            dry_run=dry_run,
+        )
+
+    # All-or-nothing companion guard, before any write (mirrors split_in_file):
+    # refuse if *either* companion exists and not force.
+    if not dry_run:
+        blockers = [c for c in (companion_path(de_path), companion_path(en_path)) if c.exists()]
+        if blockers and not force:
+            names = ", ".join(f"'{b.name}'" for b in blockers)
+            raise VoiceoverError(
+                f"refusing to overwrite existing companion(s): {names} "
+                f"(pass force=True / --force to rebuild them from the current "
+                f"voiceover cells; this discards content present only in the companion)"
+            )
+
+    # EN-authority slide_id mint across both halves first, so the two companions'
+    # for_slide sets agree by construction. report_only on a dry run writes nothing.
+    ids_minted = 0
+    if mint_ids:
+        from clm.slides.assign_ids import AssignOptions, assign_ids_in_split_pair
+
+        pre = assign_ids_in_split_pair(de_path, en_path, AssignOptions(report_only=dry_run))
+        if pre is None:
+            raise VoiceoverError(
+                f"cannot paired-extract '{de_path.name}' / '{en_path.name}': the two "
+                f"halves are not structurally aligned (divergent shared cells / cell "
+                f"count), so EN-authority slide_id parity cannot be guaranteed. "
+                f"Reconcile them first (e.g. `clm slides sync`), then retry."
+            )
+        # Distinct slide_ids stamped on slide-role cells. The same id lands on
+        # both halves, so the set dedups to one entry per logical slide;
+        # narrative ``voiceover-inherit`` writes are not minted ids.
+        ids_minted = len({a.slide_id for a in pre.assignments if a.source != "voiceover-inherit"})
+    elif not _slide_ids_in_parity(de_path, en_path):
+        # Without the pre-mint, the per-half _ensure_slide_ids would mint
+        # independently on an id-less pair and silently diverge (#162). Enforce
+        # the documented mint_ids=False contract loudly instead of breaking it.
+        raise VoiceoverError(
+            f"mint_ids=False requires '{de_path.name}' / '{en_path.name}' to be already "
+            f"in slide_id parity (every slide id'd and de_id == en_id); run with "
+            f"mint_ids=True (the default) to mint EN-authority ids."
+        )
+
+    de_result, de_writes = _plan_extraction(de_path, dry_run=dry_run)
+    en_result, en_writes = _plan_extraction(en_path, dry_run=dry_run)
+    writes = [*de_writes, *en_writes]
+    if writes:
+        atomic_write_all(writes)
+
+    # On the paired path the EN-authority pre-mint owns id generation; the per-half
+    # extract mints nothing in a real run (ids are already on disk). Report the
+    # count via ``ids_minted`` only, and zero the per-half ``ids_generated`` so the
+    # dry-run preview — where the report-only pre-mint writes nothing and
+    # ``_plan_extraction`` re-mints in memory — matches the real run.
+    for r in (de_result, en_result):
+        r.ids_generated = 0
+
+    return PairedExtractionResult(
+        results=[de_result, en_result], ids_minted=ids_minted, dry_run=dry_run
+    )
 
 
 # ---------------------------------------------------------------------------

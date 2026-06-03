@@ -8,6 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **`clm voiceover extract` auto-pairs on a split half (§8 paired extract).**
+  When the target is a split half (`<deck>.de.py` / `<deck>.en.py`) whose twin
+  exists on disk, both companions are extracted in one op: the two halves are
+  first minted with **EN-authority** `slide_id`s across both at once, then each
+  is extracted, and all writes commit atomically — so the two companions'
+  `for_slide` sets agree by construction (closing the footgun where extracting
+  each half by hand could mint divergent slugs). `--single` opts out (legacy
+  single-half behavior), `--both` forces the paired form, and a structurally
+  non-alignable pair is **refused** rather than risk divergence. The `--json`
+  output for a paired extract carries `"paired": true` + a `"companions"` array;
+  the MCP `extract_voiceover` tool gains matching `both` / `single` params. (This
+  is a behavior change to a bare `extract <deck>.de.py` — see `clm info
+  migration`.)
 - **`clm slides sync` now mirrors a tag-only edit across split halves
   (#198).** Adding or removing a role-preserving tag (`keep`, `alt`, …) on
   one half of a split deck used to be silently dropped — the body-hash
