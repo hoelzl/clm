@@ -408,8 +408,15 @@ within one bilingual file.
   it). Both assign-ids harness rows flipped break-silent → preserve; 5 new
   `TestSplitTwinAware` tests. Run-order decides the winning slug when both halves are
   id-less (parity holds either way); true EN-authority is the generative step / `sync`.
-  (`extract-voiceover` twin-awareness still TODO; strongly related to §8 — arguably
-  these per-file ops should not be normal user commands at all.)
+  **`extract-voiceover` twin-awareness ✅ DONE 2026-06-03**: `extract`'s `_ensure_slide_ids`
+  now threads `twin_ids` (via `assign_ids._twin_ids_for`) into `_apply_slide_ids`, so an id-less
+  slide on a split half adopts the sibling's id before extraction rather than minting a divergent
+  slug — extracting `.de`/`.en` separately keeps `de_id == en_id` and the two companions'
+  `for_slide` sets agree. Twin is read-only (mismatched slide counts mint normally); bilingual
+  `extract` unaffected (`twin_ids=None`). Harness `extract-per-language-twin-aware` = preserve;
+  `TestExtractTwinAware` (4 tests). A *paired* extract that produces both companions in one op
+  (generative EN-authority) remains a §8 command-surface item — not needed for parity, since
+  `assign-ids <dir>` then per-language `extract` already covers EN-authority.
 - **Generative:** ✅ **BUILT 2026-06-03** — pair-aware `assign-ids` over *both* halves.
   `assign_ids_in_split_pair` reconstructs the bilingual deck (`unify`), runs the existing
   paired EN-authority assign over it, and routes the ids back (`split`); `assign_ids_in_directory`
@@ -568,9 +575,15 @@ corpus no-op invariant + real-deck round-trip **skip**. To build justified confi
      wired alongside the `slide_id` parity detective (dir/course + single-file with twin). New
      harness row `commit-companion-divergence` = break-loud; `TestSplitCompanionForSlideParity`
      (9 tests). Harness now 14 preserve / 2 break-loud / 1 break-silent.
-   - **Next:** `extract-voiceover` twin-awareness (a paired/twin-aware extraction so the two
-     companions are produced together rather than per-file); then the build-merge observe-only
-     escalation (the one remaining break-silent row, `build-merge-unmatched`).
+   - **`extract-voiceover` twin-awareness ✅ DONE 2026-06-03** (§7 defensive) — `_ensure_slide_ids`
+     threads `twin_ids` into `_apply_slide_ids`, so a per-language extract adopts the sibling's id
+     instead of minting a divergent slug (keeps `de_id == en_id`; the companions' `for_slide` sets
+     agree). Harness `extract-per-language-twin-aware` = preserve; `TestExtractTwinAware` (4 tests).
+     Harness now 15 preserve / 2 break-loud / 1 break-silent.
+   - **Next:** the build-merge observe-only escalation (the one remaining break-silent row,
+     `build-merge-unmatched`: `merge_voiceover_text` returns the unmatched ids but the `build`
+     consumer is log-only/exit-0 — surface it as a finding honoring a fail-on policy). Then the
+     §8 command-surface rethink (incl. a *paired* extract that produces both companions in one op).
 4. **Command-surface rethink** (§8) — fold/hide/guard, with info-topic updates.
 5. **Pre-commit gate** (§9) + voiceover hardening (§10) + verification additions (§11).
 6. **Sync CLI pairing guard** (§3 Tier-2) + single-path/batch UX.
@@ -593,8 +606,9 @@ corpus no-op invariant + real-deck round-trip **skip**. To build justified confi
 - IDs: `assign_ids.py` (slug/minting; `group_slug` `:301-339`; refusals `:545-568`),
   `slug.py` (`resolve_collision` `:189-201`).
 - Voiceover (slide-side): `voiceover_tools.py` (`companion_path` `:122-136`; extract
-  `:349-424`; inline `:706-802`; `merge_voiceover_text` `:432-485`; `vo_anchor`
-  `:204-256`).
+  `:349-424`; `_ensure_slide_ids` — twin-aware id gen, threads `twin_ids` via
+  `assign_ids._twin_ids_for` into `normalizer._apply_slide_ids`; inline `:706-802`;
+  `merge_voiceover_text` `:432-485`; `vo_anchor` `:204-256`).
 - Split/unify: `split.py` (`split_text`; `unify_texts`; `_slide_ids_pair`; force guards;
   companion seam `_plan_companion_split` / `_plan_companion_unify` — lazy `companion_path`
   import, reuse `split_text`/`unify_texts`; `SplitResult`/`UnifyResult` companion fields).

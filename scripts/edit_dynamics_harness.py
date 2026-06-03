@@ -394,6 +394,24 @@ def born_split_pair(de_title: str = "Mein Thema", en_title: str = "My Topic") ->
     return SplitPair.from_bilingual(bilingual)
 
 
+def born_split_with_voiceover() -> SplitPair:
+    """A born-split pair (both halves id-less) with one inline voiceover cell per
+    half — the shape a per-language ``extract`` runs on. Built by splitting an
+    id-less bilingual deck so the split headers are exactly what ``split``
+    produces.
+    """
+    de_vo = '# %% [markdown] lang="de" tags=["voiceover"]\n#\n# Voiceover DE\n\n'
+    en_vo = '# %% [markdown] lang="en" tags=["voiceover"]\n#\n# Voiceover EN\n\n'
+    bilingual = (
+        HEADER_PREAMBLE
+        + slide_cell("de", "Mein Thema")
+        + de_vo
+        + slide_cell("en", "My Topic")
+        + en_vo
+    )
+    return SplitPair.from_bilingual(bilingual)
+
+
 def _sync_signaled(out: SyncOutcome) -> tuple[bool, str]:
     if out.result.errors:
         return True, f"errors={out.result.errors}"
@@ -684,6 +702,37 @@ def m_extract_then_split(workdir: Path) -> _RetTuple:
     )
 
 
+def m_extract_per_language_twin_aware(workdir: Path) -> _RetTuple:
+    # Born-split pair (both halves id-less) with inline voiceover. The author
+    # extracts each half separately. Twin-aware id assignment (#162 defensive in
+    # extract) makes the second extract adopt the first half's freshly-minted
+    # ids, so the two companions end up with matching for_slide sets (parity)
+    # instead of minting divergent DE/EN slugs.
+    pair = born_split_with_voiceover()
+    de_path, en_path = pair.write(workdir)
+    extract_voiceover(de_path)
+    extract_voiceover(en_path)
+    de_comp = companion_path(de_path)
+    en_comp = companion_path(en_path)
+    if not (de_comp.exists() and en_comp.exists()):
+        return ["companion_missing"], False, "", "extract did not produce both companions"
+    de_after = de_path.read_text(encoding="utf-8")
+    en_after = en_path.read_text(encoding="utf-8")
+    de_fs = for_slides(de_comp.read_text(encoding="utf-8"))
+    en_fs = for_slides(en_comp.read_text(encoding="utf-8"))
+    violated: list[str] = []
+    if slide_ids(de_after) != slide_ids(en_after):
+        violated.append("id_parity")
+    if set(de_fs) != set(en_fs):
+        violated.append("for_slide_parity")
+    return (
+        violated,
+        False,
+        "",
+        f"slide_ids de={slide_ids(de_after)} en={slide_ids(en_after)}; for_slide de={de_fs} en={en_fs}",
+    )
+
+
 def m_inline_after_rename(workdir: Path) -> _RetTuple:
     de, _ = split_text(baseline_bilingual(with_voiceover=("intro",)))
     slide = workdir / "slides_demo.de.py"
@@ -820,6 +869,17 @@ MUTATIONS: list[Mutation] = [
     # companion in lockstep (and `unify` recombines it), so extract-then-split
     # no longer orphans the narration — break-silent -> preserve.
     Mutation("extract-then-split", "extract+split", PRESERVE, True, m_extract_then_split),
+    # extract-voiceover twin-awareness landed: id generation during a per-language
+    # extract adopts the sibling half's ids (#162 defensive), so extracting both
+    # halves separately keeps slide_id + for_slide parity instead of minting
+    # divergent slugs.
+    Mutation(
+        "extract-per-language-twin-aware",
+        "extract",
+        PRESERVE,
+        True,
+        m_extract_per_language_twin_aware,
+    ),
     # Tier-1 data-loss fixes landed: inline now retains the companion with the
     # unmatched cell (recoverable) and exits non-zero; extract refuses to clobber
     # an existing companion without --force. Both flipped break-silent -> preserve.

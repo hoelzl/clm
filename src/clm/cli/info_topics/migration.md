@@ -133,6 +133,13 @@ EN-authority). A pair that is not byte-faithfully unifiable (divergent shared
 cells) falls back to the per-file path, and `clm validate`'s #162 detective
 flags any residual divergence.
 
+`clm voiceover extract` shares this defensive: since CLM {version} the
+`slide_id`s it auto-generates before extraction are twin-aware on a split half,
+so extracting the `.de` and `.en` halves separately keeps them in parity and
+the two companions narrate the same slides. (No migration required — extract on
+bilingual decks is unchanged.) For deterministic EN-authority ids, run
+`clm slides assign-ids <dir>` on the pair before extracting.
+
 ## Slide format redesign: `clm validate` enforces `slide_id` (warning now, error in 1.7)
 
 CLM {version} also ships **Phase 3** of the slide-format-redesign:
