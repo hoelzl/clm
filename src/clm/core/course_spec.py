@@ -527,9 +527,21 @@ class DirGroupSpec:
     subdirs: list[str] | None = None
     include_root_files: bool = False
     recursive: bool = True
+    # Ownership for a *topic-scoped* dir-group (a ``<dir-group>`` nested inside a
+    # ``<topic>``). ``None`` for a global ``<dir-groups>`` entry. Recorded so a
+    # per-topic release can ship a topic's dir-group together with that topic
+    # (issue #208); the output placement itself is unchanged.
+    section_id: str | None = None
+    topic_id: str | None = None
 
     @classmethod
-    def from_element(cls, element: ETree.Element):
+    def from_element(
+        cls,
+        element: ETree.Element,
+        *,
+        section_id: str | None = None,
+        topic_id: str | None = None,
+    ):
         subdirs = find_subdirs(element)
         name = Text.from_string(element_text(element, "name"))
         include_root_files = element.get("include-root-files", "").lower() == "true"
@@ -540,6 +552,8 @@ class DirGroupSpec:
             subdirs=subdirs,
             include_root_files=include_root_files,
             recursive=recursive,
+            section_id=section_id,
+            topic_id=topic_id,
         )
 
 
@@ -1084,6 +1098,12 @@ class CourseSpec:
         dir_groups: list[DirGroupSpec] = []
         # Topic-scoped dir-groups, respecting section enablement so that
         # disabled sections do not leak their dir-groups into the build output.
+        # We walk topic elements explicitly (rather than the flat
+        # ``topics/topic/dir-group`` path) so each dir-group can record its
+        # owning section/topic id (issue #208). Collection order and contents
+        # are unchanged: topics in document order, dir-groups within each topic
+        # in document order. Topic-id extraction mirrors :meth:`parse_sections`
+        # (attribute ``id`` or element text).
         for section_elem in root.findall("sections/section"):
             enabled_attr = section_elem.attrib.get("enabled")
             if (
@@ -1092,8 +1112,17 @@ class CourseSpec:
                 and not keep_disabled
             ):
                 continue
-            for dg in section_elem.iterfind("topics/topic/dir-group"):
-                dir_groups.append(DirGroupSpec.from_element(dg))
+            section_id = section_elem.attrib.get("id") or None
+            for topic_elem in section_elem.findall("topics/topic"):
+                topic_id = (
+                    (topic_elem.attrib.get("id") or "").strip()
+                    or (topic_elem.text or "").strip()
+                    or None
+                )
+                for dg in topic_elem.findall("dir-group"):
+                    dir_groups.append(
+                        DirGroupSpec.from_element(dg, section_id=section_id, topic_id=topic_id)
+                    )
         # Top-level course-scoped dir-groups come after topic-scoped ones,
         # matching the previous document-order traversal from root.iter().
         top = root.find("dir-groups")
