@@ -580,6 +580,118 @@ is now built; the **course-repo half** (wiring the hook into
 `build` stays permissive for now (decision #2). If the gate proves leaky, revisit
 build-time refusal later.
 
+### 9a. Course-repo kickoff prompt (the remaining course-repo half)
+
+With §8 drained (CLM PRs #203–#211, the last being `clm slides sync DIR` batch
+mode), the next move is the **course-repo half** above. Recon of PythonCourses
+(2026-06-04) for grounding: CLM is pinned in `uv.lock` to a git rev (1.6.2) via
+`coding-academy-lecture-manager[all,mcp]>=1.4.1` with a `[tool.uv.sources]` git
+entry and **no `rev`** (so it tracks CLM master); there is **no
+`.pre-commit-config.yaml`** and **no `.github/workflows/`** yet (the gate is
+greenfield); ~212 split `.de.py` decks live under `slides/`, so a first
+`--fail-on warning` run may surface a backlog (this is exactly the §7-Q2 rollout
+decision). The new `clm slides sync slides/ --dry-run` batch form is itself the
+natural "is every pair in sync?" gate check.
+
+Ready-to-paste prompt for a fresh session opened **in the PythonCourses repo**:
+
+````markdown
+# Kickoff: wire the split-deck safety gate into PythonCourses (CLM §9 + §11)
+
+## Context
+
+CLM just finished a multi-PR hardening pass on the **split-language
+(`.de.py`/`.en.py`) + separated-voiceover** slide workflow (PRs #203–#211, merged):
+the #162 `slide_id` parity **detective** (`clm validate` flags cross-file slide_id /
+companion `for_slide` divergence as `pairing` warnings), a `--fail-on {error,warning}`
+gate flag on `clm validate`, the single-language authoring engine `clm slides sync`
+(now with a **single-path** form and a **directory batch** form `clm slides sync DIR`),
+and paired `clm voiceover extract`.
+
+The **other half of the gate lives here, in PythonCourses** (CLM design doc §9, the
+§7-Q2 rollout decision, §11 verification). The canonical plan is in the CLM checkout
+at `docs/claude/design/split-voiceover-hardening.md` — read **§7 (Q2 rollout), §9
+(the gate, incl. this kickoff under §9a), §11 (verification)**. Also run
+`clm info migration` (the #162 sections, the "sync writes by default" change, the
+`--fail-on` flag) and `clm info commands` (validate `--fail-on`, `clm slides sync`
+incl. `DIR` batch mode).
+
+## Current state of this repo (verified 2026-06-04)
+
+- CLM is pinned in `uv.lock` to a git rev (1.6.2) via `pyproject.toml`
+  (`coding-academy-lecture-manager[all,mcp]>=1.4.1`, `[tool.uv.sources]` git = the CLM
+  repo, **no `rev`** → tracks master).
+- **No `.pre-commit-config.yaml`** exists yet (greenfield).
+- **No `.github/workflows/`** exists yet.
+- ~212 split `.de.py` decks under `slides/`.
+- `[tool.clm] cache_dir = "../PythonCoursesClmLlmCache"`.
+
+## Goal
+
+Stand up a **pre-commit-only** safety gate (maintainer's pre-decided design: the hook
+runs `clm validate … --fail-on warning` **and** `clm slides sync … --dry-run`; the
+**build stays permissive**). Then decide and apply the first-run rollout, and
+optionally add a §11 verification job.
+
+## Do this, in order
+
+1. **Bump CLM, then verify the features are present.** Pull a master rev that includes
+   #211:
+   ```
+   uv lock --upgrade-package coding-academy-lecture-manager
+   uv sync --extra all --extra mcp
+   ```
+   Confirm: `clm validate --help` shows `--fail-on`; `clm slides sync --help` shows the
+   `DIR` batch form + `--yes`. Don't proceed until both are present.
+
+2. **Assess BEFORE gating (read-only — change nothing).** Capture a baseline:
+   - `clm validate slides/ --fail-on warning` — count #162 slide_id-parity + companion
+     `for_slide`-divergence warnings.
+   - `clm slides sync slides/ --dry-run` — the new batch dry-run; count out-of-sync deck
+     pairs (exit 1 = would-change, 2 = error).
+   Report the numbers (212 split decks → there may be a backlog).
+
+3. **Decide the rollout (the open §7-Q2 question).** Based on the baseline:
+   - **(a) Clean-then-gate** (preferred if the backlog is small): fix existing warnings,
+     then wire the hook at `--fail-on warning`.
+   - **(b) Errors-first, ramp later**: wire at default severity (errors only), track the
+     cleanup, flip to `--fail-on warning` once clean.
+   **Surface this to the maintainer with the baseline counts before wiring — don't pick
+   silently.**
+
+4. **Fix existing warnings the SAFE way (if clean-then-gate).** Route through the funnels
+   — **never** per-file `clm slides assign-ids <one-half>` (the #1 silent #162 break; CLM
+   now hides it as plumbing):
+   - `clm slides sync slides/ --yes` (batch apply — reconciles + mints shared ids across
+     both halves), or `clm slides sync <deck>.de.py` per pair, or
+     `clm slides assign-ids slides/` (directory, EN-authority paired minting).
+   - Re-run step 2 until clean. Review every write with `git diff` (sync writes the tree).
+
+5. **Wire `.pre-commit-config.yaml`** (greenfield) with a `local` hook stage:
+   - `clm validate slides/ --fail-on warning` (the detective, with teeth).
+   - `clm slides sync slides/ --dry-run` (fails when a half was edited without syncing).
+   - **No** gate on the build path. Keep hooks fast and scoped to `slides/`.
+
+6. **(Stretch, §11.)** Add a `.github/workflows/` job running the same gate, and consider
+   the CLM golden-corpus no-op / real-deck round-trip check against the actual decks
+   (dev-box-only in CLM CI because the corpus isn't present there — this repo *is* the
+   corpus).
+
+## Constraints / gotchas
+
+- `clm slides sync` **writes the tree by default** — use `--dry-run` in the gate; `--yes`
+  only for an intentional batch apply.
+- `--fail-on warning` governs the exit code in **both** human and JSON output when set.
+- Fix parity via `sync` / `assign-ids <dir>` — **never** per-file `assign-ids` on a half.
+- The repo tracks CLM **master** via git (no `rev` pin), so `uv lock --upgrade-package` is
+  how you advance it; consider pinning a specific `rev` for reproducibility.
+
+## First reply I want
+
+The step-2 baseline numbers (warning count, out-of-sync pair count) and your recommended
+rollout (a or b) with reasoning — **before** changing any deck or adding the hook.
+````
+
 ---
 
 ## 10. Voiceover model: harden the current convention
