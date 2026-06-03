@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from clm.core.course_files.data_file import DataFile
+from clm.core.course_files.duplicated_image_file import DuplicatedImageFile
 from clm.core.course_files.notebook_file import NotebookFile
 from clm.infrastructure.utils.path_utils import (
     ext_for,
@@ -67,10 +68,14 @@ def enumerate_expected_outputs(
     ``language`` but not yet ``path`` or ``content_hash`` (added by
     :func:`build_provenance_manifest`).
 
-    Covered so far: notebook-derived outputs (notebook/code/HTML) and copied
-    topic data assets (``DataFile`` — e.g. ``<include>``d files). Generated
-    image outputs (PlantUML/DrawIo/shared/duplicated) and dir-group outputs
-    (ownership is recorded on ``DirGroup.spec``) are a follow-up (issue #208).
+    Covered: notebook-derived outputs (notebook/code/HTML), copied topic data
+    assets (``DataFile``), duplicated images (``DuplicatedImageFile``), and
+    dir-group output files with their recorded section/topic ownership.
+
+    Not yet covered (issue #208 follow-up): ``SharedImageFile`` (the course-
+    level ``image_mode="shared"`` layout). Source diagrams (PlantUML/DrawIo)
+    emit only a source-tree intermediate image; their *output* copy is a
+    separate image ``CourseFile`` that is already covered above.
     """
     for file in course.files:
         topic = file.topic
@@ -100,21 +105,22 @@ def enumerate_expected_outputs(
                         "language": lang,
                     },
                 )
-        elif isinstance(file, DataFile):
-            # Topic data/code assets accompany every output variant: the build
-            # copies them under each (language, format, kind) output dir, so we
-            # enumerate them the same way. Files excluded from output (e.g.
-            # HTTP-replay cassettes) are skipped, mirroring
-            # ``DataFile.get_processing_operation``.
-            if is_ignored_file_for_output(file.path):
+        elif isinstance(file, (DataFile, DuplicatedImageFile)):
+            # Topic data assets and duplicated images accompany every output
+            # variant: the build copies them under each (language, format, kind)
+            # output dir at ``output_dir/relative_path``, so we enumerate the
+            # same way. DataFiles excluded from output (e.g. HTTP-replay
+            # cassettes) are skipped, mirroring ``get_processing_operation``.
+            if isinstance(file, DataFile) and is_ignored_file_for_output(file.path):
                 continue
+            asset_format = "image" if isinstance(file, DuplicatedImageFile) else "data"
             for lang, _fmt, _kind, output_dir in output_specs(
                 course, target.output_root, target=target
             ):
                 try:
                     out_path = file.output_dir(output_dir, lang) / file.relative_path
                 except (KeyError, ValueError) as e:
-                    logger.debug("provenance: skip data %s (%s): %s", file.path, lang, e)
+                    logger.debug("provenance: skip asset %s (%s): %s", file.path, lang, e)
                     continue
                 yield (
                     out_path,
@@ -122,11 +128,51 @@ def enumerate_expected_outputs(
                         "section_id": section.id,
                         "topic_id": topic.id,
                         "kind": None,
-                        "format": "data",
+                        "format": asset_format,
                         "language": lang,
                     },
                 )
-        # else: image outputs + dir-group outputs are a follow-up (issue #208).
+        # SharedImageFile (image_mode="shared") and the source-tree-only
+        # PlantUML/DrawIo diagrams are intentionally not enumerated here; see
+        # the function docstring.
+
+    yield from _enumerate_dir_group_outputs(course, target)
+
+
+def _enumerate_dir_group_outputs(
+    course: Course, target: OutputTarget
+) -> Iterator[tuple[Path, dict[str, Any]]]:
+    """Yield existing dir-group output files with (section, topic) ownership.
+
+    Dir-groups copy whole directories, so — unlike the per-file enumeration —
+    we walk each plausible output directory (every language × public/speaker)
+    and record the files actually found on disk; placements the build did not
+    produce simply have no directory. Ownership comes from the recorded
+    ``DirGroup.spec`` (``None``/``None`` for a global ``<dir-groups>`` entry).
+    """
+    for dir_group in course.dir_groups:
+        spec = dir_group.spec
+        section_id = spec.section_id if spec is not None else None
+        topic_id = spec.topic_id if spec is not None else None
+        for lang in target.languages:
+            for is_speaker in (False, True):
+                for out_dir in dir_group.output_dirs(
+                    is_speaker, lang, target.output_root, skip_toplevel=target.is_explicit
+                ):
+                    if not out_dir.is_dir():
+                        continue
+                    for path in sorted(out_dir.rglob("*")):
+                        if path.is_file():
+                            yield (
+                                path,
+                                {
+                                    "section_id": section_id,
+                                    "topic_id": topic_id,
+                                    "kind": None,
+                                    "format": "dir-group",
+                                    "language": lang,
+                                },
+                            )
 
 
 def _hash_file(path: Path) -> str:

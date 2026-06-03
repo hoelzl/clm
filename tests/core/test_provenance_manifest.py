@@ -25,11 +25,12 @@ def test_enumerate_yields_outputs_with_topic_ownership(course_1):
     assert expected, "course_1 should enumerate outputs"
     saw_notebook = False
     # Every record carries topic ownership; notebooks carry a real
-    # (format, kind), copied data assets carry format="data" and kind=None.
+    # (format, kind), while copied assets (data/image/dir-group) carry an
+    # asset format and kind=None.
     for _path, record in expected:
         assert record["topic_id"]
         assert record["language"] in {"de", "en"}
-        if record["format"] == "data":
+        if record["format"] in {"data", "image", "dir-group"}:
             assert record["kind"] is None
         else:
             assert record["format"] in {"html", "notebook", "code"}
@@ -150,5 +151,58 @@ def test_manifest_records_data_file_assets(tmp_path):
     assert len(data_entries) == 1
     entry = data_entries[0]
     assert entry["topic_id"] == record["topic_id"]
+    assert entry["kind"] is None
+    assert entry["content_hash"].startswith("sha256:")
+
+
+def test_manifest_records_duplicated_image_assets(tmp_path):
+    course = _course_from_test_spec_1(tmp_path / "out")
+    target = course.output_targets[0]
+
+    image_records = [
+        (p, r) for p, r in enumerate_expected_outputs(course, target) if r["format"] == "image"
+    ]
+    assert image_records, "test-spec-1 has duplicated image assets"
+
+    out_path, record = image_records[0]
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    manifest = build_provenance_manifest(
+        course, target, source_commit=None, source_dirty=None, built_at=BUILT_AT
+    )
+    image_entries = [f for f in manifest["files"] if f["format"] == "image"]
+    assert len(image_entries) == 1
+    assert image_entries[0]["topic_id"] == record["topic_id"]
+    assert image_entries[0]["kind"] is None
+    assert image_entries[0]["content_hash"].startswith("sha256:")
+
+
+def test_manifest_records_dir_group_outputs_with_ownership(tmp_path):
+    course = _course_from_test_spec_1(tmp_path / "out")
+    target = course.output_targets[0]
+
+    # The topic-scoped dir-group is owned by a topic; place a file in one of
+    # its output directories and assert the manifest records it with that
+    # ownership.
+    owned = [dg for dg in course.dir_groups if dg.spec is not None and dg.spec.topic_id]
+    assert owned, "test-spec-1 has a topic-scoped dir-group"
+    dir_group = owned[0]
+
+    out_dirs = dir_group.output_dirs(
+        False, "de", target.output_root, skip_toplevel=target.is_explicit
+    )
+    assert out_dirs, "dir-group should resolve at least one output directory"
+    placed_dir = out_dirs[0]
+    placed_dir.mkdir(parents=True, exist_ok=True)
+    (placed_dir / "example.txt").write_text("hi", encoding="utf-8")
+
+    manifest = build_provenance_manifest(
+        course, target, source_commit=None, source_dirty=None, built_at=BUILT_AT
+    )
+    dg_entries = [f for f in manifest["files"] if f["format"] == "dir-group"]
+    entry = next(e for e in dg_entries if e["path"].endswith("example.txt"))
+    assert entry["topic_id"] == dir_group.spec.topic_id
+    assert entry["section_id"] == dir_group.spec.section_id
     assert entry["kind"] is None
     assert entry["content_hash"].startswith("sha256:")
