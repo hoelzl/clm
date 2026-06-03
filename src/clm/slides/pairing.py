@@ -13,8 +13,10 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Protocol
 
+from clm.infrastructure.utils.path_utils import split_lang_suffix
 from clm.notebooks.slide_parser import CellMetadata
 
 # Title-slide anchors:
@@ -104,3 +106,98 @@ def build_slide_pairs(cells: Sequence[CellLike]) -> dict[int, int]:
             pairs[a] = en_idx
             pairs[b] = en_idx
     return pairs
+
+
+# ---------------------------------------------------------------------------
+# Path-level split-pair derivation
+#
+# A split-format deck lives in two files, ``<deck>.de.py`` and
+# ``<deck>.en.py``, that must stay in #162 ``slide_id`` parity. These helpers
+# are the single home for the ``.de`` <-> ``.en`` twin arithmetic that used to
+# live, copied, in ``assign_ids`` (defensive id reuse), ``validator`` (the
+# single-file parity detective), and the ``slides sync`` CLI (the pairing
+# guard). Keeping one copy avoids the four-way drift the duplication invited.
+# ---------------------------------------------------------------------------
+
+
+def split_twin(path: Path) -> Path | None:
+    """The sibling split half (``.de.py`` <-> ``.en.py``) if it exists on disk.
+
+    Returns ``None`` when ``path`` is not a recognised split half or the twin
+    file is absent.
+    """
+    suffix = split_lang_suffix(path)
+    if suffix is None:
+        return None
+    other = "en" if suffix == "de" else "de"
+    parts = path.name.split(".")
+    # split_lang_suffix guarantees the form ``<stem>.<de|en>.<ext>``.
+    parts[-2] = other
+    twin = path.with_name(".".join(parts))
+    return twin if twin.exists() else None
+
+
+def split_twin_pair(path: Path) -> tuple[Path, Path] | None:
+    """If ``path`` is a split half whose twin exists on disk, return the ordered
+    ``(de_path, en_path)`` pair; else ``None``.
+
+    Used by the single-file validate path so a standalone
+    ``clm validate slides_x.de.py`` (and the pre-commit gate) catches twin
+    divergence even when not run over a whole directory.
+    """
+    twin = split_twin(path)
+    if twin is None:
+        return None
+    return (path, twin) if split_lang_suffix(path) == "de" else (twin, path)
+
+
+def split_lang_tag(path: Path) -> str | None:
+    """The trailing ``.de`` / ``.en`` language tag of a filename, if present.
+
+    Prefix-agnostic on purpose: unlike
+    :func:`~clm.infrastructure.utils.path_utils.split_lang_suffix` it does *not*
+    require the ``slides_``/``topic_``/``project_`` routing prefix — it only
+    looks for a ``.de`` / ``.en`` segment immediately before the final
+    extension. ``clm slides sync`` reconciles whatever two halves the author
+    hands it (the build's topic-routing prefix is a separate concern), so the
+    pairing guard must recognise e.g. ``apis.de.py`` as the DE half too.
+    """
+    stem = path.name[: -len(path.suffix)] if path.suffix else path.name
+    for lang in ("de", "en"):
+        if stem.endswith(f".{lang}"):
+            return lang
+    return None
+
+
+def _split_family(path: Path) -> str:
+    """The deck-family key for the guard: the filename with its ``.de``/``.en``
+    tag removed (so the two halves of one deck share a key). Extension is kept,
+    so a ``.de.py`` and a ``.en.cpp`` are *different* families.
+    """
+    tag = split_lang_tag(path)
+    if tag is None:
+        return path.name
+    ext = path.suffix
+    stem = path.name[: -len(ext)] if ext else path.name
+    return f"{stem[: -(len(tag) + 1)]}{ext}"
+
+
+def order_split_pair(a: Path, b: Path) -> tuple[Path, Path] | None:
+    """Order two caller-supplied paths as ``(de_path, en_path)`` if they form a
+    valid same-deck split pair, auto-correcting a swapped order; else ``None``.
+
+    Unlike :func:`split_twin_pair` (which *derives* the twin of one path from
+    disk and is prefix-gated for build-time routing), this validates a pair the
+    caller already holds — the ``clm slides sync`` pairing guard. It is
+    deliberately prefix-agnostic (see :func:`split_lang_tag`): it returns
+    ``None`` when either path lacks a ``.de``/``.en`` tag, both carry the same
+    tag, or the two belong to different decks (different :func:`_split_family`).
+    Existence on disk is the caller's concern (e.g. ``click.Path(exists=True)``).
+    """
+    ta = split_lang_tag(a)
+    tb = split_lang_tag(b)
+    if ta is None or tb is None or ta == tb:
+        return None
+    if _split_family(a) != _split_family(b):
+        return None
+    return (a, b) if ta == "de" else (b, a)

@@ -631,3 +631,66 @@ class TestExplain:
         )
         assert result.exit_code != 0
         assert "mutually exclusive" in _combined(result)
+
+
+class TestPairingGuard:
+    """``clm slides sync`` rejects an invalid DE/EN pair up front (#162 Tier-2)
+    and auto-corrects a swapped order. The guard runs before any read/write, so
+    ``--dry-run --no-cache`` is enough to exercise it.
+    """
+
+    def test_same_file_rejected(self, cli_runner: CliRunner, tmp_path: Path):
+        p = tmp_path / "slides_x.de.py"
+        p.write_text(_DE_BASE, encoding="utf-8")
+        result = cli_runner.invoke(slides_sync_cmd, [str(p), str(p), "--dry-run", "--no-cache"])
+        assert result.exit_code != 0
+        assert "same file" in _combined(result)
+
+    def test_same_language_rejected(self, cli_runner: CliRunner, tmp_path: Path):
+        de1 = tmp_path / "slides_x.de.py"
+        de2 = tmp_path / "slides_y.de.py"
+        de1.write_text(_DE_BASE, encoding="utf-8")
+        de2.write_text(_DE_BASE, encoding="utf-8")
+        result = cli_runner.invoke(slides_sync_cmd, [str(de1), str(de2), "--dry-run", "--no-cache"])
+        assert result.exit_code != 0
+        assert "same language" in _combined(result)
+
+    def test_non_split_half_rejected(self, cli_runner: CliRunner, tmp_path: Path):
+        bilingual = tmp_path / "slides_x.py"
+        en = tmp_path / "slides_x.en.py"
+        bilingual.write_text(_DE_BASE, encoding="utf-8")
+        en.write_text(_EN_BASE, encoding="utf-8")
+        result = cli_runner.invoke(
+            slides_sync_cmd, [str(bilingual), str(en), "--dry-run", "--no-cache"]
+        )
+        assert result.exit_code != 0
+        assert "not a split-format slide half" in _combined(result)
+
+    def test_cross_deck_rejected(self, cli_runner: CliRunner, tmp_path: Path):
+        de = tmp_path / "slides_x.de.py"
+        en = tmp_path / "slides_other.en.py"
+        de.write_text(_DE_BASE, encoding="utf-8")
+        en.write_text(_EN_BASE, encoding="utf-8")
+        result = cli_runner.invoke(slides_sync_cmd, [str(de), str(en), "--dry-run", "--no-cache"])
+        assert result.exit_code != 0
+        assert "different decks" in _combined(result)
+
+    def test_swapped_order_auto_corrected(self, cli_runner: CliRunner, tmp_path: Path):
+        # EN passed first, DE second: the guard reorders and proceeds (exit 0
+        # on a dry-run), emitting a note rather than erroring.
+        de_path, en_path = _write_pair(tmp_path, _DE_BASE, _EN_BASE)
+        result = cli_runner.invoke(
+            slides_sync_cmd,
+            [str(en_path), str(de_path), "--dry-run", "--no-cache"],
+        )
+        assert result.exit_code == 0, _combined(result)
+        assert "swapped" in _combined(result)
+
+    def test_well_formed_pair_passes_guard(self, cli_runner: CliRunner, tmp_path: Path):
+        de_path, en_path = _write_pair(tmp_path, _DE_BASE, _EN_BASE)
+        result = cli_runner.invoke(
+            slides_sync_cmd,
+            [str(de_path), str(en_path), "--dry-run", "--no-cache"],
+        )
+        assert result.exit_code == 0, _combined(result)
+        assert "swapped" not in _combined(result)

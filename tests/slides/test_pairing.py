@@ -8,6 +8,8 @@ the pure structural behavior so future refactors don't drift.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from clm.notebooks.slide_parser import parse_cells
 from clm.slides.pairing import (
     HEADER_MACRO_RE,
@@ -15,6 +17,10 @@ from clm.slides.pairing import (
     build_slide_groups,
     build_slide_pairs,
     is_title_macro_cell,
+    order_split_pair,
+    split_lang_tag,
+    split_twin,
+    split_twin_pair,
 )
 
 
@@ -160,3 +166,102 @@ class TestTitleMacro:
         # Pinned so accidental rename doesn't silently break the validator
         # and assign-ids consumers.
         assert TITLE_SLIDE_ID == "title"
+
+
+class TestSplitTwin:
+    """``split_twin`` / ``split_twin_pair`` — prefix-gated, disk-existence-aware
+    twin derivation (the consolidated home of what used to be copied in
+    assign_ids and validator). These require the slides_/topic_/project_ prefix
+    because they drive build-time routing.
+    """
+
+    def test_twin_found_when_sibling_exists(self, tmp_path: Path):
+        de = tmp_path / "slides_x.de.py"
+        en = tmp_path / "slides_x.en.py"
+        de.write_text("# de\n", encoding="utf-8")
+        en.write_text("# en\n", encoding="utf-8")
+        assert split_twin(de) == en
+        assert split_twin(en) == de
+
+    def test_twin_none_when_sibling_missing(self, tmp_path: Path):
+        de = tmp_path / "slides_x.de.py"
+        de.write_text("# de\n", encoding="utf-8")
+        assert split_twin(de) is None
+
+    def test_twin_none_for_non_split_half(self, tmp_path: Path):
+        bilingual = tmp_path / "slides_x.py"
+        bilingual.write_text("# both\n", encoding="utf-8")
+        assert split_twin(bilingual) is None
+
+    def test_twin_none_without_routing_prefix(self, tmp_path: Path):
+        # split_twin is prefix-gated (build routing) — an un-prefixed name is
+        # not a recognised slide file even if its sibling exists on disk.
+        de = tmp_path / "apis.de.py"
+        en = tmp_path / "apis.en.py"
+        de.write_text("# de\n", encoding="utf-8")
+        en.write_text("# en\n", encoding="utf-8")
+        assert split_twin(de) is None
+
+    def test_pair_orders_de_first_from_either_half(self, tmp_path: Path):
+        de = tmp_path / "slides_x.de.py"
+        en = tmp_path / "slides_x.en.py"
+        de.write_text("# de\n", encoding="utf-8")
+        en.write_text("# en\n", encoding="utf-8")
+        assert split_twin_pair(de) == (de, en)
+        assert split_twin_pair(en) == (de, en)
+
+    def test_pair_none_when_twin_missing(self, tmp_path: Path):
+        en = tmp_path / "slides_x.en.py"
+        en.write_text("# en\n", encoding="utf-8")
+        assert split_twin_pair(en) is None
+
+
+class TestOrderSplitPair:
+    """``order_split_pair`` / ``split_lang_tag`` — the prefix-AGNOSTIC guard
+    primitive (``clm slides sync`` reconciles any two halves, regardless of the
+    build's routing prefix). No disk access — pure filename logic.
+    """
+
+    def test_valid_pair_in_order(self):
+        assert order_split_pair(Path("slides_x.de.py"), Path("slides_x.en.py")) == (
+            Path("slides_x.de.py"),
+            Path("slides_x.en.py"),
+        )
+
+    def test_valid_pair_without_routing_prefix(self):
+        # Prefix-agnostic: an un-prefixed deck name is still a valid sync pair.
+        assert order_split_pair(Path("apis.de.py"), Path("apis.en.py")) == (
+            Path("apis.de.py"),
+            Path("apis.en.py"),
+        )
+
+    def test_swapped_order_is_corrected(self):
+        assert order_split_pair(Path("apis.en.py"), Path("apis.de.py")) == (
+            Path("apis.de.py"),
+            Path("apis.en.py"),
+        )
+
+    def test_same_file_rejected(self):
+        assert order_split_pair(Path("apis.de.py"), Path("apis.de.py")) is None
+
+    def test_same_language_rejected(self):
+        assert order_split_pair(Path("a.de.py"), Path("b.de.py")) is None
+
+    def test_cross_deck_rejected(self):
+        assert order_split_pair(Path("apis.de.py"), Path("other.en.py")) is None
+
+    def test_cross_extension_rejected(self):
+        # Family key includes the extension, so .de.py and .en.cpp differ.
+        assert order_split_pair(Path("apis.de.py"), Path("apis.en.cpp")) is None
+
+    def test_untagged_half_rejected(self):
+        assert order_split_pair(Path("apis.py"), Path("apis.en.py")) is None
+
+    def test_unknown_language_rejected(self):
+        assert order_split_pair(Path("apis.de.py"), Path("apis.fr.py")) is None
+
+    def test_lang_tag_prefix_agnostic(self):
+        assert split_lang_tag(Path("apis.de.py")) == "de"
+        assert split_lang_tag(Path("slides_x.en.py")) == "en"
+        assert split_lang_tag(Path("apis.py")) is None
+        assert split_lang_tag(Path("a.b.c.en.py")) == "en"

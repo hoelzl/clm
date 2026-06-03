@@ -162,6 +162,36 @@ then re-extract, or `clm slides sync`), or pass `--no-fail-on-error` /
 warning` in a pre-commit hook catches the underlying `slide_id` / `for_slide`
 divergence before it ever reaches a build.
 
+## Command surface: split-safety hardening ({version})
+
+`clm slides sync` is the one operation that keeps both halves of a split deck
+consistent. CLM {version} hardens the surface around it so the everyday path is
+the safe one — no command was removed and every tool stays fully invocable.
+
+- **`clm slides sync` pairing guard.** Before any read or write, sync now checks
+  that the two paths are the two halves of **one** deck (one `.de`, one `.en`,
+  same name — the routing prefix is not required). A **swapped** order is
+  auto-corrected with a note; the **same file** twice, **two same-language**
+  halves, **two different decks**, or a path that is **not a split half** (a
+  bilingual or untagged file) are rejected with a usage error (exit 2)
+  before any LLM call. This closes the #162 footgun where a mismatched pair could
+  silently produce a divergent or no-op sync. *Migration:* none for well-formed
+  invocations; a script that relied on passing a mismatched pair will now get a
+  clear usage error instead of a surprising write.
+- **`clm slides assign-ids` is now plumbing (hidden).** Per-file id minting on a
+  *single* split half can mint a divergent slug — the #1 silent #162 break. It is
+  hidden from `clm slides --help` but stays invocable by name for agents/scripts
+  and one-off fixes. *Migration:* for everyday authoring, let the funnels mint ids
+  — `clm slides sync` mints a shared id across both halves as it reconciles them,
+  and `clm slides normalize` runs the same minting pass. To mint ids across a
+  whole tree safely, `clm slides assign-ids <dir>` still works (EN-authority pair
+  minting); prefer it over running the command on one half.
+- **`clm slides suggest-sync` is now plumbing (hidden).** The old read-only
+  single-FILE *bilingual* suggester is hidden from `clm slides --help` (still
+  invocable, and still the `suggest_sync` MCP tool). It coexisted confusingly with
+  the split-pair `sync`. *Migration:* for split-format decks use `clm slides sync`;
+  `suggest-sync` remains for the pre-split bilingual layout and agent/MCP use.
+
 ## Slide format redesign: `clm validate` enforces `slide_id` (warning now, error in 1.7)
 
 CLM {version} also ships **Phase 3** of the slide-format-redesign:

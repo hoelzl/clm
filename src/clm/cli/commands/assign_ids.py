@@ -36,7 +36,7 @@ from clm.slides.assign_ids import (
 CACHE_DB_NAME = "clm-llm.sqlite"
 
 
-@click.command("assign-ids")
+@click.command("assign-ids", hidden=True)
 @click.argument("path", type=click.Path(exists=True, path_type=Path))
 @click.option(
     "--force",
@@ -117,9 +117,18 @@ def assign_ids_cmd(
     cache_dir: Path | None,
     as_json: bool,
 ) -> None:
-    """Generate stable ``slide_id`` metadata for slide/subslide cells.
+    """Generate stable ``slide_id`` metadata for slide/subslide cells (plumbing).
 
     PATH is a single .py slide file or a directory containing slide files.
+
+    \b
+    This is a low-level tool for agents/scripts and is hidden from the normal
+    command surface. For everyday authoring, id minting happens automatically:
+      * ``clm slides sync`` mints a shared id onto both halves of a split deck.
+      * ``clm slides normalize`` runs the same minting as one of its passes.
+      * On a directory, this command mints EN-authority ids across each
+        ``.de.py``/``.en.py`` pair at once (parity-safe). Running it on a
+        *single* split half can mint a divergent slug — prefer the funnels above.
 
     \b
     Three-category policy:
