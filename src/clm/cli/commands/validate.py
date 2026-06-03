@@ -82,6 +82,16 @@ def _infer_kind(path: Path) -> str | None:
     is_flag=True,
     help=('Spec-only: validate sections marked enabled="false". Not valid with --kind=slides.'),
 )
+@click.option(
+    "--fail-on",
+    type=click.Choice(["error", "warning"], case_sensitive=False),
+    default=None,
+    help=(
+        "Slides-only: exit non-zero when findings reach this severity. "
+        "'warning' makes the cross-file slide_id / voiceover for_slide parity "
+        "warnings fail a pre-commit gate. Not valid with --kind=spec."
+    ),
+)
 @click.pass_context
 def validate_cmd(
     ctx: click.Context,
@@ -92,6 +102,7 @@ def validate_cmd(
     checks: str | None,
     quick: bool,
     include_disabled: bool,
+    fail_on: str | None,
 ) -> None:
     """Validate a course spec file or slide files.
 
@@ -110,9 +121,9 @@ def validate_cmd(
         )
 
     if resolved_kind == "spec":
-        if checks or quick:
+        if checks or quick or fail_on:
             raise click.UsageError(
-                "--checks and --quick are slides-only; not valid with --kind=spec."
+                "--checks, --quick, and --fail-on are slides-only; not valid with --kind=spec."
             )
         if not path.is_file() or path.suffix.lower() != ".xml":
             # Spec validator expects a single XML file; refuse anything
@@ -135,4 +146,5 @@ def validate_cmd(
             quick=quick,
             as_json=as_json,
             data_dir=data_dir,
+            fail_on=fail_on,
         )

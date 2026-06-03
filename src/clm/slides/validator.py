@@ -1100,6 +1100,105 @@ def _check_split_slide_id_parity(de_path: Path, en_path: Path) -> list[Finding]:
     return findings
 
 
+def _check_split_companion_for_slide_parity(de_path: Path, en_path: Path) -> list[Finding]:
+    """Verify the voiceover companions of a split pair narrate the same slides.
+
+    Separated voiceover lives in sibling companion files
+    (``voiceover_X.de.py`` / ``voiceover_X.en.py``); every narration cell is
+    bound to its owning slide by ``for_slide`` (= that slide's ``slide_id``).
+    The build merge resolves ``for_slide`` against the *same-language* deck
+    half, so if one companion narrates a slide its twin does not, that language
+    ships with missing narration and nothing says so. This is the
+    **both-language voiceover compatibility check** — the companion arm of the
+    #162 detective and part of the pre-commit gate (design §9/§10). It is the
+    natural extension of :func:`_check_split_slide_id_parity`: the slide_id
+    parity guards the join key on the deck; this guards the same key on the
+    companions that reference it.
+
+    Compares the *set* of ``for_slide`` references (preserve-marker stripped),
+    not their order or multiplicity — one language may legitimately split a
+    slide's narration across a different number of cells. Fires only when a
+    companion exists on at least one side; a deck pair with no voiceover at all
+    is clean. A one-sided companion (one language has voiceover, the other
+    none) is surfaced too — that is just the degenerate divergence where one
+    set is empty. Findings are ``warning`` severity, consistent with the rest
+    of the slide_id family (the gate runs with ``--fail-on warning``).
+    """
+    # ``companion_path`` lives in the voiceover layer, which sits *above* the
+    # validator/split layer; import it lazily (as ``split.py`` does for the
+    # companion seam) so the validator carries no hard dependency on the
+    # optional voiceover tooling.
+    from clm.slides.voiceover_tools import companion_path
+
+    de_comp = companion_path(de_path)
+    en_comp = companion_path(en_path)
+    de_exists, en_exists = de_comp.exists(), en_comp.exists()
+    if not de_exists and not en_exists:
+        return []
+
+    # One-sided companion: the language without a companion ships no narration.
+    if de_exists != en_exists:
+        present, absent = (de_comp, en_comp) if de_exists else (en_comp, de_comp)
+        missing_lang = "EN" if de_exists else "DE"
+        return [
+            Finding(
+                severity="warning",
+                category="pairing",
+                file=str(present),
+                line=1,
+                message=(
+                    f"voiceover companion {present.name} exists but its twin "
+                    f"{absent.name} does not — the {missing_lang} half ships "
+                    f"without narration"
+                ),
+                suggestion=(
+                    "Separated voiceover must be present (or absent) on both "
+                    "halves of a split deck. Extract voiceover for the missing "
+                    f"language ({missing_lang}) too, or remove the lone "
+                    "companion."
+                ),
+            )
+        ]
+
+    def _for_slide_set(path: Path) -> set[str]:
+        return {
+            strip_preserve_marker(c.metadata.for_slide)
+            for c in parse_cells(path.read_text(encoding="utf-8"))
+            if c.metadata.for_slide
+        }
+
+    de_set = _for_slide_set(de_comp)
+    en_set = _for_slide_set(en_comp)
+    if de_set == en_set:
+        return []
+
+    only_de = sorted(de_set - en_set)
+    only_en = sorted(en_set - de_set)
+    detail = ""
+    if only_de:
+        detail += f"; only on DE: {only_de}"
+    if only_en:
+        detail += f"; only on EN: {only_en}"
+    return [
+        Finding(
+            severity="warning",
+            category="pairing",
+            file=str(de_comp),
+            line=1,
+            message=(
+                f"split pair voiceover companion for_slide sets diverge between "
+                f"{de_comp.name} and {en_comp.name}{detail}"
+            ),
+            suggestion=(
+                "Each narration cell's for_slide is the slide_id of the slide it "
+                "narrates; the DE/EN companions must cover the same set of slides, "
+                "or one language ships with missing voiceover. Add the missing "
+                "narration, or route the change through `clm slides sync`."
+            ),
+        )
+    ]
+
+
 def _split_twin_pair(path: Path) -> tuple[Path, Path] | None:
     """If ``path`` is a split half whose twin exists on disk, return the ordered
     ``(de_path, en_path)`` pair; else ``None``.
@@ -1425,9 +1524,11 @@ def validate_file(
         cross_file_parity: When ``True`` (the default for standalone callers —
             the CLI single-file path, MCP, the pre-commit gate) and ``path`` is
             a split half whose twin exists on disk, run the #162 cross-file
-            ``slide_id`` parity detective against the twin. Directory/course
-            entrypoints pass ``False`` and run that parity once at their own
-            scope instead, so a directory run does not duplicate the finding.
+            parity detectives against the twin: ``slide_id`` set/order parity on
+            the deck, and ``for_slide`` set parity on the voiceover companions
+            (the both-language voiceover compatibility check). Directory/course
+            entrypoints pass ``False`` and run those once at their own scope
+            instead, so a directory run does not duplicate the findings.
 
     Returns:
         A :class:`ValidationResult` with findings and optional review material.
@@ -1464,6 +1565,7 @@ def validate_file(
             pair = _split_twin_pair(path)
             if pair is not None:
                 findings.extend(_check_split_slide_id_parity(*pair))
+                findings.extend(_check_split_companion_for_slide_parity(*pair))
 
     # Review material extraction
     review_checks = check_set & ALL_REVIEW_CHECKS
@@ -1560,6 +1662,7 @@ def validate_directory(
             all_findings.extend(_check_shared_cell_parity(de_path, en_path))
             all_findings.extend(_check_split_tag_parity(de_path, en_path))
             all_findings.extend(_check_split_slide_id_parity(de_path, en_path))
+            all_findings.extend(_check_split_companion_for_slide_parity(de_path, en_path))
 
     return ValidationResult(
         files_checked=len(slide_files),
@@ -1615,6 +1718,7 @@ def validate_course(
                     all_findings.extend(_check_shared_cell_parity(de_path, en_path))
                     all_findings.extend(_check_split_tag_parity(de_path, en_path))
                     all_findings.extend(_check_split_slide_id_parity(de_path, en_path))
+                    all_findings.extend(_check_split_companion_for_slide_parity(de_path, en_path))
 
     return ValidationResult(
         files_checked=files_checked,

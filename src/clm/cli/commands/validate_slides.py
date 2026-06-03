@@ -10,6 +10,7 @@ import click
 from clm.slides.validator import (
     ALL_CHECKS,
     ALL_DETERMINISTIC_CHECKS,
+    Finding,
     ValidationResult,
     validate_course,
     validate_directory,
@@ -52,12 +53,26 @@ from clm.slides.validator import (
     type=click.Path(exists=True, file_okay=False, path_type=Path),
     help="Course data directory (contains slides/). For course spec validation.",
 )
+@click.option(
+    "--fail-on",
+    type=click.Choice(["error", "warning"], case_sensitive=False),
+    default=None,
+    help=(
+        "Exit non-zero when findings reach this severity. "
+        "'error' fails on errors only (the default exit behavior); "
+        "'warning' also fails on warnings — use it for a pre-commit gate so the "
+        "cross-file slide_id / voiceover for_slide parity warnings block a "
+        "commit. When set, --fail-on governs the exit code with --json too; "
+        "without it, JSON mode always exits 0."
+    ),
+)
 def validate_slides_cmd(
     path: Path,
     checks: str | None,
     quick: bool,
     as_json: bool,
     data_dir: Path | None,
+    fail_on: str | None,
 ):
     """Validate slide files for format, tag, and pairing correctness.
 
@@ -72,6 +87,7 @@ def validate_slides_cmd(
         clm validate course-specs/python-basics.xml
         clm validate slides/topic/slides_intro.py --quick
         clm validate slides/topic/slides_intro.py --json
+        clm validate slides/ --fail-on warning            # pre-commit gate
     """
     if quick:
         if not path.is_file():
@@ -83,12 +99,29 @@ def validate_slides_cmd(
 
     if as_json:
         click.echo(json.dumps(_result_to_dict(result), indent=2))
-        return
+    else:
+        _print_human_readable(result)
 
-    _print_human_readable(result)
+    _raise_on_findings(result.findings, fail_on, as_json)
 
-    errors = [f for f in result.findings if f.severity == "error"]
-    if errors:
+
+def _raise_on_findings(findings: list[Finding], fail_on: str | None, as_json: bool) -> None:
+    """Exit non-zero according to the ``--fail-on`` threshold.
+
+    ``--fail-on`` unset (``None``) keeps the legacy behavior: human output
+    fails on ``error`` findings, JSON output never sets an exit code (machine
+    consumers read the findings list). ``--fail-on error`` fails on errors in
+    either output mode; ``--fail-on warning`` fails on errors *or* warnings —
+    the pre-commit-gate setting, so the cross-file slide_id / voiceover
+    for_slide parity warnings (and the rest of the warning family) block.
+    """
+    if fail_on is None:
+        blocking = set() if as_json else {"error"}
+    elif fail_on == "warning":
+        blocking = {"error", "warning"}
+    else:  # "error"
+        blocking = {"error"}
+    if any(f.severity in blocking for f in findings):
         raise SystemExit(1)
 
 

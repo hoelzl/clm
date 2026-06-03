@@ -222,6 +222,75 @@ class TestValidateSlidesCommand:
         assert result.exit_code != 0
         assert "Unknown check" in result.output
 
+    def _warning_pair(self, tmp_path: Path) -> Path:
+        # A balanced DE/EN pair, both slides missing slide_id -> warning-only
+        # findings (missing slide_id is a warning; no errors).
+        return _write_slide(
+            tmp_path,
+            "slides_warn.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"]
+            # ## Titel
+
+            # %% [markdown] lang="en" tags=["slide"]
+            # ## Title
+            """,
+        )
+
+    def test_warning_without_fail_on_exits_zero(self, tmp_path):
+        p = self._warning_pair(tmp_path)
+        runner = CliRunner()
+        result = runner.invoke(cli, ["validate", str(p)])
+        assert result.exit_code == 0
+        assert "WARN" in result.output
+
+    def test_fail_on_warning_exits_nonzero(self, tmp_path):
+        p = self._warning_pair(tmp_path)
+        runner = CliRunner()
+        result = runner.invoke(cli, ["validate", str(p), "--fail-on", "warning"])
+        assert result.exit_code == 1
+        assert "WARN" in result.output
+
+    def test_fail_on_warning_clean_exits_zero(self, tmp_path):
+        p = _write_slide(
+            tmp_path,
+            "slides_ok.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"] slide_id="title"
+            # ## Titel
+
+            # %% [markdown] lang="en" tags=["slide"] slide_id="title"
+            # ## Title
+            """,
+        )
+        runner = CliRunner()
+        result = runner.invoke(cli, ["validate", str(p), "--fail-on", "warning"])
+        assert result.exit_code == 0
+
+    def test_fail_on_error_with_warnings_exits_zero(self, tmp_path):
+        # --fail-on error must NOT escalate on warning-only findings.
+        p = self._warning_pair(tmp_path)
+        runner = CliRunner()
+        result = runner.invoke(cli, ["validate", str(p), "--fail-on", "error"])
+        assert result.exit_code == 0
+
+    def test_fail_on_warning_json_exits_nonzero(self, tmp_path):
+        # When --fail-on is explicit, it governs the exit code in JSON mode too.
+        p = self._warning_pair(tmp_path)
+        runner = CliRunner()
+        result = runner.invoke(cli, ["validate", str(p), "--json", "--fail-on", "warning"])
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert any(f["severity"] == "warning" for f in data["findings"])
+
+    def test_fail_on_not_valid_with_spec(self, tmp_path):
+        spec_path = tmp_path / "course.xml"
+        spec_path.write_text("<course></course>", encoding="utf-8")
+        runner = CliRunner()
+        result = runner.invoke(cli, ["validate", str(spec_path), "--fail-on", "warning"])
+        assert result.exit_code != 0
+        assert "slides-only" in result.output
+
     def test_review_material_in_json(self, tmp_path):
         p = _write_slide(
             tmp_path,

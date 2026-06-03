@@ -1030,6 +1030,217 @@ class TestSplitSlideIdParity:
         assert self._id_findings(result) == []
 
 
+class TestSplitCompanionForSlideParity:
+    """Cross-file ``for_slide`` parity for voiceover companions — the companion
+    arm of the #162 detective (the both-language voiceover compatibility check).
+
+    Separated voiceover lives in ``voiceover_X.de.py`` / ``voiceover_X.en.py``;
+    each narration cell's ``for_slide`` names the slide it narrates. If one
+    companion narrates a slide its twin does not, that language ships without
+    narration silently — this check makes it loud.
+    """
+
+    @staticmethod
+    def _companion_findings(result):
+        return [
+            f
+            for f in result.findings
+            if f.severity == "warning" and "voiceover companion" in f.message
+        ]
+
+    def _slide_pair(self, parent):
+        # Two slide-start cells in slide_id parity, so the slide_id detective is
+        # clean and only the companion check can fire.
+        _write_slide(
+            parent,
+            "slides_intro.de.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"] slide_id="intro"
+            # ## Einführung
+
+            # %% [markdown] lang="de" tags=["slide"] slide_id="setup"
+            # ## Aufbau
+            """,
+        )
+        _write_slide(
+            parent,
+            "slides_intro.en.py",
+            """\
+            # %% [markdown] lang="en" tags=["slide"] slide_id="intro"
+            # ## Introduction
+
+            # %% [markdown] lang="en" tags=["slide"] slide_id="setup"
+            # ## Setup
+            """,
+        )
+
+    @staticmethod
+    def _vo(lang: str, *pairs: tuple[str, str]) -> str:
+        """Build companion text: each ``(for_slide, body)`` is one narration cell."""
+        cells = []
+        for for_slide, body in pairs:
+            cells.append(
+                f'# %% [markdown] lang="{lang}" tags=["voiceover"] '
+                f'for_slide="{for_slide}"\n#\n# {body}\n'
+            )
+        return "\n".join(cells) + "\n"
+
+    def test_matching_for_slides_are_clean(self, tmp_path):
+        self._slide_pair(tmp_path)
+        _write_slide(
+            tmp_path,
+            "voiceover_intro.de.py",
+            self._vo("de", ("intro", "Intro DE"), ("setup", "Setup DE")),
+        )
+        _write_slide(
+            tmp_path,
+            "voiceover_intro.en.py",
+            self._vo("en", ("intro", "Intro EN"), ("setup", "Setup EN")),
+        )
+        result = validate_directory(tmp_path, checks=["pairing"])
+        assert self._companion_findings(result) == []
+
+    def test_companion_set_mismatch_is_flagged(self, tmp_path):
+        self._slide_pair(tmp_path)
+        _write_slide(
+            tmp_path,
+            "voiceover_intro.de.py",
+            self._vo("de", ("intro", "Intro DE"), ("setup", "Setup DE")),
+        )
+        _write_slide(
+            tmp_path,
+            "voiceover_intro.en.py",
+            self._vo("en", ("intro", "Intro EN")),
+        )
+        result = validate_directory(tmp_path, checks=["pairing"])
+        findings = self._companion_findings(result)
+        assert len(findings) == 1
+        assert "for_slide sets diverge" in findings[0].message
+        assert "setup" in findings[0].message
+        assert "only on DE" in findings[0].message
+
+    def test_multiplicity_difference_is_clean(self, tmp_path):
+        # One language may split a slide's narration across more cells; the
+        # *set* of for_slide is equal, so this is not a divergence.
+        self._slide_pair(tmp_path)
+        _write_slide(
+            tmp_path,
+            "voiceover_intro.de.py",
+            self._vo("de", ("intro", "Intro DE part 1"), ("intro", "Intro DE part 2")),
+        )
+        _write_slide(
+            tmp_path,
+            "voiceover_intro.en.py",
+            self._vo("en", ("intro", "Intro EN")),
+        )
+        result = validate_directory(tmp_path, checks=["pairing"])
+        assert self._companion_findings(result) == []
+
+    def test_one_sided_companion_is_flagged(self, tmp_path):
+        self._slide_pair(tmp_path)
+        _write_slide(
+            tmp_path,
+            "voiceover_intro.de.py",
+            self._vo("de", ("intro", "Intro DE")),
+        )
+        result = validate_directory(tmp_path, checks=["pairing"])
+        findings = self._companion_findings(result)
+        assert len(findings) == 1
+        assert "does not" in findings[0].message
+        assert "EN half ships without narration" in findings[0].message
+
+    def test_one_sided_companion_en_only_is_flagged(self, tmp_path):
+        # Symmetric to the DE-only case: the EN companion exists alone, so the
+        # DE half ships without narration. Pins the language ternary direction.
+        self._slide_pair(tmp_path)
+        _write_slide(
+            tmp_path,
+            "voiceover_intro.en.py",
+            self._vo("en", ("intro", "Intro EN")),
+        )
+        result = validate_directory(tmp_path, checks=["pairing"])
+        findings = self._companion_findings(result)
+        assert len(findings) == 1
+        assert "DE half ships without narration" in findings[0].message
+        assert findings[0].file.endswith("voiceover_intro.en.py")
+
+    def test_no_companions_is_clean(self, tmp_path):
+        self._slide_pair(tmp_path)
+        result = validate_directory(tmp_path, checks=["pairing"])
+        assert self._companion_findings(result) == []
+
+    def test_set_mismatch_reported_once_in_directory_run(self, tmp_path):
+        # The per-file pass runs with cross_file_parity=False, so a directory
+        # run reports the divergence exactly once (not once per half).
+        self._slide_pair(tmp_path)
+        _write_slide(
+            tmp_path,
+            "voiceover_intro.de.py",
+            self._vo("de", ("intro", "Intro DE"), ("setup", "Setup DE")),
+        )
+        _write_slide(
+            tmp_path,
+            "voiceover_intro.en.py",
+            self._vo("en", ("intro", "Intro EN")),
+        )
+        result = validate_directory(tmp_path, checks=["pairing"])
+        assert len(self._companion_findings(result)) == 1
+
+    def test_single_file_with_twin_catches_companion_divergence(self, tmp_path):
+        self._slide_pair(tmp_path)
+        _write_slide(
+            tmp_path,
+            "voiceover_intro.de.py",
+            self._vo("de", ("intro", "Intro DE"), ("setup", "Setup DE")),
+        )
+        _write_slide(
+            tmp_path,
+            "voiceover_intro.en.py",
+            self._vo("en", ("intro", "Intro EN")),
+        )
+        result_de = validate_file(tmp_path / "slides_intro.de.py", checks=["pairing"])
+        assert len(self._companion_findings(result_de)) == 1
+        # Symmetric: validating the EN deck half catches it too.
+        result_en = validate_file(tmp_path / "slides_intro.en.py", checks=["pairing"])
+        assert len(self._companion_findings(result_en)) == 1
+
+    def test_single_file_without_twin_is_silent(self, tmp_path):
+        # A lone .de.py deck half with no .en.py twin: the cross-file parity
+        # never runs (no twin), so a lone DE companion is not flagged here.
+        _write_slide(
+            tmp_path,
+            "slides_intro.de.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"] slide_id="intro"
+            # ## Einführung
+            """,
+        )
+        _write_slide(
+            tmp_path,
+            "voiceover_intro.de.py",
+            self._vo("de", ("intro", "Intro DE")),
+        )
+        result = validate_file(tmp_path / "slides_intro.de.py", checks=["pairing"])
+        assert self._companion_findings(result) == []
+
+    def test_preserve_marker_equivalence(self, tmp_path):
+        # for_slide referencing a preserve-marked id (!intro) on one side and
+        # the bare id on the other is the same join key after stripping.
+        self._slide_pair(tmp_path)
+        _write_slide(
+            tmp_path,
+            "voiceover_intro.de.py",
+            self._vo("de", ("!intro", "Intro DE"), ("setup", "Setup DE")),
+        )
+        _write_slide(
+            tmp_path,
+            "voiceover_intro.en.py",
+            self._vo("en", ("intro", "Intro EN"), ("setup", "Setup EN")),
+        )
+        result = validate_directory(tmp_path, checks=["pairing"])
+        assert self._companion_findings(result) == []
+
+
 class TestSplitTagParity:
     """Cross-language tag-set parity for split pairs (Issue #198)."""
 

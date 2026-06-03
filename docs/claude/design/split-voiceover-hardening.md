@@ -390,13 +390,16 @@ within one bilingual file.
 
 - **Detective (= the pre-commit gate, §9):** ✅ **BUILT 2026-06-03** — enforce the
   invariant every "silent break" row violates — across `.de`/`.en`, equal `slide_id`
-  sets in equal order (companion `for_slide` sets still to add). Shipped as a `clm validate`
-  `pairing`-group warning: `_check_split_slide_id_parity` in `validator.py`, wired at
-  dir/course scope **and** the single-file path (`validate_file(cross_file_parity=True)` when
-  a twin exists on disk, so the pre-commit gate / PostToolUse path catch it). Harness
-  `commit-without-sync` flipped break-silent → break-loud ("detective CATCHES it"). 6 new
-  unit tests. Companion `for_slide` parity (the both-language voiceover compatibility check)
-  is the small remaining extension.
+  sets in equal order **and** equal companion `for_slide` sets. Shipped as `clm validate`
+  `pairing`-group warnings: `_check_split_slide_id_parity` (deck join key) and
+  `_check_split_companion_for_slide_parity` (the both-language voiceover compatibility
+  check) in `validator.py`, both wired at dir/course scope **and** the single-file path
+  (`validate_file(cross_file_parity=True)` when a twin exists on disk, so the pre-commit
+  gate / PostToolUse path catch it). The companion check compares the `!`-stripped
+  `for_slide` *set* (not order/multiplicity — one language may split a narration across more
+  cells) and also flags a one-sided companion. Harness `commit-without-sync` and
+  `commit-companion-divergence` are both break-loud ("detective CATCHES it"). 6 + 9 unit
+  tests (`TestSplitSlideIdParity` / `TestSplitCompanionForSlideParity`).
 - **Defensive:** ✅ **`assign-ids` BUILT 2026-06-03** — the highest-frequency break.
   `assign_ids_in_file` is now twin-aware: on a split half whose twin exists on disk
   with a matching slide count, an **id-less** slide adopts the twin's id
@@ -470,13 +473,20 @@ remain reachable for agents/scripts but are not the path of least resistance.
 Lives in the **course repo** (e.g. PythonCourses `.pre-commit-config.yaml`), not CLM
 itself — CLM provides the check command. It runs over the staged set:
 - the **#162 detective**: cross-file `slide_id` set+order equality across each
-  `.de`/`.en` pair, and companion `for_slide`-set equality;
+  `.de`/`.en` pair (`_check_split_slide_id_parity`), and companion `for_slide`-set
+  equality (`_check_split_companion_for_slide_parity`) — **both DONE 2026-06-03**;
 - `validate` (dir-scoped, so cross-file parity actually fires) — **with `--fail-on
-  warning`** (or a split-critical-categories strict mode), because today
+  warning`** (**DONE 2026-06-03**: `clm validate ... --fail-on {error,warning}` in
+  `validate_slides.py` / `validate.py`, threshold-driven `SystemExit`, governs `--json`
+  too when set; opt-in so default exit behavior is unchanged), because today
   missing-`slide_id`, tag-parity asymmetry, slug-format, and pair-id mismatch are all
-  *warnings* (exit 0, `validator.py:753-769`), so a naive `validate && commit` lets
-  them through;
+  *warnings* (exit 0), so a naive `validate && commit` lets them through;
 - `sync --dry-run` to fail on an unsynced half (`--check`-style exit code).
+
+The **CLM half** of the gate (the `--fail-on warning` flag + the parity detectives)
+is now built; the **course-repo half** (wiring the hook into
+`.pre-commit-config.yaml` and the error-vs-warning-on-first-run rollout decision,
+§7 Q2) is the remaining work and lives in the course repo.
 
 `build` stays permissive for now (decision #2). If the gate proves leaky, revisit
 build-time refusal later.
@@ -499,7 +509,11 @@ Required hardening:
   voiceover layer. Well-defined because #162 guarantees `de_id==en_id`. The
   `extract-then-split` harness row flipped break-silent → preserve.
 - **Both-language compatibility check** = companion `for_slide`-set equality across
-  `.de`/`.en` (same invariant as the slide check; part of the detective gate).
+  `.de`/`.en` — **DONE (2026-06-03)**: `_check_split_companion_for_slide_parity` in
+  `validator.py`, wired alongside the `slide_id` parity detective (dir/course + single-file
+  with twin). Compares the `!`-stripped `for_slide` set; surfaces a divergent set or a
+  one-sided companion as a `pairing` warning. Harness `commit-companion-divergence` =
+  break-loud.
 - **Build-time escalation** of unmatched `for_slide` from log-only to a surfaced
   finding (respecting a fail-on policy), and surface inline **relocations** at build
   time (today discarded in `merge_voiceover_text`).
@@ -549,9 +563,14 @@ corpus no-op invariant + real-deck round-trip **skip**. To build justified confi
      `for_slide`/`vo_anchor`, byte-identical round trip; lazy `companion_path` import; CLI +
      `--json` report companions; info topics updated). `extract-then-split` harness row flipped
      break-silent → preserve; `tests/slides/test_split.py::TestCompanionSplit`/`TestCompanionUnify`.
-   - **Next:** `extract-voiceover` twin-awareness + companion `for_slide` parity (the both-language
-     voiceover compat check, extends the detective); then the build-merge observe-only escalation
-     (the one remaining break-silent row).
+   - **Companion `for_slide` parity ✅ DONE 2026-06-03** (§7/§9/§10) — the both-language
+     voiceover compatibility check, `_check_split_companion_for_slide_parity` in `validator.py`,
+     wired alongside the `slide_id` parity detective (dir/course + single-file with twin). New
+     harness row `commit-companion-divergence` = break-loud; `TestSplitCompanionForSlideParity`
+     (9 tests). Harness now 14 preserve / 2 break-loud / 1 break-silent.
+   - **Next:** `extract-voiceover` twin-awareness (a paired/twin-aware extraction so the two
+     companions are produced together rather than per-file); then the build-merge observe-only
+     escalation (the one remaining break-silent row, `build-merge-unmatched`).
 4. **Command-surface rethink** (§8) — fold/hide/guard, with info-topic updates.
 5. **Pre-commit gate** (§9) + voiceover hardening (§10) + verification additions (§11).
 6. **Sync CLI pairing guard** (§3 Tier-2) + single-path/batch UX.
@@ -587,8 +606,11 @@ corpus no-op invariant + real-deck round-trip **skip**. To build justified confi
   `:87-100`, `is_ignored_file_for_output` `:244-262`); `output_sweep.py`
   (`:43-52,160-166,264-276`); `notebook_processor.py` (strips slide_id/for_slide
   `:1586-1592`).
-- Validator: `validator.py` (slide_ids `:696-876`; cross-file parity `:879-1014`,
-  wired only at dir/course `:1433-1436,1486-1489`; `validate_quick` `:1364-1398`).
+- Validator: `validator.py` (slide_ids `:696-876`; cross-file parity `:879-1014`;
+  `_check_split_slide_id_parity` (#162 deck detective) + `_check_split_companion_for_slide_parity`
+  (#162 companion `for_slide`-parity / both-language voiceover compat — lazy `companion_path`
+  import), wired at dir/course **and** the single-file-with-twin path
+  (`validate_file(cross_file_parity=True)`, `_split_twin_pair`); `validate_quick` `:1364-1398`).
 - Tests/harness: `tests/slides/test_split.py` (round-trip property),
   `test_voiceover_tools.py` (extract/inline, positional anchors),
   `test_sync_limitations.py` + `test_sync_anchor.py` (item-2/3 fix, CI),
