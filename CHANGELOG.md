@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **`clm slides sync` accepts a single path (§8 single-path contract).** `EN_PATH`
+  is now optional: pass one half (`clm slides sync slides_x.de.py`) and the twin is
+  derived from disk, or pass the bilingual deck stem (`slides_x.py`, when it still
+  exists on disk) to derive both halves. Derivation is prefix-agnostic (`apis.de.py` works) and the resolved pair
+  still runs through the pairing guard; a missing twin is a clear usage error (sync
+  never invents a translated half). The two-path form is unchanged. Directory
+  *batch* mode (`sync DIR`) remains a planned follow-up.
 - **`clm voiceover extract` auto-pairs on a split half (§8 paired extract).**
   When the target is a split half (`<deck>.de.py` / `<deck>.en.py`) whose twin
   exists on disk, both companions are extracted in one op: the two halves are

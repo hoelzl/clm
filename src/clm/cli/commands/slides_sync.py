@@ -65,7 +65,12 @@ from clm.infrastructure.llm.openrouter_client import (
     OpenRouterSyncJudge,
     has_openrouter_api_key,
 )
-from clm.slides.pairing import order_split_pair, split_lang_tag
+from clm.slides.pairing import (
+    derive_split_pair_from_stem,
+    derive_split_twin,
+    order_split_pair,
+    split_lang_tag,
+)
 from clm.slides.sync_apply import ApplyResult, apply_plan
 from clm.slides.sync_plan import (
     PlanIssue,
@@ -129,6 +134,54 @@ def _resolve_sync_pair(de_path: Path, en_path: Path) -> tuple[Path, Path]:
     return ordered
 
 
+def _resolve_single_path(de_path: Path, en_path: Path | None) -> tuple[Path, Path]:
+    """Single-path contract: when EN_PATH is omitted, derive the second half from
+    DE_PATH so the author can run ``clm slides sync <deck>.de.py``.
+
+    DE_PATH may be **one half** (``<deck>.de.py`` / ``<deck>.en.py``) — the twin
+    is derived from disk — or a **bilingual deck stem** (``<deck>.py``, no
+    ``.de``/``.en`` tag) whose two halves both exist. Derivation is prefix-agnostic
+    (so ``apis.de.py`` works) and the resolved pair is still funnelled through
+    :func:`_resolve_sync_pair` for the #162 pairing guard. Raises
+    :class:`click.UsageError` when the twin / halves are not found on disk — a
+    missing twin is almost always a typo or an un-split deck, so we error clearly
+    rather than invent a full translated half.
+    """
+    if en_path is not None:
+        return de_path, en_path
+    tag = split_lang_tag(de_path)
+    if tag is not None:
+        twin = derive_split_twin(de_path)
+        if twin is None:
+            if de_path.name.startswith("voiceover_"):
+                raise click.UsageError(
+                    f"{de_path.name} is a voiceover companion, not a deck half; "
+                    f"`clm slides sync` reconciles slide decks (<deck>.de.py / "
+                    f"<deck>.en.py), not their voiceover companions."
+                )
+            other = "EN" if tag == "de" else "DE"
+            raise click.UsageError(
+                f"no {other} twin found next to {de_path.name}; expected its sibling "
+                f"split half on disk. Pass both halves explicitly, or run "
+                f"`clm slides split` to produce the pair."
+            )
+        # Return already (de, en)-ordered so the pairing guard's swap note does not
+        # fire on a single derived path — the author supplied one path; nothing was
+        # "swapped". (derive_split_twin gives the OTHER half, so order by our tag.)
+        return (de_path, twin) if tag == "de" else (twin, de_path)
+    # No language tag → treat DE_PATH as a bilingual deck stem and derive both halves.
+    pair = derive_split_pair_from_stem(de_path)
+    if pair is None:
+        ext = de_path.suffix
+        stem = de_path.name[: -len(ext)] if ext else de_path.name
+        raise click.UsageError(
+            f"{de_path.name} is neither a split half (<deck>.de.py / <deck>.en.py) "
+            f"nor a deck stem with both halves present (expected {stem}.de{ext} and "
+            f"{stem}.en{ext} on disk). Pass the two halves explicitly."
+        )
+    return pair
+
+
 @click.command("sync")
 @click.argument(
     "de_path",
@@ -136,6 +189,8 @@ def _resolve_sync_pair(de_path: Path, en_path: Path) -> tuple[Path, Path]:
 )
 @click.argument(
     "en_path",
+    required=False,
+    default=None,
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
 )
 @click.option(
@@ -268,7 +323,7 @@ def _resolve_sync_pair(de_path: Path, en_path: Path) -> tuple[Path, Path]:
 @click.option("--json", "as_json", is_flag=True, help="Emit a JSON report.")
 def slides_sync_cmd(
     de_path: Path,
-    en_path: Path,
+    en_path: Path | None,
     dry_run: bool,
     interactive: bool,
     explain: bool,
@@ -287,7 +342,9 @@ def slides_sync_cmd(
     """Bring a split DE/EN deck pair into sync after editing one side.
 
     DE_PATH and EN_PATH are the two halves of a split-format deck
-    (``<deck>.de.py`` and ``<deck>.en.py``).
+    (``<deck>.de.py`` and ``<deck>.en.py``). EN_PATH is **optional**: pass just
+    one half (or the bilingual deck stem ``<deck>.py``) and the other half is
+    derived from disk — ``clm slides sync slides_x.de.py`` syncs the pair.
 
     \b
     Behavior:
@@ -323,6 +380,10 @@ def slides_sync_cmd(
             "--explain and --json are mutually exclusive "
             "(--explain is a human-readable diagnostic; use --dry-run --json for the structured plan)"
         )
+
+    # Single-path contract: when EN_PATH is omitted, derive the twin (or both
+    # halves from a deck stem) from disk before anything else.
+    de_path, en_path = _resolve_single_path(de_path, en_path)
 
     # Pairing guard (#162 Tier-2): reject a same-file / same-language / cross-deck
     # pair and auto-correct a swapped (en, de) order before anything reads or

@@ -244,3 +244,26 @@ def derive_split_pair(path: Path) -> tuple[Path, Path] | None:
     if twin is None:
         return None
     return order_split_pair(path, twin)
+
+
+def derive_split_pair_from_stem(path: Path) -> tuple[Path, Path] | None:
+    """Ordered ``(de_path, en_path)`` for a bilingual/deck-stem ``path`` (one
+    that carries **no** ``.de``/``.en`` tag, e.g. ``slides_x.py``) — derives
+    ``<stem>.de<ext>`` / ``<stem>.en<ext>`` and returns them iff **both** exist
+    on disk; else ``None``.
+
+    The prefix-agnostic, disk-aware companion of :func:`derive_split_pair` for
+    the ``clm slides sync`` single-path contract's "pass the deck stem" form. A
+    voiceover companion (``voiceover_*``) is never a deck stem.
+    """
+    # An extensionless path has no program extension to build halves from, and
+    # would otherwise yield ``<name>.de`` / ``<name>.en`` that the pairing guard
+    # then rejects as not-a-split-half (a contradictory double error). A real
+    # deck stem always carries a ``.py``/``.cpp``/… extension.
+    if path.suffix == "" or path.name.startswith("voiceover_") or split_lang_tag(path) is not None:
+        return None
+    ext = path.suffix
+    stem = path.name[: -len(ext)]
+    de = path.with_name(f"{stem}.de{ext}")
+    en = path.with_name(f"{stem}.en{ext}")
+    return (de, en) if de.exists() and en.exists() else None

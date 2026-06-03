@@ -471,7 +471,7 @@ agent/script plumbing, or **(G)** harden with a guard.
 | `slides split` | Unaware of voiceover companions; extract-then-split silently orphans them. | **G — DONE (2026-06-03).** First-class companion split: `split_in_file` splits a sibling `voiceover_*.py` in lockstep into `voiceover_*.de.py`/`.en.py`, routing cells by `lang`, preserving `for_slide`/`vo_anchor`. Atomic `--force` over deck+companion; byte-identical round trip. |
 | `slides unify` | Ignores companions; can't recombine voiceover. | **G — DONE (2026-06-03).** `unify_in_file` recombines the companion halves into `voiceover_*.py` (inverse of split; missing half treated as empty so narration is never dropped). |
 | `slides suggest-sync` | Old single-file read-only suggester; coexists confusingly with the split-pair `sync` (different file layout, opposite write semantics). | **H — DONE (2026-06-03).** Hidden (`hidden=True`), not removed: it is the *safe* read-only member, retains unique value for the pre-split **bilingual** single-file layout `sync` does not cover, and is a live `suggest_sync` MCP contract. Docstring + `commands.md` reframed as plumbing, steering split-deck users to `sync`. Revisit removal only when the bilingual format is retired (with an MCP deprecation window). |
-| `slides sync` (the funnel) | Two bare path args, no pairing guard, writes by default. | **G — pairing guard DONE (2026-06-03)**; single-path / batch DEFERRED. The guard (`_resolve_sync_pair`, prefix-agnostic via `pairing.order_split_pair`) rejects same-file / same-language / cross-deck pairs and auto-corrects a swapped order before any read/write. The **single-path contract** (pass one half / the deck stem; derive the twin + companion) and a directory/spec **batch mode** remain deferred additive UX (never remove the two-path form). |
+| `slides sync` (the funnel) | Two bare path args, no pairing guard, writes by default. | **G — pairing guard + single-path DONE (2026-06-03)**; batch DEFERRED. The guard (`_resolve_sync_pair`, prefix-agnostic via `pairing.order_split_pair`) rejects same-file / same-language / cross-deck pairs and auto-corrects a swapped order before any read/write. The **single-path contract** (`_resolve_single_path`): `EN_PATH` is optional — one half derives its twin via `pairing.derive_split_twin`, a bilingual stem derives both via `derive_split_pair_from_stem`, both funnelled through `_resolve_sync_pair`; missing twin → clear `UsageError` (never invents a half); two-path form unchanged. A directory/spec **batch mode** (`sync DIR` + continue-on-error + `--yes`, pre-decided) remains the deferred follow-up. |
 
 **Mechanism for "hide as plumbing."** Click supports `hidden=True` on commands (kept
 functional, omitted from `--help`); or move plumbing under a `clm _internal …` / `clm
@@ -634,11 +634,15 @@ corpus no-op invariant + real-deck round-trip **skip**. To build justified confi
    (EN-authority pre-mint → extract both → atomic four-file write; `--both` /
    `--single`; CLI + MCP + paired JSON; refuses a non-alignable pair); the
    shared `atomic_write_all` was promoted to `path_utils` and reused by
-   `split`/`unify`. **Deferred:** the `slides sync` single-path contract +
-   directory/spec batch mode (additive UX) — single-path is next; batch is its
-   own follow-up (`sync DIR` + continue-on-error + `--yes`, pre-decided).
+   `split`/`unify`. **`slides sync` single-path DONE (2026-06-03):**
+   `_resolve_single_path` makes `EN_PATH` optional (one half derives its twin via
+   `derive_split_twin`; a bilingual stem derives both via
+   `derive_split_pair_from_stem`), funnelled through `_resolve_sync_pair`; missing
+   twin → clear `UsageError`; two-path form unchanged. **Deferred:** directory/spec
+   **batch mode** (`sync DIR` + continue-on-error(max) + `--yes` write gate,
+   pre-decided) is the remaining §8 follow-up.
 5. **Pre-commit gate** (§9) + voiceover hardening (§10) + verification additions (§11).
-6. **Sync CLI single-path / batch UX** (§8) on top of the shipped pairing guard.
+6. **Sync CLI batch UX** (§8 `sync DIR`) on top of the shipped pairing guard + single-path.
 7. Forward design: N-file atomicity for separated voiceover (§3 #6); `FileTopic`
    bypass guard (§3 #7).
 

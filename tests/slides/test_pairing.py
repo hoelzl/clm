@@ -17,6 +17,7 @@ from clm.slides.pairing import (
     build_slide_groups,
     build_slide_pairs,
     derive_split_pair,
+    derive_split_pair_from_stem,
     derive_split_twin,
     is_title_macro_cell,
     order_split_pair,
@@ -326,3 +327,39 @@ class TestDeriveSplitTwin:
         en.write_text("# en\n", encoding="utf-8")
         assert derive_split_twin(de) is None
         assert derive_split_pair(de) is None
+
+
+class TestDeriveSplitPairFromStem:
+    """``derive_split_pair_from_stem`` — the deck-stem form of the sync
+    single-path contract (pass ``<deck>.py``, derive both halves)."""
+
+    def test_stem_derives_both_halves(self, tmp_path: Path):
+        de = tmp_path / "apis.de.py"
+        en = tmp_path / "apis.en.py"
+        de.write_text("# de\n", encoding="utf-8")
+        en.write_text("# en\n", encoding="utf-8")
+        stem = tmp_path / "apis.py"
+        assert derive_split_pair_from_stem(stem) == (de, en)
+
+    def test_none_when_a_half_missing(self, tmp_path: Path):
+        (tmp_path / "apis.de.py").write_text("# de\n", encoding="utf-8")  # no en
+        assert derive_split_pair_from_stem(tmp_path / "apis.py") is None
+
+    def test_none_for_a_tagged_half(self, tmp_path: Path):
+        # A path that is itself a .de/.en half is not a stem.
+        assert derive_split_pair_from_stem(tmp_path / "apis.de.py") is None
+
+    def test_none_for_companion_stem(self, tmp_path: Path):
+        de = tmp_path / "voiceover_x.de.py"
+        en = tmp_path / "voiceover_x.en.py"
+        de.write_text("# de\n", encoding="utf-8")
+        en.write_text("# en\n", encoding="utf-8")
+        assert derive_split_pair_from_stem(tmp_path / "voiceover_x.py") is None
+
+    def test_none_for_extensionless_path(self, tmp_path: Path):
+        # An extensionless path has no program extension to build halves from;
+        # it must not construct dotted ``deck.de``/``deck.en`` "halves" that the
+        # pairing guard would then reject with a contradictory error.
+        (tmp_path / "deck.de").write_text("# de\n", encoding="utf-8")
+        (tmp_path / "deck.en").write_text("# en\n", encoding="utf-8")
+        assert derive_split_pair_from_stem(tmp_path / "deck") is None

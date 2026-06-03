@@ -212,6 +212,12 @@ the safe one — no command was removed and every tool stays fully invocable.
   invocable, and still the `suggest_sync` MCP tool). It coexisted confusingly with
   the split-pair `sync`. *Migration:* for split-format decks use `clm slides sync`;
   `suggest-sync` remains for the pre-split bilingual layout and agent/MCP use.
+- **`clm slides sync` accepts a single path.** `EN_PATH` is now optional: pass one
+  half (`clm slides sync slides_x.de.py`) and the twin is derived from disk, or
+  pass the bilingual deck stem (`slides_x.py`, when it still exists) to derive both
+  halves. A missing twin is a clear usage error (exit 2); sync never invents a
+  translated half. *Migration:* purely additive — the two-path form is unchanged,
+  so existing invocations and scripts keep working.
 
 ## Slide format redesign: `clm validate` enforces `slide_id` (warning now, error in 1.7)
 
