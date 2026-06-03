@@ -19,7 +19,9 @@ from clm.slides.pairing import (
     derive_split_pair,
     derive_split_pair_from_stem,
     derive_split_twin,
+    find_split_slide_files_recursive,
     is_title_macro_cell,
+    iter_split_pairs,
     order_split_pair,
     split_lang_tag,
     split_twin,
@@ -363,3 +365,148 @@ class TestDeriveSplitPairFromStem:
         (tmp_path / "deck.de").write_text("# de\n", encoding="utf-8")
         (tmp_path / "deck.en").write_text("# en\n", encoding="utf-8")
         assert derive_split_pair_from_stem(tmp_path / "deck") is None
+
+
+class TestFindSplitSlideFilesRecursive:
+    """``find_split_slide_files_recursive`` — the prefix-agnostic enumerator
+    behind ``clm slides sync DIR`` (§8a / B1)."""
+
+    def _touch(self, *paths: Path) -> None:
+        for p in paths:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text("# x\n", encoding="utf-8")
+
+    def test_single_split_file_returns_itself_resolved(self, tmp_path: Path):
+        f = tmp_path / "apis.de.py"
+        self._touch(f)
+        assert find_split_slide_files_recursive(f) == [f.resolve()]
+
+    def test_single_non_split_file_returns_empty(self, tmp_path: Path):
+        f = tmp_path / "apis.py"  # no .de/.en tag
+        self._touch(f)
+        assert find_split_slide_files_recursive(f) == []
+
+    def test_finds_prefix_less_and_prefixed_halves(self, tmp_path: Path):
+        a_de, a_en = tmp_path / "apis.de.py", tmp_path / "apis.en.py"
+        s_de, s_en = tmp_path / "slides_x.de.py", tmp_path / "slides_x.en.py"
+        self._touch(a_de, a_en, s_de, s_en)
+        found = find_split_slide_files_recursive(tmp_path)
+        assert set(found) == {a_de.resolve(), a_en.resolve(), s_de.resolve(), s_en.resolve()}
+
+    def test_descends_full_subtree_no_early_exit(self, tmp_path: Path):
+        # A stray top-level deck must NOT stop the walk from reaching nested dirs
+        # (the silent-miss trap that the prefix-gated early-exit helper falls into).
+        top_de, top_en = tmp_path / "top.de.py", tmp_path / "top.en.py"
+        nested_de = tmp_path / "mod" / "topic" / "deep.de.py"
+        nested_en = tmp_path / "mod" / "topic" / "deep.en.py"
+        self._touch(top_de, top_en, nested_de, nested_en)
+        found = set(find_split_slide_files_recursive(tmp_path))
+        assert nested_de.resolve() in found and nested_en.resolve() in found
+        assert top_de.resolve() in found
+
+    def test_excludes_voiceover_companions(self, tmp_path: Path):
+        self._touch(
+            tmp_path / "apis.de.py",
+            tmp_path / "apis.en.py",
+            tmp_path / "voiceover_apis.de.py",
+            tmp_path / "voiceover_apis.en.py",
+        )
+        found = find_split_slide_files_recursive(tmp_path)
+        assert all("voiceover_" not in p.name for p in found)
+        assert len(found) == 2
+
+    def test_excludes_unsupported_extensions_and_bilingual(self, tmp_path: Path):
+        self._touch(
+            tmp_path / "apis.de.py",
+            tmp_path / "apis.en.py",
+            tmp_path / "notes.de.txt",  # unsupported extension
+            tmp_path / "apis.py",  # bilingual stem (no tag)
+        )
+        found = find_split_slide_files_recursive(tmp_path)
+        assert {p.name for p in found} == {"apis.de.py", "apis.en.py"}
+
+    def test_other_languages_supported(self, tmp_path: Path):
+        c_de, c_en = tmp_path / "demo.de.cpp", tmp_path / "demo.en.cpp"
+        self._touch(c_de, c_en)
+        assert set(find_split_slide_files_recursive(tmp_path)) == {c_de.resolve(), c_en.resolve()}
+
+    def test_missing_path_returns_empty(self, tmp_path: Path):
+        assert find_split_slide_files_recursive(tmp_path / "nope") == []
+
+    def test_excludes_pairs_under_ignored_dirs(self, tmp_path: Path):
+        # A vendored/archived deck under .git/.venv/build/__pycache__ must never be
+        # enumerated (and thus never written on a directory apply).
+        legit_de = tmp_path / "module_x" / "topic_a" / "apis.de.py"
+        legit_en = tmp_path / "module_x" / "topic_a" / "apis.en.py"
+        self._touch(legit_de, legit_en)
+        for ignored in (".venv", ".git", "build", "__pycache__", "dist"):
+            self._touch(tmp_path / ignored / "vend.de.py", tmp_path / ignored / "vend.en.py")
+        found = find_split_slide_files_recursive(tmp_path)
+        assert set(found) == {legit_de.resolve(), legit_en.resolve()}
+
+    def test_root_under_ignored_component_still_enumerates(self, tmp_path: Path):
+        # The ignored-dir test is applied RELATIVE to the root, so a root that
+        # itself lives under a dir named like an ignored one (e.g. ``build/``)
+        # must not falsely exclude its own decks.
+        root = tmp_path / "build" / "decks"
+        de, en = root / "apis.de.py", root / "apis.en.py"
+        self._touch(de, en)
+        found = find_split_slide_files_recursive(root)
+        assert set(found) == {de.resolve(), en.resolve()}
+
+    def test_named_ignored_file_still_honoured(self, tmp_path: Path):
+        # The single-file branch is exempt from the ignored-dir prune: an
+        # explicitly named half is always honoured, even under .venv.
+        f = tmp_path / ".venv" / "apis.de.py"
+        self._touch(f)
+        assert find_split_slide_files_recursive(f) == [f.resolve()]
+
+
+class TestIterSplitPairs:
+    """``iter_split_pairs`` — partition split halves into ordered pairs + solos
+    (§8a / B2)."""
+
+    def _touch(self, *paths: Path) -> list[Path]:
+        for p in paths:
+            p.write_text("# x\n", encoding="utf-8")
+        return list(paths)
+
+    def test_pairs_ordered_de_first(self, tmp_path: Path):
+        de, en = tmp_path / "apis.de.py", tmp_path / "apis.en.py"
+        self._touch(de, en)
+        pairs, solos = iter_split_pairs([en, de])  # en passed first
+        assert pairs == [(de, en)]  # still (de, en)-ordered
+        assert solos == []
+
+    def test_solo_half_with_no_twin_is_isolated(self, tmp_path: Path):
+        de, en = tmp_path / "apis.de.py", tmp_path / "apis.en.py"
+        orphan = tmp_path / "orphan.de.py"
+        self._touch(de, en, orphan)
+        pairs, solos = iter_split_pairs([de, en, orphan])
+        assert pairs == [(de, en)]
+        assert solos == [orphan]
+
+    def test_twin_on_disk_but_not_in_paths_is_solo(self, tmp_path: Path):
+        # The twin exists on disk but was not handed in (caller passed a subset):
+        # it must be reported solo, not silently pulled in from outside the set.
+        de, en = tmp_path / "apis.de.py", tmp_path / "apis.en.py"
+        self._touch(de, en)
+        pairs, solos = iter_split_pairs([de])  # en omitted from the input set
+        assert pairs == []
+        assert solos == [de]
+
+    def test_multiple_pairs_deterministic_order(self, tmp_path: Path):
+        a_de, a_en = tmp_path / "apis.de.py", tmp_path / "apis.en.py"
+        w_de, w_en = tmp_path / "web.de.py", tmp_path / "web.en.py"
+        self._touch(a_de, a_en, w_de, w_en)
+        pairs, solos = iter_split_pairs([w_en, a_de, w_de, a_en])
+        assert pairs == [(a_de, a_en), (w_de, w_en)]  # sorted-input order
+        assert solos == []
+
+    def test_every_path_lands_in_exactly_one_list(self, tmp_path: Path):
+        de, en = tmp_path / "apis.de.py", tmp_path / "apis.en.py"
+        orphan = tmp_path / "orphan.en.py"
+        self._touch(de, en, orphan)
+        pairs, solos = iter_split_pairs([de, en, orphan])
+        flattened = [p for pair in pairs for p in pair] + solos
+        assert sorted(flattened) == sorted([de, en, orphan])

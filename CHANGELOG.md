@@ -8,13 +8,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **`clm slides sync DIR` — directory batch mode (§8a).** Pass a directory and
+  every `.de`/`.en` deck pair under the tree is synced in one pass. Enumeration is
+  prefix-agnostic (un-prefixed decks like `apis.de.py` count too) and descends the
+  whole subtree; voiceover companions (`voiceover_*`) are ignored. A half with **no
+  twin** under the tree is **skipped with a warning**, never synced against a
+  phantom empty twin. The sweep **continues past a failing pair** (recording it as
+  errored) and the process exit code is the **worst** over all pairs (`0` clean <
+  `1` review < `2` error); a per-pair one-liner plus a `N pair(s): X clean, Y
+  review, Z errored` rollup is printed. A **writing** directory run requires
+  **`--yes`** (or an interactive confirm) since it writes to every pair at once;
+  `--dry-run` / `--explain` directory runs are unprompted. `--interactive` stays
+  single-pair only. `--json` over a directory returns an envelope
+  `{ "mode", "root", "exit_code", "pairs": [ … ] }`, each `pairs` entry being one
+  single-pair object. Additive — passing a single file or a pair is unchanged.
 - **`clm slides sync` accepts a single path (§8 single-path contract).** `EN_PATH`
   is now optional: pass one half (`clm slides sync slides_x.de.py`) and the twin is
   derived from disk, or pass the bilingual deck stem (`slides_x.py`, when it still
   exists on disk) to derive both halves. Derivation is prefix-agnostic (`apis.de.py` works) and the resolved pair
   still runs through the pairing guard; a missing twin is a clear usage error (sync
-  never invents a translated half). The two-path form is unchanged. Directory
-  *batch* mode (`sync DIR`) remains a planned follow-up.
+  never invents a translated half). The two-path form is unchanged.
 - **`clm voiceover extract` auto-pairs on a split half (§8 paired extract).**
   When the target is a split half (`<deck>.de.py` / `<deck>.en.py`) whose twin
   exists on disk, both companions are extracted in one op: the two halves are

@@ -496,6 +496,65 @@ a `{version}` substitution, no Click introspection), so `hidden=True` is invisib
 *default* surface only offers operations that keep both halves consistent. Sharp tools
 remain reachable for agents/scripts but are not the path of least resistance.
 
+### 8a. Batch mode (`clm slides sync DIR`) — SHIPPED
+
+**Status: shipped.** All of B1–B7 below landed, plus three review-driven hardening
+fixes (an adversarial find→verify pass over the diff confirmed them):
+
+- **Ignored-dir prune.** The enumerator skips `.git` / `.venv` / `build` / `dist` /
+  `__pycache__` / … (`is_ignored_dir_for_course`, the course-scan convention), so a
+  vendored or archived `.de`/`.en` copy is never enumerated and thus never *written*
+  on a writing batch. The test is applied to each file's path **relative to the
+  root**, so an ignored component in the root's own prefix (a tree under `build/`)
+  cannot falsely exclude everything; the single-file branch stays exempt.
+- **Per-deck `.env` discovery.** A writing batch loads `.env` from the root **and
+  from each deck's directory** (`load_env_files(root, *deck_dirs)`), so a `.env`
+  above a deck buried below the root is found — matching the documented single-pair
+  rule, not just a root-only search.
+- **Resolved watermark key parity.** The single-pair surface now `.resolve()`s its
+  pair before `build_sync_plan`, so it keys the watermark by the same absolute
+  string the batch enumerator produces — otherwise the *same* pair acquired two keys
+  across surfaces and a batch run silently missed a single-pair run's watermark.
+
+Original **pre-decided contract (maintainer):** a directory arg
+triggers batch (`dir_okay=True` on the first positional, branch on
+`de_path.is_dir()` — *not* a separate `sync-all` subcommand, for one funnel);
+**continue-on-error** with a **max-severity** aggregate exit code (0 < 1 < 2); a
+writing batch requires **`--yes`** (a `--dry-run`/`--explain` batch runs ungated, as
+it uses no LLM and fans out no cost). Implementation plan (from the 2026-06-03 spec):
+
+- **B1 — prefix-agnostic enumerator (the central trap).** Do **not** reuse
+  `topic_resolver.find_slide_files_recursive` / `is_slides_file` / `split_twin` /
+  `split_lang_suffix` — they are all gated on the `slides_`/`topic_`/`project_`
+  routing prefix, so they would *silently skip* every prefix-less deck (`apis.de.py`)
+  the rest of this feature deliberately supports — a #162-class silent miss. Add a
+  `find_split_slide_files_recursive(path)` that mirrors the file/topic-dir/`rglob`
+  descent shape but filters on `split_lang_tag(f) is not None and f.suffix in
+  SUPPORTED_PROG_LANG_EXTENSIONS`. Resolve paths (`.resolve()`) for stable watermark
+  keys (the watermark is keyed by the `(de_path, en_path)` *strings*).
+- **B2 — pair iterator.** `iter_split_pairs(paths)` cloning
+  `assign_ids_in_directory`'s `fileset`/`handled` skeleton but using the
+  prefix-agnostic `pairing.derive_split_twin` (already rejects `voiceover_*`); a
+  solo half with no twin under the tree is **skipped with a warning**, never synced
+  against a phantom empty twin (same rationale as single-path's missing-twin error).
+- **B3/B4 — loop.** Open **one** `SyncWatermarkCache` (+ alignment), build **one**
+  judge/translator/recoverer, iterate pairs, per-pair `build_sync_plan` +
+  apply/dry-run/explain inside a single try/finally that closes caches once. Per-pair
+  `_apply_exit_code`/`_plan_exit_code`; aggregate = `max` over pairs. Continue-on-error,
+  collect a per-pair error rollup.
+- **B5 — output.** Human: a per-pair one-liner + a final rollup (`N pairs: X clean,
+  Y review, Z errored`). `--json`: a **new envelope** `{mode, exit_code, pairs:[<existing
+  _to_dict per pair>]}` — must NOT leak into the single-pair path (existing
+  `test_dry_run_json_shape`/`test_apply_json_shape` assert the flat single-pair object;
+  keep `_to_dict` for single, the envelope for batch).
+- **B6 — cost gate.** A writing batch (default apply) requires `--yes` or an
+  interactive confirm; `--dry-run`/`--explain` run freely.
+- **B7 — tests/docs.** A tmp-tree fixture with ≥2 prefix-less pairs + a solo half
+  (assert solo skipped+warned, both pairs synced, aggregate exit code, batch `--json`
+  envelope shape). Reuse the gold-judge monkeypatch from `test_sync_code_e2e.py`. Update
+  `commands.md` (the `sync` usage/`DIR` mode + examples) and `migration.md` per the Info
+  Topics rule.
+
 ---
 
 ## 9. The pre-commit gate (the chosen enforcement)
