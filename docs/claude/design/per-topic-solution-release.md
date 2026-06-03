@@ -39,23 +39,23 @@ machinery, the spec's per-topic structure, and the worker execution path are unt
 ## 2. Architecture
 
 ```
-COURSE SOURCE REPO                          SOLUTIONS REPOSITORY (promotion dest; NOT a build target)
-  course.xml            (stable structure)    jan/                  ← cohort subfolder
-  <release-channels>    (structural decl)       .clm-released.json  ← frozen manifest (facts+provenance)
+COURSE SOURCE REPO                          ONE SOLUTIONS REPO PER COHORT (promotion dest; NOT build targets)
+  course.xml            (stable structure)    solutions/jan/   ← its own git repo + remote
+  <release-channels>    (structural decl)       .clm-released.json   ← frozen manifest (per-topic facts)
   release/jan.yaml      (volatile intent)        <copied topic files, frozen>
-  release/mar.yaml                             mar/
+  release/mar.yaml                            solutions/mar/   ← its own git repo + remote
   release/may.yaml                               .clm-released.json
                                                  <copied topic files, frozen>
-        │
+        │                                     solutions/may/   ← its own git repo + remote …
         │ clm build  (normal; CLM owns + sweeps the frozen source)
         ▼
-  FROZEN SOURCE = a `completed`-kind <output-target>
+  FROZEN SOURCE = a `completed`-kind <output-target>   (PRIVATE; never shipped)
     De|En/Course/slides/{Notebooks,Python,Html}/Completed/<Section>/<files>
     .clm-manifest.json   ← output_path → {section_id, topic_id, source_commit, source_dirty, hash}
-        │
+        │                  (build-internal index, ~200 KB; read by sync, never copied to students)
         │ clm release sync --channel jan    (copy released∧¬frozen topics, BY MANIFEST; freeze)
         ▼
-  jan/  (then: clm git push --channel jan,  or  clm release sync --channel jan --push)
+  solutions/jan/  (then: clm git push --channel jan,  or  clm release sync --channel jan --push)
 ```
 
 The frozen source is an ordinary, always-current `completed` output target that the author rebuilds
@@ -99,6 +99,13 @@ sidecars).
   ]
 }
 ```
+
+**Size & privacy.** This is a **private, build-internal** index living in the frozen-source output
+root — it is **never shipped to students**. Measured against the real AZAV ML course (79 topics, 2
+languages, a `completed` build ≈ 600 output files at 319 B/entry), it is **~190 KB minified**
+(~320 KB pretty). That is irrelevant to publication because `clm release sync` *reads* it to decide
+what to copy but copies topic *files*, not the index; sync explicitly skips all `.clm-*` sidecars
+(§3.4). What students receive is the much smaller per-topic frozen manifest (§3.3, ~15 KB).
 
 **Why a manifest is mandatory (not path inference):** the owning **topic is not recoverable from the
 output path**. Output files are grouped only by `sanitize(section.name)`; topics within a section
@@ -181,22 +188,29 @@ released:
 
 ### 3.3 Frozen Manifest (release fact — in destination)
 
-`<solutions-repo>/<channel>/.clm-released.json`:
+`<cohort-repo>/.clm-released.json` (root of the cohort's own repository):
 
 ```json
 {
   "version": 1,
-  "channel": "jan",
+  "channel": "cohort-jan",
   "frozen": {
-    "introduction":        { "source_commit": "aaa…", "copied_at": "2026-01-08T…", "files": {"…": "sha256:…"} },
-    "variables_and_types": { "source_commit": "aaa…", "copied_at": "2026-01-15T…", "files": {"…": "sha256:…"} },
-    "functions":           { "source_commit": "bbb…", "copied_at": "2026-01-22T…", "files": {"…": "sha256:…"} }
+    "introduction":        { "source_commit": "aaa…", "copied_at": "2026-01-08T…", "topic_digest": "sha256:…" },
+    "variables_and_types": { "source_commit": "aaa…", "copied_at": "2026-01-15T…", "topic_digest": "sha256:…" },
+    "functions":           { "source_commit": "bbb…", "copied_at": "2026-01-22T…", "topic_digest": "sha256:…" }
   },
   "skeleton_frozen": true
 }
 ```
 
-This file *is* the freeze boundary. Its git history in the solutions repo is the release audit log.
+This file *is* the freeze boundary. Its git history in the cohort repo is the release audit log.
+
+**Per-topic, not per-file — this is the artifact students receive.** Each entry records one
+`source_commit`, one `copied_at`, and a single rolled-up `topic_digest` (hash over the topic's
+files, for tamper/drift detection) — **not** a per-file hash map. At ~201 B/topic this is **~15 KB
+for a fully-released 80-topic course** (negligible next to the notebooks, which are routinely
+10–100 KB each). A per-file map would have ballooned the *shipped* file to ~115 KB; the per-file
+hashes, if ever needed, live only in the private build manifest (§3.1).
 
 ### 3.4 Sync Engine
 
@@ -216,8 +230,9 @@ for topic in ledger(C).released:
     else:
         files = source_manifest.files_for(topic) + dir_groups.for_topic(topic)
         ensure section-scoped assets for topic.section present (R6.2)
-        copy files  source → C/                # by manifest, never by glob; never rebuild
-        frozen_manifest.frozen[topic] = {source_commit, now, hashes}
+        copy files  source → C-repo/           # by manifest, never by glob; never rebuild
+                                               # NEVER copy `.clm-*` build sidecars (kept private)
+        frozen_manifest.frozen[topic] = {source_commit, now, topic_digest}
 
 write frozen_manifest(C)
 if --push: delegate to clm git (commit + push channel C)   # 3.6
@@ -225,6 +240,13 @@ if --push: delegate to clm git (commit + push channel C)   # 3.6
 
 Properties: idempotent (R5.2), `--dry-run` prints the copy/freeze/skip plan, `--refreeze <t>` /
 `--refreeze-all` move topics into `refreeze_set`.
+
+**Two invariants:** (1) sync **never copies `.clm-*` build sidecars** (the private
+`.clm-manifest.json`, `.clm-include`, …) into a cohort repo — a `SKIP_OUTPUT_FILE_PATTERNS`-style
+guard keeps the big provenance index private by construction. (2) Because each cohort is its **own**
+standalone repo, the global/skeleton content is **copied into each cohort repo** (and frozen there);
+the duplication is correct — every cohort repo is a complete, self-contained deliverable. The single
+shared artifact remains the frozen-source build; only the destinations multiply.
 
 > **Note on the source.** The author "updates the output repo" by **re-running `clm build`** (the
 > output tree is CLM-owned and swept; hand-edits are not tolerated). Sync reads the source's current
@@ -249,21 +271,25 @@ New module `src/clm/cli/commands/release.py`, group registered like the existing
 
 ### 3.6 `clm git` Extension for Solution Channels
 
-Solution channels are **not** `<output-targets>`, so `find_output_repos()` does not see them. We
-make them first-class for git without disturbing the output-target path:
+Solution channels are **not** `<output-targets>`, so `find_output_repos()` does not see them. But
+with **one repository per cohort**, a channel maps **1:1 onto an `OutputRepo`** exactly like an
+output target does — so the integration is a near-mechanical mirror of the existing path:
 
 1. **Declare channels structurally in the spec** (3.7) so they are discoverable through the same
-   spec-reading path, and their remotes derive through `GitHubSpec.derive_remote_url()` (reused).
+   spec-reading path, and their remotes derive through `GitHubSpec.derive_remote_url()` (reused) —
+   the `channel name` plays the role a `target name` does in remote-suffix derivation.
 2. **Generalize `OutputRepo`** (`src/clm/cli/commands/git_ops.py`) with a `source: str = "output"`
    field (`"output"` | `"channel"`; default keeps existing behavior).
 3. **Add `find_release_channel_repos(spec_file, channel_filter)`** mirroring `find_output_repos`:
-   enumerate `<release-channels>` → resolve each channel's destination path → derive its remote via
-   `GitHubSpec.derive_remote_url(channel_name, language="", remote_path=…)` → yield `OutputRepo(...,
-   source="channel")`.
+   enumerate `<release-channels>` → resolve each channel's own repo path → derive its remote via
+   `GitHubSpec.derive_remote_url(channel_name, language="", remote_path=…)` → yield one
+   `OutputRepo(..., source="channel")` **per cohort** (no language fan-out; the cohort repo holds all
+   languages).
 4. **Add a `--channel` filter** to each `clm git` subcommand. When given, the command operates on
-   channel repos; the per-repo loop, `run_git`, dry-run, and `has_remote()` are all already generic
-   over a list of `OutputRepo` and need no change.
-5. `clm release sync --push` calls this same machinery (commit + push the channel repo) — **no
+   the matching cohort repo(s); the per-repo loop, `run_git`, dry-run, and `has_remote()` are all
+   already generic over a list of `OutputRepo` and need no change. Because each cohort is its own
+   repo, `clm git push --channel jan` touches **only** Jan — no shared-repo coupling.
+5. `clm release sync --push` calls this same machinery (commit + push the cohort repo) — **no
    second git implementation.**
 
 This touches only `git_ops.py` (one new discovery function, one struct field, one option per
@@ -273,21 +299,22 @@ command). `GitHubSpec.derive_remote_url()` and `OutputTargetSpec` remote handlin
 
 ```xml
 <release-channels source-target="solutions-source">
-  <repository path="./solutions">
-    <!-- optional remote derivation knobs, reusing GitHubSpec rules -->
-    <remote-path>solution-cohorts</remote-path>
-    <channel name="cohort-jan" subdir="jan" ledger="release/jan.yaml"/>
-    <channel name="cohort-mar" subdir="mar" ledger="release/mar.yaml"/>
-    <channel name="cohort-may" subdir="may" ledger="release/may.yaml"/>
-  </repository>
+  <!-- optional default remote-derivation knobs, reusing GitHubSpec rules -->
+  <remote-path>solution-cohorts</remote-path>
+  <channel name="cohort-jan" path="./solutions/jan" ledger="release/jan.yaml"/>
+  <channel name="cohort-mar" path="./solutions/mar" ledger="release/mar.yaml"/>
+  <channel name="cohort-may" path="./solutions/may" ledger="release/may.yaml">
+    <remote-path>special-cohort</remote-path>   <!-- per-channel override, like a target's -->
+  </channel>
 </release-channels>
 ```
 
-- `source-target` names the `completed`-kind `<output-target>` that is the frozen source.
-- `<repository>` is one git repo (the promotion destination); it may hold several cohort
-  subfolders — exactly the author's "single output repository, different solution folders, each its
-  own ledger" model. Multiple `<repository>` elements are allowed for per-cohort repos.
-- `subdir` is the cohort folder inside the repo; `ledger` points at the volatile schedule in source.
+- `source-target` names the `completed`-kind `<output-target>` that is the frozen source (shared by
+  all cohorts).
+- Each `<channel>` is its **own git repository** at `path`, with its own remote (derived from the
+  channel `name` via `GitHubSpec.derive_remote_url()`, exactly like a target name → remote suffix; a
+  per-channel `<remote-path>` override works just like `OutputTargetSpec.remote_path`).
+- `ledger` points at the volatile schedule in the source repo.
 - This block is **structural and stable** — a handful of entries fixed for the course's life. It is
   categorically unlike the per-topic volatile annotations the author refuses (those are the ledger).
 - Parsed by a new `ReleaseChannelsSpec` alongside `OutputTargetSpec` in `course_spec.py`; absent →
@@ -343,7 +370,7 @@ PROVENANCE: any output file → .clm-manifest.json → source_commit
 | **Course-author workflow** | Author keeps rebuilding the frozen source freely; released topics are frozen per cohort and never regress. Weekly motion is `clm release add … ` then `clm release sync --channel … --push`. |
 | **Recordings** | Optional new provenance fields linking a take to its slide version (reuses existing `git_commit` capture). |
 | **Course spec** | Optional structural `<release-channels>`; **no per-topic churn** (that's the ledger). |
-| **Solutions repo** | A `clm release`-curated promotion destination — **never** a build target, **never** swept by `clm build`. |
+| **Solutions repos** | **One per cohort**, each a `clm release`-curated promotion destination — **never** a build target, **never** swept by `clm build`, and **never** containing `.clm-*` build sidecars. |
 | **Docs / info topics (project rule)** | `commands.md` (`clm release`, `clm git --channel`), `spec-files.md` (`<release-channels>`), `migration.md` (`.clm-manifest.json` + provenance), plus `docs/user-guide` how-to. |
 
 ---
@@ -410,14 +437,16 @@ drive straight through). Each step is independently testable and leaves the tree
 
 ## 9. Open Design Decisions (defaults chosen)
 
-| # | Decision | Default |
+| # | Decision | Resolution |
 |---|---|---|
 | D1 | Topic ownership recovery | **Manifest-driven** (no output-path restructuring) |
-| D2 | Frozen-manifest location | **Destination channel folder** (self-describing; history = audit log) |
-| D3 | Global dir-groups | Released at **channel init**, then frozen |
-| D4 | Channel destination layout | **One repo, per-cohort subfolders** (per-repo also expressible) |
+| D2 | Frozen-manifest location | **Destination repo** (self-describing; freeze+content commit atomically; history = audit log) |
+| D3 | Global dir-groups | Released at **channel init**, then frozen; copied into **each** cohort repo |
+| D4 | Channel destination layout | **One repository per cohort** (1:1 with a remote, like an output target) |
 | D5 | Scheduled reveal | **Deferred**; dated ledger reserved, manual `sync` ships first |
 | D6 | Frozen source kind | A **`completed`** output target (add one if only `trainer` exists) |
+| D7 | Frozen manifest granularity | **Per-topic** (`source_commit` + `copied_at` + rolled-up `topic_digest`); ~15 KB shipped, not per-file |
+| D8 | Build-manifest privacy | Stays in the frozen source; sync **never** copies `.clm-*` sidecars into a cohort repo |
 
 ---
 

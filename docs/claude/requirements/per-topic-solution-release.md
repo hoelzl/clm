@@ -64,8 +64,8 @@ stable spec, frozen at the moment of release**.
 | Term | Meaning |
 |---|---|
 | **Frozen source** | A `completed`-kind output target (clean solutions, no speaker notes) built normally by `clm build`. The authoritative, always-current solutions tree. CLM owns and sweeps it. |
-| **Solutions repository** | A git repository that is a **promotion destination**, *not* a `clm build` output target. CLM never builds into it; only `clm release` writes to it. May contain several cohort subfolders. |
-| **Release channel (cohort)** | A `{ ledger + destination subfolder + frozen manifest }` triple. One iteration of a course on its own schedule. Many channels can share one solutions repository. |
+| **Solutions repository** | A git repository that is a **promotion destination**, *not* a `clm build` output target. CLM never builds into it; only `clm release` writes to it. **One repository per cohort** (1:1 with a release channel), each with its own remote — mirroring how each output target already maps to its own repo. |
+| **Release channel (cohort)** | A `{ ledger + destination repository + frozen manifest }` triple. One iteration of a course on its own schedule. Each channel is its **own** git repository (its own remote, history, and push timing). |
 | **Ledger** | The **volatile** per-channel file listing which topics have been released (a cumulative set of `Topic.id`s, optionally with dates). Lives in the **course source repo**, *not* the spec. |
 | **Frozen manifest** | The per-channel record, in the destination, of what has actually been copied and from which source commit. The **freeze boundary**: a topic recorded here is never re-propagated unless forced. |
 | **Provenance manifest** | `.clm-manifest.json` emitted into each build output root, mapping every output file to `{section_id, topic_id, source_commit, source_dirty, content_hash}`. The keystone primitive. |
@@ -110,6 +110,12 @@ R1.4 Emitting the manifest **MUST** be opt-in-able and default-sensible; it **MU
 any existing output bytes (it is an additional sidecar file, and like other CLM-owned sidecars it
 is the build's to manage).
 
+R1.5 The build provenance manifest is a **private, build-internal artifact** that lives in the
+frozen-source output root and is **never shipped to students**. `clm release sync` reads it to
+decide what to copy, but **MUST NOT** copy it (or any other `.clm-*` build sidecar) into a channel
+destination. For an ~80-topic, 2-language course this manifest is on the order of ~200 KB
+(≈600 output-file entries); it is not size-constrained because it never leaves the private tree.
+
 ### R2 — Source Commit Awareness at Build Time
 
 **Priority**: High
@@ -143,8 +149,11 @@ a future scheduled-sync layer (see R10, out of scope for the first cut but not p
 
 **Priority**: High
 
-R4.1 Each channel **MUST** maintain a frozen manifest in its destination recording, per released
-topic, `{ source_commit, copied_at, file content_hashes }`.
+R4.1 Each channel **MUST** maintain a frozen manifest in its destination recording, **per released
+topic** (not per file), `{ source_commit, copied_at, topic_digest }`, where `topic_digest` is a
+single rolled-up hash over the topic's files for tamper/drift detection. This keeps the
+student-shipped artifact small (~15 KB fully released for an 80-topic course); per-file hashes, if
+needed, live only in the private build manifest (see R1.5).
 
 R4.2 Once a topic is recorded in the frozen manifest, a subsequent sync **MUST NOT** re-propagate
 it, even if the frozen source has since changed. *Students keep exactly what they were given in the
@@ -209,7 +218,7 @@ For each topic id in a channel's ledger, `clm release sync` **MUST** apply:
 | Topic state | Action |
 |---|---|
 | released **and** already in frozen manifest | **skip** (frozen — keep what students have) |
-| released **and** not yet frozen | **copy** from source → channel; **record** freeze `{commit, time, hashes}` |
+| released **and** not yet frozen | **copy** from source → cohort repo; **record** freeze `{source_commit, copied_at, topic_digest}` |
 | not released | **skip** |
 | `--refreeze <t>` / `--refreeze-all` on a frozen topic | **re-copy** and **update** the freeze record |
 
@@ -218,7 +227,7 @@ For each topic id in a channel's ledger, `clm release sync` **MUST** apply:
 **Priority**: Medium-High
 
 R8.1 The system **MUST** support **N channels over a single frozen source**, each with its own
-ledger, destination subfolder, and frozen manifest.
+ledger, **destination repository**, and frozen manifest.
 
 R8.2 Because freezing is per-`(channel, topic)`, each cohort **MUST** freeze the version of the
 material current when *that cohort* reached the topic — yielding "same material modulo unchanged
@@ -227,9 +236,10 @@ published history" automatically.
 R8.3 It **MUST** be possible to determine where two cohorts' published material diverged by
 comparing their frozen manifests (`source_commit` per topic).
 
-R8.4 Channels **MAY** share one solutions repository (subfolders) or be separate repositories; the
-first cut **MUST** support at least the single-repository-with-subfolders model the author
-described.
+R8.4 Each channel **MUST** be its **own** git repository (one repository per cohort), 1:1 with a
+git remote — mirroring how each output target already maps to its own repo. This gives each cohort
+independent history, access control, and push timing, and lets `clm git --channel NAME` push a
+single cohort without coupling to any other.
 
 ### R9 — `clm git` Extension for Solution Channels
 
@@ -311,13 +321,19 @@ output bytes or break existing consumers/diffs.
 
 ---
 
+## Resolved Decisions
+
+- **Q1 — Channel destination layout → RESOLVED: one repository per cohort.** Each channel is its own
+  git repository (1:1 with a remote), not subfolders of a shared repo. This mirrors the existing
+  output-target↔repo mapping, removes shared-repo push coupling, and gives independent
+  history/access/timing per cohort. (See R8.4.)
+- **Q2 — Frozen-manifest location → RESOLVED: in the destination repository.** Self-describing
+  artifact; freeze record and content commit atomically in one place so they cannot drift; the
+  repo's git history *is* the release audit log. Per-cohort repos (Q1) strengthen this. Shipped size
+  is ~15 KB (per-topic), so publishing it is a non-issue.
+
 ## Open Questions
 
-- **Q1 — Channel destination layout.** Single solutions repository with per-cohort subfolders
-  (author's stated preference) vs. one repository per cohort. Design defaults to the former while
-  keeping the latter expressible.
-- **Q2 — Frozen-manifest location.** In the destination channel folder (self-describing; the repo
-  history *is* the audit log) — design default — vs. alongside the ledger in source.
 - **Q3 — Dir-group ownership scope.** Whether topic-scoped dir-group release (R6.3, the only part
   that reaches into build-output ownership) ships with the first cut or as an immediate fast-follow.
   Author is fine either way and intends to complete quickly; design sequences it as step 1's
