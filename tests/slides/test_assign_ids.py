@@ -7,11 +7,15 @@ from pathlib import Path
 import pytest
 
 from clm.infrastructure.llm.ollama_client import StaticTitleSuggester
+from clm.notebooks.slide_parser import parse_cells
 from clm.slides.assign_ids import (
     AssignOptions,
     assign_ids_for_text,
+    assign_ids_in_directory,
     assign_ids_in_file,
+    assign_ids_in_split_pair,
 )
+from clm.slides.split import split_text
 
 
 def _write(tmp_path: Path, content: str, name: str = "slide.py") -> Path:
@@ -431,6 +435,185 @@ class TestFileLevel:
         assign_ids_in_file(path, AssignOptions(force=True))
         second = path.read_text(encoding="utf-8")
         assert first == second
+
+
+class TestSplitTwinAware:
+    """#162 defensive: per-file ``assign-ids`` on a split half adopts the twin's
+    ``slide_id`` instead of minting a divergent one, keeping ``de_id == en_id``.
+    """
+
+    @staticmethod
+    def _slide_ids(path: Path) -> list[str | None]:
+        return [
+            c.metadata.slide_id
+            for c in parse_cells(path.read_text(encoding="utf-8"))
+            if c.metadata.is_slide_start
+        ]
+
+    def _pair(self, tmp_path: Path, de: str, en: str) -> tuple[Path, Path]:
+        return (
+            _write(tmp_path, de, "slides_x.de.py"),
+            _write(tmp_path, en, "slides_x.en.py"),
+        )
+
+    def test_idless_half_adopts_twin_id(self, tmp_path: Path):
+        # EN already carries an id; the id-less DE adopts it rather than slugging
+        # "mein-thema" from its own heading.
+        de_path, _ = self._pair(
+            tmp_path,
+            '# %% [markdown] lang="de" tags=["slide"]\n# ## Mein Thema\n',
+            '# %% [markdown] lang="en" tags=["slide"] slide_id="my-topic"\n# ## My Topic\n',
+        )
+        result = assign_ids_in_file(de_path, AssignOptions())
+        assert self._slide_ids(de_path) == ["my-topic"]
+        assert any(a.source == "twin" for a in result.assignments)
+
+    def test_born_split_reaches_parity(self, tmp_path: Path):
+        # Both halves id-less with different headings. Assign DE then EN: the EN
+        # run adopts the DE-minted id, so the halves end up in parity.
+        de_path, en_path = self._pair(
+            tmp_path,
+            '# %% [markdown] lang="de" tags=["slide"]\n# ## Mein Thema\n',
+            '# %% [markdown] lang="en" tags=["slide"]\n# ## My Topic\n',
+        )
+        assign_ids_in_file(de_path, AssignOptions())
+        assign_ids_in_file(en_path, AssignOptions())
+        de_ids = self._slide_ids(de_path)
+        assert de_ids == self._slide_ids(en_path)
+        assert de_ids == ["mein-thema"]  # DE ran first, so its slug wins
+
+    def test_count_mismatch_skips_reuse(self, tmp_path: Path):
+        # Misaligned halves (DE has an extra slide): positional reuse is unsafe,
+        # so DE mints normally and the divergence is left for the validator's
+        # #162 detective.
+        de_path, _ = self._pair(
+            tmp_path,
+            '# %% [markdown] lang="de" tags=["slide"]\n# ## Intro\n'
+            '# %% [markdown] lang="de" tags=["slide"]\n# ## Extra\n',
+            '# %% [markdown] lang="en" tags=["slide"] slide_id="intro"\n# ## Intro\n',
+        )
+        result = assign_ids_in_file(de_path, AssignOptions())
+        assert all(a.source != "twin" for a in result.assignments)
+        assert self._slide_ids(de_path) == ["intro", "extra"]
+
+    def test_no_twin_mints_normally(self, tmp_path: Path):
+        de_path = _write(
+            tmp_path,
+            '# %% [markdown] lang="de" tags=["slide"]\n# ## Mein Thema\n',
+            "slides_x.de.py",
+        )
+        result = assign_ids_in_file(de_path, AssignOptions())
+        assert self._slide_ids(de_path) == ["mein-thema"]
+        assert all(a.source != "twin" for a in result.assignments)
+
+    def test_existing_divergent_id_not_touched_without_force(self, tmp_path: Path):
+        # The defensive only fills id-less cells. A pre-existing divergent id is
+        # left alone (the detective surfaces it); assign-ids must not silently
+        # rewrite it under the no-force default.
+        de_path, _ = self._pair(
+            tmp_path,
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="de-own"\n# ## Thema\n',
+            '# %% [markdown] lang="en" tags=["slide"] slide_id="en-own"\n# ## Topic\n',
+        )
+        assign_ids_in_file(de_path, AssignOptions())
+        assert self._slide_ids(de_path) == ["de-own"]
+
+
+class TestSplitGenerative:
+    """#162 generative: directory ``assign-ids`` mints **EN-authority** ids
+    across both halves of a split pair at once — deterministic, order-independent
+    (contrast the per-file defensive, which is first-assigned-wins)."""
+
+    _HEADER = '# j2 from \'macros.j2\' import header\n# {{ header("DE", "EN") }}\n\n'
+
+    def _born_split(
+        self, tmp_path: Path, de_title: str = "Mein Thema", en_title: str = "My Topic"
+    ) -> tuple[Path, Path]:
+        # Build a valid id-less split pair by splitting an id-less bilingual deck
+        # (so the header macros are exactly what `split` produces and `unify`
+        # accepts). The two headings differ so EN-authority is observable.
+        bilingual = (
+            self._HEADER
+            + f'# %% [markdown] lang="de" tags=["slide"]\n# ## {de_title}\n\n'
+            + f'# %% [markdown] lang="en" tags=["slide"]\n# ## {en_title}\n\n'
+        )
+        de, en = split_text(bilingual)
+        return (
+            _write(tmp_path, de, "slides_x.de.py"),
+            _write(tmp_path, en, "slides_x.en.py"),
+        )
+
+    @staticmethod
+    def _ids(path: Path) -> list[str | None]:
+        return [
+            c.metadata.slide_id
+            for c in parse_cells(path.read_text(encoding="utf-8"))
+            if c.metadata.is_slide_start
+        ]
+
+    def _divergent_shared_pair(self, tmp_path: Path) -> tuple[Path, Path]:
+        # A pair whose *shared* (no-lang) cell differs between the halves. unify
+        # raises on that, so the round-trip is not faithful -> generative bails.
+        bilingual = (
+            self._HEADER
+            + '# %% [markdown] lang="de" tags=["slide"]\n# ## Mein Thema\n\n'
+            + '# %% [markdown] lang="en" tags=["slide"]\n# ## My Topic\n\n'
+            + '# %% tags=["keep"]\nx = 1\n\n'
+        )
+        de, en = split_text(bilingual)
+        de = de.replace("x = 1", "x = 2")  # tamper the DE shared cell
+        return (
+            _write(tmp_path, de, "slides_x.de.py"),
+            _write(tmp_path, en, "slides_x.en.py"),
+        )
+
+    def test_split_pair_function_mints_en_authority(self, tmp_path: Path):
+        de_path, en_path = self._born_split(tmp_path)
+        result = assign_ids_in_split_pair(de_path, en_path, AssignOptions())
+        assert result is not None
+        assert self._ids(de_path) == self._ids(en_path) == ["my-topic"]
+
+    def test_directory_mints_en_authority(self, tmp_path: Path):
+        de_path, en_path = self._born_split(tmp_path)
+        assign_ids_in_directory(tmp_path, AssignOptions())
+        # EN heading "My Topic" -> "my-topic" wins on BOTH halves, not the DE
+        # "mein-thema" the per-file defensive would pick.
+        assert self._ids(de_path) == self._ids(en_path) == ["my-topic"]
+
+    def test_round_trippable_misalignment_is_not_corrupted(self, tmp_path: Path):
+        # An *extra* DE slide round-trips faithfully through unify/split, so the
+        # generative proceeds safely: the aligned slide gets the EN-authority id
+        # on both halves, the DE-only slide gets its own id, and the inherent
+        # divergence (extra only on DE) is left for the validator's detective.
+        de_path, en_path = self._born_split(tmp_path)
+        de_path.write_text(
+            de_path.read_text(encoding="utf-8")
+            + '# %% [markdown] lang="de" tags=["slide"]\n# ## Extra\n',
+            encoding="utf-8",
+        )
+        result = assign_ids_in_split_pair(de_path, en_path, AssignOptions())
+        assert result is not None
+        assert self._ids(de_path) == ["my-topic", "extra"]
+        assert self._ids(en_path) == ["my-topic"]
+
+    def test_divergent_shared_cell_returns_none(self, tmp_path: Path):
+        de_path, en_path = self._divergent_shared_pair(tmp_path)
+        assert assign_ids_in_split_pair(de_path, en_path, AssignOptions()) is None
+
+    def test_directory_falls_back_to_defensive_on_divergent_shared(self, tmp_path: Path):
+        # The generative bails (not round-trippable); the per-file defensive
+        # fallback still reaches slide_id parity on the aligned slide.
+        de_path, en_path = self._divergent_shared_pair(tmp_path)
+        assign_ids_in_directory(tmp_path, AssignOptions())
+        assert self._ids(de_path) == self._ids(en_path) == ["mein-thema"]
+
+    def test_report_only_writes_nothing(self, tmp_path: Path):
+        de_path, en_path = self._born_split(tmp_path)
+        before = (de_path.read_text(encoding="utf-8"), en_path.read_text(encoding="utf-8"))
+        result = assign_ids_in_split_pair(de_path, en_path, AssignOptions(report_only=True))
+        assert result is not None
+        assert result.assignments  # proposals are still reported
+        assert (de_path.read_text(encoding="utf-8"), en_path.read_text(encoding="utf-8")) == before
 
 
 # ---------------------------------------------------------------------------

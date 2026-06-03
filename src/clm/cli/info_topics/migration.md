@@ -39,6 +39,80 @@ Voiceover and notes cells inherit the id of the preceding slide
 `clm info commands` → `clm slides assign-ids` for the full flag
 matrix.
 
+## Voiceover extract/inline: data-loss hardening ({version})
+
+CLM {version} closes two ways `clm voiceover extract` / `inline` could lose
+authored narration. Both are safe-by-default behavior changes; scripts that
+relied on the old behavior may need a flag or an exit-code check.
+
+- **`inline` no longer destroys the companion when a cell is unmatched.**
+  Previously, if a voiceover's owning `slide_id` had been renamed (so its
+  `for_slide` no longer matched), inline stranded that cell at the end of the
+  slide file (stripped of `for_slide`/`vo_anchor`) and **deleted the companion
+  anyway**, exit 0. Now inline places only the cells it can match, **keeps the
+  companion** rewritten to the unmatched remainder (anchors intact), and
+  **exits non-zero**. Recover by fixing the `slide_id`(s) and re-running
+  inline. *Migration:* a script that treated inline as "always consumes the
+  companion" must handle the non-zero exit / surviving companion; check
+  `companion_retained` / `unmatched_cells` in `--json`.
+
+- **`extract` refuses to overwrite an existing companion without `--force`.**
+  The companion is rebuilt from the slide's current voiceover cells, so a blind
+  re-extract discarded anything living only in the companion. Extract now
+  raises (writing nothing) unless `--force` is passed. *Migration:* add
+  `--force` to any pipeline that intentionally rebuilds the companion.
+
+These are also surfaced by the new fast-suite `tests/slides/test_edit_dynamics.py`
+cross-command harness (`scripts/edit_dynamics_harness.py`).
+
+## `slides split` / `unify` carry the voiceover companion ({version})
+
+Previously `clm slides split` only split the deck — a sibling voiceover
+companion (`slides_<name>.py` → `voiceover_<name>.py`) was left behind,
+orphaned: the build then found no companion next to either
+`slides_<name>.de.py` or `slides_<name>.en.py`, silently dropping the
+narration. CLM {version} splits the companion in lockstep into
+`voiceover_<name>.de.py` / `voiceover_<name>.en.py` (routing each cell by its
+`lang`, preserving `for_slide` / `vo_anchor`), and `clm slides unify`
+recombines them into `voiceover_<name>.py`. The companion round trip is
+byte-identical, the same trust property the deck split already guarantees;
+it relies on the #162 `de_id == en_id` invariant so each narration cell's
+owning slide exists in its language's half.
+
+*Migration:* none required — the behavior is additive and only fires when a
+companion is present. The `split`/`unify` `--force` flag now also covers the
+companion targets, and the refusal is atomic (no file is written if any deck
+*or* companion target exists without `--force`). `--json` output gains
+`source_companion` / `de_companion` / `en_companion` (split) and
+`target_companion` / `companion_overwrote` (unify).
+
+## Cross-file `slide_id` parity detective for split decks ({version}, issue #162)
+
+`slide_id` is the cross-language join key for a split deck: voiceover
+`for_slide` resolution, `clm slides unify` (which requires `de_id == en_id`),
+and `extract`/`inline` all assume the `.de.py` and `.en.py` halves agree on the
+**set and order** of slide ids. A born-split deck, a per-file
+`clm slides assign-ids` run on one half, or a hand-edited id silently diverges
+them.
+
+CLM {version} adds a `clm validate` **`pairing`** check (warning) that flags a
+divergent `slide_id` set or order between a split pair. It runs on a
+directory/course validate **and** on a single-file validate when the twin
+exists on disk — so a pre-commit hook (`clm validate slides/ --fail-on warning`,
+or per-file in a PostToolUse hook) catches a divergence before it ships.
+
+Since CLM {version} `clm slides assign-ids` keeps the two halves consistent
+automatically. A **directory / course run** mints **EN-authority** ids across a
+`.de.py` / `.en.py` pair at once (the #162 *generative*): the slug derives from
+the EN heading and the same id is stamped on both, deterministic regardless of
+file order. A **single-file run** is **twin-aware** (the #162 *defensive*): an
+id-less slide adopts the sibling's `slide_id` when the twin exists on disk with
+a matching slide count; when both halves are id-less the first-assigned half's
+slug wins (parity still holds — use the directory run or `clm slides sync` for
+EN-authority). A pair that is not byte-faithfully unifiable (divergent shared
+cells) falls back to the per-file path, and `clm validate`'s #162 detective
+flags any residual divergence.
+
 ## Slide format redesign: `clm validate` enforces `slide_id` (warning now, error in 1.7)
 
 CLM {version} also ships **Phase 3** of the slide-format-redesign:

@@ -52,6 +52,13 @@ def split_cmd(source: Path, force: bool, report_only: bool, as_json: bool) -> No
     'macros.j2' import header`` import line is rewritten in parallel.
     Shared cells (no ``lang`` attribute) are copied verbatim to both
     outputs.
+
+    \b
+    If SOURCE has a sibling voiceover companion (``voiceover_<name>.py``),
+    it is split in lockstep into ``voiceover_<name>.de.py`` /
+    ``voiceover_<name>.en.py`` so the narration is never orphaned;
+    ``for_slide`` / ``vo_anchor`` are preserved. ``--force`` also covers
+    overwriting existing companion halves.
     """
     try:
         result = split_in_file(source, force=force, dry_run=report_only)
@@ -71,7 +78,10 @@ def split_cmd(source: Path, force: bool, report_only: bool, as_json: bool) -> No
 def _print_human(result: SplitResult, *, report_only: bool) -> None:
     prefix = "[report-only] " if report_only else ""
     verb = "would write" if report_only else "wrote"
-    for path in (result.de_path, result.en_path):
+    paths = [result.de_path, result.en_path]
+    if result.de_companion and result.en_companion:
+        paths += [result.de_companion, result.en_companion]
+    for path in paths:
         note = " (overwrote)" if path in result.overwrote else ""
         click.echo(f"{prefix}{verb} {path}{note}")
 
@@ -83,5 +93,8 @@ def _to_dict(result: SplitResult, *, report_only: bool) -> dict[str, object]:
         "en_path": result.en_path,
         "wrote": result.wrote,
         "overwrote": result.overwrote,
+        "source_companion": result.source_companion,
+        "de_companion": result.de_companion,
+        "en_companion": result.en_companion,
         "report_only": report_only,
     }

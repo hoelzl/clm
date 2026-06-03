@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from clm.infrastructure.utils.path_utils import split_lang_suffix
 from clm.notebooks.slide_parser import parse_cell_header
 from clm.slides.code_cell_extract import extract_from_code
 from clm.slides.headingless import (
@@ -73,6 +74,7 @@ __all__ = [
     "assign_ids_for_text",
     "assign_ids_in_directory",
     "assign_ids_in_file",
+    "assign_ids_in_split_pair",
 ]
 
 
@@ -242,6 +244,8 @@ def assign_ids_for_cells(
     cells: list[_Cell],
     file_path: Path,
     options: AssignOptions,
+    *,
+    twin_ids: list[str | None] | None = None,
 ) -> AssignResult:
     """Apply the assign-ids policy to an existing cell list.
 
@@ -253,6 +257,14 @@ def assign_ids_for_cells(
     disk. This is the seam :mod:`clm.slides.normalizer` uses to fold
     assign-ids into a larger multi-operation pass without re-parsing the
     file.
+
+    ``twin_ids`` (the #162 defensive) is the positional list of bare
+    slide_ids of the *sibling* split half's slide/subslide cells (``None``
+    where the twin has no id). When supplied, an **id-less** slide on this
+    half adopts ``twin_ids[n]`` for the n-th slide instead of minting a
+    divergent slug from its own heading — keeping ``de_id == en_id`` across
+    a split pair. ``assign_ids_in_file`` supplies it only when a twin exists
+    on disk and the two halves have matching slide counts.
     """
     result = AssignResult()
 
@@ -287,6 +299,7 @@ def assign_ids_for_cells(
     # slide/subslide.
     current_slide_id: str | None = None
     file_str = str(file_path)
+    slide_seen = 0  # index among slide/subslide cells (for twin_ids correspondence)
 
     for idx, cell in enumerate(cells):
         role = _classify_for_assignment(cell)
@@ -298,6 +311,32 @@ def assign_ids_for_cells(
             continue
 
         if role == "slide":
+            twin_id = (
+                twin_ids[slide_seen]
+                if twin_ids is not None and slide_seen < len(twin_ids)
+                else None
+            )
+            slide_seen += 1
+            # Defensive (#162): on a split half, an id-less slide adopts the
+            # twin's id for the positionally-corresponding slide rather than
+            # minting a divergent slug from this half's heading. Only id-less
+            # cells are touched — existing ids keep their preserve/--force
+            # semantics below.
+            if twin_id is not None and not cell.metadata.slide_id:
+                if not options.report_only:
+                    _write_slide_id(cell, twin_id)
+                used_ids.add(twin_id)
+                result.assignments.append(
+                    AssignedId(
+                        file=file_str,
+                        line=cell.line_number,
+                        slide_id=twin_id,
+                        source="twin",
+                    )
+                )
+                current_slide_id = twin_id
+                continue
+
             slug_source_idx = pairs.get(idx, idx)
             slug_source = cells[slug_source_idx]
             alt_idx = alternate_of.get(slug_source_idx)
@@ -336,6 +375,8 @@ def assign_ids_for_text(
     text: str,
     file_path: Path,
     options: AssignOptions,
+    *,
+    twin_ids: list[str | None] | None = None,
 ) -> tuple[str, AssignResult]:
     """Apply the assign-ids policy to one file's text.
 
@@ -343,9 +384,12 @@ def assign_ids_for_text(
     written (refusals only, or no changes needed). In ``--report-only``
     mode the new text always equals the input but the result still lists
     *proposed* assignments and refusals.
+
+    ``twin_ids`` is forwarded to :func:`assign_ids_for_cells` (the #162
+    defensive split-half id reuse — see its docstring).
     """
     preamble, cells = _split_cells(text)
-    result = assign_ids_for_cells(cells, file_path, options)
+    result = assign_ids_for_cells(cells, file_path, options, twin_ids=twin_ids)
     result.files_visited = 1
 
     new_text = text
@@ -727,24 +771,166 @@ def _handle_narrative(
 # ---------------------------------------------------------------------------
 
 
+def _split_twin(path: Path) -> Path | None:
+    """The sibling split half (``.de.py`` <-> ``.en.py``) if it exists on disk."""
+    suffix = split_lang_suffix(path)
+    if suffix is None:
+        return None
+    other = "en" if suffix == "de" else "de"
+    parts = path.name.split(".")
+    # split_lang_suffix guarantees the form ``<stem>.<de|en>.<ext>``.
+    parts[-2] = other
+    twin = path.with_name(".".join(parts))
+    return twin if twin.exists() else None
+
+
+def _slide_start_ids(cells: list[_Cell]) -> list[str | None]:
+    """Ordered bare slide_ids of slide/subslide cells (``None`` where absent)."""
+    out: list[str | None] = []
+    for cell in cells:
+        if _classify_for_assignment(cell) == "slide":
+            sid = cell.metadata.slide_id
+            out.append(strip_preserve_marker(sid) if sid else None)
+    return out
+
+
+def _twin_ids_for(path: Path, text: str) -> list[str | None] | None:
+    """Positional twin slide_ids to reuse (#162 defensive), or ``None``.
+
+    Reuse applies only when the twin exists *and* both halves have the same
+    number of slide/subslide cells. When the counts differ the halves are
+    structurally misaligned and positional reuse could stamp the wrong id —
+    so we mint normally and let the validator's #162 detective flag the
+    divergence instead.
+    """
+    twin = _split_twin(path)
+    if twin is None:
+        return None
+    _, own_cells = _split_cells(text)
+    own_ids = _slide_start_ids(own_cells)
+    _, twin_cells = _split_cells(twin.read_text(encoding="utf-8"))
+    twin_ids = _slide_start_ids(twin_cells)
+    if len(twin_ids) != len(own_ids):
+        return None
+    return twin_ids
+
+
 def assign_ids_in_file(path: Path, options: AssignOptions) -> AssignResult:
-    """Process one ``.py`` slide file end-to-end."""
+    """Process one ``.py`` slide file end-to-end.
+
+    On a split half (``*.de.py`` / ``*.en.py``) whose twin exists on disk and
+    has the same number of slide/subslide cells, an id-less slide adopts the
+    twin's id for the corresponding slide instead of minting a divergent slug
+    (#162 defensive). Run order decides which half's slug wins when *both* are
+    id-less, but the two halves always end up in slide_id parity.
+    """
     text = path.read_text(encoding="utf-8")
-    new_text, result = assign_ids_for_text(text, path, options)
+    twin_ids = _twin_ids_for(path, text)
+    new_text, result = assign_ids_for_text(text, path, options, twin_ids=twin_ids)
     if not options.report_only and new_text != text:
         path.write_text(new_text, encoding="utf-8", newline="\n")
     return result
 
 
+def assign_ids_in_split_pair(
+    de_path: Path, en_path: Path, options: AssignOptions
+) -> AssignResult | None:
+    """Generative #162: mint **EN-authority** slide_ids onto *both* halves of a
+    split pair at once.
+
+    Reconstructs the bilingual deck (``unify``), runs the normal paired
+    assign-ids over it — which already derives each slide's slug from its EN
+    cell and stamps the *same* id onto the DE/EN twin — then routes the ids back
+    onto the two halves (``split``). Unlike the per-file defensive (which
+    preserves parity but lets the first-assigned half's slug win), this is
+    deterministic EN-authority regardless of order, matching how ids are minted
+    in a bilingual file.
+
+    Returns ``None`` when the pair is not unifiable (structurally misaligned or
+    divergent shared cells) so the caller can fall back to the per-file
+    defensive path; the validator's #162 detective then surfaces any residual
+    divergence.
+    """
+    from clm.slides.split import SplitError, UnifyError, split_text, unify_texts
+
+    de_text = de_path.read_text(encoding="utf-8")
+    en_text = en_path.read_text(encoding="utf-8")
+    try:
+        unified = unify_texts(de_text, en_text)
+        # Proceed only when unify is *byte-faithful*: split(unify(de, en)) == (de, en).
+        # ``unify`` is best-effort for solo / misaligned cells, so a structurally
+        # divergent pair can unify without raising — but then the assign->split
+        # round-trip could reorder or move cells. Verifying the id-less round-trip
+        # guarantees that adding ids and splitting back cannot corrupt the files;
+        # otherwise fall back to the per-file defensive (the #162 detective then
+        # surfaces the residual divergence).
+        rt_de, rt_en = split_text(unified)
+    except (SplitError, UnifyError):
+        return None
+    if (rt_de, rt_en) != (de_text, en_text):
+        return None
+
+    unified_new, result = assign_ids_for_text(unified, en_path, options)
+    result.files_visited = 2
+    result.files_modified = 0
+    if options.report_only or unified_new == unified:
+        return result
+
+    try:
+        de_new, en_new = split_text(unified_new)
+    except SplitError:  # pragma: no cover - unify succeeded, split should too
+        return None
+
+    if de_new != de_text:
+        de_path.write_text(de_new, encoding="utf-8", newline="\n")
+        result.files_modified += 1
+    if en_new != en_text:
+        en_path.write_text(en_new, encoding="utf-8", newline="\n")
+        result.files_modified += 1
+    return result
+
+
+def _merge_result(combined: AssignResult, result: AssignResult) -> None:
+    combined.files_visited += result.files_visited
+    combined.files_modified += result.files_modified
+    combined.assignments.extend(result.assignments)
+    combined.refusals.extend(result.refusals)
+
+
 def assign_ids_in_directory(path: Path, options: AssignOptions) -> AssignResult:
-    """Recurse over a directory and process every slide file we find."""
+    """Recurse over a directory and process every slide file we find.
+
+    Split ``.de.py`` / ``.en.py`` pairs are minted **EN-authority** across both
+    halves at once (:func:`assign_ids_in_split_pair`); a pair that is not
+    unifiable falls back to processing each half with the per-file twin-aware
+    path. Bilingual and unpaired files go through :func:`assign_ids_in_file`.
+    """
     from clm.core.topic_resolver import find_slide_files_recursive
 
     combined = AssignResult()
-    for slide_file in find_slide_files_recursive(path):
-        result = assign_ids_in_file(slide_file, options)
-        combined.files_visited += result.files_visited
-        combined.files_modified += result.files_modified
-        combined.assignments.extend(result.assignments)
-        combined.refusals.extend(result.refusals)
+    files = list(find_slide_files_recursive(path))
+    fileset = set(files)
+    handled: set[Path] = set()
+
+    for slide_file in files:
+        if slide_file in handled:
+            continue
+        twin = _split_twin(slide_file)
+        if twin is not None and twin in fileset:
+            de_path, en_path = (
+                (slide_file, twin) if split_lang_suffix(slide_file) == "de" else (twin, slide_file)
+            )
+            pair_result = assign_ids_in_split_pair(de_path, en_path, options)
+            if pair_result is not None:
+                _merge_result(combined, pair_result)
+            else:
+                # Not unifiable — fall back to the per-file defensive on each.
+                _merge_result(combined, assign_ids_in_file(de_path, options))
+                _merge_result(combined, assign_ids_in_file(en_path, options))
+            handled.add(de_path)
+            handled.add(en_path)
+        else:
+            _merge_result(combined, assign_ids_in_file(slide_file, options))
+            handled.add(slide_file)
+
     return combined

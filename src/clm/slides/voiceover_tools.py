@@ -35,6 +35,12 @@ from clm.slides.normalizer import (
 # ---------------------------------------------------------------------------
 
 
+class VoiceoverError(Exception):
+    """A voiceover extract/inline operation refused to proceed (e.g. to avoid
+    clobbering an existing companion). Mirrors ``split.SplitError`` — the caller
+    (CLI / MCP) turns it into a clean, non-zero-exit message."""
+
+
 @dataclass
 class ExtractionResult:
     """Result of extracting voiceover cells from a slide file."""
@@ -86,6 +92,7 @@ class InlineResult:
     unmatched_cells: int = 0
     relocated_cells: int = 0
     companion_deleted: bool = False
+    companion_retained: bool = False
     dry_run: bool = False
     placements: list[Placement] = field(default_factory=list)
 
@@ -111,6 +118,11 @@ class InlineResult:
             )
         if self.companion_deleted:
             parts.append("companion file deleted")
+        if self.companion_retained:
+            parts.append(
+                f"companion {self.companion_file} retained with the unmatched "
+                f"cell(s) — fix the slide_id(s) and re-run inline"
+            )
         return "; ".join(parts)
 
 
@@ -349,6 +361,7 @@ def _find_owning_slide_id(cells: list[_RawCell], voiceover_idx: int) -> str | No
 def extract_voiceover(
     path: Path,
     *,
+    force: bool = False,
     dry_run: bool = False,
 ) -> ExtractionResult:
     """Extract voiceover cells from a slide file to a companion file.
@@ -357,12 +370,22 @@ def extract_voiceover(
     extraction.  Voiceover cells are linked to their owning slide via
     ``for_slide`` metadata.
 
+    The companion is *rebuilt* from the voiceover cells currently in the slide
+    file. If a companion already exists it would be overwritten, discarding any
+    hand-edits (or previously-extracted cells) that live only in the companion —
+    so, like ``split_in_file``, this refuses without ``force``.
+
     Args:
         path: Path to the ``.py`` slide file.
+        force: Overwrite an existing companion file. Without it, an existing
+            companion raises :class:`VoiceoverError` rather than clobbering it.
         dry_run: If ``True``, preview without writing files.
 
     Returns:
         An :class:`ExtractionResult` describing what was done.
+
+    Raises:
+        VoiceoverError: a companion already exists and ``force`` is not set.
     """
     comp = companion_path(path)
     result = ExtractionResult(
@@ -411,6 +434,17 @@ def extract_voiceover(
     remaining_cells = [c for i, c in enumerate(cells) if i not in set(vo_indices)]
 
     if not dry_run:
+        # Refuse to clobber an existing companion *before* touching the slide
+        # file — otherwise a raise here would strip voiceover from the slide
+        # and leave no companion (data loss). ``force`` opts into the rebuild.
+        if comp.exists() and not force:
+            raise VoiceoverError(
+                f"refusing to overwrite existing companion '{comp.name}' "
+                f"(pass force=True / --force to rebuild it from the current "
+                f"voiceover cells; this discards content present only in the "
+                f"companion)"
+            )
+
         # Write the slide file without voiceover cells
         new_slide_text = _reconstruct(preamble, remaining_cells)
         # Clean up double blank lines left by removal
@@ -775,13 +809,11 @@ def inline_voiceover(
         )
         insertions.append((insert_after, vo_cell))
 
-    # Strip the author-only companion attributes before the cells land
-    # back in the slide file.
+    # Strip the author-only companion attributes from the cells about to land
+    # back in the slide file. Unmatched cells are NOT stripped: they stay in
+    # the companion (below) and must keep their for_slide / vo_anchor so a
+    # retry after fixing the slide_id can re-place them.
     for _, vo_cell in insertions:
-        clean_header = _strip_author_attrs(vo_cell.header)
-        vo_cell.lines[0] = clean_header
-        vo_cell.metadata = parse_cell_header(clean_header)
-    for vo_cell in unmatched:
         clean_header = _strip_author_attrs(vo_cell.header)
         vo_cell.lines[0] = clean_header
         vo_cell.metadata = parse_cell_header(clean_header)
@@ -792,12 +824,27 @@ def inline_voiceover(
         return result
 
     if not dry_run:
-        new_cells = _apply_insertions(slide_cells, insertions, unmatched)
-        new_text = _reconstruct(preamble, new_cells)
-        path.write_text(new_text, encoding="utf-8", newline="\n")
+        if insertions:
+            # Inline only the cells we could place. Unmatched cells are *not*
+            # dumped at the end of the slide (stripped of for_slide/anchor);
+            # they are preserved in the companion below so they stay placeable.
+            new_cells = _apply_insertions(slide_cells, insertions, [])
+            new_text = _reconstruct(preamble, new_cells)
+            path.write_text(new_text, encoding="utf-8", newline="\n")
 
-        comp.unlink()
-        result.companion_deleted = True
+        if unmatched:
+            # Some companion cells could not be matched — typically the owning
+            # slide_id was renamed. Rather than destroying the clean,
+            # anchor-bearing companion (the recoverable source of truth) and
+            # stranding the narration at EOF, rewrite the companion to the
+            # unmatched remainder and keep it. The author fixes the slide_id(s)
+            # and re-runs inline to place them.
+            remaining_text = _reconstruct("", unmatched)
+            comp.write_text(remaining_text, encoding="utf-8", newline="\n")
+            result.companion_retained = True
+        else:
+            comp.unlink()
+            result.companion_deleted = True
 
     return result
 

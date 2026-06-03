@@ -539,6 +539,7 @@ adjacency, and — since CLM {version} — **`slide_id` metadata**:
 | duplicate `slide_id` across slide groups | `error` | Group-aware: paired DE/EN cells sharing the EN-derived slug are not a duplicate. Bare-form comparison so `!intro` and `intro` collide. |
 | voiceover/notes `slide_id` ≠ preceding `slide`/`subslide` anchor | `error` | Walk-back skips j2, code, shared (lang-less), and cross-language narrative cells. The j2 `header()` macro anchors `slide_id="title"` for narrative cells that follow it. |
 | paired DE/EN slides carry mismatched bare `slide_id`s | `warning` | Suggested fix: `clm slides assign-ids --force`. |
+| split pair `.de.py` / `.en.py` carry a different `slide_id` set or order | `warning` | **Cross-file** (issue #162): `slide_id` is the cross-language join key for voiceover `for_slide`, `clm slides unify`, and extract/inline. Route structural changes through `clm slides sync`; avoid per-file `clm slides assign-ids` on a split half. Runs on a directory/course validate, and on a single-file validate when the twin exists on disk. |
 | `slide_id` is not a valid kebab-case ASCII slug (≤30 chars) | `warning` | The leading `!` preserve marker is permitted and does not count toward the length cap. |
 
 Since CLM {version}, the **bilingual** `pairing` sub-checks (DE/EN cell
@@ -549,8 +550,12 @@ checks would otherwise report a false `DE/EN cell count mismatch` on every
 converted deck (issue #160). The per-file `slide_id` integrity checks (and
 the `format` / `tags` groups) still run on split files unchanged, and the
 cross-file shared-cell parity diff between a `.de.py` / `.en.py` pair is
-still applied when validating a directory or course spec. Bilingual decks
-(no `.de` / `.en` suffix) are unaffected — the full pairing check still runs.
+still applied when validating a directory or course spec. Since CLM
+{version} the cross-file **`slide_id` parity** check (issue #162) is applied
+the same way — and additionally on a single-file validate when the twin
+exists on disk, so the pre-commit gate and the PostToolUse path catch a
+divergent join key. Bilingual decks (no `.de` / `.en` suffix) are
+unaffected — the full pairing check still runs.
 
 Since CLM {version}, the `tags` check group also verifies **workshop
 scope** (issue #78). The `partial` output kind leaves a workshop's code
@@ -641,6 +646,22 @@ Special cases:
 - An id prefixed with `!` (e.g. `slide_id="!intro"`) is the
   **preserve marker** — never regenerated, even under `--force`. The
   `!` is source-level only; references elsewhere use the bare form.
+- **Split-file id consistency (since CLM {version}, issue #162).** `slide_id`
+  is the cross-language join key, so the two halves of a split deck must agree
+  on it. assign-ids keeps that automatically, two ways:
+  - **Directory / course run** (`clm slides assign-ids slides/`) — a
+    `*.de.py` / `*.en.py` pair is minted **EN-authority** across *both*
+    halves at once: the slug derives from the EN heading and the same id is
+    stamped on both, deterministic regardless of file order (the same policy
+    as a bilingual file). A pair that is not byte-faithfully unifiable
+    (divergent shared cells) falls back to the per-file path below.
+  - **Single-file run** (`clm slides assign-ids slides_x.de.py`) — when the
+    twin exists on disk with a matching slide count, an **id-less** slide
+    adopts the twin's `slide_id` for the positionally-corresponding slide
+    instead of minting a divergent slug. When both halves are id-less the
+    first-assigned half's slug wins (parity still holds; for EN-authority use
+    the directory run or `clm slides sync`). Mismatched slide counts skip the
+    reuse and leave the divergence for `clm validate`'s #162 detective.
 
 ```
 clm slides assign-ids [OPTIONS] PATH
@@ -943,6 +964,17 @@ escalating to error in CLM 1.7) — `unify` pairs adjacent DE/EN cells
 by matching id. Currently Python-only: the slide parser recognises
 only `# %%` cell boundaries; non-Python prog_langs are deferred.
 
+**Voiceover companion.** If SOURCE has a sibling voiceover companion
+(`slides_<name>.py` → `voiceover_<name>.py`), `split` splits it in
+lockstep into `voiceover_<name>.de.py` / `voiceover_<name>.en.py`,
+routing each narration cell by its `lang` and preserving `for_slide` /
+`vo_anchor` verbatim. Without this the companion would be orphaned — the
+build would find no companion next to either split half. `--force`
+covers overwriting existing companion halves, and the refusal is atomic
+(if any deck or companion target exists without `--force`, nothing is
+written). Splitting a deck that has no companion creates no
+`voiceover_*` files.
+
 ### `clm slides unify`
 
 The inverse of `clm slides split`. Combine `<basename>.de.py` and
@@ -976,6 +1008,12 @@ diverges …`. The same divergence is surfaced by
 `clm validate <topic_dir>` and refused at build time — see
 "Split-source build routing" under `clm build` above for the
 build-time gate.
+
+**Voiceover companion.** If the pair has sibling voiceover companions
+(`voiceover_<name>.de.py` / `voiceover_<name>.en.py`), `unify` recombines
+them in lockstep into `voiceover_<name>.py` (next to the bilingual
+target) — the inverse of `split`'s companion split, byte-identical.
+`--force` also covers overwriting an existing companion target.
 
 ### `clm slides language-view`
 
@@ -1042,12 +1080,20 @@ slide group. It is body-only and occurrence-qualified, so editing a
 sibling cell's tags, inserting unrelated slides, or the build's blank-line
 cleanup between extract and inline does not move the voiceover.
 
+Since CLM {version}, extract **refuses to overwrite an existing companion**
+unless `--force` is given (it raises rather than writing, leaving both files
+untouched). The companion is *rebuilt* from the slide's current voiceover
+cells, so a blind overwrite would discard anything that lives only in the
+companion (hand-edits, or cells whose owning slide was removed). This
+mirrors `clm slides split`'s `--force` contract.
+
 ```
 clm voiceover extract [OPTIONS] FILE
 ```
 
 | Option | Description |
 |--------|-------------|
+| `--force` | Overwrite an existing companion (rebuilds it from the slide's voiceover cells, discarding companion-only content). Without it, an existing companion is left untouched and the command errors. |
 | `--dry-run` | Preview changes without modifying files |
 | `--json` | Output as JSON |
 
@@ -1056,6 +1102,7 @@ Examples:
 ```bash
 clm voiceover extract slides_intro.py
 clm voiceover extract slides_intro.py --dry-run
+clm voiceover extract slides_intro.py --force
 ```
 
 ### `clm voiceover inline`
@@ -1063,23 +1110,32 @@ clm voiceover extract slides_intro.py --dry-run
 *Deprecated alias: `clm inline-voiceover` (removed in 1.7).*
 
 Inline voiceover cells from a companion `voiceover_*.py` file back into the
-slide file, deletes the companion file after successful inlining.
+slide file. The companion is deleted **only when every cell is placed**.
 
 Since CLM {version}, each voiceover is re-inserted immediately after the
 predecessor cell recorded in its `vo_anchor` (resolved within the owning
 slide group only — it never crosses into another slide). If that anchor
 cell was edited away or removed, inline falls back to the end of the
 `for_slide` group and counts the cell as **relocated**; if the owning slide
-is gone entirely, the cell is **unmatched** and appended at the end. Both
-cases are reported rather than silently misplaced:
+is gone entirely (e.g. its `slide_id` was renamed), the cell is
+**unmatched**. Both cases are reported rather than silently misplaced:
 
+- **Unmatched cells are no longer dumped at the end of the slide.** Since
+  CLM {version}, when any cell is unmatched the companion is **kept**,
+  rewritten to hold exactly the unmatched remainder (with `for_slide` /
+  `vo_anchor` intact), and the command **exits non-zero** — so a clean,
+  recoverable source of truth always survives. Fix the slide `slide_id`(s)
+  and re-run inline to place the rest. (Previously the companion was
+  deleted unconditionally and the leftovers stranded at EOF — a data-loss
+  footgun.)
 - The text summary appends `N cell(s) relocated …` / `N cell(s) could not
-  be matched …`.
+  be matched …` / `companion … retained …`.
 - `--dry-run` prints a per-cell placement line — `+` anchored, `!`
   relocated, `?` unmatched — with the target line, so you can confirm
   placement before writing.
-- `--json` adds `relocated_cells` and a `placements` array (each entry:
-  `for_slide`, `anchor`, `status`, `after_line`, `after_header`).
+- `--json` adds `relocated_cells`, `companion_retained`, and a `placements`
+  array (each entry: `for_slide`, `anchor`, `status`, `after_line`,
+  `after_header`).
 
 ```
 clm voiceover inline [OPTIONS] FILE
@@ -1088,7 +1144,7 @@ clm voiceover inline [OPTIONS] FILE
 | Option | Description |
 |--------|-------------|
 | `--dry-run` | Preview changes (incl. per-cell placement report) without modifying files |
-| `--json` | Output as JSON (incl. `relocated_cells` and `placements`) |
+| `--json` | Output as JSON (incl. `relocated_cells`, `companion_retained`, `placements`) |
 
 Examples:
 

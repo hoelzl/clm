@@ -1014,6 +1014,113 @@ def _check_split_tag_parity(de_path: Path, en_path: Path) -> list[Finding]:
     return findings
 
 
+def _check_split_slide_id_parity(de_path: Path, en_path: Path) -> list[Finding]:
+    """Verify the ``.de.py`` / ``.en.py`` halves carry the same slide_id sequence.
+
+    ``slide_id`` is the cross-language join key (issue #162): voiceover
+    ``for_slide`` resolution, ``clm slides unify`` (which requires
+    ``de_id == en_id``), and ``extract`` / ``inline`` all rely on the two halves
+    agreeing on the **set and order** of slide ids. A born-split deck, a per-file
+    ``clm slides assign-ids`` on one half, or a hand-edited id silently diverges
+    them. This is the **detective** that makes that loud — the core check of the
+    #162 pre-commit gate.
+
+    Compares the bare (preserve-marker-stripped) slide_ids of slide-start cells
+    in source order. Findings are ``warning`` severity, consistent with the rest
+    of the slide_id family (the gate runs with ``--fail-on warning``); they may
+    become ``error`` in CLM 1.7 alongside the other slide_id checks.
+    """
+    findings: list[Finding] = []
+    de_file = str(de_path)
+
+    de_cells = parse_cells(de_path.read_text(encoding="utf-8"))
+    en_cells = parse_cells(en_path.read_text(encoding="utf-8"))
+
+    def _ids(cells: list[Cell]) -> list[str]:
+        return [
+            strip_preserve_marker(c.metadata.slide_id)
+            for c in cells
+            if c.metadata.is_slide_start and c.metadata.slide_id
+        ]
+
+    de_ids = _ids(de_cells)
+    en_ids = _ids(en_cells)
+    anchor_line = next(
+        (c.line_number for c in de_cells if c.metadata.is_slide_start and c.metadata.slide_id),
+        1,
+    )
+    de_set, en_set = set(de_ids), set(en_ids)
+
+    if de_set != en_set:
+        only_de = sorted(de_set - en_set)
+        only_en = sorted(en_set - de_set)
+        detail = ""
+        if only_de:
+            detail += f"; only on DE: {only_de}"
+        if only_en:
+            detail += f"; only on EN: {only_en}"
+        findings.append(
+            Finding(
+                severity="warning",
+                category="pairing",
+                file=de_file,
+                line=anchor_line,
+                message=(
+                    f"split pair slide_id sets diverge between '.de.py' and "
+                    f"'.en.py' ({en_path.name}){detail}"
+                ),
+                suggestion=(
+                    "The .de.py / .en.py halves must carry the same slide_id set — "
+                    "it is the cross-language join key for voiceover for_slide, "
+                    "`clm slides unify`, and extract/inline. Route structural "
+                    "changes through `clm slides sync` (which mints/migrates ids "
+                    "onto both halves); avoid per-file `clm slides assign-ids` on a "
+                    "split half."
+                ),
+            )
+        )
+    elif de_ids != en_ids:
+        findings.append(
+            Finding(
+                severity="warning",
+                category="pairing",
+                file=de_file,
+                line=anchor_line,
+                message=(
+                    f"split pair slide_id order diverges: DE order {de_ids} != EN "
+                    f"order {en_ids} ({en_path.name})"
+                ),
+                suggestion=(
+                    "The slide_id sequence must match across the DE/EN halves. Run "
+                    "`clm slides sync` to mirror the reordering onto both."
+                ),
+            )
+        )
+
+    return findings
+
+
+def _split_twin_pair(path: Path) -> tuple[Path, Path] | None:
+    """If ``path`` is a split half whose twin exists on disk, return the ordered
+    ``(de_path, en_path)`` pair; else ``None``.
+
+    Used by the single-file validate path so a standalone
+    ``clm validate slides_x.de.py`` (and the pre-commit gate) catches twin
+    divergence even when not run over a whole directory.
+    """
+    suffix = split_lang_suffix(path)
+    if suffix is None:
+        return None
+    other = "en" if suffix == "de" else "de"
+    parts = path.name.split(".")
+    # split_lang_suffix guarantees the form ``<stem>.<de|en>.<ext>``.
+    parts[-2] = other
+    twin = path.with_name(".".join(parts))
+    if not twin.exists():
+        return None
+    return (path, twin) if suffix == "de" else (twin, path)
+
+
 def _slide_files_to_split_pairs(slide_files: list[Path]) -> list[tuple[Path, Path]]:
     """Return every detected ``(de_path, en_path)`` pair in ``slide_files``.
 
@@ -1300,6 +1407,8 @@ def _brief_cell_context(cell: Cell) -> str:
 def validate_file(
     path: Path,
     checks: list[str] | None = None,
+    *,
+    cross_file_parity: bool = True,
 ) -> ValidationResult:
     """Validate a single slide file.
 
@@ -1313,6 +1422,12 @@ def validate_file(
             ``"voiceover"`` is **opt-in** (issue #176): voiceover is optional
             per deck, so coverage runs only when you name it explicitly in
             ``checks`` — never as part of the default bundle.
+        cross_file_parity: When ``True`` (the default for standalone callers —
+            the CLI single-file path, MCP, the pre-commit gate) and ``path`` is
+            a split half whose twin exists on disk, run the #162 cross-file
+            ``slide_id`` parity detective against the twin. Directory/course
+            entrypoints pass ``False`` and run that parity once at their own
+            scope instead, so a directory run does not duplicate the finding.
 
     Returns:
         A :class:`ValidationResult` with findings and optional review material.
@@ -1341,6 +1456,14 @@ def validate_file(
         # has no DE/EN pairs to compare).
         if not is_split:
             findings.extend(_check_workshop_tag_symmetry(cells, file_str))
+        # #162 detective: when validating a split half standalone and its twin
+        # exists on disk, check cross-file slide_id parity (the join key). A
+        # directory/course run handles this once at that scope instead
+        # (cross_file_parity=False) so the finding is not duplicated per file.
+        if cross_file_parity and is_split:
+            pair = _split_twin_pair(path)
+            if pair is not None:
+                findings.extend(_check_split_slide_id_parity(*pair))
 
     # Review material extraction
     review_checks = check_set & ALL_REVIEW_CHECKS
@@ -1421,7 +1544,9 @@ def validate_directory(
     combined_review = ReviewMaterial() if (not checks or set(checks) & ALL_REVIEW_CHECKS) else None
 
     for sf in slide_files:
-        result = validate_file(sf, checks=checks)
+        # Cross-file parity is run once per pair below (not per file), so the
+        # per-file pass skips it to avoid duplicate findings.
+        result = validate_file(sf, checks=checks, cross_file_parity=False)
         all_findings.extend(result.findings)
         if combined_review is not None and result.review_material is not None:
             _merge_review_material(combined_review, result.review_material)
@@ -1434,6 +1559,7 @@ def validate_directory(
         for de_path, en_path in _slide_files_to_split_pairs(slide_files):
             all_findings.extend(_check_shared_cell_parity(de_path, en_path))
             all_findings.extend(_check_split_tag_parity(de_path, en_path))
+            all_findings.extend(_check_split_slide_id_parity(de_path, en_path))
 
     return ValidationResult(
         files_checked=len(slide_files),
@@ -1474,7 +1600,8 @@ def validate_course(
         for match in matches:
             slide_files = find_slide_files(match.path)
             for sf in slide_files:
-                result = validate_file(sf, checks=checks)
+                # Cross-file parity runs once per pair below, not per file.
+                result = validate_file(sf, checks=checks, cross_file_parity=False)
                 all_findings.extend(result.findings)
                 files_checked += 1
                 if combined_review is not None and result.review_material is not None:
@@ -1487,6 +1614,7 @@ def validate_course(
                 for de_path, en_path in _slide_files_to_split_pairs(slide_files):
                     all_findings.extend(_check_shared_cell_parity(de_path, en_path))
                     all_findings.extend(_check_split_tag_parity(de_path, en_path))
+                    all_findings.extend(_check_split_slide_id_parity(de_path, en_path))
 
     return ValidationResult(
         files_checked=files_checked,

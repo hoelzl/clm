@@ -34,6 +34,11 @@ from clm.slides.split import (
     unify_in_file,
     unify_texts,
 )
+from clm.slides.voiceover_tools import (
+    companion_path,
+    extract_voiceover,
+    inline_voiceover,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers / building blocks
@@ -312,8 +317,253 @@ class TestUnifyInFile:
 
 
 # ---------------------------------------------------------------------------
-# Line-ending preservation (issue #132)
+# Voiceover companion split/unify in lockstep (hardening 2026-06)
+#
+# A slide file may have a sibling ``voiceover_*.py`` companion. Splitting the
+# deck without the companion orphans the narration (the build no longer finds a
+# companion next to either split half). ``split`` must split the companion too;
+# ``unify`` must recombine it — both byte-identically, preserving
+# ``for_slide`` / ``vo_anchor``.
 # ---------------------------------------------------------------------------
+
+
+def _deck_with_voiceover() -> str:
+    """Bilingual deck with interleaved DE/EN voiceover, the extract input."""
+    return (
+        HEADER_PREAMBLE
+        + _slide_pair("intro", "Einleitung", "Introduction")
+        + _voiceover_pair("intro")
+        + _slide_pair("setup", "Aufbau", "Setup")
+        + _voiceover_pair("setup")
+    )
+
+
+class TestCompanionSplit:
+    def test_splits_sibling_companion(self, tmp_path: Path) -> None:
+        deck = tmp_path / "slides_demo.py"
+        deck.write_text(_deck_with_voiceover(), encoding="utf-8")
+        extract_voiceover(deck)  # -> voiceover_demo.py (bilingual)
+        assert (tmp_path / "voiceover_demo.py").is_file()
+
+        result = split_in_file(deck)
+
+        de_comp = tmp_path / "voiceover_demo.de.py"
+        en_comp = tmp_path / "voiceover_demo.en.py"
+        assert de_comp.is_file()
+        assert en_comp.is_file()
+        assert result.de_companion == str(de_comp)
+        assert result.en_companion == str(en_comp)
+        assert result.source_companion == str(tmp_path / "voiceover_demo.py")
+
+        de_text = de_comp.read_text(encoding="utf-8")
+        en_text = en_comp.read_text(encoding="utf-8")
+        # Each half carries only its own language's narration...
+        assert 'lang="de"' in de_text and 'lang="en"' not in de_text
+        assert 'lang="en"' in en_text and 'lang="de"' not in en_text
+        # ...with the author-only positional attributes preserved verbatim.
+        assert 'for_slide="intro"' in de_text and 'for_slide="setup"' in de_text
+        assert 'for_slide="intro"' in en_text and 'for_slide="setup"' in en_text
+        assert "vo_anchor=" in de_text and "vo_anchor=" in en_text
+
+    def test_companion_round_trips_via_unify_texts(self, tmp_path: Path) -> None:
+        deck = tmp_path / "slides_demo.py"
+        deck.write_text(_deck_with_voiceover(), encoding="utf-8")
+        extract_voiceover(deck)
+        comp_before = (tmp_path / "voiceover_demo.py").read_text(encoding="utf-8")
+
+        split_in_file(deck)
+
+        de_text = (tmp_path / "voiceover_demo.de.py").read_text(encoding="utf-8")
+        en_text = (tmp_path / "voiceover_demo.en.py").read_text(encoding="utf-8")
+        assert unify_texts(de_text, en_text) == comp_before
+
+    def test_no_companion_creates_no_voiceover_files(self, tmp_path: Path) -> None:
+        # A deck with no sibling companion must not spawn empty voiceover files.
+        deck = tmp_path / "slides_demo.py"
+        deck.write_text(HEADER_PREAMBLE + _slide_pair("a", "Eins", "One"), encoding="utf-8")
+        result = split_in_file(deck)
+        assert result.de_companion is None
+        assert result.en_companion is None
+        assert list(tmp_path.glob("voiceover_*.py")) == []
+
+    def test_refuses_when_companion_half_exists(self, tmp_path: Path) -> None:
+        # The deck halves do not exist yet, but a companion half does: split must
+        # still refuse without --force (atomic — nothing is written).
+        deck = tmp_path / "slides_demo.py"
+        deck.write_text(_deck_with_voiceover(), encoding="utf-8")
+        extract_voiceover(deck)
+        de_comp = tmp_path / "voiceover_demo.de.py"
+        de_comp.write_text("placeholder", encoding="utf-8")
+        with pytest.raises(SplitError, match="voiceover_demo.de.py"):
+            split_in_file(deck)
+        # Atomic: the deck halves were not written either.
+        assert not (tmp_path / "slides_demo.de.py").exists()
+        assert de_comp.read_text(encoding="utf-8") == "placeholder"
+
+    def test_force_overwrites_companion_half(self, tmp_path: Path) -> None:
+        deck = tmp_path / "slides_demo.py"
+        deck.write_text(_deck_with_voiceover(), encoding="utf-8")
+        extract_voiceover(deck)
+        (tmp_path / "voiceover_demo.de.py").write_text("placeholder", encoding="utf-8")
+        split_in_file(deck, force=True)
+        assert (tmp_path / "voiceover_demo.de.py").read_text(encoding="utf-8") != "placeholder"
+
+    def test_dry_run_writes_no_companion(self, tmp_path: Path) -> None:
+        deck = tmp_path / "slides_demo.py"
+        deck.write_text(_deck_with_voiceover(), encoding="utf-8")
+        extract_voiceover(deck)
+        result = split_in_file(deck, dry_run=True)
+        assert result.de_companion == str(tmp_path / "voiceover_demo.de.py")
+        assert not (tmp_path / "voiceover_demo.de.py").exists()
+        assert not (tmp_path / "voiceover_demo.en.py").exists()
+
+    def test_companion_halves_use_lf(self, tmp_path: Path) -> None:
+        deck = tmp_path / "slides_demo.py"
+        deck.write_text(_deck_with_voiceover(), encoding="utf-8")
+        extract_voiceover(deck)
+        split_in_file(deck)
+        assert b"\r\n" not in (tmp_path / "voiceover_demo.de.py").read_bytes()
+        assert b"\r\n" not in (tmp_path / "voiceover_demo.en.py").read_bytes()
+
+    def test_write_failure_leaves_no_partial_state(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The common write failure (disk full) happens during the temp phase,
+        # before any real target is replaced — so a failed split must leave NO
+        # deck half, NO companion half, and no stray .tmp files. This is the
+        # anti-orphan guarantee the companion seam exists to provide.
+        deck = tmp_path / "slides_demo.py"
+        deck.write_text(_deck_with_voiceover(), encoding="utf-8")
+        extract_voiceover(deck)
+
+        real_write = Path.write_text
+        calls = {"n": 0}
+
+        def flaky(self: Path, *args: object, **kwargs: object) -> int:
+            if self.name.endswith(".tmp"):
+                calls["n"] += 1
+                if calls["n"] == 3:  # the first companion half's temp
+                    raise OSError("simulated disk full")
+            return real_write(self, *args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(Path, "write_text", flaky)
+        with pytest.raises(OSError, match="simulated disk full"):
+            split_in_file(deck)
+
+        for name in (
+            "slides_demo.de.py",
+            "slides_demo.en.py",
+            "voiceover_demo.de.py",
+            "voiceover_demo.en.py",
+        ):
+            assert not (tmp_path / name).exists()
+        assert list(tmp_path.glob("*.tmp")) == []
+
+
+class TestCompanionUnify:
+    def test_recombines_companions(self, tmp_path: Path) -> None:
+        deck = tmp_path / "slides_demo.py"
+        deck.write_text(_deck_with_voiceover(), encoding="utf-8")
+        extract_voiceover(deck)
+        comp_before = (tmp_path / "voiceover_demo.py").read_text(encoding="utf-8")
+        deck_extracted = deck.read_text(encoding="utf-8")
+        split_in_file(deck)
+
+        # Unify the deck halves back; the companions recombine in lockstep.
+        target = tmp_path / "rebuilt.py"
+        result = unify_in_file(
+            tmp_path / "slides_demo.de.py",
+            tmp_path / "slides_demo.en.py",
+            target=target,
+        )
+        assert result.target_companion == str(tmp_path / "voiceover_rebuilt.py")
+        assert target.read_text(encoding="utf-8") == deck_extracted
+        assert (tmp_path / "voiceover_rebuilt.py").read_text(encoding="utf-8") == comp_before
+
+    def test_one_companion_half_is_not_dropped(self, tmp_path: Path) -> None:
+        # Degenerate state: only the DE companion half exists (the EN half was
+        # deleted, or only DE narration was authored). Unify must NOT silently
+        # orphan it — the missing half is treated as empty and the present
+        # narration lands in the bilingual companion.
+        deck = tmp_path / "slides_demo.py"
+        deck.write_text(_deck_with_voiceover(), encoding="utf-8")
+        extract_voiceover(deck)
+        split_in_file(deck)
+        (tmp_path / "voiceover_demo.en.py").unlink()  # drop the EN half
+
+        result = unify_in_file(
+            tmp_path / "slides_demo.de.py",
+            tmp_path / "slides_demo.en.py",
+            target=tmp_path / "rebuilt.py",
+        )
+        rebuilt_comp = tmp_path / "voiceover_rebuilt.py"
+        assert result.target_companion == str(rebuilt_comp)
+        text = rebuilt_comp.read_text(encoding="utf-8")
+        assert "Voiceover DE für intro" in text
+        assert 'lang="en"' not in text
+
+    def test_no_companion_halves_no_target_companion(self, tmp_path: Path) -> None:
+        deck = tmp_path / "slides_demo.py"
+        deck.write_text(HEADER_PREAMBLE + _slide_pair("a", "Eins", "One"), encoding="utf-8")
+        split_in_file(deck)
+        result = unify_in_file(
+            tmp_path / "slides_demo.de.py",
+            tmp_path / "slides_demo.en.py",
+            target=tmp_path / "rebuilt.py",
+        )
+        assert result.target_companion is None
+        assert not (tmp_path / "voiceover_rebuilt.py").exists()
+
+    def test_refuses_existing_companion_target(self, tmp_path: Path) -> None:
+        deck = tmp_path / "slides_demo.py"
+        deck.write_text(_deck_with_voiceover(), encoding="utf-8")
+        extract_voiceover(deck)
+        split_in_file(deck)
+        # Aim unify at a fresh deck target (does NOT exist) whose companion
+        # target DOES exist — proving the refusal is driven by the companion
+        # alone, not the deck.
+        target = tmp_path / "fresh.py"
+        (tmp_path / "voiceover_fresh.py").write_text("placeholder", encoding="utf-8")
+        with pytest.raises(UnifyError, match="voiceover_fresh.py"):
+            unify_in_file(
+                tmp_path / "slides_demo.de.py",
+                tmp_path / "slides_demo.en.py",
+                target=target,
+                force=False,
+            )
+        assert not target.exists()  # atomic: deck target not written either
+
+    def test_full_round_trip_extract_split_unify_inline(self, tmp_path: Path) -> None:
+        # The complete cross-command seam: a bilingual deck goes
+        # extract → split → unify → inline with no orphaned narration and no
+        # data loss. The deck + companion reconstruct byte-identically through
+        # split/unify; the final inline is a content check, not byte-identity —
+        # bilingual extract↔inline positioning is a separate seam (the
+        # single-language inline IS byte-identical: see the harness
+        # ``extract-inline-round-trip`` row).
+        deck = tmp_path / "slides_demo.py"
+        deck.write_text(_deck_with_voiceover(), encoding="utf-8")
+
+        extract_voiceover(deck)
+        deck_extracted = deck.read_text(encoding="utf-8")
+        comp_before = (tmp_path / "voiceover_demo.py").read_text(encoding="utf-8")
+
+        split_in_file(deck)
+        # Recombine the split halves over the original deck/companion paths.
+        unify_in_file(tmp_path / "slides_demo.de.py", tmp_path / "slides_demo.en.py", force=True)
+
+        # Deck and companion are reconstructed byte-identically; the companion is
+        # back next to the deck (never orphaned).
+        assert deck.read_text(encoding="utf-8") == deck_extracted
+        assert (tmp_path / "voiceover_demo.py").read_text(encoding="utf-8") == comp_before
+
+        # Inline consumes the companion and restores every narration cell.
+        inline_voiceover(deck)
+        merged = deck.read_text(encoding="utf-8")
+        assert "Voiceover DE für intro" in merged
+        assert "Voiceover EN for setup" in merged
+        assert "for_slide=" not in merged  # author-only attrs stripped on inline
+        assert not (tmp_path / "voiceover_demo.py").exists()
 
 
 class TestLineEndingsAreLF:

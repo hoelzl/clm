@@ -478,6 +478,33 @@ class TestOutputFilePatterns:
         py.write_text("# ...")
         assert not is_ignored_file_for_output(py)
 
+    def test_voiceover_companion_regex_matches(self):
+        # Bilingual and split-per-language companion forms must all match so the
+        # raw author file never reaches public/speaker output (its narration is
+        # merged into the slide notebook at build time instead).
+        names = [
+            "voiceover_intro.py",
+            "voiceover_010v_topic.py",
+            "voiceover_intro.de.py",
+            "voiceover_intro.en.py",
+        ]
+        for name in names:
+            assert any(p.match(name) for p in SKIP_OUTPUT_FILE_PATTERNS), name
+
+    def test_voiceover_companion_regex_rejects_non_companion(self):
+        # Only files whose name *starts with* ``voiceover_`` are companions.
+        for name in ("slides_010v.py", "my_voiceover_helper.py", "voiceover.md"):
+            assert not any(p.match(name) for p in SKIP_OUTPUT_FILE_PATTERNS), name
+
+    def test_voiceover_companion_glob_parallels_regex(self):
+        assert "voiceover_*.py" in SKIP_OUTPUT_FILE_GLOBS
+
+    def test_is_ignored_file_for_output_voiceover_companion(self, tmp_path):
+        for name in ("voiceover_intro.py", "voiceover_intro.de.py", "voiceover_intro.en.py"):
+            comp = tmp_path / name
+            comp.write_text('# %% [markdown] tags=["voiceover"] for_slide="x"\n# vo\n')
+            assert is_ignored_file_for_output(comp), name
+
     def test_is_ignored_file_for_output_keras_suffix(self, tmp_path):
         # SKIP_FILE_SUFFIXES still applies via is_ignored_file_for_course.
         model = tmp_path / "model.keras"
