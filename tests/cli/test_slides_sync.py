@@ -694,3 +694,77 @@ class TestPairingGuard:
         )
         assert result.exit_code == 0, _combined(result)
         assert "swapped" not in _combined(result)
+
+
+class TestSinglePath:
+    """`clm slides sync` single-path contract: EN_PATH is optional and the twin
+    (or both halves from a deck stem) is derived from disk. The two-path form
+    stays valid (backward compatible).
+    """
+
+    def test_single_half_derives_twin(self, cli_runner: CliRunner, tmp_path: Path):
+        de_path, _en_path = _write_pair(tmp_path, _DE_BASE, _EN_BASE)
+        result = cli_runner.invoke(slides_sync_cmd, [str(de_path), "--dry-run", "--no-cache"])
+        assert result.exit_code == 0, _combined(result)
+
+    def test_single_half_prefix_less(self, cli_runner: CliRunner, tmp_path: Path):
+        # Prefix-agnostic: an un-prefixed deck (apis.de.py) derives its twin too.
+        de_path, _en_path = _write_pair(tmp_path, _DE_BASE, _EN_BASE, stem="apis")
+        result = cli_runner.invoke(slides_sync_cmd, [str(de_path), "--dry-run", "--no-cache"])
+        assert result.exit_code == 0, _combined(result)
+
+    def test_single_en_half_derives_twin_no_swap_note(self, cli_runner: CliRunner, tmp_path: Path):
+        # The .en half alone derives the .de twin. The derived pair is returned
+        # already (de, en)-ordered, so the pairing guard's "swapped" note must NOT
+        # fire (the author passed a single path — nothing was swapped).
+        _de_path, en_path = _write_pair(tmp_path, _DE_BASE, _EN_BASE)
+        result = cli_runner.invoke(slides_sync_cmd, [str(en_path), "--dry-run", "--no-cache"])
+        assert result.exit_code == 0, _combined(result)
+        assert "swapped" not in _combined(result)
+
+    def test_deck_stem_derives_both_halves(self, cli_runner: CliRunner, tmp_path: Path):
+        _write_pair(tmp_path, _DE_BASE, _EN_BASE)
+        stem = tmp_path / "slides_intro.py"  # bilingual stem present on disk
+        stem.write_text(_DE_BASE + _EN_BASE, encoding="utf-8")
+        result = cli_runner.invoke(
+            slides_sync_cmd, [str(stem), "--dry-run", "--json", "--no-cache"]
+        )
+        assert result.exit_code == 0, _combined(result)
+        # The plan acted on the derived split halves, not the stem itself.
+        data = _json_payload(result)
+        assert data["de_path"].endswith("slides_intro.de.py")
+        assert data["en_path"].endswith("slides_intro.en.py")
+
+    def test_missing_twin_errors(self, cli_runner: CliRunner, tmp_path: Path):
+        de_path = tmp_path / "slides_intro.de.py"
+        de_path.write_text(_DE_BASE, encoding="utf-8")  # no .en twin on disk
+        result = cli_runner.invoke(slides_sync_cmd, [str(de_path), "--dry-run", "--no-cache"])
+        assert result.exit_code != 0
+        assert "twin" in _combined(result)
+
+    def test_deck_stem_missing_half_errors(self, cli_runner: CliRunner, tmp_path: Path):
+        # An untagged stem whose halves are not both present → the Branch-B usage
+        # error naming both expected halves (not a silent or contradictory failure).
+        stem = tmp_path / "slides_intro.py"
+        stem.write_text(_DE_BASE + _EN_BASE, encoding="utf-8")
+        (tmp_path / "slides_intro.de.py").write_text(_DE_BASE, encoding="utf-8")  # no .en
+        result = cli_runner.invoke(slides_sync_cmd, [str(stem), "--dry-run", "--no-cache"])
+        assert result.exit_code != 0
+        out = _combined(result)
+        assert ".de.py" in out and ".en.py" in out
+
+    def test_companion_alone_errors_with_hint(self, cli_runner: CliRunner, tmp_path: Path):
+        # A voiceover companion is never a sync target; passing one alone gives a
+        # companion-specific error (sync never derives a twin for a companion).
+        comp = tmp_path / "voiceover_intro.de.py"
+        comp.write_text(_DE_BASE, encoding="utf-8")
+        result = cli_runner.invoke(slides_sync_cmd, [str(comp), "--dry-run", "--no-cache"])
+        assert result.exit_code != 0
+        assert "companion" in _combined(result)
+
+    def test_two_path_form_still_works(self, cli_runner: CliRunner, tmp_path: Path):
+        de_path, en_path = _write_pair(tmp_path, _DE_BASE, _EN_BASE)
+        result = cli_runner.invoke(
+            slides_sync_cmd, [str(de_path), str(en_path), "--dry-run", "--no-cache"]
+        )
+        assert result.exit_code == 0, _combined(result)

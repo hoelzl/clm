@@ -752,6 +752,15 @@ twice, **two same-language** halves, **two different decks**, or a path that is
 usage error before any LLM call or write. This closes the #162 footgun where a
 mismatched pair could silently produce a divergent or no-op sync.
 
+**Single-path form (since CLM {version}).** `EN_PATH` is **optional**: pass just
+one half and the twin is derived from disk — `clm slides sync slides_x.de.py`
+syncs the pair. You may also pass the **bilingual deck stem** (`slides_x.py`, no
+`.de`/`.en` tag) when it still exists on disk, and both halves are derived. The
+derivation is prefix-agnostic (so `apis.de.py` works) and the resolved pair is
+still run through the pairing guard above. A missing twin is a clear usage error
+(exit 2) — sync never invents a translated half; run `clm slides split` first.
+The two-path form is unchanged.
+
 **Default behavior changed in CLM {version}: the command now writes to
 the working tree.** A bare `clm slides sync de en` applies the agreed
 changes (it no longer just prints a diff). Nothing is committed —
@@ -842,7 +851,7 @@ Use `--explain` to see the anchor-level view (per-cell anchor + drift, the
 propagation direction, drifted ids) for any pair.
 
 ```
-clm slides sync [OPTIONS] DE_PATH EN_PATH
+clm slides sync [OPTIONS] DE_PATH [EN_PATH]
 ```
 
 | Option | Description |
@@ -886,6 +895,9 @@ Examples:
 ```bash
 # Edit intro.de.py, then bring intro.en.py into sync (writes to the tree).
 clm slides sync slides/topic/intro.de.py slides/topic/intro.en.py
+
+# Single-path: pass one half, the twin is derived from disk.
+clm slides sync slides/topic/intro.de.py
 
 # Preview the plan first — write nothing.
 clm slides sync intro.de.py intro.en.py --dry-run
