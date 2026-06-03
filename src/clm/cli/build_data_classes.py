@@ -153,14 +153,21 @@ class BuildSummary:
     incomplete."""
 
     @property
-    def successful_files(self) -> int:
-        """Number of successfully processed files."""
-        return self.total_files - len([e for e in self.errors if e.severity == "error"])
+    def failed_files(self) -> int:
+        """Number of distinct source files that reported an error.
+
+        Counts unique ``file_path``s among error-severity findings, not raw
+        error entries: a single file can emit several errors (e.g. multiple
+        dropped voiceover narrations, or several missing cross-references), and
+        those must not inflate the file count — which previously could drive
+        :attr:`successful_files` negative.
+        """
+        return len({e.file_path for e in self.errors if e.severity == "error"})
 
     @property
-    def failed_files(self) -> int:
-        """Number of failed files."""
-        return len([e for e in self.errors if e.severity == "error"])
+    def successful_files(self) -> int:
+        """Number of source files that processed without an error (never < 0)."""
+        return max(0, self.total_files - self.failed_files)
 
     def has_errors(self) -> bool:
         """Check if build has any errors."""

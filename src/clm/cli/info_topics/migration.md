@@ -140,6 +140,28 @@ the two companions narrate the same slides. (No migration required — extract o
 bilingual decks is unchanged.) For deterministic EN-authority ids, run
 `clm slides assign-ids <dir>` on the pair before extracting.
 
+## `clm build` fails on dropped companion voiceover ({version})
+
+Separated voiceover lives in `voiceover_*.py` companions; the build merges each
+narration cell back next to the slide named by its `for_slide`. If a `for_slide`
+matches no `slide_id` in the slide (typically a renamed `slide_id`), that
+narration is **dropped** from the output. Previously the build only logged a
+warning and exited 0 — the loss was silent.
+
+Since CLM {version} each dropped narration is reported as a `voiceover`-category
+**error** in the build summary, governed by the **same `--fail-on-error`
+policy** as cell-execution errors: it fails the build under `--fail-on-error`
+(default-on in `--http-replay=replay` / CI) and is surfaced-but-non-fatal
+otherwise.
+
+*Migration:* a CI build (replay mode) that currently ships a deck with an
+unmatched companion `for_slide` will now **fail** instead of silently dropping
+the narration. Fix the `for_slide` / `slide_id` mismatch (`clm voiceover inline`
+then re-extract, or `clm slides sync`), or pass `--no-fail-on-error` /
+`CLM_FAIL_ON_ERROR=0` to tolerate it. Running `clm validate slides/ --fail-on
+warning` in a pre-commit hook catches the underlying `slide_id` / `for_slide`
+divergence before it ever reaches a build.
+
 ## Slide format redesign: `clm validate` enforces `slide_id` (warning now, error in 1.7)
 
 CLM {version} also ships **Phase 3** of the slide-format-redesign:

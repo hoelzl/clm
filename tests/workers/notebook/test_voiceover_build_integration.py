@@ -146,6 +146,206 @@ class TestPayloadMerging:
         assert data == original_text
 
 
+class _RecordingReporter:
+    """Captures report_error / report_warning calls for assertions."""
+
+    def __init__(self) -> None:
+        self.errors: list = []
+        self.warnings: list = []
+
+    def report_error(self, error) -> None:
+        self.errors.append(error)
+
+    def report_warning(self, warning) -> None:
+        self.warnings.append(warning)
+
+
+class TestVoiceoverMergeEscalation:
+    """Build-time escalation of unmatched companion voiceover (#162 hardening).
+
+    Dropped narration (a companion ``for_slide`` with no matching ``slide_id``)
+    is reported as a ``BuildError`` so it surfaces in the summary and fails the
+    build under ``--fail-on-error``, instead of being a silent log line.
+    """
+
+    def test_unmatched_reported_as_build_error(self):
+        from clm.core.operations.process_notebook import report_voiceover_merge_issues
+
+        reporter = _RecordingReporter()
+        report_voiceover_merge_issues(
+            reporter,
+            slide_name="slides_x.de.py",
+            companion_name="voiceover_x.de.py",
+            file_path="/x/slides_x.de.py",
+            unmatched=["introduction"],
+        )
+
+        assert len(reporter.errors) == 1
+        err = reporter.errors[0]
+        assert err.category == "voiceover"
+        assert err.severity == "error"
+        assert err.error_type == "user"
+        assert "introduction" in err.message
+        assert err.file_path == "/x/slides_x.de.py"
+
+    def test_one_error_per_unmatched(self):
+        from clm.core.operations.process_notebook import report_voiceover_merge_issues
+
+        reporter = _RecordingReporter()
+        report_voiceover_merge_issues(
+            reporter,
+            slide_name="slides_x.de.py",
+            companion_name="voiceover_x.de.py",
+            file_path="/x/slides_x.de.py",
+            unmatched=["a", "b"],
+        )
+        assert len(reporter.errors) == 2
+
+    def test_no_for_slide_entry_renders_clean_message(self):
+        from clm.core.operations.process_notebook import report_voiceover_merge_issues
+
+        reporter = _RecordingReporter()
+        report_voiceover_merge_issues(
+            reporter,
+            slide_name="slides_x.de.py",
+            companion_name="voiceover_x.de.py",
+            file_path="/x/slides_x.de.py",
+            unmatched=["<no for_slide>"],
+        )
+        assert len(reporter.errors) == 1
+        assert "no for_slide" in reporter.errors[0].message
+
+    def test_empty_unmatched_reports_nothing(self):
+        from clm.core.operations.process_notebook import report_voiceover_merge_issues
+
+        reporter = _RecordingReporter()
+        report_voiceover_merge_issues(
+            reporter,
+            slide_name="s.py",
+            companion_name="v.py",
+            file_path="/x/s.py",
+            unmatched=[],
+        )
+        assert reporter.errors == []
+
+    def test_none_reporter_is_noop(self):
+        from clm.core.operations.process_notebook import report_voiceover_merge_issues
+
+        # No reporter (e.g. a direct payload() call in a test, or a backend
+        # without a build_reporter) must not raise.
+        report_voiceover_merge_issues(
+            None,
+            slide_name="s.py",
+            companion_name="v.py",
+            file_path="/x/s.py",
+            unmatched=["intro"],
+        )
+
+
+def _build_op_with_unmatched_companion(tmp_path: Path):
+    """Build a real ``ProcessNotebookOperation`` whose companion narrates a
+    slide_id that does not exist in the slide — so ``payload()`` / ``execute()``
+    exercise the dropped-narration escalation end to end (not just the helper)."""
+    from clm.core.course import Course
+    from clm.core.course_spec import CourseSpec, TopicSpec
+    from clm.core.operations.process_notebook import ProcessNotebookOperation
+    from clm.core.output_target import OutputTarget
+    from clm.core.section import Section
+    from clm.core.topic import Topic
+    from clm.core.utils.text_utils import Text
+
+    spec = CourseSpec(
+        name=Text(de="Test", en="Test"),
+        prog_lang="python",
+        description=Text(de="", en=""),
+        certificate=Text(de="", en=""),
+        sections=[],
+    )
+    course = Course(
+        spec=spec,
+        course_root=tmp_path,
+        output_root=tmp_path,
+        output_targets=[OutputTarget.default_target(tmp_path)],
+    )
+    slide = tmp_path / "slides_demo.py"
+    slide.write_text(
+        '# %% [markdown] lang="en" tags=["slide"] slide_id="intro"\n# ## Intro\n',
+        encoding="utf-8",
+    )
+    # companion narrates "renamed" — no such slide_id in the slide -> dropped.
+    (tmp_path / "voiceover_demo.py").write_text(
+        '# %% [markdown] lang="en" tags=["voiceover"] for_slide="renamed"\n# Orphan narration.\n',
+        encoding="utf-8",
+    )
+    section = Section(name=Text(de="S", en="S"), course=course)
+    topic = Topic.from_spec(TopicSpec(id="t"), section=section, path=tmp_path)
+    topic.build_file_map()
+    section.topics.append(topic)
+    course.sections.append(section)
+    nb = next(f for f in topic.files if isinstance(f, NotebookFile))
+    return ProcessNotebookOperation(
+        input_file=nb,
+        output_file=tmp_path / "out.html",
+        language="en",
+        format="html",
+        kind="completed",
+        prog_lang="python",
+    )
+
+
+class TestEscalationWiring:
+    """End-to-end wiring of the escalation, beyond the helper in isolation.
+
+    Guards the two-hop path that makes the escalation fire in a real build:
+    ``execute()`` pulls ``build_reporter`` off the backend and ``payload()``
+    forwards it to the helper. A regression that drops either hop would leave
+    every helper-level test green while silently restoring the #162 data loss.
+    """
+
+    async def test_payload_reports_unmatched_to_reporter(self, tmp_path: Path):
+        op = _build_op_with_unmatched_companion(tmp_path)
+        reporter = _RecordingReporter()
+
+        payload = await op.payload(reporter)
+
+        # The orphan narration is dropped from the merged data...
+        assert "Orphan narration" not in payload.data
+        # ...but is surfaced as a voiceover BuildError instead of vanishing.
+        assert len(reporter.errors) == 1
+        assert reporter.errors[0].category == "voiceover"
+        assert reporter.errors[0].severity == "error"
+        assert "renamed" in reporter.errors[0].message
+
+    async def test_execute_pulls_reporter_off_backend(self, tmp_path: Path):
+        # The load-bearing wiring: execute() must read the reporter off the
+        # backend and thread it into payload(). Dropping the
+        # getattr(backend, "build_reporter", None) argument would fail here.
+        op = _build_op_with_unmatched_companion(tmp_path)
+        reporter = _RecordingReporter()
+
+        class _StubBackend:
+            def __init__(self, r):
+                self.build_reporter = r
+
+            async def execute_operation(self, operation, payload):
+                return None
+
+        await op.execute(_StubBackend(reporter))
+
+        assert len(reporter.errors) == 1
+        assert reporter.errors[0].category == "voiceover"
+
+    async def test_execute_without_reporter_does_not_raise(self, tmp_path: Path):
+        # A backend without a build_reporter (getattr -> None) must still work.
+        op = _build_op_with_unmatched_companion(tmp_path)
+
+        class _NoReporterBackend:
+            async def execute_operation(self, operation, payload):
+                return None
+
+        await op.execute(_NoReporterBackend())  # must not raise
+
+
 # ---------------------------------------------------------------------------
 # Voiceover cells in output specs
 # ---------------------------------------------------------------------------
