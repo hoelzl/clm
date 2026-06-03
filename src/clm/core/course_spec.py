@@ -879,6 +879,66 @@ def _parse_launcher(text: str) -> str:
 
 
 @frozen
+class ReleaseChannelSpec:
+    """One cohort's solution-release channel (issue #208).
+
+    Each channel is its own git repository (``path``) fed by a volatile
+    ``ledger`` (in the course source repo). ``remote_path`` overrides the
+    parent ``<release-channels>`` default for remote-URL derivation, mirroring
+    :class:`OutputTargetSpec.remote_path`.
+    """
+
+    name: str
+    path: str
+    ledger: str
+    remote_path: str = ""
+
+    @classmethod
+    def from_element(
+        cls, element: ETree.Element, *, default_remote_path: str = ""
+    ) -> "ReleaseChannelSpec":
+        return cls(
+            name=element.get("name", ""),
+            path=element.get("path", ""),
+            ledger=element.get("ledger", ""),
+            remote_path=(element_text(element, "remote-path") or default_remote_path),
+        )
+
+
+@frozen
+class ReleaseChannelsSpec:
+    """The ``<release-channels>`` block: per-cohort solution-release channels.
+
+    ``source_target`` names the ``completed``-kind ``<output-target>`` that is
+    the frozen source. ``remote_path`` is the default remote path for channels
+    that do not override it.
+    """
+
+    source_target: str
+    channels: list[ReleaseChannelSpec] = field(factory=list)
+    remote_path: str = ""
+
+    @classmethod
+    def from_element(cls, element: ETree.Element) -> "ReleaseChannelsSpec":
+        remote_path = element_text(element, "remote-path") or ""
+        channels = [
+            ReleaseChannelSpec.from_element(ch, default_remote_path=remote_path)
+            for ch in element.findall("channel")
+        ]
+        return cls(
+            source_target=element.get("source-target", ""),
+            channels=channels,
+            remote_path=remote_path,
+        )
+
+    def channel(self, name: str) -> "ReleaseChannelSpec | None":
+        for channel in self.channels:
+            if channel.name == name:
+                return channel
+        return None
+
+
+@frozen
 class CourseSpec:
     name: Text
     prog_lang: str
@@ -889,6 +949,7 @@ class CourseSpec:
     github: GitHubSpec = field(factory=GitHubSpec)
     dictionaries: list[DirGroupSpec] = field(factory=list)
     output_targets: list[OutputTargetSpec] = field(factory=list)
+    release_channels: "ReleaseChannelsSpec | None" = None
     image_options: ImageOptionsSpec = field(factory=ImageOptionsSpec)
     jupyterlite: JupyterLiteConfig | None = None
     author: str = "Dr. Matthias Hölzl"
@@ -1144,6 +1205,18 @@ class CourseSpec:
             targets.append(target)
 
         return targets
+
+    @staticmethod
+    def parse_release_channels(root: ETree.Element) -> "ReleaseChannelsSpec | None":
+        """Parse the optional <release-channels> element (issue #208).
+
+        Returns ``None`` when the element is absent, in which case the solution-
+        release feature is dormant and all other behavior is unchanged.
+        """
+        elem = root.find("release-channels")
+        if elem is None:
+            return None
+        return ReleaseChannelsSpec.from_element(elem)
 
     def resolve_section_selectors(self, tokens: list[str]) -> SectionSelection:
         """Resolve a list of ``--only-sections`` selector tokens.
@@ -1493,6 +1566,7 @@ class CourseSpec:
             github=github_spec,
             dictionaries=cls.parse_dir_groups(root, keep_disabled=keep_disabled),
             output_targets=cls.parse_output_targets(root),
+            release_channels=cls.parse_release_channels(root),
             image_options=ImageOptionsSpec.from_element(root.find("image-options")),
             jupyterlite=JupyterLiteConfig.from_element(root.find("jupyterlite")),
             author=author,
