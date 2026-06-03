@@ -63,7 +63,7 @@ Key options:
 | `--image-format [png\|svg]` | Image output format |
 | `--inline-images` | Embed images as base64 in notebooks |
 | `--http-replay [replay\|once\|new-episodes\|refresh\|disabled]` | HTTP replay record mode for topics with `http-replay="yes"` in the spec. `replay` requires a cassette (strict, CI default); `once` records on first run, replays thereafter (strict on new requests); `new-episodes` replays recorded requests and records any new ones (local default); `refresh` re-records every run; `disabled` bypasses replay. Defaults to `replay` when `CI=true`, else `new-episodes`. Also settable via `CLM_HTTP_REPLAY_MODE`. |
-| `--fail-on-error / --no-fail-on-error` | Exit with non-zero status when the build summary reports any cell or notebook error. Defaults to **on** under `--http-replay=replay` (incl. CI) and **off** under all other replay modes. Override via `CLM_FAIL_ON_ERROR={1,true,yes,0,false,no}`. See "Exit codes" below. |
+| `--fail-on-error / --no-fail-on-error` | Exit with non-zero status when the build summary reports any cell/notebook error **or a dropped companion voiceover** (a `for_slide` with no matching `slide_id`, since CLM {version}). Defaults to **on** under `--http-replay=replay` (incl. CI) and **off** under all other replay modes. Override via `CLM_FAIL_ON_ERROR={1,true,yes,0,false,no}`. See "Exit codes" below. |
 | `--fail-on-missing-xref / --no-fail-on-missing-xref` | Exit with non-zero status when a `clm:` cross-reference points at a topic not included in the build (issue #17). Defaults to **on** under `--http-replay=replay` (incl. CI) and **off** under all other replay modes (a missing target is then a warning and the link is dropped). Override via `CLM_FAIL_ON_MISSING_XREF={1,true,yes,0,false,no}`. See `clm info spec-files` → "Cross-references". |
 
 Examples:
@@ -296,6 +296,7 @@ summary listed the errors, but the process still exited 0.
 | Cell/notebook errors under `--http-replay=replay` (new default) | `1` |
 | Cell/notebook errors under non-replay modes | `0` (opt in with `--fail-on-error`) |
 | Cell/notebook errors with `--no-fail-on-error` (any mode) | `0` |
+| Dropped companion voiceover (unmatched `for_slide`) — same policy as cell errors (since CLM {version}) | `1` under `--fail-on-error`, else `0` |
 | Image filename collisions | non-zero `SystemExit` (existing, unchanged) |
 | Second `SIGTERM` while shutting down | `1` (existing, unchanged) |
 
@@ -318,6 +319,18 @@ The check fires **before** `--verify-against` comparison, so CI logs
 show the cell error as the cause rather than a downstream verification
 diff. If both a cell error and a verify diff are present, the cell
 error wins.
+
+Since CLM {version}, **dropped companion voiceover** is treated the same
+way. When a separated-voiceover companion (`voiceover_*.py`) has a
+`for_slide` that matches no `slide_id` in the slide it accompanies, that
+narration is dropped from the built output — usually because a `slide_id`
+was renamed out from under the companion. The build now reports each drop
+as a `voiceover`-category error in the summary (it used to be a bare log
+line), so it surfaces in the report and, under `--fail-on-error`, fails the
+build. Fix the `for_slide` / `slide_id` mismatch (`clm voiceover inline`
+then re-extract, or `clm slides sync`), or pass `--no-fail-on-error` to
+tolerate it. `clm validate`'s #162 detectives catch the underlying
+divergence earlier (pre-commit), before it reaches a build.
 
 ### `clm targets`
 

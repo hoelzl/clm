@@ -76,6 +76,29 @@ class TestBuildDataClasses:
         assert summary.failed_files == 1
         assert summary.successful_files == 99
 
+    def test_multiple_errors_one_file_count_once(self):
+        """A single source file emitting several errors (e.g. multiple dropped
+        voiceover narrations) counts as ONE failed file, and successful_files
+        never goes negative."""
+
+        def _err(message: str) -> BuildError:
+            return BuildError(
+                error_type="user",
+                category="voiceover",
+                severity="error",
+                file_path="slides_x.de.py",
+                message=message,
+                actionable_guidance="",
+            )
+
+        summary = BuildSummary(
+            duration=1.0,
+            total_files=1,
+            errors=[_err("for_slide 'a' dropped"), _err("for_slide 'b' dropped")],
+        )
+        assert summary.failed_files == 1  # distinct file_paths, not error count
+        assert summary.successful_files == 0  # clamped, never negative
+
 
 class TestErrorCategorizer:
     """Test error categorization logic."""

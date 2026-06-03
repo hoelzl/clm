@@ -43,6 +43,55 @@ def _resolve_trace_dir_for_payload() -> str:
     return str(invocation_dir) if invocation_dir is not None else ""
 
 
+def report_voiceover_merge_issues(
+    build_reporter: Any,
+    *,
+    slide_name: str,
+    companion_name: str,
+    file_path: str,
+    unmatched: list[str],
+) -> None:
+    """Escalate unmatched companion voiceover at build time (#162 hardening).
+
+    When ``merge_voiceover_text`` cannot match a companion cell's ``for_slide``
+    to a ``slide_id`` in the slide, that narration is **dropped** from the built
+    output. This used to be log-only (exit 0) — a silent loss of a slide's
+    speaker notes, usually because a ``slide_id`` was renamed out from under the
+    companion. Each drop is now reported as a ``BuildError`` (``category=
+    "voiceover"``), so it is surfaced in the build summary and — under the
+    build's ``--fail-on-error`` policy (default-on in CI / replay mode) — fails
+    the build, exactly like a cell-execution error. A course-repo gate must not
+    silently ship a slide whose narration vanished.
+
+    ``build_reporter`` is duck-typed (anything exposing ``report_error``);
+    ``None`` (no reporter — e.g. a direct ``payload()`` call in a test) is a
+    no-op, as is an empty ``unmatched`` list.
+    """
+    if build_reporter is None or not unmatched:
+        return
+    from clm.cli.build_data_classes import BuildError
+
+    for for_slide in unmatched:
+        target = "(cell has no for_slide)" if for_slide == "<no for_slide>" else repr(for_slide)
+        build_reporter.report_error(
+            BuildError(
+                error_type="user",
+                category="voiceover",
+                severity="error",
+                file_path=file_path,
+                message=(
+                    f"companion voiceover {companion_name}: for_slide {target} has no "
+                    f"matching slide_id in {slide_name}; the narration is dropped from output"
+                ),
+                actionable_guidance=(
+                    "A slide_id was likely renamed out from under the companion. Re-align "
+                    "the for_slide / slide_id (run `clm voiceover inline` then re-extract, or "
+                    "`clm slides sync`), or pass --no-fail-on-error to tolerate the drop."
+                ),
+            )
+        )
+
+
 @frozen
 class ProcessNotebookOperation(Operation):
     input_file: "NotebookFile"
@@ -70,7 +119,7 @@ class ProcessNotebookOperation(Operation):
         file_path = self.input_file.relative_path
         try:
             logger.info(f"Processing notebook '{file_path}' to '{self.output_file}'")
-            payload = await self.payload()
+            payload = await self.payload(getattr(backend, "build_reporter", None))
             await backend.execute_operation(self, payload)
             self.input_file.generated_outputs.add(self.output_file)
         except Exception as e:
@@ -269,7 +318,7 @@ class ProcessNotebookOperation(Operation):
                 stems.append(file.path.stem)
         return stems
 
-    async def payload(self) -> NotebookPayload:
+    async def payload(self, build_reporter: Any = None) -> NotebookPayload:
         course = self.input_file.course
         correlation_id = await new_correlation_id()
 
@@ -294,6 +343,16 @@ class ProcessNotebookOperation(Operation):
                     f"unmatched for_slide='{for_slide_id}' "
                     f"(no slide_id match in '{self.input_file.path.name}')"
                 )
+            # Escalate the drop from log-only to a surfaced BuildError so it
+            # fails the build under --fail-on-error (the build consumer arm of
+            # the #162 / split-voiceover hardening). No-op without a reporter.
+            report_voiceover_merge_issues(
+                build_reporter,
+                slide_name=self.input_file.path.name,
+                companion_name=companion.name,
+                file_path=str(self.input_file.path),
+                unmatched=unmatched,
+            )
 
         payload = NotebookPayload(
             data=data,

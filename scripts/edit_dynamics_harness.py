@@ -40,6 +40,9 @@ from pathlib import Path
 if __package__ in (None, ""):  # pragma: no cover - import shim
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from clm.core.operations.process_notebook import (  # noqa: E402
+    report_voiceover_merge_issues,
+)
 from clm.infrastructure.llm.cache import SyncWatermarkCache  # noqa: E402
 from clm.infrastructure.llm.ollama_client import SyncProposal  # noqa: E402
 from clm.notebooks.slide_parser import parse_cells  # noqa: E402
@@ -102,6 +105,21 @@ class CountingJudge:
     ) -> SyncProposal:
         self.calls.append((source_lang, target_lang))
         return SyncProposal(verdict="in_sync", proposed_text=target_body)
+
+
+@dataclass
+class RecordingReporter:
+    """Minimal stand-in for the build reporter — records escalations so the
+    harness can model the `build` consumer arm without a full build."""
+
+    errors: list = field(default_factory=list)
+    warnings: list = field(default_factory=list)
+
+    def report_error(self, error: object) -> None:
+        self.errors.append(error)
+
+    def report_warning(self, warning: object) -> None:
+        self.warnings.append(warning)
 
 
 # ---------------------------------------------------------------------------
@@ -806,12 +824,26 @@ def m_build_merge_unmatched(workdir: Path) -> _RetTuple:
     )
     merged, unmatched = merge_voiceover_text(slide_renamed, comp.read_text(encoding="utf-8"))
     dropped = "Voiceover DE for intro" not in merged
-    # merge_voiceover_text RETURNS unmatched; the build consumer is log-only/exit-0.
+    # The build consumer now escalates each unmatched for_slide to a BuildError
+    # (surfaced in the summary; fails under --fail-on-error, default-on in CI /
+    # replay). Model that consumer arm with a recording reporter.
+    reporter = RecordingReporter()
+    report_voiceover_merge_issues(
+        reporter,
+        slide_name=slide.name,
+        companion_name=comp.name,
+        file_path=str(slide),
+        unmatched=unmatched,
+    )
+    signaled = len(reporter.errors) > 0
     return (
         (["narration_drop"] if dropped else []),
-        False,
-        "",
-        f"VO dropped from output; unmatched={unmatched}; build merge is log-only",
+        signaled,
+        "build merge escalates unmatched to a BuildError (fails under --fail-on-error)"
+        if signaled
+        else "",
+        f"VO dropped from output; unmatched={unmatched}; "
+        f"build consumer reports {len(reporter.errors)} error(s)",
     )
 
 
@@ -891,8 +923,11 @@ MUTATIONS: list[Mutation] = [
         True,
         m_re_extract_over_edited_companion,
     ),
-    # Observe-only — the build-merge primitive reports; the `build` arm is TODO.
-    Mutation("build-merge-unmatched", "build-merge", BREAK_SILENT, False, m_build_merge_unmatched),
+    # Build-merge escalation landed: the build consumer reports each unmatched
+    # for_slide as a BuildError (fails under --fail-on-error) instead of a bare
+    # log line — break-silent -> break-loud. This was the last silent footgun;
+    # the catalogue is now fully loud.
+    Mutation("build-merge-unmatched", "build-merge", BREAK_LOUD, True, m_build_merge_unmatched),
 ]
 
 # Deferred catalogue entries (design §6) — added once their behaviour is verified

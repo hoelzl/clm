@@ -188,9 +188,14 @@ corrections are load-bearing for prioritization, so they are recorded explicitly
 ### Other confirmed issues
 
 - **Build silently drops/relocates voiceover** when `for_slide` doesn't resolve or
-  the anchor predecessor is gone — narration omitted from output (build merge:
-  log-only, exit 0; `process_notebook.py:285-296`); inline relocations are *discarded*
-  in the build merge path (`voiceover_tools.py:462-485`).
+  the anchor predecessor is gone — narration omitted from output. **Unmatched-drop
+  escalation ✅ DONE 2026-06-03**: the build consumer (`process_notebook.py`
+  `payload()`) now reports each dropped narration as a `voiceover`-category
+  `BuildError` via the build reporter (`report_voiceover_merge_issues`), so it
+  surfaces in the summary and fails under `--fail-on-error` (was log-only/exit-0).
+  *Residual (deferred):* inline **relocations** (anchor predecessor gone → group-end
+  fallback) are still discarded in `merge_voiceover_text` — narration is kept, just
+  repositioned, so it is a surfacing nicety, not data loss; a small follow-up.
 - **Validator cross-file parity is blind on a single file.**
   `_check_shared_cell_parity` / `_check_split_tag_parity` run *only* at dir/course
   scope (`validator.py:1433-1436,1486-1489`), never on a lone `.de.py`; and they go
@@ -369,6 +374,13 @@ counting judge is required to drive the apply path.
 behaviour probe): split-code-cell (def-my-fun), rename-function-while-splitting,
 edit-heading-then-force.
 
+> **Work-list fully drained 2026-06-03.** All seven break-silent rows have since been
+> hardened (see §12 step 2–3 + the build escalation). Two new rows were added
+> (`commit-companion-divergence`, `extract-per-language-twin-aware`). The catalogue is
+> now **15 preserve / 3 break-loud / 0 break-silent** — every footgun is loud. The
+> test backstop flipped from "known silent breaks still surfaced" to
+> `test_no_break_silent_rows_remain` (no new silent footgun may creep back).
+
 ---
 
 ## 7. The #162 design direction (the keystone)
@@ -522,8 +534,12 @@ Required hardening:
   one-sided companion as a `pairing` warning. Harness `commit-companion-divergence` =
   break-loud.
 - **Build-time escalation** of unmatched `for_slide` from log-only to a surfaced
-  finding (respecting a fail-on policy), and surface inline **relocations** at build
-  time (today discarded in `merge_voiceover_text`).
+  finding (respecting a fail-on policy) — **✅ DONE 2026-06-03**: `process_notebook.py`
+  `report_voiceover_merge_issues` reports each dropped narration as a `voiceover`
+  `BuildError` through the build reporter (client-side, so no new worker payload field
+  / #17 landmine), governed by the existing `--fail-on-error` policy. Surfacing inline
+  **relocations** at build time (today discarded in `merge_voiceover_text`) is the
+  deferred residual — not data loss (narration kept, repositioned).
 - **Validator companion-integrity check** (dir/course scope): every `for_slide`
   resolves; warn on orphan companions / a slide that lost its companion / contradictory
   companion sets (bilingual + split coexisting).
@@ -580,10 +596,23 @@ corpus no-op invariant + real-deck round-trip **skip**. To build justified confi
      instead of minting a divergent slug (keeps `de_id == en_id`; the companions' `for_slide` sets
      agree). Harness `extract-per-language-twin-aware` = preserve; `TestExtractTwinAware` (4 tests).
      Harness now 15 preserve / 2 break-loud / 1 break-silent.
-   - **Next:** the build-merge observe-only escalation (the one remaining break-silent row,
-     `build-merge-unmatched`: `merge_voiceover_text` returns the unmatched ids but the `build`
-     consumer is log-only/exit-0 — surface it as a finding honoring a fail-on policy). Then the
-     §8 command-surface rethink (incl. a *paired* extract that produces both companions in one op).
+   - **Build-merge unmatched escalation ✅ DONE 2026-06-03** (§3 / §10) — the build consumer
+     (`process_notebook.py` `payload()` → `report_voiceover_merge_issues`) reports each dropped
+     narration as a `voiceover` `BuildError`, surfaced in the summary and failing under
+     `--fail-on-error` (client-side; no worker payload field). Harness `build-merge-unmatched`
+     flipped break-silent → break-loud; catalogue now **15 preserve / 3 break-loud / 0
+     break-silent** — fully loud. `TestVoiceoverMergeEscalation` (5 tests) + `TestEscalationWiring`
+     (3 end-to-end tests: real `payload()`/`execute()` so a dropped `getattr(backend,
+     "build_reporter")` regression fails loudly — from the adversarial review); backstop is now
+     `test_no_break_silent_rows_remain`. The review also surfaced a *pre-existing*
+     `BuildSummary` flaw it made easy to hit — `failed_files`/`successful_files` counted error
+     *entries* not distinct files (N drops in one file → `successful_files` could go negative);
+     fixed to count distinct error `file_path`s + clamp ≥ 0 (also fixes the latent xref/timeout
+     over-count).
+   - **Next:** the §8 command-surface rethink (fold/hide/guard per-file ops; incl. a *paired*
+     extract producing both companions in one op), then the pre-commit gate wiring in the course
+     repo (§9 course-repo half) + remaining verification additions (§11). Deferred residual:
+     surface build-time inline **relocations** (not data loss).
 4. **Command-surface rethink** (§8) — fold/hide/guard, with info-topic updates.
 5. **Pre-commit gate** (§9) + voiceover hardening (§10) + verification additions (§11).
 6. **Sync CLI pairing guard** (§3 Tier-2) + single-path/batch UX.
@@ -615,7 +644,9 @@ corpus no-op invariant + real-deck round-trip **skip**. To build justified confi
 - Build: `build.py` (split-routing abort `:1117-1132`); `topic.py`
   (`add_files_in_dir`/`_add_slide_units` `:318-408`; `FileTopic` `:426-445`);
   `notebook_file.py` (`output_language_filter`, `companion_voiceover_path` `:108-114`);
-  `process_notebook.py` (`compute_other_files` `:110-134`; vo merge `:283-296`);
+  `process_notebook.py` (`compute_other_files`; vo merge in `payload(build_reporter=…)`;
+  `report_voiceover_merge_issues` — escalates dropped narration to a `voiceover` `BuildError`
+  via the reporter from `execute()`'s backend, honoring `--fail-on-error`);
   `data_file.py` (`get_processing_operation` `:37-52`); `path_utils.py` (SKIP lists
   `:87-100`, `is_ignored_file_for_output` `:244-262`); `output_sweep.py`
   (`:43-52,160-166,264-276`); `notebook_processor.py` (strips slide_id/for_slide
