@@ -12,12 +12,20 @@ from __future__ import annotations
 from pathlib import Path
 
 from clm.infrastructure.llm.cache import SyncWatermarkCache
+from clm.infrastructure.llm.ollama_client import StaticSyncJudge, SyncProposal
 from clm.notebooks.slide_parser import parse_cells
-from clm.slides.sync_apply import apply_plan
+from clm.slides.sync_apply import (
+    ApplyResult,
+    _eligible_for_partial_advance,  # noqa: PLC2701 (white-box unit)
+    apply_plan,
+)
 from clm.slides.sync_plan import (
     BaselineCell,
     CurrentCell,
+    PlanIssue,
+    Proposal,
     SyncPlan,
+    TagHold,
     _maybe_retag,  # noqa: PLC2701 (white-box unit)
     _retag_direction,  # noqa: PLC2701 (white-box unit)
     build_sync_plan,
@@ -26,6 +34,12 @@ from clm.slides.sync_plan import (
     watermark_tag_map,
 )
 from clm.slides.sync_writeback import FileState, set_header_tags
+
+
+def _update_judge(text: str) -> StaticSyncJudge:
+    """A judge that rewrites every edited cell to ``text`` (no Ollama)."""
+    return StaticSyncJudge(default_proposal=SyncProposal(verdict="update", proposed_text=text))
+
 
 # ---------------------------------------------------------------------------
 # Builders
@@ -719,5 +733,231 @@ class TestIdlessLocalizedRetagApply:
             assert result.errors == []
             assert _tags_of(de_path, "rag") == {"subslide", "keep"}
             assert _idless_code_tags(de_path, "Kapitel 3") == {"keep"}
+        finally:
+            cache.close()
+
+
+# ---------------------------------------------------------------------------
+# Issue #202 — a both-decks tag conflict no longer holds the whole watermark
+# ---------------------------------------------------------------------------
+
+
+class TestPlanIssueScoping:
+    """A tag-only ``both`` conflict carries a :class:`TagHold` and is *not* blocking;
+    every structural warning (reorder, ambiguity, auto-heal) stays blocking."""
+
+    def _plan(self) -> SyncPlan:
+        return SyncPlan(
+            de_path=Path("d.de.py"), en_path=Path("d.en.py"), baseline_source="watermark"
+        )
+
+    def test_tag_hold_issue_is_not_blocking(self):
+        plan = self._plan()
+        plan.issues.append(
+            PlanIssue("warning", "x", "tags changed on both decks", tag_hold=TagHold("x", "slide"))
+        )
+        assert plan.blocking_issues == []
+        assert [h.slide_id for h in plan.tag_holds] == ["x"]
+
+    def test_idless_tag_hold_carries_position(self):
+        plan = self._plan()
+        plan.issues.append(
+            PlanIssue("warning", None, "id-less ... both decks", tag_hold=TagHold(position=3))
+        )
+        assert plan.blocking_issues == []
+        assert [h.position for h in plan.tag_holds] == [3]
+
+    def test_structural_warning_stays_blocking(self):
+        plan = self._plan()
+        plan.issues.append(PlanIssue("warning", None, "cell order drifted on both decks"))
+        assert len(plan.blocking_issues) == 1
+        assert plan.tag_holds == []
+
+    def test_mixed_issues_partition_cleanly(self):
+        plan = self._plan()
+        plan.issues.append(PlanIssue("warning", None, "auto-healed toward de->en"))  # blocking
+        plan.issues.append(PlanIssue("warning", None, "tag", tag_hold=TagHold(position=0)))
+        plan.issues.append(PlanIssue("error", None, "duplicate id"))  # blocking (and an error)
+        assert len(plan.blocking_issues) == 2
+        assert len(plan.tag_holds) == 1
+
+
+class TestPartialAdvanceEligibilityWithTagHold:
+    """White-box: a tag hold makes a content-only pass eligible; a blocking issue does not."""
+
+    def _plan(self, *issues: PlanIssue, proposals=()) -> SyncPlan:
+        plan = SyncPlan(
+            de_path=Path("d.de.py"), en_path=Path("d.en.py"), baseline_source="watermark"
+        )
+        plan.issues.extend(issues)
+        plan.proposals.extend(proposals)
+        return plan
+
+    def test_tag_hold_eligible_even_with_no_deferral(self):
+        # #202: a co-applied clean edit may have deferred == 0; the tag hold itself
+        # makes the pass eligible so the edit can bank.
+        plan = self._plan(
+            PlanIssue("warning", None, "tag", tag_hold=TagHold(position=0)),
+            proposals=[Proposal(kind="edit", role="slide", direction="de->en", slide_id="a")],
+        )
+        assert _eligible_for_partial_advance(plan, ApplyResult(applied_edit=1, deferred=0)) is True
+
+    def test_blocking_issue_makes_ineligible(self):
+        plan = self._plan(
+            PlanIssue("warning", None, "cell order drifted on both decks"),
+            proposals=[Proposal(kind="edit", role="slide", direction="de->en", slide_id="a")],
+        )
+        assert _eligible_for_partial_advance(plan, ApplyResult(applied_edit=1, deferred=1)) is False
+
+    def test_structural_proposal_makes_ineligible_even_with_tag_hold(self):
+        plan = self._plan(
+            PlanIssue("warning", None, "tag", tag_hold=TagHold(position=0)),
+            proposals=[Proposal(kind="move", role="slide", direction="de->en", slide_id="a")],
+        )
+        assert _eligible_for_partial_advance(plan, ApplyResult(applied_edit=0, deferred=0)) is False
+
+    def test_no_tag_hold_keeps_original_edit_plus_deferral_rule(self):
+        plan = self._plan()  # no issues, no proposals
+        assert _eligible_for_partial_advance(plan, ApplyResult(applied_edit=1, deferred=0)) is False
+        assert _eligible_for_partial_advance(plan, ApplyResult(applied_edit=0, deferred=1)) is False
+        assert _eligible_for_partial_advance(plan, ApplyResult(applied_edit=1, deferred=1)) is True
+
+
+class TestWatermarkAdvanceOverTagWarning:
+    """Issue #202: a co-applied clean edit banks even when a both-decks tag conflict
+    warns. The warning re-surfaces every run (no silent baselining) but no longer
+    forces the applied edit to re-appear as a phantom conflict."""
+
+    def test_idless_both_tag_warning_with_clean_edit_converges(self, tmp_path: Path):
+        # The faithful repro: an id'd slide `a` edited cleanly on DE, alongside a
+        # genuine both-sides tag conflict on an id-less localized code cell.
+        de = _md("de", "a", ["slide"], "# ## A_OLD") + _code("de", None, [], _DE_INVOKE)
+        en = _md("en", "a", ["slide"], "# ## A_OLD_EN") + _code("en", None, [], _EN_INVOKE)
+        de_path, en_path = _write_pair(tmp_path, de, en)
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_widened(cache, de_path, en_path)
+            de_path.write_text(
+                _md("de", "a", ["slide"], "# ## A_NEW") + _code("de", None, ["keep"], _DE_INVOKE),
+                encoding="utf-8",
+            )
+            en_path.write_text(
+                _md("en", "a", ["slide"], "# ## A_OLD_EN") + _code("en", None, ["alt"], _EN_INVOKE),
+                encoding="utf-8",
+            )
+            plan0 = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            assert plan0.count("edit") == 1
+            assert len(plan0.tag_holds) == 1  # the both-tag conflict is scoped, not blocking
+            assert plan0.blocking_issues == []
+            res0 = apply_plan(plan0, judge=_update_judge("## A_NEW_EN"), watermark_cache=cache)
+            assert res0.applied_edit == 1
+            assert res0.errors == []
+            assert res0.watermark_recorded is True  # #202: edit banks despite the warning
+            assert any("both decks" in i.reason for i in plan0.issues)
+            # Pass 1: NO further edits. The edit must NOT re-surface as a phantom
+            # conflict; the tag warning persists (not silently baselined).
+            plan1 = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            assert plan1.count("conflict") == 0
+            assert plan1.count("edit") == 0
+            assert len(plan1.tag_holds) == 1
+            # Pass 2: still converged.
+            plan2 = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            assert plan2.count("conflict") == 0
+        finally:
+            cache.close()
+
+    def test_idcarrying_both_tag_warning_with_clean_edit_converges(self, tmp_path: Path):
+        # Same hazard on an id-carrying localized code cell (`code` role via slide_id).
+        de = _md("de", "a", ["slide"], "# ## A_OLD") + _code("de", "inv", [], 'x = q("Frage")')
+        en = _md("en", "a", ["slide"], "# ## A_OLD_EN") + _code(
+            "en", "inv", [], 'x = q("question")'
+        )
+        de_path, en_path = _write_pair(tmp_path, de, en)
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_widened(cache, de_path, en_path)
+            de_path.write_text(
+                _md("de", "a", ["slide"], "# ## A_NEW")
+                + _code("de", "inv", ["keep"], 'x = q("Frage")'),
+                encoding="utf-8",
+            )
+            en_path.write_text(
+                _md("en", "a", ["slide"], "# ## A_OLD_EN")
+                + _code("en", "inv", ["alt"], 'x = q("question")'),
+                encoding="utf-8",
+            )
+            plan0 = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            assert plan0.count("edit") == 1
+            assert len(plan0.tag_holds) == 1
+            assert plan0.tag_holds[0].slide_id == "inv"  # located by id, not position
+            assert plan0.tag_holds[0].role == "code"
+            assert plan0.blocking_issues == []
+            res0 = apply_plan(plan0, judge=_update_judge("## A_NEW_EN"), watermark_cache=cache)
+            assert res0.applied_edit == 1
+            assert res0.watermark_recorded is True
+            plan1 = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            assert plan1.count("conflict") == 0
+            assert plan1.count("edit") == 0
+            assert len(plan1.tag_holds) == 1  # the id'd both-tag warning still surfaces
+        finally:
+            cache.close()
+
+    def test_pure_both_tag_warning_is_idempotent(self, tmp_path: Path):
+        # No co-applied edit — only the tag conflict. The pass advances (banking the
+        # unchanged body baseline) yet pins the conflict, so it persists every run and
+        # never degenerates into a phantom body conflict.
+        de = _md("de", "rag", ["slide"], "# ## RAG") + _code("de", None, [], _DE_INVOKE)
+        en = _md("en", "rag", ["slide"], "# ## RAG") + _code("en", None, [], _EN_INVOKE)
+        de_path, en_path = _write_pair(tmp_path, de, en)
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_widened(cache, de_path, en_path)
+            de_path.write_text(
+                _md("de", "rag", ["slide"], "# ## RAG") + _code("de", None, ["keep"], _DE_INVOKE),
+                encoding="utf-8",
+            )
+            en_path.write_text(
+                _md("en", "rag", ["slide"], "# ## RAG") + _code("en", None, ["alt"], _EN_INVOKE),
+                encoding="utf-8",
+            )
+            for _ in range(3):
+                plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+                assert plan.count("conflict") == 0
+                assert plan.count("edit") == 0
+                assert len(plan.tag_holds) == 1  # warning persists, never silenced
+                apply_plan(plan, judge=None, watermark_cache=cache)
+        finally:
+            cache.close()
+
+    def test_resolving_tag_conflict_clears_warning(self, tmp_path: Path):
+        # After the conflict, the author reconciles the tags by hand (both -> keep).
+        # The next run is a clean no-op: the warning is gone.
+        de = _md("de", "rag", ["slide"], "# ## RAG") + _code("de", None, [], _DE_INVOKE)
+        en = _md("en", "rag", ["slide"], "# ## RAG") + _code("en", None, [], _EN_INVOKE)
+        de_path, en_path = _write_pair(tmp_path, de, en)
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_widened(cache, de_path, en_path)
+            de_path.write_text(
+                _md("de", "rag", ["slide"], "# ## RAG") + _code("de", None, ["keep"], _DE_INVOKE),
+                encoding="utf-8",
+            )
+            en_path.write_text(
+                _md("en", "rag", ["slide"], "# ## RAG") + _code("en", None, ["alt"], _EN_INVOKE),
+                encoding="utf-8",
+            )
+            apply_plan(
+                build_sync_plan(de_path, en_path, watermark_cache=cache),
+                judge=None,
+                watermark_cache=cache,
+            )
+            # Author resolves the conflict: set BOTH halves to keep.
+            en_path.write_text(
+                _md("en", "rag", ["slide"], "# ## RAG") + _code("en", None, ["keep"], _EN_INVOKE),
+                encoding="utf-8",
+            )
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            assert plan.tag_holds == []
+            assert plan.is_noop
         finally:
             cache.close()

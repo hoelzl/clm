@@ -58,6 +58,7 @@ __all__ = [
     "PlanIssue",
     "Proposal",
     "SyncPlan",
+    "TagHold",
     "align_anchored",
     "build_sync_plan",
     "classify_changes",
@@ -165,6 +166,26 @@ class Proposal:
     tags: tuple[str, ...] | None = None  # desired tag set for an id-less localized ``retag``
 
 
+@dataclass(frozen=True)
+class TagHold:
+    """A tag-only both-decks conflict to pin at its old baseline (Issue #202).
+
+    A both-sides tag drift (the ``both`` branch of :func:`_retag_direction`) never
+    touches a cell body, so the body baseline is safe to advance for every cell
+    while *this one cell's tags* are held at the old baseline value — so the
+    conflict re-surfaces next run instead of being silently baselined, yet a
+    co-applied clean edit still banks. Identifies the held cell the same two ways
+    the retag paths do: ``(slide_id, role)`` for an id-carrying cell
+    (:func:`_maybe_retag`, #200) or ``position`` — the watermark partition index,
+    identical on both halves under stream alignment — for an id-less localized cell
+    (:func:`_classify_localized_idless_retags`, #201). Exactly one identity is set.
+    """
+
+    slide_id: str | None = None
+    role: str | None = None
+    position: int | None = None
+
+
 @dataclass
 class PlanIssue:
     """A structural situation the classifier will not turn into a proposal."""
@@ -172,6 +193,13 @@ class PlanIssue:
     severity: str  # "warning" | "error"
     slide_id: str | None
     reason: str
+    # Issue #202: set only on a *tag-only* both-decks conflict, which is scoped to
+    # one cell's tags and touches no body. A warning carrying a ``tag_hold`` no
+    # longer holds the whole-deck watermark: the partial advance banks everything
+    # else and pins just this cell's tags at the old baseline. ``None`` for every
+    # structural warning (reorder, ambiguous de/en state, shared-cell auto-heal),
+    # which must keep holding the whole watermark.
+    tag_hold: TagHold | None = None
 
 
 @dataclass
@@ -196,6 +224,22 @@ class SyncPlan:
     @property
     def has_errors(self) -> bool:
         return any(i.severity == "error" for i in self.issues)
+
+    @property
+    def blocking_issues(self) -> list[PlanIssue]:
+        """Issues that hold the whole-deck watermark (Issue #202).
+
+        Every issue *except* a tag-only both-decks conflict (one carrying a
+        :class:`TagHold`): errors, both-decks reorders, ambiguous de/en states,
+        and the shared-cell auto-heal warning all concern structure that cannot be
+        partially advanced safely, so any of them holds the whole watermark.
+        """
+        return [i for i in self.issues if i.tag_hold is None]
+
+    @property
+    def tag_holds(self) -> list[TagHold]:
+        """The per-cell tag-only conflicts safe to hold while the rest advances (#202)."""
+        return [i.tag_hold for i in self.issues if i.tag_hold is not None]
 
     @property
     def is_noop(self) -> bool:
@@ -1179,6 +1223,9 @@ def _maybe_retag(
                 reason=f"role={role!r} tags changed on both decks "
                 f"(de={sorted(de_now.tags)}, en={sorted(en_now.tags)}); "
                 "not propagated — reconcile tags manually",
+                # Issue #202: tag-only, body untouched — pin this cell's tags at the
+                # old baseline (by id) while the rest of the pass advances.
+                tag_hold=TagHold(slide_id=key[0], role=role),
             )
         )
 
@@ -1365,6 +1412,10 @@ def _classify_localized_idless_retags(
                     reason=f"id-less localized cell #{i} tags changed on both decks "
                     f"(de={sorted(de_now)}, en={sorted(en_now)}); "
                     "not propagated — reconcile tags manually",
+                    # Issue #202: tag-only, body untouched — pin this cell's tags at
+                    # the old baseline (by position, identical on both aligned
+                    # halves) while the rest of the pass advances.
+                    tag_hold=TagHold(position=i),
                 )
             )
 

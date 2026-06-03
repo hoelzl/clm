@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`clm slides sync` no longer re-surfaces a clean edit as a phantom conflict
+  when a tag-only conflict also warns (#202).** A both-decks tag conflict (the
+  `both` branch of the #198/#200/#201 retag paths — the same role-preserving tag
+  changed on *both* halves) used to hold the **whole-deck** watermark: any clean
+  edit applied in the same pass reached disk but was never baselined, so it
+  re-appeared as a spurious `conflict` on every subsequent run until the unrelated
+  tag conflict was resolved by hand (loud and lossless, but non-idempotent). A
+  tag-only conflict touches no cell *body*, so sync now scopes the hold to just
+  that one cell's tags — pinning them at the old baseline so the conflict still
+  re-surfaces — while the partial watermark advance banks the co-applied edit (and
+  every other reconciled cell). Both the id-carrying (#200, keyed by
+  `(slide_id, role)`) and id-less (#201, keyed by position) `both` paths are fixed
+  together. Structural warnings (both-decks reorder, ambiguous de/en state,
+  shared-cell auto-heal) still hold the whole watermark, as before.
+
 ## [1.7.0] - 2026-06-04
 
 ### Added
