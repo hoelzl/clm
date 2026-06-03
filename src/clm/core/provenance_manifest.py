@@ -37,8 +37,13 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from clm.core.course_files.data_file import DataFile
 from clm.core.course_files.notebook_file import NotebookFile
-from clm.infrastructure.utils.path_utils import ext_for, output_specs
+from clm.infrastructure.utils.path_utils import (
+    ext_for,
+    is_ignored_file_for_output,
+    output_specs,
+)
 
 if TYPE_CHECKING:
     from clm.core.course import Course
@@ -62,38 +67,66 @@ def enumerate_expected_outputs(
     ``language`` but not yet ``path`` or ``content_hash`` (added by
     :func:`build_provenance_manifest`).
 
-    Only notebook-derived outputs are enumerated for now. Topic-specific
-    assets and dir-group outputs are a follow-up (issue #208, step 1).
+    Covered so far: notebook-derived outputs (notebook/code/HTML) and copied
+    topic data assets (``DataFile`` — e.g. ``<include>``d files). Generated
+    image outputs (PlantUML/DrawIo/shared/duplicated) and dir-group outputs
+    (ownership is recorded on ``DirGroup.spec``) are a follow-up (issue #208).
     """
     for file in course.files:
-        if not isinstance(file, NotebookFile):
-            # TODO(#208 step 1): topic assets (images/data) and topic-scoped
-            # dir-groups, keyed by their owning (section_id, topic_id).
-            continue
         topic = file.topic
         section = topic.section
-        for lang, fmt, kind, output_dir in output_specs(
-            course, target.output_root, file.skip_html, target=target
-        ):
-            try:
-                out_path = file.output_dir(output_dir, lang) / file.file_name(
-                    lang, ext_for(fmt, file.prog_lang)
+        if isinstance(file, NotebookFile):
+            for lang, fmt, kind, output_dir in output_specs(
+                course, target.output_root, file.skip_html, target=target
+            ):
+                try:
+                    out_path = file.output_dir(output_dir, lang) / file.file_name(
+                        lang, ext_for(fmt, file.prog_lang)
+                    )
+                except (KeyError, ValueError) as e:
+                    # e.g. a split-language source has no title for the other
+                    # language; that combination is simply not produced.
+                    logger.debug(
+                        "provenance: skip %s (%s/%s/%s): %s", file.path, lang, fmt, kind, e
+                    )
+                    continue
+                yield (
+                    out_path,
+                    {
+                        "section_id": section.id,
+                        "topic_id": topic.id,
+                        "kind": kind,
+                        "format": fmt,
+                        "language": lang,
+                    },
                 )
-            except (KeyError, ValueError) as e:
-                # e.g. a split-language source has no title for the other
-                # language; that combination is simply not produced.
-                logger.debug("provenance: skip %s (%s/%s/%s): %s", file.path, lang, fmt, kind, e)
+        elif isinstance(file, DataFile):
+            # Topic data/code assets accompany every output variant: the build
+            # copies them under each (language, format, kind) output dir, so we
+            # enumerate them the same way. Files excluded from output (e.g.
+            # HTTP-replay cassettes) are skipped, mirroring
+            # ``DataFile.get_processing_operation``.
+            if is_ignored_file_for_output(file.path):
                 continue
-            yield (
-                out_path,
-                {
-                    "section_id": section.id,
-                    "topic_id": topic.id,
-                    "kind": kind,
-                    "format": fmt,
-                    "language": lang,
-                },
-            )
+            for lang, _fmt, _kind, output_dir in output_specs(
+                course, target.output_root, target=target
+            ):
+                try:
+                    out_path = file.output_dir(output_dir, lang) / file.relative_path
+                except (KeyError, ValueError) as e:
+                    logger.debug("provenance: skip data %s (%s): %s", file.path, lang, e)
+                    continue
+                yield (
+                    out_path,
+                    {
+                        "section_id": section.id,
+                        "topic_id": topic.id,
+                        "kind": None,
+                        "format": "data",
+                        "language": lang,
+                    },
+                )
+        # else: image outputs + dir-group outputs are a follow-up (issue #208).
 
 
 def _hash_file(path: Path) -> str:

@@ -19,16 +19,23 @@ from clm.core.provenance_manifest import (
 BUILT_AT = "2026-06-03T00:00:00+00:00"
 
 
-def test_enumerate_yields_notebook_outputs(course_1):
+def test_enumerate_yields_outputs_with_topic_ownership(course_1):
     target = course_1.output_targets[0]
     expected = list(enumerate_expected_outputs(course_1, target))
-    assert expected, "course_1 should enumerate notebook outputs"
-    # Every record carries topic ownership and an output triple.
+    assert expected, "course_1 should enumerate outputs"
+    saw_notebook = False
+    # Every record carries topic ownership; notebooks carry a real
+    # (format, kind), copied data assets carry format="data" and kind=None.
     for _path, record in expected:
         assert record["topic_id"]
         assert record["language"] in {"de", "en"}
-        assert record["format"] in {"html", "notebook", "code"}
-        assert record["kind"]
+        if record["format"] == "data":
+            assert record["kind"] is None
+        else:
+            assert record["format"] in {"html", "notebook", "code"}
+            assert record["kind"]
+            saw_notebook = True
+    assert saw_notebook
 
 
 def test_manifest_records_only_existing_files(course_1):
@@ -102,3 +109,46 @@ def test_write_skips_targets_without_output_root(course_1, tmp_path):
         built_at=BUILT_AT,
     )
     assert written == []
+
+
+def _course_from_test_spec_1(out_root):
+    """Build a Course from the on-disk test-spec-1 fixture, which (unlike the
+    minimal inline ``course_1``) contains a real DataFile asset."""
+    from pathlib import Path
+
+    from clm.core.course import Course
+    from clm.core.course_spec import CourseSpec
+
+    test_data = Path(__file__).parent.parent / "test-data"
+    spec = CourseSpec.from_file(test_data / "course-specs" / "test-spec-1.xml")
+    return Course.from_spec(spec, test_data, out_root)
+
+
+def test_manifest_records_data_file_assets(tmp_path):
+    course = _course_from_test_spec_1(tmp_path / "out")
+    target = course.output_targets[0]
+
+    data_records = [
+        (p, r) for p, r in enumerate_expected_outputs(course, target) if r["format"] == "data"
+    ]
+    assert data_records, "test-spec-1 has a DataFile asset"
+
+    # Materialize one of the data-asset outputs; the manifest must record it
+    # with topic ownership and a null kind.
+    out_path, record = data_records[0]
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text("payload\n", encoding="utf-8")
+
+    manifest = build_provenance_manifest(
+        course,
+        target,
+        source_commit=None,
+        source_dirty=None,
+        built_at=BUILT_AT,
+    )
+    data_entries = [f for f in manifest["files"] if f["format"] == "data"]
+    assert len(data_entries) == 1
+    entry = data_entries[0]
+    assert entry["topic_id"] == record["topic_id"]
+    assert entry["kind"] is None
+    assert entry["content_hash"].startswith("sha256:")
