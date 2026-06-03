@@ -388,6 +388,12 @@ class BuildConfig:
     # ``fail_on_error`` (issue #90).
     fail_on_missing_xref: bool = False
 
+    # Emit a ``.clm-manifest.json`` provenance index per output root after a
+    # successful (non-watch) build (issue #208, step 1). Opt-in for now: it is
+    # a build-internal artifact and must not be committed into student-facing
+    # output repos until ``clm git`` learns to exclude ``.clm-*`` sidecars.
+    write_provenance_manifest: bool = False
+
 
 def create_output_formatter(config: BuildConfig) -> OutputFormatter:
     """Create appropriate output formatter based on configuration."""
@@ -1421,6 +1427,7 @@ async def main_build(
     image_format,
     inline_images,
     fail_on_missing_xref=False,
+    provenance_manifest=False,
 ) -> BuildSummary | None:
     """Main orchestration function for course building.
 
@@ -1534,6 +1541,7 @@ async def main_build(
         sweep=effective_sweep,
         selected_sections=selected_sections,
         fail_on_missing_xref=fail_on_missing_xref,
+        write_provenance_manifest=provenance_manifest,
     )
 
     # Create output formatter early to show startup messages
@@ -1632,6 +1640,30 @@ async def main_build(
                 )
             except Exception as e:
                 logger.error(f"Failed to merge mitmproxy cassettes: {e}", exc_info=True)
+
+    # Provenance manifests: one .clm-manifest.json per output root, for a
+    # completed (non-watch) build. Opt-in (issue #208, step 1). Capturing the
+    # source commit and writing the manifest must never fail an otherwise
+    # successful build, so any error here is logged and swallowed.
+    if summary is not None and not config.watch and config.write_provenance_manifest:
+        from datetime import datetime, timezone
+
+        from clm.core.git_info import get_git_info
+        from clm.core.provenance_manifest import write_provenance_manifests
+
+        try:
+            git = get_git_info(course.course_root)
+            written = write_provenance_manifests(
+                course,
+                source_commit=git["commit"],
+                source_dirty=git["dirty"],
+                built_at=datetime.now(timezone.utc).isoformat(),
+                spec_name=config.spec_file.name,
+            )
+            if written:
+                logger.info("Wrote %d provenance manifest(s)", len(written))
+        except Exception as e:
+            logger.warning("Failed to write provenance manifest(s): %s", e, exc_info=True)
 
     return summary
 
@@ -1935,6 +1967,16 @@ async def main_build(
     is_flag=True,
     help="Disable automatic .env file loading.",
 )
+@click.option(
+    "--provenance-manifest/--no-provenance-manifest",
+    default=False,
+    help=(
+        "Write a .clm-manifest.json provenance index into each output root "
+        "after a successful build, mapping every output file to its source "
+        "commit and owning section/topic (issue #208). Build-internal; off by "
+        "default."
+    ),
+)
 @click.pass_context
 def build(
     ctx,
@@ -1979,6 +2021,7 @@ def build(
     inline_images,
     env_file,
     no_env_file,
+    provenance_manifest,
 ):
     """Build a course from a spec file."""
     # ------------------------------------------------------------------
@@ -2114,6 +2157,7 @@ def build(
             image_format,
             inline_images,
             resolved_fail_on_missing_xref,
+            provenance_manifest,
         )
     )
 
