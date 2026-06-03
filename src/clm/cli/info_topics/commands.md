@@ -645,7 +645,19 @@ clm slides normalize slides/module_010/topic_100_intro/ --operations interleavin
 Generate stable `slide_id` metadata for slide/subslide cells per the
 EN-derived, kebab-case, ASCII policy. Cells in a DE/EN pair share the
 same id (derived from the EN heading); voiceover/notes cells inherit
-the id of the preceding slide. Three-category policy:
+the id of the preceding slide.
+
+> **Plumbing (since CLM {version}).** This command is **hidden** from
+> `clm slides --help` and is intended for agents/scripts and one-off id fixes —
+> it stays fully invocable by name. For everyday authoring, id minting happens
+> inside the safe funnels and you do not need to call it directly:
+> `clm slides sync` mints a shared id onto both halves of a split deck as it
+> reconciles them, and `clm slides normalize` runs the same minting as one of
+> its passes. Running assign-ids on a **single** split half can mint a
+> divergent slug (#162) — prefer the funnels, or run it over a **directory**
+> (EN-authority pair minting, see below).
+
+Three-category policy:
 
 - **headed** — slug from the first markdown heading. Always assigned.
 - **extractable** — headingless but with one of:
@@ -729,6 +741,16 @@ command brings the *other* half into sync in a single pass: edits are
 propagated, brand-new slides are translated and inserted, removed
 slides are dropped, reorders are mirrored, and a shared `slide_id` is
 minted onto both decks as it goes.
+
+**Pairing guard (since CLM {version}).** Before anything is read or written,
+sync checks that `DE_PATH` and `EN_PATH` are the two halves of **one** deck —
+one `.de` half and one `.en` half of the same name (the routing prefix is not
+required, so `apis.de.py` / `apis.en.py` is fine). A **swapped** order
+(`<deck>.en.py` first) is auto-corrected with a note; passing the **same file**
+twice, **two same-language** halves, **two different decks**, or a path that is
+**not a split half** at all (a bilingual or untagged file) is rejected with a
+usage error before any LLM call or write. This closes the #162 footgun where a
+mismatched pair could silently produce a divergent or no-op sync.
 
 **Default behavior changed in CLM {version}: the command now writes to
 the working tree.** A bare `clm slides sync de en` applies the agreed
@@ -1072,6 +1094,14 @@ clm slides language-view slides_intro.py en --include-notes
 
 Compare a slide file against git HEAD and detect asymmetric bilingual edits.
 Suggests which cells need translation updates. Does not modify the file.
+
+> **Plumbing (since CLM {version}).** This command is **hidden** from
+> `clm slides --help` (it stays invocable by name and as the `suggest_sync` MCP
+> tool). It is a read-only suggester for the pre-split **bilingual** layout
+> (de/en cells co-located in one `.py`). For split-format decks
+> (`<deck>.de.py` / `<deck>.en.py`) use **`clm slides sync`**, which reconciles
+> the pair and writes the changes. Two `sync`-named commands on the everyday
+> surface was a source of confusion — `sync` is the canonical funnel.
 
 ```
 clm slides suggest-sync [OPTIONS] FILE

@@ -465,13 +465,13 @@ agent/script plumbing, or **(G)** harden with a guard.
 
 | Command | Why it's risky | Disposition (proposed) |
 |---|---|---|
-| `assign-ids` (per file) | Per-file run on a split half mints **divergent** ids — the #1 silent #162 break. Its core job (id minting) is already done *consistently* by `sync`. | **F + H** — fold consistent minting into `sync` / a pair-aware mode (§7 generative); demote the raw per-file command to plumbing (agents/scripts), not a normal authoring step. |
+| `assign-ids` (per file) | Per-file run on a split half mints **divergent** ids — the #1 silent #162 break. Its core job (id minting) is already done *consistently* by `sync`. | **F + H — DONE (2026-06-03).** F was already real (minting is shared via the `clm.slides.assign_ids` engine, reused by `normalize` and the generative `assign_ids_in_split_pair`). H: `hidden=True` on the command — invocable by name for agents/scripts, gone from `clm slides --help`; docstring + `commands.md`/`migration.md`/README reframed as plumbing, pointing to `sync`/`normalize` as the canonical authoring path. |
 | `voiceover extract` | Single-file, clobbers companion w/o `--force`; per-language only; no cross-language check. | **G now, F later** — add `--force`/guard immediately; longer-term fold extraction into a paired, twin-aware operation (or under `sync`'s umbrella). |
 | `voiceover inline` | Destructive: unlinks companion even on unmatched, exit 0, no backup. | **G** — preserve/backup on unmatched, non-zero exit, `--dry-run` default. |
 | `slides split` | Unaware of voiceover companions; extract-then-split silently orphans them. | **G — DONE (2026-06-03).** First-class companion split: `split_in_file` splits a sibling `voiceover_*.py` in lockstep into `voiceover_*.de.py`/`.en.py`, routing cells by `lang`, preserving `for_slide`/`vo_anchor`. Atomic `--force` over deck+companion; byte-identical round trip. |
 | `slides unify` | Ignores companions; can't recombine voiceover. | **G — DONE (2026-06-03).** `unify_in_file` recombines the companion halves into `voiceover_*.py` (inverse of split; missing half treated as empty so narration is never dropped). |
-| `slides suggest-sync` | Old single-file read-only suggester; coexists confusingly with the split-pair `sync` (different file layout, opposite write semantics). | **H or remove** — hide as plumbing or retire; steer users to `sync`. |
-| `slides sync` (the funnel) | Two bare path args, no pairing guard, writes by default. | **G** — pairing guard (§3 Tier-2), and consider a **single-path contract** (pass one half or the deck stem; derive the twin + companion) + a directory/spec **batch mode** so the author can't fumble the pair or cross decks. |
+| `slides suggest-sync` | Old single-file read-only suggester; coexists confusingly with the split-pair `sync` (different file layout, opposite write semantics). | **H — DONE (2026-06-03).** Hidden (`hidden=True`), not removed: it is the *safe* read-only member, retains unique value for the pre-split **bilingual** single-file layout `sync` does not cover, and is a live `suggest_sync` MCP contract. Docstring + `commands.md` reframed as plumbing, steering split-deck users to `sync`. Revisit removal only when the bilingual format is retired (with an MCP deprecation window). |
+| `slides sync` (the funnel) | Two bare path args, no pairing guard, writes by default. | **G — pairing guard DONE (2026-06-03)**; single-path / batch DEFERRED. The guard (`_resolve_sync_pair`, prefix-agnostic via `pairing.order_split_pair`) rejects same-file / same-language / cross-deck pairs and auto-corrects a swapped order before any read/write. The **single-path contract** (pass one half / the deck stem; derive the twin + companion) and a directory/spec **batch mode** remain deferred additive UX (never remove the two-path form). |
 
 **Mechanism for "hide as plumbing."** Click supports `hidden=True` on commands (kept
 functional, omitted from `--help`); or move plumbing under a `clm _internal …` / `clm
@@ -480,6 +480,17 @@ that need the raw single-file ops still call them; normal authors only see the s
 funnel. This preserves the dual-use value while removing the footgun from the everyday
 surface. **Per the Info Topics Maintenance Rule, any command removal/hiding/folding
 must update `info_topics/commands.md` and `migration.md`.**
+
+**Chosen mechanism (2026-06-03): `hidden=True` per command**, mirroring the one
+existing house precedent (the `voiceover debug` subgroup). Lowest blast radius — stock
+Click honours `hidden` (no custom `Group` subclass), the command stays fully invocable
+and `--help`-reachable for agents/scripts/MCP (all of which bind the underlying
+`clm.slides.*` / `clm.voiceover.*` *functions*, not the Click command), no test breaks,
+and deprecated aliases inherit `hidden` automatically. A `_internal` group was rejected
+(no precedent; would change the canonical invocation path and force a wider doc/alias
+sweep). **Load-bearing caveat:** `clm info commands` is hand-written (`info.py` only does
+a `{version}` substitution, no Click introspection), so `hidden=True` is invisible to it
+— each hide *must* hand-edit the command's `commands.md` section, which this work did.
 
 **Guiding UX principle:** the author writes content; the tooling owns identity; the
 *default* surface only offers operations that keep both halves consistent. Sharp tools
@@ -613,9 +624,16 @@ corpus no-op invariant + real-deck round-trip **skip**. To build justified confi
      extract producing both companions in one op), then the pre-commit gate wiring in the course
      repo (§9 course-repo half) + remaining verification additions (§11). Deferred residual:
      surface build-time inline **relocations** (not data loss).
-4. **Command-surface rethink** (§8) — fold/hide/guard, with info-topic updates.
+4. **Command-surface rethink** (§8) — **safety + hygiene pass DONE (2026-06-03)**:
+   triplicated `.de`/`.en` twin-derivation consolidated into `pairing.py`
+   (`split_twin` / `split_twin_pair` + the prefix-agnostic `order_split_pair` /
+   `split_lang_tag`); `clm slides sync` **pairing guard**; `assign-ids` and
+   `suggest-sync` **hidden as plumbing** (`hidden=True`), with `commands.md` /
+   `migration.md` / README updated. **Deferred:** the paired one-op `voiceover
+   extract --both` (auto-pair on a split half; pre-decided surface), and the
+   `slides sync` single-path contract + directory/spec batch mode (additive UX).
 5. **Pre-commit gate** (§9) + voiceover hardening (§10) + verification additions (§11).
-6. **Sync CLI pairing guard** (§3 Tier-2) + single-path/batch UX.
+6. **Sync CLI single-path / batch UX** (§8) on top of the shipped pairing guard.
 7. Forward design: N-file atomicity for separated voiceover (§3 #6); `FileTopic`
    bypass guard (§3 #7).
 
@@ -623,8 +641,17 @@ corpus no-op invariant + real-deck round-trip **skip**. To build justified confi
 
 ## 13. Key code-location map (for future sessions)
 
-- Sync CLI: `src/clm/cli/commands/slides_sync.py` (args `:87-95`; apply default
-  `:333-345`; `.env` load `:282-290`).
+- Sync CLI: `src/clm/cli/commands/slides_sync.py` (args `:87-95`; **pairing guard
+  `_resolve_sync_pair` runs after the mutual-exclusion checks, before `.env`/build**;
+  apply default `:333-345`).
+- Path-pairing helpers (consolidated 2026-06-03): `pairing.py` — `split_twin` /
+  `split_twin_pair` (prefix-gated, disk-aware; were copied in `assign_ids` and
+  `validator`, now delegate here) and the **prefix-agnostic** `order_split_pair` /
+  `split_lang_tag` (the sync guard primitive — recognises any `<deck>.de`/`.en` pair
+  regardless of the routing prefix).
+- Plumbing demotion: `assign_ids.py` command `@click.command("assign-ids", hidden=True)`;
+  `suggest_sync.py` `@click.command("suggest-sync", hidden=True)` (engine fns + MCP tool
+  unchanged). House precedent for hiding: the `voiceover debug` subgroup.
 - Sync engine: `sync_plan.py` (classifier; `ordered_sync_cells` lang filter `:251-278`;
   `_resolve_duplicates` `:623-717`; cold path `:1021-1048`; baseline `:1190-1246`),
   `sync_apply.py` (apply; atomic flush `:1088-1127`; flush gate `:298-299`; orphan
@@ -655,7 +682,8 @@ corpus no-op invariant + real-deck round-trip **skip**. To build justified confi
   `_check_split_slide_id_parity` (#162 deck detective) + `_check_split_companion_for_slide_parity`
   (#162 companion `for_slide`-parity / both-language voiceover compat — lazy `companion_path`
   import), wired at dir/course **and** the single-file-with-twin path
-  (`validate_file(cross_file_parity=True)`, `_split_twin_pair`); `validate_quick` `:1364-1398`).
+  (`validate_file(cross_file_parity=True)`, now delegating to `pairing.split_twin_pair`);
+  `validate_quick` `:1364-1398`).
 - Tests/harness: `tests/slides/test_split.py` (round-trip property),
   `test_voiceover_tools.py` (extract/inline, positional anchors),
   `test_sync_limitations.py` + `test_sync_anchor.py` (item-2/3 fix, CI),

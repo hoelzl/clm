@@ -46,6 +46,7 @@ from clm.slides.pairing import (
     build_slide_groups,
     build_slide_pairs,
     is_title_macro_cell,
+    split_twin,
 )
 from clm.slides.raw_cells import RawCell as _Cell
 from clm.slides.raw_cells import reconstruct as _reconstruct
@@ -771,19 +772,6 @@ def _handle_narrative(
 # ---------------------------------------------------------------------------
 
 
-def _split_twin(path: Path) -> Path | None:
-    """The sibling split half (``.de.py`` <-> ``.en.py``) if it exists on disk."""
-    suffix = split_lang_suffix(path)
-    if suffix is None:
-        return None
-    other = "en" if suffix == "de" else "de"
-    parts = path.name.split(".")
-    # split_lang_suffix guarantees the form ``<stem>.<de|en>.<ext>``.
-    parts[-2] = other
-    twin = path.with_name(".".join(parts))
-    return twin if twin.exists() else None
-
-
 def _slide_start_ids(cells: list[_Cell]) -> list[str | None]:
     """Ordered bare slide_ids of slide/subslide cells (``None`` where absent)."""
     out: list[str | None] = []
@@ -803,7 +791,7 @@ def _twin_ids_for(path: Path, text: str) -> list[str | None] | None:
     so we mint normally and let the validator's #162 detective flag the
     divergence instead.
     """
-    twin = _split_twin(path)
+    twin = split_twin(path)
     if twin is None:
         return None
     _, own_cells = _split_cells(text)
@@ -915,7 +903,7 @@ def assign_ids_in_directory(path: Path, options: AssignOptions) -> AssignResult:
     for slide_file in files:
         if slide_file in handled:
             continue
-        twin = _split_twin(slide_file)
+        twin = split_twin(slide_file)
         if twin is not None and twin in fileset:
             de_path, en_path = (
                 (slide_file, twin) if split_lang_suffix(slide_file) == "de" else (twin, slide_file)

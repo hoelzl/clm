@@ -114,6 +114,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **Split-deck command-surface hardening (§8 safety + hygiene).**
+  - **`clm slides sync` pairing guard.** Before any read or write, sync now
+    verifies the two paths are the two halves of one deck (one `.de`, one `.en`,
+    same name — the routing prefix is not required, so `apis.de.py` /
+    `apis.en.py` works). A **swapped** order is auto-corrected with a stderr
+    note; the **same file** twice, **two same-language** halves, **two different
+    decks**, or a path that is **not a split half** are rejected with a usage
+    error (exit 2) before any LLM call. Closes the #162 footgun where a
+    mismatched pair could silently produce a divergent or no-op sync.
+  - **`clm slides assign-ids` and `clm slides suggest-sync` are now plumbing
+    (hidden).** Both are removed from `clm slides --help` but stay fully
+    invocable by name (and `suggest-sync` remains the `suggest_sync` MCP tool).
+    Per-file `assign-ids` on a single split half is the #1 silent #162 break;
+    for everyday authoring let the funnels mint ids — `clm slides sync` (split
+    decks) and `clm slides normalize`. `suggest-sync` is the read-only
+    bilingual-file suggester, superseded by `sync` for split decks.
 - **The `voiceover` slide-coverage check is now opt-in (issue #176).**
   Course-authoring policy changed: voiceover is optional per deck, so the
   coverage check — which reports a gap for every slide / nontrivial code cell

@@ -10,7 +10,7 @@ import click
 from clm.slides.language_tools import suggest_sync
 
 
-@click.command("suggest-sync")
+@click.command("suggest-sync", hidden=True)
 @click.argument(
     "file",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
@@ -32,7 +32,13 @@ def suggest_sync_cmd(
     source_language: str | None,
     json_output: bool,
 ):
-    """Compare a slide file against git HEAD and suggest sync updates.
+    """Compare a slide file against git HEAD and suggest sync updates (plumbing).
+
+    Read-only, single-FILE, *bilingual* (de/en cells co-located in one .py)
+    suggester. It is hidden from the normal command surface and kept for the
+    pre-split bilingual format and agent/MCP use. For split-format decks
+    (``<deck>.de.py`` / ``<deck>.en.py``) use ``clm slides sync``, which
+    reconciles the pair and writes the changes.
 
     Detects cells modified in one language without corresponding changes
     in the other language.  Uses slide_id metadata for precise pairing

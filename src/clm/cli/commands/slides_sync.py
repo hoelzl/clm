@@ -65,6 +65,7 @@ from clm.infrastructure.llm.openrouter_client import (
     OpenRouterSyncJudge,
     has_openrouter_api_key,
 )
+from clm.slides.pairing import order_split_pair, split_lang_tag
 from clm.slides.sync_apply import ApplyResult, apply_plan
 from clm.slides.sync_plan import (
     PlanIssue,
@@ -82,6 +83,50 @@ if TYPE_CHECKING:
     from clm.slides.sync_recover import AlignmentRecoverer
 
 CACHE_DB_NAME = "clm-llm.sqlite"
+
+
+def _resolve_sync_pair(de_path: Path, en_path: Path) -> tuple[Path, Path]:
+    """Validate the two positional paths are the DE/EN halves of one split deck,
+    auto-correcting a swapped order, and return them as ``(de, en)``.
+
+    Guards the #162 footgun: a swapped, same-file, same-language, or cross-deck
+    pair would otherwise sync silently — producing a divergent or no-op result
+    on an error-free pass (the cross-deck-orphan fail-safe only runs on clean
+    passes, so it does not catch this). Raises :class:`click.UsageError` on an
+    invalid pair. The check is deliberately prefix-agnostic — ``sync`` reconciles
+    whatever two halves it is given, independent of the build's topic-routing
+    prefix; existence on disk is already enforced by ``click.Path(exists=True)``.
+    """
+    if de_path == en_path:
+        raise click.UsageError(
+            f"DE_PATH and EN_PATH are the same file ({de_path}); pass the two "
+            "halves of a split deck — <deck>.de.py and <deck>.en.py."
+        )
+    de_tag, en_tag = split_lang_tag(de_path), split_lang_tag(en_path)
+    if de_tag is None or en_tag is None:
+        bad = de_path if de_tag is None else en_path
+        raise click.UsageError(
+            f"{bad} is not a split-format slide half. `clm slides sync` expects "
+            "two paths named <deck>.de.py and <deck>.en.py "
+            "(run `clm slides split <deck>.py` to produce them)."
+        )
+    if de_tag == en_tag:
+        raise click.UsageError(
+            f"both paths are the same language (.{de_tag}); pass one .de half and one .en half."
+        )
+    ordered = order_split_pair(de_path, en_path)
+    if ordered is None:
+        raise click.UsageError(
+            f"{de_path.name} and {en_path.name} belong to different decks; "
+            "pass the two halves of ONE deck (same name before the .de/.en tag)."
+        )
+    if ordered != (de_path, en_path):
+        click.echo(
+            f"note: arguments look swapped — treating {ordered[0].name} as the "
+            f"DE half and {ordered[1].name} as the EN half.",
+            err=True,
+        )
+    return ordered
 
 
 @click.command("sync")
@@ -278,6 +323,12 @@ def slides_sync_cmd(
             "--explain and --json are mutually exclusive "
             "(--explain is a human-readable diagnostic; use --dry-run --json for the structured plan)"
         )
+
+    # Pairing guard (#162 Tier-2): reject a same-file / same-language / cross-deck
+    # pair and auto-correct a swapped (en, de) order before anything reads or
+    # writes. Runs for every mode (incl. --dry-run/--explain) so the footgun is
+    # caught even on read-only passes.
+    de_path, en_path = _resolve_sync_pair(de_path, en_path)
 
     # Load the project .env before resolving the judge/translator, so keys kept
     # only in .env (the usual course-repo layout) are found. Without this, every

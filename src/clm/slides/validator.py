@@ -26,6 +26,7 @@ from clm.slides.pairing import (
     TITLE_SLIDE_ID,
     build_slide_groups,
     is_title_macro_cell,
+    split_twin_pair,
 )
 from clm.slides.raw_cells import split_cells as split_raw_cells
 from clm.slides.slug import (
@@ -759,8 +760,10 @@ def _check_slide_ids(cells: list[Cell], file_path: str) -> list[Finding]:
                         line=cell.line_number,
                         message="slide/subslide cell missing slide_id",
                         suggestion=(
-                            "Run `clm slides assign-ids` to add stable identifiers. "
-                            "This will become an error in CLM 1.7."
+                            "Run `clm slides assign-ids <dir>` (EN-authority pair "
+                            "minting) — or `clm slides sync` for a split deck — to add "
+                            "stable identifiers; avoid per-file `assign-ids` on a single "
+                            "split half (#162). This will become an error in CLM 1.7."
                         ),
                     )
                 )
@@ -1199,27 +1202,6 @@ def _check_split_companion_for_slide_parity(de_path: Path, en_path: Path) -> lis
     ]
 
 
-def _split_twin_pair(path: Path) -> tuple[Path, Path] | None:
-    """If ``path`` is a split half whose twin exists on disk, return the ordered
-    ``(de_path, en_path)`` pair; else ``None``.
-
-    Used by the single-file validate path so a standalone
-    ``clm validate slides_x.de.py`` (and the pre-commit gate) catches twin
-    divergence even when not run over a whole directory.
-    """
-    suffix = split_lang_suffix(path)
-    if suffix is None:
-        return None
-    other = "en" if suffix == "de" else "de"
-    parts = path.name.split(".")
-    # split_lang_suffix guarantees the form ``<stem>.<de|en>.<ext>``.
-    parts[-2] = other
-    twin = path.with_name(".".join(parts))
-    if not twin.exists():
-        return None
-    return (path, twin) if suffix == "de" else (twin, path)
-
-
 def _slide_files_to_split_pairs(slide_files: list[Path]) -> list[tuple[Path, Path]]:
     """Return every detected ``(de_path, en_path)`` pair in ``slide_files``.
 
@@ -1562,7 +1544,7 @@ def validate_file(
         # directory/course run handles this once at that scope instead
         # (cross_file_parity=False) so the finding is not duplicated per file.
         if cross_file_parity and is_split:
-            pair = _split_twin_pair(path)
+            pair = split_twin_pair(path)
             if pair is not None:
                 findings.extend(_check_split_slide_id_parity(*pair))
                 findings.extend(_check_split_companion_for_slide_parity(*pair))
