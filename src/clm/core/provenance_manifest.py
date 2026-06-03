@@ -267,3 +267,22 @@ def write_provenance_manifests(
             "Wrote provenance manifest %s (%d files)", manifest_path, len(manifest["files"])
         )
     return written
+
+
+def load_manifest(path: Path) -> dict[str, Any]:
+    """Load a ``.clm-manifest.json`` written by :func:`write_provenance_manifests`."""
+    return json.loads(path.read_text(encoding="utf-8"))  # type: ignore[no-any-return]
+
+
+def manifest_files_by_topic(
+    manifest: dict[str, Any],
+) -> dict[str | None, list[dict[str, Any]]]:
+    """Group a manifest's ``files`` by ``topic_id``.
+
+    The key ``None`` collects skeleton/global files (e.g. global ``<dir-groups>``)
+    that are not owned by any topic.
+    """
+    by_topic: dict[str | None, list[dict[str, Any]]] = {}
+    for entry in manifest.get("files", []):
+        by_topic.setdefault(entry.get("topic_id"), []).append(entry)
+    return by_topic
