@@ -517,8 +517,18 @@ clm validate [OPTIONS] PATH
 | `--quick` | Fast syntax-only check (format + tags + slide_ids). Useful for PostToolUse hooks |
 | `--json` | Output as JSON |
 | `--data-dir DIR` | Course data directory (contains slides/) |
+| `--fail-on {error,warning}` | (since CLM {version}) Exit non-zero when findings reach this severity. Unset: legacy behavior (human output fails on errors; JSON exits 0). `error`: fail on errors in either mode. `warning`: fail on errors **or** warnings — the pre-commit-gate setting, so the cross-file `slide_id` / voiceover `for_slide` parity warnings block a commit. |
 
 `PATH` can be a single slide file, a topic directory, or a course spec XML file.
+
+Since CLM {version}, `clm validate slides/ --fail-on warning` is the
+pre-commit gate: by default the `pairing` warnings (missing/divergent
+`slide_id`, tag-parity asymmetry, the cross-file `slide_id` / voiceover
+`for_slide` parity detectives) surface but exit 0, so a naive
+`clm validate && git commit` lets them through. `--fail-on warning`
+escalates the exit code so a hook fails on them; it governs the exit code
+with `--json` too (without `--fail-on`, JSON mode always exits 0 for
+backward compatibility).
 
 Since CLM {version}, the **`voiceover` coverage check is opt-in** (issue #176).
 Voiceover is now optional per deck, so the check — which reports a gap for every
@@ -540,6 +550,7 @@ adjacency, and — since CLM {version} — **`slide_id` metadata**:
 | voiceover/notes `slide_id` ≠ preceding `slide`/`subslide` anchor | `error` | Walk-back skips j2, code, shared (lang-less), and cross-language narrative cells. The j2 `header()` macro anchors `slide_id="title"` for narrative cells that follow it. |
 | paired DE/EN slides carry mismatched bare `slide_id`s | `warning` | Suggested fix: `clm slides assign-ids --force`. |
 | split pair `.de.py` / `.en.py` carry a different `slide_id` set or order | `warning` | **Cross-file** (issue #162): `slide_id` is the cross-language join key for voiceover `for_slide`, `clm slides unify`, and extract/inline. Route structural changes through `clm slides sync`; avoid per-file `clm slides assign-ids` on a split half. Runs on a directory/course validate, and on a single-file validate when the twin exists on disk. |
+| split pair voiceover companions narrate different slides (`for_slide` set differs) | `warning` | **Cross-file** (issue #162, the both-language voiceover compatibility check): a narration cell's `for_slide` is the `slide_id` of the slide it covers, so the `.de` / `.en` companions (`voiceover_X.de.py` / `voiceover_X.en.py`) must narrate the same set of slides — otherwise one language ships with missing voiceover. A one-sided companion (one language has voiceover, the other none) is flagged too. Runs on a directory/course validate, and on a single-file validate when the twin exists on disk. |
 | `slide_id` is not a valid kebab-case ASCII slug (≤30 chars) | `warning` | The leading `!` preserve marker is permitted and does not count toward the length cap. |
 
 Since CLM {version}, the **bilingual** `pairing` sub-checks (DE/EN cell
@@ -554,8 +565,11 @@ still applied when validating a directory or course spec. Since CLM
 {version} the cross-file **`slide_id` parity** check (issue #162) is applied
 the same way — and additionally on a single-file validate when the twin
 exists on disk, so the pre-commit gate and the PostToolUse path catch a
-divergent join key. Bilingual decks (no `.de` / `.en` suffix) are
-unaffected — the full pairing check still runs.
+divergent join key. The companion **`for_slide` parity** check (the
+both-language voiceover compatibility check) is applied alongside it, so a
+split deck's `voiceover_X.de.py` / `voiceover_X.en.py` companions can't
+silently narrate different slide sets. Bilingual decks (no `.de` / `.en`
+suffix) are unaffected — the full pairing check still runs.
 
 Since CLM {version}, the `tags` check group also verifies **workshop
 scope** (issue #78). The `partial` output kind leaves a workshop's code

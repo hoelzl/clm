@@ -129,6 +129,14 @@ def voiceover_cell(lang: str, *, sid: str, text: str | None = None) -> str:
     return f'# %% [markdown] lang="{lang}" tags=["voiceover"] slide_id="{sid}"\n#\n# {body}\n\n'
 
 
+def companion_cell(lang: str, *, for_slide: str, text: str | None = None) -> str:
+    """A voiceover cell *inside a companion file* (carries for_slide, not slide_id)."""
+    body = text if text is not None else f"Voiceover {lang.upper()} for {for_slide}"
+    return (
+        f'# %% [markdown] lang="{lang}" tags=["voiceover"] for_slide="{for_slide}"\n#\n# {body}\n\n'
+    )
+
+
 def shared_code(name: str = "x", value: str = "1") -> str:
     """A language-neutral shared code cell (no lang attribute)."""
     return f'# %% tags=["keep"]\n{name} = {value}\n\n'
@@ -565,6 +573,35 @@ def m_commit_without_sync(workdir: Path) -> _RetTuple:
     )
 
 
+def m_commit_companion_divergence(workdir: Path) -> _RetTuple:
+    # Author extracts voiceover for both halves but the EN companion narrates
+    # fewer slides than DE (e.g. EN voiceover not finished), then commits. The
+    # decks are in slide_id parity, so the slide_id detective is clean; the new
+    # companion `for_slide`-parity arm of the #162 detective is what must catch
+    # the divergence loudly (break-loud), or one language silently ships with
+    # missing narration at build.
+    base = _base()  # decks in slide_id parity (intro/setup/demo)
+    pair = SplitPair(
+        de=base.de,
+        en=base.en,
+        de_companion=companion_cell("de", for_slide="intro")
+        + companion_cell("de", for_slide="setup"),
+        en_companion=companion_cell("en", for_slide="intro"),  # missing `setup`
+    )
+    de_path, _ = pair.write(workdir)
+    assert pair.de_companion is not None and pair.en_companion is not None
+    diverged = set(for_slides(pair.de_companion)) != set(for_slides(pair.en_companion))
+    findings = validate_file(de_path).findings
+    caught = any(f.category == "pairing" and "voiceover companion" in f.message for f in findings)
+    return (
+        (["companion_for_slide_parity"] if diverged else []),
+        caught,
+        "validate (detective) reports companion for_slide divergence" if caught else "",
+        f"de={for_slides(pair.de_companion)} en={for_slides(pair.en_companion)}; "
+        f"detective {'CATCHES it' if caught else 'misses it'}",
+    )
+
+
 # --- voiceover round-trip (expected: preserve) -----------------------------
 
 
@@ -773,6 +810,12 @@ MUTATIONS: list[Mutation] = [
     # #162 detective landed: the pre-commit gate (`clm validate`) now catches a
     # committed split-half divergence — break-silent -> break-loud.
     Mutation("commit-without-sync", "no-gate", BREAK_LOUD, True, m_commit_without_sync),
+    # Companion arm of the #162 detective: `clm validate` flags a split pair
+    # whose voiceover companions narrate different slide sets (for_slide parity),
+    # so a half-finished EN companion can't silently ship missing narration.
+    Mutation(
+        "commit-companion-divergence", "no-gate", BREAK_LOUD, True, m_commit_companion_divergence
+    ),
     # Companion split/unify path landed: `split` splits a sibling voiceover
     # companion in lockstep (and `unify` recombines it), so extract-then-split
     # no longer orphans the narration — break-silent -> preserve.

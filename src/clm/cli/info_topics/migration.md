@@ -101,6 +101,26 @@ directory/course validate **and** on a single-file validate when the twin
 exists on disk — so a pre-commit hook (`clm validate slides/ --fail-on warning`,
 or per-file in a PostToolUse hook) catches a divergence before it ships.
 
+The same join key governs **separated voiceover**: each narration cell's
+`for_slide` is the `slide_id` of the slide it covers. CLM {version} extends the
+detective with a companion **`for_slide` parity** check (the both-language
+voiceover compatibility check) — it flags a split deck whose
+`voiceover_<name>.de.py` / `voiceover_<name>.en.py` companions narrate
+different sets of slides (`for_slide` sets differ), or where only one language
+has a companion at all. Without it, a half-finished EN companion silently ships
+the EN slides with missing narration at build time. It is wired the same way
+as the `slide_id` parity check (directory/course, plus single-file when the
+twin exists on disk) and compares the bare (`!`-stripped) `for_slide` *set* —
+one language may legitimately split a slide's narration across a different
+number of cells.
+
+Both detectives are `warning`-severity, so by default `clm validate` reports
+them but still exits 0. CLM {version} adds `clm validate --fail-on {error,warning}`
+to make them gate-able: `clm validate slides/ --fail-on warning` exits non-zero
+on any warning (the parity detectives included), which is what a pre-commit hook
+needs. `--fail-on` governs the exit code with `--json` too; without it, behavior
+is unchanged (human output fails on errors, JSON exits 0).
+
 Since CLM {version} `clm slides assign-ids` keeps the two halves consistent
 automatically. A **directory / course run** mints **EN-authority** ids across a
 `.de.py` / `.en.py` pair at once (the #162 *generative*): the slug derives from
