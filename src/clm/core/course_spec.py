@@ -519,6 +519,47 @@ class GitHubSpec:
             suffix=suffix,
         )
 
+    def derive_channel_remote_url(
+        self,
+        channel_name: str,
+        *,
+        project_slug: str | None = None,
+        remote_template: str = "",
+        remote_path: str = "",
+    ) -> str | None:
+        """Derive the remote URL for a release channel (issue #208).
+
+        A cohort channel is *not* language-scoped — one repo serves one cohort
+        — so the repo name is ``{slug}-{channel_name}`` (the cohort name, e.g.
+        ``cohort-jan``, disambiguates it) rather than appending a ``{lang}``
+        segment and a target suffix. Reusing :meth:`derive_remote_url` with an
+        empty language would emit a stray ``--`` in the repo name; this method
+        avoids that while sharing the same base/remote-path/template handling.
+
+        The ``{lang}`` and ``{suffix}`` template placeholders are bound to the
+        empty string for channels. Returns ``None`` when git config is not set.
+        """
+        slug = project_slug or self.project_slug
+        if not (slug and self.repository_base):
+            return None
+
+        effective_remote_path = remote_path or self.remote_path
+        repo = f"{slug}-{channel_name}"
+        template = remote_template or self.remote_template
+        if not template:
+            if effective_remote_path:
+                template = "{repository_base}/{remote_path}/{repo}"
+            else:
+                template = "{repository_base}/{repo}"
+        return template.format(
+            repository_base=self.repository_base,
+            remote_path=effective_remote_path,
+            repo=repo,
+            slug=slug,
+            lang="",
+            suffix="",
+        )
+
 
 @frozen
 class DirGroupSpec:

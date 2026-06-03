@@ -16,6 +16,7 @@ import click
 
 from clm.core.course_paths import resolve_course_paths
 from clm.core.course_spec import CourseSpec
+from clm.core.provenance_manifest import MANIFEST_FILENAME
 from clm.infrastructure.config import get_config
 
 logger = logging.getLogger(__name__)
@@ -30,7 +31,12 @@ _dry_run_mode: ContextVar[bool] = ContextVar("dry_run_mode", default=False)
 
 
 class OutputRepo:
-    """Represents an output directory that may have a git repository."""
+    """Represents an output directory that may have a git repository.
+
+    ``source`` distinguishes an ``<output-target>`` repo (``"output"``) from a
+    per-cohort release channel repo (``"channel"``, issue #208). Channel repos
+    are not language-scoped, so their ``language`` is the empty string.
+    """
 
     def __init__(
         self,
@@ -38,11 +44,13 @@ class OutputRepo:
         target_name: str,
         language: str,
         remote_url: str | None = None,
+        source: str = "output",
     ):
         self.path = path
         self.target_name = target_name
         self.language = language
         self.remote_url = remote_url
+        self.source = source
 
     @property
     def git_dir(self) -> Path:
@@ -54,6 +62,9 @@ class OutputRepo:
 
     @property
     def display_name(self) -> str:
+        # Channel repos carry no language, so drop the empty trailing segment.
+        if not self.language:
+            return self.target_name
         return f"{self.target_name}/{self.language}"
 
     def has_remote(self) -> bool:
@@ -211,6 +222,23 @@ def has_uncommitted_changes(repo_path: Path) -> bool:
     return bool(result.stdout.strip())
 
 
+def has_staged_changes(repo_path: Path) -> bool:
+    """Check whether the index has changes staged for commit.
+
+    Unlike :func:`has_uncommitted_changes` (which inspects the *working tree*
+    via ``git status --porcelain`` and therefore still reports an excluded,
+    untracked ``.clm-manifest.json``), this is index-scoped. It is the correct
+    gate for the "anything to commit?" decision after
+    :func:`_stage_all_excluding_sidecars`: a change that touches only the
+    excluded manifest leaves the index empty and must be treated as a no-op
+    rather than a failed ``git commit``.
+    """
+    # `git diff --cached --quiet` exits 1 when staged differences exist, 0 when
+    # the index matches HEAD (or the empty tree, on a repo with no commits yet).
+    result = run_git(repo_path, "diff", "--cached", "--quiet")
+    return result.returncode != 0
+
+
 def get_current_branch(repo_path: Path) -> str:
     """Get the current branch name."""
     result = run_git(repo_path, "rev-parse", "--abbrev-ref", "HEAD")
@@ -318,6 +346,140 @@ def find_output_repos(
     return repos
 
 
+def find_release_channel_repos(
+    spec_file: Path,
+    channel_filter: str | None = None,
+) -> list[OutputRepo]:
+    """Find the per-cohort release-channel repositories for a course (#208).
+
+    Mirrors :func:`find_output_repos` but enumerates the ``<release-channels>``
+    block instead of ``<output-targets>``. Each channel is a single,
+    non-language-scoped cohort repo whose working tree is the channel ``path``
+    (resolved under the course root, identically to ``clm release``). The remote
+    URL is best-effort (used only by ``clm git init``); push/commit operate on
+    whatever ``origin`` the repo actually has.
+
+    Args:
+        spec_file: Path to the course spec file.
+        channel_filter: Optional channel name to restrict the result to.
+
+    Returns:
+        One :class:`OutputRepo` per matching channel (``source="channel"``);
+        empty when the spec declares no ``<release-channels>`` block.
+    """
+    spec = CourseSpec.from_file(spec_file)
+    channels_spec = spec.release_channels
+    if channels_spec is None:
+        return []
+
+    course_root, _ = resolve_course_paths(spec_file)
+    github_config = spec.github
+    config = get_config()
+    remote_template = config.git.remote_template
+    config_remote_path = config.git.remote_path
+
+    repos: list[OutputRepo] = []
+    for channel in channels_spec.channels:
+        if channel_filter and channel.name != channel_filter:
+            continue
+
+        path = Path(channel.path)
+        if not path.is_absolute():
+            path = course_root / path
+
+        effective_remote_path = channel.remote_path or config_remote_path
+        remote_url = github_config.derive_channel_remote_url(
+            channel.name,
+            project_slug=spec.project_slug,
+            remote_template=remote_template,
+            remote_path=effective_remote_path,
+        )
+
+        repos.append(
+            OutputRepo(
+                path=path,
+                target_name=channel.name,
+                language="",
+                remote_url=remote_url,
+                source="channel",
+            )
+        )
+
+    return repos
+
+
+def _select_repos(
+    spec_file: Path,
+    *,
+    target: str | None,
+    channel: str | None,
+    all_channels: bool,
+) -> list[OutputRepo]:
+    """Resolve the repo set a ``clm git`` subcommand should act on.
+
+    Default is the ``<output-targets>`` repos (optionally filtered by
+    ``--target``). ``--channel NAME`` or ``--all-channels`` switches to the
+    per-cohort release-channel repos instead; the two modes are mutually
+    exclusive with ``--target``.
+    """
+    if channel or all_channels:
+        if target:
+            raise click.UsageError("--target cannot be combined with --channel/--all-channels.")
+        channels_spec = CourseSpec.from_file(spec_file).release_channels
+        if channels_spec is None or not channels_spec.channels:
+            raise click.ClickException(
+                f"{spec_file.name} declares no <release-channels>; "
+                f"--channel/--all-channels is not available for this course."
+            )
+        if channel and channels_spec.channel(channel) is None:
+            available = ", ".join(c.name for c in channels_spec.channels)
+            raise click.ClickException(
+                f"Unknown channel {channel!r}. Defined channels: {available}."
+            )
+        return find_release_channel_repos(spec_file, channel or None)
+    return find_output_repos(spec_file, target)
+
+
+def _stage_all_excluding_sidecars(repo_path: Path) -> None:
+    """Stage every change except CLM's private build sidecars.
+
+    The provenance manifest (``.clm-manifest.json``) records every output
+    file's owning topic/section and source commit (issue #208). It is a private
+    build artifact and must never be distributed in a student-facing output or
+    cohort repo, so it is excluded from staging here regardless of whether the
+    repo's ``.gitignore`` predates this exclusion. The per-cohort frozen
+    manifest (``.clm-released.json``) is deliberately *not* excluded — it is the
+    freeze record and belongs in the channel repo.
+
+    The exclude pathspec only governs *new* staging; a manifest that a prior
+    (pre-exclusion) commit already tracked would otherwise stay published and go
+    stale. So we first drop any tracked manifest from the index — ``git rm
+    --cached --ignore-unmatch`` is a no-op for clean repos and for repos with no
+    commits yet, and stages a deletion when it was tracked. Both steps match the
+    manifest at any depth (a build only ever writes it at the output root today,
+    but the recursive glob keeps the guard honest about its own invariant).
+    """
+    run_git(
+        repo_path,
+        "rm",
+        "--cached",
+        "--ignore-unmatch",
+        "--quiet",
+        "--",
+        MANIFEST_FILENAME,
+        f":(glob)**/{MANIFEST_FILENAME}",
+    )
+    run_git(
+        repo_path,
+        "add",
+        "-A",
+        "--",
+        ".",
+        f":(exclude){MANIFEST_FILENAME}",
+        f":(exclude,glob)**/{MANIFEST_FILENAME}",
+    )
+
+
 # =============================================================================
 # Init Implementation
 # =============================================================================
@@ -350,6 +512,9 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.temp
+
+# CLM private build sidecars (never distribute the provenance manifest)
+.clm-manifest.json
 """
     gitignore_path = repo.path / ".gitignore"
     if not gitignore_path.exists():
@@ -369,8 +534,8 @@ Thumbs.db
         run_git(repo.path, "remote", "add", "origin", repo.remote_url)
         click.echo(f"  Remote set to: {repo.remote_url}")
 
-    # Initial commit with all existing files
-    run_git(repo.path, "add", "-A")
+    # Initial commit with all existing files (never the private build manifest)
+    _stage_all_excluding_sidecars(repo.path)
     result = run_git(repo.path, "commit", "-m", "Initial commit")
     if result.returncode == 0:
         click.echo("  Created initial commit")
@@ -477,6 +642,20 @@ def _init_create_new_repo(repo: OutputRepo, branch: str) -> None:
 # Click Command Group
 # =============================================================================
 
+# Shared options that switch a subcommand from <output-targets> repos to the
+# per-cohort <release-channels> repos (issue #208). Mutually exclusive with
+# --target; see _select_repos.
+_channel_option = click.option(
+    "--channel",
+    default=None,
+    help="Act on the named release-channel (cohort) repo instead of output targets.",
+)
+_all_channels_option = click.option(
+    "--all-channels",
+    is_flag=True,
+    help="Act on every release-channel (cohort) repo instead of output targets.",
+)
+
 
 @click.group(name="git")
 def git_group():
@@ -496,9 +675,18 @@ def git_group():
 @git_group.command()
 @click.argument("spec-file", type=click.Path(exists=True, path_type=Path))
 @click.option("--target", help="Specific output target name")
+@_channel_option
+@_all_channels_option
 @click.option("--branch", default="master", help="Default branch name")
 @click.option("--dry-run", is_flag=True, help="Show what would be done without executing")
-def init(spec_file: Path, target: str | None, branch: str, dry_run: bool):
+def init(
+    spec_file: Path,
+    target: str | None,
+    channel: str | None,
+    all_channels: bool,
+    branch: str,
+    dry_run: bool,
+):
     """Initialize git repositories in output directories.
 
     For each output target directory:
@@ -507,10 +695,14 @@ def init(spec_file: Path, target: str | None, branch: str, dry_run: bool):
     - Local repo exists, no remote: skip (print remote URL if configured)
     - Local repo exists, remote exists: add remote origin if not yet configured
 
+    Use --channel NAME / --all-channels to initialize per-cohort release
+    repositories instead of output targets (issue #208).
+
     \b
     Examples:
         clm git init course.xml                # Initialize all targets
         clm git init course.xml --target students  # Initialize specific target
+        clm git init course.xml --channel jan      # Initialize a cohort repo
         clm git init course.xml --dry-run      # Show what would be done
     """
     _dry_run_mode.set(dry_run)
@@ -518,7 +710,7 @@ def init(spec_file: Path, target: str | None, branch: str, dry_run: bool):
         click.echo("[DRY RUN MODE - No changes will be made]")
         click.echo()
 
-    repos = find_output_repos(spec_file, target)
+    repos = _select_repos(spec_file, target=target, channel=channel, all_channels=all_channels)
 
     if not repos:
         click.echo("No output directories found.")
@@ -549,16 +741,27 @@ def init(spec_file: Path, target: str | None, branch: str, dry_run: bool):
 @git_group.command()
 @click.argument("spec-file", type=click.Path(exists=True, path_type=Path))
 @click.option("--target", help="Specific output target name")
+@_channel_option
+@_all_channels_option
 @click.option("--dry-run", is_flag=True, help="Show paths that would be checked")
-def status(spec_file: Path, target: str | None, dry_run: bool):
+def status(
+    spec_file: Path,
+    target: str | None,
+    channel: str | None,
+    all_channels: bool,
+    dry_run: bool,
+):
     """Show git status of output directories.
 
     Displays the git status for each output target that has a repository.
+    Use --channel NAME / --all-channels to report on per-cohort release
+    repositories instead of output targets (issue #208).
 
     \b
     Examples:
         clm git status course.xml
         clm git status course.xml --target students
+        clm git status course.xml --all-channels
         clm git status course.xml --dry-run
     """
     _dry_run_mode.set(dry_run)
@@ -566,7 +769,7 @@ def status(spec_file: Path, target: str | None, dry_run: bool):
         click.echo("[DRY RUN MODE - Showing paths that would be checked]")
         click.echo()
 
-    repos = find_output_repos(spec_file, target)
+    repos = _select_repos(spec_file, target=target, channel=channel, all_channels=all_channels)
 
     if not repos:
         click.echo("No output directories found.")
@@ -626,18 +829,24 @@ def status(spec_file: Path, target: str | None, dry_run: bool):
 @click.option("-m", "--message", default=None, help="Commit message")
 @click.option("--amend", is_flag=True, help="Amend the previous commit")
 @click.option("--target", help="Specific output target name")
+@_channel_option
+@_all_channels_option
 @click.option("--dry-run", is_flag=True, help="Show what would be done without executing")
 def commit(
     spec_file: Path,
     message: str | None,
     amend: bool,
     target: str | None,
+    channel: str | None,
+    all_channels: bool,
     dry_run: bool,
 ):
     """Stage all changes and commit.
 
-    Stages all files (git add -A) and creates a commit with the given message.
-    Skips repositories with no changes.
+    Stages all files (except the private ``.clm-manifest.json``) and creates a
+    commit with the given message. Skips repositories with no changes. Use
+    --channel NAME / --all-channels to commit per-cohort release repositories
+    instead of output targets (issue #208).
 
     \b
     Examples:
@@ -645,6 +854,7 @@ def commit(
         clm git commit course.xml --amend
         clm git commit course.xml --amend -m "New message"
         clm git commit course.xml -m "Fix typos" --target students
+        clm git commit course.xml -m "Release functions" --channel jan
     """
     if not message and not amend:
         raise click.UsageError("Either -m/--message or --amend must be provided.")
@@ -654,7 +864,7 @@ def commit(
         click.echo("[DRY RUN MODE - No changes will be made]")
         click.echo()
 
-    repos = find_output_repos(spec_file, target)
+    repos = _select_repos(spec_file, target=target, channel=channel, all_channels=all_channels)
 
     if not repos:
         click.echo("No output directories found.")
@@ -668,11 +878,13 @@ def commit(
             click.echo()
             continue
 
-        # Stage all changes
-        run_git(repo.path, "add", "-A")
+        # Stage all changes (excluding the private build manifest)
+        _stage_all_excluding_sidecars(repo.path)
 
-        # Check if there are changes to commit (skip for non-amend)
-        if not amend and not has_uncommitted_changes(repo.path):
+        # Check if there is anything *staged* to commit (skip for non-amend).
+        # Gate on the index, not the working tree, so a change that touches only
+        # the excluded manifest is a clean no-op instead of a failed commit.
+        if not amend and not has_staged_changes(repo.path):
             click.echo("  Nothing to commit (working tree clean)")
             click.echo()
             continue
@@ -703,17 +915,29 @@ def commit(
 @click.argument("spec-file", type=click.Path(exists=True, path_type=Path))
 @click.option("--force-with-lease", is_flag=True, help="Force push with lease (safe force push)")
 @click.option("--target", help="Specific output target name")
+@_channel_option
+@_all_channels_option
 @click.option("--dry-run", is_flag=True, help="Show what would be done without executing")
-def push(spec_file: Path, force_with_lease: bool, target: str | None, dry_run: bool):
+def push(
+    spec_file: Path,
+    force_with_lease: bool,
+    target: str | None,
+    channel: str | None,
+    all_channels: bool,
+    dry_run: bool,
+):
     """Push commits to remote.
 
     Pushes commits to the configured remote. Skips repositories without remotes.
+    Use --channel NAME / --all-channels to push per-cohort release repositories
+    instead of output targets (issue #208).
 
     \b
     Examples:
         clm git push course.xml
         clm git push course.xml --force-with-lease
         clm git push course.xml --target students
+        clm git push course.xml --channel jan
         clm git push course.xml --dry-run
     """
     _dry_run_mode.set(dry_run)
@@ -721,7 +945,7 @@ def push(spec_file: Path, force_with_lease: bool, target: str | None, dry_run: b
         click.echo("[DRY RUN MODE - No changes will be made]")
         click.echo()
 
-    repos = find_output_repos(spec_file, target)
+    repos = _select_repos(spec_file, target=target, channel=channel, all_channels=all_channels)
 
     if not repos:
         click.echo("No output directories found.")
@@ -769,6 +993,8 @@ def push(spec_file: Path, force_with_lease: bool, target: str | None, dry_run: b
 )
 @click.option("--force-with-lease", is_flag=True, help="Force push with lease (safe force push)")
 @click.option("--target", help="Specific output target name")
+@_channel_option
+@_all_channels_option
 @click.option("--dry-run", is_flag=True, help="Show what would be done without executing")
 def sync(
     spec_file: Path,
@@ -776,6 +1002,8 @@ def sync(
     amend: bool,
     force_with_lease: bool,
     target: str | None,
+    channel: str | None,
+    all_channels: bool,
     dry_run: bool,
 ):
     """Commit and push in one operation.
@@ -784,7 +1012,9 @@ def sync(
     Checks if remote is ahead first and aborts with instructions if so.
 
     Use --amend to amend the previous commit and force-push. Use
-    --force-with-lease for a safe force push without amending.
+    --force-with-lease for a safe force push without amending. Use
+    --channel NAME / --all-channels to sync per-cohort release repositories
+    instead of output targets (issue #208).
 
     \b
     Examples:
@@ -792,6 +1022,7 @@ def sync(
         clm git sync course.xml --amend
         clm git sync course.xml --amend -m "New message"
         clm git sync course.xml --force-with-lease -m "Update"
+        clm git sync course.xml --channel jan -m "Release functions"
     """
     if not message and not amend:
         raise click.UsageError("Either -m/--message or --amend must be provided.")
@@ -805,7 +1036,7 @@ def sync(
         click.echo("[DRY RUN MODE - No changes will be made]")
         click.echo()
 
-    repos = find_output_repos(spec_file, target)
+    repos = _select_repos(spec_file, target=target, channel=channel, all_channels=all_channels)
 
     if not repos:
         click.echo("No output directories found.")
@@ -841,8 +1072,8 @@ def sync(
                 errors_found = True
                 continue
 
-        # Stage all changes
-        run_git(repo.path, "add", "-A")
+        # Stage all changes (excluding the private build manifest)
+        _stage_all_excluding_sidecars(repo.path)
 
         # Build commit command
         if amend:
@@ -860,8 +1091,9 @@ def sync(
                 errors_found = True
                 continue
         else:
-            # Check if there are changes to commit
-            if has_uncommitted_changes(repo.path):
+            # Check if there is anything *staged* to commit (index-scoped, so an
+            # excluded manifest-only change is a no-op, not a failed commit).
+            if has_staged_changes(repo.path):
                 assert message is not None
                 result = run_git(repo.path, "commit", "-m", message)
                 if result.returncode == 0:
@@ -902,12 +1134,22 @@ def sync(
 @git_group.command()
 @click.argument("spec-file", type=click.Path(exists=True, path_type=Path))
 @click.option("--target", help="Specific output target name")
+@_channel_option
+@_all_channels_option
 @click.option("--dry-run", is_flag=True, help="Show what would be done without executing")
-def reset(spec_file: Path, target: str | None, dry_run: bool):
+def reset(
+    spec_file: Path,
+    target: str | None,
+    channel: str | None,
+    all_channels: bool,
+    dry_run: bool,
+):
     """Reset local repos to remote tracking branch.
 
     Fetches from remote and performs a hard reset to origin/<branch>.
-    Use this to recover when remote is ahead of local.
+    Use this to recover when remote is ahead of local. Use --channel NAME /
+    --all-channels to reset per-cohort release repositories instead of output
+    targets (issue #208).
 
     WARNING: This will discard all local changes!
 
@@ -918,6 +1160,7 @@ def reset(spec_file: Path, target: str | None, dry_run: bool):
     Examples:
         clm git reset course.xml
         clm git reset course.xml --target students
+        clm git reset course.xml --channel jan
         clm git reset course.xml --dry-run
     """
     _dry_run_mode.set(dry_run)
@@ -925,7 +1168,7 @@ def reset(spec_file: Path, target: str | None, dry_run: bool):
         click.echo("[DRY RUN MODE - No changes will be made]")
         click.echo()
 
-    repos = find_output_repos(spec_file, target)
+    repos = _select_repos(spec_file, target=target, channel=channel, all_channels=all_channels)
 
     if not repos:
         click.echo("No output directories found.")

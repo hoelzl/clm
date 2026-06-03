@@ -1,8 +1,12 @@
 # Handover: Per-Topic Solution Release (issue #208)
 
-**Branch**: `worktree-logical-jingling-fiddle` (all work pushed to origin) ·
-**Tip**: `4e06d63` · **Issue**: [#208](https://github.com/hoelzl/clm/issues/208)
+**Branch**: `worktree-logical-jingling-fiddle` ·
+**Issue**: [#208](https://github.com/hoelzl/clm/issues/208) ·
 **Design**: `docs/claude/{requirements,design}/per-topic-solution-release.md`
+
+Latest increment: **step 3b — `clm git --channel` push (DONE)**. The most recent
+commits are local until you push; run `git log --oneline origin/master..` to see
+what is ahead of origin.
 
 ## 1. Feature Overview
 
@@ -44,59 +48,83 @@ manifest) + **one orchestration layer** (`clm release`) that promotes frozen
 - **Step 3 — spec channels + git push** `[IN PROGRESS]`.
   - 3a `<release-channels>` parsing `[DONE]` (`3c47f67`).
   - 3c `clm release --channel` resolution `[DONE]` (`4e06d63`).
-  - **3b `clm git --channel` push `[TODO]` ← ACTIVE NEXT.**
-  - 3d flip `--provenance-manifest` default ON + `clm release sync --push` `[TODO]`.
+  - **3b `clm git --channel` push `[DONE]`.** Cohort repos (NOT `<output-targets>`)
+    are now pushable via `--channel NAME`/`--all-channels` on all 6 `clm git`
+    subcommands. The private `.clm-manifest.json` is staged-excluded (and
+    self-healed out of any pre-exclusion commit); `.clm-released.json` ships.
+  - **3d flip `--provenance-manifest` default ON + `clm release sync --push`
+    `[TODO]` ← ACTIVE NEXT.** Also: write the deferred info-topic docs as one
+    coherent unit here (see Follow-ups).
 - **Step 4 — multi-cohort tests** `[TODO]` (mostly emergent).
 - **Step 5 — recording → slide-version provenance** `[TODO]`.
 - **Follow-ups** `[TODO]`: `SharedImageFile` (shared image mode); `clm release
   week` (section-selector index space is disabled-inclusive — a landmine);
-  info-topic docs (`commands.md`/`spec-files.md`/`migration.md`, project rule).
+  **info-topic docs** (`commands.md`/`spec-files.md`/`migration.md`, project
+  rule) — deliberately deferred to 3d so the whole user-facing surface (`clm
+  release`, `<release-channels>`, AND the new `clm git --channel`/`--all-channels`
+  flags) is documented together once the feature flips on, rather than landing
+  dangling references to undocumented concepts while the manifest is still
+  default-off.
 
 ## 4. Current Status
 
-Steps 1–2 complete; step 3 half done. The full flow works **today** with the
-manifest opt-in:
+Steps 1–2 complete; step 3 is **3a + 3b + 3c done, 3d remaining**. The full flow
+works **today** with the manifest opt-in:
 
 ```bash
 clm build course.xml --provenance-manifest
 clm release add  course.xml functions --channel jan   # ledger resolved from spec
 clm release sync course.xml --channel jan             # source+dest resolved; promote+freeze
+clm git init course.xml --channel jan                 # one-time: make the cohort repo
+clm git sync course.xml --channel jan -m "Release functions"   # commit + push the cohort
 ```
 
-- Working tree clean; HEAD == origin; 8 commits pushed.
-- **Tests**: 46+ across the feature, all green; every pre-commit gate (ruff,
-  mypy, full fast suite) passed on every commit.
-- `--provenance-manifest` is **opt-in (default off)** on purpose: it must not
-  land in student-facing output repos until 3b adds the `.clm-*` `clm git`
-  exclusion. Flip it on in 3d.
+- **Tests**: ~60 across the feature, all green (incl. 30 in
+  `tests/cli/test_git_release_channels.py`); ruff + mypy clean. Validated with
+  an adversarial multi-agent review of the 3b diff (9 findings, all addressed).
+- `--provenance-manifest` is **opt-in (default off)** on purpose. The `clm git`
+  staging exclusion that protects student repos is now in place (3b), so 3d can
+  safely flip the default to on.
+- The manifest exclusion is **self-healing**: `_stage_all_excluding_sidecars`
+  runs `git rm --cached --ignore-unmatch` before the exclude-add, so a manifest
+  that a *pre-exclusion* commit already tracked is purged on the next
+  commit/sync — not left permanently published.
 - No blockers.
 
-## 5. Next Steps — Step 3b: `clm git --channel` push
+## 5. Next Steps — Step 3d: flip `--provenance-manifest` ON + `clm release sync --push` + info-topic docs
 
-Make the cohort repos (which are NOT `<output-targets>`) pushable. In
-`src/clm/cli/commands/git_ops.py`:
+3b is done; 3d is the next active increment. Three parts:
 
-1. Add `source: str = "output"` to `OutputRepo.__init__` (it's a plain class,
-   not attrs; default keeps existing behavior).
-2. Add `find_release_channel_repos(spec_file, channel_filter)` mirroring
-   `find_output_repos` (`git_ops.py:227`): enumerate `spec.release_channels`,
-   resolve each channel's `path` under the course root, derive its remote via
-   `GitHubSpec.derive_remote_url(channel_name, language="", remote_path=ch.remote_path)`,
-   yield ONE `OutputRepo(..., source="channel", language="")` per cohort.
-3. Add `--channel NAME` to the 6 `git` subcommands; when set, operate on channel
-   repos. The per-repo loop, `run_git`, dry-run, and `has_remote()` are already
-   generic over a list of `OutputRepo` — no change needed there.
-4. **`.clm-*` exclusion**: ensure `clm git commit` does not stage `.clm-*`
-   build sidecars (esp. `.clm-manifest.json`), so the private manifest never
-   ships. (Same invariant the release sync already enforces by copying only
-   manifest-listed files.)
-5. Then `clm release sync --push` delegates to this machinery (no second git
-   impl); and 3d flips `--provenance-manifest` default to on.
+1. **Flip `--provenance-manifest` default to ON** in
+   `src/clm/cli/commands/build.py` (`BuildConfig.write_provenance_manifest` +
+   the flag default). Safe now: the `clm git` staging exclusion (3b) keeps the
+   manifest out of every distributed repo and self-heals any already-tracked
+   copy. Keep `--no-provenance-manifest` as the opt-out.
+2. **`clm release sync --push`** in `src/clm/cli/commands/release.py`: after a
+   successful `apply_sync`, delegate to the 3b machinery — call
+   `find_release_channel_repos(spec_file, channel)` + the same commit/push loop
+   `clm git sync` uses (do NOT write a second git impl; consider extracting the
+   per-repo commit+push body from `git_ops.sync` into a reusable helper). Note
+   `clm release sync` already takes an optional SPEC positional and a
+   `--channel`, so the wiring is mostly present.
+3. **Info-topic docs** (project CRITICAL rule, deliberately batched here):
+   document the whole feature as one coherent unit —
+   - `commands.md`: the `clm release` group (add/status/sync) AND the new
+     `clm git --channel`/`--all-channels` flags on init/status/commit/push/
+     sync/reset.
+   - `spec-files.md`: the `<release-channels>` block (`source-target`,
+     `<remote-path>`, `<channel name= path= ledger=>`, per-channel
+     `<remote-path>` override).
+   - `migration.md`: how to adopt per-topic release in an existing course.
+   Use `{version}` placeholders, never hardcoded version numbers.
 
-**Gotchas**: `git_ops.py` `OutputRepo` is mutable, not attrs. `run_git` honors
-the `_dry_run_mode` ContextVar. `resolve_course_paths(spec_file)` returns
-`(course_root, default_output_root)` with `course_root = spec_file.parents[1]`
-(spec lives in a subdir). Channel remote derivation mirrors `OutputTargetSpec`.
+**3b gotchas to carry forward**: `git_ops.py` `OutputRepo` is mutable (not
+attrs); `run_git` honors the `_dry_run_mode` ContextVar; `resolve_course_paths`
+returns `(course_root, default_output_root)` with `course_root =
+spec_file.parents[1]`. The commit/sync "anything to commit?" decision must gate
+on the **index** (`has_staged_changes`, i.e. `git diff --cached --quiet`), NOT
+the working tree (`has_uncommitted_changes`/`git status --porcelain`), or a
+manifest-only delta spuriously errors — see Session Notes.
 
 ## 6. Key Files & Architecture
 
@@ -122,18 +150,35 @@ CLI / build wiring:
 - `src/clm/cli/commands/build.py` — `--provenance-manifest` flag (default off),
   `BuildConfig.write_provenance_manifest`, source-commit capture, post-sweep
   `write_provenance_manifests` hook.
+- `src/clm/cli/commands/git_ops.py` (3b) — `OutputRepo.source`
+  (`"output"`/`"channel"`) + language-free `display_name`;
+  `find_release_channel_repos` (mirrors `find_output_repos` over
+  `<release-channels>`); `_select_repos` (output-vs-channel dispatch + the
+  `--target`-exclusivity / unknown-channel / no-`<release-channels>` guards);
+  `_stage_all_excluding_sidecars` (self-healing recursive manifest exclusion);
+  `has_staged_changes` (index-scoped commit gate); `--channel`/`--all-channels`
+  on all 6 subcommands; `.clm-manifest.json` in the `init_repo_fresh` gitignore
+  template. `GitHubSpec.derive_channel_remote_url` lives in `course_spec.py`
+  (clean `{slug}-{channel}` names, no empty-language `--` wart).
 
 ## 7. Testing Approach
 
 Unit/CLI tests, all in the fast suite. Run:
 ```
 uv run pytest tests/core/test_provenance_manifest.py tests/core/test_git_info.py \
-              tests/core/test_release_channels_spec.py tests/release -q
+              tests/core/test_release_channels_spec.py tests/release \
+              tests/cli/test_git_release_channels.py tests/cli/test_git_ops.py -q
 ```
 (Worktree needs its own `uv sync --extra all` first.) `tests/test-data/course-specs/test-spec-1.xml`
 is the realistic fixture (1 DataFile, duplicated images, a topic-scoped
-dir-group owned by `some_topic_from_test_1`). Still needs tests:
-`clm git --channel` (3b), multi-cohort divergence (step 4), recordings (step 5).
+dir-group owned by `some_topic_from_test_1`).
+`tests/cli/test_git_release_channels.py` (3b) covers URL derivation, channel
+discovery, `_select_repos` guards, and **real-git** end-to-end checks: manifest
+exclusion (root + nested), self-heal of a pre-tracked manifest, manifest-only
+no-op commit, `sync --channel` push to a local bare remote, and `reset
+--channel` no-remote skip. Its e2e class autouse-patches `remote_exists`/
+`remote_has_commits` to stay offline. Still needs tests: multi-cohort
+divergence (step 4), recordings (step 5).
 
 ## 8. Session Notes
 
@@ -145,3 +190,18 @@ dir-group owned by `some_topic_from_test_1`). Still needs tests:
   double-count or treat them as missing.
 - Adding fields to `NotebookPayload` must go through `model_validate` (Issue #17
   landmine) — relevant if step 5 or a future change stamps payloads.
+- **3b manifest-exclusion invariants (do NOT regress):** (1) the staging
+  chokepoint is `_stage_all_excluding_sidecars` — `git rm --cached
+  --ignore-unmatch` (self-heal a pre-tracked manifest) *then* `git add -A`
+  with `:(exclude)` + `:(exclude,glob)**/` pathspecs (root + nested). (2) The
+  "anything to commit?" gate is `has_staged_changes` (`git diff --cached
+  --quiet`), NOT the working-tree `has_uncommitted_changes`; otherwise an
+  untracked, non-ignored manifest as the sole change makes `git commit` exit
+  non-zero and prints `Error`. (3) `.clm-released.json` (frozen manifest) must
+  stay committed — only `.clm-manifest.json` is excluded. (4) Channel repos are
+  language-free (`language=""`, `source="channel"`); `display_name` drops the
+  empty segment. (5) `--target` and `--channel`/`--all-channels` are mutually
+  exclusive; unknown channel / no-`<release-channels>` error loudly (mirror
+  `clm release`).
+- A `git rm --cached --ignore-unmatch` is a safe no-op on a repo with no commits
+  yet (used inside `init_repo_fresh` before the first commit) — verified.
