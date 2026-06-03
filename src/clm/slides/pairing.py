@@ -12,11 +12,15 @@ helpers operate on any cell-like object that exposes ``metadata`` and
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Protocol
 
-from clm.infrastructure.utils.path_utils import split_lang_suffix
+from clm.infrastructure.utils.path_utils import (
+    SUPPORTED_PROG_LANG_EXTENSIONS,
+    is_ignored_dir_for_course,
+    split_lang_suffix,
+)
 from clm.notebooks.slide_parser import CellMetadata
 
 # Title-slide anchors:
@@ -267,3 +271,100 @@ def derive_split_pair_from_stem(path: Path) -> tuple[Path, Path] | None:
     de = path.with_name(f"{stem}.de{ext}")
     en = path.with_name(f"{stem}.en{ext}")
     return (de, en) if de.exists() and en.exists() else None
+
+
+# ---------------------------------------------------------------------------
+# Directory enumeration (the ``clm slides sync DIR`` batch surface)
+#
+# Prefix-agnostic by design, like the rest of the CLI-facing split helpers
+# above. Reusing ``topic_resolver.find_slide_files_recursive`` /
+# ``is_slides_file`` here would silently skip every prefix-less deck
+# (``apis.de.py``) the sync surface deliberately supports — a #162-class silent
+# miss — because those are gated on the ``slides_``/``topic_``/``project_``
+# build-routing prefix.
+# ---------------------------------------------------------------------------
+
+
+def _is_split_slide_file(path: Path) -> bool:
+    """A file is a sync-able split half iff it carries a ``.de``/``.en`` tag and a
+    supported program extension — and is **not** a voiceover companion.
+
+    Prefix-agnostic (uses :func:`split_lang_tag`, not
+    :func:`~clm.infrastructure.utils.path_utils.is_slides_file`). Voiceover
+    companions (``voiceover_*``) carry a language tag and a ``.py`` extension but
+    are extract *output*, never decks — excluding them here keeps them from being
+    enumerated and then warned about as phantom solo halves.
+    """
+    if path.name.startswith("voiceover_"):
+        return False
+    return split_lang_tag(path) is not None and path.suffix in SUPPORTED_PROG_LANG_EXTENSIONS
+
+
+def find_split_slide_files_recursive(path: Path) -> list[Path]:
+    """Every split-format slide half (``*.de.<ext>`` / ``*.en.<ext>``) at or under
+    ``path``, **prefix-agnostic** — recognises ``apis.de.py`` as well as
+    ``slides_x.de.py``.
+
+    Unlike :func:`clm.core.topic_resolver.find_slide_files_recursive` (gated on the
+    ``slides_``/``topic_``/``project_`` routing prefix, and early-exiting on a topic
+    dir's direct children), this descends the **whole** subtree and keeps any file
+    matching :func:`_is_split_slide_file`. The prefix gate is deliberately dropped
+    and the early-exit is *not* mirrored: ``clm slides sync`` reconciles whatever
+    split decks the author keeps wherever they keep them, so a stray top-level deck
+    must not stop the walk from reaching nested module dirs (that would be a silent
+    miss). Paths are resolved so the per-pair watermark key (the
+    ``(de_path, en_path)`` strings) is stable regardless of how ``path`` was spelled.
+
+    Directories the course scan ignores (``.git``, ``.venv``, ``build``, ``dist``,
+    ``__pycache__`` …) are pruned, so a vendored or archived ``.de``/``.en`` copy
+    under one of them is never enumerated — and thus never **written** on a writing
+    batch. The ignored-dir test is applied to each file's path *relative to*
+    ``path``, so an ignored component in ``path``'s own prefix (e.g. a tree that
+    itself lives under ``build/``) cannot falsely exclude everything. The
+    single-file branch is exempt: an explicitly named file is always honoured.
+    """
+    if path.is_file():
+        return [path.resolve()] if _is_split_slide_file(path) else []
+    if not path.is_dir():
+        return []
+    return sorted(
+        f.resolve()
+        for f in path.rglob("*")
+        if f.is_file()
+        and _is_split_slide_file(f)
+        and not is_ignored_dir_for_course(f.parent.relative_to(path))
+    )
+
+
+def iter_split_pairs(paths: Iterable[Path]) -> tuple[list[tuple[Path, Path]], list[Path]]:
+    """Partition split-slide ``paths`` into ordered ``(de, en)`` pairs and leftover
+    solo halves.
+
+    Mirrors :func:`clm.slides.assign_ids.assign_ids_in_directory`'s
+    ``fileset``/``handled`` skeleton but pairs through the prefix-agnostic
+    :func:`derive_split_pair` (which already rejects ``voiceover_*``). A half whose
+    twin is **not among ``paths``** (no sibling under the enumerated tree) is
+    returned in the solo list — the caller decides how to report it (``clm slides
+    sync`` warns and skips it, never syncing against a phantom empty twin, the same
+    rationale as the single-path missing-twin error). Deterministic: input is
+    sorted, each pair's DE half comes first, and every path lands in exactly one of
+    the two lists.
+    """
+    files = sorted(set(paths))
+    fileset = set(files)
+    handled: set[Path] = set()
+    pairs: list[tuple[Path, Path]] = []
+    solos: list[Path] = []
+    for f in files:
+        if f in handled:
+            continue
+        pair = derive_split_pair(f)
+        if pair is None or pair[0] not in fileset or pair[1] not in fileset:
+            solos.append(f)
+            handled.add(f)
+            continue
+        de_path, en_path = pair
+        pairs.append((de_path, en_path))
+        handled.add(de_path)
+        handled.add(en_path)
+    return pairs, solos

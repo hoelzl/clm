@@ -761,6 +761,21 @@ still run through the pairing guard above. A missing twin is a clear usage error
 (exit 2) — sync never invents a translated half; run `clm slides split` first.
 The two-path form is unchanged.
 
+**Batch mode (since CLM {version}).** `DE_PATH` may also be a **directory** —
+every `.de`/`.en` deck pair under the tree is synced in one pass. Enumeration is
+prefix-agnostic (un-prefixed decks like `apis.de.py` count too) and descends the
+whole subtree; voiceover companions (`voiceover_*`) are ignored. A half with **no
+twin** under the tree is **skipped with a warning**, never synced against a
+phantom empty twin. The sweep **continues past a failing pair** (recording it as
+errored) and the process exit code is the **worst** over all pairs (`0` clean <
+`1` review < `2` error). A summary one-liner per pair plus a final rollup
+(`N pair(s): X clean, Y review, Z errored`) is printed; `--dry-run` and
+`--explain` behave as for a single pair, applied to each. A **writing** directory
+run requires **`--yes`** (or an interactive confirm), since it writes to every
+pair at once; `--dry-run` / `--explain` directory runs are unprompted.
+`--interactive` is single-pair only (it walks one pair's proposals) and is
+rejected with a directory. Do **not** pass a second path with a directory.
+
 **Default behavior changed in CLM {version}: the command now writes to
 the working tree.** A bare `clm slides sync de en` applies the agreed
 changes (it no longer just prints a diff). Nothing is committed —
@@ -852,6 +867,7 @@ propagation direction, drifted ids) for any pair.
 
 ```
 clm slides sync [OPTIONS] DE_PATH [EN_PATH]
+clm slides sync [OPTIONS] DIR          # batch: sync every pair under DIR
 ```
 
 | Option | Description |
@@ -869,6 +885,7 @@ clm slides sync [OPTIONS] DE_PATH [EN_PATH]
 | `--cache-dir PATH` | Directory holding the structural watermark. Lookup order: flag → `$CLM_CACHE_DIR` → `tool.clm.cache_dir` in `pyproject.toml` → `<cwd>/.clm-cache/`. |
 | `--no-cache` | Do not read or write the watermark. Every run then re-derives its baseline from git `HEAD` and no synced state is persisted. |
 | `--no-env-file` | Do not auto-load a `.env` file. By default sync loads the first `.env` found above each deck (without overriding already-set variables), so keys kept in the project `.env` reach the judge/translator. |
+| `--yes`, `-y` | **Batch (`DIR`) only.** Confirm a writing directory run without the interactive prompt. A directory apply writes to every pair under the tree, so it is gated; `--dry-run` / `--explain` directory runs are unprompted. Ignored for a single pair. |
 | `--json` | Emit a JSON report instead of human-readable lines. |
 
 Exit codes: `0` clean (every change applied, or nothing to do, with no
@@ -890,6 +907,13 @@ The JSON report carries `mode` (`dry-run` / `apply` / `interactive`),
 accept/skip/defer counters under `--interactive`. These counters are the
 pilot accept-rate instrumentation.
 
+In **batch (`DIR`) mode** the `--json` report is instead an envelope
+`{ "mode", "root", "exit_code", "pairs": [ … ] }`, where each entry of
+`pairs` is exactly one single-pair object as above (so a tool can treat
+`pairs[i]` like an individual `clm slides sync --json`); a pair that errored
+appears as `{ "de_path", "en_path", "mode", "exit_code", "error" }`. A writing
+batch with `--json` requires `--yes` (there is no prompt to fall back to).
+
 Examples:
 
 ```bash
@@ -898,6 +922,12 @@ clm slides sync slides/topic/intro.de.py slides/topic/intro.en.py
 
 # Single-path: pass one half, the twin is derived from disk.
 clm slides sync slides/topic/intro.de.py
+
+# Batch: preview every pair under a directory (unprompted, writes nothing).
+clm slides sync slides/ --dry-run
+
+# Batch: sync every pair under a directory (writing → needs --yes).
+clm slides sync slides/ --yes
 
 # Preview the plan first — write nothing.
 clm slides sync intro.de.py intro.en.py --dry-run

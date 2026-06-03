@@ -218,6 +218,19 @@ the safe one — no command was removed and every tool stays fully invocable.
   halves. A missing twin is a clear usage error (exit 2); sync never invents a
   translated half. *Migration:* purely additive — the two-path form is unchanged,
   so existing invocations and scripts keep working.
+- **`clm slides sync` accepts a directory (batch mode).** Pass a directory and
+  every `.de`/`.en` deck pair under the tree is synced in one pass (prefix-agnostic
+  enumeration, voiceover companions ignored). A half with no twin under the tree is
+  **skipped with a warning**; the sweep **continues past a failing pair** and the
+  exit code is the **worst** over all pairs (`0` < `1` < `2`). A **writing**
+  directory run requires **`--yes`** (or an interactive confirm) since it writes to
+  every pair at once; `--dry-run` / `--explain` directory runs are unprompted.
+  `--interactive` stays single-pair only, and a second path with a directory is a
+  usage error. `--json` over a directory returns an envelope
+  `{ "mode", "root", "exit_code", "pairs": [ … ] }` (each `pairs` entry is one
+  single-pair object). *Migration:* purely additive — passing a single file or a
+  pair is unchanged; only a directory argument (previously rejected) now triggers
+  the sweep.
 
 ## Slide format redesign: `clm validate` enforces `slide_id` (warning now, error in 1.7)
 
