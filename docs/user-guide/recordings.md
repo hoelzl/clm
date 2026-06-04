@@ -237,7 +237,10 @@ available while a recording is in progress — stop first.
 ## Recording State
 
 Each course can track which recordings belong to which lectures. State is
-stored as JSON files under `~/.config/clm/recordings/`.
+stored as JSON files under `~/.config/clm/recordings/`. At record time CLM
+also stamps each part with the `section_id`, `topic_id`, and `slide_digest`
+of the slides that were presented, which enables drift detection (see
+[Detecting Stale Recordings](#detecting-stale-recordings-slide-drift)).
 
 ### Viewing Status
 
@@ -267,7 +270,10 @@ Each course has a JSON state file (`~/.config/clm/recordings/<course-id>.json`):
           "git_commit": "a1b2c3def456",
           "git_dirty": false,
           "recorded_at": "2025-03-01T10:15:22",
-          "status": "processed"
+          "status": "processed",
+          "section_id": "010-control-flow",
+          "topic_id": "010-intro",
+          "slide_digest": "9f86d081884c7d65"
         }
       ]
     }
@@ -278,6 +284,11 @@ Each course has a JSON state file (`~/.config/clm/recordings/<course-id>.json`):
 ```
 
 Recording status values: `pending`, `processing`, `processed`, `failed`.
+
+The `section_id`, `topic_id`, and `slide_digest` fields are optional (they
+default to `null`) and are absent in pre-1.8 state files, which are still
+loaded for backward compatibility. When present they record the slide
+provenance used by [drift detection](#detecting-stale-recordings-slide-drift).
 
 ### Assignment Modes
 
@@ -293,6 +304,41 @@ Recording status values: `pending`, `processing`, `processed`, `failed`.
 When a recording is assigned to a lecture, the tool captures the current
 git commit hash and dirty status of the course repository. This lets you
 correlate recordings with the exact version of the slides that were presented.
+
+### Detecting Stale Recordings (Slide Drift)
+
+```bash
+clm recordings drift python-basics
+```
+
+`clm recordings drift COURSE_ID` compares each recorded part's stamped slide
+digest against the topic's current digest in the build provenance manifest
+(`.clm-manifest.json`) and classifies every part as:
+
+- **current** — the slides are unchanged since the recording was made.
+- **changed** — the slides have been edited since the recording, so the part
+  may need to be re-recorded.
+- **unknown** — the part predates provenance stamping, or its topic is absent
+  from the manifest.
+
+The manifest is resolved in priority order: `--manifest` > `--source` >
+`--spec-file`'s default `output/` root > the `spec_file` of the matching
+`recordings.courses` config entry.
+
+| Flag | Purpose |
+|------|---------|
+| `--source DIR` | Built output root containing `.clm-manifest.json` (overrides the spec's default `output/` location). |
+| `--manifest FILE` | Path to a specific `.clm-manifest.json` (overrides `--source` and the spec). |
+| `--spec-file FILE` | Course spec XML; its default `output/` root is searched for the manifest. |
+| `--all` | Show every recorded part, not just the ones whose slides changed. |
+| `--json` | Emit machine-readable JSON. |
+
+```bash
+# Show every part (including current ones) using an explicit manifest
+clm recordings drift python-basics \
+    --manifest /output/python-basics/.clm-manifest.json \
+    --all
+```
 
 ## Course Configuration
 

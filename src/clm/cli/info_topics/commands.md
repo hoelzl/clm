@@ -420,10 +420,15 @@ clm slides search lists --course-spec course-specs/python.xml
 
 ### `clm validate` (spec mode)
 
-`clm validate course.xml` dispatches to spec validation when the
-argument is an `.xml` file.
+`clm validate` is one unified command that validates **either** a course
+specification **or** slide files, dispatching on the input type: an `.xml`
+file → spec validation (this section); a `.py` file or a directory → slide
+validation (see *`clm validate` (slides mode)* below). Override the inference
+with `--kind`.
 
-*Removed in CLM 1.8: the flat alias `clm validate-spec` no longer exists — use this group-qualified form.*
+*Removed in CLM 1.8: the flat aliases `clm validate-spec` and
+`clm validate-slides` no longer exist — both are folded into this single
+`clm validate` command.*
 
 Validate a course specification XML file for consistency.
 
@@ -437,6 +442,7 @@ that referenced dir-group paths exist.
 
 | Option | Description |
 |--------|-------------|
+| `--kind [slides\|spec]` | Force a validator instead of inferring from the path (`.xml` → spec, `.py`/directory → slides). `--kind=spec` requires an `.xml` file. |
 | `--data-dir DIR` | Course data directory (contains slides/) |
 | `--json` | Output as JSON |
 | `--include-disabled` | Also validate sections marked `enabled="false"`; each finding from a disabled section has `(disabled)` appended to its message (default: disabled sections are skipped) |
@@ -525,6 +531,7 @@ clm validate [OPTIONS] PATH
 
 | Option | Description |
 |--------|-------------|
+| `--kind [slides\|spec]` | Force a validator instead of inferring from the path (`.xml` → spec, `.py`/directory → slides). |
 | `--checks TEXT` | Comma-separated checks: `format`, `pairing`, `tags`, `code_quality`, `voiceover`, `completeness` (CLI default: all deterministic) |
 | `--quick` | Fast syntax-only check (format + tags + slide_ids). Useful for PostToolUse hooks |
 | `--json` | Output as JSON |
@@ -1394,24 +1401,31 @@ clm mcp [OPTIONS]
 | `--data-dir DIR` | Course data directory (default: `CLM_DATA_DIR` or cwd) |
 | `--log-level TEXT` | Log level for stderr output |
 
-The MCP server exposes 11 tools over stdio transport:
+The MCP server exposes 16 tools over stdio transport. Tool names mirror the
+CLI verb-group structure (group-first); the flat pre-1.8 names
+(`resolve_topic`, `validate_slides`, …) were renamed in CLM 1.8.
 
 | Tool | Description |
 |------|-------------|
-| `resolve_topic` | Resolve topic ID or glob pattern to filesystem path |
-| `search_slides` | Fuzzy search across topic names and slide titles |
+| `topic_resolve` | Resolve topic ID or glob pattern to filesystem path |
+| `slides_search` | Fuzzy search across topic names and slide titles |
 | `course_outline` | Generate structured JSON course outline |
-| `validate_spec` | Validate course specification XML |
-| `validate_slides` | Validate slide files (format, tags, pairing) |
-| `normalize_slides` | Apply mechanical fixes (tag migration, interleaving, slide IDs) |
-| `get_language_view` | Extract single-language view with line annotations |
-| `suggest_sync` | Detect asymmetric bilingual edits vs git HEAD |
-| `extract_voiceover` | Move voiceover cells to a companion file; on a split half auto-pairs both companions (`both`/`single` params, `"paired"` JSON) |
-| `inline_voiceover` | Merge voiceover cells back from companion file |
-| `course_authoring_rules` | Look up merged authoring rules for a course |
+| `validate` | Validate a course spec (`.xml`) or slide files; dispatches on input type (override with the `kind` parameter). Replaces the former `validate_spec` + `validate_slides`. |
+| `slides_normalize` | Apply mechanical fixes (tag migration, interleaving, slide IDs) |
+| `slides_language_view` | Extract single-language view with line annotations |
+| `slides_suggest_sync` | Detect asymmetric bilingual edits vs git HEAD |
+| `voiceover_extract` | Move voiceover cells to a companion file; on a split half auto-pairs both companions (`both`/`single` params, `"paired"` JSON) |
+| `voiceover_inline` | Merge voiceover cells back from companion file |
+| `authoring_rules` | Look up merged authoring rules for a course |
+| `voiceover_transcribe` | Transcribe a video through the voiceover artifact cache |
+| `voiceover_identify_rev` | Identify which historical revision a recording was made against |
+| `voiceover_compare` | Compare voiceover content between two slide files |
+| `voiceover_backfill_dry` | Preview a backfill (identify-rev → sync-at-rev → port) without writing |
+| `voiceover_cache_list` | List entries in the voiceover artifact cache |
+| `voiceover_trace_show` | Read a voiceover merge-trace log and return entries as JSON |
 
 All tools accept paths relative to the data directory or as absolute paths.
-Most return JSON; `get_language_view` returns annotated plain text.
+Most return JSON; `slides_language_view` returns annotated plain text.
 
 ### `clm status`
 
@@ -2552,6 +2566,7 @@ Create and manage ZIP archives of course output.
 | `CLM_LLM__MAX_CONCURRENT` | Max parallel LLM calls (default: 3) |
 | `CLM_LLM__TEMPERATURE` | LLM sampling temperature (default: 0.3) |
 | `CLM_SYNC_PROVIDER` | Default edit-judge backend for `clm slides sync`: `openrouter` (default) or `local`. Overridden by `--provider`. |
+| `CLM_SYNC__SHARED_DIVERGENCE` | How `clm slides sync` handles a language-neutral code cell edited *differently* on both decks: `auto-heal` (default) propagates the winning side (keyed direction, else newer file) and warns; `error` surfaces it and writes nothing so you resolve it by hand. |
 | `OPENROUTER_API_KEY` | OpenRouter API key for `clm slides sync` (edit judge + new-slide translation); falls back to `OPENAI_API_KEY`. |
 | `CLM_RECORDINGS__OBS_OUTPUT_DIR` | Directory where OBS saves recordings |
 | `CLM_RECORDINGS__ACTIVE_COURSE` | Currently active course ID |

@@ -61,13 +61,13 @@ Set the verbosity of logs:
 
 ```bash
 # Show all logs including DEBUG messages
-CLM_E2E_LOG_LEVEL=DEBUG pytest -m e2e
+CLM_LOG_LEVEL=DEBUG pytest -m e2e
 
 # Show only warnings and errors (quieter)
-CLM_E2E_LOG_LEVEL=WARNING pytest -m e2e
+CLM_LOG_LEVEL=WARNING pytest -m e2e
 
 # Default is INFO
-CLM_E2E_LOG_LEVEL=INFO pytest -m e2e
+CLM_LOG_LEVEL=INFO pytest -m e2e
 ```
 
 ### Progress Update Interval
@@ -114,13 +114,13 @@ CLM_E2E_SHOW_WORKER_DETAILS=true pytest -m e2e
 
 ```bash
 # Verbose logging with frequent updates and early warnings
-CLM_E2E_LOG_LEVEL=DEBUG \
+CLM_LOG_LEVEL=DEBUG \
 CLM_E2E_PROGRESS_INTERVAL=2 \
 CLM_E2E_LONG_JOB_THRESHOLD=10 \
 pytest -m e2e
 
 # Quiet logging for CI/CD
-CLM_E2E_LOG_LEVEL=WARNING \
+CLM_LOG_LEVEL=WARNING \
 CLM_E2E_SHOW_WORKER_DETAILS=false \
 pytest -m e2e
 ```
@@ -130,7 +130,7 @@ pytest -m e2e
 You can also control logging with pytest's built-in options:
 
 ```bash
-# Adjust pytest's log level (overrides CLM_E2E_LOG_LEVEL for pytest output)
+# Adjust pytest's log level (overrides CLM_LOG_LEVEL for pytest output)
 pytest -m e2e --log-cli-level=DEBUG
 
 # Disable live logging entirely (not recommended for e2e tests)
@@ -218,7 +218,7 @@ pytest -m e2e --log-cli-level=INFO
 Use a higher log level:
 
 ```bash
-CLM_E2E_LOG_LEVEL=ERROR pytest -m e2e
+CLM_LOG_LEVEL=ERROR pytest -m e2e
 ```
 
 Or disable progress tracking entirely by setting the interval very high:
@@ -288,7 +288,6 @@ Tests run on multiple Python versions:
 - Python 3.11
 - Python 3.12
 - Python 3.13
-- Python 3.14
 
 ### Code Coverage
 

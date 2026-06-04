@@ -45,30 +45,29 @@ docker build ...
 
 **IMPORTANT**: All builds must be run from the **root directory** of the project, as the Dockerfiles need access to both the service code and the shared `clm-common` directory.
 
-### Using the Build Script (Recommended)
+### Using `clm docker build` (Recommended)
 
-For convenience, use the provided build script:
+For convenience, use the built-in `clm docker build` command. Build cache is
+stored locally in `.docker-cache/` and reused automatically.
 
-**Linux/macOS:**
 ```bash
 # Build all services
-./build-services.sh
+clm docker build
 
-# Build specific service
-./build-services.sh drawio-converter
-./build-services.sh notebook-processor
-./build-services.sh plantuml-converter
-```
+# Build a specific service (plantuml, drawio, notebook)
+clm docker build drawio
+clm docker build notebook
+clm docker build plantuml
 
-**Windows PowerShell:**
-```powershell
-# Build all services
-.\build-services.ps1
+# Build a single notebook variant (both are built by default)
+clm docker build notebook:lite
+clm docker build notebook:full
 
-# Build specific service
-.\build-services.ps1 drawio-converter
-.\build-services.ps1 notebook-processor
-.\build-services.ps1 plantuml-converter
+# Rebuild from scratch, ignoring the local cache
+clm docker build --no-cache notebook
+
+# See all options
+clm docker build --help
 ```
 
 ### Manual Build from Root Directory
@@ -135,36 +134,23 @@ After building your images, you can push them to Docker Hub for sharing or deplo
    docker login
    ```
 
-### Using the Push Script (Recommended)
+### Using `clm docker push` (Recommended)
 
-**Linux/macOS:**
+Make sure you have run `docker login` first (see Prerequisites above), then
+use the built-in `clm docker push` command:
+
 ```bash
 # Push all services
-./push-services.sh YOUR_DOCKERHUB_USERNAME
+clm docker push
 
-# Push specific service
-./push-services.sh YOUR_DOCKERHUB_USERNAME drawio-converter
-./push-services.sh YOUR_DOCKERHUB_USERNAME notebook-processor
-./push-services.sh YOUR_DOCKERHUB_USERNAME plantuml-converter
+# Push a specific service (use full names)
+clm docker push drawio-converter
+clm docker push notebook-processor
+clm docker push plantuml-converter
+
+# See all options
+clm docker push --help
 ```
-
-**Windows PowerShell:**
-```powershell
-# Push all services
-.\push-services.ps1 YOUR_DOCKERHUB_USERNAME
-
-# Push specific service
-.\push-services.ps1 YOUR_DOCKERHUB_USERNAME drawio-converter
-.\push-services.ps1 YOUR_DOCKERHUB_USERNAME notebook-processor
-.\push-services.ps1 YOUR_DOCKERHUB_USERNAME plantuml-converter
-```
-
-### What the Push Script Does
-
-For each service, the script:
-1. Tags the local image as `username/clm-service-name:0.3.0`
-2. Tags the local image as `username/clm-service-name:latest`
-3. Pushes both tags to Docker Hub
 
 ### Manual Push
 
@@ -173,22 +159,22 @@ You can also push manually:
 **Linux/macOS:**
 ```bash
 # Tag the image
-docker tag clm-drawio-converter YOUR_USERNAME/clm-drawio-converter:0.3.0
+docker tag clm-drawio-converter YOUR_USERNAME/clm-drawio-converter:1.7.0
 docker tag clm-drawio-converter YOUR_USERNAME/clm-drawio-converter:latest
 
 # Push to Docker Hub
-docker push YOUR_USERNAME/clm-drawio-converter:0.3.0
+docker push YOUR_USERNAME/clm-drawio-converter:1.7.0
 docker push YOUR_USERNAME/clm-drawio-converter:latest
 ```
 
 **Windows PowerShell:**
 ```powershell
 # Tag the image
-docker tag clm-drawio-converter YOUR_USERNAME/clm-drawio-converter:0.3.0
+docker tag clm-drawio-converter YOUR_USERNAME/clm-drawio-converter:1.7.0
 docker tag clm-drawio-converter YOUR_USERNAME/clm-drawio-converter:latest
 
 # Push to Docker Hub
-docker push YOUR_USERNAME/clm-drawio-converter:0.3.0
+docker push YOUR_USERNAME/clm-drawio-converter:1.7.0
 docker push YOUR_USERNAME/clm-drawio-converter:latest
 ```
 
@@ -208,13 +194,24 @@ When you rebuild, pip will:
 2. Only download new or updated packages
 3. Install from the local cache when possible
 
-### Conda/Mamba Cache
+### Micromamba and uv Cache
 
-For the notebook-processor, conda packages are cached in `/opt/conda/pkgs`:
+For the notebook-processor, micromamba provides a clean managed Python base
+environment (Python plus the `xeus-cpp` C++ kernel, which cannot be installed
+via pip). This step is not cache-mounted:
 
 ```dockerfile
-RUN --mount=type=cache,target=/opt/conda/pkgs \
-    micromamba install -y -n base -f packages.yaml
+RUN /usr/local/bin/micromamba install -y -n base -c conda-forge \
+    python=3.12 xeus-cpp>=0.8 ... && \
+    /usr/local/bin/micromamba clean -a -y
+```
+
+The remaining Python packages are installed with `uv pip`, using a BuildKit
+cache mount on uv's package cache so they are reused across builds:
+
+```dockerfile
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --python /opt/conda/bin/python ...
 ```
 
 ### Apt Cache

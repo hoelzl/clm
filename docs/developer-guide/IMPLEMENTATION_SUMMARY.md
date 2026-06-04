@@ -1,5 +1,7 @@
 # Direct Worker Execution - Implementation Summary
 
+*Historical implementation summary; file paths reflect the current clm.infrastructure layout.*
+
 ## Overview
 
 Successfully implemented the ability to run CLM workers directly as Python subprocesses, without requiring Docker containers. This feature maintains full backward compatibility while adding a simpler execution mode for development, testing, and environments where Docker is unavailable.
@@ -36,42 +38,42 @@ Successfully implemented the ability to run CLM workers directly as Python subpr
 ### Files Changed
 
 **New Files:**
-- `clm-common/src/clm_common/workers/worker_executor.py` (510 lines)
+- `src/clm/infrastructure/workers/worker_executor.py`
   - `WorkerExecutor` abstract base class
   - `DockerWorkerExecutor` implementation
   - `DirectWorkerExecutor` implementation
   - `WorkerConfig` dataclass with validation
 
-- `clm-common/tests/workers/test_worker_executor.py` (576 lines)
+- `tests/infrastructure/workers/test_worker_executor.py`
   - 20 unit tests covering both executors
   - Tests for configuration validation
   - Mock-based testing for subprocess and Docker API
 
-- `clm-common/tests/workers/test_direct_integration.py` (410 lines)
+- `tests/infrastructure/workers/test_direct_integration.py`
   - Integration tests for direct worker lifecycle
   - Job processing tests
   - Mixed-mode tests (Docker + Direct)
   - Health monitoring tests
 
-- `docs/direct_worker_execution.md` (comprehensive user guide)
+- `docs/developer-guide/direct_worker_execution.md` (comprehensive user guide)
 - `examples/direct_worker_example.py` (demonstration script)
 
 **Modified Files:**
-- `clm-common/src/clm_common/workers/pool_manager.py`
+- `src/clm/infrastructure/workers/pool_manager.py`
   - Refactored to use executor abstraction
   - Lazy Docker client initialization
   - Support for mixed execution modes
 
-- `services/notebook-processor/src/nb/notebook_worker.py`
+- `src/clm/workers/notebook/notebook_worker.py`
   - Updated `register_worker()` to support `WORKER_ID`
 
-- `services/drawio-converter/src/drawio_converter/drawio_worker.py`
+- `src/clm/workers/drawio/drawio_worker.py`
   - Updated `register_worker()` to support `WORKER_ID`
 
-- `services/plantuml-converter/src/plantuml_converter/plantuml_worker.py`
+- `src/clm/workers/plantuml/plantuml_worker.py`
   - Updated `register_worker()` to support `WORKER_ID`
 
-- `clm-common/tests/workers/test_pool_manager.py`
+- `tests/infrastructure/workers/test_pool_manager.py`
   - Updated for lazy Docker initialization
 
 ### Test Coverage
@@ -102,8 +104,8 @@ Successfully implemented the ability to run CLM workers directly as Python subpr
 ### Direct Mode Only
 
 ```python
-from clm_common.workers.pool_manager import WorkerPoolManager
-from clm_common.workers.worker_executor import WorkerConfig
+from clm.infrastructure.workers.pool_manager import WorkerPoolManager
+from clm.infrastructure.workers.worker_executor import WorkerConfig
 
 configs = [
     WorkerConfig(
@@ -230,16 +232,16 @@ Real process execution for:
 
 ```bash
 # Run all worker tests
-pytest clm-common/tests/workers/ -v
+pytest tests/infrastructure/workers/ -v
 
 # Run only unit tests
-pytest clm-common/tests/workers/test_worker_executor.py -v
+pytest tests/infrastructure/workers/test_worker_executor.py -v
 
 # Run only integration tests
-pytest clm-common/tests/workers/test_direct_integration.py -v -m integration
+pytest tests/infrastructure/workers/test_direct_integration.py -v -m integration
 
 # Run with coverage
-pytest clm-common/tests/workers/ --cov=clm_common.workers --cov-report=html
+pytest tests/infrastructure/workers/ --cov=clm.infrastructure.workers --cov-report=html
 ```
 
 ## Migration Path
@@ -322,21 +324,21 @@ Potential improvements identified:
 ## Documentation
 
 Complete documentation available:
-- **User Guide**: `docs/direct_worker_execution.md`
+- **User Guide**: `docs/developer-guide/direct_worker_execution.md`
 - **Examples**: `examples/direct_worker_example.py`
 - **API Reference**: Inline docstrings
 - **Architecture**: This document
 
 ## Commits
 
-1. **Initial Implementation** (commit 2cb1f3f)
+1. **Initial Implementation** (see git history / the merged PR)
    - Worker executor abstraction layer
    - Direct and Docker implementations
    - Worker registration updates
    - Comprehensive tests
    - Documentation and examples
 
-2. **Test Fixes** (commit d930bee)
+2. **Test Fixes** (see git history / the merged PR)
    - Fixed Docker executor mocking
    - Fixed platform-specific tests
    - Updated pool manager tests for lazy init
@@ -354,7 +356,7 @@ The direct worker execution feature is **production-ready** and provides a valua
 - Code committed and pushed to feature branch
 
 **Next Steps**:
-1. Review PR: https://github.com/hoelzl/clm/pull/new/claude/add-direct-worker-execution-011CV4auBeSCndRbSZaRKqAd
+1. Review PR (see git history / the merged PR)
 2. Merge to main branch
 3. Update release notes
 4. Consider future enhancements as needed

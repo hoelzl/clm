@@ -253,15 +253,34 @@ clm build course.xml \
 
 ### Disable Auto-Management
 
-```bash
+Auto-management is controlled through the `[worker_management]` config section,
+not through `clm build` flags. Set the relevant keys in `.clm/config.toml`:
+
+```toml
+[worker_management]
 # Don't auto-start workers (use existing)
-clm build course.xml --no-auto-start
+auto_start = false
 
 # Don't auto-stop workers (keep running)
-clm build course.xml --no-auto-stop
+auto_stop = false
 
 # Start fresh workers (don't reuse)
-clm build course.xml --fresh-workers
+reuse_workers = false
+```
+
+The same settings can be overridden per-build with environment variables:
+
+```bash
+# Don't auto-start workers (use existing)
+export CLM_WORKER_MANAGEMENT__AUTO_START=false
+
+# Don't auto-stop workers (keep running)
+export CLM_WORKER_MANAGEMENT__AUTO_STOP=false
+
+# Start fresh workers (don't reuse)
+export CLM_WORKER_MANAGEMENT__REUSE_WORKERS=false
+
+clm build course.xml
 ```
 
 ## Troubleshooting
@@ -277,8 +296,8 @@ clm workers list
 # Check for dead/hung workers
 clm workers cleanup
 
-# Force fresh workers
-clm build course.xml --fresh-workers
+# Force fresh workers (don't reuse existing ones)
+CLM_WORKER_MANAGEMENT__REUSE_WORKERS=false clm build course.xml
 ```
 
 ### Stale Workers

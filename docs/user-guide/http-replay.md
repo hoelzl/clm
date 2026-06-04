@@ -244,8 +244,9 @@ not substitutes — a topic that has a cassette should rely on replay and
 ## Troubleshooting
 
 - **`Cannot find cassette file ... and mode is replay`** — the topic opts
-  in but no cassette has been recorded. Run locally with the default
-  `once` mode, commit the generated cassette, and re-run CI.
+  in but no cassette has been recorded. Run locally to record the
+  cassette (the default `new-episodes` mode replays existing recordings
+  and appends new ones), commit it, and re-run CI.
 - **`Can't overwrite existing cassette in 'none' mode`** — a cell issued
   a request that is not recorded. If the notebook now makes additional
   requests but the existing recordings are still valid, run

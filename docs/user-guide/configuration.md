@@ -205,7 +205,7 @@ in bulk.
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `CLM_LOGGING__LOG_LEVEL` | Log level (DEBUG, INFO, WARNING, ERROR) | `INFO` |
+| `CLM_LOGGING__LOG_LEVEL` | Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL) | `INFO` |
 | `CLM_LOGGING__ENABLE_TEST_LOGGING` | Enable logging during tests | `false` |
 | `CLM_LOG_DIR` | Directory for `clm.log` and `workers/` logs. Overrides the platform default (Windows: `%LOCALAPPDATA%/clm/Logs`; macOS: `~/Library/Logs/clm`; Linux: `~/.local/state/clm/log`). Useful to relocate logs, or to give parallel processes their own log file so they don't race to open/rotate the shared one. | platform default |
 
@@ -299,7 +299,7 @@ for nested fields).
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `CLM_RECORDINGS__PROCESSING__DEEPFILTER_ATTEN_LIM` | DeepFilterNet attenuation limit in dB. | `35.0` |
+| `CLM_RECORDINGS__PROCESSING__DENOISE_ATTEN_LIM` | Noise reduction attenuation limit in dB. | `35.0` |
 | `CLM_RECORDINGS__PROCESSING__SAMPLE_RATE` | Audio sample rate. | `48000` |
 | `CLM_RECORDINGS__PROCESSING__LOUDNORM_TARGET` | EBU R128 loudness target in LUFS. | `-16.0` |
 

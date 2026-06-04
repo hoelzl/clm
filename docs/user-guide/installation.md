@@ -105,7 +105,7 @@ pip install -e ".[all]"      # Everything (required for full testing)
 CLM has several optional dependency groups for different features:
 
 **Worker Dependencies**:
-- **[notebook]**: IPython, nbconvert, jupytext, matplotlib, pandas, scikit-learn
+- **[notebook]**: ipython, ipykernel, ipywidgets, jinja2, jupytext, nbformat, nbconvert
   - Required for notebook processing in direct execution mode
   - Install: `pip install -e ".[notebook]"`
 - **[plantuml]**: aiofiles, tenacity
@@ -124,7 +124,7 @@ CLM has several optional dependency groups for different features:
 - **[tui]**: textual, rich
   - Required for: `clm monitor` command
   - Install: `pip install -e ".[tui]"`
-- **[web]**: fastapi, uvicorn, websockets
+- **[web]**: wsproto, httptools, watchfiles
   - Required for: `clm serve` command
   - Install: `pip install -e ".[web]"`
 
@@ -134,18 +134,43 @@ CLM has several optional dependency groups for different features:
   - Install: `pip install -e ".[summarize]"`
 
 **Voiceover**:
-- **[voiceover]**: faster-whisper, opencv-python, pytesseract, rapidfuzz, Pillow
+- **[voiceover]**: faster-whisper, opencv-python, pytesseract, python-dateutil, rapidfuzz, Pillow, langfuse
   - Required for: `clm voiceover` commands (video-to-speaker-notes pipeline)
   - Install: `pip install -e ".[voiceover]"`
   - External tools: ffmpeg (audio extraction), Tesseract OCR (slide matching)
+  - `[voiceover-cohere]` and `[voiceover-granite]` are alternative voiceover
+    backends (heavier, require torch) and are **not** included in `[all]`
+
+**Recordings**:
+- **[recordings]**: jinja2, python-multipart, onnxruntime, soundfile, numpy, obsws-python
+  - Required for: `clm recordings` commands (recording workflow and audio processing)
+  - Install: `pip install -e ".[recordings]"`
+
+**Slide Authoring**:
+- **[slides]**: rapidfuzz
+  - Required for: `clm slides` authoring tools (search, validation, normalization)
+  - Install: `pip install -e ".[slides]"`
+- **[mcp]**: mcp (plus `[slides]` dependencies)
+  - MCP server for AI-assisted slide authoring
+  - Install: `pip install -e ".[mcp]"`
+
+**Output Bundling**:
+- **[jupyterlite]**: jupyterlite-core, jupyterlite-pyodide-kernel, jupyterlite-xeus, jupyter-server
+  - Required for: the `jupyterlite` output format (browser-based notebook site bundler)
+  - Install: `pip install -e ".[jupyterlite]"`
+
+**HTTP Replay**:
+- **[replay]**: vcrpy, filelock
+  - HTTP request/response replay for notebooks that call live services
+  - Install: `pip install -e ".[replay]"`
 
 **Development Tools**:
-- **[dev]**: pytest, mypy, ruff, pytest-asyncio, pytest-cov, httpx
+- **[dev]**: pytest, pytest-asyncio, pytest-cov, pytest-mock, pytest-timeout, pytest-xdist, hypothesis, mypy, ruff, respx
   - Required for: Running tests, type checking, linting
   - Install: `pip install -e ".[dev]"`
 
 **Everything**:
-- **[all]**: All of the above (workers + ml + tui + web + voiceover + dev)
+- **[all]**: All of the above (all-workers, ml, summarize, voiceover, recordings, slides, mcp, jupyterlite, replay, dev, tui, web)
   - Required for: Full development and testing
   - Install: `pip install -e ".[all]"`
 
@@ -250,7 +275,7 @@ pip install -e ".[notebook]"
 pip install -e ".[all-workers]"
 ```
 
-This includes: IPython, nbconvert, jupytext, matplotlib, pandas, scikit-learn, and more.
+This includes: ipython, ipykernel, ipywidgets, jinja2, jupytext, nbformat, nbconvert.
 
 **Step 2: Install Jupyter Kernels for Additional Languages**
 

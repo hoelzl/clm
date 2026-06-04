@@ -1025,10 +1025,10 @@ CLI-facing tooling for AI-assisted slide authoring. Powers `clm topic resolve`,
 `clm slides search`, `clm validate` (spec + slide validation),
 `clm slides normalize`, `clm slides language-view`, `clm slides suggest-sync`,
 `clm slides assign-ids`, `clm slides coverage`, `clm slides split` /
-`clm slides unify`, `clm slides sync`, `clm voiceover extract` /
-`clm voiceover inline`, and `clm authoring rules`. (Flat-form aliases —
-`clm resolve-topic`, `clm search-slides`, etc. — still work in 1.7 with
-a deprecation warning; removal in 1.8.)
+`clm slides unify`, `clm slides sync`, `clm slides tidy`,
+`clm voiceover extract` / `clm voiceover inline`, and `clm authoring rules`.
+(The flat-form aliases — `clm resolve-topic`, `clm search-slides`, etc. — were
+removed in CLM 1.8; use the verb-grouped invocations above.)
 
 Key entry points: `tags` (canonical tag sets), `search.search_slides`,
 `spec_validator.validate_spec`, `validator.validate_file`,
@@ -1051,7 +1051,14 @@ and `SyncSnapshotCache` location-addressed last-known-synced
 anchors), and `raw_cells` (the shared lossless cell-primitive
 module — `RawCell`, `split_cells`, `reconstruct`,
 `is_cell_boundary` — that `assign-ids` / `normalize` / `split` /
-`sync` all share).
+`sync` all share). Two more modules manage where authoring **sidecars**
+(voiceover companions and HTTP-replay cassettes) live:
+`sidecar_layout.resolve_course_sidecar_default` / `effective_write_layout`
+(per-operation and course-wide layout precedence, driven by the
+`CLM_SIDECAR_LAYOUT` env var and the `[tool.clm] sidecar-layout` pyproject
+key) and `tidy.plan_tidy` / `apply_tidy` (bulk relocation between the
+`voiceover/` + `cassettes/` subdirectory layout and the flat sibling layout,
+exposed at the CLI as `clm slides tidy PATH`).
 
 ### `clm.snapshot` (build-output verification harness)
 
@@ -1099,7 +1106,13 @@ HTMX web dashboard. Requires `[recordings]`.
 - `recordings.processing` — audio pipeline (`ProcessingPipeline`,
   `run_onnx_denoise`, `PipelineConfig`/`AudioFilterConfig`, batch utilities).
 - `recordings.state` — per-course `CourseRecordingState` with JSON CRUD,
-  `LectureState`/`RecordingPart` models.
+  `LectureState`/`RecordingPart`/`TakeRecord` models. Parts and takes stamp
+  slide-version provenance (`section_id`, `topic_id`, `slide_digest`) at
+  record time (issue #208; optional/default `None` for backward-compatible
+  state files).
+- `recordings.provenance` — drift query comparing a part's stamped
+  `slide_digest` against the topic's current digest in the build provenance
+  manifest, classifying each part `current` / `changed` / `unknown`.
 - `recordings.workflow` — naming conventions, directory management, assembler
   (mux video+audio, archive originals), OBS WebSocket client, recording
   session state machine, watchdog-based file watcher, processing backends,
@@ -1110,6 +1123,34 @@ HTMX web dashboard. Requires `[recordings]`.
   (cloud video-in/video-out), and `make_backend()` factory.
 - `recordings.web` — FastAPI + HTMX + SSE dashboard (`create_app`).
 - `recordings.git_info` — captures git commit at recording assignment time.
+
+CLI: `clm recordings drift COURSE_ID` reports which recordings are stale after
+slide edits (stamped `slide_digest` vs the build provenance manifest).
+
+### `clm.release` (per-topic solution release)
+
+Solution-release orchestration for promoting completed topics to student
+cohorts one at a time, each frozen against later course edits (issue #208).
+No optional extras — pure stdlib + `attrs`. Cohorts are declared in the spec's
+`<release-channels>` block; the volatile per-topic release state lives in a
+plain-text ledger, never in the spec.
+
+- `ledger` — read/append the per-channel released-topic ledger.
+- `frozen_manifest` — the per-cohort freeze record (`.clm-released.json`).
+- `sync` — promote released-but-not-frozen topics' bytes into a cohort repo
+  (located via the build provenance manifest) and freeze them.
+
+Driven by the `clm release` CLI group (`add` / `week` / `status` / `sync`)
+and `clm git --channel` (init/commit/push the cohort repos).
+
+The enabling build artifact is the **provenance manifest**
+(`.clm-manifest.json`), written by `clm build` at each output root **by
+default** (`clm.core` build pipeline; suppressed for `--snapshot`,
+`--verify-against`, `--only-sections`, and errored builds). It maps every
+output file to its owning `{section, topic, source_commit, content hash}` —
+information the output path alone cannot recover — and is consumed by both
+`clm release` and `clm recordings drift`. `clm git` keeps it out of every
+distributed repo.
 
 ### `clm.workers.jupyterlite` (JupyterLite site builder)
 
