@@ -4,7 +4,7 @@
 **Design note:** `docs/claude/design/sync-plan-resolve-apply.md` (the canonical spec)
 **Base design:** `docs/claude/design/single-language-authoring-sync.md` (the #166 engine)
 **Memory:** `project-sync-coldstart-idless-bug` (corrected framing + verified findings)
-**Status:** design accepted, both forks settled; **Phase 1 DONE** (all 5 xfails flipped); **Phase 2 DONE (scoped: edit + add materialized)**; **Phase 3 is next** (cold-start minting — the actual #158 unblock).
+**Status:** design accepted; **Phase 1 DONE** (all 5 xfails flipped); **Phase 2 DONE (scoped: edit + add materialized)**; **Phase 3 design FINALIZED** (decisions baked — design note §12 + Phase 3 below), implementation not started — the actual #158 unblock.
 
 ---
 
@@ -165,26 +165,42 @@ The original TODO recipe (kept for reference):
   seams suffice; the add seam is ordering-sensitive, so it can't simply hoist to
   the top of `apply_plan`).
 
-### Phase 3 — Cold-start minting + correspondence gate  **[TODO]**
-- **Goal:** `clm slides sync` becomes the proper cold-start id minter.
-- **Work:**
-  - 2a (provider-aware): for a structurally-aligned cold-start pair, emit
-    `mint_shared_id(de_cell, en_cell)` (both id-less) or `adopt_id(src_id →
-    twin)` (half-id'd) **candidates** when a provider is configured (else
-    `refuse`). Alignment predicate adapted from the idea behind
-    `_streams_aligned` (`sync_plan.py:1267`) — note it is **not** a drop-in (see
-    Gotchas).
-  - 2b: a `CorrespondenceVerifier` beside `AlignmentRecoverer` in
-    `sync_recover.py` — cheap model (Haiku-class), body-free inputs, cached by
-    pair fingerprint + prompt version, validated, safe-abort. "yes" → materialize
-    the mint/adopt; "no" → downgrade to `refuse`.
-  - Delegate the byte-level stamping to `assign_ids_in_split_pair`
-    (`assign_ids.py:823`).
-  - CLI: `--verify-cold-pairs` (default on when a provider is set).
-- **Acceptance:** flips the remaining #216 bootstrap xfails (the two
-  `test_sync_dry_run_parity.py::TestDryRunMatchesApplyKnownBugs` cases, once
-  Phase 1 has them refusing they'll need updating to assert *mint* under a stub
-  verifier). Unblocks the 1.8 PythonCourses gate.
+### Phase 3 — Cold-start minting + correspondence gate  **[NEXT — design finalized]**
+- **Goal:** `clm slides sync` becomes the proper cold-start id minter — the actual
+  #158 unblock. **The authoritative, decision-baked plan is design note §12**; the
+  summary below mirrors it.
+- **Decisions (settled 2026-06-04 with the maintainer):**
+  - **Scope:** mint **id-less** both-directions cold pairs (the #158 case) **and**
+    **half-id'd** pairs (id-less half adopts the id'd half's ids); **mismatched-id**
+    (both id'd, different ids) stays `refuse`.
+  - **Verifier inputs:** per aligned slide, **heading + a short body snippet**
+    (~first 1–2 lines) + role; **Haiku-class** model; one cached call per deck.
+    **Not body-free** (cross-language correspondence needs the heading text).
+  - **Gate:** the verifier is a **required gate, default-on when a provider is
+    configured** (`--verify-cold-pairs`); no provider → `refuse`.
+- **Architecture (keeps the purity boundary; see §12 for detail):**
+  - `classify_changes` unchanged (still `refuse`). `build_sync_plan` (with files +
+    a new `provider_available: bool`) converts a both-directions cold refusal into a
+    `pending` mint candidate when `provider_available` **and** the pair is
+    **unifiable** (read-only `unify→split` round-trip); else keeps `refuse`.
+  - `apply_plan` (2b) verifies the candidate's heading/snippet pairs with a new
+    `CorrespondenceVerifier` (mirrors `AlignmentRecoverer`: Protocol + Static +
+    OpenRouter, fingerprint-cached, validated, safe-abort). All "yes" → mint; any
+    "no"/abort/no-verifier → downgrade to `refuse` (the disclosed Q-A divergence).
+  - execute delegates to `assign_ids_in_split_pair` (`assign_ids.py`) — byte-faithful
+    EN-authority minting; its own "not unifiable → None" is a second safety net. A
+    cold pair carries no other apply ops, so the file-level write doesn't fight the
+    FileState buffer.
+  - CLI: `--verify-cold-pairs` (default on when provider set); pass `provider_available`
+    into `build_sync_plan`.
+- **Acceptance:** the `TestColdStartRefusalParity` cases become mint-under-a-confirming
+  -`StaticCorrespondenceVerifier` / refuse-under-a-denying-one / refuse-with-no-provider;
+  + a half-id'd adopt case, a not-unifiable→refuse case, and verifier caching. Unblocks
+  the 1.8 PythonCourses gate (`#158`).
+- **Open implementation checks:** confirm `assign_ids_in_split_pair`/`unify` propagates
+  an existing id onto the id-less twin for **half-id'd** (else add an explicit `adopt_id`
+  stamp); pick the verifier cache (extend `SyncAlignmentCache` vs sibling table);
+  `provider_available` env helper.
 
 ---
 
@@ -249,31 +265,38 @@ has **no guard** (`sync_apply.py:695-705`).
 
 ## 5. Next Steps
 
-**Phases 1 and 2 are DONE.** Start **Phase 3 — cold-start minting + correspondence
-gate** (design §3-Q-B, §7; Phase 3 above). This is the larger payoff: it lets a
-confirmed cold-start pair *mint* a shared id instead of refusing, **unblocking the
-1.8 PythonCourses gate (`#158`)**. Concretely:
+**Phases 1 and 2 are DONE; Phase 3's design is finalized.** Implement **Phase 3 —
+cold-start minting + correspondence gate** per the **decision-baked plan in design
+note §12** (mirrored in the Phase 3 breakdown above). It lets a confirmed cold-start
+pair *mint* a shared id instead of refusing — **the actual #158 unblock**. Build
+order:
 
-1. **2a (resolver, provider-aware)** — for a structurally-aligned cold-start pair
-   (the case Phase 1 currently `refuse`s), emit `mint_shared_id` (both id-less) /
-   `adopt_id` (half-id'd) **candidates** *when a provider is configured*, else keep
-   `refuse`. Provider availability is a plan-time input, so dry-run and apply still
-   agree. The alignment predicate adapts the idea behind `_streams_aligned`
-   (`sync_plan.py`) — **not a drop-in** (it consumes raw `Cell`s incl. code, while
-   the cold path holds role-filtered `CurrentCell`s; see Session Notes).
-2. **2b (apply-side tier)** — a `CorrespondenceVerifier` beside `AlignmentRecoverer`
-   in `sync_recover.py`: cheap model (Haiku-class), body-free inputs, cached by pair
-   fingerprint + prompt version, validated, safe-abort. "yes" → materialize the
-   mint/adopt (reuse the `_TransOutcome`/`_EditOutcome` materialize pattern from
-   Phase 2); "no" → downgrade the candidate to `refuse`.
-3. Delegate the byte-level stamping to `assign_ids_in_split_pair` (`assign_ids.py`).
-4. CLI: `--verify-cold-pairs` (default on when a provider is set).
-5. Tests: the two `TestColdStartRefusalParity` cases become "mints under a
-   confirming stub verifier, refuses under a denying one."
+1. **Data model** (`sync_plan.py`): add the `pending` disposition value and a `mint`
+   proposal kind (carries the aligned heading/snippet pairs). Render/JSON/exit-code
+   like `refuse` (a pending mint is exit 1, "changes pending").
+2. **2a candidacy** (`build_sync_plan`, +`provider_available: bool`): when the cold
+   refusals are convertible and the pair is **unifiable** (read-only `unify→split`
+   round-trip) and a provider is set → emit the `pending` mint candidate; else keep
+   `refuse`. Keep `classify_changes` pure.
+3. **Verifier** (`sync_recover.py`): `CorrespondenceVerifier` Protocol + `SlidePair`
+   + `correspondence_fingerprint` + `validate_correspondence` + `Static…` / `OpenRouter…`
+   (Haiku), mirroring `AlignmentRecoverer`. **Heading + short body snippet** inputs
+   (NOT body-free). Cache + validate + safe-abort.
+4. **2b verify + 3 mint** (`sync_apply.py`): for a `pending` mint, verify; all-yes →
+   `assign_ids_in_split_pair` (handles id-less + half-id'd); any-no/abort/no-verifier →
+   downgrade to `refuse`.
+5. **CLI** (`slides_sync.py`): `--verify-cold-pairs` (default on when provider set);
+   pass `provider_available` into `build_sync_plan`.
+6. **Tests:** rewrite `TestColdStartRefusalParity` (mint / refuse-on-no / no-provider),
+   add half-id'd adopt + not-unifiable→refuse + verifier-cache cases.
 
-**Also remaining (lower priority, Phase 2 follow-ups):** materialize the
-id-migration recoverer and the `sync_code` structural translate so execute is
-*fully* model-free (today only the edit + add paths are). Not required for Phase 3.
+**Watch (open checks, §12):** confirm `assign_ids_in_split_pair`/`unify` propagates an
+existing id onto the id-less twin for **half-id'd** (else add an explicit `adopt_id`);
+choose the verifier cache; `provider_available` env helper.
+
+**Also remaining (lower priority, Phase 2 follow-ups):** materialize the id-migration
+recoverer and the `sync_code` structural translate so execute is *fully* model-free
+(today only the edit + add paths are). Not required for Phase 3.
 
 **Prereqs / setup (IMPORTANT — see Gotchas):**
 - This worktree's venv was incomplete. Run **`uv sync --extra all`** before
