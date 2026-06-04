@@ -1,7 +1,7 @@
 # Handover: Full-deck translation — `clm slides translate` (deck bootstrap)
 
-**Status:** **Phase 1 DONE** (`src/clm/slides/translate_deck.py` + 17 tests, all green; lint/format/mypy clean). Phase 2 (idempotency + sync delegation + watermark) is next.
-**Branch:** `claude/slides-translate-bootstrap` off `master` (commit `fdf7772` handover, Phase 1 commit follows). Do **not** branch off `claude/issue-226-partial-overlap-mismatch`.
+**Status:** **Phase 1 + Phase 2 DONE.** Phase 1 = pure engine `src/clm/slides/translate_deck.py` (17 tests). Phase 2 = file/orchestration layer `src/clm/slides/translate_bootstrap.py` (19 tests) — the D2 dispatch (twin absent→bootstrap+mint+watermark; twin present→delegate to sync), all green; lint/format/mypy clean; full slides suite (1165) green. **Phase 3 (voiceover companion in lockstep) is next.**
+**Branch:** `claude/slides-translate-bootstrap` off `master` (`fdf7772` handover, `cf1c8e06` Phase 1, Phase 2 commit follows). Do **not** branch off `claude/issue-226-partial-overlap-mismatch`.
 **Builds on (all merged to master):** the resolve-then-apply sync engine (#166/#190/#216), cold-start mint/adopt (#216), committed un-bootstrapped pairs (#225), partial-overlap mismatch (#226).
 **Related design notes:** `docs/claude/design/single-language-authoring-sync.md`, `docs/claude/design/sync-plan-resolve-apply.md`.
 **Sibling handover:** `docs/claude/sync-plan-resolve-apply-handover.md` (the engine this feature reuses).
@@ -76,14 +76,14 @@ If `voiceover_<name>.<src>.py` exists, translate its localized cells too (preser
 - **Tests:** `tests/slides/test_translate_deck.py` (17, all green) — round-trip + content on every shape (slide / voiceover / localized-code / id-less-code / shared / no-header / reverse-direction), byte-exact on trailing-symmetric decks, and the error paths.
 - **Two deliberate deviations from the original phase plan** (see §8): (1) `TranslationCache` moved to **Phase 4** — a caching translator *wrapper* at the integration layer keeps Phase 1 pure/offline; (2) `slide_id` minting moved to **Phase 2** — the engine carries through whatever ids the source has (via `swap_lang`); minting a never-id'd source happens at the file/orchestration layer.
 
-### Phase 2 — Idempotency + sync convergence + watermark — [TODO]
-**Accomplishes:** the D2 dispatch and the "next sync is a no-op" seal.
+### Phase 2 — Idempotency + sync convergence + watermark — [DONE]
+**Accomplished:** the D2 dispatch and the "next sync is a no-op" seal, in `src/clm/slides/translate_bootstrap.py`.
 
-- Resolve source + derive twin with `derive_split_twin` (`pairing.py:210`) / `split_lang_tag` (`pairing.py:158`).
-- **Twin present** → delegate to `build_sync_plan` (`sync_plan.py:1664`) + `apply_plan` (`sync_apply.py:208`) (mirror `slides_sync_cmd`'s wiring). **Twin absent** → Phase 1 bootstrap, then:
-  - run `assign_ids_in_split_pair` (`assign_ids.py:823`, `AssignOptions(accept_content_derived=True)`) for EN-authority parity (re-slugs from EN headings; writes the **source** half back too if ids changed — keep parity).
-  - record the watermark via `_record_watermark` (`sync_apply.py:2172`) + `SyncWatermarkCache` (`cache.py:652`).
-- **Acceptance:** `translate` twice → the second run is a `sync` no-op; deck is not doubled; a subsequent `clm slides sync` reports clean. Round-trip + parity assertions hold on the written files.
+- `derive_bootstrap_paths(source_path, target_lang=None) -> BootstrapPaths`: resolves direction (`split_lang_tag`, with a `--to` override), derives the twin path **existence-agnostically** (`_twin_path` swaps the second-to-last dotted segment — `derive_split_twin` could not be reused because it returns `None` when the twin is *absent*, which is exactly the bootstrap case), and resolves all paths so the watermark key matches a later `clm slides sync`. Rejects a bilingual stem (no tag), a `voiceover_*` source, and a contradictory/unsupported `--to`. `twin_exists` folds in **non-emptiness** (an empty twin is treated as absent).
+- `bootstrap_deck(...)`: the dispatch. **Twin present** (and not `--force`) → `_delegate_to_sync` = `build_sync_plan` + `apply_plan` mirroring `slides_sync_cmd`. **Twin absent / empty / `--force`** → `_bootstrap_new_twin`: `translate_deck_text` → `write_text(newline="\n")` → `assign_ids_in_split_pair(de, en, AssignOptions(accept_content_derived=True))` (EN-authority parity; mints onto **both** halves if the source was id-less; `force=False` preserves any author id) → `_record_watermark`.
+- Pure orchestration over **injected** deps (translator/judge/recoverer/verifier/caches) — builds no LLM client, loads no `.env`, closes no cache (the CLI owns those). Offline-testable through the `SlideTranslator`/`SyncJudge` protocols.
+- **Result:** `BootstrapResult` (`action` = `"bootstrapped"`/`"synced"`, `deck`/`assign` or `plan`/`apply_result`, `ids_assigned`, `watermark_recorded`).
+- **Acceptance — met:** `translate` twice → second run is a `sync` no-op (`action=="synced"`, `proposals==[]`, no errors, deck not doubled), proven for **both** an id'd and an **id-less** source (the latter rewrites both halves on run 1, so it exercises the post-mint watermark). Round-trip + parity hold on the written files, including a **trailing-asymmetric** deck (ends on a slide pair). 19 tests in `tests/slides/test_translate_bootstrap.py`.
 
 ### Phase 3 — Voiceover companion in lockstep — [TODO]
 **Accomplishes:** D5.
@@ -114,23 +114,24 @@ If `voiceover_<name>.<src>.py` exists, translate its localized cells too (preser
 
 ## 4. Current Status
 
-- **Completed:** design + **Phase 1** (pure engine `src/clm/slides/translate_deck.py` + `tests/slides/test_translate_deck.py`, 17 tests green, lint/format/mypy clean). Issue **#232** filed. Branch `claude/slides-translate-bootstrap` off master; handover committed `fdf7772`, Phase 1 commit follows. The three user-facing forks are settled (D1, D4, D5).
-- **In progress:** none — Phase 2 not started.
-- **Blockers / open questions:** none blocking. D6 defaults stand unless the user objects. Confirm at Phase 4: whether `--to` should be required when the source half has **no** lang tags at all (currently planned as: infer from filename, `--to` optional override).
-- **Tests:** Phase 1 fully covered (see §7). Phases 2–5 pending.
+- **Completed:** design + **Phase 1** (pure engine `translate_deck.py` + 17 tests, `cf1c8e06`) + **Phase 2** (orchestration `translate_bootstrap.py` + 19 tests). Both lint/format/mypy clean; full `tests/slides` suite (1165) green. Issue **#232** filed. Branch `claude/slides-translate-bootstrap` off master. The three user-facing forks are settled (D1, D4, D5).
+- **In progress:** none — Phase 3 not started.
+- **Blockers / open questions:** none blocking. D6 defaults stand unless the user objects. Confirm at Phase 4: whether `--to` should be required when the source half has **no** lang tags at all (currently: infer from filename, `--to` optional override — note `derive_bootstrap_paths` requires a `.de`/`.en` tag on the *source*, so a tag-less single half is already rejected with a "run split first" hint).
+- **Tests:** Phases 1–2 fully covered (see §7). Phases 3–5 pending.
 
 ---
 
 ## 5. Next Steps
 
-**Start Phase 2 — idempotency + sync delegation + watermark + id minting.** This is the file/orchestration layer that wraps the Phase 1 pure engine. Build a function (e.g. `clm/slides/translate_bootstrap.py`) that:
-1. Resolves the source half and derives the twin path with `derive_split_twin` (`pairing.py:210`) / `split_lang_tag` (`pairing.py:158`).
-2. **Dispatch:** twin **present** → do not bootstrap; delegate to `build_sync_plan` (`sync_plan.py:1664`) + `apply_plan` (`sync_apply.py:208`) exactly as `slides_sync_cmd` wires them (degrade to incremental sync). Twin **absent** → run Phase 1 `translate_deck_text`, write both halves, then:
-   - run `assign_ids_in_split_pair` (`assign_ids.py:823`, `AssignOptions(accept_content_derived=True)`) over the freshly-written pair so it carries EN-authority `de_id==en_id` (writes the source half back too if ids changed — keep parity). If the source was id-less this is where ids are minted, so the pair is never born id-less.
-   - record the watermark via `_record_watermark` (`sync_apply.py:2172`) + `SyncWatermarkCache` (`cache.py:652`) so the next `clm slides sync` is a clean no-op.
-3. Writes via `FileState`/`atomic_write_all` with `newline="\n"`.
+**Start Phase 3 — voiceover companion in lockstep (D5).** The deck-half engine (`translate_deck_text`) already translates lang-tagged narrative cells and copies neutral ones, and `bootstrap_deck` is the orchestration seam to hook into. A voiceover companion (`voiceover_<name>.<src>.py`) is *just* lang-tagged cells with no header macro, which `translate_deck_text` handles as-is. Plan:
+1. In `bootstrap_deck` (twin-**absent** path), after writing the deck twin, detect the source companion next to the source half. Companion naming is `voiceover_*` and it carries the same `.de`/`.en` tag; resolve its placement with `effective_write_layout` (`src/clm/slides/sidecar_layout.py`) — it may live as a sibling or under a `voiceover/` subdir (topic-sidecar-subdirs, PR #218). Reuse the resolver (`resolve_companion`) rather than re-deriving the path.
+2. Translate the companion's text with `translate_deck_text` (same translator) and write `voiceover_<name>.<tgt>.py` via the layout. **Preserve `for_slide` / `vo_anchor`** — these are cell metadata the engine copies verbatim (they are not `lang`-gated), so they should survive untouched; add a test asserting it.
+3. `derive_bootstrap_paths` currently **rejects** a `voiceover_*` *source* (a companion is never a standalone translate target). Keep that — the companion is found and translated *from the deck*, not passed directly.
+4. **Idempotency:** a companion already present must not be re-translated/doubled. Mirror the deck dispatch — if the target companion exists, skip (or, later, sync it). For Phase 3, skip-with-note is acceptable; full companion-sync can defer.
 
-**Acceptance:** `translate` twice → the second run is a sync no-op; deck not doubled; a subsequent `clm slides sync` reports clean. Round-trip + parity hold on the written files. (Engine-level round-trip is already guaranteed by Phase 1.)
+**Acceptance:** companion `for_slide` parity holds against the translated deck (`validator._check_split_companion_for_slide_parity`); narration cells are translated; `vo_anchor` preserved; re-running does not double the companion. Add tests to `tests/slides/test_translate_bootstrap.py` (or a new `test_*` file) driven by `StaticSlideTranslator`.
+
+**Phase 2 is DONE** (`translate_bootstrap.py`): the twin dispatch, EN-authority minting and watermark seal are in place and the `translate`-twice no-op is proven (incl. id-less + asymmetric decks). Engine-level round-trip is guaranteed by Phase 1; Phase 2 additionally proves the on-disk pair round-trips and is idempotent.
 
 **Setup:** worktree venv must be synced (`uv sync --extra all`) — a repo-root `.venv` silently resolves `clm` to the main repo (memory `feedback-worktree-venv-sync`). Run tests with `uv run python -m pytest …` (system Python has no pytest).
 
@@ -148,7 +149,8 @@ If `voiceover_<name>.<src>.py` exists, translate its localized cells too (preser
 ### New files
 - **`src/clm/slides/translate_deck.py` — DONE (Phase 1).** The pure, offline bootstrap engine: `translate_deck_text(source_text, *, source_lang, target_lang, translator) -> TranslateDeckResult`. Parses a source half, classifies cells by `metadata.lang`, translates localized ones (code via `CODE_ROLE`), copies neutral ones verbatim, rewrites the header macro/import (reusing `split.py` regexes), self-checks the split/unify round-trip, returns target text. Protocol-driven (`SlideTranslator`) so it's offline-testable. **Also reusable for the Phase 3 voiceover companion** — companions are just lang-tagged cells with no header macro, which this engine already handles.
 - **`tests/slides/test_translate_deck.py` — DONE (17 tests).**
-- `src/clm/slides/translate_bootstrap.py` — file/orchestration layer (Phase 2): dispatch, id minting, watermark.
+- **`src/clm/slides/translate_bootstrap.py` — DONE (Phase 2).** File/orchestration layer: `derive_bootstrap_paths` (direction + existence-agnostic twin path + rejections), `bootstrap_deck` (the D2 dispatch), `_bootstrap_new_twin` (translate→write→`assign_ids_in_split_pair`→`_record_watermark`), `_delegate_to_sync` (mirror of `slides_sync_cmd`). Injected deps only (no client/`.env`/cache-close). `BootstrapResult`/`BootstrapPaths`/`TranslateBootstrapError` are the public surface. **This is the seam Phase 3's voiceover companion hooks into.**
+- **`tests/slides/test_translate_bootstrap.py` — DONE (19 tests).**
 - `src/clm/cli/commands/slides_translate.py` — the `clm slides translate` Click command (Phase 4).
 - `TranslationCache` + `CachingSlideTranslator` in `src/clm/infrastructure/llm/cache.py` / `sync_translate.py` (Phase 4 — moved from Phase 1).
 - Tests: `tests/cli/test_slides_translate.py` (CLI), companion/idempotency tests (Phases 2–4).
