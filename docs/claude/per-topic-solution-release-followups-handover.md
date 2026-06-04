@@ -49,9 +49,9 @@ Four follow-ups remain, in rough value order:
 - **Follow-up 4 — real-build `--snapshot` manifest-free test** `[DONE]`
   (`e375c2a`). Un-stubbed dir-group build, no workers.
 
-**All four follow-ups are now done.** Remaining work on #208: optionally push
-this branch (follow-ups 2–4 are committed locally but **not yet pushed**;
-follow-up 1 was pushed earlier as `c4a45f4`).
+**All four follow-ups are now done and pushed** to
+`origin/worktree-logical-jingling-fiddle` (`34cafb1..be6ff1d`). No remaining
+work on #208 unless a PR/merge is desired.
 
 ## 4. Current Status
 
@@ -65,9 +65,9 @@ follow-up 1 was pushed earlier as `c4a45f4`).
   deterministic-first target subdir; `clm recordings drift` adds
   `--source`/`--manifest`/`--spec-file`). `slide_digest=None` → drift `unknown`
   when no manifest, never an error.
-- **Follow-ups 2, 3, 4 DONE** (`55591a8`, `d54fb71`, `e375c2a`); committed
-  locally, **not yet pushed**. Each was independent. See the per-follow-up
-  "what shipped" notes below.
+- **Follow-ups 2, 3, 4 DONE** (`55591a8`, `d54fb71`, `e375c2a`); **pushed** to
+  `origin/worktree-logical-jingling-fiddle`. Each was independent. See the
+  per-follow-up "what shipped" notes below.
 
 ### Follow-up 1 — what shipped (for the record)
 
