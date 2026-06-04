@@ -168,6 +168,21 @@ class _EditOutcome:
     error: str | None = None
 
 
+@dataclass
+class _TransOutcome:
+    """The materialized translation of one add/rename source cell (#216 2b).
+
+    Computed by :func:`_materialize_idcarrying` / :func:`_materialize_idless` so the
+    add execute walks call no translator: ``body`` is the translated counterpart, or
+    ``error`` is the deferral message to record (the translation raised). Exactly one
+    is set. Keyed by ``id(cell)`` of the source cell (stable: both decks load once
+    and the walks hold the same cell objects).
+    """
+
+    body: str | None = None
+    error: str | None = None
+
+
 def apply_plan(
     plan: SyncPlan,
     *,
@@ -763,6 +778,17 @@ def _apply_adds(
         result.errors.append("add/rename present but no translator available")
         return
 
+    # Stage 2b for the add path (#216 resolve-then-apply): every translation is
+    # materialized into ``translations`` (keyed by source-cell id) just before the
+    # execute walk that consumes it, the only place the add path calls the
+    # translator. The walks below mint ids (deterministic) and insert twins,
+    # reading the cache; the ``translator`` they still receive is only a safety
+    # fallback for a cache miss (the materialize walks are built to enumerate a
+    # superset of what the execute walks translate, so a miss never happens). The
+    # materialize calls sit right before their walks so cell identity — and the
+    # post-id-carrying state the id-less walk reads — match exactly.
+    translations: dict[int, _TransOutcome] = {}
+
     # id-carrying adds: a new cell (slide / subslide / narrative / aux markdown /
     # localized code) already minted with a slide_id on one side only — e.g. a
     # deck whose ids were assigned before the split, where the author then adds a
@@ -771,13 +797,15 @@ def _apply_adds(
     if idd:
         de_keys = {(p.slide_id, p.role) for p in idd if p.direction == "de->en"}
         en_keys = {(p.slide_id, p.role) for p in idd if p.direction == "en->de"}
+        _materialize_idcarrying(de_state, "de", "en", de_keys, translator, translations)
+        _materialize_idcarrying(en_state, "en", "de", en_keys, translator, translations)
         if de_keys:
             _add_idcarrying_one_direction(
-                de_state, en_state, "de", "en", de_keys, translator, result
+                de_state, en_state, "de", "en", de_keys, translator, result, translations
             )
         if en_keys:
             _add_idcarrying_one_direction(
-                en_state, de_state, "en", "de", en_keys, translator, result
+                en_state, de_state, "en", "de", en_keys, translator, result, translations
             )
 
     if len(idless) + len(rename_props) == 0:
@@ -795,14 +823,110 @@ def _apply_adds(
         en_state, "en", [p for p in rename_props if p.direction == "en->de"]
     )
 
+    _materialize_idless(de_state, "de", "en", de_copy_ids, translator, translations)
+    _materialize_idless(en_state, "en", "de", en_copy_ids, translator, translations)
+
     used_ids = {
         cell.metadata.slide_id
         for state in (de_state, en_state)
         for cell in state.cells
         if cell.metadata.slide_id
     }
-    _add_one_direction(de_state, en_state, "de", "en", translator, used_ids, result, de_copy_ids)
-    _add_one_direction(en_state, de_state, "en", "de", translator, used_ids, result, en_copy_ids)
+    _add_one_direction(
+        de_state, en_state, "de", "en", translator, used_ids, result, de_copy_ids, translations
+    )
+    _add_one_direction(
+        en_state, de_state, "en", "de", translator, used_ids, result, en_copy_ids, translations
+    )
+
+
+def _cache_translation(
+    cell: RawCell,
+    source_lang: str,
+    target_lang: str,
+    role: str,
+    translator: SlideTranslator,
+    cache: dict[int, _TransOutcome],
+) -> None:
+    """Translate one add source cell into ``cache`` (no ``result`` accounting here).
+
+    The deferral/error counting for a failed translation happens later, in the
+    execute walk's :func:`_translate`, so its order matches the legacy inline pass.
+    """
+    if id(cell) in cache:
+        return
+    try:
+        body = translator.translate(
+            source_body=cell.body.rstrip("\n"),
+            source_lang=source_lang,
+            target_lang=target_lang,
+            role=role,
+        )
+        cache[id(cell)] = _TransOutcome(body=body)
+    except TranslationError as exc:
+        cache[id(cell)] = _TransOutcome(error=f"{role}: translation failed: {exc}")
+
+
+def _materialize_idcarrying(
+    source_state: FileState,
+    source_lang: str,
+    target_lang: str,
+    add_keys: set[tuple[str | None, str]],
+    translator: SlideTranslator,
+    cache: dict[int, _TransOutcome],
+) -> None:
+    """Pre-translate every id-carrying add cell (those :func:`_add_idcarrying_one_direction` translates)."""
+    for cell in list(source_state.cells):
+        role = role_of(cell.metadata)
+        if role is None or cell.metadata.lang != source_lang:
+            continue
+        sid = cell.metadata.slide_id
+        if sid is None or (sid, role) not in add_keys:
+            continue
+        _cache_translation(cell, source_lang, target_lang, role, translator, cache)
+
+
+def _materialize_idless(
+    source_state: FileState,
+    source_lang: str,
+    target_lang: str,
+    copy_slide_ids: set[int],
+    translator: SlideTranslator,
+    cache: dict[int, _TransOutcome],
+) -> None:
+    """Pre-translate every cell :func:`_add_one_direction` will translate.
+
+    Mirrors that walk's *translate selection* exactly — a new or copied slide, and
+    a narrative companion that is id-less or copy-pasted with a preceding slide —
+    without minting or mutating. It tracks ``has_slide`` / ``renaming_from`` the
+    same way but assumes each translation succeeds, so it enumerates a **superset**
+    of what the execute walk actually translates (an upstream failure can only make
+    the walk translate *fewer* cells). A superset means the execute walk never
+    misses the cache; the surplus entries are simply never read.
+    """
+    renaming_from: str | None = None
+    has_slide = False
+    for cell in list(source_state.cells):
+        role = role_of(cell.metadata)
+        if role is None or cell.metadata.lang != source_lang:
+            continue
+        sid = cell.metadata.slide_id
+        if role in _SLIDE_ROLES:
+            is_copy = id(cell) in copy_slide_ids
+            has_slide = True
+            if sid is not None and not is_copy:
+                renaming_from = None  # existing slide — anchors, not translated
+                continue
+            renaming_from = sid if is_copy else None
+            _cache_translation(cell, source_lang, target_lang, role, translator, cache)
+            continue
+        # narrative
+        is_copy_companion = renaming_from is not None and sid is not None and sid == renaming_from
+        if sid is not None and not is_copy_companion:
+            continue  # existing companion — anchors, not translated
+        if not has_slide:
+            continue  # orphan companion — errors before translate, never translated
+        _cache_translation(cell, source_lang, target_lang, role, translator, cache)
 
 
 def _add_idcarrying_one_direction(
@@ -813,6 +937,7 @@ def _add_idcarrying_one_direction(
     add_keys: set[tuple[str | None, str]],
     translator: SlideTranslator,
     result: ApplyResult,
+    translations: dict[int, _TransOutcome],
 ) -> None:
     """Insert the twin of each id-carrying new cell, under the same id, at anchor.
 
@@ -838,7 +963,9 @@ def _add_idcarrying_one_direction(
         if key not in add_keys:
             anchor = key  # an existing cell already twinned on the target
             continue
-        target_body = _translate(cell, source_lang, target_lang, translator, role, result)
+        target_body = _translate(
+            cell, source_lang, target_lang, translator, role, result, translations
+        )
         if target_body is None:
             continue  # _translate recorded the deferral/error; keep the anchor
         twin = build_twin_cell(cell, target_lang, target_body)
@@ -893,6 +1020,7 @@ def _add_one_direction(
     used_ids: set[str],
     result: ApplyResult,
     copy_slide_ids: set[int],
+    translations: dict[int, _TransOutcome],
 ) -> None:
     """Walk the source deck, minting ids for new and copy-pasted slides.
 
@@ -923,7 +1051,9 @@ def _add_one_direction(
                 anchor = (sid, role)
                 continue
             # id-less add OR copy slide: translate, mint EN-authority id, place.
-            target_body = _translate(cell, source_lang, target_lang, translator, role, result)
+            target_body = _translate(
+                cell, source_lang, target_lang, translator, role, result, translations
+            )
             if target_body is None:
                 renaming_from = None
                 continue
@@ -951,7 +1081,9 @@ def _add_one_direction(
             result.deferred += 1
             result.errors.append(f"add {role}: narrative with no preceding slide — deferred")
             continue
-        target_body = _translate(cell, source_lang, target_lang, translator, role, result)
+        target_body = _translate(
+            cell, source_lang, target_lang, translator, role, result, translations
+        )
         if target_body is None:
             continue
         # Companions inherit the slide's id (the freshly minted one for a copy).
@@ -972,12 +1104,24 @@ def _translate(
     translator: SlideTranslator,
     role: str,
     result: ApplyResult,
+    translations: dict[int, _TransOutcome],
 ) -> str | None:
-    """Translate a cell body, recording a deferral + error on failure.
+    """Return the materialized translation of a cell, recording a deferral on failure.
 
-    rstrip drops the terminal-newline artifact so the translator input does not
-    depend on cell position.
+    The translation was computed up front (#216 2b) and read from ``translations``
+    here, in walk order, so the deferral/error accounting matches the legacy inline
+    pass exactly. A cache miss falls back to translating now — a safety net that
+    keeps behavior correct even if the materialize walk under-enumerated; it is not
+    expected to fire (the materialize walks enumerate a superset). rstrip drops the
+    terminal-newline artifact so the translator input does not depend on position.
     """
+    cached = translations.get(id(cell))
+    if cached is not None:
+        if cached.error is not None:
+            result.deferred += 1
+            result.errors.append(cached.error)
+            return None
+        return cached.body
     try:
         return translator.translate(
             source_body=cell.body.rstrip("\n"),

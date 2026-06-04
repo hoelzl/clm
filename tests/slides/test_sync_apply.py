@@ -44,6 +44,20 @@ def _update_judge(text: str) -> StaticSyncJudge:
     return StaticSyncJudge(default_proposal=SyncProposal(verdict="update", proposed_text=text))
 
 
+class _CountingTranslator:
+    """Wraps a StaticSlideTranslator and counts translate() calls (#216 2b boundary)."""
+
+    prompt_version = "counting"
+
+    def __init__(self, inner: StaticSlideTranslator) -> None:
+        self._inner = inner
+        self.calls = 0
+
+    def translate(self, **kwargs) -> str:
+        self.calls += 1
+        return self._inner.translate(**kwargs)
+
+
 # ---------------------------------------------------------------------------
 # FileState primitives
 # ---------------------------------------------------------------------------
@@ -750,6 +764,35 @@ class TestApplyAdd:
         assert sync_ids == [("a", "slide"), ("new", "slide"), ("new", "voiceover")]
         # The DE voiceover inherited the slide's minted id too.
         assert _cell_for(de_path, "new", "voiceover") is not None
+
+    def test_translator_called_once_per_cell_in_materialize(self, tmp_path: Path):
+        # The add path's translations are materialized up front (#216 2b); the
+        # execute walk mints + inserts reading the cache, never re-calling the
+        # translator. Two new cells (slide + voiceover) => exactly two calls.
+        de_path, en_path = _write_pair(
+            tmp_path, _slide("de", "a", "# ## A"), _slide("en", "a", "# ## A")
+        )
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_watermark(cache, de_path, en_path)
+            de_path.write_text(
+                _slide("de", "a", "# ## A")
+                + _slide_idless("de", "# ## Neu")
+                + _vo_idless("de", "# Sprechertext"),
+                encoding="utf-8",
+            )
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            translator = _CountingTranslator(
+                StaticSlideTranslator(
+                    mapping={"# ## Neu": "# ## New", "# Sprechertext": "# Narration"}
+                )
+            )
+            result = apply_plan(plan, judge=None, translator=translator, watermark_cache=cache)
+        finally:
+            cache.close()
+
+        assert result.applied_add == 2
+        assert translator.calls == 2  # materialized once each; execute read the cache
 
     def test_add_in_the_middle_is_anchored(self, tmp_path: Path):
         de_path, en_path = _write_pair(
