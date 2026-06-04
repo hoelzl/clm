@@ -475,6 +475,65 @@ class SyncAlignmentCache:
         self._conn.close()
 
 
+class SyncCorrespondenceCache:
+    """Cache cold-start *correspondence* verdicts for the sync engine.
+
+    Issue #216 Phase 3 (design §12). When ``clm slides sync`` bootstraps a
+    never-id'd split pair, it asks a cheap LLM whether the two structurally-aligned
+    halves actually correspond (are translations) before minting a shared
+    ``slide_id`` onto each pair. A row memoizes *"the verifier was asked about this
+    set of aligned heading/snippet pairs, and here are the (validated) yes/no
+    verdicts"*, so a re-run over the same deck short-circuits to the cached verdicts
+    and never re-spends on the LLM.
+
+    Keyed by ``(pairs_hash, prompt_version)`` — the pair fingerprint
+    (:func:`clm.slides.sync_recover.correspondence_fingerprint`) fully determines the
+    question, and the prompt version (which folds in the model) invalidates the
+    cache when the prompt/model contract changes. Only *successfully validated*
+    verdict maps are cached: a safe-aborted verification records nothing, so a fixed
+    prompt re-derives it next run. Shares the SQLite file; lives in its own table.
+    """
+
+    def __init__(self, db_path: Path):
+        self.db_path = db_path
+        self._conn = sqlite3.connect(str(db_path))
+        self._migrate()
+
+    def _migrate(self) -> None:
+        cursor = self._conn.execute("PRAGMA table_info(sync_correspondences)")
+        columns = {row[1] for row in cursor.fetchall()}
+        if not columns:
+            self._conn.execute(
+                """CREATE TABLE sync_correspondences (
+                    pairs_hash      TEXT NOT NULL,
+                    prompt_version  TEXT NOT NULL,
+                    verdicts        TEXT NOT NULL,
+                    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (pairs_hash, prompt_version)
+                )"""
+            )
+            self._conn.commit()
+
+    def get(self, pairs_hash: str, prompt_version: str) -> str | None:
+        """Return the cached verdict JSON for the pair set, or ``None``."""
+        row = self._conn.execute(
+            "SELECT verdicts FROM sync_correspondences WHERE pairs_hash=? AND prompt_version=?",
+            (pairs_hash, prompt_version),
+        ).fetchone()
+        return row[0] if row else None
+
+    def put(self, pairs_hash: str, prompt_version: str, verdicts: str) -> None:
+        self._conn.execute(
+            """INSERT OR REPLACE INTO sync_correspondences
+               (pairs_hash, prompt_version, verdicts) VALUES (?, ?, ?)""",
+            (pairs_hash, prompt_version, verdicts),
+        )
+        self._conn.commit()
+
+    def close(self) -> None:
+        self._conn.close()
+
+
 class SyncSnapshotCache:
     """Per-(file, slide_id, role) snapshot of the last accepted sync state.
 
