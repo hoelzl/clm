@@ -71,7 +71,15 @@ manifest) + **one orchestration layer** (`clm release`) that promotes frozen
   a released-but-unbuilt topic is skipped (retried) then frozen once built.
   Engine was already capable — this is coverage. Non-vacuity + scope confirmed
   by an adversarial review (3 gaps it found are closed).
-- **Step 5 — recording → slide-version provenance** `[TODO]` ← NEXT.
+- **Step 5 — recording → slide-version provenance `[DONE]`** (`de27496`). The
+  provenance *primitive*: `core.provenance_manifest.topic_digest_from_files` /
+  `manifest_topic_digest` (one order-independent per-topic digest; `release.sync`
+  deduped onto it, value byte-identical, frozen-literal regression test);
+  `RecordingPart`/`TakeRecord` gain optional `section_id`/`topic_id`/`slide_digest`
+  (backward-compatible, threaded through every mutator incl. retake/restore);
+  `recordings.provenance.{part_slide_drift,course_recording_drift}` answers "did
+  this slide change since the video was shot?" as a manifest diff (unknown ≠
+  current). **Consumer wiring is the follow-up** (see below).
 - **Follow-ups** `[TODO]`: `SharedImageFile` (shared image mode); `clm release
   week` (section-selector index space is disabled-inclusive — a landmine);
   one real-build integration test asserting a `--snapshot` DIR stays
@@ -83,7 +91,8 @@ manifest) + **one orchestration layer** (`clm release`) that promotes frozen
 
 ## 4. Current Status
 
-Steps 1, 2, 3 (3a/3b/3c/3d), and 4 are **all complete**. The full flow works
+**All 5 steps of the #208 plan are complete** (1, 2, 3a/3b/3c/3d, 4, 5); what
+remains is consumer wiring + smaller follow-ups (see §5). The release flow works
 end-to-end with the manifest **on by default**:
 
 ```bash
@@ -108,21 +117,31 @@ clm release sync course.xml --channel jan --push -m "Release functions"  # promo
   exclude-add), so a pre-exclusion-tracked manifest is purged on the next push.
 - No blockers.
 
-## 5. Next Steps — Step 5: recording → slide-version provenance
+## 5. Next Steps — all 5 steps done; remaining follow-ups
 
-Steps 1–4 are done. The next increment is **Step 5 — recording → slide-version
-provenance**: extend the recordings state (`src/clm/recordings/state.py`
-`RecordingPart` / `TakeRecord`, which already capture `git_commit`) with the
-recorded slide's `content_hash` + `section_id` / `topic_id`, so "what changed in
-this slide since it was recorded" becomes a diff of the stored hash against the
-current `.clm-manifest.json` entry — reusing the same provenance manifest the
-release engine consumes. Mostly additive; mind the recordings package is an
-optional extra (do not import it from build).
+The 5-step plan (#208) is complete. Remaining work is follow-ups, roughly by
+value:
 
-Also still open (smaller): the `SharedImageFile` step-1 manifest gap
-(`image_mode="shared"`); `clm release week` (the section-selector index space is
-disabled-inclusive — a landmine); and the deferred 3d review finding #6 (a
-real-build `--snapshot` manifest-free integration test).
+1. **Step-5 consumer wiring** (the most impactful gap). The drift primitive
+   ships, but nothing populates it at record time: `src/clm/recordings/workflow/
+   session.py` (`_sync_*` around line 1759) calls `ensure_part`/`record_retake`
+   with **no** provenance kwargs — and note it never passed `git_commit` either,
+   so `recordings/git_info.get_git_info` is currently unused in the live flow.
+   Wiring it means: at record/retake time resolve the deck's `(section_id,
+   topic_id)`, load the course's `.clm-manifest.json`, compute
+   `manifest_topic_digest(...)`, and pass all three (plus the already-available
+   git info) through. That single change lights up BOTH the long-dormant
+   git provenance and the new slide drift. Then add a read surface — e.g. a
+   `clm recordings drift SPEC` command over `course_recording_drift(...,
+   stale_only=True)` (and/or a web-dashboard badge). Needs a small design note on
+   where the manifest comes from at record time and how a lecture maps to a topic.
+2. **`SharedImageFile` step-1 manifest gap** (`image_mode="shared"`): the only
+   output kind the provenance manifest does not yet enumerate (see
+   `enumerate_expected_outputs` docstring). Needs a shared-mode test course.
+3. **`clm release week`**: the section-selector index space is
+   disabled-inclusive — a landmine (deferred since step 2).
+4. **Deferred 3d review finding #6**: a real-build `--snapshot` integration test
+   asserting the output tree stays `.clm-manifest.json`-free.
 
 **Carry-forward gotchas**: `git_ops.py` `OutputRepo` is mutable (not attrs);
 `run_git` honors the `_dry_run_mode` ContextVar; `resolve_course_paths` returns
@@ -134,8 +153,9 @@ The commit "anything to commit?" decision gates on the **index**
 
 Build/provenance side (`src/clm/core/`):
 - `provenance_manifest.py` — emit `.clm-manifest.json`; `load_manifest`,
-  `manifest_files_by_topic` readers. Enumeration reuses the build's own path
-  computation + existence-filter.
+  `manifest_files_by_topic` readers; `topic_digest_from_files` /
+  `manifest_topic_digest` (step 5 — the shared per-topic rollup). Enumeration
+  reuses the build's own path computation + existence-filter.
 - `git_info.py` — `get_git_info()` (commit+dirty), core copy free of the
   `[recordings]` extra.
 - `course_spec.py` — `DirGroupSpec.{section_id,topic_id}` (dir-group ownership);
@@ -146,7 +166,14 @@ Build/provenance side (`src/clm/core/`):
 Release engine (`src/clm/release/`):
 - `ledger.py` — `Ledger` (plain-text), `partition_known`.
 - `frozen_manifest.py` — `FrozenManifest` (`.clm-released.json`), `FrozenRecord`.
-- `sync.py` — `plan_sync`/`apply_sync`, `SyncPlan`/`SyncResult`, `_topic_digest`.
+- `sync.py` — `plan_sync`/`apply_sync`, `SyncPlan`/`SyncResult`; the per-topic
+  freeze digest is now `core.provenance_manifest.topic_digest_from_files`.
+
+Recordings provenance (`src/clm/recordings/`):
+- `state.py` — `RecordingPart`/`TakeRecord` carry `section_id`/`topic_id`/
+  `slide_digest` (step 5); mutators thread them through.
+- `provenance.py` — `part_slide_drift` / `course_recording_drift` + `SlideDrift`
+  (`unknown`/`current`/`changed`). Pure manifest diff; no video/slide re-read.
 
 CLI / build wiring:
 - `src/clm/cli/commands/release.py` — `clm release` group (add/status/sync +
@@ -251,3 +278,18 @@ divergence (step 4), recordings (step 5).
   source change (not just present). No real build runs — these are engine/CLI
   tests, fast, no git. The divergence guarantee is asserted on real dest bytes
   AND `FrozenRecord.source_commit`/`topic_digest`, not just on log strings.
+- **Step 5 invariants:** (1) the per-topic digest rollup is now ONE function
+  (`core.provenance_manifest.topic_digest_from_files`) shared by the release
+  freeze and recording drift; a frozen-literal test (`...5d02884ff145...`) pins
+  its output, because a change to the rollup would silently invalidate every
+  shipped `.clm-released.json` digest. (2) The new recording fields are
+  optional/`None`-default pydantic fields → old `state.json` loads unchanged;
+  every `RecordingPart(`/`TakeRecord(` site in `state.py` carries them (incl.
+  retake/restore demote+swap), so provenance never silently drops. (3) Drift
+  `unknown` is deliberately distinct from `current` — an unprovenanced or
+  absent-from-manifest recording must never read as up to date. (4) **Key
+  discovery:** `recordings/git_info.get_git_info` is currently UNUSED by the live
+  session flow — `session.py` populates neither `git_commit` nor the new slide
+  fields at record time. So step 5 ships the primitive consistently with how
+  recording provenance already works; the live wiring is the §5 follow-up and
+  lights up both at once.
