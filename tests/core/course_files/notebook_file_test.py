@@ -319,6 +319,85 @@ class TestCassetteResolution:
         )
         assert nb.expected_cassette_relative_name == "_cassettes/slides_replay.http-cassette.yaml"
 
+    def test_cassette_path_prefers_new_cassettes_dir(self, course_1, tmp_path):
+        # The non-underscore ``cassettes/`` is the current name for the sidecar.
+        nb = self._make_nb_file(course_1, tmp_path, with_cassette=False)
+        (tmp_path / "cassettes").mkdir()
+        (tmp_path / "cassettes" / "slides_replay.http-cassette.yaml").write_text(
+            "interactions: []\n", encoding="utf-8"
+        )
+        assert nb.cassette_path == tmp_path / "cassettes" / "slides_replay.http-cassette.yaml"
+        assert nb.cassette_relative_name == "cassettes/slides_replay.http-cassette.yaml"
+
+    def test_cassette_path_prefers_new_dir_over_legacy(self, course_1, tmp_path):
+        # Both ``cassettes/`` and legacy ``_cassettes/`` present → new wins.
+        nb = self._make_nb_file(course_1, tmp_path, with_cassette=True, nested=True)
+        (tmp_path / "cassettes").mkdir()
+        (tmp_path / "cassettes" / "slides_replay.http-cassette.yaml").write_text(
+            "interactions: []\n", encoding="utf-8"
+        )
+        assert nb.cassette_relative_name == "cassettes/slides_replay.http-cassette.yaml"
+
+    def test_expected_cassette_path_uses_new_cassettes_dir(self, course_1, tmp_path):
+        (tmp_path / "cassettes").mkdir()
+        nb = self._make_nb_file(course_1, tmp_path, with_cassette=False)
+        assert (
+            nb.expected_cassette_path == tmp_path / "cassettes" / "slides_replay.http-cassette.yaml"
+        )
+        assert nb.expected_cassette_relative_name == "cassettes/slides_replay.http-cassette.yaml"
+
+    def test_expected_cassette_path_prefers_new_dir_over_legacy(self, course_1, tmp_path):
+        (tmp_path / "_cassettes").mkdir()
+        (tmp_path / "cassettes").mkdir()
+        nb = self._make_nb_file(course_1, tmp_path, with_cassette=False)
+        assert (
+            nb.expected_cassette_path == tmp_path / "cassettes" / "slides_replay.http-cassette.yaml"
+        )
+
+
+class TestCompanionVoiceoverResolution:
+    """NotebookFile.companion_voiceover_path resolves either layout.
+
+    The build probes this property host-side and merges the companion's
+    narration at payload time. It must find a companion whether it sits as a
+    sibling or has been relocated into the ``voiceover/`` subdirectory."""
+
+    def _make_nb_file(self, tmp_path: Path) -> NotebookFile:
+        from clm.core.course import Course
+        from clm.core.course_spec import CourseSpec
+
+        spec = CourseSpec(
+            name=Text(de="Test", en="Test"),
+            prog_lang="python",
+            description=Text(de="", en=""),
+            certificate=Text(de="", en=""),
+            sections=[],
+        )
+        course = Course(spec=spec, course_root=tmp_path, output_root=tmp_path)
+        section = Section(name=Text(de="S", en="S"), course=course)
+        topic_spec = TopicSpec(id="t")
+        py_file = tmp_path / "slides_intro.py"
+        py_file.write_text("# %% [markdown]\n# Title\n", encoding="utf-8")
+        topic = Topic.from_spec(topic_spec, section=section, path=tmp_path)
+        return cast(NotebookFile, CourseFile.from_path(course, py_file, topic))
+
+    def test_none_when_absent(self, tmp_path):
+        nb = self._make_nb_file(tmp_path)
+        assert nb.companion_voiceover_path is None
+
+    def test_finds_sibling(self, tmp_path):
+        nb = self._make_nb_file(tmp_path)
+        sibling = tmp_path / "voiceover_intro.py"
+        sibling.write_text('# %% [markdown] tags=["voiceover"]\n# hi\n', encoding="utf-8")
+        assert nb.companion_voiceover_path == sibling
+
+    def test_prefers_voiceover_subdir(self, tmp_path):
+        nb = self._make_nb_file(tmp_path)
+        (tmp_path / "voiceover").mkdir()
+        nested = tmp_path / "voiceover" / "voiceover_intro.py"
+        nested.write_text('# %% [markdown] tags=["voiceover"]\n# hi\n', encoding="utf-8")
+        assert nb.companion_voiceover_path == nested
+
 
 class TestReplayCassetteLanguageFallback:
     """Issue #159: split ``.de``/``.en`` decks fall back to the base cassette

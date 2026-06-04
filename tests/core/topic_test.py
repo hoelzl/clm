@@ -338,3 +338,34 @@ def test_build_file_map_skips_sync_includes_ledger(tmp_path):
 
     names = {f.path.name for f in topic.files}
     assert names == {"slides_010.py"}, f"ledger leaked: {names}"
+
+
+def test_build_file_map_excludes_voiceover_subdir_keeps_cassettes(tmp_path):
+    """Sidecar subdirs in the build walk: ``voiceover/`` is fully excluded from
+    the course file map; ``cassettes/`` stays in the map (the kernel reads
+    cassettes at runtime) but is suppressed from output."""
+    from clm.infrastructure.utils.path_utils import is_ignored_file_for_output
+
+    course, topic, course_root = _make_isolated_topic(tmp_path)
+    (topic.path / "slides_010.py").write_text("# slide content\n")
+
+    vo = topic.path / "voiceover"
+    vo.mkdir()
+    (vo / "voiceover_010.py").write_text('# %% [markdown] tags=["voiceover"]\n# vo\n')
+
+    cas = topic.path / "cassettes"
+    cas.mkdir()
+    cassette = cas / "slides_010.http-cassette.yaml"
+    cassette.write_text("interactions: []\n")
+
+    topic.build_file_map()
+
+    paths = {f.path for f in topic.files}
+    # voiceover/ companions never enter the course file map (merged host-side).
+    assert (vo / "voiceover_010.py") not in paths
+    # cassettes/ files DO enter the map (the kernel needs them) ...
+    assert cassette in paths
+    # ... but must not be copied to public/speaker output.
+    assert is_ignored_file_for_output(cassette)
+    # core slide source is present.
+    assert (topic.path / "slides_010.py") in paths

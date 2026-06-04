@@ -305,16 +305,20 @@ def _plan_companion_split(source: Path, de_path: Path, en_path: Path) -> _Compan
     The ``voiceover_tools`` import is deferred so a plain deck split never
     pulls in the voiceover layer.
     """
-    from clm.slides.voiceover_tools import companion_path
+    from clm.slides.voiceover_tools import companion_name, resolve_companion
 
-    companion = companion_path(source)
-    if not companion.exists():
+    companion = resolve_companion(source)
+    if companion is None:
         return None
+    # Keep the split halves in the same directory the bilingual companion lived
+    # in (the ``voiceover/`` subdir or the sibling location), so a foldered topic
+    # stays foldered across a split.
+    comp_dir = companion.parent
     comp_de_text, comp_en_text = split_text(companion.read_text(encoding="utf-8"))
     return _CompanionSplitPlan(
         source=companion,
-        de_path=companion_path(de_path),
-        en_path=companion_path(en_path),
+        de_path=comp_dir / companion_name(de_path),
+        en_path=comp_dir / companion_name(en_path),
         de_text=comp_de_text,
         en_text=comp_en_text,
     )
@@ -639,15 +643,20 @@ def _plan_companion_unify(
     both halves). Raising here (divergent shared companion cell, misalignment)
     aborts the whole unify before any file is written.
     """
-    from clm.slides.voiceover_tools import companion_path
+    from clm.slides.voiceover_tools import companion_name, resolve_companion
 
-    de_comp = companion_path(de_source)
-    en_comp = companion_path(en_source)
-    if not de_comp.exists() and not en_comp.exists():
+    de_comp = resolve_companion(de_source)
+    en_comp = resolve_companion(en_source)
+    if de_comp is None and en_comp is None:
         return None
-    de_text = de_comp.read_text(encoding="utf-8") if de_comp.exists() else ""
-    en_text = en_comp.read_text(encoding="utf-8") if en_comp.exists() else ""
-    return _CompanionUnifyPlan(target=companion_path(target), text=unify_texts(de_text, en_text))
+    de_text = de_comp.read_text(encoding="utf-8") if de_comp is not None else ""
+    en_text = en_comp.read_text(encoding="utf-8") if en_comp is not None else ""
+    # Recombine into the directory the split companions lived in (preferring the
+    # DE half's location), so a foldered topic stays foldered across a unify.
+    present = de_comp if de_comp is not None else en_comp
+    assert present is not None
+    target_companion = present.parent / companion_name(target)
+    return _CompanionUnifyPlan(target=target_companion, text=unify_texts(de_text, en_text))
 
 
 def unify_in_file(

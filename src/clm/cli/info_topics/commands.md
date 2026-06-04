@@ -1099,11 +1099,75 @@ diverges …`. The same divergence is surfaced by
 "Split-source build routing" under `clm build` above for the
 build-time gate.
 
-**Voiceover companion.** If the pair has sibling voiceover companions
+**Voiceover companion.** If the pair has voiceover companions
 (`voiceover_<name>.de.py` / `voiceover_<name>.en.py`), `unify` recombines
-them in lockstep into `voiceover_<name>.py` (next to the bilingual
-target) — the inverse of `split`'s companion split, byte-identical.
-`--force` also covers overwriting an existing companion target.
+them in lockstep into `voiceover_<name>.py` — the inverse of `split`'s
+companion split, byte-identical. The recombined companion is written to the
+**same directory** the split companions lived in (a `voiceover/` subdirectory
+stays foldered; see `clm slides tidy`). `--force` also covers overwriting an
+existing companion target.
+
+### `clm slides tidy`
+
+Relocate a topic's authoring **sidecars** between the flat and foldered
+layouts. Sidecars are the files that are *not* core source and never reach
+output: voiceover companions (`voiceover_*.py`) and HTTP-replay cassettes
+(`*.http-cassette.yaml`). `tidy` moves them into per-type subdirectories so a
+topic directory holds only the `slides_*.py` sources and genuine output
+companions (`img/`, `drawio/`):
+
+```
+topic_070_rag_introduction/
+├── cassettes/      ← *.http-cassette.yaml      (was: loose in the topic dir)
+├── voiceover/      ← voiceover_*.py            (was: loose in the topic dir)
+├── drawio/  img/   ← output companions (unchanged)
+└── slides_010_*.de.py  slides_010_*.en.py      ← core sources
+```
+
+`--layout sibling` flattens the sidecars back out. Both layouts are fully
+supported everywhere (build, `extract`/`inline`/`sync`, `split`/`unify`,
+`validate`); `tidy` is just the bulk reorganizer. The cassette folder is
+`cassettes/`; the historical `_cassettes/` is still read and is **consolidated**
+into `cassettes/` by `--layout subdir`.
+
+```
+clm slides tidy [OPTIONS] PATH
+```
+
+`PATH` may be a single slide/sidecar file, a topic directory, or a whole course
+tree (walked recursively).
+
+| Option | Description |
+|--------|-------------|
+| `--layout [subdir\|sibling]` | Target layout. `subdir` (default) moves sidecars into `voiceover/` / `cassettes/`; `sibling` flattens them back. |
+| `--dry-run` | Print the planned moves/deletes without touching any file. |
+| `--voiceover` / `--no-voiceover` | Include/exclude voiceover companions (default: include). |
+| `--cassettes` / `--no-cassettes` | Include/exclude cassettes and the pruning of transient staging markers (default: include). |
+| `--no-git` | Use plain file moves instead of `git mv` for tracked files. |
+| `--json` | Emit a JSON report. |
+
+Behavior:
+
+- **Moves** use `git mv` for tracked files (history follows the file), falling
+  back to a plain move for untracked files or outside a repo.
+- **Transient** cassette staging markers (`*.http-cassette.yaml.staging-*` and
+  their `.completed` companions) are **deleted**, not moved — they regenerate.
+- A file already at its target is a **no-op** (the command is idempotent).
+- A sidecar present in **both** layouts is a **conflict**: that one move is
+  skipped (nothing is clobbered) and the command exits **2**. Reconcile the
+  duplicate (`clm validate` flags it too) and re-run.
+- A `voiceover/` / `cassettes/` / `_cassettes/` directory emptied by a flatten
+  is removed.
+
+Exit codes: `0` done (or dry-run printed); `2` one or more conflicts were
+skipped.
+
+```bash
+clm slides tidy slides/module_550/topic_070 --dry-run
+clm slides tidy slides/module_550/topic_070            # -> subdir layout
+clm slides tidy slides --layout sibling                # flatten a whole tree
+clm slides tidy slides/module_550 --no-cassettes       # voiceover companions only
+```
 
 ### `clm slides language-view`
 
@@ -1221,8 +1285,13 @@ clm voiceover extract [OPTIONS] FILE
 | `--force` | Overwrite an existing companion (rebuilds it from the slide's voiceover cells, discarding companion-only content). Without it, an existing companion is left untouched and the command errors. For a paired extract this is **all-or-nothing**: it refuses if *either* companion exists. |
 | `--both` | Force the paired extract (both companions of a split deck). Auto-detected on a split half whose twin exists; passing `--both` errors if there is no twin. |
 | `--single` | Extract only `FILE`'s own companion, even on a split half whose twin exists — opt out of the default auto-pairing. |
+| `--layout [subdir\|sibling]` | Where to write the companion: `subdir` creates/uses a `voiceover/` folder; `sibling` writes next to the slide. Default: auto-detect an existing `voiceover/` folder, else sibling. See `clm slides tidy`. |
 | `--dry-run` | Preview changes without modifying files |
 | `--json` | Output as JSON |
+
+Reading is always layout-agnostic — `inline`, `sync`, `validate`, and the build
+find the companion whether it sits next to the slide or in a `voiceover/`
+subdirectory. `--layout` only chooses where a **newly written** companion lands.
 
 Examples:
 
@@ -1230,6 +1299,7 @@ Examples:
 clm voiceover extract slides_intro.py                 # bilingual: single companion
 clm voiceover extract slides_intro.de.py              # split half: auto-pairs both companions
 clm voiceover extract slides_intro.de.py --single     # split half: this half only
+clm voiceover extract slides_intro.de.py --layout subdir   # write into voiceover/
 clm voiceover extract slides_intro.py --dry-run
 clm voiceover extract slides_intro.de.py --force
 ```
@@ -1696,7 +1766,8 @@ between arguments is preserved.
 | `--model TEXT` | LLM model for merge/polished mode (default: `anthropic/claude-sonnet-4-6` via OpenRouter) |
 | `--transcript PATH` | Skip ASR; load precomputed transcript JSON (single-part only) |
 | `--alignment PATH` | Skip ASR, detection, matching; load precomputed alignment JSON |
-| `--companion/--no-companion` | Force companion-file merge on/off (default: auto-detect based on whether `voiceover_*.py` exists next to SLIDES) |
+| `--companion/--no-companion` | Force companion-file merge on/off (default: auto-detect based on whether a `voiceover_*.py` companion exists, in a `voiceover/` subdir or next to SLIDES) |
+| `--layout [subdir\|sibling]` | Where to create a **new** companion: `subdir` (a `voiceover/` folder) or `sibling`. Default: auto-detect an existing `voiceover/` folder, else sibling. Ignored when a companion already exists — it is updated in place. |
 | `--propagate-to [de\|en]` | After merging `--lang`, translate the changes into the given target language and update its voiceover cells |
 
 **Companion-file merge (auto-detected):**

@@ -2,6 +2,51 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## Authoring sidecar subdirectories: `voiceover/` and `cassettes/` (additive — no break)
+
+CLM {version} lets a topic keep its authoring **sidecars** — voiceover
+companions (`voiceover_*.py`) and HTTP-replay cassettes (`*.http-cassette.yaml`)
+— in per-type subdirectories so the topic directory holds only the editable
+`slides_*.py` sources and the output companions (`img/`, `drawio/`):
+
+```
+topic_070_rag_introduction/
+├── cassettes/   ← *.http-cassette.yaml
+├── voiceover/   ← voiceover_*.py
+├── drawio/  img/
+└── slides_010_*.de.py  slides_010_*.en.py
+```
+
+**Nothing changes unless you opt in** — the flat layout (sidecars next to the
+slides) keeps working, and both layouts are auto-detected by directory presence
+everywhere (build, `extract`/`inline`/`sync`, `split`/`unify`, `validate`).
+
+*Adopt it:*
+
+```bash
+# Preview, then move a topic / section / whole course into the foldered layout
+clm slides tidy slides/module_550/topic_070 --dry-run
+clm slides tidy slides --layout subdir
+
+# Flatten back if you prefer
+clm slides tidy slides --layout sibling
+```
+
+`tidy` uses `git mv` for tracked files, deletes transient `*.staging-*` cassette
+markers, and **consolidates the historical `_cassettes/` directory into
+`cassettes/`** (the underscore name is still read as a fallback). To make new
+`clm voiceover extract` / `sync` companions default to the foldered layout
+without per-topic `mkdir`, set a course-wide default:
+
+```toml
+[tool.clm]
+sidecar-layout = "subdir"   # or override per-shell with CLM_SIDECAR_LAYOUT=subdir
+```
+
+This default is write-time only and never changes build output. Precedence for a
+new companion: explicit `--layout` flag → an existing `voiceover/` directory →
+the course default → `sibling`.
+
 ## Breaking changes in CLM 1.8
 
 CLM 1.8 retires the Phase 0 deprecation period. It carries **intentional

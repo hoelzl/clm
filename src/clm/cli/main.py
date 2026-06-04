@@ -97,6 +97,7 @@ from clm.cli.commands.status import status  # noqa: E402
 from clm.cli.commands.suggest_sync import suggest_sync_cmd  # noqa: E402
 from clm.cli.commands.summarize import summarize  # noqa: E402
 from clm.cli.commands.sync_includes import sync_includes_cmd  # noqa: E402
+from clm.cli.commands.tidy import tidy_cmd  # noqa: E402
 from clm.cli.commands.unify import unify_cmd  # noqa: E402
 from clm.cli.commands.validate import validate_cmd  # noqa: E402
 from clm.cli.commands.voiceover_tools import (  # noqa: E402
@@ -164,6 +165,7 @@ slides_group.add_command(language_view_cmd, name="language-view")
 slides_group.add_command(suggest_sync_cmd, name="suggest-sync")
 slides_group.add_command(slides_sync_cmd, name="sync")
 slides_group.add_command(search_slides_cmd, name="search")
+slides_group.add_command(tidy_cmd, name="tidy")
 cli.add_command(slides_group)
 
 topic_group.add_command(resolve_topic_cmd, name="resolve")

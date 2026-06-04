@@ -193,6 +193,15 @@ def voiceover_group(ctx, cache_root, no_cache, refresh_cache):
     "language and update its voiceover cells. Must differ from --lang and "
     "cannot be combined with --overwrite.",
 )
+@click.option(
+    "--layout",
+    type=click.Choice(["subdir", "sibling"]),
+    default=None,
+    help="Where to create a NEW companion: 'subdir' (voiceover/ folder) or "
+    "'sibling' (next to SLIDES). Default: auto-detect an existing voiceover/ "
+    "folder, else sibling. Ignored when a companion already exists — it is "
+    "updated in place.",
+)
 @click.pass_context
 def sync(
     ctx,
@@ -215,6 +224,7 @@ def sync(
     alignment_override,
     companion_flag,
     propagate_to,
+    layout,
 ):
     """Synchronize speaker notes from one or more video recordings.
 
@@ -237,7 +247,7 @@ def sync(
     import warnings
 
     from clm.notebooks.polish_levels import PolishLevel
-    from clm.slides.voiceover_tools import companion_path
+    from clm.slides.voiceover_tools import expected_companion, resolve_companion
 
     # Resolve effective polish level from --polish-level and deprecated --mode.
     if mode is not None:
@@ -279,12 +289,22 @@ def sync(
             )
 
     # Resolve companion-mode activation (auto-detect unless --no-companion/--companion).
-    companion_file = companion_path(slides)
+    # Read/write the existing companion wherever it lives (``voiceover/`` subdir
+    # or sibling); a not-yet-created companion uses the --layout write target,
+    # folded with the course-wide default (CLM_SIDECAR_LAYOUT / [tool.clm]).
+    from clm.slides.sidecar_layout import effective_write_layout
+
+    existing_companion = resolve_companion(slides)
+    companion_file = (
+        existing_companion
+        if existing_companion is not None
+        else expected_companion(slides, layout=effective_write_layout(slides, layout))
+    )
     if companion_flag is None:
-        use_companion = companion_file.exists()
+        use_companion = existing_companion is not None
     else:
         use_companion = companion_flag
-    if use_companion and not companion_file.exists() and not overwrite:
+    if use_companion and existing_companion is None and not overwrite:
         # User asked for companion mode but no file exists; behave like an empty
         # baseline (companion will be created on write). We only warn for clarity.
         console.print(

@@ -2904,3 +2904,30 @@ class TestSelectiveChecks:
         )
         result = validate_file(p)
         assert result.review_material is not None
+
+
+def test_companion_location_ambiguity_is_flagged(tmp_path):
+    """A companion present in BOTH the voiceover/ subdir and as a sibling is
+    ambiguous — the build silently prefers the relocated copy."""
+    _write_slide(
+        tmp_path,
+        "slides_intro.py",
+        """\
+        # %% [markdown] lang="de" tags=["slide"] slide_id="intro"
+        # ## Einführung
+
+        # %% [markdown] lang="en" tags=["slide"] slide_id="intro"
+        # ## Introduction
+        """,
+    )
+    companion = '# %% [markdown] tags=["voiceover"] for_slide="intro"\n#\n# hi\n'
+    _write_slide(tmp_path, "voiceover_intro.py", companion)  # sibling
+    (tmp_path / "voiceover").mkdir()
+    _write_slide(tmp_path / "voiceover", "voiceover_intro.py", companion)  # relocated
+
+    result = validate_file(tmp_path / "slides_intro.py", checks=["pairing"])
+    ambiguity = [
+        f for f in result.findings if f.severity == "warning" and "two locations" in f.message
+    ]
+    assert len(ambiguity) == 1
+    assert ambiguity[0].category == "pairing"

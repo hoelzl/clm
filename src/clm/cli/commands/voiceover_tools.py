@@ -13,10 +13,10 @@ from clm.slides.voiceover_tools import (
     InlineResult,
     PairedExtractionResult,
     VoiceoverError,
-    companion_path,
     extract_voiceover,
     extract_voiceover_pair,
     inline_voiceover,
+    resolve_companion,
 )
 
 
@@ -51,6 +51,14 @@ from clm.slides.voiceover_tools import (
     help="Preview changes without modifying files.",
 )
 @click.option(
+    "--layout",
+    type=click.Choice(["subdir", "sibling"]),
+    default=None,
+    help="Where to write the companion: 'subdir' creates/uses a voiceover/ "
+    "folder; 'sibling' writes next to the slide. Default: auto-detect an "
+    "existing voiceover/ folder, else sibling.",
+)
+@click.option(
     "--json",
     "as_json",
     is_flag=True,
@@ -62,6 +70,7 @@ def extract_voiceover_cmd(
     both: bool,
     single: bool,
     dry_run: bool,
+    layout: str | None,
     as_json: bool,
 ):
     """Extract voiceover cells from a slide file to a companion file.
@@ -97,13 +106,22 @@ def extract_voiceover_cmd(
             f"<deck>.en.py twin on disk."
         )
 
+    # Fold the --layout flag with the course-wide default (CLM_SIDECAR_LAYOUT /
+    # [tool.clm] sidecar-layout). A flag wins; otherwise a course default of
+    # subdir steers new companions into voiceover/.
+    from clm.slides.sidecar_layout import effective_write_layout
+
+    layout = effective_write_layout(path, layout)
+
     try:
         if pair is not None:
-            paired = extract_voiceover_pair(pair[0], pair[1], force=force, dry_run=dry_run)
+            paired = extract_voiceover_pair(
+                pair[0], pair[1], force=force, dry_run=dry_run, layout=layout
+            )
             payload = _paired_extraction_to_dict(paired)
             summary = paired.summary
         else:
-            result = extract_voiceover(path, force=force, dry_run=dry_run)
+            result = extract_voiceover(path, force=force, dry_run=dry_run, layout=layout)
             payload = _extraction_to_dict(result)
             summary = result.summary
     except VoiceoverError as e:
@@ -147,9 +165,9 @@ def inline_voiceover_cmd(
         clm voiceover inline slides/topic/slides_intro.py
         clm voiceover inline slides/topic/slides_intro.py --json
     """
-    comp = companion_path(path)
-    if not comp.exists():
-        click.echo(f"No companion file found at {comp}")
+    comp = resolve_companion(path)
+    if comp is None:
+        click.echo(f"No companion file found for {path.name}")
         return
 
     result = inline_voiceover(path, dry_run=dry_run)
