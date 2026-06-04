@@ -670,7 +670,7 @@ def _check_ordering(cells: list[Cell], file_path: str) -> list[Finding]:
                 de_cell = cells[de_first]
                 findings.append(
                     Finding(
-                        severity="warning",
+                        severity="error",
                         category="pairing",
                         file=file_path,
                         line=de_cell.line_number,
@@ -697,13 +697,12 @@ def _check_ordering(cells: list[Cell], file_path: str) -> list[Finding]:
 def _check_slide_ids(cells: list[Cell], file_path: str) -> list[Finding]:
     """Verify slide_id metadata: presence, format, uniqueness, adjacency, pair-consistency.
 
-    Per handover §3 / option B rollout, *missing* slide_ids land at
-    ``warning`` severity (slated for promotion to ``error`` in CLM 1.8
-    once the PythonCourses migration sweep completes). All other rules
-    — duplicate ids, narrative-cell adjacency mismatch, slug-format
-    violations, DE/EN pair mismatch — fire at the severity their
-    semantics warrant (errors for content bugs, warnings for
-    style/format drift).
+    A *missing* slide_id on a ``slide``/``subslide`` cell is an
+    ``error`` as of CLM 1.8 (it was a warning through 1.7, during the
+    PythonCourses migration sweep). All other rules — duplicate ids,
+    narrative-cell adjacency mismatch, slug-format violations, DE/EN
+    pair mismatch — fire at the severity their semantics warrant
+    (errors for content bugs, warnings for style/format drift).
 
     The ``!`` preserve marker is stripped before every comparison except
     the slug-format check, where it's permitted as a single leading
@@ -754,7 +753,7 @@ def _check_slide_ids(cells: list[Cell], file_path: str) -> list[Finding]:
             if sid is None:
                 findings.append(
                     Finding(
-                        severity="warning",
+                        severity="error",
                         category="pairing",
                         file=file_path,
                         line=cell.line_number,
@@ -763,7 +762,7 @@ def _check_slide_ids(cells: list[Cell], file_path: str) -> list[Finding]:
                             "Run `clm slides assign-ids <dir>` (EN-authority pair "
                             "minting) — or `clm slides sync` for a split deck — to add "
                             "stable identifiers; avoid per-file `assign-ids` on a single "
-                            "split half (#162). This will become an error in CLM 1.8."
+                            "split half (#162)."
                         ),
                     )
                 )

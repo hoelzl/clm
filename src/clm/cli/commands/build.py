@@ -1753,14 +1753,6 @@ async def main_build(
     ),
 )
 @click.option(
-    "--keep-directory",
-    is_flag=True,
-    help=(
-        "Deprecated: keeping the output tree is now the default; this "
-        "flag is a no-op alias. Will be removed in 1.8."
-    ),
-)
-@click.option(
     "--incremental",
     is_flag=True,
     help="Incremental build: only write newly processed files (skip cached ones). Implies --no-sweep.",
@@ -1953,7 +1945,6 @@ def build(
     ignore_cache,
     clear_cache,
     clean,
-    keep_directory,
     incremental,
     no_sweep,
     only_sections,
@@ -2020,17 +2011,6 @@ def build(
         )
     cache_db_path = ctx.obj["CACHE_DB_PATH"]
     jobs_db_path = ctx.obj["JOBS_DB_PATH"]
-
-    if keep_directory:
-        import warnings
-
-        warnings.warn(
-            "--keep-directory is deprecated and will be removed in CLM 1.8. "
-            "Keeping the output tree is now the default; this flag is a no-op. "
-            "Use --clean to opt into the legacy wipe-and-restore flow.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
 
     shutdown_requested = False
 

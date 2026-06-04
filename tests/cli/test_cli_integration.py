@@ -300,37 +300,6 @@ class TestCliBuildWithDifferentOptions:
         assert "no such option" not in result.output.lower()
         assert "missing argument" not in result.output.lower()
 
-    def test_build_with_keep_directory_flag(self, tmp_path):
-        """Test that --keep-directory flag is accepted"""
-        runner = CliRunner()
-
-        spec_file = Path("test-data/course-specs/test-spec-2.xml")
-        data_dir = Path("test-data")
-        output_dir = tmp_path / "output"
-
-        if not spec_file.exists():
-            pytest.skip("Test data not available")
-
-        result = runner.invoke(
-            cli,
-            [
-                "--jobs-db-path",
-                str(tmp_path / "test.db"),
-                "build",
-                str(spec_file),
-                "--data-dir",
-                str(data_dir),
-                "--output-dir",
-                str(output_dir),
-                "--keep-directory",
-                "--log-level",
-                "ERROR",
-            ],
-        )
-
-        # Verify no argument errors
-        assert "no such option" not in result.output.lower()
-
     def test_build_all_boolean_flags_together(self, tmp_path):
         """Test combining multiple boolean flags"""
         runner = CliRunner()
@@ -355,7 +324,6 @@ class TestCliBuildWithDifferentOptions:
                 str(output_dir),
                 "--ignore-cache",
                 "--clear-cache",
-                "--keep-directory",
                 "--print-correlation-ids",
                 "--log-level",
                 "ERROR",

@@ -1,4 +1,4 @@
-"""Tests for the clm resolve-topic CLI command."""
+"""Tests for the ``clm topic resolve`` CLI command."""
 
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ class TestResolveTopicCommand:
         runner = CliRunner()
         result = runner.invoke(
             cli,
-            ["resolve-topic", "intro", "--data-dir", str(course_tree)],
+            ["topic", "resolve", "intro", "--data-dir", str(course_tree)],
         )
         assert result.exit_code == 0
         assert "topic_010_intro" in result.output
@@ -41,17 +41,13 @@ class TestResolveTopicCommand:
         runner = CliRunner()
         result = runner.invoke(
             cli,
-            ["resolve-topic", "nonexistent", "--data-dir", str(course_tree)],
+            ["topic", "resolve", "nonexistent", "--data-dir", str(course_tree)],
         )
         assert result.exit_code != 0
         assert "not found" in result.output.lower()
 
     def test_json_output(self, course_tree):
         runner = CliRunner()
-        # Use new canonical `topic resolve` path — the deprecated
-        # `resolve-topic` alias emits a stderr notice that CliRunner's
-        # default mix_stderr=True would merge into the JSON parser's
-        # input.
         result = runner.invoke(
             cli,
             ["topic", "resolve", "intro", "--data-dir", str(course_tree), "--json"],
@@ -66,7 +62,7 @@ class TestResolveTopicCommand:
         runner = CliRunner()
         result = runner.invoke(
             cli,
-            ["resolve-topic", "*", "--data-dir", str(course_tree)],
+            ["topic", "resolve", "*", "--data-dir", str(course_tree)],
         )
         assert result.exit_code == 0
         assert "intro" in result.output
@@ -76,6 +72,6 @@ class TestResolveTopicCommand:
         runner = CliRunner()
         result = runner.invoke(
             cli,
-            ["resolve-topic", "zzz*", "--data-dir", str(course_tree)],
+            ["topic", "resolve", "zzz*", "--data-dir", str(course_tree)],
         )
         assert result.exit_code != 0

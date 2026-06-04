@@ -16,10 +16,9 @@ clm [OPTIONS] COMMAND [ARGS]...
 
 The CLI is organised into a small top-level surface plus verb groups
 (`slides`, `topic`, `authoring`, `voiceover`). The reference below
-uses the canonical (group-qualified) names; older flat names like
-`clm normalize-slides`, `clm validate-slides`, etc. still work as
-deprecated aliases and print a one-line migration hint on each
-invocation. The aliases will be removed in CLM 1.8; see
+uses the canonical (group-qualified) names. The older flat names
+(`clm normalize-slides`, `clm validate-slides`, etc.), deprecated since
+CLM 1.6, were **removed in CLM 1.8** — use the group-qualified forms; see
 `clm info migration` for the full rename table.
 
 ### `clm build`
@@ -47,7 +46,6 @@ Key options:
 | `--clean` | Wipe each output root and regenerate from scratch (legacy flow; preserves nested `.git/`). Use for emergency recovery from a corrupted output tree. The default no longer wipes — see "Git-friendly output writes" below. |
 | `--no-sweep` | Disable the post-build stray-file sweep. Useful when iterating on a single section and you don't want orphans from other sections deleted. |
 | `--incremental` | Keep directories, only write newly processed files (skip cached ones). Implies `--no-sweep`. |
-| `--keep-directory` | **Deprecated** (CLM {version}, will be removed in 1.8). Keeping the output tree is now the default; this flag is a no-op alias. |
 | `--only-sections TEXT` | Comma-separated selector tokens; rebuild only those sections and leave unselected section output untouched. Dir-group processing is skipped in this mode. See "Iterating on a single section" below. |
 | `--workers [direct\|docker]` | Worker execution mode |
 | `--notebook-workers N` | Number of notebook workers |
@@ -370,7 +368,7 @@ clm outline course.xml --sections-only
 
 ### `clm topic resolve`
 
-*Deprecated alias: `clm resolve-topic` (removed in 1.8).*
+*Removed in CLM 1.8: the flat alias `clm resolve-topic` no longer exists — use this group-qualified form.*
 
 Resolve a topic ID to its filesystem path.
 
@@ -396,7 +394,7 @@ clm topic resolve intro --module module_545_ml_azav_cohort_2026_04
 
 ### `clm slides search`
 
-*Deprecated alias: `clm search-slides` (removed in 1.8).*
+*Removed in CLM 1.8: the flat alias `clm search-slides` no longer exists — use this group-qualified form.*
 
 Fuzzy search across topic names and slide file titles.
 
@@ -424,7 +422,7 @@ clm slides search lists --course-spec course-specs/python.xml
 `clm validate course.xml` dispatches to spec validation when the
 argument is an `.xml` file.
 
-*Deprecated alias: `clm validate-spec` (removed in 1.8).*
+*Removed in CLM 1.8: the flat alias `clm validate-spec` no longer exists — use this group-qualified form.*
 
 Validate a course specification XML file for consistency.
 
@@ -515,7 +513,7 @@ clm sync-includes course-specs/ml-azav.xml --data-dir /path/to/course
 `clm validate slides/` (or `clm validate slides_foo.py`) dispatches
 to slide validation when the argument is a `.py` file or directory.
 
-*Deprecated alias: `clm validate-slides` (removed in 1.8).*
+*Removed in CLM 1.8: the flat alias `clm validate-slides` no longer exists — use this group-qualified form.*
 
 Validate slide files for format, tag, and pairing correctness. Runs deterministic
 checks and extracts structured review material for content-quality checks.
@@ -558,7 +556,8 @@ adjacency, and — since CLM {version} — **`slide_id` metadata**:
 
 | Finding | Severity | Notes |
 |---------|----------|-------|
-| `slide`/`subslide` cell missing `slide_id` | `warning` | Will become an `error` in CLM 1.8. Suggested fix: `clm slides assign-ids`. |
+| `slide`/`subslide` cell missing `slide_id` | `error` | An `error` since CLM 1.8 (was a `warning` through 1.7). Suggested fix: `clm slides assign-ids`. |
+| DE/EN content/voiceover pair not adjacent (intervening lang-tagged cell) | `error` | An `error` since CLM 1.8 (was a `warning` through 1.7). Canonical layout: `[de] [en] [de voiceover] [en voiceover]`. Fix with `clm slides normalize`. |
 | duplicate `slide_id` across slide groups | `error` | Group-aware: paired DE/EN cells sharing the EN-derived slug are not a duplicate. Bare-form comparison so `!intro` and `intro` collide. |
 | voiceover/notes `slide_id` ≠ preceding `slide`/`subslide` anchor | `error` | Walk-back skips j2, code, shared (lang-less), and cross-language narrative cells. The j2 `header()` macro anchors `slide_id="title"` for narrative cells that follow it. |
 | paired DE/EN slides carry mismatched bare `slide_id`s | `warning` | Suggested fix: `clm slides assign-ids --force`. |
@@ -610,7 +609,7 @@ clm validate slides/module_010/topic_100_intro/ --quick
 
 ### `clm slides normalize`
 
-*Deprecated alias: `clm normalize-slides` (removed in 1.8).*
+*Removed in CLM 1.8: the flat alias `clm normalize-slides` no longer exists — use this group-qualified form.*
 
 Normalize slide files by applying mechanical fixes: tag migration (`alt`→`completed`),
 workshop tag insertion, DE/EN interleaving, and slide ID auto-generation.
@@ -1172,7 +1171,7 @@ clm slides tidy slides/module_550 --no-cassettes       # voiceover companions on
 
 ### `clm slides language-view`
 
-*Deprecated alias: `clm language-view` (removed in 1.8).*
+*Removed in CLM 1.8: the flat alias `clm language-view` no longer exists — use this group-qualified form.*
 
 Extract a single-language view of a bilingual slide file. Each cell is
 preceded by an `[original line N]` annotation so edits can be mapped back.
@@ -1196,7 +1195,7 @@ clm slides language-view slides_intro.py en --include-notes
 
 ### `clm slides suggest-sync`
 
-*Deprecated alias: `clm suggest-sync` (removed in 1.8).*
+*Removed in CLM 1.8: the flat alias `clm suggest-sync` no longer exists — use this group-qualified form.*
 
 Compare a slide file against git HEAD and detect asymmetric bilingual edits.
 Suggests which cells need translation updates. Does not modify the file.
@@ -1227,7 +1226,7 @@ clm slides suggest-sync slides_intro.py --source-language de --json
 
 ### `clm voiceover extract`
 
-*Deprecated alias: `clm extract-voiceover` (removed in 1.8).*
+*Removed in CLM 1.8: the flat alias `clm extract-voiceover` no longer exists — use this group-qualified form.*
 
 Extract voiceover and notes cells from a slide file to a companion
 `voiceover_*.py` file, linked via `slide_id`/`for_slide` metadata.
@@ -1307,7 +1306,7 @@ clm voiceover extract slides_intro.de.py --force
 
 ### `clm voiceover inline`
 
-*Deprecated alias: `clm inline-voiceover` (removed in 1.8).*
+*Removed in CLM 1.8: the flat alias `clm inline-voiceover` no longer exists — use this group-qualified form.*
 
 Inline voiceover cells from a companion `voiceover_*.py` file back into the
 slide file. The companion is deleted **only when every cell is placed**.
@@ -1355,7 +1354,7 @@ clm voiceover inline slides_intro.py --dry-run
 
 ### `clm authoring rules`
 
-*Deprecated alias: `clm authoring-rules` (removed in 1.8).*
+*Removed in CLM 1.8: the flat alias `clm authoring-rules` no longer exists — use this group-qualified form.*
 
 Look up merged authoring rules (common + course-specific) for a course.
 Reads per-course `.authoring.md` files from the `course-specs/` directory.

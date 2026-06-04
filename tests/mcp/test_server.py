@@ -23,17 +23,16 @@ from clm.mcp import server as server_module  # noqa: E402
 from clm.mcp.server import create_server, run_server  # noqa: E402
 
 EXPECTED_TOOLS = {
-    "resolve_topic",
-    "search_slides",
+    "topic_resolve",
+    "slides_search",
     "course_outline",
-    "validate_spec",
-    "validate_slides",
-    "normalize_slides",
-    "get_language_view",
-    "suggest_sync",
-    "extract_voiceover",
-    "inline_voiceover",
-    "course_authoring_rules",
+    "validate",
+    "slides_normalize",
+    "slides_language_view",
+    "slides_suggest_sync",
+    "voiceover_extract",
+    "voiceover_inline",
+    "authoring_rules",
     "voiceover_transcribe",
     "voiceover_identify_rev",
     "voiceover_compare",
@@ -118,10 +117,10 @@ class TestCreateServer:
         """Spot-check parameter schemas for a handful of tools."""
         server = create_server(tmp_data_dir)
 
-        resolve = server._tool_manager.get_tool("resolve_topic")
+        resolve = server._tool_manager.get_tool("topic_resolve")
         assert "topic_id" in resolve.parameters["properties"]
 
-        search = server._tool_manager.get_tool("search_slides")
+        search = server._tool_manager.get_tool("slides_search")
         search_props = search.parameters["properties"]
         assert "query" in search_props
         assert "max_results" in search_props
@@ -142,7 +141,7 @@ class TestServerDispatch:
 
     async def test_call_resolve_topic(self, course_tree: Path) -> None:
         server = create_server(course_tree)
-        result = await server._tool_manager.call_tool("resolve_topic", {"topic_id": "intro"})
+        result = await server._tool_manager.call_tool("topic_resolve", {"topic_id": "intro"})
         payload = _extract_text_payload(result)
         data = json.loads(payload)
         assert data["topic_id"] == "intro"
@@ -162,7 +161,7 @@ class TestServerDispatch:
     async def test_call_search_slides_forwards_max_results(self, course_tree: Path) -> None:
         server = create_server(course_tree)
         result = await server._tool_manager.call_tool(
-            "search_slides", {"query": "intro", "max_results": 1}
+            "slides_search", {"query": "intro", "max_results": 1}
         )
         payload = _extract_text_payload(result)
         data = json.loads(payload)
