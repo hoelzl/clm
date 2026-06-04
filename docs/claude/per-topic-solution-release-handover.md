@@ -120,7 +120,8 @@ clm release sync course.xml --channel jan --push -m "Release functions"  # promo
 ## 5. Next Steps — all 5 steps done; remaining follow-ups
 
 The 5-step plan (#208) is complete. Remaining work is follow-ups, roughly by
-value:
+value (a dedicated, actionable handover for these lives at
+`docs/claude/per-topic-solution-release-followups-handover.md`):
 
 1. **Step-5 consumer wiring** (the most impactful gap). The drift primitive
    ships, but nothing populates it at record time: `src/clm/recordings/workflow/
