@@ -235,6 +235,7 @@ fabric.properties
 .claude/settings.local.json
 .claude/worktrees/
 .claude/scheduled_tasks.lock
+.claude/projects/
 
 # CLM SQLite databases (job queue and cache)
 clm_cache.db

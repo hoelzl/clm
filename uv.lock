@@ -7254,8 +7254,8 @@ wheels = [
 
 [[package]]
 name = "skorch"
-version = "1.4.0"
-source = { git = "https://github.com/skorch-dev/skorch.git#5db0ddc962117a2c3a646910ecd2e70253ff8e87" }
+version = "1.4.1.dev0"
+source = { git = "https://github.com/skorch-dev/skorch.git#e769a2b89dc6e946dfaf42654184aa01b7025964" }
 dependencies = [
     { name = "numpy" },
     { name = "scikit-learn" },
