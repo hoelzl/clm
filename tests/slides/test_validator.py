@@ -637,13 +637,13 @@ class TestCheckPairing:
             tmp_path,
             "slides_unbalanced.py",
             """\
-            # %% [markdown] lang="de" tags=["slide"]
+            # %% [markdown] lang="de" tags=["slide"] slide_id="title"
             # ## Titel
 
-            # %% [markdown] lang="en" tags=["slide"]
+            # %% [markdown] lang="en" tags=["slide"] slide_id="title"
             # ## Title
 
-            # %% [markdown] lang="de" tags=["subslide"]
+            # %% [markdown] lang="de" tags=["subslide"] slide_id="extra"
             # ## Extra German
             """,
         )
@@ -676,14 +676,14 @@ class TestCheckPairing:
             tmp_path,
             "slides_vo.py",
             """\
-            # %% [markdown] lang="de" tags=["slide"]
+            # %% [markdown] lang="de" tags=["slide"] slide_id="title"
             # ## Titel
+
+            # %% [markdown] lang="en" tags=["slide"] slide_id="title"
+            # ## Title
 
             # %% [markdown] lang="de" tags=["voiceover"]
             # Voiceover text
-
-            # %% [markdown] lang="en" tags=["slide"]
-            # ## Title
 
             # %% [markdown] lang="en" tags=["voiceover"]
             # Voiceover text
@@ -1409,11 +1409,11 @@ class TestCheckOrdering:
             """,
         )
         result = validate_file(p, checks=["pairing"])
-        warnings = [f for f in result.findings if f.severity == "warning"]
         # The DE/EN slide pair has the DE voiceover wedged between, AND
         # the DE/EN voiceover pair has the EN slide wedged between.
-        assert len(warnings) >= 1
-        assert any("not adjacent" in w.message for w in warnings)
+        adjacency = [f for f in result.findings if "not adjacent" in f.message]
+        assert len(adjacency) >= 1
+        assert all(f.severity == "error" for f in adjacency)
 
     def test_shared_cell_between_de_en_is_ok(self, tmp_path):
         p = _write_slide(
@@ -1636,9 +1636,9 @@ class TestCheckOrdering:
 class TestCheckSlideIds:
     """Validate Phase 3's `_check_slide_ids` rules."""
 
-    # -- Missing slide_id: rollout option B (warning, promote to error in 1.8) --
+    # -- Missing slide_id: an error as of CLM 1.8 (was a warning through 1.7) --
 
-    def test_missing_slide_id_warns(self, tmp_path):
+    def test_missing_slide_id_errors(self, tmp_path):
         p = _write_slide(
             tmp_path,
             "slides_missing.py",
@@ -1651,15 +1651,12 @@ class TestCheckSlideIds:
             """,
         )
         result = validate_file(p, checks=["pairing"])
-        warnings = [f for f in result.findings if "missing slide_id" in f.message]
-        assert len(warnings) == 2
-        assert all(f.severity == "warning" for f in warnings)
-        # The migration hint must mention assign-ids, otherwise authors
-        # have no fix path.
-        assert all("assign-ids" in f.suggestion for f in warnings)
-        # Promotion note belongs in the suggestion so it surfaces in
-        # editor hover/quickfix UIs, not just docs.
-        assert all("1.8" in f.suggestion for f in warnings)
+        missing = [f for f in result.findings if "missing slide_id" in f.message]
+        assert len(missing) == 2
+        assert all(f.severity == "error" for f in missing)
+        # The fix hint must mention assign-ids, otherwise authors have no
+        # fix path.
+        assert all("assign-ids" in f.suggestion for f in missing)
 
     def test_present_slide_id_silent(self, tmp_path):
         p = _write_slide(
@@ -2033,7 +2030,7 @@ class TestCheckSlideIds:
 
     def test_code_slide_cell_participates_in_slide_id_checks(self, tmp_path):
         # `tags=["slide"]` on a code cell is unusual but valid; the
-        # missing-id warning should fire just like for markdown slides.
+        # missing-id error should fire just like for markdown slides.
         p = _write_slide(
             tmp_path,
             "slides_code_slide.py",
