@@ -55,10 +55,20 @@ SKIP_DIRS_FOR_COURSE = frozenset(
         "obj",
         "out",
         "target",
+        # Authoring sidecar: extracted voiceover companions live here when a
+        # topic opts into the foldered layout. Fully excluded from the course
+        # file map because the build merges their narration host-side at
+        # payload time (it locates them by a direct probe — see
+        # ``slides.voiceover_tools.resolve_companion`` — not this walk), so they
+        # reach neither output nor the worker.
+        "voiceover",
     )
 )
 
-SKIP_DIRS_FOR_OUTPUT = SKIP_DIRS_FOR_COURSE | frozenset({"pu", "drawio", "_cassettes"})
+# Cassettes differ from voiceover companions: the kernel reads them at runtime,
+# so ``cassettes/`` (and the legacy ``_cassettes/``) stay in the course file map
+# but are suppressed from output here. See ``NotebookFile._resolve_cassette``.
+SKIP_DIRS_FOR_OUTPUT = SKIP_DIRS_FOR_COURSE | frozenset({"pu", "drawio", "_cassettes", "cassettes"})
 
 SKIP_DIRS_PATTERNS = ["*.egg-info*", "*cmake-build*"]
 

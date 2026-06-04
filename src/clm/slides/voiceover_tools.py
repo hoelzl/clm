@@ -171,10 +171,22 @@ class InlineResult:
 # ---------------------------------------------------------------------------
 
 
-def companion_path(slide_path: Path) -> Path:
-    """Derive the companion voiceover file path from a slide file path.
+# Topic-relative subdirectory that may hold extracted voiceover companions
+# instead of placing them as siblings of the slide file. Auto-detected on read
+# by the companion file's presence (see :func:`resolve_companion`) — the
+# voiceover analogue of the ``cassettes/`` cassette sidecar.
+COMPANION_SUBDIR = "voiceover"
+
+
+def companion_name(slide_path: Path) -> str:
+    """Return the companion voiceover *filename* for a slide file.
+
+    Directory-independent — the name only. Known slide prefixes are replaced
+    with ``voiceover_``; any ``.de`` / ``.en`` language tag is preserved so the
+    two halves of a split deck never collide on one name:
 
     ``slides_intro.py`` → ``voiceover_intro.py``
+    ``slides_010_x.de.py`` → ``voiceover_010_x.de.py``
     ``topic_overview.py`` → ``voiceover_overview.py``
     ``project_setup.py`` → ``voiceover_setup.py``
     """
@@ -182,10 +194,41 @@ def companion_path(slide_path: Path) -> Path:
     # Replace known prefixes
     for prefix in ("slides_", "topic_", "project_"):
         if stem.startswith(prefix):
-            suffix_part = stem[len(prefix) :]
-            return slide_path.with_name(f"voiceover_{suffix_part}.py")
+            return f"voiceover_{stem[len(prefix) :]}.py"
     # Fallback: prepend voiceover_
-    return slide_path.with_name(f"voiceover_{stem}.py")
+    return f"voiceover_{stem}.py"
+
+
+def companion_path(slide_path: Path) -> Path:
+    """Return the *sibling* companion path for a slide file.
+
+    This is the nominal companion location next to the slide — the
+    backward-compatible default used as a write target and for display. To find
+    a companion that may have been relocated into the ``voiceover/``
+    subdirectory, use :func:`resolve_companion` instead.
+    """
+    return slide_path.with_name(companion_name(slide_path))
+
+
+def resolve_companion(slide_path: Path) -> Path | None:
+    """Return the *existing* companion for a slide file, or ``None``.
+
+    Prefers the relocated ``<topic>/voiceover/<name>`` when present, else the
+    sibling ``<topic>/<name>``. Location-config-free: it finds the companion in
+    either layout, so reads (the build merge, ``inline``, ``validate``, the
+    ``sync`` baseline) work without knowing how a given topic is organised. The
+    ``voiceover/`` subdirectory is auto-detected by the file's presence — exactly
+    as ``cassettes/`` is for cassettes. When a companion exists in *both*
+    locations the relocated one wins.
+    """
+    name = companion_name(slide_path)
+    nested = slide_path.parent / COMPANION_SUBDIR / name
+    if nested.exists():
+        return nested
+    sibling = slide_path.with_name(name)
+    if sibling.exists():
+        return sibling
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -984,14 +1027,14 @@ def inline_voiceover(
     Returns:
         An :class:`InlineResult` describing what was done.
     """
-    comp = companion_path(path)
+    comp = resolve_companion(path)
     result = InlineResult(
         slide_file=str(path),
-        companion_file=str(comp),
+        companion_file=str(comp if comp is not None else companion_path(path)),
         dry_run=dry_run,
     )
 
-    if not comp.exists():
+    if comp is None:
         return result
 
     slide_text = path.read_text(encoding="utf-8")

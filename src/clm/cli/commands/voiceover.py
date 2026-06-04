@@ -237,7 +237,7 @@ def sync(
     import warnings
 
     from clm.notebooks.polish_levels import PolishLevel
-    from clm.slides.voiceover_tools import companion_path
+    from clm.slides.voiceover_tools import companion_path, resolve_companion
 
     # Resolve effective polish level from --polish-level and deprecated --mode.
     if mode is not None:
@@ -279,12 +279,17 @@ def sync(
             )
 
     # Resolve companion-mode activation (auto-detect unless --no-companion/--companion).
-    companion_file = companion_path(slides)
+    # Read/write the existing companion wherever it lives (``voiceover/`` subdir
+    # or sibling); a not-yet-created companion falls back to the sibling name.
+    existing_companion = resolve_companion(slides)
+    companion_file = (
+        existing_companion if existing_companion is not None else companion_path(slides)
+    )
     if companion_flag is None:
-        use_companion = companion_file.exists()
+        use_companion = existing_companion is not None
     else:
         use_companion = companion_flag
-    if use_companion and not companion_file.exists() and not overwrite:
+    if use_companion and existing_companion is None and not overwrite:
         # User asked for companion mode but no file exists; behave like an empty
         # baseline (companion will be created on write). We only warn for clarity.
         console.print(

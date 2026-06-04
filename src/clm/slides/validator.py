@@ -1131,18 +1131,24 @@ def _check_split_companion_for_slide_parity(de_path: Path, en_path: Path) -> lis
     # validator/split layer; import it lazily (as ``split.py`` does for the
     # companion seam) so the validator carries no hard dependency on the
     # optional voiceover tooling.
-    from clm.slides.voiceover_tools import companion_path
+    from clm.slides.voiceover_tools import companion_path, resolve_companion
 
-    de_comp = companion_path(de_path)
-    en_comp = companion_path(en_path)
-    de_exists, en_exists = de_comp.exists(), en_comp.exists()
+    # Resolve the *existing* companion in either layout (``voiceover/`` subdir or
+    # sibling); fall back to the nominal sibling name only for messaging.
+    de_comp = resolve_companion(de_path)
+    en_comp = resolve_companion(en_path)
+    de_exists, en_exists = de_comp is not None, en_comp is not None
     if not de_exists and not en_exists:
         return []
 
     # One-sided companion: the language without a companion ships no narration.
     if de_exists != en_exists:
-        present, absent = (de_comp, en_comp) if de_exists else (en_comp, de_comp)
-        missing_lang = "EN" if de_exists else "DE"
+        if de_exists:
+            assert de_comp is not None
+            present, absent_name, missing_lang = de_comp, companion_path(en_path).name, "EN"
+        else:
+            assert en_comp is not None
+            present, absent_name, missing_lang = en_comp, companion_path(de_path).name, "DE"
         return [
             Finding(
                 severity="warning",
@@ -1151,7 +1157,7 @@ def _check_split_companion_for_slide_parity(de_path: Path, en_path: Path) -> lis
                 line=1,
                 message=(
                     f"voiceover companion {present.name} exists but its twin "
-                    f"{absent.name} does not — the {missing_lang} half ships "
+                    f"{absent_name} does not — the {missing_lang} half ships "
                     f"without narration"
                 ),
                 suggestion=(
@@ -1170,6 +1176,8 @@ def _check_split_companion_for_slide_parity(de_path: Path, en_path: Path) -> lis
             if c.metadata.for_slide
         }
 
+    # Both companions exist here (the one-sided branch above returned).
+    assert de_comp is not None and en_comp is not None
     de_set = _for_slide_set(de_comp)
     en_set = _for_slide_set(en_comp)
     if de_set == en_set:

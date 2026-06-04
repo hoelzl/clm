@@ -13,10 +13,10 @@ from clm.slides.voiceover_tools import (
     InlineResult,
     PairedExtractionResult,
     VoiceoverError,
-    companion_path,
     extract_voiceover,
     extract_voiceover_pair,
     inline_voiceover,
+    resolve_companion,
 )
 
 
@@ -147,9 +147,9 @@ def inline_voiceover_cmd(
         clm voiceover inline slides/topic/slides_intro.py
         clm voiceover inline slides/topic/slides_intro.py --json
     """
-    comp = companion_path(path)
-    if not comp.exists():
-        click.echo(f"No companion file found at {comp}")
+    comp = resolve_companion(path)
+    if comp is None:
+        click.echo(f"No companion file found for {path.name}")
         return
 
     result = inline_voiceover(path, dry_run=dry_run)

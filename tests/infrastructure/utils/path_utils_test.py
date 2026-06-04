@@ -7,6 +7,7 @@ import pytest
 from clm.core.course_spec import OutputTargetSpec
 from clm.core.output_target import OutputTarget
 from clm.infrastructure.utils.path_utils import (
+    SKIP_DIRS_FOR_COURSE,
     SKIP_DIRS_FOR_OUTPUT,
     SKIP_OUTPUT_FILE_GLOBS,
     SKIP_OUTPUT_FILE_PATTERNS,
@@ -15,6 +16,8 @@ from clm.infrastructure.utils.path_utils import (
     Lang,
     atomic_write_bytes,
     ext_for,
+    is_ignored_dir_for_course,
+    is_ignored_dir_for_output,
     is_ignored_file_for_course,
     is_ignored_file_for_output,
     is_slides_file,
@@ -417,6 +420,44 @@ class TestOutputSpecsWithExplicitTarget:
         # All specs should have paths under the private (``speaker/``) toplevel
         for spec in specs:
             assert "speaker" in str(spec.output_dir)
+
+
+class TestSidecarSubdirSkips:
+    """Topic sidecar subdirectories: ``voiceover/`` is fully walk-excluded;
+    ``cassettes/`` (and legacy ``_cassettes/``) are output-suppressed."""
+
+    def test_voiceover_dir_in_skip_dirs_for_course(self):
+        # Voiceover companions are merged host-side, so the dir is excluded from
+        # the course walk entirely (and therefore from output too).
+        assert "voiceover" in SKIP_DIRS_FOR_COURSE
+        assert "voiceover" in SKIP_DIRS_FOR_OUTPUT  # superset
+
+    def test_cassettes_dirs_output_suppressed_but_in_course(self):
+        # Cassettes are read by the kernel at runtime: kept in the course map
+        # (NOT in SKIP_DIRS_FOR_COURSE) but suppressed from output.
+        assert "cassettes" in SKIP_DIRS_FOR_OUTPUT
+        assert "_cassettes" in SKIP_DIRS_FOR_OUTPUT
+        assert "cassettes" not in SKIP_DIRS_FOR_COURSE
+        assert "_cassettes" not in SKIP_DIRS_FOR_COURSE
+
+    def test_is_ignored_dir_for_course_voiceover(self, tmp_path):
+        assert is_ignored_dir_for_course(tmp_path / "topic_x" / "voiceover")
+
+    def test_is_ignored_dir_for_course_cassettes_not_skipped(self, tmp_path):
+        # cassettes/ must still be walked into the course map for runtime use.
+        assert not is_ignored_dir_for_course(tmp_path / "topic_x" / "cassettes")
+        assert not is_ignored_dir_for_course(tmp_path / "topic_x" / "_cassettes")
+
+    def test_is_ignored_dir_for_output_cassettes(self, tmp_path):
+        assert is_ignored_dir_for_output(tmp_path / "topic_x" / "cassettes")
+        assert is_ignored_dir_for_output(tmp_path / "topic_x" / "_cassettes")
+
+    def test_is_ignored_file_for_output_file_in_cassettes_dir(self, tmp_path):
+        nested = tmp_path / "cassettes"
+        nested.mkdir()
+        cassette = nested / "slides_010v.http-cassette.yaml"
+        cassette.write_text("interactions: []")
+        assert is_ignored_file_for_output(cassette)
 
 
 class TestOutputFilePatterns:

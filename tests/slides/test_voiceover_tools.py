@@ -81,6 +81,71 @@ def test_companion_path_split_pair_is_distinct(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
+# companion_name / resolve_companion (folder-or-sibling layout)
+# ---------------------------------------------------------------------------
+
+
+def test_companion_name_is_directory_independent(tmp_path: Path):
+    from clm.slides.voiceover_tools import companion_name
+
+    assert companion_name(tmp_path / "slides_intro.de.py") == "voiceover_intro.de.py"
+    assert companion_name(Path("a/b/c/topic_overview.py")) == "voiceover_overview.py"
+
+
+def test_resolve_companion_none_when_absent(tmp_path: Path):
+    from clm.slides.voiceover_tools import resolve_companion
+
+    assert resolve_companion(tmp_path / "slides_intro.py") is None
+
+
+def test_resolve_companion_finds_sibling(tmp_path: Path):
+    from clm.slides.voiceover_tools import resolve_companion
+
+    slide = tmp_path / "slides_intro.py"
+    sibling = tmp_path / "voiceover_intro.py"
+    sibling.write_text('# %% [markdown] tags=["voiceover"]\n# hi\n', encoding="utf-8")
+    assert resolve_companion(slide) == sibling
+
+
+def test_resolve_companion_prefers_voiceover_subdir(tmp_path: Path):
+    from clm.slides.voiceover_tools import COMPANION_SUBDIR, resolve_companion
+
+    slide = tmp_path / "slides_intro.py"
+    (tmp_path / COMPANION_SUBDIR).mkdir()
+    nested = tmp_path / COMPANION_SUBDIR / "voiceover_intro.py"
+    nested.write_text('# %% [markdown] tags=["voiceover"]\n# hi\n', encoding="utf-8")
+    # A stale sibling must not win — the relocated companion takes precedence.
+    (tmp_path / "voiceover_intro.py").write_text("# sibling\n", encoding="utf-8")
+    assert resolve_companion(slide) == nested
+
+
+def test_inline_reads_and_deletes_voiceover_subdir_companion(tmp_path: Path):
+    """A companion relocated into ``voiceover/`` is inlined and removed there."""
+    from clm.slides.voiceover_tools import COMPANION_SUBDIR
+
+    slide = tmp_path / "slides_intro.py"
+    slide.write_text(SLIDE_WITH_SLIDE_IDS, encoding="utf-8")
+
+    # Extract to the default sibling, then relocate the companion into voiceover/.
+    extract_voiceover(slide)
+    sibling = tmp_path / "voiceover_intro.py"
+    assert sibling.exists()
+    subdir = tmp_path / COMPANION_SUBDIR
+    subdir.mkdir()
+    nested = subdir / "voiceover_intro.py"
+    nested.write_text(sibling.read_text(encoding="utf-8"), encoding="utf-8")
+    sibling.unlink()
+
+    result = inline_voiceover(slide)
+
+    assert result.cells_inlined > 0
+    assert result.companion_deleted
+    assert not nested.exists()  # deleted from the subdir, not re-created as a sibling
+    assert not sibling.exists()
+    assert 'tags=["voiceover"]' in slide.read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
