@@ -1052,6 +1052,7 @@ def classify_changes(
 
     _append_idless_adds(plan, de_idless, en_idless)
     _refuse_idless_both_directions(plan)
+    _refuse_idcarrying_mismatched(plan, de_base, en_base, baseline_source)
     plan.proposals.sort(key=_proposal_sort_key)
     return plan
 
@@ -1207,9 +1208,11 @@ def _refuse_idless_both_directions(plan: SyncPlan) -> None:
     and inserting both would cross-add (each deck gets the other's untranslatable
     twin). This is the situation the old apply-time guard deferred; deciding it
     here, at plan time, is what makes the dry-run show it. id-*carrying*
-    both-direction adds are left as adds: against a real baseline their ids were
-    absent from it, so they are genuinely distinct new slides (not a mismatched
-    pair) and apply correctly.
+    both-direction adds are handled separately by
+    :func:`_refuse_idcarrying_mismatched`: against a *watermark* baseline their ids
+    were absent from it, so they are genuinely distinct new slides and apply; against
+    a committed *git-HEAD* baseline that already carried them they may be a
+    mismatched-id pair and are refused (#226).
     """
     idless = [p for p in plan.proposals if p.kind == "add" and p.slide_id is None]
     if len({p.direction for p in idless}) <= 1:
@@ -1219,6 +1222,74 @@ def _refuse_idless_both_directions(plan: SyncPlan) -> None:
         idless,
         "id-less new slides on both decks — edit one deck at a time "
         "(no slide_id to pair the halves; #216)",
+    )
+
+
+def _refuse_idcarrying_mismatched(
+    plan: SyncPlan,
+    de_base: dict[tuple[str, str], BaselineCell],
+    en_base: dict[tuple[str, str], BaselineCell],
+    baseline_source: str,
+) -> None:
+    """Refuse ambiguous one-sided adds against a committed baseline (#226).
+
+    Against a *git-HEAD* baseline, an add that puts content the other deck **may
+    already carry** onto it is ambiguous when it cannot be content-matched by id:
+
+    - a **committed id'd** slide present on one deck only whose id was already in that
+      deck's baseline ("same" / "edited" state) — a genuinely one-sided slide, **or**
+      one half of a *mismatched-id* pair (same content, divergent ids: per-half
+      ``assign-ids``);
+    - an **id-less** new slide — a genuinely new cell, **or** a hand-typed
+      counterpart of a slide the other deck already carries id'd (the *half-id'd
+      sharing-a-key* shape: id'd "B" on one deck, id-less "B" on the other).
+
+    These two buckets are considered **together**: when adds across **both** of them
+    span both directions, applying them would translate-and-insert content the other
+    deck already has → silently **double** it. ``slide_id`` alone cannot tell a twin
+    from a genuinely-distinct slide — only cross-language content correspondence can
+    (the planned strategy-B follow-up, #226) — so refuse the whole ambiguous set
+    rather than guess. (Considering the buckets separately misses the *mixed* case,
+    where the id'd half and the id-less half each flow in a single — but opposite —
+    direction.)
+
+    Conservative gating that leaves every safe path untouched:
+
+    - **git-HEAD only.** A *watermark* baseline records both decks, so a slide added
+      since the last sync reads as "added" (id absent from the watermark) and stays a
+      genuine cross-add — the by-design distinct-new-slides behavior
+      (:func:`_refuse_idless_both_directions`' note). A committed never-synced deck
+      has no such signal. (A pair sharing **no** ids is already routed to the cold
+      path by :func:`_pair_is_unbootstrapped`, #225; this catches the *partial-overlap*
+      pair that shares one id and so kept its git-HEAD baseline.)
+    - **committed id, or id-less.** A genuinely-new *id'd* slide (id *absent* from the
+      git-HEAD baseline — authored but not yet committed) is **not** suspect and still
+      cross-adds; only a committed id'd slide, or an id-less one, can be a twin.
+    - **both directions.** A one-sided add (id'd or id-less) in a single direction is
+      the ordinary "translate the missing counterpart" sync and is kept; the
+      both-directions id-less-only case is already refused upstream
+      (:func:`_refuse_idless_both_directions`).
+    """
+    if baseline_source != "git-head":
+        return
+    ambiguous = [
+        p
+        for p in plan.proposals
+        if p.kind == "add"
+        and (
+            p.slide_id is None
+            or (p.slide_id, p.role) in (de_base if p.direction == "de->en" else en_base)
+        )
+    ]
+    if len({p.direction for p in ambiguous}) <= 1:
+        return
+    _replace_adds_with_refusals(
+        plan,
+        ambiguous,
+        "slides present on one deck only, in both directions, against a committed "
+        "baseline — possibly the same content carrying divergent (or one-sided id-less) "
+        "slide_ids, which would double on apply. Reconcile the slide_ids (make both "
+        "halves share one id) or sync one deck at a time (#226)",
     )
 
 

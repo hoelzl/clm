@@ -385,6 +385,80 @@ class TestBothDirectionsRefusal:
         assert plan.count("add") == 2
         assert plan.count("refuse") == 0
 
+    def test_git_head_idcarrying_both_directions_committed_refuses(self):
+        # #226: against a COMMITTED (git-head) baseline, an id'd slide present on one
+        # deck only whose id was ALREADY in that deck's baseline is ambiguous — a
+        # genuinely one-sided slide, or one half of a mismatched-id pair (same content,
+        # divergent ids). Both directions → refuse rather than risk doubling on apply.
+        plan = classify(
+            [cur(0, "intro", "d0"), cur(1, "d1", "dB")],
+            [cur(0, "intro", "e0"), cur(1, "e1", "eB")],
+            [base(0, "intro", "d0"), base(1, "d1", "dB")],
+            [base(0, "intro", "e0"), base(1, "e1", "eB")],
+            source="git-head",
+        )
+        assert plan.count("add") == 0
+        assert plan.count("refuse") == 2
+        assert plan.in_sync_count == 1
+
+    def test_git_head_idcarrying_added_state_still_adds(self):
+        # Git-head too, but the one-sided id'd slides are genuinely NEW — their ids are
+        # ABSENT from the baseline (authored, not yet committed) — so they are distinct
+        # new slides and still cross-add (only a *committed* one-sided slide is suspect).
+        plan = classify(
+            [cur(0, "intro", "d0"), cur(1, "newde", "dNEW")],
+            [cur(0, "intro", "e0"), cur(1, "newen", "eNEW")],
+            [base(0, "intro", "d0")],
+            [base(0, "intro", "e0")],
+            source="git-head",
+        )
+        assert plan.count("add") == 2
+        assert plan.count("refuse") == 0
+
+    def test_git_head_idcarrying_one_direction_still_adds(self):
+        # The common "add the missing counterpart" sync: a one-sided id'd slide in a
+        # SINGLE direction (committed) is propagated, not refused.
+        plan = classify(
+            [cur(0, "intro", "d0"), cur(1, "d1", "dB")],
+            [cur(0, "intro", "e0")],
+            [base(0, "intro", "d0"), base(1, "d1", "dB")],
+            [base(0, "intro", "e0")],
+            source="git-head",
+        )
+        assert plan.count("add") == 1
+        assert plan.count("refuse") == 0
+
+    def test_watermark_idcarrying_committed_both_directions_still_adds(self):
+        # The #226 refusal is git-HEAD-only: a watermark records BOTH decks, so it
+        # never legitimately holds a one-sided 'same'-state slide; that path keeps its
+        # by-design cross-add and is untouched by the git-head ambiguity guard.
+        plan = classify(
+            [cur(0, "intro", "d0"), cur(1, "d1", "dB")],
+            [cur(0, "intro", "e0"), cur(1, "e1", "eB")],
+            [base(0, "intro", "d0"), base(1, "d1", "dB")],
+            [base(0, "intro", "e0"), base(1, "e1", "eB")],
+            source="watermark",
+        )
+        assert plan.count("add") == 2
+        assert plan.count("refuse") == 0
+
+    def test_git_head_mixed_idd_idless_both_directions_refuses(self):
+        # #226 (mixed variant): a COMMITTED id'd "B" on DE and an id-less "B" on EN
+        # (sharing `intro`) — the half-id'd-sharing-a-key shape. The committed-id'd add
+        # (de->en) and the id-less add (en->de) each flow in a single but OPPOSITE
+        # direction, so partitioning by id-presence misses it; considered together they
+        # span both directions → refuse (else "B" doubles on both decks).
+        plan = classify(
+            [cur(0, "intro", "d0"), cur(1, "d1", "dB")],
+            [cur(0, "intro", "e0"), cur(1, None, "eB")],
+            [base(0, "intro", "d0"), base(1, "d1", "dB")],
+            [base(0, "intro", "e0")],
+            source="git-head",
+        )
+        assert plan.count("add") == 0
+        assert plan.count("refuse") == 2
+        assert plan.in_sync_count == 1
+
 
 # ---------------------------------------------------------------------------
 # build_sync_plan (IO wrapper: baseline resolution)
@@ -613,6 +687,50 @@ class TestBuildSyncPlanGitFallback:
             assert plan.count("refuse") == 4
             assert plan.count("mint") == 0
             assert plan.count("adopt") == 0
+
+    def test_committed_partial_overlap_mismatched_refuses_never_doubles(self, tmp_path: Path):
+        # #226: the halves SHARE `s1` (so the pair is bootstrapped and keeps its
+        # git-HEAD baseline — not demoted by #225), but a different slide carries
+        # mismatched ids (`d1` on DE / `e1` on EN, same content "B"). The keyed path
+        # used to emit both as adds → translate-insert → DOUBLE "B". Now refused.
+        de_path, en_path = self._commit_pair(
+            tmp_path,
+            _slide("de", "s1", "# ## A") + _slide("de", "d1", "# ## B"),
+            _slide("en", "s1", "# ## A") + _slide("en", "e1", "# ## B"),
+        )
+        plan = build_sync_plan(de_path, en_path, provider_available=True)
+        assert plan.baseline_source == "git-head"  # shares s1 → keeps its baseline
+        assert plan.count("add") == 0  # the doubling adds are gone
+        assert plan.count("refuse") == 2
+        assert plan.in_sync_count == 1  # s1 still pairs
+
+    def test_committed_mixed_idd_idless_partial_overlap_refuses(self, tmp_path: Path):
+        # #226 mixed variant end-to-end: share `s1`, but "B" is committed id'd on DE
+        # (`d1`) and committed id-less on EN. Was a silent double (id'd add de->en +
+        # id-less add en->de, neither caught by a single-bucket guard); now refused.
+        de_path, en_path = self._commit_pair(
+            tmp_path,
+            _slide("de", "s1", "# ## A") + _slide("de", "d1", "# ## B"),
+            _slide("en", "s1", "# ## A") + _slide_idless("en", "# ## B"),
+        )
+        plan = build_sync_plan(de_path, en_path, provider_available=True)
+        assert plan.baseline_source == "git-head"  # shares s1 → keeps its baseline
+        assert plan.count("add") == 0
+        assert plan.count("refuse") == 2
+        assert plan.in_sync_count == 1
+
+    def test_committed_one_directional_idcarrying_add_still_propagates(self, tmp_path: Path):
+        # REGRESSION: the common "add the missing counterpart" — a committed id'd slide
+        # present on DE only (single direction) — must still propagate, not refuse.
+        de_path, en_path = self._commit_pair(
+            tmp_path,
+            _slide("de", "s1", "# ## A") + _slide("de", "d1", "# ## B"),
+            _slide("en", "s1", "# ## A"),
+        )
+        plan = build_sync_plan(de_path, en_path, provider_available=True)
+        assert plan.baseline_source == "git-head"
+        assert plan.count("add") == 1
+        assert plan.count("refuse") == 0
 
     def test_committed_idd_pair_edit_still_uses_git_head(self, tmp_path: Path):
         # REGRESSION: a fully-id'd committed pair keeps its real git-HEAD baseline —

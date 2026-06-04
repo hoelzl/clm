@@ -1366,6 +1366,23 @@ class TestColdStartCommittedPair:
         assert _slide_order(de_path) == ["s1", "s2"]
         assert en_path.read_text(encoding="utf-8") == en_before
 
+    def test_committed_partial_overlap_mismatched_does_not_double(self, tmp_path: Path):
+        # #226: a committed pair sharing `s1` but with a mismatched-id "B" slide
+        # (`d1`/`e1`) is refused, not cross-added, so applying it writes NOTHING and
+        # never doubles "B" — even with a translator available.
+        de = _slide("de", "s1", "# ## A") + _slide("de", "d1", "# ## B")
+        en = _slide("en", "s1", "# ## A") + _slide("en", "e1", "# ## B")
+        de_path, en_path = self._commit_pair(tmp_path, de, en)
+        plan = build_sync_plan(de_path, en_path, provider_available=True)
+        translator = StaticSlideTranslator(default="# ## X")
+        result = apply_plan(plan, judge=None, translator=translator, watermark_cache=None)
+        assert result.applied_add == 0
+        assert result.deferred == 2  # the two mismatched adds refused
+        assert de_path.read_text(encoding="utf-8") == de  # "B" not duplicated
+        assert en_path.read_text(encoding="utf-8") == en
+        assert len(_slide_order(de_path)) == 2
+        assert len(_slide_order(en_path)) == 2
+
     def test_committed_half_idd_pair_does_not_double_without_translator(self, tmp_path: Path):
         # The pre-#225 failure mode: with no provider the committed half-id'd pair fell
         # to the keyed baseline path and emitted both-direction adds → applying them

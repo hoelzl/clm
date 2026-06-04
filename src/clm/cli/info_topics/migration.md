@@ -371,9 +371,13 @@ the safe one — no command was removed and every tool stays fully invocable.
   committed un-bootstrapped pair has a git-HEAD baseline that carries no ids, so
   it is treated as a cold start the same as a never-committed one — it mints/adopts
   rather than reading the id-less side as "missing every slide" (which would have
-  doubled the deck). *Migration:* for a refused pair, sync one direction at a time
-  (author one half, sync, then the other), or run `clm slides assign-ids <dir>` to
-  mint shared ids across the pair first; then re-run sync.
+  doubled the deck). A committed pair that **shares some ids but gives one slide a
+  different `slide_id` on each half** (the same content id'd divergently) is likewise
+  **refused** rather than cross-added in both directions (#226) — `sync` cannot tell a
+  divergent-id twin from a genuinely one-sided slide by id alone, so it declines
+  instead of risking a duplicate. *Migration:* for a refused pair, sync one direction
+  at a time (author one half, sync, then the other), reconcile the divergent ids so
+  both halves share one id, or run `clm slides assign-ids <dir>`; then re-run sync.
 - **`clm slides assign-ids` is now plumbing (hidden).** Per-file id minting on a
   *single* split half can mint a divergent slug — the #1 silent #162 break. It is
   hidden from `clm slides --help` but stays invocable by name for agents/scripts
