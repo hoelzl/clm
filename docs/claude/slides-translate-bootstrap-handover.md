@@ -1,7 +1,7 @@
 # Handover: Full-deck translation — `clm slides translate` (deck bootstrap)
 
-**Status:** design accepted (user-confirmed forks below); **no code written yet** — Phase 1 is next.
-**Recommended branch:** `claude/slides-translate-bootstrap` off `master` (this feature builds on the now-merged sync core; do **not** branch off `claude/issue-226-partial-overlap-mismatch`).
+**Status:** **Phase 1 DONE** (`src/clm/slides/translate_deck.py` + 17 tests, all green; lint/format/mypy clean). Phase 2 (idempotency + sync delegation + watermark) is next.
+**Branch:** `claude/slides-translate-bootstrap` off `master` (commit `fdf7772` handover, Phase 1 commit follows). Do **not** branch off `claude/issue-226-partial-overlap-mismatch`.
 **Builds on (all merged to master):** the resolve-then-apply sync engine (#166/#190/#216), cold-start mint/adopt (#216), committed un-bootstrapped pairs (#225), partial-overlap mismatch (#226).
 **Related design notes:** `docs/claude/design/single-language-authoring-sync.md`, `docs/claude/design/sync-plan-resolve-apply.md`.
 **Sibling handover:** `docs/claude/sync-plan-resolve-apply-handover.md` (the engine this feature reuses).
@@ -62,18 +62,19 @@ If `voiceover_<name>.<src>.py` exists, translate its localized cells too (preser
 
 ## 3. Phase Breakdown
 
-### Phase 1 — Core bootstrap engine `src/clm/slides/translate_deck.py` (pure, offline) — [TODO] ← NEXT
-**Accomplishes:** turn one source half's text into the translated target half's text, deterministically and without network.
+### Phase 1 — Core bootstrap engine `src/clm/slides/translate_deck.py` (pure, offline) — [DONE]
+**Accomplished:** `translate_deck_text(source_text, *, source_lang, target_lang, translator) -> TranslateDeckResult` turns one source half's text into the translated target half's text, deterministically and without network. Public API: `translate_deck_text`, `TranslateDeckError`, `TranslateDeckResult` (`.target_text`, `.cells`, `.translated_count`, `.copied_count`, `.header_translated`).
 
-- Parse the source with `raw_cells.split_cells` (`src/clm/slides/raw_cells.py:53`) — **byte-faithful**. Never use `slide_parser.parse_cells` (lossy; read-only analysis only).
-- For each `RawCell`, classify with `role_of` (`sync_writeback.py:66`) / `_membership_role` (`sync_plan.py`):
-  - neutral / no-`lang` (incl. idiomatic code) → **copy verbatim** into the target half.
-  - localized → translate via the `SlideTranslator` protocol (`sync_translate.py:45`), `role` selecting code-vs-markdown prompt.
-- Title slide is a **j2 header macro**, not a normal cell: swap `header_de("…")` ↔ `header_en("…")` **and** the `import header_de`/`import header_en` line **structurally** using `split.py`'s header regexes — translate only the title string argument. Running the macro through the cell translator corrupts it.
-- Build twins with `build_twin_cell` (`sync_writeback.py:241`) / `swap_lang` (`sync_writeback.py:228`) — preserves `slide_id` + tags + cell-type, swaps `lang`. Order cells so the translated twin sits adjacent to its source under the same id (so `unify` can interleave).
-- Stamp the source half's `slide_id`s onto the twins (carried through `swap_lang`).
-- New `TranslationCache` in `src/clm/infrastructure/llm/cache.py` (one table in the shared `clm-llm.sqlite`; key = content-hash + **model-folded** `prompt_version`; cache only successful results — safe-abort caches nothing).
-- **Acceptance:** given a source half + a `StaticSlideTranslator`, produce the target text such that `split(unify(de, en)) == (de, en)` and `unify(de, en)` round-trips. Neutral cells byte-identical across halves. Unit tests only, no network.
+- Parses the source with `raw_cells.split_cells` (byte-faithful). Per cell:
+  - **header macro** (`header_<src>`) → rewrite to `header_<tgt>` + translate only the title string;
+  - **header import** (`from … import header_<src>`) → rewrite to `header_<tgt>`;
+  - **localized** (`metadata.lang == source_lang`) → translate via the `SlideTranslator` protocol and `build_twin_cell`, re-appending the source cell's trailing-blank count to preserve spacing;
+  - **everything else** (no-lang shared cells incl. code, non-header j2) → copy verbatim.
+- **Key correction vs. the original plan:** the translate-vs-copy gate is **`metadata.lang`**, NOT `role_of`. A localized *id-less* code cell has `role_of() is None` yet carries `lang` and must be translated. `role_of`/`cell_type` only pick the prompt (`CODE_ROLE` → code prompt).
+- Header grammar is **reused** from `split.py` (`_HEADER_DE_RE`/`_HEADER_EN_RE` + import REs), not re-implemented.
+- **Safety guard:** before returning, the engine self-checks `split(unify(de, en)) == (de, en)` (ordering the two halves by language — `unify_texts` takes `(de, en)` positionally) and raises `TranslateDeckError` rather than emit a structurally-malformed pair. All-or-nothing — never half-writes; on a per-cell `TranslationError` it raises naming the slide.
+- **Tests:** `tests/slides/test_translate_deck.py` (17, all green) — round-trip + content on every shape (slide / voiceover / localized-code / id-less-code / shared / no-header / reverse-direction), byte-exact on trailing-symmetric decks, and the error paths.
+- **Two deliberate deviations from the original phase plan** (see §8): (1) `TranslationCache` moved to **Phase 4** — a caching translator *wrapper* at the integration layer keeps Phase 1 pure/offline; (2) `slide_id` minting moved to **Phase 2** — the engine carries through whatever ids the source has (via `swap_lang`); minting a never-id'd source happens at the file/orchestration layer.
 
 ### Phase 2 — Idempotency + sync convergence + watermark — [TODO]
 **Accomplishes:** the D2 dispatch and the "next sync is a no-op" seal.
@@ -95,7 +96,8 @@ If `voiceover_<name>.<src>.py` exists, translate its localized cells too (preser
 
 - New module `src/clm/cli/commands/slides_translate.py`; clone the option skeleton from `slides_sync.py` and the simple-mutation skeleton from `split.py`:
   - `--to en|de`, `--dry-run` / `--explain` (side-effect-free: parse + classify + count translatable vs copied + show target path + id plan; skip LLM/.env where possible), `--json` (`_to_dict`: `cells_translated`, `cells_copied`, `target_path`, `ids_minted`, `deferred`), `--force`, `--provider` (env `CLM_SYNC_PROVIDER`), `--translation-model`, `--cache-dir` (env `CLM_CACHE_DIR`), `--no-cache`, `--no-env-file`.
-- Reuse `has_openrouter_api_key` (`openrouter_client.py:71`), `build_openrouter_client`, `load_env_files` (`env_loading.py:45`), `resolve_cache_dir`. No key → **warn + degrade** (defer localized cells or exit 1), never crash. On `TranslationError`, defer-and-report (the never-drop-content discipline at `sync_apply.py` `_translate`).
+- Reuse `has_openrouter_api_key` (`openrouter_client.py:71`), `build_openrouter_client`, `load_env_files` (`env_loading.py:45`), `resolve_cache_dir`. No key → **exit 1, write nothing** (a whole deck of untranslated placeholders is not useful — unlike sync's per-cell defer); the engine is all-or-nothing. On `TranslationError` it already raises (never half-writes).
+- **`TranslationCache` lands here (moved from Phase 1):** add a `TranslationCache` to `src/clm/infrastructure/llm/cache.py` (one table in `clm-llm.sqlite`; key = content-hash + **model-folded** `prompt_version`; cache only successful results) and expose it as a `CachingSlideTranslator` that *wraps* a `SlideTranslator` and is passed into `translate_deck_text`. The engine stays cache-agnostic (depends only on the protocol), so this is purely additive.
 - Register in `src/clm/cli/main.py` (~line 168): `slides_group.add_command(translate_cmd, name="translate")` and a second registration for `bootstrap`. Use the try/except optional-import pattern (main.py ~112-130) if LLM deps may be absent.
 - Exit codes: `0` wrote/clean, `1` some cells deferred (no key) / needs review, `2` hard error (twin exists without `--force`, engine down, bilingual-stem source).
 - **Acceptance:** `CliRunner` tests for absent-twin bootstrap, present-twin delegation, `--dry-run` no-write, `--json` shape, no-key degradation, `--force` overwrite, exit codes.
@@ -112,24 +114,29 @@ If `voiceover_<name>.<src>.py` exists, translate its localized cells too (preser
 
 ## 4. Current Status
 
-- **Completed:** design only. The three user-facing forks are settled (D1, D4, D5). The reuse surface is verified against the live tree (all symbols in §6 exist at the cited paths/lines as of this writing).
-- **In progress:** none — implementation not started.
-- **Blockers / open questions:** none blocking. D6 defaults stand unless the user objects. One thing to confirm with the user at Phase 4: whether `--to` should be required when the source half has **no** lang tags at all (currently planned as: infer from filename, `--to` optional override).
-- **Tests:** none yet. Strategy in §7.
+- **Completed:** design + **Phase 1** (pure engine `src/clm/slides/translate_deck.py` + `tests/slides/test_translate_deck.py`, 17 tests green, lint/format/mypy clean). Issue **#232** filed. Branch `claude/slides-translate-bootstrap` off master; handover committed `fdf7772`, Phase 1 commit follows. The three user-facing forks are settled (D1, D4, D5).
+- **In progress:** none — Phase 2 not started.
+- **Blockers / open questions:** none blocking. D6 defaults stand unless the user objects. Confirm at Phase 4: whether `--to` should be required when the source half has **no** lang tags at all (currently planned as: infer from filename, `--to` optional override).
+- **Tests:** Phase 1 fully covered (see §7). Phases 2–5 pending.
 
 ---
 
 ## 5. Next Steps
 
-**Start Phase 1.** Prerequisites/setup:
-1. From this worktree, create the branch: `git fetch origin && git switch -C claude/slides-translate-bootstrap origin/master`.
-2. Ensure the worktree venv is synced (`uv sync --extra all`) — a repo-root `.venv` silently resolves `clm` to the main repo (see memory `feedback-worktree-venv-sync`).
-3. Read `src/clm/slides/sync_translate.py` (the translator + both prompts), `src/clm/slides/sync_writeback.py` (`role_of`, `swap_lang`, `build_twin_cell`, `FileState`), `src/clm/slides/split.py` (header-macro regexes + the `unify`/`split` round-trip invariant), and `src/clm/slides/sync_apply.py` `_add_one_direction` / `_translate` (the existing per-cell translate+mint+insert pattern to mirror).
+**Start Phase 2 — idempotency + sync delegation + watermark + id minting.** This is the file/orchestration layer that wraps the Phase 1 pure engine. Build a function (e.g. `clm/slides/translate_bootstrap.py`) that:
+1. Resolves the source half and derives the twin path with `derive_split_twin` (`pairing.py:210`) / `split_lang_tag` (`pairing.py:158`).
+2. **Dispatch:** twin **present** → do not bootstrap; delegate to `build_sync_plan` (`sync_plan.py:1664`) + `apply_plan` (`sync_apply.py:208`) exactly as `slides_sync_cmd` wires them (degrade to incremental sync). Twin **absent** → run Phase 1 `translate_deck_text`, write both halves, then:
+   - run `assign_ids_in_split_pair` (`assign_ids.py:823`, `AssignOptions(accept_content_derived=True)`) over the freshly-written pair so it carries EN-authority `de_id==en_id` (writes the source half back too if ids changed — keep parity). If the source was id-less this is where ids are minted, so the pair is never born id-less.
+   - record the watermark via `_record_watermark` (`sync_apply.py:2172`) + `SyncWatermarkCache` (`cache.py:652`) so the next `clm slides sync` is a clean no-op.
+3. Writes via `FileState`/`atomic_write_all` with `newline="\n"`.
+
+**Acceptance:** `translate` twice → the second run is a sync no-op; deck not doubled; a subsequent `clm slides sync` reports clean. Round-trip + parity hold on the written files. (Engine-level round-trip is already guaranteed by Phase 1.)
+
+**Setup:** worktree venv must be synced (`uv sync --extra all`) — a repo-root `.venv` silently resolves `clm` to the main repo (memory `feedback-worktree-venv-sync`). Run tests with `uv run python -m pytest …` (system Python has no pytest).
 
 **Gotchas to watch (these silently corrupt the pair):**
-- Translating a neutral/shared cell → `UnifyError` + `_check_shared_cell_parity` failure. Gate strictly on `role_of(meta) is None` / `meta.lang is None`.
-- Running the header macro through the cell translator, or forgetting the `import header_de`→`import header_en` line swap → broken title slide + split↔bilingual round-trip. Reuse `split.py`'s regexes.
-- Emitting the twin id-less → forces a downstream cold-mint/adopt round (needs verifier + key). Mint ids at bootstrap.
+- **Phase 1 already handles** the translate-vs-copy gate (`metadata.lang`, *not* `role_of` — a localized id-less code cell is `role_of()==None` but must translate), the header-macro/import rewrite (reused `split.py` regexes), and the `split(unify(de,en))==(de,en)` validity guard. Don't re-implement these in Phase 2.
+- Emitting the twin id-less → forces a downstream cold-mint/adopt round (needs verifier + key). Mint ids at bootstrap via `assign_ids_in_split_pair`.
 - Missing watermark seal → the next `sync` re-diffs and may re-propose. The `_record_watermark` call is load-bearing for D2.
 - Program extension may be `.cpp`/`.java` etc.; the `.de`/`.en` tag sits immediately before the final extension. Use `split_lang_tag` (prefix-agnostic) for naming — don't assume `.py`.
 - Line endings: write with `newline="\n"`; never line-string surgery — use `raw_cells` / `FileState`.
@@ -139,10 +146,12 @@ If `voiceover_<name>.<src>.py` exists, translate its localized cells too (preser
 ## 6. Key Files & Architecture
 
 ### New files
-- `src/clm/slides/translate_deck.py` — the pure bootstrap engine (Phase 1). Parses a source half, classifies cells, translates localized ones, copies neutral ones verbatim, swaps the header macro, builds twins, returns target text. Protocol-driven (`SlideTranslator`) so it's offline-testable.
+- **`src/clm/slides/translate_deck.py` — DONE (Phase 1).** The pure, offline bootstrap engine: `translate_deck_text(source_text, *, source_lang, target_lang, translator) -> TranslateDeckResult`. Parses a source half, classifies cells by `metadata.lang`, translates localized ones (code via `CODE_ROLE`), copies neutral ones verbatim, rewrites the header macro/import (reusing `split.py` regexes), self-checks the split/unify round-trip, returns target text. Protocol-driven (`SlideTranslator`) so it's offline-testable. **Also reusable for the Phase 3 voiceover companion** — companions are just lang-tagged cells with no header macro, which this engine already handles.
+- **`tests/slides/test_translate_deck.py` — DONE (17 tests).**
+- `src/clm/slides/translate_bootstrap.py` — file/orchestration layer (Phase 2): dispatch, id minting, watermark.
 - `src/clm/cli/commands/slides_translate.py` — the `clm slides translate` Click command (Phase 4).
-- `TranslationCache` class added to `src/clm/infrastructure/llm/cache.py` (Phase 1).
-- Tests: `tests/slides/test_translate_deck.py` (engine), `tests/cli/test_slides_translate.py` (CLI), companion/idempotency tests.
+- `TranslationCache` + `CachingSlideTranslator` in `src/clm/infrastructure/llm/cache.py` / `sync_translate.py` (Phase 4 — moved from Phase 1).
+- Tests: `tests/cli/test_slides_translate.py` (CLI), companion/idempotency tests (Phases 2–4).
 
 ### Modified files
 - `src/clm/cli/main.py` — register `translate` + `bootstrap` under `slides_group` (~line 168).
@@ -177,7 +186,7 @@ If `voiceover_<name>.<src>.py` exists, translate its localized cells too (preser
 ## 7. Testing Approach
 
 - **Unit (primary, offline):** drive everything through the `SlideTranslator` **Protocol** with `StaticSlideTranslator` — **no network, no vcrpy cassette** (this is a host-side path, unlike in-kernel build LLM traffic). The whole sync stack is tested this way; follow it.
-- **Phase 1 invariants to assert:** neutral cells byte-identical across halves; `split(unify(de,en)) == (de,en)`; localized markdown translated, code identifiers untouched (only string/comment payload changes under the static fake); header macro swapped (`header_de`→`header_en` + import line) with title arg translated; ids carried onto twins.
+- **Phase 1 invariants — DONE (17 tests, all green):** the primary assertion is `split(unify(de, en)) == (de, en)` (`_assert_valid_pair`) plus content checks (right language survives, shared cells present, header swapped). Byte-exact `== other_half` is asserted only on *trailing-symmetric* decks (header-only or shared-cell-terminated) — see the trailing-blank note in §8. The strongest cases use a `_mirror_translator` built from the canonical split halves so a correct engine regenerates the other side's content exactly.
 - **Phase 2:** run `translate` twice → second run = `sync` no-op (assert no doubling, watermark recorded, subsequent `sync` clean). Present-twin delegation path exercised.
 - **Phase 3:** companion translated, `for_slide`/`vo_anchor` preserved, parity validator passes.
 - **Phase 4:** `CliRunner` for absent/present twin, `--dry-run` writes nothing, `--json` envelope shape, no-key degradation (exit 1 + warning, no crash), `--force` overwrite, exit-code matrix. Note the Click 8.1-vs-8.2 `CliRunner` compat pattern (memory `feedback-click-82-clirunner-compat`).
@@ -192,3 +201,9 @@ If `voiceover_<name>.<src>.py` exists, translate its localized cells too (preser
 - The "code is translated iff it has a lang tag" requirement was the user's own framing — and it happens to be exactly the existing `role_of` / no-lang-is-shared model. Lean on that; don't invent a parallel marker.
 - Grounding for this design came from a multi-agent read of the sync engine, slide format, pairing/cold-start machinery, LLM infra, and CLI surface. The reuse table in §6 was re-verified against the live tree (symbol names + line numbers) before writing this doc.
 - CLAUDE.md hard rules in play: type hints on public APIs; `attrs @define` internal / Pydantic at boundaries; `logging.getLogger(__name__)` never `print()`; Python over bash for any tooling; **update info topics** when CLI behavior changes (Phase 5 is not optional). Commits that fail a hook didn't happen — fix, re-stage, new commit (never `--amend` a rejected commit).
+
+### Phase 1 discoveries (read before Phase 2)
+- **The translate-vs-copy gate is `metadata.lang`, NOT `role_of`.** The original plan said "gate on `role_of(meta) is None`", but `role_of` returns `None` for a localized id-less code cell (`# %% lang="de"` with no `slide_id`) — which *must* be translated. So: `lang == source_lang` → translate; `lang is None` → copy verbatim. `role_of`/`cell_type` only select the prompt (`CODE_ROLE` → code prompt). This is encoded in `_translation_role` and the main loop.
+- **`split` produces trailing-blank-asymmetric halves.** The cell that ends the bilingual source carries an extra EOF blank line that, after `split`, lands on **only one** half. So a generated half (the engine mirrors the *source* half's per-cell trailing blanks) does **not** in general byte-match the other half of an arbitrary bilingual deck — and that is correct: when bootstrapping there is no pre-existing other half to match. The honest invariant is the round-trip, not byte-equality. Byte-exact tests therefore use decks that end on a shared cell (symmetric) or are header-only. Phase 2 writes these halves to disk as-is; don't try to "fix" the asymmetry.
+- **The round-trip guard verifies split-*validity*, not translation *fidelity*.** A translator that injects a *valid* `lang="en"` cell boundary produces an extra-but-valid cell that still round-trips (guard won't flag it); only a structurally-breaking injection (e.g. a no-lang cell appearing in one half) trips it. Fidelity is the LLM's job / a later verify pass, not the engine's.
+- **The engine reuses `split.py`'s private header regexes** (`_HEADER_DE_RE` etc.) via `from clm.slides import split`. Deliberate (the handover's "don't duplicate the header grammar" rule). If a reviewer prefers, promote them to public names in `split.py` — but do not fork copies.
