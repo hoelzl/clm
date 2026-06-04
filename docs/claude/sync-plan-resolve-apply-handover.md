@@ -4,7 +4,7 @@
 **Design note:** `docs/claude/design/sync-plan-resolve-apply.md` (the canonical spec)
 **Base design:** `docs/claude/design/single-language-authoring-sync.md` (the #166 engine)
 **Memory:** `project-sync-coldstart-idless-bug` (corrected framing + verified findings)
-**Status:** design accepted, both forks settled; **Phase 1 DONE** (all 5 xfails flipped to passing); Phase 2 is next.
+**Status:** design accepted, both forks settled; **Phase 1 DONE** (all 5 xfails flipped); **Phase 2 DONE (scoped: edit + add materialized)**; **Phase 3 is next** (cold-start minting — the actual #158 unblock).
 
 ---
 
@@ -141,15 +141,29 @@ The original TODO recipe (kept for reference):
   markers (strict will force this — they become XPASS failures otherwise).
 - **Risk:** low. No LLM, no new minting; pure relocation + a new disposition.
 
-### Phase 2 — Split apply into materialize (2b) + execute (3)  **[TODO]**
-- **Goal:** make apply decision-free. Formalize a `MaterializedPlan`; fold
-  translation (`_translate`, `_add_one_direction`) and the edit judge into a 2b
-  pass that attaches content or marks an item `blocked`; the execute pass does
-  only mechanical writes (insert / replace-body / stamp-id / delete / move).
-- **Files:** `src/clm/slides/sync_apply.py` (the bulk), possibly a new module for
-  the execute primitives.
-- **Acceptance:** behavior-preserving refactor; full sync suite stays green; the
-  boundary is enforced (execute makes no decisions, calls no model).
+### Phase 2 — Split apply into materialize (2b) + execute (3)  **[DONE — scoped to edit + add]**
+- **Delivered** (commits `6e34368` edit / `879b61b` add): the model calls for the
+  edit and add paths moved into materialize passes; the execute walks write
+  mechanically.
+  - **Edit** (2.1): `_materialize_edits` resolves every edit + won conflict into an
+    `_EditOutcome` (`update` / `in_sync` / `blocked`); `_apply_edit` writes from it
+    with no judge/translator (`_apply_code_edit` folded into `_resolve_edit`).
+  - **Add** (2.2): `_materialize_idcarrying` / `_materialize_idless` pre-translate
+    every add/rename source cell into a `_TransOutcome` cache keyed by source-cell
+    `id`; `_add_one_direction` / `_add_idcarrying_one_direction` keep their exact
+    structure but read the cache via `_translate` (which has a never-fires model
+    fallback — the materialize walks enumerate a **superset** of what execute
+    translates). Materialize calls sit right before their walks to preserve the
+    state-mutation ordering and copy-id detection.
+  - **Boundary tests** (`test_sync_apply.py`): judge called once per edit,
+    translator once per add cell — both in materialize, never re-called in execute.
+- **Behavior-preserving:** `tests/slides` + CLI sync = 1106 passed; ruff + mypy clean.
+- **Deferred follow-ups (still call models inline):** the id-migration recoverer
+  (`--llm-recover`, `_migrate_drifted_ids` subsystem) and the `sync_code` structural
+  translate (`apply_code_structure`, id-less localized code). A single bundled
+  `MaterializedPlan` object was judged not worth the churn (the two materialize
+  seams suffice; the add seam is ordering-sensitive, so it can't simply hoist to
+  the top of `apply_plan`).
 
 ### Phase 3 — Cold-start minting + correspondence gate  **[TODO]**
 - **Goal:** `clm slides sync` becomes the proper cold-start id minter.
@@ -177,13 +191,16 @@ The original TODO recipe (kept for reference):
 ## 4. Current Status
 
 ### Done (committed on the branch)
-- **Phase 1 implementation** (this session): the `refuse` disposition + the
-  both-directions guard relocated to the resolver. Touches
+- **Phase 2 implementation** (commits `6e34368` edit-path / `879b61b` add-path):
+  edit + add paths are materialize-then-execute (see Phase 2 above). Touches only
+  `src/clm/slides/sync_apply.py` + `tests/slides/test_sync_apply.py` (2 boundary
+  tests). `tests/slides` + CLI sync = 1106 passed; ruff + mypy clean.
+- **Phase 1 implementation** (commit `de038a7`, docs `033db03`): the `refuse`
+  disposition + the both-directions guard relocated to the resolver. Touches
   `src/clm/slides/sync_plan.py`, `sync_apply.py`, `sync_plan_walker.py`,
   `src/clm/cli/commands/slides_sync.py`, `src/clm/cli/info_topics/migration.md`,
   and the four test files (markers removed, assertions rewritten to the refusal
-  outcome, `TestBothDirectionsRefusal` added). `tests/slides` = 1048 passed,
-  2 skipped; ruff + mypy clean.
+  outcome, `TestBothDirectionsRefusal` added).
 - `93d5e59` — **test spec** (originally 4 pass / 5 xfail; the 5 xfails are now
   passing after Phase 1):
   - `tests/slides/test_sync_dry_run_parity.py` (NEW): parity helper
@@ -223,35 +240,40 @@ has **no guard** (`sync_apply.py:695-705`).
   mismatched-id pairs with a provider — start with refuse).
 
 ### Test state
-- After Phase 1: the 9 parity tests all pass (the 5 xfail markers removed),
-  `TestBothDirectionsRefusal` added (6 cases). Full `tests/slides` green
-  (1048 passed, 2 skipped); `tests/cli/test_slides_sync.py` green. ruff + mypy
-  clean on the changed modules.
+- After Phase 2: `tests/slides` + `tests/cli/test_slides_sync.py` = **1106 passed,
+  2 skipped**; ruff + mypy clean. Phase 1's 9 parity tests + `TestBothDirectionsRefusal`
+  (6 cases) all pass; Phase 2 added 2 boundary tests (judge-once / translator-once).
+  All pre-commit hooks green on both Phase 2 commits.
 
 ---
 
 ## 5. Next Steps
 
-**Phase 1 is DONE.** Start **Phase 2 — split apply into materialize (2b) +
-execute (3)** (design note §10). The goal is to make `apply_plan` decision-free:
+**Phases 1 and 2 are DONE.** Start **Phase 3 — cold-start minting + correspondence
+gate** (design §3-Q-B, §7; Phase 3 above). This is the larger payoff: it lets a
+confirmed cold-start pair *mint* a shared id instead of refusing, **unblocking the
+1.8 PythonCourses gate (`#158`)**. Concretely:
 
-1. Formalize a `MaterializedPlan` (or a per-proposal `materialized_*` payload):
-   a pass that, for each `add` / `rename` / `edit` / `retag`, attaches the
-   already-generated content (the translated body / the judge's rewrite) or marks
-   the item `blocked` when the model is unavailable/fails — instead of today's
-   inline `_translate` (`sync_apply.py` ~870) and `judge.propose` (~590) calls
-   that decide *and* write in one step.
-2. Make the **execute** pass mechanical: insert / replace-body / stamp-id / delete
-   / move only, no `translator`/`judge` reference, no `result.deferred`/`errors`
-   decisions of its own (those become `blocked` dispositions decided in 2b).
-3. Keep it behavior-preserving — the full sync suite must stay green; the boundary
-   is the deliverable (assert execute calls no model). No new user-visible
-   behavior; this just locks in what Phase 1 started.
+1. **2a (resolver, provider-aware)** — for a structurally-aligned cold-start pair
+   (the case Phase 1 currently `refuse`s), emit `mint_shared_id` (both id-less) /
+   `adopt_id` (half-id'd) **candidates** *when a provider is configured*, else keep
+   `refuse`. Provider availability is a plan-time input, so dry-run and apply still
+   agree. The alignment predicate adapts the idea behind `_streams_aligned`
+   (`sync_plan.py`) — **not a drop-in** (it consumes raw `Cell`s incl. code, while
+   the cold path holds role-filtered `CurrentCell`s; see Session Notes).
+2. **2b (apply-side tier)** — a `CorrespondenceVerifier` beside `AlignmentRecoverer`
+   in `sync_recover.py`: cheap model (Haiku-class), body-free inputs, cached by pair
+   fingerprint + prompt version, validated, safe-abort. "yes" → materialize the
+   mint/adopt (reuse the `_TransOutcome`/`_EditOutcome` materialize pattern from
+   Phase 2); "no" → downgrade the candidate to `refuse`.
+3. Delegate the byte-level stamping to `assign_ids_in_split_pair` (`assign_ids.py`).
+4. CLI: `--verify-cold-pairs` (default on when a provider is set).
+5. Tests: the two `TestColdStartRefusalParity` cases become "mints under a
+   confirming stub verifier, refuses under a denying one."
 
-Phase 3 (cold-start minting + `CorrespondenceVerifier`) remains the larger payoff
-— see §3 of this handover and design §7. It is what finally lets a confirmed
-cold-start pair *mint* instead of refuse, unblocking the 1.8 PythonCourses gate
-(`#158`). Until then the Phase 1 refusal is the safe, honest default.
+**Also remaining (lower priority, Phase 2 follow-ups):** materialize the
+id-migration recoverer and the `sync_code` structural translate so execute is
+*fully* model-free (today only the edit + add paths are). Not required for Phase 3.
 
 **Prereqs / setup (IMPORTANT — see Gotchas):**
 - This worktree's venv was incomplete. Run **`uv sync --extra all`** before

@@ -9,8 +9,11 @@ apply divergence** it exposed.
 
 **Status:** design accepted (2 forks settled — see §3); implementation phased
 (§10). **Phase 1 DONE** (the `refuse` disposition + both-directions guard moved to
-the resolver; all 5 parity/doubling xfails flipped to passing — §9). Phases 2–3
-pending.
+the resolver; all 5 parity/doubling xfails flipped — §9). **Phase 2 DONE (scoped):**
+the edit and add paths are materialize-then-execute (the model calls moved to 2b;
+execute writes mechanically). The id-migration recoverer and the `sync_code`
+structural translate remain inline as **explicitly-deferred follow-ups** (§10).
+Phase 3 pending.
 
 ---
 
@@ -170,7 +173,7 @@ classifier invariant.
 | Module | Change |
 |---|---|
 | `sync_plan.py` | becomes Classify + Resolve-2a. Owns *all* structural dispositions, incl. the both-directions refusal (idless **and** idd) and cold-start pair candidacy — **moved out of apply**. `build_sync_plan` returns a `ResolvedPlan` whose every item carries a disposition. |
-| `sync_apply.py` | splits into **2b materialize** (the LLM calls — translate / judge / correspondence) producing a `MaterializedPlan`, and **3 execute** (decision-free writes). `_apply_adds`' guard logic is deleted (now in 2a). Execute never re-decides. |
+| `sync_apply.py` | **2b materialize** (the LLM calls) is split from **3 execute** (decision-free writes) for the edit + add paths: `_materialize_edits` → `_EditOutcome` (judge / code re-translate), and `_materialize_idcarrying` / `_materialize_idless` → `_TransOutcome` cache (add translations). `_apply_edit` and the two add walks then write mechanically; a model-failure is a `blocked`/error outcome decided in 2b. `_apply_adds`' both-directions guard is deleted (now in 2a, Phase 1). **Still inline (deferred):** the id-migration recoverer (`--llm-recover`) and the `sync_code` structural translate — they call models inside their own helpers; a single bundled `MaterializedPlan` object was judged not worth the churn given the add materialize is ordering-sensitive (it must run between the id-carrying and id-less walks). |
 | `sync_recover.py` | gains `CorrespondenceVerifier` beside `AlignmentRecoverer` (same opt-in/cached/validated/safe-abort shape). |
 | `assign_ids.py` | `assign_ids_in_split_pair` reused by `mint_shared_id` / `adopt_id` for byte-level stamping. |
 | `slides_sync.py` (CLI) | dry-run renders the resolved plan (incl. `refuse`/`pending`); exit codes derive from dispositions, so `_plan_exit_code` and `_apply_exit_code` converge by construction. New `--verify-cold-pairs` (default: on when a provider is set) gates 2b correspondence. |
@@ -199,6 +202,11 @@ The parity assertion was written to survive either fix shape (it checks "a
 writing-run error must have been foreseen by the dry-run"), so it needed no edits
 when the redesign landed — only the `xfail` markers came off.
 
+**Phase 2 boundary tests** (`tests/slides/test_sync_apply.py`): the judge is invoked
+exactly once per edit and the translator exactly once per add cell — both in the
+materialize pass, never re-called in execute. A higher count would mean the
+execute walk fell back to the model (a leak across the 2b/3 boundary).
+
 ## 10. Phased implementation
 
 Each phase is independently shippable and flips a named subset of the xfails.
@@ -216,9 +224,18 @@ refusal. Also surfaced in `render_plan` / `--json` (`counts.refuse`,
 `proposals[].disposition`), the walker (a `REFUSE` action, never prompted), and
 the `migration.md` info topic.
 
-**Phase 2 — Split apply into materialize (2b) + execute (3).** Formalize
-`MaterializedPlan`; make execute decision-free; fold translation/judge into 2b
-with `blocked` on failure. Behavior-preserving refactor that locks the boundary.
+**Phase 2 — Split apply into materialize (2b) + execute (3). [DONE — scoped to
+edit + add].** The edit path materializes via `_materialize_edits` → `_EditOutcome`
+(`update` / `in_sync` / `blocked`); `_apply_edit` writes mechanically (boundary
+test: judge called once, in materialize). The add path materializes via
+`_materialize_idcarrying` / `_materialize_idless` → a `_TransOutcome` cache keyed by
+source-cell id; the two add walks read the cache through `_translate`, with a
+model fallback for a cache miss that never fires because the materialize walks
+enumerate a **superset** of what execute translates (boundary test: translator
+called once per cell). Behavior-preserving (1106 sync tests green). **Deferred
+follow-ups (call models inline still):** the id-migration recoverer and the
+`sync_code` structural translate; and a single bundled `MaterializedPlan` object
+(the two materialize seams suffice, and the add seam is ordering-sensitive).
 
 **Phase 3 — Cold-start minting + correspondence gate.** `mint_shared_id` /
 `adopt_id` candidates in 2a (provider-aware); `CorrespondenceVerifier` in 2b;
