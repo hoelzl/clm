@@ -63,6 +63,7 @@ Key options:
 | `--http-replay [replay\|once\|new-episodes\|refresh\|disabled]` | HTTP replay record mode for topics with `http-replay="yes"` in the spec. `replay` requires a cassette (strict, CI default); `once` records on first run, replays thereafter (strict on new requests); `new-episodes` replays recorded requests and records any new ones (local default); `refresh` re-records every run; `disabled` bypasses replay. Defaults to `replay` when `CI=true`, else `new-episodes`. Also settable via `CLM_HTTP_REPLAY_MODE`. |
 | `--fail-on-error / --no-fail-on-error` | Exit with non-zero status when the build summary reports any cell/notebook error **or a dropped companion voiceover** (a `for_slide` with no matching `slide_id`, since CLM {version}). Defaults to **on** under `--http-replay=replay` (incl. CI) and **off** under all other replay modes. Override via `CLM_FAIL_ON_ERROR={1,true,yes,0,false,no}`. See "Exit codes" below. |
 | `--fail-on-missing-xref / --no-fail-on-missing-xref` | Exit with non-zero status when a `clm:` cross-reference points at a topic not included in the build (issue #17). Defaults to **on** under `--http-replay=replay` (incl. CI) and **off** under all other replay modes (a missing target is then a warning and the link is dropped). Override via `CLM_FAIL_ON_MISSING_XREF={1,true,yes,0,false,no}`. See `clm info spec-files` → "Cross-references". |
+| `--provenance-manifest / --no-provenance-manifest` | Write a `.clm-manifest.json` provenance index into each output root, mapping every output file to its source commit and owning section/topic (issue #208 — needed by the per-topic solution-release workflow). **On by default since CLM {version}**; `clm git` excludes it from every distributed repo. Pass `--no-provenance-manifest` to skip it. Always suppressed under `--snapshot` / `--verify-against` (it embeds a timestamp + commit, so it must not enter a byte-reproducibility baseline). |
 
 Examples:
 
@@ -1609,6 +1610,8 @@ Key options for `git commit`, `git push`, and `git sync`:
 | `--amend` | commit, sync | Amend previous commit instead of creating new one |
 | `--force-with-lease` | push, sync | Safe force push (implied by `--amend` on sync) |
 | `--target` | all | Filter to specific output target |
+| `--channel NAME` | all | Act on the named release-channel (cohort) repo instead of output targets (issue #208). Mutually exclusive with `--target`. |
+| `--all-channels` | all | Act on every release-channel (cohort) repo instead of output targets. Mutually exclusive with `--target`. |
 | `--dry-run` | all | Show what would be done |
 
 Examples:
@@ -1621,6 +1624,9 @@ clm git push course.xml --force-with-lease     # safe force push
 clm git sync course.xml -m "Weekly update"     # commit + push
 clm git sync course.xml --amend                # amend + force push
 clm git sync course.xml --force-with-lease -m "msg"  # commit + force push
+clm git init course.xml --channel jan          # create one cohort repo
+clm git sync course.xml --channel jan -m "Release functions"  # push a cohort
+clm git status course.xml --all-channels       # status of every cohort repo
 ```
 
 `git init` is idempotent — re-running it after creating remote repositories will
@@ -1630,6 +1636,71 @@ detect and add them as origin. The behavior matrix:
 |---|---|---|
 | **No remote** | Create local-only repo | Skip (print remote URL if configured) |
 | **Remote exists** | Clone/restore from remote | Add remote origin if missing |
+
+**Release channels (`--channel` / `--all-channels`).** With these flags every
+`clm git` subcommand operates on the per-cohort repositories declared in the
+spec's `<release-channels>` block (see `clm info spec-files`) instead of the
+`<output-targets>` repos — same init/status/commit/push/sync/reset behavior,
+pointed at the cohort working trees. The private provenance manifest
+(`.clm-manifest.json`) is always excluded from staging (and a copy a pre-exclusion
+commit already tracked is purged on the next commit); the per-cohort frozen
+manifest (`.clm-released.json`) is committed normally. The course must declare a
+`<release-channels>` block or these flags error. Populating these working trees
+is the job of `clm release sync`; `clm git --channel` then versions and
+distributes them (and `clm git init --channel` creates each cohort repo once).
+
+### `clm release`
+
+Per-topic solution release to student cohorts (issue #208). After a topic's
+workshop has been discussed, release that topic's full solution — and only that
+topic's — into a cohort repository, **frozen** so later course edits never change
+what a cohort already received. Channels are declared in the spec's
+`<release-channels>` block (`clm info spec-files`); the volatile per-topic
+release state lives in a plain-text **ledger** (one topic id per line), never in
+the spec.
+
+| Subcommand | Description |
+|------------|-------------|
+| `release add SPEC_FILE TOPIC_IDS… --channel NAME` | Append topic ids to the channel's ledger (validated against the spec). |
+| `release week SPEC_FILE SELECTORS… --channel NAME` | Append **every topic in the selected section(s)** to the ledger — a section-scoped `release add`. `SELECTORS` use the `build --only-sections` grammar (`id:`/`idx:`/`name:` prefixes, or a bare 1-based index / name substring). Section indices are disabled-inclusive; a selected-but-`enabled="false"` section is reported and skipped. |
+| `release status SPEC_FILE --channel NAME` | Show released vs pending topics, and (with a resolvable `--dest`/`--channel`) frozen vs awaiting-sync. |
+| `release sync SPEC_FILE --channel NAME` | Promote released-but-not-frozen topics from the built source into the cohort repo and freeze them. |
+
+A channel can be addressed two ways: `--channel NAME` (resolves the ledger, the
+frozen `--source` build root, and the `--dest` cohort repo from the spec's
+`<release-channels>`), or by passing `--ledger` / `--source` / `--dest`
+explicitly (which override resolution).
+
+Key options for `release sync`:
+
+| Option | Description |
+|--------|-------------|
+| `--channel NAME` | Resolve ledger/source/dest from the spec's `<release-channels>`. |
+| `--ledger PATH` | Channel release ledger (overrides `--channel` resolution). |
+| `--source DIR` | Built frozen-source output root (must contain `.clm-manifest.json`). |
+| `--dest DIR` | Cohort destination repository (created if absent). |
+| `--refreeze TOPIC` | Re-copy and re-freeze an already-frozen topic (e.g. a bug fix). Repeatable. |
+| `--refreeze-all` | Re-copy and re-freeze every released topic. |
+| `--push` | After promoting, commit and push the cohort repo (via `clm git`'s commit/push). The repo must already exist — run `clm git init … --channel` once first. |
+| `-m, --message` | Commit message used by `--push` (default: a one-line summary of the sync). |
+| `--dry-run` | Print the promotion plan; copy nothing. |
+
+The source must be built with the provenance manifest (`clm build` writes it by
+default since CLM {version}). Promotion copies bytes by manifest and records each
+topic in the cohort's frozen manifest (`.clm-released.json`); a frozen topic is
+never re-propagated unless you pass `--refreeze`.
+
+Examples:
+
+```bash
+clm build course.xml                                       # writes .clm-manifest.json
+clm release add course.xml functions lists --channel jan   # release two topics to a cohort
+clm release week course.xml "name:Week 1" --channel jan    # release a whole section's topics
+clm release status course.xml --channel jan                # what's released vs pending/frozen
+clm git init course.xml --channel jan                      # one-time: create the cohort repo
+clm release sync course.xml --channel jan --push -m "Release functions, lists"
+clm release sync course.xml --channel jan --dry-run        # preview promotion
+```
 
 ### `clm jobs`
 
@@ -2261,6 +2332,34 @@ Show recording status for a course, including per-lecture recording state.
 ```
 clm recordings status COURSE_ID
 ```
+
+#### `clm recordings drift`
+
+Report which recordings have gone stale after slide edits. Each recorded
+part stamps, at record time, the topic it records and that topic's
+build-output digest (from the `.clm-manifest.json` provenance index). `drift`
+re-reads the current manifest and compares: a part is `changed` when the
+topic's built output differs from when it was recorded, `current` when it
+matches, and `unknown` when it predates provenance stamping or its topic is
+absent from the manifest (`unknown` is never reported as up to date).
+
+```
+clm recordings drift COURSE_ID [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--source PATH` | Built output root containing `.clm-manifest.json` (overrides the spec's default `output/` location) |
+| `--manifest PATH` | Path to a specific `.clm-manifest.json` (overrides `--source` and the spec) |
+| `--spec-file PATH` | Course spec XML; its default `output/` root is searched for the manifest |
+| `--all` | Show every recorded part, not just the changed ones |
+| `--json` | Emit machine-readable JSON |
+
+The manifest is resolved in priority order: `--manifest` > `--source` >
+`--spec-file`'s default `output/` root > the `spec_file` of the matching
+`recordings.courses` config entry. By default only `changed` parts are
+listed (the answer to "which videos must I re-record?"); pass `--all` to see
+every part.
 
 #### `clm recordings compare`
 

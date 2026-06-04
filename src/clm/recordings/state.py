@@ -35,6 +35,13 @@ class TakeRecord(BaseModel):
     recorded_at: str = ""
     status: RecordingStatus = "pending"
     superseded_at: str | None = None
+    # Slide-version provenance (issue #208 step 5): the section/topic this take
+    # records and the topic's build-output digest at record time, so drift
+    # ("did the slide change since this video was shot?") is a manifest diff.
+    # All optional + default None, so pre-step-5 state files load unchanged.
+    section_id: str | None = None
+    topic_id: str | None = None
+    slide_digest: str | None = None
 
 
 class RecordingPart(BaseModel):
@@ -55,6 +62,11 @@ class RecordingPart(BaseModel):
     status: RecordingStatus = "pending"
     takes: list[TakeRecord] = Field(default_factory=list)
     active_take: int = 1
+    # Slide-version provenance (issue #208 step 5) for the active take; see
+    # TakeRecord. Optional + default None for backward-compatible state files.
+    section_id: str | None = None
+    topic_id: str | None = None
+    slide_digest: str | None = None
 
 
 class LectureState(BaseModel):
@@ -126,6 +138,9 @@ class CourseRecordingState(BaseModel):
         git_commit: str | None = None,
         git_dirty: bool = False,
         processed_file: str | None = None,
+        section_id: str | None = None,
+        topic_id: str | None = None,
+        slide_digest: str | None = None,
     ) -> RecordingPart:
         """Return the part for *(lecture_id, part_number)*, creating it if absent.
 
@@ -134,7 +149,8 @@ class CourseRecordingState(BaseModel):
         active take into ``takes/`` and placed a fresh file in its
         slot). If the lecture does not yet exist, it is created with
         *display_name* (or ``lecture_id`` when no display name is
-        given).
+        given). ``section_id``/``topic_id``/``slide_digest`` stamp the
+        slide-version provenance (issue #208 step 5).
         """
         lecture = self.get_lecture(lecture_id)
         if lecture is None:
@@ -148,6 +164,9 @@ class CourseRecordingState(BaseModel):
                 part.git_dirty = git_dirty
                 part.recorded_at = datetime.now().isoformat(timespec="seconds")
                 part.status = "pending"
+                part.section_id = section_id
+                part.topic_id = topic_id
+                part.slide_digest = slide_digest
                 return part
 
         part = RecordingPart(
@@ -157,6 +176,9 @@ class CourseRecordingState(BaseModel):
             git_commit=git_commit,
             git_dirty=git_dirty,
             recorded_at=datetime.now().isoformat(timespec="seconds"),
+            section_id=section_id,
+            topic_id=topic_id,
+            slide_digest=slide_digest,
         )
         lecture.parts.append(part)
         lecture.parts.sort(key=lambda p: p.part)
@@ -183,6 +205,9 @@ class CourseRecordingState(BaseModel):
         lecture_id: str | None = None,
         git_commit: str | None = None,
         git_dirty: bool = False,
+        section_id: str | None = None,
+        topic_id: str | None = None,
+        slide_digest: str | None = None,
     ) -> tuple[str, int]:
         """Assign a raw recording file to a lecture.
 
@@ -218,6 +243,9 @@ class CourseRecordingState(BaseModel):
             git_commit=git_commit,
             git_dirty=git_dirty,
             recorded_at=datetime.now().isoformat(timespec="seconds"),
+            section_id=section_id,
+            topic_id=topic_id,
+            slide_digest=slide_digest,
         )
         lecture.parts.append(part)
 
@@ -332,13 +360,18 @@ class CourseRecordingState(BaseModel):
         git_commit: str | None = None,
         git_dirty: bool = False,
         new_processed_file: str | None = None,
+        section_id: str | None = None,
+        topic_id: str | None = None,
+        slide_digest: str | None = None,
     ) -> TakeRecord:
         """Demote the part's current active take into ``takes`` and install a new one.
 
         The caller is responsible for the corresponding filesystem moves
         (typically into ``takes/``). The returned :class:`TakeRecord`
         describes the take that was just demoted — useful for the caller
-        to know the old paths.
+        to know the old paths. The slide-version provenance
+        (``section_id``/``topic_id``/``slide_digest``) is preserved on the
+        demoted take and re-stamped on the new active take (issue #208 step 5).
 
         Raises:
             ValueError: If the lecture or part does not exist.
@@ -354,6 +387,9 @@ class CourseRecordingState(BaseModel):
             recorded_at=part.recorded_at,
             status=part.status,
             superseded_at=datetime.now().isoformat(timespec="seconds"),
+            section_id=part.section_id,
+            topic_id=part.topic_id,
+            slide_digest=part.slide_digest,
         )
         part.takes.append(demoted)
 
@@ -364,6 +400,9 @@ class CourseRecordingState(BaseModel):
         part.git_dirty = git_dirty
         part.recorded_at = datetime.now().isoformat(timespec="seconds")
         part.status = "pending"
+        part.section_id = section_id
+        part.topic_id = topic_id
+        part.slide_digest = slide_digest
 
         logger.info(
             "Recorded retake {} for {} part {}",
@@ -407,6 +446,9 @@ class CourseRecordingState(BaseModel):
             recorded_at=part.recorded_at,
             status=part.status,
             superseded_at=datetime.now().isoformat(timespec="seconds"),
+            section_id=part.section_id,
+            topic_id=part.topic_id,
+            slide_digest=part.slide_digest,
         )
 
         part.takes.remove(target)
@@ -420,6 +462,9 @@ class CourseRecordingState(BaseModel):
         part.git_dirty = target.git_dirty
         part.recorded_at = target.recorded_at
         part.status = target.status
+        part.section_id = target.section_id
+        part.topic_id = target.topic_id
+        part.slide_digest = target.slide_digest
 
         logger.info(
             "Restored take {} for {} part {}",

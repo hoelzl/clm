@@ -2,6 +2,43 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## Per-topic solution release (issue #208, {version} — additive)
+
+CLM {version} adds **per-topic solution release**: hand a student cohort a
+topic's full solution only after its workshop has been discussed, one topic at a
+time, with multiple cohorts each on their own schedule, and solutions **frozen**
+so later course edits never change what a cohort already received. The feature is
+entirely opt-in — a course that declares no `<release-channels>` block behaves
+exactly as before.
+
+One behavior **does** change by default: `clm build` now writes a
+`.clm-manifest.json` provenance index into each output root (it maps every output
+file to its owning topic, which the release workflow needs). This file is private
+and is automatically excluded from every repo `clm git` touches, so it never
+reaches students. If you don't want it, pass `--no-provenance-manifest`. It is
+always suppressed under `--snapshot` / `--verify-against` (it embeds a build
+timestamp and commit, so it never enters a reproducibility baseline).
+
+### How to adopt
+
+1. Add a `<release-channels>` block to the course spec, naming the
+   `completed`-kind output target that is the frozen source and one
+   `<channel>` per cohort (see `clm info spec-files` → `<release-channels>`).
+2. Build the source as usual: `clm build course.xml` (the manifest is written
+   automatically).
+3. For each cohort repo, once: `clm git init course.xml --channel <name>`.
+4. As each topic's workshop wraps up:
+   - `clm release add course.xml <topic-id> --channel <name>` — record the
+     release in the cohort's ledger.
+   - `clm release sync course.xml --channel <name> --push` — promote and freeze
+     that topic into the cohort repo and push it.
+
+The ledger (one topic id per line) is the source-repo-side record of what was
+released; the per-cohort `.clm-released.json` is the freeze record that ships in
+the cohort repo. A frozen topic is never re-propagated unless you pass
+`--refreeze`. Full command reference: `clm info commands` → `clm release` and
+`clm git`.
+
 ## Authoring sidecar subdirectories: `voiceover/` and `cassettes/` (additive — no break)
 
 CLM {version} lets a topic keep its authoring **sidecars** — voiceover

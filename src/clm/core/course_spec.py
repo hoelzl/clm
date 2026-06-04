@@ -519,6 +519,47 @@ class GitHubSpec:
             suffix=suffix,
         )
 
+    def derive_channel_remote_url(
+        self,
+        channel_name: str,
+        *,
+        project_slug: str | None = None,
+        remote_template: str = "",
+        remote_path: str = "",
+    ) -> str | None:
+        """Derive the remote URL for a release channel (issue #208).
+
+        A cohort channel is *not* language-scoped — one repo serves one cohort
+        — so the repo name is ``{slug}-{channel_name}`` (the cohort name, e.g.
+        ``cohort-jan``, disambiguates it) rather than appending a ``{lang}``
+        segment and a target suffix. Reusing :meth:`derive_remote_url` with an
+        empty language would emit a stray ``--`` in the repo name; this method
+        avoids that while sharing the same base/remote-path/template handling.
+
+        The ``{lang}`` and ``{suffix}`` template placeholders are bound to the
+        empty string for channels. Returns ``None`` when git config is not set.
+        """
+        slug = project_slug or self.project_slug
+        if not (slug and self.repository_base):
+            return None
+
+        effective_remote_path = remote_path or self.remote_path
+        repo = f"{slug}-{channel_name}"
+        template = remote_template or self.remote_template
+        if not template:
+            if effective_remote_path:
+                template = "{repository_base}/{remote_path}/{repo}"
+            else:
+                template = "{repository_base}/{repo}"
+        return template.format(
+            repository_base=self.repository_base,
+            remote_path=effective_remote_path,
+            repo=repo,
+            slug=slug,
+            lang="",
+            suffix="",
+        )
+
 
 @frozen
 class DirGroupSpec:
@@ -527,9 +568,21 @@ class DirGroupSpec:
     subdirs: list[str] | None = None
     include_root_files: bool = False
     recursive: bool = True
+    # Ownership for a *topic-scoped* dir-group (a ``<dir-group>`` nested inside a
+    # ``<topic>``). ``None`` for a global ``<dir-groups>`` entry. Recorded so a
+    # per-topic release can ship a topic's dir-group together with that topic
+    # (issue #208); the output placement itself is unchanged.
+    section_id: str | None = None
+    topic_id: str | None = None
 
     @classmethod
-    def from_element(cls, element: ETree.Element):
+    def from_element(
+        cls,
+        element: ETree.Element,
+        *,
+        section_id: str | None = None,
+        topic_id: str | None = None,
+    ):
         subdirs = find_subdirs(element)
         name = Text.from_string(element_text(element, "name"))
         include_root_files = element.get("include-root-files", "").lower() == "true"
@@ -540,6 +593,8 @@ class DirGroupSpec:
             subdirs=subdirs,
             include_root_files=include_root_files,
             recursive=recursive,
+            section_id=section_id,
+            topic_id=topic_id,
         )
 
 
@@ -865,6 +920,66 @@ def _parse_launcher(text: str) -> str:
 
 
 @frozen
+class ReleaseChannelSpec:
+    """One cohort's solution-release channel (issue #208).
+
+    Each channel is its own git repository (``path``) fed by a volatile
+    ``ledger`` (in the course source repo). ``remote_path`` overrides the
+    parent ``<release-channels>`` default for remote-URL derivation, mirroring
+    :class:`OutputTargetSpec.remote_path`.
+    """
+
+    name: str
+    path: str
+    ledger: str
+    remote_path: str = ""
+
+    @classmethod
+    def from_element(
+        cls, element: ETree.Element, *, default_remote_path: str = ""
+    ) -> "ReleaseChannelSpec":
+        return cls(
+            name=element.get("name", ""),
+            path=element.get("path", ""),
+            ledger=element.get("ledger", ""),
+            remote_path=(element_text(element, "remote-path") or default_remote_path),
+        )
+
+
+@frozen
+class ReleaseChannelsSpec:
+    """The ``<release-channels>`` block: per-cohort solution-release channels.
+
+    ``source_target`` names the ``completed``-kind ``<output-target>`` that is
+    the frozen source. ``remote_path`` is the default remote path for channels
+    that do not override it.
+    """
+
+    source_target: str
+    channels: list[ReleaseChannelSpec] = field(factory=list)
+    remote_path: str = ""
+
+    @classmethod
+    def from_element(cls, element: ETree.Element) -> "ReleaseChannelsSpec":
+        remote_path = element_text(element, "remote-path") or ""
+        channels = [
+            ReleaseChannelSpec.from_element(ch, default_remote_path=remote_path)
+            for ch in element.findall("channel")
+        ]
+        return cls(
+            source_target=element.get("source-target", ""),
+            channels=channels,
+            remote_path=remote_path,
+        )
+
+    def channel(self, name: str) -> "ReleaseChannelSpec | None":
+        for channel in self.channels:
+            if channel.name == name:
+                return channel
+        return None
+
+
+@frozen
 class CourseSpec:
     name: Text
     prog_lang: str
@@ -875,6 +990,7 @@ class CourseSpec:
     github: GitHubSpec = field(factory=GitHubSpec)
     dictionaries: list[DirGroupSpec] = field(factory=list)
     output_targets: list[OutputTargetSpec] = field(factory=list)
+    release_channels: "ReleaseChannelsSpec | None" = None
     image_options: ImageOptionsSpec = field(factory=ImageOptionsSpec)
     jupyterlite: JupyterLiteConfig | None = None
     author: str = "Dr. Matthias Hölzl"
@@ -1084,6 +1200,12 @@ class CourseSpec:
         dir_groups: list[DirGroupSpec] = []
         # Topic-scoped dir-groups, respecting section enablement so that
         # disabled sections do not leak their dir-groups into the build output.
+        # We walk topic elements explicitly (rather than the flat
+        # ``topics/topic/dir-group`` path) so each dir-group can record its
+        # owning section/topic id (issue #208). Collection order and contents
+        # are unchanged: topics in document order, dir-groups within each topic
+        # in document order. Topic-id extraction mirrors :meth:`parse_sections`
+        # (attribute ``id`` or element text).
         for section_elem in root.findall("sections/section"):
             enabled_attr = section_elem.attrib.get("enabled")
             if (
@@ -1092,8 +1214,17 @@ class CourseSpec:
                 and not keep_disabled
             ):
                 continue
-            for dg in section_elem.iterfind("topics/topic/dir-group"):
-                dir_groups.append(DirGroupSpec.from_element(dg))
+            section_id = section_elem.attrib.get("id") or None
+            for topic_elem in section_elem.findall("topics/topic"):
+                topic_id = (
+                    (topic_elem.attrib.get("id") or "").strip()
+                    or (topic_elem.text or "").strip()
+                    or None
+                )
+                for dg in topic_elem.findall("dir-group"):
+                    dir_groups.append(
+                        DirGroupSpec.from_element(dg, section_id=section_id, topic_id=topic_id)
+                    )
         # Top-level course-scoped dir-groups come after topic-scoped ones,
         # matching the previous document-order traversal from root.iter().
         top = root.find("dir-groups")
@@ -1115,6 +1246,18 @@ class CourseSpec:
             targets.append(target)
 
         return targets
+
+    @staticmethod
+    def parse_release_channels(root: ETree.Element) -> "ReleaseChannelsSpec | None":
+        """Parse the optional <release-channels> element (issue #208).
+
+        Returns ``None`` when the element is absent, in which case the solution-
+        release feature is dormant and all other behavior is unchanged.
+        """
+        elem = root.find("release-channels")
+        if elem is None:
+            return None
+        return ReleaseChannelsSpec.from_element(elem)
 
     def resolve_section_selectors(self, tokens: list[str]) -> SectionSelection:
         """Resolve a list of ``--only-sections`` selector tokens.
@@ -1464,6 +1607,7 @@ class CourseSpec:
             github=github_spec,
             dictionaries=cls.parse_dir_groups(root, keep_disabled=keep_disabled),
             output_targets=cls.parse_output_targets(root),
+            release_channels=cls.parse_release_channels(root),
             image_options=ImageOptionsSpec.from_element(root.find("image-options")),
             jupyterlite=JupyterLiteConfig.from_element(root.find("jupyterlite")),
             author=author,

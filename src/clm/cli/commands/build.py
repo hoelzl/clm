@@ -131,6 +131,22 @@ def _resolve_fail_on_missing_xref(cli_value: bool | None, resolved_http_replay_m
     return resolved_http_replay_mode == "replay"
 
 
+def _resolve_write_provenance_manifest(
+    *, requested: bool, is_snapshot: bool, verify_against_dir: Path | None
+) -> bool:
+    """Whether this build should write the ``.clm-manifest.json`` provenance index.
+
+    ``requested`` is the resolved ``--provenance-manifest/--no-provenance-manifest``
+    value (on by default since issue #208 step 3d). It is always suppressed for
+    ``--snapshot`` and ``--verify-against`` builds: the manifest embeds a build
+    timestamp and source commit, so it is intentionally non-deterministic and
+    must never enter a byte-reproducibility baseline. ``--strict-verify`` skips
+    nothing, so a verifier skip-list cannot save it — the only correct place to
+    drop it is here, before the build runs.
+    """
+    return requested and not is_snapshot and verify_against_dir is None
+
+
 def _build_has_docker_notebook_worker(worker_config: object | None) -> bool:
     """True when this build will start a Docker-mode **notebook** worker.
 
@@ -387,6 +403,43 @@ class BuildConfig:
     # ``CLM_FAIL_ON_MISSING_XREF`` / the replay-mode default, mirroring
     # ``fail_on_error`` (issue #90).
     fail_on_missing_xref: bool = False
+
+    # Emit a ``.clm-manifest.json`` provenance index per output root after a
+    # successful (non-watch) build (issue #208). On by default since step 3d:
+    # ``clm git`` now excludes (and self-heals) the manifest from every
+    # distributed output/cohort repo, so the per-topic release workflow gets
+    # the manifest without an opt-in flag. ``--no-provenance-manifest`` opts
+    # out. The manifest is suppressed for ``--snapshot`` / ``--verify-against``
+    # builds at the entry point — it embeds a build timestamp and source commit,
+    # so it must never enter a byte-reproducibility baseline.
+    write_provenance_manifest: bool = True
+
+
+def _should_emit_provenance_manifest(summary: BuildSummary | None, config: BuildConfig) -> bool:
+    """Whether to write the ``.clm-manifest.json`` after a finished build.
+
+    Beyond the resolved request flag (``config.write_provenance_manifest``), the
+    manifest is written only for a **complete, successful, whole-course** build —
+    mirroring the post-build sweep's conservative skips, because the manifest is a
+    full overwrite of the prior index:
+
+    - ``--watch``: long-running rebuilds populate only the changed file.
+    - ``--only-sections``: a section selection would overwrite the full manifest
+      with a partial index that silently drops every unselected section's
+      provenance (the release engine's join key). The sweep skips this mode for
+      the same cross-section-damage reason.
+    - errored / timed-out builds: the output tree is incomplete, so the hashed
+      manifest would claim clean provenance over output the build reported broken.
+      (The non-zero exit happens later, in the ``build`` entry point.)
+    """
+    return (
+        summary is not None
+        and config.write_provenance_manifest
+        and not config.watch
+        and config.resolved_section_selection is None
+        and not summary.errors
+        and not summary.timed_out
+    )
 
 
 def create_output_formatter(config: BuildConfig) -> OutputFormatter:
@@ -1421,6 +1474,7 @@ async def main_build(
     image_format,
     inline_images,
     fail_on_missing_xref=False,
+    provenance_manifest=True,
 ) -> BuildSummary | None:
     """Main orchestration function for course building.
 
@@ -1534,6 +1588,7 @@ async def main_build(
         sweep=effective_sweep,
         selected_sections=selected_sections,
         fail_on_missing_xref=fail_on_missing_xref,
+        write_provenance_manifest=provenance_manifest,
     )
 
     # Create output formatter early to show startup messages
@@ -1632,6 +1687,33 @@ async def main_build(
                 )
             except Exception as e:
                 logger.error(f"Failed to merge mitmproxy cassettes: {e}", exc_info=True)
+
+    # Provenance manifests: one .clm-manifest.json per output root (issue #208).
+    # On by default since step 3d (and suppressed for --snapshot / --verify-against
+    # at the entry point). Only written for a complete, successful, whole-course
+    # build — see _should_emit_provenance_manifest, which mirrors the post-build
+    # sweep's conservative skips. Capturing the source commit and writing the
+    # manifest must never fail an otherwise successful build, so any error here is
+    # logged and swallowed.
+    if _should_emit_provenance_manifest(summary, config):
+        from datetime import datetime, timezone
+
+        from clm.core.git_info import get_git_info
+        from clm.core.provenance_manifest import write_provenance_manifests
+
+        try:
+            git = get_git_info(course.course_root)
+            written = write_provenance_manifests(
+                course,
+                source_commit=git["commit"],
+                source_dirty=git["dirty"],
+                built_at=datetime.now(timezone.utc).isoformat(),
+                spec_name=config.spec_file.name,
+            )
+            if written:
+                logger.info("Wrote %d provenance manifest(s)", len(written))
+        except Exception as e:
+            logger.warning("Failed to write provenance manifest(s): %s", e, exc_info=True)
 
     return summary
 
@@ -1927,6 +2009,18 @@ async def main_build(
     is_flag=True,
     help="Disable automatic .env file loading.",
 )
+@click.option(
+    "--provenance-manifest/--no-provenance-manifest",
+    default=True,
+    help=(
+        "Write a .clm-manifest.json provenance index into each output root "
+        "after a successful build, mapping every output file to its source "
+        "commit and owning section/topic (issue #208). On by default; "
+        "`clm git` excludes it from distributed repos. Pass "
+        "--no-provenance-manifest to skip it. Always suppressed under "
+        "--snapshot / --verify-against (it embeds a timestamp + commit)."
+    ),
+)
 @click.pass_context
 def build(
     ctx,
@@ -1970,6 +2064,7 @@ def build(
     inline_images,
     env_file,
     no_env_file,
+    provenance_manifest,
 ):
     """Build a course from a spec file."""
     # ------------------------------------------------------------------
@@ -2056,6 +2151,12 @@ def build(
         fail_on_missing_xref, resolved_http_replay_mode
     )
 
+    effective_provenance_manifest = _resolve_write_provenance_manifest(
+        requested=provenance_manifest,
+        is_snapshot=is_snapshot,
+        verify_against_dir=verify_against_dir,
+    )
+
     summary = asyncio.run(
         main_build(
             ctx,
@@ -2094,6 +2195,7 @@ def build(
             image_format,
             inline_images,
             resolved_fail_on_missing_xref,
+            effective_provenance_manifest,
         )
     )
 

@@ -1047,6 +1047,70 @@ class TestParseDirGroupsDisabledSections:
             "examples/disabled",
         ]
 
+    def test_topic_scoped_dir_group_records_section_and_topic_ownership(self):
+        """A topic-scoped dir-group records its owning (section_id, topic_id);
+        a global dir-group records neither (issue #208)."""
+        xml = """
+        <course>
+            <sections>
+                <section id="w01">
+                    <name><de>W1</de><en>W1</en></name>
+                    <topics>
+                        <topic id="intro">
+                            <dir-group>
+                                <name>Examples</name>
+                                <path>examples</path>
+                            </dir-group>
+                        </topic>
+                    </topics>
+                </section>
+            </sections>
+            <dir-groups>
+                <dir-group>
+                    <name>Bonus</name>
+                    <path>bonus</path>
+                </dir-group>
+            </dir-groups>
+        </course>
+        """
+        groups = self._parse(xml)
+        owned = [g for g in groups if g.topic_id is not None]
+        global_groups = [g for g in groups if g.topic_id is None]
+
+        assert [g.path for g in owned] == ["examples"]
+        assert owned[0].section_id == "w01"
+        assert owned[0].topic_id == "intro"
+
+        assert [g.path for g in global_groups] == ["bonus"]
+        assert global_groups[0].section_id is None
+        assert global_groups[0].topic_id is None
+
+    def test_topic_scoped_dir_group_topic_id_from_text_content(self):
+        """Topic id given as element text (not an attribute) is captured too,
+        matching parse_sections; the section here has no id, so section_id is
+        None."""
+        xml = """
+        <course>
+            <sections>
+                <section>
+                    <name><de>W1</de><en>W1</en></name>
+                    <topics>
+                        <topic>some_topic
+                            <dir-group>
+                                <name>X</name>
+                                <path>x</path>
+                            </dir-group>
+                        </topic>
+                    </topics>
+                </section>
+            </sections>
+        </course>
+        """
+        groups = self._parse(xml)
+        assert len(groups) == 1
+        assert groups[0].topic_id == "some_topic"
+        assert groups[0].section_id is None
+
 
 def test_parse_dir_group_with_include_root_files():
     """Test parsing include-root-files attribute on dir-group."""

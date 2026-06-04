@@ -31,6 +31,8 @@ from clm.cli.commands.build import (
     _report_loading_issues,
     _resolve_fail_on_missing_xref,
     _resolve_http_replay_mode,
+    _resolve_write_provenance_manifest,
+    _should_emit_provenance_manifest,
     configure_workers,
     create_output_formatter,
     enable_jupyterlite_workers_if_needed,
@@ -1423,6 +1425,141 @@ class TestResolveFailOnMissingXref:
         monkeypatch.setenv("CLM_FAIL_ON_MISSING_XREF", "maybe")
         with pytest.raises(click.UsageError):
             _resolve_fail_on_missing_xref(None, "replay")
+
+
+class TestResolveWriteProvenanceManifest:
+    """The manifest is on by default (issue #208 step 3d) but always suppressed
+    for --snapshot / --verify-against builds (its timestamp/commit would break
+    byte-comparison, which --strict-verify cannot skip)."""
+
+    def test_default_request_writes(self) -> None:
+        assert (
+            _resolve_write_provenance_manifest(
+                requested=True, is_snapshot=False, verify_against_dir=None
+            )
+            is True
+        )
+
+    def test_opt_out_request_does_not_write(self) -> None:
+        assert (
+            _resolve_write_provenance_manifest(
+                requested=False, is_snapshot=False, verify_against_dir=None
+            )
+            is False
+        )
+
+    def test_snapshot_suppresses_even_when_requested(self) -> None:
+        assert (
+            _resolve_write_provenance_manifest(
+                requested=True, is_snapshot=True, verify_against_dir=None
+            )
+            is False
+        )
+
+    def test_verify_suppresses_even_when_requested(self) -> None:
+        assert (
+            _resolve_write_provenance_manifest(
+                requested=True, is_snapshot=False, verify_against_dir=Path("baseline")
+            )
+            is False
+        )
+
+    def test_opt_out_stays_off_under_snapshot(self) -> None:
+        assert (
+            _resolve_write_provenance_manifest(
+                requested=False, is_snapshot=True, verify_against_dir=None
+            )
+            is False
+        )
+
+
+class TestProvenanceManifestWiring:
+    """The resolved flag flows into ``main_build`` as its last positional arg —
+    on for a normal build, off under --no-provenance-manifest and --snapshot."""
+
+    def _captured_provenance(self, monkeypatch: pytest.MonkeyPatch, args, tmp_path: Path):
+        captured: dict = {}
+
+        async def fake_main_build(*a, **k):
+            captured["provenance"] = a[-1]
+            return SimpleNamespace(timed_out=False, errors=[])
+
+        monkeypatch.setattr(build_module, "main_build", fake_main_build)
+        result = _invoke_build(args, tmp_path=tmp_path)
+        assert result.exit_code == 0, result.output
+        return captured["provenance"]
+
+    def test_default_build_requests_manifest(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        spec = _write_spec(tmp_path / "course.xml", with_targets=False)
+        assert self._captured_provenance(monkeypatch, [str(spec)], tmp_path) is True
+
+    def test_no_provenance_flag_opts_out(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        spec = _write_spec(tmp_path / "course.xml", with_targets=False)
+        assert (
+            self._captured_provenance(
+                monkeypatch, [str(spec), "--no-provenance-manifest"], tmp_path
+            )
+            is False
+        )
+
+    def test_snapshot_suppresses_manifest(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        spec = _write_spec(tmp_path / "course.xml", with_targets=False)
+        snapshot = tmp_path / "snap"
+        assert (
+            self._captured_provenance(
+                monkeypatch, [str(spec), "--snapshot", str(snapshot)], tmp_path
+            )
+            is False
+        )
+
+
+class TestShouldEmitProvenanceManifest:
+    """The post-build write decision: only a complete, successful, whole-course
+    build emits the manifest (it is a full overwrite of the prior index). Guards
+    against silently corrupting the release join key with a partial/incomplete
+    manifest (issue #208 step 3d review)."""
+
+    @staticmethod
+    def _summary(*, errors=None, timed_out: bool = False):
+        return SimpleNamespace(errors=errors or [], timed_out=timed_out)
+
+    def test_normal_complete_build_emits(self) -> None:
+        config = _make_config(write_provenance_manifest=True)
+        assert _should_emit_provenance_manifest(self._summary(), config) is True
+
+    def test_no_summary_does_not_emit(self) -> None:
+        config = _make_config(write_provenance_manifest=True)
+        assert _should_emit_provenance_manifest(None, config) is False
+
+    def test_flag_off_does_not_emit(self) -> None:
+        config = _make_config(write_provenance_manifest=False)
+        assert _should_emit_provenance_manifest(self._summary(), config) is False
+
+    def test_watch_does_not_emit(self) -> None:
+        config = _make_config(write_provenance_manifest=True, watch=True)
+        assert _should_emit_provenance_manifest(self._summary(), config) is False
+
+    def test_only_sections_does_not_emit(self) -> None:
+        # A section selection would overwrite the full manifest with a partial
+        # one, dropping every unselected section's provenance.
+        config = _make_config(
+            write_provenance_manifest=True, resolved_section_selection=MagicMock()
+        )
+        assert _should_emit_provenance_manifest(self._summary(), config) is False
+
+    def test_errored_build_does_not_emit(self) -> None:
+        config = _make_config(write_provenance_manifest=True)
+        assert _should_emit_provenance_manifest(self._summary(errors=["boom"]), config) is False
+
+    def test_timed_out_build_does_not_emit(self) -> None:
+        config = _make_config(write_provenance_manifest=True)
+        assert _should_emit_provenance_manifest(self._summary(timed_out=True), config) is False
 
 
 # ---------------------------------------------------------------------------

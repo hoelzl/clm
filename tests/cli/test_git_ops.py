@@ -1386,7 +1386,7 @@ class TestSyncAmendAndForce:
             with (
                 patch("clm.cli.commands.git_ops.run_git") as mock_run,
                 patch(
-                    "clm.cli.commands.git_ops.has_uncommitted_changes",
+                    "clm.cli.commands.git_ops.has_staged_changes",
                     return_value=True,
                 ),
                 patch("clm.cli.commands.git_ops.is_behind_remote") as mock_behind,

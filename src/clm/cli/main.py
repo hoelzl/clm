@@ -89,6 +89,7 @@ from clm.cli.commands.language_view import language_view_cmd  # noqa: E402
 from clm.cli.commands.monitoring import monitor, serve  # noqa: E402
 from clm.cli.commands.normalize_slides import normalize_slides_cmd  # noqa: E402
 from clm.cli.commands.outline import outline  # noqa: E402
+from clm.cli.commands.release import release_group  # noqa: E402
 from clm.cli.commands.resolve_topic import resolve_topic_cmd  # noqa: E402
 from clm.cli.commands.search_slides import search_slides_cmd  # noqa: E402
 from clm.cli.commands.slides_sync import slides_sync_cmd  # noqa: E402
@@ -183,6 +184,7 @@ cli.add_command(db)
 cli.add_command(docker_group)
 cli.add_command(jobs_group)
 cli.add_command(git_group)
+cli.add_command(release_group)
 cli.add_command(workers_group)
 cli.add_command(zip_group)
 

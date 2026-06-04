@@ -25,6 +25,10 @@ class DirGroup:
     course: "Course"
     base_path: Path | None = None
     recursive: bool = True
+    # The spec this dir-group was built from, retained so the build/release
+    # tooling can read its (section_id, topic_id) ownership (issue #208).
+    # ``None`` only for dir-groups constructed without a spec.
+    spec: DirGroupSpec | None = None
 
     @classmethod
     def from_spec(cls, spec: DirGroupSpec, course: "Course") -> "DirGroup":
@@ -53,6 +57,7 @@ class DirGroup:
             course=course,
             base_path=base_path,
             recursive=spec.recursive,
+            spec=spec,
         )
 
     @property

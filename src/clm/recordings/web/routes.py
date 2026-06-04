@@ -184,6 +184,28 @@ def _scan_active_take_for_panel(
     )
 
 
+def _build_deck_provenance(request: Request, section_name: str, deck_name: str, lang: str):
+    """Assemble slide-version/git provenance for the deck being armed (issue #208).
+
+    Reads the built ``Course`` and spec file from app state — both present
+    only when the dashboard was launched with ``--spec-file``. Returns
+    ``None`` (no provenance) when no course is configured. Best-effort: the
+    assembler itself never raises, but the whole step is also wrapped so a
+    provenance failure can never block an arm/record action.
+    """
+    course = getattr(request.app.state, "course", None)
+    spec_file = getattr(request.app.state, "spec_file", None)
+    if course is None and spec_file is None:
+        return None
+    try:
+        from clm.recordings.record_provenance import build_record_provenance
+
+        return build_record_provenance(course, spec_file, section_name, deck_name, lang)
+    except Exception as exc:  # pragma: no cover — defensive; assembler is total
+        logger.warning("Could not assemble recording provenance: {}", exc)
+        return None
+
+
 def _get_or_load_course_state(request: Request, course_slug: str) -> CourseRecordingState:
     """Return the cached :class:`CourseRecordingState` for *course_slug*.
 
@@ -341,6 +363,7 @@ async def arm_deck(
     lecture_id = _resolve_lecture_id(section_name, deck_name)
     state = _get_or_load_course_state(request, course_slug)
     state.ensure_lecture(lecture_id, deck_name)
+    provenance = _build_deck_provenance(request, section_name, deck_name, lang)
     try:
         session.arm(
             course_slug,
@@ -349,6 +372,7 @@ async def arm_deck(
             part_number=part_number,
             lang=lang,
             lecture_id=lecture_id,
+            provenance=provenance,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -394,6 +418,7 @@ async def record_deck(
     lecture_id = _resolve_lecture_id(section_name, deck_name)
     state = _get_or_load_course_state(request, course_slug)
     state.ensure_lecture(lecture_id, deck_name)
+    provenance = _build_deck_provenance(request, section_name, deck_name, lang)
     try:
         session.record(
             course_slug,
@@ -402,6 +427,7 @@ async def record_deck(
             part_number=part_number,
             lang=lang,
             lecture_id=lecture_id,
+            provenance=provenance,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

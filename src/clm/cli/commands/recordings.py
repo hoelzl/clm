@@ -294,6 +294,166 @@ def status(course_id: str):
 
 
 @recordings_group.command()
+@click.argument("course_id")
+@click.option(
+    "--source",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    default=None,
+    help="Built output root containing .clm-manifest.json (overrides the spec's "
+    "default output/ location).",
+)
+@click.option(
+    "--manifest",
+    "manifest_path",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="Path to a specific .clm-manifest.json (overrides --source and the spec).",
+)
+@click.option(
+    "--spec-file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="Course spec XML; its default output/ root is searched for the manifest "
+    "when --source/--manifest are not given (falls back to the recordings config).",
+)
+@click.option(
+    "--all",
+    "show_all",
+    is_flag=True,
+    help="Show every recorded part, not just the ones whose slides changed.",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
+def drift(
+    course_id: str,
+    source: Path | None,
+    manifest_path: Path | None,
+    spec_file: Path | None,
+    show_all: bool,
+    as_json: bool,
+):
+    """Report which recordings are stale after slide edits.
+
+    Compares each recorded part's stamped slide digest (issue #208) against
+    the topic's current digest in the build provenance manifest. A part reads
+    ``changed`` when its topic's built output differs from when it was
+    recorded, ``current`` when it matches, and ``unknown`` when it predates
+    provenance stamping or its topic is absent from the manifest.
+
+    The manifest is resolved in priority order: ``--manifest`` > ``--source``
+    > ``--spec-file``'s default ``output/`` root > the ``spec_file`` of the
+    matching ``recordings.courses`` config entry.
+    """
+    import json as _json
+
+    from clm.core.provenance_manifest import load_manifest
+    from clm.recordings.provenance import course_recording_drift
+    from clm.recordings.state import load_state
+
+    state = load_state(course_id)
+    if state is None:
+        console.print(f"[yellow]No recording state found for course '{course_id}'.[/yellow]")
+        raise SystemExit(1)
+
+    resolved_manifest = _resolve_drift_manifest(
+        course_id=course_id,
+        source=source,
+        manifest_path=manifest_path,
+        spec_file=spec_file,
+    )
+    if resolved_manifest is None:
+        console.print(
+            "[yellow]No provenance manifest found.[/yellow] Build the course "
+            "(writes .clm-manifest.json by default) or pass --source/--manifest/"
+            "--spec-file."
+        )
+        raise SystemExit(1)
+
+    manifest = load_manifest(resolved_manifest)
+    drifts = course_recording_drift(state, manifest, stale_only=not show_all)
+
+    if as_json:
+        payload = [
+            {
+                "lecture_id": d.lecture_id,
+                "part": d.part,
+                "topic_id": d.drift.topic_id,
+                "status": d.drift.status,
+                "recorded_digest": d.drift.recorded_digest,
+                "current_digest": d.drift.current_digest,
+            }
+            for d in drifts
+        ]
+        console.print_json(_json.dumps({"course_id": course_id, "drift": payload}))
+        return
+
+    if not drifts:
+        msg = "All recorded parts are up to date." if not show_all else "No recorded parts."
+        console.print(f"[green]{msg}[/green] (manifest: {resolved_manifest})")
+        return
+
+    _status_style = {"changed": "red", "current": "green", "unknown": "yellow"}
+    table = Table(title=f"Recording slide drift — {course_id}")
+    table.add_column("Lecture", style="cyan")
+    table.add_column("Part", style="dim", justify="right")
+    table.add_column("Topic")
+    table.add_column("Status")
+    for d in drifts:
+        style = _status_style.get(d.drift.status, "white")
+        table.add_row(
+            d.lecture_id,
+            str(d.part),
+            d.drift.topic_id or "[dim]—[/dim]",
+            f"[{style}]{d.drift.status}[/{style}]",
+        )
+    console.print(table)
+    console.print(f"[dim]manifest: {resolved_manifest}[/dim]")
+    if not show_all:
+        console.print("[dim]Showing changed parts only; pass --all to see every part.[/dim]")
+
+
+def _resolve_drift_manifest(
+    *,
+    course_id: str,
+    source: Path | None,
+    manifest_path: Path | None,
+    spec_file: Path | None,
+) -> Path | None:
+    """Resolve the manifest path for ``recordings drift`` by priority.
+
+    ``--manifest`` > ``--source`` > ``--spec-file`` > the spec of the matching
+    ``recordings.courses`` config entry. Returns ``None`` when nothing
+    resolves to an on-disk ``.clm-manifest.json``.
+    """
+    from clm.core.provenance_manifest import find_course_manifest_path
+
+    if manifest_path is not None:
+        return manifest_path
+    if source is not None:
+        return find_course_manifest_path(output_root=source)
+    if spec_file is not None:
+        return find_course_manifest_path(spec_file)
+
+    # Fall back to the configured spec for this course id.
+    configured_spec = _configured_spec_for_course(course_id)
+    if configured_spec is not None:
+        return find_course_manifest_path(configured_spec)
+    return None
+
+
+def _configured_spec_for_course(course_id: str) -> Path | None:
+    """Return the ``spec_file`` for *course_id* from the recordings config, if set."""
+    try:
+        from clm.infrastructure.config import get_config
+
+        for course in get_config().recordings.courses:
+            if course.id == course_id and course.spec_file:
+                return Path(course.spec_file)
+    except Exception:  # pragma: no cover — defensive
+        return None
+    return None
+
+
+@recordings_group.command()
 @click.argument(
     "version_a",
     type=click.Path(exists=True, path_type=Path),
