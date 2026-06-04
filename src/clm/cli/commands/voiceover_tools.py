@@ -51,6 +51,14 @@ from clm.slides.voiceover_tools import (
     help="Preview changes without modifying files.",
 )
 @click.option(
+    "--layout",
+    type=click.Choice(["subdir", "sibling"]),
+    default=None,
+    help="Where to write the companion: 'subdir' creates/uses a voiceover/ "
+    "folder; 'sibling' writes next to the slide. Default: auto-detect an "
+    "existing voiceover/ folder, else sibling.",
+)
+@click.option(
     "--json",
     "as_json",
     is_flag=True,
@@ -62,6 +70,7 @@ def extract_voiceover_cmd(
     both: bool,
     single: bool,
     dry_run: bool,
+    layout: str | None,
     as_json: bool,
 ):
     """Extract voiceover cells from a slide file to a companion file.
@@ -99,11 +108,13 @@ def extract_voiceover_cmd(
 
     try:
         if pair is not None:
-            paired = extract_voiceover_pair(pair[0], pair[1], force=force, dry_run=dry_run)
+            paired = extract_voiceover_pair(
+                pair[0], pair[1], force=force, dry_run=dry_run, layout=layout
+            )
             payload = _paired_extraction_to_dict(paired)
             summary = paired.summary
         else:
-            result = extract_voiceover(path, force=force, dry_run=dry_run)
+            result = extract_voiceover(path, force=force, dry_run=dry_run, layout=layout)
             payload = _extraction_to_dict(result)
             summary = result.summary
     except VoiceoverError as e:

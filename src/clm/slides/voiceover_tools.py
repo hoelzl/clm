@@ -210,6 +210,26 @@ def companion_path(slide_path: Path) -> Path:
     return slide_path.with_name(companion_name(slide_path))
 
 
+def companion_locations(slide_path: Path) -> list[Path]:
+    """Return every *existing* companion path for a slide, in read-precedence
+    order (the ``voiceover/`` subdir before the sibling).
+
+    Normally length 0 or 1. Length ≥ 2 means the same companion exists in *both*
+    the relocated subdir and as a sibling — an ambiguity where
+    :func:`resolve_companion` silently prefers the relocated copy. ``clm
+    validate`` surfaces that case so it can be reconciled.
+    """
+    name = companion_name(slide_path)
+    out: list[Path] = []
+    nested = slide_path.parent / COMPANION_SUBDIR / name
+    if nested.exists():
+        out.append(nested)
+    sibling = slide_path.with_name(name)
+    if sibling.exists():
+        out.append(sibling)
+    return out
+
+
 def resolve_companion(slide_path: Path) -> Path | None:
     """Return the *existing* companion for a slide file, or ``None``.
 
@@ -221,14 +241,51 @@ def resolve_companion(slide_path: Path) -> Path | None:
     as ``cassettes/`` is for cassettes. When a companion exists in *both*
     locations the relocated one wins.
     """
+    locations = companion_locations(slide_path)
+    return locations[0] if locations else None
+
+
+def expected_companion(slide_path: Path, *, layout: str | None = None) -> Path:
+    """Return the *write target* path for a slide's companion.
+
+    Where a newly-created companion (``extract``, ``sync``, ``split``) should be
+    written. Resolution:
+
+    - ``layout="subdir"``: ``<topic>/voiceover/<name>`` (the dir is created by
+      the caller on write).
+    - ``layout="sibling"``: ``<topic>/<name>`` (next to the slide).
+    - ``layout=None`` (auto): ``<topic>/voiceover/<name>`` when that directory
+      already exists, else the sibling — the same directory-presence
+      auto-detection ``NotebookFile.expected_cassette_path`` uses for cassettes.
+
+    Reads do not consult this — they use :func:`resolve_companion`, which finds
+    the companion in either layout regardless of the write target.
+    """
     name = companion_name(slide_path)
-    nested = slide_path.parent / COMPANION_SUBDIR / name
-    if nested.exists():
-        return nested
-    sibling = slide_path.with_name(name)
-    if sibling.exists():
-        return sibling
-    return None
+    parent = slide_path.parent
+    if layout == "subdir":
+        return parent / COMPANION_SUBDIR / name
+    if layout == "sibling":
+        return parent / name
+    if (parent / COMPANION_SUBDIR).is_dir():
+        return parent / COMPANION_SUBDIR / name
+    return parent / name
+
+
+def _prune_other_companions(slide_path: Path, keep: Path) -> list[Path]:
+    """Delete every existing companion for ``slide_path`` except ``keep``.
+
+    Run after a forced ``extract`` rewrite so relocating a companion (e.g. into
+    ``voiceover/``) does not strand a stale copy in the other location, which
+    :func:`resolve_companion` would then shadow. Returns the removed paths.
+    """
+    removed: list[Path] = []
+    keep = keep.resolve()
+    for loc in companion_locations(slide_path):
+        if loc.resolve() != keep:
+            loc.unlink()
+            removed.append(loc)
+    return removed
 
 
 # ---------------------------------------------------------------------------
@@ -482,7 +539,7 @@ def _slide_ids_in_parity(de_path: Path, en_path: Path) -> bool:
 
 
 def _plan_extraction(
-    path: Path, *, dry_run: bool
+    path: Path, *, dry_run: bool, layout: str | None = None
 ) -> tuple[ExtractionResult, list[tuple[Path, str]]]:
     """Compute the extraction result and the ``(path, text)`` writes WITHOUT
     writing anything.
@@ -493,8 +550,12 @@ def _plan_extraction(
     check and the actual commit (via :func:`atomic_write_all`), so the paired
     path can guard *both* companions up front and write all four files in one
     atomic batch.
+
+    ``layout`` selects the companion write target (see
+    :func:`expected_companion`): ``"subdir"`` / ``"sibling"`` force a location,
+    ``None`` auto-detects an existing ``voiceover/`` directory.
     """
-    comp = companion_path(path)
+    comp = expected_companion(path, layout=layout)
     result = ExtractionResult(
         slide_file=str(path),
         companion_file=str(comp),
@@ -555,6 +616,7 @@ def extract_voiceover(
     *,
     force: bool = False,
     dry_run: bool = False,
+    layout: str | None = None,
 ) -> ExtractionResult:
     """Extract voiceover cells from a slide file to a companion file.
 
@@ -569,15 +631,19 @@ def extract_voiceover(
     :func:`extract_voiceover_pair`.
 
     The companion is *rebuilt* from the voiceover cells currently in the slide
-    file. If a companion already exists it would be overwritten, discarding any
-    hand-edits (or previously-extracted cells) that live only in the companion —
-    so, like ``split_in_file``, this refuses without ``force``.
+    file. If a companion already exists (in **either** the ``voiceover/`` subdir
+    or as a sibling) it would be overwritten, discarding any hand-edits (or
+    previously-extracted cells) that live only in the companion — so, like
+    ``split_in_file``, this refuses without ``force``.
 
     Args:
         path: Path to the ``.py`` slide file.
         force: Overwrite an existing companion file. Without it, an existing
             companion raises :class:`VoiceoverError` rather than clobbering it.
         dry_run: If ``True``, preview without writing files.
+        layout: Where to write the companion — ``"subdir"`` (``voiceover/``),
+            ``"sibling"``, or ``None`` to auto-detect an existing ``voiceover/``
+            directory (see :func:`expected_companion`).
 
     Returns:
         An :class:`ExtractionResult` describing what was done.
@@ -585,20 +651,26 @@ def extract_voiceover(
     Raises:
         VoiceoverError: a companion already exists and ``force`` is not set.
     """
-    result, writes = _plan_extraction(path, dry_run=dry_run)
+    result, writes = _plan_extraction(path, dry_run=dry_run, layout=layout)
     if writes:
         # Refuse to clobber an existing companion *before* any write — otherwise
         # the slide rewrite would strip voiceover and leave no companion (data
-        # loss). ``force`` opts into the rebuild. The two writes commit together.
-        comp = companion_path(path)
-        if comp.exists() and not force:
+        # loss). The guard spans *both* layouts (``resolve_companion``) so a
+        # relocate-on-extract never silently discards a companion in the other
+        # location. ``force`` opts into the rebuild. The two writes commit
+        # together; a forced relocation then prunes the stale other-location copy.
+        existing = resolve_companion(path)
+        if existing is not None and not force:
             raise VoiceoverError(
-                f"refusing to overwrite existing companion '{comp.name}' "
+                f"refusing to overwrite existing companion '{existing.name}' "
                 f"(pass force=True / --force to rebuild it from the current "
                 f"voiceover cells; this discards content present only in the "
                 f"companion)"
             )
+        target = expected_companion(path, layout=layout)
+        target.parent.mkdir(parents=True, exist_ok=True)
         atomic_write_all(writes)
+        _prune_other_companions(path, keep=target)
     return result
 
 
@@ -609,6 +681,7 @@ def extract_voiceover_pair(
     force: bool = False,
     dry_run: bool = False,
     mint_ids: bool = True,
+    layout: str | None = None,
 ) -> PairedExtractionResult:
     """Extract voiceover from *both* halves of a split deck in one op.
 
@@ -659,12 +732,12 @@ def extract_voiceover_pair(
             results=[
                 ExtractionResult(
                     slide_file=str(de_path),
-                    companion_file=str(companion_path(de_path)),
+                    companion_file=str(expected_companion(de_path, layout=layout)),
                     dry_run=dry_run,
                 ),
                 ExtractionResult(
                     slide_file=str(en_path),
-                    companion_file=str(companion_path(en_path)),
+                    companion_file=str(expected_companion(en_path, layout=layout)),
                     dry_run=dry_run,
                 ),
             ],
@@ -672,9 +745,9 @@ def extract_voiceover_pair(
         )
 
     # All-or-nothing companion guard, before any write (mirrors split_in_file):
-    # refuse if *either* companion exists and not force.
+    # refuse if *either* companion exists (in either layout) and not force.
     if not dry_run:
-        blockers = [c for c in (companion_path(de_path), companion_path(en_path)) if c.exists()]
+        blockers = [c for c in (resolve_companion(de_path), resolve_companion(en_path)) if c]
         if blockers and not force:
             names = ", ".join(f"'{b.name}'" for b in blockers)
             raise VoiceoverError(
@@ -711,11 +784,18 @@ def extract_voiceover_pair(
             f"mint_ids=True (the default) to mint EN-authority ids."
         )
 
-    de_result, de_writes = _plan_extraction(de_path, dry_run=dry_run)
-    en_result, en_writes = _plan_extraction(en_path, dry_run=dry_run)
+    de_result, de_writes = _plan_extraction(de_path, dry_run=dry_run, layout=layout)
+    en_result, en_writes = _plan_extraction(en_path, dry_run=dry_run, layout=layout)
     writes = [*de_writes, *en_writes]
     if writes:
+        de_target = expected_companion(de_path, layout=layout)
+        en_target = expected_companion(en_path, layout=layout)
+        de_target.parent.mkdir(parents=True, exist_ok=True)
+        en_target.parent.mkdir(parents=True, exist_ok=True)
         atomic_write_all(writes)
+        # Forced relocation prunes any stale companion left in the other layout.
+        _prune_other_companions(de_path, keep=de_target)
+        _prune_other_companions(en_path, keep=en_target)
 
     # On the paired path the EN-authority pre-mint owns id generation; the per-half
     # extract mints nothing in a real run (ids are already on disk). Report the
@@ -1117,6 +1197,11 @@ def inline_voiceover(
         else:
             comp.unlink()
             result.companion_deleted = True
+            # If the companion lived in a now-empty ``voiceover/`` subdir, remove
+            # the directory too so a fully-inlined topic returns to a clean tree.
+            parent = comp.parent
+            if parent.name == COMPANION_SUBDIR and not any(parent.iterdir()):
+                parent.rmdir()
 
     return result
 
@@ -1255,5 +1340,8 @@ def update_companion_narrative(
 
     existing_text = companion.read_text(encoding="utf-8") if companion.exists() else ""
     new_text = render_companion_update(existing_text, notes_by_slide_id, lang, tag=tag)
+    # Create the parent on first write so a fresh companion can land in a
+    # not-yet-existing ``voiceover/`` subdir (``sync --layout subdir``).
+    companion.parent.mkdir(parents=True, exist_ok=True)
     companion.write_text(new_text, encoding="utf-8", newline="\n")
     return companion
