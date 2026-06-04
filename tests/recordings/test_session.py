@@ -2733,29 +2733,94 @@ class TestSessionRestoreTake:
 # ---------------------------------------------------------------------------
 
 
+class _SessionStateRecorder:
+    """Event-driven waiter for session state, fed by ``on_state_change``.
+
+    The session calls its ``on_state_change`` callback (``RecordingSession.
+    _notify``) *outside the lock* immediately after every transition, on the
+    thread that made the transition. Attaching this recorder there lets
+    :meth:`wait_for` block on a ``Condition`` and wake the instant a transition
+    fires, instead of busy-polling.
+
+    Why this matters: the old helper spun ``while session.state != expected:
+    time.sleep(0.01)``. Under heavy xdist load that 100 Hz spin competes for
+    CPU with the very background thread (OBS event handler, retake ``Timer``,
+    watcher) it is waiting on — so the waited-for transition arrives *later*,
+    and the wait can hit its ceiling and flake. That self-inflicted contention
+    grows with the worker count, which is exactly why the pre-commit cap had
+    been pinned low. A ``Condition`` wait sleeps the waiter (zero CPU spin), so
+    the background thread runs unimpeded and we still wake immediately on the
+    transition. The predicate stays ``session.state == expected`` (current
+    state, not history) so repeated waits for a recurring state are correct.
+    """
+
+    def __init__(self, initial: SessionState) -> None:
+        self.cond = threading.Condition()
+        # Transition trail, for diagnostics in the timeout message only — never
+        # used as the wait predicate (that would break repeated waits for a
+        # state the session legitimately re-enters).
+        self.history: list[SessionState] = [initial]
+
+    def __call__(self, snapshot: SessionSnapshot) -> None:
+        with self.cond:
+            self.history.append(snapshot.state)
+            self.cond.notify_all()
+
+    def wait_for(self, session: RecordingSession, expected: SessionState, timeout: float) -> None:
+        import time
+
+        deadline = time.monotonic() + timeout
+        with self.cond:
+            while session.state != expected:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(
+                        f"Session did not reach {expected.value} within {timeout}s "
+                        f"(stuck at {session.state.value}; "
+                        f"transitions={[s.value for s in self.history]})"
+                    )
+                self.cond.wait(timeout=remaining)
+
+
+def _attach_state_recorder(session: RecordingSession) -> _SessionStateRecorder:
+    """Get-or-create the recorder wired into *session*'s ``on_state_change``.
+
+    Idempotent and cached on the session, so repeated ``_wait_for_state`` calls
+    share one waiter. Composes with any pre-existing callback (tests don't set
+    one today, but stay defensive) so the original still fires.
+    """
+    recorder = getattr(session, "_test_state_recorder", None)
+    if recorder is not None:
+        return recorder
+
+    recorder = _SessionStateRecorder(session.state)
+    previous = session._on_state_change
+    if previous is None:
+        session._on_state_change = recorder
+    else:
+
+        def _chained(snapshot: SessionSnapshot) -> None:
+            recorder(snapshot)
+            previous(snapshot)
+
+        session._on_state_change = _chained
+    session._test_state_recorder = recorder
+    return recorder
+
+
 def _wait_for_state(
     session: RecordingSession,
     expected: SessionState,
     timeout: float = 15.0,
 ) -> None:
-    """Block until the session reaches the expected state or timeout.
+    """Block until the session reaches *expected*, or raise after *timeout*.
 
-    Default timeout is generous to tolerate Windows scheduler jitter under
-    parallel xdist load; the poll loop exits immediately on match, so a fast
-    state transition still completes quickly.
+    Event-driven via :class:`_SessionStateRecorder` rather than a CPU-burning
+    busy-poll, so it stays reliable under heavy parallel load (see that class's
+    docstring). The generous default ``timeout`` is a backstop for a genuinely
+    stuck session; success returns the instant the state is reached.
     """
-    deadline = threading.Event()
-    deadline.wait(0)
-    import time
-
-    start = time.monotonic()
-    while session.state != expected:
-        if time.monotonic() - start > timeout:
-            raise TimeoutError(
-                f"Session did not reach {expected.value} within {timeout}s "
-                f"(stuck at {session.state.value})"
-            )
-        time.sleep(0.01)
+    _attach_state_recorder(session).wait_for(session, expected, timeout)
 
 
 # ---------------------------------------------------------------------------

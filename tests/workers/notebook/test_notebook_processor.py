@@ -1520,6 +1520,11 @@ class TestKernelCleanup:
         # Cleanup should have been called exactly once (success on first try)
         assert len(cleanup_calls) == 1
 
+    # Spawns a REAL ipykernel subprocess (~5s). Marked ``integration`` so it
+    # runs in CI's integration step but is excluded from the per-commit fast
+    # suite — keeps a real-subprocess long-pole off every local commit without
+    # losing the coverage. See docs/developer-guide/testing.md.
+    @pytest.mark.integration
     def test_reaping_kernel_manager_kills_grandchild_on_success(self, tmp_path):
         """Grandchildren spawned by a cell must die on kernel shutdown (happy path).
 
@@ -1581,6 +1586,9 @@ class TestKernelCleanup:
                 except psutil.NoSuchProcess:
                     pass
 
+    # Real ipykernel subprocess (~5s); ``integration`` for the same reason as
+    # ``test_reaping_kernel_manager_kills_grandchild_on_success`` above.
+    @pytest.mark.integration
     def test_reaping_kernel_manager_kills_grandchild_on_cell_error(self, tmp_path):
         """Grandchildren must be reaped even when a later cell raises.
 

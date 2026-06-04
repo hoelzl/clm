@@ -140,32 +140,56 @@ pytest -m e2e --log-cli-level=CRITICAL
 pytest -m e2e -v
 ```
 
-## Parallelism and the `serial` marker
+## Parallelism, the `serial` marker, and keeping the commit gate fast
 
-The suite runs in parallel via `pytest-xdist` (`-n auto`, capped to 8 workers
-in the pre-commit hook by `scripts/run_pytest_hook.py`). The default scheduler
-is `--dist loadgroup` (set in `pyproject.toml` `addopts`): it load-balances as
+The suite runs in parallel via `pytest-xdist` (`-n auto`, capped to **16
+workers** in the pre-commit hook by `scripts/run_pytest_hook.py` — see the long
+comment there for the cap history and why 16 is safe). The default scheduler is
+`--dist loadgroup` (set in `pyproject.toml` `addopts`): it load-balances as
 usual but keeps any tests sharing an `xdist_group` on the **same** worker.
 
-A handful of tests spawn heavyweight external processes — a mitmdump proxy
-(`tests/infrastructure/test_http_replay_mitm.py`), a mock worker pool
-(`tests/infrastructure/workers/test_lifecycle_mock.py`). When many xdist
-workers launch those simultaneously they oversubscribe the box and flake
-(readiness ceilings expiring, worker-registration starvation, port races —
-issues #163/#184). Such tests carry the project's `serial` marker:
+Three levers keep the per-commit fast suite both quick and flake-free:
+
+**1. `serial` — pin contention-prone tests to one worker.** A mock worker pool
+(`tests/infrastructure/workers/test_lifecycle_mock.py`) polls committed SQLite
+registration state; under many concurrent xdist workers its threads get starved
+and registration appears to stall (issue #163). The `serial` marker puts every
+such test on a single shared `xdist_group` so they run one-at-a-time on one
+dedicated worker while the rest of the suite stays fully parallel:
 
 ```python
 import pytest
 
-pytestmark = pytest.mark.serial  # whole module, or use @pytest.mark.serial per-test
+pytestmark = pytest.mark.serial  # whole module, or @pytest.mark.serial per-test
 ```
 
-`tests/conftest.py` maps `serial` onto a single shared `xdist_group`, so every
-serial-marked test runs one-at-a-time on one dedicated worker while the rest of
-the suite stays fully parallel. **Reach for `serial` when a new test launches a
-real subprocess or otherwise contends for a global resource** (a fixed port, a
-shared daemon) — it is the cheap, surgical alternative to widening timeouts.
-It is a no-op under `-n0`.
+`tests/conftest.py` maps `serial` onto the `xdist_group`. **Reach for `serial`
+when a test contends for a global resource** (a fixed port, a shared daemon, a
+registration table) — it is the cheap, surgical alternative to widening
+timeouts, and a no-op under `-n0`.
+
+**2. `integration` — keep real-subprocess long-poles off every commit.** A test
+that spawns a real OS subprocess (a Jupyter kernel, a mitmdump proxy) is slow
+*and* a flakiness surface that grows with the worker count. Mark it
+`integration` so it runs in CI's dedicated integration step but is excluded from
+the per-commit fast suite (both the default `addopts` filter and the pre-commit
+hook exclude `integration`). Current residents:
+`tests/infrastructure/test_http_replay_mitm.py` (the parked mitmproxy prototype
+smoke tests) and the two `test_reaping_kernel_manager_kills_grandchild_*` tests
+(real `ipykernel`). Note `slow` is the *wrong* marker for this — CI excludes
+`slow` everywhere, so a `slow` test runs nowhere automatically.
+
+**3. Event-driven waits — never busy-poll an async state.** When a test waits
+for a background thread to drive a state transition, block on an event/callback,
+not a `while ...: time.sleep()` loop. A busy-poll burns CPU that competes with
+the very thread it is waiting on, so it gets *slower and flakier* as the worker
+count rises. Reference patterns: `tests/recordings/test_session.py`'s
+`_wait_for_state` attaches to the session's `on_state_change` callback and
+blocks on a `threading.Condition`; the `JobManager` helpers wait on an
+`EventBus`-fed `threading.Event`. Both keep a generous wall-clock ceiling purely
+as a backstop. (For a timer-*expiring* transient state, widen the state's own
+lifetime past the wait ceiling rather than the ceiling itself — see the
+`retake_window_seconds` note in `test_session.py`.)
 
 > The HTTP-replay / cassette tests need the `replay` extra (`vcrpy`,
 > `filelock`). It is included in the auto-synced `dev` dependency group, so

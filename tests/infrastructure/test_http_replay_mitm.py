@@ -35,13 +35,19 @@ from clm.infrastructure.http_replay_mitm.proxy_manager import (
     _locate_mitmdump,
 )
 
-# Every test here launches a real mitmdump subprocess (proxy startup +
-# port bind). Pin the module onto one xdist worker so these spawns run
-# one-at-a-time instead of racing each other across workers and
-# oversubscribing the box (the documented #184 contention family). See the
-# ``serial`` marker in pyproject and its xdist_group mapping in
-# ``tests/conftest.py``.
-pytestmark = pytest.mark.serial
+# Every test here launches a real mitmdump subprocess (proxy startup + port
+# bind) against the parked out-of-process mitmproxy replay PROTOTYPE. Two marks:
+#   * ``integration`` excludes the module from the per-commit fast suite — ~11
+#     real-subprocess round-trips (~30s) of churn that a parked prototype does
+#     not need to re-prove on every local commit. CI never installs mitmproxy,
+#     so these already only run on a dev box; ``integration`` makes that
+#     explicit (run on demand via ``pytest -m integration`` or directly by
+#     path), and the #184 mitmdump contention/flakiness surface leaves the
+#     commit path entirely.
+#   * ``serial`` still pins them onto one xdist worker whenever they ARE run in
+#     parallel, so the mitmdump spawns don't race each other. See the ``serial``
+#     marker in pyproject and its xdist_group mapping in ``tests/conftest.py``.
+pytestmark = [pytest.mark.serial, pytest.mark.integration]
 
 # Skip the whole module if mitmdump isn't reachable — the [mitmproxy]
 # extra installs the Python package but the executable lookup may still
