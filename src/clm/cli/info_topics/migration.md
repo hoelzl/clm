@@ -347,19 +347,24 @@ the safe one — no command was removed and every tool stays fully invocable.
   silently produce a divergent or no-op sync. *Migration:* none for well-formed
   invocations; a script that relied on passing a mismatched pair will now get a
   clear usage error instead of a surprising write.
-- **A both-directions cold-start pair is now refused, never doubled (#216).**
-  When changes would have to flow in *both* directions with no way to pair the
-  halves — a freshly-split parallel pair (all cells id-less), a per-half
-  `assign-ids` run (both halves id'd but with **mismatched** ids), or a half-id'd
-  pair — `clm slides sync` emits **`refuse`** items in the plan instead of adding
-  every cell on both sides. Previously the id-less form deferred with an error
-  (exit 2) and the id-carrying form silently **doubled** both decks; now both are
-  decided at plan time, so `--dry-run` shows exactly what a writing run does
-  (`N refuse`, exit 1 — "changes pending"), nothing is written, and the watermark
-  holds. *Migration:* sync one direction at a time (edit/author a single half,
-  sync, then the other), or run `clm slides assign-ids <dir>` to mint shared ids
-  across the pair first; then re-run sync. Automatic cold-start pairing (minting a
-  shared id once the halves are confirmed to correspond) is a planned follow-up.
+- **Cold-start pairs are reconciled or refused — never doubled (#216).** When a
+  split pair has changes that would have to flow in *both* directions with no
+  shared ids to pair the halves, `clm slides sync` now decides at plan time
+  instead of adding every cell on both sides (which previously errored at exit 2
+  for an all-id-less pair, or silently **doubled** both decks for an id-carrying
+  one). A **freshly-split parallel pair** (all cells id-less) is **paired and
+  minted one shared `slide_id` per slide** — but only after a cheap, cached LLM
+  **correspondence check** confirms the two halves actually translate each other
+  (default-on when an OpenRouter key is configured; turn it off with
+  `--no-verify-cold-pairs`). Without a provider, or if the check returns "no" or
+  cannot run, the pair is **refused** rather than guessed. Pairs that still can't
+  be paired unambiguously — both halves id'd with **mismatched** ids, or a
+  **half-id'd** pair — are **refused** too. A refusal emits **`refuse`** items,
+  writes nothing, holds the watermark, and `--dry-run` shows exactly what a
+  writing run does (`N refuse`, exit 1 — "changes pending"). *Migration:* for a
+  refused pair, sync one direction at a time (author one half, sync, then the
+  other), or run `clm slides assign-ids <dir>` to mint shared ids across the pair
+  first; then re-run sync.
 - **`clm slides assign-ids` is now plumbing (hidden).** Per-file id minting on a
   *single* split half can mint a divergent slug — the #1 silent #162 break. It is
   hidden from `clm slides --help` but stays invocable by name for agents/scripts
