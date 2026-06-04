@@ -508,6 +508,53 @@ If no `<output-targets>` element is present, all default kinds, default formats
 (CLI) or `./output` (default). Opt-in formats like `jupyterlite` are **not**
 enabled by the default target.
 
+### `<release-channels>` (CLM {version}+)
+
+Per-topic solution release to student cohorts (issue #208). Declare one git
+repository per cohort; after a topic's workshop has been discussed you release
+that topic — and only that topic — into the cohort's repo, **frozen** so later
+course edits never change what a cohort already received. Multiple cohorts each
+move on their own schedule.
+
+This block is **structural and stable** — it names the cohorts and where their
+repos live. The **volatile** per-topic release state (which topics a cohort has
+received) lives in a separate plain-text **ledger** file, never in the spec, so
+the spec stays diff-clean as you release week by week.
+
+```xml
+<release-channels source-target="solutions">
+    <remote-path>cohorts</remote-path>
+    <channel name="jan" path="./solutions/jan" ledger="release/jan.txt"/>
+    <channel name="may" path="./solutions/may" ledger="release/may.txt">
+        <remote-path>special</remote-path>
+    </channel>
+</release-channels>
+```
+
+| Attribute / child | On | Required | Description |
+|---|---|----------|-------------|
+| `source-target` (attr) | `<release-channels>` | Yes | Name of the `completed`-kind `<output-target>` that is the frozen source. Topics are promoted out of this target's built tree. |
+| `<remote-path>` | `<release-channels>` | No | Default remote path (e.g. a GitLab group) for every channel that does not override it. |
+| `name` (attr) | `<channel>` | Yes | Cohort identifier. Addresses the channel on the CLI (`--channel jan`) and forms the derived repo name `{project-slug}-{name}`. |
+| `path` (attr) | `<channel>` | Yes | The cohort repo's working tree (relative to the course root, or absolute). One repo per cohort; **not** language-scoped. |
+| `ledger` (attr) | `<channel>` | Yes | Path to the cohort's release ledger — a plain-text file, **one released topic id per line**, created/appended by `clm release add`. Keep it in the course source repo. |
+| `<remote-path>` | `<channel>` | No | Override the block-level `<remote-path>` for this one cohort. |
+
+The remote URL is derived as `{repository-base}/{remote-path}/{project-slug}-{name}`
+(the `<remote-path>` segment is omitted when unset) — see `<github>` and
+`<project-slug>` above. Unlike output targets, a channel repo carries no language
+segment: the cohort `name` disambiguates it.
+
+The build artifact that makes per-topic promotion possible is the **provenance
+manifest** (`.clm-manifest.json`, written by `clm build` — on by default since
+CLM {version}); it maps each output file to its owning topic, which the output
+path alone cannot recover. The manifest is private and is automatically excluded
+from every distributed repo by `clm git`. The per-cohort **frozen manifest**
+(`.clm-released.json`) *does* ship in the channel repo — it is the freeze record.
+
+Drive the workflow with `clm release` (add/status/sync) and `clm git --channel`
+(init/commit/push the cohort repos); run `clm info commands` for both.
+
 ### `<jupyterlite>`
 
 Configuration for the `jupyterlite` output format. May appear at course level
