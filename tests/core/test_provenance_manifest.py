@@ -13,6 +13,8 @@ from clm.core.provenance_manifest import (
     MANIFEST_VERSION,
     build_provenance_manifest,
     enumerate_expected_outputs,
+    manifest_topic_digest,
+    topic_digest_from_files,
     write_provenance_manifests,
 )
 
@@ -206,3 +208,54 @@ def test_manifest_records_dir_group_outputs_with_ownership(tmp_path):
     assert entry["section_id"] == dir_group.spec.section_id
     assert entry["kind"] is None
     assert entry["content_hash"].startswith("sha256:")
+
+
+# ---------------------------------------------------------------------------
+# topic_digest_from_files / manifest_topic_digest (issue #208 step 5 join key)
+# ---------------------------------------------------------------------------
+
+
+def _entry(path: str, topic_id: str | None, content_hash: str) -> dict:
+    return {"path": path, "topic_id": topic_id, "content_hash": content_hash}
+
+
+def test_topic_digest_from_files_is_order_independent():
+    a = [_entry("a", "t", "sha256:1"), _entry("b", "t", "sha256:2")]
+    assert topic_digest_from_files(a) == topic_digest_from_files(list(reversed(a)))
+
+
+def test_topic_digest_from_files_changes_with_content():
+    base = [_entry("a", "t", "sha256:1")]
+    changed = [_entry("a", "t", "sha256:2")]
+    assert topic_digest_from_files(base) != topic_digest_from_files(changed)
+    assert topic_digest_from_files(base).startswith("sha256:")
+
+
+def test_topic_digest_from_files_is_stable_against_a_frozen_value():
+    """Pin the exact rollup output. A change to the algorithm (separators,
+    sort, prefix) would silently invalidate every shipped frozen
+    ``.clm-released.json`` digest and the digest stamped on recordings — this
+    catches that, decoupled from the implementation."""
+    files = [_entry("a", "t", "sha256:b"), _entry("b", "t", "sha256:a")]  # unsorted on purpose
+    assert (
+        topic_digest_from_files(files)
+        == "sha256:5d02884ff145014d7bbd2e791dfad6096dbc4208330b699b82742d4b403d1f56"
+    )
+
+
+def test_manifest_topic_digest_absent_topic_is_none():
+    manifest = {"files": [_entry("Sec/a.ipynb", "intro", "sha256:a")]}
+    assert manifest_topic_digest(manifest, "nope") is None
+
+
+def test_manifest_topic_digest_matches_files_rollup():
+    files = [_entry("Sec/a.ipynb", "intro", "sha256:a"), _entry("Sec/b.ipynb", "intro", "sha256:b")]
+    manifest = {"files": [*files, _entry("shared/x", None, "sha256:s")]}
+    assert manifest_topic_digest(manifest, "intro") == topic_digest_from_files(files)
+
+
+def test_manifest_topic_digest_stable_across_manifest_file_order():
+    files = [_entry("Sec/a.ipynb", "intro", "sha256:a"), _entry("Sec/b.ipynb", "intro", "sha256:b")]
+    m1 = {"files": files}
+    m2 = {"files": list(reversed(files))}
+    assert manifest_topic_digest(m1, "intro") == manifest_topic_digest(m2, "intro")

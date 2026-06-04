@@ -430,3 +430,95 @@ class TestTakeRecordModel:
         assert part.active_take == 2
         assert len(part.takes) == 1
         assert part.takes[0].processed_file == "/takes/t1.mp4"
+
+
+class TestSlideProvenanceFields:
+    """Issue #208 step 5: section/topic + slide_digest stamped on parts/takes."""
+
+    def test_fields_default_none(self):
+        part = RecordingPart(part=1, raw_file="r.mp4")
+        assert part.section_id is None
+        assert part.topic_id is None
+        assert part.slide_digest is None
+
+    def test_round_trip_through_save_load(self, tmp_path: Path):
+        state = CourseRecordingState(
+            course_id="c",
+            lectures=[
+                LectureState(
+                    lecture_id="L",
+                    display_name="L",
+                    parts=[
+                        RecordingPart(
+                            part=1,
+                            raw_file="r.mp4",
+                            section_id="w01",
+                            topic_id="intro",
+                            slide_digest="sha256:abc",
+                        )
+                    ],
+                )
+            ],
+        )
+        path = tmp_path / "s.json"
+        state.save(path)
+        part = CourseRecordingState.load(path).lectures[0].parts[0]
+        assert (part.section_id, part.topic_id, part.slide_digest) == ("w01", "intro", "sha256:abc")
+
+    def test_pre_step5_state_loads_with_none(self, tmp_path: Path):
+        """A state.json written before step 5 (no provenance fields) loads fine."""
+        legacy = (
+            '{"course_id":"c","lectures":[{"lecture_id":"L","display_name":"L",'
+            '"parts":[{"part":1,"raw_file":"r.mp4"}]}]}'
+        )
+        path = tmp_path / "legacy.json"
+        path.write_text(legacy, encoding="utf-8")
+        part = CourseRecordingState.load(path).lectures[0].parts[0]
+        assert part.topic_id is None
+        assert part.slide_digest is None
+
+    def test_ensure_part_stamps_provenance(self):
+        state = CourseRecordingState(course_id="c")
+        part = state.ensure_part(
+            "L", 1, "r.mp4", topic_id="intro", section_id="w01", slide_digest="sha256:v1"
+        )
+        assert (part.topic_id, part.section_id, part.slide_digest) == (
+            "intro",
+            "w01",
+            "sha256:v1",
+        )
+        # Re-ensuring the same part re-stamps (e.g. a fresh take of the same deck).
+        again = state.ensure_part("L", 1, "r2.mp4", topic_id="intro", slide_digest="sha256:v2")
+        assert again.slide_digest == "sha256:v2"
+
+    def test_assign_recording_stamps_provenance(self):
+        state = CourseRecordingState(
+            course_id="c", lectures=[LectureState(lecture_id="L", display_name="L")]
+        )
+        lecture_id, part_no = state.assign_recording(
+            "r.mp4", lecture_id="L", topic_id="intro", slide_digest="sha256:v1"
+        )
+        part = state.get_lecture(lecture_id).parts[part_no - 1]
+        assert part.topic_id == "intro"
+        assert part.slide_digest == "sha256:v1"
+
+    def test_retake_preserves_old_provenance_and_stamps_new(self):
+        state = CourseRecordingState(course_id="c")
+        state.ensure_part("L", 1, "r1.mp4", topic_id="intro", slide_digest="sha256:v1")
+        state.record_retake("L", 1, "r2.mp4", topic_id="intro", slide_digest="sha256:v2")
+
+        part = state.get_lecture("L").parts[0]
+        assert part.slide_digest == "sha256:v2"  # active take re-stamped
+        assert part.takes[0].slide_digest == "sha256:v1"  # demoted take preserved
+        assert part.takes[0].topic_id == "intro"
+
+    def test_restore_take_swaps_provenance(self):
+        state = CourseRecordingState(course_id="c")
+        state.ensure_part("L", 1, "r1.mp4", topic_id="intro", slide_digest="sha256:v1")
+        state.record_retake("L", 1, "r2.mp4", topic_id="intro", slide_digest="sha256:v2")
+
+        # Restore take 1 (v1) as active; the v2 take is demoted with its digest.
+        state.restore_take("L", 1, 1)
+        part = state.get_lecture("L").parts[0]
+        assert part.slide_digest == "sha256:v1"
+        assert any(t.slide_digest == "sha256:v2" for t in part.takes)

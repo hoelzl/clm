@@ -286,3 +286,35 @@ def manifest_files_by_topic(
     for entry in manifest.get("files", []):
         by_topic.setdefault(entry.get("topic_id"), []).append(entry)
     return by_topic
+
+
+def topic_digest_from_files(files: list[dict[str, Any]]) -> str:
+    """A single rolled-up hash over a set of manifest file entries.
+
+    Combines the entries' recorded ``content_hash`` values (the copied bytes are
+    verbatim, so no file is re-read) into one ``sha256:`` digest. Order-independent
+    (the inputs are sorted), so it is **stable** for unchanged content across
+    builds and processes — the join value for "has this set of outputs changed?"
+    queries. Shared by the release freeze (:mod:`clm.release.sync`) and the
+    recording-provenance drift check (:mod:`clm.recordings.provenance`) so both
+    speak the same digest.
+    """
+    digest = hashlib.sha256()
+    for content_hash in sorted(entry.get("content_hash", "") for entry in files):
+        digest.update(content_hash.encode("utf-8"))
+        digest.update(b"\n")
+    return f"sha256:{digest.hexdigest()}"
+
+
+def manifest_topic_digest(manifest: dict[str, Any], topic_id: str) -> str | None:
+    """The rolled-up content digest for *topic_id*'s output files in *manifest*.
+
+    Returns ``None`` when the topic has no files in the manifest (e.g. it was not
+    built, or the manifest predates it), letting callers distinguish "unchanged"
+    from "unknown". Otherwise the same value :func:`topic_digest_from_files`
+    produces for that topic's entries.
+    """
+    files = manifest_files_by_topic(manifest).get(topic_id, [])
+    if not files:
+        return None
+    return topic_digest_from_files(files)

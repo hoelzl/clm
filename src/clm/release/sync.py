@@ -19,7 +19,6 @@ it never copies ``.clm-*`` build sidecars into the destination.
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import shutil
 from collections.abc import Iterable
@@ -28,7 +27,7 @@ from typing import Any
 
 from attrs import frozen
 
-from clm.core.provenance_manifest import manifest_files_by_topic
+from clm.core.provenance_manifest import manifest_files_by_topic, topic_digest_from_files
 from clm.release.frozen_manifest import FrozenManifest, FrozenRecord
 
 logger = logging.getLogger(__name__)
@@ -142,7 +141,7 @@ def apply_sync(
             FrozenRecord(
                 source_commit=source_commit,
                 copied_at=copied_at,
-                topic_digest=_topic_digest(files),
+                topic_digest=topic_digest_from_files(files),
             ),
         )
         if topic_plan.action == REFREEZE:
@@ -172,16 +171,3 @@ def _copy_files(files: list[dict[str, Any]], source_root: Path, dest_root: Path)
         shutil.copy2(src, dst)
         copied += 1
     return copied
-
-
-def _topic_digest(files: list[dict[str, Any]]) -> str:
-    """A single rolled-up hash over a topic's per-file content hashes.
-
-    Uses the manifest's recorded ``content_hash`` values (the copied bytes are
-    verbatim), so no file needs re-reading. Order-independent via sorting.
-    """
-    digest = hashlib.sha256()
-    for content_hash in sorted(entry.get("content_hash", "") for entry in files):
-        digest.update(content_hash.encode("utf-8"))
-        digest.update(b"\n")
-    return f"sha256:{digest.hexdigest()}"
