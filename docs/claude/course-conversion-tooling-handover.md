@@ -112,14 +112,36 @@ Tests, `commands.md`, and a CHANGELOG `Added` entry land with the code.
   group) + `clm slides referenced-by`. `--lang`, `--all-specs`, `--json`. 18 tests
   (`tests/core/test_spec_decks.py`, `tests/cli/test_spec_decks.py`); `commands.md`
   + CHANGELOG updated. Smoke-tested on the CSharpCourses corpus (64-deck spec,
-  multi-spec union, reverse lookup). **Next: Tool #2 (deep/scoped validation).**
-  Reuse `resolve_spec_decks` to enumerate the shipping set, then run the slides
-  validator on each deck — see `cli/commands/validate.py` for how `validate`
-  currently dispatches spec-vs-slides.
+  multi-spec union, reverse lookup).
+- 2026-06-05: consolidated onto PR #230 (rebased the 3 local commits onto the
+  gaps-doc commit `48bdf1c`, pushed as a fast-forward); PR title/body updated.
+  **Note:** PR branch `claude/course-conversion-tooling-gaps` is checked out in
+  the *sibling* worktree `encapsulated-nibbling-feigenbaum`, so it cannot be
+  checked out here. This worktree works on its own branch
+  `worktree-linked-honking-dolphin` and pushes with an explicit refspec:
+  `git push origin worktree-linked-honking-dolphin:claude/course-conversion-tooling-gaps`.
+- 2026-06-05: **Tool #2 DONE**. `clm validate <spec> --deep` (structure + deck
+  content over the shipping set, reusing `resolve_spec_decks`), `--summary`
+  (category/kind/per-deck rollup; new `clm.slides.validation_summary`),
+  `--shipping-only` + `--specs-dir` for directory validates (new
+  `clm.core.spec_decks.shipping_set` + `clm.slides.validator.validate_files`).
+  Found+handled a real bug: `find_slide_files_recursive` deep-walks `*.py` only,
+  so `--shipping-only` filters the resolved shipping set instead of walking
+  (covers `.cs`/`.cpp`). 27 new tests (`tests/slides/test_validation_summary.py`,
+  `tests/cli/test_validate_deep.py`); 203 existing validate tests still green;
+  `commands.md` + CHANGELOG updated. Smoke-tested on CSharpCourses (clean corpus →
+  0 findings; `--shipping-only` root=89 decks, one module=33). **Next: Tool #3
+  (course-gate orchestrator).** Reuse `resolve_spec_decks` (shipping set) +
+  `validate_course`/`validate_files` + `summarize_findings`; sequence the
+  mechanical passes (`assign-ids --accept-content-derived` → `normalize
+  --operations tag_migration` → sync) and split remaining findings into
+  mechanically-fixable vs needs-author.
 
 ## Resuming
 
-Pick up from the "Progress log" tail. Tool #1 is complete; **Tool #2 is next**;
-tools #3–#9 follow in priority order. Each tool = core helper reuse + thin command(s) + tests +
+Pick up from the "Progress log" tail. Tools #1–#2 are complete; **Tool #3 is
+next**; tools #4–#9 follow in priority order. Pushing: this worktree is on
+`worktree-linked-honking-dolphin`; push to the PR branch with the explicit
+refspec noted in the 2026-06-05 consolidation entry above. Each tool = core helper reuse + thin command(s) + tests +
 `commands.md` + CHANGELOG. Keep mirroring build resolution semantics — the whole
 point of gap #1 is that ad-hoc heuristics silently miss decks.

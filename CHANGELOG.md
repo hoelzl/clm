@@ -21,6 +21,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   `clm slides referenced-by <deck.py>` is the reverse lookup (or reports
   `unreferenced`). First of the course-conversion tooling gaps documented in
   `docs/claude/course-conversion-tooling-gaps.md`.
+- **`clm validate <spec> --deep`, `--summary`, and `--shipping-only` — deep /
+  scoped validation with a category rollup.** `clm validate <spec.xml>` validates
+  only the spec *structure* (topic resolution); it does **not** check the slide
+  content of the referenced decks, so "spec validates OK" never meant the decks
+  were clean. `--deep` now runs the full slide validator on every deck the spec
+  pulls in (resolved with the same build-faithful logic as `clm spec decks`) and
+  reports structure + content together, failing on either. `--summary` rolls
+  findings up into a category/kind histogram with per-deck counts (by-category is
+  exact; by-kind — `missing-slide_id`, `adjacency`, `count-mismatch`,
+  `start-completed`, … — is a heuristic message bucket with an `other` fallback)
+  instead of a flat list of thousands of lines; on a spec it implies `--deep`.
+  `--shipping-only` restricts a directory validate to the decks reachable from
+  course specs (`--specs-dir`, default `<course-root>/course-specs/`), skipping
+  archived / unreferenced decks — and, because it filters the resolved shipping
+  set rather than walking, it correctly covers non-`.py` decks (`.cs`, `.cpp`)
+  that the plain directory walk misses. Second of the course-conversion tooling
+  gaps. New public helper `clm.slides.validator.validate_files` validates an
+  explicit deck list with the same per-pair parity as a directory walk.
 
 ### Removed
 

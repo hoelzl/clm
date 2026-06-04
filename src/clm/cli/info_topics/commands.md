@@ -498,12 +498,28 @@ Checks that all referenced topic IDs resolve to exactly one existing
 topic directory, that there are no duplicate topic references, and
 that referenced dir-group paths exist.
 
+> **Structure-OK is not decks-clean.** By default `clm validate <spec.xml>`
+> validates only the spec *structure* (topic resolution, duplicates, dir-group
+> paths) — it does **not** check the slide content of the decks the spec pulls
+> in. So a passing spec validation does not mean the decks are free of
+> missing-`slide_id` / adjacency / pairing errors. Use `--deep` to validate
+> both.
+
 | Option | Description |
 |--------|-------------|
 | `--kind [slides\|spec]` | Force a validator instead of inferring from the path (`.xml` → spec, `.py`/directory → slides). `--kind=spec` requires an `.xml` file. |
 | `--data-dir DIR` | Course data directory (contains slides/) |
 | `--json` | Output as JSON |
 | `--include-disabled` | Also validate sections marked `enabled="false"`; each finding from a disabled section has `(disabled)` appended to its message (default: disabled sections are skipped) |
+| `--deep` | After structure validation, run the full slide validator on **every deck the spec pulls in** (its shipping set) and report both. Exits non-zero on a structure error or a deck-content error (`--fail-on` governs the deck-content threshold). Resolves decks with the same build-faithful semantics as `clm spec decks`. |
+| `--summary` | Roll the deck-content findings up into a category/kind histogram with per-deck counts instead of a flat list (intended for corpus-scale validates that emit thousands of findings). On a spec, `--summary` implies `--deep`. |
+| `--checks LIST`, `--fail-on [error\|warning]` | Slides-validator options (see slides mode); valid on a spec only together with `--deep`, where they apply to the deck-content pass. |
+
+The `--summary` rollup has three axes: **by category** (`format`/`pairing`/`tags`
+× severity — the validator's own categories, exact), **by kind** (a finer,
+heuristic bucket derived from the message: `missing-slide_id`, `adjacency`,
+`count-mismatch`, `start-completed`, `malformed-marker`, … with an `other`
+fallback), and **by deck** (the decks with the most findings first).
 
 Examples:
 
@@ -511,6 +527,9 @@ Examples:
 clm validate course-specs/python-basics.xml
 clm validate course-specs/ml-azav.xml --json
 clm validate course-specs/ml-azav.xml --include-disabled
+clm validate course-specs/python.xml --deep              # structure + deck content
+clm validate course-specs/python.xml --summary           # deep, rolled up
+clm validate course-specs/python.xml --deep --fail-on warning
 ```
 
 ### `clm sync-includes`
@@ -595,8 +614,16 @@ clm validate [OPTIONS] PATH
 | `--json` | Output as JSON |
 | `--data-dir DIR` | Course data directory (contains slides/) |
 | `--fail-on {error,warning}` | (since CLM {version}) Exit non-zero when findings reach this severity. Unset: legacy behavior (human output fails on errors; JSON exits 0). `error`: fail on errors in either mode. `warning`: fail on errors **or** warnings — the pre-commit-gate setting, so the cross-file `slide_id` / voiceover `for_slide` parity warnings block a commit. |
+| `--summary` | (since CLM {version}) Roll findings up into a category/kind histogram with per-deck counts instead of a flat list — for corpus-scale validates that would otherwise print thousands of lines. |
+| `--shipping-only` | (since CLM {version}) Directory only: restrict the walk to decks reachable from course specs (the shipping set), skipping archived / unreferenced decks so they don't drown the signal. |
+| `--specs-dir DIR` | For `--shipping-only`: directory of `*.xml` specs to resolve the shipping set from. Default: `<course-root>/course-specs/`. |
 
 `PATH` can be a single slide file, a topic directory, or a course spec XML file.
+
+> `--shipping-only` resolves the shipping set with the same build-faithful logic
+> as `clm spec decks`, and filters that resolved deck list to the decks under
+> `PATH` — so it correctly includes non-`.py` decks (`.cs`, `.cpp`) that the
+> plain directory walk currently misses.
 
 Since CLM {version}, `clm validate slides/ --fail-on warning` is the
 pre-commit gate: by default the `pairing` warnings (missing/divergent

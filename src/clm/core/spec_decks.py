@@ -194,3 +194,28 @@ def find_deck_references(
                     )
                 )
     return references
+
+
+def shipping_set(
+    spec_files: list[Path],
+    slides_dir: Path,
+    *,
+    topic_map: dict[str, list[TopicMatch]] | None = None,
+) -> set[Path]:
+    """The union of resolved deck paths across *spec_files*.
+
+    The "shipping set": every deck reachable from at least one spec, resolved
+    (so the members are absolute paths that compare equal to a deck found by a
+    filesystem walk). Specs that fail to parse are skipped. Reuses the same
+    build-faithful resolution as :func:`resolve_spec_decks`.
+    """
+    full_map = topic_map if topic_map is not None else build_topic_map(slides_dir)
+    decks: set[Path] = set()
+    for spec_file in spec_files:
+        try:
+            spec = CourseSpec.from_file(spec_file)
+        except Exception:
+            continue
+        resolution = resolve_spec_decks(spec, slides_dir, topic_map=full_map)
+        decks.update(d.resolve() for d in resolution.deck_files)
+    return decks
