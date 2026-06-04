@@ -2,6 +2,16 @@
 # See https://pre-commit.com for more information
 # Install: pip install pre-commit && pre-commit install
 # Or with uv: uv add pre-commit --dev && uv run pre-commit install
+#
+# This config installs TWO git hook types:
+#   * pre-commit — ruff (lint+format) + mypy. Fast (~3-5s), runs on every commit
+#     so a commit stays near-instant.
+#   * pre-push — the full fast test suite (~72s). Runs on ``git push`` so the test
+#     gate happens once before code leaves the machine instead of on every commit.
+# ``default_install_hook_types`` makes a plain ``pre-commit install`` wire up both.
+# If you installed hooks before this line existed, re-run
+# ``uv run pre-commit install`` once to pick up the pre-push hook.
+default_install_hook_types: [pre-commit, pre-push]
 
 repos:
   # Ruff - Fast Python linter and formatter
@@ -37,19 +47,22 @@ repos:
         pass_filenames: false
         args: [src/clm]
 
-  # Fast test suite (~30s) - runs default (non-slow) tests in parallel.
-  # Invoked via scripts/run_pytest_hook.py which clears leaking GIT_*
-  # env vars before spawning pytest — see docs/proposals/
-  # PRE_COMMIT_HOOK_HARDENING.md (Fix 2) for the reason this wrapper is
-  # needed. always_run is false so docs-only commits don't pay the 30s
-  # cost (Fix 4).
+  # Fast test suite (~72s) — runs on PRE-PUSH, not pre-commit, so commits stay
+  # fast (ruff+mypy only) and the full suite gates ``git push`` instead. Invoked
+  # via scripts/run_pytest_hook.py, which clears leaking GIT_* env vars before
+  # spawning pytest (see docs/proposals/PRE_COMMIT_HOOK_HARDENING.md Fix 2) and
+  # caps xdist workers (see that script's comment). always_run is false + the
+  # files filter so a docs-only push doesn't pay the cost. To run the suite on a
+  # commit anyway (the old behaviour), use ``uv run pre-commit run --hook-stage
+  # pre-push pytest`` or just run ``pytest`` directly.
   - repo: local
     hooks:
       - id: pytest
-        name: pytest (fast)
+        name: pytest (fast, pre-push)
         entry: python scripts/run_pytest_hook.py -q --tb=line
         language: system
-        # Only run when source or test files change
+        stages: [pre-push]
+        # Only run when source or test files are in the push range
         files: ^(src|tests)/
         types: [python]
         pass_filenames: false

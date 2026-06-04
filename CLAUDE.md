@@ -48,7 +48,7 @@ For the full list of optional extras (`[notebook]`, `[plantuml]`, `[drawio]`,
 ## Testing
 
 ```bash
-pytest                    # Fast suite only (~30s, runs via pre-commit hook)
+pytest                    # Fast suite only (~72s; runs on the pre-PUSH hook)
 pytest -m "not docker"    # Full suite minus Docker tests (~2 min, pre-release gate)
 pytest -m ""              # Everything including docker/slow/integration/e2e
 ```
@@ -106,8 +106,12 @@ Full procedure lives in `docs/developer-guide/releasing.md`. The hard rules:
 ## Git Workflow
 
 - Branch prefix: `claude/` for AI-generated branches.
-- **Pre-commit hooks**: install with `uv run pre-commit install`. Runs ruff,
-  mypy, and the fast test suite automatically.
+- **Git hooks**: install with `uv run pre-commit install` (wires up both hook
+  types via `default_install_hook_types`). The **pre-commit** hook runs ruff +
+  mypy (fast, every commit); the **pre-push** hook runs the fast test suite
+  (~72s) on `git push`. So commits are near-instant and the test gate fires once
+  before a push. Re-run `pre-commit install` if you set up hooks before the
+  pre-push split landed.
 - Manual checks: `uv run ruff check src/ tests/` and
   `uv run ruff format src/ tests/`.
 - Commits that fail a hook did **not** happen — fix the issue, re-stage, and

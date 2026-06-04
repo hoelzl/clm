@@ -142,10 +142,16 @@ pytest -m e2e -v
 
 ## Parallelism, the `serial` marker, and keeping the commit gate fast
 
+The fast test suite runs on the **pre-push** git hook (not pre-commit), so a
+commit pays only ruff + mypy (~3–5s) and the ~72s suite gates `git push` instead.
+Both hooks install from one `pre-commit install` (`default_install_hook_types` in
+`.pre-commit-config.yaml`). Run the suite manually any time with `pytest`, or as
+the hook would with `uv run pre-commit run --hook-stage pre-push pytest`.
+
 The suite runs in parallel via `pytest-xdist` (`-n auto`, capped to **16
-workers** in the pre-commit hook by `scripts/run_pytest_hook.py` — see the long
-comment there for the cap history and why 16 is safe). The default scheduler is
-`--dist loadgroup` (set in `pyproject.toml` `addopts`): it load-balances as
+workers** in the pre-push test hook by `scripts/run_pytest_hook.py` — see the
+long comment there for the cap history and why 16 is safe). The default scheduler
+is `--dist loadgroup` (set in `pyproject.toml` `addopts`): it load-balances as
 usual but keeps any tests sharing an `xdist_group` on the **same** worker.
 
 Three levers keep the per-commit fast suite both quick and flake-free:
