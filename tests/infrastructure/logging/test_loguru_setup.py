@@ -13,6 +13,32 @@ from loguru import logger
 from clm.infrastructure.logging.loguru_setup import LokiSink, setup_logger
 
 
+@pytest.fixture(autouse=True)
+def _restore_loguru_handlers():
+    """Stop ``setup_logger`` from leaking a blocking Loki sink across tests.
+
+    ``setup_logger`` reconfigures loguru's *process-global* ``logger`` singleton:
+    it calls ``logger.remove()`` and then installs a real :class:`LokiSink`
+    (a synchronous ``requests.post`` to ``localhost:3100``). With no teardown
+    that sink survives the test and fires on every later loguru ``INFO`` log on
+    the same xdist worker — including background poller/watcher threads in
+    unrelated suites (e.g. ``tests/recordings``) — stalling them on the Loki
+    connect attempt. That made an ordering-dependent flake that only appeared in
+    the full suite (where this module is collected), not in isolated runs.
+
+    Snapshot the handler ids before each test and remove any added during it,
+    leaving loguru with a plain stderr sink so the rest of the suite is unaffected.
+    """
+    before = set(logger._core.handlers)  # type: ignore[attr-defined]
+    try:
+        yield
+    finally:
+        for handler_id in set(logger._core.handlers) - before:  # type: ignore[attr-defined]
+            logger.remove(handler_id)
+        if not logger._core.handlers:  # type: ignore[attr-defined]
+            logger.add(sys.stderr)
+
+
 class TestLokiSink:
     """Test LokiSink class."""
 

@@ -3,6 +3,13 @@ import sys
 import requests  # type: ignore[import-untyped]
 from loguru import logger
 
+# A logging sink must never block the calling thread (often a background worker)
+# on a dead or hung Loki endpoint. Without a timeout, ``requests.post`` to an
+# unreachable host can stall for the OS default connect timeout (tens of seconds
+# on a SYN-retransmit path), which is how a leaked Loki sink stalled background
+# poller threads in the test suite. Bound it: (connect, read) seconds.
+_LOKI_TIMEOUT = (1.0, 2.0)
+
 
 class LokiSink:
     def __init__(self, loki_url: str, static_labels: dict[str, str]):
@@ -37,7 +44,7 @@ class LokiSink:
         }
 
         try:
-            response = requests.post(self.loki_url, json=log_entry)
+            response = requests.post(self.loki_url, json=log_entry, timeout=_LOKI_TIMEOUT)
             response.raise_for_status()
         except requests.RequestException as e:
             print(f"Failed to send log to Loki: {e}", file=sys.stderr)

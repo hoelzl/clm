@@ -287,6 +287,9 @@ def _init_bare_remote(path: Path) -> Path:
     return path
 
 
+# Real-`git` end-to-end (init/commit/push); ~3-6s/test. Runs in CI's integration
+# step, excluded from the per-commit fast suite. See docs/developer-guide/testing.md.
+@pytest.mark.integration
 class TestChannelGitEndToEnd:
     @pytest.fixture(autouse=True)
     def _no_network(self):

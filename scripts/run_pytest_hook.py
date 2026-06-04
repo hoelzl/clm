@@ -48,11 +48,32 @@ LEAKING_GIT_VARS = (
 # wall-clock is flat/noise-dominated in this range, so capping costs no real
 # speed while removing the contention that drives the flakes.
 #
-# Cap lowered 16 -> 8 (2026-06-04): a 16-worker run *hard-deadlocked* the fast
-# suite during the 1.7.0 release bump's pre-commit commit (worker-registration
-# contention, hung > 5 min, not mere slowness); re-running at 8 committed
-# cleanly. Since wall-clock is flat across this range, 8 trades no real speed for
-# materially more headroom against the contention deadlock.
+# Cap history:
+#   * 16 -> 8 (2026-06-04, PR #214): a 16-worker run *hard-deadlocked* the fast
+#     suite during the 1.7.0 release bump's pre-commit commit (worker-
+#     registration starvation, hung > 5 min). An emergency firefight, made
+#     before the structural fix below had landed.
+#   * 8 -> 16 (2026-06-04, later same day): PR #217 (587038c) fixed that
+#     deadlock's ROOT CAUSE — the worker-registration family
+#     (tests/infrastructure/workers/test_lifecycle_mock.py, #163) is now pinned
+#     to its own ``serial`` xdist_group, so it can no longer race the parallel
+#     remainder regardless of worker count. With the contention source
+#     serialized, the 8-cap became a redundant over-correction that only slowed
+#     the ~6.5k-test parallel remainder (the serial group runs on one worker
+#     and is independent of this cap). Measured on the 64-thread dev box:
+#     cap 8 ~= 94s, cap 12 ~= 80s, cap 16 ~= 73s, all green; many consecutive
+#     16-worker runs showed zero flakes/deadlock. Restoring 16 (the benchmarked
+#     plateau) recovers ~22% wall-clock at no observed contention cost. The
+#     other contention-sensitive family — the recordings session-state polls —
+#     was made event-driven in the same change (``_wait_for_state`` in
+#     tests/recordings/test_session.py now blocks on the session's
+#     ``on_state_change`` callback instead of busy-spinning, so it can no longer
+#     starve the very background thread it waits on as the worker count rises).
+#     Two real-subprocess long-poles (the mitmdump prototype smoke tests and the
+#     real-ipykernel reaping tests) were also moved to the ``integration``
+#     marker, off the per-commit path entirely. If a contention flake ever
+#     recurs, dial back toward 12 — but do NOT drop below the point where
+#     lifecycle_mock stays serialized (that, not the cap, is the #163 fix).
 #
 # ``xdist`` honours ``PYTEST_XDIST_AUTO_NUM_WORKERS`` to decide what ``auto``
 # becomes, so we set it here for the hook only. This:
@@ -63,7 +84,7 @@ LEAKING_GIT_VARS = (
 #   * leaves a manual ``pytest`` run untouched;
 #   * respects an explicit ``PYTEST_XDIST_AUTO_NUM_WORKERS`` the developer has
 #     already exported (``setdefault``).
-_MAX_AUTO_WORKERS = 8
+_MAX_AUTO_WORKERS = 16
 
 
 def main() -> int:
