@@ -132,13 +132,24 @@ class Proposal:
     """One cross-language change the sync would make.
 
     ``kind`` is ``add`` / ``edit`` / ``retag`` / ``move`` / ``remove`` /
-    ``conflict`` / ``rename``. ``direction`` is ``"de->en"`` / ``"en->de"`` (the
-    side that drifted is the source), or ``None`` for a conflict. ``slide_id`` is
-    ``None`` for an id-less add, and the *duplicated* id for a ``rename``. A
-    ``retag`` mirrors a tag-only edit (the content hash is unchanged) onto the
-    other half (Issue #198). Positions are 0-based indices among sync-relevant
-    cells and are best-effort context for later phases (anchoring, walker
-    rendering).
+    ``conflict`` / ``rename`` / ``refuse``. ``direction`` is ``"de->en"`` /
+    ``"en->de"`` (the side that drifted is the source), or ``None`` for a
+    conflict. ``slide_id`` is ``None`` for an id-less add, and the *duplicated* id
+    for a ``rename``. A ``retag`` mirrors a tag-only edit (the content hash is
+    unchanged) onto the other half (Issue #198). Positions are 0-based indices
+    among sync-relevant cells and are best-effort context for later phases
+    (anchoring, walker rendering).
+
+    ``disposition`` is the resolved verdict the classifier assigns (the
+    resolve-then-apply redesign, #216): ``"apply"`` (the default — apply executes
+    a concrete mechanical op) or ``"refuse"`` (a structural decision *not* to act,
+    surfaced in the plan and held at the baseline). A ``refuse`` proposal carries
+    ``kind == "refuse"`` and ``disposition == "refuse"`` so it renders in the plan,
+    drives the dry-run exit code, and is deferred — never applied — by the engine.
+    Moving this decision to plan time is what makes ``--dry-run`` predict the
+    writing run instead of diverging from it (the apply engine used to re-decide
+    a both-directions refusal that the plan never recorded). Later phases add
+    ``"pending"`` / ``"conflict"`` dispositions to apply-kind items.
 
     ``content_hash`` is set on a ``rename`` proposal: it identifies which of the
     duplicate-id cells is the copy (the apply re-mints the cell matching this
@@ -164,6 +175,7 @@ class Proposal:
     new_position: int | None = None
     content_hash: str | None = None  # the copy's hash, for ``rename``
     tags: tuple[str, ...] | None = None  # desired tag set for an id-less localized ``retag``
+    disposition: str = "apply"  # "apply" | "refuse" — the resolved verdict (#216)
 
 
 @dataclass(frozen=True)
@@ -242,6 +254,17 @@ class SyncPlan:
         return [i.tag_hold for i in self.issues if i.tag_hold is not None]
 
     @property
+    def refusals(self) -> list[Proposal]:
+        """Structural ``refuse`` items (#216): decisions NOT to act, shown in the plan.
+
+        A refusal is resolved at plan time (the both-directions cold-start /
+        id-less case), so the dry-run preview lists it and a writing run defers
+        it — never silently doubling a deck the way the old apply-time guard
+        could be bypassed for id-carrying adds.
+        """
+        return [p for p in self.proposals if p.kind == "refuse"]
+
+    @property
     def is_noop(self) -> bool:
         """True when there is nothing to apply (and nothing went wrong).
 
@@ -267,6 +290,7 @@ class SyncPlan:
                 f"{self.count('move')} move",
                 f"{self.count('remove')} remove",
                 f"{self.count('conflict')} conflict",
+                f"{self.count('refuse')} refuse",
             ]
             tail = f"; {len(self.issues)} issue(s)" if self.issues else ""
             return (
@@ -879,6 +903,7 @@ def classify_changes(
     if not has_baseline:
         _classify_cold(plan, de_by_key, en_by_key, de_idless, en_idless, set())
         _append_idless_adds(plan, de_idless, en_idless)
+        _refuse_cold_both_directions(plan)
         plan.proposals.sort(key=_proposal_sort_key)
         return plan
 
@@ -1015,6 +1040,7 @@ def classify_changes(
         # (de removed & en absent/removed, or mirror) falls through to no-op.
 
     _append_idless_adds(plan, de_idless, en_idless)
+    _refuse_idless_both_directions(plan)
     plan.proposals.sort(key=_proposal_sort_key)
     return plan
 
@@ -1110,6 +1136,79 @@ def _append_idless_adds(
         plan.proposals.append(_add(None, cell.role, "de->en", cell))
     for cell in en_idless:
         plan.proposals.append(_add(None, cell.role, "en->de", cell))
+
+
+def _refuse(source: Proposal, reason: str) -> Proposal:
+    """A structural ``refuse`` standing in for an add we decline to apply (#216).
+
+    Keeps the source cell's identity (direction / slide_id / source_position) so
+    the plan can show *which* cell was refused, but carries ``kind="refuse"`` /
+    ``disposition="refuse"`` so it is never counted as an ``add`` and never
+    applied — the engine defers it and the watermark holds at the baseline.
+    """
+    return Proposal(
+        kind="refuse",
+        role=source.role,
+        direction=source.direction,
+        slide_id=source.slide_id,
+        reason=reason,
+        source_position=source.source_position,
+        disposition="refuse",
+    )
+
+
+def _replace_adds_with_refusals(plan: SyncPlan, doomed: list[Proposal], reason: str) -> None:
+    """Swap the ``doomed`` add proposals out of the plan for ``refuse`` items."""
+    doomed_ids = {id(p) for p in doomed}
+    plan.proposals = [p for p in plan.proposals if id(p) not in doomed_ids]
+    plan.proposals.extend(_refuse(p, reason) for p in doomed)
+
+
+def _refuse_cold_both_directions(plan: SyncPlan) -> None:
+    """Cold start: if adds would flow BOTH ways, refuse them all (#216).
+
+    With no baseline, adds in both directions mean each half carries content the
+    other lacks: a freshly-split parallel pair (all id-less), a per-half
+    ``assign-ids`` run (both id'd, *mismatched* ids), or a half-id'd pair. None
+    can be safely auto-paired *here* — pairing structurally-parallel halves is the
+    cross-language similarity-guess the base design forbids (§3.2 of
+    ``single-language-authoring-sync``). Applying both directions would
+    translate-and-insert both sets and silently **double** both decks, so refuse
+    instead. (Phase 3's provider-gated correspondence check may later mint shared
+    ids for a confirmed pair.) A one-directional cold start — new content on one
+    side only — keeps its adds and applies normally.
+    """
+    adds = [p for p in plan.proposals if p.kind == "add"]
+    if len({p.direction for p in adds}) <= 1:
+        return
+    _replace_adds_with_refusals(
+        plan,
+        adds,
+        "cold-start pair drifted on both decks (no baseline to pair against) — "
+        "sync one direction at a time, or assign shared slide_ids first (#216)",
+    )
+
+
+def _refuse_idless_both_directions(plan: SyncPlan) -> None:
+    """Baseline path: id-less adds on BOTH decks can't be paired — refuse them (#216).
+
+    An id-less new cell on each side has no ``slide_id`` to pair on, so translating
+    and inserting both would cross-add (each deck gets the other's untranslatable
+    twin). This is the situation the old apply-time guard deferred; deciding it
+    here, at plan time, is what makes the dry-run show it. id-*carrying*
+    both-direction adds are left as adds: against a real baseline their ids were
+    absent from it, so they are genuinely distinct new slides (not a mismatched
+    pair) and apply correctly.
+    """
+    idless = [p for p in plan.proposals if p.kind == "add" and p.slide_id is None]
+    if len({p.direction for p in idless}) <= 1:
+        return
+    _replace_adds_with_refusals(
+        plan,
+        idless,
+        "id-less new slides on both decks — edit one deck at a time "
+        "(no slide_id to pair the halves; #216)",
+    )
 
 
 def _add(
@@ -1428,6 +1527,7 @@ _KIND_ORDER = {
     "move": 4,
     "add": 5,
     "rename": 6,
+    "refuse": 7,
 }
 
 

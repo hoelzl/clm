@@ -1113,16 +1113,13 @@ class TestDryRunApplyParity:
         assert "1 add" in applied.output
         assert "# ## Neu" in de_path.read_text(encoding="utf-8")
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="#216: for a cold-start parallel id-less pair the dry-run promises "
-        "N adds and exits 1 (changes pending), but a writing run defers them all "
-        "with an error and exits 2, writing nothing — the preview misleads. The fix "
-        "must make the plan honest (pair-and-mint, or surface the refusal as an issue).",
-    )
     def test_dry_run_promise_matches_apply_for_parallel_idless(
         self, cli_runner: CliRunner, tmp_path: Path, monkeypatch
     ):
+        # A cold-start parallel id-less pair: the resolver refuses the
+        # both-directions adds at plan time (#216), so the dry-run shows the
+        # refusal (exit 1, "changes pending") and a writing run defers it
+        # (exit 1) — they agree, and nothing is written.
         de = _idless_slide("de", "# ## Eins") + _idless_slide("de", "# ## Zwei")
         en = _idless_slide("en", "# ## One") + _idless_slide("en", "# ## Two")
         de_path, en_path = _write_pair(tmp_path, de, en, stem="cold")
@@ -1132,17 +1129,16 @@ class TestDryRunApplyParity:
         )
         assert dry.exit_code == 1, _combined(dry)  # "changes pending"
         assert "baseline=none" in dry.output
+        assert "refuse" in dry.output  # the refusal is shown in the preview
 
         _stub_judge(monkeypatch, _EN_PROPOSAL)
         _stub_translator(monkeypatch)
         applied = cli_runner.invoke(slides_sync_cmd, [str(de_path), str(en_path), "--no-cache"])
-        # Whatever happens, the writing run must not corrupt the decks.
+        # The writing run does not corrupt the decks...
         assert de_path.read_text(encoding="utf-8") == de
         assert en_path.read_text(encoding="utf-8") == en
-        # The contract the fix must restore: a writing-run error (exit 2) must have
-        # been foreseen by the dry-run (also exit 2). Today dry=1, apply=2 -> xfail.
-        if applied.exit_code == 2:
-            assert dry.exit_code == 2, (
-                f"writing run errored (exit 2) but dry-run reported exit "
-                f"{dry.exit_code}: {_combined(applied)}"
-            )
+        # ...and the dry-run preview matched it: both "needs review" (exit 1), the
+        # refusal foreseen — never a clean/pending preview that errors on write.
+        assert applied.exit_code == 1, _combined(applied)
+        assert applied.exit_code == dry.exit_code
+        assert "refuse" in applied.output

@@ -59,6 +59,7 @@ __all__ = [
     "DE_WINS",
     "EN_WINS",
     "QUIT",
+    "REFUSE",
     "SKIP",
     "PlanWalkResult",
     "WalkerAction",
@@ -75,6 +76,7 @@ QUIT = "quit"
 DE_WINS = "de-wins"
 EN_WINS = "en-wins"
 AUTO = "auto"  # add (id-less or id-carrying) / rename, applied without prompting
+REFUSE = "refuse"  # a structural refusal (#216): shown, never prompted, deferred
 
 _GATED_KINDS = {"edit", "retag", "remove", "move"}
 _AUTO_KINDS = {"add", "rename"}
@@ -148,6 +150,11 @@ class PlanWalkResult:
         return self._count(action=AUTO)
 
     @property
+    def refused(self) -> int:
+        """Structural refusals shown but not acted on (#216) — deferred by design."""
+        return self._count(action=REFUSE)
+
+    @property
     def unvisited(self) -> int:
         """Proposals not reached because the author quit the walk."""
         return self._count(action=QUIT)
@@ -180,6 +187,7 @@ class PlanWalkResult:
             f"walker decisions: {self.accepted} accepted, "
             f"{self.conflicts_resolved} conflict(s) resolved, "
             f"{self.skipped} skipped, "
+            f"{self.refused} refused, "
             f"{self.unvisited} unvisited (quit).",
             f"applied: {r.applied_edit} edit, {r.applied_retag} retag, "
             f"{r.applied_remove} remove, "
@@ -229,6 +237,15 @@ def run_plan_walker(
             # the existing id; an id-less add mints one.
             echo("  → will auto-apply (add/rename; counterpart reviewed in git diff)")
             actions.append(_action(proposal, AUTO))
+            continue
+
+        if kind == "refuse":
+            # A structural refusal the resolver decided at plan time (#216): there
+            # is no decision to make — show it and let the apply engine defer it
+            # (the watermark holds, exit code is "needs review"). Never prompted.
+            echo(render_proposal(proposal, de_bodies, en_bodies))
+            echo("  → refused (structural; sync one direction at a time)")
+            actions.append(_action(proposal, REFUSE))
             continue
 
         if quitting:

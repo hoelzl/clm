@@ -10,22 +10,19 @@ the dry-run exit code, ``_apply_exit_code`` is the writing-run exit code, and a
 **non-failing** static translator/judge is injected so that any divergence is the
 plan-vs-apply disagreement under test, never a translation/judge failure.
 
-Known divergence (#216): when *both* halves of a split pair carry id-less cells
-(a freshly-authored or freshly-split parallel deck), the classifier emits an
-``add`` per cell on *both* sides, so the plan promises ``N add`` and dry-run
-exits 1 ("changes pending"). But ``apply`` cannot pair parallel id-less halves,
-so it defers every add with an error and exits 2, writing nothing. The dry-run
-preview is therefore a lie. The two ``xfail(strict=True)`` tests below encode the
-fixed contract; when #216 teaches the classifier to pair-and-mint (or to surface
-the refusal as a plan issue), they flip to passing and the strict marker forces
-its own removal.
+Fixed in the resolve-then-apply redesign (#216): when adds would flow in *both*
+directions with no way to pair the halves — a freshly-split parallel deck (all
+id-less), a per-half ``assign-ids`` (mismatched ids), or a half-id'd pair — the
+classifier now emits ``refuse`` proposals at plan time instead of bidirectional
+adds the apply engine would silently double (id-carrying) or defer with an error
+(id-less). So the dry-run lists the refusal (exit 1, "changes pending") and a
+writing run defers it (exit 1), writing nothing — the preview and the act agree.
+The ``TestColdStartRefusalParity`` cases below pin that agreement.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-
-import pytest
 
 from clm.cli.commands.slides_sync import _apply_exit_code, _plan_exit_code
 from clm.infrastructure.llm.cache import SyncWatermarkCache
@@ -209,17 +206,11 @@ class TestDryRunMatchesApply:
 
 
 # ---------------------------------------------------------------------------
-# Parity is BROKEN (#216): the dry-run preview lies about a parallel id-less pair
+# Parity holds for a both-directions cold-start pair: the resolver refuses (#216)
 # ---------------------------------------------------------------------------
 
 
-class TestDryRunMatchesApplyKnownBugs:
-    @pytest.mark.xfail(
-        strict=True,
-        reason="#216: cold-start parallel id-less pair — dry-run promises N adds "
-        "(exit 1) but apply defers all with an error (exit 2), writing nothing. "
-        "Fix must pair-and-mint or surface the refusal in the plan.",
-    )
+class TestColdStartRefusalParity:
     def test_cold_start_parallel_idless_pair(self, tmp_path: Path):
         # A freshly-authored / freshly-split pair: structurally parallel, prose
         # differs by language, ZERO slide_ids, no watermark and (tmp dir) no git.
@@ -237,19 +228,18 @@ class TestDryRunMatchesApplyKnownBugs:
         plan, dry_exit, result, apply_exit = _dry_then_apply(
             de_path, en_path, cache=None, translator=_forgiving_translator(), judge=None
         )
-        # Establish the divergence is the #216 cold-start one, not something else.
+        # The resolver refuses both directions rather than promising 6 adds it
+        # cannot apply: 3 de->en + 3 en->de become 6 refusals, nothing to add.
         assert plan.baseline_source == "none"
-        assert plan.count("add") == 6  # 3 de->en + 3 en->de: the misleading promise
-        assert dry_exit == 1  # dry-run says "6 changes pending"
-        # The contract the fix must restore (currently false -> xfail):
+        assert plan.count("add") == 0
+        assert plan.count("refuse") == 6
+        assert dry_exit == 1  # "changes pending" (the refusal needs the author)
+        assert apply_exit == 1  # ...deferred, not errored
+        # Nothing written: both halves are byte-identical after the writing run.
+        assert de_path.read_text(encoding="utf-8") == de
+        assert en_path.read_text(encoding="utf-8") == en
         _assert_dry_run_predicts_apply(plan, dry_exit, result, apply_exit)
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="#216: both halves carry an id-less cell even against a watermark "
-        "baseline — dry-run promises 2 adds (exit 1) but apply defers both with an "
-        "error (exit 2), writing nothing.",
-    )
     def test_watermark_baseline_both_sides_idless(self, tmp_path: Path):
         de_path, en_path = _write_pair(
             tmp_path, _slide("de", "a", "# ## A"), _slide("en", "a", "# ## A")
@@ -257,18 +247,22 @@ class TestDryRunMatchesApplyKnownBugs:
         cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
         try:
             _seed_watermark(cache, de_path, en_path)
-            # An id-less new slide added on BOTH halves (the isolated #216 case).
-            de_path.write_text(
-                _slide("de", "a", "# ## A") + _slide_idless("de", "# ## Neu"), encoding="utf-8"
-            )
-            en_path.write_text(
-                _slide("en", "a", "# ## A") + _slide_idless("en", "# ## New"), encoding="utf-8"
-            )
+            # An id-less new slide added on BOTH halves (the isolated #216 case):
+            # against a real baseline this still cannot be paired, so it refuses.
+            de_after = _slide("de", "a", "# ## A") + _slide_idless("de", "# ## Neu")
+            en_after = _slide("en", "a", "# ## A") + _slide_idless("en", "# ## New")
+            de_path.write_text(de_after, encoding="utf-8")
+            en_path.write_text(en_after, encoding="utf-8")
             plan, dry_exit, result, apply_exit = _dry_then_apply(
                 de_path, en_path, cache=cache, translator=_forgiving_translator(), judge=None
             )
-            assert plan.count("add") == 2
+            assert plan.count("add") == 0
+            assert plan.count("refuse") == 2
             assert dry_exit == 1
+            assert apply_exit == 1
+            assert result.watermark_recorded is False  # held over the refusal
+            assert de_path.read_text(encoding="utf-8") == de_after
+            assert en_path.read_text(encoding="utf-8") == en_after
             _assert_dry_run_predicts_apply(plan, dry_exit, result, apply_exit)
         finally:
             cache.close()

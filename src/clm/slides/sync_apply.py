@@ -20,6 +20,9 @@ Scope of this engine:
   slide's id. id-carrying "missing counterpart" adds are a follow-up.
 - **conflict** — isolated by design; counted as ``deferred`` so nothing is
   silent.
+- **refuse** — a structural decision the resolver made at plan time *not* to act
+  (the both-directions cold-start / id-less case, #216); executed as a no-op
+  ``deferred`` so the watermark holds and the dry-run preview matches the run.
 
 Atomicity: each proposal is all-or-nothing for its target cell; the two decks
 are persisted once at the end, via a buffered temp-swap (Issue #190 item 1)
@@ -242,6 +245,15 @@ def apply_plan(
                 result,
                 deferred_keys,
             )
+        elif kind == "refuse":
+            # A structural refusal the resolver decided at plan time (#216): the
+            # engine never acts on it — it is *deferred* so the watermark holds
+            # for these cells and the exit code is "needs review", exactly what
+            # the dry-run preview promised. (This is the both-directions
+            # cold-start / id-less case; the old apply-time guard that re-decided
+            # it — and that the id-carrying path silently bypassed — is gone.)
+            result.deferred += 1
+            _note_deferred(deferred_keys, proposal)
         # "add" / "rename" are handled by _apply_adds below (always applied).
 
     # Adds run before moves so a freshly-inserted slide takes part in any
@@ -707,16 +719,11 @@ def _apply_adds(
     if len(idless) + len(rename_props) == 0:
         return
 
-    process_idless = True
-    if idless and len({p.direction for p in idless}) > 1:
-        # id-less new slides on BOTH decks: off the single-language path. Defer
-        # the adds (renames are independent and still apply).
-        result.deferred += len(idless)
-        result.errors.append(
-            "id-less new slides on both decks — edit one deck at a time (deferred)"
-        )
-        process_idless = False
-
+    # The both-directions id-less refusal that used to live here (a deck-doubling
+    # guard, plus the unguarded id-carrying sibling that bypassed it) is now a
+    # plan-time decision in the resolver (#216): such adds reach apply as
+    # ``refuse`` proposals, deferred above. Every ``add`` that survives to here is
+    # therefore a single-direction add that applies mechanically.
     de_copy_ids = _identify_copy_slides(
         de_state, "de", [p for p in rename_props if p.direction == "de->en"]
     )
@@ -730,12 +737,8 @@ def _apply_adds(
         for cell in state.cells
         if cell.metadata.slide_id
     }
-    _add_one_direction(
-        de_state, en_state, "de", "en", translator, used_ids, result, de_copy_ids, process_idless
-    )
-    _add_one_direction(
-        en_state, de_state, "en", "de", translator, used_ids, result, en_copy_ids, process_idless
-    )
+    _add_one_direction(de_state, en_state, "de", "en", translator, used_ids, result, de_copy_ids)
+    _add_one_direction(en_state, de_state, "en", "de", translator, used_ids, result, en_copy_ids)
 
 
 def _add_idcarrying_one_direction(
@@ -826,7 +829,6 @@ def _add_one_direction(
     used_ids: set[str],
     result: ApplyResult,
     copy_slide_ids: set[int],
-    process_idless: bool,
 ) -> None:
     """Walk the source deck, minting ids for new and copy-pasted slides.
 
@@ -836,6 +838,9 @@ def _add_one_direction(
     copy slide's old id so each following same-id companion inherits the freshly
     minted id — rather than by a per-companion hash match (which identical
     companions defeat).
+
+    Every id-less cell here is a single-direction add (the both-directions case is
+    refused at plan time, #216), so it always mints and places — no gating.
     """
     current_slide_id: str | None = None
     renaming_from: str | None = None  # old id of a copy slide whose companions follow
@@ -853,9 +858,6 @@ def _add_one_direction(
                 renaming_from = None
                 anchor = (sid, role)
                 continue
-            if sid is None and not process_idless:
-                renaming_from = None
-                continue  # deferred parallel id-less add
             # id-less add OR copy slide: translate, mint EN-authority id, place.
             target_body = _translate(cell, source_lang, target_lang, translator, role, result)
             if target_body is None:
@@ -880,8 +882,6 @@ def _add_one_direction(
         is_copy_companion = renaming_from is not None and sid is not None and sid == renaming_from
         if sid is not None and not is_copy_companion:
             anchor = (sid, role)  # existing companion (of a non-copied slide)
-            continue
-        if sid is None and not process_idless:
             continue
         if current_slide_id is None:
             result.deferred += 1

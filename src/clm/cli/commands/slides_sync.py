@@ -1011,7 +1011,7 @@ def _plan_dict(plan: SyncPlan) -> dict:
         "in_sync": plan.in_sync_count,
         "counts": {
             kind: plan.count(kind)
-            for kind in ("add", "edit", "retag", "move", "remove", "conflict", "rename")
+            for kind in ("add", "edit", "retag", "move", "remove", "conflict", "rename", "refuse")
         },
         "proposals": [
             {
@@ -1021,6 +1021,7 @@ def _plan_dict(plan: SyncPlan) -> dict:
                 "slide_id": p.slide_id,
                 "reason": p.reason,
                 "translation_pending": p.translation_pending,
+                "disposition": p.disposition,
             }
             for p in plan.proposals
         ],
