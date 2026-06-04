@@ -132,13 +132,33 @@ class Proposal:
     """One cross-language change the sync would make.
 
     ``kind`` is ``add`` / ``edit`` / ``retag`` / ``move`` / ``remove`` /
-    ``conflict`` / ``rename``. ``direction`` is ``"de->en"`` / ``"en->de"`` (the
-    side that drifted is the source), or ``None`` for a conflict. ``slide_id`` is
-    ``None`` for an id-less add, and the *duplicated* id for a ``rename``. A
-    ``retag`` mirrors a tag-only edit (the content hash is unchanged) onto the
-    other half (Issue #198). Positions are 0-based indices among sync-relevant
-    cells and are best-effort context for later phases (anchoring, walker
-    rendering).
+    ``conflict`` / ``rename`` / ``refuse`` / ``mint`` / ``adopt``. ``direction``
+    is ``"de->en"`` / ``"en->de"`` (the side that drifted is the source), or
+    ``None`` for a conflict / ``mint``. ``slide_id`` is ``None`` for an id-less
+    add, and the *duplicated* id for a ``rename``. A ``retag`` mirrors a tag-only
+    edit (the content hash is unchanged) onto the other half (Issue #198).
+    Positions are 0-based indices among sync-relevant cells and are best-effort
+    context for later phases (anchoring, walker rendering).
+
+    ``mint`` and ``adopt`` are the two cold-start id-bootstrap candidates (#216
+    §12; ``disposition == "pending"``): a ``mint`` stands for a both-id-less
+    cold pair whose halves get a *fresh* shared ``slide_id`` per slide; an
+    ``adopt`` stands for a *half-id'd* cold pair (one half fully id'd, the other
+    fully id-less) where the id-less half **adopts** the id'd half's *existing*
+    ids — its ``direction`` is ``"{authority}->{other}"`` (the id-bearing side
+    first). Both are confirmed by the apply-time correspondence verifier before
+    any id reaches disk; an unconfirmed candidate downgrades to a deferral.
+
+    ``disposition`` is the resolved verdict the classifier assigns (the
+    resolve-then-apply redesign, #216): ``"apply"`` (the default — apply executes
+    a concrete mechanical op) or ``"refuse"`` (a structural decision *not* to act,
+    surfaced in the plan and held at the baseline). A ``refuse`` proposal carries
+    ``kind == "refuse"`` and ``disposition == "refuse"`` so it renders in the plan,
+    drives the dry-run exit code, and is deferred — never applied — by the engine.
+    Moving this decision to plan time is what makes ``--dry-run`` predict the
+    writing run instead of diverging from it (the apply engine used to re-decide
+    a both-directions refusal that the plan never recorded). Later phases add
+    ``"pending"`` / ``"conflict"`` dispositions to apply-kind items.
 
     ``content_hash`` is set on a ``rename`` proposal: it identifies which of the
     duplicate-id cells is the copy (the apply re-mints the cell matching this
@@ -164,6 +184,7 @@ class Proposal:
     new_position: int | None = None
     content_hash: str | None = None  # the copy's hash, for ``rename``
     tags: tuple[str, ...] | None = None  # desired tag set for an id-less localized ``retag``
+    disposition: str = "apply"  # "apply" | "refuse" — the resolved verdict (#216)
 
 
 @dataclass(frozen=True)
@@ -242,6 +263,17 @@ class SyncPlan:
         return [i.tag_hold for i in self.issues if i.tag_hold is not None]
 
     @property
+    def refusals(self) -> list[Proposal]:
+        """Structural ``refuse`` items (#216): decisions NOT to act, shown in the plan.
+
+        A refusal is resolved at plan time (the both-directions cold-start /
+        id-less case), so the dry-run preview lists it and a writing run defers
+        it — never silently doubling a deck the way the old apply-time guard
+        could be bypassed for id-carrying adds.
+        """
+        return [p for p in self.proposals if p.kind == "refuse"]
+
+    @property
     def is_noop(self) -> bool:
         """True when there is nothing to apply (and nothing went wrong).
 
@@ -267,6 +299,9 @@ class SyncPlan:
                 f"{self.count('move')} move",
                 f"{self.count('remove')} remove",
                 f"{self.count('conflict')} conflict",
+                f"{self.count('refuse')} refuse",
+                f"{self.count('mint')} mint",
+                f"{self.count('adopt')} adopt",
             ]
             tail = f"; {len(self.issues)} issue(s)" if self.issues else ""
             return (
@@ -879,6 +914,7 @@ def classify_changes(
     if not has_baseline:
         _classify_cold(plan, de_by_key, en_by_key, de_idless, en_idless, set())
         _append_idless_adds(plan, de_idless, en_idless)
+        _refuse_cold_both_directions(plan)
         plan.proposals.sort(key=_proposal_sort_key)
         return plan
 
@@ -1015,6 +1051,7 @@ def classify_changes(
         # (de removed & en absent/removed, or mirror) falls through to no-op.
 
     _append_idless_adds(plan, de_idless, en_idless)
+    _refuse_idless_both_directions(plan)
     plan.proposals.sort(key=_proposal_sort_key)
     return plan
 
@@ -1110,6 +1147,79 @@ def _append_idless_adds(
         plan.proposals.append(_add(None, cell.role, "de->en", cell))
     for cell in en_idless:
         plan.proposals.append(_add(None, cell.role, "en->de", cell))
+
+
+def _refuse(source: Proposal, reason: str) -> Proposal:
+    """A structural ``refuse`` standing in for an add we decline to apply (#216).
+
+    Keeps the source cell's identity (direction / slide_id / source_position) so
+    the plan can show *which* cell was refused, but carries ``kind="refuse"`` /
+    ``disposition="refuse"`` so it is never counted as an ``add`` and never
+    applied — the engine defers it and the watermark holds at the baseline.
+    """
+    return Proposal(
+        kind="refuse",
+        role=source.role,
+        direction=source.direction,
+        slide_id=source.slide_id,
+        reason=reason,
+        source_position=source.source_position,
+        disposition="refuse",
+    )
+
+
+def _replace_adds_with_refusals(plan: SyncPlan, doomed: list[Proposal], reason: str) -> None:
+    """Swap the ``doomed`` add proposals out of the plan for ``refuse`` items."""
+    doomed_ids = {id(p) for p in doomed}
+    plan.proposals = [p for p in plan.proposals if id(p) not in doomed_ids]
+    plan.proposals.extend(_refuse(p, reason) for p in doomed)
+
+
+def _refuse_cold_both_directions(plan: SyncPlan) -> None:
+    """Cold start: if adds would flow BOTH ways, refuse them all (#216).
+
+    With no baseline, adds in both directions mean each half carries content the
+    other lacks: a freshly-split parallel pair (all id-less), a per-half
+    ``assign-ids`` run (both id'd, *mismatched* ids), or a half-id'd pair. None
+    can be safely auto-paired *here* — pairing structurally-parallel halves is the
+    cross-language similarity-guess the base design forbids (§3.2 of
+    ``single-language-authoring-sync``). Applying both directions would
+    translate-and-insert both sets and silently **double** both decks, so refuse
+    instead. (Phase 3's provider-gated correspondence check may later mint shared
+    ids for a confirmed pair.) A one-directional cold start — new content on one
+    side only — keeps its adds and applies normally.
+    """
+    adds = [p for p in plan.proposals if p.kind == "add"]
+    if len({p.direction for p in adds}) <= 1:
+        return
+    _replace_adds_with_refusals(
+        plan,
+        adds,
+        "cold-start pair drifted on both decks (no baseline to pair against) — "
+        "sync one direction at a time, or assign shared slide_ids first (#216)",
+    )
+
+
+def _refuse_idless_both_directions(plan: SyncPlan) -> None:
+    """Baseline path: id-less adds on BOTH decks can't be paired — refuse them (#216).
+
+    An id-less new cell on each side has no ``slide_id`` to pair on, so translating
+    and inserting both would cross-add (each deck gets the other's untranslatable
+    twin). This is the situation the old apply-time guard deferred; deciding it
+    here, at plan time, is what makes the dry-run show it. id-*carrying*
+    both-direction adds are left as adds: against a real baseline their ids were
+    absent from it, so they are genuinely distinct new slides (not a mismatched
+    pair) and apply correctly.
+    """
+    idless = [p for p in plan.proposals if p.kind == "add" and p.slide_id is None]
+    if len({p.direction for p in idless}) <= 1:
+        return
+    _replace_adds_with_refusals(
+        plan,
+        idless,
+        "id-less new slides on both decks — edit one deck at a time "
+        "(no slide_id to pair the halves; #216)",
+    )
 
 
 def _add(
@@ -1428,12 +1538,15 @@ _KIND_ORDER = {
     "move": 4,
     "add": 5,
     "rename": 6,
+    "refuse": 7,
+    "mint": 8,
+    "adopt": 9,
 }
 
 
 def _proposal_sort_key(p: Proposal) -> tuple:
     return (
-        _KIND_ORDER.get(p.kind, 9),
+        _KIND_ORDER.get(p.kind, 10),
         p.source_position if p.source_position is not None else 1_000_000,
         p.slide_id or "",
         p.role,
@@ -1451,11 +1564,20 @@ def build_sync_plan(
     *,
     watermark_cache: SyncWatermarkCache | None = None,
     allow_git_fallback: bool = True,
+    provider_available: bool = False,
 ) -> SyncPlan:
     """Resolve the baseline and classify the pair into a :class:`SyncPlan`.
 
     Baseline priority: watermark → git HEAD → none (see module docstring).
     Reads the two files; writes nothing.
+
+    ``provider_available`` (#216 Phase 3, design §12) is the plan-time fact "a
+    correspondence verifier will be available at apply time" (an LLM provider is
+    configured **and** ``--verify-cold-pairs`` is on). When true, a cold-start
+    both-id-less refusal over a *unifiable* pair is upgraded to a ``pending`` mint
+    candidate instead of a `refuse`; the verifier (stage 2b, in apply) confirms the
+    halves correspond before a shared id is minted. Identical in dry-run and apply,
+    so the two agree on `refuse`-vs-`pending`.
     """
     de_cells = parse_cells(de_path.read_text(encoding="utf-8"))
     en_cells = parse_cells(en_path.read_text(encoding="utf-8"))
@@ -1535,7 +1657,206 @@ def build_sync_plan(
         )
         plan.proposals.sort(key=_proposal_sort_key)
 
+    # Phase 3 (#216 §12): a cold-start refusal becomes a `pending` bootstrap
+    # candidate when a provider/verifier is available — apply (2b) then confirms
+    # correspondence before any id reaches disk. Two shapes, mutually exclusive:
+    # a both-id-less *unifiable* pair → `mint` (fresh shared ids); a *half-id'd*
+    # pair (one half fully id'd, the other fully id-less) → `adopt` (the id-less
+    # half adopts the id'd half's existing ids). Cold start only (so apply can
+    # short-circuit the whole pair; the watermark-baseline both-sides-idless case
+    # keeps refusing, a documented future extension). `adopt` runs after `mint`
+    # and is a no-op when `mint` already consumed the refusals.
+    if source == "none" and provider_available:
+        _maybe_emit_cold_mint(plan, de_cells, en_cells, de_path, en_path)
+        _maybe_emit_cold_adopt(plan, de_cells, en_cells, de_path, en_path)
+
     return plan
+
+
+def _maybe_emit_cold_mint(
+    plan: SyncPlan,
+    de_cells: list[Cell],
+    en_cells: list[Cell],
+    de_path: Path,
+    en_path: Path,
+) -> None:
+    """Upgrade an all-id-less cold refusal to a ``pending`` mint candidate (#216 §12).
+
+    Gated three ways, conservative by construction: every refusal must be id-less
+    (the both-id-less cold pair — a mismatched-id refusal is left to stand and a
+    half-id'd refusal is handled by :func:`_maybe_emit_cold_adopt` instead), the
+    localized streams must be positionally aligned (so the verifier and the minter
+    pair the same cells), and the pair must be **unifiable** (a read-only
+    ``unify→split`` byte-faithful round-trip — the same guard
+    :func:`assign_ids_in_split_pair` applies before it writes). Any gate failing
+    keeps the `refuse`. Emits a single ``mint`` proposal (``disposition="pending"``)
+    standing for the whole pair; the aligned heading/snippet pairs are rebuilt in
+    apply from the (unchanged) files.
+
+    Never offered when the plan already carries a **classifier error** (e.g. an
+    unresolvable duplicate id): bootstrapping ids onto a structurally-broken pair
+    would bake the error in — the same posture as the apply-time flush gate, which
+    writes nothing on ``plan.has_errors``. (Unreachable for a true both-id-less pair,
+    which has no id-carrying cells to collide — kept for symmetry with adopt.)
+    """
+    if plan.has_errors:
+        return
+    refusals = plan.refusals
+    if not refusals or any(r.slide_id is not None for r in refusals):
+        return
+    de_loc = _localized_lang_cells(de_cells, "de")
+    en_loc = _localized_lang_cells(en_cells, "en")
+    if len(de_loc) != len(en_loc) or not _streams_aligned(de_loc, en_loc):
+        return
+    if not _is_unifiable(de_path, en_path):
+        return
+    refused_ids = {id(r) for r in refusals}
+    plan.proposals = [p for p in plan.proposals if id(p) not in refused_ids]
+    plan.proposals.append(
+        Proposal(
+            kind="mint",
+            role="slide",
+            direction=None,
+            slide_id=None,
+            reason="cold-start pair — pending correspondence verification (#216)",
+            disposition="pending",
+        )
+    )
+    plan.proposals.sort(key=_proposal_sort_key)
+
+
+def _is_unifiable(de_path: Path, en_path: Path) -> bool:
+    """Read-only: does ``unify→split`` round-trip byte-faithfully? (the mint guard).
+
+    Mirrors :func:`assign_ids_in_split_pair`'s own gate, so a `pending` candidate
+    this admits is one the minter will actually be able to write. A pair that does
+    not round-trip (structurally misaligned, divergent shared cell) is not mintable,
+    so the candidacy declines and the `refuse` stands.
+    """
+    from clm.slides.split import SplitError, UnifyError, split_text, unify_texts
+
+    de_text = de_path.read_text(encoding="utf-8")
+    en_text = en_path.read_text(encoding="utf-8")
+    try:
+        unified = unify_texts(de_text, en_text)
+        rt_de, rt_en = split_text(unified)
+    except (SplitError, UnifyError):
+        return False
+    return (rt_de, rt_en) == (de_text, en_text)
+
+
+def _cold_adopt_authority(de_loc: list[Cell], en_loc: list[Cell]) -> str | None:
+    """The fully-id'd side of a half-id'd cold pair (``"de"``/``"en"``), or ``None``.
+
+    A half-id'd pair is one positionally-aligned localized stream where the
+    *sync-relevant* cells are id'd on exactly one side (the **authority**) and
+    id-less on the other, while the non-sync cells (id-less localized code) are
+    id-less on both. The id-less half can then **adopt** the authority's existing
+    ids verbatim (:func:`clm.slides.sync_apply._apply_cold_adopt`) — no minting,
+    no translation. Returns the authority language, or ``None`` when the pair is
+    not a clean half-id'd shape (so the cold refusal stands):
+
+    - **lengths differ** — the streams are not positionally comparable;
+    - **role / cell-type mismatch** at any position — the streams are not twins,
+      so positional pairing would be unsound (this also excludes an aux-markdown or
+      a localized-code half-id'd cell, whose ``role_of`` *depends on* the
+      ``slide_id`` and so differs across an id'd/id-less twin — those stay refused
+      rather than guessing an adopt);
+    - **a sync pair that is not XOR** — both id-less (the :func:`_maybe_emit_cold_mint`
+      case, not adopt) or both id'd (a mismatched-id pair → refuse);
+    - **mixed authority** — some sync pairs id'd on DE, others on EN → refuse;
+    - **an id on a non-sync cell** — unexpected; refuse rather than mis-stamp.
+
+    Conservative by construction: any doubt returns ``None`` and the visible-in-git
+    refuse stands, exactly the safety posture of the mint candidacy (§3.2 of
+    ``single-language-authoring-sync``: never bake an id from a similarity guess).
+    """
+    if not de_loc or len(de_loc) != len(en_loc):
+        return None
+    authority: str | None = None
+    saw_xor = False
+    for de_cell, en_cell in zip(de_loc, en_loc, strict=True):
+        de_role = role_of(de_cell.metadata)
+        en_role = role_of(en_cell.metadata)
+        if de_role != en_role:
+            return None
+        if de_cell.metadata.cell_type != en_cell.metadata.cell_type:
+            return None
+        de_id = de_cell.metadata.slide_id or None
+        en_id = en_cell.metadata.slide_id or None
+        if de_role is None:
+            # A non-sync localized cell (id-less code) — must be id-less on both.
+            if de_id is not None or en_id is not None:
+                return None
+            continue
+        # A sync-relevant pair: exactly one side must carry the id (XOR).
+        if (de_id is None) == (en_id is None):
+            return None  # both id-less (mint's job) or both id'd (mismatched → refuse)
+        side = "en" if en_id is not None else "de"
+        if authority is None:
+            authority = side
+        elif authority != side:
+            return None  # mixed authority → refuse
+        saw_xor = True
+    return authority if saw_xor else None
+
+
+def _maybe_emit_cold_adopt(
+    plan: SyncPlan,
+    de_cells: list[Cell],
+    en_cells: list[Cell],
+    de_path: Path,
+    en_path: Path,
+) -> None:
+    """Upgrade a half-id'd cold refusal to a ``pending`` adopt candidate (#216 §12).
+
+    The sibling of :func:`_maybe_emit_cold_mint` for the *half-id'd* shape (one half
+    fully id'd, the other fully id-less): the id-less half adopts the id'd half's
+    *existing* ids rather than minting fresh ones — ``unify``/``assign_ids`` cannot
+    do this (its ``_slide_ids_pair`` is ``de_id == en_id``, so an id-less cell never
+    pairs with an id'd one), so apply takes an explicit stamp path. Runs **after**
+    the mint pass and no-ops when mint already consumed the refusals (its removal
+    empties ``plan.refusals``), so the two are mutually exclusive. The authority is
+    decided by :func:`_cold_adopt_authority`; any non-clean shape leaves the refusal
+    standing. Emits a single ``adopt`` proposal (``disposition="pending"``,
+    ``direction="{authority}->{other}"``); apply rebuilds the aligned heading/snippet
+    pairs from the (unchanged) files and verifies them before stamping.
+
+    Never offered when the plan already carries a **classifier error** — most
+    importantly a *duplicated id on the authority half* (e.g. a slide whose two
+    voiceover companions share its id, which :func:`_resolve_duplicates` flags as a
+    "lone duplicated companion"). Stamping the authority's id positionally onto the
+    id-less twin would then propagate the duplicate onto the previously-clean half
+    and advance the watermark over the corruption. Declining on ``plan.has_errors``
+    matches the apply-time flush gate (which writes nothing on a classifier error)
+    and keeps the dry-run honest (it shows the error + refusals, exit 2, not a
+    phantom "adopt pending").
+    """
+    if plan.has_errors:
+        return
+    refusals = plan.refusals
+    if not refusals:
+        return
+    de_loc = _localized_lang_cells(de_cells, "de")
+    en_loc = _localized_lang_cells(en_cells, "en")
+    authority = _cold_adopt_authority(de_loc, en_loc)
+    if authority is None:
+        return
+    other = "en" if authority == "de" else "de"
+    refused_ids = {id(r) for r in refusals}
+    plan.proposals = [p for p in plan.proposals if id(p) not in refused_ids]
+    plan.proposals.append(
+        Proposal(
+            kind="adopt",
+            role="slide",
+            direction=f"{authority}->{other}",
+            slide_id=None,
+            reason=f"half-id'd cold-start pair — {authority.upper()} ids pending "
+            "correspondence verification (#216)",
+            disposition="pending",
+        )
+    )
+    plan.proposals.sort(key=_proposal_sort_key)
 
 
 def _apply_divergence(

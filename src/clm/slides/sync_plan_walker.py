@@ -46,10 +46,14 @@ from clm.slides.sync_apply import (
 )
 
 if TYPE_CHECKING:
-    from clm.infrastructure.llm.cache import SyncAlignmentCache, SyncWatermarkCache
+    from clm.infrastructure.llm.cache import (
+        SyncAlignmentCache,
+        SyncCorrespondenceCache,
+        SyncWatermarkCache,
+    )
     from clm.infrastructure.llm.ollama_client import SyncJudge
     from clm.slides.sync_plan import Proposal, SyncPlan
-    from clm.slides.sync_recover import AlignmentRecoverer
+    from clm.slides.sync_recover import AlignmentRecoverer, CorrespondenceVerifier
     from clm.slides.sync_translate import SlideTranslator
 
 
@@ -59,6 +63,7 @@ __all__ = [
     "DE_WINS",
     "EN_WINS",
     "QUIT",
+    "REFUSE",
     "SKIP",
     "PlanWalkResult",
     "WalkerAction",
@@ -75,6 +80,7 @@ QUIT = "quit"
 DE_WINS = "de-wins"
 EN_WINS = "en-wins"
 AUTO = "auto"  # add (id-less or id-carrying) / rename, applied without prompting
+REFUSE = "refuse"  # a structural refusal (#216): shown, never prompted, deferred
 
 _GATED_KINDS = {"edit", "retag", "remove", "move"}
 _AUTO_KINDS = {"add", "rename"}
@@ -148,6 +154,11 @@ class PlanWalkResult:
         return self._count(action=AUTO)
 
     @property
+    def refused(self) -> int:
+        """Structural refusals shown but not acted on (#216) — deferred by design."""
+        return self._count(action=REFUSE)
+
+    @property
     def unvisited(self) -> int:
         """Proposals not reached because the author quit the walk."""
         return self._count(action=QUIT)
@@ -180,6 +191,7 @@ class PlanWalkResult:
             f"walker decisions: {self.accepted} accepted, "
             f"{self.conflicts_resolved} conflict(s) resolved, "
             f"{self.skipped} skipped, "
+            f"{self.refused} refused, "
             f"{self.unvisited} unvisited (quit).",
             f"applied: {r.applied_edit} edit, {r.applied_retag} retag, "
             f"{r.applied_remove} remove, "
@@ -199,6 +211,8 @@ def run_plan_walker(
     options: WalkerOptions | None = None,
     recoverer: AlignmentRecoverer | None = None,
     alignment_cache: SyncAlignmentCache | None = None,
+    verifier: CorrespondenceVerifier | None = None,
+    correspondence_cache: SyncCorrespondenceCache | None = None,
 ) -> PlanWalkResult:
     """Walk ``plan``'s proposals, prompt per proposal, then apply once.
 
@@ -228,6 +242,27 @@ def run_plan_walker(
             # the resulting git diff). An id-carrying add inserts the twin under
             # the existing id; an id-less add mints one.
             echo("  → will auto-apply (add/rename; counterpart reviewed in git diff)")
+            actions.append(_action(proposal, AUTO))
+            continue
+
+        if kind == "refuse":
+            # A structural refusal the resolver decided at plan time (#216): there
+            # is no decision to make — show it and let the apply engine defer it
+            # (the watermark holds, exit code is "needs review"). Never prompted.
+            echo(render_proposal(proposal, de_bodies, en_bodies))
+            echo("  → refused (structural; sync one direction at a time)")
+            actions.append(_action(proposal, REFUSE))
+            continue
+
+        if kind in ("mint", "adopt"):
+            # A cold-start bootstrap candidate (#216 §12): correspondence is verified
+            # in apply (2b), not here — show it and let the engine mint/adopt or
+            # downgrade to refuse. Never prompted (the author reviews the resulting
+            # ids in git diff). `mint` creates fresh shared ids for a both-id-less
+            # pair; `adopt` stamps the id'd half's existing ids onto its id-less twin.
+            echo(render_proposal(proposal, de_bodies, en_bodies))
+            verb = "mint shared" if kind == "mint" else "adopt the id'd half's"
+            echo(f"  → pending correspondence verification (will {verb} ids if confirmed)")
             actions.append(_action(proposal, AUTO))
             continue
 
@@ -261,6 +296,8 @@ def run_plan_walker(
         decisions=decisions,
         recoverer=recoverer,
         alignment_cache=alignment_cache,
+        verifier=verifier,
+        correspondence_cache=correspondence_cache,
     )
     return PlanWalkResult(plan=plan, apply_result=apply_result, actions=actions)
 

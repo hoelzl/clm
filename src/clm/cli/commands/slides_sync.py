@@ -53,6 +53,7 @@ from attrs import define
 
 from clm.infrastructure.llm.cache import (
     SyncAlignmentCache,
+    SyncCorrespondenceCache,
     SyncWatermarkCache,
     resolve_cache_dir,
 )
@@ -83,14 +84,18 @@ from clm.slides.sync_plan import (
     render_plan,
 )
 from clm.slides.sync_plan_walker import PlanWalkResult, WalkerOptions, run_plan_walker
-from clm.slides.sync_recover import DEFAULT_RECOVERY_MODEL, OpenRouterAlignmentRecoverer
+from clm.slides.sync_recover import (
+    DEFAULT_RECOVERY_MODEL,
+    OpenRouterAlignmentRecoverer,
+    OpenRouterCorrespondenceVerifier,
+)
 from clm.slides.sync_translate import DEFAULT_TRANSLATION_MODEL, OpenRouterSlideTranslator
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from clm.infrastructure.llm.ollama_client import SyncJudge
-    from clm.slides.sync_recover import AlignmentRecoverer
+    from clm.slides.sync_recover import AlignmentRecoverer, CorrespondenceVerifier
     from clm.slides.sync_translate import SlideTranslator
 
 CACHE_DB_NAME = "clm-llm.sqlite"
@@ -299,6 +304,18 @@ def _resolve_single_path(de_path: Path, en_path: Path | None) -> tuple[Path, Pat
     help="OpenRouter model for --llm-recover alignment (a strong reasoning model).",
 )
 @click.option(
+    "--verify-cold-pairs/--no-verify-cold-pairs",
+    "verify_cold_pairs",
+    default=None,
+    help=(
+        "Bootstrap a never-id'd split pair by minting shared slide_ids — but only "
+        "after a cheap LLM (Haiku, via OpenRouter) confirms the two halves actually "
+        "correspond (#216). Default: on when $OPENROUTER_API_KEY (or $OPENAI_API_KEY) "
+        "is set. With no provider, or --no-verify-cold-pairs, such a pair is refused "
+        "(sync one direction at a time, or run `clm slides assign-ids`)."
+    ),
+)
+@click.option(
     "--cache-dir",
     type=click.Path(path_type=Path),
     default=None,
@@ -353,6 +370,7 @@ def slides_sync_cmd(
     translation_model: str,
     llm_recover: bool,
     recovery_model: str,
+    verify_cold_pairs: bool | None,
     cache_dir: Path | None,
     no_cache: bool,
     no_env_file: bool,
@@ -410,6 +428,13 @@ def slides_sync_cmd(
             "(--explain is a human-readable diagnostic; use --dry-run --json for the structured plan)"
         )
 
+    # Cold-start minting (#216 §12): a verifier is on by default when a provider is
+    # configured; --no-verify-cold-pairs forces it off (cold pairs then refuse).
+    # ``provider_available`` is a plan-time fact (identical in dry-run and apply), so
+    # the two agree on whether a cold pair is a `pending` mint candidate or a `refuse`.
+    verify_enabled = verify_cold_pairs is not False
+    provider_available = verify_enabled and has_openrouter_api_key()
+
     # Batch mode: a directory triggers a sweep over every split pair under the
     # tree (one funnel — no separate `sync-all` subcommand). Branch here, before
     # the single-path / pairing-guard resolution (which both assume a file).
@@ -434,9 +459,11 @@ def slides_sync_cmd(
             no_cache=no_cache,
             no_env_file=no_env_file,
             cache_dir=cache_dir,
+            provider_available=provider_available,
             make_judge=lambda: _resolve_judge(provider, llm_model, ollama_url, llm_timeout),
             make_translator=lambda: OpenRouterSlideTranslator(model=translation_model),
             make_recoverer=lambda: _resolve_recoverer(llm_recover, recovery_model),
+            make_verifier=lambda: _resolve_verifier(verify_enabled),
         )
         return  # _run_batch always sys.exit()s; this is just for the type-checker.
 
@@ -470,18 +497,23 @@ def slides_sync_cmd(
 
     watermark_cache: SyncWatermarkCache | None = None
     alignment_cache: SyncAlignmentCache | None = None
+    correspondence_cache: SyncCorrespondenceCache | None = None
     if not no_cache:
         cache_root = resolve_cache_dir(cli_override=cache_dir)
         watermark_cache = SyncWatermarkCache(cache_root / CACHE_DB_NAME)
         if llm_recover and not dry_run:
             alignment_cache = SyncAlignmentCache(cache_root / CACHE_DB_NAME)
+        if provider_available and not dry_run:
+            correspondence_cache = SyncCorrespondenceCache(cache_root / CACHE_DB_NAME)
 
     plan: SyncPlan
     apply_result: ApplyResult | None = None
     walk: PlanWalkResult | None = None
     explain_text: str | None = None
     try:
-        plan = build_sync_plan(de_path, en_path, watermark_cache=watermark_cache)
+        plan = build_sync_plan(
+            de_path, en_path, watermark_cache=watermark_cache, provider_available=provider_available
+        )
 
         if explain:
             mode = "explain"
@@ -497,6 +529,7 @@ def slides_sync_cmd(
             judge = _resolve_judge(provider, llm_model, ollama_url, llm_timeout)
             translator = OpenRouterSlideTranslator(model=translation_model)
             recoverer = _resolve_recoverer(llm_recover, recovery_model)
+            verifier = _resolve_verifier(verify_enabled)
             for issue in plan.issues:
                 click.echo(_issue_line(issue))
             walk = run_plan_walker(
@@ -507,6 +540,8 @@ def slides_sync_cmd(
                 options=WalkerOptions(),
                 recoverer=recoverer,
                 alignment_cache=alignment_cache,
+                verifier=verifier,
+                correspondence_cache=correspondence_cache,
             )
             apply_result = walk.apply_result
         else:
@@ -514,6 +549,7 @@ def slides_sync_cmd(
             judge = _resolve_judge(provider, llm_model, ollama_url, llm_timeout)
             translator = OpenRouterSlideTranslator(model=translation_model)
             recoverer = _resolve_recoverer(llm_recover, recovery_model)
+            verifier = _resolve_verifier(verify_enabled)
             apply_result = apply_plan(
                 plan,
                 judge=judge,
@@ -521,12 +557,16 @@ def slides_sync_cmd(
                 watermark_cache=watermark_cache,
                 recoverer=recoverer,
                 alignment_cache=alignment_cache,
+                verifier=verifier,
+                correspondence_cache=correspondence_cache,
             )
     finally:
         if watermark_cache is not None:
             watermark_cache.close()
         if alignment_cache is not None:
             alignment_cache.close()
+        if correspondence_cache is not None:
+            correspondence_cache.close()
 
     exit_code = (
         _plan_exit_code(plan) if apply_result is None else _apply_exit_code(plan, apply_result)
@@ -579,9 +619,11 @@ def _run_batch(
     no_cache: bool,
     no_env_file: bool,
     cache_dir: Path | None,
+    provider_available: bool,
     make_judge: Callable[[], SyncJudge | None],
     make_translator: Callable[[], SlideTranslator],
     make_recoverer: Callable[[], AlignmentRecoverer | None],
+    make_verifier: Callable[[], CorrespondenceVerifier | None],
 ) -> None:
     """Sync every split deck pair under ``root`` in one pass, then ``sys.exit`` the
     worst per-pair exit code (0 clean < 1 review < 2 error)."""
@@ -631,6 +673,7 @@ def _run_batch(
     cache_root: Path | None = None
     watermark_cache: SyncWatermarkCache | None = None
     alignment_cache: SyncAlignmentCache | None = None
+    correspondence_cache: SyncCorrespondenceCache | None = None
     if not no_cache:
         cache_root = resolve_cache_dir(cli_override=cache_dir)
         watermark_cache = SyncWatermarkCache(cache_root / CACHE_DB_NAME)
@@ -638,12 +681,16 @@ def _run_batch(
     judge: SyncJudge | None = None
     translator: SlideTranslator | None = None
     recoverer: AlignmentRecoverer | None = None
+    verifier: CorrespondenceVerifier | None = None
     if writing:
         judge = make_judge()
         translator = make_translator()
         recoverer = make_recoverer()
+        verifier = make_verifier()
         if recoverer is not None and cache_root is not None:
             alignment_cache = SyncAlignmentCache(cache_root / CACHE_DB_NAME)
+        if verifier is not None and cache_root is not None:
+            correspondence_cache = SyncCorrespondenceCache(cache_root / CACHE_DB_NAME)
 
     results: list[_PairResult] = []
     try:
@@ -658,6 +705,9 @@ def _run_batch(
                     judge=judge,
                     translator=translator,
                     recoverer=recoverer,
+                    provider_available=provider_available,
+                    verifier=verifier,
+                    correspondence_cache=correspondence_cache,
                 )
             )
     finally:
@@ -665,6 +715,8 @@ def _run_batch(
             watermark_cache.close()
         if alignment_cache is not None:
             alignment_cache.close()
+        if correspondence_cache is not None:
+            correspondence_cache.close()
 
     exit_code = max((r.exit_code for r in results), default=0)
     _emit_batch(root, mode, results, exit_code, as_json=as_json)
@@ -681,10 +733,15 @@ def _sync_one_pair(
     judge: SyncJudge | None,
     translator: SlideTranslator | None,
     recoverer: AlignmentRecoverer | None,
+    provider_available: bool,
+    verifier: CorrespondenceVerifier | None,
+    correspondence_cache: SyncCorrespondenceCache | None,
 ) -> _PairResult:
     """Sync one pair for the batch, catching any failure so the sweep continues."""
     try:
-        plan = build_sync_plan(de_path, en_path, watermark_cache=watermark_cache)
+        plan = build_sync_plan(
+            de_path, en_path, watermark_cache=watermark_cache, provider_available=provider_available
+        )
         apply_result: ApplyResult | None = None
         explain_text: str | None = None
         if mode == "explain":
@@ -699,6 +756,8 @@ def _sync_one_pair(
                 watermark_cache=watermark_cache,
                 recoverer=recoverer,
                 alignment_cache=alignment_cache,
+                verifier=verifier,
+                correspondence_cache=correspondence_cache,
             )
         # else dry-run: classify only, write nothing.
         exit_code = (
@@ -725,7 +784,18 @@ def _deck_label(de_path: Path, root: Path) -> str:
 
 
 def _counts_str(plan: SyncPlan) -> str:
-    kinds = ("add", "edit", "retag", "move", "remove", "conflict", "rename")
+    kinds = (
+        "add",
+        "edit",
+        "retag",
+        "move",
+        "remove",
+        "conflict",
+        "rename",
+        "refuse",
+        "mint",
+        "adopt",
+    )
     parts = [f"{plan.count(k)} {k}" for k in kinds if plan.count(k)]
     return ", ".join(parts) if parts else "0"
 
@@ -905,6 +975,19 @@ def _resolve_recoverer(llm_recover: bool, recovery_model: str) -> AlignmentRecov
     return OpenRouterAlignmentRecoverer(model=recovery_model)
 
 
+def _resolve_verifier(verify_enabled: bool) -> CorrespondenceVerifier | None:
+    """The cold-start correspondence verifier (#216 §12), or ``None``.
+
+    ``None`` (—-no-verify-cold-pairs, or no OpenRouter key) makes a cold both-id-less
+    pair **refuse** instead of mint — and the plan already showed it as `refuse`,
+    because ``provider_available`` folds in the same two checks, so dry-run and apply
+    agree. On by default when a key is configured.
+    """
+    if not verify_enabled or not has_openrouter_api_key():
+        return None
+    return OpenRouterCorrespondenceVerifier()
+
+
 # ---------------------------------------------------------------------------
 # Exit codes
 # ---------------------------------------------------------------------------
@@ -947,7 +1030,8 @@ def _outcome_line(result: ApplyResult) -> str:
         f"applied: {result.applied_edit} edit, {result.applied_retag} retag, "
         f"{result.applied_remove} remove, "
         f"{result.applied_move} move, {result.applied_add} add, "
-        f"{result.applied_rename} rename; {result.in_sync} already in sync; "
+        f"{result.applied_rename} rename, {result.applied_mint} mint, "
+        f"{result.applied_adopt} adopt; {result.in_sync} already in sync; "
         f"{result.deferred} deferred; {len(result.errors)} error(s); "
         f"watermark {'advanced' if result.watermark_recorded else 'held'}."
     )
@@ -1011,7 +1095,18 @@ def _plan_dict(plan: SyncPlan) -> dict:
         "in_sync": plan.in_sync_count,
         "counts": {
             kind: plan.count(kind)
-            for kind in ("add", "edit", "retag", "move", "remove", "conflict", "rename")
+            for kind in (
+                "add",
+                "edit",
+                "retag",
+                "move",
+                "remove",
+                "conflict",
+                "rename",
+                "refuse",
+                "mint",
+                "adopt",
+            )
         },
         "proposals": [
             {
@@ -1021,6 +1116,7 @@ def _plan_dict(plan: SyncPlan) -> dict:
                 "slide_id": p.slide_id,
                 "reason": p.reason,
                 "translation_pending": p.translation_pending,
+                "disposition": p.disposition,
             }
             for p in plan.proposals
         ],
@@ -1040,6 +1136,8 @@ def _apply_dict(result: ApplyResult) -> dict:
             "move": result.applied_move,
             "add": result.applied_add,
             "rename": result.applied_rename,
+            "mint": result.applied_mint,
+            "adopt": result.applied_adopt,
             "total": result.applied,
         },
         "in_sync": result.in_sync,

@@ -44,21 +44,34 @@ from clm.infrastructure.llm.retry import call_with_retries
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "CORRESPONDENCE_PROMPT_VERSION",
+    "DEFAULT_CORRESPONDENCE_MODEL",
     "DEFAULT_RECOVERY_MODEL",
     "NEW",
     "NONE",
     "RECOVERY_PROMPT_VERSION",
     "AlignmentInvalid",
     "AlignmentRecoverer",
+    "CorrespondenceError",
+    "CorrespondenceInvalid",
+    "CorrespondenceVerifier",
     "OpenRouterAlignmentRecoverer",
+    "OpenRouterCorrespondenceVerifier",
     "RecoveryError",
     "RegionCell",
+    "SlidePair",
     "StaticAlignmentRecoverer",
+    "StaticCorrespondenceVerifier",
+    "build_correspondence_user_prompt",
     "build_recovery_user_prompt",
+    "correspondence_fingerprint",
     "decode_mapping",
+    "decode_verdicts",
     "encode_mapping",
+    "encode_verdicts",
     "region_fingerprint",
     "validate_alignment",
+    "validate_correspondence",
 ]
 
 # Claude Opus via OpenRouter — the design's "escalate to Claude (Opus)" tier. A
@@ -443,3 +456,252 @@ def _strip_fences(text: str) -> str:
             lines = lines[:-1]
         stripped = "\n".join(lines).strip()
     return stripped
+
+
+# ---------------------------------------------------------------------------
+# Cold-start correspondence verification (#216 Phase 3, design §12)
+# ---------------------------------------------------------------------------
+#
+# When `clm slides sync` bootstraps a never-id'd split pair, it must confirm the
+# two structurally-aligned halves actually *correspond* (are translations of each
+# other) before minting a shared slide_id onto each pair — otherwise two
+# coincidentally same-shaped non-translation decks would get a silently-wrong
+# shared id (the base design's §3.2 "no similarity-guess"). This tier mirrors the
+# AlignmentRecoverer above — opt-in, cached, validated, safe-abort — but, unlike
+# it, is NOT body-free: two translated headings have different content hashes, so
+# the cross-language signal lives in the heading *text*. The verifier therefore
+# sees, per aligned slide, the heading + a short body snippet of each half.
+
+
+DEFAULT_CORRESPONDENCE_MODEL = "anthropic/claude-haiku-4-5"  # the cheap "are these twins?" tier
+CORRESPONDENCE_PROMPT_VERSION = "correspond-v1"
+
+
+class CorrespondenceError(Exception):
+    """The verifier could not produce verdicts (transport/parse failure)."""
+
+
+class CorrespondenceInvalid(Exception):
+    """Returned verdicts failed validation; the caller safe-aborts (treat as 'no')."""
+
+
+@dataclass(frozen=True)
+class SlidePair:
+    """One positionally-aligned ``(de, en)`` cold-start slide candidate.
+
+    Content-bearing (the heading + a short body snippet of each half) so the model
+    can judge whether the two halves are the same slide in two languages. ``role``
+    is the per-cell sync role (``slide`` / ``subslide`` / ``voiceover`` / …) so the
+    model knows what it is comparing.
+    """
+
+    de_heading: str
+    en_heading: str
+    de_snippet: str
+    en_snippet: str
+    role: str
+
+
+@runtime_checkable
+class CorrespondenceVerifier(Protocol):
+    """Confirms that each aligned ``(de, en)`` cold-start pair corresponds.
+
+    ``prompt_version`` participates in the cache key so a prompt/model change
+    invalidates stale verdicts.
+    """
+
+    prompt_version: str
+
+    def verify(self, *, pairs: list[SlidePair]) -> dict[int, bool]:
+        """Return ``{pair_index: corresponds?}`` for every pair.
+
+        Raises :class:`CorrespondenceError` on failure. The result is *not*
+        trusted — the caller runs :func:`validate_correspondence` before using it.
+        """
+        ...
+
+
+def correspondence_fingerprint(pairs: list[SlidePair]) -> str:
+    """Stable sha256 over the exact pair serialization the verifier sees.
+
+    The cache key half: a cached verdict map is a sound function of this
+    fingerprint + the prompt version, since the fingerprint captures every byte the
+    model is shown (both headings, both snippets, the role, in order).
+    """
+    payload = [[p.de_heading, p.en_heading, p.de_snippet, p.en_snippet, p.role] for p in pairs]
+    blob = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def encode_verdicts(verdicts: dict[int, bool]) -> str:
+    """Serialize a ``{int: bool}`` verdict map to canonical JSON (string keys, sorted)."""
+    return json.dumps(
+        {str(k): verdicts[k] for k in sorted(verdicts)},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+def decode_verdicts(text: str) -> dict[int, bool]:
+    """Parse a JSON object back into a ``{int: bool}`` verdict map.
+
+    Raises :class:`CorrespondenceInvalid` on any malformed payload (a non-object, a
+    non-integer key, or a non-boolean value) so a corrupt cache row or a stray LLM
+    response is a validation failure (→ safe-abort → 'no'), never a crash.
+    """
+    try:
+        raw = json.loads(text)
+    except (ValueError, TypeError) as exc:
+        raise CorrespondenceInvalid(f"correspondence map is not valid JSON: {exc}") from exc
+    if not isinstance(raw, dict):
+        raise CorrespondenceInvalid("correspondence map must be a JSON object")
+    out: dict[int, bool] = {}
+    for key, value in raw.items():
+        try:
+            idx = int(key)
+        except (ValueError, TypeError) as exc:
+            raise CorrespondenceInvalid(f"correspondence key {key!r} is not an integer") from exc
+        if not isinstance(value, bool):
+            raise CorrespondenceInvalid(f"correspondence value for {key!r} is not a boolean")
+        out[idx] = value
+    return out
+
+
+def validate_correspondence(verdicts: dict[int, bool], pairs: list[SlidePair]) -> dict[int, bool]:
+    """Return ``verdicts`` unchanged if total over ``pairs``, else raise.
+
+    The single hard gate before the engine trusts a verdict map: the keys must be
+    exactly ``{0 … len(pairs)-1}`` (one boolean per pair, no missing or stray
+    index). Any failure raises :class:`CorrespondenceInvalid` and the caller
+    safe-aborts to "no" (refuse) — minting a wrong shared id is worse than refusing.
+    """
+    n = len(pairs)
+    if set(verdicts) != set(range(n)):
+        raise CorrespondenceInvalid(
+            f"verdicts must cover pair indices 0..{n - 1} exactly, got {sorted(verdicts)}"
+        )
+    return verdicts
+
+
+@dataclass
+class StaticCorrespondenceVerifier:
+    """A deterministic verifier for tests and offline runs.
+
+    Returns ``verdicts.get(i, default)`` for each pair index. With ``raise_error``
+    it raises :class:`CorrespondenceError` to exercise the safe-abort path.
+    ``calls`` counts invocations so a test can assert the cache short-circuited a
+    second run.
+    """
+
+    verdicts: dict[int, bool] = field(default_factory=dict)
+    default: bool = True
+    raise_error: bool = False
+    prompt_version: str = "static"
+    calls: int = 0
+
+    def verify(self, *, pairs: list[SlidePair]) -> dict[int, bool]:
+        self.calls += 1
+        if self.raise_error:
+            raise CorrespondenceError("static verifier configured to fail")
+        return {i: self.verdicts.get(i, self.default) for i in range(len(pairs))}
+
+
+_CORRESPONDENCE_SYSTEM_PROMPT = (
+    "You verify that the two halves of a split bilingual programming-course slide "
+    "deck line up: a German (DE) deck and an English (EN) deck that should be "
+    "translations of each other, slide for slide. You are given an ordered list of "
+    "candidate PAIRS; each pair has the DE and the EN slide's heading and a short "
+    "body snippet, and a role.\n\n"
+    "Return ONLY a JSON object mapping each pair index (a string) to a boolean:\n"
+    "  - true  when the DE and EN slide are the SAME slide in the two languages "
+    "(a translation / counterpart — same topic and intent);\n"
+    "  - false when they are NOT the same slide (different topics — the decks are "
+    "misaligned at this position).\n\n"
+    "Judge by meaning, not surface form: a faithful translation has different words "
+    "but the same topic. When genuinely unsure, return false — a wrong pairing bakes "
+    "a wrong shared identifier, which is worse than asking the author to pair by hand.\n"
+    "Map EVERY pair index exactly once. Return only the JSON object, no commentary, "
+    "no code fences."
+)
+
+
+def _serialize_pairs(pairs: list[SlidePair]) -> str:
+    """Render the aligned pairs as a compact, indexed list for the prompt."""
+    rows = [
+        {
+            "index": idx,
+            "role": p.role,
+            "de_heading": p.de_heading,
+            "en_heading": p.en_heading,
+            "de_snippet": p.de_snippet,
+            "en_snippet": p.en_snippet,
+        }
+        for idx, p in enumerate(pairs)
+    ]
+    return "PAIRS:\n" + json.dumps(rows, ensure_ascii=False, indent=2)
+
+
+def build_correspondence_user_prompt(pairs: list[SlidePair]) -> str:
+    """Build the user prompt: the serialized aligned pairs."""
+    return _serialize_pairs(pairs)
+
+
+@dataclass
+class OpenRouterCorrespondenceVerifier:
+    """LLM-backed verifier (synchronous OpenAI client, Claude Haiku by default).
+
+    Sends the heading/snippet pairs and parses the returned ``{index: bool}`` map.
+    Raises :class:`CorrespondenceError` on any transport/parse failure so the caller
+    safe-aborts (→ refuse) rather than crashing the sync. The result is *not*
+    trusted — :func:`validate_correspondence` gates it before it is used.
+
+    ``prompt_version`` folds in the ``model`` (like the recoverer) so switching the
+    model does not serve another model's cached verdicts.
+    """
+
+    model: str = DEFAULT_CORRESPONDENCE_MODEL
+    api_base: str | None = "https://openrouter.ai/api/v1"
+    api_key: str | None = None
+    temperature: float = 0.0
+    max_tokens: int = 1024
+    timeout: float = 60.0
+    prompt_version: str = CORRESPONDENCE_PROMPT_VERSION
+
+    def __post_init__(self) -> None:
+        if self.prompt_version == CORRESPONDENCE_PROMPT_VERSION:
+            self.prompt_version = f"{CORRESPONDENCE_PROMPT_VERSION}:{self.model}"
+
+    def _client(self):  # pragma: no cover - thin network adapter
+        from clm.infrastructure.llm.openrouter_client import build_openrouter_client
+
+        return build_openrouter_client(
+            api_base=self.api_base, api_key=self.api_key, timeout=self.timeout
+        )
+
+    def verify(
+        self, *, pairs: list[SlidePair]
+    ) -> dict[int, bool]:  # pragma: no cover - exercised via mocked client / integration
+        user = build_correspondence_user_prompt(pairs)
+
+        def _create():
+            return self._client().chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": _CORRESPONDENCE_SYSTEM_PROMPT},
+                    {"role": "user", "content": user},
+                ],
+                temperature=self.temperature,
+                max_tokens=self.max_tokens,
+                response_format={"type": "json_object"},
+            )
+
+        try:
+            response = call_with_retries(
+                _create, exc=Exception, label=f"correspondence ({self.model})"
+            )
+        except Exception as exc:  # noqa: BLE001 - normalize to the protocol's error
+            raise CorrespondenceError(f"correspondence call failed: {exc}") from exc
+        content = response.choices[0].message.content
+        if not content or not content.strip():
+            raise CorrespondenceError("correspondence returned empty content")
+        return decode_verdicts(_strip_fences(content))

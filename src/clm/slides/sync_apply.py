@@ -20,6 +20,16 @@ Scope of this engine:
   slide's id. id-carrying "missing counterpart" adds are a follow-up.
 - **conflict** — isolated by design; counted as ``deferred`` so nothing is
   silent.
+- **refuse** — a structural decision the resolver made at plan time *not* to act
+  (the both-directions cold-start / id-less case, #216); executed as a no-op
+  ``deferred`` so the watermark holds and the dry-run preview matches the run.
+- **mint** / **adopt** — the two cold-start id-bootstrap candidates (#216 §12),
+  each the whole plan and short-circuited before any ``FileState`` load: ``mint``
+  confirms a both-id-less pair corresponds, then mints fresh shared ids via
+  ``assign_ids_in_split_pair``; ``adopt`` confirms a *half-id'd* pair, then stamps
+  the id'd half's *existing* ids onto its id-less twin. Either downgrades to a
+  ``deferred`` no-op when correspondence is not confirmed (a "no", a safe-abort, or
+  no verifier), so nothing wrong ever reaches disk.
 
 Atomicity: each proposal is all-or-nothing for its target cell; the two decks
 are persisted once at the end, via a buffered temp-swap (Issue #190 item 1)
@@ -61,12 +71,19 @@ from clm.slides.sync_recover import (
     NEW,
     NONE,
     AlignmentInvalid,
+    CorrespondenceError,
+    CorrespondenceInvalid,
     RecoveryError,
     RegionCell,
+    SlidePair,
+    correspondence_fingerprint,
     decode_mapping,
+    decode_verdicts,
     encode_mapping,
+    encode_verdicts,
     region_fingerprint,
     validate_alignment,
+    validate_correspondence,
 )
 from clm.slides.sync_translate import TranslationError
 from clm.slides.sync_writeback import (
@@ -80,9 +97,13 @@ from clm.slides.sync_writeback import (
 )
 
 if TYPE_CHECKING:
-    from clm.infrastructure.llm.cache import SyncAlignmentCache, SyncWatermarkCache
+    from clm.infrastructure.llm.cache import (
+        SyncAlignmentCache,
+        SyncCorrespondenceCache,
+        SyncWatermarkCache,
+    )
     from clm.infrastructure.llm.ollama_client import SyncJudge
-    from clm.slides.sync_recover import AlignmentRecoverer
+    from clm.slides.sync_recover import AlignmentRecoverer, CorrespondenceVerifier
     from clm.slides.sync_translate import SlideTranslator
 
 _SLIDE_ID_RE = re.compile(r'\s*slide_id="[^"]*"')
@@ -122,6 +143,8 @@ class ApplyResult:
     applied_add: int = 0
     applied_rename: int = 0
     applied_migrate: int = 0  # a drifted slide_id moved back onto its construct (§9)
+    applied_mint: int = 0  # a confirmed both-id-less cold pair minted shared ids (#216 §12)
+    applied_adopt: int = 0  # a confirmed half-id'd cold pair adopted the id'd half's ids (#216 §12)
     in_sync: int = 0  # an edit the judge decided needed no change
     deferred: int = 0  # conflict (or moves/adds declined this pass)
     watermark_recorded: bool = False
@@ -137,11 +160,49 @@ class ApplyResult:
             + self.applied_add
             + self.applied_rename
             + self.applied_migrate
+            + self.applied_mint
+            + self.applied_adopt
         )
 
     @property
     def has_errors(self) -> bool:
         return bool(self.errors)
+
+
+@dataclass
+class _EditOutcome:
+    """The materialized result of one edit (#216 resolve-then-apply, stage 2b).
+
+    Computed by :func:`_materialize_edits` so the execute pass writes mechanically
+    and calls no model for an edit:
+
+    - ``"update"`` — apply ``proposed_text`` to the target cell;
+    - ``"in_sync"`` — the judge decided no change is needed (counts as in-sync);
+    - ``"blocked"`` — the model was unavailable / failed, or the proposal was
+      malformed; ``error`` is the message to record (the edit is not applied).
+
+    Mirrors exactly what the former inline ``_apply_edit`` / ``_apply_code_edit``
+    decided, so moving the decision earlier is behavior-preserving.
+    """
+
+    verdict: str  # "update" | "in_sync" | "blocked"
+    proposed_text: str | None = None
+    error: str | None = None
+
+
+@dataclass
+class _TransOutcome:
+    """The materialized translation of one add/rename source cell (#216 2b).
+
+    Computed by :func:`_materialize_idcarrying` / :func:`_materialize_idless` so the
+    add execute walks call no translator: ``body`` is the translated counterpart, or
+    ``error`` is the deferral message to record (the translation raised). Exactly one
+    is set. Keyed by ``id(cell)`` of the source cell (stable: both decks load once
+    and the walks hold the same cell objects).
+    """
+
+    body: str | None = None
+    error: str | None = None
 
 
 def apply_plan(
@@ -153,6 +214,8 @@ def apply_plan(
     decisions: dict[int, str] | None = None,
     recoverer: AlignmentRecoverer | None = None,
     alignment_cache: SyncAlignmentCache | None = None,
+    verifier: CorrespondenceVerifier | None = None,
+    correspondence_cache: SyncCorrespondenceCache | None = None,
 ) -> ApplyResult:
     """Apply ``plan``'s proposals to the decks and advance the watermark.
 
@@ -183,6 +246,23 @@ def apply_plan(
     """
     result = ApplyResult()
 
+    # Stage 2b/3 for a cold-start mint (#216 §12): a `pending` mint candidate is the
+    # whole plan (a cold pair carries no other ops), so handle it on its own path —
+    # verify correspondence, then mint shared ids via the file-level minter — and
+    # return. Done before loading FileState so the file-level mint and the watermark
+    # advance read the freshly-minted files, with no buffered-write to coordinate.
+    if any(p.kind == "mint" for p in plan.proposals):
+        _apply_cold_mint(plan, verifier, correspondence_cache, watermark_cache, result)
+        return result
+
+    # Stage 2b/3 for a cold-start *adopt* (#216 §12): a half-id'd cold pair (one
+    # half fully id'd, the other fully id-less) whose id-less half adopts the id'd
+    # half's existing ids. Like the mint above it is the whole plan, verified then
+    # stamped on its own path, before any FileState load.
+    if any(p.kind == "adopt" for p in plan.proposals):
+        _apply_cold_adopt(plan, verifier, correspondence_cache, watermark_cache, result)
+        return result
+
     # Pre-apply content (parser-stripped) for the judge, keyed by (slide_id,
     # role). Read before FileState mutates anything.
     de_content = content_index(plan.de_path, "de")
@@ -190,6 +270,15 @@ def apply_plan(
 
     de_state = FileState.load(plan.de_path)
     en_state = FileState.load(plan.en_path)
+
+    # Stage 2b (edit path): resolve every edit — and every conflict the caller
+    # chose to win — into a materialized outcome up front, the only place an edit
+    # touches the judge/translator. The execute walk below then writes each edit
+    # mechanically (#216 resolve-then-apply). Read against the pre-mutation
+    # snapshots/state, exactly as the inline edit appliers used to.
+    edit_outcomes = _materialize_edits(
+        plan, decisions, de_state, en_state, de_content, en_content, judge, translator
+    )
 
     moves: list[Proposal] = []
     # (slide_id, role) of every TRUE deferral this pass: an unresolved conflict
@@ -211,9 +300,7 @@ def apply_plan(
                 _note_deferred(deferred_keys, proposal)
         elif kind == "edit":
             if _accepted(decisions, proposal):
-                _apply_edit(
-                    proposal, de_state, en_state, de_content, en_content, judge, translator, result
-                )
+                _apply_edit(proposal, de_state, en_state, edit_outcomes[id(proposal)], result)
             else:
                 result.deferred += 1
                 _note_deferred(deferred_keys, proposal)
@@ -231,17 +318,17 @@ def apply_plan(
                 _note_deferred(deferred_keys, proposal)
         elif kind == "conflict":
             _apply_conflict(
-                proposal,
-                decisions,
-                de_state,
-                en_state,
-                de_content,
-                en_content,
-                judge,
-                translator,
-                result,
-                deferred_keys,
+                proposal, decisions, de_state, en_state, edit_outcomes, result, deferred_keys
             )
+        elif kind == "refuse":
+            # A structural refusal the resolver decided at plan time (#216): the
+            # engine never acts on it — it is *deferred* so the watermark holds
+            # for these cells and the exit code is "needs review", exactly what
+            # the dry-run preview promised. (This is the both-directions
+            # cold-start / id-less case; the old apply-time guard that re-decided
+            # it — and that the id-carrying path silently bypassed — is gone.)
+            result.deferred += 1
+            _note_deferred(deferred_keys, proposal)
         # "add" / "rename" are handled by _apply_adds below (always applied).
 
     # Adds run before moves so a freshly-inserted slide takes part in any
@@ -375,19 +462,17 @@ def _apply_conflict(
     decisions: dict[int, str] | None,
     de_state: FileState,
     en_state: FileState,
-    de_content: dict[tuple[str, str], str],
-    en_content: dict[tuple[str, str], str],
-    judge: SyncJudge | None,
-    translator: SlideTranslator | None,
+    edit_outcomes: dict[int, _EditOutcome],
     result: ApplyResult,
     deferred_keys: set[tuple[str, str]],
 ) -> None:
     """Resolve a conflict per its decision, or defer it.
 
     ``de-wins`` / ``en-wins`` propagate the winning side as an ordinary edit
-    (the judge rewrites the losing side to match); any other decision defers,
-    recording the key so the per-cell advance keeps its pre-conflict baseline
-    and the conflict re-surfaces next run.
+    (the judge's rewrite of the losing side was materialized up front by
+    :func:`_materialize_edits`, keyed by this conflict proposal's id); any other
+    decision defers, recording the key so the per-cell advance keeps its
+    pre-conflict baseline and the conflict re-surfaces next run.
     """
     decision = _conflict_decision(decisions, proposal)
     if decision == DECISION_DE_WINS:
@@ -395,10 +480,7 @@ def _apply_conflict(
             _conflict_as_edit(proposal, "de->en"),
             de_state,
             en_state,
-            de_content,
-            en_content,
-            judge,
-            translator,
+            edit_outcomes[id(proposal)],
             result,
         )
     elif decision == DECISION_EN_WINS:
@@ -406,10 +488,7 @@ def _apply_conflict(
             _conflict_as_edit(proposal, "en->de"),
             de_state,
             en_state,
-            de_content,
-            en_content,
-            judge,
-            translator,
+            edit_outcomes[id(proposal)],
             result,
         )
     else:
@@ -550,7 +629,52 @@ def _apply_retag_idless(
         )
 
 
-def _apply_edit(
+def _materialize_edits(
+    plan: SyncPlan,
+    decisions: dict[int, str] | None,
+    de_state: FileState,
+    en_state: FileState,
+    de_content: dict[tuple[str, str], str],
+    en_content: dict[tuple[str, str], str],
+    judge: SyncJudge | None,
+    translator: SlideTranslator | None,
+) -> dict[int, _EditOutcome]:
+    """Resolve every edit (and every conflict the caller chose to win) up front.
+
+    Stage 2b for the edit path (#216 resolve-then-apply): the only model calls for
+    edits happen here, keyed by ``id(proposal)``, so the execute walk writes
+    mechanically. A conflict resolved ``de-wins`` / ``en-wins`` is materialized as
+    the directed edit it becomes (keyed by the *conflict* proposal's id, since the
+    execute pass synthesizes a fresh edit proposal each run); a skipped or
+    undecided conflict is left out so the execute walk simply defers it.
+
+    Runs before any cell mutation, exactly where the inline appliers used to read
+    their inputs (markdown from the ``content_index`` snapshots, localized code
+    from the loaded state), so the move is behavior-preserving.
+    """
+    outcomes: dict[int, _EditOutcome] = {}
+    for proposal in plan.proposals:
+        if proposal.kind == "edit":
+            outcomes[id(proposal)] = _resolve_edit(
+                proposal, de_state, en_state, de_content, en_content, judge, translator
+            )
+        elif proposal.kind == "conflict":
+            decision = _conflict_decision(decisions, proposal)
+            if decision in (DECISION_DE_WINS, DECISION_EN_WINS):
+                direction = "de->en" if decision == DECISION_DE_WINS else "en->de"
+                outcomes[id(proposal)] = _resolve_edit(
+                    _conflict_as_edit(proposal, direction),
+                    de_state,
+                    en_state,
+                    de_content,
+                    en_content,
+                    judge,
+                    translator,
+                )
+    return outcomes
+
+
+def _resolve_edit(
     proposal: Proposal,
     de_state: FileState,
     en_state: FileState,
@@ -558,87 +682,321 @@ def _apply_edit(
     en_content: dict[tuple[str, str], str],
     judge: SyncJudge | None,
     translator: SlideTranslator | None,
-    result: ApplyResult,
-) -> None:
+) -> _EditOutcome:
+    """Resolve one edit to a materialized :class:`_EditOutcome` (the model call).
+
+    Mirrors the former inline ``_apply_edit`` / ``_apply_code_edit`` decision logic
+    exactly — same verdicts, same error strings — but returns the outcome instead
+    of writing, so the execute pass is mechanical. A localized **code** cell is
+    reconciled by re-translating the source body (the markdown judge's prompt does
+    not fit runnable code); a markdown cell goes through the judge.
+    """
     if proposal.slide_id is None:
-        result.errors.append(f"edit {proposal.role}: proposal has no slide_id")
-        return
+        return _EditOutcome("blocked", error=f"edit {proposal.role}: proposal has no slide_id")
     sid = proposal.slide_id
     key = (sid, proposal.role)
     if proposal.direction == "de->en":
         source_lang, target_lang = "de", "en"
         source_body = de_content.get(key, "")
         target_body = en_content.get(key, "")
-        source_state, target_state = de_state, en_state
+        source_state = de_state
     else:
         source_lang, target_lang = "en", "de"
         source_body = en_content.get(key, "")
         target_body = de_content.get(key, "")
-        source_state, target_state = en_state, de_state
+        source_state = en_state
 
-    # A localized code cell is reconciled by re-translating the source body (the
-    # markdown judge's prompt does not fit runnable code); only the human-facing
-    # string literals / comments differ across languages.
     if proposal.role == CODE_ROLE:
-        _apply_code_edit(
-            sid, source_state, target_state, source_lang, target_lang, translator, result
-        )
-        return
+        if translator is None:
+            return _EditOutcome(
+                "blocked", error=f"edit {sid}/code: no translator (LLM unavailable)"
+            )
+        src_cell = source_state.find_cell(sid, CODE_ROLE)
+        if src_cell is None:
+            return _EditOutcome("blocked", error=f"edit {sid}/code: source cell not found")
+        try:
+            new_body = translator.translate(
+                source_body=src_cell.body.rstrip("\n"),
+                source_lang=source_lang,
+                target_lang=target_lang,
+                role=CODE_ROLE,
+            )
+        except TranslationError as exc:
+            return _EditOutcome("blocked", error=f"edit {sid}/code: translation failed: {exc}")
+        return _EditOutcome("update", proposed_text=new_body)
 
     if judge is None:
-        result.errors.append(f"edit {sid}/{proposal.role}: no judge (LLM unavailable)")
-        return
-
+        return _EditOutcome(
+            "blocked", error=f"edit {sid}/{proposal.role}: no judge (LLM unavailable)"
+        )
     try:
         sync_proposal = judge.propose(
             source_body, target_body, source_lang=source_lang, target_lang=target_lang
         )
     except OllamaError as exc:
         logger.info("edit judge failed on %s/%s: %s", sid, proposal.role, exc)
-        result.errors.append(f"edit {sid}/{proposal.role}: {exc}")
-        return
-
+        return _EditOutcome("blocked", error=f"edit {sid}/{proposal.role}: {exc}")
     if sync_proposal.verdict != "update":
+        return _EditOutcome("in_sync")
+    return _EditOutcome("update", proposed_text=sync_proposal.proposed_text)
+
+
+def _apply_edit(
+    proposal: Proposal,
+    de_state: FileState,
+    en_state: FileState,
+    outcome: _EditOutcome,
+    result: ApplyResult,
+) -> None:
+    """Write a pre-materialized edit (mechanical — no judge/translator here).
+
+    The model call (markdown judge / code re-translation) already happened in
+    :func:`_materialize_edits`; this only records the outcome: ``blocked`` → its
+    error, ``in_sync`` → the judge's no-change verdict, ``update`` → replace the
+    target cell's body (the target is the non-source deck; ``proposal.role`` is the
+    cell's role, ``"code"`` for a localized code cell).
+    """
+    if outcome.verdict == "blocked":
+        result.errors.append(outcome.error or f"edit {proposal.role}: blocked")
+        return
+    if outcome.verdict == "in_sync":
         result.in_sync += 1
         return
-
-    if target_state.replace_cell_body(sid, proposal.role, sync_proposal.proposed_text):
+    sid = proposal.slide_id
+    if sid is None:  # unreachable: an id-less edit resolves to "blocked" above
+        result.errors.append(f"edit {proposal.role}: proposal has no slide_id")
+        return
+    target_state = en_state if proposal.direction == "de->en" else de_state
+    if target_state.replace_cell_body(sid, proposal.role, outcome.proposed_text or ""):
         result.applied_edit += 1
     else:
         result.errors.append(f"edit {sid}/{proposal.role}: target cell not found")
 
 
-def _apply_code_edit(
-    sid: str,
-    source_state: FileState,
-    target_state: FileState,
-    source_lang: str,
-    target_lang: str,
-    translator: SlideTranslator | None,
+# ---------------------------------------------------------------------------
+# Cold-start mint (#216 Phase 3 §12): verify correspondence, then mint shared ids
+# ---------------------------------------------------------------------------
+
+
+def _apply_cold_mint(
+    plan: SyncPlan,
+    verifier: CorrespondenceVerifier | None,
+    correspondence_cache: SyncCorrespondenceCache | None,
+    watermark_cache: SyncWatermarkCache | None,
     result: ApplyResult,
 ) -> None:
-    """Reconcile a localized code cell edit by re-translating the source body."""
-    if translator is None:
-        result.errors.append(f"edit {sid}/code: no translator (LLM unavailable)")
+    """Confirm a cold-start pair corresponds, then mint shared ids onto both halves.
+
+    The plan carries a single ``pending`` ``mint`` candidate (a both-id-less,
+    unifiable cold pair the resolver admitted). Build the aligned slide pairs from
+    the files, verify them (cached, validated, safe-abort); on **all-yes** mint the
+    shared EN-authority ids via :func:`assign_ids_in_split_pair` and advance the
+    watermark; on **any-no / safe-abort / no-verifier** downgrade to a deferral —
+    the dry-run already disclosed this item as ``pending`` — writing nothing.
+
+    Defers (writes nothing) on a **classifier error** — the same gate the normal
+    flush path applies (``not plan.has_errors``). The candidacy guard already
+    declines to emit a candidate for an errored plan, so this is defense in depth
+    at the write boundary (a fully-id-less mint pair cannot carry such an error, but
+    the guard keeps the short-circuit honest if one ever reaches here).
+    """
+    if plan.has_errors:
+        result.deferred += 1
         return
-    src_cell = source_state.find_cell(sid, CODE_ROLE)
-    if src_cell is None:
-        result.errors.append(f"edit {sid}/code: source cell not found")
+    pairs = _build_slide_pairs(plan.de_path, plan.en_path)
+    if verifier is None:
+        result.deferred += 1  # no verifier (e.g. --no-verify): pending → refuse
         return
-    try:
-        new_body = translator.translate(
-            source_body=src_cell.body.rstrip("\n"),
-            source_lang=source_lang,
-            target_lang=target_lang,
-            role=CODE_ROLE,
+    verdicts = _resolve_correspondence(verifier, correspondence_cache, pairs)
+    if verdicts is None or not all(verdicts.get(i, False) for i in range(len(pairs))):
+        result.deferred += 1  # a "no" or a safe-abort → refuse the pair (never a wrong id)
+        return
+
+    from clm.slides.assign_ids import AssignOptions, assign_ids_in_split_pair
+
+    minted = assign_ids_in_split_pair(
+        plan.de_path, plan.en_path, AssignOptions(accept_content_derived=True)
+    )
+    if minted is None:  # not unifiable after all (a race vs candidacy) → refuse
+        result.deferred += 1
+        return
+    result.applied_mint += 1
+    if watermark_cache is not None:
+        _record_watermark(watermark_cache, plan.de_path, plan.en_path)
+        result.watermark_recorded = True
+
+
+def _slide_cells(path: Path, lang: str) -> list[Cell]:
+    """The slide/subslide cells of ``lang`` — the units a cold mint stamps an id onto."""
+    return [
+        c
+        for c in parse_cells(path.read_text(encoding="utf-8"))
+        if c.metadata.lang == lang and role_of(c.metadata) in _SLIDE_ROLES
+    ]
+
+
+def _build_slide_pairs(de_path: Path, en_path: Path) -> list[SlidePair]:
+    """Positionally pair the slide cells of the two cold-start halves for the verifier.
+
+    Both halves are fully id-less and structurally aligned (the candidacy gate), so
+    the i-th sync slide of DE pairs with the i-th of EN. Slides are the unit of
+    correspondence (companions follow their slide); each pair carries the heading +
+    a short body snippet of each side.
+    """
+    de_slides = _slide_cells(de_path, "de")
+    en_slides = _slide_cells(en_path, "en")
+    pairs: list[SlidePair] = []
+    # Equal length by the candidacy gate (_streams_aligned); strict=False is a
+    # defensive no-crash fallback — the assign_ids unify guard backs correctness.
+    for de_c, en_c in zip(de_slides, en_slides, strict=False):
+        pairs.append(
+            SlidePair(
+                de_heading=_heading_line(de_c.content),
+                en_heading=_heading_line(en_c.content),
+                de_snippet=_snippet(de_c.content),
+                en_snippet=_snippet(en_c.content),
+                role=role_of(de_c.metadata) or "slide",
+            )
         )
-    except TranslationError as exc:
-        result.errors.append(f"edit {sid}/code: translation failed: {exc}")
+    return pairs
+
+
+def _heading_line(body: str) -> str:
+    """The first non-blank line of a cell body (the slide heading)."""
+    for line in body.splitlines():
+        if line.strip():
+            return line.strip()
+    return ""
+
+
+def _snippet(body: str, max_lines: int = 2) -> str:
+    """The lines just after the heading (a short lead-in for the verifier)."""
+    lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
+    return "\n".join(lines[1 : 1 + max_lines])
+
+
+def _resolve_correspondence(
+    verifier: CorrespondenceVerifier,
+    cache: SyncCorrespondenceCache | None,
+    pairs: list[SlidePair],
+) -> dict[int, bool] | None:
+    """Verify ``pairs`` (cached, validated), or ``None`` on a safe-abort.
+
+    Mirrors :func:`_resolve_alignment`: caches only a *validated* verdict map, keyed
+    by the pair fingerprint + the verifier's prompt version. Any failure — transport,
+    parse, or a map that fails validation — returns ``None`` so the caller refuses
+    (a wrong shared id is worse than a deferred pair), and nothing is cached so a
+    fixed prompt re-derives it next run.
+    """
+    fp = correspondence_fingerprint(pairs)
+    pv = verifier.prompt_version
+    if cache is not None:
+        hit = cache.get(fp, pv)
+        if hit is not None:
+            try:
+                return validate_correspondence(decode_verdicts(hit), pairs)
+            except CorrespondenceInvalid:
+                pass  # corrupt cache row — re-derive
+    try:
+        verdicts = validate_correspondence(verifier.verify(pairs=pairs), pairs)
+    except (CorrespondenceError, CorrespondenceInvalid):
+        return None
+    if cache is not None:
+        cache.put(fp, pv, encode_verdicts(verdicts))
+    return verdicts
+
+
+# ---------------------------------------------------------------------------
+# Cold-start adopt (#216 Phase 3.2 §12): verify, then stamp the id'd half's ids
+# ---------------------------------------------------------------------------
+
+
+def _apply_cold_adopt(
+    plan: SyncPlan,
+    verifier: CorrespondenceVerifier | None,
+    correspondence_cache: SyncCorrespondenceCache | None,
+    watermark_cache: SyncWatermarkCache | None,
+    result: ApplyResult,
+) -> None:
+    """Confirm a half-id'd cold pair corresponds, then stamp the id'd half's ids onto its twin.
+
+    The plan carries a single ``pending`` ``adopt`` candidate whose ``direction`` is
+    ``"{authority}->{other}"`` (the authority is the fully-id'd half). Build the
+    aligned slide pairs from the files and verify them (cached, validated,
+    safe-abort); on **all-yes** stamp each authority slide_id onto its id-less
+    positional twin — a header rewrite, **no translation** (both bodies already
+    exist) — and advance the watermark; on **any-no / safe-abort / no-verifier**
+    downgrade to a deferral, writing nothing (the dry-run disclosed it as
+    ``pending``). Unlike the mint, ``assign_ids`` cannot do this: its
+    ``_slide_ids_pair`` is ``de_id == en_id``, so an id-less cell never pairs with
+    an id'd one — hence the explicit per-cell stamp.
+
+    Defers (writes nothing) on a **classifier error** — the same gate the normal
+    flush path applies (``not plan.has_errors``). This is the critical safety net:
+    a half-id'd pair whose *authority* half carries a duplicated id (e.g. a slide
+    with two same-id voiceover companions) would otherwise stamp that duplicate onto
+    the id-less twin and advance the watermark over the corruption. The candidacy
+    guard already declines such a plan; this defends the write boundary too.
+    """
+    if plan.has_errors:
+        result.deferred += 1
         return
-    if target_state.replace_cell_body(sid, CODE_ROLE, new_body):
-        result.applied_edit += 1
+    adopt = next(p for p in plan.proposals if p.kind == "adopt")
+    authority = (adopt.direction or "en->de").split("->")[0]
+    pairs = _build_slide_pairs(plan.de_path, plan.en_path)
+    if verifier is None:
+        result.deferred += 1  # no verifier (e.g. --no-verify): pending → refuse
+        return
+    verdicts = _resolve_correspondence(verifier, correspondence_cache, pairs)
+    if verdicts is None or not all(verdicts.get(i, False) for i in range(len(pairs))):
+        result.deferred += 1  # a "no" or a safe-abort → refuse the pair (never a wrong id)
+        return
+    stamped = _adopt_ids_in_split_pair(plan.de_path, plan.en_path, authority)
+    if stamped == 0:  # the streams drifted since candidacy (a race) → refuse
+        result.deferred += 1
+        return
+    result.applied_adopt += 1
+    if watermark_cache is not None:
+        _record_watermark(watermark_cache, plan.de_path, plan.en_path)
+        result.watermark_recorded = True
+
+
+def _adopt_ids_in_split_pair(de_path: Path, en_path: Path, authority: str) -> int:
+    """Stamp the ``authority`` half's slide_ids onto its id-less twin, in place.
+
+    Walks both halves' localized cell streams positionally (the candidacy gate
+    proved them aligned): wherever the authority cell carries a slide_id and its
+    positional twin is id-less, write that id onto the twin's header
+    (:func:`_stamp_slide_id` — the same byte-faithful rewrite assign-ids uses).
+    Both halves are loaded with the *same* parser (:meth:`FileState.load`); only the
+    id-less half is flushed. Returns the number of cells stamped — ``0`` when the
+    streams no longer align (a race vs the plan) or a positional role drifted, so the
+    caller refuses rather than mis-stamping a wrong id.
+    """
+    if authority == "en":
+        idd_state, idless_state = FileState.load(en_path), FileState.load(de_path)
+        idd_lang, idless_lang = "en", "de"
     else:
-        result.errors.append(f"edit {sid}/code: target cell not found")
+        idd_state, idless_state = FileState.load(de_path), FileState.load(en_path)
+        idd_lang, idless_lang = "de", "en"
+    idd_loc = [c for c in idd_state.cells if not c.metadata.is_j2 and c.metadata.lang == idd_lang]
+    idless_loc = [
+        c for c in idless_state.cells if not c.metadata.is_j2 and c.metadata.lang == idless_lang
+    ]
+    if len(idd_loc) != len(idless_loc):
+        return 0  # streams drifted since the plan — refuse rather than mis-stamp
+    stamped = 0
+    for idd_cell, idless_cell in zip(idd_loc, idless_loc, strict=False):
+        if role_of(idd_cell.metadata) != role_of(idless_cell.metadata):
+            return 0  # a positional role drifted — refuse
+        target_id = idd_cell.metadata.slide_id
+        if target_id and not idless_cell.metadata.slide_id:
+            _stamp_slide_id(idless_cell, target_id)
+            stamped += 1
+    if stamped:
+        idless_state.dirty = True
+        idless_state.flush()
+    return stamped
 
 
 # ---------------------------------------------------------------------------
@@ -687,6 +1045,17 @@ def _apply_adds(
         result.errors.append("add/rename present but no translator available")
         return
 
+    # Stage 2b for the add path (#216 resolve-then-apply): every translation is
+    # materialized into ``translations`` (keyed by source-cell id) just before the
+    # execute walk that consumes it, the only place the add path calls the
+    # translator. The walks below mint ids (deterministic) and insert twins,
+    # reading the cache; the ``translator`` they still receive is only a safety
+    # fallback for a cache miss (the materialize walks are built to enumerate a
+    # superset of what the execute walks translate, so a miss never happens). The
+    # materialize calls sit right before their walks so cell identity — and the
+    # post-id-carrying state the id-less walk reads — match exactly.
+    translations: dict[int, _TransOutcome] = {}
+
     # id-carrying adds: a new cell (slide / subslide / narrative / aux markdown /
     # localized code) already minted with a slide_id on one side only — e.g. a
     # deck whose ids were assigned before the split, where the author then adds a
@@ -695,34 +1064,34 @@ def _apply_adds(
     if idd:
         de_keys = {(p.slide_id, p.role) for p in idd if p.direction == "de->en"}
         en_keys = {(p.slide_id, p.role) for p in idd if p.direction == "en->de"}
+        _materialize_idcarrying(de_state, "de", "en", de_keys, translator, translations)
+        _materialize_idcarrying(en_state, "en", "de", en_keys, translator, translations)
         if de_keys:
             _add_idcarrying_one_direction(
-                de_state, en_state, "de", "en", de_keys, translator, result
+                de_state, en_state, "de", "en", de_keys, translator, result, translations
             )
         if en_keys:
             _add_idcarrying_one_direction(
-                en_state, de_state, "en", "de", en_keys, translator, result
+                en_state, de_state, "en", "de", en_keys, translator, result, translations
             )
 
     if len(idless) + len(rename_props) == 0:
         return
 
-    process_idless = True
-    if idless and len({p.direction for p in idless}) > 1:
-        # id-less new slides on BOTH decks: off the single-language path. Defer
-        # the adds (renames are independent and still apply).
-        result.deferred += len(idless)
-        result.errors.append(
-            "id-less new slides on both decks — edit one deck at a time (deferred)"
-        )
-        process_idless = False
-
+    # The both-directions id-less refusal that used to live here (a deck-doubling
+    # guard, plus the unguarded id-carrying sibling that bypassed it) is now a
+    # plan-time decision in the resolver (#216): such adds reach apply as
+    # ``refuse`` proposals, deferred above. Every ``add`` that survives to here is
+    # therefore a single-direction add that applies mechanically.
     de_copy_ids = _identify_copy_slides(
         de_state, "de", [p for p in rename_props if p.direction == "de->en"]
     )
     en_copy_ids = _identify_copy_slides(
         en_state, "en", [p for p in rename_props if p.direction == "en->de"]
     )
+
+    _materialize_idless(de_state, "de", "en", de_copy_ids, translator, translations)
+    _materialize_idless(en_state, "en", "de", en_copy_ids, translator, translations)
 
     used_ids = {
         cell.metadata.slide_id
@@ -731,11 +1100,100 @@ def _apply_adds(
         if cell.metadata.slide_id
     }
     _add_one_direction(
-        de_state, en_state, "de", "en", translator, used_ids, result, de_copy_ids, process_idless
+        de_state, en_state, "de", "en", translator, used_ids, result, de_copy_ids, translations
     )
     _add_one_direction(
-        en_state, de_state, "en", "de", translator, used_ids, result, en_copy_ids, process_idless
+        en_state, de_state, "en", "de", translator, used_ids, result, en_copy_ids, translations
     )
+
+
+def _cache_translation(
+    cell: RawCell,
+    source_lang: str,
+    target_lang: str,
+    role: str,
+    translator: SlideTranslator,
+    cache: dict[int, _TransOutcome],
+) -> None:
+    """Translate one add source cell into ``cache`` (no ``result`` accounting here).
+
+    The deferral/error counting for a failed translation happens later, in the
+    execute walk's :func:`_translate`, so its order matches the legacy inline pass.
+    """
+    if id(cell) in cache:
+        return
+    try:
+        body = translator.translate(
+            source_body=cell.body.rstrip("\n"),
+            source_lang=source_lang,
+            target_lang=target_lang,
+            role=role,
+        )
+        cache[id(cell)] = _TransOutcome(body=body)
+    except TranslationError as exc:
+        cache[id(cell)] = _TransOutcome(error=f"{role}: translation failed: {exc}")
+
+
+def _materialize_idcarrying(
+    source_state: FileState,
+    source_lang: str,
+    target_lang: str,
+    add_keys: set[tuple[str | None, str]],
+    translator: SlideTranslator,
+    cache: dict[int, _TransOutcome],
+) -> None:
+    """Pre-translate every id-carrying add cell (those :func:`_add_idcarrying_one_direction` translates)."""
+    for cell in list(source_state.cells):
+        role = role_of(cell.metadata)
+        if role is None or cell.metadata.lang != source_lang:
+            continue
+        sid = cell.metadata.slide_id
+        if sid is None or (sid, role) not in add_keys:
+            continue
+        _cache_translation(cell, source_lang, target_lang, role, translator, cache)
+
+
+def _materialize_idless(
+    source_state: FileState,
+    source_lang: str,
+    target_lang: str,
+    copy_slide_ids: set[int],
+    translator: SlideTranslator,
+    cache: dict[int, _TransOutcome],
+) -> None:
+    """Pre-translate every cell :func:`_add_one_direction` will translate.
+
+    Mirrors that walk's *translate selection* exactly — a new or copied slide, and
+    a narrative companion that is id-less or copy-pasted with a preceding slide —
+    without minting or mutating. It tracks ``has_slide`` / ``renaming_from`` the
+    same way but assumes each translation succeeds, so it enumerates a **superset**
+    of what the execute walk actually translates (an upstream failure can only make
+    the walk translate *fewer* cells). A superset means the execute walk never
+    misses the cache; the surplus entries are simply never read.
+    """
+    renaming_from: str | None = None
+    has_slide = False
+    for cell in list(source_state.cells):
+        role = role_of(cell.metadata)
+        if role is None or cell.metadata.lang != source_lang:
+            continue
+        sid = cell.metadata.slide_id
+        if role in _SLIDE_ROLES:
+            is_copy = id(cell) in copy_slide_ids
+            has_slide = True
+            if sid is not None and not is_copy:
+                renaming_from = None  # existing slide — anchors, not translated
+                continue
+            renaming_from = sid if is_copy else None
+            _cache_translation(cell, source_lang, target_lang, role, translator, cache)
+            continue
+        # narrative
+        is_copy_companion = renaming_from is not None and sid is not None and sid == renaming_from
+        if sid is not None and not is_copy_companion:
+            continue  # existing companion — anchors, not translated
+        if not has_slide:
+            continue  # orphan companion — errors before translate, never translated
+        _cache_translation(cell, source_lang, target_lang, role, translator, cache)
 
 
 def _add_idcarrying_one_direction(
@@ -746,6 +1204,7 @@ def _add_idcarrying_one_direction(
     add_keys: set[tuple[str | None, str]],
     translator: SlideTranslator,
     result: ApplyResult,
+    translations: dict[int, _TransOutcome],
 ) -> None:
     """Insert the twin of each id-carrying new cell, under the same id, at anchor.
 
@@ -771,7 +1230,9 @@ def _add_idcarrying_one_direction(
         if key not in add_keys:
             anchor = key  # an existing cell already twinned on the target
             continue
-        target_body = _translate(cell, source_lang, target_lang, translator, role, result)
+        target_body = _translate(
+            cell, source_lang, target_lang, translator, role, result, translations
+        )
         if target_body is None:
             continue  # _translate recorded the deferral/error; keep the anchor
         twin = build_twin_cell(cell, target_lang, target_body)
@@ -826,7 +1287,7 @@ def _add_one_direction(
     used_ids: set[str],
     result: ApplyResult,
     copy_slide_ids: set[int],
-    process_idless: bool,
+    translations: dict[int, _TransOutcome],
 ) -> None:
     """Walk the source deck, minting ids for new and copy-pasted slides.
 
@@ -836,6 +1297,9 @@ def _add_one_direction(
     copy slide's old id so each following same-id companion inherits the freshly
     minted id — rather than by a per-companion hash match (which identical
     companions defeat).
+
+    Every id-less cell here is a single-direction add (the both-directions case is
+    refused at plan time, #216), so it always mints and places — no gating.
     """
     current_slide_id: str | None = None
     renaming_from: str | None = None  # old id of a copy slide whose companions follow
@@ -853,11 +1317,10 @@ def _add_one_direction(
                 renaming_from = None
                 anchor = (sid, role)
                 continue
-            if sid is None and not process_idless:
-                renaming_from = None
-                continue  # deferred parallel id-less add
             # id-less add OR copy slide: translate, mint EN-authority id, place.
-            target_body = _translate(cell, source_lang, target_lang, translator, role, result)
+            target_body = _translate(
+                cell, source_lang, target_lang, translator, role, result, translations
+            )
             if target_body is None:
                 renaming_from = None
                 continue
@@ -881,13 +1344,13 @@ def _add_one_direction(
         if sid is not None and not is_copy_companion:
             anchor = (sid, role)  # existing companion (of a non-copied slide)
             continue
-        if sid is None and not process_idless:
-            continue
         if current_slide_id is None:
             result.deferred += 1
             result.errors.append(f"add {role}: narrative with no preceding slide — deferred")
             continue
-        target_body = _translate(cell, source_lang, target_lang, translator, role, result)
+        target_body = _translate(
+            cell, source_lang, target_lang, translator, role, result, translations
+        )
         if target_body is None:
             continue
         # Companions inherit the slide's id (the freshly minted one for a copy).
@@ -908,12 +1371,24 @@ def _translate(
     translator: SlideTranslator,
     role: str,
     result: ApplyResult,
+    translations: dict[int, _TransOutcome],
 ) -> str | None:
-    """Translate a cell body, recording a deferral + error on failure.
+    """Return the materialized translation of a cell, recording a deferral on failure.
 
-    rstrip drops the terminal-newline artifact so the translator input does not
-    depend on cell position.
+    The translation was computed up front (#216 2b) and read from ``translations``
+    here, in walk order, so the deferral/error accounting matches the legacy inline
+    pass exactly. A cache miss falls back to translating now — a safety net that
+    keeps behavior correct even if the materialize walk under-enumerated; it is not
+    expected to fire (the materialize walks enumerate a superset). rstrip drops the
+    terminal-newline artifact so the translator input does not depend on position.
     """
+    cached = translations.get(id(cell))
+    if cached is not None:
+        if cached.error is not None:
+            result.deferred += 1
+            result.errors.append(cached.error)
+            return None
+        return cached.body
     try:
         return translator.translate(
             source_body=cell.body.rstrip("\n"),

@@ -105,6 +105,44 @@ def _stub_judge(
     )
 
 
+def _stub_translator(monkeypatch, *, default: str = "# ## Translated\n#\n# - point") -> None:
+    """Patch the CLI's translator factory to a non-failing static translator.
+
+    Mirrors :func:`_stub_judge`: it replaces the ``OpenRouterSlideTranslator``
+    symbol the command constructs, so a writing run translates id-less adds
+    offline. A translator that always succeeds means a deferral can only come from
+    the engine's own decision, never a missing translation.
+    """
+    from clm.cli.commands import slides_sync as cmd
+    from clm.slides.sync_translate import StaticSlideTranslator
+
+    monkeypatch.setattr(
+        cmd, "OpenRouterSlideTranslator", lambda **_kwargs: StaticSlideTranslator(default=default)
+    )
+
+
+def _stub_verifier(monkeypatch, *, default: bool = True) -> None:
+    """Make a provider look configured and stub the cold-start verifier (#216 §12).
+
+    Patches ``has_openrouter_api_key`` to True (so ``provider_available`` is set and a
+    cold pair becomes a pending mint candidate) and the ``OpenRouterCorrespondenceVerifier``
+    factory to a deterministic static verifier, so the mint path runs offline.
+    """
+    from clm.cli.commands import slides_sync as cmd
+    from clm.slides.sync_recover import StaticCorrespondenceVerifier
+
+    monkeypatch.setattr(cmd, "has_openrouter_api_key", lambda *_a, **_k: True)
+    monkeypatch.setattr(
+        cmd,
+        "OpenRouterCorrespondenceVerifier",
+        lambda **_k: StaticCorrespondenceVerifier(default=default),
+    )
+
+
+def _idless_slide(lang: str, body: str) -> str:
+    return f'# %% [markdown] lang="{lang}" tags=["slide"]\n{body}\n'
+
+
 def _combined(result) -> str:
     return (result.stderr or "") + (result.output or "")
 
@@ -1051,3 +1089,125 @@ class TestBatchMode:
         # the nested .env was missed → judge unavailable → exit 2.
         assert result.exit_code == 0, _combined(result)
         assert "Point one" in en_path.read_text(encoding="utf-8")
+
+
+class TestDryRunApplyParity:
+    """``--dry-run`` must predict the writing run (#216).
+
+    A preview that promises changes a writing run silently refuses (or that exits
+    "clean / changes-pending" when the writing run errors and writes nothing) is a
+    misleading preview. These tests drive the real command twice — once with
+    ``--dry-run``, once writing — over the same fixture, with the judge/translator
+    stubbed so the only thing under test is whether the preview matches the act.
+    """
+
+    def test_dry_run_add_count_matches_apply(
+        self, cli_runner: CliRunner, tmp_path: Path, monkeypatch
+    ):
+        # Watermark baseline; the author appends ONE id-less slide on DE only.
+        cache_dir = tmp_path / "cache"
+        de_base = _cell("de", "a", "# ## A")
+        en_base = _cell("en", "a", "# ## A")
+        de_path, en_path = _write_pair(tmp_path, de_base, en_base, stem="parity")
+        _seed_watermark(
+            cache_dir, de_path.resolve(), en_path.resolve(), de_text=de_base, en_text=en_base
+        )
+        de_path.write_text(de_base + _idless_slide("de", "# ## Neu"), encoding="utf-8")
+
+        dry = cli_runner.invoke(
+            slides_sync_cmd,
+            [str(de_path), str(en_path), "--dry-run", "--cache-dir", str(cache_dir)],
+        )
+        assert dry.exit_code == 1, _combined(dry)  # one change pending
+        assert "1 add" in dry.output
+
+        _stub_judge(monkeypatch, _EN_PROPOSAL)
+        _stub_translator(monkeypatch)
+        applied = cli_runner.invoke(
+            slides_sync_cmd, [str(de_path), str(en_path), "--cache-dir", str(cache_dir)]
+        )
+        # The preview's promise (1 add, applicable) is what the writing run did.
+        assert applied.exit_code == 0, _combined(applied)
+        assert "1 add" in applied.output
+        assert "# ## Neu" in de_path.read_text(encoding="utf-8")
+
+    def test_dry_run_promise_matches_apply_for_parallel_idless(
+        self, cli_runner: CliRunner, tmp_path: Path, monkeypatch
+    ):
+        # A cold-start parallel id-less pair: the resolver refuses the
+        # both-directions adds at plan time (#216), so the dry-run shows the
+        # refusal (exit 1, "changes pending") and a writing run defers it
+        # (exit 1) — they agree, and nothing is written.
+        de = _idless_slide("de", "# ## Eins") + _idless_slide("de", "# ## Zwei")
+        en = _idless_slide("en", "# ## One") + _idless_slide("en", "# ## Two")
+        de_path, en_path = _write_pair(tmp_path, de, en, stem="cold")
+
+        # --no-verify-cold-pairs forces the refusal path regardless of whether a
+        # provider key is set in this env (with a key + the default, this pair would
+        # instead become a pending mint — see test_cold_pair_mints_when_verified).
+        base = [str(de_path), str(en_path), "--no-cache", "--no-verify-cold-pairs"]
+        dry = cli_runner.invoke(slides_sync_cmd, [*base, "--dry-run"])
+        assert dry.exit_code == 1, _combined(dry)  # "changes pending"
+        assert "baseline=none" in dry.output
+        assert "refuse" in dry.output  # the refusal is shown in the preview
+
+        _stub_judge(monkeypatch, _EN_PROPOSAL)
+        _stub_translator(monkeypatch)
+        applied = cli_runner.invoke(slides_sync_cmd, base)
+        # The writing run does not corrupt the decks...
+        assert de_path.read_text(encoding="utf-8") == de
+        assert en_path.read_text(encoding="utf-8") == en
+        # ...and the dry-run preview matched it: both "needs review" (exit 1), the
+        # refusal foreseen — never a clean/pending preview that errors on write.
+        assert applied.exit_code == 1, _combined(applied)
+        assert applied.exit_code == dry.exit_code
+        assert "refuse" in applied.output
+
+    def test_cold_pair_mints_when_verified(
+        self, cli_runner: CliRunner, tmp_path: Path, monkeypatch
+    ):
+        # With a provider configured (stubbed) and the verifier confirming, a
+        # cold-start pair is bootstrapped: dry-run shows a pending mint, the writing
+        # run mints shared ids onto both halves (#216 §12).
+        de = _idless_slide("de", "# ## Einleitung") + _idless_slide("de", "# ## Variablen")
+        en = _idless_slide("en", "# ## Introduction") + _idless_slide("en", "# ## Variables")
+        de_path, en_path = _write_pair(tmp_path, de, en, stem="coldmint")
+        _stub_verifier(monkeypatch, default=True)
+
+        dry = cli_runner.invoke(
+            slides_sync_cmd, [str(de_path), str(en_path), "--dry-run", "--no-cache"]
+        )
+        assert dry.exit_code == 1, _combined(dry)  # a pending mint is "changes pending"
+        assert "mint" in dry.output
+
+        applied = cli_runner.invoke(slides_sync_cmd, [str(de_path), str(en_path), "--no-cache"])
+        assert applied.exit_code == 0, _combined(applied)  # minted cleanly
+        de_after = de_path.read_text(encoding="utf-8")
+        en_after = en_path.read_text(encoding="utf-8")
+        assert 'slide_id="' in de_after  # both halves now carry minted ids
+        assert 'slide_id="' in en_after
+
+    def test_half_idd_pair_adopts_when_verified(
+        self, cli_runner: CliRunner, tmp_path: Path, monkeypatch
+    ):
+        # A half-id'd cold pair (EN assign-ids'd, DE id-less — the common 1.8-gate
+        # shape): dry-run shows a pending adopt, the writing run stamps EN's EXISTING
+        # ids onto the DE twin verbatim — no minting, no translation (#216 §12, 3.2).
+        de = _idless_slide("de", "# ## Einleitung") + _idless_slide("de", "# ## Variablen")
+        en = _cell("en", "intro", "# ## Introduction") + _cell("en", "vars", "# ## Variables")
+        de_path, en_path = _write_pair(tmp_path, de, en, stem="coldadopt")
+        _stub_verifier(monkeypatch, default=True)
+
+        dry = cli_runner.invoke(
+            slides_sync_cmd, [str(de_path), str(en_path), "--dry-run", "--no-cache"]
+        )
+        assert dry.exit_code == 1, _combined(dry)  # a pending adopt is "changes pending"
+        assert "adopt" in dry.output
+
+        applied = cli_runner.invoke(slides_sync_cmd, [str(de_path), str(en_path), "--no-cache"])
+        assert applied.exit_code == 0, _combined(applied)  # adopted cleanly
+        de_after = parse_cells(de_path.read_text(encoding="utf-8"))
+        de_ids = [c.metadata.slide_id for c in de_after if c.metadata.is_slide_start]
+        # The DE half adopted EN's ids verbatim, not freshly-minted heading slugs.
+        assert de_ids == ["intro", "vars"]
+        assert en_path.read_text(encoding="utf-8") == en  # the id'd half is untouched

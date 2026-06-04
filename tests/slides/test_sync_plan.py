@@ -304,6 +304,88 @@ class TestColdStart:
         assert "cannot detect" in summary
 
 
+class TestBothDirectionsRefusal:
+    """Adds that would flow both ways become ``refuse`` proposals (#216).
+
+    The resolver decides at plan time that a both-directions cold-start / id-less
+    pair cannot be auto-paired, so it emits ``refuse`` items instead of
+    bidirectional adds the apply engine would double (id-carrying) or defer with
+    an error (id-less). A one-directional case keeps its adds.
+    """
+
+    def test_cold_start_parallel_idless_refuses(self):
+        plan = classify(
+            [cur(0, None, "d0"), cur(1, None, "d1")],
+            [cur(0, None, "e0"), cur(1, None, "e1")],
+            None,
+            None,
+            source="none",
+        )
+        assert plan.count("add") == 0
+        assert plan.count("refuse") == 4
+        assert all(p.disposition == "refuse" for p in plan.refusals)
+        assert {p.direction for p in plan.refusals} == {"de->en", "en->de"}
+
+    def test_cold_start_mismatched_ids_refuses(self):
+        plan = classify(
+            [cur(0, "d1", "d0"), cur(1, "d2", "d1h")],
+            [cur(0, "e1", "e0"), cur(1, "e2", "e1h")],
+            None,
+            None,
+            source="none",
+        )
+        assert plan.count("add") == 0
+        assert plan.count("refuse") == 4
+
+    def test_cold_start_half_idd_refuses(self):
+        plan = classify(
+            [cur(0, None, "d0"), cur(1, None, "d1")],
+            [cur(0, "s1", "e0"), cur(1, "s2", "e1")],
+            None,
+            None,
+            source="none",
+        )
+        assert plan.count("add") == 0
+        assert plan.count("refuse") == 4
+
+    def test_cold_start_one_direction_still_adds(self):
+        # New content on one side only is the legitimate single-language case —
+        # never refused.
+        plan = classify(
+            [cur(0, None, "d0"), cur(1, None, "d1")],
+            [],
+            None,
+            None,
+            source="none",
+        )
+        assert plan.count("add") == 2
+        assert plan.count("refuse") == 0
+
+    def test_baseline_both_sides_idless_refuses(self):
+        plan = classify(
+            [cur(0, "intro", "d0"), cur(1, None, "dNEW")],
+            [cur(0, "intro", "e0"), cur(1, None, "eNEW")],
+            [base(0, "intro", "d0")],
+            [base(0, "intro", "e0")],
+        )
+        assert plan.count("add") == 0
+        assert plan.count("refuse") == 2
+        assert plan.in_sync_count == 1
+
+    def test_baseline_idcarrying_both_directions_still_adds(self):
+        # Against a real baseline, two new id'd slides (one per side) are genuinely
+        # distinct — their ids were absent from the baseline — not a mismatched
+        # pair, so they apply rather than refuse.
+        plan = classify(
+            [cur(0, "intro", "d0"), cur(1, "newde", "dNEW")],
+            [cur(0, "intro", "e0"), cur(1, "newen", "eNEW")],
+            [base(0, "intro", "d0")],
+            [base(0, "intro", "e0")],
+        )
+        assert plan.count("add") == 2
+        assert plan.count("refuse") == 0
+
+
 # ---------------------------------------------------------------------------
 # build_sync_plan (IO wrapper: baseline resolution)
 # ---------------------------------------------------------------------------

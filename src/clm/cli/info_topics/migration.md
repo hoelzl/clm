@@ -347,6 +347,29 @@ the safe one — no command was removed and every tool stays fully invocable.
   silently produce a divergent or no-op sync. *Migration:* none for well-formed
   invocations; a script that relied on passing a mismatched pair will now get a
   clear usage error instead of a surprising write.
+- **Cold-start pairs are reconciled or refused — never doubled (#216).** When a
+  split pair has changes that would have to flow in *both* directions with no
+  shared ids to pair the halves, `clm slides sync` now decides at plan time
+  instead of adding every cell on both sides (which previously errored at exit 2
+  for an all-id-less pair, or silently **doubled** both decks for an id-carrying
+  one). A **freshly-split parallel pair** (all cells id-less) is **paired and
+  minted one shared `slide_id` per slide** — but only after a cheap, cached LLM
+  **correspondence check** confirms the two halves actually translate each other
+  (default-on when an OpenRouter key is configured; turn it off with
+  `--no-verify-cold-pairs`). A **half-id'd pair** — one half fully id'd, the
+  other fully id-less (e.g. ids were assigned on only one half) — is **paired
+  and the id-less half adopts the id'd half's *existing* slide_ids** (no fresh
+  minting, no translation; the same correspondence check gates it). Without a
+  provider, or if the check returns "no" or cannot run, the pair is **refused**
+  rather than guessed. A pair that still cannot be paired unambiguously — both
+  halves id'd with **mismatched** ids, or **mixed authority** (different halves
+  id'd on different slides) — is **refused**. A refusal emits **`refuse`** items,
+  writes nothing, holds the watermark, and `--dry-run` shows exactly what a
+  writing run does (`N refuse`, exit 1 — "changes pending"); a confirmed
+  bootstrap shows `1 mint`/`1 adopt` instead (also exit 1 until applied).
+  *Migration:* for a refused pair, sync one direction at a time (author one half,
+  sync, then the other), or run `clm slides assign-ids <dir>` to mint shared ids
+  across the pair first; then re-run sync.
 - **`clm slides assign-ids` is now plumbing (hidden).** Per-file id minting on a
   *single* split half can mint a divergent slug — the #1 silent #162 break. It is
   hidden from `clm slides --help` but stays invocable by name for agents/scripts
