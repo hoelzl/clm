@@ -19,7 +19,7 @@ The CLM worker system now supports running workers directly as Python subprocess
 Workers run in isolated Docker containers:
 
 ```python
-from clm_common.workers.worker_executor import WorkerConfig
+from clm.infrastructure.workers.worker_executor import WorkerConfig
 
 config = WorkerConfig(
     worker_type='notebook',
@@ -45,7 +45,7 @@ config = WorkerConfig(
 Workers run as Python subprocesses:
 
 ```python
-from clm_common.workers.worker_executor import WorkerConfig
+from clm.infrastructure.workers.worker_executor import WorkerConfig
 
 config = WorkerConfig(
     worker_type='notebook',
@@ -70,9 +70,9 @@ config = WorkerConfig(
 
 ```python
 from pathlib import Path
-from clm_common.database.schema import init_database
-from clm_common.workers.pool_manager import WorkerPoolManager
-from clm_common.workers.worker_executor import WorkerConfig
+from clm.infrastructure.database.schema import init_database
+from clm.infrastructure.workers.pool_manager import WorkerPoolManager
+from clm.infrastructure.workers.worker_executor import WorkerConfig
 
 # Setup
 db_path = Path("./jobs.db")
@@ -245,7 +245,7 @@ stats = manager.get_worker_stats()
 Test individual executor implementations:
 
 ```bash
-pytest clm-common/tests/workers/test_worker_executor.py
+pytest tests/infrastructure/workers/test_worker_executor.py
 ```
 
 ### Integration Tests
@@ -253,7 +253,7 @@ pytest clm-common/tests/workers/test_worker_executor.py
 Test full worker lifecycle with actual jobs:
 
 ```bash
-pytest clm-common/tests/workers/test_direct_integration.py -m integration
+pytest tests/infrastructure/workers/test_direct_integration.py -m integration
 ```
 
 ## Debugging
@@ -433,7 +433,7 @@ Abstract base class for worker executors.
 ```python
 class WorkerExecutor(ABC):
     @abstractmethod
-    def start_worker(self, worker_type: str, index: int, config: WorkerConfig) -> Optional[str]:
+    def start_worker(self, worker_type: str, index: int, config: WorkerConfig, db_worker_id: int | None = None) -> str | None:
         """Start a worker and return its unique identifier."""
 
     @abstractmethod

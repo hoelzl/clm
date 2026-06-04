@@ -50,7 +50,7 @@ and e2e tests and takes about 2 minutes with `pytest-xdist` parallelism.
 ## Step 3: Bump version, build, and push to CI
 
 ```bash
-# Bump the version (creates commit + tag across 7 files)
+# Bump the version (creates commit + tag across 8 files)
 uv run bump-my-version bump patch  # or minor / major
 
 # Build the package (sdist + wheel in dist/)
@@ -61,7 +61,7 @@ git push && git push --tags
 ```
 
 `bump-my-version` is configured in `[tool.bumpversion]` in `pyproject.toml`
-and automatically updates the version in seven files, creates a commit with
+and automatically updates the version in eight files, creates a commit with
 the message `Bump version X.Y.Z → A.B.C`, and tags that commit `vA.B.C`.
 
 Preview what would change without modifying anything:

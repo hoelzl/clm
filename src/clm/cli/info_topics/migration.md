@@ -828,7 +828,7 @@ text-before-children form:
 Childless topics need no changes — `<topic>introduction</topic>` keeps
 working. Migration is opt-in for those.
 
-Verification: `clm validate-spec course.xml` parses cleanly. Any `<topic>`
+Verification: `clm validate course.xml` parses cleanly. Any `<topic>`
 with children and a stale post-child ID will surface as a clear
 `CourseSpecError` pointing at the section.
 
@@ -850,7 +850,7 @@ kinds, since they serve genuinely different audiences:
 `<kind>speaker</kind>` continues to parse and is treated as
 `recording` for one release. Spec parsing logs a deprecation warning
 and rewrites the kind internally, so downstream consumers
-(`clm build`, `clm validate-spec`, the MCP tools, etc.) only ever see
+(`clm build`, `clm validate`, the MCP tools, etc.) only ever see
 the canonical kinds. The `--speaker-only` CLI flag also still works
 and now selects both `trainer` and `recording`, since both share the
 private (`speaker/`) toplevel output directory.
@@ -908,7 +908,7 @@ holding both for a recording trainer), list both kinds:
 
 Verification:
 
-- `clm validate-spec course.xml` — the spec parses cleanly without
+- `clm validate course.xml` — the spec parses cleanly without
   any `speaker` deprecation warnings.
 - `clm build course.xml --speaker-only` — produces both `Trainer/` and
   `Recording/` subdirs under the private (`speaker/`) toplevel.
@@ -963,7 +963,7 @@ Verification:
   single section (see `clm info commands`).
 - `clm outline course.xml --include-disabled` — lists the disabled
   sections with a `(disabled)` marker so you can see the full roadmap.
-- `clm validate-spec course.xml --include-disabled` — validates disabled
+- `clm validate course.xml --include-disabled` — validates disabled
   sections' topics with a `(disabled)` suffix on each finding so you can
   track which topics still need to be created.
 

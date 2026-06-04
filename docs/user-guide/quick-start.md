@@ -224,9 +224,7 @@ class User {
 **C++ Notebook** (`topic_cpp.cpp`):
 ```cpp
 // %% [markdown]
-"""
-# C++ Example
-"""
+// # C++ Example
 
 // %%
 #include <iostream>
@@ -242,8 +240,8 @@ int main() {
 ```
 
 Update `course.xml`:
-```yaml
-prog_lang: cpp
+```xml
+<prog-lang>cpp</prog-lang>
 ```
 
 ### Sharing Source Between Topics

@@ -606,12 +606,15 @@ This creates a detailed log file you can review or share.
 
 ```bash
 # View running workers (if using Docker)
+# Run this first to find the actual container names — runtime containers are
+# named clm-{worker_type}-worker-{index}, and the indices depend on the
+# configured worker count (e.g. clm-notebook-worker-0, clm-notebook-worker-1).
 docker ps
 
-# View worker logs
-docker logs clm-notebook-processor
-docker logs clm-plantuml-converter
-docker logs clm-drawio-converter
+# View worker logs (substitute the names shown by `docker ps` above)
+docker logs clm-notebook-worker-0
+docker logs clm-plantuml-worker-0
+docker logs clm-drawio-worker-0
 ```
 
 ### Examine Database

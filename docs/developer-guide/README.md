@@ -93,7 +93,7 @@ pytest --cov=src/clm
 
 ```
 clm/
-├── src/clm/              # Package source (v1.0.0)
+├── src/clm/              # Package source (v1.7.0)
 │   ├── core/             # Domain logic (Course, Section, Topic)
 │   ├── infrastructure/   # Job queue, worker management, backends
 │   ├── workers/          # Worker implementations

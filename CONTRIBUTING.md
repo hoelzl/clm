@@ -90,8 +90,8 @@ pytest
 pytest -m integration
 pytest -m e2e
 
-# Run all tests
-pytest -m ""
+# Run all tests (excluding docker)
+pytest -m "not docker"
 
 # Run with coverage
 pytest --cov=src/clm --cov-report=html
@@ -355,7 +355,7 @@ When changing architecture or adding developer-relevant features:
 
 ### Before Submitting
 
-- [ ] All tests pass (`pytest -m ""`)
+- [ ] All tests pass (`pytest -m "not docker"`)
 - [ ] Code follows style guidelines
 - [ ] New code has tests
 - [ ] Documentation updated (if needed)

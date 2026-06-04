@@ -762,7 +762,7 @@ Each output target specifies:
 |------|-------------|
 | `code-along` | Notebooks with code cells cleared for student exercises |
 | `completed` | Notebooks with all solutions included |
-| `partial` | Completed outside workshop ranges, code-along inside them. A workshop range starts at a markdown cell tagged `workshop` and ends — exclusively — at the next `end-workshop` cell, the next `workshop` heading, or end-of-notebook. Intended as a student follow-along artifact: demonstrations remain worked out, workshops stay blank. |
+| `partial` | Completed outside workshop ranges, code-along inside them. A workshop range starts at a markdown cell tagged `workshop` **or** a slide-start (`slide`/`subslide`) markdown cell whose `slide_id` begins with `workshop-`, and ends — exclusively — at the next `end-workshop` cell, the next workshop opener, or end-of-notebook. Intended as a student follow-along artifact: demonstrations remain worked out, workshops stay blank. Without an explicit `end-workshop`, a workshop runs to end-of-notebook (legacy behaviour); add `end-workshop` to close one mid-deck. `clm validate` warns when a `# Workshop` heading has no workshop scope covering it, so a missing opener doesn't silently render the exercise cells. |
 | `trainer` | Notebooks for trainers teaching the course: keeps speaker `notes` cells but strips `voiceover` cells. The variant most trainers want. |
 | `recording` | Notebooks for the trainer recording the course on video: keeps both `notes` and `voiceover` cells. The voiceover cells contain the polished narration read on camera. |
 
@@ -927,6 +927,56 @@ clm build course.xml --output-dir ./custom-output
 ```
 
 When `--output-dir` is specified, it overrides all targets defined in the spec file.
+
+---
+
+## Release Channels (Per-Cohort Solution Release)
+
+The optional `<release-channels>` element configures **per-topic solution
+release to student cohorts** (issue #208): declare one git repository per
+cohort, and after a topic's workshop has been discussed, release that topic —
+and only that topic — into the cohort's repo, **frozen** so that later course
+edits never change what a cohort already received. Multiple cohorts each move on
+their own schedule. See the [Solution Release guide](solution-release.md) for
+the end-to-end workflow.
+
+This block is **structural and stable** — it names the cohorts and where their
+repos live. The volatile per-topic release state (which topics a cohort has
+received) lives in a separate plain-text **ledger** file, never in the spec, so
+the spec stays diff-clean as you release week by week.
+
+```xml
+<release-channels source-target="solutions">
+    <remote-path>cohorts</remote-path>
+    <channel name="jan" path="./solutions/jan" ledger="release/jan.txt"/>
+    <channel name="may" path="./solutions/may" ledger="release/may.txt">
+        <remote-path>special</remote-path>
+    </channel>
+</release-channels>
+```
+
+| Attribute / child | On | Required | Description |
+|---|---|----------|-------------|
+| `source-target` (attr) | `<release-channels>` | Yes | Name of the `completed`-kind `<output-target>` that is the frozen source. Topics are promoted out of this target's built tree. |
+| `<remote-path>` | `<release-channels>` | No | Default remote path (e.g. a GitLab group) for every channel that does not override it. |
+| `name` (attr) | `<channel>` | Yes | Cohort identifier. Addresses the channel on the CLI (`--channel jan`) and forms the derived repo name `{project-slug}-{name}`. |
+| `path` (attr) | `<channel>` | Yes | The cohort repo's working tree (relative to the course root, or absolute). One repo per cohort; **not** language-scoped. |
+| `ledger` (attr) | `<channel>` | Yes | Path to the cohort's release ledger — a plain-text file, **one released topic id per line**, created/appended by `clm release add`. Keep it in the course source repo. |
+| `<remote-path>` | `<channel>` | No | Override the block-level `<remote-path>` for this one cohort. |
+
+The remote URL is derived as
+`{repository-base}/{remote-path}/{project-slug}-{name}` (the `<remote-path>`
+segment is omitted when unset). Unlike output targets, a channel repo carries no
+language segment — the cohort `name` disambiguates it.
+
+Per-topic promotion relies on the build **provenance manifest**
+(`.clm-manifest.json`, written by `clm build` on by default), which maps each
+output file to its owning topic — information the output path alone cannot
+recover. The manifest is private and is excluded from every distributed repo by
+`clm git`; the per-cohort **frozen manifest** (`.clm-released.json`) *does* ship
+in the channel repo as the freeze record. Drive the workflow with `clm release`
+(`add` / `week` / `status` / `sync`) and `clm git --channel` (init/commit/push
+the cohort repos); run `clm info commands` for both.
 
 ---
 
