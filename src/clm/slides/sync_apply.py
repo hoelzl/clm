@@ -147,6 +147,27 @@ class ApplyResult:
         return bool(self.errors)
 
 
+@dataclass
+class _EditOutcome:
+    """The materialized result of one edit (#216 resolve-then-apply, stage 2b).
+
+    Computed by :func:`_materialize_edits` so the execute pass writes mechanically
+    and calls no model for an edit:
+
+    - ``"update"`` — apply ``proposed_text`` to the target cell;
+    - ``"in_sync"`` — the judge decided no change is needed (counts as in-sync);
+    - ``"blocked"`` — the model was unavailable / failed, or the proposal was
+      malformed; ``error`` is the message to record (the edit is not applied).
+
+    Mirrors exactly what the former inline ``_apply_edit`` / ``_apply_code_edit``
+    decided, so moving the decision earlier is behavior-preserving.
+    """
+
+    verdict: str  # "update" | "in_sync" | "blocked"
+    proposed_text: str | None = None
+    error: str | None = None
+
+
 def apply_plan(
     plan: SyncPlan,
     *,
@@ -194,6 +215,15 @@ def apply_plan(
     de_state = FileState.load(plan.de_path)
     en_state = FileState.load(plan.en_path)
 
+    # Stage 2b (edit path): resolve every edit — and every conflict the caller
+    # chose to win — into a materialized outcome up front, the only place an edit
+    # touches the judge/translator. The execute walk below then writes each edit
+    # mechanically (#216 resolve-then-apply). Read against the pre-mutation
+    # snapshots/state, exactly as the inline edit appliers used to.
+    edit_outcomes = _materialize_edits(
+        plan, decisions, de_state, en_state, de_content, en_content, judge, translator
+    )
+
     moves: list[Proposal] = []
     # (slide_id, role) of every TRUE deferral this pass: an unresolved conflict
     # or a user-skipped edit/remove/move. The per-cell partial watermark advance
@@ -214,9 +244,7 @@ def apply_plan(
                 _note_deferred(deferred_keys, proposal)
         elif kind == "edit":
             if _accepted(decisions, proposal):
-                _apply_edit(
-                    proposal, de_state, en_state, de_content, en_content, judge, translator, result
-                )
+                _apply_edit(proposal, de_state, en_state, edit_outcomes[id(proposal)], result)
             else:
                 result.deferred += 1
                 _note_deferred(deferred_keys, proposal)
@@ -234,16 +262,7 @@ def apply_plan(
                 _note_deferred(deferred_keys, proposal)
         elif kind == "conflict":
             _apply_conflict(
-                proposal,
-                decisions,
-                de_state,
-                en_state,
-                de_content,
-                en_content,
-                judge,
-                translator,
-                result,
-                deferred_keys,
+                proposal, decisions, de_state, en_state, edit_outcomes, result, deferred_keys
             )
         elif kind == "refuse":
             # A structural refusal the resolver decided at plan time (#216): the
@@ -387,19 +406,17 @@ def _apply_conflict(
     decisions: dict[int, str] | None,
     de_state: FileState,
     en_state: FileState,
-    de_content: dict[tuple[str, str], str],
-    en_content: dict[tuple[str, str], str],
-    judge: SyncJudge | None,
-    translator: SlideTranslator | None,
+    edit_outcomes: dict[int, _EditOutcome],
     result: ApplyResult,
     deferred_keys: set[tuple[str, str]],
 ) -> None:
     """Resolve a conflict per its decision, or defer it.
 
     ``de-wins`` / ``en-wins`` propagate the winning side as an ordinary edit
-    (the judge rewrites the losing side to match); any other decision defers,
-    recording the key so the per-cell advance keeps its pre-conflict baseline
-    and the conflict re-surfaces next run.
+    (the judge's rewrite of the losing side was materialized up front by
+    :func:`_materialize_edits`, keyed by this conflict proposal's id); any other
+    decision defers, recording the key so the per-cell advance keeps its
+    pre-conflict baseline and the conflict re-surfaces next run.
     """
     decision = _conflict_decision(decisions, proposal)
     if decision == DECISION_DE_WINS:
@@ -407,10 +424,7 @@ def _apply_conflict(
             _conflict_as_edit(proposal, "de->en"),
             de_state,
             en_state,
-            de_content,
-            en_content,
-            judge,
-            translator,
+            edit_outcomes[id(proposal)],
             result,
         )
     elif decision == DECISION_EN_WINS:
@@ -418,10 +432,7 @@ def _apply_conflict(
             _conflict_as_edit(proposal, "en->de"),
             de_state,
             en_state,
-            de_content,
-            en_content,
-            judge,
-            translator,
+            edit_outcomes[id(proposal)],
             result,
         )
     else:
@@ -562,7 +573,52 @@ def _apply_retag_idless(
         )
 
 
-def _apply_edit(
+def _materialize_edits(
+    plan: SyncPlan,
+    decisions: dict[int, str] | None,
+    de_state: FileState,
+    en_state: FileState,
+    de_content: dict[tuple[str, str], str],
+    en_content: dict[tuple[str, str], str],
+    judge: SyncJudge | None,
+    translator: SlideTranslator | None,
+) -> dict[int, _EditOutcome]:
+    """Resolve every edit (and every conflict the caller chose to win) up front.
+
+    Stage 2b for the edit path (#216 resolve-then-apply): the only model calls for
+    edits happen here, keyed by ``id(proposal)``, so the execute walk writes
+    mechanically. A conflict resolved ``de-wins`` / ``en-wins`` is materialized as
+    the directed edit it becomes (keyed by the *conflict* proposal's id, since the
+    execute pass synthesizes a fresh edit proposal each run); a skipped or
+    undecided conflict is left out so the execute walk simply defers it.
+
+    Runs before any cell mutation, exactly where the inline appliers used to read
+    their inputs (markdown from the ``content_index`` snapshots, localized code
+    from the loaded state), so the move is behavior-preserving.
+    """
+    outcomes: dict[int, _EditOutcome] = {}
+    for proposal in plan.proposals:
+        if proposal.kind == "edit":
+            outcomes[id(proposal)] = _resolve_edit(
+                proposal, de_state, en_state, de_content, en_content, judge, translator
+            )
+        elif proposal.kind == "conflict":
+            decision = _conflict_decision(decisions, proposal)
+            if decision in (DECISION_DE_WINS, DECISION_EN_WINS):
+                direction = "de->en" if decision == DECISION_DE_WINS else "en->de"
+                outcomes[id(proposal)] = _resolve_edit(
+                    _conflict_as_edit(proposal, direction),
+                    de_state,
+                    en_state,
+                    de_content,
+                    en_content,
+                    judge,
+                    translator,
+                )
+    return outcomes
+
+
+def _resolve_edit(
     proposal: Proposal,
     de_state: FileState,
     en_state: FileState,
@@ -570,87 +626,95 @@ def _apply_edit(
     en_content: dict[tuple[str, str], str],
     judge: SyncJudge | None,
     translator: SlideTranslator | None,
-    result: ApplyResult,
-) -> None:
+) -> _EditOutcome:
+    """Resolve one edit to a materialized :class:`_EditOutcome` (the model call).
+
+    Mirrors the former inline ``_apply_edit`` / ``_apply_code_edit`` decision logic
+    exactly — same verdicts, same error strings — but returns the outcome instead
+    of writing, so the execute pass is mechanical. A localized **code** cell is
+    reconciled by re-translating the source body (the markdown judge's prompt does
+    not fit runnable code); a markdown cell goes through the judge.
+    """
     if proposal.slide_id is None:
-        result.errors.append(f"edit {proposal.role}: proposal has no slide_id")
-        return
+        return _EditOutcome("blocked", error=f"edit {proposal.role}: proposal has no slide_id")
     sid = proposal.slide_id
     key = (sid, proposal.role)
     if proposal.direction == "de->en":
         source_lang, target_lang = "de", "en"
         source_body = de_content.get(key, "")
         target_body = en_content.get(key, "")
-        source_state, target_state = de_state, en_state
+        source_state = de_state
     else:
         source_lang, target_lang = "en", "de"
         source_body = en_content.get(key, "")
         target_body = de_content.get(key, "")
-        source_state, target_state = en_state, de_state
+        source_state = en_state
 
-    # A localized code cell is reconciled by re-translating the source body (the
-    # markdown judge's prompt does not fit runnable code); only the human-facing
-    # string literals / comments differ across languages.
     if proposal.role == CODE_ROLE:
-        _apply_code_edit(
-            sid, source_state, target_state, source_lang, target_lang, translator, result
-        )
-        return
+        if translator is None:
+            return _EditOutcome(
+                "blocked", error=f"edit {sid}/code: no translator (LLM unavailable)"
+            )
+        src_cell = source_state.find_cell(sid, CODE_ROLE)
+        if src_cell is None:
+            return _EditOutcome("blocked", error=f"edit {sid}/code: source cell not found")
+        try:
+            new_body = translator.translate(
+                source_body=src_cell.body.rstrip("\n"),
+                source_lang=source_lang,
+                target_lang=target_lang,
+                role=CODE_ROLE,
+            )
+        except TranslationError as exc:
+            return _EditOutcome("blocked", error=f"edit {sid}/code: translation failed: {exc}")
+        return _EditOutcome("update", proposed_text=new_body)
 
     if judge is None:
-        result.errors.append(f"edit {sid}/{proposal.role}: no judge (LLM unavailable)")
-        return
-
+        return _EditOutcome(
+            "blocked", error=f"edit {sid}/{proposal.role}: no judge (LLM unavailable)"
+        )
     try:
         sync_proposal = judge.propose(
             source_body, target_body, source_lang=source_lang, target_lang=target_lang
         )
     except OllamaError as exc:
         logger.info("edit judge failed on %s/%s: %s", sid, proposal.role, exc)
-        result.errors.append(f"edit {sid}/{proposal.role}: {exc}")
-        return
-
+        return _EditOutcome("blocked", error=f"edit {sid}/{proposal.role}: {exc}")
     if sync_proposal.verdict != "update":
+        return _EditOutcome("in_sync")
+    return _EditOutcome("update", proposed_text=sync_proposal.proposed_text)
+
+
+def _apply_edit(
+    proposal: Proposal,
+    de_state: FileState,
+    en_state: FileState,
+    outcome: _EditOutcome,
+    result: ApplyResult,
+) -> None:
+    """Write a pre-materialized edit (mechanical — no judge/translator here).
+
+    The model call (markdown judge / code re-translation) already happened in
+    :func:`_materialize_edits`; this only records the outcome: ``blocked`` → its
+    error, ``in_sync`` → the judge's no-change verdict, ``update`` → replace the
+    target cell's body (the target is the non-source deck; ``proposal.role`` is the
+    cell's role, ``"code"`` for a localized code cell).
+    """
+    if outcome.verdict == "blocked":
+        result.errors.append(outcome.error or f"edit {proposal.role}: blocked")
+        return
+    if outcome.verdict == "in_sync":
         result.in_sync += 1
         return
-
-    if target_state.replace_cell_body(sid, proposal.role, sync_proposal.proposed_text):
+    sid = proposal.slide_id
+    if sid is None:  # unreachable: an id-less edit resolves to "blocked" above
+        result.errors.append(f"edit {proposal.role}: proposal has no slide_id")
+        return
+    target_state = en_state if proposal.direction == "de->en" else de_state
+    if target_state.replace_cell_body(sid, proposal.role, outcome.proposed_text or ""):
         result.applied_edit += 1
     else:
         result.errors.append(f"edit {sid}/{proposal.role}: target cell not found")
-
-
-def _apply_code_edit(
-    sid: str,
-    source_state: FileState,
-    target_state: FileState,
-    source_lang: str,
-    target_lang: str,
-    translator: SlideTranslator | None,
-    result: ApplyResult,
-) -> None:
-    """Reconcile a localized code cell edit by re-translating the source body."""
-    if translator is None:
-        result.errors.append(f"edit {sid}/code: no translator (LLM unavailable)")
-        return
-    src_cell = source_state.find_cell(sid, CODE_ROLE)
-    if src_cell is None:
-        result.errors.append(f"edit {sid}/code: source cell not found")
-        return
-    try:
-        new_body = translator.translate(
-            source_body=src_cell.body.rstrip("\n"),
-            source_lang=source_lang,
-            target_lang=target_lang,
-            role=CODE_ROLE,
-        )
-    except TranslationError as exc:
-        result.errors.append(f"edit {sid}/code: translation failed: {exc}")
-        return
-    if target_state.replace_cell_body(sid, CODE_ROLE, new_body):
-        result.applied_edit += 1
-    else:
-        result.errors.append(f"edit {sid}/code: target cell not found")
 
 
 # ---------------------------------------------------------------------------

@@ -153,6 +153,30 @@ class TestApplyEdit:
 
         assert plan2.is_noop
 
+    def test_edit_judge_called_once_in_materialize_not_in_execute(self, tmp_path: Path):
+        # The model call for an edit happens exactly once, in the materialize pass
+        # (#216 resolve-then-apply 2b); the execute pass writes mechanically and
+        # never re-invokes the judge.
+        de = _slide("de", "intro", "# ## Einleitung\n# - eins")
+        en = _slide("en", "intro", "# ## Introduction\n# - one")
+        de_path, en_path = _write_pair(tmp_path, de, en)
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_watermark(cache, de_path, en_path)
+            de_path.write_text(
+                _slide("de", "intro", "# ## Einleitung\n# - eins\n# - zwei"), encoding="utf-8"
+            )
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            assert plan.count("edit") == 1
+            # StaticSyncJudge records every propose() call in .calls.
+            judge = _update_judge("# ## Introduction\n# - one\n# - two")
+            result = apply_plan(plan, judge=judge, watermark_cache=cache)
+        finally:
+            cache.close()
+
+        assert result.applied_edit == 1
+        assert len(judge.calls) == 1  # materialized once; execute did not re-call
+
     def test_edit_in_sync_verdict_writes_nothing(self, tmp_path: Path):
         de = _slide("de", "intro", "# ## Einleitung")
         en = _slide("en", "intro", "# ## Introduction")
