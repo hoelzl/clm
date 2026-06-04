@@ -6,8 +6,98 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Removed
+
+- **The flat top-level CLI aliases were removed (1.8 milestone, #158).**
+  The flat command names deprecated since CLM 1.6 — `clm normalize-slides`,
+  `clm language-view`, `clm suggest-sync`, `clm search-slides`,
+  `clm resolve-topic`, `clm authoring-rules`, `clm validate-slides`,
+  `clm validate-spec`, `clm extract-voiceover`, `clm inline-voiceover` —
+  no longer exist. Use the verb-grouped invocations (`clm slides normalize`,
+  `clm topic resolve`, `clm validate`, `clm voiceover extract`, …). See
+  `clm info migration`.
+- **`clm build --keep-directory` was removed (#158).** It had been a no-op
+  alias since keeping the output tree became the default. Drop it; use
+  `--clean` to opt into the legacy wipe-and-restore flow.
+
+### Changed
+
+- **`clm validate`: missing `slide_id` and DE/EN non-adjacency are now
+  errors (#158).** A `slide`/`subslide` cell missing a `slide_id`, and a
+  DE/EN content/voiceover pair separated by an intervening language-tagged
+  cell, escalated from `warning` to `error` (the two-release deprecation
+  window that began in 1.6/1.7 closed in 1.8). Fix missing ids with
+  `clm slides assign-ids` (or `clm slides sync` for a split deck) and
+  non-adjacency with `clm slides normalize`. This fails the pre-commit gate
+  and the PostToolUse hook until cleared.
+- **MCP tool names aligned to the CLI verb-group scheme (#158).** The MCP
+  server's tools were renamed group-first with no aliases:
+  `resolve_topic → topic_resolve`, `search_slides → slides_search`,
+  `normalize_slides → slides_normalize`,
+  `get_language_view → slides_language_view`,
+  `suggest_sync → slides_suggest_sync`,
+  `extract_voiceover → voiceover_extract`,
+  `inline_voiceover → voiceover_inline`,
+  `course_authoring_rules → authoring_rules`. `validate_spec` and
+  `validate_slides` are consolidated into a single `validate` tool that
+  dispatches on input type, mirroring the CLI. `course_outline` and the
+  `voiceover_*` family are unchanged. Update `.mcp.json`, CLAUDE.md /
+  AGENTS.md tool tables, and agent prompts.
+
+### Fixed
+
+- **`clm slides sync` no longer re-surfaces a clean edit as a phantom conflict
+  when a tag-only conflict also warns (#202).** A both-decks tag conflict (the
+  `both` branch of the #198/#200/#201 retag paths — the same role-preserving tag
+  changed on *both* halves) used to hold the **whole-deck** watermark: any clean
+  edit applied in the same pass reached disk but was never baselined, so it
+  re-appeared as a spurious `conflict` on every subsequent run until the unrelated
+  tag conflict was resolved by hand (loud and lossless, but non-idempotent). A
+  tag-only conflict touches no cell *body*, so sync now scopes the hold to just
+  that one cell's tags — pinning them at the old baseline so the conflict still
+  re-surfaces — while the partial watermark advance banks the co-applied edit (and
+  every other reconciled cell). Both the id-carrying (#200, keyed by
+  `(slide_id, role)`) and id-less (#201, keyed by position) `both` paths are fixed
+  together. Structural warnings (both-decks reorder, ambiguous de/en state,
+  shared-cell auto-heal) still hold the whole watermark, as before.
+
+## [1.7.0] - 2026-06-04
+
 ### Added
 
+- **`clm slides sync DIR` — directory batch mode (§8a).** Pass a directory and
+  every `.de`/`.en` deck pair under the tree is synced in one pass. Enumeration is
+  prefix-agnostic (un-prefixed decks like `apis.de.py` count too) and descends the
+  whole subtree; voiceover companions (`voiceover_*`) are ignored. A half with **no
+  twin** under the tree is **skipped with a warning**, never synced against a
+  phantom empty twin. The sweep **continues past a failing pair** (recording it as
+  errored) and the process exit code is the **worst** over all pairs (`0` clean <
+  `1` review < `2` error); a per-pair one-liner plus a `N pair(s): X clean, Y
+  review, Z errored` rollup is printed. A **writing** directory run requires
+  **`--yes`** (or an interactive confirm) since it writes to every pair at once;
+  `--dry-run` / `--explain` directory runs are unprompted. `--interactive` stays
+  single-pair only. `--json` over a directory returns an envelope
+  `{ "mode", "root", "exit_code", "pairs": [ … ] }`, each `pairs` entry being one
+  single-pair object. Additive — passing a single file or a pair is unchanged.
+- **`clm slides sync` accepts a single path (§8 single-path contract).** `EN_PATH`
+  is now optional: pass one half (`clm slides sync slides_x.de.py`) and the twin is
+  derived from disk, or pass the bilingual deck stem (`slides_x.py`, when it still
+  exists on disk) to derive both halves. Derivation is prefix-agnostic (`apis.de.py` works) and the resolved pair
+  still runs through the pairing guard; a missing twin is a clear usage error (sync
+  never invents a translated half). The two-path form is unchanged.
+- **`clm voiceover extract` auto-pairs on a split half (§8 paired extract).**
+  When the target is a split half (`<deck>.de.py` / `<deck>.en.py`) whose twin
+  exists on disk, both companions are extracted in one op: the two halves are
+  first minted with **EN-authority** `slide_id`s across both at once, then each
+  is extracted, and all writes commit atomically — so the two companions'
+  `for_slide` sets agree by construction (closing the footgun where extracting
+  each half by hand could mint divergent slugs). `--single` opts out (legacy
+  single-half behavior), `--both` forces the paired form, and a structurally
+  non-alignable pair is **refused** rather than risk divergence. The `--json`
+  output for a paired extract carries `"paired": true` + a `"companions"` array;
+  the MCP `extract_voiceover` tool gains matching `both` / `single` params. (This
+  is a behavior change to a bare `extract <deck>.de.py` — see `clm info
+  migration`.)
 - **`clm slides sync` now mirrors a tag-only edit across split halves
   (#198).** Adding or removing a role-preserving tag (`keep`, `alt`, …) on
   one half of a split deck used to be silently dropped — the body-hash
@@ -114,6 +204,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **Split-deck command-surface hardening (§8 safety + hygiene).**
+  - **`clm slides sync` pairing guard.** Before any read or write, sync now
+    verifies the two paths are the two halves of one deck (one `.de`, one `.en`,
+    same name — the routing prefix is not required, so `apis.de.py` /
+    `apis.en.py` works). A **swapped** order is auto-corrected with a stderr
+    note; the **same file** twice, **two same-language** halves, **two different
+    decks**, or a path that is **not a split half** are rejected with a usage
+    error (exit 2) before any LLM call. Closes the #162 footgun where a
+    mismatched pair could silently produce a divergent or no-op sync.
+  - **`clm slides assign-ids` and `clm slides suggest-sync` are now plumbing
+    (hidden).** Both are removed from `clm slides --help` but stay fully
+    invocable by name (and `suggest-sync` remains the `suggest_sync` MCP tool).
+    Per-file `assign-ids` on a single split half is the #1 silent #162 break;
+    for everyday authoring let the funnels mint ids — `clm slides sync` (split
+    decks) and `clm slides normalize`. `suggest-sync` is the read-only
+    bilingual-file suggester, superseded by `sync` for split decks.
 - **The `voiceover` slide-coverage check is now opt-in (issue #176).**
   Course-authoring policy changed: voiceover is optional per deck, so the
   coverage check — which reports a gap for every slide / nontrivial code cell

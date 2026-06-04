@@ -1,8 +1,10 @@
 """MCP server for CLM slide authoring tools.
 
-Uses the ``mcp`` Python SDK with stdio transport.  The server
-exposes ``resolve_topic``, ``search_slides``, and ``course_outline``
-as MCP tools.
+Uses the ``mcp`` Python SDK with stdio transport. Tool names mirror the
+CLI verb-group structure (``topic_resolve``, ``slides_search``,
+``slides_normalize``, ``voiceover_extract``, ``validate``, …); the flat
+pre-1.8 names (``resolve_topic``, ``validate_slides``, …) were renamed in
+CLM 1.8.
 """
 
 from __future__ import annotations
@@ -48,7 +50,7 @@ def create_server(data_dir: Path) -> FastMCP:
     mcp = FastMCP("clm")
 
     @mcp.tool()
-    async def resolve_topic(
+    async def topic_resolve(
         topic_id: str,
         course_spec: str | None = None,
         module: str | None = None,
@@ -73,7 +75,7 @@ def create_server(data_dir: Path) -> FastMCP:
         )
 
     @mcp.tool()
-    async def search_slides(
+    async def slides_search(
         query: str,
         course_spec: str | None = None,
         language: str | None = None,
@@ -119,52 +121,53 @@ def create_server(data_dir: Path) -> FastMCP:
         )
 
     @mcp.tool()
-    async def validate_spec(
-        course_spec: str,
+    async def validate(
+        path: str,
+        kind: str | None = None,
+        checks: list[str] | None = None,
         include_disabled: bool = False,
     ) -> str:
-        """Validate a course specification XML file.
+        """Validate a course spec file or slide files.
 
-        Checks that all referenced topic IDs resolve to exactly one
-        existing topic directory, that there are no duplicate topic
-        references, and that referenced dir-group paths exist.
+        Mirrors the unified ``clm validate`` CLI command. Dispatches by
+        input type: an ``.xml`` path is validated as a course spec; a
+        ``.py`` file or a directory is validated as slides. Override the
+        inference with ``kind="spec"`` or ``kind="slides"`` for ambiguous
+        cases (e.g. an ``.xml`` you nonetheless want slide-validated).
 
-        Args:
-            course_spec: Path to the course spec file (absolute, or
-                relative to the data directory).
-            include_disabled: If True, also validate sections marked
-                enabled="false". Each finding from a disabled section
-                has "(disabled)" appended to its message. Default:
-                disabled sections are dropped at parse time and
-                therefore invisible to validation.
-        """
-        return await handle_validate_spec(course_spec, data_dir, include_disabled=include_disabled)
-
-    @mcp.tool()
-    async def validate_slides(
-        path: str,
-        checks: list[str] | None = None,
-    ) -> str:
-        """Validate slide files for format, tag, and pairing correctness.
-
-        Runs deterministic checks (format, pairing, tags) and extracts
-        structured review_material for content-quality checks that
-        require LLM judgment.  Call this after completing edits to a
-        slide file.
+        Spec validation checks that all referenced topic IDs resolve to
+        exactly one existing topic directory, that there are no duplicate
+        topic references, and that referenced dir-group paths exist.
+        Slide validation runs deterministic checks (format, pairing,
+        tags) and extracts structured review_material for content-quality
+        checks that require LLM judgment.
 
         Args:
-            path: Path to a slide file, topic directory, or course spec
-                XML (absolute, or relative to the data directory).
-            checks: Which checks to run.  Deterministic: format, pairing,
-                tags.  Review: code_quality, voiceover, completeness.
-                Default: all checks except ``voiceover``.  Voiceover
-                coverage is opt-in (voiceover is optional per deck, issue
-                #176) — pass ``checks=["voiceover"]`` to run it.
+            path: Path to a course spec (.xml), slide file (.py), or
+                topic directory (absolute, or relative to the data
+                directory).
+            kind: Force a validator: "spec" or "slides". Default
+                inference: .xml → spec, .py / directory → slides.
+            checks: Slides-only. Which checks to run. Deterministic:
+                format, pairing, tags. Review: code_quality, voiceover,
+                completeness. Default: all checks except ``voiceover``
+                (opt-in per deck, issue #176) — pass
+                ``checks=["voiceover"]`` to run it. Ignored for spec
+                validation.
+            include_disabled: Spec-only. If True, also validate sections
+                marked enabled="false"; each finding from a disabled
+                section has "(disabled)" appended. Ignored for slide
+                validation.
         """
+        resolved_kind = (kind or "").lower()
+        if resolved_kind not in ("spec", "slides"):
+            resolved_kind = "spec" if path.lower().endswith(".xml") else "slides"
+        if resolved_kind == "spec":
+            return await handle_validate_spec(path, data_dir, include_disabled=include_disabled)
         return await handle_validate_slides(path, data_dir, checks=checks)
 
     @mcp.tool()
-    async def normalize_slides(
+    async def slides_normalize(
         path: str,
         operations: list[str] | None = None,
         dry_run: bool = False,
@@ -196,7 +199,7 @@ def create_server(data_dir: Path) -> FastMCP:
         )
 
     @mcp.tool()
-    async def get_language_view(
+    async def slides_language_view(
         file: str,
         language: str,
         include_voiceover: bool = False,
@@ -225,7 +228,7 @@ def create_server(data_dir: Path) -> FastMCP:
         )
 
     @mcp.tool()
-    async def suggest_sync(
+    async def slides_suggest_sync(
         file: str,
         source_language: str | None = None,
     ) -> str:
@@ -245,10 +248,12 @@ def create_server(data_dir: Path) -> FastMCP:
         return await handle_suggest_sync(file, data_dir, source_language=source_language)
 
     @mcp.tool()
-    async def extract_voiceover(
+    async def voiceover_extract(
         file: str,
         force: bool = False,
         dry_run: bool = False,
+        both: bool = False,
+        single: bool = False,
     ) -> str:
         """Extract voiceover cells from a slide file to a companion file.
 
@@ -258,17 +263,26 @@ def create_server(data_dir: Path) -> FastMCP:
         Refuses to overwrite an existing companion unless force is set
         (returns an ``{"error": ...}`` object in that case).
 
+        On a split half (<deck>.de.py / <deck>.en.py) whose twin exists on
+        disk, BOTH companions are extracted in one EN-authority paired op by
+        default (the result carries ``"paired": true``). Pass single=True to
+        extract only this half; both=True forces the paired form.
+
         Args:
             file: Path to the slide file (absolute, or relative to the
                 data directory).
             force: Overwrite an existing companion (rebuilds it from the
                 slide's voiceover cells, discarding companion-only content).
             dry_run: If True, preview without writing files.
+            both: Force the paired extract (both companions of a split deck).
+            single: Extract only this file's companion, even on a split half.
         """
-        return await handle_extract_voiceover(file, data_dir, force=force, dry_run=dry_run)
+        return await handle_extract_voiceover(
+            file, data_dir, force=force, dry_run=dry_run, both=both, single=single
+        )
 
     @mcp.tool()
-    async def inline_voiceover(
+    async def voiceover_inline(
         file: str,
         dry_run: bool = False,
     ) -> str:
@@ -288,7 +302,7 @@ def create_server(data_dir: Path) -> FastMCP:
         return await handle_inline_voiceover(file, data_dir, dry_run=dry_run)
 
     @mcp.tool()
-    async def course_authoring_rules(
+    async def authoring_rules(
         course_spec: str | None = None,
         slide_path: str | None = None,
     ) -> str:

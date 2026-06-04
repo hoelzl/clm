@@ -49,6 +49,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import click
+from attrs import define
 
 from clm.infrastructure.llm.cache import (
     SyncAlignmentCache,
@@ -65,6 +66,14 @@ from clm.infrastructure.llm.openrouter_client import (
     OpenRouterSyncJudge,
     has_openrouter_api_key,
 )
+from clm.slides.pairing import (
+    derive_split_pair_from_stem,
+    derive_split_twin,
+    find_split_slide_files_recursive,
+    iter_split_pairs,
+    order_split_pair,
+    split_lang_tag,
+)
 from clm.slides.sync_apply import ApplyResult, apply_plan
 from clm.slides.sync_plan import (
     PlanIssue,
@@ -78,19 +87,116 @@ from clm.slides.sync_recover import DEFAULT_RECOVERY_MODEL, OpenRouterAlignmentR
 from clm.slides.sync_translate import DEFAULT_TRANSLATION_MODEL, OpenRouterSlideTranslator
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from clm.infrastructure.llm.ollama_client import SyncJudge
     from clm.slides.sync_recover import AlignmentRecoverer
+    from clm.slides.sync_translate import SlideTranslator
 
 CACHE_DB_NAME = "clm-llm.sqlite"
+
+
+def _resolve_sync_pair(de_path: Path, en_path: Path) -> tuple[Path, Path]:
+    """Validate the two positional paths are the DE/EN halves of one split deck,
+    auto-correcting a swapped order, and return them as ``(de, en)``.
+
+    Guards the #162 footgun: a swapped, same-file, same-language, or cross-deck
+    pair would otherwise sync silently — producing a divergent or no-op result
+    on an error-free pass (the cross-deck-orphan fail-safe only runs on clean
+    passes, so it does not catch this). Raises :class:`click.UsageError` on an
+    invalid pair. The check is deliberately prefix-agnostic — ``sync`` reconciles
+    whatever two halves it is given, independent of the build's topic-routing
+    prefix; existence on disk is already enforced by ``click.Path(exists=True)``.
+    """
+    if de_path == en_path:
+        raise click.UsageError(
+            f"DE_PATH and EN_PATH are the same file ({de_path}); pass the two "
+            "halves of a split deck — <deck>.de.py and <deck>.en.py."
+        )
+    de_tag, en_tag = split_lang_tag(de_path), split_lang_tag(en_path)
+    if de_tag is None or en_tag is None:
+        bad = de_path if de_tag is None else en_path
+        raise click.UsageError(
+            f"{bad} is not a split-format slide half. `clm slides sync` expects "
+            "two paths named <deck>.de.py and <deck>.en.py "
+            "(run `clm slides split <deck>.py` to produce them)."
+        )
+    if de_tag == en_tag:
+        raise click.UsageError(
+            f"both paths are the same language (.{de_tag}); pass one .de half and one .en half."
+        )
+    ordered = order_split_pair(de_path, en_path)
+    if ordered is None:
+        raise click.UsageError(
+            f"{de_path.name} and {en_path.name} belong to different decks; "
+            "pass the two halves of ONE deck (same name before the .de/.en tag)."
+        )
+    if ordered != (de_path, en_path):
+        click.echo(
+            f"note: arguments look swapped — treating {ordered[0].name} as the "
+            f"DE half and {ordered[1].name} as the EN half.",
+            err=True,
+        )
+    return ordered
+
+
+def _resolve_single_path(de_path: Path, en_path: Path | None) -> tuple[Path, Path]:
+    """Single-path contract: when EN_PATH is omitted, derive the second half from
+    DE_PATH so the author can run ``clm slides sync <deck>.de.py``.
+
+    DE_PATH may be **one half** (``<deck>.de.py`` / ``<deck>.en.py``) — the twin
+    is derived from disk — or a **bilingual deck stem** (``<deck>.py``, no
+    ``.de``/``.en`` tag) whose two halves both exist. Derivation is prefix-agnostic
+    (so ``apis.de.py`` works) and the resolved pair is still funnelled through
+    :func:`_resolve_sync_pair` for the #162 pairing guard. Raises
+    :class:`click.UsageError` when the twin / halves are not found on disk — a
+    missing twin is almost always a typo or an un-split deck, so we error clearly
+    rather than invent a full translated half.
+    """
+    if en_path is not None:
+        return de_path, en_path
+    tag = split_lang_tag(de_path)
+    if tag is not None:
+        twin = derive_split_twin(de_path)
+        if twin is None:
+            if de_path.name.startswith("voiceover_"):
+                raise click.UsageError(
+                    f"{de_path.name} is a voiceover companion, not a deck half; "
+                    f"`clm slides sync` reconciles slide decks (<deck>.de.py / "
+                    f"<deck>.en.py), not their voiceover companions."
+                )
+            other = "EN" if tag == "de" else "DE"
+            raise click.UsageError(
+                f"no {other} twin found next to {de_path.name}; expected its sibling "
+                f"split half on disk. Pass both halves explicitly, or run "
+                f"`clm slides split` to produce the pair."
+            )
+        # Return already (de, en)-ordered so the pairing guard's swap note does not
+        # fire on a single derived path — the author supplied one path; nothing was
+        # "swapped". (derive_split_twin gives the OTHER half, so order by our tag.)
+        return (de_path, twin) if tag == "de" else (twin, de_path)
+    # No language tag → treat DE_PATH as a bilingual deck stem and derive both halves.
+    pair = derive_split_pair_from_stem(de_path)
+    if pair is None:
+        ext = de_path.suffix
+        stem = de_path.name[: -len(ext)] if ext else de_path.name
+        raise click.UsageError(
+            f"{de_path.name} is neither a split half (<deck>.de.py / <deck>.en.py) "
+            f"nor a deck stem with both halves present (expected {stem}.de{ext} and "
+            f"{stem}.en{ext} on disk). Pass the two halves explicitly."
+        )
+    return pair
 
 
 @click.command("sync")
 @click.argument(
     "de_path",
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    type=click.Path(exists=True, dir_okay=True, path_type=Path),
 )
 @click.argument(
     "en_path",
+    required=False,
+    default=None,
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
 )
 @click.option(
@@ -220,10 +326,23 @@ CACHE_DB_NAME = "clm-llm.sqlite"
         ".env are available to the judge and translator."
     ),
 )
+@click.option(
+    "--yes",
+    "-y",
+    "yes",
+    is_flag=True,
+    default=False,
+    help=(
+        "Batch (DIR) only: confirm a writing run over a whole directory without "
+        "the interactive prompt. A directory apply writes to every pair under the "
+        "tree, so it is gated; --dry-run / --explain batches run freely. Ignored "
+        "for a single pair."
+    ),
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit a JSON report.")
 def slides_sync_cmd(
     de_path: Path,
-    en_path: Path,
+    en_path: Path | None,
     dry_run: bool,
     interactive: bool,
     explain: bool,
@@ -237,12 +356,24 @@ def slides_sync_cmd(
     cache_dir: Path | None,
     no_cache: bool,
     no_env_file: bool,
+    yes: bool,
     as_json: bool,
 ) -> None:
     """Bring a split DE/EN deck pair into sync after editing one side.
 
     DE_PATH and EN_PATH are the two halves of a split-format deck
-    (``<deck>.de.py`` and ``<deck>.en.py``).
+    (``<deck>.de.py`` and ``<deck>.en.py``). EN_PATH is **optional**: pass just
+    one half (or the bilingual deck stem ``<deck>.py``) and the other half is
+    derived from disk — ``clm slides sync slides_x.de.py`` syncs the pair.
+
+    \b
+    DE_PATH may also be a **directory** — batch mode: every ``.de``/``.en`` deck
+    pair under the tree is synced in one pass (prefix-agnostic, so un-prefixed
+    decks count too). A half with no twin under the tree is skipped with a
+    warning. The run continues past a failing pair and the exit code is the
+    worst over all pairs (0 clean < 1 review < 2 error). A *writing* directory
+    run needs --yes (or an interactive confirm); --dry-run / --explain run
+    freely. --interactive is single-pair only.
 
     \b
     Behavior:
@@ -278,6 +409,54 @@ def slides_sync_cmd(
             "--explain and --json are mutually exclusive "
             "(--explain is a human-readable diagnostic; use --dry-run --json for the structured plan)"
         )
+
+    # Batch mode: a directory triggers a sweep over every split pair under the
+    # tree (one funnel — no separate `sync-all` subcommand). Branch here, before
+    # the single-path / pairing-guard resolution (which both assume a file).
+    if de_path.is_dir():
+        if en_path is not None:
+            raise click.UsageError(
+                f"{de_path} is a directory (batch mode), which takes a single "
+                "directory argument; do not pass a second path."
+            )
+        if interactive:
+            raise click.UsageError(
+                "--interactive cannot be combined with a directory (it walks one "
+                "pair's proposals). Sync a single deck/half interactively, or use "
+                "--dry-run / --explain over the directory."
+            )
+        batch_mode = "explain" if explain else ("dry-run" if dry_run else "apply")
+        _run_batch(
+            de_path,
+            mode=batch_mode,
+            as_json=as_json,
+            yes=yes,
+            no_cache=no_cache,
+            no_env_file=no_env_file,
+            cache_dir=cache_dir,
+            make_judge=lambda: _resolve_judge(provider, llm_model, ollama_url, llm_timeout),
+            make_translator=lambda: OpenRouterSlideTranslator(model=translation_model),
+            make_recoverer=lambda: _resolve_recoverer(llm_recover, recovery_model),
+        )
+        return  # _run_batch always sys.exit()s; this is just for the type-checker.
+
+    # Single-path contract: when EN_PATH is omitted, derive the twin (or both
+    # halves from a deck stem) from disk before anything else.
+    de_path, en_path = _resolve_single_path(de_path, en_path)
+
+    # Pairing guard (#162 Tier-2): reject a same-file / same-language / cross-deck
+    # pair and auto-correct a swapped (en, de) order before anything reads or
+    # writes. Runs for every mode (incl. --dry-run/--explain) so the footgun is
+    # caught even on read-only passes.
+    de_path, en_path = _resolve_sync_pair(de_path, en_path)
+
+    # Canonicalize to absolute, resolved paths. The watermark is keyed by the
+    # (de_path, en_path) *strings*, so the single-path surface must key by the
+    # same form the directory-batch surface does (its enumerator resolves every
+    # file) — otherwise the SAME pair acquires two watermark keys across surfaces
+    # (a relative single-path run vs. a resolved batch run) and the second silently
+    # misses the first's watermark and re-baselines off git HEAD.
+    de_path, en_path = de_path.resolve(), en_path.resolve()
 
     # Load the project .env before resolving the judge/translator, so keys kept
     # only in .env (the usual course-repo layout) are found. Without this, every
@@ -361,6 +540,288 @@ def slides_sync_cmd(
         _print_human(plan, apply_result, walk, mode=mode)
 
     sys.exit(exit_code)
+
+
+# ---------------------------------------------------------------------------
+# Batch mode (`clm slides sync DIR`)
+#
+# A directory sweeps every split deck pair under the tree in one pass, sharing a
+# single watermark cache + judge/translator/recoverer. Continue-on-error: a pair
+# that raises is recorded as errored (exit 2) and the sweep proceeds; the process
+# exit is the worst per-pair code. A writing sweep is gated behind --yes (or an
+# interactive confirm); --dry-run / --explain run freely.
+# ---------------------------------------------------------------------------
+
+
+@define
+class _PairResult:
+    """The outcome of syncing one deck pair inside a directory batch.
+
+    ``plan``/``apply_result`` are ``None`` only when the pair raised before
+    producing them (``error`` set) — every clean/review pair carries a plan.
+    """
+
+    de_path: Path
+    en_path: Path
+    plan: SyncPlan | None
+    apply_result: ApplyResult | None
+    explain_text: str | None
+    exit_code: int
+    error: str | None
+
+
+def _run_batch(
+    root: Path,
+    *,
+    mode: str,
+    as_json: bool,
+    yes: bool,
+    no_cache: bool,
+    no_env_file: bool,
+    cache_dir: Path | None,
+    make_judge: Callable[[], SyncJudge | None],
+    make_translator: Callable[[], SlideTranslator],
+    make_recoverer: Callable[[], AlignmentRecoverer | None],
+) -> None:
+    """Sync every split deck pair under ``root`` in one pass, then ``sys.exit`` the
+    worst per-pair exit code (0 clean < 1 review < 2 error)."""
+    pairs, solos = iter_split_pairs(find_split_slide_files_recursive(root))
+    for solo in solos:
+        tag = split_lang_tag(solo)
+        other = "EN" if tag == "de" else "DE"
+        click.echo(
+            f"warning: skipping {solo.name} — no {other} twin found under {root}.",
+            err=True,
+        )
+    if not pairs:
+        if as_json:
+            click.echo(
+                json.dumps({"mode": mode, "root": str(root), "exit_code": 0, "pairs": []}, indent=2)
+            )
+        else:
+            click.echo(f"no split-format deck pairs found under {root}.")
+        sys.exit(0)
+
+    writing = mode == "apply"
+    if writing and not yes:
+        # A directory apply writes to every pair under the tree — gate it. With
+        # --json there is no usable prompt, so require the explicit flag.
+        if as_json:
+            raise click.UsageError(
+                f"a writing batch over {len(pairs)} pair(s) needs --yes (cannot prompt "
+                "with --json); add --yes, or preview with --dry-run."
+            )
+        click.confirm(
+            f"About to sync {len(pairs)} deck pair(s) under {root} — this writes to "
+            "the working tree. Continue?",
+            abort=True,
+        )
+
+    # One env load + one cache + one judge/translator/recoverer for the whole sweep.
+    # Discover .env from the root AND from each deck's own directory (like the
+    # single-pair path), so a project .env at the root and a nested .env above a
+    # deck buried below it are both found — load_env_files de-dups by file, and
+    # root-first keeps a top-level project .env authoritative.
+    if writing and not no_env_file:
+        from clm.cli.env_loading import load_env_files
+
+        deck_dirs = [d for de_p, en_p in pairs for d in (de_p.parent, en_p.parent)]
+        load_env_files(root, *deck_dirs)
+
+    cache_root: Path | None = None
+    watermark_cache: SyncWatermarkCache | None = None
+    alignment_cache: SyncAlignmentCache | None = None
+    if not no_cache:
+        cache_root = resolve_cache_dir(cli_override=cache_dir)
+        watermark_cache = SyncWatermarkCache(cache_root / CACHE_DB_NAME)
+
+    judge: SyncJudge | None = None
+    translator: SlideTranslator | None = None
+    recoverer: AlignmentRecoverer | None = None
+    if writing:
+        judge = make_judge()
+        translator = make_translator()
+        recoverer = make_recoverer()
+        if recoverer is not None and cache_root is not None:
+            alignment_cache = SyncAlignmentCache(cache_root / CACHE_DB_NAME)
+
+    results: list[_PairResult] = []
+    try:
+        for de_path, en_path in pairs:
+            results.append(
+                _sync_one_pair(
+                    de_path,
+                    en_path,
+                    mode=mode,
+                    watermark_cache=watermark_cache,
+                    alignment_cache=alignment_cache,
+                    judge=judge,
+                    translator=translator,
+                    recoverer=recoverer,
+                )
+            )
+    finally:
+        if watermark_cache is not None:
+            watermark_cache.close()
+        if alignment_cache is not None:
+            alignment_cache.close()
+
+    exit_code = max((r.exit_code for r in results), default=0)
+    _emit_batch(root, mode, results, exit_code, as_json=as_json)
+    sys.exit(exit_code)
+
+
+def _sync_one_pair(
+    de_path: Path,
+    en_path: Path,
+    *,
+    mode: str,
+    watermark_cache: SyncWatermarkCache | None,
+    alignment_cache: SyncAlignmentCache | None,
+    judge: SyncJudge | None,
+    translator: SlideTranslator | None,
+    recoverer: AlignmentRecoverer | None,
+) -> _PairResult:
+    """Sync one pair for the batch, catching any failure so the sweep continues."""
+    try:
+        plan = build_sync_plan(de_path, en_path, watermark_cache=watermark_cache)
+        apply_result: ApplyResult | None = None
+        explain_text: str | None = None
+        if mode == "explain":
+            explain_text = render_explain(
+                de_path, en_path, plan=plan, watermark_cache=watermark_cache
+            )
+        elif mode == "apply":
+            apply_result = apply_plan(
+                plan,
+                judge=judge,
+                translator=translator,
+                watermark_cache=watermark_cache,
+                recoverer=recoverer,
+                alignment_cache=alignment_cache,
+            )
+        # else dry-run: classify only, write nothing.
+        exit_code = (
+            _plan_exit_code(plan) if apply_result is None else _apply_exit_code(plan, apply_result)
+        )
+        return _PairResult(de_path, en_path, plan, apply_result, explain_text, exit_code, None)
+    except Exception as exc:  # continue-on-error: one bad pair must not abort the sweep
+        return _PairResult(de_path, en_path, None, None, None, 2, f"{type(exc).__name__}: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# Batch output (human one-liners + rollup; JSON envelope)
+# ---------------------------------------------------------------------------
+
+_BATCH_STATUS = {0: "OK    ", 1: "REVIEW", 2: "ERROR "}
+
+
+def _deck_label(de_path: Path, root: Path) -> str:
+    """The DE half's path relative to the batch root (bare name if not under it)."""
+    try:
+        return str(de_path.resolve().relative_to(root.resolve()))
+    except ValueError:
+        return de_path.name
+
+
+def _counts_str(plan: SyncPlan) -> str:
+    kinds = ("add", "edit", "retag", "move", "remove", "conflict", "rename")
+    parts = [f"{plan.count(k)} {k}" for k in kinds if plan.count(k)]
+    return ", ".join(parts) if parts else "0"
+
+
+def _batch_pair_detail(r: _PairResult) -> str:
+    if r.apply_result is None:  # dry-run / explain — describe the plan
+        plan = r.plan
+        assert plan is not None  # a non-error pair always carries a plan
+        if plan.has_errors:
+            return f"{_counts_str(plan)} (classifier error)"
+        if plan.proposals:
+            return f"would change: {_counts_str(plan)}"
+        return "nothing to do"
+    res = r.apply_result
+    parts: list[str] = []
+    if res.applied:
+        parts.append(f"applied {res.applied}")
+    if res.deferred:
+        parts.append(f"{res.deferred} deferred")
+    if res.errors:
+        parts.append(f"{len(res.errors)} error(s)")
+    return ", ".join(parts) if parts else "in sync"
+
+
+def _batch_pair_line(r: _PairResult, root: Path) -> str:
+    label = _deck_label(r.de_path, root)
+    if r.error is not None:
+        return f"{_BATCH_STATUS[2]} {label}: {r.error}"
+    return f"{_BATCH_STATUS[r.exit_code]} {label}: {_batch_pair_detail(r)}"
+
+
+def _batch_rollup(results: list[_PairResult]) -> str:
+    clean = sum(1 for r in results if r.exit_code == 0)
+    review = sum(1 for r in results if r.exit_code == 1)
+    errored = sum(1 for r in results if r.exit_code == 2)
+    return f"{len(results)} pair(s): {clean} clean, {review} review, {errored} errored."
+
+
+def _emit_batch(
+    root: Path,
+    mode: str,
+    results: list[_PairResult],
+    exit_code: int,
+    *,
+    as_json: bool,
+) -> None:
+    if as_json:
+        click.echo(json.dumps(_batch_to_dict(root, mode, results, exit_code), indent=2))
+        return
+    if mode == "explain":
+        for r in results:
+            click.echo("")
+            click.echo(f"=== {_deck_label(r.de_path, root)} ===")
+            click.echo(f"  error: {r.error}" if r.error is not None else r.explain_text)
+        click.echo("")
+        click.echo(_batch_rollup(results))
+        return
+    # dry-run / apply: a scannable one-liner per pair, then the rollup.
+    for r in results:
+        click.echo(_batch_pair_line(r, root))
+    # Surface each pair's apply-time errors in full (the one-liner only counts them).
+    for r in results:
+        if r.apply_result is not None and r.apply_result.errors:
+            label = _deck_label(r.de_path, root)
+            for err in r.apply_result.errors:
+                click.echo(f"  {label}: error: {err}")
+    click.echo("")
+    click.echo(_batch_rollup(results))
+    if mode == "apply" and any(
+        r.apply_result is not None and r.apply_result.applied for r in results
+    ):
+        click.echo("Review the propagated changes with `git diff` before committing.")
+
+
+def _batch_to_dict(root: Path, mode: str, results: list[_PairResult], exit_code: int) -> dict:
+    return {
+        "mode": mode,
+        "root": str(root),
+        "exit_code": exit_code,
+        "pairs": [_batch_pair_dict(r, mode) for r in results],
+    }
+
+
+def _batch_pair_dict(r: _PairResult, mode: str) -> dict:
+    if r.error is not None:
+        return {
+            "de_path": str(r.de_path),
+            "en_path": str(r.en_path),
+            "mode": mode,
+            "exit_code": r.exit_code,
+            "error": r.error,
+        }
+    assert r.plan is not None
+    # Each non-errored pair reuses the single-pair object shape verbatim, so a
+    # consumer can treat ``pairs[i]`` exactly like one ``clm slides sync --json``.
+    return _to_dict(r.plan, r.apply_result, None, mode, r.exit_code)
 
 
 # Provider-aware default per-call timeout. A large local reasoning model

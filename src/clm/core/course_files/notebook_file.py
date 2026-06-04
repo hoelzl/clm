@@ -55,6 +55,13 @@ def _get_operation_stage(format_: str, kind: str) -> int:
 # ``_base_cassette_stem`` and Issue #159.
 _LANGUAGE_CASSETTE_TOKENS = ("de", "en")
 
+# Topic-relative subdirectories that may hold HTTP-replay cassettes, in
+# read-preference order. ``cassettes`` is the current name; ``_cassettes`` is
+# the original underscore-prefixed form, still accepted as a legacy alias.
+# Auto-detected by presence — no flag — mirroring the ``voiceover/`` companion
+# sidecar (``slides.voiceover_tools.resolve_companion``).
+_CASSETTE_SUBDIRS = ("cassettes", "_cassettes")
+
 
 def _base_cassette_stem(stem: str) -> str | None:
     """Return the base (bilingual) stem for a split language deck, else ``None``.
@@ -107,30 +114,41 @@ class NotebookFile(CourseFile):
 
     @property
     def companion_voiceover_path(self) -> Path | None:
-        """Return the companion voiceover file path if it exists, else None."""
-        from clm.slides.voiceover_tools import companion_path
+        """Return the companion voiceover file path if it exists, else None.
 
-        comp = companion_path(self.path)
-        return comp if comp.exists() else None
+        Resolves the relocated ``voiceover/`` subdirectory layout before the
+        sibling layout (see ``voiceover_tools.resolve_companion``); the build
+        merges the companion's narration host-side at payload time.
+        """
+        from clm.slides.voiceover_tools import resolve_companion
+
+        return resolve_companion(self.path)
+
+    def _resolve_cassette(self, cassette_name: str) -> Path | None:
+        """Return the existing cassette ``cassette_name`` for this topic, else None.
+
+        Prefers a sidecar subdirectory (``cassettes/`` then the legacy
+        ``_cassettes/``); otherwise falls back to the sibling next to the source
+        ``.py``. Encapsulates the read-precedence shared by ``cassette_path`` and
+        ``replay_cassette_path`` so both honour the same layout detection.
+        """
+        topic_dir = self.path.parent
+        for sub in _CASSETTE_SUBDIRS:
+            candidate = topic_dir / sub / cassette_name
+            if candidate.exists():
+                return candidate
+        sibling = topic_dir / cassette_name
+        return sibling if sibling.exists() else None
 
     @property
     def cassette_path(self) -> Path | None:
         """Return the HTTP-replay cassette path if present, else None.
 
-        Prefers ``<topic_dir>/_cassettes/<stem>.http-cassette.yaml`` when
-        that layout is in use; otherwise falls back to the sibling
-        ``<topic_dir>/<stem>.http-cassette.yaml``.
+        Prefers ``<topic_dir>/cassettes/<stem>.http-cassette.yaml`` (or the
+        legacy ``_cassettes/``) when that layout is in use; otherwise falls back
+        to the sibling ``<topic_dir>/<stem>.http-cassette.yaml``.
         """
-        stem = self.path.stem
-        cassette_name = f"{stem}.http-cassette.yaml"
-        topic_dir = self.path.parent
-        nested = topic_dir / "_cassettes" / cassette_name
-        if nested.exists():
-            return nested
-        sibling = topic_dir / cassette_name
-        if sibling.exists():
-            return sibling
-        return None
+        return self._resolve_cassette(f"{self.path.stem}.http-cassette.yaml")
 
     @property
     def expected_cassette_path(self) -> Path:
@@ -140,15 +158,15 @@ class NotebookFile(CourseFile):
         can activate vcrpy with a target path even on first-run when no
         cassette has been recorded yet. Resolution rule:
 
-        - If ``<topic_dir>/_cassettes/`` exists, write inside it.
+        - If a sidecar subdirectory (``cassettes/``, then legacy ``_cassettes/``)
+          exists, write inside it.
         - Otherwise write next to the source ``.py``.
         """
-        stem = self.path.stem
-        cassette_name = f"{stem}.http-cassette.yaml"
+        cassette_name = f"{self.path.stem}.http-cassette.yaml"
         topic_dir = self.path.parent
-        nested_dir = topic_dir / "_cassettes"
-        if nested_dir.is_dir():
-            return nested_dir / cassette_name
+        for sub in _CASSETTE_SUBDIRS:
+            if (topic_dir / sub).is_dir():
+                return topic_dir / sub / cassette_name
         return topic_dir / cassette_name
 
     @property
@@ -169,9 +187,9 @@ class NotebookFile(CourseFile):
         Prefers the strict, language-specific cassette (``cassette_path``).
         When that is absent and this is a split ``.de``/``.en`` deck, falls
         back to the base (bilingual) cassette that already holds both
-        languages' recorded interactions, searching the nested ``_cassettes/``
-        layout before the sibling layout — same precedence as
-        ``cassette_path`` (Issue #159).
+        languages' recorded interactions, searching the sidecar subdirectory
+        (``cassettes/`` then legacy ``_cassettes/``) before the sibling layout
+        — same precedence as ``cassette_path`` (Issue #159).
 
         This is used **only** on the replay path. Record/seed/sweep keep using
         the strict, language-specific ``cassette_path`` so a re-record can
@@ -184,15 +202,7 @@ class NotebookFile(CourseFile):
         base_stem = _base_cassette_stem(self.path.stem)
         if base_stem is None:
             return None
-        cassette_name = f"{base_stem}.http-cassette.yaml"
-        topic_dir = self.path.parent
-        nested = topic_dir / "_cassettes" / cassette_name
-        if nested.exists():
-            return nested
-        sibling = topic_dir / cassette_name
-        if sibling.exists():
-            return sibling
-        return None
+        return self._resolve_cassette(f"{base_stem}.http-cassette.yaml")
 
     @property
     def replay_cassette_relative_name(self) -> str | None:

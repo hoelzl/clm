@@ -55,10 +55,20 @@ SKIP_DIRS_FOR_COURSE = frozenset(
         "obj",
         "out",
         "target",
+        # Authoring sidecar: extracted voiceover companions live here when a
+        # topic opts into the foldered layout. Fully excluded from the course
+        # file map because the build merges their narration host-side at
+        # payload time (it locates them by a direct probe — see
+        # ``slides.voiceover_tools.resolve_companion`` — not this walk), so they
+        # reach neither output nor the worker.
+        "voiceover",
     )
 )
 
-SKIP_DIRS_FOR_OUTPUT = SKIP_DIRS_FOR_COURSE | frozenset({"pu", "drawio", "_cassettes"})
+# Cassettes differ from voiceover companions: the kernel reads them at runtime,
+# so ``cassettes/`` (and the legacy ``_cassettes/``) stay in the course file map
+# but are suppressed from output here. See ``NotebookFile._resolve_cassette``.
+SKIP_DIRS_FOR_OUTPUT = SKIP_DIRS_FOR_COURSE | frozenset({"pu", "drawio", "_cassettes", "cassettes"})
 
 SKIP_DIRS_PATTERNS = ["*.egg-info*", "*cmake-build*"]
 
@@ -225,6 +235,37 @@ def slide_family_key(input_path: Path) -> str | None:
     return input_path.name
 
 
+def atomic_write_all(writes: list[tuple[Path, str]]) -> None:
+    """Write several ``(path, text)`` outputs as atomically as the FS allows.
+
+    Every text is first written to a sibling ``*.tmp`` file; only after **all**
+    temp writes succeed are they ``os.replace``-d into place back-to-back. A
+    failure during the temp phase (the common one — disk full, permission)
+    therefore leaves every real target untouched; the replace phase has only a
+    tiny residual window, and leftover temps are cleaned up either way.
+
+    Shared by the slide rewriters that emit several coupled files in one op —
+    ``split`` / ``unify`` (a deck plus its voiceover companion) and the paired
+    ``voiceover extract`` (two slide halves plus two companions). With plain
+    per-file writes a mid-operation failure could leave a one-sided companion
+    (the very orphaning these seams prevent). Cross-file atomicity is not
+    achievable without a journal, but this upgrades direct per-file writes so
+    the likely failure is safe.
+    """
+    temps: list[tuple[Path, Path]] = []
+    try:
+        for path, text in writes:
+            tmp = path.with_name(path.name + ".tmp")
+            tmp.write_text(text, encoding="utf-8", newline="\n")
+            temps.append((tmp, path))
+        for tmp, path in temps:
+            os.replace(tmp, path)
+    finally:
+        for tmp, _ in temps:
+            if tmp.exists():
+                tmp.unlink()
+
+
 def is_ignored_dir_for_course(dir_path: Path) -> bool:
     for part in dir_path.parts:
         if part in SKIP_DIRS_FOR_COURSE:
@@ -297,7 +338,7 @@ class Kind(StrEnum):
     COMPLETED = "completed"
     TRAINER = "trainer"
     RECORDING = "recording"
-    SPEAKER = "speaker"  # Deprecated alias for RECORDING; removed in CLM 1.7.
+    SPEAKER = "speaker"  # Deprecated alias for RECORDING; removed in CLM 1.8.
     PARTIAL = "partial"
 
 

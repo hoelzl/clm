@@ -88,6 +88,40 @@ if TYPE_CHECKING:
 
 
 # ====================================================================
+# Per-worker log isolation
+# ====================================================================
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _isolate_clm_log_dir(tmp_path_factory):
+    """Give each pytest-xdist worker its own CLM log directory.
+
+    Without this, every worker process writes to the single global
+    ``clm.log`` (``%LOCALAPPDATA%/clm/Logs`` on Windows). When many workers
+    open or rotate that one file concurrently, Windows intermittently raises
+    ``PermissionError`` and fails whichever CLI test happened to be inside
+    ``setup_logging`` at that moment — a pure cross-worker contention flake.
+    Pointing each worker at its own temp directory removes the sharing at the
+    root. ``tmp_path_factory.getbasetemp()`` is already per-worker under
+    xdist, so the directories never collide. Honoured via the ``CLM_LOG_DIR``
+    override in ``clm.infrastructure.logging.log_paths`` (which subprocess
+    workers spawned during a test inherit through the environment too).
+    """
+    from clm.infrastructure.logging.log_paths import LOG_DIR_ENV_VAR
+
+    log_dir = tmp_path_factory.mktemp("clm-logs")
+    previous = os.environ.get(LOG_DIR_ENV_VAR)
+    os.environ[LOG_DIR_ENV_VAR] = str(log_dir)
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop(LOG_DIR_ENV_VAR, None)
+        else:
+            os.environ[LOG_DIR_ENV_VAR] = previous
+
+
+# ====================================================================
 # Tool Availability Detection
 # ====================================================================
 
@@ -481,8 +515,14 @@ def pytest_configure(config):
         logging.getLogger(logger_name).setLevel(logging.WARNING)
 
 
+# ``tryfirst`` so the ``serial`` -> ``xdist_group`` mapping below runs before
+# pytest-xdist's own (unordered) ``pytest_collection_modifyitems`` in
+# ``xdist/remote.py``, which appends the ``@group`` suffix to each nodeid by
+# reading the ``xdist_group`` mark. If we added the mark after that hook, the
+# suffix would be missing and ``--dist loadgroup`` would scatter the tests.
+@pytest.hookimpl(tryfirst=True)
 def pytest_collection_modifyitems(config, items):
-    """Auto-skip tests based on tool availability."""
+    """Auto-skip tests based on tool availability; map ``serial`` to a group."""
     tool_status = get_tool_availability()
 
     # Count tests by marker for reporting
@@ -569,6 +609,16 @@ def pytest_collection_modifyitems(config, items):
         if "docker" in markers:
             if not tool_status["docker"]:
                 item.add_marker(skip_docker)
+
+        # Map the project's ``serial`` marker onto an xdist load group so the
+        # ``--dist loadgroup`` scheduler (see pyproject ``addopts``) pins every
+        # serial-marked test onto a single worker. Contention-prone tests that
+        # spawn heavyweight external processes (a mitmdump proxy, a worker
+        # pool) thereby run one-at-a-time instead of racing each other across
+        # workers and oversubscribing the box. A no-op when xdist is disabled
+        # (``-n0``), since there is then only one worker anyway.
+        if "serial" in markers:
+            item.add_marker(pytest.mark.xdist_group("serial"))
 
 
 @pytest.fixture(scope="function")

@@ -884,7 +884,7 @@ wheels = [
 
 [[package]]
 name = "coding-academy-lecture-manager"
-version = "1.6.2"
+version = "1.7.0"
 source = { editable = "." }
 dependencies = [
     { name = "attrs" },
@@ -1165,7 +1165,7 @@ web = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "coding-academy-lecture-manager", extra = ["drawio", "jupyterlite", "mcp", "notebook", "plantuml", "recordings", "slides", "summarize", "tui", "voiceover", "web"] },
+    { name = "coding-academy-lecture-manager", extra = ["drawio", "jupyterlite", "mcp", "notebook", "plantuml", "recordings", "replay", "slides", "summarize", "tui", "voiceover", "web"] },
     { name = "hypothesis" },
     { name = "mypy" },
     { name = "pre-commit" },
@@ -1318,7 +1318,7 @@ provides-extras = ["notebook", "plantuml", "drawio", "all-workers", "ml", "summa
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "coding-academy-lecture-manager", extras = ["notebook", "plantuml", "drawio", "recordings", "slides", "mcp", "summarize", "voiceover", "jupyterlite", "tui", "web"] },
+    { name = "coding-academy-lecture-manager", extras = ["notebook", "plantuml", "drawio", "recordings", "slides", "mcp", "summarize", "voiceover", "jupyterlite", "replay", "tui", "web"] },
     { name = "hypothesis", specifier = ">=6.148.2" },
     { name = "mypy", specifier = ">=1.0" },
     { name = "pre-commit", specifier = ">=4.5.0" },

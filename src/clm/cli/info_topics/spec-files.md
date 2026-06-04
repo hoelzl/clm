@@ -640,6 +640,36 @@ with a pointer to this topic.
 </course>
 ```
 
+## Topic directory layout
+
+A topic directory is discovered on disk (the spec lists topic *ids*, not file
+layouts). Within it, CLM distinguishes three kinds of file:
+
+| Kind | Examples | Copied to output? |
+|---|---|---|
+| **Core source** | `slides_*.py` (incl. split `slides_*.de.py` / `slides_*.en.py`) | processed into notebooks/HTML |
+| **Output companions** | `img/`, `drawio/`, loose data files | **yes**, verbatim |
+| **Authoring sidecars** | `voiceover_*.py`, `*.http-cassette.yaml` | **no** |
+
+The authoring sidecars may live either next to the slides (the default) or
+collected into per-type subdirectories so the topic directory stays focused on
+the editable sources:
+
+```
+topic_070_rag_introduction/
+├── cassettes/      # *.http-cassette.yaml      (also accepted: legacy _cassettes/)
+├── voiceover/      # voiceover_*.py
+├── drawio/  img/   # output companions (unchanged)
+├── slides_010_what_is_rag.de.py
+└── slides_010_what_is_rag.en.py
+```
+
+Both layouts work everywhere (build, `extract`/`inline`/`sync`, `split`/`unify`,
+`validate`); they are auto-detected by directory presence, so no spec change is
+needed. `clm slides tidy` moves sidecars between the two layouts in bulk, and a
+course-wide write default can be set via `[tool.clm] sidecar-layout` /
+`CLM_SIDECAR_LAYOUT` (see `clm info commands` and the configuration guide).
+
 ## Cross-references between notebooks (CLM {version}+)
 
 Link from one notebook to another using a custom Markdown link scheme.

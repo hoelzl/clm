@@ -26,6 +26,7 @@ from clm.slides.pairing import (
     TITLE_SLIDE_ID,
     build_slide_groups,
     is_title_macro_cell,
+    split_twin_pair,
 )
 from clm.slides.raw_cells import split_cells as split_raw_cells
 from clm.slides.slug import (
@@ -669,7 +670,7 @@ def _check_ordering(cells: list[Cell], file_path: str) -> list[Finding]:
                 de_cell = cells[de_first]
                 findings.append(
                     Finding(
-                        severity="warning",
+                        severity="error",
                         category="pairing",
                         file=file_path,
                         line=de_cell.line_number,
@@ -696,13 +697,12 @@ def _check_ordering(cells: list[Cell], file_path: str) -> list[Finding]:
 def _check_slide_ids(cells: list[Cell], file_path: str) -> list[Finding]:
     """Verify slide_id metadata: presence, format, uniqueness, adjacency, pair-consistency.
 
-    Per handover §3 / option B rollout, *missing* slide_ids land at
-    ``warning`` severity (slated for promotion to ``error`` in CLM 1.7
-    once the PythonCourses migration sweep completes). All other rules
-    — duplicate ids, narrative-cell adjacency mismatch, slug-format
-    violations, DE/EN pair mismatch — fire at the severity their
-    semantics warrant (errors for content bugs, warnings for
-    style/format drift).
+    A *missing* slide_id on a ``slide``/``subslide`` cell is an
+    ``error`` as of CLM 1.8 (it was a warning through 1.7, during the
+    PythonCourses migration sweep). All other rules — duplicate ids,
+    narrative-cell adjacency mismatch, slug-format violations, DE/EN
+    pair mismatch — fire at the severity their semantics warrant
+    (errors for content bugs, warnings for style/format drift).
 
     The ``!`` preserve marker is stripped before every comparison except
     the slug-format check, where it's permitted as a single leading
@@ -753,14 +753,16 @@ def _check_slide_ids(cells: list[Cell], file_path: str) -> list[Finding]:
             if sid is None:
                 findings.append(
                     Finding(
-                        severity="warning",
+                        severity="error",
                         category="pairing",
                         file=file_path,
                         line=cell.line_number,
                         message="slide/subslide cell missing slide_id",
                         suggestion=(
-                            "Run `clm slides assign-ids` to add stable identifiers. "
-                            "This will become an error in CLM 1.7."
+                            "Run `clm slides assign-ids <dir>` (EN-authority pair "
+                            "minting) — or `clm slides sync` for a split deck — to add "
+                            "stable identifiers; avoid per-file `assign-ids` on a single "
+                            "split half (#162)."
                         ),
                     )
                 )
@@ -1028,7 +1030,7 @@ def _check_split_slide_id_parity(de_path: Path, en_path: Path) -> list[Finding]:
     Compares the bare (preserve-marker-stripped) slide_ids of slide-start cells
     in source order. Findings are ``warning`` severity, consistent with the rest
     of the slide_id family (the gate runs with ``--fail-on warning``); they may
-    become ``error`` in CLM 1.7 alongside the other slide_id checks.
+    become ``error`` in CLM 1.8 alongside the other slide_id checks.
     """
     findings: list[Finding] = []
     de_file = str(de_path)
@@ -1128,18 +1130,24 @@ def _check_split_companion_for_slide_parity(de_path: Path, en_path: Path) -> lis
     # validator/split layer; import it lazily (as ``split.py`` does for the
     # companion seam) so the validator carries no hard dependency on the
     # optional voiceover tooling.
-    from clm.slides.voiceover_tools import companion_path
+    from clm.slides.voiceover_tools import companion_path, resolve_companion
 
-    de_comp = companion_path(de_path)
-    en_comp = companion_path(en_path)
-    de_exists, en_exists = de_comp.exists(), en_comp.exists()
+    # Resolve the *existing* companion in either layout (``voiceover/`` subdir or
+    # sibling); fall back to the nominal sibling name only for messaging.
+    de_comp = resolve_companion(de_path)
+    en_comp = resolve_companion(en_path)
+    de_exists, en_exists = de_comp is not None, en_comp is not None
     if not de_exists and not en_exists:
         return []
 
     # One-sided companion: the language without a companion ships no narration.
     if de_exists != en_exists:
-        present, absent = (de_comp, en_comp) if de_exists else (en_comp, de_comp)
-        missing_lang = "EN" if de_exists else "DE"
+        if de_exists:
+            assert de_comp is not None
+            present, absent_name, missing_lang = de_comp, companion_path(en_path).name, "EN"
+        else:
+            assert en_comp is not None
+            present, absent_name, missing_lang = en_comp, companion_path(de_path).name, "DE"
         return [
             Finding(
                 severity="warning",
@@ -1148,7 +1156,7 @@ def _check_split_companion_for_slide_parity(de_path: Path, en_path: Path) -> lis
                 line=1,
                 message=(
                     f"voiceover companion {present.name} exists but its twin "
-                    f"{absent.name} does not — the {missing_lang} half ships "
+                    f"{absent_name} does not — the {missing_lang} half ships "
                     f"without narration"
                 ),
                 suggestion=(
@@ -1167,6 +1175,8 @@ def _check_split_companion_for_slide_parity(de_path: Path, en_path: Path) -> lis
             if c.metadata.for_slide
         }
 
+    # Both companions exist here (the one-sided branch above returned).
+    assert de_comp is not None and en_comp is not None
     de_set = _for_slide_set(de_comp)
     en_set = _for_slide_set(en_comp)
     if de_set == en_set:
@@ -1199,25 +1209,38 @@ def _check_split_companion_for_slide_parity(de_path: Path, en_path: Path) -> lis
     ]
 
 
-def _split_twin_pair(path: Path) -> tuple[Path, Path] | None:
-    """If ``path`` is a split half whose twin exists on disk, return the ordered
-    ``(de_path, en_path)`` pair; else ``None``.
+def _check_companion_location_ambiguity(path: Path) -> list[Finding]:
+    """Warn when a slide's voiceover companion exists in *both* layouts.
 
-    Used by the single-file validate path so a standalone
-    ``clm validate slides_x.de.py`` (and the pre-commit gate) catches twin
-    divergence even when not run over a whole directory.
+    A companion present at ``voiceover/<name>`` *and* the sibling ``<name>`` is
+    ambiguous: the build's ``resolve_companion`` silently prefers the relocated
+    (subdir) copy, so the sibling's narration would be ignored. Surface it so the
+    duplicate can be reconciled to a single companion per slide. Warning
+    severity, consistent with the rest of the companion-pairing family.
     """
-    suffix = split_lang_suffix(path)
-    if suffix is None:
-        return None
-    other = "en" if suffix == "de" else "de"
-    parts = path.name.split(".")
-    # split_lang_suffix guarantees the form ``<stem>.<de|en>.<ext>``.
-    parts[-2] = other
-    twin = path.with_name(".".join(parts))
-    if not twin.exists():
-        return None
-    return (path, twin) if suffix == "de" else (twin, path)
+    from clm.slides.voiceover_tools import companion_locations
+
+    locations = companion_locations(path)
+    if len(locations) < 2:
+        return []
+    winner, *shadowed = locations  # resolve_companion order: voiceover/ before sibling
+    shadowed_names = ", ".join(p.name for p in shadowed)
+    return [
+        Finding(
+            severity="warning",
+            category="pairing",
+            file=str(path),
+            line=1,
+            message=(
+                f"voiceover companion for '{path.name}' exists in two locations — "
+                f"the build uses '{winner}' and ignores '{shadowed_names}'"
+            ),
+            suggestion=(
+                "Keep a single companion per slide: remove the stale copy in the "
+                "other location so the narration is unambiguous."
+            ),
+        )
+    ]
 
 
 def _slide_files_to_split_pairs(slide_files: list[Path]) -> list[tuple[Path, Path]]:
@@ -1552,6 +1575,9 @@ def validate_file(
         # directory/course entrypoints via _check_shared_cell_parity.
         is_split = split_lang_suffix(path) is not None
         findings.extend(_check_pairing(cells, file_str, is_split=is_split))
+        # A voiceover companion duplicated across both layouts (voiceover/ +
+        # sibling) is ambiguous — the build silently prefers one. Flag it.
+        findings.extend(_check_companion_location_ambiguity(path))
         # workshop/end-workshop tags must match across a DE/EN heading pair;
         # the asymmetry only manifests on the bilingual source (a split half
         # has no DE/EN pairs to compare).
@@ -1562,7 +1588,7 @@ def validate_file(
         # directory/course run handles this once at that scope instead
         # (cross_file_parity=False) so the finding is not duplicated per file.
         if cross_file_parity and is_split:
-            pair = _split_twin_pair(path)
+            pair = split_twin_pair(path)
             if pair is not None:
                 findings.extend(_check_split_slide_id_parity(*pair))
                 findings.extend(_check_split_companion_for_slide_parity(*pair))

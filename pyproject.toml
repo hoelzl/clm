@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "coding-academy-lecture-manager"
-version = "1.6.2"
+version = "1.7.0"
 description = "Coding-Academy Lecture Manager - A course content processing system"
 authors = [
     {name = "Dr. Matthias Hölzl", email = "tc@xantira.com"},
@@ -283,10 +283,23 @@ markers = [
     "e2e: mark tests as end-to-end tests that test full course conversion",
     "docker: mark tests that require Docker daemon (excluded by default)",
     "recordings: mark tests for the recordings module",
+    # ``serial`` pins a test onto a single xdist worker (via the ``--dist
+    # loadgroup`` scheduler below). Use it for tests that spawn heavyweight
+    # external processes — a mitmdump proxy, a Jupyter kernel, a worker pool —
+    # whose simultaneous startup across many xdist workers oversubscribes the
+    # box and produces contention flakes (readiness ceilings expiring, worker
+    # registration starvation, port races). All ``serial`` tests share one
+    # group, so xdist runs them one-at-a-time on a dedicated worker while the
+    # rest of the suite stays fully parallel. The mapping marker -> xdist_group
+    # lives in ``tests/conftest.py`` (``pytest_collection_modifyitems``).
+    "serial: pin a heavy/contention-prone test to a single xdist worker",
 ]
-# Run fast unit tests by default, skip db_only, integration, slow, e2e, and docker tests
-# Use -n auto for parallel execution via pytest-xdist (pass -n0 to disable)
-addopts = "-v -n auto -m 'not slow and not db_only and not integration and not e2e and not docker'"
+# Run fast unit tests by default, skip db_only, integration, slow, e2e, and docker tests.
+# Use -n auto for parallel execution via pytest-xdist (pass -n0 to disable).
+# --dist loadgroup keeps the default load-balancing scheduler but honours the
+# ``xdist_group`` mark that the ``serial`` marker maps to, so contention-prone
+# tests are serialized onto one worker instead of racing each other.
+addopts = "-v -n auto --dist loadgroup -m 'not slow and not db_only and not integration and not e2e and not docker'"
 # Timeout configuration - prevents tests from hanging indefinitely
 timeout = 600  # 10 minutes default timeout for all tests
 timeout_method = "thread"  # Works better with asyncio tests
@@ -391,7 +404,7 @@ ignore = [
 known-first-party = ["clm"]
 
 [tool.bumpversion]
-current_version = "1.6.2"
+current_version = "1.7.0"
 commit = true
 tag = true
 tag_name = "v{new_version}"
@@ -451,9 +464,15 @@ version = "{new_version}\""""
 #      from the [notebook] extra), so without them `uv sync` would
 #      leave the fast suite broken. `ml` is deliberately excluded
 #      because it's huge and blocked on Python 3.14.
+#      `replay` (vcrpy + filelock) is included so the HTTP-replay /
+#      cassette tests actually *run* in the fast suite instead of
+#      silently `pytest.importorskip`-skipping: without it, `uv sync`
+#      leaves vcr absent and the whole http-replay surface goes
+#      untested in the pre-commit gate (and a fresh sync surprises with
+#      "No module named 'vcr'").
 # See docs/proposals/PRE_COMMIT_HOOK_HARDENING.md (Fix 1) for rationale.
 dev = [
-    "coding-academy-lecture-manager[notebook,plantuml,drawio,recordings,slides,mcp,summarize,voiceover,jupyterlite,tui,web]",
+    "coding-academy-lecture-manager[notebook,plantuml,drawio,recordings,slides,mcp,summarize,voiceover,jupyterlite,replay,tui,web]",
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
     "pytest-cov>=4.0",

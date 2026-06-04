@@ -9,7 +9,7 @@ output that should be generated.
 - `CodeAlongOutput`: The output type for artefacts meant for live coding or workshops.
 - `TrainerOutput`: Private output for trainers — keeps speaker notes, strips voiceover.
 - `RecordingOutput`: Private output for video recording — keeps both notes and voiceover.
-- `SpeakerOutput`: Deprecated alias for ``RecordingOutput`` (removed in CLM 1.7).
+- `SpeakerOutput`: Deprecated alias for ``RecordingOutput`` (removed in CLM 1.8).
 - `EditScriptOutput`: Output type that generates an edit script to update from codealong to completed notebook.
 """
 
@@ -523,7 +523,7 @@ def create_output_spec(kind: str, *args, **kwargs) -> OutputSpec:
             warnings.warn(
                 "Output kind 'speaker' is deprecated; use 'recording' (notes + "
                 "voiceover) or 'trainer' (notes only) instead. 'speaker' currently "
-                "maps to 'recording' and will be removed in CLM 1.7.",
+                "maps to 'recording' and will be removed in CLM 1.8.",
                 DeprecationWarning,
                 stacklevel=2,
             )

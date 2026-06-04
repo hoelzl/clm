@@ -38,7 +38,7 @@ solo and an EN-only solo cannot in general be recovered from the two
 split outputs — the information is gone after the split. Real fixtures
 in PythonCourses always pair tagged cells, so this restriction is
 invisible in practice. Phase 3's validator flags missing slide_id; once
-that promotes to error in 1.7, the canonical pattern is enforced
+that promotes to error in 1.8, the canonical pattern is enforced
 upstream too.
 
 **Voiceover companion split (hardening 2026-06).** A slide file may have a
@@ -60,42 +60,12 @@ layer.
 
 from __future__ import annotations
 
-import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from clm.infrastructure.utils.path_utils import atomic_write_all
 from clm.slides.raw_cells import RawCell, reconstruct, split_cells
-
-
-def _atomic_write_all(writes: list[tuple[Path, str]]) -> None:
-    """Write several ``(path, text)`` outputs as atomically as the FS allows.
-
-    Every text is first written to a sibling ``*.tmp`` file; only after **all**
-    temp writes succeed are they ``os.replace``-d into place back-to-back. A
-    failure during the temp phase (the common one — disk full, permission)
-    therefore leaves every real target untouched; the replace phase has only a
-    tiny residual window, and leftover temps are cleaned up either way.
-
-    This matters for the companion seam: ``split``/``unify`` write up to four
-    files, and a mid-operation failure with plain per-file writes could leave a
-    split deck without its companion — the very orphaning this seam prevents.
-    Cross-file atomicity is not achievable without a journal, but this upgrades
-    the previous direct per-file writes so the likely failure is safe.
-    """
-    temps: list[tuple[Path, Path]] = []
-    try:
-        for path, text in writes:
-            tmp = path.with_name(path.name + ".tmp")
-            tmp.write_text(text, encoding="utf-8", newline="\n")
-            temps.append((tmp, path))
-        for tmp, path in temps:
-            os.replace(tmp, path)
-    finally:
-        for tmp, _ in temps:
-            if tmp.exists():
-                tmp.unlink()
-
 
 # ---------------------------------------------------------------------------
 # Errors
@@ -335,16 +305,20 @@ def _plan_companion_split(source: Path, de_path: Path, en_path: Path) -> _Compan
     The ``voiceover_tools`` import is deferred so a plain deck split never
     pulls in the voiceover layer.
     """
-    from clm.slides.voiceover_tools import companion_path
+    from clm.slides.voiceover_tools import companion_name, resolve_companion
 
-    companion = companion_path(source)
-    if not companion.exists():
+    companion = resolve_companion(source)
+    if companion is None:
         return None
+    # Keep the split halves in the same directory the bilingual companion lived
+    # in (the ``voiceover/`` subdir or the sibling location), so a foldered topic
+    # stays foldered across a split.
+    comp_dir = companion.parent
     comp_de_text, comp_en_text = split_text(companion.read_text(encoding="utf-8"))
     return _CompanionSplitPlan(
         source=companion,
-        de_path=companion_path(de_path),
-        en_path=companion_path(en_path),
+        de_path=comp_dir / companion_name(de_path),
+        en_path=comp_dir / companion_name(en_path),
         de_text=comp_de_text,
         en_text=comp_en_text,
     )
@@ -398,7 +372,7 @@ def split_in_file(
         if companion is not None:
             writes.append((companion.de_path, companion.de_text))
             writes.append((companion.en_path, companion.en_text))
-        _atomic_write_all(writes)
+        atomic_write_all(writes)
 
     return SplitResult(
         source=str(source),
@@ -669,15 +643,20 @@ def _plan_companion_unify(
     both halves). Raising here (divergent shared companion cell, misalignment)
     aborts the whole unify before any file is written.
     """
-    from clm.slides.voiceover_tools import companion_path
+    from clm.slides.voiceover_tools import companion_name, resolve_companion
 
-    de_comp = companion_path(de_source)
-    en_comp = companion_path(en_source)
-    if not de_comp.exists() and not en_comp.exists():
+    de_comp = resolve_companion(de_source)
+    en_comp = resolve_companion(en_source)
+    if de_comp is None and en_comp is None:
         return None
-    de_text = de_comp.read_text(encoding="utf-8") if de_comp.exists() else ""
-    en_text = en_comp.read_text(encoding="utf-8") if en_comp.exists() else ""
-    return _CompanionUnifyPlan(target=companion_path(target), text=unify_texts(de_text, en_text))
+    de_text = de_comp.read_text(encoding="utf-8") if de_comp is not None else ""
+    en_text = en_comp.read_text(encoding="utf-8") if en_comp is not None else ""
+    # Recombine into the directory the split companions lived in (preferring the
+    # DE half's location), so a foldered topic stays foldered across a unify.
+    present = de_comp if de_comp is not None else en_comp
+    assert present is not None
+    target_companion = present.parent / companion_name(target)
+    return _CompanionUnifyPlan(target=target_companion, text=unify_texts(de_text, en_text))
 
 
 def unify_in_file(
@@ -725,7 +704,7 @@ def unify_in_file(
         writes = [(target, unified)]
         if companion is not None:
             writes.append((companion.target, companion.text))
-        _atomic_write_all(writes)
+        atomic_write_all(writes)
 
     return UnifyResult(
         de_source=str(de_source),

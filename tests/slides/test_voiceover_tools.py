@@ -6,17 +6,37 @@ from pathlib import Path
 
 import pytest
 
+from clm.notebooks.slide_parser import parse_cells
 from clm.slides.split import split_text
 from clm.slides.voiceover_tools import (
+    PairedExtractionResult,
     VoiceoverError,
     companion_path,
     extract_voiceover,
+    extract_voiceover_pair,
     inline_voiceover,
     merge_voiceover_text,
     read_companion_baselines,
     render_companion_update,
     update_companion_narrative,
 )
+
+
+def _for_slide_set(path: Path) -> set[str]:
+    return {
+        c.metadata.for_slide
+        for c in parse_cells(path.read_text(encoding="utf-8"))
+        if c.metadata.for_slide
+    }
+
+
+def _slide_ids(path: Path) -> list[str]:
+    return [
+        c.metadata.slide_id
+        for c in parse_cells(path.read_text(encoding="utf-8"))
+        if c.metadata.is_slide_start
+    ]
+
 
 # ---------------------------------------------------------------------------
 # companion_path
@@ -58,6 +78,177 @@ def test_companion_path_split_pair_is_distinct(tmp_path: Path):
     assert de != en
     assert de.name == "voiceover_intro.de.py"
     assert en.name == "voiceover_intro.en.py"
+
+
+# ---------------------------------------------------------------------------
+# companion_name / resolve_companion (folder-or-sibling layout)
+# ---------------------------------------------------------------------------
+
+
+def test_companion_name_is_directory_independent(tmp_path: Path):
+    from clm.slides.voiceover_tools import companion_name
+
+    assert companion_name(tmp_path / "slides_intro.de.py") == "voiceover_intro.de.py"
+    assert companion_name(Path("a/b/c/topic_overview.py")) == "voiceover_overview.py"
+
+
+def test_resolve_companion_none_when_absent(tmp_path: Path):
+    from clm.slides.voiceover_tools import resolve_companion
+
+    assert resolve_companion(tmp_path / "slides_intro.py") is None
+
+
+def test_resolve_companion_finds_sibling(tmp_path: Path):
+    from clm.slides.voiceover_tools import resolve_companion
+
+    slide = tmp_path / "slides_intro.py"
+    sibling = tmp_path / "voiceover_intro.py"
+    sibling.write_text('# %% [markdown] tags=["voiceover"]\n# hi\n', encoding="utf-8")
+    assert resolve_companion(slide) == sibling
+
+
+def test_resolve_companion_prefers_voiceover_subdir(tmp_path: Path):
+    from clm.slides.voiceover_tools import COMPANION_SUBDIR, resolve_companion
+
+    slide = tmp_path / "slides_intro.py"
+    (tmp_path / COMPANION_SUBDIR).mkdir()
+    nested = tmp_path / COMPANION_SUBDIR / "voiceover_intro.py"
+    nested.write_text('# %% [markdown] tags=["voiceover"]\n# hi\n', encoding="utf-8")
+    # A stale sibling must not win — the relocated companion takes precedence.
+    (tmp_path / "voiceover_intro.py").write_text("# sibling\n", encoding="utf-8")
+    assert resolve_companion(slide) == nested
+
+
+def test_inline_reads_and_deletes_voiceover_subdir_companion(tmp_path: Path):
+    """A companion relocated into ``voiceover/`` is inlined and removed there."""
+    from clm.slides.voiceover_tools import COMPANION_SUBDIR
+
+    slide = tmp_path / "slides_intro.py"
+    slide.write_text(SLIDE_WITH_SLIDE_IDS, encoding="utf-8")
+
+    # Extract to the default sibling, then relocate the companion into voiceover/.
+    extract_voiceover(slide)
+    sibling = tmp_path / "voiceover_intro.py"
+    assert sibling.exists()
+    subdir = tmp_path / COMPANION_SUBDIR
+    subdir.mkdir()
+    nested = subdir / "voiceover_intro.py"
+    nested.write_text(sibling.read_text(encoding="utf-8"), encoding="utf-8")
+    sibling.unlink()
+
+    result = inline_voiceover(slide)
+
+    assert result.cells_inlined > 0
+    assert result.companion_deleted
+    assert not nested.exists()  # deleted from the subdir, not re-created as a sibling
+    assert not sibling.exists()
+    assert 'tags=["voiceover"]' in slide.read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# expected_companion + extract/split/unify write target (Phase 3)
+# ---------------------------------------------------------------------------
+
+
+def test_expected_companion_layouts(tmp_path: Path):
+    from clm.slides.voiceover_tools import expected_companion
+
+    slide = tmp_path / "slides_intro.py"
+    # auto, no dir -> sibling
+    assert expected_companion(slide) == tmp_path / "voiceover_intro.py"
+    # explicit subdir -> nested even without the dir present
+    assert (
+        expected_companion(slide, layout="subdir") == tmp_path / "voiceover" / "voiceover_intro.py"
+    )
+    (tmp_path / "voiceover").mkdir()
+    # explicit sibling -> sibling even with the dir present
+    assert expected_companion(slide, layout="sibling") == tmp_path / "voiceover_intro.py"
+    # auto, dir present -> nested
+    assert expected_companion(slide) == tmp_path / "voiceover" / "voiceover_intro.py"
+
+
+def test_extract_layout_subdir_creates_folder(tmp_path: Path):
+    slide = tmp_path / "slides_intro.py"
+    slide.write_text(SLIDE_WITH_SLIDE_IDS, encoding="utf-8")
+    result = extract_voiceover(slide, layout="subdir")
+    nested = tmp_path / "voiceover" / "voiceover_intro.py"
+    assert nested.exists()
+    assert not (tmp_path / "voiceover_intro.py").exists()
+    assert result.companion_file == str(nested)
+    assert 'tags=["voiceover"]' not in slide.read_text(encoding="utf-8")
+
+
+def test_extract_auto_detects_existing_voiceover_dir(tmp_path: Path):
+    slide = tmp_path / "slides_intro.py"
+    slide.write_text(SLIDE_WITH_SLIDE_IDS, encoding="utf-8")
+    (tmp_path / "voiceover").mkdir()
+    extract_voiceover(slide)  # layout=None -> auto-detect the dir
+    assert (tmp_path / "voiceover" / "voiceover_intro.py").exists()
+    assert not (tmp_path / "voiceover_intro.py").exists()
+
+
+def test_extract_refuses_when_companion_in_other_layout(tmp_path: Path):
+    slide = tmp_path / "slides_intro.py"
+    slide.write_text(SLIDE_WITH_SLIDE_IDS, encoding="utf-8")
+    # A stale sibling companion + a voiceover/ dir: extract --layout subdir must
+    # refuse (resolve finds the sibling) rather than create a second copy.
+    (tmp_path / "voiceover_intro.py").write_text("# stale\n", encoding="utf-8")
+    (tmp_path / "voiceover").mkdir()
+    with pytest.raises(VoiceoverError):
+        extract_voiceover(slide, layout="subdir")
+
+
+def test_extract_force_relocates_and_prunes_stale(tmp_path: Path):
+    slide = tmp_path / "slides_intro.py"
+    slide.write_text(SLIDE_WITH_SLIDE_IDS, encoding="utf-8")
+    (tmp_path / "voiceover_intro.py").write_text("# stale\n", encoding="utf-8")
+    (tmp_path / "voiceover").mkdir()
+    extract_voiceover(slide, layout="subdir", force=True)
+    assert (tmp_path / "voiceover" / "voiceover_intro.py").exists()
+    assert not (tmp_path / "voiceover_intro.py").exists()  # stale sibling pruned
+
+
+def test_inline_removes_emptied_voiceover_dir(tmp_path: Path):
+    slide = tmp_path / "slides_intro.py"
+    slide.write_text(SLIDE_WITH_SLIDE_IDS, encoding="utf-8")
+    extract_voiceover(slide, layout="subdir")
+    subdir = tmp_path / "voiceover"
+    assert (subdir / "voiceover_intro.py").exists()
+
+    result = inline_voiceover(slide)
+    assert result.companion_deleted
+    assert not subdir.exists()  # emptied folder removed on full inline
+
+
+def test_split_keeps_companion_in_voiceover_dir(tmp_path: Path):
+    from clm.slides.split import split_in_file
+
+    slide = tmp_path / "slides_intro.py"
+    slide.write_text(SLIDE_WITH_VOICEOVER, encoding="utf-8")
+    extract_voiceover(slide, layout="subdir")  # foldered bilingual companion
+    assert (tmp_path / "voiceover" / "voiceover_intro.py").exists()
+
+    split_in_file(slide)  # companion halves follow the source companion into voiceover/
+    assert (tmp_path / "voiceover" / "voiceover_intro.de.py").exists()
+    assert (tmp_path / "voiceover" / "voiceover_intro.en.py").exists()
+    assert not (tmp_path / "voiceover_intro.de.py").exists()
+    assert not (tmp_path / "voiceover_intro.en.py").exists()
+
+
+def test_unify_keeps_companion_in_voiceover_dir(tmp_path: Path):
+    from clm.slides.split import split_in_file, unify_in_file
+
+    slide = tmp_path / "slides_intro.py"
+    slide.write_text(SLIDE_WITH_VOICEOVER, encoding="utf-8")
+    extract_voiceover(slide, layout="subdir")
+    split_in_file(slide)
+    # Drop the bilingual companion so the assertion proves unify *recreates* it
+    # in voiceover/ (not as a sibling) from the foldered de/en halves.
+    (tmp_path / "voiceover" / "voiceover_intro.py").unlink()
+
+    unify_in_file(tmp_path / "slides_intro.de.py", tmp_path / "slides_intro.en.py", force=True)
+    assert (tmp_path / "voiceover" / "voiceover_intro.py").exists()
+    assert not (tmp_path / "voiceover_intro.py").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -1038,6 +1229,198 @@ class TestExtractTwinAware:
         res = extract_voiceover(p)
         assert res.cells_extracted == 1
         assert 'slide_id="mein-thema"' in p.read_text(encoding="utf-8")
+
+
+class TestPairedExtract:
+    """``extract_voiceover_pair`` — one-op, EN-authority extraction over both
+    halves of a split deck (the §8 'F later' paired extract).
+    """
+
+    @staticmethod
+    def _born_split_with_vo(tmp_path: Path) -> tuple[Path, Path]:
+        """A born-split (both halves id-less) pair, DE heading 'Mein Thema',
+        EN heading 'My Topic', one voiceover per half. Written via split_text so
+        the headers are real."""
+        de_vo = '# %% [markdown] lang="de" tags=["voiceover"]\n#\n# VO DE\n\n'
+        en_vo = '# %% [markdown] lang="en" tags=["voiceover"]\n#\n# VO EN\n\n'
+        bilingual = (
+            "# j2 from 'macros.j2' import header\n"
+            '# {{ header("Titel", "Title") }}\n\n'
+            '# %% [markdown] lang="de" tags=["slide"]\n# ## Mein Thema\n\n'
+            + de_vo
+            + '# %% [markdown] lang="en" tags=["slide"]\n# ## My Topic\n\n'
+            + en_vo
+        )
+        de_text, en_text = split_text(bilingual)
+        de = tmp_path / "slides_x.de.py"
+        en = tmp_path / "slides_x.en.py"
+        de.write_text(de_text, encoding="utf-8", newline="\n")
+        en.write_text(en_text, encoding="utf-8", newline="\n")
+        return de, en
+
+    def test_writes_both_companions_with_for_slide_parity(self, tmp_path: Path):
+        de, en = self._born_split_with_vo(tmp_path)
+        result = extract_voiceover_pair(de, en)
+
+        assert isinstance(result, PairedExtractionResult)
+        de_comp = tmp_path / "voiceover_x.de.py"
+        en_comp = tmp_path / "voiceover_x.en.py"
+        assert de_comp.exists() and en_comp.exists()
+        # for_slide sets agree across the two companions (the whole point).
+        assert _for_slide_set(de_comp) == _for_slide_set(en_comp)
+        # slide_id parity on the slide files (#162 invariant).
+        assert _slide_ids(de) == _slide_ids(en)
+
+    def test_en_authority_regardless_of_order(self, tmp_path: Path):
+        # The slug comes from the EN heading ('My Topic' -> 'my-topic') and is
+        # stamped on BOTH halves — unlike the per-language path, which is
+        # DE-authority-by-order (see TestExtractTwinAware). Passing the halves in
+        # either order yields the same EN-authority id.
+        de, en = self._born_split_with_vo(tmp_path)
+        extract_voiceover_pair(en, de)  # deliberately swapped order
+
+        assert 'slide_id="my-topic"' in de.read_text(encoding="utf-8")
+        assert 'slide_id="my-topic"' in en.read_text(encoding="utf-8")
+        assert 'slide_id="mein-thema"' not in de.read_text(encoding="utf-8")
+
+    def test_force_is_all_or_nothing(self, tmp_path: Path):
+        # A pre-existing DE companion must block the paired extract even though
+        # the EN companion does not exist yet — all-or-nothing over both halves.
+        de, en = self._born_split_with_vo(tmp_path)
+        (tmp_path / "voiceover_x.de.py").write_text("# stale\n", encoding="utf-8")
+        assert not (tmp_path / "voiceover_x.en.py").exists()
+
+        with pytest.raises(VoiceoverError):
+            extract_voiceover_pair(de, en)
+
+        # --force rebuilds both from the current slide voiceover cells.
+        result = extract_voiceover_pair(de, en, force=True)
+        assert (tmp_path / "voiceover_x.de.py").exists()
+        assert (tmp_path / "voiceover_x.en.py").exists()
+        assert result.de.cells_extracted >= 1 and result.en.cells_extracted >= 1
+        assert _for_slide_set(tmp_path / "voiceover_x.de.py") == _for_slide_set(
+            tmp_path / "voiceover_x.en.py"
+        )
+
+    def test_dry_run_writes_nothing(self, tmp_path: Path):
+        de, en = self._born_split_with_vo(tmp_path)
+        de_before = de.read_text(encoding="utf-8")
+        en_before = en.read_text(encoding="utf-8")
+
+        result = extract_voiceover_pair(de, en, dry_run=True)
+
+        assert result.dry_run
+        # No companions, and the slide files (incl. their ids) are untouched —
+        # the pre-mint runs report-only under dry_run.
+        assert not (tmp_path / "voiceover_x.de.py").exists()
+        assert not (tmp_path / "voiceover_x.en.py").exists()
+        assert de.read_text(encoding="utf-8") == de_before
+        assert en.read_text(encoding="utf-8") == en_before
+
+    def test_refuses_non_round_trippable_pair(self, tmp_path: Path):
+        # Divergent SHARED (no-lang) cells -> unify is not byte-faithful -> the
+        # EN-authority mint can't guarantee parity -> refuse loudly.
+        de = tmp_path / "slides_x.de.py"
+        en = tmp_path / "slides_x.en.py"
+        de.write_text(
+            "# %%\nx = 1\n\n"
+            '# %% [markdown] lang="de" tags=["slide"]\n# ## A\n\n'
+            '# %% [markdown] lang="de" tags=["voiceover"]\n# VO\n',
+            encoding="utf-8",
+            newline="\n",
+        )
+        en.write_text(
+            "# %%\nx = 2\n\n"  # divergent shared cell -> unify refuses
+            '# %% [markdown] lang="en" tags=["slide"]\n# ## A\n',
+            encoding="utf-8",
+            newline="\n",
+        )
+        de_before, en_before = de.read_text(encoding="utf-8"), en.read_text(encoding="utf-8")
+        with pytest.raises(VoiceoverError, match="not structurally aligned"):
+            extract_voiceover_pair(de, en)
+        # Nothing written: no companions and the slide halves are byte-unchanged
+        # (the refuse fires before any id-stamp or extraction).
+        assert not (tmp_path / "voiceover_x.de.py").exists()
+        assert not (tmp_path / "voiceover_x.en.py").exists()
+        assert de.read_text(encoding="utf-8") == de_before
+        assert en.read_text(encoding="utf-8") == en_before
+
+    def test_no_op_when_no_voiceover_even_with_stale_companion(self, tmp_path: Path):
+        # A split deck with a pre-existing companion but zero voiceover cells (the
+        # idempotent post-extract state) is a clean no-op — the no-VO short-circuit
+        # runs BEFORE the all-or-nothing force guard, matching the single-file path.
+        de = tmp_path / "slides_x.de.py"
+        en = tmp_path / "slides_x.en.py"
+        de.write_text(
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="t"\n# ## Thema\n', encoding="utf-8"
+        )
+        en.write_text(
+            '# %% [markdown] lang="en" tags=["slide"] slide_id="t"\n# ## Topic\n', encoding="utf-8"
+        )
+        (tmp_path / "voiceover_x.de.py").write_text("# stale\n", encoding="utf-8")
+
+        result = extract_voiceover_pair(de, en)  # no force, but no VO → no raise
+        assert all(r.cells_extracted == 0 for r in result.results)
+
+    def test_mint_ids_false_rejects_non_parity_pair(self, tmp_path: Path):
+        # mint_ids=False skips the EN-authority pre-mint; on an id-less pair the
+        # per-half mint would diverge (#162), so it must refuse loudly rather than
+        # silently violate the documented "already in parity" contract.
+        de, en = self._born_split_with_vo(tmp_path)  # both halves id-less
+        with pytest.raises(VoiceoverError, match="slide_id parity"):
+            extract_voiceover_pair(de, en, mint_ids=False)
+
+    def test_dry_run_and_real_report_same_ids(self, tmp_path: Path):
+        # Per-half ids_generated is 0 on the paired path (the pre-mint owns id
+        # minting, reported via ids_minted) — identical in dry-run and real, so a
+        # dry-run preview does not over-report ids the real run won't produce.
+        de, en = self._born_split_with_vo(tmp_path)
+        dry = extract_voiceover_pair(de, en, dry_run=True)
+        assert all(r.ids_generated == 0 for r in dry.results)
+        real = extract_voiceover_pair(de, en)
+        assert all(r.ids_generated == 0 for r in real.results)
+        assert dry.ids_minted == real.ids_minted == 1  # one distinct slide_id
+
+    def test_rejects_invalid_pair(self, tmp_path: Path):
+        # Two same-language halves are not a valid de/en pair.
+        a = tmp_path / "slides_x.de.py"
+        b = tmp_path / "slides_y.de.py"
+        a.write_text('# %% [markdown] lang="de" tags=["slide"]\n# ## A\n', encoding="utf-8")
+        b.write_text('# %% [markdown] lang="de" tags=["slide"]\n# ## B\n', encoding="utf-8")
+        with pytest.raises(VoiceoverError):
+            extract_voiceover_pair(a, b)
+
+    def test_no_voiceover_is_noop(self, tmp_path: Path):
+        # Neither half has voiceover cells: do nothing — don't id-stamp either.
+        de = tmp_path / "slides_x.de.py"
+        en = tmp_path / "slides_x.en.py"
+        de.write_text(
+            '# %% [markdown] lang="de" tags=["slide"]\n# ## Mein Thema\n', encoding="utf-8"
+        )
+        en.write_text('# %% [markdown] lang="en" tags=["slide"]\n# ## My Topic\n', encoding="utf-8")
+        de_before, en_before = de.read_text(encoding="utf-8"), en.read_text(encoding="utf-8")
+
+        result = extract_voiceover_pair(de, en)
+
+        assert all(r.cells_extracted == 0 for r in result.results)
+        assert not (tmp_path / "voiceover_x.de.py").exists()
+        # No id-stamping side effect.
+        assert de.read_text(encoding="utf-8") == de_before
+        assert en.read_text(encoding="utf-8") == en_before
+
+    def test_mint_ids_false_skips_premint(self, tmp_path: Path):
+        # With ids already in parity, mint_ids=False just extracts both halves.
+        de, en = self._born_split_with_vo(tmp_path)
+        # Pre-id both halves to parity via the generative pass directly.
+        from clm.slides.assign_ids import AssignOptions, assign_ids_in_split_pair
+
+        assign_ids_in_split_pair(de, en, AssignOptions())
+        result = extract_voiceover_pair(de, en, force=True, mint_ids=False)
+
+        assert result.ids_minted == 0
+        assert _for_slide_set(tmp_path / "voiceover_x.de.py") == _for_slide_set(
+            tmp_path / "voiceover_x.en.py"
+        )
 
 
 # ---------------------------------------------------------------------------

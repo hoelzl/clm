@@ -39,6 +39,117 @@ the cohort repo. A frozen topic is never re-propagated unless you pass
 `--refreeze`. Full command reference: `clm info commands` → `clm release` and
 `clm git`.
 
+## Authoring sidecar subdirectories: `voiceover/` and `cassettes/` (additive — no break)
+
+CLM {version} lets a topic keep its authoring **sidecars** — voiceover
+companions (`voiceover_*.py`) and HTTP-replay cassettes (`*.http-cassette.yaml`)
+— in per-type subdirectories so the topic directory holds only the editable
+`slides_*.py` sources and the output companions (`img/`, `drawio/`):
+
+```
+topic_070_rag_introduction/
+├── cassettes/   ← *.http-cassette.yaml
+├── voiceover/   ← voiceover_*.py
+├── drawio/  img/
+└── slides_010_*.de.py  slides_010_*.en.py
+```
+
+**Nothing changes unless you opt in** — the flat layout (sidecars next to the
+slides) keeps working, and both layouts are auto-detected by directory presence
+everywhere (build, `extract`/`inline`/`sync`, `split`/`unify`, `validate`).
+
+*Adopt it:*
+
+```bash
+# Preview, then move a topic / section / whole course into the foldered layout
+clm slides tidy slides/module_550/topic_070 --dry-run
+clm slides tidy slides --layout subdir
+
+# Flatten back if you prefer
+clm slides tidy slides --layout sibling
+```
+
+`tidy` uses `git mv` for tracked files, deletes transient `*.staging-*` cassette
+markers, and **consolidates the historical `_cassettes/` directory into
+`cassettes/`** (the underscore name is still read as a fallback). To make new
+`clm voiceover extract` / `sync` companions default to the foldered layout
+without per-topic `mkdir`, set a course-wide default:
+
+```toml
+[tool.clm]
+sidecar-layout = "subdir"   # or override per-shell with CLM_SIDECAR_LAYOUT=subdir
+```
+
+This default is write-time only and never changes build output. Precedence for a
+new companion: explicit `--layout` flag → an existing `voiceover/` directory →
+the course default → `sibling`.
+
+## Breaking changes in CLM 1.8
+
+CLM 1.8 retires the Phase 0 deprecation period. It carries **intentional
+breaking changes** — review these before upgrading a course repo's pin.
+
+### 1. Flat top-level CLI aliases removed
+
+The flat command names, deprecated since CLM 1.6, no longer exist. Use the
+verb-grouped invocations:
+
+| Removed | Use instead |
+|---------|-------------|
+| `clm normalize-slides` | `clm slides normalize` |
+| `clm language-view` | `clm slides language-view` |
+| `clm suggest-sync` | `clm slides suggest-sync` |
+| `clm search-slides` | `clm slides search` |
+| `clm resolve-topic` | `clm topic resolve` |
+| `clm authoring-rules` | `clm authoring rules` |
+| `clm validate-slides` | `clm validate` |
+| `clm validate-spec` | `clm validate` |
+| `clm extract-voiceover` | `clm voiceover extract` |
+| `clm inline-voiceover` | `clm voiceover inline` |
+
+Scripts, hooks, and agent prompts that call a flat name now fail with
+Click's `No such command`. Update them to the group-qualified form.
+
+### 2. `clm build --keep-directory` removed
+
+The flag was a no-op alias (keeping the output tree has been the default
+since the git-friendly output-writes rollout). Drop it from any build
+invocation. To opt into the legacy wipe-and-restore flow, use `--clean`.
+
+### 3. Validator: missing `slide_id` and DE/EN non-adjacency are now errors
+
+Two `clm validate` slide findings escalated from `warning` to `error`:
+
+- A `slide`/`subslide` cell **missing a `slide_id`**. Fix with
+  `clm slides assign-ids <dir>` (or `clm slides sync` for a split deck).
+- A **DE/EN content/voiceover pair that is not adjacent** (an intervening
+  language-tagged cell wedged between the two halves). Fix with
+  `clm slides normalize`.
+
+A course repo must clear these before its build/validate passes succeed
+under 1.8. The errors fail the pre-commit gate and the PostToolUse hook.
+
+### 4. MCP tool names aligned to the verb-group scheme
+
+The MCP server's tool names were renamed to mirror the CLI verb groups
+(group-first, no aliases). Update `.mcp.json`, CLAUDE.md / AGENTS.md tool
+tables, and agent prompts:
+
+| Old MCP tool | New MCP tool |
+|--------------|--------------|
+| `resolve_topic` | `topic_resolve` |
+| `search_slides` | `slides_search` |
+| `normalize_slides` | `slides_normalize` |
+| `get_language_view` | `slides_language_view` |
+| `suggest_sync` | `slides_suggest_sync` |
+| `extract_voiceover` | `voiceover_extract` |
+| `inline_voiceover` | `voiceover_inline` |
+| `course_authoring_rules` | `authoring_rules` |
+| `validate_spec` + `validate_slides` | `validate` (single tool; dispatches on input type) |
+
+`course_outline` and the `voiceover_*` tool family are unchanged (already
+group-first / no verb group).
+
 ## Slide format redesign: stable `slide_id`s (additive — no break)
 
 CLM {version} ships **Phase 2** of the slide-format-redesign: the
@@ -101,6 +212,27 @@ relied on the old behavior may need a flag or an exit-code check.
 
 These are also surfaced by the new fast-suite `tests/slides/test_edit_dynamics.py`
 cross-command harness (`scripts/edit_dynamics_harness.py`).
+
+## `clm voiceover extract` auto-pairs on a split half ({version})
+
+CLM {version} makes `clm voiceover extract` produce **both** companions of a
+split deck in one op. When `FILE` is a split half (`<deck>.de.py` /
+`<deck>.en.py`) whose twin exists on disk, extract now mints EN-authority
+`slide_id`s across both halves and extracts both, so the two companions'
+`for_slide` sets agree by construction (closing the per-language footgun where
+extracting each half by hand could mint divergent slugs).
+
+*Migration (behavior change):* a bare `clm voiceover extract <deck>.de.py` that
+used to write only `voiceover_<deck>.de.py` now also writes
+`voiceover_<deck>.en.py`, and the EN-authority pre-mint may stamp `slide_id`s on
+**both** slide halves (so `git diff` shows the `.en` half too). To keep the old
+single-half behavior, pass `--single`. The `--json` output for a paired extract
+is a new shape — `{"paired": true, "companions": [<de>, <en>], …}` — so a
+consumer that reads top-level `cells_extracted` should branch on the `paired`
+key (a single-file/bilingual extract still emits the flat object). A pair that
+is not structurally alignable makes extract **refuse** (reconcile with
+`clm slides sync` first). Bilingual decks (no `.de`/`.en` twin) are unchanged.
+The MCP `extract_voiceover` tool gains matching `both` / `single` parameters.
 
 ## `slides split` / `unify` carry the voiceover companion ({version})
 
@@ -199,7 +331,56 @@ then re-extract, or `clm slides sync`), or pass `--no-fail-on-error` /
 warning` in a pre-commit hook catches the underlying `slide_id` / `for_slide`
 divergence before it ever reaches a build.
 
-## Slide format redesign: `clm validate` enforces `slide_id` (warning now, error in 1.7)
+## Command surface: split-safety hardening ({version})
+
+`clm slides sync` is the one operation that keeps both halves of a split deck
+consistent. CLM {version} hardens the surface around it so the everyday path is
+the safe one — no command was removed and every tool stays fully invocable.
+
+- **`clm slides sync` pairing guard.** Before any read or write, sync now checks
+  that the two paths are the two halves of **one** deck (one `.de`, one `.en`,
+  same name — the routing prefix is not required). A **swapped** order is
+  auto-corrected with a note; the **same file** twice, **two same-language**
+  halves, **two different decks**, or a path that is **not a split half** (a
+  bilingual or untagged file) are rejected with a usage error (exit 2)
+  before any LLM call. This closes the #162 footgun where a mismatched pair could
+  silently produce a divergent or no-op sync. *Migration:* none for well-formed
+  invocations; a script that relied on passing a mismatched pair will now get a
+  clear usage error instead of a surprising write.
+- **`clm slides assign-ids` is now plumbing (hidden).** Per-file id minting on a
+  *single* split half can mint a divergent slug — the #1 silent #162 break. It is
+  hidden from `clm slides --help` but stays invocable by name for agents/scripts
+  and one-off fixes. *Migration:* for everyday authoring, let the funnels mint ids
+  — `clm slides sync` mints a shared id across both halves as it reconciles them,
+  and `clm slides normalize` runs the same minting pass. To mint ids across a
+  whole tree safely, `clm slides assign-ids <dir>` still works (EN-authority pair
+  minting); prefer it over running the command on one half.
+- **`clm slides suggest-sync` is now plumbing (hidden).** The old read-only
+  single-FILE *bilingual* suggester is hidden from `clm slides --help` (still
+  invocable, and still the `suggest_sync` MCP tool). It coexisted confusingly with
+  the split-pair `sync`. *Migration:* for split-format decks use `clm slides sync`;
+  `suggest-sync` remains for the pre-split bilingual layout and agent/MCP use.
+- **`clm slides sync` accepts a single path.** `EN_PATH` is now optional: pass one
+  half (`clm slides sync slides_x.de.py`) and the twin is derived from disk, or
+  pass the bilingual deck stem (`slides_x.py`, when it still exists) to derive both
+  halves. A missing twin is a clear usage error (exit 2); sync never invents a
+  translated half. *Migration:* purely additive — the two-path form is unchanged,
+  so existing invocations and scripts keep working.
+- **`clm slides sync` accepts a directory (batch mode).** Pass a directory and
+  every `.de`/`.en` deck pair under the tree is synced in one pass (prefix-agnostic
+  enumeration, voiceover companions ignored). A half with no twin under the tree is
+  **skipped with a warning**; the sweep **continues past a failing pair** and the
+  exit code is the **worst** over all pairs (`0` < `1` < `2`). A **writing**
+  directory run requires **`--yes`** (or an interactive confirm) since it writes to
+  every pair at once; `--dry-run` / `--explain` directory runs are unprompted.
+  `--interactive` stays single-pair only, and a second path with a directory is a
+  usage error. `--json` over a directory returns an envelope
+  `{ "mode", "root", "exit_code", "pairs": [ … ] }` (each `pairs` entry is one
+  single-pair object). *Migration:* purely additive — passing a single file or a
+  pair is unchanged; only a directory argument (previously rejected) now triggers
+  the sweep.
+
+## Slide format redesign: `clm validate` enforces `slide_id`
 
 CLM {version} also ships **Phase 3** of the slide-format-redesign:
 `clm validate` now inspects `slide_id` metadata and reports findings
@@ -211,14 +392,14 @@ modes, so the PostToolUse hook surfaces them at edit time.
 
 | Finding | Severity in {version} | Notes |
 |---------|----------------------|-------|
-| `slide`/`subslide` cell missing `slide_id` | `warning` | **Will become an `error` in CLM 1.7** (same release that retires the Phase 0 deprecation aliases). |
+| `slide`/`subslide` cell missing `slide_id` | `warning` through 1.7, **`error` since 1.8** | Escalated in CLM 1.8 (the release that retires the Phase 0 deprecation aliases). See "Breaking changes in CLM 1.8" above. |
 | duplicate `slide_id` across slide groups | `error` | Group-aware: paired DE/EN cells sharing the EN-derived slug are not a duplicate. Bare-form comparison so `!intro` and `intro` collide. |
 | voiceover/notes `slide_id` ≠ preceding `slide`/`subslide` anchor | `error` | Walk-back skips j2, code, shared (lang-less), and cross-language narrative cells. The j2 `header()` macro anchors `slide_id="title"` for narrative cells that follow it. |
 | paired DE/EN slides carry mismatched bare `slide_id`s | `warning` | Fix with `clm slides assign-ids --force`. |
 | `slide_id` value is not a valid kebab-case ASCII slug (≤30 chars) | `warning` | The leading `!` preserve marker is permitted and does not count toward the length cap. |
 
-The two-release window (warning in {version}, error in 1.7) gives
-course repositories time to sweep `clm slides assign-ids` across
+The two-release deprecation window (warning through 1.7, error from 1.8)
+gave course repositories time to sweep `clm slides assign-ids` across
 their decks without the hook spamming warnings for unmigrated files.
 
 ### How to migrate
@@ -241,8 +422,8 @@ clm slides assign-ids slides/ --llm-suggest --accept-content-derived
 #    on the cell directly. Use the preserve marker `!` if you want the id
 #    to survive future regeneration: slide_id="!intro".
 
-# 5. Re-validate. Errors (duplicates, narrative adjacency mismatch,
-#    invalid slug) need to be cleared before CLM 1.7.
+# 5. Re-validate. As of CLM 1.8, missing slide_id is an error too —
+#    along with duplicates, narrative adjacency mismatch, and invalid slug.
 clm validate slides/
 ```
 
@@ -492,7 +673,7 @@ commands moved under new groups for a smaller, more scannable layout:
   notice does not affect exit codes or stdout, so scripts that
   pipe `--json` output through `jq` continue to work; only
   interactive users see the migration hint.
-- **1.7 (planned)**: Old names removed.
+- **1.8 (planned)**: Old names removed.
 
 ### `clm validate` consolidates the two validators
 
@@ -525,7 +706,7 @@ For scripts and CI:
   noticeable lint signal if you forget any.
 
 For interactive use, no action is needed — the old names keep
-working until 1.7, and the deprecation notice tells you the new
+working until 1.8, and the deprecation notice tells you the new
 path each time you invoke an old one.
 
 ## `clm build` no longer wipes the output tree by default
@@ -551,7 +732,7 @@ The new default does the opposite:
 | Flag | Before | After |
 |------|--------|-------|
 | (default) | wipe + restore `.git/` + rebuild | no wipe; hash-aware writes + sweep |
-| `--keep-directory` | opt out of the wipe | **deprecated** no-op alias; will be removed in 1.7 |
+| `--keep-directory` | opt out of the wipe | **removed in CLM 1.8** (was a no-op alias) |
 | `--incremental` | implies `--keep-directory`; skip cached writes | skip cached writes; implies `--no-sweep` |
 | `--clean` | n/a (new) | opt into the legacy wipe-and-restore flow |
 | `--no-sweep` | n/a (new) | opt out of the post-build sweep |
@@ -565,10 +746,10 @@ output for unchanged content. A few scripts may need an explicit flag:
   build.** Pass `--clean`. It runs the legacy flow (move `.git/` aside,
   `shutil.rmtree` each root, regenerate). Nested `.git/` directories
   are preserved across the wipe, same as before.
-- **You scripted `--keep-directory`.** The flag is now a no-op alias
-  with a `DeprecationWarning`; remove it. The flag is removed entirely
-  in CLM 1.7 (originally planned for 1.6 — slipped to align with the
-  Phase 0 CLI-alias removal so users have a single deprecation cliff).
+- **You scripted `--keep-directory`.** The flag was **removed in CLM 1.8**
+  (it had been a no-op alias since the output tree stopped being wiped by
+  default). Remove it from the invocation; pass `--clean` if you actually
+  want the legacy wipe-and-restore flow.
 - **You scripted `--incremental` to avoid the wipe.** Drop `--incremental`
   unless you also want the disk-write skipping it adds on top of the new
   default. `--incremental` now implies `--no-sweep` as well.

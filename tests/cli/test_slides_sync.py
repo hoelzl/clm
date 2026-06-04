@@ -631,3 +631,423 @@ class TestExplain:
         )
         assert result.exit_code != 0
         assert "mutually exclusive" in _combined(result)
+
+
+class TestPairingGuard:
+    """``clm slides sync`` rejects an invalid DE/EN pair up front (#162 Tier-2)
+    and auto-corrects a swapped order. The guard runs before any read/write, so
+    ``--dry-run --no-cache`` is enough to exercise it.
+    """
+
+    def test_same_file_rejected(self, cli_runner: CliRunner, tmp_path: Path):
+        p = tmp_path / "slides_x.de.py"
+        p.write_text(_DE_BASE, encoding="utf-8")
+        result = cli_runner.invoke(slides_sync_cmd, [str(p), str(p), "--dry-run", "--no-cache"])
+        assert result.exit_code != 0
+        assert "same file" in _combined(result)
+
+    def test_same_language_rejected(self, cli_runner: CliRunner, tmp_path: Path):
+        de1 = tmp_path / "slides_x.de.py"
+        de2 = tmp_path / "slides_y.de.py"
+        de1.write_text(_DE_BASE, encoding="utf-8")
+        de2.write_text(_DE_BASE, encoding="utf-8")
+        result = cli_runner.invoke(slides_sync_cmd, [str(de1), str(de2), "--dry-run", "--no-cache"])
+        assert result.exit_code != 0
+        assert "same language" in _combined(result)
+
+    def test_non_split_half_rejected(self, cli_runner: CliRunner, tmp_path: Path):
+        bilingual = tmp_path / "slides_x.py"
+        en = tmp_path / "slides_x.en.py"
+        bilingual.write_text(_DE_BASE, encoding="utf-8")
+        en.write_text(_EN_BASE, encoding="utf-8")
+        result = cli_runner.invoke(
+            slides_sync_cmd, [str(bilingual), str(en), "--dry-run", "--no-cache"]
+        )
+        assert result.exit_code != 0
+        assert "not a split-format slide half" in _combined(result)
+
+    def test_cross_deck_rejected(self, cli_runner: CliRunner, tmp_path: Path):
+        de = tmp_path / "slides_x.de.py"
+        en = tmp_path / "slides_other.en.py"
+        de.write_text(_DE_BASE, encoding="utf-8")
+        en.write_text(_EN_BASE, encoding="utf-8")
+        result = cli_runner.invoke(slides_sync_cmd, [str(de), str(en), "--dry-run", "--no-cache"])
+        assert result.exit_code != 0
+        assert "different decks" in _combined(result)
+
+    def test_swapped_order_auto_corrected(self, cli_runner: CliRunner, tmp_path: Path):
+        # EN passed first, DE second: the guard reorders and proceeds (exit 0
+        # on a dry-run), emitting a note rather than erroring.
+        de_path, en_path = _write_pair(tmp_path, _DE_BASE, _EN_BASE)
+        result = cli_runner.invoke(
+            slides_sync_cmd,
+            [str(en_path), str(de_path), "--dry-run", "--no-cache"],
+        )
+        assert result.exit_code == 0, _combined(result)
+        assert "swapped" in _combined(result)
+
+    def test_well_formed_pair_passes_guard(self, cli_runner: CliRunner, tmp_path: Path):
+        de_path, en_path = _write_pair(tmp_path, _DE_BASE, _EN_BASE)
+        result = cli_runner.invoke(
+            slides_sync_cmd,
+            [str(de_path), str(en_path), "--dry-run", "--no-cache"],
+        )
+        assert result.exit_code == 0, _combined(result)
+        assert "swapped" not in _combined(result)
+
+
+class TestSinglePath:
+    """`clm slides sync` single-path contract: EN_PATH is optional and the twin
+    (or both halves from a deck stem) is derived from disk. The two-path form
+    stays valid (backward compatible).
+    """
+
+    def test_single_half_derives_twin(self, cli_runner: CliRunner, tmp_path: Path):
+        de_path, _en_path = _write_pair(tmp_path, _DE_BASE, _EN_BASE)
+        result = cli_runner.invoke(slides_sync_cmd, [str(de_path), "--dry-run", "--no-cache"])
+        assert result.exit_code == 0, _combined(result)
+
+    def test_single_half_prefix_less(self, cli_runner: CliRunner, tmp_path: Path):
+        # Prefix-agnostic: an un-prefixed deck (apis.de.py) derives its twin too.
+        de_path, _en_path = _write_pair(tmp_path, _DE_BASE, _EN_BASE, stem="apis")
+        result = cli_runner.invoke(slides_sync_cmd, [str(de_path), "--dry-run", "--no-cache"])
+        assert result.exit_code == 0, _combined(result)
+
+    def test_single_en_half_derives_twin_no_swap_note(self, cli_runner: CliRunner, tmp_path: Path):
+        # The .en half alone derives the .de twin. The derived pair is returned
+        # already (de, en)-ordered, so the pairing guard's "swapped" note must NOT
+        # fire (the author passed a single path — nothing was swapped).
+        _de_path, en_path = _write_pair(tmp_path, _DE_BASE, _EN_BASE)
+        result = cli_runner.invoke(slides_sync_cmd, [str(en_path), "--dry-run", "--no-cache"])
+        assert result.exit_code == 0, _combined(result)
+        assert "swapped" not in _combined(result)
+
+    def test_deck_stem_derives_both_halves(self, cli_runner: CliRunner, tmp_path: Path):
+        _write_pair(tmp_path, _DE_BASE, _EN_BASE)
+        stem = tmp_path / "slides_intro.py"  # bilingual stem present on disk
+        stem.write_text(_DE_BASE + _EN_BASE, encoding="utf-8")
+        result = cli_runner.invoke(
+            slides_sync_cmd, [str(stem), "--dry-run", "--json", "--no-cache"]
+        )
+        assert result.exit_code == 0, _combined(result)
+        # The plan acted on the derived split halves, not the stem itself.
+        data = _json_payload(result)
+        assert data["de_path"].endswith("slides_intro.de.py")
+        assert data["en_path"].endswith("slides_intro.en.py")
+
+    def test_missing_twin_errors(self, cli_runner: CliRunner, tmp_path: Path):
+        de_path = tmp_path / "slides_intro.de.py"
+        de_path.write_text(_DE_BASE, encoding="utf-8")  # no .en twin on disk
+        result = cli_runner.invoke(slides_sync_cmd, [str(de_path), "--dry-run", "--no-cache"])
+        assert result.exit_code != 0
+        assert "twin" in _combined(result)
+
+    def test_deck_stem_missing_half_errors(self, cli_runner: CliRunner, tmp_path: Path):
+        # An untagged stem whose halves are not both present → the Branch-B usage
+        # error naming both expected halves (not a silent or contradictory failure).
+        stem = tmp_path / "slides_intro.py"
+        stem.write_text(_DE_BASE + _EN_BASE, encoding="utf-8")
+        (tmp_path / "slides_intro.de.py").write_text(_DE_BASE, encoding="utf-8")  # no .en
+        result = cli_runner.invoke(slides_sync_cmd, [str(stem), "--dry-run", "--no-cache"])
+        assert result.exit_code != 0
+        out = _combined(result)
+        assert ".de.py" in out and ".en.py" in out
+
+    def test_companion_alone_errors_with_hint(self, cli_runner: CliRunner, tmp_path: Path):
+        # A voiceover companion is never a sync target; passing one alone gives a
+        # companion-specific error (sync never derives a twin for a companion).
+        comp = tmp_path / "voiceover_intro.de.py"
+        comp.write_text(_DE_BASE, encoding="utf-8")
+        result = cli_runner.invoke(slides_sync_cmd, [str(comp), "--dry-run", "--no-cache"])
+        assert result.exit_code != 0
+        assert "companion" in _combined(result)
+
+    def test_two_path_form_still_works(self, cli_runner: CliRunner, tmp_path: Path):
+        de_path, en_path = _write_pair(tmp_path, _DE_BASE, _EN_BASE)
+        result = cli_runner.invoke(
+            slides_sync_cmd, [str(de_path), str(en_path), "--dry-run", "--no-cache"]
+        )
+        assert result.exit_code == 0, _combined(result)
+
+    def test_keys_watermark_by_resolved_path(
+        self, cli_runner: CliRunner, tmp_path: Path, monkeypatch
+    ):
+        # The single-path surface must hand build_sync_plan **resolved** paths, so
+        # its watermark key matches the directory-batch surface (whose enumerator
+        # resolves every file). Otherwise the same pair gets two keys across
+        # surfaces and the second silently misses the first's watermark.
+        from clm.cli.commands import slides_sync as cmd
+
+        captured: dict[str, Path] = {}
+        real = cmd.build_sync_plan
+
+        def cap(de_path, en_path, **kw):
+            captured["de"], captured["en"] = de_path, en_path
+            return real(de_path, en_path, **kw)
+
+        monkeypatch.setattr(cmd, "build_sync_plan", cap)
+        de_path, en_path = _write_pair(tmp_path, _DE_BASE, _EN_BASE)
+        result = cli_runner.invoke(
+            slides_sync_cmd, [str(de_path), str(en_path), "--dry-run", "--no-cache"]
+        )
+        assert result.exit_code == 0, _combined(result)
+        assert captured["de"] == de_path.resolve()
+        assert captured["en"] == en_path.resolve()
+
+
+class TestBatchMode:
+    """`clm slides sync DIR` — sweep every split pair under a directory (§8a).
+
+    A directory triggers batch mode: prefix-agnostic enumeration, solo halves
+    skipped with a warning, continue-on-error, a max-severity aggregate exit
+    code, a `--yes` gate on writes, and a `{mode, root, exit_code, pairs:[...]}`
+    JSON envelope whose per-pair entries reuse the single-pair object shape.
+    """
+
+    def _make_tree(
+        self, tmp_path: Path, *, with_solo: bool = True
+    ) -> tuple[Path, Path, dict[str, tuple[Path, Path]]]:
+        """A directory holding two prefix-less pairs (``apis`` in sync, ``web``
+        with DE edited vs the watermark) and — optionally — a solo DE half.
+
+        Watermarks are seeded with **resolved** paths because batch enumeration
+        resolves every file (so the watermark key matches what ``build_sync_plan``
+        looks up). Returns ``(root, cache_dir, {stem: (de, en)})``.
+        """
+        root = tmp_path / "decks"
+        root.mkdir()
+        cache_dir = tmp_path / "cache"
+        apis_de, apis_en = _write_pair(root, _DE_BASE, _EN_BASE, stem="apis")
+        web_de, web_en = _write_pair(root, _DE_EDITED, _EN_BASE, stem="web")
+        _seed_watermark(
+            cache_dir, apis_de.resolve(), apis_en.resolve(), de_text=_DE_BASE, en_text=_EN_BASE
+        )
+        _seed_watermark(
+            cache_dir, web_de.resolve(), web_en.resolve(), de_text=_DE_BASE, en_text=_EN_BASE
+        )
+        if with_solo:
+            (root / "orphan.de.py").write_text(_DE_BASE, encoding="utf-8")
+        return root, cache_dir, {"apis": (apis_de, apis_en), "web": (web_de, web_en)}
+
+    def test_dry_run_json_envelope_skips_solo_and_aggregates(
+        self, cli_runner: CliRunner, tmp_path: Path
+    ):
+        root, cache_dir, _decks = self._make_tree(tmp_path)
+
+        result = cli_runner.invoke(
+            slides_sync_cmd,
+            [str(root), "--dry-run", "--json", "--cache-dir", str(cache_dir)],
+        )
+
+        # apis is in sync (0), web has a DE edit (1) -> aggregate max == 1.
+        assert result.exit_code == 1, _combined(result)
+        # The solo half is skipped with a warning, never synced against a phantom.
+        assert "skipping orphan.de.py" in (result.stderr or "")
+        payload = _json_payload(result)
+        assert payload["mode"] == "dry-run"
+        assert payload["root"] == str(root)
+        assert payload["exit_code"] == 1
+        assert len(payload["pairs"]) == 2
+        by_stem = {Path(p["de_path"]).name: p for p in payload["pairs"]}
+        # Each pair entry is the single-pair object shape verbatim.
+        assert by_stem["apis.de.py"]["plan"]["counts"]["edit"] == 0
+        assert by_stem["apis.de.py"]["exit_code"] == 0
+        assert by_stem["web.de.py"]["plan"]["counts"]["edit"] == 1
+        assert by_stem["web.de.py"]["plan"]["proposals"][0]["direction"] == "de->en"
+        assert by_stem["web.de.py"]["exit_code"] == 1
+
+    def test_dry_run_human_one_liner_and_rollup(self, cli_runner: CliRunner, tmp_path: Path):
+        root, cache_dir, _decks = self._make_tree(tmp_path)
+
+        result = cli_runner.invoke(
+            slides_sync_cmd,
+            [str(root), "--dry-run", "--cache-dir", str(cache_dir)],
+        )
+
+        out = result.output
+        assert result.exit_code == 1, _combined(result)
+        assert "OK     apis.de.py: nothing to do" in out
+        assert "REVIEW web.de.py: would change: 1 edit" in out
+        assert "2 pair(s): 1 clean, 1 review, 0 errored." in out
+
+    def test_apply_writes_every_pair_with_yes(
+        self, cli_runner: CliRunner, tmp_path: Path, monkeypatch
+    ):
+        _stub_judge(monkeypatch, _EN_PROPOSAL)
+        # Both pairs edited so both apply.
+        root = tmp_path / "decks"
+        root.mkdir()
+        cache_dir = tmp_path / "cache"
+        a_de, a_en = _write_pair(root, _DE_EDITED, _EN_BASE, stem="apis")
+        w_de, w_en = _write_pair(root, _DE_EDITED, _EN_BASE, stem="web")
+        _seed_watermark(
+            cache_dir, a_de.resolve(), a_en.resolve(), de_text=_DE_BASE, en_text=_EN_BASE
+        )
+        _seed_watermark(
+            cache_dir, w_de.resolve(), w_en.resolve(), de_text=_DE_BASE, en_text=_EN_BASE
+        )
+
+        result = cli_runner.invoke(
+            slides_sync_cmd,
+            [str(root), "--yes", "--cache-dir", str(cache_dir)],
+        )
+
+        assert result.exit_code == 0, _combined(result)
+        assert "Point one" in a_en.read_text(encoding="utf-8")
+        assert "Point one" in w_en.read_text(encoding="utf-8")
+        assert "2 pair(s): 2 clean, 0 review, 0 errored." in result.output
+        assert "Review the propagated changes with `git diff`" in result.output
+
+    def test_apply_without_yes_and_json_errors(self, cli_runner: CliRunner, tmp_path: Path):
+        root, cache_dir, _decks = self._make_tree(tmp_path, with_solo=False)
+        result = cli_runner.invoke(
+            slides_sync_cmd,
+            [str(root), "--json", "--cache-dir", str(cache_dir)],
+        )
+        assert result.exit_code != 0
+        assert "needs --yes" in _combined(result)
+
+    def test_apply_without_yes_prompts_and_abort_writes_nothing(
+        self, cli_runner: CliRunner, tmp_path: Path
+    ):
+        root, cache_dir, decks = self._make_tree(tmp_path, with_solo=False)
+        before = {stem: en.read_text(encoding="utf-8") for stem, (_de, en) in decks.items()}
+
+        # Decline the confirm: the sweep aborts before any write.
+        result = cli_runner.invoke(
+            slides_sync_cmd,
+            [str(root), "--cache-dir", str(cache_dir)],
+            input="n\n",
+        )
+
+        assert result.exit_code != 0
+        for stem, (_de, en) in decks.items():
+            assert en.read_text(encoding="utf-8") == before[stem]
+
+    def test_continue_on_error_aggregates_and_isolates(
+        self, cli_runner: CliRunner, tmp_path: Path, monkeypatch
+    ):
+        # One pair raises during classification; the sweep records it as errored
+        # (exit 2) and still processes the other pair.
+        from clm.cli.commands import slides_sync as cmd
+
+        root, cache_dir, _decks = self._make_tree(tmp_path, with_solo=False)
+        real_build = cmd.build_sync_plan
+
+        def flaky_build(de_path, en_path, **kw):
+            if "web" in de_path.name:
+                raise RuntimeError("boom")
+            return real_build(de_path, en_path, **kw)
+
+        monkeypatch.setattr(cmd, "build_sync_plan", flaky_build)
+
+        result = cli_runner.invoke(
+            slides_sync_cmd,
+            [str(root), "--dry-run", "--cache-dir", str(cache_dir)],
+        )
+
+        out = result.output
+        assert result.exit_code == 2, _combined(result)
+        assert "OK     apis.de.py: nothing to do" in out
+        assert "ERROR  web.de.py: RuntimeError: boom" in out
+        assert "2 pair(s): 1 clean, 0 review, 1 errored." in out
+
+    def test_explain_prints_per_pair_anchor_diff(self, cli_runner: CliRunner, tmp_path: Path):
+        root, cache_dir, _decks = self._make_tree(tmp_path, with_solo=False)
+        result = cli_runner.invoke(
+            slides_sync_cmd,
+            [str(root), "--explain", "--cache-dir", str(cache_dir)],
+        )
+        out = _combined(result)
+        assert result.exit_code in (0, 1), out
+        assert "=== apis.de.py ===" in out
+        assert "=== web.de.py ===" in out
+        assert "anchor diff" in out
+        assert "2 pair(s):" in out
+
+    def test_empty_directory_reports_nothing(self, cli_runner: CliRunner, tmp_path: Path):
+        empty = tmp_path / "empty"
+        empty.mkdir()
+        result = cli_runner.invoke(slides_sync_cmd, [str(empty), "--dry-run", "--no-cache"])
+        assert result.exit_code == 0, _combined(result)
+        assert "no split-format deck pairs found" in result.output
+
+    def test_empty_directory_json_envelope(self, cli_runner: CliRunner, tmp_path: Path):
+        empty = tmp_path / "empty"
+        empty.mkdir()
+        result = cli_runner.invoke(
+            slides_sync_cmd, [str(empty), "--dry-run", "--json", "--no-cache"]
+        )
+        assert result.exit_code == 0, _combined(result)
+        payload = _json_payload(result)
+        assert payload["pairs"] == []
+        assert payload["exit_code"] == 0
+
+    def test_directory_with_second_path_rejected(self, cli_runner: CliRunner, tmp_path: Path):
+        root = tmp_path / "decks"
+        root.mkdir()
+        de_path, en_path = _write_pair(root, _DE_BASE, _EN_BASE, stem="apis")
+        result = cli_runner.invoke(
+            slides_sync_cmd, [str(root), str(en_path), "--dry-run", "--no-cache"]
+        )
+        assert result.exit_code != 0
+        assert "single" in _combined(result) and "directory" in _combined(result)
+
+    def test_directory_with_interactive_rejected(self, cli_runner: CliRunner, tmp_path: Path):
+        root = tmp_path / "decks"
+        root.mkdir()
+        _write_pair(root, _DE_BASE, _EN_BASE, stem="apis")
+        result = cli_runner.invoke(slides_sync_cmd, [str(root), "--interactive", "--no-cache"])
+        assert result.exit_code != 0
+        assert "--interactive" in _combined(result)
+
+    def test_excludes_pairs_under_ignored_dirs(self, cli_runner: CliRunner, tmp_path: Path):
+        # A vendored deck under .venv must not be synced by a directory run.
+        root = tmp_path / "decks"
+        root.mkdir()
+        _write_pair(root, _DE_BASE, _EN_BASE, stem="real")
+        vend = root / ".venv" / "pkg"
+        vend.mkdir(parents=True)
+        _write_pair(vend, _DE_BASE, _EN_BASE, stem="vendored")
+        result = cli_runner.invoke(
+            slides_sync_cmd, [str(root), "--dry-run", "--json", "--no-cache"]
+        )
+        assert result.exit_code == 0, _combined(result)
+        payload = _json_payload(result)
+        names = {Path(p["de_path"]).name for p in payload["pairs"]}
+        assert names == {"real.de.py"}  # vendored.de.py under .venv is pruned
+
+    def test_loads_env_from_nested_deck_dir(
+        self, cli_runner: CliRunner, tmp_path: Path, monkeypatch, restore_api_keys
+    ):
+        # A .env above a nested deck (but below root, with no root .env) must be
+        # found in batch mode — the writing path searches per-deck, not only root.
+        monkeypatch.delenv("CLM_SYNC_PROVIDER", raising=False)
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        from clm.cli.commands import slides_sync as cmd
+        from clm.infrastructure.llm.ollama_client import StaticSyncJudge, SyncProposal
+
+        proposal = SyncProposal(verdict="update", proposed_text=_EN_PROPOSAL, reason="")
+        monkeypatch.setattr(
+            cmd, "OpenRouterSyncJudge", lambda **_kw: StaticSyncJudge(default_proposal=proposal)
+        )
+        root = tmp_path / "decks"
+        deck_dir = root / "mod" / "topic"
+        deck_dir.mkdir(parents=True)
+        cache_dir = tmp_path / "cache"
+        de_path, en_path = _write_pair(deck_dir, _DE_EDITED, _EN_BASE, stem="apis")
+        _seed_watermark(
+            cache_dir, de_path.resolve(), en_path.resolve(), de_text=_DE_BASE, en_text=_EN_BASE
+        )
+        # The key lives only in a .env beside the nested deck; root has none.
+        (deck_dir / ".env").write_text("OPENROUTER_API_KEY=sk-nested\n", encoding="utf-8")
+
+        result = cli_runner.invoke(
+            slides_sync_cmd, [str(root), "--yes", "--cache-dir", str(cache_dir)]
+        )
+
+        # Key found → the judge runs → the edit applies (exit 0). Before the fix
+        # the nested .env was missed → judge unavailable → exit 2.
+        assert result.exit_code == 0, _combined(result)
+        assert "Point one" in en_path.read_text(encoding="utf-8")
