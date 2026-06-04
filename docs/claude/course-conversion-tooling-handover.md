@@ -107,10 +107,19 @@ Tests, `commands.md`, and a CHANGELOG `Added` entry land with the code.
 
 - 2026-06-04: gaps doc committed (`48bdf1c`); branch pushed; PR #230 opened.
 - 2026-06-04: handover written; codebase anchors verified. Starting Tool #1.
+- 2026-06-05: **Tool #1 DONE** (`cb720cb0`). `clm.core.spec_decks`
+  (`resolve_spec_decks` / `find_deck_references`) + `clm spec decks` (new `spec`
+  group) + `clm slides referenced-by`. `--lang`, `--all-specs`, `--json`. 18 tests
+  (`tests/core/test_spec_decks.py`, `tests/cli/test_spec_decks.py`); `commands.md`
+  + CHANGELOG updated. Smoke-tested on the CSharpCourses corpus (64-deck spec,
+  multi-spec union, reverse lookup). **Next: Tool #2 (deep/scoped validation).**
+  Reuse `resolve_spec_decks` to enumerate the shipping set, then run the slides
+  validator on each deck — see `cli/commands/validate.py` for how `validate`
+  currently dispatches spec-vs-slides.
 
 ## Resuming
 
-Pick up from the "Progress log" tail. Tool #1 is the active task; tools #2–#9 are
-queued in priority order. Each tool = core helper reuse + thin command(s) + tests +
+Pick up from the "Progress log" tail. Tool #1 is complete; **Tool #2 is next**;
+tools #3–#9 follow in priority order. Each tool = core helper reuse + thin command(s) + tests +
 `commands.md` + CHANGELOG. Keep mirroring build resolution semantics — the whole
 point of gap #1 is that ad-hoc heuristics silently miss decks.
