@@ -64,12 +64,19 @@ from clm.slides.sync_recover import (
     NEW,
     NONE,
     AlignmentInvalid,
+    CorrespondenceError,
+    CorrespondenceInvalid,
     RecoveryError,
     RegionCell,
+    SlidePair,
+    correspondence_fingerprint,
     decode_mapping,
+    decode_verdicts,
     encode_mapping,
+    encode_verdicts,
     region_fingerprint,
     validate_alignment,
+    validate_correspondence,
 )
 from clm.slides.sync_translate import TranslationError
 from clm.slides.sync_writeback import (
@@ -83,9 +90,13 @@ from clm.slides.sync_writeback import (
 )
 
 if TYPE_CHECKING:
-    from clm.infrastructure.llm.cache import SyncAlignmentCache, SyncWatermarkCache
+    from clm.infrastructure.llm.cache import (
+        SyncAlignmentCache,
+        SyncCorrespondenceCache,
+        SyncWatermarkCache,
+    )
     from clm.infrastructure.llm.ollama_client import SyncJudge
-    from clm.slides.sync_recover import AlignmentRecoverer
+    from clm.slides.sync_recover import AlignmentRecoverer, CorrespondenceVerifier
     from clm.slides.sync_translate import SlideTranslator
 
 _SLIDE_ID_RE = re.compile(r'\s*slide_id="[^"]*"')
@@ -125,6 +136,7 @@ class ApplyResult:
     applied_add: int = 0
     applied_rename: int = 0
     applied_migrate: int = 0  # a drifted slide_id moved back onto its construct (§9)
+    applied_mint: int = 0  # a confirmed cold-start pair minted shared ids (#216 §12)
     in_sync: int = 0  # an edit the judge decided needed no change
     deferred: int = 0  # conflict (or moves/adds declined this pass)
     watermark_recorded: bool = False
@@ -140,6 +152,7 @@ class ApplyResult:
             + self.applied_add
             + self.applied_rename
             + self.applied_migrate
+            + self.applied_mint
         )
 
     @property
@@ -192,6 +205,8 @@ def apply_plan(
     decisions: dict[int, str] | None = None,
     recoverer: AlignmentRecoverer | None = None,
     alignment_cache: SyncAlignmentCache | None = None,
+    verifier: CorrespondenceVerifier | None = None,
+    correspondence_cache: SyncCorrespondenceCache | None = None,
 ) -> ApplyResult:
     """Apply ``plan``'s proposals to the decks and advance the watermark.
 
@@ -221,6 +236,15 @@ def apply_plan(
     (the default) leaves the ambiguous region untouched to re-surface next run.
     """
     result = ApplyResult()
+
+    # Stage 2b/3 for a cold-start mint (#216 §12): a `pending` mint candidate is the
+    # whole plan (a cold pair carries no other ops), so handle it on its own path —
+    # verify correspondence, then mint shared ids via the file-level minter — and
+    # return. Done before loading FileState so the file-level mint and the watermark
+    # advance read the freshly-minted files, with no buffered-write to coordinate.
+    if any(p.kind == "mint" for p in plan.proposals):
+        _apply_cold_mint(plan, verifier, correspondence_cache, watermark_cache, result)
+        return result
 
     # Pre-apply content (parser-stripped) for the judge, keyed by (slide_id,
     # role). Read before FileState mutates anything.
@@ -730,6 +754,130 @@ def _apply_edit(
         result.applied_edit += 1
     else:
         result.errors.append(f"edit {sid}/{proposal.role}: target cell not found")
+
+
+# ---------------------------------------------------------------------------
+# Cold-start mint (#216 Phase 3 §12): verify correspondence, then mint shared ids
+# ---------------------------------------------------------------------------
+
+
+def _apply_cold_mint(
+    plan: SyncPlan,
+    verifier: CorrespondenceVerifier | None,
+    correspondence_cache: SyncCorrespondenceCache | None,
+    watermark_cache: SyncWatermarkCache | None,
+    result: ApplyResult,
+) -> None:
+    """Confirm a cold-start pair corresponds, then mint shared ids onto both halves.
+
+    The plan carries a single ``pending`` ``mint`` candidate (a both-id-less,
+    unifiable cold pair the resolver admitted). Build the aligned slide pairs from
+    the files, verify them (cached, validated, safe-abort); on **all-yes** mint the
+    shared EN-authority ids via :func:`assign_ids_in_split_pair` and advance the
+    watermark; on **any-no / safe-abort / no-verifier** downgrade to a deferral —
+    the dry-run already disclosed this item as ``pending`` — writing nothing.
+    """
+    pairs = _build_slide_pairs(plan.de_path, plan.en_path)
+    if verifier is None:
+        result.deferred += 1  # no verifier (e.g. --no-verify): pending → refuse
+        return
+    verdicts = _resolve_correspondence(verifier, correspondence_cache, pairs)
+    if verdicts is None or not all(verdicts.get(i, False) for i in range(len(pairs))):
+        result.deferred += 1  # a "no" or a safe-abort → refuse the pair (never a wrong id)
+        return
+
+    from clm.slides.assign_ids import AssignOptions, assign_ids_in_split_pair
+
+    minted = assign_ids_in_split_pair(
+        plan.de_path, plan.en_path, AssignOptions(accept_content_derived=True)
+    )
+    if minted is None:  # not unifiable after all (a race vs candidacy) → refuse
+        result.deferred += 1
+        return
+    result.applied_mint += 1
+    if watermark_cache is not None:
+        _record_watermark(watermark_cache, plan.de_path, plan.en_path)
+        result.watermark_recorded = True
+
+
+def _slide_cells(path: Path, lang: str) -> list[Cell]:
+    """The slide/subslide cells of ``lang`` — the units a cold mint stamps an id onto."""
+    return [
+        c
+        for c in parse_cells(path.read_text(encoding="utf-8"))
+        if c.metadata.lang == lang and role_of(c.metadata) in _SLIDE_ROLES
+    ]
+
+
+def _build_slide_pairs(de_path: Path, en_path: Path) -> list[SlidePair]:
+    """Positionally pair the slide cells of the two cold-start halves for the verifier.
+
+    Both halves are fully id-less and structurally aligned (the candidacy gate), so
+    the i-th sync slide of DE pairs with the i-th of EN. Slides are the unit of
+    correspondence (companions follow their slide); each pair carries the heading +
+    a short body snippet of each side.
+    """
+    de_slides = _slide_cells(de_path, "de")
+    en_slides = _slide_cells(en_path, "en")
+    pairs: list[SlidePair] = []
+    # Equal length by the candidacy gate (_streams_aligned); strict=False is a
+    # defensive no-crash fallback — the assign_ids unify guard backs correctness.
+    for de_c, en_c in zip(de_slides, en_slides, strict=False):
+        pairs.append(
+            SlidePair(
+                de_heading=_heading_line(de_c.content),
+                en_heading=_heading_line(en_c.content),
+                de_snippet=_snippet(de_c.content),
+                en_snippet=_snippet(en_c.content),
+                role=role_of(de_c.metadata) or "slide",
+            )
+        )
+    return pairs
+
+
+def _heading_line(body: str) -> str:
+    """The first non-blank line of a cell body (the slide heading)."""
+    for line in body.splitlines():
+        if line.strip():
+            return line.strip()
+    return ""
+
+
+def _snippet(body: str, max_lines: int = 2) -> str:
+    """The lines just after the heading (a short lead-in for the verifier)."""
+    lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
+    return "\n".join(lines[1 : 1 + max_lines])
+
+
+def _resolve_correspondence(
+    verifier: CorrespondenceVerifier,
+    cache: SyncCorrespondenceCache | None,
+    pairs: list[SlidePair],
+) -> dict[int, bool] | None:
+    """Verify ``pairs`` (cached, validated), or ``None`` on a safe-abort.
+
+    Mirrors :func:`_resolve_alignment`: caches only a *validated* verdict map, keyed
+    by the pair fingerprint + the verifier's prompt version. Any failure — transport,
+    parse, or a map that fails validation — returns ``None`` so the caller refuses
+    (a wrong shared id is worse than a deferred pair), and nothing is cached so a
+    fixed prompt re-derives it next run.
+    """
+    fp = correspondence_fingerprint(pairs)
+    pv = verifier.prompt_version
+    if cache is not None:
+        hit = cache.get(fp, pv)
+        if hit is not None:
+            try:
+                return validate_correspondence(decode_verdicts(hit), pairs)
+            except CorrespondenceInvalid:
+                pass  # corrupt cache row — re-derive
+    try:
+        verdicts = validate_correspondence(verifier.verify(pairs=pairs), pairs)
+    except (CorrespondenceError, CorrespondenceInvalid):
+        return None
+    if cache is not None:
+        cache.put(fp, pv, encode_verdicts(verdicts))
+    return verdicts
 
 
 # ---------------------------------------------------------------------------

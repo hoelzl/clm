@@ -291,6 +291,7 @@ class SyncPlan:
                 f"{self.count('remove')} remove",
                 f"{self.count('conflict')} conflict",
                 f"{self.count('refuse')} refuse",
+                f"{self.count('mint')} mint",
             ]
             tail = f"; {len(self.issues)} issue(s)" if self.issues else ""
             return (
@@ -1528,6 +1529,7 @@ _KIND_ORDER = {
     "add": 5,
     "rename": 6,
     "refuse": 7,
+    "mint": 8,
 }
 
 
@@ -1551,11 +1553,20 @@ def build_sync_plan(
     *,
     watermark_cache: SyncWatermarkCache | None = None,
     allow_git_fallback: bool = True,
+    provider_available: bool = False,
 ) -> SyncPlan:
     """Resolve the baseline and classify the pair into a :class:`SyncPlan`.
 
     Baseline priority: watermark → git HEAD → none (see module docstring).
     Reads the two files; writes nothing.
+
+    ``provider_available`` (#216 Phase 3, design §12) is the plan-time fact "a
+    correspondence verifier will be available at apply time" (an LLM provider is
+    configured **and** ``--verify-cold-pairs`` is on). When true, a cold-start
+    both-id-less refusal over a *unifiable* pair is upgraded to a ``pending`` mint
+    candidate instead of a `refuse`; the verifier (stage 2b, in apply) confirms the
+    halves correspond before a shared id is minted. Identical in dry-run and apply,
+    so the two agree on `refuse`-vs-`pending`.
     """
     de_cells = parse_cells(de_path.read_text(encoding="utf-8"))
     en_cells = parse_cells(en_path.read_text(encoding="utf-8"))
@@ -1635,7 +1646,78 @@ def build_sync_plan(
         )
         plan.proposals.sort(key=_proposal_sort_key)
 
+    # Phase 3 (#216 §12): a cold-start, both-id-less, *unifiable* refusal becomes a
+    # `pending` mint candidate when a provider/verifier is available — apply (2b)
+    # then confirms correspondence before minting. Cold start only (so apply can
+    # short-circuit the whole pair; the watermark-baseline both-sides-idless case
+    # keeps refusing, a documented future extension).
+    if source == "none" and provider_available:
+        _maybe_emit_cold_mint(plan, de_cells, en_cells, de_path, en_path)
+
     return plan
+
+
+def _maybe_emit_cold_mint(
+    plan: SyncPlan,
+    de_cells: list[Cell],
+    en_cells: list[Cell],
+    de_path: Path,
+    en_path: Path,
+) -> None:
+    """Upgrade an all-id-less cold refusal to a ``pending`` mint candidate (#216 §12).
+
+    Gated three ways, conservative by construction: every refusal must be id-less
+    (the both-id-less cold pair — a mismatched-id or half-id'd refusal is left
+    alone), the localized streams must be positionally aligned (so the verifier and
+    the minter pair the same cells), and the pair must be **unifiable** (a read-only
+    ``unify→split`` byte-faithful round-trip — the same guard
+    :func:`assign_ids_in_split_pair` applies before it writes). Any gate failing
+    keeps the `refuse`. Emits a single ``mint`` proposal (``disposition="pending"``)
+    standing for the whole pair; the aligned heading/snippet pairs are rebuilt in
+    apply from the (unchanged) files.
+    """
+    refusals = plan.refusals
+    if not refusals or any(r.slide_id is not None for r in refusals):
+        return
+    de_loc = _localized_lang_cells(de_cells, "de")
+    en_loc = _localized_lang_cells(en_cells, "en")
+    if len(de_loc) != len(en_loc) or not _streams_aligned(de_loc, en_loc):
+        return
+    if not _is_unifiable(de_path, en_path):
+        return
+    refused_ids = {id(r) for r in refusals}
+    plan.proposals = [p for p in plan.proposals if id(p) not in refused_ids]
+    plan.proposals.append(
+        Proposal(
+            kind="mint",
+            role="slide",
+            direction=None,
+            slide_id=None,
+            reason="cold-start pair — pending correspondence verification (#216)",
+            disposition="pending",
+        )
+    )
+    plan.proposals.sort(key=_proposal_sort_key)
+
+
+def _is_unifiable(de_path: Path, en_path: Path) -> bool:
+    """Read-only: does ``unify→split`` round-trip byte-faithfully? (the mint guard).
+
+    Mirrors :func:`assign_ids_in_split_pair`'s own gate, so a `pending` candidate
+    this admits is one the minter will actually be able to write. A pair that does
+    not round-trip (structurally misaligned, divergent shared cell) is not mintable,
+    so the candidacy declines and the `refuse` stands.
+    """
+    from clm.slides.split import SplitError, UnifyError, split_text, unify_texts
+
+    de_text = de_path.read_text(encoding="utf-8")
+    en_text = en_path.read_text(encoding="utf-8")
+    try:
+        unified = unify_texts(de_text, en_text)
+        rt_de, rt_en = split_text(unified)
+    except (SplitError, UnifyError):
+        return False
+    return (rt_de, rt_en) == (de_text, en_text)
 
 
 def _apply_divergence(

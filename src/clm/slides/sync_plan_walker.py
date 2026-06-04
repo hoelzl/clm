@@ -46,10 +46,14 @@ from clm.slides.sync_apply import (
 )
 
 if TYPE_CHECKING:
-    from clm.infrastructure.llm.cache import SyncAlignmentCache, SyncWatermarkCache
+    from clm.infrastructure.llm.cache import (
+        SyncAlignmentCache,
+        SyncCorrespondenceCache,
+        SyncWatermarkCache,
+    )
     from clm.infrastructure.llm.ollama_client import SyncJudge
     from clm.slides.sync_plan import Proposal, SyncPlan
-    from clm.slides.sync_recover import AlignmentRecoverer
+    from clm.slides.sync_recover import AlignmentRecoverer, CorrespondenceVerifier
     from clm.slides.sync_translate import SlideTranslator
 
 
@@ -207,6 +211,8 @@ def run_plan_walker(
     options: WalkerOptions | None = None,
     recoverer: AlignmentRecoverer | None = None,
     alignment_cache: SyncAlignmentCache | None = None,
+    verifier: CorrespondenceVerifier | None = None,
+    correspondence_cache: SyncCorrespondenceCache | None = None,
 ) -> PlanWalkResult:
     """Walk ``plan``'s proposals, prompt per proposal, then apply once.
 
@@ -248,6 +254,15 @@ def run_plan_walker(
             actions.append(_action(proposal, REFUSE))
             continue
 
+        if kind == "mint":
+            # A cold-start mint candidate (#216 §12): correspondence is verified in
+            # apply (2b), not here — show it and let the engine mint or downgrade to
+            # refuse. Never prompted (the author reviews the minted ids in git diff).
+            echo(render_proposal(proposal, de_bodies, en_bodies))
+            echo("  → pending correspondence verification (will mint shared ids if confirmed)")
+            actions.append(_action(proposal, AUTO))
+            continue
+
         if quitting:
             decisions[id(proposal)] = DECISION_SKIP
             actions.append(_action(proposal, QUIT))
@@ -278,6 +293,8 @@ def run_plan_walker(
         decisions=decisions,
         recoverer=recoverer,
         alignment_cache=alignment_cache,
+        verifier=verifier,
+        correspondence_cache=correspondence_cache,
     )
     return PlanWalkResult(plan=plan, apply_result=apply_result, actions=actions)
 

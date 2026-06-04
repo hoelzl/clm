@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from clm.infrastructure.llm.cache import SyncWatermarkCache
+from clm.infrastructure.llm.cache import SyncCorrespondenceCache, SyncWatermarkCache
 from clm.infrastructure.llm.ollama_client import StaticSyncJudge, SyncProposal
 from clm.notebooks.slide_parser import parse_cells
 from clm.slides.sync_apply import DECISION_APPLY, DECISION_SKIP, apply_plan
 from clm.slides.sync_plan import PlanIssue, Proposal, SyncPlan, build_sync_plan, ordered_sync_cells
+from clm.slides.sync_recover import StaticCorrespondenceVerifier
 from clm.slides.sync_translate import StaticSlideTranslator
 from clm.slides.sync_writeback import FileState
 
@@ -977,6 +978,94 @@ class TestApplyAdd:
         assert result.deferred == 4
         assert len(_slide_order(de_path)) == 2
         assert len(_slide_order(en_path)) == 2
+
+
+class TestColdStartMint:
+    """A both-id-less cold pair mints shared ids once correspondence is confirmed (#216 §12)."""
+
+    def _cold_pair(self, tmp_path: Path) -> tuple[Path, Path]:
+        de = _slide_idless("de", "# ## Einleitung") + _slide_idless("de", "# ## Variablen")
+        en = _slide_idless("en", "# ## Introduction") + _slide_idless("en", "# ## Variables")
+        return _write_pair(tmp_path, de, en)
+
+    def test_confirmed_pair_is_minted(self, tmp_path: Path):
+        de_path, en_path = self._cold_pair(tmp_path)
+        plan = build_sync_plan(de_path, en_path, watermark_cache=None, provider_available=True)
+        # The refusals became one pending mint candidate.
+        assert plan.count("mint") == 1
+        assert plan.count("refuse") == 0
+        verifier = StaticCorrespondenceVerifier(default=True)
+        result = apply_plan(plan, judge=None, verifier=verifier, watermark_cache=None)
+        assert result.applied_mint == 1
+        assert result.deferred == 0
+        assert result.has_errors is False
+        assert verifier.calls == 1
+        # Both halves now carry the SAME (EN-authority) ids on every slide.
+        de_ids, en_ids = _slide_order(de_path), _slide_order(en_path)
+        assert de_ids == en_ids
+        assert all(de_ids) and len(de_ids) == 2  # every slide got a real id
+
+    def test_denied_pair_refuses_and_writes_nothing(self, tmp_path: Path):
+        de_path, en_path = self._cold_pair(tmp_path)
+        before_de = de_path.read_text(encoding="utf-8")
+        before_en = en_path.read_text(encoding="utf-8")
+        plan = build_sync_plan(de_path, en_path, watermark_cache=None, provider_available=True)
+        verifier = StaticCorrespondenceVerifier(default=False)  # all "no"
+        result = apply_plan(plan, judge=None, verifier=verifier, watermark_cache=None)
+        assert result.applied_mint == 0
+        assert result.deferred == 1
+        assert de_path.read_text(encoding="utf-8") == before_de
+        assert en_path.read_text(encoding="utf-8") == before_en
+
+    def test_no_verifier_refuses(self, tmp_path: Path):
+        de_path, en_path = self._cold_pair(tmp_path)
+        before_de = de_path.read_text(encoding="utf-8")
+        plan = build_sync_plan(de_path, en_path, watermark_cache=None, provider_available=True)
+        result = apply_plan(plan, judge=None, verifier=None, watermark_cache=None)
+        assert result.applied_mint == 0
+        assert result.deferred == 1
+        assert de_path.read_text(encoding="utf-8") == before_de
+
+    def test_no_provider_keeps_refuse(self, tmp_path: Path):
+        de_path, en_path = self._cold_pair(tmp_path)
+        plan = build_sync_plan(de_path, en_path, watermark_cache=None, provider_available=False)
+        assert plan.count("mint") == 0
+        assert plan.count("refuse") == 4  # 2 de + 2 en id-less, both directions
+
+    def test_mismatched_id_pair_keeps_refuse_even_with_provider(self, tmp_path: Path):
+        # Both id'd with different ids: never a mint candidate (design §12 — refuse).
+        de = _slide("de", "d1", "# ## A") + _slide("de", "d2", "# ## B")
+        en = _slide("en", "e1", "# ## A") + _slide("en", "e2", "# ## B")
+        de_path, en_path = _write_pair(tmp_path, de, en)
+        plan = build_sync_plan(de_path, en_path, watermark_cache=None, provider_available=True)
+        assert plan.count("mint") == 0
+        assert plan.count("refuse") == 4
+
+    def test_half_idd_pair_keeps_refuse_in_phase_3_1(self, tmp_path: Path):
+        # Half-id'd is the adopt case (3.2); 3.1 leaves it refusing (mixed refusals).
+        de = _slide_idless("de", "# ## A") + _slide_idless("de", "# ## B")
+        en = _slide("en", "s1", "# ## A") + _slide("en", "s2", "# ## B")
+        de_path, en_path = _write_pair(tmp_path, de, en)
+        plan = build_sync_plan(de_path, en_path, watermark_cache=None, provider_available=True)
+        assert plan.count("mint") == 0
+        assert plan.count("refuse") == 4
+
+    def test_verifier_result_is_cached(self, tmp_path: Path):
+        # The verdict map is memoized by pair fingerprint: a second resolve over the
+        # same pairs short-circuits the model (calls stays 1).
+        from clm.slides.sync_apply import _resolve_correspondence
+        from clm.slides.sync_recover import SlidePair
+
+        cache = SyncCorrespondenceCache(tmp_path / "clm-llm.sqlite")
+        try:
+            pairs = [SlidePair("# ## A", "# ## A", "", "", "slide")]
+            verifier = StaticCorrespondenceVerifier(default=True)
+            first = _resolve_correspondence(verifier, cache, pairs)
+            second = _resolve_correspondence(verifier, cache, pairs)
+            assert first == {0: True} == second
+            assert verifier.calls == 1  # the second resolve hit the cache
+        finally:
+            cache.close()
 
 
 # ---------------------------------------------------------------------------
