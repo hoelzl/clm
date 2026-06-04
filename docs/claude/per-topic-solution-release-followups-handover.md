@@ -44,8 +44,14 @@ Four follow-ups remain, in rough value order:
   1a record-time stamping + 1b `clm recordings drift` both shipped.
 - **Follow-up 2 — `SharedImageFile` manifest enumeration** `[DONE]`.
   `enumerate_expected_outputs` now covers shared-mode images.
-- **Follow-up 3 — `clm release week`** `[TODO]` ← ACTIVE NEXT.
-- **Follow-up 4 — real-build `--snapshot` manifest-free test** `[TODO]`.
+- **Follow-up 3 — `clm release week`** `[DONE]` (`d54fb71`). Section-scoped
+  ledger append.
+- **Follow-up 4 — real-build `--snapshot` manifest-free test** `[DONE]`
+  (`e375c2a`). Un-stubbed dir-group build, no workers.
+
+**All four follow-ups are now done.** Remaining work on #208: optionally push
+this branch (follow-ups 2–4 are committed locally but **not yet pushed**;
+follow-up 1 was pushed earlier as `c4a45f4`).
 
 ## 4. Current Status
 
@@ -59,7 +65,9 @@ Four follow-ups remain, in rough value order:
   deterministic-first target subdir; `clm recordings drift` adds
   `--source`/`--manifest`/`--spec-file`). `slide_digest=None` → drift `unknown`
   when no manifest, never an error.
-- Follow-ups 2–4 not started; each is independent.
+- **Follow-ups 2, 3, 4 DONE** (`55591a8`, `d54fb71`, `e375c2a`); committed
+  locally, **not yet pushed**. Each was independent. See the per-follow-up
+  "what shipped" notes below.
 
 ### Follow-up 1 — what shipped (for the record)
 
@@ -108,6 +116,50 @@ Four follow-ups remain, in rough value order:
   cross-checks the enumeration against the actual `CopyFileOperation` outputs
   of `get_processing_operation` — the guard against the two path computations
   drifting. No CLI/spec surface change, so no info-topic update.
+
+### Follow-up 3 — what shipped (for the record)
+
+- `clm release week SPEC_FILE SELECTORS… [--channel NAME | --ledger PATH]`
+  (`cli/commands/release.py` `week_cmd`): a section-scoped `release add`.
+  Resolves section(s) via `CourseSpec.resolve_section_selectors` (same
+  `id:`/`idx:`/`name:`/bare grammar as `build --only-sections`), expands them
+  to topic ids, and appends to the channel ledger via the same `Ledger.add`
+  path as `add`.
+- **Landmine handled:** the spec is parsed `keep_disabled=True` so selector
+  indices are disabled-inclusive. `resolved_indices` never contains a disabled
+  section, so expansion yields only enabled topics; a selected-but-disabled
+  section is surfaced as a `Warning:` line (`skipped_disabled`) and skipped,
+  and an all-disabled selection errors. `CourseSpecError` → `ClickException`.
+- Tests (`tests/release/test_release_cli.py`): by-name, by-index, the
+  disabled-inclusive index (`3` reaches the third authored section past a
+  disabled middle one), warn-and-skip, all-disabled error, unknown selector,
+  rerun-already-released, `--channel` ledger resolution. Info topic updated:
+  `release week` row + example in `info_topics/commands.md`.
+
+### Follow-up 4 — what shipped (for the record)
+
+- `tests/snapshot/test_manifest_suppressed.py`: an **un-stubbed** integration
+  guard that the provenance manifest is suppressed under `--snapshot` /
+  `--verify-against`. **Key finding:** the suppression gate
+  (`_should_emit_provenance_manifest`) *and* the `write_provenance_manifests`
+  call both live **inside `main_build`**, so the previously-considered
+  "stub main_build and seed output" approach can't reach them. The test instead
+  drives a real `main_build` via a **dir-group-only** course (no topics → no
+  notebook workers → ~0.1s, deterministic, no worker-lifecycle flakiness):
+  files copy to output via plain `CopyFileOperation`s and a real manifest is
+  written.
+- Assertions: `--snapshot DIR` → real dir-group output under DIR but **no**
+  `.clm-manifest.json` anywhere under it; `--output-dir OUT` → a manifest **is**
+  written (positive control, proving the gate+writer fire); `--verify-against`
+  → suppressed. Nothing is stubbed, so a refactor moving the write past the
+  gate fails the snapshot assertion.
+- **Commit-hang lesson (this session):** running concurrent `pytest -n0`
+  while the FU3 commit's pre-commit hook ran its fast suite in the background
+  starved a poll-based recordings test into a hang (the known `test_session.py`
+  xdist-contention flake). Recovery: `TaskStop` the commit, kill orphaned
+  python workers, re-commit **foreground** with `PYTEST_XDIST_AUTO_NUM_WORKERS=4`
+  and **no concurrent pytest**. Don't run pytest while a backgrounded commit's
+  hook is running.
 
 ## 5. Next Steps
 
@@ -203,7 +255,9 @@ shared-mode path computation (`output_path_for`/`get_relative_img_path`,
 `is_speaker` from `target.kinds`). Needs a shared-mode test course (the default
 fixtures are `image_mode="duplicated"`).
 
-### Follow-up 3 — `clm release week`
+### Follow-up 3 — `clm release week` — `[DONE]` (`d54fb71`)
+
+> Shipped; see §4 "Follow-up 3 — what shipped". Original design note below.
 
 A convenience to release a whole section's topics by week selector. Deferred
 because the section-selector index space is **disabled-inclusive** (a
@@ -211,7 +265,12 @@ because the section-selector index space is **disabled-inclusive** (a
 `CourseSpec.resolve_section_selectors` and the `--only-sections` notes. Get the
 index semantics right or it silently releases the wrong topics.
 
-### Follow-up 4 — real-build `--snapshot` manifest-free test
+### Follow-up 4 — real-build `--snapshot` manifest-free test — `[DONE]` (`e375c2a`)
+
+> Shipped; see §4 "Follow-up 4 — what shipped". Note the original "stub
+> main_build and seed output" suggestion below does NOT work — the gate +
+> writer live inside `main_build`, so a real (un-stubbed) dir-group build is
+> used instead. Original design note kept for context.
 
 3d added unit coverage (`_resolve_write_provenance_manifest` /
 `_should_emit_provenance_manifest` matrices + a wiring test) but no integration
