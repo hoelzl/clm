@@ -527,6 +527,110 @@ class TestBuildSyncPlanGitFallback:
         assert plan.count("add") == 1
         assert plan.proposals[0].slide_id is None
 
+    def _commit_pair(self, tmp_path: Path, de: str, en: str) -> tuple[Path, Path]:
+        de_path, en_path = _write_pair(tmp_path, de, en)
+        self._git(tmp_path, "init", "-q")
+        self._git(tmp_path, "config", "user.email", "t@example.com")
+        self._git(tmp_path, "config", "user.name", "Test")
+        self._git(tmp_path, "add", "-A")
+        self._git(tmp_path, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "baseline")
+        return de_path, en_path
+
+    def test_committed_idless_pair_mints_with_provider(self, tmp_path: Path):
+        # Issue #225: a COMMITTED never-id'd pair resolves to a git-HEAD baseline that
+        # carries no ids — functionally a cold start. It must bootstrap (mint), not
+        # refuse: the baseline is demoted to "none" so the cold mint candidacy fires.
+        de_path, en_path = self._commit_pair(
+            tmp_path,
+            _slide_idless("de", "# ## A") + _slide_idless("de", "# ## B"),
+            _slide_idless("en", "# ## A") + _slide_idless("en", "# ## B"),
+        )
+        plan = build_sync_plan(de_path, en_path, provider_available=True)
+        assert plan.baseline_source == "none"  # demoted from git-head (#225)
+        assert plan.count("mint") == 1
+        assert plan.count("add") == 0
+        assert plan.count("refuse") == 0
+
+    def test_committed_idless_pair_refuses_without_provider(self, tmp_path: Path):
+        # No provider → no verifier → it must REFUSE (never silently add/double).
+        de_path, en_path = self._commit_pair(
+            tmp_path,
+            _slide_idless("de", "# ## A") + _slide_idless("de", "# ## B"),
+            _slide_idless("en", "# ## A") + _slide_idless("en", "# ## B"),
+        )
+        plan = build_sync_plan(de_path, en_path, provider_available=False)
+        assert plan.baseline_source == "none"
+        assert plan.count("refuse") == 4
+        assert plan.count("add") == 0
+        assert plan.count("mint") == 0
+
+    def test_committed_half_idd_pair_adopts_with_provider(self, tmp_path: Path):
+        # A COMMITTED half-id'd pair (DE id-less, EN id'd) bootstraps via adopt — the
+        # id-less DE half adopts EN's existing ids — instead of the keyed baseline path
+        # that would translate-and-insert both directions and double the deck.
+        de_path, en_path = self._commit_pair(
+            tmp_path,
+            _slide_idless("de", "# ## A") + _slide_idless("de", "# ## B"),
+            _slide("en", "s1", "# ## A") + _slide("en", "s2", "# ## B"),
+        )
+        plan = build_sync_plan(de_path, en_path, provider_available=True)
+        assert plan.baseline_source == "none"
+        assert plan.count("adopt") == 1
+        assert plan.count("add") == 0
+        assert plan.count("refuse") == 0
+
+    def test_committed_half_idd_pair_never_doubles_without_provider(self, tmp_path: Path):
+        # REGRESSION GUARD for the silent-doubling bug uncovered alongside #225: a
+        # committed half-id'd pair used to emit 4 ADDS on the git-HEAD baseline path
+        # (id-less de->en + id'd en->de) → translate-insert both → DOUBLE both decks.
+        # With the demotion it refuses instead (add == 0), even with no provider.
+        de_path, en_path = self._commit_pair(
+            tmp_path,
+            _slide_idless("de", "# ## A") + _slide_idless("de", "# ## B"),
+            _slide("en", "s1", "# ## A") + _slide("en", "s2", "# ## B"),
+        )
+        plan = build_sync_plan(de_path, en_path, provider_available=False)
+        assert plan.count("add") == 0  # the doubling adds are gone
+        assert plan.count("refuse") == 4
+        assert plan.count("mint") == 0
+        assert plan.count("adopt") == 0
+
+    def test_committed_mismatched_id_pair_refuses_never_doubles(self, tmp_path: Path):
+        # Both halves committed but id'd with DISJOINT ids (per-half assign-ids): the
+        # ids do not pair across decks, so the git-HEAD baseline keys are useless and
+        # the keyed path used to emit 4 id-carrying adds (both directions) → DOUBLE.
+        # The pair shares no keying → demoted to cold → refused (mismatched stays
+        # refuse), with or without a provider.
+        de_path, en_path = self._commit_pair(
+            tmp_path,
+            _slide("de", "d1", "# ## A") + _slide("de", "d2", "# ## B"),
+            _slide("en", "e1", "# ## A") + _slide("en", "e2", "# ## B"),
+        )
+        for provider in (True, False):
+            plan = build_sync_plan(de_path, en_path, provider_available=provider)
+            assert plan.baseline_source == "none"  # demoted: no shared keying
+            assert plan.count("add") == 0  # the doubling adds are gone
+            assert plan.count("refuse") == 4
+            assert plan.count("mint") == 0
+            assert plan.count("adopt") == 0
+
+    def test_committed_idd_pair_edit_still_uses_git_head(self, tmp_path: Path):
+        # REGRESSION: a fully-id'd committed pair keeps its real git-HEAD baseline —
+        # an edit is detected as an edit, never demoted to a cold-start bootstrap.
+        de_path, en_path = self._commit_pair(
+            tmp_path,
+            _slide("de", "s1", "# ## A") + _slide("de", "s2", "# ## B"),
+            _slide("en", "s1", "# ## A") + _slide("en", "s2", "# ## B"),
+        )
+        de_path.write_text(
+            _slide("de", "s1", "# ## A EDITED") + _slide("de", "s2", "# ## B"), encoding="utf-8"
+        )
+        plan = build_sync_plan(de_path, en_path, provider_available=True)
+        assert plan.baseline_source == "git-head"  # NOT demoted
+        assert plan.count("edit") == 1
+        assert plan.count("mint") == 0
+        assert plan.count("adopt") == 0
+
 
 # ---------------------------------------------------------------------------
 # Reporting

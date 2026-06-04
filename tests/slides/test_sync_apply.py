@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
 
 from clm.infrastructure.llm.cache import SyncCorrespondenceCache, SyncWatermarkCache
 from clm.infrastructure.llm.ollama_client import StaticSyncJudge, SyncProposal
@@ -1305,6 +1309,79 @@ class TestColdStartAdopt:
         de_path, en_path = _write_pair(tmp_path, de, en)
         plan = build_sync_plan(de_path, en_path, watermark_cache=None, provider_available=True)
         assert plan.count("adopt") == 0  # role mismatch on the code pair → refuse
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not available")
+class TestColdStartCommittedPair:
+    """A COMMITTED id-less pair bootstraps end-to-end (Issue #225).
+
+    The cold-start minter must serve the existing corpus, not just never-committed
+    files: a committed id-less pair resolves to a git-HEAD baseline that carries no
+    ids, which is demoted to a true cold start so mint/adopt can run.
+    """
+
+    def _git(self, cwd: Path, *args: str) -> None:
+        subprocess.run(["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True)
+
+    def _commit_pair(self, tmp_path: Path, de: str, en: str) -> tuple[Path, Path]:
+        de_path, en_path = _write_pair(tmp_path, de, en)
+        self._git(tmp_path, "init", "-q")
+        self._git(tmp_path, "config", "user.email", "t@example.com")
+        self._git(tmp_path, "config", "user.name", "Test")
+        self._git(tmp_path, "add", "-A")
+        self._git(tmp_path, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "baseline")
+        return de_path, en_path
+
+    def test_committed_idless_pair_mints_onto_both_halves(self, tmp_path: Path):
+        de_path, en_path = self._commit_pair(
+            tmp_path,
+            _slide_idless("de", "# ## Einleitung") + _slide_idless("de", "# ## Variablen"),
+            _slide_idless("en", "# ## Introduction") + _slide_idless("en", "# ## Variables"),
+        )
+        plan = build_sync_plan(de_path, en_path, provider_available=True)
+        assert plan.baseline_source == "none"  # demoted from git-head (#225)
+        assert plan.count("mint") == 1
+        verifier = StaticCorrespondenceVerifier(default=True)
+        result = apply_plan(plan, judge=None, verifier=verifier, watermark_cache=None)
+        assert result.applied_mint == 1
+        assert result.has_errors is False
+        # Both committed halves now carry the SAME minted ids — the deck is bootstrapped.
+        de_ids, en_ids = _slide_order(de_path), _slide_order(en_path)
+        assert de_ids == en_ids
+        assert all(de_ids) and len(de_ids) == 2
+
+    def test_committed_half_idd_pair_adopts_onto_idless_half(self, tmp_path: Path):
+        de_path, en_path = self._commit_pair(
+            tmp_path,
+            _slide_idless("de", "# ## A") + _slide_idless("de", "# ## B"),
+            _slide("en", "s1", "# ## A") + _slide("en", "s2", "# ## B"),
+        )
+        en_before = en_path.read_text(encoding="utf-8")
+        plan = build_sync_plan(de_path, en_path, provider_available=True)
+        assert plan.count("adopt") == 1
+        verifier = StaticCorrespondenceVerifier(default=True)
+        result = apply_plan(plan, judge=None, verifier=verifier, watermark_cache=None)
+        assert result.applied_adopt == 1
+        # The DE half adopted EN's EXISTING ids verbatim; the EN half is untouched.
+        assert _slide_order(de_path) == ["s1", "s2"]
+        assert en_path.read_text(encoding="utf-8") == en_before
+
+    def test_committed_half_idd_pair_does_not_double_without_translator(self, tmp_path: Path):
+        # The pre-#225 failure mode: with no provider the committed half-id'd pair fell
+        # to the keyed baseline path and emitted both-direction adds → applying them
+        # (translate+insert) doubled both decks. It must now refuse and write nothing.
+        de = _slide_idless("de", "# ## A") + _slide_idless("de", "# ## B")
+        en = _slide("en", "s1", "# ## A") + _slide("en", "s2", "# ## B")
+        de_path, en_path = self._commit_pair(tmp_path, de, en)
+        plan = build_sync_plan(de_path, en_path, provider_available=False)
+        translator = StaticSlideTranslator(default="# ## X")
+        result = apply_plan(plan, judge=None, translator=translator, watermark_cache=None)
+        assert result.applied_add == 0
+        assert result.applied_adopt == 0
+        assert de_path.read_text(encoding="utf-8") == de  # no duplication
+        assert en_path.read_text(encoding="utf-8") == en
+        assert len(_slide_order(de_path)) == 2
+        assert len(_slide_order(en_path)) == 2
 
 
 # ---------------------------------------------------------------------------
