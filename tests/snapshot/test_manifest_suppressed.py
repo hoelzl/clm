@@ -70,7 +70,15 @@ def _invoke_build(args, tmp_path: Path):
         "CACHE_DB_PATH": tmp_path / "cache.db",
         "JOBS_DB_PATH": tmp_path / "jobs.db",
     }
-    return CliRunner().invoke(build_module.build, args, obj=obj)
+    # Force Direct execution mode explicitly. These are dir-group-only builds that
+    # never spawn workers, but the worker-config loader mutates the process-global
+    # ``get_config()`` singleton's ``default_execution_mode`` in place — so an
+    # earlier Docker-mode build/test on the same xdist worker can leave the default
+    # at ``"docker"``, and a build here that did not override it would then fail with
+    # "Docker execution mode requires 'image'" (a real, order-dependent flake seen on
+    # CI). Overriding ``--workers direct`` makes this test immune to that leak. See
+    # the load_worker_config singleton-mutation issue tracked separately.
+    return CliRunner().invoke(build_module.build, [*args, "--workers", "direct"], obj=obj)
 
 
 def _manifests_under(root: Path) -> list[Path]:
