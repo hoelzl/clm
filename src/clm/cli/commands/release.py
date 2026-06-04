@@ -6,8 +6,8 @@ Thin CLI over :mod:`clm.release`. A channel can be addressed two ways:
   and the ``--dest`` cohort repo from the spec's ``<release-channels>`` block;
 * or those three paths can be passed explicitly (and override resolution).
 
-``clm release sync --push`` (delegating to ``clm git``) is added in a later
-increment.
+``clm release sync --push`` commits and pushes the cohort repo after promoting,
+delegating to ``clm git``'s shared commit/push helper (issue #208).
 """
 
 from __future__ import annotations
@@ -19,12 +19,17 @@ from pathlib import Path
 import click
 from attrs import frozen
 
+from clm.cli.commands.git_ops import (
+    OutputRepo,
+    commit_and_push_repo,
+    find_release_channel_repos,
+)
 from clm.core.course_paths import resolve_course_paths
 from clm.core.course_spec import CourseSpec
 from clm.core.provenance_manifest import MANIFEST_FILENAME, load_manifest
 from clm.release.frozen_manifest import FROZEN_FILENAME, FrozenManifest
 from clm.release.ledger import Ledger, partition_known
-from clm.release.sync import apply_sync, plan_sync
+from clm.release.sync import SyncResult, apply_sync, plan_sync
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +96,87 @@ def _resolve_channel(spec_file: Path, channel_name: str) -> _ResolvedChannel:
 
 def _spec_topic_ids(spec_file: Path) -> list[str]:
     return [topic.id for topic in CourseSpec.from_file(spec_file).topics]
+
+
+def _default_push_message(channel_name: str, result: SyncResult) -> str:
+    """A one-line commit message summarizing what a sync froze into the cohort."""
+    parts: list[str] = []
+    if result.copied_topics:
+        parts.append(f"{len(result.copied_topics)} new")
+    if result.refrozen_topics:
+        parts.append(f"{len(result.refrozen_topics)} refrozen")
+    # The first sync of a cohort ships the skeleton (dir-group/shared files) even
+    # with no topics released yet — don't call that "no topic changes".
+    if not parts and result.skeleton_copied:
+        parts.append("skeleton")
+    detail = ", ".join(parts) if parts else "no topic changes"
+    return f"Release to {channel_name}: {detail}"
+
+
+def _push_channel_repo(
+    *,
+    spec_file: Path | None,
+    channel: str,
+    dest_path: Path,
+    channel_name: str,
+    result: SyncResult,
+    message: str | None,
+) -> None:
+    """Commit and push the cohort repo after a successful ``clm release sync``.
+
+    Delegates to ``clm git``'s shared :func:`commit_and_push_repo` so promotion
+    and distribution use one git implementation (and one manifest-exclusion
+    chokepoint). The repo is the channel ``dest`` working tree, where the
+    promoted files already live; when the channel resolves from a spec we reuse
+    its discovered :class:`OutputRepo` (carrying the derived remote URL),
+    otherwise we operate on ``dest_path`` directly. Raises a ``ClickException``
+    if the repo was never initialized, and exits non-zero if the push fails.
+    """
+    repo: OutputRepo | None = None
+    if channel and spec_file is not None:
+        repos = find_release_channel_repos(spec_file, channel)
+        repo = next((r for r in repos if r.path.resolve() == dest_path.resolve()), None)
+    if repo is None:
+        repo = OutputRepo(
+            path=dest_path,
+            target_name=channel_name,
+            language="",
+            source="channel",
+        )
+
+    click.echo()
+    click.echo(f"[{repo.display_name}] {repo.path}")
+    if not repo.has_git:
+        if channel and spec_file is not None:
+            # Channel mode: `clm git init --channel` resolves this exact repo.
+            recovery = (
+                f"Initialize the cohort repo first:\n"
+                f"    clm git init {spec_file} --channel {channel_name}\n"
+                f"then re-run with --push."
+            )
+        else:
+            # Explicit --dest mode has no <release-channels> entry, so
+            # `clm git init --channel` cannot resolve it — init a plain repo.
+            recovery = (
+                f"Initialize a git repository there first (run `git init` in "
+                f"{repo.path} and add an 'origin' remote), then re-run with --push."
+            )
+        raise click.ClickException(f"No git repository at {repo.path}. {recovery}")
+
+    remote_ahead_hint: list[str] | None = None
+    if spec_file is not None and channel:
+        remote_ahead_hint = [
+            f"clm git reset {spec_file} --channel {channel_name}",
+            f"clm release sync {spec_file} --channel {channel_name} --push",
+        ]
+
+    ok = commit_and_push_repo(
+        repo,
+        message or _default_push_message(channel_name, result),
+        remote_ahead_hint=remote_ahead_hint,
+    )
+    if not ok:
+        raise SystemExit(1)
 
 
 @release_group.command("add")
@@ -197,6 +283,19 @@ def status_cmd(
 )
 @click.option("--refreeze-all", is_flag=True, help="Re-copy and re-freeze every released topic.")
 @click.option("--dry-run", is_flag=True, help="Print the plan; copy nothing.")
+@click.option(
+    "--push",
+    is_flag=True,
+    help="After promoting, commit and push the cohort repo (via clm git's "
+    "commit/push). The repo must already exist — run `clm git init --channel` once.",
+)
+@click.option(
+    "-m",
+    "--message",
+    "commit_message",
+    default=None,
+    help="Commit message used by --push (default: a one-line summary of the sync).",
+)
 def sync_cmd(
     spec_file: Path | None,
     channel: str,
@@ -206,12 +305,15 @@ def sync_cmd(
     refreeze_ids: tuple[str, ...],
     refreeze_all: bool,
     dry_run: bool,
+    push: bool,
+    commit_message: str | None,
 ) -> None:
     """Promote released-but-not-frozen topics into a cohort.
 
     Address the channel either with ``--channel NAME`` (resolved from
     ``SPEC_FILE``'s <release-channels>) or with explicit
-    ``--ledger``/``--source``/``--dest`` paths.
+    ``--ledger``/``--source``/``--dest`` paths. With ``--push`` the cohort repo
+    is committed and pushed afterward, reusing ``clm git``'s machinery.
     """
     if channel:
         if spec_file is None:
@@ -260,6 +362,8 @@ def sync_cmd(
 
     if dry_run:
         click.echo("Dry run: nothing copied.")
+        if push:
+            click.echo("Dry run: --push skipped (nothing was promoted).")
         return
 
     result = apply_sync(
@@ -277,3 +381,13 @@ def sync_cmd(
         f"{len(result.refrozen_topics)} re-frozen, "
         f"{len(result.skipped_topics)} already frozen (skipped)."
     )
+
+    if push:
+        _push_channel_repo(
+            spec_file=spec_file,
+            channel=channel,
+            dest_path=dest_path,
+            channel_name=channel_name,
+            result=result,
+            message=commit_message,
+        )

@@ -480,6 +480,101 @@ def _stage_all_excluding_sidecars(repo_path: Path) -> None:
     )
 
 
+def commit_and_push_repo(
+    repo: OutputRepo,
+    message: str | None,
+    *,
+    amend: bool = False,
+    force_with_lease: bool = False,
+    remote_ahead_hint: list[str] | None = None,
+) -> bool:
+    """Stage (sidecar-excluded), commit, and push one already-initialized repo.
+
+    The reusable core of ``clm git sync``'s per-repo loop, shared with
+    ``clm release sync --push`` (issue #208) so both paths apply the same
+    staging exclusion (:func:`_stage_all_excluding_sidecars`), index-scoped
+    commit gate (:func:`has_staged_changes`), remote-ahead guard, and push
+    policy. The caller echoes the ``[name] path`` header and verifies
+    ``repo.has_git`` first; this helper assumes a git repository.
+
+    Progress is echoed with the same wording ``clm git sync`` has always used.
+    No trailing blank line is printed — the caller prints exactly one after each
+    repo. Returns ``True`` when the repo ends in the intended state (committed
+    and/or pushed, or a clean no-op) and ``False`` on any git error or a blocked
+    non-force push against an ahead remote.
+
+    ``amend`` implies a force push at the call site (``clm git sync`` sets
+    ``force_with_lease=True`` whenever ``amend`` is given); this helper does not
+    re-derive that coupling. ``remote_ahead_hint`` is an optional list of command
+    lines printed (indented, to stderr) under "To resolve:" when a non-force push
+    is blocked because the remote is ahead.
+    """
+    has_remote = repo.has_remote()
+    branch = get_current_branch(repo.path)
+
+    # Refuse to clobber an ahead remote unless we are explicitly force-pushing.
+    if has_remote and not force_with_lease:
+        behind, count = is_behind_remote(repo.path, branch)
+        if behind:
+            click.echo(
+                f"  Error: Remote 'origin/{branch}' is {count} commit(s) ahead",
+                err=True,
+            )
+            if remote_ahead_hint:
+                click.echo("", err=True)
+                click.echo("  To resolve:", err=True)
+                for line in remote_ahead_hint:
+                    click.echo(f"      {line}", err=True)
+            return False
+
+    # Stage all changes (excluding the private build manifest).
+    _stage_all_excluding_sidecars(repo.path)
+
+    if amend:
+        if message:
+            commit_args = ["commit", "--amend", "-m", message]
+        else:
+            commit_args = ["commit", "--amend", "--no-edit"]
+        result = run_git(repo.path, *commit_args)
+        if result.returncode == 0:
+            click.echo(f"  Amended commit{': ' + message if message else ''}")
+        else:
+            click.echo(f"  Error amending: {result.stderr.strip()}", err=True)
+            return False
+    else:
+        # Gate on the index (not the working tree) so a change that touches only
+        # the excluded manifest is a clean no-op rather than a failed commit.
+        if has_staged_changes(repo.path):
+            assert message is not None
+            result = run_git(repo.path, "commit", "-m", message)
+            if result.returncode == 0:
+                click.echo(f"  Committed: {message}")
+            else:
+                click.echo(f"  Error committing: {result.stderr.strip()}", err=True)
+                return False
+        else:
+            click.echo("  No changes to commit")
+
+    if has_remote:
+        push_args = ["push"]
+        if force_with_lease:
+            push_args.append("--force-with-lease")
+        push_args.extend(["-u", "origin", branch])
+        result = run_git(repo.path, *push_args)
+        if result.returncode == 0:
+            if force_with_lease:
+                click.echo(f"  Force-pushed to origin/{branch}")
+            else:
+                click.echo(f"  Pushed to origin/{branch}")
+        else:
+            click.echo(f"  Error pushing: {result.stderr.strip()}", err=True)
+            return False
+    else:
+        click.echo("  Skipped push: No remote configured")
+
+    return True
+
+
 # =============================================================================
 # Init Implementation
 # =============================================================================
@@ -1052,78 +1147,21 @@ def sync(
             click.echo()
             continue
 
-        has_remote = repo.has_remote()
-        branch = get_current_branch(repo.path)
-
-        # Check if remote is ahead (skip when force-pushing)
-        if has_remote and not force_with_lease:
-            behind, count = is_behind_remote(repo.path, branch)
-            if behind:
-                click.echo(
-                    f"  Error: Remote 'origin/{branch}' is {count} commit(s) ahead",
-                    err=True,
-                )
-                click.echo("", err=True)
-                click.echo("  To resolve:", err=True)
-                click.echo(f"      clm git reset {spec_file}", err=True)
-                click.echo(f"      clm build {spec_file}", err=True)
-                click.echo(f'      clm git sync {spec_file} -m "{message}"', err=True)
-                click.echo()
-                errors_found = True
-                continue
-
-        # Stage all changes (excluding the private build manifest)
-        _stage_all_excluding_sidecars(repo.path)
-
-        # Build commit command
-        if amend:
-            if message:
-                commit_args = ["commit", "--amend", "-m", message]
-            else:
-                commit_args = ["commit", "--amend", "--no-edit"]
-
-            result = run_git(repo.path, *commit_args)
-            if result.returncode == 0:
-                click.echo(f"  Amended commit{': ' + message if message else ''}")
-            else:
-                click.echo(f"  Error amending: {result.stderr.strip()}", err=True)
-                click.echo()
-                errors_found = True
-                continue
-        else:
-            # Check if there is anything *staged* to commit (index-scoped, so an
-            # excluded manifest-only change is a no-op, not a failed commit).
-            if has_staged_changes(repo.path):
-                assert message is not None
-                result = run_git(repo.path, "commit", "-m", message)
-                if result.returncode == 0:
-                    click.echo(f"  Committed: {message}")
-                else:
-                    click.echo(f"  Error committing: {result.stderr.strip()}", err=True)
-                    click.echo()
-                    errors_found = True
-                    continue
-            else:
-                click.echo("  No changes to commit")
-
-        # Push if we have a remote
-        if has_remote:
-            push_args = ["push"]
-            if force_with_lease:
-                push_args.append("--force-with-lease")
-            push_args.extend(["-u", "origin", branch])
-
-            result = run_git(repo.path, *push_args)
-            if result.returncode == 0:
-                if force_with_lease:
-                    click.echo(f"  Force-pushed to origin/{branch}")
-                else:
-                    click.echo(f"  Pushed to origin/{branch}")
-            else:
-                click.echo(f"  Error pushing: {result.stderr.strip()}", err=True)
-                errors_found = True
-        else:
-            click.echo("  Skipped push: No remote configured")
+        # The remote-ahead recovery hint is command-specific; pass the
+        # ``clm git`` recipe so the shared helper can print it verbatim.
+        remote_ahead_hint = [
+            f"clm git reset {spec_file}",
+            f"clm build {spec_file}",
+            f'clm git sync {spec_file} -m "{message}"',
+        ]
+        if not commit_and_push_repo(
+            repo,
+            message,
+            amend=amend,
+            force_with_lease=force_with_lease,
+            remote_ahead_hint=remote_ahead_hint,
+        ):
+            errors_found = True
 
         click.echo()
 

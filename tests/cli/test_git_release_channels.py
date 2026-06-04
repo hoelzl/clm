@@ -444,3 +444,41 @@ class TestChannelGitEndToEnd:
         result = runner.invoke(git_group, ["reset", str(spec_file), "--channel", "jan"])
         assert result.exit_code == 0, result.output
         assert "Skipped: No remote configured" in result.output
+
+    def test_sync_channel_aborts_when_remote_is_ahead(self, tmp_path: Path, git_identity):
+        """The remote-ahead guard (the one error path the commit_and_push_repo
+        refactor reordered) still fires: a non-force sync against an ahead remote
+        prints the recovery recipe and exits non-zero."""
+        spec_file = _write_spec(tmp_path, SPEC_WITH_CHANNELS)
+        channel = tmp_path / "solutions" / "jan"
+        _populate_channel(channel)
+        runner = CliRunner()
+        runner.invoke(git_group, ["init", str(spec_file), "--channel", "jan"])
+
+        bare = _init_bare_remote(tmp_path / "remotes" / "jan.git")
+        _git(channel, "remote", "add", "origin", str(bare))
+        # First sync establishes origin/master.
+        first = runner.invoke(
+            git_group, ["sync", str(spec_file), "--channel", "jan", "-m", "first"]
+        )
+        assert first.exit_code == 0, first.output
+
+        # A second clone advances the remote so the cohort is now behind.
+        clone = tmp_path / "clone"
+        _git(tmp_path, "clone", "-q", str(bare), str(clone))
+        (clone / "upstream.txt").write_text("ahead", encoding="utf-8")
+        _git(clone, "add", "-A")
+        _git(clone, "commit", "-qm", "advance remote")
+        _git(clone, "push", "-q", "origin", "master")
+
+        # The cohort has a local change but the remote moved — sync must refuse.
+        (channel / "Sec" / "02 More.ipynb").write_text("more", encoding="utf-8")
+        result = runner.invoke(
+            git_group, ["sync", str(spec_file), "--channel", "jan", "-m", "second"]
+        )
+        assert result.exit_code != 0
+        assert "ahead" in result.output
+        assert "To resolve:" in result.output
+        assert "clm git reset" in result.output
+        # The blocked sync did not commit the local change.
+        assert "Sec/02 More.ipynb" not in _ls_files(channel)
