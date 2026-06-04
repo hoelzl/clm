@@ -40,8 +40,8 @@ Four follow-ups remain, in rough value order:
 
 ## 3. Phase Breakdown
 
-- **Follow-up 1 — step-5 consumer wiring** `[DONE]` (commit `c4a45f4`,
-  unpushed). 1a record-time stamping + 1b `clm recordings drift` both shipped.
+- **Follow-up 1 — step-5 consumer wiring** `[DONE]` (commit `c4a45f4`, pushed).
+  1a record-time stamping + 1b `clm recordings drift` both shipped.
 - **Follow-up 2 — `SharedImageFile` manifest enumeration** `[TODO]` ← ACTIVE NEXT.
 - **Follow-up 3 — `clm release week`** `[TODO]`.
 - **Follow-up 4 — real-build `--snapshot` manifest-free test** `[TODO]`.
@@ -50,8 +50,10 @@ Four follow-ups remain, in rough value order:
 
 - Steps 1–5 shipped on `origin/worktree-jingling-...` (`de27496` is the step-5
   tip; `113ccdb` the handover). Tree clean, suite green, no blockers.
-- **Follow-up 1 DONE** (`c4a45f4`, not yet pushed). All 157 new+affected tests
-  green; ruff + mypy clean; pre-commit passed. Decision taken: manifest
+- **Follow-up 1 DONE** (`c4a45f4`, pushed to
+  `origin/worktree-logical-jingling-fiddle`). All 157 new+affected tests
+  green (full recordings suite 859; core+cli 1859); ruff + mypy clean;
+  pre-commit passed. Decision taken: manifest
   resolution is **convention + override** (`course_root/output`,
   deterministic-first target subdir; `clm recordings drift` adds
   `--source`/`--manifest`/`--spec-file`). `slide_digest=None` → drift `unknown`
