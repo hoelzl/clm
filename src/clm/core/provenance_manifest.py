@@ -40,9 +40,12 @@ from typing import TYPE_CHECKING, Any
 from clm.core.course_files.data_file import DataFile
 from clm.core.course_files.duplicated_image_file import DuplicatedImageFile
 from clm.core.course_files.notebook_file import NotebookFile
+from clm.core.course_files.shared_image_file import SharedImageFile
+from clm.core.image_registry import get_relative_img_path
 from clm.infrastructure.utils.path_utils import (
     ext_for,
     is_ignored_file_for_output,
+    output_path_for,
     output_specs,
 )
 
@@ -57,6 +60,30 @@ MANIFEST_VERSION = 1
 
 _HASH_CHUNK = 1 << 16
 
+# Audience routing for shared-mode images, mirroring the ``target`` branch of
+# ``SharedImageFile.get_processing_operation``. ``speaker`` is the deprecated
+# alias for ``recording``; all private kinds land under the ``speaker/``
+# toplevel.
+_SHARED_PRIVATE_KINDS = frozenset({"trainer", "recording", "speaker"})
+_SHARED_PUBLIC_KINDS = frozenset({"code-along", "completed", "partial"})
+
+
+def _shared_image_audiences(target: OutputTarget) -> list[bool]:
+    """The ``is_speaker`` values a shared-mode image is copied for under *target*.
+
+    A target with public kinds yields a public (``False``) copy; one with
+    private kinds yields a speaker (``True``) copy; a target with neither
+    (no recognised kinds) falls back to both, matching
+    ``SharedImageFile.get_processing_operation``.
+    """
+    kinds = set(target.kinds)
+    options: list[bool] = []
+    if kinds & _SHARED_PUBLIC_KINDS:
+        options.append(False)
+    if kinds & _SHARED_PRIVATE_KINDS:
+        options.append(True)
+    return options or [False, True]
+
 
 def enumerate_expected_outputs(
     course: Course, target: OutputTarget
@@ -69,13 +96,13 @@ def enumerate_expected_outputs(
     :func:`build_provenance_manifest`).
 
     Covered: notebook-derived outputs (notebook/code/HTML), copied topic data
-    assets (``DataFile``), duplicated images (``DuplicatedImageFile``), and
+    assets (``DataFile``), duplicated images (``DuplicatedImageFile``), shared
+    images (``SharedImageFile``, the ``image_mode="shared"`` layout), and
     dir-group output files with their recorded section/topic ownership.
 
-    Not yet covered (issue #208 follow-up): ``SharedImageFile`` (the course-
-    level ``image_mode="shared"`` layout). Source diagrams (PlantUML/DrawIo)
-    emit only a source-tree intermediate image; their *output* copy is a
-    separate image ``CourseFile`` that is already covered above.
+    Source diagrams (PlantUML/DrawIo) emit only a source-tree intermediate
+    image; their *output* copy is a separate image ``CourseFile`` that is
+    already covered above.
     """
     for file in course.files:
         topic = file.topic
@@ -132,9 +159,41 @@ def enumerate_expected_outputs(
                         "language": lang,
                     },
                 )
-        # SharedImageFile (image_mode="shared") and the source-tree-only
-        # PlantUML/DrawIo diagrams are intentionally not enumerated here; see
-        # the function docstring.
+        elif isinstance(file, SharedImageFile):
+            # Shared-mode images copy once per (language, audience) into the
+            # course-level ``img/`` folder — 4 copies, not duplicated mode's
+            # per-variant fan-out. Mirror SharedImageFile.get_processing_operation's
+            # path computation (``output_path_for`` + ``get_relative_img_path``).
+            # When several topics reference one image *file name* the copies
+            # collapse to a single output path; the path-dedup in
+            # :func:`build_provenance_manifest` then attributes it to whichever
+            # owning topic enumerates first — inherent to shared mode, where the
+            # bytes physically exist once per course dir.
+            rel_img_path = get_relative_img_path(file.path)
+            for lang in target.languages:
+                try:
+                    dir_name = course.output_dir_name[lang]
+                except (KeyError, TypeError) as e:
+                    logger.debug("provenance: skip shared image %s (%s): %s", file.path, lang, e)
+                    continue
+                for is_speaker in _shared_image_audiences(target):
+                    course_dir = output_path_for(
+                        target.output_root,
+                        is_speaker,
+                        lang,
+                        dir_name,
+                        skip_toplevel=target.is_explicit,
+                    )
+                    yield (
+                        course_dir / "img" / rel_img_path,
+                        {
+                            "section_id": section.id,
+                            "topic_id": topic.id,
+                            "kind": None,
+                            "format": "image",
+                            "language": lang,
+                        },
+                    )
 
     yield from _enumerate_dir_group_outputs(course, target)
 

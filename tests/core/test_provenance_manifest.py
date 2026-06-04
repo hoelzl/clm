@@ -181,6 +181,100 @@ def test_manifest_records_duplicated_image_assets(tmp_path):
     assert image_entries[0]["content_hash"].startswith("sha256:")
 
 
+def _course_from_test_spec_1_shared(out_root):
+    """Build the test-spec-1 course in ``image_mode="shared"`` so its images
+    become ``SharedImageFile`` (course-level ``img/`` layout) rather than the
+    default ``DuplicatedImageFile`` (per-variant ``Section/img/``)."""
+    from pathlib import Path
+
+    from clm.core.course import Course
+    from clm.core.course_spec import CourseSpec
+
+    test_data = Path(__file__).parent.parent / "test-data"
+    spec = CourseSpec.from_file(test_data / "course-specs" / "test-spec-1.xml")
+    return Course.from_spec(spec, test_data, out_root, image_mode="shared")
+
+
+def test_manifest_records_shared_image_assets(tmp_path):
+    course = _course_from_test_spec_1_shared(tmp_path / "out")
+    target = course.output_targets[0]
+
+    image_records = [
+        (p, r) for p, r in enumerate_expected_outputs(course, target) if r["format"] == "image"
+    ]
+    assert image_records, "test-spec-1 in shared mode has shared image assets"
+
+    out_path, record = image_records[0]
+
+    # Shared layout: the image sits directly under the course output dir's
+    # ``img/`` folder, NOT under a per-variant ``.../Kind/Section/img/`` path.
+    # The segment immediately before ``img`` must be the course dir name.
+    parts = out_path.parts
+    img_index = parts.index("img")
+    assert parts[img_index - 1] == course.output_dir_name[record["language"]]
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    manifest = build_provenance_manifest(
+        course, target, source_commit=None, source_dirty=None, built_at=BUILT_AT
+    )
+    # Only the one (language, audience) copy we materialized exists on disk, so
+    # the existence filter keeps exactly one entry despite the 4-way fan-out.
+    image_entries = [f for f in manifest["files"] if f["format"] == "image"]
+    assert len(image_entries) == 1
+    entry = image_entries[0]
+    assert entry["path"] == out_path.relative_to(target.output_root).as_posix()
+    assert entry["topic_id"] == record["topic_id"]
+    assert entry["section_id"] == record["section_id"]
+    assert entry["kind"] is None
+    assert entry["content_hash"].startswith("sha256:")
+
+
+def _collect_copy_output_files(op) -> set:
+    """Flatten an Operation tree to the set of ``CopyFileOperation.output_file``."""
+    from clm.core.operations.copy_file import CopyFileOperation
+    from clm.infrastructure.operation import Concurrently, Sequential
+
+    paths: set = set()
+    if isinstance(op, CopyFileOperation):
+        paths.add(op.output_file)
+    elif isinstance(op, (Concurrently, Sequential)):
+        for sub in op.operations:
+            paths |= _collect_copy_output_files(sub)
+    return paths
+
+
+def test_shared_image_enumeration_matches_build_copy_paths(tmp_path):
+    """The manifest enumeration must yield *exactly* the paths the real build
+    writes. Cross-check the enumerated shared-image paths against the
+    ``CopyFileOperation`` outputs ``SharedImageFile.get_processing_operation``
+    actually produces — the guard against the two path computations drifting.
+    """
+    import asyncio
+
+    from clm.core.course_files.shared_image_file import SharedImageFile
+
+    course = _course_from_test_spec_1_shared(tmp_path / "out")
+    target = course.output_targets[0]
+
+    shared_files = [f for f in course.files if isinstance(f, SharedImageFile)]
+    assert shared_files, "shared mode should yield SharedImageFile instances"
+
+    build_paths: set = set()
+    for f in shared_files:
+        op = asyncio.run(f.get_processing_operation(target.output_root, target=target))
+        build_paths |= _collect_copy_output_files(op)
+
+    enum_paths = {
+        path
+        for path, record in enumerate_expected_outputs(course, target)
+        if record["format"] == "image"
+    }
+
+    assert enum_paths == build_paths
+
+
 def test_manifest_records_dir_group_outputs_with_ownership(tmp_path):
     course = _course_from_test_spec_1(tmp_path / "out")
     target = course.output_targets[0]
