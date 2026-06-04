@@ -28,6 +28,11 @@ def topic_group() -> None:
     """Topic resolution and inspection."""
 
 
+@click.group("spec")
+def spec_group() -> None:
+    """Course-spec inspection: resolve the decks a spec pulls in."""
+
+
 @click.group("authoring")
 def authoring_group() -> None:
     """Authoring-rules introspection."""

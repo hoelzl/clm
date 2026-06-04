@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+
+- **`clm spec decks` and `clm slides referenced-by` — spec→deck resolution.**
+  `clm spec decks <spec.xml>` lists the decks a course spec actually pulls in
+  (its "shipping set"), mirroring the build's resolution exactly: a `<topic>`
+  resolves to a topic *directory* and **every** `slides_*.py` in it is a deck.
+  A deck-filename-stem heuristic silently misses decks (a topic dir name often
+  differs from its deck filenames), which is what motivated this command. Module
+  bindings resolve in their module; unbound duplicate IDs are first-occurrence-wins
+  (the shadowed matches surface in `--json`). `--lang de|en|both` filters split
+  halves (bilingual decks always survive); `--all-specs DIR` emits the union
+  shipping set across every spec annotated with the referencing spec(s).
+  `clm slides referenced-by <deck.py>` is the reverse lookup (or reports
+  `unreferenced`). First of the course-conversion tooling gaps documented in
+  `docs/claude/course-conversion-tooling-gaps.md`.
+
 ### Removed
 
 - **The flat top-level CLI aliases were removed (1.8 milestone, #158).**

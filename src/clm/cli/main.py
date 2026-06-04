@@ -68,6 +68,7 @@ def help(ctx):
 from clm.cli.commands._groups import (  # noqa: E402
     authoring_group,
     slides_group,
+    spec_group,
     topic_group,
 )
 from clm.cli.commands.assign_ids import assign_ids_cmd  # noqa: E402
@@ -93,6 +94,10 @@ from clm.cli.commands.release import release_group  # noqa: E402
 from clm.cli.commands.resolve_topic import resolve_topic_cmd  # noqa: E402
 from clm.cli.commands.search_slides import search_slides_cmd  # noqa: E402
 from clm.cli.commands.slides_sync import slides_sync_cmd  # noqa: E402
+from clm.cli.commands.spec_decks import (  # noqa: E402
+    referenced_by_cmd,
+    spec_decks_cmd,
+)
 from clm.cli.commands.split import split_cmd  # noqa: E402
 from clm.cli.commands.status import status  # noqa: E402
 from clm.cli.commands.suggest_sync import suggest_sync_cmd  # noqa: E402
@@ -167,10 +172,14 @@ slides_group.add_command(suggest_sync_cmd, name="suggest-sync")
 slides_group.add_command(slides_sync_cmd, name="sync")
 slides_group.add_command(search_slides_cmd, name="search")
 slides_group.add_command(tidy_cmd, name="tidy")
+slides_group.add_command(referenced_by_cmd, name="referenced-by")
 cli.add_command(slides_group)
 
 topic_group.add_command(resolve_topic_cmd, name="resolve")
 cli.add_command(topic_group)
+
+spec_group.add_command(spec_decks_cmd, name="decks")
+cli.add_command(spec_group)
 
 authoring_group.add_command(authoring_rules_cmd, name="rules")
 cli.add_command(authoring_group)

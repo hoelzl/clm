@@ -393,6 +393,64 @@ clm topic resolve intro --course-spec course-specs/python.xml
 clm topic resolve intro --module module_545_ml_azav_cohort_2026_04
 ```
 
+### `clm spec decks`
+
+List the deck files a course spec actually pulls in — its "shipping set".
+
+```
+clm spec decks [OPTIONS] [SPEC_FILE]
+```
+
+Resolution mirrors the build exactly, which is the point of the command: a
+`<topic>` resolves to a topic **directory** and CLM builds **every**
+`slides_*.py` in it. The directory name often differs from the deck filenames
+(e.g. topic `properties` → `slides_properties.py` **and**
+`slides_property_setters.py`), so a deck-filename-stem heuristic silently misses
+decks. Module-bound `<topic>`/`<section>` references resolve in their module;
+unbound topic IDs that match multiple modules are first-occurrence-wins (matching
+the build), and the shadowed matches are reported in `--json` output.
+
+| Option | Description |
+|--------|-------------|
+| `--all-specs DIR` | Resolve the union shipping set across every `*.xml` spec in `DIR`, annotating each deck with the spec(s) that reference it. Mutually exclusive with `SPEC_FILE`. |
+| `--lang de\|en\|both` | Keep only decks serving this language. Bilingual decks (no `.de`/`.en` tag) serve both, so they always survive the filter; split halves are kept only for their own language. Default: `both`. |
+| `--data-dir DIR` | Course data directory (contains `slides/`). Default: inferred from the spec file (its grandparent). |
+| `--json` | Output as JSON (includes per-topic resolution, unresolved topics, and first-occurrence-shadowed duplicates). |
+
+Topic references that resolve to no directory on disk are reported as a warning
+(stderr) but do not fail the command.
+
+Examples:
+
+```bash
+clm spec decks course-specs/python.xml
+clm spec decks course-specs/python.xml --lang de --json
+clm spec decks --all-specs course-specs/
+```
+
+### `clm slides referenced-by`
+
+Reverse of `clm spec decks`: show which spec(s)/topic(s) pull a given deck into
+their shipping set. A deck reachable from no spec is reported as `unreferenced` —
+useful for spotting orphaned or superseded decks before a corpus-wide change.
+
+```
+clm slides referenced-by [OPTIONS] DECK
+```
+
+| Option | Description |
+|--------|-------------|
+| `--specs-dir DIR` | Directory of `*.xml` specs to search. Default: `<course-root>/course-specs/`. |
+| `--data-dir DIR` | Course data directory (contains `slides/`). Default: inferred from the deck path (its `slides/` ancestor). |
+| `--json` | Output as JSON. |
+
+Examples:
+
+```bash
+clm slides referenced-by slides/module_x/topic_y/slides_intro.py
+clm slides referenced-by slides_intro.py --specs-dir course-specs/
+```
+
 ### `clm slides search`
 
 *Removed in CLM 1.8: the flat alias `clm search-slides` no longer exists — use this group-qualified form.*
