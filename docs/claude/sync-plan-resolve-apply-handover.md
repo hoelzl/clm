@@ -4,7 +4,7 @@
 **Design note:** `docs/claude/design/sync-plan-resolve-apply.md` (the canonical spec)
 **Base design:** `docs/claude/design/single-language-authoring-sync.md` (the #166 engine)
 **Memory:** `project-sync-coldstart-idless-bug` (corrected framing + verified findings)
-**Status:** design accepted; **Phase 1 DONE**; **Phase 2 DONE (scoped: edit + add materialized)**; **Phase 3.1 (id-less cold-pair minting) DONE** — the id-less half of the #158 unblock; **Phase 3.2 (half-id'd adopt) is NEXT** (see Phase 3 below — `unify` won't pair half-id'd, so it needs an explicit adopt path).
+**Status:** design accepted; **Phase 1 DONE**; **Phase 2 DONE (scoped: edit + add materialized)**; **Phase 3.1 (id-less cold-pair minting) DONE**; **Phase 3.2 (half-id'd adopt) DONE** — the half-id'd half of the #158 unblock, via an explicit `adopt` path (`unify`/`assign_ids` cannot pair an id-less cell with an id'd one). The whole #216 cold-start cluster is resolved end-to-end; the only remaining items are the Phase-2 deferred follow-ups (id-migration recoverer + `sync_code` structural translate).
 
 ---
 
@@ -165,7 +165,7 @@ The original TODO recipe (kept for reference):
   seams suffice; the add seam is ordering-sensitive, so it can't simply hoist to
   the top of `apply_plan`).
 
-### Phase 3 — Cold-start minting + correspondence gate  **[3.1 (id-less) DONE; 3.2 (half-id'd) NEXT]**
+### Phase 3 — Cold-start minting + correspondence gate  **[3.1 (id-less) DONE; 3.2 (half-id'd) DONE]**
 
 **3.1a/3.1b SHIPPED** (commits `5bdf4d4` verifier tier + the id-less wiring commit):
 `clm slides sync` now bootstraps a never-id'd **both-id-less** cold pair end-to-end
@@ -186,13 +186,23 @@ unifiable pair; `apply_plan` verifies via `CorrespondenceVerifier` (in
 - `provider_available` helper = `has_openrouter_api_key()` (`openrouter_client.py`).
 - Verifier cache = a new `SyncCorrespondenceCache` sibling table (`sync_correspondences`).
 
-**3.2 — half-id'd adopt (NEXT):** in `_maybe_emit_cold_mint`, the half-id'd refusal
-(mixed id-less + id'd) currently bails (any `slide_id is not None` → skip). Add an
-`adopt` candidacy + an `_apply_cold_adopt` that positionally pairs the id'd and
-id-less localized streams and stamps the existing id onto the id-less twin (no
-translation — both bodies exist), gated by the same `CorrespondenceVerifier`. New
-tests: half-id'd confirmed→adopt / denied→refuse. `TestColdStartMint::test_half_idd_pair_keeps_refuse_in_phase_3_1`
-flips to an adopt assertion.
+**3.2 — half-id'd adopt (SHIPPED):** `build_sync_plan` now runs `_maybe_emit_cold_adopt`
+right after `_maybe_emit_cold_mint` (same `source=="none" and provider_available` gate,
+mutually exclusive — mint empties `plan.refusals` when it fires). `_cold_adopt_authority`
+(`sync_plan.py`) walks the full positional localized stream and returns the fully-id'd
+side only for a clean half-id'd shape (every pair role/cell-type-matched; sync pairs XOR
+with a consistent authority; non-sync pairs id-less both sides), emitting a single
+`kind="adopt"`, `disposition="pending"`, `direction="{authority}->{other}"`. Apply has a
+second short-circuit beside the mint: `_apply_cold_adopt` verifies the slide pairs (reusing
+`_build_slide_pairs` / `_resolve_correspondence`), then `_adopt_ids_in_split_pair` loads
+**both** halves via `FileState.load`, walks them positionally, and stamps each authority
+slide_id onto its id-less twin (`_stamp_slide_id`), flushing only the id-less half;
+per-cell guards make a post-plan drift return `0` → deferral. `adopt` kind +
+`applied_adopt` counter wired through `ApplyResult`, the walker, and the CLI
+(`_counts_str`/`_plan_dict`/`_apply_dict`/`_outcome_line`). Mismatched-id and
+mixed-authority stay `refuse`. `TestColdStartMint::test_half_idd_pair_keeps_refuse_in_phase_3_1`
+became `test_half_idd_pair_is_adopt_not_mint`; new `TestColdStartAdopt` (10 cases) +
+CLI `test_half_idd_pair_adopts_when_verified`. **1109 slides + 213 sync/CLI tests green.**
 
 - **Goal (overall):** `clm slides sync` becomes the proper cold-start id minter — the
   actual #158 unblock. **The authoritative, decision-baked plan is design note §12.**

@@ -784,7 +784,18 @@ def _deck_label(de_path: Path, root: Path) -> str:
 
 
 def _counts_str(plan: SyncPlan) -> str:
-    kinds = ("add", "edit", "retag", "move", "remove", "conflict", "rename", "refuse", "mint")
+    kinds = (
+        "add",
+        "edit",
+        "retag",
+        "move",
+        "remove",
+        "conflict",
+        "rename",
+        "refuse",
+        "mint",
+        "adopt",
+    )
     parts = [f"{plan.count(k)} {k}" for k in kinds if plan.count(k)]
     return ", ".join(parts) if parts else "0"
 
@@ -1019,7 +1030,8 @@ def _outcome_line(result: ApplyResult) -> str:
         f"applied: {result.applied_edit} edit, {result.applied_retag} retag, "
         f"{result.applied_remove} remove, "
         f"{result.applied_move} move, {result.applied_add} add, "
-        f"{result.applied_rename} rename; {result.in_sync} already in sync; "
+        f"{result.applied_rename} rename, {result.applied_mint} mint, "
+        f"{result.applied_adopt} adopt; {result.in_sync} already in sync; "
         f"{result.deferred} deferred; {len(result.errors)} error(s); "
         f"watermark {'advanced' if result.watermark_recorded else 'held'}."
     )
@@ -1093,6 +1105,7 @@ def _plan_dict(plan: SyncPlan) -> dict:
                 "rename",
                 "refuse",
                 "mint",
+                "adopt",
             )
         },
         "proposals": [
@@ -1123,6 +1136,8 @@ def _apply_dict(result: ApplyResult) -> dict:
             "move": result.applied_move,
             "add": result.applied_add,
             "rename": result.applied_rename,
+            "mint": result.applied_mint,
+            "adopt": result.applied_adopt,
             "total": result.applied,
         },
         "in_sync": result.in_sync,

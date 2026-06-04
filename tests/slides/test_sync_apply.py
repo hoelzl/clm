@@ -1041,14 +1041,17 @@ class TestColdStartMint:
         assert plan.count("mint") == 0
         assert plan.count("refuse") == 4
 
-    def test_half_idd_pair_keeps_refuse_in_phase_3_1(self, tmp_path: Path):
-        # Half-id'd is the adopt case (3.2); 3.1 leaves it refusing (mixed refusals).
+    def test_half_idd_pair_is_adopt_not_mint(self, tmp_path: Path):
+        # Half-id'd is the adopt case (3.2), never a mint: it becomes ONE shared-id
+        # candidate, but `adopt` (reuse the id'd half's existing ids), not `mint`
+        # (fresh ids). Full adopt behavior is covered in TestColdStartAdopt.
         de = _slide_idless("de", "# ## A") + _slide_idless("de", "# ## B")
         en = _slide("en", "s1", "# ## A") + _slide("en", "s2", "# ## B")
         de_path, en_path = _write_pair(tmp_path, de, en)
         plan = build_sync_plan(de_path, en_path, watermark_cache=None, provider_available=True)
         assert plan.count("mint") == 0
-        assert plan.count("refuse") == 4
+        assert plan.count("adopt") == 1
+        assert plan.count("refuse") == 0
 
     def test_verifier_result_is_cached(self, tmp_path: Path):
         # The verdict map is memoized by pair fingerprint: a second resolve over the
@@ -1066,6 +1069,242 @@ class TestColdStartMint:
             assert verifier.calls == 1  # the second resolve hit the cache
         finally:
             cache.close()
+
+
+class TestColdStartAdopt:
+    """A half-id'd cold pair adopts the id'd half's *existing* ids once confirmed (#216 §12, 3.2).
+
+    Distinct from a mint: one half is fully id'd, the other fully id-less, and the
+    id-less half adopts the id'd half's ids verbatim (a header stamp — no
+    translation, no fresh slug), gated by the same correspondence verifier.
+    """
+
+    def _half_idd_pair(self, tmp_path: Path, *, idd: str = "en") -> tuple[Path, Path]:
+        # The common 1.8-gate shape: one half assign-ids'd (s1, s2), the twin id-less.
+        idless = _slide_idless("__", "# ## A") + _slide_idless("__", "# ## B")
+        idd_text = _slide("__", "s1", "# ## A") + _slide("__", "s2", "# ## B")
+        if idd == "en":
+            return _write_pair(tmp_path, idless.replace("__", "de"), idd_text.replace("__", "en"))
+        return _write_pair(tmp_path, idd_text.replace("__", "de"), idless.replace("__", "en"))
+
+    def test_half_idd_becomes_adopt_candidate(self, tmp_path: Path):
+        de_path, en_path = self._half_idd_pair(tmp_path)
+        plan = build_sync_plan(de_path, en_path, watermark_cache=None, provider_available=True)
+        assert plan.count("adopt") == 1
+        assert plan.count("mint") == 0
+        assert plan.count("refuse") == 0
+        adopt = next(p for p in plan.proposals if p.kind == "adopt")
+        assert adopt.direction == "en->de"  # EN is the fully-id'd authority
+        assert adopt.disposition == "pending"
+
+    def test_confirmed_pair_adopts_authority_ids(self, tmp_path: Path):
+        de_path, en_path = self._half_idd_pair(tmp_path)
+        en_before = en_path.read_text(encoding="utf-8")
+        plan = build_sync_plan(de_path, en_path, watermark_cache=None, provider_available=True)
+        verifier = StaticCorrespondenceVerifier(default=True)
+        result = apply_plan(plan, judge=None, verifier=verifier, watermark_cache=None)
+        assert result.applied_adopt == 1
+        assert result.applied_mint == 0
+        assert result.deferred == 0
+        assert result.has_errors is False
+        assert verifier.calls == 1
+        # The id-less DE half adopted EN's EXISTING ids verbatim — NOT fresh slugs
+        # (a mint would derive "introduction"/"variables" from the headings).
+        assert _slide_order(de_path) == ["s1", "s2"]
+        assert _slide_order(en_path) == ["s1", "s2"]
+        # Only the id-less half was written; the id'd half is byte-identical.
+        assert en_path.read_text(encoding="utf-8") == en_before
+
+    def test_de_authority_is_adopted_onto_en(self, tmp_path: Path):
+        de_path, en_path = self._half_idd_pair(tmp_path, idd="de")
+        de_before = de_path.read_text(encoding="utf-8")
+        plan = build_sync_plan(de_path, en_path, watermark_cache=None, provider_available=True)
+        adopt = next(p for p in plan.proposals if p.kind == "adopt")
+        assert adopt.direction == "de->en"  # DE is the authority
+        verifier = StaticCorrespondenceVerifier(default=True)
+        result = apply_plan(plan, judge=None, verifier=verifier, watermark_cache=None)
+        assert result.applied_adopt == 1
+        assert _slide_order(de_path) == ["s1", "s2"]
+        assert _slide_order(en_path) == ["s1", "s2"]
+        assert de_path.read_text(encoding="utf-8") == de_before  # the id'd half untouched
+
+    def test_denied_pair_refuses_and_writes_nothing(self, tmp_path: Path):
+        de_path, en_path = self._half_idd_pair(tmp_path)
+        before_de = de_path.read_text(encoding="utf-8")
+        before_en = en_path.read_text(encoding="utf-8")
+        plan = build_sync_plan(de_path, en_path, watermark_cache=None, provider_available=True)
+        verifier = StaticCorrespondenceVerifier(default=False)  # all "no"
+        result = apply_plan(plan, judge=None, verifier=verifier, watermark_cache=None)
+        assert result.applied_adopt == 0
+        assert result.deferred == 1
+        assert de_path.read_text(encoding="utf-8") == before_de
+        assert en_path.read_text(encoding="utf-8") == before_en
+
+    def test_no_verifier_refuses(self, tmp_path: Path):
+        de_path, en_path = self._half_idd_pair(tmp_path)
+        before_de = de_path.read_text(encoding="utf-8")
+        plan = build_sync_plan(de_path, en_path, watermark_cache=None, provider_available=True)
+        result = apply_plan(plan, judge=None, verifier=None, watermark_cache=None)
+        assert result.applied_adopt == 0
+        assert result.deferred == 1
+        assert de_path.read_text(encoding="utf-8") == before_de
+
+    def test_no_provider_keeps_refuse(self, tmp_path: Path):
+        de_path, en_path = self._half_idd_pair(tmp_path)
+        plan = build_sync_plan(de_path, en_path, watermark_cache=None, provider_available=False)
+        assert plan.count("adopt") == 0
+        assert plan.count("refuse") == 4  # 2 id-less de + 2 id'd en, both directions
+
+    def test_mismatched_ids_never_adopt(self, tmp_path: Path):
+        # Both id'd with DIFFERENT ids: not a half-id'd pair → refuse, never adopt.
+        de = _slide("de", "d1", "# ## A") + _slide("de", "d2", "# ## B")
+        en = _slide("en", "e1", "# ## A") + _slide("en", "e2", "# ## B")
+        de_path, en_path = _write_pair(tmp_path, de, en)
+        plan = build_sync_plan(de_path, en_path, watermark_cache=None, provider_available=True)
+        assert plan.count("adopt") == 0
+        assert plan.count("mint") == 0
+        assert plan.count("refuse") == 4
+
+    def test_mixed_authority_keeps_refuse(self, tmp_path: Path):
+        # DE id'd on slide A, EN id'd on slide B — inconsistent authority → refuse.
+        de = _slide("de", "s1", "# ## A") + _slide_idless("de", "# ## B")
+        en = _slide_idless("en", "# ## A") + _slide("en", "s2", "# ## B")
+        de_path, en_path = _write_pair(tmp_path, de, en)
+        plan = build_sync_plan(de_path, en_path, watermark_cache=None, provider_available=True)
+        assert plan.count("adopt") == 0
+        assert plan.count("refuse") == 4
+
+    def test_adopt_advances_watermark_and_second_run_is_noop(self, tmp_path: Path):
+        de_path, en_path = self._half_idd_pair(tmp_path)
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache, provider_available=True)
+            verifier = StaticCorrespondenceVerifier(default=True)
+            result = apply_plan(plan, judge=None, verifier=verifier, watermark_cache=cache)
+            assert result.applied_adopt == 1
+            assert result.watermark_recorded is True
+            # The watermark recorded the POST-stamp state (both halves now id'd), so a
+            # second run sees a synced pair and proposes nothing.
+            plan2 = build_sync_plan(
+                de_path, en_path, watermark_cache=cache, provider_available=True
+            )
+            assert plan2.count("adopt") == 0
+            assert plan2.is_noop
+        finally:
+            cache.close()
+
+    def test_adopt_with_voiceover_companion_adopts_group(self, tmp_path: Path):
+        # A slide + its voiceover companion: the id'd half carries the slide id on
+        # both cells; the id-less twin adopts both, so the group stays paired.
+        de = (
+            _slide_idless("de", "# ## A")
+            + _vo_idless("de", "# Sprechertext A")
+            + _slide_idless("de", "# ## B")
+        )
+        en = (
+            _slide("en", "s1", "# ## A")
+            + '# %% [markdown] lang="en" tags=["voiceover"] slide_id="s1"\n# Narration A\n'
+            + _slide("en", "s2", "# ## B")
+        )
+        de_path, en_path = _write_pair(tmp_path, de, en)
+        plan = build_sync_plan(de_path, en_path, watermark_cache=None, provider_available=True)
+        assert plan.count("adopt") == 1
+        verifier = StaticCorrespondenceVerifier(default=True)
+        result = apply_plan(plan, judge=None, verifier=verifier, watermark_cache=None)
+        assert result.applied_adopt == 1
+        # The DE voiceover companion adopted the slide's id too (group kept intact).
+        assert _cell_for(de_path, "s1", role="voiceover") is not None
+        assert _slide_order(de_path) == ["s1", "s2"]
+
+    def test_classifier_error_on_authority_blocks_adopt(self, tmp_path: Path):
+        # The authority half has a *duplicated* companion id (slide s1 + TWO voiceovers
+        # both s1) → `_resolve_duplicates` raises a "lone duplicated companion" error
+        # (plan.has_errors). A bootstrap that stamped s1 onto both id-less DE
+        # voiceovers would bake a DUPLICATE id and advance the watermark over the
+        # corruption — so a classifier error must block the adopt entirely.
+        en = (
+            _slide("en", "s1", "# ## A")
+            + '# %% [markdown] lang="en" tags=["voiceover"] slide_id="s1"\n# VO1\n'
+            + '# %% [markdown] lang="en" tags=["voiceover"] slide_id="s1"\n# VO2\n'
+        )
+        de = _slide_idless("de", "# ## A") + _vo_idless("de", "# S1") + _vo_idless("de", "# S2")
+        de_path, en_path = _write_pair(tmp_path, de, en)
+        before_de = de_path.read_text(encoding="utf-8")
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache, provider_available=True)
+            assert plan.has_errors is True
+            assert plan.count("adopt") == 0  # candidacy bails on a classifier error
+            verifier = StaticCorrespondenceVerifier(default=True)
+            result = apply_plan(plan, judge=None, verifier=verifier, watermark_cache=cache)
+            assert result.applied_adopt == 0
+            assert de_path.read_text(encoding="utf-8") == before_de  # nothing stamped
+            assert result.watermark_recorded is False  # watermark held over the error
+        finally:
+            cache.close()
+
+    def test_apply_defers_adopt_when_plan_has_errors(self, tmp_path: Path):
+        # Defense in depth: even if an `adopt` candidate coexists with a classifier
+        # error (here injected after planning), the apply-time short-circuit must defer
+        # it and write nothing — mirroring the normal flush gate's `not plan.has_errors`.
+        de_path, en_path = self._half_idd_pair(tmp_path)
+        before_de = de_path.read_text(encoding="utf-8")
+        before_en = en_path.read_text(encoding="utf-8")
+        plan = build_sync_plan(de_path, en_path, watermark_cache=None, provider_available=True)
+        assert plan.count("adopt") == 1  # a clean half-id'd pair → an adopt candidate
+        plan.issues.append(PlanIssue(severity="error", slide_id=None, reason="injected error"))
+        verifier = StaticCorrespondenceVerifier(default=True)
+        result = apply_plan(plan, judge=None, verifier=verifier, watermark_cache=None)
+        assert result.applied_adopt == 0
+        assert result.deferred == 1
+        assert de_path.read_text(encoding="utf-8") == before_de
+        assert en_path.read_text(encoding="utf-8") == before_en
+
+    def test_adopt_skips_idless_localized_code_cells(self, tmp_path: Path):
+        # An id-less localized CODE cell (role_of None) interleaved between the
+        # slides: candidacy treats it as an aligned non-sync pair (both id-less) and
+        # the stamp walk skips it, so only the slides adopt ids — the code cell stays
+        # id-less, never mis-stamped.
+        de = (
+            _slide_idless("de", "# ## A")
+            + '# %% lang="de"\nx = 1\n'
+            + _slide_idless("de", "# ## B")
+        )
+        en = _slide("en", "s1", "# ## A") + '# %% lang="en"\nx = 1\n' + _slide("en", "s2", "# ## B")
+        de_path, en_path = _write_pair(tmp_path, de, en)
+        plan = build_sync_plan(de_path, en_path, watermark_cache=None, provider_available=True)
+        assert plan.count("adopt") == 1
+        verifier = StaticCorrespondenceVerifier(default=True)
+        result = apply_plan(plan, judge=None, verifier=verifier, watermark_cache=None)
+        assert result.applied_adopt == 1
+        assert _slide_order(de_path) == ["s1", "s2"]
+        assert en_path.read_text(encoding="utf-8") == en  # the id'd half untouched
+        # The id-less localized code cell was NOT stamped — it stays id-less.
+        de_code = [
+            c
+            for c in parse_cells(de_path.read_text(encoding="utf-8"))
+            if c.metadata.cell_type == "code" and c.metadata.lang == "de"
+        ]
+        assert len(de_code) == 1
+        assert de_code[0].metadata.slide_id is None
+
+    def test_idd_localized_code_on_one_side_refuses(self, tmp_path: Path):
+        # If the code cell is id'd on the authority half but id-less on the twin, the
+        # two have different role_of (CODE_ROLE vs None) → the streams are not clean
+        # twins → adopt declines and the refusal stands (never a guessed code-id stamp).
+        de = (
+            _slide_idless("de", "# ## A")
+            + '# %% lang="de"\nx = 1\n'
+            + _slide_idless("de", "# ## B")
+        )
+        en = (
+            _slide("en", "s1", "# ## A")
+            + '# %% lang="en" slide_id="c1"\nx = 1\n'
+            + _slide("en", "s2", "# ## B")
+        )
+        de_path, en_path = _write_pair(tmp_path, de, en)
+        plan = build_sync_plan(de_path, en_path, watermark_cache=None, provider_available=True)
+        assert plan.count("adopt") == 0  # role mismatch on the code pair → refuse
 
 
 # ---------------------------------------------------------------------------

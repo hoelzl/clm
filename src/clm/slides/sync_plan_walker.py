@@ -254,12 +254,15 @@ def run_plan_walker(
             actions.append(_action(proposal, REFUSE))
             continue
 
-        if kind == "mint":
-            # A cold-start mint candidate (#216 §12): correspondence is verified in
-            # apply (2b), not here — show it and let the engine mint or downgrade to
-            # refuse. Never prompted (the author reviews the minted ids in git diff).
+        if kind in ("mint", "adopt"):
+            # A cold-start bootstrap candidate (#216 §12): correspondence is verified
+            # in apply (2b), not here — show it and let the engine mint/adopt or
+            # downgrade to refuse. Never prompted (the author reviews the resulting
+            # ids in git diff). `mint` creates fresh shared ids for a both-id-less
+            # pair; `adopt` stamps the id'd half's existing ids onto its id-less twin.
             echo(render_proposal(proposal, de_bodies, en_bodies))
-            echo("  → pending correspondence verification (will mint shared ids if confirmed)")
+            verb = "mint shared" if kind == "mint" else "adopt the id'd half's"
+            echo(f"  → pending correspondence verification (will {verb} ids if confirmed)")
             actions.append(_action(proposal, AUTO))
             continue
 

@@ -16,7 +16,15 @@ structural translate remain inline as **explicitly-deferred follow-ups** (§10).
 **Phase 3.1 (id-less cold-pair minting) DONE** — `build_sync_plan` emits a `pending`
 mint candidate, `apply_plan` verifies via the new `CorrespondenceVerifier` and mints
 via `assign_ids_in_split_pair`; `--verify-cold-pairs` default-on with a provider.
-**Phase 3.2 (half-id'd adopt) is next** (§12).
+**Phase 3.2 (half-id'd adopt) DONE** — `build_sync_plan` emits a `pending` **`adopt`**
+candidate for a half-id'd pair (`_cold_adopt_authority` / `_maybe_emit_cold_adopt`,
+run right after the mint pass and mutually exclusive with it); `apply_plan` verifies
+the same way and stamps the id'd half's *existing* ids onto the id-less twin
+(`_apply_cold_adopt` / `_adopt_ids_in_split_pair` — an explicit per-cell header stamp,
+**not** `assign_ids_in_split_pair`, which cannot pair an id-less cell with an id'd
+one). Mismatched-id and mixed-authority stay `refuse`. The whole #216 cluster is now
+resolved end-to-end; the only remaining items are the Phase-2 deferred follow-ups
+(the id-migration recoverer + `sync_code` structural translate).
 
 ---
 
@@ -242,14 +250,15 @@ follow-ups (call models inline still):** the id-migration recoverer and the
 (the two materialize seams suffice, and the add seam is ordering-sensitive).
 
 **Phase 3 — Cold-start minting + correspondence gate. [3.1 (id-less) DONE; 3.2
-(half-id'd) NEXT — see §12].** `build_sync_plan` emits a `pending` mint candidate for
+(half-id'd) DONE — see §12].** `build_sync_plan` emits a `pending` mint candidate for
 a provider-available, unifiable cold pair; a `CorrespondenceVerifier` (2b) confirms
 the heading/snippet pairs; the mint delegates to `assign_ids_in_split_pair`.
-**3.1 done** (id-less; mismatched-id stays `refuse`). **3.2** adds the half-id'd
-*adopt* — separate from `assign_ids_in_split_pair`, which **cannot** adopt because
-`unify` does not pair an id-less cell with an id'd one (`_slide_ids_pair` is
-`de_id == en_id`). Unblocks the **1.8 PythonCourses gate** (~200 id-less split
-halves; see `#158`).
+**3.1 done** (id-less; mismatched-id stays `refuse`). **3.2 done** — the half-id'd
+*adopt* (`kind="adopt"`), an **explicit** path **separate from
+`assign_ids_in_split_pair`**, which **cannot** adopt because `unify` does not pair an
+id-less cell with an id'd one (`_slide_ids_pair` is `de_id == en_id`): apply stamps the
+id'd half's existing ids onto the id-less twin per-cell. Unblocks the **1.8
+PythonCourses gate** (~200 id-less split halves; see `#158`).
 
 ## 11. Open questions / deferred
 
@@ -304,13 +313,17 @@ halves; see `#158`).
    abort / no verifier** → downgrade to `refuse` (deferred, watermark held — the one
    disclosed Q-A divergence). Conservative: a single mismatched pair means the streams
    are not a clean translation → refuse the whole pair, never bake a wrong shared id.
-5. **execute (3) — mint.** A confirmed mint delegates to
+5. **execute (3) — mint *or* adopt.** A confirmed **mint** (both-id-less) delegates to
    **`assign_ids_in_split_pair(de_path, en_path, options)`** (`assign_ids.py`):
-   byte-faithful EN-authority shared-id minting that handles id-less *and*, via
-   `unify→assign→split`, the half-id'd adopt. Its own "not unifiable → `None`" return
-   is a second safety net → `refuse`. A cold pair carries no other apply ops, so this
-   file-level write does not conflict with the FileState buffer (states are never
-   dirtied; the flush is a no-op) and the watermark records from the minted files.
+   byte-faithful EN-authority shared-id minting (id-less only — see the corrected note
+   below; it does **not** adopt a half-id'd pair). Its own "not unifiable → `None`"
+   return is a second safety net → `refuse`. A confirmed **adopt** (half-id'd) takes a
+   separate path (`_apply_cold_adopt` / `_adopt_ids_in_split_pair`): it walks the two
+   halves' localized streams positionally and stamps each authority slide_id onto its
+   id-less twin (`_stamp_slide_id`, the same byte-faithful header rewrite assign-ids
+   uses), writing only the id-less half. Either is the whole plan and carries no other
+   apply ops, so the file-level write does not conflict with the FileState buffer and
+   the watermark records from the post-write files.
 
 **New `CorrespondenceVerifier`** (`sync_recover.py`, mirroring `AlignmentRecoverer`):
 
@@ -350,3 +363,32 @@ per-pair marker; apply re-derives the aligned `(de, en)` slide pairs from the
 `_resolve_correspondence` (mirrors `_resolve_alignment`) verifies + caches. The mint
 short-circuits the whole `apply_plan` (a cold pair has no other ops). Verifier inputs
 are heading + the lines *after* the heading (a short lead snippet) + role.
+
+**3.2 implementation notes (shipped):** the half-id'd **adopt** mirrors the mint
+shape but takes its own classifier candidate and apply path:
+
+- **Candidacy (`_cold_adopt_authority` + `_maybe_emit_cold_adopt`, `sync_plan.py`).**
+  Runs in `build_sync_plan` right after `_maybe_emit_cold_mint`, gated on the same
+  `source == "none" and provider_available`. Mutually exclusive with mint **by
+  construction**: mint, when it fires, removes the refusals (emptying `plan.refusals`),
+  so adopt's `if not refusals: return` bails. `_cold_adopt_authority` walks the full
+  positional localized stream and returns the fully-id'd side (`"de"`/`"en"`) only when:
+  every pair agrees on `role_of` and cell-type; every **sync** pair (`role_of != None`)
+  is XOR (exactly one side id'd) with a **consistent** authority; every **non-sync**
+  pair (id-less localized code, `role_of None`) is id-less on both. Any other shape →
+  `None` → the refuse stands. Because `role_of` of an aux-markdown or a localized-code
+  cell *depends on* its `slide_id`, an id'd-vs-id-less twin of those has mismatched
+  `role_of` → adopt declines (only narrative-tagged cells, whose role is
+  id-independent, adopt — a documented, conservative boundary). Emits a single
+  `kind="adopt"`, `disposition="pending"`, `direction="{authority}->{other}"`.
+- **Apply (`_apply_cold_adopt` + `_adopt_ids_in_split_pair`, `sync_apply.py`).** A
+  second short-circuit beside the mint one. Builds the slide pairs and verifies them
+  exactly like the mint (reusing `_build_slide_pairs` / `_resolve_correspondence`); on
+  **all-yes** stamps each authority slide_id onto its positional id-less twin, loading
+  **both** halves with the same `FileState.load` parser (so candidacy/apply parser
+  consistency holds) and flushing only the id-less half. Per-cell guards (`role_of`
+  match, target is id'd, twin is id-less, equal stream lengths) make a post-plan drift
+  return `0` stamped → deferral, never a mis-stamp. `applied_adopt` counts it.
+- **Why not `assign_ids_in_split_pair`:** it mints fresh slugs and cannot pair an
+  id-less cell with an id'd one (the `_slide_ids_pair` `de_id == en_id` gate), so it
+  would create *new, divergent* ids instead of adopting the authority's existing ones.

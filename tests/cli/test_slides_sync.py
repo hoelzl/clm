@@ -1186,3 +1186,28 @@ class TestDryRunApplyParity:
         en_after = en_path.read_text(encoding="utf-8")
         assert 'slide_id="' in de_after  # both halves now carry minted ids
         assert 'slide_id="' in en_after
+
+    def test_half_idd_pair_adopts_when_verified(
+        self, cli_runner: CliRunner, tmp_path: Path, monkeypatch
+    ):
+        # A half-id'd cold pair (EN assign-ids'd, DE id-less — the common 1.8-gate
+        # shape): dry-run shows a pending adopt, the writing run stamps EN's EXISTING
+        # ids onto the DE twin verbatim — no minting, no translation (#216 §12, 3.2).
+        de = _idless_slide("de", "# ## Einleitung") + _idless_slide("de", "# ## Variablen")
+        en = _cell("en", "intro", "# ## Introduction") + _cell("en", "vars", "# ## Variables")
+        de_path, en_path = _write_pair(tmp_path, de, en, stem="coldadopt")
+        _stub_verifier(monkeypatch, default=True)
+
+        dry = cli_runner.invoke(
+            slides_sync_cmd, [str(de_path), str(en_path), "--dry-run", "--no-cache"]
+        )
+        assert dry.exit_code == 1, _combined(dry)  # a pending adopt is "changes pending"
+        assert "adopt" in dry.output
+
+        applied = cli_runner.invoke(slides_sync_cmd, [str(de_path), str(en_path), "--no-cache"])
+        assert applied.exit_code == 0, _combined(applied)  # adopted cleanly
+        de_after = parse_cells(de_path.read_text(encoding="utf-8"))
+        de_ids = [c.metadata.slide_id for c in de_after if c.metadata.is_slide_start]
+        # The DE half adopted EN's ids verbatim, not freshly-minted heading slugs.
+        assert de_ids == ["intro", "vars"]
+        assert en_path.read_text(encoding="utf-8") == en  # the id'd half is untouched

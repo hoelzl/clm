@@ -356,15 +356,20 @@ the safe one — no command was removed and every tool stays fully invocable.
   minted one shared `slide_id` per slide** — but only after a cheap, cached LLM
   **correspondence check** confirms the two halves actually translate each other
   (default-on when an OpenRouter key is configured; turn it off with
-  `--no-verify-cold-pairs`). Without a provider, or if the check returns "no" or
-  cannot run, the pair is **refused** rather than guessed. Pairs that still can't
-  be paired unambiguously — both halves id'd with **mismatched** ids, or a
-  **half-id'd** pair — are **refused** too. A refusal emits **`refuse`** items,
+  `--no-verify-cold-pairs`). A **half-id'd pair** — one half fully id'd, the
+  other fully id-less (e.g. ids were assigned on only one half) — is **paired
+  and the id-less half adopts the id'd half's *existing* slide_ids** (no fresh
+  minting, no translation; the same correspondence check gates it). Without a
+  provider, or if the check returns "no" or cannot run, the pair is **refused**
+  rather than guessed. A pair that still cannot be paired unambiguously — both
+  halves id'd with **mismatched** ids, or **mixed authority** (different halves
+  id'd on different slides) — is **refused**. A refusal emits **`refuse`** items,
   writes nothing, holds the watermark, and `--dry-run` shows exactly what a
-  writing run does (`N refuse`, exit 1 — "changes pending"). *Migration:* for a
-  refused pair, sync one direction at a time (author one half, sync, then the
-  other), or run `clm slides assign-ids <dir>` to mint shared ids across the pair
-  first; then re-run sync.
+  writing run does (`N refuse`, exit 1 — "changes pending"); a confirmed
+  bootstrap shows `1 mint`/`1 adopt` instead (also exit 1 until applied).
+  *Migration:* for a refused pair, sync one direction at a time (author one half,
+  sync, then the other), or run `clm slides assign-ids <dir>` to mint shared ids
+  across the pair first; then re-run sync.
 - **`clm slides assign-ids` is now plumbing (hidden).** Per-file id minting on a
   *single* split half can mint a divergent slug — the #1 silent #162 break. It is
   hidden from `clm slides --help` but stays invocable by name for agents/scripts

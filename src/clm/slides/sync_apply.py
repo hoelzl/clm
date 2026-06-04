@@ -23,6 +23,13 @@ Scope of this engine:
 - **refuse** — a structural decision the resolver made at plan time *not* to act
   (the both-directions cold-start / id-less case, #216); executed as a no-op
   ``deferred`` so the watermark holds and the dry-run preview matches the run.
+- **mint** / **adopt** — the two cold-start id-bootstrap candidates (#216 §12),
+  each the whole plan and short-circuited before any ``FileState`` load: ``mint``
+  confirms a both-id-less pair corresponds, then mints fresh shared ids via
+  ``assign_ids_in_split_pair``; ``adopt`` confirms a *half-id'd* pair, then stamps
+  the id'd half's *existing* ids onto its id-less twin. Either downgrades to a
+  ``deferred`` no-op when correspondence is not confirmed (a "no", a safe-abort, or
+  no verifier), so nothing wrong ever reaches disk.
 
 Atomicity: each proposal is all-or-nothing for its target cell; the two decks
 are persisted once at the end, via a buffered temp-swap (Issue #190 item 1)
@@ -136,7 +143,8 @@ class ApplyResult:
     applied_add: int = 0
     applied_rename: int = 0
     applied_migrate: int = 0  # a drifted slide_id moved back onto its construct (§9)
-    applied_mint: int = 0  # a confirmed cold-start pair minted shared ids (#216 §12)
+    applied_mint: int = 0  # a confirmed both-id-less cold pair minted shared ids (#216 §12)
+    applied_adopt: int = 0  # a confirmed half-id'd cold pair adopted the id'd half's ids (#216 §12)
     in_sync: int = 0  # an edit the judge decided needed no change
     deferred: int = 0  # conflict (or moves/adds declined this pass)
     watermark_recorded: bool = False
@@ -153,6 +161,7 @@ class ApplyResult:
             + self.applied_rename
             + self.applied_migrate
             + self.applied_mint
+            + self.applied_adopt
         )
 
     @property
@@ -244,6 +253,14 @@ def apply_plan(
     # advance read the freshly-minted files, with no buffered-write to coordinate.
     if any(p.kind == "mint" for p in plan.proposals):
         _apply_cold_mint(plan, verifier, correspondence_cache, watermark_cache, result)
+        return result
+
+    # Stage 2b/3 for a cold-start *adopt* (#216 §12): a half-id'd cold pair (one
+    # half fully id'd, the other fully id-less) whose id-less half adopts the id'd
+    # half's existing ids. Like the mint above it is the whole plan, verified then
+    # stamped on its own path, before any FileState load.
+    if any(p.kind == "adopt" for p in plan.proposals):
+        _apply_cold_adopt(plan, verifier, correspondence_cache, watermark_cache, result)
         return result
 
     # Pre-apply content (parser-stripped) for the judge, keyed by (slide_id,
@@ -776,7 +793,16 @@ def _apply_cold_mint(
     shared EN-authority ids via :func:`assign_ids_in_split_pair` and advance the
     watermark; on **any-no / safe-abort / no-verifier** downgrade to a deferral —
     the dry-run already disclosed this item as ``pending`` — writing nothing.
+
+    Defers (writes nothing) on a **classifier error** — the same gate the normal
+    flush path applies (``not plan.has_errors``). The candidacy guard already
+    declines to emit a candidate for an errored plan, so this is defense in depth
+    at the write boundary (a fully-id-less mint pair cannot carry such an error, but
+    the guard keeps the short-circuit honest if one ever reaches here).
     """
+    if plan.has_errors:
+        result.deferred += 1
+        return
     pairs = _build_slide_pairs(plan.de_path, plan.en_path)
     if verifier is None:
         result.deferred += 1  # no verifier (e.g. --no-verify): pending → refuse
@@ -878,6 +904,99 @@ def _resolve_correspondence(
     if cache is not None:
         cache.put(fp, pv, encode_verdicts(verdicts))
     return verdicts
+
+
+# ---------------------------------------------------------------------------
+# Cold-start adopt (#216 Phase 3.2 §12): verify, then stamp the id'd half's ids
+# ---------------------------------------------------------------------------
+
+
+def _apply_cold_adopt(
+    plan: SyncPlan,
+    verifier: CorrespondenceVerifier | None,
+    correspondence_cache: SyncCorrespondenceCache | None,
+    watermark_cache: SyncWatermarkCache | None,
+    result: ApplyResult,
+) -> None:
+    """Confirm a half-id'd cold pair corresponds, then stamp the id'd half's ids onto its twin.
+
+    The plan carries a single ``pending`` ``adopt`` candidate whose ``direction`` is
+    ``"{authority}->{other}"`` (the authority is the fully-id'd half). Build the
+    aligned slide pairs from the files and verify them (cached, validated,
+    safe-abort); on **all-yes** stamp each authority slide_id onto its id-less
+    positional twin — a header rewrite, **no translation** (both bodies already
+    exist) — and advance the watermark; on **any-no / safe-abort / no-verifier**
+    downgrade to a deferral, writing nothing (the dry-run disclosed it as
+    ``pending``). Unlike the mint, ``assign_ids`` cannot do this: its
+    ``_slide_ids_pair`` is ``de_id == en_id``, so an id-less cell never pairs with
+    an id'd one — hence the explicit per-cell stamp.
+
+    Defers (writes nothing) on a **classifier error** — the same gate the normal
+    flush path applies (``not plan.has_errors``). This is the critical safety net:
+    a half-id'd pair whose *authority* half carries a duplicated id (e.g. a slide
+    with two same-id voiceover companions) would otherwise stamp that duplicate onto
+    the id-less twin and advance the watermark over the corruption. The candidacy
+    guard already declines such a plan; this defends the write boundary too.
+    """
+    if plan.has_errors:
+        result.deferred += 1
+        return
+    adopt = next(p for p in plan.proposals if p.kind == "adopt")
+    authority = (adopt.direction or "en->de").split("->")[0]
+    pairs = _build_slide_pairs(plan.de_path, plan.en_path)
+    if verifier is None:
+        result.deferred += 1  # no verifier (e.g. --no-verify): pending → refuse
+        return
+    verdicts = _resolve_correspondence(verifier, correspondence_cache, pairs)
+    if verdicts is None or not all(verdicts.get(i, False) for i in range(len(pairs))):
+        result.deferred += 1  # a "no" or a safe-abort → refuse the pair (never a wrong id)
+        return
+    stamped = _adopt_ids_in_split_pair(plan.de_path, plan.en_path, authority)
+    if stamped == 0:  # the streams drifted since candidacy (a race) → refuse
+        result.deferred += 1
+        return
+    result.applied_adopt += 1
+    if watermark_cache is not None:
+        _record_watermark(watermark_cache, plan.de_path, plan.en_path)
+        result.watermark_recorded = True
+
+
+def _adopt_ids_in_split_pair(de_path: Path, en_path: Path, authority: str) -> int:
+    """Stamp the ``authority`` half's slide_ids onto its id-less twin, in place.
+
+    Walks both halves' localized cell streams positionally (the candidacy gate
+    proved them aligned): wherever the authority cell carries a slide_id and its
+    positional twin is id-less, write that id onto the twin's header
+    (:func:`_stamp_slide_id` — the same byte-faithful rewrite assign-ids uses).
+    Both halves are loaded with the *same* parser (:meth:`FileState.load`); only the
+    id-less half is flushed. Returns the number of cells stamped — ``0`` when the
+    streams no longer align (a race vs the plan) or a positional role drifted, so the
+    caller refuses rather than mis-stamping a wrong id.
+    """
+    if authority == "en":
+        idd_state, idless_state = FileState.load(en_path), FileState.load(de_path)
+        idd_lang, idless_lang = "en", "de"
+    else:
+        idd_state, idless_state = FileState.load(de_path), FileState.load(en_path)
+        idd_lang, idless_lang = "de", "en"
+    idd_loc = [c for c in idd_state.cells if not c.metadata.is_j2 and c.metadata.lang == idd_lang]
+    idless_loc = [
+        c for c in idless_state.cells if not c.metadata.is_j2 and c.metadata.lang == idless_lang
+    ]
+    if len(idd_loc) != len(idless_loc):
+        return 0  # streams drifted since the plan — refuse rather than mis-stamp
+    stamped = 0
+    for idd_cell, idless_cell in zip(idd_loc, idless_loc, strict=False):
+        if role_of(idd_cell.metadata) != role_of(idless_cell.metadata):
+            return 0  # a positional role drifted — refuse
+        target_id = idd_cell.metadata.slide_id
+        if target_id and not idless_cell.metadata.slide_id:
+            _stamp_slide_id(idless_cell, target_id)
+            stamped += 1
+    if stamped:
+        idless_state.dirty = True
+        idless_state.flush()
+    return stamped
 
 
 # ---------------------------------------------------------------------------
