@@ -442,6 +442,23 @@ class TestBothDirectionsRefusal:
         assert plan.count("add") == 2
         assert plan.count("refuse") == 0
 
+    def test_git_head_mixed_idd_idless_both_directions_refuses(self):
+        # #226 (mixed variant): a COMMITTED id'd "B" on DE and an id-less "B" on EN
+        # (sharing `intro`) — the half-id'd-sharing-a-key shape. The committed-id'd add
+        # (de->en) and the id-less add (en->de) each flow in a single but OPPOSITE
+        # direction, so partitioning by id-presence misses it; considered together they
+        # span both directions → refuse (else "B" doubles on both decks).
+        plan = classify(
+            [cur(0, "intro", "d0"), cur(1, "d1", "dB")],
+            [cur(0, "intro", "e0"), cur(1, None, "eB")],
+            [base(0, "intro", "d0"), base(1, "d1", "dB")],
+            [base(0, "intro", "e0")],
+            source="git-head",
+        )
+        assert plan.count("add") == 0
+        assert plan.count("refuse") == 2
+        assert plan.in_sync_count == 1
+
 
 # ---------------------------------------------------------------------------
 # build_sync_plan (IO wrapper: baseline resolution)
@@ -686,6 +703,21 @@ class TestBuildSyncPlanGitFallback:
         assert plan.count("add") == 0  # the doubling adds are gone
         assert plan.count("refuse") == 2
         assert plan.in_sync_count == 1  # s1 still pairs
+
+    def test_committed_mixed_idd_idless_partial_overlap_refuses(self, tmp_path: Path):
+        # #226 mixed variant end-to-end: share `s1`, but "B" is committed id'd on DE
+        # (`d1`) and committed id-less on EN. Was a silent double (id'd add de->en +
+        # id-less add en->de, neither caught by a single-bucket guard); now refused.
+        de_path, en_path = self._commit_pair(
+            tmp_path,
+            _slide("de", "s1", "# ## A") + _slide("de", "d1", "# ## B"),
+            _slide("en", "s1", "# ## A") + _slide_idless("en", "# ## B"),
+        )
+        plan = build_sync_plan(de_path, en_path, provider_available=True)
+        assert plan.baseline_source == "git-head"  # shares s1 → keeps its baseline
+        assert plan.count("add") == 0
+        assert plan.count("refuse") == 2
+        assert plan.in_sync_count == 1
 
     def test_committed_one_directional_idcarrying_add_still_propagates(self, tmp_path: Path):
         # REGRESSION: the common "add the missing counterpart" — a committed id'd slide
