@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from clm.infrastructure.llm.cache import SyncWatermarkCache
 from clm.infrastructure.llm.ollama_client import StaticSyncJudge, SyncProposal
 from clm.notebooks.slide_parser import parse_cells
@@ -871,6 +873,47 @@ class TestApplyAdd:
         assert result.watermark_recorded is False
         # No duplication: each deck still has exactly its slide + one id-less new.
         assert len(_slide_order(de_path)) == 2  # "a" + one id-less
+        assert len(_slide_order(en_path)) == 2
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="#216 (id-CARRYING sibling): the both-directions guard at "
+        "sync_apply.py:710-718 covers only id-LESS adds. A cold-start pair whose "
+        "halves carry DIFFERENT slide_ids (e.g. assign-ids run per half) makes the "
+        "classifier emit id-carrying adds in BOTH directions, which "
+        "_add_idcarrying_one_direction applies unconditionally — silently DOUBLING "
+        "both decks with no error. The guard must cover idd both-directions too.",
+    )
+    def test_cold_start_mismatched_ids_must_not_double(self, tmp_path: Path):
+        # Both halves carry slide_ids, but DIFFERENT ones, and there is no baseline.
+        de = _slide("de", "d1", "# ## A") + _slide("de", "d2", "# ## B")
+        en = _slide("en", "e1", "# ## A") + _slide("en", "e2", "# ## B")
+        de_path, en_path = _write_pair(tmp_path, de, en)
+        plan = build_sync_plan(de_path, en_path, watermark_cache=None)
+        translator = StaticSlideTranslator(default="# ## X")
+        result = apply_plan(plan, judge=None, translator=translator, watermark_cache=None)
+        # Desired: a cold-start mismatched pair is NOT auto-applied (it would
+        # duplicate every cell on both halves). Currently applies 4 -> xfail.
+        assert result.applied_add == 0
+        assert len(_slide_order(de_path)) == 2
+        assert len(_slide_order(en_path)) == 2
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="#216 (id-CARRYING sibling): a cold-start HALF-id'd pair (one half "
+        "id-less, the other id'd) doubles both decks — the id-less half adds de->en "
+        "(id-less, guarded only if the other direction is also id-less) while the "
+        "id'd half adds en->de (id-carrying, never guarded), so both sets apply.",
+    )
+    def test_cold_start_half_idd_must_not_double(self, tmp_path: Path):
+        de = _slide_idless("de", "# ## A") + _slide_idless("de", "# ## B")
+        en = _slide("en", "s1", "# ## A") + _slide("en", "s2", "# ## B")
+        de_path, en_path = _write_pair(tmp_path, de, en)
+        plan = build_sync_plan(de_path, en_path, watermark_cache=None)
+        translator = StaticSlideTranslator(default="# ## X")
+        result = apply_plan(plan, judge=None, translator=translator, watermark_cache=None)
+        assert result.applied_add == 0
+        assert len(_slide_order(de_path)) == 2
         assert len(_slide_order(en_path)) == 2
 
 

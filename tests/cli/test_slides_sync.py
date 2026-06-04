@@ -105,6 +105,26 @@ def _stub_judge(
     )
 
 
+def _stub_translator(monkeypatch, *, default: str = "# ## Translated\n#\n# - point") -> None:
+    """Patch the CLI's translator factory to a non-failing static translator.
+
+    Mirrors :func:`_stub_judge`: it replaces the ``OpenRouterSlideTranslator``
+    symbol the command constructs, so a writing run translates id-less adds
+    offline. A translator that always succeeds means a deferral can only come from
+    the engine's own decision, never a missing translation.
+    """
+    from clm.cli.commands import slides_sync as cmd
+    from clm.slides.sync_translate import StaticSlideTranslator
+
+    monkeypatch.setattr(
+        cmd, "OpenRouterSlideTranslator", lambda **_kwargs: StaticSlideTranslator(default=default)
+    )
+
+
+def _idless_slide(lang: str, body: str) -> str:
+    return f'# %% [markdown] lang="{lang}" tags=["slide"]\n{body}\n'
+
+
 def _combined(result) -> str:
     return (result.stderr or "") + (result.output or "")
 
@@ -1051,3 +1071,78 @@ class TestBatchMode:
         # the nested .env was missed → judge unavailable → exit 2.
         assert result.exit_code == 0, _combined(result)
         assert "Point one" in en_path.read_text(encoding="utf-8")
+
+
+class TestDryRunApplyParity:
+    """``--dry-run`` must predict the writing run (#216).
+
+    A preview that promises changes a writing run silently refuses (or that exits
+    "clean / changes-pending" when the writing run errors and writes nothing) is a
+    misleading preview. These tests drive the real command twice — once with
+    ``--dry-run``, once writing — over the same fixture, with the judge/translator
+    stubbed so the only thing under test is whether the preview matches the act.
+    """
+
+    def test_dry_run_add_count_matches_apply(
+        self, cli_runner: CliRunner, tmp_path: Path, monkeypatch
+    ):
+        # Watermark baseline; the author appends ONE id-less slide on DE only.
+        cache_dir = tmp_path / "cache"
+        de_base = _cell("de", "a", "# ## A")
+        en_base = _cell("en", "a", "# ## A")
+        de_path, en_path = _write_pair(tmp_path, de_base, en_base, stem="parity")
+        _seed_watermark(
+            cache_dir, de_path.resolve(), en_path.resolve(), de_text=de_base, en_text=en_base
+        )
+        de_path.write_text(de_base + _idless_slide("de", "# ## Neu"), encoding="utf-8")
+
+        dry = cli_runner.invoke(
+            slides_sync_cmd,
+            [str(de_path), str(en_path), "--dry-run", "--cache-dir", str(cache_dir)],
+        )
+        assert dry.exit_code == 1, _combined(dry)  # one change pending
+        assert "1 add" in dry.output
+
+        _stub_judge(monkeypatch, _EN_PROPOSAL)
+        _stub_translator(monkeypatch)
+        applied = cli_runner.invoke(
+            slides_sync_cmd, [str(de_path), str(en_path), "--cache-dir", str(cache_dir)]
+        )
+        # The preview's promise (1 add, applicable) is what the writing run did.
+        assert applied.exit_code == 0, _combined(applied)
+        assert "1 add" in applied.output
+        assert "# ## Neu" in de_path.read_text(encoding="utf-8")
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="#216: for a cold-start parallel id-less pair the dry-run promises "
+        "N adds and exits 1 (changes pending), but a writing run defers them all "
+        "with an error and exits 2, writing nothing — the preview misleads. The fix "
+        "must make the plan honest (pair-and-mint, or surface the refusal as an issue).",
+    )
+    def test_dry_run_promise_matches_apply_for_parallel_idless(
+        self, cli_runner: CliRunner, tmp_path: Path, monkeypatch
+    ):
+        de = _idless_slide("de", "# ## Eins") + _idless_slide("de", "# ## Zwei")
+        en = _idless_slide("en", "# ## One") + _idless_slide("en", "# ## Two")
+        de_path, en_path = _write_pair(tmp_path, de, en, stem="cold")
+
+        dry = cli_runner.invoke(
+            slides_sync_cmd, [str(de_path), str(en_path), "--dry-run", "--no-cache"]
+        )
+        assert dry.exit_code == 1, _combined(dry)  # "changes pending"
+        assert "baseline=none" in dry.output
+
+        _stub_judge(monkeypatch, _EN_PROPOSAL)
+        _stub_translator(monkeypatch)
+        applied = cli_runner.invoke(slides_sync_cmd, [str(de_path), str(en_path), "--no-cache"])
+        # Whatever happens, the writing run must not corrupt the decks.
+        assert de_path.read_text(encoding="utf-8") == de
+        assert en_path.read_text(encoding="utf-8") == en
+        # The contract the fix must restore: a writing-run error (exit 2) must have
+        # been foreseen by the dry-run (also exit 2). Today dry=1, apply=2 -> xfail.
+        if applied.exit_code == 2:
+            assert dry.exit_code == 2, (
+                f"writing run errored (exit 2) but dry-run reported exit "
+                f"{dry.exit_code}: {_combined(applied)}"
+            )
