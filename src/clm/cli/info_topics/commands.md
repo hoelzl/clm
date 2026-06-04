@@ -1501,6 +1501,7 @@ the spec.
 | Subcommand | Description |
 |------------|-------------|
 | `release add SPEC_FILE TOPIC_IDS… --channel NAME` | Append topic ids to the channel's ledger (validated against the spec). |
+| `release week SPEC_FILE SELECTORS… --channel NAME` | Append **every topic in the selected section(s)** to the ledger — a section-scoped `release add`. `SELECTORS` use the `build --only-sections` grammar (`id:`/`idx:`/`name:` prefixes, or a bare 1-based index / name substring). Section indices are disabled-inclusive; a selected-but-`enabled="false"` section is reported and skipped. |
 | `release status SPEC_FILE --channel NAME` | Show released vs pending topics, and (with a resolvable `--dest`/`--channel`) frozen vs awaiting-sync. |
 | `release sync SPEC_FILE --channel NAME` | Promote released-but-not-frozen topics from the built source into the cohort repo and freeze them. |
 
@@ -1533,6 +1534,7 @@ Examples:
 ```bash
 clm build course.xml                                       # writes .clm-manifest.json
 clm release add course.xml functions lists --channel jan   # release two topics to a cohort
+clm release week course.xml "name:Week 1" --channel jan    # release a whole section's topics
 clm release status course.xml --channel jan                # what's released vs pending/frozen
 clm git init course.xml --channel jan                      # one-time: create the cohort repo
 clm release sync course.xml --channel jan --push -m "Release functions, lists"

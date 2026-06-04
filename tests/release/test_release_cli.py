@@ -205,6 +205,147 @@ def test_channel_resolves_ledger_source_and_dest_from_spec(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# `clm release week` (follow-up 3) — section-scoped ledger append
+# ---------------------------------------------------------------------------
+
+# test-spec-1 sections: "Week 1" (3 topics) and "Week 2" (1 topic).
+WEEK1_TOPICS = {"some_topic_from_test_1", "a_topic_from_test_2", "punctuation_test"}
+WEEK2_TOPICS = {"another_topic_from_test_1"}
+
+# A multi-section spec whose middle section is disabled, to exercise the
+# disabled-inclusive section index (an enabled="false" section still consumes
+# its 1-based index — selecting "3" must reach the third *authored* section).
+SPEC_WITH_DISABLED = """
+<course>
+  <name><de>T</de><en>T</en></name>
+  <prog-lang>python</prog-lang>
+  <sections>
+    <section id="w01">
+      <name><de>Woche 1</de><en>Week 1</en></name>
+      <topics><topic>w1_a</topic><topic>w1_b</topic></topics>
+    </section>
+    <section id="w02" enabled="false">
+      <name><de>Woche 2</de><en>Week 2</en></name>
+      <topics><topic>w2_a</topic></topics>
+    </section>
+    <section id="w03">
+      <name><de>Woche 3</de><en>Week 3</en></name>
+      <topics><topic>w3_a</topic><topic>w3_b</topic></topics>
+    </section>
+  </sections>
+</course>
+""".strip()
+
+
+def _write_spec(tmp_path: Path, body: str) -> Path:
+    """Write a spec under a ``course-specs`` subdir (so resolve_course_paths,
+    used by --channel resolution, treats the grandparent as the course root)."""
+    specs_dir = tmp_path / "course-specs"
+    specs_dir.mkdir(exist_ok=True)
+    spec_file = specs_dir / "course.xml"
+    spec_file.write_text(body, encoding="utf-8")
+    return spec_file
+
+
+def test_week_releases_a_section_by_name(tmp_path):
+    runner = CliRunner()
+    ledger = tmp_path / "jan.txt"
+
+    result = runner.invoke(
+        release_group, ["week", str(SPEC), "name:Week 1", "--ledger", str(ledger)]
+    )
+    assert result.exit_code == 0, result.output
+    assert set(Ledger.load(ledger).released) == WEEK1_TOPICS
+    # The other section's topic is untouched.
+    assert "another_topic_from_test_1" not in Ledger.load(ledger).released
+
+
+def test_week_releases_a_section_by_index(tmp_path):
+    runner = CliRunner()
+    ledger = tmp_path / "jan.txt"
+    # Bare 1-based index selects the second authored section ("Week 2").
+    result = runner.invoke(release_group, ["week", str(SPEC), "2", "--ledger", str(ledger)])
+    assert result.exit_code == 0, result.output
+    assert set(Ledger.load(ledger).released) == WEEK2_TOPICS
+
+
+def test_week_index_is_disabled_inclusive(tmp_path):
+    """Selecting index ``3`` must reach the third *authored* section even
+    though the second is disabled — the index space is disabled-inclusive."""
+    runner = CliRunner()
+    spec = _write_spec(tmp_path, SPEC_WITH_DISABLED)
+    ledger = tmp_path / "jan.txt"
+
+    result = runner.invoke(release_group, ["week", str(spec), "3", "--ledger", str(ledger)])
+    assert result.exit_code == 0, result.output
+    # Index 3 → "Week 3", NOT the disabled "Week 2".
+    assert set(Ledger.load(ledger).released) == {"w3_a", "w3_b"}
+
+
+def test_week_warns_and_skips_a_disabled_section(tmp_path):
+    """When the selection includes both an enabled and a disabled section, the
+    disabled one is reported and skipped; the enabled one still releases."""
+    runner = CliRunner()
+    spec = _write_spec(tmp_path, SPEC_WITH_DISABLED)
+    ledger = tmp_path / "jan.txt"
+
+    result = runner.invoke(
+        release_group, ["week", str(spec), "id:w01", "id:w02", "--ledger", str(ledger)]
+    )
+    assert result.exit_code == 0, result.output
+    assert "skipping disabled section 'w02'" in result.output
+    released = set(Ledger.load(ledger).released)
+    assert released == {"w1_a", "w1_b"}
+    assert "w2_a" not in released
+
+
+def test_week_all_disabled_selection_errors(tmp_path):
+    runner = CliRunner()
+    spec = _write_spec(tmp_path, SPEC_WITH_DISABLED)
+    ledger = tmp_path / "jan.txt"
+
+    result = runner.invoke(release_group, ["week", str(spec), "id:w02", "--ledger", str(ledger)])
+    assert result.exit_code != 0
+    assert "disabled" in result.output
+    assert not ledger.exists()
+
+
+def test_week_unknown_selector_errors(tmp_path):
+    runner = CliRunner()
+    ledger = tmp_path / "jan.txt"
+    result = runner.invoke(
+        release_group, ["week", str(SPEC), "name:NoSuchWeek", "--ledger", str(ledger)]
+    )
+    assert result.exit_code != 0
+    assert "did not match" in result.output
+    assert not ledger.exists()
+
+
+def test_week_reports_already_released_on_rerun(tmp_path):
+    runner = CliRunner()
+    ledger = tmp_path / "jan.txt"
+    args = ["week", str(SPEC), "name:Week 1", "--ledger", str(ledger)]
+
+    first = runner.invoke(release_group, args)
+    assert first.exit_code == 0, first.output
+    second = runner.invoke(release_group, args)
+    assert second.exit_code == 0, second.output
+    assert "Already released" in second.output
+    # Re-running does not duplicate ledger entries.
+    assert sorted(Ledger.load(ledger).released) == sorted(WEEK1_TOPICS)
+
+
+def test_week_resolves_ledger_from_channel(tmp_path):
+    runner = CliRunner()
+    spec_file = _write_spec(tmp_path, SPEC_WITH_CHANNELS)
+
+    # SPEC_WITH_CHANNELS has one section ("S") with topic "intro".
+    result = runner.invoke(release_group, ["week", str(spec_file), "name:S", "--channel", "jan"])
+    assert result.exit_code == 0, result.output
+    assert Ledger.load(tmp_path / "release" / "jan.txt").released == ["intro"]
+
+
+# ---------------------------------------------------------------------------
 # `clm release sync --push` (step 3d) — real-git end-to-end
 # ---------------------------------------------------------------------------
 

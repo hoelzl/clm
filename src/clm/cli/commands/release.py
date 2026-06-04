@@ -25,7 +25,7 @@ from clm.cli.commands.git_ops import (
     find_release_channel_repos,
 )
 from clm.core.course_paths import resolve_course_paths
-from clm.core.course_spec import CourseSpec
+from clm.core.course_spec import CourseSpec, CourseSpecError, SectionSpec
 from clm.core.provenance_manifest import MANIFEST_FILENAME, load_manifest
 from clm.release.frozen_manifest import FROZEN_FILENAME, FrozenManifest
 from clm.release.ledger import Ledger, partition_known
@@ -205,6 +205,83 @@ def add_cmd(
     if added:
         click.echo(f"Released {len(added)} topic(s): {', '.join(added)}")
     already = [tid for tid in known if tid not in added]
+    if already:
+        click.echo(f"Already released ({len(already)}): {', '.join(already)}")
+
+
+def _section_label(section: SectionSpec) -> str:
+    """Display label for a section: its id, else its English/German name."""
+    if section.id:
+        return section.id
+    return section.name.en or section.name.de
+
+
+@release_group.command("week")
+@_SPEC_ARG
+@click.argument("selectors", nargs=-1, required=True)
+@_CHANNEL_OPT
+@_LEDGER_OPT
+def week_cmd(
+    spec_file: Path, selectors: tuple[str, ...], channel: str, ledger_path: Path | None
+) -> None:
+    """Release every topic in the selected section(s) — a "week" — to a channel.
+
+    SELECTORS use the same grammar as ``build --only-sections``: ``id:`` /
+    ``idx:`` / ``name:`` prefixes, or a bare 1-based index or
+    case-insensitive name substring. A "week" is a course section; this
+    resolves the matching section(s), expands them to their topic ids, and
+    appends those to the channel ledger — a section-scoped ``release add``.
+
+    Section indices are **disabled-inclusive** (an ``enabled="false"`` section
+    still consumes its index), so the spec is parsed keeping disabled sections
+    and any selected-but-disabled section is reported and skipped rather than
+    silently shifting which topics get released.
+    """
+    if ledger_path is None and channel:
+        ledger_path = _resolve_channel(spec_file, channel).ledger
+    if ledger_path is None:
+        raise click.ClickException("Pass --ledger PATH or --channel NAME.")
+
+    # Parse keeping disabled sections so the selector indices line up with the
+    # authoring order (see CourseSpec.resolve_section_selectors). Disabled
+    # sections never land in resolved_indices — they are collected separately
+    # into skipped_disabled — so expanding resolved_indices to topics yields
+    # only enabled sections' topics.
+    try:
+        spec = CourseSpec.from_file(spec_file, keep_disabled=True)
+        selection = spec.resolve_section_selectors(list(selectors))
+    except CourseSpecError as e:
+        raise click.ClickException(str(e)) from None
+
+    for label in selection.skipped_disabled:
+        click.echo(f"Warning: skipping disabled section '{label}' (enabled=\"false\").")
+
+    topic_ids: list[str] = []
+    seen: set[str] = set()
+    selected_labels: list[str] = []
+    for idx in selection.resolved_indices:
+        section = spec.sections[idx]
+        selected_labels.append(_section_label(section))
+        for topic in section.topics:
+            if topic.id not in seen:
+                seen.add(topic.id)
+                topic_ids.append(topic.id)
+
+    if not topic_ids:
+        raise click.ClickException("The selected section(s) declare no topics; nothing to release.")
+
+    click.echo(
+        f"Selected {len(selected_labels)} of {len(spec.sections)} section(s): "
+        + ", ".join(selected_labels)
+    )
+
+    ledger = Ledger.load(ledger_path)
+    added = ledger.add(topic_ids)
+    ledger.save(ledger_path)
+
+    if added:
+        click.echo(f"Released {len(added)} topic(s): {', '.join(added)}")
+    already = [tid for tid in topic_ids if tid not in added]
     if already:
         click.echo(f"Already released ({len(already)}): {', '.join(already)}")
 
