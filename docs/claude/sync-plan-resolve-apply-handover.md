@@ -4,7 +4,7 @@
 **Design note:** `docs/claude/design/sync-plan-resolve-apply.md` (the canonical spec)
 **Base design:** `docs/claude/design/single-language-authoring-sync.md` (the #166 engine)
 **Memory:** `project-sync-coldstart-idless-bug` (corrected framing + verified findings)
-**Status:** design accepted; **Phase 1 DONE** (all 5 xfails flipped); **Phase 2 DONE (scoped: edit + add materialized)**; **Phase 3 design FINALIZED** (decisions baked — design note §12 + Phase 3 below), implementation not started — the actual #158 unblock.
+**Status:** design accepted; **Phase 1 DONE**; **Phase 2 DONE (scoped: edit + add materialized)**; **Phase 3.1 (id-less cold-pair minting) DONE** — the id-less half of the #158 unblock; **Phase 3.2 (half-id'd adopt) is NEXT** (see Phase 3 below — `unify` won't pair half-id'd, so it needs an explicit adopt path).
 
 ---
 
@@ -165,10 +165,37 @@ The original TODO recipe (kept for reference):
   seams suffice; the add seam is ordering-sensitive, so it can't simply hoist to
   the top of `apply_plan`).
 
-### Phase 3 — Cold-start minting + correspondence gate  **[NEXT — design finalized]**
-- **Goal:** `clm slides sync` becomes the proper cold-start id minter — the actual
-  #158 unblock. **The authoritative, decision-baked plan is design note §12**; the
-  summary below mirrors it.
+### Phase 3 — Cold-start minting + correspondence gate  **[3.1 (id-less) DONE; 3.2 (half-id'd) NEXT]**
+
+**3.1a/3.1b SHIPPED** (commits `5bdf4d4` verifier tier + the id-less wiring commit):
+`clm slides sync` now bootstraps a never-id'd **both-id-less** cold pair end-to-end
+— `build_sync_plan(provider_available=...)` emits a `pending` `mint` candidate for a
+unifiable pair; `apply_plan` verifies via `CorrespondenceVerifier` (in
+`sync_recover.py`, mirroring `AlignmentRecoverer`; `SyncCorrespondenceCache` in
+`cache.py`) and mints via `assign_ids_in_split_pair`; `--verify-cold-pairs`
+(default-on when `has_openrouter_api_key()`) wires it through single/batch/walker.
+`mint` kind + `pending` disposition + `applied_mint` added. **17 verifier unit tests
++ 7 engine mint tests + 1 CLI mint test; 1131 sync tests green.**
+
+**Resolved open checks (record these):**
+- **Half-id'd is NOT handled by `assign_ids_in_split_pair`.** `unify`'s
+  `_slide_ids_pair` returns `de_id == en_id`, so a half-id'd pair (`None` vs an id)
+  does **not** pair under unify → the minter would mint *separate* ids, not adopt.
+  So **3.2 needs an explicit `adopt` path** (positional-stream pairing + stamp the
+  id'd side's id onto the id-less twin). Both-id-less *does* pair (`None==None`).
+- `provider_available` helper = `has_openrouter_api_key()` (`openrouter_client.py`).
+- Verifier cache = a new `SyncCorrespondenceCache` sibling table (`sync_correspondences`).
+
+**3.2 — half-id'd adopt (NEXT):** in `_maybe_emit_cold_mint`, the half-id'd refusal
+(mixed id-less + id'd) currently bails (any `slide_id is not None` → skip). Add an
+`adopt` candidacy + an `_apply_cold_adopt` that positionally pairs the id'd and
+id-less localized streams and stamps the existing id onto the id-less twin (no
+translation — both bodies exist), gated by the same `CorrespondenceVerifier`. New
+tests: half-id'd confirmed→adopt / denied→refuse. `TestColdStartMint::test_half_idd_pair_keeps_refuse_in_phase_3_1`
+flips to an adopt assertion.
+
+- **Goal (overall):** `clm slides sync` becomes the proper cold-start id minter — the
+  actual #158 unblock. **The authoritative, decision-baked plan is design note §12.**
 - **Decisions (settled 2026-06-04 with the maintainer):**
   - **Scope:** mint **id-less** both-directions cold pairs (the #158 case) **and**
     **half-id'd** pairs (id-less half adopts the id'd half's ids); **mismatched-id**

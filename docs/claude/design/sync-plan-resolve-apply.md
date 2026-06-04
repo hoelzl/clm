@@ -13,7 +13,10 @@ the resolver; all 5 parity/doubling xfails flipped — §9). **Phase 2 DONE (sco
 the edit and add paths are materialize-then-execute (the model calls moved to 2b;
 execute writes mechanically). The id-migration recoverer and the `sync_code`
 structural translate remain inline as **explicitly-deferred follow-ups** (§10).
-Phase 3 pending.
+**Phase 3.1 (id-less cold-pair minting) DONE** — `build_sync_plan` emits a `pending`
+mint candidate, `apply_plan` verifies via the new `CorrespondenceVerifier` and mints
+via `assign_ids_in_split_pair`; `--verify-cold-pairs` default-on with a provider.
+**Phase 3.2 (half-id'd adopt) is next** (§12).
 
 ---
 
@@ -238,13 +241,15 @@ follow-ups (call models inline still):** the id-migration recoverer and the
 `sync_code` structural translate; and a single bundled `MaterializedPlan` object
 (the two materialize seams suffice, and the add seam is ordering-sensitive).
 
-**Phase 3 — Cold-start minting + correspondence gate. [NEXT — finalized plan in
-§12].** `build_sync_plan` emits a `pending` mint candidate for a provider-available,
-unifiable cold pair; a `CorrespondenceVerifier` (2b) confirms the heading/snippet
-pairs; the mint delegates to `assign_ids_in_split_pair` (handles id-less + half-id'd;
-mismatched-id stays `refuse`). *Flips:* the `TestColdStartRefusalParity` cases to
-mint-under-a-confirming-verifier. Unblocks the **1.8 PythonCourses gate** (~200
-id-less split halves; see `#158`).
+**Phase 3 — Cold-start minting + correspondence gate. [3.1 (id-less) DONE; 3.2
+(half-id'd) NEXT — see §12].** `build_sync_plan` emits a `pending` mint candidate for
+a provider-available, unifiable cold pair; a `CorrespondenceVerifier` (2b) confirms
+the heading/snippet pairs; the mint delegates to `assign_ids_in_split_pair`.
+**3.1 done** (id-less; mismatched-id stays `refuse`). **3.2** adds the half-id'd
+*adopt* — separate from `assign_ids_in_split_pair`, which **cannot** adopt because
+`unify` does not pair an id-less cell with an id'd one (`_slide_ids_pair` is
+`de_id == en_id`). Unblocks the **1.8 PythonCourses gate** (~200 id-less split
+halves; see `#158`).
 
 ## 11. Open questions / deferred
 
@@ -328,10 +333,20 @@ when a provider is set), resolving the verifier like `_resolve_recoverer`; pass
 plus a half-id'd adopt case, a not-unifiable→refuse case, and verifier caching
 (calls==1 on re-run). Dry-run shows pending; apply mints or downgrades.
 
-**Open implementation checks (resolve while building):**
+**Open implementation checks — RESOLVED (3.1):**
 
-- Confirm `assign_ids_in_split_pair` / `unify` propagates an existing id onto the
-  id-less twin for the **half-id'd** case. If not, add an explicit `adopt_id` stamp.
-- Choose the verifier cache (extend `SyncAlignmentCache` vs a sibling table).
-- `provider_available` detection helper (env-based; reuse the judge/translator key
-  resolution).
+- **Half-id'd: `assign_ids_in_split_pair` / `unify` does NOT adopt.** `unify`'s
+  `_slide_ids_pair(de, en)` is `de_id == en_id`, so an id-less cell never pairs with
+  an id'd one — the minter would mint *separate* ids, not adopt. So **3.2 needs an
+  explicit `adopt` path** (positional-stream pairing + stamp the id'd side's id onto
+  the id-less twin). Both-id-less *does* pair (`None == None` → adjacency), which is
+  why 3.1's id-less mint works through `assign_ids_in_split_pair`.
+- Verifier cache = a new `SyncCorrespondenceCache` (sibling table `sync_correspondences`).
+- `provider_available` = `has_openrouter_api_key()` (`openrouter_client.py`).
+
+**3.1 implementation notes (shipped):** the `pending` `mint` candidate is one
+per-pair marker; apply re-derives the aligned `(de, en)` slide pairs from the
+(unchanged) files by positional zip of the slide cells (`_build_slide_pairs`), then
+`_resolve_correspondence` (mirrors `_resolve_alignment`) verifies + caches. The mint
+short-circuits the whole `apply_plan` (a cold pair has no other ops). Verifier inputs
+are heading + the lines *after* the heading (a short lead snippet) + role.
