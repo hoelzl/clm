@@ -62,8 +62,16 @@ manifest) + **one orchestration layer** (`clm release`) that promotes frozen
     user-facing surface documented in the three info topics. Adversarial review
     (5 dimensions, 11 confirmed findings): 10 fixed, 1 deferred (see Session
     Notes).
-- **Step 4 — multi-cohort tests** `[TODO]` (mostly emergent) ← NEXT.
-- **Step 5 — recording → slide-version provenance** `[TODO]`.
+- **Step 4 — multi-cohort tests `[DONE]`** (`tests/release/test_multi_cohort.py`,
+  8 end-to-end tests). Pins the concurrent-cohort guarantees: each cohort
+  freezes/ships only its own released topics; a frozen topic **and the skeleton**
+  are never re-propagated on a source change (so cohorts on different schedules
+  diverge); `--refreeze` is the only override; unchanged re-sync is a no-op; two
+  channels resolve+diverge from one spec; `topic_digest` is order-independent;
+  a released-but-unbuilt topic is skipped (retried) then frozen once built.
+  Engine was already capable — this is coverage. Non-vacuity + scope confirmed
+  by an adversarial review (3 gaps it found are closed).
+- **Step 5 — recording → slide-version provenance** `[TODO]` ← NEXT.
 - **Follow-ups** `[TODO]`: `SharedImageFile` (shared image mode); `clm release
   week` (section-selector index space is disabled-inclusive — a landmine);
   one real-build integration test asserting a `--snapshot` DIR stays
@@ -75,7 +83,7 @@ manifest) + **one orchestration layer** (`clm release`) that promotes frozen
 
 ## 4. Current Status
 
-Steps 1, 2, and 3 (3a/3b/3c/3d) are **all complete**. The full flow works
+Steps 1, 2, 3 (3a/3b/3c/3d), and 4 are **all complete**. The full flow works
 end-to-end with the manifest **on by default**:
 
 ```bash
@@ -85,11 +93,13 @@ clm git init course.xml --channel jan                 # one-time: make the cohor
 clm release sync course.xml --channel jan --push -m "Release functions"  # promote+freeze+push
 ```
 
-- **Tests**: ~90 across the feature, all green (incl. the 3d additions:
+- **Tests**: ~100 across the feature, all green. 3d additions:
   `_should_emit_provenance_manifest` / `_resolve_write_provenance_manifest`
   matrices + wiring in `test_build_command.py`; the `--push` real-git suite +
   refreeze/idempotency/self-heal/de-masked-exclusion in `test_release_cli.py`;
-  the remote-ahead guard in `test_git_release_channels.py`). ruff + mypy clean.
+  the remote-ahead guard in `test_git_release_channels.py`. Step 4 adds 8
+  end-to-end multi-cohort divergence tests in `test_multi_cohort.py`. ruff +
+  mypy clean.
 - **3d adversarial review** (5 dimensions, 11 confirmed findings): 10 fixed in
   the same diff, 1 deferred (the snapshot real-build coverage test — see §8).
 - The manifest exclusion is **self-healing** and shared: both `clm git sync` and
@@ -98,16 +108,21 @@ clm release sync course.xml --channel jan --push -m "Release functions"  # promo
   exclude-add), so a pre-exclusion-tracked manifest is purged on the next push.
 - No blockers.
 
-## 5. Next Steps — Step 4: multi-cohort tests (then Step 5)
+## 5. Next Steps — Step 5: recording → slide-version provenance
 
-Step 3 is done. The next increment is **Step 4 — multi-cohort divergence tests**
-(mostly emergent): exercise two cohorts on different release schedules against
-the same source and assert each freezes/ships only its own released topics, that
-a frozen topic is never re-propagated when the source changes, and that
-`--refreeze` is the only override. The release engine already supports this; the
-gap is coverage, not capability.
+Steps 1–4 are done. The next increment is **Step 5 — recording → slide-version
+provenance**: extend the recordings state (`src/clm/recordings/state.py`
+`RecordingPart` / `TakeRecord`, which already capture `git_commit`) with the
+recorded slide's `content_hash` + `section_id` / `topic_id`, so "what changed in
+this slide since it was recorded" becomes a diff of the stored hash against the
+current `.clm-manifest.json` entry — reusing the same provenance manifest the
+release engine consumes. Mostly additive; mind the recordings package is an
+optional extra (do not import it from build).
 
-Then **Step 5 — recording → slide-version provenance** (`[TODO]`).
+Also still open (smaller): the `SharedImageFile` step-1 manifest gap
+(`image_mode="shared"`); `clm release week` (the section-selector index space is
+disabled-inclusive — a landmine); and the deferred 3d review finding #6 (a
+real-build `--snapshot` manifest-free integration test).
 
 **Carry-forward gotchas**: `git_ops.py` `OutputRepo` is mutable (not attrs);
 `run_git` honors the `_dry_run_mode` ContextVar; `resolve_course_paths` returns
@@ -226,3 +241,13 @@ divergence (step 4), recordings (step 5).
   even if `_stage_all_excluding_sidecars` is gutted (the 3d review caught exactly
   this). See `_init_cohort_repo(gitignore_manifest=False)` in
   `tests/release/test_release_cli.py`.
+- **Step 4 test harness:** `tests/release/test_multi_cohort.py` fabricates a
+  frozen source synthetically — `_write_source_entries(root, source_commit=,
+  entries=[(path, topic_id, body), ...])` writes a `.clm-manifest.json` + bodies
+  with `content_hash` derived from each body, so a changed body yields different
+  copied bytes AND a different `topic_digest` (a real rebuild). Pass `entries`
+  in a chosen order to exercise `_topic_digest`'s order-independence; vary
+  `_build_source(..., skeleton_body=)` to prove the skeleton is pinned across a
+  source change (not just present). No real build runs — these are engine/CLI
+  tests, fast, no git. The divergence guarantee is asserted on real dest bytes
+  AND `FrozenRecord.source_commit`/`topic_digest`, not just on log strings.
