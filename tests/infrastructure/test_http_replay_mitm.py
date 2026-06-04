@@ -35,6 +35,14 @@ from clm.infrastructure.http_replay_mitm.proxy_manager import (
     _locate_mitmdump,
 )
 
+# Every test here launches a real mitmdump subprocess (proxy startup +
+# port bind). Pin the module onto one xdist worker so these spawns run
+# one-at-a-time instead of racing each other across workers and
+# oversubscribing the box (the documented #184 contention family). See the
+# ``serial`` marker in pyproject and its xdist_group mapping in
+# ``tests/conftest.py``.
+pytestmark = pytest.mark.serial
+
 # Skip the whole module if mitmdump isn't reachable — the [mitmproxy]
 # extra installs the Python package but the executable lookup may still
 # fail on some environments.

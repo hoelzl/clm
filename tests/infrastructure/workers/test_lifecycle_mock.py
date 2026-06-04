@@ -19,6 +19,14 @@ import pytest
 
 from tests.fixtures.mock_workers import MockWorker, MockWorkerConfig, MockWorkerPool
 
+# These tests start worker threads and poll committed SQLite registration
+# state. Under heavy xdist load the worker threads can be starved long enough
+# that registration appears to stall (issue #163). The polling helpers already
+# use generous timeouts; pinning the module onto one xdist worker additionally
+# stops it from racing other heavy tests for CPU. See the ``serial`` marker in
+# pyproject and its xdist_group mapping in ``tests/conftest.py``.
+pytestmark = pytest.mark.serial
+
 
 class TestMockWorkerBasics:
     """Test basic mock worker functionality."""
