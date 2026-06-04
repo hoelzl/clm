@@ -394,6 +394,9 @@ def _init_bare_remote(path: Path) -> Path:
     return path
 
 
+# Real-`git` end-to-end (commit + push to a local remote); ~2-4s/test. Runs in
+# CI's integration step, excluded from the per-commit fast suite.
+@pytest.mark.integration
 class TestSyncPush:
     @pytest.fixture(autouse=True)
     def _git_identity(self, monkeypatch):

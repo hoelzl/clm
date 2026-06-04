@@ -249,6 +249,9 @@ class TestSnapshotInference:
 # ---------------------------------------------------------------------------
 
 
+# Real-`git` repos (init/commit for timestamp inference); ~3s/test. Runs in CI's
+# integration step, excluded from the per-commit fast suite.
+@pytest.mark.integration
 class TestGitTimestampInference:
     def test_more_recent_commit_wins(self, tmp_path: Path):
         _init_repo(tmp_path)
@@ -304,6 +307,9 @@ class TestGitTimestampInference:
 # ---------------------------------------------------------------------------
 
 
+# Real-`git` repos (snapshot-vs-git timestamp interaction); ~3s/test. Runs in
+# CI's integration step, excluded from the per-commit fast suite.
+@pytest.mark.integration
 class TestSnapshotGitInteraction:
     def test_snapshot_wins_over_agreeing_git(self, tmp_path: Path):
         """When both signals point at the same side, snapshot is named in the result."""

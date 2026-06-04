@@ -217,7 +217,11 @@ class TestDbVacuum:
         import os
 
         jobs_db = initialized_dbs["jobs"]
-        _grow_jobs_db_freelist(jobs_db)
+        # 100 rows × 64 KiB = ~6 MiB of freelist — far above SQLite's page
+        # granularity, so the on-disk shrink stays unambiguous while halving the
+        # ~200 committed inserts (the fsync-bound cost that made this the single
+        # slowest fast-suite test on Windows).
+        _grow_jobs_db_freelist(jobs_db, rows=100)
 
         # Sanity: there is reclaimable space and the file is sizeable.
         with JobQueue(jobs_db) as jq:
