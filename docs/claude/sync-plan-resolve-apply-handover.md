@@ -4,7 +4,7 @@
 **Design note:** `docs/claude/design/sync-plan-resolve-apply.md` (the canonical spec)
 **Base design:** `docs/claude/design/single-language-authoring-sync.md` (the #166 engine)
 **Memory:** `project-sync-coldstart-idless-bug` (corrected framing + verified findings)
-**Status:** design accepted, both forks settled, test spec committed; **Phase 1 not started.**
+**Status:** design accepted, both forks settled; **Phase 1 DONE** (all 5 xfails flipped to passing); Phase 2 is next.
 
 ---
 
@@ -93,7 +93,26 @@ provider is configured.
 
 ## 3. Phase Breakdown
 
-### Phase 1 — `Refuse` as a first-class disposition; move structural guards to 2a  **[TODO — NEXT]**
+### Phase 1 — `Refuse` as a first-class disposition; move structural guards to 2a  **[DONE]**
+
+*Implemented.* `Proposal` gained a `disposition` field (`"apply"` | `"refuse"`)
+and a `refuse` kind (`SyncPlan.refusals`, `_KIND_ORDER`, the `summary()` headline,
+`count("refuse")`). The both-directions refusal moved into `classify_changes`:
+`_refuse_cold_both_directions` (cold path — refuses when the combined idd+idless
+adds span both directions: parallel id-less, mismatched-id, half-id'd) and
+`_refuse_idless_both_directions` (baseline path — refuses only id-less
+both-direction adds; id-carrying both-direction adds stay adds, since against a
+real baseline they are distinct new slides). `apply_plan` executes a `refuse` as a
+deferred no-op (`result.deferred += 1`, watermark holds, **no error → exit 1**);
+the old `_apply_adds:710-718` guard and the `process_idless` parameter/branches in
+`_add_one_direction` are deleted. The CLI (`_plan_dict` counts + `disposition`),
+the interactive walker (`REFUSE` action, shown-not-prompted, `refused` summary),
+and the `migration.md` info topic were all updated. **All 5 xfails flipped to
+passing** (the main-path refusal also fixed the watermark both-sides case, so 5,
+not the 4 first estimated); a new `TestBothDirectionsRefusal` pins the classifier
+behavior directly. `tests/slides` green (1048 passed), ruff + mypy clean.
+
+The original TODO recipe (kept for reference):
 - **Goal:** relocate every *structural* decision from `apply_plan` into the
   resolver so the plan is faithful and apply stops re-deciding.
 - **Work:**
@@ -158,7 +177,15 @@ provider is configured.
 ## 4. Current Status
 
 ### Done (committed on the branch)
-- `93d5e59` — **test spec** (9 tests, all green as 4 pass / 5 xfail):
+- **Phase 1 implementation** (this session): the `refuse` disposition + the
+  both-directions guard relocated to the resolver. Touches
+  `src/clm/slides/sync_plan.py`, `sync_apply.py`, `sync_plan_walker.py`,
+  `src/clm/cli/commands/slides_sync.py`, `src/clm/cli/info_topics/migration.md`,
+  and the four test files (markers removed, assertions rewritten to the refusal
+  outcome, `TestBothDirectionsRefusal` added). `tests/slides` = 1048 passed,
+  2 skipped; ruff + mypy clean.
+- `93d5e59` — **test spec** (originally 4 pass / 5 xfail; the 5 xfails are now
+  passing after Phase 1):
   - `tests/slides/test_sync_dry_run_parity.py` (NEW): parity helper
     `_assert_dry_run_predicts_apply` + `_dry_then_apply`; `TestDryRunMatchesApply`
     (3 pass: noop / single-side id-less add / one-side edit);
@@ -180,6 +207,11 @@ provider is configured.
 | **D** mismatched-id (both id'd, different ids) | **both decks DOUBLE, errors=[]** | **silent corruption** (same root cause as C) |
 | **E** id-less code + id-less narrative | narrative adds **deferred** | SAFE (code rides structural pass) |
 
+> **Phase 1 resolved A / C / D** (and the watermark both-sides id-less case): all
+> now emit `refuse` proposals at plan time — dry-run and apply agree (exit 1,
+> nothing written, watermark held). The "Behavior today" column above is the
+> *pre-Phase-1* state, kept for the record.
+
 **Key correction:** the issue's "silent doubling of the id-less case" is **wrong** —
 that case is *refused* (guard at `sync_apply.py:710-718`, added 2026-05-31,
 predates the issue). The real doubling is the **id-carrying sibling** (C/D), which
@@ -191,27 +223,35 @@ has **no guard** (`sync_apply.py:695-705`).
   mismatched-id pairs with a provider — start with refuse).
 
 ### Test state
-- New 9 tests: 4 pass, 5 xfail (as designed). Full sync suite green
-  (`138 passed, 5 xfailed` across the four sync test modules).
+- After Phase 1: the 9 parity tests all pass (the 5 xfail markers removed),
+  `TestBothDirectionsRefusal` added (6 cases). Full `tests/slides` green
+  (1048 passed, 2 skipped); `tests/cli/test_slides_sync.py` green. ruff + mypy
+  clean on the changed modules.
 
 ---
 
 ## 5. Next Steps
 
-**Start Phase 1.** Concretely, in order:
-1. Add the `disposition` to the plan model in `sync_plan.py` (`Proposal` ~130 /
-   `SyncPlan` ~205). Decide: a `disposition: str` + `reason` on `Proposal`, or a
-   dedicated `Refuse` item. Ensure `render_plan` (~1583), `_plan_dict`
-   (`slides_sync.py:1008`), and `_plan_exit_code` (~913) all handle `refuse`.
-2. In `classify_changes` cold path (`sync_plan.py:879-883`): replace the
-   unconditional `_append_idless_adds` (~1104) both-directions emission with a
-   `refuse` when id-less adds span both directions. Do the same for id-carrying
-   both-directions adds (`_classify_cold` ~1074 emits these via `_add(..., cold=True)`).
-3. In `apply_plan` (`sync_apply.py`): delete `_apply_adds:710-718` guard and the
-   `process_idless` plumbing; route `refuse` items to a no-op that holds the
-   watermark for their cells.
-4. Remove the four now-passing `xfail` markers (run the suite; strict xfail will
-   fail loudly if you miss one).
+**Phase 1 is DONE.** Start **Phase 2 — split apply into materialize (2b) +
+execute (3)** (design note §10). The goal is to make `apply_plan` decision-free:
+
+1. Formalize a `MaterializedPlan` (or a per-proposal `materialized_*` payload):
+   a pass that, for each `add` / `rename` / `edit` / `retag`, attaches the
+   already-generated content (the translated body / the judge's rewrite) or marks
+   the item `blocked` when the model is unavailable/fails — instead of today's
+   inline `_translate` (`sync_apply.py` ~870) and `judge.propose` (~590) calls
+   that decide *and* write in one step.
+2. Make the **execute** pass mechanical: insert / replace-body / stamp-id / delete
+   / move only, no `translator`/`judge` reference, no `result.deferred`/`errors`
+   decisions of its own (those become `blocked` dispositions decided in 2b).
+3. Keep it behavior-preserving — the full sync suite must stay green; the boundary
+   is the deliverable (assert execute calls no model). No new user-visible
+   behavior; this just locks in what Phase 1 started.
+
+Phase 3 (cold-start minting + `CorrespondenceVerifier`) remains the larger payoff
+— see §3 of this handover and design §7. It is what finally lets a confirmed
+cold-start pair *mint* instead of refuse, unblocking the 1.8 PythonCourses gate
+(`#158`). Until then the Phase 1 refusal is the safe, honest default.
 
 **Prereqs / setup (IMPORTANT — see Gotchas):**
 - This worktree's venv was incomplete. Run **`uv sync --extra all`** before

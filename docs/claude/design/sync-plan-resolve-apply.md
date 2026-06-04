@@ -8,7 +8,9 @@ found investigating **#216** (cold-start id-less doubling) and the **dry-run /
 apply divergence** it exposed.
 
 **Status:** design accepted (2 forks settled — see §3); implementation phased
-(§10). Tests pinning the target behavior already landed as `xfail(strict)` (§9).
+(§10). **Phase 1 DONE** (the `refuse` disposition + both-directions guard moved to
+the resolver; all 5 parity/doubling xfails flipped to passing — §9). Phases 2–3
+pending.
 
 ---
 
@@ -174,27 +176,45 @@ classifier invariant.
 | `slides_sync.py` (CLI) | dry-run renders the resolved plan (incl. `refuse`/`pending`); exit codes derive from dispositions, so `_plan_exit_code` and `_apply_exit_code` converge by construction. New `--verify-cold-pairs` (default: on when a provider is set) gates 2b correspondence. |
 | watermark | stage 3 advances it only over `apply`-disposition cells; `refuse`/`conflict`/`blocked` cells hold at baseline (the existing #202 per-cell partial-advance, simplified — the held set is now explicit in the plan). |
 
-## 9. Tests already pinning this (committed)
+## 9. Tests pinning this
 
-Landed as `xfail(strict=True)` so they self-remove when the fix flips them:
+Originally landed as `xfail(strict=True)`; **Phase 1 flipped all five to passing**
+(the markers are removed and the assertions now read the refusal outcome):
 
-- `tests/slides/test_sync_dry_run_parity.py` — parity helper (`_assert_dry_run_predicts_apply`); 3 passing (noop / single-add / edit) + 2 xfail (cold-start id-less; watermark both-sides id-less).
-- `tests/cli/test_slides_sync.py::TestDryRunApplyParity` — 1 passing + 1 xfail at the CLI surface (+ `_stub_translator`).
-- `tests/slides/test_sync_apply.py` — 2 xfail for the id-carrying doubling (mismatched-id, half-id'd).
+- `tests/slides/test_sync_dry_run_parity.py` — parity helper
+  (`_assert_dry_run_predicts_apply`); `TestColdStartRefusalParity` (was
+  `…KnownBugs`) now asserts the cold-start id-less and watermark both-sides
+  cases **refuse** (`N refuse`, dry=apply=exit 1, decks byte-unchanged).
+- `tests/cli/test_slides_sync.py::TestDryRunApplyParity::test_dry_run_promise_matches_apply_for_parallel_idless`
+  — passes at the CLI surface: dry and apply both exit 1, `refuse` shown.
+- `tests/slides/test_sync_apply.py` — the two id-carrying doubling cases
+  (mismatched-id, half-id'd) now assert `applied_add == 0`, `refuse == 4`, no
+  duplication, no error.
+- `tests/slides/test_sync_plan.py::TestBothDirectionsRefusal` — **new** unit
+  cases on `classify_changes` directly: cold parallel id-less / mismatched-id /
+  half-id'd all refuse; one-directional cold start and id-carrying both-directions
+  *against a baseline* still **add** (the key distinctions).
 
-The parity assertion is already written to survive either fix shape (it checks
-"a writing-run error must have been foreseen by the dry-run"), so it needs no
-edits when the redesign lands — only the `xfail` markers come off.
+The parity assertion was written to survive either fix shape (it checks "a
+writing-run error must have been foreseen by the dry-run"), so it needed no edits
+when the redesign landed — only the `xfail` markers came off.
 
 ## 10. Phased implementation
 
 Each phase is independently shippable and flips a named subset of the xfails.
 
 **Phase 1 — `Refuse` as a first-class disposition; move the structural guards to
-2a.** Introduce the disposition field; relocate the both-directions refusal
-(idless **and** idd) and conflict isolation from `apply_plan` into the resolver.
-Apply stops re-deciding those. *Flips:* the dry-run-honesty xfails + the
-id-carrying doubling xfails (4 of 5). Lowest risk; no LLM, no new minting.
+2a. [DONE]** Introduced `Proposal.disposition` (`"apply"` | `"refuse"`) and a
+`refuse` kind; relocated the both-directions refusal (idless **and** the
+previously-unguarded idd) from `apply_plan` into the resolver (`classify_changes`
+→ `_refuse_cold_both_directions` / `_refuse_idless_both_directions`). `apply_plan`
+now executes a `refuse` as a deferred no-op; the old `_apply_adds` guard and the
+`process_idless` plumbing are deleted. *Flipped all 5 xfails* (the main-path
+id-less refusal also covers the watermark both-sides case, so it was **5 of 5**,
+not the 4 first estimated). No LLM, no new minting; the watermark holds over a
+refusal. Also surfaced in `render_plan` / `--json` (`counts.refuse`,
+`proposals[].disposition`), the walker (a `REFUSE` action, never prompted), and
+the `migration.md` info topic.
 
 **Phase 2 — Split apply into materialize (2b) + execute (3).** Formalize
 `MaterializedPlan`; make execute decision-free; fold translation/judge into 2b
