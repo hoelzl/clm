@@ -1861,6 +1861,164 @@ class TestStateWiring:
         assert persisted, "on_state_mutation was not invoked"
         assert persisted[-1] is state
 
+    def test_provenance_stamped_on_first_take(self, mock_obs, recording_root: Path, tmp_path: Path):
+        """A deck armed with provenance stamps the recorded part (issue #208)."""
+        from clm.recordings.record_provenance import RecordProvenance
+        from clm.recordings.state import CourseRecordingState
+
+        state = CourseRecordingState(course_id="c")
+        state.ensure_lecture("l1", "t")
+
+        session = RecordingSession(
+            mock_obs,
+            recording_root,
+            stability_interval=0.01,
+            stability_checks=1,
+            short_take_seconds=0.0,
+            retake_window_seconds=0.0,
+            state=state,
+        )
+
+        obs_output = tmp_path / "rec.mkv"
+        obs_output.write_bytes(b"p0")
+
+        prov = RecordProvenance(
+            section_id="sec-1",
+            topic_id="topic-x",
+            slide_digest="sha256:abc",
+            git_commit="deadbeef",
+            git_dirty=True,
+        )
+        session.arm("c", "s", "t", part_number=0, lecture_id="l1", provenance=prov)
+        _fire_event(mock_obs, RecordingEvent(output_active=True, output_state="started"))
+        _fire_event(
+            mock_obs,
+            RecordingEvent(
+                output_active=False,
+                output_state="stopped",
+                output_path=str(obs_output),
+            ),
+        )
+        _wait_for_state(session, SessionState.IDLE, timeout=15.0)
+
+        part = state.get_lecture("l1").parts[0]
+        assert part.section_id == "sec-1"
+        assert part.topic_id == "topic-x"
+        assert part.slide_digest == "sha256:abc"
+        assert part.git_commit == "deadbeef"
+        assert part.git_dirty is True
+
+    def test_no_provenance_leaves_fields_none(self, mock_obs, recording_root: Path, tmp_path: Path):
+        """Arming without provenance keeps the pre-#208 behaviour (all None)."""
+        from clm.recordings.state import CourseRecordingState
+
+        state = CourseRecordingState(course_id="c")
+        state.ensure_lecture("l1", "t")
+
+        session = RecordingSession(
+            mock_obs,
+            recording_root,
+            stability_interval=0.01,
+            stability_checks=1,
+            short_take_seconds=0.0,
+            retake_window_seconds=0.0,
+            state=state,
+        )
+
+        obs_output = tmp_path / "rec.mkv"
+        obs_output.write_bytes(b"p0")
+
+        session.arm("c", "s", "t", part_number=0, lecture_id="l1")
+        _fire_event(mock_obs, RecordingEvent(output_active=True, output_state="started"))
+        _fire_event(
+            mock_obs,
+            RecordingEvent(
+                output_active=False,
+                output_state="stopped",
+                output_path=str(obs_output),
+            ),
+        )
+        _wait_for_state(session, SessionState.IDLE, timeout=15.0)
+
+        part = state.get_lecture("l1").parts[0]
+        assert part.topic_id is None
+        assert part.slide_digest is None
+        assert part.git_commit is None
+        assert part.git_dirty is False
+
+    def test_provenance_stamped_on_retake(self, mock_obs, recording_root: Path, tmp_path: Path):
+        """A retake stamps the new active take with the freshly armed provenance."""
+        from clm.recordings.record_provenance import RecordProvenance
+        from clm.recordings.state import CourseRecordingState, LectureState, RecordingPart
+        from clm.recordings.workflow.directories import archive_dir
+
+        rel = Path("c") / "s"
+        arc = archive_dir(recording_root) / rel
+        arc.mkdir(parents=True)
+        old_raw = arc / "t--RAW.mkv"
+        old_raw.write_bytes(b"old-raw")
+
+        state = CourseRecordingState(
+            course_id="cid",
+            lectures=[
+                LectureState(
+                    lecture_id="l1",
+                    display_name="L1",
+                    parts=[
+                        RecordingPart(
+                            part=1,
+                            raw_file=str(old_raw),
+                            status="processed",
+                            topic_id="topic-old",
+                            slide_digest="sha256:old",
+                        )
+                    ],
+                )
+            ],
+        )
+
+        session = RecordingSession(
+            mock_obs,
+            recording_root,
+            stability_interval=0.01,
+            stability_checks=1,
+            short_take_seconds=0.0,
+            retake_window_seconds=0.0,
+            state=state,
+        )
+
+        obs_output = tmp_path / "rec.mkv"
+        obs_output.write_bytes(b"new-raw")
+
+        prov = RecordProvenance(
+            section_id="sec-1",
+            topic_id="topic-new",
+            slide_digest="sha256:new",
+            git_commit="cafef00d",
+            git_dirty=False,
+        )
+        session.arm("c", "s", "t", lecture_id="l1", provenance=prov)
+        _fire_event(mock_obs, RecordingEvent(output_active=True, output_state="started"))
+        _fire_event(
+            mock_obs,
+            RecordingEvent(
+                output_active=False,
+                output_state="stopped",
+                output_path=str(obs_output),
+            ),
+        )
+        _wait_for_state(session, SessionState.IDLE, timeout=15.0)
+
+        part = state.get_lecture("l1").parts[0]
+        # Active take carries the new provenance...
+        assert part.topic_id == "topic-new"
+        assert part.slide_digest == "sha256:new"
+        assert part.git_commit == "cafef00d"
+        # ...and the demoted take preserved the original.
+        assert part.takes, "a take should have been demoted on retake"
+        assert part.takes[0].topic_id == "topic-old"
+        assert part.takes[0].slide_digest == "sha256:old"
+
     def test_cascade_rename_fires_on_path_rename(
         self, mock_obs, recording_root: Path, tmp_path: Path
     ):

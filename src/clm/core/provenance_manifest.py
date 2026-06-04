@@ -274,6 +274,50 @@ def load_manifest(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))  # type: ignore[no-any-return]
 
 
+def find_course_manifest_path(
+    spec_file: Path | None = None, *, output_root: Path | None = None
+) -> Path | None:
+    """Locate the ``.clm-manifest.json`` for a spec's built output, if any.
+
+    Recording drift (issue #208 follow-up) needs the build manifest but is
+    handed only a spec file — the recordings dashboard builds its ``Course``
+    rooted at the course directory, so the course object cannot reveal where
+    a real ``clm build`` wrote its output. This resolves the manifest by
+    convention instead:
+
+    1. ``output_root`` if given (the ``clm recordings drift --source`` /
+       ``--manifest`` override); otherwise the default build output root
+       ``course_root/output`` from :func:`resolve_course_paths`.
+    2. ``<output_root>/.clm-manifest.json`` (single default target), else
+    3. the first ``<output_root>/<target>/.clm-manifest.json`` in sorted
+       order (multi-target builds key each target by name).
+
+    Returns ``None`` when no manifest exists — callers treat that as
+    "slide provenance unknown", never an error. The lookup is deterministic
+    so the record-time stamp and a later drift check read the same target's
+    manifest as long as the on-disk layout is unchanged.
+
+    Either ``spec_file`` or ``output_root`` must be given; with neither there
+    is nothing to resolve and ``None`` is returned.
+    """
+    if output_root is None:
+        if spec_file is None:
+            return None
+        from clm.core.course_paths import resolve_course_paths
+
+        _course_root, output_root = resolve_course_paths(spec_file)
+
+    direct = output_root / MANIFEST_FILENAME
+    if direct.is_file():
+        return direct
+    if output_root.is_dir():
+        for sub in sorted(output_root.iterdir()):
+            candidate = sub / MANIFEST_FILENAME
+            if candidate.is_file():
+                return candidate
+    return None
+
+
 def manifest_files_by_topic(
     manifest: dict[str, Any],
 ) -> dict[str | None, list[dict[str, Any]]]:

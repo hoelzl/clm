@@ -48,6 +48,7 @@ if TYPE_CHECKING:
 from loguru import logger
 
 from clm.core.utils.text_utils import sanitize_file_name
+from clm.recordings.record_provenance import RecordProvenance
 
 from .directories import archive_dir, final_dir, superseded_dir, takes_dir, to_process_dir
 from .naming import (
@@ -98,6 +99,12 @@ class ArmedDeck:
     decks without a course-state identity; the web app is expected to
     resolve it from the course spec at ``/arm`` time so the session
     can keep ``state.json`` in sync with filesystem renames.
+
+    ``provenance`` carries the slide-version/git provenance assembled at
+    ``/arm`` time (issue #208). It rides along on the armed deck so the
+    background rename thread can stamp it onto the recorded part without
+    needing a course/spec reference of its own. ``None`` for decks armed
+    without a course identity (CLI/tests).
     """
 
     course_slug: str
@@ -106,6 +113,7 @@ class ArmedDeck:
     part_number: int = 0
     lang: str = "en"
     lecture_id: str | None = None
+    provenance: RecordProvenance | None = None
 
 
 # Keep old name as alias for backward compatibility during transition
@@ -1007,6 +1015,7 @@ class RecordingSession:
         part_number: int = 0,
         lang: str = "en",
         lecture_id: str | None = None,
+        provenance: RecordProvenance | None = None,
     ) -> None:
         """Arm a slide deck for the next recording.
 
@@ -1015,6 +1024,11 @@ class RecordingSession:
         ``ARMED_AFTER_TAKE`` cancels the retake timer — the window is
         specific to the deck that just finished, and switching decks
         means the user is moving on.
+
+        ``provenance`` (issue #208) is the slide-version/git provenance the
+        caller assembled for this deck; it is stamped onto the recorded part
+        when the rename completes. Optional — ``None`` keeps the pre-#208
+        behaviour (no provenance recorded).
 
         Raises:
             RuntimeError: If a recording or rename is in progress.
@@ -1037,6 +1051,7 @@ class RecordingSession:
                 part_number=part_number,
                 lang=lang,
                 lecture_id=lecture_id,
+                provenance=provenance,
             )
             self._error = None
             self._state = SessionState.ARMED
@@ -1085,6 +1100,7 @@ class RecordingSession:
         part_number: int = 0,
         lang: str = "en",
         lecture_id: str | None = None,
+        provenance: RecordProvenance | None = None,
     ) -> None:
         """Arm a deck and start OBS recording in one operation.
 
@@ -1096,6 +1112,8 @@ class RecordingSession:
         purpose: the user can switch to OBS and start recording manually,
         or retry the Record button once OBS is reachable. The caller is
         responsible for surfacing the error in the UI.
+
+        ``provenance`` is forwarded to :meth:`arm` (issue #208).
 
         Raises:
             RuntimeError: If ``arm`` fails (already recording or mid-rename).
@@ -1109,6 +1127,7 @@ class RecordingSession:
             part_number=part_number,
             lang=lang,
             lecture_id=lecture_id,
+            provenance=provenance,
         )
         logger.info(
             "User action: record (arm + obs.start_record) deck={!r} part={}",
@@ -1748,6 +1767,13 @@ class RecordingSession:
 
         state_part = deck.part_number if deck.part_number > 0 else 1
 
+        prov = deck.provenance
+        section_id = prov.section_id if prov is not None else None
+        topic_id = prov.topic_id if prov is not None else None
+        slide_digest = prov.slide_digest if prov is not None else None
+        git_commit = prov.git_commit if prov is not None else None
+        git_dirty = prov.git_dirty if prov is not None else False
+
         try:
             lecture = course_state.get_lecture(deck.lecture_id)
             existing_part = (
@@ -1761,6 +1787,11 @@ class RecordingSession:
                     deck.lecture_id,
                     state_part,
                     str(new_raw),
+                    git_commit=git_commit,
+                    git_dirty=git_dirty,
+                    section_id=section_id,
+                    topic_id=topic_id,
+                    slide_digest=slide_digest,
                 )
             else:
                 course_state.ensure_part(
@@ -1768,6 +1799,11 @@ class RecordingSession:
                     state_part,
                     str(new_raw),
                     display_name=deck.deck_name,
+                    git_commit=git_commit,
+                    git_dirty=git_dirty,
+                    section_id=section_id,
+                    topic_id=topic_id,
+                    slide_digest=slide_digest,
                 )
         except Exception as exc:
             logger.warning(

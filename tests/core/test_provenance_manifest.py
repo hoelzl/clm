@@ -13,6 +13,7 @@ from clm.core.provenance_manifest import (
     MANIFEST_VERSION,
     build_provenance_manifest,
     enumerate_expected_outputs,
+    find_course_manifest_path,
     manifest_topic_digest,
     topic_digest_from_files,
     write_provenance_manifests,
@@ -259,3 +260,70 @@ def test_manifest_topic_digest_stable_across_manifest_file_order():
     m1 = {"files": files}
     m2 = {"files": list(reversed(files))}
     assert manifest_topic_digest(m1, "intro") == manifest_topic_digest(m2, "intro")
+
+
+# ---------------------------------------------------------------------------
+# find_course_manifest_path (issue #208 follow-up: recording drift resolution)
+# ---------------------------------------------------------------------------
+
+
+def _spec_with_output_root(tmp_path):
+    """Create a spec file laid out so resolve_course_paths yields tmp_path/output.
+
+    ``resolve_course_paths`` treats the spec's grandparent as the course root,
+    so a spec at ``<root>/course-specs/course.xml`` gives output root
+    ``<root>/output``.
+    """
+    specs_dir = tmp_path / "course-specs"
+    specs_dir.mkdir()
+    spec = specs_dir / "course.xml"
+    spec.write_text("<course/>", encoding="utf-8")
+    return spec
+
+
+def test_find_manifest_none_without_inputs():
+    assert find_course_manifest_path() is None
+
+
+def test_find_manifest_explicit_output_root_direct(tmp_path):
+    out = tmp_path / "out"
+    out.mkdir()
+    manifest = out / MANIFEST_FILENAME
+    manifest.write_text("{}", encoding="utf-8")
+    assert find_course_manifest_path(output_root=out) == manifest
+
+
+def test_find_manifest_explicit_output_root_first_target_subdir(tmp_path):
+    out = tmp_path / "out"
+    # Two target subdirs; only the second has a manifest. Sorted order makes
+    # the choice deterministic regardless of creation order.
+    (out / "Public").mkdir(parents=True)
+    speaker = out / "Speaker"
+    speaker.mkdir(parents=True)
+    manifest = speaker / MANIFEST_FILENAME
+    manifest.write_text("{}", encoding="utf-8")
+    assert find_course_manifest_path(output_root=out) == manifest
+
+
+def test_find_manifest_direct_wins_over_subdir(tmp_path):
+    out = tmp_path / "out"
+    (out / "Public").mkdir(parents=True)
+    (out / "Public" / MANIFEST_FILENAME).write_text("{}", encoding="utf-8")
+    direct = out / MANIFEST_FILENAME
+    direct.write_text("{}", encoding="utf-8")
+    assert find_course_manifest_path(output_root=out) == direct
+
+
+def test_find_manifest_from_spec_default_output_root(tmp_path):
+    spec = _spec_with_output_root(tmp_path)
+    out = tmp_path / "output"
+    out.mkdir()
+    manifest = out / MANIFEST_FILENAME
+    manifest.write_text("{}", encoding="utf-8")
+    assert find_course_manifest_path(spec) == manifest
+
+
+def test_find_manifest_missing_returns_none(tmp_path):
+    out = tmp_path / "out"
+    out.mkdir()
+    assert find_course_manifest_path(output_root=out) is None

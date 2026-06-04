@@ -2169,6 +2169,34 @@ Show recording status for a course, including per-lecture recording state.
 clm recordings status COURSE_ID
 ```
 
+#### `clm recordings drift`
+
+Report which recordings have gone stale after slide edits. Each recorded
+part stamps, at record time, the topic it records and that topic's
+build-output digest (from the `.clm-manifest.json` provenance index). `drift`
+re-reads the current manifest and compares: a part is `changed` when the
+topic's built output differs from when it was recorded, `current` when it
+matches, and `unknown` when it predates provenance stamping or its topic is
+absent from the manifest (`unknown` is never reported as up to date).
+
+```
+clm recordings drift COURSE_ID [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--source PATH` | Built output root containing `.clm-manifest.json` (overrides the spec's default `output/` location) |
+| `--manifest PATH` | Path to a specific `.clm-manifest.json` (overrides `--source` and the spec) |
+| `--spec-file PATH` | Course spec XML; its default `output/` root is searched for the manifest |
+| `--all` | Show every recorded part, not just the changed ones |
+| `--json` | Emit machine-readable JSON |
+
+The manifest is resolved in priority order: `--manifest` > `--source` >
+`--spec-file`'s default `output/` root > the `spec_file` of the matching
+`recordings.courses` config entry. By default only `changed` parts are
+listed (the answer to "which videos must I re-record?"); pass `--all` to see
+every part.
+
 #### `clm recordings compare`
 
 Generate an A/B audio comparison HTML page with embedded audio players

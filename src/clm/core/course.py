@@ -305,6 +305,41 @@ class Course(NotebookMixin):
                 return file
         return None
 
+    def resolve_deck_topic(
+        self, section_name: str, deck_name: str, lang: str
+    ) -> tuple[str | None, str | None]:
+        """Map a ``(section_name, deck_name)`` pair back to ``(section_id, topic_id)``.
+
+        This is the exact inverse of how the recordings dashboard lists
+        decks (``recordings/web/routes.py``): a section is identified by
+        its localized ``name[lang]`` and a deck by a notebook's
+        ``file_name(lang, "")``. Recording provenance (issue #208) needs to
+        recover the owning section/topic from those display names because a
+        deck name alone is not enough to find the topic — topics within a
+        section share one output folder.
+
+        Returns ``(section.id, topic.id)`` for the first matching notebook,
+        or ``(None, None)`` when no section/deck matches. ``file_name`` is
+        guarded the same way the provenance-manifest enumerator guards it: a
+        split ``.de``/``.en`` companion has no title for the other language
+        and raises ``KeyError``/``ValueError`` there — that combination is
+        simply skipped. Both companions of a split deck share one
+        ``topic.id``, so which half matches does not change the result.
+        """
+        for section in self.sections:
+            try:
+                if section.name[lang] != section_name:
+                    continue
+            except (KeyError, TypeError):
+                continue
+            for nb in section.notebooks:
+                try:
+                    if nb.file_name(lang, "") == deck_name:
+                        return section.id, nb.topic.id
+                except (KeyError, ValueError):
+                    continue
+        return None, None
+
     def add_file(self, path: Path, warn_if_no_topic: bool = True) -> Topic | None:
         for topic in self.topics:
             if topic.matches_path(path, False):
