@@ -81,18 +81,23 @@ Two layouts are supported per topic:
   ├── slides_010v_requests_get.py
   └── slides_010v_requests_get.http-cassette.yaml
   ```
-- **Opt-out** — cassettes collected in a `_cassettes/` subdirectory:
+- **Foldered** — cassettes collected in a `cassettes/` subdirectory:
   ```
   topic_017_requests_azav/
-  ├── _cassettes/
+  ├── cassettes/
   │   └── slides_010v_requests_get.http-cassette.yaml
   └── slides_010v_requests_get.py
   ```
 
-To switch layouts, `mkdir _cassettes` at the topic level once — CLM
-prefers `_cassettes/` when that directory exists and falls back to the
-sibling location otherwise. The filename is always
-`<stem>.http-cassette.yaml`.
+To switch layouts, `mkdir cassettes` at the topic level once — CLM prefers
+`cassettes/` when that directory exists and falls back to the sibling location
+otherwise. The historical name `_cassettes/` (leading underscore) is still
+recognised as a read fallback after `cassettes/`; `clm slides tidy` consolidates
+it into `cassettes/`. The filename is always `<stem>.http-cassette.yaml`.
+
+> **Bulk reorg.** `clm slides tidy <topic|section|course>` moves cassettes into
+> `cassettes/` (and voiceover companions into `voiceover/`) in one pass —
+> `--layout sibling` flattens them back. See `clm info commands`.
 
 Cassettes are never copied to public or speaker output. They travel with
 the notebook into worker payloads and Docker source mounts so execution

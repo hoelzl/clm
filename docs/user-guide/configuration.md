@@ -176,6 +176,31 @@ export DRAWIO_EXECUTABLE="/Applications/draw.io.app/Contents/MacOS/draw.io"
 set DRAWIO_EXECUTABLE="C:\Program Files\draw.io\draw.io.exe"
 ```
 
+### Slide Authoring
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `CLM_SIDECAR_LAYOUT` | Course-wide default for where **newly created** voiceover companions land: `subdir` (a `voiceover/` folder) or `sibling` (next to the slide). | (unset → sibling) |
+
+This is a **write-time** default only — it affects where `clm voiceover extract`
+/ `sync` create a *new* companion. It does **not** change the build, which always
+reads a companion (and cassettes) from either layout. The precedence for a new
+companion is: an explicit `--layout` flag → a `voiceover/` directory that already
+exists in the topic → this course default → `sibling`. A value of `sibling` is a
+no-op (it equals the built-in fallback).
+
+The same default can be set per course repository in `pyproject.toml`, which the
+environment variable overrides:
+
+```toml
+[tool.clm]
+sidecar-layout = "subdir"   # or "sibling"
+```
+
+The setting is read from the nearest ancestor `pyproject.toml` of the slide
+being written. Use `clm slides tidy` to move *existing* sidecars between layouts
+in bulk.
+
 ### Logging
 
 | Variable | Description | Default |

@@ -290,12 +290,15 @@ def sync(
 
     # Resolve companion-mode activation (auto-detect unless --no-companion/--companion).
     # Read/write the existing companion wherever it lives (``voiceover/`` subdir
-    # or sibling); a not-yet-created companion uses the --layout write target.
+    # or sibling); a not-yet-created companion uses the --layout write target,
+    # folded with the course-wide default (CLM_SIDECAR_LAYOUT / [tool.clm]).
+    from clm.slides.sidecar_layout import effective_write_layout
+
     existing_companion = resolve_companion(slides)
     companion_file = (
         existing_companion
         if existing_companion is not None
-        else expected_companion(slides, layout=layout)
+        else expected_companion(slides, layout=effective_write_layout(slides, layout))
     )
     if companion_flag is None:
         use_companion = existing_companion is not None

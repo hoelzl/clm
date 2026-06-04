@@ -106,6 +106,13 @@ def extract_voiceover_cmd(
             f"<deck>.en.py twin on disk."
         )
 
+    # Fold the --layout flag with the course-wide default (CLM_SIDECAR_LAYOUT /
+    # [tool.clm] sidecar-layout). A flag wins; otherwise a course default of
+    # subdir steers new companions into voiceover/.
+    from clm.slides.sidecar_layout import effective_write_layout
+
+    layout = effective_write_layout(path, layout)
+
     try:
         if pair is not None:
             paired = extract_voiceover_pair(
