@@ -4,21 +4,39 @@ This module provides consistent log file paths across all CLM components,
 including the main CLI and worker processes.
 """
 
+import os
 from pathlib import Path
 
 import platformdirs
+
+#: Environment variable that overrides the log directory. When set, CLM writes
+#: ``clm.log`` (and ``workers/``) under this directory instead of the system
+#: default. This exists so that processes which must not share the single
+#: global log file can each point at their own directory — most importantly the
+#: test suite under pytest-xdist, where many worker processes would otherwise
+#: race to open/rotate the same ``clm.log`` and hit ``PermissionError`` on
+#: Windows. It is also a convenient way to relocate logs in production.
+LOG_DIR_ENV_VAR = "CLM_LOG_DIR"
 
 
 def get_log_dir() -> Path:
     """Get the system-appropriate log directory for CLM.
 
+    If the ``CLM_LOG_DIR`` environment variable is set, that directory is used
+    verbatim (created if needed); otherwise the platform default is used.
+
     Returns:
         Path to the log directory (created if it doesn't exist)
+        - ``CLM_LOG_DIR`` if set
         - Windows: %LOCALAPPDATA%/clm/Logs
         - macOS: ~/Library/Logs/clm
         - Linux: ~/.local/state/clm/log
     """
-    log_dir = Path(platformdirs.user_log_dir("clm", appauthor=False))
+    override = os.environ.get(LOG_DIR_ENV_VAR)
+    if override:
+        log_dir = Path(override)
+    else:
+        log_dir = Path(platformdirs.user_log_dir("clm", appauthor=False))
     log_dir.mkdir(parents=True, exist_ok=True)
     return log_dir
 

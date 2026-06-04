@@ -182,6 +182,7 @@ set DRAWIO_EXECUTABLE="C:\Program Files\draw.io\draw.io.exe"
 |----------|-------------|---------|
 | `CLM_LOGGING__LOG_LEVEL` | Log level (DEBUG, INFO, WARNING, ERROR) | `INFO` |
 | `CLM_LOGGING__ENABLE_TEST_LOGGING` | Enable logging during tests | `false` |
+| `CLM_LOG_DIR` | Directory for `clm.log` and `workers/` logs. Overrides the platform default (Windows: `%LOCALAPPDATA%/clm/Logs`; macOS: `~/Library/Logs/clm`; Linux: `~/.local/state/clm/log`). Useful to relocate logs, or to give parallel processes their own log file so they don't race to open/rotate the shared one. | platform default |
 
 ### Git
 

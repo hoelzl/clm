@@ -140,6 +140,38 @@ pytest -m e2e --log-cli-level=CRITICAL
 pytest -m e2e -v
 ```
 
+## Parallelism and the `serial` marker
+
+The suite runs in parallel via `pytest-xdist` (`-n auto`, capped to 8 workers
+in the pre-commit hook by `scripts/run_pytest_hook.py`). The default scheduler
+is `--dist loadgroup` (set in `pyproject.toml` `addopts`): it load-balances as
+usual but keeps any tests sharing an `xdist_group` on the **same** worker.
+
+A handful of tests spawn heavyweight external processes — a mitmdump proxy
+(`tests/infrastructure/test_http_replay_mitm.py`), a mock worker pool
+(`tests/infrastructure/workers/test_lifecycle_mock.py`). When many xdist
+workers launch those simultaneously they oversubscribe the box and flake
+(readiness ceilings expiring, worker-registration starvation, port races —
+issues #163/#184). Such tests carry the project's `serial` marker:
+
+```python
+import pytest
+
+pytestmark = pytest.mark.serial  # whole module, or use @pytest.mark.serial per-test
+```
+
+`tests/conftest.py` maps `serial` onto a single shared `xdist_group`, so every
+serial-marked test runs one-at-a-time on one dedicated worker while the rest of
+the suite stays fully parallel. **Reach for `serial` when a new test launches a
+real subprocess or otherwise contends for a global resource** (a fixed port, a
+shared daemon) — it is the cheap, surgical alternative to widening timeouts.
+It is a no-op under `-n0`.
+
+> The HTTP-replay / cassette tests need the `replay` extra (`vcrpy`,
+> `filelock`). It is included in the auto-synced `dev` dependency group, so
+> `uv sync` / `uv run pytest` always has it; without it those tests
+> `importorskip`-skip rather than run.
+
 ## Troubleshooting
 
 ### "I don't see any logs during test execution"
