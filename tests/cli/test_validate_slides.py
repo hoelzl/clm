@@ -1,4 +1,4 @@
-"""Tests for the ``clm validate-slides`` CLI command."""
+"""Tests for slide validation via the unified ``clm validate`` command."""
 
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ class TestValidateSlidesCommand:
         )
 
         runner = CliRunner()
-        result = runner.invoke(cli, ["validate-slides", str(p)])
+        result = runner.invoke(cli, ["validate", str(p)])
 
         assert result.exit_code == 0
         assert "OK" in result.output
@@ -52,7 +52,7 @@ class TestValidateSlidesCommand:
         )
 
         runner = CliRunner()
-        result = runner.invoke(cli, ["validate-slides", str(p)])
+        result = runner.invoke(cli, ["validate", str(p)])
 
         assert result.exit_code == 1
         assert "ERROR" in result.output
@@ -71,11 +71,6 @@ class TestValidateSlidesCommand:
         )
 
         runner = CliRunner()
-        # Use the new canonical `validate` command (auto-dispatches
-        # by file type) so stdout stays clean — the deprecated
-        # `validate-slides` alias emits a stderr notice that
-        # CliRunner's default mix_stderr=True would merge into the
-        # JSON parser's input.
         result = runner.invoke(cli, ["validate", str(p), "--json"])
 
         assert result.exit_code == 0
@@ -115,7 +110,7 @@ class TestValidateSlidesCommand:
         )
 
         runner = CliRunner()
-        result = runner.invoke(cli, ["validate-slides", str(p), "--quick"])
+        result = runner.invoke(cli, ["validate", str(p), "--quick"])
 
         assert result.exit_code == 0
         assert "OK" in result.output
@@ -131,7 +126,7 @@ class TestValidateSlidesCommand:
         )
 
         runner = CliRunner()
-        result = runner.invoke(cli, ["validate-slides", str(p), "--quick"])
+        result = runner.invoke(cli, ["validate", str(p), "--quick"])
 
         assert result.exit_code == 1
         assert "start" in result.output
@@ -149,7 +144,7 @@ class TestValidateSlidesCommand:
 
         runner = CliRunner()
         # Only run format checks — should not catch tag issue
-        result = runner.invoke(cli, ["validate-slides", str(p), "--checks", "format"])
+        result = runner.invoke(cli, ["validate", str(p), "--checks", "format"])
 
         assert result.exit_code == 0
 
@@ -163,7 +158,7 @@ class TestValidateSlidesCommand:
         )
 
         runner = CliRunner()
-        result = runner.invoke(cli, ["validate-slides", str(topic_dir)])
+        result = runner.invoke(cli, ["validate", str(topic_dir)])
 
         assert result.exit_code == 0
         assert "OK" in result.output
@@ -201,7 +196,7 @@ class TestValidateSlidesCommand:
         )
 
         runner = CliRunner()
-        result = runner.invoke(cli, ["validate-slides", str(spec_path)])
+        result = runner.invoke(cli, ["validate", str(spec_path), "--kind=slides"])
 
         assert result.exit_code == 0
         assert "OK" in result.output
@@ -217,22 +212,23 @@ class TestValidateSlidesCommand:
         )
 
         runner = CliRunner()
-        result = runner.invoke(cli, ["validate-slides", str(p), "--checks", "nonexistent"])
+        result = runner.invoke(cli, ["validate", str(p), "--checks", "nonexistent"])
 
         assert result.exit_code != 0
         assert "Unknown check" in result.output
 
     def _warning_pair(self, tmp_path: Path) -> Path:
-        # A balanced DE/EN pair, both slides missing slide_id -> warning-only
-        # findings (missing slide_id is a warning; no errors).
+        # A balanced, id-carrying DE/EN pair whose only finding is a
+        # tag-mismatch warning (extra `keep` tag on the DE half) — no
+        # errors, so it exercises the warning-only paths.
         return _write_slide(
             tmp_path,
             "slides_warn.py",
             """\
-            # %% [markdown] lang="de" tags=["slide"]
+            # %% [markdown] lang="de" tags=["slide", "keep"] slide_id="title"
             # ## Titel
 
-            # %% [markdown] lang="en" tags=["slide"]
+            # %% [markdown] lang="en" tags=["slide"] slide_id="title"
             # ## Title
             """,
         )

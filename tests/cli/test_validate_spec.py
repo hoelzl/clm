@@ -1,4 +1,4 @@
-"""Tests for the ``clm validate-spec`` CLI command."""
+"""Tests for spec validation via the unified ``clm validate`` command."""
 
 from __future__ import annotations
 
@@ -48,7 +48,7 @@ class TestValidateSpecCommand:
         )
 
         runner = CliRunner()
-        result = runner.invoke(cli, ["validate-spec", str(spec_file), "--data-dir", str(tmp_path)])
+        result = runner.invoke(cli, ["validate", str(spec_file), "--data-dir", str(tmp_path)])
 
         assert result.exit_code == 0
         assert "OK" in result.output
@@ -66,7 +66,7 @@ class TestValidateSpecCommand:
         )
 
         runner = CliRunner()
-        result = runner.invoke(cli, ["validate-spec", str(spec_file), "--data-dir", str(tmp_path)])
+        result = runner.invoke(cli, ["validate", str(spec_file), "--data-dir", str(tmp_path)])
 
         assert result.exit_code == 1
         assert "ERROR" in result.output
@@ -133,7 +133,7 @@ class TestValidateSpecCommand:
         runner = CliRunner()
         # Without --data-dir, should infer from spec file location:
         # spec is at tmp_path/course-specs/test.xml → slides at tmp_path/slides
-        result = runner.invoke(cli, ["validate-spec", str(spec_file)])
+        result = runner.invoke(cli, ["validate", str(spec_file)])
 
         assert result.exit_code == 0
         assert "OK" in result.output
@@ -166,7 +166,7 @@ class TestValidateSpecIncludeDisabled:
         )
 
         runner = CliRunner()
-        result = runner.invoke(cli, ["validate-spec", str(spec_file), "--data-dir", str(tmp_path)])
+        result = runner.invoke(cli, ["validate", str(spec_file), "--data-dir", str(tmp_path)])
 
         assert result.exit_code == 0
         assert "OK" in result.output
@@ -194,7 +194,7 @@ class TestValidateSpecIncludeDisabled:
         result = runner.invoke(
             cli,
             [
-                "validate-spec",
+                "validate",
                 str(spec_file),
                 "--data-dir",
                 str(tmp_path),

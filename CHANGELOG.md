@@ -6,6 +6,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Removed
+
+- **The flat top-level CLI aliases were removed (1.8 milestone, #158).**
+  The flat command names deprecated since CLM 1.6 — `clm normalize-slides`,
+  `clm language-view`, `clm suggest-sync`, `clm search-slides`,
+  `clm resolve-topic`, `clm authoring-rules`, `clm validate-slides`,
+  `clm validate-spec`, `clm extract-voiceover`, `clm inline-voiceover` —
+  no longer exist. Use the verb-grouped invocations (`clm slides normalize`,
+  `clm topic resolve`, `clm validate`, `clm voiceover extract`, …). See
+  `clm info migration`.
+- **`clm build --keep-directory` was removed (#158).** It had been a no-op
+  alias since keeping the output tree became the default. Drop it; use
+  `--clean` to opt into the legacy wipe-and-restore flow.
+
+### Changed
+
+- **`clm validate`: missing `slide_id` and DE/EN non-adjacency are now
+  errors (#158).** A `slide`/`subslide` cell missing a `slide_id`, and a
+  DE/EN content/voiceover pair separated by an intervening language-tagged
+  cell, escalated from `warning` to `error` (the two-release deprecation
+  window that began in 1.6/1.7 closed in 1.8). Fix missing ids with
+  `clm slides assign-ids` (or `clm slides sync` for a split deck) and
+  non-adjacency with `clm slides normalize`. This fails the pre-commit gate
+  and the PostToolUse hook until cleared.
+- **MCP tool names aligned to the CLI verb-group scheme (#158).** The MCP
+  server's tools were renamed group-first with no aliases:
+  `resolve_topic → topic_resolve`, `search_slides → slides_search`,
+  `normalize_slides → slides_normalize`,
+  `get_language_view → slides_language_view`,
+  `suggest_sync → slides_suggest_sync`,
+  `extract_voiceover → voiceover_extract`,
+  `inline_voiceover → voiceover_inline`,
+  `course_authoring_rules → authoring_rules`. `validate_spec` and
+  `validate_slides` are consolidated into a single `validate` tool that
+  dispatches on input type, mirroring the CLI. `course_outline` and the
+  `voiceover_*` family are unchanged. Update `.mcp.json`, CLAUDE.md /
+  AGENTS.md tool tables, and agent prompts.
+
 ### Fixed
 
 - **`clm slides sync` no longer re-surfaces a clean edit as a phantom conflict

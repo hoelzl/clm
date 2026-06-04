@@ -184,7 +184,6 @@ class TestBuildCommandArguments:
                     "--print-correlation-ids",
                     "--ignore-cache",
                     "--clear-cache",
-                    "--keep-directory",
                     "--data-dir",
                     ".",
                 ],

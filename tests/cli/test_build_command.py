@@ -1426,7 +1426,7 @@ class TestResolveFailOnMissingXref:
 
 
 # ---------------------------------------------------------------------------
-# D3: default flip + --clean / --keep-directory deprecation
+# D3: default flip + --clean; --keep-directory removed in 1.8
 # ---------------------------------------------------------------------------
 
 
@@ -1448,43 +1448,21 @@ class TestBuildConfigDefaults:
         assert not hasattr(config, "keep_directory")
 
 
-class TestKeepDirectoryDeprecation:
-    """``--keep-directory`` is a no-op alias that emits DeprecationWarning."""
+class TestKeepDirectoryRemoved:
+    """``--keep-directory`` was removed in CLM 1.8 (was a no-op alias)."""
 
     def _make_spec(self, tmp_path: Path) -> Path:
         spec = tmp_path / "course.xml"
         _write_spec(spec, with_targets=False)
         return spec
 
-    def test_emits_deprecation_warning(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recwarn: pytest.WarningsRecorder
-    ) -> None:
+    def test_flag_is_rejected(self, tmp_path: Path) -> None:
         spec = self._make_spec(tmp_path)
-        monkeypatch.setattr(build_module.asyncio, "run", lambda coro: coro.close())
 
         result = _invoke_build([str(spec), "--keep-directory"], tmp_path=tmp_path)
 
-        assert result.exit_code == 0
-        deprecation = [w for w in recwarn if issubclass(w.category, DeprecationWarning)]
-        assert deprecation, "expected a DeprecationWarning when --keep-directory is used"
-        assert "--keep-directory" in str(deprecation[0].message)
-        assert "1.8" in str(deprecation[0].message)
-
-    def test_no_warning_without_flag(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recwarn: pytest.WarningsRecorder
-    ) -> None:
-        spec = self._make_spec(tmp_path)
-        monkeypatch.setattr(build_module.asyncio, "run", lambda coro: coro.close())
-
-        result = _invoke_build([str(spec)], tmp_path=tmp_path)
-
-        assert result.exit_code == 0
-        deprecation = [
-            w
-            for w in recwarn
-            if issubclass(w.category, DeprecationWarning) and "--keep-directory" in str(w.message)
-        ]
-        assert not deprecation
+        assert result.exit_code != 0
+        assert "No such option" in result.output
 
 
 class TestMaybeRunSweepSkipReasons:

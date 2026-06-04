@@ -65,7 +65,6 @@ def help(ctx):
 # Import and register commands from submodules
 # These imports must come after cli is defined, hence noqa: E402
 # Re-export commonly used functions for backwards compatibility with tests
-from clm.cli.commands._aliases import deprecated_alias  # noqa: E402
 from clm.cli.commands._groups import (  # noqa: E402
     authoring_group,
     slides_group,
@@ -100,8 +99,6 @@ from clm.cli.commands.summarize import summarize  # noqa: E402
 from clm.cli.commands.sync_includes import sync_includes_cmd  # noqa: E402
 from clm.cli.commands.unify import unify_cmd  # noqa: E402
 from clm.cli.commands.validate import validate_cmd  # noqa: E402
-from clm.cli.commands.validate_slides import validate_slides_cmd  # noqa: E402
-from clm.cli.commands.validate_spec import validate_spec_cmd  # noqa: E402
 from clm.cli.commands.voiceover_tools import (  # noqa: E402
     extract_voiceover_cmd,
     inline_voiceover_cmd,
@@ -204,22 +201,10 @@ if mcp_cmd is not None:
     cli.add_command(mcp_cmd)
 cli.add_command(jupyterlite_group)
 
-# ---------------------------------------------------------------------
-# Deprecated top-level aliases (Phase 0). Each old name keeps working
-# with a deprecation notice naming the new invocation. Removal slated
-# for CLM 1.8.
-# ---------------------------------------------------------------------
-cli.add_command(deprecated_alias(normalize_slides_cmd, new_invocation="slides normalize"))
-cli.add_command(deprecated_alias(language_view_cmd, new_invocation="slides language-view"))
-cli.add_command(deprecated_alias(suggest_sync_cmd, new_invocation="slides suggest-sync"))
-cli.add_command(deprecated_alias(search_slides_cmd, new_invocation="slides search"))
-cli.add_command(deprecated_alias(resolve_topic_cmd, new_invocation="topic resolve"))
-cli.add_command(deprecated_alias(authoring_rules_cmd, new_invocation="authoring rules"))
-cli.add_command(deprecated_alias(validate_slides_cmd, new_invocation="validate"))
-cli.add_command(deprecated_alias(validate_spec_cmd, new_invocation="validate"))
-if voiceover_group is not None:
-    cli.add_command(deprecated_alias(extract_voiceover_cmd, new_invocation="voiceover extract"))
-    cli.add_command(deprecated_alias(inline_voiceover_cmd, new_invocation="voiceover inline"))
+# The flat top-level aliases (``normalize-slides``, ``validate-slides``,
+# ``extract-voiceover``, …) deprecated in CLM 1.6 were removed in 1.8.
+# Use the verb-grouped invocations (``clm slides normalize``,
+# ``clm validate``, ``clm voiceover extract``, …) instead.
 
 
 # Re-export commonly used functions for backwards compatibility with tests
