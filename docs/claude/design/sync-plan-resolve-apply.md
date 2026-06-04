@@ -392,3 +392,21 @@ shape but takes its own classifier candidate and apply path:
 - **Why not `assign_ids_in_split_pair`:** it mints fresh slugs and cannot pair an
   id-less cell with an id'd one (the `_slide_ids_pair` `de_id == en_id` gate), so it
   would create *new, divergent* ids instead of adopting the authority's existing ones.
+
+**#225 — committed un-bootstrapped pairs (shipped):** the mint/adopt gate was keyed on
+`source == "none"`, but a **committed** id-less pair resolves to a *git-HEAD* baseline,
+so it was skipped — refusing the fully-id-less corpus and (worse) **silently doubling**
+a half-id'd or mismatched-id committed pair via the keyed baseline path (the id-less /
+disjoint side reads as "missing every slide", translate-added both directions). Root
+cause: the keyed engine pairs by **shared `(slide_id, role)`**, so a baseline is only
+useful when the two halves **share at least one `slide_id`**. `_pair_is_unbootstrapped`
+(`build_sync_plan`) demotes a git-HEAD baseline to `source="none"` whenever the two
+current halves' id sets are **disjoint** — covering fully-id-less (→`mint`), half-id'd
+(→`adopt`), and mismatched-id / per-half-`assign-ids` (→`refuse`) committed shapes, so
+they bootstrap exactly like a never-committed pair. A pair that shares even one id keeps
+its real baseline (an appended id-less cell stays an ordinary `add`); the correspondence
+verifier remains the safety net, so the broader demotion never bakes a wrong id. Only the
+git-HEAD fallback is demoted — a real **watermark** (a synced deck, which always carries
+ids) is never touched. (A *partial-overlap* pair — shares one id but a different slide is
+mismatched-id'd — is left to the keyed path's existing distinct-new-slide semantics, a
+pre-existing ambiguity outside the no-shared-keying class.)

@@ -366,10 +366,14 @@ the safe one — no command was removed and every tool stays fully invocable.
   id'd on different slides) — is **refused**. A refusal emits **`refuse`** items,
   writes nothing, holds the watermark, and `--dry-run` shows exactly what a
   writing run does (`N refuse`, exit 1 — "changes pending"); a confirmed
-  bootstrap shows `1 mint`/`1 adopt` instead (also exit 1 until applied).
-  *Migration:* for a refused pair, sync one direction at a time (author one half,
-  sync, then the other), or run `clm slides assign-ids <dir>` to mint shared ids
-  across the pair first; then re-run sync.
+  bootstrap shows `1 mint`/`1 adopt` instead (also exit 1 until applied). This
+  bootstrap works **whether or not the pair is committed to git** (#225): a
+  committed un-bootstrapped pair has a git-HEAD baseline that carries no ids, so
+  it is treated as a cold start the same as a never-committed one — it mints/adopts
+  rather than reading the id-less side as "missing every slide" (which would have
+  doubled the deck). *Migration:* for a refused pair, sync one direction at a time
+  (author one half, sync, then the other), or run `clm slides assign-ids <dir>` to
+  mint shared ids across the pair first; then re-run sync.
 - **`clm slides assign-ids` is now plumbing (hidden).** Per-file id minting on a
   *single* split half can mint a divergent slug — the #1 silent #162 break. It is
   hidden from `clm slides --help` but stays invocable by name for agents/scripts

@@ -1558,6 +1558,38 @@ def _proposal_sort_key(p: Proposal) -> tuple:
 # ---------------------------------------------------------------------------
 
 
+def _pair_is_unbootstrapped(de_current: list[CurrentCell], en_current: list[CurrentCell]) -> bool:
+    """Whether the two halves share **no** ``slide_id`` — a cold-start shape (#225).
+
+    The per-cell engine reconciles a pair by its shared ``(slide_id, role)`` keys, so
+    a pair is "bootstrapped" only if the two halves have **at least one ``slide_id`` in
+    common** (the engine can then pair at least one cell across the decks). When they
+    share none, a git-HEAD baseline is **no more informative than no baseline at all**
+    — and running the keyed baseline path against it is actively harmful: every slide
+    reads as "present on one deck, missing on the other", which the engine
+    translate-and-inserts in **both** directions and so **doubles both decks** (Issue
+    #225). So a no-shared-keying committed pair is treated as a true cold start
+    (``source="none"``) and routed to the correspondence-gated ``mint`` / ``adopt`` /
+    ``refuse`` bootstrap, exactly like a never-committed pair, instead of the keyed
+    git-HEAD diff.
+
+    "No shared keying" covers every committed shape the keyed path would double:
+    a **fully id-less** pair (→ ``mint``), a **half-id'd** pair (one side fully id'd,
+    the other id-less → ``adopt``), a **mismatched-id** pair (both id'd but disjoint —
+    per-half ``assign-ids`` → ``refuse``), and a partial-disjoint mix. A pair that
+    shares even one id is (at least partly) bootstrapped: its baseline keys are real
+    and kept, so a genuinely new id-less cell appended to it stays an ordinary ``add``.
+    The cheap correspondence verifier is the safety net for the bootstrap path, so an
+    aggressive demotion never bakes a wrong id — a non-corresponding pair refuses. A
+    pair with **no** sync cells at all is a no-op, not a cold start.
+    """
+    if not de_current and not en_current:
+        return False
+    de_ids = {c.slide_id for c in de_current if c.slide_id is not None}
+    en_ids = {c.slide_id for c in en_current if c.slide_id is not None}
+    return de_ids.isdisjoint(en_ids)
+
+
 def build_sync_plan(
     de_path: Path,
     en_path: Path,
@@ -1608,7 +1640,7 @@ def build_sync_plan(
             )
         ]
         source = "watermark"
-    elif allow_git_fallback:
+    elif allow_git_fallback and not _pair_is_unbootstrapped(de_current, en_current):
         gb_de = _baseline_from_git_head(de_path)
         gb_en = _baseline_from_git_head(en_path)
         if gb_de is not None and gb_en is not None:
@@ -1662,10 +1694,13 @@ def build_sync_plan(
     # correspondence before any id reaches disk. Two shapes, mutually exclusive:
     # a both-id-less *unifiable* pair → `mint` (fresh shared ids); a *half-id'd*
     # pair (one half fully id'd, the other fully id-less) → `adopt` (the id-less
-    # half adopts the id'd half's existing ids). Cold start only (so apply can
-    # short-circuit the whole pair; the watermark-baseline both-sides-idless case
-    # keeps refusing, a documented future extension). `adopt` runs after `mint`
-    # and is a no-op when `mint` already consumed the refusals.
+    # half adopts the id'd half's existing ids). `source == "none"` covers both a
+    # never-committed pair AND a committed un-bootstrapped one: an id-less committed
+    # pair is demoted to "none" above (`_pair_is_unbootstrapped`, Issue #225), since
+    # its git-HEAD baseline carries no usable ids. A watermark-baseline both-sides-
+    # idless deck (a synced deck whose ids were later stripped — against the design
+    # invariant) still refuses, a documented edge. `adopt` runs after `mint` and is a
+    # no-op when `mint` already consumed the refusals.
     if source == "none" and provider_available:
         _maybe_emit_cold_mint(plan, de_cells, en_cells, de_path, en_path)
         _maybe_emit_cold_adopt(plan, de_cells, en_cells, de_path, en_path)
