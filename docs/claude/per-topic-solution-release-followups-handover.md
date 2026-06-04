@@ -42,8 +42,9 @@ Four follow-ups remain, in rough value order:
 
 - **Follow-up 1 — step-5 consumer wiring** `[DONE]` (commit `c4a45f4`, pushed).
   1a record-time stamping + 1b `clm recordings drift` both shipped.
-- **Follow-up 2 — `SharedImageFile` manifest enumeration** `[TODO]` ← ACTIVE NEXT.
-- **Follow-up 3 — `clm release week`** `[TODO]`.
+- **Follow-up 2 — `SharedImageFile` manifest enumeration** `[DONE]`.
+  `enumerate_expected_outputs` now covers shared-mode images.
+- **Follow-up 3 — `clm release week`** `[TODO]` ← ACTIVE NEXT.
 - **Follow-up 4 — real-build `--snapshot` manifest-free test** `[TODO]`.
 
 ## 4. Current Status
@@ -90,6 +91,23 @@ Four follow-ups remain, in rough value order:
   `--manifest` > `--source` > `--spec-file` > matching `recordings.courses`
   config entry. Tests: `tests/recordings/test_recordings_drift_cli.py`. Docs:
   `clm recordings drift` added to `info_topics/commands.md`.
+
+### Follow-up 2 — what shipped (for the record)
+
+- `core.provenance_manifest.enumerate_expected_outputs` gained a
+  `SharedImageFile` branch (the last unenumerated output kind): shared-mode
+  images copy once per (language, audience) into the course-level `img/`
+  folder. Path computation mirrors
+  `SharedImageFile.get_processing_operation` exactly (`output_path_for` +
+  `get_relative_img_path`, audiences derived from `target.kinds` via the new
+  `_shared_image_audiences` helper). When several topics share one image file
+  name the copies collapse to one path; the manifest path-dedup attributes it
+  to the first owning topic — inherent to shared mode (bytes exist once).
+- Tests (`tests/core/test_provenance_manifest.py`): a shared-mode round-trip
+  (`image_mode="shared"` over test-spec-1) **plus** a path-parity test that
+  cross-checks the enumeration against the actual `CopyFileOperation` outputs
+  of `get_processing_operation` — the guard against the two path computations
+  drifting. No CLI/spec surface change, so no info-topic update.
 
 ## 5. Next Steps
 
@@ -173,7 +191,9 @@ A `--json` mode and (optionally) a web-dashboard badge are natural extensions.
 This is read-only and can ship before 1a is fully wired (it just reports
 `unknown` until parts carry digests).
 
-### Follow-up 2 — `SharedImageFile` manifest enumeration
+### Follow-up 2 — `SharedImageFile` manifest enumeration — `[DONE]`
+
+> Shipped; see §4 "Follow-up 2 — what shipped". Original design note below.
 
 `core/provenance_manifest.py` `enumerate_expected_outputs` covers
 notebook/code/HTML, `DataFile`, `DuplicatedImageFile`, and dir-group outputs but
