@@ -451,6 +451,49 @@ clm slides referenced-by slides/module_x/topic_y/slides_intro.py
 clm slides referenced-by slides_intro.py --specs-dir course-specs/
 ```
 
+### `clm course gate`
+
+Run the mechanical conversion passes over a course and report **readiness** —
+how much of a corpus is cleared by tooling versus how much still needs a human.
+Built for bringing a course up to a stricter validator (e.g. the 1.8 `slide_id`
+gate) without hand-driving the passes one at a time.
+
+```
+clm course gate [OPTIONS] TARGET
+```
+
+`TARGET` is a course spec `.xml` (validates and fixes its shipping set) or a
+slides directory. The gate runs the mechanical passes — `tag_migration`,
+`workshop_tags`, `interleaving`, and content-derived `slide_id` minting — then
+splits the remaining work into:
+
+- **mechanical** — what the passes changed (or, in a dry run, *would* change);
+- **needs-author** — what the normalizer **refused** to touch because a safe
+  automatic fix doesn't exist: a `slide_id` with no derivable heading (hard
+  refusal), a DE/EN pair whose code diverged too far to auto-interleave
+  (`similarity_failure`), or a DE/EN cell-count mismatch (a missing translation).
+
+| Option | Description |
+|--------|-------------|
+| `--apply` | Write the mechanical fixes and re-validate, reporting the residual. Without it, the gate is a **dry run**: it reports what *would* change and touches nothing on disk. |
+| `--operations LIST` | Comma-separated passes to run (default: `tag_migration,workshop_tags,interleaving,slide_ids`). Valid names: `tag_migration`, `workshop_tags`, `interleaving`, `slide_ids`. |
+| `--data-dir DIR` | Course data directory (contains `slides/`). Default: inferred from the target. |
+| `--json` | Output as JSON (baseline rollup, mechanical change counts, the needs-author list, and the post-apply residual rollup). |
+
+**Exit code:** non-zero when author work remains, or — after `--apply` — when a
+residual error remains; zero when the course is mechanically clean (no author
+work). This makes `clm course gate <spec>` usable as a conversion gate in CI:
+a dry run that exits 0 means `--apply` will fully clear the corpus.
+
+Examples:
+
+```bash
+clm course gate course-specs/python.xml            # dry-run readiness report
+clm course gate course-specs/python.xml --apply    # fix mechanically + re-validate
+clm course gate slides/module_100/ --apply
+clm course gate course-specs/python.xml --json
+```
+
 ### `clm slides search`
 
 *Removed in CLM 1.8: the flat alias `clm search-slides` no longer exists — use this group-qualified form.*

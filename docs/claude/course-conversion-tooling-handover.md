@@ -136,11 +136,27 @@ Tests, `commands.md`, and a CHANGELOG `Added` entry land with the code.
   mechanical passes (`assign-ids --accept-content-derived` → `normalize
   --operations tag_migration` → sync) and split remaining findings into
   mechanically-fixable vs needs-author.
+- 2026-06-05: **Tool #3 DONE**. `clm course gate <spec-or-dir> [--apply]` (new
+  `course` group). `clm.slides.course_gate.run_course_gate` drives the mechanical
+  passes via `normalize_file(operations=[tag_migration, workshop_tags,
+  interleaving, slide_ids], assign_options=accept_content_derived, dry_run=not
+  apply)` — the normalizer already orchestrates assign-ids + tag-migration and
+  surfaces **hard refusals / similarity_failure / count_mismatch as
+  `review_items`**, which IS the needs-author signal (no separate classifier
+  needed). Dry-run writes nothing; `--apply` writes + re-validates + reports
+  residual. Exit non-zero while author work / post-apply error remains (CI gate).
+  15 new tests (`tests/{slides,cli}/test_course_gate.py`); 135-test regression
+  (normalizer + assign-ids) green; `commands.md` + CHANGELOG updated. Smoke-tested
+  on CSharpCourses (dry-run clean, 0 writes confirmed via git status). **Next:
+  Tool #4 (scope mints — `--only bilingual|split` / `--exclude` / `--shipping-only`
+  on `assign-ids`/`normalize`).** `course gate` already scopes internally, so #4's
+  predicates (`split_lang_tag`-based bilingual/split filter; glob exclude) could
+  live in a shared helper both reuse.
 
 ## Resuming
 
-Pick up from the "Progress log" tail. Tools #1–#2 are complete; **Tool #3 is
-next**; tools #4–#9 follow in priority order. Pushing: this worktree is on
+Pick up from the "Progress log" tail. Tools #1–#3 are complete; **Tool #4 is
+next**; tools #5–#9 follow in priority order. Pushing: this worktree is on
 `worktree-linked-honking-dolphin`; push to the PR branch with the explicit
 refspec noted in the 2026-06-05 consolidation entry above. Each tool = core helper reuse + thin command(s) + tests +
 `commands.md` + CHANGELOG. Keep mirroring build resolution semantics — the whole

@@ -39,6 +39,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   that the plain directory walk misses. Second of the course-conversion tooling
   gaps. New public helper `clm.slides.validator.validate_files` validates an
   explicit deck list with the same per-pair parity as a directory walk.
+- **`clm course gate` — corpus readiness orchestrator.** Runs the mechanical
+  conversion passes (`tag_migration`, `workshop_tags`, `interleaving`,
+  content-derived `slide_id` minting) over a spec's shipping set (or a directory),
+  then splits the remaining work into **mechanical** (what the passes changed /
+  would change) versus **needs-author** (what the normalizer *refused* to touch:
+  a `slide_id` with no derivable heading, a DE/EN pair whose code diverged too far
+  to auto-interleave, or a DE/EN cell-count mismatch). Default is a dry run that
+  writes nothing; `--apply` writes the fixes and re-validates, reporting the
+  residual. Exits non-zero while author work (or a post-apply residual error)
+  remains, so it gates a conversion in CI — turning a validator bump into
+  `clm course gate <spec> --apply`. Third of the course-conversion tooling gaps;
+  the report a conversion agent previously hand-built. New `spec` and `course`
+  command groups accompany these tools.
 
 ### Removed
 
