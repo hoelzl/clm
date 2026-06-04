@@ -40,9 +40,9 @@ Four follow-ups remain, in rough value order:
 
 ## 3. Phase Breakdown
 
-- **Follow-up 1 — step-5 consumer wiring** `[TODO]` ← ACTIVE NEXT. Two parts:
-  1a record-time stamping (the design task); 1b a `clm recordings drift` surface.
-- **Follow-up 2 — `SharedImageFile` manifest enumeration** `[TODO]`.
+- **Follow-up 1 — step-5 consumer wiring** `[DONE]` (commit `c4a45f4`,
+  unpushed). 1a record-time stamping + 1b `clm recordings drift` both shipped.
+- **Follow-up 2 — `SharedImageFile` manifest enumeration** `[TODO]` ← ACTIVE NEXT.
 - **Follow-up 3 — `clm release week`** `[TODO]`.
 - **Follow-up 4 — real-build `--snapshot` manifest-free test** `[TODO]`.
 
@@ -50,12 +50,52 @@ Four follow-ups remain, in rough value order:
 
 - Steps 1–5 shipped on `origin/worktree-jingling-...` (`de27496` is the step-5
   tip; `113ccdb` the handover). Tree clean, suite green, no blockers.
-- None of the follow-ups are started. Follow-up 1 needs a small design decision
-  first (where the provenance context is assembled — see §5).
+- **Follow-up 1 DONE** (`c4a45f4`, not yet pushed). All 157 new+affected tests
+  green; ruff + mypy clean; pre-commit passed. Decision taken: manifest
+  resolution is **convention + override** (`course_root/output`,
+  deterministic-first target subdir; `clm recordings drift` adds
+  `--source`/`--manifest`/`--spec-file`). `slide_digest=None` → drift `unknown`
+  when no manifest, never an error.
+- Follow-ups 2–4 not started; each is independent.
+
+### Follow-up 1 — what shipped (for the record)
+
+- `Course.resolve_deck_topic(section_name, deck_name, lang) -> (section_id,
+  topic_id)` (`core/course.py`): inverse of the dashboard deck listing
+  (`section.name[lang]` / `nb.file_name(lang,"")`). `file_name` guarded for
+  split companions; both halves share `topic.id`. Tests:
+  `tests/core/test_resolve_deck_topic.py`.
+- `core.provenance_manifest.find_course_manifest_path(spec_file=None, *,
+  output_root=None)`: convention locator (default `course_root/output`, else
+  first sorted `<target>/.clm-manifest.json`). Shared by arm-time stamping and
+  the drift command so both read the same target. Tests in
+  `tests/core/test_provenance_manifest.py`.
+- `recordings/record_provenance.py` — `RecordProvenance` frozen dataclass +
+  `build_record_provenance(course, spec_file, section_name, deck_name, lang)`:
+  total/never-raising assembler (resolver + `recordings.git_info.get_git_info`
+  on the spec's `course_root` + manifest digest). Tests:
+  `tests/recordings/test_record_provenance.py`.
+- Threading: `ArmedDeck` gained a `provenance` field; `RecordingSession.arm`/
+  `record` gained a `provenance=` kwarg; `_sync_state_after_rename` forwards
+  the five fields to `ensure_part`/`record_retake`. `self._armed` already flows
+  through the OBS-stop rename thread, so no other plumbing was needed. Tests in
+  `tests/recordings/test_session.py::TestStateWiring`.
+- Web: `/arm` + `/record` call a new `_build_deck_provenance` helper
+  (`recordings/web/routes.py`) using `app.state.course` + `app.state.spec_file`;
+  failure → all-`None` (recording never blocked).
+- 1b: `clm recordings drift COURSE_ID` (`cli/commands/recordings.py`) with
+  `--source`/`--manifest`/`--spec-file`/`--all`/`--json`; manifest priority
+  `--manifest` > `--source` > `--spec-file` > matching `recordings.courses`
+  config entry. Tests: `tests/recordings/test_recordings_drift_cli.py`. Docs:
+  `clm recordings drift` added to `info_topics/commands.md`.
 
 ## 5. Next Steps
 
-### Follow-up 1 — wire recording provenance (the meaty one)
+### Follow-up 1 — wire recording provenance (the meaty one) — `[DONE]` (`c4a45f4`)
+
+> Shipped as described below; the decision taken was **convention + override**
+> for manifest resolution. See §4 "what shipped" for the concrete surface.
+> The rest of this subsection is the original design narrative, kept for context.
 
 **Goal.** At record/retake time, stamp each `RecordingPart` with
 `section_id`, `topic_id`, `slide_digest` (the topic's current
