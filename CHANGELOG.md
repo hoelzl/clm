@@ -92,6 +92,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   `by_issue` histograms. Exit code is always `0` (it's a report). Sixth of the
   course-conversion tooling gaps. New module `clm.slides.slug_quality`
   (`classify_slug` / `scan_slug_quality` / `render_report` / `report_to_dict`).
+- **`clm spec orphans` — decks reachable from no spec, plus cruft.** The inverse
+  of `clm spec decks`: scan every spec in a course and report the decks on disk
+  that no spec pulls in, grouped by likely intent so dead decks can be archived
+  without deleting intentional alternates — `superseded` (`_old` / `_bak` /
+  `_orig` / `_vN` / trailing `_N`, usually safe to archive), `alternate`
+  (`_partN` / `_short` / `_long`, probably-intentional content), and `unknown`
+  (no marker — review). Orphans are computed against the **union** of every spec
+  (a deck unreferenced by one spec may be pulled in by another), and the on-disk
+  walk is extension-complete (`.py` / `.cpp` / `.cs` / …) so a non-Python orphan
+  is not silently missed. Also surfaces gitignored `.ipynb_checkpoints/` cache
+  cruft, with `--clean-checkpoints` to delete it; `--kind` filters to one bucket;
+  `--json` adds `by_kind` counts. Exit code is always `0` (it's a report).
+  Seventh of the course-conversion tooling gaps. New module
+  `clm.core.spec_orphans` (`find_orphans` / `classify_orphan` /
+  `find_checkpoint_dirs` / `render_report` / `report_to_dict`).
 
 ### Removed
 

@@ -101,6 +101,7 @@ from clm.cli.commands.spec_decks import (  # noqa: E402
     referenced_by_cmd,
     spec_decks_cmd,
 )
+from clm.cli.commands.spec_orphans import spec_orphans_cmd  # noqa: E402
 from clm.cli.commands.split import split_cmd  # noqa: E402
 from clm.cli.commands.status import status  # noqa: E402
 from clm.cli.commands.suggest_sync import suggest_sync_cmd  # noqa: E402
@@ -183,6 +184,7 @@ topic_group.add_command(resolve_topic_cmd, name="resolve")
 cli.add_command(topic_group)
 
 spec_group.add_command(spec_decks_cmd, name="decks")
+spec_group.add_command(spec_orphans_cmd, name="orphans")
 cli.add_command(spec_group)
 
 course_group.add_command(course_gate_cmd, name="gate")

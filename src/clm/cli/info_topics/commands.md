@@ -451,6 +451,50 @@ clm slides referenced-by slides/module_x/topic_y/slides_intro.py
 clm slides referenced-by slides_intro.py --specs-dir course-specs/
 ```
 
+### `clm spec orphans`
+
+*Added in CLM {version}.*
+
+The inverse of `clm spec decks`: scan **every** spec in a course and report the
+decks on disk that *no* spec pulls in, grouped by likely intent — so you can
+archive the dead ones without deleting intentional alternates. Also surfaces
+(and optionally removes) gitignored `.ipynb_checkpoints/` cache cruft.
+
+```
+clm spec orphans [OPTIONS] SPECS_DIR
+```
+
+`SPECS_DIR` is the directory of course spec `*.xml` files. Orphans are computed
+against the **union** of every spec (a deck unreferenced by one spec may be
+pulled in by another). The on-disk walk is extension-complete (`.py` / `.cpp` /
+`.cs` / …), so a non-Python orphan is not silently missed.
+
+| Option | Description |
+|--------|-------------|
+| `--slides-dir DIR` | The course's `slides/` directory. Default: `<specs-dir>/../slides`. |
+| `--data-dir DIR` | Course data directory (contains `slides/`); alternative to `--slides-dir`. |
+| `--kind superseded\|alternate\|unknown` | Show only orphans of this intent. |
+| `--clean-checkpoints` | Delete the `.ipynb_checkpoints/` directories found (regenerable cache cruft). |
+| `--json` | Emit a JSON report (`by_kind` counts + per-orphan `kind`/`reason`, plus `checkpoints`). |
+
+Intent buckets (the distinction matters — blindly archiving a `_part1..5` series
+would delete real content):
+
+| Bucket | Markers | Meaning |
+|---|---|---|
+| `superseded` | `_old` / `_oldN` / `_bak` / `_backup` / `_orig` / `_deprecated` / `_copy` / `_vN` / trailing `_N` | usually safe to archive |
+| `alternate` | `_partN` / `_short` / `_long` | probably intentional content — do **not** blindly archive |
+| `unknown` | no recognizable marker | review before acting |
+
+The exit code is always `0` — this is a report. Examples:
+
+```bash
+clm spec orphans course-specs/                                 # full orphan report
+clm spec orphans course-specs/ --kind superseded               # just the archivable ones
+clm spec orphans course-specs/ --clean-checkpoints             # report + delete checkpoint cruft
+clm spec orphans course-specs/ --slides-dir ../other/slides --json
+```
+
 ### `clm course gate`
 
 Run the mechanical conversion passes over a course and report **readiness** —

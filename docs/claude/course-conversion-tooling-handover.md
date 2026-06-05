@@ -204,11 +204,34 @@ Tests, `commands.md`, and a CHANGELOG `Added` entry land with the code.
   updated. **Next: Tool #7 (`clm spec orphans <specs-dir>` — decks reachable from
   no spec, grouped by likely intent: `_old` superseded vs `_short`/`_long`/`_partN`
   intentional alternates; + flag gitignored `.ipynb_checkpoints/` cruft).**
+- 2026-06-05: **Tool #6 PUSHED** (`9b845ba3` → PR #230, fast suite green).
+- 2026-06-05: **Tool #7 DONE**. New `clm spec orphans SPECS_DIR` (spec group).
+  New core `clm.core.spec_orphans`: `find_orphans(spec_files, slides_dir) ->
+  OrphanReport` = inverse of Tool #1's `shipping_set` (orphans = `_all_decks -
+  shipping`). `classify_orphan(path) -> (OrphanKind, reason)` buckets by filename
+  intent — `alternate` (`_partN`/`_short`/`_long`) checked **before** `superseded`
+  (`_old\d*`/`_bak`/`_backup`/`_orig`/`_deprecated`/`_copy`/`_vN`/trailing `_\d+`)
+  so a `_part2` series is never mislabeled a numeric-dup; everything else
+  `unknown`. Two correctness choices: (1) `_all_decks` does its **own**
+  extension-complete `rglob("*")`+`is_slides_file` walk, NOT
+  `find_slide_files_recursive` (which is `*.py`-only → would miss `.cs`/`.cpp`
+  orphans — same trap as Tool #2); (2) checkpoint files are *excluded* from decks
+  (`.ipynb_checkpoints in path.parts`) and the dirs reported separately as cruft
+  (else `slides_x-checkpoint.py` counts as an orphan). `--clean-checkpoints`
+  rmtree's them (gitignored regenerable cache → safe; flag is the authorization,
+  no prompt); `--kind` filter; `--json`; exit 0 always. `_deck_stem` strips the
+  `.de`/`.en` tag before matching. 32 new tests
+  (`tests/core/test_spec_orphans.py`, `tests/cli/test_spec_orphans.py`); spec_decks
+  regression green; ruff/mypy clean; `commands.md` + CHANGELOG updated. **Next:
+  Tool #8 (`clm slides coverage-report <dir-or-spec>` — per deck: DE-only /
+  EN-only / balanced / N-cell imbalance, by counting `lang="de"` vs `lang="en"`
+  cells; separates "needs translation" from "1-cell imbalance" among
+  count-mismatch errors).**
 
 ## Resuming
 
-Pick up from the "Progress log" tail. Tools #1–#6 are complete; **Tool #7 is
-next**; tools #8–#9 follow in priority order. Pushing: this worktree is on
+Pick up from the "Progress log" tail. Tools #1–#7 are complete; **Tool #8 is
+next**; tool #9 follows. Pushing: this worktree is on
 `worktree-linked-honking-dolphin`; push to the PR branch with the explicit
 refspec noted in the 2026-06-05 consolidation entry above. Each tool = core helper reuse + thin command(s) + tests +
 `commands.md` + CHANGELOG. Keep mirroring build resolution semantics — the whole
