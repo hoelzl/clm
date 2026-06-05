@@ -13,9 +13,11 @@ from clm.cli.main import cli
 CLEAN_DECK = dedent(
     """\
     # %% [markdown] lang="de" tags=["slide"] slide_id="title"
+    #
     # ## Titel
 
     # %% [markdown] lang="en" tags=["slide"] slide_id="title"
+    #
     # ## Title
     """
 )
