@@ -15,6 +15,13 @@ state of the code:
 
 1. **CHANGELOG.md** — Add an entry for the new version with a summary of
    changes (Added / Changed / Fixed / Removed, following Keep a Changelog).
+   **Verify every merged PR since the last release is represented** — a PR can
+   merge without adding its own `[Unreleased]` entry (e.g. 1.8.0's cell-spacing
+   feature shipped with none and had to be backfilled at cut time). Cross-check
+   `git log <last-tag>..HEAD --merges` against the `[Unreleased]` section, then
+   rename `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD` and leave a fresh empty
+   `## [Unreleased]` above it. `bump-my-version` does **not** touch the
+   CHANGELOG, so this rename is manual.
 2. **README.md** — Update if there are new features, changed commands, or
    altered setup instructions.
 3. **CLAUDE.md** — Update only if there are new **guardrails** or
@@ -47,17 +54,15 @@ uv run pytest -m "not docker"
 All non-Docker tests must pass before proceeding. This runs unit, integration,
 and e2e tests and takes about 2 minutes with `pytest-xdist` parallelism.
 
-## Step 3: Bump version, build, and push to CI
+## Step 3: Bump the version and push
 
 ```bash
-# Bump the version (creates commit + tag across 8 files)
+# Bump the version (creates the commit + tag across 8 files)
 uv run bump-my-version bump patch  # or minor / major
 
-# Build the package (sdist + wheel in dist/)
-uv build
-
-# Push commit and tags to trigger CI
-git push && git push --tags
+# Push the bump commit to master (this triggers CI), then push the tag
+git push
+git push --tags
 ```
 
 `bump-my-version` is configured in `[tool.bumpversion]` in `pyproject.toml`
@@ -70,28 +75,62 @@ Preview what would change without modifying anything:
 uv run bump-my-version bump patch --dry-run --verbose
 ```
 
-## Step 4: Verify CI passes
+## Step 4: The automated release (CI gate → PyPI → GitHub Release)
 
-Wait for the GitHub Actions CI pipeline to complete. CI runs the **full**
-test suite including Docker tests (it builds the `lite-test` images from
-scratch).
+Pushing the `vX.Y.Z` tag triggers the **Release** workflow
+(`.github/workflows/release.yml`), which does the rest automatically:
+
+1. **Waits for the CI workflow to finish on the tagged commit and requires it
+   to be green** before doing anything else. CI triggers on the `master` push
+   from Step 3 (it does **not** trigger on tags); the release workflow polls for
+   that run on the same commit SHA and aborts if it failed or never ran. This
+   enforces the "CI green on the tagged commit" rule mechanically — including
+   the Docker integration job, which a standalone release job could not easily
+   reproduce.
+2. Builds a clean sdist + wheel and **verifies the built version matches the
+   tag**.
+3. **Publishes to PyPI via Trusted Publishing (OIDC)** — no stored token.
+4. **Creates the GitHub Release**, with notes taken from the matching
+   `## [X.Y.Z]` CHANGELOG section.
+
+Watch it:
 
 ```bash
-gh run list --limit 5
-gh run view <run-id>
+gh run watch "$(gh run list --workflow=Release --limit 1 --json databaseId --jq '.[0].databaseId')"
 ```
 
-Do not proceed to publish until CI is green on the tagged commit.
+Nothing else is required for a normal release. The rest of this section is the
+one-time setup and the manual fallback.
 
-## Step 5: Publish to PyPI
+### One-time setup: PyPI Trusted Publishing
 
-Only after CI has passed for the tagged commit:
+The publish step authenticates to PyPI via GitHub OIDC, so there is no API token
+to store or rotate. Configure it once on PyPI, under the project's
+[publishing settings](https://pypi.org/manage/project/coding-academy-lecture-manager/settings/publishing/):
+
+- **Owner:** `hoelzl`  ·  **Repository:** `clm`
+- **Workflow name:** `release.yml`
+- **Environment name:** `pypi`
+
+The `publish` job declares `environment: pypi`; add protection rules (required
+reviewers, etc.) to that environment in the repo settings if you want a manual
+approval gate before any upload.
+
+### Manual fallback
+
+If the workflow is unavailable, publish by hand — but only after confirming CI
+is green on the tagged commit:
 
 ```bash
-uv publish
+rm -rf dist/*            # dist/ accumulates old artifacts; uv publish uploads all of dist/
+uv build
+uv publish              # needs a PyPI token configured locally
+awk -v v=X.Y.Z 'BEGIN{h="## [" v "]"} index($0,h)==1{f=1;next} f&&index($0,"## [")==1{exit} f' \
+  CHANGELOG.md > notes.md
+gh release create vX.Y.Z --title "CLM X.Y.Z" --notes-file notes.md --verify-tag
 ```
 
-The `uv build` output in `dist/` (sdist + wheel) is what gets uploaded.
+`--verify-tag` refuses to create the release if the tag was never pushed.
 
 ---
 

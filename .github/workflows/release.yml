@@ -1,0 +1,114 @@
+name: Release
+
+# Triggered by pushing a version tag (the `bump-my-version bump` commit's tag).
+# Gates on the full CI workflow being green for the *same commit* (CI runs on the
+# master push that the tag points at — see docs/developer-guide/releasing.md),
+# then builds, publishes to PyPI via Trusted Publishing (OIDC, no stored token),
+# and creates the GitHub Release from the CHANGELOG.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  require-ci:
+    name: Require full CI green on the tagged commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Wait for the CI workflow to succeed on ${{ github.sha }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          echo "Waiting for the 'CI' workflow to complete on $SHA ..."
+          # 80 polls x 30s = 40 min, comfortably longer than the full matrix
+          # (test x3 + lint + docker integration).
+          for attempt in $(seq 1 80); do
+            runs=$(gh api "repos/$REPO/actions/runs?head_sha=$SHA&per_page=100" \
+              --jq '[.workflow_runs[] | select(.name=="CI")]')
+            total=$(jq 'length' <<<"$runs")
+            if [ "$total" -eq 0 ]; then
+              echo "  attempt $attempt: no CI run for this commit yet ..."
+              sleep 30; continue
+            fi
+            # Inspect the most recently started CI run for this commit.
+            status=$(jq -r 'sort_by(.run_started_at) | last | .status'     <<<"$runs")
+            conclusion=$(jq -r 'sort_by(.run_started_at) | last | .conclusion' <<<"$runs")
+            echo "  attempt $attempt: CI status=$status conclusion=$conclusion"
+            if [ "$status" = "completed" ]; then
+              if [ "$conclusion" = "success" ]; then
+                echo "CI is green for $SHA — proceeding to publish."
+                exit 0
+              fi
+              echo "::error::CI concluded '$conclusion' on $SHA — refusing to release."
+              exit 1
+            fi
+            sleep 30
+          done
+          echo "::error::Timed out after 40 min waiting for CI on $SHA."
+          exit 1
+
+  publish:
+    name: Publish to PyPI and create the GitHub Release
+    needs: require-ci
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write  # PyPI Trusted Publishing (OIDC token exchange)
+      contents: write  # create the GitHub Release
+    steps:
+      - name: Checkout the tagged commit
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Build a clean sdist + wheel
+        run: |
+          rm -rf dist
+          uv build
+
+      - name: Verify the built version matches the tag
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          ls -la dist/
+          if [ ! -f "dist/coding_academy_lecture_manager-${version}.tar.gz" ]; then
+            echo "::error::dist/ has no sdist for ${version} — tag/version mismatch."
+            exit 1
+          fi
+
+      - name: Publish to PyPI (Trusted Publishing)
+        run: uv publish --trusted-publishing always
+
+      - name: Extract the CHANGELOG section for this version
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          # index()-based, no regex: match lines that *start with* the literal
+          # "## [<version>]" header and stop at the next "## [" section.
+          awk -v v="$version" '
+            BEGIN { hdr = "## [" v "]" }
+            index($0, hdr) == 1 { f=1; next }
+            f && index($0, "## [") == 1 { exit }
+            f { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "Release ${GITHUB_REF_NAME}. See CHANGELOG.md for details." > release-notes.md
+          fi
+
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "CLM $GITHUB_REF_NAME" \
+            --notes-file release-notes.md \
+            --verify-tag
