@@ -97,6 +97,7 @@ from clm.cli.commands.release import release_group  # noqa: E402
 from clm.cli.commands.resolve_topic import resolve_topic_cmd  # noqa: E402
 from clm.cli.commands.search_slides import search_slides_cmd  # noqa: E402
 from clm.cli.commands.slides_sync import slides_sync_cmd  # noqa: E402
+from clm.cli.commands.slides_translate import slides_translate_cmd  # noqa: E402
 from clm.cli.commands.slug_report import slug_report_cmd  # noqa: E402
 from clm.cli.commands.spec_decks import (  # noqa: E402
     referenced_by_cmd,
@@ -175,6 +176,9 @@ slides_group.add_command(unify_cmd, name="unify")
 slides_group.add_command(language_view_cmd, name="language-view")
 slides_group.add_command(suggest_sync_cmd, name="suggest-sync")
 slides_group.add_command(slides_sync_cmd, name="sync")
+slides_group.add_command(slides_translate_cmd, name="translate")
+# `bootstrap` is an alias for the cold-start direction of the same command.
+slides_group.add_command(slides_translate_cmd, name="bootstrap")
 slides_group.add_command(search_slides_cmd, name="search")
 slides_group.add_command(tidy_cmd, name="tidy")
 slides_group.add_command(referenced_by_cmd, name="referenced-by")

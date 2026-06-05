@@ -84,6 +84,49 @@ This default is write-time only and never changes build output. Precedence for a
 new companion: explicit `--layout` flag → an existing `voiceover/` directory →
 the course default → `sibling`.
 
+## Bootstrap a second language: `clm slides translate` ({version} — additive)
+
+New command **`clm slides translate SOURCE`** (alias `clm slides bootstrap`)
+generates the missing-language split half of a single-language deck as a full
+translation. This is the cold start `clm slides sync` deliberately refuses to
+perform — sync only fills per-cell gaps inside an *already-existing* pair, and a
+missing twin is a usage error there.
+
+**Nothing changes for existing course repos** — this is a new command, no
+behavior change to `build`, `sync`, `split`, or `unify`. Adopt it when starting a
+new deck in one language:
+
+```bash
+# 1. You wrote only slides_x.de.py. Create the English half.
+clm slides translate slides/topic/slides_x.de.py
+
+# 2. From here on, keep the two halves in step with the usual tool.
+clm slides sync slides/topic/slides_x.de.py
+
+# 3. (Optional) merge to a single bilingual file for editing.
+clm slides unify slides/topic/slides_x.de.py
+```
+
+What it does (see `clm info commands` → *`clm slides translate`* for the full
+reference):
+
+- Code is translated **iff** a cell carries a `lang` tag — the existing
+  no-`lang`-is-shared model, no new marker. Shared (no-`lang`) cells, including
+  idiomatic code, are copied byte-for-byte into both halves.
+- The voiceover companion (`voiceover_*`) is translated in lockstep, preserving
+  `for_slide` / `vo_anchor`.
+- EN-authority shared `slide_id`s are minted onto both halves and the sync
+  watermark is recorded, so the **next** `translate` or `sync` is a clean no-op —
+  re-running never doubles the deck (a present twin degrades to incremental sync;
+  `--force` re-bootstraps).
+- Needs `$OPENROUTER_API_KEY` (or `$OPENAI_API_KEY`); reads a project `.env`. With
+  no key the bootstrap exits `1` and writes nothing. `--dry-run` previews with no
+  key and no LLM.
+
+A generated deck is valid for all the split-pair tooling immediately — it passes
+`clm validate slides <dir> --fail-on warning` (slide_id set/order parity,
+shared-cell byte parity, pairing adjacency, companion `for_slide` parity).
+
 ## Breaking changes in CLM 1.8
 
 CLM 1.8 retires the Phase 0 deprecation period. It carries **intentional

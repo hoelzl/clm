@@ -168,6 +168,89 @@ class TitleSuggestionCache:
         self._conn.close()
 
 
+class TranslationCache:
+    """Cache translated cell bodies for ``clm slides translate`` (Issue #232).
+
+    Keyed by ``(content_hash, prompt_version, source_lang, target_lang, role)``:
+    the source body's hash plus everything that changes the *output* — the
+    translator's prompt version (model-folded by the caller, so two models never
+    share an entry), the direction, and the role (markdown vs the
+    identifier-preserving code prompt). Bootstrapping a whole deck is the same
+    per-cell translation a later sync would do, so a shared cache makes re-runs
+    and tests cheap. Only **successful** translations are stored.
+
+    Shares the consuming repo's ``clm-llm.sqlite`` cache file with the other LLM
+    caches but lives in its own table.
+    """
+
+    def __init__(self, db_path: Path):
+        self.db_path = db_path
+        self._conn = sqlite3.connect(str(db_path))
+        self._migrate()
+
+    def _migrate(self) -> None:
+        cursor = self._conn.execute("PRAGMA table_info(translations)")
+        columns = {row[1] for row in cursor.fetchall()}
+        if not columns:
+            self._conn.execute(
+                """CREATE TABLE translations (
+                    content_hash   TEXT NOT NULL,
+                    prompt_version TEXT NOT NULL,
+                    source_lang    TEXT NOT NULL,
+                    target_lang    TEXT NOT NULL,
+                    role           TEXT NOT NULL,
+                    translation    TEXT NOT NULL,
+                    created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (content_hash, prompt_version, source_lang, target_lang, role)
+                )"""
+            )
+            self._conn.commit()
+
+    def get(
+        self,
+        content_hash: str,
+        prompt_version: str,
+        source_lang: str,
+        target_lang: str,
+        role: str,
+    ) -> str | None:
+        row = self._conn.execute(
+            "SELECT translation FROM translations WHERE content_hash=? AND prompt_version=? "
+            "AND source_lang=? AND target_lang=? AND role=?",
+            (content_hash, prompt_version, source_lang, target_lang, role),
+        ).fetchone()
+        return row[0] if row else None
+
+    def put(
+        self,
+        content_hash: str,
+        prompt_version: str,
+        source_lang: str,
+        target_lang: str,
+        role: str,
+        translation: str,
+    ) -> None:
+        self._conn.execute(
+            """INSERT OR REPLACE INTO translations
+               (content_hash, prompt_version, source_lang, target_lang, role, translation)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (content_hash, prompt_version, source_lang, target_lang, role, translation),
+        )
+        self._conn.commit()
+
+    def invalidate_prompt_version(self, prompt_version: str) -> int:
+        """Delete entries whose prompt version no longer matches."""
+        cursor = self._conn.execute(
+            "DELETE FROM translations WHERE prompt_version!=?",
+            (prompt_version,),
+        )
+        self._conn.commit()
+        return cursor.rowcount
+
+    def close(self) -> None:
+        self._conn.close()
+
+
 class CoverageCache:
     """Cache LLM voiceover-coverage verdicts.
 

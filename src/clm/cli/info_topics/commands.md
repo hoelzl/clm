@@ -1079,8 +1079,10 @@ syncs the pair. You may also pass the **bilingual deck stem** (`slides_x.py`, no
 `.de`/`.en` tag) when it still exists on disk, and both halves are derived. The
 derivation is prefix-agnostic (so `apis.de.py` works) and the resolved pair is
 still run through the pairing guard above. A missing twin is a clear usage error
-(exit 2) — sync never invents a translated half; run `clm slides split` first.
-The two-path form is unchanged.
+(exit 2) — sync never invents a translated half. To create a missing
+other-language half from scratch, use **`clm slides translate`** (below); to split
+an existing bilingual deck into halves, run `clm slides split` first. The two-path
+form is unchanged.
 
 **Batch mode (since CLM {version}).** `DE_PATH` may also be a **directory** —
 every `.de`/`.en` deck pair under the tree is synced in one pass. Enumeration is
@@ -1270,6 +1272,102 @@ clm slides sync intro.de.py intro.en.py --dry-run --json
 
 # Stateless run: ignore/leave the watermark, baseline off git HEAD.
 clm slides sync intro.de.py intro.en.py --no-cache
+```
+
+### `clm slides translate`
+
+*Added in CLM {version}. Alias: `clm slides bootstrap`.*
+
+Cold-start translation of a **single-language** deck into its other-language
+split half. When an author has written only `slides_x.de.py`, this synthesizes
+`slides_x.en.py` (and vice-versa) as a complete translation of the whole deck —
+the one thing `clm slides sync` deliberately refuses to do (sync only fills
+per-cell gaps inside an *already-existing* pair). After the twin exists, keep the
+two halves in step with `clm slides sync`; run `clm slides unify` for a single
+bilingual file.
+
+**Code is mostly not translated — the `lang` tag decides.** A cell with **no**
+`lang` attribute is *shared* and copied **byte-for-byte** into both halves; only
+**`lang`-tagged** cells are translated. Idiomatic code carries no `lang` tag, so
+it is copied verbatim; a code cell whose string literals / comments are shown to
+the learner carries `lang=` and is translated through a prompt that keeps every
+identifier byte-identical. This is the same model `clm slides sync` and the
+validator already use — there is no new marker.
+
+**Dispatch (idempotent by design).** If the other-language half is **absent**,
+the deck is bootstrapped: the whole deck is translated, shared cells copied,
+EN-authority shared `slide_id`s minted onto **both** halves, and the sync
+watermark recorded. If the twin is **already present**, the command degrades to
+an incremental `clm slides sync` (it never re-translates the whole deck). So
+running `clm slides translate` twice is safe — the second run is a clean sync
+no-op and the deck is never doubled. Use `--force` to re-bootstrap over an
+existing twin.
+
+**Direction** is inferred from the source half's `.de` / `.en` tag (`.de.py` →
+produces `.en`). Override with `--to en|de`. The source **must** be one split
+half: a bilingual deck stem (no tag) is rejected with a hint to run
+`clm slides split` first.
+
+**Voiceover companion in lockstep.** If the source half has a `voiceover_*`
+companion, it is translated alongside the deck into the matching
+`voiceover_*.<lang>.py` (in the same `voiceover/` subdir or sibling location),
+preserving each cell's `for_slide` / `vo_anchor` anchors. An existing target
+companion is left untouched unless `--force`.
+
+**Key and `.env`.** Translation needs `$OPENROUTER_API_KEY` (or
+`$OPENAI_API_KEY`); the command walks up from the deck and loads the first `.env`
+it finds (skip with `--no-env-file`). On the **bootstrap** path a missing key is
+a hard stop — the command exits `1` and writes nothing (a whole untranslated deck
+is useless), unlike sync's per-cell defer. `--dry-run` uses no key and no LLM.
+
+```
+clm slides translate [OPTIONS] SOURCE
+clm slides bootstrap [OPTIONS] SOURCE   # alias
+```
+
+| Option | Description |
+|--------|-------------|
+| `--to [en\|de]` | Target language. Default: the opposite of SOURCE's `.de`/`.en` tag. Override when a source mixes/omits `lang` tags. |
+| `--dry-run` | Preview only: show the target path and how many cells would be translated vs copied (and the companion), and write nothing. Uses no LLM and no API key. |
+| `--force` | Overwrite an existing twin (and its companion) by re-bootstrapping. Without it, an existing twin degrades to an incremental sync. |
+| `--translation-model TEXT` | OpenRouter model used to translate the deck (default: `anthropic/claude-sonnet-4-6`). Needs `$OPENROUTER_API_KEY` / `$OPENAI_API_KEY`. |
+| `--provider [openrouter\|local]` | Edit-judge backend for the *delegated-sync* path (when the twin already exists); unused on the bootstrap path. Overridable with `$CLM_SYNC_PROVIDER`. |
+| `--llm-model TEXT` | Model for the delegated-sync edit judge (default `anthropic/claude-sonnet-4-6` for openrouter). |
+| `--cache-dir PATH` | Directory holding the translation + watermark caches. Lookup: flag → `$CLM_CACHE_DIR` → `tool.clm.cache_dir` → `<cwd>/.clm-cache/`. |
+| `--no-cache` | Do not read or write the translation / watermark caches. |
+| `--no-env-file` | Do not auto-load a `.env` file. |
+| `--json` | Emit a JSON report instead of human-readable lines. |
+
+Exit codes: `0` wrote the new half (or the delegated sync was clean), `1` the
+delegated sync left something for review **or** no API key was available on the
+bootstrap path (nothing written), `2` a hard error (the source is not a single
+split half, or the deck could not be translated — nothing is written).
+
+The `--json` report carries `action` (`bootstrapped` / `synced`), `source`,
+`target`, `source_lang`, `target_lang`, the `companion` (`action`, `source`,
+`target`) or `null`, `watermark_recorded`, and — for a bootstrap —
+`cells_translated`, `cells_copied`, `ids_assigned`. `--dry-run --json` carries
+`mode: "dry-run"`, the `action` that *would* run, and `cells_translatable` /
+`cells_copied` counts.
+
+Examples:
+
+```bash
+# Author wrote only slides_x.de.py — create the English half.
+clm slides translate slides/topic/slides_x.de.py
+
+# Preview without translating (no key needed).
+clm slides translate slides/topic/slides_x.de.py --dry-run
+
+# Force the direction (e.g. a source that mixes/omits lang tags).
+clm slides translate slides/topic/slides_x.de.py --to en
+
+# Re-bootstrap over an existing (e.g. stale) twin.
+clm slides translate slides/topic/slides_x.de.py --force
+
+# After bootstrapping, keep the halves in step, or merge to a bilingual file.
+clm slides sync slides/topic/slides_x.de.py
+clm slides unify slides/topic/slides_x.de.py
 ```
 
 ### `clm slides coverage`
