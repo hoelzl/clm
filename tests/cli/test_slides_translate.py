@@ -266,3 +266,30 @@ def test_bootstrap_alias_is_registered(cli_runner, tmp_path, monkeypatch):
     result = cli_runner.invoke(cli, ["slides", "bootstrap", str(de_path), *_common(tmp_path)])
     assert result.exit_code == 0, result.output
     assert (tmp_path / "slides_x.en.py").exists()
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 acceptance gate: a generated deck passes the pre-commit validator
+# ---------------------------------------------------------------------------
+
+
+def test_generated_deck_passes_validate_fail_on_warning(cli_runner, tmp_path, monkeypatch):
+    """End-to-end: bootstrap a deck via the CLI, then `clm validate ... --fail-on
+    warning` (the pre-commit gate) must pass — slide_id set/order parity,
+    shared-cell byte parity, pairing adjacency, companion for_slide parity."""
+    from clm.cli.main import cli
+
+    de, en = _split(_DECK)
+    topic = tmp_path / "slides" / "module_010" / "topic_100_intro"
+    topic.mkdir(parents=True)
+    de_path = _write(topic / "slides_intro.de.py", de)
+    _patch_key(monkeypatch)
+    _patch_translator(monkeypatch, _mirror_translator(de, en))
+
+    boot = cli_runner.invoke(slides_translate_cmd, [str(de_path), *_common(tmp_path)])
+    assert boot.exit_code == 0, boot.output
+    assert (topic / "slides_intro.en.py").exists()
+
+    # The generated pair is immediately valid for the split-pair tooling.
+    val = cli_runner.invoke(cli, ["validate", str(topic), "--fail-on", "warning"])
+    assert val.exit_code == 0, val.output

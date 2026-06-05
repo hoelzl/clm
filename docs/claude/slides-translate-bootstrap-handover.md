@@ -1,7 +1,7 @@
 # Handover: Full-deck translation — `clm slides translate` (deck bootstrap)
 
-**Status:** **Phases 1–4 DONE.** Phase 1 = pure engine `translate_deck.py`. Phase 2 = orchestration `translate_bootstrap.py` (D2 dispatch + mint + watermark). Phase 3 = voiceover companion in lockstep. Phase 4 = the `clm slides translate` (+ `bootstrap` alias) CLI command + `TranslationCache`/`CachingSlideTranslator`. All green; lint/format/mypy clean; fast suite green. **Phase 5 (info-topic docs + acceptance gate) is next** — and is required by CLAUDE.md's Info Topics rule since a new CLI command landed.
-**Branch:** `claude/slides-translate-bootstrap` off `master` (`fdf7772` handover, `cf1c8e06` Phase 1, `29947b88` Phase 2, `c9199c8a` Phase 3, Phase 4 commit follows). Do **not** branch off `claude/issue-226-partial-overlap-mismatch`.
+**Status:** ✅ **FEATURE COMPLETE — all 5 phases DONE.** Phase 1 = pure engine `translate_deck.py`. Phase 2 = orchestration `translate_bootstrap.py` (D2 dispatch + mint + watermark). Phase 3 = voiceover companion in lockstep. Phase 4 = the `clm slides translate` (+ `bootstrap` alias) CLI command + `TranslationCache`/`CachingSlideTranslator`. Phase 5 = info-topic docs (`commands.md` + `migration.md`) + the validate acceptance gate. All green; lint/format/mypy clean; fast suite green. **No phases remain — this handover is ready to retire** (`docs/claude/.../-archive`). The only optional follow-ups are in §8.
+**Branch:** `claude/slides-translate-bootstrap` off `master` (`fdf7772` handover, `cf1c8e06` Phase 1, `29947b88` Phase 2, `c9199c8a` Phase 3, `28511cb2` Phase 4, Phase 5 commit follows). Do **not** branch off `claude/issue-226-partial-overlap-mismatch`.
 **Builds on (all merged to master):** the resolve-then-apply sync engine (#166/#190/#216), cold-start mint/adopt (#216), committed un-bootstrapped pairs (#225), partial-overlap mismatch (#226).
 **Related design notes:** `docs/claude/design/single-language-authoring-sync.md`, `docs/claude/design/sync-plan-resolve-apply.md`.
 **Sibling handover:** `docs/claude/sync-plan-resolve-apply-handover.md` (the engine this feature reuses).
@@ -106,34 +106,34 @@ If `voiceover_<name>.<src>.py` exists, translate its localized cells too (preser
 - Exit codes: `0` wrote/clean, `1` delegated-sync deferred / no key, `2` hard error (bad source → `UsageError`; `TranslateDeckError` mid-bootstrap → caught, exit 2, nothing written).
 - **Acceptance — met:** `CliRunner` tests (11) — absent-twin bootstrap (exit 0, twin == split's EN), no-key exit 1 + nothing written, `--dry-run` no-write + `--json` shape, `--to` reverse direction, present-twin → incremental-sync no-op (not doubled), `--force` overwrite, bilingual-stem/missing-source exit 2, and the `bootstrap` alias via the `slides` group. Plus 13 cache/caching-translator unit tests in `tests/infrastructure/llm/test_translation_cache.py`.
 
-### Phase 5 — Docs & acceptance gate — [TODO]
-**Accomplishes:** the CLAUDE.md Info Topics Maintenance Rule + end-to-end validation.
+### Phase 5 — Docs & acceptance gate — [DONE]
+**Accomplished:** the CLAUDE.md Info Topics Maintenance Rule + end-to-end validation.
 
-- Add a `### clm slides translate` section to `src/clm/cli/info_topics/commands.md`, modeled on the existing `### clm slides sync` block (option table + exit codes + examples). Use `{version}` placeholders — never hardcode versions.
-- Add a `migration.md` entry: the "bootstrap a second language" workflow (`translate` → then `sync`).
-- If exposed via MCP, add a `slides_translate` tool + a migration parity entry.
-- **Acceptance gate:** a generated deck passes `clm validate slides <dir> --fail-on warning` (slide_id set+order parity, shared-cell byte parity, pairing adjacency, companion `for_slide` parity).
+- Added a `### clm slides translate` section to `src/clm/cli/info_topics/commands.md` (option table, exit codes, examples, the `bootstrap` alias, the lang-tag rule, companion lockstep, dispatch/idempotency), with `{version}` placeholders. Also updated the `### clm slides sync` cross-reference ("sync never invents a translated half") to point at `clm slides translate` for the cold start.
+- Added a `## Bootstrap a second language: clm slides translate ({version} — additive)` entry to `migration.md` (the `translate` → `sync` → `unify` workflow; additive, no break).
+- **MCP: intentionally skipped** — the MCP surface wraps read/analysis library functions (`suggest_sync`, `validate`, `normalize`); the writing+LLM `slides_sync` is **not** exposed there, so `slides_translate` is out of scope by the same rationale (not an omission).
+- **Acceptance gate — met:** `test_generated_deck_passes_validate_fail_on_warning` bootstraps a deck through the **real CLI** and asserts `clm validate <dir> --fail-on warning` exits 0 (slide_id set/order parity, shared-cell byte parity, pairing adjacency, companion `for_slide` parity all hold on the generated pair).
 
 ---
 
 ## 4. Current Status
 
-- **Completed:** design + **Phase 1** (`translate_deck.py`, `cf1c8e06`) + **Phase 2** (`translate_bootstrap.py`, `29947b88`) + **Phase 3** (companion, `c9199c8a`) + **Phase 4** (CLI `slides_translate.py` + `TranslationCache`/`CachingSlideTranslator`). Lint/format/mypy clean; fast suite green. Issue **#232** filed. Branch `claude/slides-translate-bootstrap` off master. The three user-facing forks are settled (D1, D4, D5).
-- **In progress:** none — Phase 5 (docs) not started.
-- **Blockers / open questions:** none blocking. The `--to` question is resolved: `derive_bootstrap_paths` requires a `.de`/`.en` tag on the *source* (a tag-less single half is rejected with a "run split first" hint), and `--to` is an optional override.
-- **Tests:** Phases 1–4 fully covered (see §7). Phase 5 pending.
+- **Completed:** design + **all 5 phases**. `cf1c8e06` Phase 1, `29947b88` Phase 2, `c9199c8a` Phase 3, `28511cb2` Phase 4, Phase 5 commit follows (docs + acceptance gate). Lint/format/mypy clean; fast suite green. Issue **#232** filed. Branch `claude/slides-translate-bootstrap` off master, pushed. The three user-facing forks are settled (D1, D4, D5).
+- **In progress:** none — feature complete.
+- **Blockers / open questions:** none. The `--to` question is resolved: `derive_bootstrap_paths` requires a `.de`/`.en` tag on the *source* (a tag-less single half is rejected with a "run split first" hint), and `--to` is an optional override.
+- **Tests:** all phases covered (see §7). Counts: 17 (`test_translate_deck`) + 28 (`test_translate_bootstrap`) + 13 (`test_translation_cache`) + 12 (`test_slides_translate`, incl. the acceptance gate).
+- **Remaining:** open a PR to `master`, then **retire this handover** (→ `-archive`). No code work left.
 
 ---
 
 ## 5. Next Steps
 
-**Start Phase 5 — info-topic docs + acceptance gate (the final phase).** A new CLI command landed, so CLAUDE.md's **Info Topics Maintenance Rule (CRITICAL)** now requires updating the version-accurate docs downstream agents read. Plan:
-1. Add a `### clm slides translate` section to `src/clm/cli/info_topics/commands.md`, modeled on the existing `### clm slides sync` block (option table, exit codes `0/1/2`, examples — `clm slides translate slides_x.de.py`, `--to`, `--dry-run`, `--force`). Use `{version}` placeholders — never hardcode versions. Mention the `bootstrap` alias and that code is translated iff a cell carries a `lang` tag.
-2. Add a `migration.md` entry: the "bootstrap a second language" workflow (`translate` once → then `sync` forever; run `unify` for a bilingual file).
-3. (Optional) If the MCP server exposes slide tools, add a `slides_translate` tool + a parity entry — check `src/clm/mcp/` first; skip if not a natural fit.
-4. **Acceptance gate:** generate a deck via the CLI (offline, with a static translator in a test, or by hand) and confirm it passes `clm validate slides <dir> --fail-on warning` (slide_id set+order parity, shared-cell byte parity, pairing adjacency, companion `for_slide` parity). A round-trip test feeding a real bilingual fixture through split → translate-one-half → validate is the strongest end-to-end check.
+**All 5 phases are DONE — no implementation work remains.** The only follow-ups are process:
+1. **Open a PR** from `claude/slides-translate-bootstrap` → `master` (link #232). The branch is pushed and the pre-push gate (ruff, format, mypy, fast suite) passes.
+2. **Retire this handover** — rename to `docs/claude/slides-translate-bootstrap-handover-archive.md` (the `retire-handover` skill), since the feature is shipped.
+3. **Optional future work** (not required): async fan-out of the per-cell translate loop (`client.py` `_get_semaphore`, default `max_concurrent=5`) if real decks are slow; full companion *sync* (reconciling an already-present companion on the sync-delegation path); a `--to` requirement when a source genuinely has no lang tags (currently inferred from the filename tag).
 
-**Phases 1–4 are DONE.** The feature is fully usable from the CLI today (`clm slides translate slides_x.de.py`); Phase 5 is documentation + the validation gate, not new behavior. The single entry point is `bootstrap_deck(source_path, *, target_lang=None, translator, judge=None, watermark_cache=None, recoverer=None, alignment_cache=None, verifier=None, correspondence_cache=None, provider_available=False, force=False) -> BootstrapResult`; the CLI is `src/clm/cli/commands/slides_translate.py`.
+**The feature is usable today:** `clm slides translate slides_x.de.py`. Single entry point `bootstrap_deck(...) -> BootstrapResult` in `src/clm/slides/translate_bootstrap.py`; CLI in `src/clm/cli/commands/slides_translate.py`.
 
 **Setup:** worktree venv must be synced (`uv sync --extra all`) — a repo-root `.venv` silently resolves `clm` to the main repo (memory `feedback-worktree-venv-sync`). Run tests with `uv run python -m pytest …` (system Python has no pytest).
 
@@ -158,9 +158,9 @@ If `voiceover_<name>.<src>.py` exists, translate its localized cells too (preser
 - **`tests/cli/test_slides_translate.py` — DONE (11 tests).** **`tests/infrastructure/llm/test_translation_cache.py` — DONE (13 tests).**
 
 ### Modified files
-- `src/clm/cli/main.py` — register `translate` + `bootstrap` under `slides_group` (~line 168).
-- `src/clm/cli/info_topics/commands.md` — `### clm slides translate` section (Phase 5).
-- `src/clm/cli/info_topics/migration.md` — bootstrap-a-second-language workflow entry (Phase 5).
+- `src/clm/cli/main.py` — registers `translate` + `bootstrap` under `slides_group` (~line 167). **DONE.**
+- `src/clm/cli/info_topics/commands.md` — `### clm slides translate` section + updated the sync cross-reference. **DONE (Phase 5).**
+- `src/clm/cli/info_topics/migration.md` — `## Bootstrap a second language` entry. **DONE (Phase 5).**
 
 ### Reuse surface (verified at these paths/lines)
 | Symbol | Location | Role |
