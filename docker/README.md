@@ -8,20 +8,22 @@ This directory contains Dockerfiles and supporting files for building CLM worker
 - `drawio/` - Draw.io converter worker
 - `notebook/` - Jupyter notebook processor worker
 
-## Git LFS Files
+## Build inputs
 
-Several large binary files are stored in Git LFS:
+Large third-party inputs are **fetched from pinned upstream releases and
+SHA-256-verified at build time** (see the `ARG …_VERSION` / `ARG …_SHA256` pairs
+in the Dockerfiles), so they are no longer vendored in Git LFS:
 
-**DrawIO Worker:**
-- `drawio/drawio-amd64-24.7.5.deb` (98MB) - Draw.io desktop application
-- `drawio/ArchitectsDaughter-Regular.ttf` (37KB) - Font file
+- `notebook/` — Deno runtime, IJava kernel (fetched)
+- `drawio/` — Draw.io desktop `.deb` (fetched)
 
-**Notebook Worker:**
-- `notebook/deno-x86_64-unknown-linux-gnu.zip` (~40MB) - Deno runtime
-- `notebook/ijava-1.3.0.zip` (~6MB) - IJava kernel
-- `notebook/packages-microsoft-prod.deb` (~3KB) - Microsoft package repository config
+Still in-tree:
 
-**Note**: PlantUML JAR (`plantuml/plantuml-1.2024.6.jar`, 22MB) is committed directly (not LFS).
+- `drawio/ArchitectsDaughter-Regular.ttf` (~38 KB) — small font, vendored in Git LFS
+- `plantuml/plantuml-1.2024.6.jar` (22 MB) — committed directly (not LFS)
+
+So only the Draw.io image needs `git lfs pull`; the others need none. See
+`BUILDING.md` for version-bump and checksum-mismatch notes.
 
 ## Building Images
 
@@ -40,8 +42,8 @@ From the repository root:
 ## Requirements
 
 - Docker with BuildKit enabled
-- Git LFS (to checkout large binary files)
-- Repository must be cloned with Git LFS:
+- Network access during the build (Dockerfiles fetch pinned, checksummed inputs)
+- Git LFS only for the Draw.io image (its bundled font):
   ```bash
   git lfs install
   git lfs pull
