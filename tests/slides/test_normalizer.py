@@ -962,5 +962,97 @@ class TestSlideIds:
         assert 'slide_id="wichtige-methoden"' in new_text
 
 
+# ---------------------------------------------------------------------------
+# Cell spacing (blank line between cells; markdown leading blank comment)
+# ---------------------------------------------------------------------------
+
+
+class TestCellSpacing:
+    def test_inserts_blank_between_cells(self, tmp_path):
+        text = '# %% [markdown] lang="de"\n#\n# ## A\n# %% [markdown] lang="de"\n#\n# ## B\n'
+        path = _write_slide(tmp_path / "slides_x.de.py", text)
+        result = normalize_file(path, operations=["cell_spacing"])
+        assert result.files_modified == 1
+        out = path.read_text(encoding="utf-8")
+        assert "# ## A\n\n# %% [markdown]" in out
+
+    def test_inserts_markdown_lead(self, tmp_path):
+        text = '# %% [markdown] lang="de" tags=["slide"] slide_id="a"\n# - Bullet\n'
+        path = _write_slide(tmp_path / "slides_x.de.py", text)
+        normalize_file(path, operations=["cell_spacing"])
+        out = path.read_text(encoding="utf-8")
+        assert out.startswith(
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="a"\n#\n# - Bullet'
+        )
+
+    def test_bare_blank_promoted_to_comment(self, tmp_path):
+        # A bare empty first line (not a `#` comment) becomes the blank comment.
+        text = '# %% [markdown] lang="de"\n\n# ## A\n'
+        path = _write_slide(tmp_path / "slides_x.de.py", text)
+        normalize_file(path, operations=["cell_spacing"])
+        assert path.read_text(encoding="utf-8") == '# %% [markdown] lang="de"\n#\n# ## A\n'
+
+    def test_j2_header_block_not_separated(self, tmp_path):
+        text = (
+            "# j2 from 'm' import header\n"
+            '# {{ header_de("T") }}\n\n'
+            '# %% [markdown] lang="de"\n#\n# ## A\n'
+        )
+        path = _write_slide(tmp_path / "slides_x.de.py", text)
+        result = normalize_file(path, operations=["cell_spacing"])
+        out = path.read_text(encoding="utf-8")
+        # No blank inserted between the j2 import and the header macro.
+        assert "import header\n# {{ header_de" in out
+        assert result.files_modified == 0  # already conforming
+
+    def test_idempotent(self, tmp_path):
+        text = '# %% [markdown] lang="de"\n# ## A\n# %%\nx = 1\n'
+        path = _write_slide(tmp_path / "slides_x.de.py", text)
+        normalize_file(path, operations=["cell_spacing"])
+        first = path.read_text(encoding="utf-8")
+        result = normalize_file(path, operations=["cell_spacing"])
+        assert result.files_modified == 0
+        assert path.read_text(encoding="utf-8") == first
+
+    def test_round_trip_preserved(self, tmp_path):
+        text = '# %% [markdown] lang="de"\n# ## A\n# %%\nx = 1\n'
+        path = _write_slide(tmp_path / "slides_x.de.py", text)
+        normalize_file(path, operations=["cell_spacing"])
+        out = path.read_text(encoding="utf-8")
+        preamble, cells = _split_raw_cells(out)
+        assert _reconstruct(preamble, cells) == out
+
+    def test_runs_by_default(self, tmp_path):
+        assert "cell_spacing" in ALL_OPERATIONS
+        text = (
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="a"\n# ## A\n\n'
+            '# %% [markdown] lang="en" tags=["slide"] slide_id="a"\n# ## B\n'
+        )
+        path = _write_slide(tmp_path / "slides_x.de.py", text)
+        normalize_file(path)  # no operations => all, including cell_spacing
+        out = path.read_text(encoding="utf-8")
+        assert "#\n# ## A" in out
+        assert "#\n# ## B" in out
+
+    def test_resolves_validator_warnings(self, tmp_path):
+        from clm.slides.validator import validate_file
+
+        text = '# %% [markdown] lang="de" slide_id="a"\n# ## A\n# %%\nx = 1\n'
+        path = _write_slide(tmp_path / "slides_x.de.py", text)
+        before = [
+            f
+            for f in validate_file(path, checks=["format"]).findings
+            if "blank line" in f.message or "blank comment" in f.message
+        ]
+        assert before  # spacing warnings present
+        normalize_file(path, operations=["cell_spacing"])
+        after = [
+            f
+            for f in validate_file(path, checks=["format"]).findings
+            if "blank line" in f.message or "blank comment" in f.message
+        ]
+        assert after == []
+
+
 # Import needed for TestResultStatus
 from clm.slides.normalizer import Change, ReviewItem  # noqa: E402

@@ -127,6 +127,30 @@ A generated deck is valid for all the split-pair tooling immediately — it pass
 `clm validate slides <dir> --fail-on warning` (slide_id set/order parity,
 shared-cell byte parity, pairing adjacency, companion `for_slide` parity).
 
+## Cell-spacing checks + `cell_spacing` normalize ({version} — additive)
+
+`clm validate` (the `format` group) now surfaces two `warning`s, and
+`clm slides normalize` gains a `cell_spacing` operation that fixes them:
+
+- **A cell must be separated from the previous cell by a blank line** — except a
+  j2 cell, since the title-header block (`# j2 … import header` immediately
+  followed by `# {{ header(…) }}`) is tight-coupled by design.
+- **A markdown cell body must start with a blank comment line (`#`)** — so
+  content that opens with a bullet or heading renders correctly.
+
+**Non-breaking but newly visible.** Both are `warning`s, so the default
+error-gate and existing CI are unaffected — but `clm validate --fail-on warning`
+(the pre-commit gate) will now flag pre-existing slides that lack a blank lead or
+run cells together. Fix a whole course in one pass:
+
+```bash
+clm slides normalize slides/                       # fixes spacing with the other ops
+clm slides normalize slides/ --operations cell_spacing   # spacing only
+```
+
+`cell_spacing` runs by default (part of `all`), is idempotent, and preserves the
+split/unify round-trip. No code or spec changes are required in course repos.
+
 ## Breaking changes in CLM 1.8
 
 CLM 1.8 retires the Phase 0 deprecation period. It carries **intentional

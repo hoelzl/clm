@@ -28,6 +28,7 @@ from clm.slides.pairing import (
     is_title_macro_cell,
     split_twin_pair,
 )
+from clm.slides.raw_cells import RawCell
 from clm.slides.raw_cells import split_cells as split_raw_cells
 from clm.slides.slug import (
     MAX_SLUG_LENGTH,
@@ -179,6 +180,82 @@ def _check_format(cells: list[Cell], file_path: str) -> list[Finding]:
                     )
                 )
 
+    return findings
+
+
+def _ends_with_blank_line(cell: RawCell) -> bool:
+    """True iff ``cell``'s body ends with at least one blank line.
+
+    Inter-cell separation is stored as trailing empty body lines on the *preceding*
+    cell (``reconstruct`` joins cells with a single ``\\n``), so a preceding cell
+    that ends with a blank line is what puts a blank line before the next cell.
+    """
+    return len(cell.lines) > 1 and cell.lines[-1].strip() == ""
+
+
+def _is_blank_comment(line: str) -> bool:
+    """True iff ``line`` is a markdown blank-comment line (just ``#``)."""
+    return line.strip() == "#"
+
+
+def _check_cell_separation(raw_cells: list[RawCell], file_path: str) -> list[Finding]:
+    """Warn when a cell is not separated from the previous one by a blank line.
+
+    A blank line is required before every cell **except a j2 cell** — the canonical
+    title-header block writes ``# j2 ... import header`` immediately followed by
+    ``# {{ header(...) }}`` with no blank between the two directives, so j2 cells
+    tight-couple and are exempt. Cells run together are valid percent-format but
+    render and diff poorly. Operates on :class:`RawCell` because the parsed ``Cell``
+    model strips inter-cell whitespace.
+    """
+    findings: list[Finding] = []
+    for prev, cur in zip(raw_cells, raw_cells[1:], strict=False):
+        if cur.metadata.is_j2:
+            continue
+        if not _ends_with_blank_line(prev):
+            findings.append(
+                Finding(
+                    severity="warning",
+                    category="format",
+                    file=file_path,
+                    line=cur.line_number,
+                    message="cell is not separated from the previous cell by a blank line",
+                    suggestion="Insert a blank line between cells (`clm slides normalize` fixes this).",
+                )
+            )
+    return findings
+
+
+def _check_markdown_blank_lead(raw_cells: list[RawCell], file_path: str) -> list[Finding]:
+    """Warn when a markdown cell body does not start with a blank comment line.
+
+    A markdown cell should open with a ``#`` line before its content
+    (``# %% [markdown]`` / ``#`` / ``# <content>``). The leading ``#`` is what makes
+    content that starts with a bullet or heading render correctly. j2 cells (the
+    title macro) are exempt and empty-body cells are skipped.
+    """
+    findings: list[Finding] = []
+    for cell in raw_cells:
+        meta = cell.metadata
+        if meta.is_j2 or meta.cell_type != "markdown":
+            continue
+        body = cell.lines[1:]
+        if not body:
+            continue
+        if not _is_blank_comment(body[0]):
+            findings.append(
+                Finding(
+                    severity="warning",
+                    category="format",
+                    file=file_path,
+                    line=cell.line_number,
+                    message="markdown cell body does not start with a blank comment line (`#`)",
+                    suggestion=(
+                        "Begin the markdown cell with a `#` line "
+                        "(`clm slides normalize` fixes this)."
+                    ),
+                )
+            )
     return findings
 
 
@@ -1566,6 +1643,11 @@ def validate_file(
 
     if "format" in check_set:
         findings.extend(_check_format(cells, file_str))
+        # Cell spacing runs on the raw (whitespace-preserving) cells, since the
+        # parsed Cell model strips the blank lines these checks inspect.
+        _, raw_cells = split_raw_cells(text)
+        findings.extend(_check_cell_separation(raw_cells, file_str))
+        findings.extend(_check_markdown_blank_lead(raw_cells, file_str))
     if "tags" in check_set:
         findings.extend(_check_tags(cells, file_str))
     if "pairing" in check_set:

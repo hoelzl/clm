@@ -104,7 +104,9 @@ class NormalizationResult:
 # Operations
 # ---------------------------------------------------------------------------
 
-ALL_OPERATIONS = frozenset({"tag_migration", "workshop_tags", "interleaving", "slide_ids"})
+ALL_OPERATIONS = frozenset(
+    {"tag_migration", "workshop_tags", "interleaving", "slide_ids", "cell_spacing"}
+)
 
 
 # ---------------------------------------------------------------------------
@@ -634,6 +636,72 @@ def _apply_slide_ids(
 
 
 # ---------------------------------------------------------------------------
+# Cell spacing: blank line between cells + markdown leading blank comment
+# ---------------------------------------------------------------------------
+
+
+def _apply_cell_spacing(cells: list[_RawCell], file_path: str) -> list[Change]:
+    """Normalize inter-cell and intra-cell whitespace (two mechanical fixes).
+
+    The counterparts of the validator's ``cell-separation`` and
+    ``markdown-blank-lead`` warnings:
+
+    1. A non-j2 cell must be preceded by a blank line — represented as a trailing
+       empty body line on the *previous* cell. j2 cells (the tight-coupled title
+       header block ``# j2 import`` → ``# {{ header }}``) are exempt.
+    2. A non-j2 markdown cell's body must start with a blank comment line (``#``),
+       so content that opens with a bullet or heading renders correctly.
+
+    Mutates ``cells`` in place. Idempotent: a conforming deck yields no changes.
+    """
+    changes: list[Change] = []
+
+    # Fix 1 — markdown leading blank comment. Done first; it only touches the
+    # FRONT of a cell's body, so it never interferes with the trailing-blank pass.
+    for cell in cells:
+        meta = cell.metadata
+        if meta.is_j2 or meta.cell_type != "markdown":
+            continue
+        body = cell.lines[1:]
+        if not body:
+            continue
+        first = body[0]
+        if first.strip() == "#":
+            continue  # already a blank comment
+        if first.strip() == "":
+            # A bare blank line where the `#` belongs — promote it to the comment.
+            cell.lines[1] = "#"
+        else:
+            cell.lines.insert(1, "#")
+        changes.append(
+            Change(
+                file=file_path,
+                operation="cell_spacing",
+                line=cell.line_number,
+                description="Added leading blank comment line (`#`) to markdown cell",
+            )
+        )
+
+    # Fix 2 — blank-line separation before each non-j2 cell.
+    for prev, cur in zip(cells, cells[1:], strict=False):
+        if cur.metadata.is_j2:
+            continue
+        if len(prev.lines) > 1 and prev.lines[-1].strip() == "":
+            continue  # already separated
+        prev.lines.append("")
+        changes.append(
+            Change(
+                file=file_path,
+                operation="cell_spacing",
+                line=cur.line_number,
+                description="Added blank line before cell",
+            )
+        )
+
+    return changes
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -697,6 +765,11 @@ def normalize_file(
         slide_id_changes, slide_id_reviews = _apply_slide_ids(cells, path, assign_options)
         all_changes.extend(slide_id_changes)
         all_review.extend(slide_id_reviews)
+
+    # Cell spacing runs last, on the final cell order (after any interleaving
+    # reorder), so blank-line separation reflects the cells' final adjacency.
+    if "cell_spacing" in op_set:
+        all_changes.extend(_apply_cell_spacing(cells, file_str))
 
     modified = False
     if all_changes and not dry_run:
