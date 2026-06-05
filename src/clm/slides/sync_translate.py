@@ -17,16 +17,21 @@ it with :class:`StaticSlideTranslator` and never touch the network.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from dataclasses import dataclass, field
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from clm.infrastructure.llm.retry import call_with_retries
+
+if TYPE_CHECKING:
+    from clm.infrastructure.llm.cache import TranslationCache
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
     "DEFAULT_TRANSLATION_MODEL",
+    "CachingSlideTranslator",
     "OpenRouterSlideTranslator",
     "SlideTranslator",
     "StaticSlideTranslator",
@@ -188,3 +193,55 @@ _CODE_SYSTEM_PROMPT = (
 def _system_prompt_for(role: str) -> str:
     """Pick the system prompt for a cell ``role`` (code cells are not Markdown)."""
     return _CODE_SYSTEM_PROMPT if role == "code" else _SYSTEM_PROMPT
+
+
+@dataclass
+class CachingSlideTranslator:
+    """Wrap a :class:`SlideTranslator` with a persistent :class:`TranslationCache`.
+
+    Satisfies the ``SlideTranslator`` protocol itself, so it is a drop-in for the
+    engine: a cache hit skips the network, a miss calls ``inner`` and stores the
+    successful result. The cache key folds the wrapped translator's ``model`` (if
+    any) into ``prompt_version`` so two models — or a future prompt revision —
+    never share an entry. Used by ``clm slides translate`` so a re-run (or a
+    bootstrap of a deck that shares cells with a previously translated one) is
+    cheap; the engine stays cache-agnostic (it depends only on the protocol).
+    """
+
+    inner: SlideTranslator
+    cache: TranslationCache
+    # A settable attribute (not a property) so this satisfies the SlideTranslator
+    # protocol's ``prompt_version: str``. Folds the wrapped model into the version
+    # so a model switch invalidates by cache miss rather than returning the other
+    # model's translation. Computed once at construction.
+    prompt_version: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        model = getattr(self.inner, "model", "")
+        self.prompt_version = (
+            f"{self.inner.prompt_version}:{model}" if model else self.inner.prompt_version
+        )
+
+    def translate(
+        self,
+        *,
+        source_body: str,
+        source_lang: str,
+        target_lang: str,
+        role: str,
+    ) -> str:
+        content_hash = hashlib.sha256(source_body.encode("utf-8")).hexdigest()
+        version = self.prompt_version
+        hit = self.cache.get(content_hash, version, source_lang, target_lang, role)
+        if hit is not None:
+            return hit
+        result = self.inner.translate(
+            source_body=source_body,
+            source_lang=source_lang,
+            target_lang=target_lang,
+            role=role,
+        )
+        # Only successful results reach here (inner raises TranslationError on
+        # failure), so the cache never stores a bad translation.
+        self.cache.put(content_hash, version, source_lang, target_lang, role, result)
+        return result

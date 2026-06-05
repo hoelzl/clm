@@ -1,7 +1,7 @@
 # Handover: Full-deck translation — `clm slides translate` (deck bootstrap)
 
-**Status:** **Phases 1–3 DONE.** Phase 1 = pure engine `translate_deck.py` (17 tests). Phase 2 = orchestration `translate_bootstrap.py` (D2 dispatch + mint + watermark). Phase 3 = voiceover companion translated in lockstep (now **28 tests** in `test_translate_bootstrap.py`). All green; lint/format/mypy clean; full slides suite (1176) + fast suite green. **Phase 4 (the `clm slides translate` CLI command) is next.**
-**Branch:** `claude/slides-translate-bootstrap` off `master` (`fdf7772` handover, `cf1c8e06` Phase 1, `29947b88` Phase 2, Phase 3 commit follows). Do **not** branch off `claude/issue-226-partial-overlap-mismatch`.
+**Status:** **Phases 1–4 DONE.** Phase 1 = pure engine `translate_deck.py`. Phase 2 = orchestration `translate_bootstrap.py` (D2 dispatch + mint + watermark). Phase 3 = voiceover companion in lockstep. Phase 4 = the `clm slides translate` (+ `bootstrap` alias) CLI command + `TranslationCache`/`CachingSlideTranslator`. All green; lint/format/mypy clean; fast suite green. **Phase 5 (info-topic docs + acceptance gate) is next** — and is required by CLAUDE.md's Info Topics rule since a new CLI command landed.
+**Branch:** `claude/slides-translate-bootstrap` off `master` (`fdf7772` handover, `cf1c8e06` Phase 1, `29947b88` Phase 2, `c9199c8a` Phase 3, Phase 4 commit follows). Do **not** branch off `claude/issue-226-partial-overlap-mismatch`.
 **Builds on (all merged to master):** the resolve-then-apply sync engine (#166/#190/#216), cold-start mint/adopt (#216), committed un-bootstrapped pairs (#225), partial-overlap mismatch (#226).
 **Related design notes:** `docs/claude/design/single-language-authoring-sync.md`, `docs/claude/design/sync-plan-resolve-apply.md`.
 **Sibling handover:** `docs/claude/sync-plan-resolve-apply-handover.md` (the engine this feature reuses).
@@ -95,16 +95,16 @@ If `voiceover_<name>.<src>.py` exists, translate its localized cells too (preser
 - **Acceptance — met:** companion translated alongside the deck; `for_slide` + `vo_anchor` preserved; companion pair round-trips; subdir layout preserved; existing target skipped; `--force` regenerates; re-run via sync leaves it untouched; translation failure writes nothing. 9 companion tests (28 total in `tests/slides/test_translate_bootstrap.py`).
 - **Deferred:** full companion *sync* (reconciling an already-present companion when the deck twin exists) is out of scope — the bootstrap creates it once; later deck syncs leave it alone. Also not special-cased: a companion whose `for_slide` references an **id-less** deck (a malformed input — `extract` requires deck ids; the bootstrap mint with `force=False` preserves existing ids, so a real companion's `for_slide` stays valid).
 
-### Phase 4 — CLI command `clm slides translate` (+ `bootstrap` alias) — [TODO]
+### Phase 4 — CLI command `clm slides translate` (+ `bootstrap` alias) — [DONE]
 **Accomplishes:** user-facing surface.
 
-- New module `src/clm/cli/commands/slides_translate.py`; clone the option skeleton from `slides_sync.py` and the simple-mutation skeleton from `split.py`:
-  - `--to en|de`, `--dry-run` / `--explain` (side-effect-free: parse + classify + count translatable vs copied + show target path + id plan; skip LLM/.env where possible), `--json` (`_to_dict`: `cells_translated`, `cells_copied`, `target_path`, `ids_minted`, `deferred`), `--force`, `--provider` (env `CLM_SYNC_PROVIDER`), `--translation-model`, `--cache-dir` (env `CLM_CACHE_DIR`), `--no-cache`, `--no-env-file`.
-- Reuse `has_openrouter_api_key` (`openrouter_client.py:71`), `build_openrouter_client`, `load_env_files` (`env_loading.py:45`), `resolve_cache_dir`. No key → **exit 1, write nothing** (a whole deck of untranslated placeholders is not useful — unlike sync's per-cell defer); the engine is all-or-nothing. On `TranslationError` it already raises (never half-writes).
-- **`TranslationCache` lands here (moved from Phase 1):** add a `TranslationCache` to `src/clm/infrastructure/llm/cache.py` (one table in `clm-llm.sqlite`; key = content-hash + **model-folded** `prompt_version`; cache only successful results) and expose it as a `CachingSlideTranslator` that *wraps* a `SlideTranslator` and is passed into `translate_deck_text`. The engine stays cache-agnostic (depends only on the protocol), so this is purely additive.
-- Register in `src/clm/cli/main.py` (~line 168): `slides_group.add_command(translate_cmd, name="translate")` and a second registration for `bootstrap`. Use the try/except optional-import pattern (main.py ~112-130) if LLM deps may be absent.
-- Exit codes: `0` wrote/clean, `1` some cells deferred (no key) / needs review, `2` hard error (twin exists without `--force`, engine down, bilingual-stem source).
-- **Acceptance:** `CliRunner` tests for absent-twin bootstrap, present-twin delegation, `--dry-run` no-write, `--json` shape, no-key degradation, `--force` overwrite, exit codes.
+**Done as built:**
+- **`src/clm/cli/commands/slides_translate.py`** — the Click command wrapping `bootstrap_deck`. Options: `--to en|de`, `--dry-run` (side-effect-free preview: counts translatable-vs-copied + target + companion, **no LLM/key**, exit 0), `--json`, `--force`, `--translation-model`, `--provider` (judge backend for the delegated-sync path only), `--llm-model`, `--cache-dir`, `--no-cache`, `--no-env-file`. It calls `derive_bootstrap_paths` first (pure) to decide bootstrap-vs-sync **before** building any client, builds the translator always and the judge (via reused `slides_sync._resolve_judge`) only on the sync path. Recoverer/verifier are intentionally **off** (a bootstrap-created pair is already id'd+watermarked; advanced id-migration lives on `clm slides sync`).
+- **No key → exit 1, write nothing** — but only on the **bootstrap** path (a whole untranslated deck is useless). The delegated-sync path degrades like `clm slides sync` (adds defer). `_make_translator` is a module-level factory so tests patch it with a static translator; `has_openrouter_api_key` is imported into the module namespace and patched in tests.
+- **`TranslationCache`** in `src/clm/infrastructure/llm/cache.py` (table `translations`, PK `(content_hash, prompt_version, source_lang, target_lang, role)`, get/put/invalidate/close; only successful results) + **`CachingSlideTranslator`** in `sync_translate.py` wrapping a `SlideTranslator`, `prompt_version` computed in `__post_init__` (a settable field, **not** a property — a read-only property fails the Protocol's settable `prompt_version: str` under mypy) with the model folded in so two models never share an entry.
+- Registered in `src/clm/cli/main.py` (~line 167) under `slides_group` for both `translate` and `bootstrap` (same command object, two names — Click handles this; no optional-import guard needed, the deps are core).
+- Exit codes: `0` wrote/clean, `1` delegated-sync deferred / no key, `2` hard error (bad source → `UsageError`; `TranslateDeckError` mid-bootstrap → caught, exit 2, nothing written).
+- **Acceptance — met:** `CliRunner` tests (11) — absent-twin bootstrap (exit 0, twin == split's EN), no-key exit 1 + nothing written, `--dry-run` no-write + `--json` shape, `--to` reverse direction, present-twin → incremental-sync no-op (not doubled), `--force` overwrite, bilingual-stem/missing-source exit 2, and the `bootstrap` alias via the `slides` group. Plus 13 cache/caching-translator unit tests in `tests/infrastructure/llm/test_translation_cache.py`.
 
 ### Phase 5 — Docs & acceptance gate — [TODO]
 **Accomplishes:** the CLAUDE.md Info Topics Maintenance Rule + end-to-end validation.
@@ -118,26 +118,22 @@ If `voiceover_<name>.<src>.py` exists, translate its localized cells too (preser
 
 ## 4. Current Status
 
-- **Completed:** design + **Phase 1** (`translate_deck.py`, `cf1c8e06`) + **Phase 2** (`translate_bootstrap.py`, `29947b88`) + **Phase 3** (companion-in-lockstep, in `translate_bootstrap.py`). Lint/format/mypy clean; full `tests/slides` (1176) + fast suite green; 28 tests in `test_translate_bootstrap.py`. Issue **#232** filed. Branch `claude/slides-translate-bootstrap` off master. The three user-facing forks are settled (D1, D4, D5).
-- **In progress:** none — Phase 4 (CLI) not started.
-- **Blockers / open questions:** none blocking. D6 defaults stand unless the user objects. Confirm at Phase 4: whether `--to` should be required when the source half has **no** lang tags at all (currently: infer from filename, `--to` optional override — note `derive_bootstrap_paths` requires a `.de`/`.en` tag on the *source*, so a tag-less single half is already rejected with a "run split first" hint).
-- **Tests:** Phases 1–3 fully covered (see §7). Phases 4–5 pending.
+- **Completed:** design + **Phase 1** (`translate_deck.py`, `cf1c8e06`) + **Phase 2** (`translate_bootstrap.py`, `29947b88`) + **Phase 3** (companion, `c9199c8a`) + **Phase 4** (CLI `slides_translate.py` + `TranslationCache`/`CachingSlideTranslator`). Lint/format/mypy clean; fast suite green. Issue **#232** filed. Branch `claude/slides-translate-bootstrap` off master. The three user-facing forks are settled (D1, D4, D5).
+- **In progress:** none — Phase 5 (docs) not started.
+- **Blockers / open questions:** none blocking. The `--to` question is resolved: `derive_bootstrap_paths` requires a `.de`/`.en` tag on the *source* (a tag-less single half is rejected with a "run split first" hint), and `--to` is an optional override.
+- **Tests:** Phases 1–4 fully covered (see §7). Phase 5 pending.
 
 ---
 
 ## 5. Next Steps
 
-**Start Phase 4 — the `clm slides translate` CLI command (+ `bootstrap` alias).** The engine (Phase 1), the dispatch (Phase 2) and the companion (Phase 3) are all in `clm.slides`; Phase 4 is the user-facing Click surface over `bootstrap_deck`. The full plan is in **§3 Phase 4** — the short version:
-1. New module `src/clm/cli/commands/slides_translate.py`. Clone the option skeleton from `slides_sync.py` (`--provider`, `--translation-model`, `--cache-dir`, `--no-cache`, `--no-env-file`) and add `--to en|de`, `--dry-run`/`--explain` (side-effect-free: call `derive_bootstrap_paths` + parse + count translatable-vs-copied + show target path + id/companion plan; build **no** LLM client), `--json` (`_to_dict`), `--force`.
-2. Decide bootstrap-vs-sync **before** building any client by calling `derive_bootstrap_paths` (it's pure) — then build the translator (`OpenRouterSlideTranslator`) always, and the judge/recoverer/verifier/caches only on the sync path (twin present). Wire exactly as `slides_sync_cmd` does (env load via `load_env_files` unless `--no-env-file`; `resolve_cache_dir`; close caches in a `finally`).
-3. **No key → exit 1, write nothing** (the engine is all-or-nothing; unlike sync's per-cell defer, a whole deck of placeholders is useless). Reuse `has_openrouter_api_key`.
-4. **`TranslationCache` lands here (moved from Phase 1):** add it to `src/clm/infrastructure/llm/cache.py` and expose a `CachingSlideTranslator` that *wraps* a `SlideTranslator` and is passed into `bootstrap_deck` — the engine stays cache-agnostic, so it's purely additive.
-5. Register in `src/clm/cli/main.py` (~line 168) under `slides_group` for both `translate` and `bootstrap`; optional-import guard if LLM deps may be absent.
-6. Exit codes: `0` wrote/clean, `1` review/no-key, `2` hard error.
+**Start Phase 5 — info-topic docs + acceptance gate (the final phase).** A new CLI command landed, so CLAUDE.md's **Info Topics Maintenance Rule (CRITICAL)** now requires updating the version-accurate docs downstream agents read. Plan:
+1. Add a `### clm slides translate` section to `src/clm/cli/info_topics/commands.md`, modeled on the existing `### clm slides sync` block (option table, exit codes `0/1/2`, examples — `clm slides translate slides_x.de.py`, `--to`, `--dry-run`, `--force`). Use `{version}` placeholders — never hardcode versions. Mention the `bootstrap` alias and that code is translated iff a cell carries a `lang` tag.
+2. Add a `migration.md` entry: the "bootstrap a second language" workflow (`translate` once → then `sync` forever; run `unify` for a bilingual file).
+3. (Optional) If the MCP server exposes slide tools, add a `slides_translate` tool + a parity entry — check `src/clm/mcp/` first; skip if not a natural fit.
+4. **Acceptance gate:** generate a deck via the CLI (offline, with a static translator in a test, or by hand) and confirm it passes `clm validate slides <dir> --fail-on warning` (slide_id set+order parity, shared-cell byte parity, pairing adjacency, companion `for_slide` parity). A round-trip test feeding a real bilingual fixture through split → translate-one-half → validate is the strongest end-to-end check.
 
-**Acceptance:** `CliRunner` tests for absent-twin bootstrap, present-twin delegation, `--dry-run` no-write, `--json` shape, no-key degradation, `--force`, exit-code matrix. Mind the Click 8.1-vs-8.2 `CliRunner` compat pattern (memory `feedback-click-82-clirunner-compat`).
-
-**Phases 1–3 are DONE.** `bootstrap_deck(source_path, *, target_lang=None, translator, judge=None, watermark_cache=None, recoverer=None, alignment_cache=None, verifier=None, correspondence_cache=None, provider_available=False, force=False) -> BootstrapResult` is the single entry point the CLI calls. It already does the twin dispatch, EN-authority mint, watermark seal, and companion-in-lockstep; the `translate`-twice no-op is proven (id'd, id-less, asymmetric) and nothing half-writes.
+**Phases 1–4 are DONE.** The feature is fully usable from the CLI today (`clm slides translate slides_x.de.py`); Phase 5 is documentation + the validation gate, not new behavior. The single entry point is `bootstrap_deck(source_path, *, target_lang=None, translator, judge=None, watermark_cache=None, recoverer=None, alignment_cache=None, verifier=None, correspondence_cache=None, provider_available=False, force=False) -> BootstrapResult`; the CLI is `src/clm/cli/commands/slides_translate.py`.
 
 **Setup:** worktree venv must be synced (`uv sync --extra all`) — a repo-root `.venv` silently resolves `clm` to the main repo (memory `feedback-worktree-venv-sync`). Run tests with `uv run python -m pytest …` (system Python has no pytest).
 
@@ -157,9 +153,9 @@ If `voiceover_<name>.<src>.py` exists, translate its localized cells too (preser
 - **`tests/slides/test_translate_deck.py` — DONE (17 tests).**
 - **`src/clm/slides/translate_bootstrap.py` — DONE (Phases 2 + 3).** File/orchestration layer: `derive_bootstrap_paths` (direction + existence-agnostic twin path + rejections), `bootstrap_deck` (the D2 dispatch), `_bootstrap_new_twin` (translate deck + companion → write both → `assign_ids_in_split_pair` → `_record_watermark`), `_translate_companion` (Phase 3 — `resolve_companion` + `companion_name`, all-or-nothing, skip/force), `_delegate_to_sync` (mirror of `slides_sync_cmd`). Injected deps only (no client/`.env`/cache-close). Public surface: `bootstrap_deck`, `derive_bootstrap_paths`, `BootstrapResult`, `CompanionResult`, `BootstrapPaths`, `TranslateBootstrapError`. **This is the single entry point the Phase 4 CLI calls.**
 - **`tests/slides/test_translate_bootstrap.py` — DONE (28 tests, incl. 9 companion).**
-- `src/clm/cli/commands/slides_translate.py` — the `clm slides translate` Click command (Phase 4).
-- `TranslationCache` + `CachingSlideTranslator` in `src/clm/infrastructure/llm/cache.py` / `sync_translate.py` (Phase 4 — moved from Phase 1).
-- Tests: `tests/cli/test_slides_translate.py` (CLI), companion/idempotency tests (Phases 2–4).
+- **`src/clm/cli/commands/slides_translate.py` — DONE (Phase 4).** The `clm slides translate` (+ `bootstrap`) Click command over `bootstrap_deck`; `_make_translator` factory (patchable), `derive_bootstrap_paths`-first dispatch, `--dry-run` preview, `--json`, exit-code matrix.
+- **`TranslationCache` (`src/clm/infrastructure/llm/cache.py`) + `CachingSlideTranslator` (`src/clm/slides/sync_translate.py`) — DONE (Phase 4).** Persistent per-cell translation cache + a `SlideTranslator`-protocol wrapper (model-folded version; `prompt_version` is a computed field, not a property).
+- **`tests/cli/test_slides_translate.py` — DONE (11 tests).** **`tests/infrastructure/llm/test_translation_cache.py` — DONE (13 tests).**
 
 ### Modified files
 - `src/clm/cli/main.py` — register `translate` + `bootstrap` under `slides_group` (~line 168).
