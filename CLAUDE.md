@@ -116,13 +116,22 @@ Full procedure lives in `docs/developer-guide/releasing.md`. The hard rules:
   `uv run ruff format src/ tests/`.
 - Commits that fail a hook did **not** happen — fix the issue, re-stage, and
   create a **new** commit. Never `--amend` a commit the hook rejected.
-- **Reset a worktree to master** without breaking the main checkout: from inside
-  the worktree run `git fetch origin && git switch -C <worktree-branch>
-  origin/master`. Git won't let the *same* branch be checked out in two worktrees
-  (no config changes this), so do **not** check out the literal `master` in a
-  worktree, and **never** set `core.bare=true` on the main repo to work around it
-  — that strips the main checkout's working tree and is a recurring source of
-  breakage.
+- **`master` belongs to the main repo — a worktree must NEVER switch to it.**
+  The `master` branch is checked out in the main repo (`C:/…/Projects/clm`), and
+  Git forbids the *same* branch being checked out in two worktrees at once (no
+  config changes this). So a worktree never runs `git switch master` /
+  `git checkout master` — that command can only fail or, if forced, corrupt the
+  main checkout. To put a worktree on the latest master **content**, reset the
+  worktree's **own** branch onto `origin/master` instead. From inside the
+  worktree:
+  ```
+  git fetch origin && git switch -C <worktree-branch> origin/master
+  ```
+  This keeps you on your per-worktree branch (e.g. `worktree-<name>`) with
+  master's exact tree — non-destructive when that branch is already merged/behind.
+  To start fresh work, branch off it: `git switch -c claude/issue-NNN-...`.
+  **Never** set `core.bare=true` on the main repo to "free up" `master` — that
+  strips the main checkout's working tree and is a recurring source of breakage.
 
 ## Documentation Map
 
@@ -161,4 +170,4 @@ do not fabricate options.
 
 **Repository**: https://github.com/hoelzl/clm/ | **Issues**: https://github.com/hoelzl/clm/issues
 
-**Last Updated**: 2026-04-11
+**Last Updated**: 2026-06-05
