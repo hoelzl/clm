@@ -8,12 +8,14 @@ from pathlib import Path
 
 import click
 
+from clm.cli.commands.shared import has_deck_scope, resolve_scoped_files
 from clm.slides.normalizer import (
     ALL_OPERATIONS,
     NormalizationResult,
     normalize_course,
     normalize_directory,
     normalize_file,
+    normalize_files,
 )
 
 
@@ -57,7 +59,33 @@ from clm.slides.normalizer import (
 @click.option(
     "--data-dir",
     type=click.Path(exists=True, file_okay=False, path_type=Path),
-    help="Course data directory (contains slides/). For course spec normalization.",
+    help="Course data directory (contains slides/). For course spec normalization "
+    "and --shipping-only scope resolution.",
+)
+@click.option(
+    "--only",
+    type=click.Choice(["bilingual", "split"]),
+    default=None,
+    help="Scope a directory run to only bilingual decks (no .de/.en tag) or only "
+    "split halves (e.g. leave .de/.en pairs for `clm slides sync`).",
+)
+@click.option(
+    "--exclude",
+    multiple=True,
+    metavar="GLOB",
+    help="Skip decks matching GLOB (matched against the full path and each path "
+    "component, so `--exclude _archive` skips an _archive/ dir). Repeatable.",
+)
+@click.option(
+    "--shipping-only",
+    is_flag=True,
+    help="Scope a directory run to decks reachable from course specs (the shipping set).",
+)
+@click.option(
+    "--specs-dir",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    default=None,
+    help="For --shipping-only: directory of *.xml specs. Default: <course-root>/course-specs/.",
 )
 def normalize_slides_cmd(
     path: Path,
@@ -66,6 +94,10 @@ def normalize_slides_cmd(
     canonicalize_start_completed: bool,
     as_json: bool,
     data_dir: Path | None,
+    only: str | None,
+    exclude: tuple[str, ...],
+    shipping_only: bool,
+    specs_dir: Path | None,
 ):
     """Normalize slide files by applying mechanical fixes.
 
@@ -88,7 +120,29 @@ def normalize_slides_cmd(
         clm slides normalize course-specs/python-basics.xml
     """
     op_list = _parse_operations(operations)
-    result = _dispatch(path, op_list, dry_run, data_dir, canonicalize_start_completed)
+
+    if has_deck_scope(only, exclude, shipping_only):
+        if not path.is_dir():
+            raise click.UsageError(
+                "--only / --exclude / --shipping-only apply to a directory, not a "
+                "single file or spec."
+            )
+        files = resolve_scoped_files(
+            path,
+            only=only,
+            exclude=exclude,
+            shipping_only=shipping_only,
+            specs_dir=specs_dir,
+            data_dir=data_dir,
+        )
+        result = normalize_files(
+            files,
+            operations=op_list,
+            dry_run=dry_run,
+            canonicalize_start_completed=canonicalize_start_completed,
+        )
+    else:
+        result = _dispatch(path, op_list, dry_run, data_dir, canonicalize_start_completed)
 
     if as_json:
         click.echo(json.dumps(_result_to_dict(result), indent=2))

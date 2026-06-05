@@ -152,11 +152,27 @@ Tests, `commands.md`, and a CHANGELOG `Added` entry land with the code.
   on `assign-ids`/`normalize`).** `course gate` already scopes internally, so #4's
   predicates (`split_lang_tag`-based bilingual/split filter; glob exclude) could
   live in a shared helper both reuse.
+- 2026-06-05: **Tool #4 DONE**. `--only bilingual|split` / `--exclude GLOB` /
+  `--shipping-only` (+`--specs-dir`/`--data-dir`) on both `clm slides assign-ids`
+  and `clm slides normalize`. New `clm.slides.deck_scope` (`filter_decks`,
+  `course_root_for_path`, `resolve_shipping_set`); shared CLI helper
+  `cli/commands/shared.py::resolve_scoped_files` + `has_deck_scope`. Refactor:
+  extracted public `assign_ids_in_files` (from `assign_ids_in_directory`) and
+  `normalize_files` (from `normalize_directory`) — the directory funcs now
+  delegate, so split-pair parity is preserved on a scoped subset. Scoping is
+  directory-only (single file / spec → UsageError). 20 new tests
+  (`tests/slides/test_deck_scope.py`, `tests/cli/test_deck_scope_cli.py`);
+  144-test assign-ids/normalize/gate regression green. `commands.md` + CHANGELOG
+  updated. Smoke-tested on a crafted tree (bilingual/split/archive). **Next: Tool
+  #5 (hard-refusal worklist with cell context — `assign-ids --report-refusals
+  [--context]`).** Refusals already carry `file:line` + `proposed_slug/title`; #5
+  adds the cell body + nearest preceding heading/slide_id so an author/agent can
+  fill ids efficiently. Could also feed the gate's needs-author output.
 
 ## Resuming
 
-Pick up from the "Progress log" tail. Tools #1–#3 are complete; **Tool #4 is
-next**; tools #5–#9 follow in priority order. Pushing: this worktree is on
+Pick up from the "Progress log" tail. Tools #1–#4 are complete; **Tool #5 is
+next**; tools #6–#9 follow in priority order. Pushing: this worktree is on
 `worktree-linked-honking-dolphin`; push to the PR branch with the explicit
 refspec noted in the 2026-06-05 consolidation entry above. Each tool = core helper reuse + thin command(s) + tests +
 `commands.md` + CHANGELOG. Keep mirroring build resolution semantics — the whole

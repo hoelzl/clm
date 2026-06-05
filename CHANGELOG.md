@@ -52,6 +52,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   `clm course gate <spec> --apply`. Third of the course-conversion tooling gaps;
   the report a conversion agent previously hand-built. New `spec` and `course`
   command groups accompany these tools.
+- **`clm slides assign-ids` / `clm slides normalize` gained `--only`, `--exclude`,
+  and `--shipping-only` scoping.** A directory run can now be restricted to part
+  of the corpus: `--only bilingual|split` (touch only bilingual decks, or only
+  `.de`/`.en` split halves — e.g. mint bilingual decks while leaving split pairs
+  for `clm slides sync`), `--exclude GLOB` (skip decks matching a glob, matched
+  against the full path *and* each path component, so `--exclude _archive` skips
+  an `_archive/` dir; repeatable), and `--shipping-only` (`--specs-dir`, default
+  `<course-root>/course-specs/`) to touch only decks reachable from specs. This
+  replaces the "run over everything, then `git checkout` the files you shouldn't
+  have touched" workaround. Split pairs are still detected within the scoped set,
+  so EN-authority parity minting is preserved. Fourth of the course-conversion
+  tooling gaps. New public helpers `clm.slides.assign_ids.assign_ids_in_files`,
+  `clm.slides.normalizer.normalize_files`, and module `clm.slides.deck_scope`.
 
 ### Removed
 

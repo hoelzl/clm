@@ -761,6 +761,15 @@ clm slides normalize [OPTIONS] PATH
 | `--canonicalize-start-completed` | Force `start`/`completed` cohesion pairs into the canonical DE/EN interleave, even when DE/EN code differs (e.g. localized identifiers). Run before `clm slides split` so `unify(split(deck)) == deck` holds byte-for-byte. Only affects the `interleaving` operation. |
 | `--json` | Output as JSON |
 | `--data-dir DIR` | Course data directory (contains slides/) |
+| `--only bilingual\|split` | (since CLM {version}) Scope a **directory** run to only bilingual decks (no `.de`/`.en` tag) or only split halves — e.g. normalize the bilingual decks while leaving `.de`/`.en` pairs for `clm slides sync`. |
+| `--exclude GLOB` | (since CLM {version}) Skip decks matching `GLOB`, matched against the full path **and** each path component (so `--exclude _archive` skips an `_archive/` directory). Repeatable. |
+| `--shipping-only` | (since CLM {version}) Scope a directory run to decks reachable from course specs (the shipping set), skipping archived / unreferenced decks. |
+| `--specs-dir DIR` | For `--shipping-only`: directory of `*.xml` specs. Default: `<course-root>/course-specs/`. |
+
+The scoping options (`--only` / `--exclude` / `--shipping-only`) apply only to a
+directory `PATH`; using them with a single file or a spec is an error. They
+replace the old "run over everything, then `git checkout` the files you shouldn't
+have touched" workaround.
 
 Examples:
 
@@ -771,6 +780,10 @@ clm slides normalize slides/module_010/ --operations tag_migration
 clm slides normalize slides/module_010/ --operations slide_ids --json
 # Pre-conversion: canonicalize start/completed order so the split round-trips exactly
 clm slides normalize slides/module_010/topic_100_intro/ --operations interleaving --canonicalize-start-completed
+# Scope: mint ids on bilingual decks only, skipping an _archive/ dir
+clm slides normalize slides/ --operations slide_ids --only bilingual --exclude _archive
+# Scope: only the decks that actually ship
+clm slides normalize slides/ --shipping-only
 ```
 
 ### `clm slides assign-ids`
@@ -851,7 +864,19 @@ clm slides assign-ids [OPTIONS] PATH
 | `--ollama-url TEXT` | Base URL of the Ollama daemon (default: `$OLLAMA_URL` or `http://localhost:11434`). |
 | `--llm-timeout SECONDS` | Per-call timeout (default: 120s — cold-load on a 30B model can exceed 60s). |
 | `--cache-dir PATH` | Directory for the LLM cache. Lookup order: flag → `$CLM_CACHE_DIR` → `tool.clm.cache_dir` in `pyproject.toml` → `<cwd>/.clm-cache/`. |
+| `--only bilingual\|split` | (since CLM {version}) Scope a **directory** run to only bilingual decks (no `.de`/`.en` tag) or only split halves — e.g. `--only bilingual` mints bilingual decks while leaving `.de`/`.en` pairs for `clm slides sync`. |
+| `--exclude GLOB` | (since CLM {version}) Skip decks matching `GLOB`, matched against the full path **and** each path component (so `--exclude _archive` skips an `_archive/` dir). Repeatable. |
+| `--shipping-only` | (since CLM {version}) Scope a directory run to decks reachable from course specs (the shipping set). |
+| `--specs-dir DIR` | For `--shipping-only`: directory of `*.xml` specs. Default: `<course-root>/course-specs/`. |
+| `--data-dir DIR` | Course data directory (contains `slides/`); used to resolve the `--shipping-only` scope. |
 | `--json` | Emit a JSON report instead of human-readable lines. |
+
+The scoping options (`--only` / `--exclude` / `--shipping-only`) apply only to a
+directory `PATH` and replace the old "run over everything, then `git checkout`
+the files you shouldn't have touched" workaround. Split pairs are still detected
+*within* the scoped set, so EN-authority parity minting across a `.de`/`.en` pair
+is preserved; if only one half survives the filter, that half takes the per-file
+twin-aware path and the absent twin is never written.
 
 Exit codes: `0` clean, `1` soft refusals (extractable cells awaiting
 author input), `2` at least one hard refusal.
@@ -863,6 +888,10 @@ clm slides assign-ids slides/module_010/topic_100/slides_intro.py --report-only
 clm slides assign-ids slides/module_010/ --accept-content-derived
 clm slides assign-ids slides/module_010/topic_100/slides_intro.py --llm-suggest
 clm slides assign-ids slides/module_010/ --force        # regenerate all derivable ids
+# Scope: mint only the bilingual decks, leaving split pairs for `clm slides sync`
+clm slides assign-ids slides/ --accept-content-derived --only bilingual --exclude _archive
+# Scope: only the decks that actually ship
+clm slides assign-ids slides/ --accept-content-derived --shipping-only
 ```
 
 ### `clm slides sync`

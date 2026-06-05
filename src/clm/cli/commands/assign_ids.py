@@ -19,6 +19,7 @@ from pathlib import Path
 
 import click
 
+from clm.cli.commands.shared import has_deck_scope, resolve_scoped_files
 from clm.infrastructure.llm.cache import TitleSuggestionCache, resolve_cache_dir
 from clm.infrastructure.llm.ollama_client import (
     DEFAULT_TITLE_MODEL,
@@ -31,6 +32,7 @@ from clm.slides.assign_ids import (
     AssignResult,
     assign_ids_in_directory,
     assign_ids_in_file,
+    assign_ids_in_files,
 )
 
 CACHE_DB_NAME = "clm-llm.sqlite"
@@ -104,6 +106,38 @@ CACHE_DB_NAME = "clm-llm.sqlite"
         "tool.clm.cache_dir in pyproject.toml > <cwd>/.clm-cache/)."
     ),
 )
+@click.option(
+    "--only",
+    type=click.Choice(["bilingual", "split"]),
+    default=None,
+    help="Scope a directory run to only bilingual decks (no .de/.en tag) or only "
+    "split halves. E.g. --only bilingual mints bilingual decks while leaving "
+    ".de/.en pairs for `clm slides sync`.",
+)
+@click.option(
+    "--exclude",
+    multiple=True,
+    metavar="GLOB",
+    help="Skip decks matching GLOB (matched against the full path and each path "
+    "component, so `--exclude _archive` skips an _archive/ dir). Repeatable.",
+)
+@click.option(
+    "--shipping-only",
+    is_flag=True,
+    help="Scope a directory run to decks reachable from course specs (the shipping set).",
+)
+@click.option(
+    "--specs-dir",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    default=None,
+    help="For --shipping-only: directory of *.xml specs. Default: <course-root>/course-specs/.",
+)
+@click.option(
+    "--data-dir",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    default=None,
+    help="Course data directory (contains slides/). For --shipping-only scope resolution.",
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit a JSON report.")
 def assign_ids_cmd(
     path: Path,
@@ -115,6 +149,11 @@ def assign_ids_cmd(
     ollama_url: str | None,
     llm_timeout: float,
     cache_dir: Path | None,
+    only: str | None,
+    exclude: tuple[str, ...],
+    shipping_only: bool,
+    specs_dir: Path | None,
+    data_dir: Path | None,
     as_json: bool,
 ) -> None:
     """Generate stable ``slide_id`` metadata for slide/subslide cells (plumbing).
@@ -173,8 +212,24 @@ def assign_ids_cmd(
         llm_cache=cache,
     )
 
+    scoped = has_deck_scope(only, exclude, shipping_only)
+    if scoped and not path.is_dir():
+        raise click.UsageError(
+            "--only / --exclude / --shipping-only apply to a directory, not a single file."
+        )
+
     try:
-        if path.is_dir():
+        if scoped:
+            files = resolve_scoped_files(
+                path,
+                only=only,
+                exclude=exclude,
+                shipping_only=shipping_only,
+                specs_dir=specs_dir,
+                data_dir=data_dir,
+            )
+            result = assign_ids_in_files(files, options)
+        elif path.is_dir():
             result = assign_ids_in_directory(path, options)
         elif path.is_file():
             result = assign_ids_in_file(path, options)
