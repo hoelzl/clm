@@ -908,6 +908,57 @@ clm slides assign-ids slides/ --accept-content-derived --shipping-only
 clm slides assign-ids slides/ --report-only --report-refusals --context
 ```
 
+### `clm slides slug-report`
+
+*Added in CLM {version}.*
+
+After a bulk `clm slides assign-ids --accept-content-derived` mints thousands
+of ids, **most are fine but a minority are low-information** — single generic
+tokens (`data` / `true` / `value`), very short code-identifier-shaped slugs
+(`cp` / `df` / `os`), or slugs that hit the 30-char cap and lost their trailing
+words. `slug-report` flags just those so you review the minority instead of
+scanning every id.
+
+```bash
+clm slides slug-report [OPTIONS] PATH
+```
+
+`PATH` is a directory of slide files **or** a course spec `.xml` (resolved to
+the decks it pulls in, via the same build-faithful logic as `clm spec decks`).
+
+| Option | Description |
+|--------|-------------|
+| `--min-severity low\|medium\|high` | Only show findings at or above this confidence (default `low` = all). `high` = very-short / generic only. |
+| `--only bilingual\|split` | Scope a **directory** scan to only bilingual decks (no `.de`/`.en` tag) or only split halves. |
+| `--exclude GLOB` | Skip decks matching `GLOB` (matched against the full path **and** each path component, so `--exclude _archive` skips an `_archive/` dir). Repeatable. |
+| `--shipping-only` | Scope a directory scan to decks reachable from course specs (the shipping set). |
+| `--specs-dir DIR` | For `--shipping-only`: directory of `*.xml` specs. Default: `<course-root>/course-specs/`. |
+| `--data-dir DIR` | Course data directory (contains `slides/`); used for a spec `PATH` or `--shipping-only`. |
+| `--json` | Emit a JSON report (per-finding issues + `by_severity` / `by_issue` histograms). |
+
+Quality signals — a flag means "worth a look", **not** "wrong" (`introduction`
+is a single token and perfectly good, so it's only `low`):
+
+| Signal | Meaning | Severity |
+|---|---|---|
+| `very_short` | one token ≤ 3 chars (`cp` / `df` / `os`) | high |
+| `generic` | one content-free token (`data` / `true` / `value`) | high |
+| `possibly_truncated` | length hit the 30-char cap; trailing words likely lost | medium |
+| `single_token` | one token (often fine, e.g. `introduction`) | low |
+
+Only slide/subslide *start* cells are inspected (narrative cells inherit their
+slide's id), and a bilingual deck's DE/EN twins — which share an id — yield a
+single finding. The exit code is always `0`; this is a report.
+
+Examples:
+
+```bash
+clm slides slug-report slides/module_010/                       # everything flagged
+clm slides slug-report slides/ --min-severity high              # just the high-confidence ids
+clm slides slug-report course-specs/python-course.xml --json    # only the decks that ship
+clm slides slug-report slides/ --exclude _archive --shipping-only
+```
+
 ### `clm slides sync`
 
 *Added in CLM {version}.*

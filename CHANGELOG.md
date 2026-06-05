@@ -78,6 +78,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   JSON → re-extract cell bodies and context with a script" step. Fifth of the
   course-conversion tooling gaps. New module `clm.slides.refusal_report`
   (`build_refusal_worklist` / `render_worklist` / `worklist_to_dict`).
+- **`clm slides slug-report` — flag low-quality content-derived slugs.** A bulk
+  `assign-ids --accept-content-derived` mints thousands of ids; most are fine but
+  a minority are low-information — single generic tokens (`data` / `true` /
+  `value`), very short code-identifier-shaped slugs (`cp` / `df` / `os`), or slugs
+  that hit the 30-char cap and lost their trailing words. `slug-report` classifies
+  each `slide_id` by cheap, source-independent heuristics and lists just the
+  flagged minority, with a `--min-severity low|medium|high` cutoff (`high` =
+  very-short / generic). `PATH` is a directory (with the same `--only` /
+  `--exclude` / `--shipping-only` scoping as `assign-ids`) or a spec `.xml`
+  (resolved to its shipping decks). Only slide-start cells are inspected and a
+  bilingual deck's DE/EN twins yield one finding; `--json` adds `by_severity` /
+  `by_issue` histograms. Exit code is always `0` (it's a report). Sixth of the
+  course-conversion tooling gaps. New module `clm.slides.slug_quality`
+  (`classify_slug` / `scan_slug_quality` / `render_report` / `report_to_dict`).
 
 ### Removed
 

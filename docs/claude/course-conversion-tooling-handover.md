@@ -184,11 +184,31 @@ Tests, `commands.md`, and a CHANGELOG `Added` entry land with the code.
   (slug-quality report for content-derived ids — `assign-ids --flag-low-quality`
   or `clm slides slug-report`: single-token / code-identifier-shaped / truncated
   slugs).**
+- 2026-06-05: **Tool #5 PUSHED** (`44cb9e35` → PR #230, fast suite green).
+- 2026-06-05: **Tool #6 DONE**. New `clm slides slug-report PATH` (dir or spec
+  `.xml`). New pure-heuristic core `clm.slides.slug_quality`: `classify_slug(slug)
+  -> [SlugIssue]` (`very_short` ≤3 chars / `generic` curated word set — both
+  *high*; `possibly_truncated` len ≥ 28 of the 30 cap — *medium*; `single_token`
+  — *low*), `scan_slug_quality(files) -> SlugReport`, `render_report` /
+  `report_to_dict`. Chose the **standalone command** over `assign-ids
+  --flag-low-quality` (the gap says "or") — works on already-minted corpora, the
+  user's actual scenario, and reuses Tool #1's `resolve_spec_decks` (spec PATH) +
+  Tool #4's `resolve_scoped_files` (`--only`/`--exclude`/`--shipping-only` on a
+  dir). Source-independent by design (on-disk ids don't record their source);
+  scans only `is_slide_start` cells and dedups a bilingual deck's DE/EN twin to one
+  finding. `--min-severity low|medium|high`; `--json` adds `by_severity`/`by_issue`.
+  Deliberately conservative to avoid false positives (no collision-suffix/numbered
+  -slide special-casing → `step-2`/`python-3` stay clean). Exit 0 always.
+  32 new tests (`tests/slides/test_slug_quality.py`,
+  `tests/cli/test_slug_report.py`); ruff/mypy clean; `commands.md` + CHANGELOG
+  updated. **Next: Tool #7 (`clm spec orphans <specs-dir>` — decks reachable from
+  no spec, grouped by likely intent: `_old` superseded vs `_short`/`_long`/`_partN`
+  intentional alternates; + flag gitignored `.ipynb_checkpoints/` cruft).**
 
 ## Resuming
 
-Pick up from the "Progress log" tail. Tools #1–#5 are complete; **Tool #6 is
-next**; tools #7–#9 follow in priority order. Pushing: this worktree is on
+Pick up from the "Progress log" tail. Tools #1–#6 are complete; **Tool #7 is
+next**; tools #8–#9 follow in priority order. Pushing: this worktree is on
 `worktree-linked-honking-dolphin`; push to the PR branch with the explicit
 refspec noted in the 2026-06-05 consolidation entry above. Each tool = core helper reuse + thin command(s) + tests +
 `commands.md` + CHANGELOG. Keep mirroring build resolution semantics — the whole

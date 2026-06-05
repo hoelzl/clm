@@ -96,6 +96,7 @@ from clm.cli.commands.release import release_group  # noqa: E402
 from clm.cli.commands.resolve_topic import resolve_topic_cmd  # noqa: E402
 from clm.cli.commands.search_slides import search_slides_cmd  # noqa: E402
 from clm.cli.commands.slides_sync import slides_sync_cmd  # noqa: E402
+from clm.cli.commands.slug_report import slug_report_cmd  # noqa: E402
 from clm.cli.commands.spec_decks import (  # noqa: E402
     referenced_by_cmd,
     spec_decks_cmd,
@@ -175,6 +176,7 @@ slides_group.add_command(slides_sync_cmd, name="sync")
 slides_group.add_command(search_slides_cmd, name="search")
 slides_group.add_command(tidy_cmd, name="tidy")
 slides_group.add_command(referenced_by_cmd, name="referenced-by")
+slides_group.add_command(slug_report_cmd, name="slug-report")
 cli.add_command(slides_group)
 
 topic_group.add_command(resolve_topic_cmd, name="resolve")
