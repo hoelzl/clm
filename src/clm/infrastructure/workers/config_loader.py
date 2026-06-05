@@ -50,8 +50,16 @@ def load_worker_config(cli_overrides: dict[str, Any] | None = None) -> WorkersMa
     """
     cli_overrides = cli_overrides or {}
 
-    # Load base config from files + env (handled by ClmConfig)
-    config = get_config().worker_management
+    # Load base config from files + env (handled by ClmConfig).
+    #
+    # Deep-copy off the shared singleton: ``get_config()`` returns a
+    # process-global instance, and the CLI-override application below mutates
+    # the config (and its nested per-type models) in place. Operating on the
+    # live singleton would let a per-invocation override (e.g. ``--workers
+    # docker``) leak into every later ``load_worker_config`` call that does not
+    # override the same field, poisoning the default execution mode for the
+    # rest of the process. A copy makes each call self-contained. See #223.
+    config = get_config().worker_management.model_copy(deep=True)
 
     # Apply CLI overrides to global settings
     # Support both CLI-style ("workers") and config-style ("default_execution_mode")

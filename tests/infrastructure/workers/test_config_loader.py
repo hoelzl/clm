@@ -31,6 +31,13 @@ def mock_base_config():
         type_config.count = 1
         setattr(config, worker_type, type_config)
 
+    # ``load_worker_config`` deep-copies off the singleton before applying
+    # overrides (the #223 copy-on-write). These override-logic tests assert on
+    # (and ``is``-compare against) the object they passed in, so make the mock's
+    # copy a no-op that returns itself. Isolation/COW itself is covered by
+    # ``TestLoadWorkerConfigDoesNotPoisonSingleton`` against a real config.
+    config.model_copy.return_value = config
+
     return config
 
 
@@ -389,3 +396,52 @@ class TestLogging:
         with caplog.at_level(logging.INFO, logger="clm.infrastructure.workers.config_loader"):
             load_worker_config(cli_overrides={"max_workers": 4})
         assert "max_workers_cap" in caplog.text
+
+
+class TestLoadWorkerConfigDoesNotPoisonSingleton:
+    """Regression tests for #223: per-invocation overrides must not leak onto
+    the process-global config singleton.
+
+    These drive a *real* ``WorkersManagementConfig`` (not a MagicMock) so the
+    copy-on-write in ``load_worker_config`` is exercised for real, including the
+    nested per-type models.
+    """
+
+    @pytest.fixture
+    def real_singleton(self):
+        """Patch ``get_config`` to return a real, default config singleton."""
+        from clm.infrastructure.config import ClmConfig
+
+        singleton = ClmConfig()
+        with patch("clm.infrastructure.workers.config_loader.get_config", return_value=singleton):
+            yield singleton
+
+    def test_workers_override_does_not_leak_to_singleton(self, real_singleton):
+        """A ``--workers docker`` override on one call must not flip the
+        singleton's default for the next override-free call."""
+        assert real_singleton.worker_management.default_execution_mode == "direct"
+
+        overridden = load_worker_config(cli_overrides={"workers": "docker"})
+        assert overridden.default_execution_mode == "docker"
+
+        # The singleton is untouched: a later override-free load still defaults
+        # to direct (this is the exact flake from #223 — Docker mode leaking
+        # into a build that never asked for it).
+        assert real_singleton.worker_management.default_execution_mode == "direct"
+        default = load_worker_config()
+        assert default.default_execution_mode == "direct"
+
+    def test_nested_per_type_override_does_not_leak(self, real_singleton):
+        """Deep-copy guard: a per-type count / image override must not mutate
+        the singleton's nested ``WorkerTypeConfig`` instances."""
+        baseline_count = real_singleton.worker_management.notebook.count
+
+        load_worker_config(cli_overrides={"notebook_workers": 7, "notebook_image": "lite"})
+
+        assert real_singleton.worker_management.notebook.count == baseline_count
+        assert real_singleton.worker_management.notebook.image is None
+
+    def test_returned_config_is_a_distinct_copy(self, real_singleton):
+        """Each call returns its own object, not the shared singleton's."""
+        result = load_worker_config()
+        assert result is not real_singleton.worker_management
