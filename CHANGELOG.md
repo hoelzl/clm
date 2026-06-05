@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.8.1] - 2026-06-05
+
+### Changed
+
+- **Docker worker images fetch their large build inputs at build time instead
+  of vendoring them as git LFS objects (#239).** `deno` (v2.1.1), `ijava`
+  (v1.3.0), and the Draw.io `.deb` (v24.7.5) are now pulled from their pinned
+  GitHub release URLs and verified with a `sha256sum -c` guard inside the
+  Dockerfiles, mirroring the existing micromamba pattern, and the three LFS
+  binaries (plus an unused orphan `packages-microsoft-prod.deb`) were removed.
+  The CI `test` matrix also stops pulling `docker/**` LFS objects it never used
+  (`git lfs pull --exclude="docker/**"`). This cuts the repo's LFS bandwidth and
+  storage cost; building the worker images is unchanged for users (the
+  `docker-test` CI job builds all three and validates the checksums).
+- **Releases are now cut by an automated tag-triggered workflow**
+  (`.github/workflows/release.yml`). Pushing a `vX.Y.Z` tag waits for CI to be
+  green on that commit, then builds, publishes to PyPI via Trusted Publishing
+  (OIDC), and creates the GitHub Release from the CHANGELOG. See
+  `docs/developer-guide/releasing.md`.
+
 ## [1.8.0] - 2026-06-05
 
 ### Added
