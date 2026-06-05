@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.8.2] - 2026-06-06
+
 ### Changed
 
 - **Releases can now be cut merge-driven, not only by an explicit tag.** The
