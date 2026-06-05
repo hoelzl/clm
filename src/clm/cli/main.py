@@ -83,6 +83,7 @@ from clm.cli.commands.completion import completion_cmd  # noqa: E402
 from clm.cli.commands.config import config  # noqa: E402
 from clm.cli.commands.course_gate import course_gate_cmd  # noqa: E402
 from clm.cli.commands.coverage import coverage_cmd  # noqa: E402
+from clm.cli.commands.coverage_report import coverage_report_cmd  # noqa: E402
 from clm.cli.commands.database import db, delete_database  # noqa: E402
 from clm.cli.commands.docker import docker_group  # noqa: E402
 from clm.cli.commands.git_ops import git_group  # noqa: E402
@@ -178,6 +179,7 @@ slides_group.add_command(search_slides_cmd, name="search")
 slides_group.add_command(tidy_cmd, name="tidy")
 slides_group.add_command(referenced_by_cmd, name="referenced-by")
 slides_group.add_command(slug_report_cmd, name="slug-report")
+slides_group.add_command(coverage_report_cmd, name="coverage-report")
 cli.add_command(slides_group)
 
 topic_group.add_command(resolve_topic_cmd, name="resolve")

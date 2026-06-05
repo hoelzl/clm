@@ -107,6 +107,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   Seventh of the course-conversion tooling gaps. New module
   `clm.core.spec_orphans` (`find_orphans` / `classify_orphan` /
   `find_checkpoint_dirs` / `render_report` / `report_to_dict`).
+- **`clm slides coverage-report` — DE/EN completeness per deck.** Among
+  count-mismatch validation errors, a deck that exists in only one language
+  (needs translation) and a bilingual deck off by a cell or two (an alignment
+  fix) are very different jobs. This separates them by counting `lang="de"` vs
+  `lang="en"` slide cells per deck and classifying each as `de_only` /
+  `en_only` / `imbalanced` (shown with a `Δ`) / `balanced`. Split `*.de.py` /
+  `*.en.py` halves are scored as one pair — a half whose twin is absent counts
+  the missing language as zero — and only slide/subslide cells are counted, so
+  one-language speaker notes don't skew the result. `PATH` is a directory (with
+  the same `--only` / `--exclude` / `--shipping-only` scoping as `assign-ids`)
+  or a spec `.xml`; `--status` filters to one bucket; `--json` adds `by_status`
+  counts. Exit code is always `0` (it's a report). Eighth of the
+  course-conversion tooling gaps. New module `clm.slides.lang_coverage`
+  (`count_languages` / `classify_counts` / `scan_coverage` / `render_report` /
+  `report_to_dict`).
 
 ### Removed
 

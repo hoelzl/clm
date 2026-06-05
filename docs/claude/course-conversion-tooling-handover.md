@@ -227,11 +227,32 @@ Tests, `commands.md`, and a CHANGELOG `Added` entry land with the code.
   EN-only / balanced / N-cell imbalance, by counting `lang="de"` vs `lang="en"`
   cells; separates "needs translation" from "1-cell imbalance" among
   count-mismatch errors).**
+- 2026-06-05: **Tool #7 PUSHED** (`0ef09839` → PR #230; commit amended to fix the
+  test count 64→32 BEFORE pushing, never on a pushed commit).
+- 2026-06-05: **Tool #8 DONE**. New `clm slides coverage-report PATH` (dir or
+  spec `.xml`). New core `clm.slides.lang_coverage`: `count_languages(text) ->
+  (de, en)` counts **only `is_slide_start`** cells by lang (narrative cells
+  inherit → excluded so one-language speaker notes don't skew); `classify_counts`
+  → BALANCED / DE_ONLY / EN_ONLY / IMBALANCED; `scan_coverage(files)` uses
+  `pairing.iter_split_pairs` to score split `.de`/`.en` halves as ONE pair (de=de-
+  half's de count, en=en-half's en count), bilingual files in place, and a lone
+  split half (twin absent) as that-lang-only (missing side = 0 → de_only/en_only).
+  Reuses Tool #1 resolver (spec) + Tool #4 `resolve_scoped_files` (dir);
+  `--status` filter; `--json`; exit 0. The point: separates "needs translation"
+  (de_only/en_only) from "1-cell alignment" (imbalanced, shown with Δ) among
+  count-mismatch errors. 19 new tests (`tests/slides/test_lang_coverage.py`,
+  `tests/cli/test_coverage_report.py`); ruff/mypy clean; `commands.md` + CHANGELOG
+  updated. **Next: Tool #9 (assisted/`--interactive` interleave for
+  structurally-diverged DE/EN — the `similarity_failure` refusal case; LOW
+  priority, may be deferred). NOTE: #9 is interactive (prompts), harder to test +
+  out of character for the batch-report tools so far — consider proposing it as a
+  follow-up issue rather than building inline.**
 
 ## Resuming
 
-Pick up from the "Progress log" tail. Tools #1–#7 are complete; **Tool #8 is
-next**; tool #9 follows. Pushing: this worktree is on
+Pick up from the "Progress log" tail. Tools #1–#8 are complete; **Tool #9 is the
+last** (interactive interleave — see the caveat in the #8 log entry). Pushing:
+this worktree is on
 `worktree-linked-honking-dolphin`; push to the PR branch with the explicit
 refspec noted in the 2026-06-05 consolidation entry above. Each tool = core helper reuse + thin command(s) + tests +
 `commands.md` + CHANGELOG. Keep mirroring build resolution semantics — the whole

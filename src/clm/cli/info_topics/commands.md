@@ -1003,6 +1003,54 @@ clm slides slug-report course-specs/python-course.xml --json    # only the decks
 clm slides slug-report slides/ --exclude _archive --shipping-only
 ```
 
+### `clm slides coverage-report`
+
+*Added in CLM {version}.*
+
+Report **DE/EN completeness** per deck. Among count-mismatch validation errors,
+two very different situations hide — a deck that exists in only one language
+(needs *translation*, a big job) and a bilingual deck off by a cell or two (a
+small *alignment* fix). This separates them by counting `lang="de"` vs
+`lang="en"` slide cells per deck.
+
+```
+clm slides coverage-report [OPTIONS] PATH
+```
+
+`PATH` is a directory of slide files **or** a course spec `.xml` (resolved to
+its shipping decks). Each deck unit is classified:
+
+| Status | Meaning |
+|---|---|
+| `de_only` | DE present, EN missing — needs EN translation |
+| `en_only` | EN present, DE missing — needs DE translation |
+| `imbalanced` | both present, counts differ — an alignment fix (shown with `Δ`) |
+| `balanced` | equal DE/EN counts (not listed unless `--status balanced`) |
+
+Split `*.de.py` / `*.en.py` halves are scored as **one pair**; a half whose
+twin is absent counts the missing language as zero (so a lone `.de.py` reads as
+`de_only`). Only slide/subslide cells are counted — narrative (voiceover/notes)
+cells inherit their slide, so one-language speaker notes don't skew the result.
+
+| Option | Description |
+|--------|-------------|
+| `--status de_only\|en_only\|imbalanced\|balanced` | Show only decks with this status. |
+| `--only bilingual\|split` | Scope a **directory** scan to only bilingual decks or only split halves. |
+| `--exclude GLOB` | Skip decks matching `GLOB` (full path **and** each component; repeatable). |
+| `--shipping-only` | Scope a directory scan to decks reachable from course specs. |
+| `--specs-dir DIR` | For `--shipping-only`: directory of `*.xml` specs. Default: `<course-root>/course-specs/`. |
+| `--data-dir DIR` | Course data directory (contains `slides/`). For a spec `PATH` or `--shipping-only`. |
+| `--json` | Emit a JSON report (`by_status` counts + per-deck `de_cells`/`en_cells`/`delta`/`status`). |
+
+The exit code is always `0` — this is a report. Examples:
+
+```bash
+clm slides coverage-report slides/module_010/                   # everything not balanced
+clm slides coverage-report slides/ --status de_only             # just the untranslated decks
+clm slides coverage-report course-specs/python-course.xml --json
+clm slides coverage-report slides/ --exclude _archive --shipping-only
+```
+
 ### `clm slides sync`
 
 *Added in CLM {version}.*
