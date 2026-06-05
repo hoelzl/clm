@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-06-05
+
 ### Added
 
 - **`clm spec decks` and `clm slides referenced-by` — spec→deck resolution.**
@@ -122,6 +124,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   course-conversion tooling gaps. New module `clm.slides.lang_coverage`
   (`count_languages` / `classify_counts` / `scan_coverage` / `render_report` /
   `report_to_dict`).
+- **`clm validate` / `clm slides normalize` enforce cell spacing (#238).**
+  `clm validate` gained two default-on `format` warnings: a cell that is not
+  separated from the previous one by a blank line, and a markdown cell whose
+  body does not open with a blank comment line (`#`) before its content — both
+  render and diff poorly otherwise. The canonical j2 title-header block is
+  exempt (its two directives are intentionally tight-coupled), and the checks
+  run on the raw, whitespace-preserving cells since the parsed `Cell` model
+  strips inter-cell blank lines. `clm slides normalize` gained a matching
+  default-on `cell_spacing` operation that inserts the missing blank line and
+  promotes/adds the leading `#`, so `normalize` clears both warnings
+  mechanically.
 
 ### Removed
 
