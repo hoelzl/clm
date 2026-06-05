@@ -1,20 +1,93 @@
 name: Release
 
-# Triggered by pushing a version tag (the `bump-my-version bump` commit's tag).
-# Gates on the full CI workflow being green for the *same commit* (CI runs on the
-# master push that the tag points at — see docs/developer-guide/releasing.md),
-# then builds, publishes to PyPI via Trusted Publishing (OIDC, no stored token),
-# and creates the GitHub Release from the CHANGELOG.
+# Two ways to cut a release; both end in the same gated pipeline:
+#   gate on CI green for the commit  ->  build  ->  PyPI (OIDC)  ->  GitHub Release.
+#
+#   1. Merge-driven (default): land a `Bump version X.Y.Z -> A.B.C` commit on
+#      master (e.g. merge a bump PR with a *merge commit*, or push the bump
+#      commit directly). This workflow detects the bump commit in the push,
+#      creates the vA.B.C tag, and publishes.
+#   2. Explicit tag (fallback): push a `vX.Y.Z` tag directly.
+#
+# The decision lives in the `resolve` job; everything downstream is shared and
+# idempotent (re-runnable without double-publishing or duplicate tags/releases).
 on:
   push:
+    branches: [master]
     tags: ['v*']
+
+# Serialize releases and never cancel an in-flight publish.
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
+  resolve:
+    name: Decide whether to release
+    runs-on: ubuntu-latest
+    outputs:
+      release: ${{ steps.decide.outputs.release }}
+      version: ${{ steps.decide.outputs.version }}
+      tag: ${{ steps.decide.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Decide
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # The in-tree version at this commit is the single source of truth.
+          version=$(grep -oE '__version__ = "[^"]+"' src/clm/__version__.py \
+            | sed -E 's/.*"([^"]+)".*/\1/')
+          tag="v$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag"         >> "$GITHUB_OUTPUT"
+          echo "Resolved in-tree version: $version (tag $tag)"
+
+          tag_exists() { git ls-remote --tags origin "refs/tags/$tag" | grep -q .; }
+
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            # Explicit tag push (fallback path). Guard against a tag that does
+            # not match the version committed at that ref.
+            if [ "${GITHUB_REF_NAME}" != "$tag" ]; then
+              echo "::error::Pushed tag ${GITHUB_REF_NAME} != in-tree version tag $tag."
+              exit 1
+            fi
+            echo "Explicit tag ${GITHUB_REF_NAME} — releasing."
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Branch push (master). Release only when this push *introduced* a
+          # `Bump version ...` commit. Scanning the pushed commits (not just
+          # HEAD) means a bump merged via a merge commit still counts — HEAD is
+          # then the merge commit, but the bump commit rides along in the push.
+          bumps=$(jq -r \
+            '[.commits[]? | select(.message | startswith("Bump version"))] | length' \
+            "$GITHUB_EVENT_PATH")
+          if [ "${bumps:-0}" -gt 0 ]; then
+            if tag_exists; then
+              echo "Bump commit present but $tag already exists — nothing to release."
+              echo "release=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "Bump commit present and $tag is new — releasing."
+              echo "release=true" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "No 'Bump version' commit in this push — no release."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          fi
+
   require-ci:
-    name: Require full CI green on the tagged commit
+    name: Require full CI green on the commit
+    needs: resolve
+    if: needs.resolve.outputs.release == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -55,15 +128,33 @@ jobs:
 
   publish:
     name: Publish to PyPI and create the GitHub Release
-    needs: require-ci
+    needs: [resolve, require-ci]
+    if: needs.resolve.outputs.release == 'true'
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
       id-token: write  # PyPI Trusted Publishing (OIDC token exchange)
-      contents: write  # create the GitHub Release
+      contents: write  # push the tag (merge-driven path) + create the Release
+    env:
+      VERSION: ${{ needs.resolve.outputs.version }}
+      TAG: ${{ needs.resolve.outputs.tag }}
     steps:
-      - name: Checkout the tagged commit
+      - name: Checkout the release commit
         uses: actions/checkout@v4
+
+      - name: Ensure the release tag exists at this commit
+        run: |
+          set -euo pipefail
+          # Merge-driven path: the tag does not exist yet, so create it now —
+          # *after* the CI gate, so a red commit never gets tagged. Pushed with
+          # the workflow token, which (by design) does not re-trigger Release.
+          if git ls-remote --tags origin "refs/tags/$TAG" | grep -q .; then
+            echo "Tag $TAG already on origin — leaving it as-is."
+          else
+            git tag -a "$TAG" -m "Release $TAG" "$GITHUB_SHA"
+            git push origin "refs/tags/$TAG"
+            echo "Created and pushed $TAG at $GITHUB_SHA."
+          fi
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4
@@ -78,37 +169,46 @@ jobs:
       - name: Verify the built version matches the tag
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
           ls -la dist/
-          if [ ! -f "dist/coding_academy_lecture_manager-${version}.tar.gz" ]; then
-            echo "::error::dist/ has no sdist for ${version} — tag/version mismatch."
+          if [ ! -f "dist/coding_academy_lecture_manager-${VERSION}.tar.gz" ]; then
+            echo "::error::dist/ has no sdist for ${VERSION} — tag/version mismatch."
             exit 1
           fi
 
-      - name: Publish to PyPI (Trusted Publishing)
-        run: uv publish --trusted-publishing always
+      - name: Publish to PyPI (Trusted Publishing; skip if already present)
+        run: |
+          set -euo pipefail
+          if curl -sf "https://pypi.org/pypi/coding-academy-lecture-manager/${VERSION}/json" >/dev/null; then
+            echo "Version ${VERSION} is already on PyPI — skipping publish."
+          else
+            uv publish --trusted-publishing always
+          fi
 
       - name: Extract the CHANGELOG section for this version
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
           # index()-based, no regex: match lines that *start with* the literal
           # "## [<version>]" header and stop at the next "## [" section.
-          awk -v v="$version" '
+          awk -v v="$VERSION" '
             BEGIN { hdr = "## [" v "]" }
             index($0, hdr) == 1 { f=1; next }
             f && index($0, "## [") == 1 { exit }
             f { print }
           ' CHANGELOG.md > release-notes.md
           if [ ! -s release-notes.md ]; then
-            echo "Release ${GITHUB_REF_NAME}. See CHANGELOG.md for details." > release-notes.md
+            echo "Release ${TAG}. See CHANGELOG.md for details." > release-notes.md
           fi
 
-      - name: Create the GitHub Release
+      - name: Create the GitHub Release (if missing)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            --title "CLM $GITHUB_REF_NAME" \
-            --notes-file release-notes.md \
-            --verify-tag
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "GitHub Release $TAG already exists — leaving it as-is."
+          else
+            gh release create "$TAG" \
+              --title "CLM $TAG" \
+              --notes-file release-notes.md \
+              --verify-tag
+          fi

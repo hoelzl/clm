@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Releases can now be cut merge-driven, not only by an explicit tag.** The
+  release workflow also triggers on a `master` push that introduces a
+  `Bump version …` commit (e.g. merging a bump PR with a merge commit): it
+  gates on CI, then creates the `vX.Y.Z` tag and publishes. Pushing a `vX.Y.Z`
+  tag directly still works as a fallback. Every external action (tag, PyPI
+  upload, GitHub Release) is idempotent, so a re-run never double-publishes. See
+  `docs/developer-guide/releasing.md`.
+
 ## [1.8.1] - 2026-06-05
 
 ### Changed

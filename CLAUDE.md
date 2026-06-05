@@ -102,6 +102,13 @@ Full procedure lives in `docs/developer-guide/releasing.md`. The hard rules:
 - **Never publish unless CI has passed for the tagged commit.**
 - Use `pytest -m "not docker"` for local pre-release testing (Docker tests
   run in CI only).
+- **Publishing is automated — do not run `uv publish` / `gh release create` by
+  hand.** Landing a `Bump version …` commit on `master` (e.g. merging a bump PR
+  with a **merge commit**, not squash/rebase) — or pushing a `vX.Y.Z` tag —
+  triggers `.github/workflows/release.yml`, which gates on CI being green for
+  that commit, then publishes to PyPI via OIDC Trusted Publishing and creates
+  the GitHub Release. Your job is the docs + CHANGELOG + version bump; the
+  workflow does the rest. (A manual fallback is documented in `releasing.md`.)
 
 ## Git Workflow
 

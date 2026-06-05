@@ -54,44 +54,73 @@ uv run pytest -m "not docker"
 All non-Docker tests must pass before proceeding. This runs unit, integration,
 and e2e tests and takes about 2 minutes with `pytest-xdist` parallelism.
 
-## Step 3: Bump the version and push
+## Step 3: Cut the release
+
+`bump-my-version` updates the version across eight files and commits it with the
+message `Bump version X.Y.Z → A.B.C` — the message the release workflow keys on.
+There are two ways to land that bump commit on `master`; both trigger the same
+automated pipeline (Step 4).
+
+**Merge-driven (recommended).** Treat the bump like any other change and review
+it in a PR:
 
 ```bash
-# Bump the version (creates the commit + tag across 8 files)
-uv run bump-my-version bump patch  # or minor / major
-
-# Push the bump commit to master (this triggers CI), then push the tag
-git push
-git push --tags
+git switch -c claude/release-A.B.C
+uv run bump-my-version bump patch   # or minor / major; creates the bump commit
+git push -u origin claude/release-A.B.C
+# open a PR, get CI green, then merge it with a MERGE COMMIT (not squash/rebase)
 ```
 
-`bump-my-version` is configured in `[tool.bumpversion]` in `pyproject.toml`
-and automatically updates the version in eight files, creates a commit with
-the message `Bump version X.Y.Z → A.B.C`, and tags that commit `vA.B.C`.
+When the PR merges, the push to `master` carries the `Bump version …` commit and
+the workflow releases. **Merge with a merge commit, not squash or rebase** — the
+workflow recognises the release by finding the `Bump version …` commit in the
+push, and squash/rebase rewrites it into a differently-worded commit.
 
-Preview what would change without modifying anything:
+`bump-my-version` also creates a *local* `vA.B.C` tag; do **not** push it (don't
+`git push --tags`). The workflow creates the authoritative tag on `master`
+itself, after the CI gate.
+
+**Direct (no PR).** If review isn't needed, push the bump commit straight to
+master:
 
 ```bash
-uv run bump-my-version bump patch --dry-run --verbose
+uv run bump-my-version bump patch
+git push        # pushes the bump commit; do NOT push the tag
 ```
 
-## Step 4: The automated release (CI gate → PyPI → GitHub Release)
+**Explicit tag (fallback).** You can still release by pushing a tag directly —
+useful to re-release or to tag a specific commit:
 
-Pushing the `vX.Y.Z` tag triggers the **Release** workflow
-(`.github/workflows/release.yml`), which does the rest automatically:
+```bash
+git push origin vX.Y.Z
+```
 
-1. **Waits for the CI workflow to finish on the tagged commit and requires it
-   to be green** before doing anything else. CI triggers on the `master` push
-   from Step 3 (it does **not** trigger on tags); the release workflow polls for
-   that run on the same commit SHA and aborts if it failed or never ran. This
-   enforces the "CI green on the tagged commit" rule mechanically — including
-   the Docker integration job, which a standalone release job could not easily
-   reproduce.
-2. Builds a clean sdist + wheel and **verifies the built version matches the
-   tag**.
-3. **Publishes to PyPI via Trusted Publishing (OIDC)** — no stored token.
-4. **Creates the GitHub Release**, with notes taken from the matching
-   `## [X.Y.Z]` CHANGELOG section.
+Preview a bump without changing anything: `uv run bump-my-version bump patch
+--dry-run --verbose`.
+
+## Step 4: What the Release workflow does
+
+Either trigger runs `.github/workflows/release.yml`, which:
+
+1. **`resolve`** — decides whether to release. A tag push always proceeds; a
+   `master` push proceeds only when it introduced a `Bump version …` commit and
+   the `vX.Y.Z` tag does not already exist. The version is read from
+   `src/clm/__version__.py`.
+2. **`require-ci`** — waits for the CI workflow to finish on this commit and
+   requires it to be **green** before anything is published. CI triggers on the
+   `master` push (not on tags); the gate polls for that run on the same commit
+   SHA and aborts if it failed or never ran. This enforces "CI green on the
+   released commit" mechanically — including the Docker integration job, which a
+   standalone release job could not easily reproduce.
+3. **`publish`** — creates and pushes the `vX.Y.Z` tag if it doesn't exist yet
+   (only *after* the gate, so a red commit is never tagged), builds a clean
+   sdist + wheel, verifies the built version matches the tag, **publishes to
+   PyPI via Trusted Publishing (OIDC)**, and **creates the GitHub Release** from
+   the matching `## [X.Y.Z]` CHANGELOG section.
+
+Every external action is **idempotent** — the tag, the PyPI upload, and the
+GitHub Release are each skipped if they already exist, so a re-run (or a stray
+duplicate trigger) never double-publishes.
 
 Watch it:
 
