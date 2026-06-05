@@ -393,6 +393,151 @@ clm topic resolve intro --course-spec course-specs/python.xml
 clm topic resolve intro --module module_545_ml_azav_cohort_2026_04
 ```
 
+### `clm spec decks`
+
+List the deck files a course spec actually pulls in — its "shipping set".
+
+```
+clm spec decks [OPTIONS] [SPEC_FILE]
+```
+
+Resolution mirrors the build exactly, which is the point of the command: a
+`<topic>` resolves to a topic **directory** and CLM builds **every**
+`slides_*.py` in it. The directory name often differs from the deck filenames
+(e.g. topic `properties` → `slides_properties.py` **and**
+`slides_property_setters.py`), so a deck-filename-stem heuristic silently misses
+decks. Module-bound `<topic>`/`<section>` references resolve in their module;
+unbound topic IDs that match multiple modules are first-occurrence-wins (matching
+the build), and the shadowed matches are reported in `--json` output.
+
+| Option | Description |
+|--------|-------------|
+| `--all-specs DIR` | Resolve the union shipping set across every `*.xml` spec in `DIR`, annotating each deck with the spec(s) that reference it. Mutually exclusive with `SPEC_FILE`. |
+| `--lang de\|en\|both` | Keep only decks serving this language. Bilingual decks (no `.de`/`.en` tag) serve both, so they always survive the filter; split halves are kept only for their own language. Default: `both`. |
+| `--data-dir DIR` | Course data directory (contains `slides/`). Default: inferred from the spec file (its grandparent). |
+| `--json` | Output as JSON (includes per-topic resolution, unresolved topics, and first-occurrence-shadowed duplicates). |
+
+Topic references that resolve to no directory on disk are reported as a warning
+(stderr) but do not fail the command.
+
+Examples:
+
+```bash
+clm spec decks course-specs/python.xml
+clm spec decks course-specs/python.xml --lang de --json
+clm spec decks --all-specs course-specs/
+```
+
+### `clm slides referenced-by`
+
+Reverse of `clm spec decks`: show which spec(s)/topic(s) pull a given deck into
+their shipping set. A deck reachable from no spec is reported as `unreferenced` —
+useful for spotting orphaned or superseded decks before a corpus-wide change.
+
+```
+clm slides referenced-by [OPTIONS] DECK
+```
+
+| Option | Description |
+|--------|-------------|
+| `--specs-dir DIR` | Directory of `*.xml` specs to search. Default: `<course-root>/course-specs/`. |
+| `--data-dir DIR` | Course data directory (contains `slides/`). Default: inferred from the deck path (its `slides/` ancestor). |
+| `--json` | Output as JSON. |
+
+Examples:
+
+```bash
+clm slides referenced-by slides/module_x/topic_y/slides_intro.py
+clm slides referenced-by slides_intro.py --specs-dir course-specs/
+```
+
+### `clm spec orphans`
+
+*Added in CLM {version}.*
+
+The inverse of `clm spec decks`: scan **every** spec in a course and report the
+decks on disk that *no* spec pulls in, grouped by likely intent — so you can
+archive the dead ones without deleting intentional alternates. Also surfaces
+(and optionally removes) gitignored `.ipynb_checkpoints/` cache cruft.
+
+```
+clm spec orphans [OPTIONS] SPECS_DIR
+```
+
+`SPECS_DIR` is the directory of course spec `*.xml` files. Orphans are computed
+against the **union** of every spec (a deck unreferenced by one spec may be
+pulled in by another). The on-disk walk is extension-complete (`.py` / `.cpp` /
+`.cs` / …), so a non-Python orphan is not silently missed.
+
+| Option | Description |
+|--------|-------------|
+| `--slides-dir DIR` | The course's `slides/` directory. Default: `<specs-dir>/../slides`. |
+| `--data-dir DIR` | Course data directory (contains `slides/`); alternative to `--slides-dir`. |
+| `--kind superseded\|alternate\|unknown` | Show only orphans of this intent. |
+| `--clean-checkpoints` | Delete the `.ipynb_checkpoints/` directories found (regenerable cache cruft). |
+| `--json` | Emit a JSON report (`by_kind` counts + per-orphan `kind`/`reason`, plus `checkpoints`). |
+
+Intent buckets (the distinction matters — blindly archiving a `_part1..5` series
+would delete real content):
+
+| Bucket | Markers | Meaning |
+|---|---|---|
+| `superseded` | `_old` / `_oldN` / `_bak` / `_backup` / `_orig` / `_deprecated` / `_copy` / `_vN` / trailing `_N` | usually safe to archive |
+| `alternate` | `_partN` / `_short` / `_long` | probably intentional content — do **not** blindly archive |
+| `unknown` | no recognizable marker | review before acting |
+
+The exit code is always `0` — this is a report. Examples:
+
+```bash
+clm spec orphans course-specs/                                 # full orphan report
+clm spec orphans course-specs/ --kind superseded               # just the archivable ones
+clm spec orphans course-specs/ --clean-checkpoints             # report + delete checkpoint cruft
+clm spec orphans course-specs/ --slides-dir ../other/slides --json
+```
+
+### `clm course gate`
+
+Run the mechanical conversion passes over a course and report **readiness** —
+how much of a corpus is cleared by tooling versus how much still needs a human.
+Built for bringing a course up to a stricter validator (e.g. the 1.8 `slide_id`
+gate) without hand-driving the passes one at a time.
+
+```
+clm course gate [OPTIONS] TARGET
+```
+
+`TARGET` is a course spec `.xml` (validates and fixes its shipping set) or a
+slides directory. The gate runs the mechanical passes — `tag_migration`,
+`workshop_tags`, `interleaving`, and content-derived `slide_id` minting — then
+splits the remaining work into:
+
+- **mechanical** — what the passes changed (or, in a dry run, *would* change);
+- **needs-author** — what the normalizer **refused** to touch because a safe
+  automatic fix doesn't exist: a `slide_id` with no derivable heading (hard
+  refusal), a DE/EN pair whose code diverged too far to auto-interleave
+  (`similarity_failure`), or a DE/EN cell-count mismatch (a missing translation).
+
+| Option | Description |
+|--------|-------------|
+| `--apply` | Write the mechanical fixes and re-validate, reporting the residual. Without it, the gate is a **dry run**: it reports what *would* change and touches nothing on disk. |
+| `--operations LIST` | Comma-separated passes to run (default: `tag_migration,workshop_tags,interleaving,slide_ids`). Valid names: `tag_migration`, `workshop_tags`, `interleaving`, `slide_ids`. |
+| `--data-dir DIR` | Course data directory (contains `slides/`). Default: inferred from the target. |
+| `--json` | Output as JSON (baseline rollup, mechanical change counts, the needs-author list, and the post-apply residual rollup). |
+
+**Exit code:** non-zero when author work remains, or — after `--apply` — when a
+residual error remains; zero when the course is mechanically clean (no author
+work). This makes `clm course gate <spec>` usable as a conversion gate in CI:
+a dry run that exits 0 means `--apply` will fully clear the corpus.
+
+Examples:
+
+```bash
+clm course gate course-specs/python.xml            # dry-run readiness report
+clm course gate course-specs/python.xml --apply    # fix mechanically + re-validate
+clm course gate slides/module_100/ --apply
+clm course gate course-specs/python.xml --json
+```
+
 ### `clm slides search`
 
 *Removed in CLM 1.8: the flat alias `clm search-slides` no longer exists — use this group-qualified form.*
@@ -440,12 +585,28 @@ Checks that all referenced topic IDs resolve to exactly one existing
 topic directory, that there are no duplicate topic references, and
 that referenced dir-group paths exist.
 
+> **Structure-OK is not decks-clean.** By default `clm validate <spec.xml>`
+> validates only the spec *structure* (topic resolution, duplicates, dir-group
+> paths) — it does **not** check the slide content of the decks the spec pulls
+> in. So a passing spec validation does not mean the decks are free of
+> missing-`slide_id` / adjacency / pairing errors. Use `--deep` to validate
+> both.
+
 | Option | Description |
 |--------|-------------|
 | `--kind [slides\|spec]` | Force a validator instead of inferring from the path (`.xml` → spec, `.py`/directory → slides). `--kind=spec` requires an `.xml` file. |
 | `--data-dir DIR` | Course data directory (contains slides/) |
 | `--json` | Output as JSON |
 | `--include-disabled` | Also validate sections marked `enabled="false"`; each finding from a disabled section has `(disabled)` appended to its message (default: disabled sections are skipped) |
+| `--deep` | After structure validation, run the full slide validator on **every deck the spec pulls in** (its shipping set) and report both. Exits non-zero on a structure error or a deck-content error (`--fail-on` governs the deck-content threshold). Resolves decks with the same build-faithful semantics as `clm spec decks`. |
+| `--summary` | Roll the deck-content findings up into a category/kind histogram with per-deck counts instead of a flat list (intended for corpus-scale validates that emit thousands of findings). On a spec, `--summary` implies `--deep`. |
+| `--checks LIST`, `--fail-on [error\|warning]` | Slides-validator options (see slides mode); valid on a spec only together with `--deep`, where they apply to the deck-content pass. |
+
+The `--summary` rollup has three axes: **by category** (`format`/`pairing`/`tags`
+× severity — the validator's own categories, exact), **by kind** (a finer,
+heuristic bucket derived from the message: `missing-slide_id`, `adjacency`,
+`count-mismatch`, `start-completed`, `malformed-marker`, … with an `other`
+fallback), and **by deck** (the decks with the most findings first).
 
 Examples:
 
@@ -453,6 +614,9 @@ Examples:
 clm validate course-specs/python-basics.xml
 clm validate course-specs/ml-azav.xml --json
 clm validate course-specs/ml-azav.xml --include-disabled
+clm validate course-specs/python.xml --deep              # structure + deck content
+clm validate course-specs/python.xml --summary           # deep, rolled up
+clm validate course-specs/python.xml --deep --fail-on warning
 ```
 
 ### `clm sync-includes`
@@ -537,8 +701,16 @@ clm validate [OPTIONS] PATH
 | `--json` | Output as JSON |
 | `--data-dir DIR` | Course data directory (contains slides/) |
 | `--fail-on {error,warning}` | (since CLM {version}) Exit non-zero when findings reach this severity. Unset: legacy behavior (human output fails on errors; JSON exits 0). `error`: fail on errors in either mode. `warning`: fail on errors **or** warnings — the pre-commit-gate setting, so the cross-file `slide_id` / voiceover `for_slide` parity warnings block a commit. |
+| `--summary` | (since CLM {version}) Roll findings up into a category/kind histogram with per-deck counts instead of a flat list — for corpus-scale validates that would otherwise print thousands of lines. |
+| `--shipping-only` | (since CLM {version}) Directory only: restrict the walk to decks reachable from course specs (the shipping set), skipping archived / unreferenced decks so they don't drown the signal. |
+| `--specs-dir DIR` | For `--shipping-only`: directory of `*.xml` specs to resolve the shipping set from. Default: `<course-root>/course-specs/`. |
 
 `PATH` can be a single slide file, a topic directory, or a course spec XML file.
+
+> `--shipping-only` resolves the shipping set with the same build-faithful logic
+> as `clm spec decks`, and filters that resolved deck list to the decks under
+> `PATH` — so it correctly includes non-`.py` decks (`.cs`, `.cpp`) that the
+> plain directory walk currently misses.
 
 Since CLM {version}, `clm validate slides/ --fail-on warning` is the
 pre-commit gate: by default the `pairing` warnings (missing/divergent
@@ -633,6 +805,15 @@ clm slides normalize [OPTIONS] PATH
 | `--canonicalize-start-completed` | Force `start`/`completed` cohesion pairs into the canonical DE/EN interleave, even when DE/EN code differs (e.g. localized identifiers). Run before `clm slides split` so `unify(split(deck)) == deck` holds byte-for-byte. Only affects the `interleaving` operation. |
 | `--json` | Output as JSON |
 | `--data-dir DIR` | Course data directory (contains slides/) |
+| `--only bilingual\|split` | (since CLM {version}) Scope a **directory** run to only bilingual decks (no `.de`/`.en` tag) or only split halves — e.g. normalize the bilingual decks while leaving `.de`/`.en` pairs for `clm slides sync`. |
+| `--exclude GLOB` | (since CLM {version}) Skip decks matching `GLOB`, matched against the full path **and** each path component (so `--exclude _archive` skips an `_archive/` directory). Repeatable. |
+| `--shipping-only` | (since CLM {version}) Scope a directory run to decks reachable from course specs (the shipping set), skipping archived / unreferenced decks. |
+| `--specs-dir DIR` | For `--shipping-only`: directory of `*.xml` specs. Default: `<course-root>/course-specs/`. |
+
+The scoping options (`--only` / `--exclude` / `--shipping-only`) apply only to a
+directory `PATH`; using them with a single file or a spec is an error. They
+replace the old "run over everything, then `git checkout` the files you shouldn't
+have touched" workaround.
 
 Examples:
 
@@ -643,6 +824,10 @@ clm slides normalize slides/module_010/ --operations tag_migration
 clm slides normalize slides/module_010/ --operations slide_ids --json
 # Pre-conversion: canonicalize start/completed order so the split round-trips exactly
 clm slides normalize slides/module_010/topic_100_intro/ --operations interleaving --canonicalize-start-completed
+# Scope: mint ids on bilingual decks only, skipping an _archive/ dir
+clm slides normalize slides/ --operations slide_ids --only bilingual --exclude _archive
+# Scope: only the decks that actually ship
+clm slides normalize slides/ --shipping-only
 ```
 
 ### `clm slides assign-ids`
@@ -723,7 +908,31 @@ clm slides assign-ids [OPTIONS] PATH
 | `--ollama-url TEXT` | Base URL of the Ollama daemon (default: `$OLLAMA_URL` or `http://localhost:11434`). |
 | `--llm-timeout SECONDS` | Per-call timeout (default: 120s — cold-load on a 30B model can exceed 60s). |
 | `--cache-dir PATH` | Directory for the LLM cache. Lookup order: flag → `$CLM_CACHE_DIR` → `tool.clm.cache_dir` in `pyproject.toml` → `<cwd>/.clm-cache/`. |
+| `--only bilingual\|split` | (since CLM {version}) Scope a **directory** run to only bilingual decks (no `.de`/`.en` tag) or only split halves — e.g. `--only bilingual` mints bilingual decks while leaving `.de`/`.en` pairs for `clm slides sync`. |
+| `--exclude GLOB` | (since CLM {version}) Skip decks matching `GLOB`, matched against the full path **and** each path component (so `--exclude _archive` skips an `_archive/` dir). Repeatable. |
+| `--shipping-only` | (since CLM {version}) Scope a directory run to decks reachable from course specs (the shipping set). |
+| `--specs-dir DIR` | For `--shipping-only`: directory of `*.xml` specs. Default: `<course-root>/course-specs/`. |
+| `--data-dir DIR` | Course data directory (contains `slides/`); used to resolve the `--shipping-only` scope. |
+| `--report-refusals` | (since CLM {version}) Emit a hand-authoring **worklist** of the refusals (hard ones first) instead of the assignment listing — the cells that still need a `slide_id`. |
+| `--context` | (since CLM {version}) With `--report-refusals`, include each refused cell's marker, body, and the nearest preceding `slide_id`/heading so you can author an id in place. Implies `--report-refusals`. |
 | `--json` | Emit a JSON report instead of human-readable lines. |
+
+The scoping options (`--only` / `--exclude` / `--shipping-only`) apply only to a
+directory `PATH` and replace the old "run over everything, then `git checkout`
+the files you shouldn't have touched" workaround. Split pairs are still detected
+*within* the scoped set, so EN-authority parity minting across a `.de`/`.en` pair
+is preserved; if only one half survives the filter, that half takes the per-file
+twin-aware path and the absent twin is never written.
+
+`--report-refusals` turns the run into a **worklist** for the cells that could
+*not* be assigned automatically: hard refusals (no heading and no extractable
+content — only a hand-authored id will do) sort first, then soft refusals
+(extractable, carrying a proposed slug). Add `--context` to attach each refused
+cell's marker line, full body, and the nearest preceding `slide_id`/heading so an
+author or agent can write the id without opening the file. The worklist honors the
+same scoping flags, and `--json` emits it as structured data. It replaces the
+throwaway "dry-run JSON → script that re-extracts cell bodies and surrounding
+context" step that course conversions repeatedly hand-rolled.
 
 Exit codes: `0` clean, `1` soft refusals (extractable cells awaiting
 author input), `2` at least one hard refusal.
@@ -735,6 +944,111 @@ clm slides assign-ids slides/module_010/topic_100/slides_intro.py --report-only
 clm slides assign-ids slides/module_010/ --accept-content-derived
 clm slides assign-ids slides/module_010/topic_100/slides_intro.py --llm-suggest
 clm slides assign-ids slides/module_010/ --force        # regenerate all derivable ids
+# Scope: mint only the bilingual decks, leaving split pairs for `clm slides sync`
+clm slides assign-ids slides/ --accept-content-derived --only bilingual --exclude _archive
+# Scope: only the decks that actually ship
+clm slides assign-ids slides/ --accept-content-derived --shipping-only
+# Worklist of cells that still need a hand-authored id, with body + context
+clm slides assign-ids slides/ --report-only --report-refusals --context
+```
+
+### `clm slides slug-report`
+
+*Added in CLM {version}.*
+
+After a bulk `clm slides assign-ids --accept-content-derived` mints thousands
+of ids, **most are fine but a minority are low-information** — single generic
+tokens (`data` / `true` / `value`), very short code-identifier-shaped slugs
+(`cp` / `df` / `os`), or slugs that hit the 30-char cap and lost their trailing
+words. `slug-report` flags just those so you review the minority instead of
+scanning every id.
+
+```bash
+clm slides slug-report [OPTIONS] PATH
+```
+
+`PATH` is a directory of slide files **or** a course spec `.xml` (resolved to
+the decks it pulls in, via the same build-faithful logic as `clm spec decks`).
+
+| Option | Description |
+|--------|-------------|
+| `--min-severity low\|medium\|high` | Only show findings at or above this confidence (default `low` = all). `high` = very-short / generic only. |
+| `--only bilingual\|split` | Scope a **directory** scan to only bilingual decks (no `.de`/`.en` tag) or only split halves. |
+| `--exclude GLOB` | Skip decks matching `GLOB` (matched against the full path **and** each path component, so `--exclude _archive` skips an `_archive/` dir). Repeatable. |
+| `--shipping-only` | Scope a directory scan to decks reachable from course specs (the shipping set). |
+| `--specs-dir DIR` | For `--shipping-only`: directory of `*.xml` specs. Default: `<course-root>/course-specs/`. |
+| `--data-dir DIR` | Course data directory (contains `slides/`); used for a spec `PATH` or `--shipping-only`. |
+| `--json` | Emit a JSON report (per-finding issues + `by_severity` / `by_issue` histograms). |
+
+Quality signals — a flag means "worth a look", **not** "wrong" (`introduction`
+is a single token and perfectly good, so it's only `low`):
+
+| Signal | Meaning | Severity |
+|---|---|---|
+| `very_short` | one token ≤ 3 chars (`cp` / `df` / `os`) | high |
+| `generic` | one content-free token (`data` / `true` / `value`) | high |
+| `possibly_truncated` | length hit the 30-char cap; trailing words likely lost | medium |
+| `single_token` | one token (often fine, e.g. `introduction`) | low |
+
+Only slide/subslide *start* cells are inspected (narrative cells inherit their
+slide's id), and a bilingual deck's DE/EN twins — which share an id — yield a
+single finding. The exit code is always `0`; this is a report.
+
+Examples:
+
+```bash
+clm slides slug-report slides/module_010/                       # everything flagged
+clm slides slug-report slides/ --min-severity high              # just the high-confidence ids
+clm slides slug-report course-specs/python-course.xml --json    # only the decks that ship
+clm slides slug-report slides/ --exclude _archive --shipping-only
+```
+
+### `clm slides coverage-report`
+
+*Added in CLM {version}.*
+
+Report **DE/EN completeness** per deck. Among count-mismatch validation errors,
+two very different situations hide — a deck that exists in only one language
+(needs *translation*, a big job) and a bilingual deck off by a cell or two (a
+small *alignment* fix). This separates them by counting `lang="de"` vs
+`lang="en"` slide cells per deck.
+
+```
+clm slides coverage-report [OPTIONS] PATH
+```
+
+`PATH` is a directory of slide files **or** a course spec `.xml` (resolved to
+its shipping decks). Each deck unit is classified:
+
+| Status | Meaning |
+|---|---|
+| `de_only` | DE present, EN missing — needs EN translation |
+| `en_only` | EN present, DE missing — needs DE translation |
+| `imbalanced` | both present, counts differ — an alignment fix (shown with `Δ`) |
+| `balanced` | equal DE/EN counts (not listed unless `--status balanced`) |
+
+Split `*.de.py` / `*.en.py` halves are scored as **one pair**; a half whose
+twin is absent counts the missing language as zero (so a lone `.de.py` reads as
+`de_only`). Only slide/subslide cells are counted — narrative (voiceover/notes)
+cells inherit their slide, so one-language speaker notes don't skew the result.
+
+| Option | Description |
+|--------|-------------|
+| `--status de_only\|en_only\|imbalanced\|balanced` | Show only decks with this status. |
+| `--only bilingual\|split` | Scope a **directory** scan to only bilingual decks or only split halves. |
+| `--exclude GLOB` | Skip decks matching `GLOB` (full path **and** each component; repeatable). |
+| `--shipping-only` | Scope a directory scan to decks reachable from course specs. |
+| `--specs-dir DIR` | For `--shipping-only`: directory of `*.xml` specs. Default: `<course-root>/course-specs/`. |
+| `--data-dir DIR` | Course data directory (contains `slides/`). For a spec `PATH` or `--shipping-only`. |
+| `--json` | Emit a JSON report (`by_status` counts + per-deck `de_cells`/`en_cells`/`delta`/`status`). |
+
+The exit code is always `0` — this is a report. Examples:
+
+```bash
+clm slides coverage-report slides/module_010/                   # everything not balanced
+clm slides coverage-report slides/ --status de_only             # just the untranslated decks
+clm slides coverage-report course-specs/python-course.xml --json
+clm slides coverage-report slides/ --exclude _archive --shipping-only
 ```
 
 ### `clm slides sync`

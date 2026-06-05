@@ -1667,7 +1667,27 @@ def validate_directory(
             ``None`` runs the default bundle, which excludes the opt-in
             ``voiceover`` coverage check (issue #176).
     """
-    slide_files = find_slide_files_recursive(path)
+    return validate_files(find_slide_files_recursive(path), checks=checks)
+
+
+def validate_files(
+    slide_files: list[Path],
+    checks: list[str] | None = None,
+) -> ValidationResult:
+    """Validate an explicit list of slide files (same logic as a directory walk).
+
+    Factored out of :func:`validate_directory` so callers that have already
+    computed a file set — e.g. ``clm validate --shipping-only``, which filters a
+    directory down to the decks reachable from course specs — get identical
+    per-file checks *and* the once-per-pair split-pair parity, without a second
+    filesystem walk.
+
+    Args:
+        slide_files: The slide files to validate.
+        checks: Which checks to run (passed to :func:`validate_file`).
+            ``None`` runs the default bundle, which excludes the opt-in
+            ``voiceover`` coverage check (issue #176).
+    """
     all_findings: list[Finding] = []
     combined_review = ReviewMaterial() if (not checks or set(checks) & ALL_REVIEW_CHECKS) else None
 
