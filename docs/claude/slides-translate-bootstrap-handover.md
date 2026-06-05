@@ -1,7 +1,7 @@
 # Handover: Full-deck translation — `clm slides translate` (deck bootstrap)
 
-**Status:** **Phase 1 + Phase 2 DONE.** Phase 1 = pure engine `src/clm/slides/translate_deck.py` (17 tests). Phase 2 = file/orchestration layer `src/clm/slides/translate_bootstrap.py` (19 tests) — the D2 dispatch (twin absent→bootstrap+mint+watermark; twin present→delegate to sync), all green; lint/format/mypy clean; full slides suite (1165) green. **Phase 3 (voiceover companion in lockstep) is next.**
-**Branch:** `claude/slides-translate-bootstrap` off `master` (`fdf7772` handover, `cf1c8e06` Phase 1, Phase 2 commit follows). Do **not** branch off `claude/issue-226-partial-overlap-mismatch`.
+**Status:** **Phases 1–3 DONE.** Phase 1 = pure engine `translate_deck.py` (17 tests). Phase 2 = orchestration `translate_bootstrap.py` (D2 dispatch + mint + watermark). Phase 3 = voiceover companion translated in lockstep (now **28 tests** in `test_translate_bootstrap.py`). All green; lint/format/mypy clean; full slides suite (1176) + fast suite green. **Phase 4 (the `clm slides translate` CLI command) is next.**
+**Branch:** `claude/slides-translate-bootstrap` off `master` (`fdf7772` handover, `cf1c8e06` Phase 1, `29947b88` Phase 2, Phase 3 commit follows). Do **not** branch off `claude/issue-226-partial-overlap-mismatch`.
 **Builds on (all merged to master):** the resolve-then-apply sync engine (#166/#190/#216), cold-start mint/adopt (#216), committed un-bootstrapped pairs (#225), partial-overlap mismatch (#226).
 **Related design notes:** `docs/claude/design/single-language-authoring-sync.md`, `docs/claude/design/sync-plan-resolve-apply.md`.
 **Sibling handover:** `docs/claude/sync-plan-resolve-apply-handover.md` (the engine this feature reuses).
@@ -85,11 +85,15 @@ If `voiceover_<name>.<src>.py` exists, translate its localized cells too (preser
 - **Result:** `BootstrapResult` (`action` = `"bootstrapped"`/`"synced"`, `deck`/`assign` or `plan`/`apply_result`, `ids_assigned`, `watermark_recorded`).
 - **Acceptance — met:** `translate` twice → second run is a `sync` no-op (`action=="synced"`, `proposals==[]`, no errors, deck not doubled), proven for **both** an id'd and an **id-less** source (the latter rewrites both halves on run 1, so it exercises the post-mint watermark). Round-trip + parity hold on the written files, including a **trailing-asymmetric** deck (ends on a slide pair). 19 tests in `tests/slides/test_translate_bootstrap.py`.
 
-### Phase 3 — Voiceover companion in lockstep — [TODO]
-**Accomplishes:** D5.
+### Phase 3 — Voiceover companion in lockstep — [DONE]
+**Accomplished:** D5, inside `translate_bootstrap.py`.
 
-- Detect `voiceover_<name>.<src>.py`; translate localized cells preserving `for_slide` / `vo_anchor`; write `voiceover_<name>.<tgt>.py` via `effective_write_layout` (`src/clm/slides/sidecar_layout.py`).
-- **Acceptance:** companion `for_slide` parity holds against the translated deck (`validator._check_split_companion_for_slide_parity`); narration cells are translated, anchors preserved.
+- `_translate_companion(paths, translator, force)`: on the **bootstrap** path only, `resolve_companion(source_path)` finds the source half's companion (sibling **or** `voiceover/` subdir). The target is `companion_name(twin_path)` placed in the **source companion's directory** (foldered stays foldered) — mirroring `split._plan_companion_split`. It is translated by the **same** `translate_deck_text` (a companion is just `lang`-tagged narrative cells, no header macro), so `build_twin_cell` preserves `for_slide` / `vo_anchor` / `slide_id` / `tags` verbatim (only `lang` + body change).
+- **All-or-nothing:** both the deck and the companion are translated *before any write*, so a companion translation failure aborts the whole bootstrap with nothing on disk (test asserts this).
+- **Idempotency:** an existing non-empty target companion is `"skipped"` (never doubled) unless `--force`. The **sync-delegation** path does not touch the companion (`result.companion is None`), so a re-run can't double it.
+- **Result:** `BootstrapResult.companion: CompanionResult | None` (`action` = `"translated"`/`"skipped"`, `source`, `target`, `translation`).
+- **Acceptance — met:** companion translated alongside the deck; `for_slide` + `vo_anchor` preserved; companion pair round-trips; subdir layout preserved; existing target skipped; `--force` regenerates; re-run via sync leaves it untouched; translation failure writes nothing. 9 companion tests (28 total in `tests/slides/test_translate_bootstrap.py`).
+- **Deferred:** full companion *sync* (reconciling an already-present companion when the deck twin exists) is out of scope — the bootstrap creates it once; later deck syncs leave it alone. Also not special-cased: a companion whose `for_slide` references an **id-less** deck (a malformed input — `extract` requires deck ids; the bootstrap mint with `force=False` preserves existing ids, so a real companion's `for_slide` stays valid).
 
 ### Phase 4 — CLI command `clm slides translate` (+ `bootstrap` alias) — [TODO]
 **Accomplishes:** user-facing surface.
@@ -114,24 +118,26 @@ If `voiceover_<name>.<src>.py` exists, translate its localized cells too (preser
 
 ## 4. Current Status
 
-- **Completed:** design + **Phase 1** (pure engine `translate_deck.py` + 17 tests, `cf1c8e06`) + **Phase 2** (orchestration `translate_bootstrap.py` + 19 tests). Both lint/format/mypy clean; full `tests/slides` suite (1165) green. Issue **#232** filed. Branch `claude/slides-translate-bootstrap` off master. The three user-facing forks are settled (D1, D4, D5).
-- **In progress:** none — Phase 3 not started.
+- **Completed:** design + **Phase 1** (`translate_deck.py`, `cf1c8e06`) + **Phase 2** (`translate_bootstrap.py`, `29947b88`) + **Phase 3** (companion-in-lockstep, in `translate_bootstrap.py`). Lint/format/mypy clean; full `tests/slides` (1176) + fast suite green; 28 tests in `test_translate_bootstrap.py`. Issue **#232** filed. Branch `claude/slides-translate-bootstrap` off master. The three user-facing forks are settled (D1, D4, D5).
+- **In progress:** none — Phase 4 (CLI) not started.
 - **Blockers / open questions:** none blocking. D6 defaults stand unless the user objects. Confirm at Phase 4: whether `--to` should be required when the source half has **no** lang tags at all (currently: infer from filename, `--to` optional override — note `derive_bootstrap_paths` requires a `.de`/`.en` tag on the *source*, so a tag-less single half is already rejected with a "run split first" hint).
-- **Tests:** Phases 1–2 fully covered (see §7). Phases 3–5 pending.
+- **Tests:** Phases 1–3 fully covered (see §7). Phases 4–5 pending.
 
 ---
 
 ## 5. Next Steps
 
-**Start Phase 3 — voiceover companion in lockstep (D5).** The deck-half engine (`translate_deck_text`) already translates lang-tagged narrative cells and copies neutral ones, and `bootstrap_deck` is the orchestration seam to hook into. A voiceover companion (`voiceover_<name>.<src>.py`) is *just* lang-tagged cells with no header macro, which `translate_deck_text` handles as-is. Plan:
-1. In `bootstrap_deck` (twin-**absent** path), after writing the deck twin, detect the source companion next to the source half. Companion naming is `voiceover_*` and it carries the same `.de`/`.en` tag; resolve its placement with `effective_write_layout` (`src/clm/slides/sidecar_layout.py`) — it may live as a sibling or under a `voiceover/` subdir (topic-sidecar-subdirs, PR #218). Reuse the resolver (`resolve_companion`) rather than re-deriving the path.
-2. Translate the companion's text with `translate_deck_text` (same translator) and write `voiceover_<name>.<tgt>.py` via the layout. **Preserve `for_slide` / `vo_anchor`** — these are cell metadata the engine copies verbatim (they are not `lang`-gated), so they should survive untouched; add a test asserting it.
-3. `derive_bootstrap_paths` currently **rejects** a `voiceover_*` *source* (a companion is never a standalone translate target). Keep that — the companion is found and translated *from the deck*, not passed directly.
-4. **Idempotency:** a companion already present must not be re-translated/doubled. Mirror the deck dispatch — if the target companion exists, skip (or, later, sync it). For Phase 3, skip-with-note is acceptable; full companion-sync can defer.
+**Start Phase 4 — the `clm slides translate` CLI command (+ `bootstrap` alias).** The engine (Phase 1), the dispatch (Phase 2) and the companion (Phase 3) are all in `clm.slides`; Phase 4 is the user-facing Click surface over `bootstrap_deck`. The full plan is in **§3 Phase 4** — the short version:
+1. New module `src/clm/cli/commands/slides_translate.py`. Clone the option skeleton from `slides_sync.py` (`--provider`, `--translation-model`, `--cache-dir`, `--no-cache`, `--no-env-file`) and add `--to en|de`, `--dry-run`/`--explain` (side-effect-free: call `derive_bootstrap_paths` + parse + count translatable-vs-copied + show target path + id/companion plan; build **no** LLM client), `--json` (`_to_dict`), `--force`.
+2. Decide bootstrap-vs-sync **before** building any client by calling `derive_bootstrap_paths` (it's pure) — then build the translator (`OpenRouterSlideTranslator`) always, and the judge/recoverer/verifier/caches only on the sync path (twin present). Wire exactly as `slides_sync_cmd` does (env load via `load_env_files` unless `--no-env-file`; `resolve_cache_dir`; close caches in a `finally`).
+3. **No key → exit 1, write nothing** (the engine is all-or-nothing; unlike sync's per-cell defer, a whole deck of placeholders is useless). Reuse `has_openrouter_api_key`.
+4. **`TranslationCache` lands here (moved from Phase 1):** add it to `src/clm/infrastructure/llm/cache.py` and expose a `CachingSlideTranslator` that *wraps* a `SlideTranslator` and is passed into `bootstrap_deck` — the engine stays cache-agnostic, so it's purely additive.
+5. Register in `src/clm/cli/main.py` (~line 168) under `slides_group` for both `translate` and `bootstrap`; optional-import guard if LLM deps may be absent.
+6. Exit codes: `0` wrote/clean, `1` review/no-key, `2` hard error.
 
-**Acceptance:** companion `for_slide` parity holds against the translated deck (`validator._check_split_companion_for_slide_parity`); narration cells are translated; `vo_anchor` preserved; re-running does not double the companion. Add tests to `tests/slides/test_translate_bootstrap.py` (or a new `test_*` file) driven by `StaticSlideTranslator`.
+**Acceptance:** `CliRunner` tests for absent-twin bootstrap, present-twin delegation, `--dry-run` no-write, `--json` shape, no-key degradation, `--force`, exit-code matrix. Mind the Click 8.1-vs-8.2 `CliRunner` compat pattern (memory `feedback-click-82-clirunner-compat`).
 
-**Phase 2 is DONE** (`translate_bootstrap.py`): the twin dispatch, EN-authority minting and watermark seal are in place and the `translate`-twice no-op is proven (incl. id-less + asymmetric decks). Engine-level round-trip is guaranteed by Phase 1; Phase 2 additionally proves the on-disk pair round-trips and is idempotent.
+**Phases 1–3 are DONE.** `bootstrap_deck(source_path, *, target_lang=None, translator, judge=None, watermark_cache=None, recoverer=None, alignment_cache=None, verifier=None, correspondence_cache=None, provider_available=False, force=False) -> BootstrapResult` is the single entry point the CLI calls. It already does the twin dispatch, EN-authority mint, watermark seal, and companion-in-lockstep; the `translate`-twice no-op is proven (id'd, id-less, asymmetric) and nothing half-writes.
 
 **Setup:** worktree venv must be synced (`uv sync --extra all`) — a repo-root `.venv` silently resolves `clm` to the main repo (memory `feedback-worktree-venv-sync`). Run tests with `uv run python -m pytest …` (system Python has no pytest).
 
@@ -149,8 +155,8 @@ If `voiceover_<name>.<src>.py` exists, translate its localized cells too (preser
 ### New files
 - **`src/clm/slides/translate_deck.py` — DONE (Phase 1).** The pure, offline bootstrap engine: `translate_deck_text(source_text, *, source_lang, target_lang, translator) -> TranslateDeckResult`. Parses a source half, classifies cells by `metadata.lang`, translates localized ones (code via `CODE_ROLE`), copies neutral ones verbatim, rewrites the header macro/import (reusing `split.py` regexes), self-checks the split/unify round-trip, returns target text. Protocol-driven (`SlideTranslator`) so it's offline-testable. **Also reusable for the Phase 3 voiceover companion** — companions are just lang-tagged cells with no header macro, which this engine already handles.
 - **`tests/slides/test_translate_deck.py` — DONE (17 tests).**
-- **`src/clm/slides/translate_bootstrap.py` — DONE (Phase 2).** File/orchestration layer: `derive_bootstrap_paths` (direction + existence-agnostic twin path + rejections), `bootstrap_deck` (the D2 dispatch), `_bootstrap_new_twin` (translate→write→`assign_ids_in_split_pair`→`_record_watermark`), `_delegate_to_sync` (mirror of `slides_sync_cmd`). Injected deps only (no client/`.env`/cache-close). `BootstrapResult`/`BootstrapPaths`/`TranslateBootstrapError` are the public surface. **This is the seam Phase 3's voiceover companion hooks into.**
-- **`tests/slides/test_translate_bootstrap.py` — DONE (19 tests).**
+- **`src/clm/slides/translate_bootstrap.py` — DONE (Phases 2 + 3).** File/orchestration layer: `derive_bootstrap_paths` (direction + existence-agnostic twin path + rejections), `bootstrap_deck` (the D2 dispatch), `_bootstrap_new_twin` (translate deck + companion → write both → `assign_ids_in_split_pair` → `_record_watermark`), `_translate_companion` (Phase 3 — `resolve_companion` + `companion_name`, all-or-nothing, skip/force), `_delegate_to_sync` (mirror of `slides_sync_cmd`). Injected deps only (no client/`.env`/cache-close). Public surface: `bootstrap_deck`, `derive_bootstrap_paths`, `BootstrapResult`, `CompanionResult`, `BootstrapPaths`, `TranslateBootstrapError`. **This is the single entry point the Phase 4 CLI calls.**
+- **`tests/slides/test_translate_bootstrap.py` — DONE (28 tests, incl. 9 companion).**
 - `src/clm/cli/commands/slides_translate.py` — the `clm slides translate` Click command (Phase 4).
 - `TranslationCache` + `CachingSlideTranslator` in `src/clm/infrastructure/llm/cache.py` / `sync_translate.py` (Phase 4 — moved from Phase 1).
 - Tests: `tests/cli/test_slides_translate.py` (CLI), companion/idempotency tests (Phases 2–4).

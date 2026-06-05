@@ -26,6 +26,7 @@ from clm.slides.split import split_text, unify_texts
 from clm.slides.sync_translate import StaticSlideTranslator
 from clm.slides.translate_bootstrap import (
     BootstrapResult,
+    CompanionResult,
     TranslateBootstrapError,
     bootstrap_deck,
     derive_bootstrap_paths,
@@ -121,6 +122,31 @@ _DECK_ASYMMETRIC = (
     + _slide_pair("intro", "Einleitung", "Introduction")
     + _slide_pair("more", "Mehr", "More")
 )
+
+
+def _companion_pair(slide_id: str) -> str:
+    """A bilingual voiceover companion: a lang-tagged narrative cell per side,
+    carrying for_slide + vo_anchor (the metadata that must survive translation)."""
+    return (
+        f'# %% [markdown] lang="de" tags=["voiceover"] for_slide="{slide_id}" '
+        f'vo_anchor="id:{slide_id}"\n#\n# Voiceover DE für {slide_id}\n\n'
+        f'# %% [markdown] lang="en" tags=["voiceover"] for_slide="{slide_id}" '
+        f'vo_anchor="id:{slide_id}"\n#\n# Voiceover EN for {slide_id}\n\n'
+    )
+
+
+_COMPANION = _companion_pair("intro")
+
+
+def _combined_translator(
+    de_deck: str, en_deck: str, de_comp: str, en_comp: str
+) -> StaticSlideTranslator:
+    """One translator covering BOTH the deck and the companion bodies (a single
+    translator drives both translations in :func:`bootstrap_deck`)."""
+    mapping = dict(zip(_localized_bodies(de_deck), _localized_bodies(en_deck)))
+    mapping.update(dict(zip(_localized_bodies(de_comp), _localized_bodies(en_comp))))
+    mapping.update(TITLES)
+    return StaticSlideTranslator(mapping=mapping)
 
 
 # ---------------------------------------------------------------------------
@@ -411,6 +437,132 @@ class TestResolution:
         # An empty twin must not route to sync; it is bootstrapped over.
         assert result.action == "bootstrapped"
         assert (tmp_path / "slides_x.en.py").read_text(encoding="utf-8") == en
+
+
+# ---------------------------------------------------------------------------
+# D5: voiceover companion translated in lockstep
+# ---------------------------------------------------------------------------
+
+
+class TestVoiceoverCompanion:
+    def _setup(self, tmp_path: Path, *, comp_dir: Path | None = None):
+        """Write a deck source half + its bilingual-split DE companion; return
+        (de_path, target_companion_path, combined_translator)."""
+        de_deck, en_deck = _split(_DECK)
+        de_comp, en_comp = _split(_COMPANION)
+        de_path = _write(tmp_path / "slides_x.de.py", de_deck)
+        loc = comp_dir if comp_dir is not None else tmp_path
+        loc.mkdir(parents=True, exist_ok=True)
+        _write(loc / "voiceover_x.de.py", de_comp)
+        translator = _combined_translator(de_deck, en_deck, de_comp, en_comp)
+        return de_path, loc / "voiceover_x.en.py", translator
+
+    def test_companion_translated_alongside_deck(self, tmp_path: Path):
+        de_path, target, translator = self._setup(tmp_path)
+        result = bootstrap_deck(de_path, translator=translator)
+
+        assert result.action == "bootstrapped"
+        assert isinstance(result.companion, CompanionResult)
+        assert result.companion.action == "translated"
+        assert result.companion.target == target
+        assert target.exists()
+        text = target.read_text(encoding="utf-8")
+        assert "Voiceover EN for intro" in text
+        assert "Voiceover DE" not in text
+
+    def test_for_slide_and_vo_anchor_preserved(self, tmp_path: Path):
+        de_path, target, translator = self._setup(tmp_path)
+        bootstrap_deck(de_path, translator=translator)
+        text = target.read_text(encoding="utf-8")
+        # Anchoring metadata rides through untouched (build_twin_cell only swaps
+        # lang + body); this is the companion for_slide parity the validator wants.
+        assert 'for_slide="intro"' in text
+        assert 'vo_anchor="id:intro"' in text
+        assert 'lang="en"' in text and 'lang="de"' not in text
+
+    def test_companion_pair_round_trips(self, tmp_path: Path):
+        de_path, target, translator = self._setup(tmp_path)
+        bootstrap_deck(de_path, translator=translator)
+        de_comp = (tmp_path / "voiceover_x.de.py").read_text(encoding="utf-8")
+        en_comp = target.read_text(encoding="utf-8")
+        assert split_text(unify_texts(de_comp, en_comp)) == (de_comp, en_comp)
+
+    def test_no_companion_is_a_noop(self, tmp_path: Path):
+        de, en = _split(_DECK)
+        de_path = _write(tmp_path / "slides_x.de.py", de)  # no companion file
+        result = bootstrap_deck(de_path, translator=_mirror_translator(de, en))
+        assert result.action == "bootstrapped"
+        assert result.companion is None
+
+    def test_existing_companion_is_skipped_not_doubled(self, tmp_path: Path):
+        # Deck twin absent (so we bootstrap) but the target companion already
+        # exists -> leave it untouched rather than overwrite/double.
+        de_path, target, translator = self._setup(tmp_path)
+        _write(target, '# %% [markdown] lang="en"\n#\n# hand-written EN\n\n')
+        result = bootstrap_deck(de_path, translator=translator)
+        assert result.action == "bootstrapped"
+        assert result.companion is not None and result.companion.action == "skipped"
+        assert "hand-written EN" in target.read_text(encoding="utf-8")
+
+    def test_force_regenerates_companion(self, tmp_path: Path):
+        de_path, target, translator = self._setup(tmp_path)
+        bootstrap_deck(de_path, translator=translator)  # creates the deck twin + companion
+        _write(target, "stale")  # corrupt the target companion
+        # Deck twin now exists, so only --force re-runs the bootstrap (deck + companion).
+        result = bootstrap_deck(de_path, translator=translator, force=True)
+        assert result.action == "bootstrapped"
+        assert result.companion is not None and result.companion.action == "translated"
+        assert "stale" not in target.read_text(encoding="utf-8")
+        assert "Voiceover EN for intro" in target.read_text(encoding="utf-8")
+
+    def test_companion_subdir_layout_is_preserved(self, tmp_path: Path):
+        # Source companion under voiceover/ -> target lands in voiceover/ too,
+        # never as a stray sibling (foldered topic stays foldered).
+        vo_dir = tmp_path / "voiceover"
+        de_path, target, translator = self._setup(tmp_path, comp_dir=vo_dir)
+        result = bootstrap_deck(de_path, translator=translator)
+        assert result.companion is not None and result.companion.action == "translated"
+        assert (vo_dir / "voiceover_x.en.py").exists()
+        assert not (tmp_path / "voiceover_x.en.py").exists()
+
+    def test_rerun_via_sync_does_not_touch_companion(self, tmp_path: Path):
+        # First run bootstraps deck + companion; second run sees the deck twin and
+        # delegates to sync, which must not re-translate or double the companion.
+        de_path, target, translator = self._setup(tmp_path)
+        cache = _cache(tmp_path)
+        try:
+            bootstrap_deck(de_path, translator=translator, watermark_cache=cache)
+            comp_after_first = target.read_text(encoding="utf-8")
+            second = bootstrap_deck(
+                de_path,
+                translator=translator,
+                judge=StaticSyncJudge(
+                    default_proposal=SyncProposal(verdict="in_sync", proposed_text="")
+                ),
+                watermark_cache=cache,
+            )
+        finally:
+            cache.close()
+        assert second.action == "synced"
+        assert second.companion is None  # sync path owns no companion lifecycle
+        assert target.read_text(encoding="utf-8") == comp_after_first  # not doubled
+
+    def test_companion_translation_failure_aborts_before_any_write(self, tmp_path: Path):
+        # A translator that handles the deck but not the companion body must fail
+        # the whole bootstrap with nothing written (all-or-nothing across both).
+        de_deck, en_deck = _split(_DECK)
+        de_comp, _ = _split(_COMPANION)
+        de_path = _write(tmp_path / "slides_x.de.py", de_deck)
+        _write(tmp_path / "voiceover_x.de.py", de_comp)
+        # Deck-only translator: no mapping for the companion body -> raises.
+        deck_only = _mirror_translator(de_deck, en_deck)
+        from clm.slides.translate_deck import TranslateDeckError
+
+        with pytest.raises(TranslateDeckError):
+            bootstrap_deck(de_path, translator=deck_only)
+        # Neither the deck twin nor the companion twin reached disk.
+        assert not (tmp_path / "slides_x.en.py").exists()
+        assert not (tmp_path / "voiceover_x.en.py").exists()
 
 
 def test_result_type_is_exported():

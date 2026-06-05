@@ -56,6 +56,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "BootstrapPaths",
     "BootstrapResult",
+    "CompanionResult",
     "TranslateBootstrapError",
     "bootstrap_deck",
     "derive_bootstrap_paths",
@@ -100,6 +101,26 @@ class BootstrapPaths:
     twin_exists: bool
 
 
+CompanionAction = Literal["translated", "skipped"]
+
+
+@dataclass(frozen=True)
+class CompanionResult:
+    """How the source half's voiceover companion was handled (design decision D5).
+
+    ``action`` is ``"translated"`` when a new ``voiceover_<name>.<tgt>.py`` was
+    synthesized in lockstep with the deck, or ``"skipped"`` when one already
+    existed (left untouched, never doubled). ``translation`` carries the engine
+    result for a translated companion (``None`` for a skip). ``source`` /
+    ``target`` are the companion halves.
+    """
+
+    source: Path
+    target: Path
+    action: CompanionAction
+    translation: TranslateDeckResult | None = None
+
+
 @dataclass
 class BootstrapResult:
     """Outcome of one :func:`bootstrap_deck` call.
@@ -107,7 +128,9 @@ class BootstrapResult:
     ``action`` is ``"bootstrapped"`` when a new half was synthesized or
     ``"synced"`` when an existing twin routed the call to the incremental sync
     engine. The per-path detail (``deck`` / ``assign`` for a bootstrap;
-    ``plan`` / ``apply_result`` for a sync) is whichever path ran.
+    ``plan`` / ``apply_result`` for a sync) is whichever path ran. ``companion``
+    records the voiceover companion translated alongside a bootstrap (``None``
+    when the source has no companion, or on the sync path).
     """
 
     action: BootstrapAction
@@ -122,6 +145,7 @@ class BootstrapResult:
     plan: SyncPlan | None = None
     apply_result: ApplyResult | None = None
     watermark_recorded: bool = False
+    companion: CompanionResult | None = None
 
     @property
     def ids_assigned(self) -> int:
@@ -246,7 +270,9 @@ def bootstrap_deck(
             provider_available=provider_available,
         )
 
-    return _bootstrap_new_twin(paths, translator=translator, watermark_cache=watermark_cache)
+    return _bootstrap_new_twin(
+        paths, translator=translator, watermark_cache=watermark_cache, force=force
+    )
 
 
 def _bootstrap_new_twin(
@@ -254,14 +280,17 @@ def _bootstrap_new_twin(
     *,
     translator: SlideTranslator,
     watermark_cache: SyncWatermarkCache | None,
+    force: bool,
 ) -> BootstrapResult:
-    """Synthesize, write and seal the missing-language half.
+    """Synthesize, write and seal the missing-language half (and its companion).
 
-    Order matters: translate (the engine self-checks the split/unify round-trip,
-    so a malformed half never reaches disk) → write the twin → mint EN-authority
-    shared ids across **both** halves (also fills the source half if it was
-    id-less, so the pair is never born id-less) → record the watermark from the
-    final, id'd files so the next ``sync`` is a clean no-op.
+    Order matters: translate the deck **and** the voiceover companion *up front*
+    (the engine self-checks each pair's split/unify round-trip, and nothing is on
+    disk yet, so a translation failure leaves no half-written deck) → write the
+    deck twin → write the companion twin → mint EN-authority shared ids across
+    **both** deck halves (also fills the source half if it was id-less, so the
+    pair is never born id-less) → record the watermark from the final, id'd files
+    so the next ``sync`` is a clean no-op.
     """
     source_text = paths.source_path.read_text(encoding="utf-8")
     deck = translate_deck_text(
@@ -270,9 +299,18 @@ def _bootstrap_new_twin(
         target_lang=paths.target_lang,
         translator=translator,
     )
+    # Translate the companion in lockstep (D5) BEFORE any write, so a companion
+    # failure aborts the whole bootstrap instead of leaving a deck with no
+    # narration twin. Returns None when the source half has no companion.
+    companion = _translate_companion(paths, translator=translator, force=force)
+
     # newline="\n": never let the platform inject CRLF (the split-pair tooling and
     # the round-trip invariant assume LF), matching assign_ids' own write.
     paths.twin_path.write_text(deck.target_text, encoding="utf-8", newline="\n")
+    if companion is not None and companion.translation is not None:
+        companion.target.write_text(
+            companion.translation.target_text, encoding="utf-8", newline="\n"
+        )
 
     # EN-authority shared-id parity (de_id == en_id) over the freshly written pair.
     # accept_content_derived=True so a heading-less slide still mints from its
@@ -313,6 +351,51 @@ def _bootstrap_new_twin(
         deck=deck,
         assign=assign,
         watermark_recorded=watermark_recorded,
+        companion=companion,
+    )
+
+
+def _translate_companion(
+    paths: BootstrapPaths,
+    *,
+    translator: SlideTranslator,
+    force: bool,
+) -> CompanionResult | None:
+    """Plan the voiceover companion's translation in lockstep with the deck (D5).
+
+    Returns ``None`` when the source half has no voiceover companion. Otherwise
+    the target companion is ``voiceover_<name>.<tgt>.py`` placed in the **same
+    directory** the source companion lives in (so a foldered ``voiceover/`` topic
+    stays foldered) — mirroring ``split``'s ``_plan_companion_split``. An existing
+    non-empty target is left untouched (``"skipped"``) unless ``force``, so a
+    re-run never doubles the narration. Translation happens here (raising before
+    any write on failure); the **caller** performs the write.
+
+    A companion is just ``lang``-tagged narrative cells with no header macro, so
+    :func:`translate_deck_text` handles it directly — translating each localized
+    cell while ``build_twin_cell`` preserves ``for_slide`` / ``vo_anchor`` /
+    ``slide_id`` / ``tags`` verbatim (only ``lang`` and the body change), which is
+    exactly the companion ``for_slide`` parity the validator checks.
+    """
+    # Deferred import: a deck with no companion never pulls in the voiceover layer.
+    from clm.slides.voiceover_tools import companion_name, resolve_companion
+
+    source_companion = resolve_companion(paths.source_path)
+    if source_companion is None:
+        return None
+    # Keep the target in the source companion's directory (sibling or voiceover/
+    # subdir), named for the deck twin — voiceover_<name>.<tgt>.py.
+    target = source_companion.parent / companion_name(paths.twin_path)
+    if target.exists() and target.stat().st_size > 0 and not force:
+        return CompanionResult(source=source_companion, target=target, action="skipped")
+    translation = translate_deck_text(
+        source_companion.read_text(encoding="utf-8"),
+        source_lang=paths.source_lang,
+        target_lang=paths.target_lang,
+        translator=translator,
+    )
+    return CompanionResult(
+        source=source_companion, target=target, action="translated", translation=translation
     )
 
 
