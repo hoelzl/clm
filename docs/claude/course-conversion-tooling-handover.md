@@ -242,17 +242,22 @@ Tests, `commands.md`, and a CHANGELOG `Added` entry land with the code.
   (de_only/en_only) from "1-cell alignment" (imbalanced, shown with Δ) among
   count-mismatch errors. 19 new tests (`tests/slides/test_lang_coverage.py`,
   `tests/cli/test_coverage_report.py`); ruff/mypy clean; `commands.md` + CHANGELOG
-  updated. **Next: Tool #9 (assisted/`--interactive` interleave for
-  structurally-diverged DE/EN — the `similarity_failure` refusal case; LOW
-  priority, may be deferred). NOTE: #9 is interactive (prompts), harder to test +
-  out of character for the batch-report tools so far — consider proposing it as a
-  follow-up issue rather than building inline.**
+  updated.
+- 2026-06-05: **Tool #8 PUSHED** (`8362185c` → PR #230, fast suite green).
+- 2026-06-05: **Tool #9 FILED AS FOLLOW-UP ISSUE [#236](https://github.com/hoelzl/clm/issues/236)**
+  (user decision), not built inline. It is the assisted/`--interactive` interleave
+  for structurally-diverged DE/EN (`similarity_failure` refusal) — interactive,
+  hard to test, out of character with the eight non-interactive batch/report tools
+  here. The issue suggests a testable non-interactive first cut (emit the
+  DE↔EN pairing worklist with similarity scores, mirroring
+  `assign-ids --report-refusals`) with an `--interactive` loop layered on later.
+  **PR #230 is now feature-complete: 8 of 9 gaps delivered; gap #9 → #236.**
 
 ## Resuming
 
-Pick up from the "Progress log" tail. Tools #1–#8 are complete; **Tool #9 is the
-last** (interactive interleave — see the caveat in the #8 log entry). Pushing:
-this worktree is on
+**This work is DONE** — Tools #1–#8 are complete and pushed to PR #230; gap #9 is
+tracked as issue #236. If revisiting, the natural remaining work is (a) getting PR
+#230 reviewed/merged, or (b) building issue #236. Pushing: this worktree is on
 `worktree-linked-honking-dolphin`; push to the PR branch with the explicit
 refspec noted in the 2026-06-05 consolidation entry above. Each tool = core helper reuse + thin command(s) + tests +
 `commands.md` + CHANGELOG. Keep mirroring build resolution semantics — the whole
