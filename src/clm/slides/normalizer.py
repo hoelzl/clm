@@ -794,7 +794,29 @@ def normalize_directory(
     canonicalize_start_completed: bool = False,
 ) -> NormalizationResult:
     """Normalize all slide files in a directory (recursive)."""
-    slide_files = find_slide_files_recursive(path)
+    return normalize_files(
+        find_slide_files_recursive(path),
+        operations=operations,
+        dry_run=dry_run,
+        assign_options=assign_options,
+        canonicalize_start_completed=canonicalize_start_completed,
+    )
+
+
+def normalize_files(
+    slide_files: list[Path],
+    *,
+    operations: list[str] | None = None,
+    dry_run: bool = False,
+    assign_options: AssignOptions | None = None,
+    canonicalize_start_completed: bool = False,
+) -> NormalizationResult:
+    """Normalize an explicit list of slide files.
+
+    Factored out of :func:`normalize_directory` so a caller that has already
+    selected a subset of decks (``clm slides normalize --only`` / ``--exclude``
+    / ``--shipping-only``) normalizes exactly that set without a second walk.
+    """
     combined = NormalizationResult()
 
     for sf in slide_files:

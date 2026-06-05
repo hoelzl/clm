@@ -895,8 +895,20 @@ def assign_ids_in_directory(path: Path, options: AssignOptions) -> AssignResult:
     """
     from clm.core.topic_resolver import find_slide_files_recursive
 
+    return assign_ids_in_files(list(find_slide_files_recursive(path)), options)
+
+
+def assign_ids_in_files(files: list[Path], options: AssignOptions) -> AssignResult:
+    """Process an explicit list of slide files (the directory-walk body).
+
+    Factored out of :func:`assign_ids_in_directory` so callers that have already
+    selected a subset of decks — e.g. ``clm slides assign-ids --only bilingual``
+    / ``--exclude`` / ``--shipping-only`` — get the same split-pair-aware minting
+    without a second filesystem walk. Split pairs are still detected *within* the
+    given set: if only one half is present (e.g. its twin was excluded), that
+    half takes the per-file twin-aware path and the absent twin is never written.
+    """
     combined = AssignResult()
-    files = list(find_slide_files_recursive(path))
     fileset = set(files)
     handled: set[Path] = set()
 

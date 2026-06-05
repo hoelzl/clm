@@ -6,7 +6,9 @@ This module contains utilities used by multiple CLI command modules.
 import locale
 import logging
 import sys
+from pathlib import Path
 
+import click
 from rich.console import Console
 from rich.logging import RichHandler
 
@@ -98,6 +100,65 @@ def print_separator(section: str = "", char: str = "="):
         cli_console.rule(f"[bold]{section}[/bold]", characters=char)
     else:
         cli_console.rule(characters=char)
+
+
+def has_deck_scope(only: str | None, exclude: tuple[str, ...], shipping_only: bool) -> bool:
+    """Whether any deck-scoping option is active (gap #4)."""
+    return bool(only) or bool(exclude) or shipping_only
+
+
+def resolve_scoped_files(
+    path: Path,
+    *,
+    only: str | None,
+    exclude: tuple[str, ...],
+    shipping_only: bool,
+    specs_dir: Path | None,
+    data_dir: Path | None,
+) -> list[Path]:
+    """Resolve a directory *path* to the scoped subset of slide files (gap #4).
+
+    Applies ``--only`` / ``--exclude`` / ``--shipping-only`` to the recursive
+    slide-file walk. Used by ``clm slides assign-ids`` and ``clm slides
+    normalize`` so both scope decks identically. Raises ``click`` errors on
+    misuse (non-directory path, unlocatable specs).
+    """
+    from clm.core.topic_resolver import find_slide_files_recursive
+    from clm.slides.deck_scope import (
+        course_root_for_path,
+        filter_decks,
+        resolve_shipping_set,
+    )
+
+    if not path.is_dir():
+        raise click.UsageError(
+            "--only / --exclude / --shipping-only apply to a directory, not a single file."
+        )
+
+    files = list(find_slide_files_recursive(path))
+
+    shipping: set[Path] | None = None
+    if shipping_only:
+        course_root = data_dir or course_root_for_path(path)
+        if course_root is None:
+            raise click.ClickException(
+                "Could not locate the course root (no 'slides/' ancestor) for "
+                "--shipping-only. Pass --data-dir or --specs-dir explicitly."
+            )
+        resolved_specs_dir = specs_dir or (course_root / "course-specs")
+        if not resolved_specs_dir.is_dir():
+            raise click.ClickException(
+                f"Specs directory not found: {resolved_specs_dir}. Pass --specs-dir explicitly."
+            )
+        slides_dir = (data_dir / "slides") if data_dir else (course_root / "slides")
+        shipping = resolve_shipping_set(resolved_specs_dir, slides_dir)
+        if not shipping:
+            raise click.ClickException(
+                f"No decks reachable from specs in {resolved_specs_dir} "
+                "(no *.xml specs, or none resolve)."
+            )
+
+    return filter_decks(files, only=only, exclude=exclude, shipping=shipping)
 
 
 def is_ci_environment() -> bool:

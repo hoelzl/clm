@@ -67,7 +67,9 @@ def help(ctx):
 # Re-export commonly used functions for backwards compatibility with tests
 from clm.cli.commands._groups import (  # noqa: E402
     authoring_group,
+    course_group,
     slides_group,
+    spec_group,
     topic_group,
 )
 from clm.cli.commands.assign_ids import assign_ids_cmd  # noqa: E402
@@ -79,7 +81,9 @@ from clm.cli.commands.build import (  # noqa: E402
 from clm.cli.commands.cassette import cassette_group  # noqa: E402
 from clm.cli.commands.completion import completion_cmd  # noqa: E402
 from clm.cli.commands.config import config  # noqa: E402
+from clm.cli.commands.course_gate import course_gate_cmd  # noqa: E402
 from clm.cli.commands.coverage import coverage_cmd  # noqa: E402
+from clm.cli.commands.coverage_report import coverage_report_cmd  # noqa: E402
 from clm.cli.commands.database import db, delete_database  # noqa: E402
 from clm.cli.commands.docker import docker_group  # noqa: E402
 from clm.cli.commands.git_ops import git_group  # noqa: E402
@@ -94,6 +98,12 @@ from clm.cli.commands.resolve_topic import resolve_topic_cmd  # noqa: E402
 from clm.cli.commands.search_slides import search_slides_cmd  # noqa: E402
 from clm.cli.commands.slides_sync import slides_sync_cmd  # noqa: E402
 from clm.cli.commands.slides_translate import slides_translate_cmd  # noqa: E402
+from clm.cli.commands.slug_report import slug_report_cmd  # noqa: E402
+from clm.cli.commands.spec_decks import (  # noqa: E402
+    referenced_by_cmd,
+    spec_decks_cmd,
+)
+from clm.cli.commands.spec_orphans import spec_orphans_cmd  # noqa: E402
 from clm.cli.commands.split import split_cmd  # noqa: E402
 from clm.cli.commands.status import status  # noqa: E402
 from clm.cli.commands.suggest_sync import suggest_sync_cmd  # noqa: E402
@@ -171,10 +181,20 @@ slides_group.add_command(slides_translate_cmd, name="translate")
 slides_group.add_command(slides_translate_cmd, name="bootstrap")
 slides_group.add_command(search_slides_cmd, name="search")
 slides_group.add_command(tidy_cmd, name="tidy")
+slides_group.add_command(referenced_by_cmd, name="referenced-by")
+slides_group.add_command(slug_report_cmd, name="slug-report")
+slides_group.add_command(coverage_report_cmd, name="coverage-report")
 cli.add_command(slides_group)
 
 topic_group.add_command(resolve_topic_cmd, name="resolve")
 cli.add_command(topic_group)
+
+spec_group.add_command(spec_decks_cmd, name="decks")
+spec_group.add_command(spec_orphans_cmd, name="orphans")
+cli.add_command(spec_group)
+
+course_group.add_command(course_gate_cmd, name="gate")
+cli.add_command(course_group)
 
 authoring_group.add_command(authoring_rules_cmd, name="rules")
 cli.add_command(authoring_group)

@@ -6,6 +6,123 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+
+- **`clm spec decks` and `clm slides referenced-by` — spec→deck resolution.**
+  `clm spec decks <spec.xml>` lists the decks a course spec actually pulls in
+  (its "shipping set"), mirroring the build's resolution exactly: a `<topic>`
+  resolves to a topic *directory* and **every** `slides_*.py` in it is a deck.
+  A deck-filename-stem heuristic silently misses decks (a topic dir name often
+  differs from its deck filenames), which is what motivated this command. Module
+  bindings resolve in their module; unbound duplicate IDs are first-occurrence-wins
+  (the shadowed matches surface in `--json`). `--lang de|en|both` filters split
+  halves (bilingual decks always survive); `--all-specs DIR` emits the union
+  shipping set across every spec annotated with the referencing spec(s).
+  `clm slides referenced-by <deck.py>` is the reverse lookup (or reports
+  `unreferenced`). First of the course-conversion tooling gaps documented in
+  `docs/claude/course-conversion-tooling-gaps.md`.
+- **`clm validate <spec> --deep`, `--summary`, and `--shipping-only` — deep /
+  scoped validation with a category rollup.** `clm validate <spec.xml>` validates
+  only the spec *structure* (topic resolution); it does **not** check the slide
+  content of the referenced decks, so "spec validates OK" never meant the decks
+  were clean. `--deep` now runs the full slide validator on every deck the spec
+  pulls in (resolved with the same build-faithful logic as `clm spec decks`) and
+  reports structure + content together, failing on either. `--summary` rolls
+  findings up into a category/kind histogram with per-deck counts (by-category is
+  exact; by-kind — `missing-slide_id`, `adjacency`, `count-mismatch`,
+  `start-completed`, … — is a heuristic message bucket with an `other` fallback)
+  instead of a flat list of thousands of lines; on a spec it implies `--deep`.
+  `--shipping-only` restricts a directory validate to the decks reachable from
+  course specs (`--specs-dir`, default `<course-root>/course-specs/`), skipping
+  archived / unreferenced decks — and, because it filters the resolved shipping
+  set rather than walking, it correctly covers non-`.py` decks (`.cs`, `.cpp`)
+  that the plain directory walk misses. Second of the course-conversion tooling
+  gaps. New public helper `clm.slides.validator.validate_files` validates an
+  explicit deck list with the same per-pair parity as a directory walk.
+- **`clm course gate` — corpus readiness orchestrator.** Runs the mechanical
+  conversion passes (`tag_migration`, `workshop_tags`, `interleaving`,
+  content-derived `slide_id` minting) over a spec's shipping set (or a directory),
+  then splits the remaining work into **mechanical** (what the passes changed /
+  would change) versus **needs-author** (what the normalizer *refused* to touch:
+  a `slide_id` with no derivable heading, a DE/EN pair whose code diverged too far
+  to auto-interleave, or a DE/EN cell-count mismatch). Default is a dry run that
+  writes nothing; `--apply` writes the fixes and re-validates, reporting the
+  residual. Exits non-zero while author work (or a post-apply residual error)
+  remains, so it gates a conversion in CI — turning a validator bump into
+  `clm course gate <spec> --apply`. Third of the course-conversion tooling gaps;
+  the report a conversion agent previously hand-built. New `spec` and `course`
+  command groups accompany these tools.
+- **`clm slides assign-ids` / `clm slides normalize` gained `--only`, `--exclude`,
+  and `--shipping-only` scoping.** A directory run can now be restricted to part
+  of the corpus: `--only bilingual|split` (touch only bilingual decks, or only
+  `.de`/`.en` split halves — e.g. mint bilingual decks while leaving split pairs
+  for `clm slides sync`), `--exclude GLOB` (skip decks matching a glob, matched
+  against the full path *and* each path component, so `--exclude _archive` skips
+  an `_archive/` dir; repeatable), and `--shipping-only` (`--specs-dir`, default
+  `<course-root>/course-specs/`) to touch only decks reachable from specs. This
+  replaces the "run over everything, then `git checkout` the files you shouldn't
+  have touched" workaround. Split pairs are still detected within the scoped set,
+  so EN-authority parity minting is preserved. Fourth of the course-conversion
+  tooling gaps. New public helpers `clm.slides.assign_ids.assign_ids_in_files`,
+  `clm.slides.normalizer.normalize_files`, and module `clm.slides.deck_scope`.
+- **`clm slides assign-ids --report-refusals [--context]` — a hand-authoring
+  worklist.** Hard refusals (a slide with no heading and no extractable content)
+  can only be cleared by hand-authoring a `slide_id`, and to write a good one you
+  need the cell's body and where it sits in the deck. `--report-refusals` emits a
+  worklist of the cells that could not be assigned — hard refusals first, then
+  soft (extractable, with a proposed slug) — instead of the assignment listing.
+  `--context` (which implies `--report-refusals`) attaches each refused cell's
+  marker line, full body, and the nearest preceding `slide_id`/heading so an
+  author or agent can fill the id without opening the file. Honors the same
+  scoping flags; `--json` emits it structured. Replaces the throwaway "dry-run
+  JSON → re-extract cell bodies and context with a script" step. Fifth of the
+  course-conversion tooling gaps. New module `clm.slides.refusal_report`
+  (`build_refusal_worklist` / `render_worklist` / `worklist_to_dict`).
+- **`clm slides slug-report` — flag low-quality content-derived slugs.** A bulk
+  `assign-ids --accept-content-derived` mints thousands of ids; most are fine but
+  a minority are low-information — single generic tokens (`data` / `true` /
+  `value`), very short code-identifier-shaped slugs (`cp` / `df` / `os`), or slugs
+  that hit the 30-char cap and lost their trailing words. `slug-report` classifies
+  each `slide_id` by cheap, source-independent heuristics and lists just the
+  flagged minority, with a `--min-severity low|medium|high` cutoff (`high` =
+  very-short / generic). `PATH` is a directory (with the same `--only` /
+  `--exclude` / `--shipping-only` scoping as `assign-ids`) or a spec `.xml`
+  (resolved to its shipping decks). Only slide-start cells are inspected and a
+  bilingual deck's DE/EN twins yield one finding; `--json` adds `by_severity` /
+  `by_issue` histograms. Exit code is always `0` (it's a report). Sixth of the
+  course-conversion tooling gaps. New module `clm.slides.slug_quality`
+  (`classify_slug` / `scan_slug_quality` / `render_report` / `report_to_dict`).
+- **`clm spec orphans` — decks reachable from no spec, plus cruft.** The inverse
+  of `clm spec decks`: scan every spec in a course and report the decks on disk
+  that no spec pulls in, grouped by likely intent so dead decks can be archived
+  without deleting intentional alternates — `superseded` (`_old` / `_bak` /
+  `_orig` / `_vN` / trailing `_N`, usually safe to archive), `alternate`
+  (`_partN` / `_short` / `_long`, probably-intentional content), and `unknown`
+  (no marker — review). Orphans are computed against the **union** of every spec
+  (a deck unreferenced by one spec may be pulled in by another), and the on-disk
+  walk is extension-complete (`.py` / `.cpp` / `.cs` / …) so a non-Python orphan
+  is not silently missed. Also surfaces gitignored `.ipynb_checkpoints/` cache
+  cruft, with `--clean-checkpoints` to delete it; `--kind` filters to one bucket;
+  `--json` adds `by_kind` counts. Exit code is always `0` (it's a report).
+  Seventh of the course-conversion tooling gaps. New module
+  `clm.core.spec_orphans` (`find_orphans` / `classify_orphan` /
+  `find_checkpoint_dirs` / `render_report` / `report_to_dict`).
+- **`clm slides coverage-report` — DE/EN completeness per deck.** Among
+  count-mismatch validation errors, a deck that exists in only one language
+  (needs translation) and a bilingual deck off by a cell or two (an alignment
+  fix) are very different jobs. This separates them by counting `lang="de"` vs
+  `lang="en"` slide cells per deck and classifying each as `de_only` /
+  `en_only` / `imbalanced` (shown with a `Δ`) / `balanced`. Split `*.de.py` /
+  `*.en.py` halves are scored as one pair — a half whose twin is absent counts
+  the missing language as zero — and only slide/subslide cells are counted, so
+  one-language speaker notes don't skew the result. `PATH` is a directory (with
+  the same `--only` / `--exclude` / `--shipping-only` scoping as `assign-ids`)
+  or a spec `.xml`; `--status` filters to one bucket; `--json` adds `by_status`
+  counts. Exit code is always `0` (it's a report). Eighth of the
+  course-conversion tooling gaps. New module `clm.slides.lang_coverage`
+  (`count_languages` / `classify_counts` / `scan_coverage` / `render_report` /
+  `report_to_dict`).
+
 ### Removed
 
 - **The flat top-level CLI aliases were removed (1.8 milestone, #158).**
