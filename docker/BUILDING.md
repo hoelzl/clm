@@ -5,12 +5,15 @@ This document describes how to build Docker images for CLM workers.
 ## Prerequisites
 
 1. **Docker** with BuildKit enabled
-2. **Git LFS** for large binary files
-3. CLM repository cloned with LFS:
+2. **Git LFS** — only needed for the Draw.io image (the small bundled font).
+   The notebook and PlantUML images fetch their build inputs at build time and
+   need no LFS objects. For the Draw.io image:
    ```bash
    git lfs install
    git lfs pull
    ```
+3. **Network access during the build** — the Dockerfiles fetch Deno, IJava, and
+   the Draw.io `.deb` from their pinned upstream releases (SHA-256-verified).
 
 ## Quick Start
 
@@ -248,33 +251,42 @@ RUN --mount=type=cache,target=/opt/conda/pkgs,id=conda-pkgs,sharing=locked \
 
 **Important:** Do not use `--no-cache` with Docker build commands, as this disables cache mounts and makes builds significantly slower.
 
-## Git LFS Files
+## Build inputs (fetched vs vendored)
 
-Several large binary files are stored in Git LFS and must be present before building:
+The large third-party build inputs are **fetched from their pinned upstream
+releases and SHA-256-verified inside the Dockerfiles** rather than vendored in
+git, to keep them out of Git LFS. Bump a version by editing the `ARG …_VERSION`
+/ `ARG …_SHA256` pair in the relevant Dockerfile.
 
-### PlantUML Worker
-- `docker/plantuml/plantuml-1.2024.6.jar` (22MB) - **Committed directly (not LFS)**
+| Worker | Input | Source |
+|--------|-------|--------|
+| Notebook | Deno (`ARG DENO_VERSION`) | fetched from `denoland/deno` releases |
+| Notebook | IJava (`ARG IJAVA_VERSION`) | fetched from `SpencerPark/IJava` releases |
+| Draw.io | Draw.io `.deb` (`ARG DRAWIO_VERSION`) | fetched from `jgraph/drawio-desktop` releases |
+| PlantUML | `plantuml-1.2024.6.jar` (22 MB) | committed directly (not LFS) |
+| Draw.io | `ArchitectsDaughter-Regular.ttf` (~38 KB) | vendored in Git LFS (small) |
 
-### Draw.io Worker
-- `docker/drawio/drawio-amd64-24.7.5.deb` (98MB) - **LFS**
-- `docker/drawio/ArchitectsDaughter-Regular.ttf` (37KB) - **LFS**
-
-### Notebook Worker
-- `docker/notebook/deno-x86_64-unknown-linux-gnu.zip` (~40MB) - **LFS**
-- `docker/notebook/ijava-1.8.0.zip` (~6MB) - **LFS**
-- `docker/notebook/packages-microsoft-prod.deb` (~3KB) - **LFS**
-
-To ensure all LFS files are downloaded:
-
-```bash
-git lfs pull
-```
+Only the small Draw.io font remains in LFS, so a plain `git lfs pull` (or a
+checkout with `lfs: true`) before building the Draw.io image is enough. The
+notebook and PlantUML images need no LFS objects.
 
 ## Troubleshooting
 
-### Build Fails: Missing LFS Files
+### Build Fails: Checksum Mismatch on a Fetched Input
 
-**Error:** `COPY failed: file not found`
+**Error:** `sha256sum: WARNING: 1 computed checksum did NOT match`
+
+**Cause:** the pinned `ARG …_SHA256` no longer matches what the upstream URL
+serves (a re-published asset, or a version bump that updated the URL but not the
+SHA).
+
+**Solution:** download the asset, recompute `sha256sum <file>`, and update the
+matching `ARG …_SHA256` (and `ARG …_VERSION` if you intended a bump) in the
+Dockerfile.
+
+### Build Fails: Missing Draw.io Font
+
+**Error:** `COPY failed: file not found` for `ArchitectsDaughter-Regular.ttf`
 
 **Solution:**
 ```bash

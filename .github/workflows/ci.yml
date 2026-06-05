@@ -21,7 +21,14 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
       with:
-        lfs: true
+        lfs: false
+
+    # The non-docker test suite needs only the small fixture/template images,
+    # not the docker/ build inputs. Pulling only what we need (and excluding
+    # docker/**) keeps LFS bandwidth down and guards against any large binary
+    # ever re-landing under docker/ silently inflating every CI run.
+    - name: Pull LFS test fixtures (excluding docker build inputs)
+      run: git lfs pull --exclude="docker/**"
 
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v5
@@ -156,23 +163,13 @@ jobs:
     timeout-minutes: 45
 
     steps:
+    # The notebook/plantuml/drawio build inputs (deno, ijava, drawio .deb) are
+    # now fetched + SHA-256-verified inside the Dockerfiles, so the only LFS
+    # object the image builds need is the small drawio font.
     - name: Checkout code
       uses: actions/checkout@v4
       with:
         lfs: true
-
-    - name: Pull LFS files
-      run: |
-        git lfs pull
-        # Verify LFS files were pulled correctly (should be multi-MB, not ~130 bytes)
-        for f in docker/notebook/*.zip; do
-          size=$(stat -c%s "$f")
-          if [ "$size" -lt 1000000 ]; then
-            echo "Error: LFS file $f not properly pulled (size: $size bytes)"
-            exit 1
-          fi
-          echo "OK: $f is $size bytes"
-        done
 
     - name: Set up Python
       uses: actions/setup-python@v5

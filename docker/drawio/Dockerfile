@@ -22,20 +22,28 @@ WORKDIR /app
 
 ARG DOCKER_PATH=docker/drawio
 
-# Copy files needed for system install to maximize cache hits
-# The expensive apt/drawio install will only rebuild if these files change
-COPY ${DOCKER_PATH}/drawio-amd64-24.7.5.deb .
+# The font is small (~38 KB) and stays vendored. The Draw.io .deb is fetched
+# from the pinned GitHub release and SHA-256-verified inside the install step
+# below (same pattern as the notebook Dockerfile) rather than vendored as a
+# ~100 MB git LFS object. Bump by checking
+# https://github.com/jgraph/drawio-desktop/releases and updating both below.
 COPY ${DOCKER_PATH}/ArchitectsDaughter-Regular.ttf /usr/local/share/fonts/
+
+ARG DRAWIO_VERSION=24.7.5
+ARG DRAWIO_SHA256=196fd079cf2625be122d2ab94342ddb9547ff500d7398daaf35432aee1674973
 
 # Install system dependencies and drawio
 # Using apt cache mounts to avoid re-downloading packages
 # This is the most expensive step for this service
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    set -eu && \
     rm -f /etc/apt/apt.conf.d/docker-clean && \
     echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache && \
     apt-get update && \
     apt-get install -y \
+        ca-certificates \
+        curl \
         dbus \
         dbus-x11 \
         nodejs \
@@ -49,8 +57,12 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         fonts-liberation \
         fonts-noto \
         fonts-noto-cjk && \
-    apt-get -y -f install ./drawio-amd64-24.7.5.deb && \
-    rm drawio-amd64-24.7.5.deb && \
+    curl --fail --location --retry 5 --retry-delay 5 --retry-all-errors \
+        --output drawio.deb \
+        "https://github.com/jgraph/drawio-desktop/releases/download/v${DRAWIO_VERSION}/drawio-amd64-${DRAWIO_VERSION}.deb" && \
+    echo "${DRAWIO_SHA256}  drawio.deb" | sha256sum -c - && \
+    apt-get -y -f install ./drawio.deb && \
+    rm drawio.deb && \
     npm install -g svgo && \
     fc-cache -f -v
 

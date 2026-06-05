@@ -108,10 +108,6 @@ FROM base-${VARIANT} AS common
 
 ARG DOCKER_PATH=docker/notebook
 
-# Copy static files needed for installation
-COPY ${DOCKER_PATH}/deno-x86_64-unknown-linux-gnu.zip .
-COPY ${DOCKER_PATH}/ijava-1.3.0.zip .
-
 # Install .NET SDK 10.0 using the official install script
 # Note: .NET 9 has a known issue with dotnet-interactive installation
 # (DotnetToolSettings.xml not found error), fixed in .NET 10
@@ -174,14 +170,34 @@ RUN dotnet tool install -g --no-cache Microsoft.dotnet-interactive && \
     dotnet interactive jupyter install
 
 # Install Deno (TypeScript/JavaScript kernel)
-RUN unzip ./deno-x86_64-unknown-linux-gnu.zip -d deno-bin && \
-    rm ./deno-x86_64-unknown-linux-gnu.zip && \
+# Fetched from the pinned GitHub release and SHA-256-verified rather than
+# vendored in-tree, so the 50 MB archive stays out of git LFS (see the
+# micromamba block above for the same pattern and rationale). Bump by
+# checking https://github.com/denoland/deno/releases and updating both the
+# version tag and SHA below.
+ARG DENO_VERSION=2.1.1
+ARG DENO_SHA256=cbc1b6728040f715e879a3a0c36e462bd09c37b634eb79d04df0bc8bdb07d6c6
+RUN set -eu && \
+    curl --fail --location --retry 5 --retry-delay 5 --retry-all-errors \
+        --output deno.zip \
+        "https://github.com/denoland/deno/releases/download/v${DENO_VERSION}/deno-x86_64-unknown-linux-gnu.zip" && \
+    echo "${DENO_SHA256}  deno.zip" | sha256sum -c - && \
+    unzip deno.zip -d deno-bin && \
+    rm deno.zip && \
     cp ./deno-bin/deno /usr/local/bin && \
     /usr/local/bin/deno jupyter --unstable --install
 
 # Install IJava (Java kernel)
-RUN unzip ./ijava-1.3.0.zip -d ijava-1.3.0 && \
-    rm ./ijava-1.3.0.zip
+# Same fetch-and-verify approach (was a vendored LFS zip).
+ARG IJAVA_VERSION=1.3.0
+ARG IJAVA_SHA256=484cc62579cb77510b0f0c78283f043794396d8ae9d76a8f2ab5d7368ec246b2
+RUN set -eu && \
+    curl --fail --location --retry 5 --retry-delay 5 --retry-all-errors \
+        --output ijava.zip \
+        "https://github.com/SpencerPark/IJava/releases/download/v${IJAVA_VERSION}/ijava-${IJAVA_VERSION}.zip" && \
+    echo "${IJAVA_SHA256}  ijava.zip" | sha256sum -c - && \
+    unzip ijava.zip -d ijava-1.3.0 && \
+    rm ijava.zip
 WORKDIR /app/ijava-1.3.0
 RUN python3 install.py --sys-prefix
 
