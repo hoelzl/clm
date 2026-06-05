@@ -39,9 +39,11 @@ class TestCheckFormat:
             "slides_ok.py",
             """\
             # %% [markdown] lang="de" tags=["slide"]
+            #
             # ## Titel
 
             # %% [markdown] lang="en" tags=["slide"]
+            #
             # ## Title
 
             # %% tags=["keep"]
@@ -57,6 +59,7 @@ class TestCheckFormat:
             "slides_bad_tags.py",
             """\
             # %% [markdown] tags=broken
+            #
             # ## Bad
             """,
         )
@@ -71,6 +74,7 @@ class TestCheckFormat:
             "slides_bad_lang.py",
             """\
             # %% [markdown] lang=de tags=["slide"]
+            #
             # ## Bad
             """,
         )
@@ -88,9 +92,11 @@ class TestCheckFormat:
             # {{ header("T", "T") }}
 
             # %% [markdown] lang="de" tags=["slide"]
+            #
             # ## Titel
 
             # %% [markdown] lang="en" tags=["slide"]
+            #
             # ## Title
             """,
         )
@@ -2714,13 +2720,13 @@ class TestValidateDirectory:
         topic_dir = tmp_path / "topic_010_intro"
         topic_dir.mkdir()
         (topic_dir / "slides_intro.py").write_text(
-            '# %% [markdown] lang="de" tags=["slide"] slide_id="title"\n# ## Titel\n'
-            '# %% [markdown] lang="en" tags=["slide"] slide_id="title"\n# ## Title\n',
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="title"\n#\n# ## Titel\n\n'
+            '# %% [markdown] lang="en" tags=["slide"] slide_id="title"\n#\n# ## Title\n',
             encoding="utf-8",
         )
         (topic_dir / "slides_extra.py").write_text(
-            '# %% [markdown] lang="de" tags=["slide"] slide_id="more"\n# ## Mehr\n'
-            '# %% [markdown] lang="en" tags=["slide"] slide_id="more"\n# ## More\n',
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="more"\n#\n# ## Mehr\n\n'
+            '# %% [markdown] lang="en" tags=["slide"] slide_id="more"\n#\n# ## More\n',
             encoding="utf-8",
         )
         # Non-slide file should be ignored
@@ -2785,8 +2791,8 @@ class TestValidateCourse:
         t1 = m1 / "topic_010_intro"
         t1.mkdir(parents=True)
         (t1 / "slides_intro.py").write_text(
-            '# %% [markdown] lang="de" tags=["slide"]\n# ## Titel\n'
-            '# %% [markdown] lang="en" tags=["slide"]\n# ## Title\n',
+            '# %% [markdown] lang="de" tags=["slide"]\n#\n# ## Titel\n\n'
+            '# %% [markdown] lang="en" tags=["slide"]\n#\n# ## Title\n',
             encoding="utf-8",
         )
 
@@ -2931,3 +2937,77 @@ def test_companion_location_ambiguity_is_flagged(tmp_path):
     ]
     assert len(ambiguity) == 1
     assert ambiguity[0].category == "pairing"
+
+
+# ---------------------------------------------------------------------------
+# Cell spacing checks (blank line between cells; markdown leading blank comment)
+# ---------------------------------------------------------------------------
+
+_J2_HEADER = "# j2 from 'macros.j2' import header\n# {{ header_de(\"Titel\") }}\n"
+
+
+def _write_raw(tmp_path: Path, content: str, name: str = "slides_x.de.py") -> Path:
+    """Write byte-exact content (no dedent — these tests are whitespace-sensitive)."""
+    p = tmp_path / name
+    p.write_text(content, encoding="utf-8", newline="\n")
+    return p
+
+
+def _separation(result: ValidationResult) -> list[Finding]:
+    return [f for f in result.findings if "separated from the previous" in f.message]
+
+
+def _lead(result: ValidationResult) -> list[Finding]:
+    return [f for f in result.findings if "blank comment" in f.message]
+
+
+class TestCellSeparationCheck:
+    def test_missing_blank_between_cells_warns(self, tmp_path):
+        text = '# %% [markdown] lang="de"\n#\n# ## A\n# %% [markdown] lang="de"\n#\n# ## B\n'
+        seps = _separation(validate_file(_write_raw(tmp_path, text), checks=["format"]))
+        assert len(seps) == 1
+        assert seps[0].severity == "warning"
+        assert seps[0].category == "format"
+
+    def test_blank_present_no_warning(self, tmp_path):
+        text = '# %% [markdown] lang="de"\n#\n# ## A\n\n# %% [markdown] lang="de"\n#\n# ## B\n'
+        assert _separation(validate_file(_write_raw(tmp_path, text), checks=["format"])) == []
+
+    def test_j2_header_block_exempt(self, tmp_path):
+        # The `# j2 import` -> `# {{ header }}` adjacency carries no blank by design.
+        text = _J2_HEADER + '\n# %% [markdown] lang="de"\n#\n# ## A\n'
+        assert _separation(validate_file(_write_raw(tmp_path, text), checks=["format"])) == []
+
+    def test_code_cell_separation_enforced(self, tmp_path):
+        text = '# %% [markdown] lang="de"\n#\n# ## A\n# %%\nx = 1\n'
+        assert len(_separation(validate_file(_write_raw(tmp_path, text), checks=["format"]))) == 1
+
+    def test_content_cell_after_macro_without_blank_warns(self, tmp_path):
+        # The header macro (j2) is exempt as a *target*, but a content cell right
+        # after it with no blank IS flagged (the macro must end with a blank).
+        text = _J2_HEADER + '# %% [markdown] lang="de"\n#\n# ## A\n'
+        assert len(_separation(validate_file(_write_raw(tmp_path, text), checks=["format"]))) == 1
+
+
+class TestMarkdownBlankLeadCheck:
+    def test_missing_lead_warns(self, tmp_path):
+        text = '# %% [markdown] lang="de" tags=["slide"] slide_id="a"\n# - Bullet\n'
+        leads = _lead(validate_file(_write_raw(tmp_path, text), checks=["format"]))
+        assert len(leads) == 1
+        assert leads[0].severity == "warning"
+
+    def test_lead_present_no_warning(self, tmp_path):
+        text = '# %% [markdown] lang="de"\n#\n# - Bullet\n'
+        assert _lead(validate_file(_write_raw(tmp_path, text), checks=["format"])) == []
+
+    def test_code_cell_not_subject(self, tmp_path):
+        text = '# %% lang="de"\nx = 1\n'
+        assert _lead(validate_file(_write_raw(tmp_path, text), checks=["format"])) == []
+
+    def test_j2_macro_not_subject(self, tmp_path):
+        assert _lead(validate_file(_write_raw(tmp_path, _J2_HEADER), checks=["format"])) == []
+
+    def test_runs_under_default_checks(self, tmp_path):
+        # No explicit --checks: the format bundle (and thus these) run by default.
+        text = '# %% [markdown] lang="de" tags=["slide"] slide_id="a"\n# - Bullet\n'
+        assert len(_lead(validate_file(_write_raw(tmp_path, text)))) == 1

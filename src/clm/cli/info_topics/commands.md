@@ -774,10 +774,20 @@ either a `workshop` tag or a slide-start cell whose `slide_id` begins with
 |---------|----------|-------|
 | markdown `# Workshop …` heading with no workshop scope covering it | `warning` | Heading match is case-sensitive, tolerant of `#`-count and whitespace (`^#+\s*Workshop\b`). Continuation headings (e.g. `## Workshop (Continued)`) inside an already-open scope are *not* flagged. Suggested fix: add a `workshop` tag or a `workshop-…` slide_id. |
 
+Since CLM {version}, the `format` check group also enforces **cell spacing**
+(both `warning`s — non-breaking; `clm slides normalize` auto-fixes them):
+
+| Finding | Severity | Notes |
+|---------|----------|-------|
+| cell is not separated from the previous cell by a blank line | `warning` | A blank line is required before every cell **except a j2 cell** — the title-header block (`# j2 … import header` immediately followed by `# {{ header(…) }}`) is tight-coupled and exempt. Cells run together are valid percent-format but render and diff poorly. Fix with `clm slides normalize`. |
+| markdown cell body does not start with a blank comment line (`#`) | `warning` | A markdown cell should open `# %% [markdown]` / `#` / `# <content>`; the leading `#` is what makes content that starts with a bullet (or heading) render correctly. j2 cells (the title macro) are exempt; empty-body cells are skipped. Fix with `clm slides normalize`. |
+
 Quick mode (`--quick`) runs the slide_id checks because they walk cells
 linearly and don't false-positive on in-progress edits. The workshop-scope
 check runs in quick mode too. The DE/EN count/tag-mismatch checks remain
-excluded from quick mode.
+excluded from quick mode, as do the cell-spacing checks above (they would
+fire on an in-progress markdown cell before the author has typed the
+leading `#`).
 
 Examples:
 
@@ -792,7 +802,14 @@ clm validate slides/module_010/topic_100_intro/ --quick
 *Removed in CLM 1.8: the flat alias `clm normalize-slides` no longer exists — use this group-qualified form.*
 
 Normalize slide files by applying mechanical fixes: tag migration (`alt`→`completed`),
-workshop tag insertion, DE/EN interleaving, and slide ID auto-generation.
+workshop tag insertion, DE/EN interleaving, slide ID auto-generation, and — since
+CLM {version} — **cell spacing** (`cell_spacing`).
+
+The `cell_spacing` operation fixes the two formatting issues the `format`
+validator now warns about: it inserts a blank line before every cell that lacks
+one (except the tight-coupled j2 title-header block), and prepends a blank
+comment line (`#`) to any markdown cell whose body starts directly with content.
+It runs by default (part of `all`) and is idempotent.
 
 ```
 clm slides normalize [OPTIONS] PATH
@@ -800,7 +817,7 @@ clm slides normalize [OPTIONS] PATH
 
 | Option | Description |
 |--------|-------------|
-| `--operations TEXT` | Comma-separated operations: `tag_migration`, `workshop_tags`, `interleaving`, `slide_ids`, `all` (default: `all`) |
+| `--operations TEXT` | Comma-separated operations: `tag_migration`, `workshop_tags`, `interleaving`, `slide_ids`, `cell_spacing`, `all` (default: `all`) |
 | `--dry-run` | Preview changes without modifying files |
 | `--canonicalize-start-completed` | Force `start`/`completed` cohesion pairs into the canonical DE/EN interleave, even when DE/EN code differs (e.g. localized identifiers). Run before `clm slides split` so `unify(split(deck)) == deck` holds byte-for-byte. Only affects the `interleaving` operation. |
 | `--json` | Output as JSON |
@@ -822,6 +839,8 @@ clm slides normalize slides/module_010/topic_100_intro/slides_intro.py
 clm slides normalize slides/module_010/ --dry-run
 clm slides normalize slides/module_010/ --operations tag_migration
 clm slides normalize slides/module_010/ --operations slide_ids --json
+# Fix only cell spacing (blank line between cells + markdown leading `#`).
+clm slides normalize slides/module_010/ --operations cell_spacing
 # Pre-conversion: canonicalize start/completed order so the split round-trips exactly
 clm slides normalize slides/module_010/topic_100_intro/ --operations interleaving --canonicalize-start-completed
 # Scope: mint ids on bilingual decks only, skipping an _archive/ dir
