@@ -34,6 +34,11 @@ from clm.slides.assign_ids import (
     assign_ids_in_file,
     assign_ids_in_files,
 )
+from clm.slides.refusal_report import (
+    build_refusal_worklist,
+    render_worklist,
+    worklist_to_dict,
+)
 
 CACHE_DB_NAME = "clm-llm.sqlite"
 
@@ -138,6 +143,19 @@ CACHE_DB_NAME = "clm-llm.sqlite"
     default=None,
     help="Course data directory (contains slides/). For --shipping-only scope resolution.",
 )
+@click.option(
+    "--report-refusals",
+    is_flag=True,
+    help="Emit a hand-authoring worklist of the refusals (hard ones first) instead "
+    "of the assignment listing — the cells that still need a slide_id.",
+)
+@click.option(
+    "--context",
+    is_flag=True,
+    help="With --report-refusals, include each refused cell's marker, body, and the "
+    "nearest preceding slide_id/heading so you can author an id in place. Implies "
+    "--report-refusals.",
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit a JSON report.")
 def assign_ids_cmd(
     path: Path,
@@ -154,6 +172,8 @@ def assign_ids_cmd(
     shipping_only: bool,
     specs_dir: Path | None,
     data_dir: Path | None,
+    report_refusals: bool,
+    context: bool,
     as_json: bool,
 ) -> None:
     """Generate stable ``slide_id`` metadata for slide/subslide cells (plumbing).
@@ -239,7 +259,16 @@ def assign_ids_cmd(
         if cache is not None:
             cache.close()
 
-    if as_json:
+    # --context implies the refusal-worklist view.
+    report_refusals = report_refusals or context
+
+    if report_refusals:
+        worklist = build_refusal_worklist(result.refusals, with_context=context)
+        if as_json:
+            click.echo(json.dumps(worklist_to_dict(worklist), indent=2))
+        else:
+            click.echo(render_worklist(worklist))
+    elif as_json:
         click.echo(json.dumps(_to_dict(result), indent=2))
     else:
         _print_human(result, report_only=report_only)

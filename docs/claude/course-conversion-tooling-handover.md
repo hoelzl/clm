@@ -168,11 +168,27 @@ Tests, `commands.md`, and a CHANGELOG `Added` entry land with the code.
   [--context]`).** Refusals already carry `file:line` + `proposed_slug/title`; #5
   adds the cell body + nearest preceding heading/slide_id so an author/agent can
   fill ids efficiently. Could also feed the gate's needs-author output.
+- 2026-06-05: **Tool #5 DONE**. `clm slides assign-ids --report-refusals
+  [--context]`. New post-processing module `clm.slides.refusal_report`
+  (`build_refusal_worklist` / `render_worklist` / `worklist_to_dict`) layered over
+  `AssignResult.refusals` — the engine is unchanged. `--report-refusals` swaps the
+  assignment listing for a worklist (hard refusals first, then soft); `--context`
+  (implies `--report-refusals`) re-reads each affected file *once*, finds the
+  refused cell by `line_number`, and attaches its marker, body (trailing-blank
+  stripped), and the nearest preceding `slide_id`/heading (independent backward
+  scans via `extract_heading` + `strip_preserve_marker`). Without `--context` no
+  files are re-read. Honors scoping flags + `--json`; exit codes unchanged (2 on
+  hard refusal). 18 new tests (`tests/slides/test_refusal_report.py`,
+  `tests/cli/test_assign_ids_refusals.py`); 86-test assign-ids/scope regression
+  green; ruff/mypy clean. `commands.md` + CHANGELOG updated. **Next: Tool #6
+  (slug-quality report for content-derived ids — `assign-ids --flag-low-quality`
+  or `clm slides slug-report`: single-token / code-identifier-shaped / truncated
+  slugs).**
 
 ## Resuming
 
-Pick up from the "Progress log" tail. Tools #1–#4 are complete; **Tool #5 is
-next**; tools #6–#9 follow in priority order. Pushing: this worktree is on
+Pick up from the "Progress log" tail. Tools #1–#5 are complete; **Tool #6 is
+next**; tools #7–#9 follow in priority order. Pushing: this worktree is on
 `worktree-linked-honking-dolphin`; push to the PR branch with the explicit
 refspec noted in the 2026-06-05 consolidation entry above. Each tool = core helper reuse + thin command(s) + tests +
 `commands.md` + CHANGELOG. Keep mirroring build resolution semantics — the whole

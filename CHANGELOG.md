@@ -65,6 +65,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   so EN-authority parity minting is preserved. Fourth of the course-conversion
   tooling gaps. New public helpers `clm.slides.assign_ids.assign_ids_in_files`,
   `clm.slides.normalizer.normalize_files`, and module `clm.slides.deck_scope`.
+- **`clm slides assign-ids --report-refusals [--context]` — a hand-authoring
+  worklist.** Hard refusals (a slide with no heading and no extractable content)
+  can only be cleared by hand-authoring a `slide_id`, and to write a good one you
+  need the cell's body and where it sits in the deck. `--report-refusals` emits a
+  worklist of the cells that could not be assigned — hard refusals first, then
+  soft (extractable, with a proposed slug) — instead of the assignment listing.
+  `--context` (which implies `--report-refusals`) attaches each refused cell's
+  marker line, full body, and the nearest preceding `slide_id`/heading so an
+  author or agent can fill the id without opening the file. Honors the same
+  scoping flags; `--json` emits it structured. Replaces the throwaway "dry-run
+  JSON → re-extract cell bodies and context with a script" step. Fifth of the
+  course-conversion tooling gaps. New module `clm.slides.refusal_report`
+  (`build_refusal_worklist` / `render_worklist` / `worklist_to_dict`).
 
 ### Removed
 

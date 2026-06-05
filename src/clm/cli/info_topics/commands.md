@@ -869,6 +869,8 @@ clm slides assign-ids [OPTIONS] PATH
 | `--shipping-only` | (since CLM {version}) Scope a directory run to decks reachable from course specs (the shipping set). |
 | `--specs-dir DIR` | For `--shipping-only`: directory of `*.xml` specs. Default: `<course-root>/course-specs/`. |
 | `--data-dir DIR` | Course data directory (contains `slides/`); used to resolve the `--shipping-only` scope. |
+| `--report-refusals` | (since CLM {version}) Emit a hand-authoring **worklist** of the refusals (hard ones first) instead of the assignment listing — the cells that still need a `slide_id`. |
+| `--context` | (since CLM {version}) With `--report-refusals`, include each refused cell's marker, body, and the nearest preceding `slide_id`/heading so you can author an id in place. Implies `--report-refusals`. |
 | `--json` | Emit a JSON report instead of human-readable lines. |
 
 The scoping options (`--only` / `--exclude` / `--shipping-only`) apply only to a
@@ -877,6 +879,16 @@ the files you shouldn't have touched" workaround. Split pairs are still detected
 *within* the scoped set, so EN-authority parity minting across a `.de`/`.en` pair
 is preserved; if only one half survives the filter, that half takes the per-file
 twin-aware path and the absent twin is never written.
+
+`--report-refusals` turns the run into a **worklist** for the cells that could
+*not* be assigned automatically: hard refusals (no heading and no extractable
+content — only a hand-authored id will do) sort first, then soft refusals
+(extractable, carrying a proposed slug). Add `--context` to attach each refused
+cell's marker line, full body, and the nearest preceding `slide_id`/heading so an
+author or agent can write the id without opening the file. The worklist honors the
+same scoping flags, and `--json` emits it as structured data. It replaces the
+throwaway "dry-run JSON → script that re-extracts cell bodies and surrounding
+context" step that course conversions repeatedly hand-rolled.
 
 Exit codes: `0` clean, `1` soft refusals (extractable cells awaiting
 author input), `2` at least one hard refusal.
@@ -892,6 +904,8 @@ clm slides assign-ids slides/module_010/ --force        # regenerate all derivab
 clm slides assign-ids slides/ --accept-content-derived --only bilingual --exclude _archive
 # Scope: only the decks that actually ship
 clm slides assign-ids slides/ --accept-content-derived --shipping-only
+# Worklist of cells that still need a hand-authored id, with body + context
+clm slides assign-ids slides/ --report-only --report-refusals --context
 ```
 
 ### `clm slides sync`
