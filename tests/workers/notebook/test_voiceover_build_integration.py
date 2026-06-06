@@ -347,6 +347,158 @@ class TestEscalationWiring:
 
 
 # ---------------------------------------------------------------------------
+# Title-greeting companion survives the build (#242)
+# ---------------------------------------------------------------------------
+
+
+def _build_op_with_title_companion(tmp_path: Path, *, for_slide: bool = True):
+    """A real ``ProcessNotebookOperation`` over a header-macro deck whose
+    companion narrates the (slide_id-less) title slide. Mirrors
+    :func:`_build_op_with_unmatched_companion` but for the #242 title case: the
+    greeting must MATCH (no dropped narration) rather than be reported.
+
+    ``for_slide=False`` writes the pre-#242 legacy companion shape
+    (``slide_id="title"`` with no ``for_slide``) to prove already-extracted
+    decks build without a re-extract.
+    """
+    from clm.core.course import Course
+    from clm.core.course_spec import CourseSpec, TopicSpec
+    from clm.core.operations.process_notebook import ProcessNotebookOperation
+    from clm.core.output_target import OutputTarget
+    from clm.core.section import Section
+    from clm.core.topic import Topic
+    from clm.core.utils.text_utils import Text
+
+    spec = CourseSpec(
+        name=Text(de="Test", en="Test"),
+        prog_lang="python",
+        description=Text(de="", en=""),
+        certificate=Text(de="", en=""),
+        sections=[],
+    )
+    course = Course(
+        spec=spec,
+        course_root=tmp_path,
+        output_root=tmp_path,
+        output_targets=[OutputTarget.default_target(tmp_path)],
+    )
+    slide = tmp_path / "slides_demo.py"
+    slide.write_text(
+        "# j2 from 'macros.j2' import header_en\n"
+        '# {{ header_en("Demo") }}\n\n'
+        '# %% [markdown] lang="en" tags=["slide"] slide_id="intro"\n# ## Intro\n',
+        encoding="utf-8",
+    )
+    title_attr = ' for_slide="title"' if for_slide else ' slide_id="title"'
+    (tmp_path / "voiceover_demo.py").write_text(
+        f'# %% [markdown] lang="en" tags=["voiceover"]{title_attr}\n# Greeting narration.\n',
+        encoding="utf-8",
+    )
+    section = Section(name=Text(de="S", en="S"), course=course)
+    topic = Topic.from_spec(TopicSpec(id="t"), section=section, path=tmp_path)
+    topic.build_file_map()
+    section.topics.append(topic)
+    course.sections.append(section)
+    nb = next(f for f in topic.files if isinstance(f, NotebookFile))
+    return ProcessNotebookOperation(
+        input_file=nb,
+        output_file=tmp_path / "out.html",
+        language="en",
+        format="html",
+        kind="speaker",
+        prog_lang="python",
+    )
+
+
+class TestTitleVoiceoverBuild:
+    """#242 — a title-greeting companion must merge into the build, not drop."""
+
+    async def test_title_companion_merges_and_does_not_error(self, tmp_path: Path):
+        op = _build_op_with_title_companion(tmp_path, for_slide=True)
+        reporter = _RecordingReporter()
+
+        payload = await op.payload(reporter)
+
+        assert "Greeting narration." in payload.data
+        assert reporter.errors == []
+
+    async def test_legacy_title_companion_merges_without_reextract(self, tmp_path: Path):
+        # Pre-#242 companion: slide_id="title", no for_slide. Must still merge.
+        op = _build_op_with_title_companion(tmp_path, for_slide=False)
+        reporter = _RecordingReporter()
+
+        payload = await op.payload(reporter)
+
+        assert "Greeting narration." in payload.data
+        assert reporter.errors == []
+
+
+async def _render_speaker_cells(data: str) -> list[tuple[str, str]]:
+    """Expand j2 + process a deck through SpeakerOutput WITHOUT a kernel, and
+    return ``(cell_type, source)`` pairs — the rendered notebook the worker
+    would produce (slide_id / for_slide stripped, macros expanded)."""
+    from clm.infrastructure.messaging.notebook_classes import NotebookPayload
+    from clm.workers.notebook.notebook_processor import NotebookProcessor
+    from clm.workers.notebook.output_spec import SpeakerOutput
+
+    spec = SpeakerOutput(format="html", language="de", prog_lang="python")
+    proc = NotebookProcessor(spec)
+    payload = NotebookPayload(
+        data=data,
+        input_file="/t/slides_intro.de.py",
+        input_file_name="slides_intro.de.py",
+        output_file="/t/out.html",
+        kind="speaker",
+        prog_lang="python",
+        language="de",
+        format="html",
+        correlation_id="cid-242",
+        author="Author",
+        organization="Org",
+    )
+    proc._author = payload.author
+    proc._organization = payload.organization
+    expanded = await proc.load_and_expand_jinja_template(
+        payload.data, payload.input_file_name, payload.correlation_id
+    )
+    processed = await proc.process_notebook_for_spec(expanded, payload)
+    return [(c.cell_type, c.source) for c in processed.cells]
+
+
+class TestTitleVoiceoverRenderParity:
+    """The literal #242 acceptance criterion: the rendered speaker notebook of
+    an extract+merge deck is identical to the inline-authored deck."""
+
+    async def test_extract_merge_renders_identically_to_inline(self, tmp_path: Path):
+        from clm.slides.voiceover_tools import extract_voiceover, merge_voiceover_text
+
+        inline = (
+            "# j2 from 'macros.j2' import header_de\n"
+            '# {{ header_de("Titel") }}\n\n'
+            '# %% [markdown] lang="de" tags=["voiceover"] slide_id="title"\n'
+            "# - Herzlich willkommen!\n\n"
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="first-real-slide"\n'
+            "# - Erste echte Folie\n"
+        )
+        slide = tmp_path / "slides_intro.de.py"
+        slide.write_text(inline, encoding="utf-8")
+        extract_voiceover(slide, force=True)
+        companion = tmp_path / "voiceover_intro.de.py"
+        merged, unmatched = merge_voiceover_text(
+            slide.read_text(encoding="utf-8"), companion.read_text(encoding="utf-8")
+        )
+        assert unmatched == []
+
+        inline_cells = await _render_speaker_cells(inline)
+        merged_cells = await _render_speaker_cells(merged)
+
+        # The greeting actually rendered (not silently dropped)...
+        assert any("Herzlich willkommen" in src for _, src in merged_cells)
+        # ...and the rendered notebooks are byte-identical.
+        assert merged_cells == inline_cells
+
+
+# ---------------------------------------------------------------------------
 # Voiceover cells in output specs
 # ---------------------------------------------------------------------------
 
