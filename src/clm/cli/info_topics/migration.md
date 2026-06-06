@@ -2,6 +2,51 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## Header-line-less title convention for C#/C++/Java/TypeScript ({version})
+
+CLM {version} makes the `//`-comment languages (C#, C++, Java, TypeScript) use
+the same deck-title convention Python already used: the title is a **standalone**
+`// {{ header("DE", "EN") }}` j2 call with **no** authored `// %%` wrapper cell.
+The `header` macro now emits its own `%% [markdown] lang="de"` boundary, and new
+`header_de` / `header_en` sibling macros are available for split decks.
+
+**Why:** one title convention across all languages unblocks the multi-language
+authoring tooling (split decks, `voiceover extract/inline`, `assign-ids`,
+`normalize`, `sync`). It also fixes a latent bug: a `//`-family deck whose title
+used a *neutral* wrapper (`// %% [markdown] tags=["slide"]`) put German title
+content in a language-neutral cell, so it leaked into the **English** build (the
+EN slides showed two titles). After migrating, each language has exactly one.
+
+**Old shape (no longer correct):**
+
+```
+// %% [markdown] lang="de" tags=["slide"]
+// j2 from 'macros.j2' import header
+// {{ header("Titel", "Title") }}
+```
+
+**New shape:**
+
+```
+// j2 from 'macros.j2' import header
+// {{ header("Titel", "Title") }}
+```
+
+**How to migrate a course (do this in lockstep with bumping the course's CLM
+pin — a reformatted deck requires CLM {version}):**
+
+1. Commit the course repo clean.
+2. `python scripts/reformat_header_convention.py <slides-dir> --apply` (the
+   script lives in the CLM repo; dry-run without `--apply` first). It removes the
+   wrapper line, drops now-unnecessary `<!-- clang-format off/on -->` comments
+   around the title, and skips genuine outliers for manual review.
+3. `python scripts/verify_header_reformat.py <lang>` — asserts exactly one title
+   slide per language across the corpus.
+4. Rebuild; for `lang="de"`-wrapped decks the output is byte-identical, for
+   neutral-wrapped decks the (previously doubled) English title is corrected.
+
+Python (`#`) decks are unchanged.
+
 ## Per-topic solution release (issue #208, {version} — additive)
 
 CLM {version} adds **per-topic solution release**: hand a student cohort a
