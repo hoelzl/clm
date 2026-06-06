@@ -63,6 +63,10 @@ class Cell:
     header: str
     content: str
     metadata: CellMetadata
+    comment_token: str = "#"
+    """Line-comment token of the source language (``"#"`` python/rust, ``"//"``
+    cpp/csharp/java/typescript). Used when stripping the comment prefix from the
+    cell body. Defaults to ``"#"`` for backward compatibility."""
 
     @property
     def cell_type(self) -> str:
@@ -83,8 +87,8 @@ class Cell:
     def text_content(self) -> str:
         """Extract readable text from the cell, stripping comment prefixes and formatting."""
         if self.metadata.cell_type == "markdown":
-            return _strip_markdown(self.content)
-        return _strip_code_comments(self.content)
+            return _strip_markdown(self.content, self.comment_token)
+        return _strip_code_comments(self.content, self.comment_token)
 
 
 @dataclass
@@ -129,17 +133,21 @@ class SlideGroup:
         return len(self.notes_cells) > 0
 
 
-def parse_cell_header(header: str) -> CellMetadata:
+def parse_cell_header(header: str, comment_token: str = "#") -> CellMetadata:
     """Extract metadata from a cell header line.
+
+    ``comment_token`` is the source language's line-comment token (``"#"`` for
+    python/rust, ``"//"`` for cpp/csharp/java/typescript). Only boundary/j2
+    detection depends on it; the ``lang=``/``tags=``/``slide_id=``/``for_slide=``
+    grammar after ``%%`` is comment-token-independent.
 
     Examples::
 
         # %% [markdown] lang="de" tags=["slide"]
-        # %% tags=["keep"]
-        # %%
+        // %% [markdown] lang="de" tags=["slide"]
         # j2 from 'macros.j2' import header
     """
-    is_j2 = header.startswith("# j2 ") or header.startswith("# {{ ")
+    is_j2 = header.startswith(comment_token + " j2 ") or header.startswith(comment_token + " {{ ")
 
     if is_j2:
         return CellMetadata(
@@ -178,8 +186,12 @@ def parse_cell_header(header: str) -> CellMetadata:
     )
 
 
-def parse_cells(text: str) -> list[Cell]:
-    """Parse a percent-format .py file into a list of cells."""
+def parse_cells(text: str, comment_token: str = "#") -> list[Cell]:
+    """Parse a percent-format slide file into a list of cells.
+
+    ``comment_token`` is the source language's line-comment token (``"#"`` python/
+    rust, ``"//"`` cpp/csharp/java/typescript). Defaults to ``"#"``.
+    """
     lines = text.split("\n")
     cells: list[Cell] = []
     current_header: str | None = None
@@ -187,16 +199,17 @@ def parse_cells(text: str) -> list[Cell]:
     current_line_number = 0
 
     for i, line in enumerate(lines, 1):
-        if _is_cell_boundary(line):
+        if _is_cell_boundary(line, comment_token):
             if current_header is not None:
                 content = "\n".join(current_lines).strip()
-                metadata = parse_cell_header(current_header)
+                metadata = parse_cell_header(current_header, comment_token)
                 cells.append(
                     Cell(
                         line_number=current_line_number,
                         header=current_header,
                         content=content,
                         metadata=metadata,
+                        comment_token=comment_token,
                     )
                 )
             current_header = line
@@ -208,13 +221,14 @@ def parse_cells(text: str) -> list[Cell]:
     # Final cell
     if current_header is not None:
         content = "\n".join(current_lines).strip()
-        metadata = parse_cell_header(current_header)
+        metadata = parse_cell_header(current_header, comment_token)
         cells.append(
             Cell(
                 line_number=current_line_number,
                 header=current_header,
                 content=content,
                 metadata=metadata,
+                comment_token=comment_token,
             )
         )
 
@@ -238,9 +252,12 @@ def parse_slides(
 
     Returns:
         Ordered list of SlideGroup objects.
+
+    The line-comment token is resolved from ``path``'s extension, so this works
+    for ``.py``/``.cs``/``.cpp``/``.java``/``.ts`` slide files alike.
     """
     text = path.read_text(encoding="utf-8")
-    cells = parse_cells(text)
+    cells = parse_cells(text, comment_token_for_path(path))
     return group_slides(cells, lang, include_header=include_header)
 
 
@@ -323,19 +340,39 @@ def group_slides(
 # ---------------------------------------------------------------------------
 
 
-def _is_cell_boundary(line: str) -> bool:
-    """Check if a line starts a new cell."""
-    return line.startswith("# %%") or line.startswith("# j2 ") or line.startswith("# {{ ")
+def comment_token_for_path(path: Path) -> str:
+    """Resolve a slide file's line-comment token from its extension.
+
+    ``.py``/``.rs``/``.md`` → ``"#"``; ``.cs``/``.cpp``/``.java``/``.ts`` → ``"//"``.
+    Falls back to ``"#"`` for unknown extensions. Imports are local to avoid a
+    module-load cycle (slide_parser is imported very early).
+    """
+    from clm.infrastructure.utils.path_utils import path_to_prog_lang
+    from clm.workers.notebook.utils.prog_lang_utils import line_comment_for
+
+    try:
+        return line_comment_for(path_to_prog_lang(path))
+    except (KeyError, ValueError):
+        return "#"
 
 
-def _strip_markdown(content: str) -> str:
+def _is_cell_boundary(line: str, comment_token: str = "#") -> bool:
+    """Check if a line starts a new cell (boundary / j2 statement / j2 expression)."""
+    return (
+        line.startswith(comment_token + " %%")
+        or line.startswith(comment_token + " j2 ")
+        or line.startswith(comment_token + " {{ ")
+    )
+
+
+def _strip_markdown(content: str, comment_token: str = "#") -> str:
     """Strip comment prefixes and markdown formatting from a markdown cell."""
     parts = []
     for line in content.split("\n"):
-        # Remove comment prefix
-        stripped = line.lstrip("# ").rstrip()
+        # Remove the language comment prefix (e.g. "# " or "// ").
+        stripped = line.lstrip(comment_token + " ").rstrip()
         if stripped.startswith("#"):
-            # This is still a comment prefix artifact, strip more
+            # Strip markdown heading markers (always "#", language-independent).
             stripped = stripped.lstrip("# ").strip()
         # Remove markdown formatting
         stripped = re.sub(r"[*_`]", "", stripped)
@@ -350,11 +387,11 @@ def _strip_markdown(content: str) -> str:
     return " ".join(parts)
 
 
-def _strip_code_comments(content: str) -> str:
+def _strip_code_comments(content: str, comment_token: str = "#") -> str:
     """Strip comment prefixes from code content."""
     parts = []
     for line in content.split("\n"):
-        stripped = line.lstrip("# ").strip()
+        stripped = line.lstrip(comment_token + " ").strip()
         if stripped:
             parts.append(stripped)
     return " ".join(parts)
@@ -365,7 +402,7 @@ def _extract_title(cell: Cell) -> str:
     if cell.cell_type != "markdown":
         return ""
     for line in cell.content.split("\n"):
-        stripped = line.lstrip("# ").strip()
+        stripped = line.lstrip(cell.comment_token + " ").strip()
         if stripped.startswith("#"):
             # Markdown heading
             return stripped.lstrip("# ").strip()

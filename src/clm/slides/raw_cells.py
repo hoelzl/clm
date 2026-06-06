@@ -21,12 +21,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from clm.notebooks.slide_parser import CellMetadata, parse_cell_header
+from clm.notebooks.slide_parser import CellMetadata, _is_cell_boundary, parse_cell_header
 
 
-def is_cell_boundary(line: str) -> bool:
-    """Return True iff ``line`` opens a new percent-format cell."""
-    return line.startswith("# %%") or line.startswith("# j2 ") or line.startswith("# {{ ")
+def is_cell_boundary(line: str, comment_token: str = "#") -> bool:
+    """Return True iff ``line`` opens a new percent-format cell.
+
+    Delegates to the single canonical predicate in
+    :mod:`clm.notebooks.slide_parser` so the boundary rule can never drift between
+    the two. ``comment_token`` is the source language's line-comment token
+    (``"#"`` python/rust, ``"//"`` cpp/csharp/java/typescript).
+    """
+    return _is_cell_boundary(line, comment_token)
 
 
 @dataclass
@@ -50,12 +56,15 @@ class RawCell:
         return "\n".join(self.lines[1:])
 
 
-def split_cells(text: str) -> tuple[str, list[RawCell]]:
+def split_cells(text: str, comment_token: str = "#") -> tuple[str, list[RawCell]]:
     """Split ``text`` into ``(preamble, cells)`` losslessly.
 
     ``preamble`` contains every line before the first cell boundary. Each
     ``RawCell`` keeps the boundary line and all following lines until the
-    next boundary (or end of file) in ``lines``.
+    next boundary (or end of file) in ``lines``. ``comment_token`` is the source
+    language's line-comment token (``"#"`` / ``"//"``); it affects only boundary
+    detection and j2 classification — the verbatim ``lines`` are untouched, so the
+    round-trip invariant holds for any language.
     """
     lines = text.split("\n")
     cells: list[RawCell] = []
@@ -64,13 +73,13 @@ def split_cells(text: str) -> tuple[str, list[RawCell]]:
     current_line = 0
     in_cell = False
     for i, line in enumerate(lines):
-        if is_cell_boundary(line):
+        if is_cell_boundary(line, comment_token):
             if in_cell:
                 cells.append(
                     RawCell(
                         lines=current,
                         line_number=current_line,
-                        metadata=parse_cell_header(current[0]),
+                        metadata=parse_cell_header(current[0], comment_token),
                     )
                 )
             current = [line]
@@ -86,7 +95,7 @@ def split_cells(text: str) -> tuple[str, list[RawCell]]:
             RawCell(
                 lines=current,
                 line_number=current_line,
-                metadata=parse_cell_header(current[0]),
+                metadata=parse_cell_header(current[0], comment_token),
             )
         )
     return ("\n".join(preamble), cells)
