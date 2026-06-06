@@ -13,7 +13,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   removed from runners in September 2026). `actions/checkout`, `setup-python`,
   `setup-java`, `astral-sh/setup-uv`, `codecov/codecov-action`, and
   `docker/setup-buildx-action` are bumped to their current Node-24 majors. No
-  behavioral change to CI or the release pipeline.
+  behavioral change to CI or the release pipeline. A grouped monthly Dependabot
+  config (`.github/dependabot.yml`) now keeps the actions current so the next
+  runtime deprecation arrives as a routine PR.
 - **`bump-my-version` no longer creates a local `vX.Y.Z` tag** (`tag = false` in
   `[tool.bumpversion]`). The Release workflow already creates the authoritative
   tag on the server after the CI-green gate; dropping the local tag removes a
