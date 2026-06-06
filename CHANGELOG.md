@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.8.3] - 2026-06-06
+
 ### Fixed
 
 - **A title-slide greeting voiceover now survives `clm voiceover extract` (#242).**
@@ -22,6 +24,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   fix merge without a re-extract. Adding `slide_id` to the macros (the issue's
   alternative) is neither necessary nor sufficient — the merge runs before j2
   expansion and the worker strips `slide_id`/`for_slide` from output.
+- **`load_worker_config` no longer poisons the global config singleton (#223).**
+  Applying CLI `--workers` overrides mutated `get_config().worker_management` —
+  a process-global singleton — in place, so a build/test that resolved to Docker
+  mode permanently flipped `default_execution_mode` to `"docker"` for every later
+  call in the process; a subsequent override-free build then built a Docker
+  executor with no image and raised `ValueError: Docker execution mode requires
+  'image'`. Order-dependent under `pytest-xdist`, so it surfaced as a rare CI
+  flake. The loader now deep-copies (`model_copy(deep=True)`) before applying
+  overrides, so each call is self-contained and the shared default can't be
+  poisoned.
 
 ### Added
 
