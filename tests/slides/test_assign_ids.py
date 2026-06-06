@@ -711,6 +711,149 @@ class TestCodeCellSlideStart:
         assert result.assignments[0].source == "content:prose"
 
 
+class TestCodeDerivedFallback:
+    """``--accept-code-derived`` first-code-line fallback for bare-expression
+    code cells (#251) — the cells that historically hard-refused with the LLM
+    as the only non-manual escape.
+    """
+
+    BARE = '# %% lang="en" tags=["subslide"]\n(1 + 1j) * (1 + 1j)\n'
+
+    def test_default_still_hard_refuses(self):
+        # Unchanged from pre-#251: a bare expression hard-refuses by default.
+        new_text, result = _run(self.BARE)
+        assert result.assignments == []
+        assert result.refusals[0].severity == "hard"
+        assert new_text == self.BARE
+
+    def test_accept_code_derived_mints(self):
+        new_text, result = _run(self.BARE, accept_code_derived=True)
+        assert len(result.assignments) == 1
+        a = result.assignments[0]
+        assert a.slide_id == "1-1j-1-1j"
+        assert a.source == "code:line"
+        assert 'slide_id="1-1j-1-1j"' in new_text
+
+    def test_accept_content_derived_alone_does_not_mint(self):
+        # Critical back-compat: course_gate / sync_apply / translate_bootstrap
+        # pass accept_content_derived=True and must NOT start minting opaque
+        # code-line slugs — that needs the separate accept_code_derived knob.
+        new_text, result = _run(self.BARE, accept_content_derived=True)
+        assert result.assignments == []
+        assert result.refusals[0].severity == "hard"
+        assert new_text == self.BARE
+
+    def test_magic_only_still_hard_refuses_with_flag(self):
+        # The magic is skipped by the scanner, so nothing is extractable.
+        text = '# %% lang="en" tags=["subslide"]\n!pip install requests\n'
+        new_text, result = _run(text, accept_code_derived=True)
+        assert result.assignments == []
+        assert result.refusals[0].severity == "hard"
+
+    def test_punctuation_only_still_hard_refuses_with_flag(self):
+        text = '# %% lang="en" tags=["subslide"]\n...\n'
+        new_text, result = _run(text, accept_code_derived=True)
+        assert result.assignments == []
+        assert result.refusals[0].severity == "hard"
+
+    def test_idempotent_rerun(self):
+        new_text, _ = _run(self.BARE, accept_code_derived=True)
+        new_text2, result2 = _run(new_text, accept_code_derived=True)
+        assert result2.assignments == []
+        assert new_text2 == new_text
+
+    def test_collision_suffix_for_identical_code_lines(self):
+        text = (
+            '# %% lang="en" tags=["subslide"]\nletters[0:3]\n'
+            '# %% lang="en" tags=["subslide"]\nletters[0:3]\n'
+        )
+        new_text, result = _run(text, accept_code_derived=True)
+        slugs = [a.slide_id for a in result.assignments]
+        assert slugs == ["letters-0-3", "letters-0-3-2"]
+
+    def test_preserve_marker_untouched(self):
+        text = '# %% lang="en" tags=["subslide"] slide_id="!keep"\n(1 + 1j) * (1 + 1j)\n'
+        new_text, result = _run(text, accept_code_derived=True, force=True)
+        assert result.assignments == []
+        assert 'slide_id="!keep"' in new_text
+
+    def test_llm_wins_over_code_derived(self):
+        suggester = StaticTitleSuggester(default="Complex Multiplication")
+        new_text, result = _run(
+            self.BARE,
+            accept_code_derived=True,
+            llm_suggest=True,
+            llm_suggester=suggester,
+        )
+        assert len(result.assignments) == 1
+        a = result.assignments[0]
+        assert a.slide_id == "complex-multiplication"
+        assert a.source == "llm"
+
+    # -- pair-safety across all three id paths --
+
+    def test_pair_safe_bilingual_single_file(self):
+        text = (
+            '# %% lang="de" tags=["subslide"]\n(1 + 1j) * (1 + 1j)\n'
+            '# %% lang="en" tags=["subslide"]\n(1 + 1j) * (1 + 1j)\n'
+        )
+        new_text, result = _run(text, accept_code_derived=True)
+        slugs = [a.slide_id for a in result.assignments]
+        assert slugs == ["1-1j-1-1j", "1-1j-1-1j"]
+        assert {a.source for a in result.assignments} == {"code:line", "paired"}
+
+    def test_pair_safe_split_pair_function(self, tmp_path: Path):
+        de = _write(
+            tmp_path,
+            '# %% lang="de" tags=["subslide"]\n(1 + 1j) * (1 + 1j)\n',
+            "deck.de.py",
+        )
+        en = _write(
+            tmp_path,
+            '# %% lang="en" tags=["subslide"]\n(1 + 1j) * (1 + 1j)\n',
+            "deck.en.py",
+        )
+        assign_ids_in_split_pair(de, en, AssignOptions(accept_code_derived=True))
+        assert 'slide_id="1-1j-1-1j"' in de.read_text(encoding="utf-8")
+        assert 'slide_id="1-1j-1-1j"' in en.read_text(encoding="utf-8")
+
+    def test_pair_safe_directory(self, tmp_path: Path):
+        # find_slide_files only discovers slides_*/topic_*/project_* names.
+        _write(tmp_path, '# %% lang="de" tags=["subslide"]\nletters[0:3]\n', "slides_deck.de.py")
+        _write(tmp_path, '# %% lang="en" tags=["subslide"]\nletters[0:3]\n', "slides_deck.en.py")
+        assign_ids_in_directory(tmp_path, AssignOptions(accept_code_derived=True))
+        de_text = (tmp_path / "slides_deck.de.py").read_text(encoding="utf-8")
+        en_text = (tmp_path / "slides_deck.en.py").read_text(encoding="utf-8")
+        assert 'slide_id="letters-0-3"' in de_text
+        assert 'slide_id="letters-0-3"' in en_text
+
+    def test_pair_safe_per_file_twin(self, tmp_path: Path):
+        # EN minted via code-derived, then the id-less DE half adopts the twin
+        # id through the per-file twin path — code-derived ids stay in parity.
+        de = _write(tmp_path, '# %% lang="de" tags=["subslide"]\nletters[0:3]\n', "deck.de.py")
+        en = _write(tmp_path, '# %% lang="en" tags=["subslide"]\nletters[0:3]\n', "deck.en.py")
+        assign_ids_in_file(en, AssignOptions(accept_code_derived=True))
+        assign_ids_in_file(de, AssignOptions(accept_code_derived=True))
+        import re
+
+        de_id = re.search(r'slide_id="([^"]+)"', de.read_text(encoding="utf-8")).group(1)
+        en_id = re.search(r'slide_id="([^"]+)"', en.read_text(encoding="utf-8")).group(1)
+        assert de_id == en_id == "letters-0-3"
+
+    def test_non_python_pair_safe(self):
+        # ast.parse can't parse C#; the comment-token-aware fallback completes
+        # the deck and the EN-authority pair stays in slide_id parity.
+        text = (
+            '// %% lang="de" tags=["subslide"]\nvar z = (1 + 2) * (3 + 4);\n'
+            '// %% lang="en" tags=["subslide"]\nvar z = (1 + 2) * (3 + 4);\n'
+        )
+        new_text, result = assign_ids_for_text(
+            text, Path("deck.cs"), AssignOptions(accept_code_derived=True)
+        )
+        slugs = [a.slide_id for a in result.assignments]
+        assert slugs == ["var-z-1-2-3-4", "var-z-1-2-3-4"]
+
+
 class TestLLMSuggestOnHardRefusal:
     """Phase 4: ``--llm-suggest`` fires on NON_EXTRACTABLE cells as a
     last resort. Without this, the LLM would silently no-op on the
