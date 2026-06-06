@@ -4,7 +4,7 @@ Spec → deck resolution (gap #1). ``spec decks`` answers "which decks does this
 spec build?"; ``referenced-by`` is the reverse lookup. Both delegate to
 :mod:`clm.core.spec_decks`, which mirrors the build's resolution semantics so the
 shipping set is correct (a ``<topic>`` resolves to a directory and CLM builds
-**every** ``slides_*.py`` in it — filename-stem heuristics silently miss decks).
+**every** ``slides_*.<ext>`` in it — filename-stem heuristics silently miss decks).
 """
 
 from __future__ import annotations
@@ -87,7 +87,7 @@ def spec_decks_cmd(
     """List the deck files a course spec pulls in.
 
     Resolution mirrors the build exactly: a ``<topic>`` resolves to a topic
-    *directory* and **every** ``slides_*.py`` in it is a deck (module-bound
+    *directory* and **every** ``slides_*.<ext>`` in it is a deck (module-bound
     references pick their module; unbound duplicates are first-occurrence-wins).
     This is the reliable way to compute a spec's "shipping set" — do not guess
     from deck filenames.

@@ -1,7 +1,7 @@
 """``clm slides translate`` (alias ``bootstrap``) — full-deck cold-start translation.
 
 Issue #232. When an author writes a deck in a **single** language (only
-``slides_x.de.py``), this command synthesizes the other-language split half as a
+``slides_x.de.<ext>``), this command synthesizes the other-language split half as a
 complete translation of the whole deck — the cold start that ``clm slides sync``
 deliberately refuses to perform (``sync`` only fills per-cell gaps inside an
 *already-existing* pair).
@@ -91,7 +91,7 @@ def _make_translator(
     default=None,
     help=(
         "Target language. Default: the opposite of SOURCE's .de/.en tag "
-        "(slides_x.de.py → en). Override when a source mixes/omits lang tags."
+        "(slides_x.de.<ext> → en). Override when a source mixes/omits lang tags."
     ),
 )
 @click.option(
@@ -172,8 +172,8 @@ def slides_translate_cmd(
 ) -> None:
     """Translate a single-language deck SOURCE into its other-language split half.
 
-    SOURCE is one half of a split deck (``slides_x.de.py`` or ``slides_x.en.py``).
-    The matching ``slides_x.en.py`` / ``slides_x.de.py`` is synthesized as a full
+    SOURCE is one half of a split deck (``slides_x.de.<ext>`` or ``slides_x.en.<ext>``).
+    The matching ``slides_x.en.<ext>`` / ``slides_x.de.<ext>`` is synthesized as a full
     translation; a voiceover companion is translated in lockstep. Run
     ``clm slides unify`` afterward for a bilingual file, or just keep editing the
     halves and ``clm slides sync`` them.

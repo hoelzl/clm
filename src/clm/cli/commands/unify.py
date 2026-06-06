@@ -1,7 +1,7 @@
 """``clm slides unify`` — Phase 5 of the slide-format-redesign.
 
-The inverse of ``clm slides split``: combines a ``<basename>.de.py`` /
-``<basename>.en.py`` pair into the bilingual ``<basename>.py``. Shared
+The inverse of ``clm slides split``: combines a ``<basename>.de.<ext>`` /
+``<basename>.en.<ext>`` pair into the bilingual ``<basename>.<ext>``. Shared
 cells (no ``lang`` attribute) must be byte-identical between the two
 inputs — divergent shared content is an error that surfaces before any
 file is written.
@@ -33,7 +33,7 @@ from clm.slides.split import UnifyError, UnifyResult, unify_in_file
     default=None,
     help=(
         "Explicit bilingual target path. Defaults to the basename shared by DE_SOURCE "
-        "and EN_SOURCE — e.g. ``foo.de.py`` + ``foo.en.py`` → ``foo.py``."
+        "and EN_SOURCE — e.g. ``foo.de.<ext>`` + ``foo.en.<ext>`` → ``foo.<ext>``."
     ),
 )
 @click.option(
@@ -69,8 +69,8 @@ def unify_cmd(
 
     \b
     If the pair has sibling voiceover companions
-    (``voiceover_<name>.de.py`` / ``voiceover_<name>.en.py``), they are
-    recombined in lockstep into ``voiceover_<name>.py`` — the inverse of
+    (``voiceover_<name>.de.<ext>`` / ``voiceover_<name>.en.<ext>``), they are
+    recombined in lockstep into ``voiceover_<name>.<ext>`` — the inverse of
     ``split``'s companion split. ``--force`` also covers overwriting an
     existing companion target.
     """

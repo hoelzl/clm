@@ -647,9 +647,9 @@ layouts). Within it, CLM distinguishes three kinds of file:
 
 | Kind | Examples | Copied to output? |
 |---|---|---|
-| **Core source** | `slides_*.py` (incl. split `slides_*.de.py` / `slides_*.en.py`) | processed into notebooks/HTML |
+| **Core source** | `slides_*.<ext>` (incl. split `slides_*.de.<ext>` / `slides_*.en.<ext>`) | processed into notebooks/HTML |
 | **Output companions** | `img/`, `drawio/`, loose data files | **yes**, verbatim |
-| **Authoring sidecars** | `voiceover_*.py`, `*.http-cassette.yaml` | **no** |
+| **Authoring sidecars** | `voiceover_*.<ext>`, `*.http-cassette.yaml` | **no** |
 
 The authoring sidecars may live either next to the slides (the default) or
 collected into per-type subdirectories so the topic directory stays focused on
@@ -658,7 +658,7 @@ the editable sources:
 ```
 topic_070_rag_introduction/
 ├── cassettes/      # *.http-cassette.yaml      (also accepted: legacy _cassettes/)
-├── voiceover/      # voiceover_*.py
+├── voiceover/      # voiceover_*.<ext>
 ├── drawio/  img/   # output companions (unchanged)
 ├── slides_010_what_is_rag.de.py
 └── slides_010_what_is_rag.en.py

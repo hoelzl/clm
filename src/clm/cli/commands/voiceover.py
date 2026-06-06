@@ -182,7 +182,7 @@ def voiceover_group(ctx, cache_root, no_cache, refresh_cache):
     "companion_flag",
     default=None,
     help="Force companion-file merge on/off. Default: auto-detect based on "
-    "whether a voiceover_*.py companion file exists next to SLIDES.",
+    "whether a voiceover_*.<ext> companion file exists next to SLIDES.",
 )
 @click.option(
     "--propagate-to",
