@@ -182,21 +182,23 @@ def companion_name(slide_path: Path) -> str:
     """Return the companion voiceover *filename* for a slide file.
 
     Directory-independent — the name only. Known slide prefixes are replaced
-    with ``voiceover_``; any ``.de`` / ``.en`` language tag is preserved so the
-    two halves of a split deck never collide on one name:
+    with ``voiceover_``; the slide's own extension (``.py``/``.cs``/``.cpp``/
+    ``.java``/``.ts``) is preserved, and any ``.de`` / ``.en`` language tag (part
+    of the stem) is kept so the two halves of a split deck never collide:
 
     ``slides_intro.py`` → ``voiceover_intro.py``
-    ``slides_010_x.de.py`` → ``voiceover_010_x.de.py``
-    ``topic_overview.py`` → ``voiceover_overview.py``
+    ``slides_010_x.de.cs`` → ``voiceover_010_x.de.cs``
+    ``topic_overview.cpp`` → ``voiceover_overview.cpp``
     ``project_setup.py`` → ``voiceover_setup.py``
     """
     stem = slide_path.stem
+    ext = slide_path.suffix
     # Replace known prefixes
     for prefix in ("slides_", "topic_", "project_"):
         if stem.startswith(prefix):
-            return f"voiceover_{stem[len(prefix) :]}.py"
+            return f"voiceover_{stem[len(prefix) :]}{ext}"
     # Fallback: prepend voiceover_
-    return f"voiceover_{stem}.py"
+    return f"voiceover_{stem}{ext}"
 
 
 def companion_path(slide_path: Path) -> Path:

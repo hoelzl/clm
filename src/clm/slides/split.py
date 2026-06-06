@@ -64,7 +64,11 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from clm.infrastructure.utils.path_utils import atomic_write_all
+from clm.infrastructure.utils.path_utils import (
+    SUPPORTED_PROG_LANG_EXTENSIONS,
+    atomic_write_all,
+)
+from clm.notebooks.slide_parser import comment_token_for_path
 from clm.slides.raw_cells import RawCell, reconstruct, split_cells
 
 # ---------------------------------------------------------------------------
@@ -140,9 +144,11 @@ _HEADER_EN_RE = re.compile(r'(\{\{\s*header_en\s*\(\s*")([^"]*)("\s*\)\s*\}\})')
 
 # Exact bare-form import line — anything more elaborate (extra macros, aliases)
 # is treated as a shared j2 directive and copied verbatim to both outputs.
-_HEADER_IMPORT_RE = re.compile(r"^(#\s*j2\s+from\s+\S+\s+import\s+)header\s*$")
-_HEADER_DE_IMPORT_RE = re.compile(r"^(#\s*j2\s+from\s+\S+\s+import\s+)header_de\s*$")
-_HEADER_EN_IMPORT_RE = re.compile(r"^(#\s*j2\s+from\s+\S+\s+import\s+)header_en\s*$")
+# ``(?:#|//)`` matches either comment family; group 1 captures the actual prefix
+# (incl. the source language's token), so the rewrite preserves ``#`` vs ``//``.
+_HEADER_IMPORT_RE = re.compile(r"^((?:#|//)\s*j2\s+from\s+\S+\s+import\s+)header\s*$")
+_HEADER_DE_IMPORT_RE = re.compile(r"^((?:#|//)\s*j2\s+from\s+\S+\s+import\s+)header_de\s*$")
+_HEADER_EN_IMPORT_RE = re.compile(r"^((?:#|//)\s*j2\s+from\s+\S+\s+import\s+)header_en\s*$")
 
 
 def _is_bilingual_header_cell(cell: RawCell) -> bool:
@@ -174,8 +180,12 @@ def _is_header_en_import_cell(cell: RawCell) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def split_text(text: str) -> tuple[str, str]:
+def split_text(text: str, comment_token: str = "#") -> tuple[str, str]:
     """Return ``(de_text, en_text)`` for a bilingual slide-file ``text``.
+
+    ``comment_token`` is the source language's line-comment token (``"#"`` python/
+    rust, ``"//"`` cpp/csharp/java/typescript). The header-macro rewrite is
+    comment-token-agnostic; only cell splitting needs the token.
 
     The split is purely structural — no cell content is reformatted. Cells
     are routed by ``lang`` attribute: ``lang="de"`` → DE only,
@@ -187,7 +197,7 @@ def split_text(text: str) -> tuple[str, str]:
     Raises :class:`SplitError` if the file contains a ``header_de`` or
     ``header_en`` cell, which indicates the input is already split.
     """
-    preamble, cells = split_cells(text)
+    preamble, cells = split_cells(text, comment_token)
 
     de_cells: list[RawCell] = []
     en_cells: list[RawCell] = []
@@ -292,7 +302,9 @@ class _CompanionSplitPlan:
     en_text: str
 
 
-def _plan_companion_split(source: Path, de_path: Path, en_path: Path) -> _CompanionSplitPlan | None:
+def _plan_companion_split(
+    source: Path, de_path: Path, en_path: Path, comment_token: str = "#"
+) -> _CompanionSplitPlan | None:
     """Plan splitting ``source``'s voiceover companion in lockstep with the deck.
 
     Returns ``None`` when ``source`` has no sibling ``voiceover_*.py``.
@@ -314,7 +326,7 @@ def _plan_companion_split(source: Path, de_path: Path, en_path: Path) -> _Compan
     # in (the ``voiceover/`` subdir or the sibling location), so a foldered topic
     # stays foldered across a split.
     comp_dir = companion.parent
-    comp_de_text, comp_en_text = split_text(companion.read_text(encoding="utf-8"))
+    comp_de_text, comp_en_text = split_text(companion.read_text(encoding="utf-8"), comment_token)
     return _CompanionSplitPlan(
         source=companion,
         de_path=comp_dir / companion_name(de_path),
@@ -345,10 +357,11 @@ def split_in_file(
     de_path = _split_target(source, "de")
     en_path = _split_target(source, "en")
 
+    comment_token = comment_token_for_path(source)
     text = source.read_text(encoding="utf-8")
-    de_text, en_text = split_text(text)
+    de_text, en_text = split_text(text, comment_token)
 
-    companion = _plan_companion_split(source, de_path, en_path)
+    companion = _plan_companion_split(source, de_path, en_path, comment_token)
 
     overwrote: list[str] = []
     if de_path.exists():
@@ -387,13 +400,18 @@ def split_in_file(
 
 
 def _split_target(source: Path, lang: str) -> Path:
-    """Return the ``<basename>.<lang>.py`` companion path for ``source``."""
-    if source.suffix != ".py":
-        raise SplitError(f"source must be a .py file: {source}")
-    basename = source.name[: -len(".py")]
+    """Return the ``<basename>.<lang><ext>`` split path for ``source``.
+
+    Works for any supported slide extension (``.py``/``.cs``/``.cpp``/``.java``/
+    ``.ts``), preserving the source's extension.
+    """
+    suffix = source.suffix
+    if suffix not in SUPPORTED_PROG_LANG_EXTENSIONS:
+        raise SplitError(f"source must be a supported slide file: {source}")
+    basename = source.name[: -len(suffix)]
     if basename.endswith(".de") or basename.endswith(".en"):
         raise SplitError(f"source already looks split (ends with .de/.en): {source}")
-    return source.with_name(f"{basename}.{lang}.py")
+    return source.with_name(f"{basename}.{lang}{suffix}")
 
 
 # ---------------------------------------------------------------------------
@@ -401,8 +419,10 @@ def _split_target(source: Path, lang: str) -> Path:
 # ---------------------------------------------------------------------------
 
 
-def unify_texts(de_text: str, en_text: str) -> str:
+def unify_texts(de_text: str, en_text: str, comment_token: str = "#") -> str:
     """Return the bilingual text reconstructed from ``de_text`` and ``en_text``.
+
+    ``comment_token`` is the source language's line-comment token (``"#"`` / ``"//"``).
 
     Walks both cell lists with parallel cursors and interleaves cells back
     into the canonical bilingual order:
@@ -418,8 +438,8 @@ def unify_texts(de_text: str, en_text: str) -> str:
     Raises :class:`UnifyError` on any structural mismatch (divergent shared
     cell, leftover cells, header mismatch).
     """
-    de_preamble, de_cells = split_cells(de_text)
-    en_preamble, en_cells = split_cells(en_text)
+    de_preamble, de_cells = split_cells(de_text, comment_token)
+    en_preamble, en_cells = split_cells(en_text, comment_token)
 
     if de_preamble != en_preamble:
         raise UnifyError("DE and EN files differ in their preamble (lines before any cell)")
@@ -633,7 +653,7 @@ class _CompanionUnifyPlan:
 
 
 def _plan_companion_unify(
-    de_source: Path, en_source: Path, target: Path
+    de_source: Path, en_source: Path, target: Path, comment_token: str = "#"
 ) -> _CompanionUnifyPlan | None:
     """Plan recombining the split voiceover companions of a ``.de`` / ``.en`` pair.
 
@@ -656,7 +676,9 @@ def _plan_companion_unify(
     present = de_comp if de_comp is not None else en_comp
     assert present is not None
     target_companion = present.parent / companion_name(target)
-    return _CompanionUnifyPlan(target=target_companion, text=unify_texts(de_text, en_text))
+    return _CompanionUnifyPlan(
+        target=target_companion, text=unify_texts(de_text, en_text, comment_token)
+    )
 
 
 def unify_in_file(
@@ -684,11 +706,12 @@ def unify_in_file(
         target = _unify_target(de_source, en_source)
     target = target.resolve()
 
+    comment_token = comment_token_for_path(de_source)
     de_text = de_source.read_text(encoding="utf-8")
     en_text = en_source.read_text(encoding="utf-8")
-    unified = unify_texts(de_text, en_text)
+    unified = unify_texts(de_text, en_text, comment_token)
 
-    companion = _plan_companion_unify(de_source, en_source, target)
+    companion = _plan_companion_unify(de_source, en_source, target, comment_token)
 
     overwrote = target.exists()
     companion_overwrote = companion is not None and companion.target.exists()
@@ -727,10 +750,11 @@ def _unify_target(de_source: Path, en_source: Path) -> Path:
 
 
 def _strip_lang_suffix(path: Path, lang: str) -> Path:
-    if path.suffix != ".py":
-        raise UnifyError(f"source must be a .py file: {path}")
-    stem = path.name[: -len(".py")]
+    ext = path.suffix
+    if ext not in SUPPORTED_PROG_LANG_EXTENSIONS:
+        raise UnifyError(f"source must be a supported slide file: {path}")
+    stem = path.name[: -len(ext)]
     suffix = f".{lang}"
     if not stem.endswith(suffix):
-        raise UnifyError(f"source does not end in {suffix}.py: {path}")
-    return path.with_name(f"{stem[: -len(suffix)]}.py")
+        raise UnifyError(f"source does not end in {suffix}{ext}: {path}")
+    return path.with_name(f"{stem[: -len(suffix)]}{ext}")
