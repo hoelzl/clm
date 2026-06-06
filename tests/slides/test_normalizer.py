@@ -967,6 +967,108 @@ class TestSlideIds:
 # ---------------------------------------------------------------------------
 
 
+_DECK_WITH_PREAMBLE = (
+    "# j2 from 'macros.j2' import header\n"
+    '# {{ header("Regeln für Typen", "Rules for Types") }}\n'
+    "from typing import Iterable\n"
+    "\n"
+    "\n"
+    '# %% [markdown] lang="de" tags=["slide"] slide_id="gh"\n'
+    "#\n# ## Hinweise\n"
+)
+
+
+class TestPreambleCode:
+    def test_wraps_preamble_code(self, tmp_path):
+        path = _write_slide(tmp_path / "slides_x.py", _DECK_WITH_PREAMBLE)
+        result = normalize_file(path, operations=["preamble_code", "cell_spacing"])
+        assert result.files_modified == 1
+        out = path.read_text(encoding="utf-8")
+        # The import is now its own bare code cell, no longer on the header cell.
+        assert "}}\nfrom typing" not in out
+        assert "# %%\nfrom typing import Iterable" in out
+
+    def test_change_recorded(self, tmp_path):
+        path = _write_slide(tmp_path / "slides_x.py", _DECK_WITH_PREAMBLE)
+        result = normalize_file(path, operations=["preamble_code"])
+        ops = [c for c in result.changes if c.operation == "preamble_code"]
+        assert len(ops) == 1
+        assert ops[0].line == 3
+
+    def test_runs_by_default(self, tmp_path):
+        assert "preamble_code" in ALL_OPERATIONS
+        path = _write_slide(tmp_path / "slides_x.py", _DECK_WITH_PREAMBLE)
+        normalize_file(path)  # no operations => all, including preamble_code
+        out = path.read_text(encoding="utf-8")
+        assert "# %%\nfrom typing import Iterable" in out
+
+    def test_idempotent(self, tmp_path):
+        path = _write_slide(tmp_path / "slides_x.py", _DECK_WITH_PREAMBLE)
+        normalize_file(path)
+        first = path.read_text(encoding="utf-8")
+        result = normalize_file(path)
+        assert [c for c in result.changes if c.operation == "preamble_code"] == []
+        assert path.read_text(encoding="utf-8") == first
+
+    def test_no_code_no_change(self, tmp_path):
+        text = (
+            "# j2 from 'macros.j2' import header\n"
+            '# {{ header("DE", "EN") }}\n\n'
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="a"\n#\n# ## A\n'
+        )
+        path = _write_slide(tmp_path / "slides_x.py", text)
+        result = normalize_file(path, operations=["preamble_code"])
+        assert [c for c in result.changes if c.operation == "preamble_code"] == []
+        assert result.files_modified == 0
+
+    def test_round_trip_preserved(self, tmp_path):
+        path = _write_slide(tmp_path / "slides_x.py", _DECK_WITH_PREAMBLE)
+        normalize_file(path)
+        out = path.read_text(encoding="utf-8")
+        preamble, cells = _split_raw_cells(out)
+        assert _reconstruct(preamble, cells) == out
+
+    def test_normalized_split_round_trips_and_is_render_neutral(self, tmp_path):
+        """After normalize, the bilingual deck and its split halves agree.
+
+        The wrapped code cell is shared (no lang), so split copies it verbatim
+        to both halves and unify reproduces the normalized text byte-for-byte —
+        the conversion is finally render-neutral (issue #253).
+        """
+        from clm.slides.split import split_text, unify_texts
+
+        path = _write_slide(tmp_path / "slides_x.py", _DECK_WITH_PREAMBLE)
+        normalize_file(path)
+        normalized = path.read_text(encoding="utf-8")
+        de_text, en_text = split_text(normalized)
+        assert unify_texts(de_text, en_text) == normalized
+        # The import survives as a shared code cell in BOTH halves.
+        assert "# %%\nfrom typing import Iterable" in de_text
+        assert "# %%\nfrom typing import Iterable" in en_text
+
+    def test_clike_wraps_with_slash_marker(self, tmp_path):
+        text = (
+            "// j2 from 'macros.j2' import header\n"
+            '// {{ header("DE", "EN") }}\n'
+            "using System;\n\n"
+            '// %% [markdown] lang="de" tags=["slide"] slide_id="a"\n//\n// ## A\n'
+        )
+        path = _write_slide(tmp_path / "slides_x.cs", text)
+        normalize_file(path, operations=["preamble_code", "cell_spacing"])
+        out = path.read_text(encoding="utf-8")
+        assert "// %%\nusing System;" in out
+
+    def test_resolves_validator_warning(self, tmp_path):
+        from clm.slides.validator import validate_file
+
+        path = _write_slide(tmp_path / "slides_x.py", _DECK_WITH_PREAMBLE)
+        before = [f for f in validate_file(path, checks=["format"]).findings if "#253" in f.message]
+        assert before  # the preamble-code warning is present
+        normalize_file(path)
+        after = [f for f in validate_file(path, checks=["format"]).findings if "#253" in f.message]
+        assert after == []
+
+
 class TestCellSpacing:
     def test_inserts_blank_between_cells(self, tmp_path):
         text = '# %% [markdown] lang="de"\n#\n# ## A\n# %% [markdown] lang="de"\n#\n# ## B\n'

@@ -196,6 +196,49 @@ clm slides normalize slides/ --operations cell_spacing   # spacing only
 `cell_spacing` runs by default (part of `all`), is idempotent, and preserves the
 split/unify round-trip. No code or spec changes are required in course repos.
 
+## Preamble-code wrapping: `preamble_code` (issue #253, {version} — additive)
+
+A deck may carry **preamble code** — an executable line between the
+`# {{ header(…) }}` macro call and the first `# %%` cell, e.g.:
+
+```python
+# j2 from 'macros.j2' import header
+# {{ header("Regeln für Typen", "Rules for Types") }}
+from typing import Iterable          # <- preamble code, no cell marker
+# %% [markdown] lang="de" ...
+```
+
+Because `# {{ ` is itself a cell boundary, that code becomes the **body** of the
+header cell, and jupytext folds it into the **title markdown** at build time. In
+the bilingual `header(de, en)` macro the code rides the EN title (so it is
+silently dropped from a DE build); in a split `.de.py` half it rides the DE title
+(so it is kept). The two builds therefore **diverge on the DE side** — the
+bilingual→split conversion is not render-neutral. The split *source* still
+round-trips byte-identically; the divergence is build-side only.
+
+CLM {version} addresses this three ways:
+
+- **`clm validate`** (the `format` group) emits a `warning` pointing at the code.
+- **`clm slides split`** prints a `warning:` (to stderr; non-fatal) and never
+  rewrites the source.
+- **`clm slides normalize`** gains a `preamble_code` operation that moves the
+  code into its own `# %%` code cell — a shared, language-neutral cell that every
+  build includes identically and `split` copies verbatim to both halves. After
+  the fix the import is finally executed **as code** (not rendered as markdown
+  text), and the bilingual and split builds are byte-identical.
+
+```bash
+clm slides normalize slides/                          # fixes it with the other ops
+clm slides normalize slides/ --operations preamble_code   # this fix only
+```
+
+**Non-breaking.** The validate finding is a `warning` (the default error-gate and
+CI are unaffected). `preamble_code` runs first among the normalize ops, is
+default-on (part of `all`), idempotent, and a strict no-op on a conforming deck.
+**Note:** top-of-file code *before* the `# j2` import line (a true file preamble,
+e.g. a leading `import os`) lands in the split's shared preamble and is already
+render-neutral — it is **not** flagged.
+
 ## Breaking changes in CLM 1.8
 
 CLM 1.8 retires the Phase 0 deprecation period. It carries **intentional

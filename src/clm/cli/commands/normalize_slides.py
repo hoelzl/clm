@@ -106,10 +106,12 @@ def normalize_slides_cmd(
 
     \b
     Operations:
+        preamble_code   Wrap code that precedes the first cell into its own cell
         tag_migration   Rename alt->completed after start cells
         workshop_tags   Add workshop tag to workshop heading cells
         interleaving    Normalize DE/EN cell ordering
         slide_ids       Auto-generate slide_id metadata for cells
+        cell_spacing    Normalize blank-line separation between cells
         all             All of the above (default)
 
     \b

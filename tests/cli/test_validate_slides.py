@@ -59,6 +59,33 @@ class TestValidateSlidesCommand:
         assert result.exit_code == 1
         assert "ERROR" in result.output
 
+    def test_preamble_code_warning_exit_zero(self, tmp_path):
+        # A deck with code folded into the header cell (issue #253) warns but,
+        # with the default --fail-on, still exits 0 (gate-safety). The DE/EN
+        # pair keeps the pairing check clean so only the warning is present.
+        p = _write_slide(
+            tmp_path,
+            "slides_preamble.py",
+            """\
+            # j2 from 'macros.j2' import header
+            # {{ header("Regeln", "Rules") }}
+            from typing import Iterable
+
+            # %% [markdown] lang="de" tags=["slide"] slide_id="gh"
+            #
+            # ## Hinweise
+
+            # %% [markdown] lang="en" tags=["slide"] slide_id="gh"
+            #
+            # ## Hints
+            """,
+        )
+        runner = CliRunner()
+        result = runner.invoke(cli, ["validate", str(p)])
+        assert result.exit_code == 0
+        assert "WARN" in result.output
+        assert "#253" in result.output
+
     def test_json_output(self, tmp_path):
         p = _write_slide(
             tmp_path,

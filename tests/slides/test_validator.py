@@ -103,6 +103,65 @@ class TestCheckFormat:
         result = validate_file(p, checks=["format"])
         assert result.findings == []
 
+    def test_preamble_code_warns(self, tmp_path):
+        p = _write_slide(
+            tmp_path,
+            "slides_preamble.py",
+            """\
+            # j2 from 'macros.j2' import header
+            # {{ header("Regeln", "Rules") }}
+            from typing import Iterable
+
+            # %% [markdown] lang="de" tags=["slide"] slide_id="gh"
+            #
+            # ## Hinweise
+            """,
+        )
+        result = validate_file(p, checks=["format"])
+        pc = [f for f in result.findings if "#253" in f.message]
+        assert len(pc) == 1
+        assert pc[0].severity == "warning"
+        assert pc[0].category == "format"
+        assert pc[0].line == 3
+
+    def test_preamble_code_clean_no_finding(self, tmp_path):
+        p = _write_slide(
+            tmp_path,
+            "slides_preamble_ok.py",
+            """\
+            # j2 from 'macros.j2' import header
+            # {{ header("Regeln", "Rules") }}
+
+            # %%
+            from typing import Iterable
+
+            # %% [markdown] lang="de" tags=["slide"] slide_id="gh"
+            #
+            # ## Hinweise
+            """,
+        )
+        result = validate_file(p, checks=["format"])
+        assert [f for f in result.findings if "#253" in f.message] == []
+
+    def test_preamble_code_is_never_an_error(self, tmp_path):
+        # Gate-safety: the preamble-code finding must stay a warning so it never
+        # breaks the 1.8 validator gate (which escalates only named checks).
+        p = _write_slide(
+            tmp_path,
+            "slides_preamble_err.py",
+            """\
+            # j2 from 'macros.j2' import header
+            # {{ header("Regeln", "Rules") }}
+            from typing import Iterable
+
+            # %% [markdown] lang="de" tags=["slide"] slide_id="gh"
+            #
+            # ## Hinweise
+            """,
+        )
+        result = validate_file(p, checks=["format"])
+        assert all(f.severity != "error" for f in result.findings)
+
 
 # ---------------------------------------------------------------------------
 # Tag checks

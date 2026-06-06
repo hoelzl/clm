@@ -61,6 +61,37 @@ class TestNormalizeSlidesCmd:
         assert data["status"] == "applied"
         assert len(data["changes"]) == 1
 
+    def test_preamble_code_operation(self, tmp_path):
+        text = (
+            "# j2 from 'macros.j2' import header\n"
+            '# {{ header("Regeln", "Rules") }}\n'
+            "from typing import Iterable\n\n"
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="gh"\n#\n# ## A\n'
+        )
+        path = _write_slide(tmp_path / "slides_test.py", text)
+        runner = CliRunner()
+        result = runner.invoke(normalize_slides_cmd, [str(path), "--operations", "preamble_code"])
+        assert result.exit_code == 0
+        assert "preamble_code" in result.output
+        assert "# %%\nfrom typing import Iterable" in path.read_text(encoding="utf-8")
+
+    def test_preamble_code_dry_run_reports_without_writing(self, tmp_path):
+        text = (
+            "# j2 from 'macros.j2' import header\n"
+            '# {{ header("Regeln", "Rules") }}\n'
+            "from typing import Iterable\n\n"
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="gh"\n#\n# ## A\n'
+        )
+        path = _write_slide(tmp_path / "slides_test.py", text)
+        runner = CliRunner()
+        result = runner.invoke(
+            normalize_slides_cmd, [str(path), "--operations", "preamble_code", "--dry-run"]
+        )
+        assert result.exit_code == 0
+        assert "[DRY RUN]" in result.output
+        assert "preamble_code" in result.output
+        assert path.read_text(encoding="utf-8") == text
+
     def test_review_items_exit_2(self, tmp_path):
         # Count mismatch produces review items → exit 2 when no other changes
         text = (
