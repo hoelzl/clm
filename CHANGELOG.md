@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+
+- **`clm slides sync` now reconciles a committed mismatched-id twin instead of
+  only refusing it (#228, strategy B).** When a committed split pair shares a
+  `slide_id` but gave one slide a *different* id on each half (e.g. a per-half
+  `assign-ids`), sync previously refused the ambiguous both-directions bucket to
+  avoid silently doubling the slide (#226). With a correspondence verifier
+  available (the default `--verify-cold-pairs` when `$OPENROUTER_API_KEY` /
+  `$OPENAI_API_KEY` is set), sync now cross-pairs the suspects by content
+  correspondence (the cheap Haiku verifier) and, for a confirmed twin, **rewrites**
+  the divergent id so both halves share one (EN-authority) — no manual fix needed.
+  Leftover suspects with no confirmed twin use a direction-guarded hybrid:
+  single-direction → cross-add the genuinely-distinct slide; both-direction →
+  defer. No provider or an unconfirmed pair → refuse, exactly as before (never
+  bakes a wrong id). Surfaced as a `reconcile` proposal in the plan / `--json` /
+  dry-run.
+
 ## [1.8.2] - 2026-06-06
 
 ### Changed

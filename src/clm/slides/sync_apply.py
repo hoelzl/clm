@@ -145,6 +145,9 @@ class ApplyResult:
     applied_migrate: int = 0  # a drifted slide_id moved back onto its construct (§9)
     applied_mint: int = 0  # a confirmed both-id-less cold pair minted shared ids (#216 §12)
     applied_adopt: int = 0  # a confirmed half-id'd cold pair adopted the id'd half's ids (#216 §12)
+    applied_reconcile: int = (
+        0  # a confirmed mismatched-id twin had its divergent id rewritten (#228)
+    )
     in_sync: int = 0  # an edit the judge decided needed no change
     deferred: int = 0  # conflict (or moves/adds declined this pass)
     watermark_recorded: bool = False
@@ -162,6 +165,7 @@ class ApplyResult:
             + self.applied_migrate
             + self.applied_mint
             + self.applied_adopt
+            + self.applied_reconcile
         )
 
     @property
@@ -261,6 +265,17 @@ def apply_plan(
     # stamped on its own path, before any FileState load.
     if any(p.kind == "adopt" for p in plan.proposals):
         _apply_cold_adopt(plan, verifier, correspondence_cache, watermark_cache, result)
+        return result
+
+    # Stage 2b/3 for a strategy-B *reconcile* (#228): a committed partial-overlap pair
+    # whose mismatched-id twins are the whole actionable plan (emitted only then). Like
+    # mint/adopt it is handled as a coordinated whole-plan unit — verify the suspect
+    # cross-product, rewrite the divergent id of each confirmed twin (EN-authority),
+    # direction-guarded cross-add or defer the rest — and returns before any keyed walk,
+    # so it never interacts with the per-cell add / partial-watermark machinery (the
+    # source of the two doubling/watermark hazards a per-cell integration would carry).
+    if any(p.kind == "reconcile" for p in plan.proposals):
+        _apply_reconcile(plan, verifier, correspondence_cache, watermark_cache, translator, result)
         return result
 
     # Pre-apply content (parser-stripped) for the judge, keyed by (slide_id,
@@ -997,6 +1012,259 @@ def _adopt_ids_in_split_pair(de_path: Path, en_path: Path, authority: str) -> in
         idless_state.dirty = True
         idless_state.flush()
     return stamped
+
+
+# ---------------------------------------------------------------------------
+# Strategy-B reconcile (#228): verify mismatched-id twins, rewrite the divergent id
+# ---------------------------------------------------------------------------
+
+
+def _apply_reconcile(
+    plan: SyncPlan,
+    verifier: CorrespondenceVerifier | None,
+    correspondence_cache: SyncCorrespondenceCache | None,
+    watermark_cache: SyncWatermarkCache | None,
+    translator: SlideTranslator | None,
+    result: ApplyResult,
+) -> None:
+    """Resolve a committed mismatched-id-twin bucket by content correspondence (#228 strategy B).
+
+    The plan's ``reconcile`` candidates are the suspect cells of a partial-overlap pair
+    (it shares an id, so it kept its git-HEAD baseline) whose halves may carry the same
+    content under divergent ids. Handled as a coordinated whole-plan unit — like
+    mint/adopt — so a confirmed twin is never independently cross-added in both
+    directions (the doubling a per-cell route would risk):
+
+    1. Locate each suspect's cell; split into DE-source / EN-source by direction.
+    2. Verify the **DE×EN cross-product** of candidate pairs (cached, validated, safe-abort).
+    3. Keep only **unambiguous mutual** matches (a unique "yes" for both sides).
+    4. Reconcile each confirmed twin — **EN-authority**: both id'd → rewrite DE's id to
+       EN's; mixed → stamp the id'd side's id onto the id-less twin (a header rewrite, no
+       translation). A would-be id collision on the loser deck defers that pair.
+    5. **Direction-guarded hybrid** for the leftovers (no confirmed correspondent): all
+       one direction → cross-add the genuinely-distinct slide (cannot double); both
+       directions → defer.
+
+    No verifier / a safe-abort defers everything (strategy A — never a wrong id). Both
+    decks are written once (error-free passes only) and the watermark advances **only**
+    when every suspect was resolved (``deferred == 0``); otherwise it holds and the
+    unresolved suspects re-surface next run (the confirmed rewrites already on disk read
+    as in-sync, so nothing doubles).
+    """
+    reconciles = [p for p in plan.proposals if p.kind == "reconcile"]
+    if plan.has_errors:  # defense in depth — the emission gate already excludes errored plans
+        result.deferred += len(reconciles)
+        return
+
+    de_state = FileState.load(plan.de_path)
+    en_state = FileState.load(plan.en_path)
+    de_props = [p for p in reconciles if p.direction == "de->en"]
+    en_props = [p for p in reconciles if p.direction == "en->de"]
+    de_suspects = [c for p in de_props if (c := _suspect_cell(de_state, "de", p)) is not None]
+    en_suspects = [c for p in en_props if (c := _suspect_cell(en_state, "en", p)) is not None]
+    # A suspect that cannot be located (the files changed under us) or a single-direction
+    # bucket (shouldn't reach here) is not safe to resolve — defer the whole set.
+    if (
+        verifier is None
+        or not de_props
+        or not en_props
+        or len(de_suspects) != len(de_props)
+        or len(en_suspects) != len(en_props)
+    ):
+        result.deferred += len(reconciles)
+        return
+
+    pairs = [
+        SlidePair(
+            de_heading=_heading_line(de_c.body),
+            en_heading=_heading_line(en_c.body),
+            de_snippet=_snippet(de_c.body),
+            en_snippet=_snippet(en_c.body),
+            role=role_of(de_c.metadata) or "slide",
+        )
+        for de_c in de_suspects
+        for en_c in en_suspects
+    ]
+    verdicts = _resolve_correspondence(verifier, correspondence_cache, pairs)
+    if verdicts is None:  # safe-abort → refuse the whole set (never a wrong id)
+        result.deferred += len(reconciles)
+        return
+
+    confirmed = _mutual_matches(verdicts, len(de_suspects), len(en_suspects))
+    matched_de = {i for i, _ in confirmed}
+    matched_en = {j for _, j in confirmed}
+
+    deferred = 0
+    for i, j in confirmed:
+        if _reconcile_twin(de_suspects[i], en_suspects[j], de_state, en_state):
+            result.applied_reconcile += 1
+        else:
+            deferred += 2  # both-id-less (defensive) or an id collision — defer the pair
+
+    de_left = [c for i, c in enumerate(de_suspects) if i not in matched_de]
+    en_left = [c for j, c in enumerate(en_suspects) if j not in matched_en]
+    if de_left and en_left:
+        deferred += len(de_left) + len(en_left)  # both directions → can't be sure → defer
+    elif de_left:
+        deferred += _cross_add_leftovers(
+            de_left, "de", "en", de_state, en_state, translator, result
+        )
+    elif en_left:
+        deferred += _cross_add_leftovers(
+            en_left, "en", "de", en_state, de_state, translator, result
+        )
+    result.deferred += deferred
+
+    # Write the confirmed rewrites + any cross-adds (error-free passes only), then advance
+    # the watermark only when nothing was deferred — a held pass re-reads git HEAD next run
+    # and the now-paired twins read as in-sync, so the partial progress never doubles.
+    if not result.has_errors and not plan.has_errors:
+        _flush_states_atomically(de_state, en_state)
+    if (
+        watermark_cache is not None
+        and deferred == 0
+        and not result.has_errors
+        and not plan.has_errors
+    ):
+        _record_watermark(watermark_cache, plan.de_path, plan.en_path)
+        result.watermark_recorded = True
+
+
+def _suspect_cell(state: FileState, lang: str, proposal: Proposal) -> RawCell | None:
+    """Locate a reconcile suspect's cell in the loaded state.
+
+    An id'd suspect is found by ``(slide_id, role)``; an id-less one by its
+    ``source_position`` among the language's sync cells (the same index
+    :func:`ordered_sync_cells` assigns, stable since nothing committed between plan and
+    apply). ``None`` when it cannot be located, so the caller defers the whole set.
+    """
+    if proposal.slide_id is not None:
+        return state.find_cell(proposal.slide_id, proposal.role)
+    pos = -1
+    for cell in state.cells:
+        if role_of(cell.metadata) is None or cell.metadata.lang != lang:
+            continue
+        pos += 1
+        if pos == proposal.source_position:
+            return cell
+    return None
+
+
+def _mutual_matches(verdicts: dict[int, bool], n: int, m: int) -> list[tuple[int, int]]:
+    """The unambiguous mutual matches over an N×M correspondence cross-product.
+
+    ``verdicts`` is keyed by the flat pair index ``i * m + j`` (DE suspect ``i`` × EN
+    suspect ``j``). A pair is confirmed only when it is the sole "yes" in **both** its
+    row and its column — so a DE suspect matching two EN suspects (or vice versa) leaves
+    every involved pair ambiguous, and none are reconciled (they fall to the hybrid).
+    """
+    yes = [(i, j) for i in range(n) for j in range(m) if verdicts.get(i * m + j, False)]
+    row = Counter(i for i, _ in yes)
+    col = Counter(j for _, j in yes)
+    return [(i, j) for i, j in yes if row[i] == 1 and col[j] == 1]
+
+
+def _reconcile_twin(
+    de_cell: RawCell, en_cell: RawCell, de_state: FileState, en_state: FileState
+) -> bool:
+    """Rewrite a confirmed twin's divergent id so both halves share one (EN-authority).
+
+    Both id'd → EN wins (rewrite DE's id to EN's); exactly one id'd → the id'd side wins
+    (stamp its id onto the id-less twin). Returns ``False`` (defer the pair, no write) when
+    neither side carries an id (a defensive case the suspect buckets exclude) or the
+    winning id already exists on the loser deck (a collision — never overwrite a sibling).
+    """
+    de_id = de_cell.metadata.slide_id
+    en_id = en_cell.metadata.slide_id
+    if de_id and en_id:
+        winner, loser_state, loser_cell = en_id, de_state, de_cell  # EN-authority
+    elif de_id:
+        winner, loser_state, loser_cell = de_id, en_state, en_cell  # the id'd side wins
+    elif en_id:
+        winner, loser_state, loser_cell = en_id, de_state, de_cell
+    else:
+        return False  # both id-less — not a mismatched-id twin (defensive)
+    role = role_of(loser_cell.metadata)
+    if role is not None and loser_state.find_cell(winner, role) is not None:
+        return False  # the winning id already lives on the loser deck — defer, don't collide
+    _stamp_slide_id(loser_cell, winner)
+    loser_state.dirty = True
+    return True
+
+
+def _cross_add_leftovers(
+    leftovers: list[RawCell],
+    source_lang: str,
+    target_lang: str,
+    source_state: FileState,
+    target_state: FileState,
+    translator: SlideTranslator | None,
+    result: ApplyResult,
+) -> int:
+    """Cross-add genuinely-distinct one-sided leftovers (the hybrid's single-direction arm).
+
+    Each leftover has no confirmed correspondent, so it is a real one-sided slide:
+    translate its body and insert the twin on the other deck (an id'd leftover keeps its
+    id; an id-less one mints a fresh EN-authority slug onto both). Safe because the caller
+    only reaches here when leftovers exist in a **single** direction, so no twin can be
+    doubled. Returns the count that could not be cross-added (no translator / a translation
+    failure) — those are deferred so the watermark holds.
+    """
+    if translator is None:
+        return len(leftovers)
+    used_ids = {
+        cell.metadata.slide_id
+        for state in (source_state, target_state)
+        for cell in state.cells
+        if cell.metadata.slide_id
+    }
+    deferred = 0
+    for cell in leftovers:
+        role = role_of(cell.metadata) or "slide"
+        try:
+            target_body = translator.translate(
+                source_body=cell.body.rstrip("\n"),
+                source_lang=source_lang,
+                target_lang=target_lang,
+                role=role,
+            )
+        except TranslationError as exc:
+            logger.info("reconcile cross-add: translation failed (%s) — deferred", exc)
+            deferred += 1
+            continue
+        if cell.metadata.slide_id is None:
+            en_body = target_body if target_lang == "en" else cell.body.rstrip("\n")
+            new_id = resolve_collision(_slug_or_default(en_body), used_ids)
+            used_ids.add(new_id)
+            _stamp_slide_id(cell, new_id)
+            source_state.dirty = True
+        twin = build_twin_cell(cell, target_lang, target_body)
+        _insert_at_anchor(
+            target_state, _preceding_shared_anchor(source_state, target_state, cell), twin
+        )
+        target_state.dirty = True
+        result.applied_add += 1
+    return deferred
+
+
+def _preceding_shared_anchor(
+    source_state: FileState, target_state: FileState, cell: RawCell
+) -> tuple[str, str] | None:
+    """The nearest sync cell *before* ``cell`` in the source that also exists on the target.
+
+    Gives a cross-add a sensible insertion anchor without the structural pass (which the
+    reconcile short-circuit does not run). ``None`` falls back to inserting before the
+    target's first sync cell.
+    """
+    anchor: tuple[str, str] | None = None
+    for c in source_state.cells:
+        if c is cell:
+            break
+        role = role_of(c.metadata)
+        sid = c.metadata.slide_id
+        if role is not None and sid is not None and target_state.find_cell(sid, role) is not None:
+            anchor = (sid, role)
+    return anchor
 
 
 # ---------------------------------------------------------------------------
@@ -2248,7 +2516,13 @@ def _eligible_for_partial_advance(plan: SyncPlan, result: ApplyResult) -> bool:
     if not plan.tag_holds and (result.deferred <= 0 or result.applied_edit <= 0):
         return False
     structural = (
-        plan.count("add") + plan.count("remove") + plan.count("move") + plan.count("rename")
+        plan.count("add")
+        + plan.count("remove")
+        + plan.count("move")
+        + plan.count("rename")
+        # A reconcile plan is a whole-plan short-circuit that never reaches this path;
+        # counting it here is cheap insurance against a stray reconcile ever partial-advancing.
+        + plan.count("reconcile")
     )
     return structural == 0
 

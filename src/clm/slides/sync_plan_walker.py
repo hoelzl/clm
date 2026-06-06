@@ -195,7 +195,8 @@ class PlanWalkResult:
             f"{self.unvisited} unvisited (quit).",
             f"applied: {r.applied_edit} edit, {r.applied_retag} retag, "
             f"{r.applied_remove} remove, "
-            f"{r.applied_move} move, {r.applied_add} add, {r.applied_rename} rename; "
+            f"{r.applied_move} move, {r.applied_add} add, {r.applied_rename} rename, "
+            f"{r.applied_reconcile} reconcile; "
             f"{r.in_sync} already in sync; {r.deferred} deferred; "
             f"{len(r.errors)} error(s); "
             f"watermark {'advanced' if r.watermark_recorded else 'held'}.",
@@ -254,14 +255,19 @@ def run_plan_walker(
             actions.append(_action(proposal, REFUSE))
             continue
 
-        if kind in ("mint", "adopt"):
-            # A cold-start bootstrap candidate (#216 §12): correspondence is verified
-            # in apply (2b), not here — show it and let the engine mint/adopt or
-            # downgrade to refuse. Never prompted (the author reviews the resulting
-            # ids in git diff). `mint` creates fresh shared ids for a both-id-less
-            # pair; `adopt` stamps the id'd half's existing ids onto its id-less twin.
+        if kind in ("mint", "adopt", "reconcile"):
+            # A bootstrap / reconcile candidate (#216 §12 / #228): correspondence is
+            # verified in apply (2b), not here — show it and let the engine resolve it or
+            # downgrade to refuse. Never prompted (the author reviews the resulting ids in
+            # git diff). `mint` creates fresh shared ids for a both-id-less pair; `adopt`
+            # stamps the id'd half's existing ids onto its id-less twin; `reconcile`
+            # rewrites a committed mismatched twin's divergent id so both halves share one.
             echo(render_proposal(proposal, de_bodies, en_bodies))
-            verb = "mint shared" if kind == "mint" else "adopt the id'd half's"
+            verb = {
+                "mint": "mint shared",
+                "adopt": "adopt the id'd half's",
+                "reconcile": "reconcile the divergent",
+            }[kind]
             echo(f"  → pending correspondence verification (will {verb} ids if confirmed)")
             actions.append(_action(proposal, AUTO))
             continue

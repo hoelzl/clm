@@ -439,12 +439,18 @@ the safe one — no command was removed and every tool stays fully invocable.
   it is treated as a cold start the same as a never-committed one — it mints/adopts
   rather than reading the id-less side as "missing every slide" (which would have
   doubled the deck). A committed pair that **shares some ids but gives one slide a
-  different `slide_id` on each half** (the same content id'd divergently) is likewise
-  **refused** rather than cross-added in both directions (#226) — `sync` cannot tell a
-  divergent-id twin from a genuinely one-sided slide by id alone, so it declines
-  instead of risking a duplicate. *Migration:* for a refused pair, sync one direction
-  at a time (author one half, sync, then the other), reconcile the divergent ids so
-  both halves share one id, or run `clm slides assign-ids <dir>`; then re-run sync.
+  different `slide_id` on each half** (the same content id'd divergently) is, with a
+  provider available, **reconciled** (#228): the same correspondence check confirms the
+  twin, and `sync` **rewrites the divergent id** so both halves share one (EN-authority).
+  Leftover suspects with no confirmed twin use a direction-guarded hybrid — a
+  single-direction leftover is cross-added (a genuinely-distinct one-sided slide),
+  both-direction leftovers defer. Without a provider, or if the check returns "no" or
+  cannot run, such a pair is **refused** rather than cross-added in both directions
+  (#226) — `sync` cannot tell a divergent-id twin from a genuinely one-sided slide by id
+  alone, so it declines instead of risking a duplicate. A reconcile shows `N reconcile`
+  in `--dry-run` (exit 1 until applied). *Migration:* for a refused pair, sync one
+  direction at a time (author one half, sync, then the other), reconcile the divergent
+  ids so both halves share one id, or run `clm slides assign-ids <dir>`; then re-run sync.
 - **`clm slides assign-ids` is now plumbing (hidden).** Per-file id minting on a
   *single* split half can mint a divergent slug — the #1 silent #162 break. It is
   hidden from `clm slides --help` but stays invocable by name for agents/scripts

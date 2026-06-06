@@ -271,8 +271,14 @@ PythonCourses gate** (~200 id-less split halves; see `#158`).
   id, neutral code is byte-identical, id-less code rides the structural pass.
   The gate targets id-less *narrative markdown* only.
 - **Mismatched-id pairs with a provider** — Phase 3 may offer to *reconcile*
-  (pick a source-lang, adopt one side's ids) instead of only refusing; **decided:
-  stays `refuse` in Phase 3 v1** (§12), revisit with pilot data.
+  (pick a source-lang, adopt one side's ids) instead of only refusing; stayed
+  `refuse` in Phase 3 v1. **Shipped in #228 (strategy B):** a committed
+  partial-overlap pair whose mismatched twins are the *whole actionable plan* is
+  emitted as `reconcile` candidates when a provider is available; apply cross-pairs
+  the suspects by content correspondence (the same Haiku verifier) and, for a
+  confirmed twin, **rewrites** the divergent id (EN-authority). Leftover suspects
+  use a direction-guarded hybrid (single-direction → cross-add; both-direction →
+  defer). No provider / safe-abort → `refuse` (strategy A, #226). See §13.
 
 ---
 
@@ -282,7 +288,8 @@ PythonCourses gate** (~200 id-less split halves; see `#158`).
 
 - **Scope:** mint **id-less** both-directions cold pairs (the #158 case) **and**
   **half-id'd** pairs (the id-less half adopts the id'd half's ids). **Mismatched-id**
-  pairs (both id'd, *different* ids) stay `refuse`.
+  pairs (both id'd, *different* ids) stayed `refuse` in v1 — now *reconciled* in #228
+  (strategy B, §13).
 - **Verifier inputs:** per aligned slide, the **heading + a short body snippet**
   (~first 1–2 lines) + role. A **Haiku-class** model (a tunable constant, cf. the
   recoverer's Opus). One cached call per cold deck. **Not body-free** — two translated
@@ -410,3 +417,51 @@ git-HEAD fallback is demoted — a real **watermark** (a synced deck, which alwa
 ids) is never touched. (A *partial-overlap* pair — shares one id but a different slide is
 mismatched-id'd — is left to the keyed path's existing distinct-new-slide semantics, a
 pre-existing ambiguity outside the no-shared-keying class.)
+
+## 13. Strategy A / B for the partial-overlap mismatched-id pair (#226 → #228)
+
+The partial-overlap pair §12 left out (shares `s1`, so it **keeps** its git-HEAD baseline,
+but a different slide carries divergent ids — `d1` "B" on DE, `e1` "B" on EN) read as a
+slide "present on one deck only" in *both* directions, so the keyed path translate-added
+both and **silently doubled** "B".
+
+- **Strategy A (#226, shipped).** `_refuse_idcarrying_mismatched` (`sync_plan.py`) collects
+  the ambiguous both-directions bucket against a **git-HEAD** baseline — adds that are
+  id-less *or* whose id was already in the source deck's baseline (a committed one-sided
+  slide) — and, when they span both directions, replaces them with `refuse`. Safe but
+  conservative: the author reconciles the divergent ids by hand.
+
+- **Strategy B (#228, shipped).** When `provider_available` **and the ambiguous bucket is
+  the whole actionable plan** (the canonical shape: shared `s1` in-sync with no proposal,
+  the mismatched twins the only proposals), `_refuse_idcarrying_mismatched` upgrades the
+  bucket to **`reconcile`** candidates (`disposition="pending"`, one per suspect, carrying
+  direction/slide_id/role/source_position) instead of refusing. `apply_plan` handles a
+  reconcile plan as a **whole-plan short-circuit** (`_apply_reconcile`, beside mint/adopt):
+
+  1. Locate each suspect; split DE-source / EN-source by direction.
+  2. Verify the **DE×EN cross-product** of candidate pairs (heading+snippet via
+     `_build_slide_pairs` inputs / `_resolve_correspondence` — same Haiku verifier + cache).
+     The twins may sit at different positions, so positional `adopt` (§3.2) does not apply.
+  3. Keep only **unambiguous mutual** matches (`_mutual_matches`: a unique "yes" in both the
+     row and the column) — a DE suspect matching two EN suspects leaves all involved pairs
+     ambiguous.
+  4. **Reconcile a confirmed twin (EN-authority, `_reconcile_twin`):** both id'd → rewrite
+     DE's id to EN's; mixed → stamp the id'd side's id onto the id-less twin
+     (`_stamp_slide_id`, a header rewrite, no translation). A would-be id collision on the
+     loser deck defers that pair — never overwrite a sibling.
+  5. **Direction-guarded hybrid (`_cross_add_leftovers`)** for leftovers (no confirmed
+     correspondent): **all one direction** → cross-add the genuinely-distinct slide (cannot
+     double, since the other deck has no leftover suspect); **both directions** → defer.
+
+  No verifier / safe-abort → defer the whole set (strategy A — never a wrong id). The pass
+  writes confirmed rewrites + cross-adds (error-free passes only) and advances the watermark
+  **only when nothing was deferred**; a held pass re-reads git HEAD next run and the
+  now-paired twins read as in-sync, so the partial progress never doubles.
+
+  **Why a whole-plan short-circuit, gated to "the whole actionable plan":** a per-cell
+  reconcile proposal flowing through the normal walk is unsafe — independent processing can
+  cross-add a confirmed twin in both directions (doubling), the per-cell partial-watermark
+  advance tracks only one `(slide_id, role)` per proposal (a mismatched twin has two, so the
+  EN baseline would silently advance), and `_apply_adds`' id-less walk would double a
+  deferred id-less suspect. The coordinated short-circuit avoids all three; coexisting
+  edits/adds/issues keep `refuse` (the author does a two-step sync), matching mint/adopt.

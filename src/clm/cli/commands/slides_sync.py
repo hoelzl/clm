@@ -308,7 +308,8 @@ def _resolve_single_path(de_path: Path, en_path: Path | None) -> tuple[Path, Pat
     "verify_cold_pairs",
     default=None,
     help=(
-        "Bootstrap a never-id'd split pair by minting shared slide_ids — but only "
+        "Bootstrap a never-id'd split pair by minting shared slide_ids — and reconcile "
+        "a committed pair whose halves gave one slide divergent ids (#228) — but only "
         "after a cheap LLM (Haiku, via OpenRouter) confirms the two halves actually "
         "correspond (#216). Default: on when $OPENROUTER_API_KEY (or $OPENAI_API_KEY) "
         "is set. With no provider, or --no-verify-cold-pairs, such a pair is refused "
@@ -795,6 +796,7 @@ def _counts_str(plan: SyncPlan) -> str:
         "refuse",
         "mint",
         "adopt",
+        "reconcile",
     )
     parts = [f"{plan.count(k)} {k}" for k in kinds if plan.count(k)]
     return ", ".join(parts) if parts else "0"
@@ -1031,7 +1033,8 @@ def _outcome_line(result: ApplyResult) -> str:
         f"{result.applied_remove} remove, "
         f"{result.applied_move} move, {result.applied_add} add, "
         f"{result.applied_rename} rename, {result.applied_mint} mint, "
-        f"{result.applied_adopt} adopt; {result.in_sync} already in sync; "
+        f"{result.applied_adopt} adopt, {result.applied_reconcile} reconcile; "
+        f"{result.in_sync} already in sync; "
         f"{result.deferred} deferred; {len(result.errors)} error(s); "
         f"watermark {'advanced' if result.watermark_recorded else 'held'}."
     )
@@ -1106,6 +1109,7 @@ def _plan_dict(plan: SyncPlan) -> dict:
                 "refuse",
                 "mint",
                 "adopt",
+                "reconcile",
             )
         },
         "proposals": [
@@ -1138,6 +1142,7 @@ def _apply_dict(result: ApplyResult) -> dict:
             "rename": result.applied_rename,
             "mint": result.applied_mint,
             "adopt": result.applied_adopt,
+            "reconcile": result.applied_reconcile,
             "total": result.applied,
         },
         "in_sync": result.in_sync,
