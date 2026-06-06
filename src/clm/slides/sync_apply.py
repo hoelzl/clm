@@ -1209,6 +1209,12 @@ def _cross_add_leftovers(
     only reaches here when leftovers exist in a **single** direction, so no twin can be
     doubled. Returns the count that could not be cross-added (no translator / a translation
     failure) — those are deferred so the watermark holds.
+
+    Each leftover cell is cross-added **independently** — unlike :func:`_add_one_direction`,
+    there is no group-adjacency (``renaming_from``) handling for a slide's companions,
+    because a leftover companion is itself a committed-id'd suspect that arrives as its own
+    reconcile candidate (and so its own leftover, cross-added under its own id). The
+    whole-plan emission gate keeps this sound; relaxing it would require companion handling.
     """
     if translator is None:
         return len(leftovers)
