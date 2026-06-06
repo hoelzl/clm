@@ -2271,3 +2271,268 @@ class TestAnchorAmbiguityAndScoping:
         out, res = _round_trip(tmp_path, deck)
         assert res.relocated_cells == 0
         _assert_order(out, "b = 2", "VO after the multi-blank cell.", "trailing = 99")
+
+
+# ---------------------------------------------------------------------------
+# #247 — a j2 cell embedded mid-slide-group is no longer an invisible anchor
+# barrier. A voiceover authored after such a cell (e.g. an inline widget macro)
+# must anchor *to* the j2 cell, so extract/merge/inline restore its exact
+# position instead of re-inserting it before the j2.
+# ---------------------------------------------------------------------------
+
+
+def _anchor_for_body(comp: Path, needle: str) -> str | None:
+    """The ``vo_anchor`` token of the companion cell whose body contains ``needle``."""
+    for cell in parse_cells(comp.read_text(encoding="utf-8")):
+        if needle in cell.content:
+            m = re.search(r'vo_anchor="([^"]*)"', cell.header)
+            return m.group(1) if m else None
+    return None
+
+
+# A real j2 cell header must start with ``# {{ `` or ``# j2 ``; ``widget(...)``
+# stands in for any inline macro a deck might embed between content and its
+# voiceover.
+J2_MID_GROUP_DECK = """\
+# %% [markdown] lang="de" tags=["slide"] slide_id="real"
+# ## Real
+
+# {{ widget("demo") }}
+
+# %% [markdown] lang="de" tags=["voiceover"] slide_id="real"
+# VO after the widget.
+
+# %% [markdown] lang="de" tags=["slide"] slide_id="next"
+# ## Next
+"""
+
+
+class TestMidGroupJ2Anchor:
+    """#247 — mid-group j2 cells are anchorable predecessors / insert targets."""
+
+    def test_extract_anchors_voiceover_to_mid_group_j2(self, tmp_path: Path):
+        """The recorded anchor is an ``fp:`` of the j2 cell, not the content
+        cell above it. The old predecessor walk skipped the j2 and mis-anchored
+        to the heading, so the merge hoisted the voiceover above the j2."""
+        f = tmp_path / "slides_w.py"
+        f.write_text(J2_MID_GROUP_DECK, encoding="utf-8", newline="\n")
+
+        extract_voiceover(f)
+
+        anchor = _anchor_for_body(companion_path(f), "VO after the widget.")
+        assert anchor is not None and anchor.startswith("fp:")
+
+    def test_merge_keeps_voiceover_after_mid_group_j2(self, tmp_path: Path):
+        """The build path (merge) restores the voiceover after the j2 widget,
+        byte-identically, with no anchor leak."""
+        f = tmp_path / "slides_w.py"
+        f.write_text(J2_MID_GROUP_DECK, encoding="utf-8", newline="\n")
+        extract_voiceover(f)
+
+        merged, unmatched = merge_voiceover_text(
+            f.read_text(encoding="utf-8"), companion_path(f).read_text(encoding="utf-8")
+        )
+
+        assert unmatched == []
+        assert "vo_anchor" not in merged
+        _assert_order(merged, "## Real", 'widget("demo")', "VO after the widget.", "## Next")
+        assert _strip_for_slide(merged).strip() == J2_MID_GROUP_DECK.strip()
+
+    def test_inline_round_trip_with_mid_group_j2_byte_identical(self, tmp_path: Path):
+        """extract -> inline restores the deck exactly (the voiceover already
+        carries its slide_id, so extract adds nothing) and reports no
+        relocation."""
+        f = tmp_path / "slides_w.py"
+        f.write_text(J2_MID_GROUP_DECK, encoding="utf-8", newline="\n")
+
+        extract_voiceover(f)
+        res = inline_voiceover(f)
+
+        assert res.relocated_cells == 0
+        assert res.unmatched_cells == 0
+        assert res.companion_deleted
+        assert f.read_text(encoding="utf-8") == J2_MID_GROUP_DECK
+
+    def test_voiceovers_around_mid_group_j2_keep_order(self, tmp_path: Path):
+        """``content / VO_A / j2 widget / VO_B``: VO_A anchors to the heading,
+        VO_B to the widget, so both keep their slots across the round-trip."""
+        deck = (
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="s"\n# ## Slide\n\n'
+            '# %% [markdown] lang="de" tags=["voiceover"]\n# VO before the widget.\n\n'
+            '# {{ widget("demo") }}\n\n'
+            '# %% [markdown] lang="de" tags=["voiceover"]\n# VO after the widget.\n\n'
+            '# %% tags=["keep"]\nx = 1\n'
+        )
+        out, res = _round_trip(tmp_path, deck)
+
+        assert res.relocated_cells == 0
+        _assert_order(
+            out,
+            "## Slide",
+            "VO before the widget.",
+            'widget("demo")',
+            "VO after the widget.",
+            "x = 1",
+        )
+
+    def test_duplicate_mid_group_j2_occ_disambiguates(self, tmp_path: Path):
+        """Two identical j2 widgets in one group: a VO after the second anchors
+        to the second via the occurrence ordinal, not the first — proving the
+        ordinal counts j2 cells consistently at extract and merge time."""
+        deck = (
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="s"\n# ## Slide\n\n'
+            '# {{ widget("x") }}\n\n'
+            '# %% [markdown] lang="de" tags=["voiceover"]\n# VO after the FIRST widget.\n\n'
+            '# {{ widget("x") }}\n\n'
+            '# %% [markdown] lang="de" tags=["voiceover"]\n# VO after the SECOND widget.\n'
+        )
+        out, res = _round_trip(tmp_path, deck)
+
+        assert res.relocated_cells == 0
+        w1 = out.index('widget("x")')
+        w2 = out.index('widget("x")', w1 + 1)
+        v1 = out.index("VO after the FIRST widget.")
+        v2 = out.index("VO after the SECOND widget.")
+        assert w1 < v1 < w2 < v2
+
+    def test_legacy_anchorless_voiceover_lands_after_mid_group_j2(self):
+        """A *legacy* companion (``for_slide``, no ``vo_anchor``) for a slide
+        with a mid-group j2 now lands at the true group end — after the j2 —
+        rather than being stranded before it. The group-end fallback no longer
+        breaks on a j2 continuation cell (#247)."""
+        slide = (
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="real"\n# ## Real\n\n'
+            '# {{ widget("demo") }}\n\n'
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="next"\n# ## Next\n'
+        )
+        legacy = '# %% [markdown] lang="de" tags=["voiceover"] for_slide="real"\n# Legacy VO.\n'
+
+        merged, unmatched = merge_voiceover_text(slide, legacy)
+
+        assert unmatched == []
+        _assert_order(merged, "## Real", 'widget("demo")', "Legacy VO.", "## Next")
+
+    def test_title_greeting_under_macro_still_uses_tm_anchor(self, tmp_path: Path):
+        """The j2 title macro is now an eligible predecessor (it is a j2 cell),
+        yet it keeps its dedicated ``tm:`` anchor — not an ``fp:`` of the
+        ``header()`` call — so the #246 title behaviour is preserved. This guards
+        the interaction between the #247 j2-aware walk and the #246 macro anchor.
+        """
+        slide = tmp_path / "slides_015.en.py"
+        slide.write_text(TITLE_BEFORE_KEEP_EN, encoding="utf-8")
+
+        extract_voiceover(slide, force=True)
+
+        comp = slide.with_name("voiceover_015.en.py")
+        assert _vo_anchor_of(comp) == "tm:title#0"
+
+    def test_title_slide_widget_after_macro_anchors_via_fp(self, tmp_path: Path):
+        """A j2 widget on the title slide (after the header macro) followed by a
+        greeting: the greeting anchors to the *widget* via ``fp:`` (the widget is
+        not the title macro) and round-trips — exercising the now-j2-aware title
+        group bounds and candidate set."""
+        deck = """\
+# j2 from 'macros.j2' import header_en
+# {{ header_en("T") }}
+
+# {{ widget("demo") }}
+
+# %% [markdown] lang="en" tags=["voiceover"] slide_id="title"
+# - Greeting after widget.
+
+# %% [markdown] lang="en" tags=["slide"] slide_id="real"
+# - Real
+"""
+        slide = tmp_path / "slides_015.en.py"
+        slide.write_text(deck, encoding="utf-8")
+
+        extract_voiceover(slide, force=True)
+        comp = slide.with_name("voiceover_015.en.py")
+        anchor = _vo_anchor_of(comp)
+        assert anchor is not None and anchor.startswith("fp:")
+
+        merged, unmatched = merge_voiceover_text(
+            slide.read_text(encoding="utf-8"), comp.read_text(encoding="utf-8")
+        )
+        assert unmatched == []
+        _assert_order(
+            merged,
+            'header_en("T")',
+            'widget("demo")',
+            "Greeting after widget.",
+            "- Real",
+        )
+        assert _strip_for_slide(merged).strip() == deck.strip()
+
+    def test_inserting_different_j2_above_anchor_does_not_misplace(self, tmp_path: Path):
+        """A j2 anchor must track its *specific* macro across edits, not degrade
+        to 'the N-th j2 cell'. Inserting an unrelated j2 cell above the anchored
+        widget between extract and the build merge must not hoist the voiceover
+        in front of its true predecessor — the fingerprint folds in the j2
+        header so distinct macros get distinct anchors (#247)."""
+        deck = (
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="s"\n# ## S\n\n'
+            '# {{ realwidget("anchor") }}\n\n'
+            '# %% [markdown] lang="de" tags=["voiceover"] slide_id="s"\n# VO for the REAL widget.\n\n'
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="next"\n# ## Next\n'
+        )
+        f = tmp_path / "slides_e.py"
+        f.write_text(deck, encoding="utf-8", newline="\n")
+        extract_voiceover(f)
+        comp = companion_path(f).read_text(encoding="utf-8")
+
+        # Author inserts an unrelated j2 widget ABOVE the anchored one.
+        edited = f.read_text(encoding="utf-8").replace(
+            '# {{ realwidget("anchor") }}',
+            '# {{ newwidget("inserted") }}\n\n# {{ realwidget("anchor") }}',
+        )
+        merged, unmatched = merge_voiceover_text(edited, comp)
+
+        assert unmatched == []
+        # The voiceover stays after its OWN widget, not the freshly-inserted one.
+        _assert_order(
+            merged,
+            'newwidget("inserted")',
+            'realwidget("anchor")',
+            "VO for the REAL widget.",
+            "## Next",
+        )
+
+    def test_reordering_distinct_j2_widgets_does_not_swap_narration(self, tmp_path: Path):
+        """Two distinct widgets, each with its own voiceover: swapping the
+        widgets between extract and inline moves each narration WITH its widget
+        rather than leaving them pinned by ordinal. Guards the shared-fingerprint
+        defect the #247 review caught (all j2 cells once hashed identically)."""
+        deck = (
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="s"\n# ## S\n\n'
+            '# {{ widget("alpha") }}\n\n'
+            '# %% [markdown] lang="de" tags=["voiceover"] slide_id="s"\n# VO for ALPHA.\n\n'
+            '# {{ widget("beta") }}\n\n'
+            '# %% [markdown] lang="de" tags=["voiceover"] slide_id="s"\n# VO for BETA.\n'
+        )
+        f = tmp_path / "slides_r.py"
+        f.write_text(deck, encoding="utf-8", newline="\n")
+        extract_voiceover(f)
+
+        # Swap the two widgets in the (voiceover-stripped) slide file.
+        sentinel = "@@SWAP@@"
+        t = f.read_text(encoding="utf-8")
+        t = (
+            t.replace('# {{ widget("alpha") }}', sentinel)
+            .replace('# {{ widget("beta") }}', '# {{ widget("alpha") }}')
+            .replace(sentinel, '# {{ widget("beta") }}')
+        )
+        f.write_text(t, encoding="utf-8", newline="\n")
+
+        res = inline_voiceover(f)
+        out = f.read_text(encoding="utf-8")
+
+        assert res.unmatched_cells == 0
+        # Each narration tracks its widget across the swap (not swapped by ordinal).
+        _assert_order(
+            out,
+            'widget("beta")',
+            "VO for BETA.",
+            'widget("alpha")',
+            "VO for ALPHA.",
+        )

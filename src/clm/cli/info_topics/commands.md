@@ -1723,6 +1723,13 @@ slide group. It is body-only and occurrence-qualified, so editing a
 sibling cell's tags, inserting unrelated slides, or the build's blank-line
 cleanup between extract and inline does not move the voiceover.
 
+Since CLM {version} (#247), a j2 macro cell embedded *mid* slide-group — an
+inline widget, say — is also an eligible anchor. A voiceover authored after
+such a cell anchors to it (by body fingerprint, which is stable because the
+companion merge runs *before* j2 expansion) and is restored to its slot
+*after* the macro, rather than being hoisted in front of it. The title-slide
+macro keeps its dedicated `tm:title#0` anchor (#246).
+
 Since CLM {version}, extract **refuses to overwrite an existing companion**
 unless `--force` is given (it raises rather than writing, leaving both files
 untouched). The companion is *rebuilt* from the slide's current voiceover

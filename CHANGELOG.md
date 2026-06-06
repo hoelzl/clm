@@ -8,6 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **A voiceover authored after a mid-slide-group j2 cell now keeps its exact
+  position across `clm voiceover extract` → build / `inline` (#247).** A j2
+  macro cell (header `# {{ … }}` / `# j2 …` — e.g. an inline widget) embedded
+  between a slide's content and a following voiceover was an invisible anchor
+  barrier: `extract`'s predecessor-walk skipped j2 cells, so the voiceover was
+  anchored to the content cell *above* the macro and the build merge / `inline`
+  re-inserted it *before* the macro — content-preserving but not byte-identical,
+  and reported clean (no relocation, nothing unmatched). A mid-group j2 cell is
+  now an eligible positional anchor, matched by its body fingerprint (stable
+  because the companion merge runs *before* j2 expansion), so the voiceover
+  returns to its authored slot after the macro. The title-slide macro keeps its
+  dedicated `tm:title#0` anchor (#246), and legacy companions with no
+  `vo_anchor` are unaffected.
 - **A title-slide greeting voiceover now keeps its exact position across
   `clm voiceover extract` → build / `inline` (#246).** Follow-up to #242, which
   fixed the title greeting being *dropped*; this fixes it being *reordered*.

@@ -373,8 +373,20 @@ def _body_fingerprint(cell: _RawCell) -> str:
     cleanup that ``extract`` applies to the whole slide text *after* the
     anchor is recorded. Trailing whitespace is stripped and the cell type
     is folded in to avoid markdown/code collisions.
+
+    A j2 cell carries its entire content on its header line ``lines[0]`` (the
+    ``# {{ ... }}`` / ``# j2 ...`` macro call); its ``lines[1:]`` are only
+    inter-cell blanks. So for a j2 cell the header *is* the body and must be
+    hashed — otherwise every j2 cell collapses to the same empty fingerprint
+    and two different macros become indistinguishable, leaving the occurrence
+    ordinal as the only (brittle) discriminator (#247). This is safe because
+    the companion merge runs host-side on the raw slide text *before* j2
+    expansion, so the macro call is byte-identical at extract and at merge
+    time. Content cells keep hashing only ``lines[1:]`` so a header-only edit
+    (e.g. adding a tag) never moves their voiceover.
     """
-    body_lines = [ln.rstrip() for ln in cell.lines[1:]]
+    src = cell.lines if cell.metadata.is_j2 else cell.lines[1:]
+    body_lines = [ln.rstrip() for ln in src]
     body_lines = [ln for ln in body_lines if ln]
     norm = "\n".join(body_lines)
     payload = f"{cell.metadata.cell_type}\x00{norm}"
@@ -398,15 +410,21 @@ def _anchor_candidates(
 ) -> list[int]:
     """Indices within ``bounds`` matching an anchor ``(kind, value)``.
 
-    Returned in document order. Narrative/j2 cells and cells of a
-    conflicting language are excluded so the occurrence ordinal counts the
-    same content cells at extract time and at inline time.
+    Returned in document order. Narrative cells (other voiceover/notes
+    cells) and cells of a conflicting language are excluded so the
+    occurrence ordinal counts the same cells at extract time and at inline
+    time. A j2 cell *is* eligible: a voiceover authored after a mid-group j2
+    cell (e.g. an inline widget macro) anchors to it via an ``fp:`` body
+    fingerprint, and the host-side merge runs *before* j2 expansion so that
+    fingerprint is stable (#247). The title macro never resolves here — it
+    carries the dedicated ``tm:`` anchor (#246), matched separately — so its
+    presence among the candidates is harmless.
     """
     lo, hi = bounds
     out: list[int] = []
     for i in range(lo, hi):
         meta = cells[i].metadata
-        if meta.is_narrative or meta.is_j2:
+        if meta.is_narrative:
             continue
         if vo_lang and meta.lang and meta.lang != vo_lang:
             continue
@@ -429,7 +447,15 @@ def _anchor_token(
     predecessor's position among same-token candidates in that group, so a
     voiceover after the second of two identical cells resolves back to the
     second, not the first.
+
+    The j2 title macro is anchored with its dedicated, content-independent
+    ``tm:`` token (#246) rather than a fingerprint of its ``header(...)`` call,
+    so a title greeting sitting directly under the macro restores to the start
+    of the title group regardless of the title text. Every *other* j2 cell (an
+    inline widget macro, say) gets an ordinary ``fp:`` anchor (#247).
     """
+    if is_title_macro_cell(cells[pred_idx]):
+        return _TITLE_MACRO_ANCHOR
     kind, value = _anchor_key(cells[pred_idx])
     candidates = _anchor_candidates(cells, bounds, kind, value, vo_lang)
     occ = candidates.index(pred_idx) if pred_idx in candidates else 0
@@ -458,16 +484,21 @@ def _find_predecessor_index(
     voiceover_idx: int,
     vo_lang: str | None,
 ) -> int | None:
-    """Index of the content cell immediately preceding a voiceover cell.
+    """Index of the cell immediately preceding a voiceover cell.
 
-    Walks backward over j2 and narrative cells (other voiceover/notes
-    cells) and over cells of a conflicting language, returning the first
-    real content cell. Returns ``None`` if the voiceover has no content
-    cell above it.
+    Walks backward over narrative cells (other voiceover/notes cells) and
+    over cells of a conflicting language, returning the first cell that can
+    serve as a positional anchor. A j2 cell *is* eligible: a voiceover
+    authored after a mid-group j2 macro must anchor to it, not skip over it
+    onto the content cell above — otherwise the merge re-inserts the
+    voiceover *before* the j2 and the round-trip is not byte-identical
+    (#247). The title macro is one such j2 cell and is given the dedicated
+    ``tm:`` anchor by :func:`_anchor_token` (#246). Returns ``None`` if the
+    voiceover has no eligible cell above it.
     """
     for i in range(voiceover_idx - 1, -1, -1):
         meta = cells[i].metadata
-        if meta.is_j2 or meta.is_narrative:
+        if meta.is_narrative:
             continue
         if meta.lang is not None and vo_lang is not None and meta.lang != vo_lang:
             continue
@@ -959,15 +990,17 @@ def _find_insertion_point(
         best = indices[-1]
 
     # Walk forward from `best` to skip any non-voiceover continuation cells
-    # that belong to the same slide group (e.g., code cells after a slide)
+    # that belong to the same slide group (e.g., code cells after a slide).
+    # A mid-group j2 cell (an inline widget macro) is also a continuation: it
+    # carries no slide_id and is not a slide-start, so the group only ends at
+    # the next slide-start. Breaking at it would strand a group-end fallback
+    # before the j2 instead of after it (#247).
     insert_after = best
     for i in range(best + 1, len(cells)):
         cell = cells[i]
         if cell.metadata.is_narrative:
             break
         if cell.metadata.is_slide_start:
-            break
-        if cell.metadata.is_j2:
             break
         # If this cell has a different slide_id, stop
         if cell.metadata.slide_id and cell.metadata.slide_id != slide_id:
@@ -1043,14 +1076,16 @@ def _find_title_insertion_point(
             break
         if meta.is_slide_start:
             break
-        if meta.is_j2:
-            break
         # A continuation cell carrying its own slide_id belongs to a later
         # slide group (the title group has none of its own), so stop.
         if meta.slide_id:
             break
         if vo_lang and meta.lang and meta.lang != vo_lang:
             break
+        # A mid-title-group j2 cell (e.g. a widget on the title slide) is a
+        # continuation, not a boundary: walk over it so an anchorless title
+        # greeting still lands at the true group end rather than before it
+        # (#247).
         insert_after = i
 
     return insert_after
