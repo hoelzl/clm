@@ -1688,7 +1688,12 @@ carries no `slide_id` of its own — is anchored by the conventional
 build merge and `clm voiceover inline` anchor it back to the title slide, so a
 title greeting round-trips and builds in companion form exactly as it does
 inline. Companions extracted before the fix (which carried `slide_id="title"`
-with no `for_slide`) still merge — no re-extract needed.
+with no `for_slide`) still merge — no re-extract needed. Since CLM {version}
+(#246), the greeting's **exact position** within the opening segment is also
+preserved: a greeting authored *before* the title slide's trailing `keep`/code
+cells gets a title-macro `vo_anchor` (`tm:title#0`) so the merge restores it
+right after the title slide rather than at the end of the title group. Legacy
+companions with no `vo_anchor` keep the group-end placement.
 
 **Paired extract (auto-pairing), since CLM {version}.** When `FILE` is a split
 half (`<deck>.de.py` / `<deck>.en.py`) whose twin exists on disk, both
@@ -1717,6 +1722,13 @@ voiceover to its **exact** original position rather than to the end of its
 slide group. It is body-only and occurrence-qualified, so editing a
 sibling cell's tags, inserting unrelated slides, or the build's blank-line
 cleanup between extract and inline does not move the voiceover.
+
+Since CLM {version} (#247), a j2 macro cell embedded *mid* slide-group — an
+inline widget, say — is also an eligible anchor. A voiceover authored after
+such a cell anchors to it (by body fingerprint, which is stable because the
+companion merge runs *before* j2 expansion) and is restored to its slot
+*after* the macro, rather than being hoisted in front of it. The title-slide
+macro keeps its dedicated `tm:title#0` anchor (#246).
 
 Since CLM {version}, extract **refuses to overwrite an existing companion**
 unless `--force` is given (it raises rather than writing, leaving both files
