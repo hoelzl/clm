@@ -37,7 +37,7 @@ def suggest_sync_cmd(
     Read-only, single-FILE, *bilingual* (de/en cells co-located in one .py)
     suggester. It is hidden from the normal command surface and kept for the
     pre-split bilingual format and agent/MCP use. For split-format decks
-    (``<deck>.de.py`` / ``<deck>.en.py``) use ``clm slides sync``, which
+    (``<deck>.de.<ext>`` / ``<deck>.en.<ext>``) use ``clm slides sync``, which
     reconciles the pair and writes the changes.
 
     Detects cells modified in one language without corresponding changes

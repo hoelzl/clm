@@ -40,8 +40,8 @@ from clm.slides.split import SplitError, SplitResult, split_in_file
 )
 @click.option("--json", "as_json", is_flag=True, help="Emit a JSON report.")
 def split_cmd(source: Path, force: bool, report_only: bool, as_json: bool) -> None:
-    """Split a bilingual SOURCE slide file into ``<basename>.de.py`` and
-    ``<basename>.en.py`` companions.
+    """Split a bilingual SOURCE slide file into ``<basename>.de.<ext>`` and
+    ``<basename>.en.<ext>`` companions.
 
     \b
     The split is byte-identical: ``unify`` of the two outputs reproduces
@@ -54,9 +54,9 @@ def split_cmd(source: Path, force: bool, report_only: bool, as_json: bool) -> No
     outputs.
 
     \b
-    If SOURCE has a sibling voiceover companion (``voiceover_<name>.py``),
-    it is split in lockstep into ``voiceover_<name>.de.py`` /
-    ``voiceover_<name>.en.py`` so the narration is never orphaned;
+    If SOURCE has a sibling voiceover companion (``voiceover_<name>.<ext>``),
+    it is split in lockstep into ``voiceover_<name>.de.<ext>`` /
+    ``voiceover_<name>.en.<ext>`` so the narration is never orphaned;
     ``for_slide`` / ``vo_anchor`` are preserved. ``--force`` also covers
     overwriting existing companion halves.
     """

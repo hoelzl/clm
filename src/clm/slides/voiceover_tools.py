@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from clm.infrastructure.utils.path_utils import atomic_write_all
-from clm.notebooks.slide_parser import parse_cell_header, parse_cells
+from clm.notebooks.slide_parser import comment_token_for_path, parse_cell_header, parse_cells
 from clm.slides.normalizer import (
     _apply_slide_ids,
     _RawCell,
@@ -182,21 +182,23 @@ def companion_name(slide_path: Path) -> str:
     """Return the companion voiceover *filename* for a slide file.
 
     Directory-independent — the name only. Known slide prefixes are replaced
-    with ``voiceover_``; any ``.de`` / ``.en`` language tag is preserved so the
-    two halves of a split deck never collide on one name:
+    with ``voiceover_``; the slide's own extension (``.py``/``.cs``/``.cpp``/
+    ``.java``/``.ts``) is preserved, and any ``.de`` / ``.en`` language tag (part
+    of the stem) is kept so the two halves of a split deck never collide:
 
     ``slides_intro.py`` → ``voiceover_intro.py``
-    ``slides_010_x.de.py`` → ``voiceover_010_x.de.py``
-    ``topic_overview.py`` → ``voiceover_overview.py``
+    ``slides_010_x.de.cs`` → ``voiceover_010_x.de.cs``
+    ``topic_overview.cpp`` → ``voiceover_overview.cpp``
     ``project_setup.py`` → ``voiceover_setup.py``
     """
     stem = slide_path.stem
+    ext = slide_path.suffix
     # Replace known prefixes
     for prefix in ("slides_", "topic_", "project_"):
         if stem.startswith(prefix):
-            return f"voiceover_{stem[len(prefix) :]}.py"
+            return f"voiceover_{stem[len(prefix) :]}{ext}"
     # Fallback: prepend voiceover_
-    return f"voiceover_{stem}.py"
+    return f"voiceover_{stem}{ext}"
 
 
 def companion_path(slide_path: Path) -> Path:
@@ -573,7 +575,9 @@ def _find_owning_slide_id(cells: list[_RawCell], voiceover_idx: int) -> str | No
 
 def _has_voiceover_cells(path: Path) -> bool:
     """True iff ``path`` contains at least one voiceover/notes cell."""
-    _preamble, cells = _split_raw_cells(path.read_text(encoding="utf-8"))
+    _preamble, cells = _split_raw_cells(
+        path.read_text(encoding="utf-8"), comment_token_for_path(path)
+    )
     return any(_is_voiceover_cell(c) for c in cells)
 
 
@@ -622,7 +626,7 @@ def _plan_extraction(
     )
 
     text = path.read_text(encoding="utf-8")
-    preamble, cells = _split_raw_cells(text)
+    preamble, cells = _split_raw_cells(text, comment_token_for_path(path))
 
     # Check if there are any voiceover cells at all
     vo_indices = [i for i, c in enumerate(cells) if _is_voiceover_cell(c)]
@@ -892,6 +896,7 @@ def extract_voiceover_pair(
 def merge_voiceover_text(
     slide_text: str,
     companion_text: str,
+    comment_token: str = "#",
 ) -> tuple[str, list[str]]:
     """Merge companion voiceover cells into slide text in-memory.
 
@@ -908,8 +913,8 @@ def merge_voiceover_text(
         the companion that could not be matched to a ``slide_id``
         in the slide file.
     """
-    preamble, slide_cells = _split_raw_cells(slide_text)
-    _, companion_cells = _split_raw_cells(companion_text)
+    preamble, slide_cells = _split_raw_cells(slide_text, comment_token)
+    _, companion_cells = _split_raw_cells(companion_text, comment_token)
 
     if not companion_cells:
         return slide_text, []
@@ -1334,8 +1339,9 @@ def inline_voiceover(
     slide_text = path.read_text(encoding="utf-8")
     companion_text = comp.read_text(encoding="utf-8")
 
-    preamble, slide_cells = _split_raw_cells(slide_text)
-    _, companion_cells = _split_raw_cells(companion_text)
+    comment_token = comment_token_for_path(path)
+    preamble, slide_cells = _split_raw_cells(slide_text, comment_token)
+    _, companion_cells = _split_raw_cells(companion_text, comment_token)
 
     if not companion_cells:
         return result
@@ -1462,18 +1468,18 @@ def read_companion_baselines(
     return {sid: "\n".join(parts) for sid, parts in by_id.items()}
 
 
-def _format_companion_cell_body(text: str) -> list[str]:
+def _format_companion_cell_body(text: str, comment_token: str = "#") -> list[str]:
     """Format narrative text as comment-prefixed body lines for a companion cell."""
     lines = text.strip().split("\n")
-    body: list[str] = ["#"]
+    body: list[str] = [comment_token]
     for line in lines:
         stripped = line.strip()
         if not stripped:
-            body.append("#")
+            body.append(comment_token)
         elif stripped.startswith("- ") or stripped.startswith("**["):
-            body.append(f"# {stripped}")
+            body.append(f"{comment_token} {stripped}")
         else:
-            body.append(f"# - {stripped}")
+            body.append(f"{comment_token} - {stripped}")
     return body
 
 
@@ -1483,6 +1489,7 @@ def render_companion_update(
     lang: str,
     *,
     tag: str = "voiceover",
+    comment_token: str = "#",
 ) -> str:
     """Return updated companion file text with ``notes_by_slide_id`` applied.
 
@@ -1495,7 +1502,7 @@ def render_companion_update(
     if not notes_by_slide_id:
         return companion_text
 
-    preamble, cells = _split_raw_cells(companion_text)
+    preamble, cells = _split_raw_cells(companion_text, comment_token)
 
     existing: dict[str, int] = {}
     for i, cell in enumerate(cells):
@@ -1510,12 +1517,14 @@ def render_companion_update(
             existing[meta.for_slide] = i
 
     for slide_id, text in notes_by_slide_id.items():
-        body = _format_companion_cell_body(text)
+        body = _format_companion_cell_body(text, comment_token)
         if slide_id in existing:
             cell = cells[existing[slide_id]]
             cell.lines = [cell.lines[0], *body]
         else:
-            header = f'# %% [markdown] lang="{lang}" tags=["{tag}"] for_slide="{slide_id}"'
+            header = (
+                f'{comment_token} %% [markdown] lang="{lang}" tags=["{tag}"] for_slide="{slide_id}"'
+            )
             new_lines = [header, *body]
             cells.append(
                 _RawCell(
@@ -1553,7 +1562,13 @@ def update_companion_narrative(
         return companion
 
     existing_text = companion.read_text(encoding="utf-8") if companion.exists() else ""
-    new_text = render_companion_update(existing_text, notes_by_slide_id, lang, tag=tag)
+    new_text = render_companion_update(
+        existing_text,
+        notes_by_slide_id,
+        lang,
+        tag=tag,
+        comment_token=comment_token_for_path(companion),
+    )
     # Create the parent on first write so a fresh companion can land in a
     # not-yet-existing ``voiceover/`` subdir (``sync --layout subdir``).
     companion.parent.mkdir(parents=True, exist_ok=True)

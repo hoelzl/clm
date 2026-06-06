@@ -11,7 +11,8 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from clm.notebooks.slide_parser import Cell, parse_cells
+from clm.notebooks.slide_parser import Cell, comment_token_for_path, parse_cells
+from clm.slides.raw_cells import is_cell_boundary
 
 
 def get_language_view(
@@ -36,12 +37,13 @@ def get_language_view(
     Returns:
         Filtered file content as a string with line-number annotations.
     """
+    comment_token = comment_token_for_path(path)
     text = path.read_text(encoding="utf-8")
     raw_lines = text.split("\n")
-    cells = parse_cells(text)
+    cells = parse_cells(text, comment_token)
 
     kept = _filter_cells(cells, language, include_voiceover, include_notes)
-    return _reconstruct(kept, raw_lines)
+    return _reconstruct(kept, raw_lines, comment_token)
 
 
 def _filter_cells(
@@ -67,8 +69,12 @@ def _filter_cells(
     return result
 
 
-def _reconstruct(cells: list[Cell], raw_lines: list[str]) -> str:
-    """Reconstruct file text from kept cells with line annotations."""
+def _reconstruct(cells: list[Cell], raw_lines: list[str], comment_token: str = "#") -> str:
+    """Reconstruct file text from kept cells with line annotations.
+
+    The ``[original line N]`` annotation uses the deck's own comment token so the
+    single-language view stays a valid comment in the source language.
+    """
     parts: list[str] = []
 
     for cell in cells:
@@ -79,17 +85,17 @@ def _reconstruct(cells: list[Cell], raw_lines: list[str]) -> str:
                 parts.append(cell.content)
             continue
 
-        # Add line-number annotation
-        parts.append(f"# [original line {cell.line_number}]")
+        # Add line-number annotation (as a comment in the source language)
+        parts.append(f"{comment_token} [original line {cell.line_number}]")
 
         # Emit the cell's raw lines from the original file
-        cell_lines = _extract_raw_cell(cell, raw_lines)
+        cell_lines = _extract_raw_cell(cell, raw_lines, comment_token)
         parts.append(cell_lines)
 
     return "\n".join(parts) + "\n" if parts else ""
 
 
-def _extract_raw_cell(cell: Cell, raw_lines: list[str]) -> str:
+def _extract_raw_cell(cell: Cell, raw_lines: list[str], comment_token: str = "#") -> str:
     """Extract the raw text of a cell from the original file lines.
 
     Uses the cell's ``line_number`` (1-based) as start and scans
@@ -99,7 +105,7 @@ def _extract_raw_cell(cell: Cell, raw_lines: list[str]) -> str:
     end = start + 1
     while end < len(raw_lines):
         line = raw_lines[end]
-        if line.startswith("# %%") or line.startswith("# j2 ") or line.startswith("# {{ "):
+        if is_cell_boundary(line, comment_token):
             break
         end += 1
 
@@ -161,11 +167,12 @@ def suggest_sync(
     Returns:
         A :class:`SyncResult` with suggestions for the target language.
     """
+    comment_token = comment_token_for_path(path)
     current_text = path.read_text(encoding="utf-8")
     head_text = _git_head_content(path)
 
-    current_cells = parse_cells(current_text)
-    head_cells = parse_cells(head_text) if head_text is not None else []
+    current_cells = parse_cells(current_text, comment_token)
+    head_cells = parse_cells(head_text, comment_token) if head_text is not None else []
 
     # Separate cells by language
     cur_de = _lang_cells(current_cells, "de")

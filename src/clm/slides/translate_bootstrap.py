@@ -35,6 +35,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
+from clm.notebooks.slide_parser import comment_token_for_path
 from clm.slides.assign_ids import AssignOptions, AssignResult, assign_ids_in_split_pair
 from clm.slides.pairing import split_lang_tag
 from clm.slides.sync_apply import ApplyResult, _record_watermark, apply_plan
@@ -293,11 +294,13 @@ def _bootstrap_new_twin(
     so the next ``sync`` is a clean no-op.
     """
     source_text = paths.source_path.read_text(encoding="utf-8")
+    comment_token = comment_token_for_path(paths.source_path)
     deck = translate_deck_text(
         source_text,
         source_lang=paths.source_lang,
         target_lang=paths.target_lang,
         translator=translator,
+        comment_token=comment_token,
     )
     # Translate the companion in lockstep (D5) BEFORE any write, so a companion
     # failure aborts the whole bootstrap instead of leaving a deck with no
@@ -393,6 +396,7 @@ def _translate_companion(
         source_lang=paths.source_lang,
         target_lang=paths.target_lang,
         translator=translator,
+        comment_token=comment_token_for_path(paths.source_path),
     )
     return CompanionResult(
         source=source_companion, target=target, action="translated", translation=translation

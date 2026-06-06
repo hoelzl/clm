@@ -54,7 +54,7 @@ def extract_slide_file_at_rev(slide_path: Path, rev: str, scratch_dir: Path) -> 
         raise FileNotFoundError(f"{slide_path.name} does not exist at revision {rev[:10]}")
     # Use a short SHA suffix so multiple sync-at-rev invocations against
     # the same scratch dir stay distinguishable.
-    out = scratch_dir / f"{slide_path.stem}-at-{rev[:10]}.py"
+    out = scratch_dir / f"{slide_path.stem}-at-{rev[:10]}{slide_path.suffix}"
     out.write_text(content, encoding="utf-8")
     return out
 

@@ -48,7 +48,8 @@ def _infer_kind(path: Path) -> str | None:
         suffix = path.suffix.lower()
         if suffix == ".xml":
             return "spec"
-        if suffix == ".py":
+        # Any slide-source extension (#- and //-family), not just .py.
+        if suffix in (".py", ".cs", ".cpp", ".cxx", ".cc", ".java", ".ts", ".rs"):
             return "slides"
         return None
     if path.is_dir():

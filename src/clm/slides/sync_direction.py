@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from clm.notebooks.slide_parser import Cell, parse_cells
+from clm.notebooks.slide_parser import Cell, comment_token_for_path, parse_cells
 from clm.slides.sync_writeback import cell_content_hash
 
 if TYPE_CHECKING:
@@ -177,8 +177,8 @@ def _infer_from_snapshot(
         return _SignalResult(verdict="none", side=None, detail="no snapshot rows for this pair")
 
     try:
-        de_cells = parse_cells(de_path.read_text(encoding="utf-8"))
-        en_cells = parse_cells(en_path.read_text(encoding="utf-8"))
+        de_cells = parse_cells(de_path.read_text(encoding="utf-8"), comment_token_for_path(de_path))
+        en_cells = parse_cells(en_path.read_text(encoding="utf-8"), comment_token_for_path(en_path))
     except OSError as exc:
         return _SignalResult(
             verdict="none", side=None, detail=f"could not read source files: {exc}"

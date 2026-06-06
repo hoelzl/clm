@@ -144,6 +144,17 @@ def jinja_prefix_for(prog_lang: str) -> str:
         raise ValueError(f"Unsupported language: {prog_lang}") from e
 
 
+def line_comment_for(prog_lang: str) -> str:
+    """Return the line-comment token for a language.
+
+    ``"#"`` for python/rust, ``"//"`` for cpp/csharp/java/typescript — the token
+    that precedes ``%%`` / ``j2`` / ``{{`` in that language's percent-format slide
+    files. Derived from the Jinja line-statement prefix (``"# j2"`` / ``"// j2"``)
+    so the two can never drift.
+    """
+    return jinja_prefix_for(prog_lang).split(" ", 1)[0]
+
+
 def jupytext_format_for(prog_lang: str) -> str | dict[str, str]:
     try:
         return cast(str | dict[str, str], config.prog_lang[prog_lang]["jupytext_format"])

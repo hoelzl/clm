@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from clm.notebooks.slide_parser import Cell, parse_cells
+from clm.notebooks.slide_parser import Cell, comment_token_for_path, parse_cells
 from clm.slides.pairing import TITLE_SLIDE_ID, is_title_macro_cell
 from clm.slides.slug import strip_preserve_marker
 from clm.slides.workshop_scope import find_workshop_ranges, is_in_workshop
@@ -263,8 +263,9 @@ def _synthetic_title_cell(*, line_number: int, lang: str) -> Cell:
 # ---------------------------------------------------------------------------
 
 
-_BULLET_RE = re.compile(r"^#\s+[-*]\s+(?P<text>.+?)\s*$")
-_NUMBERED_RE = re.compile(r"^#\s+\d+\.\s+(?P<text>.+?)\s*$")
+# Anchored on either comment family (``#`` python/rust, ``//`` c-family).
+_BULLET_RE = re.compile(r"^(?:#|//)\s+[-*]\s+(?P<text>.+?)\s*$")
+_NUMBERED_RE = re.compile(r"^(?:#|//)\s+\d+\.\s+(?P<text>.+?)\s*$")
 _EMPHASIS_RE = re.compile(r"\*+([^*]+)\*+")
 _INLINE_CODE_RE = re.compile(r"`([^`]+)`")
 _LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]+\)")
@@ -297,13 +298,15 @@ def _narrative_text(cells: Sequence[Cell], *, max_chars: int = 6000) -> str:
     parts: list[str] = []
     used = 0
     for cell in cells:
+        token = cell.comment_token
         for raw_line in cell.content.splitlines():
             if not raw_line.strip():
                 continue
-            if raw_line.startswith("# "):
-                line = raw_line[2:]
-            elif raw_line.startswith("#"):
-                line = raw_line[1:]
+            # Literal-prefix strip (keeps content slashes for "//" decks).
+            if raw_line.startswith(token + " "):
+                line = raw_line[len(token) + 1 :]
+            elif raw_line.startswith(token):
+                line = raw_line[len(token) :]
             else:
                 line = raw_line
             if not line.strip():
@@ -345,7 +348,7 @@ def check_coverage_for_text(
     Returns a :class:`CoverageResult`. The text is never mutated.
     """
     result = CoverageResult(files_visited=1)
-    cells = parse_cells(text)
+    cells = parse_cells(text, comment_token_for_path(file_path))
     workshop_count: list[int] = [0]
     pairs = build_coverage_pairs(cells, workshop_slide_count=workshop_count)
     result.pairs_in_workshop = workshop_count[0]

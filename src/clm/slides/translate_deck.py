@@ -114,13 +114,16 @@ def translate_deck_text(
     source_lang: str,
     target_lang: str,
     translator: SlideTranslator,
+    comment_token: str = "#",
 ) -> TranslateDeckResult:
     """Translate a single-language split half into its other-language twin.
 
-    ``source_text`` is the verbatim content of a ``*.<source_lang>.py`` split
-    half. Returns the text of the matching ``*.<target_lang>.py`` half plus a
-    per-cell report. Raises :class:`TranslateDeckError` if a cell cannot be
-    translated or the generated pair does not round-trip.
+    ``source_text`` is the verbatim content of a ``*.<source_lang><ext>`` split
+    half. Returns the text of the matching ``*.<target_lang><ext>`` half plus a
+    per-cell report. ``comment_token`` is the source language's line-comment
+    token (``"#"`` python/rust, ``"//"`` cpp/csharp/java/typescript). Raises
+    :class:`TranslateDeckError` if a cell cannot be translated or the generated
+    pair does not round-trip.
     """
     if source_lang not in _SUPPORTED_LANGS or target_lang not in _SUPPORTED_LANGS:
         raise TranslateDeckError(
@@ -130,7 +133,7 @@ def translate_deck_text(
     if source_lang == target_lang:
         raise TranslateDeckError(f"source and target language are both {source_lang!r}")
 
-    preamble, source_cells = split_cells(source_text)
+    preamble, source_cells = split_cells(source_text, comment_token)
 
     target_cells: list[RawCell] = []
     report: list[CellTranslation] = []
@@ -171,7 +174,7 @@ def translate_deck_text(
         report.append(CellTranslation(index, "copied", None, meta.slide_id, meta.lang))
 
     target_text = reconstruct(preamble, target_cells)
-    _assert_round_trips(source_text, target_text, source_lang)
+    _assert_round_trips(source_text, target_text, source_lang, comment_token)
     return TranslateDeckResult(target_text=target_text, cells=report)
 
 
@@ -301,7 +304,9 @@ def _trailing_blanks(cell: RawCell) -> int:
     return n
 
 
-def _assert_round_trips(source_text: str, target_text: str, source_lang: str) -> None:
+def _assert_round_trips(
+    source_text: str, target_text: str, source_lang: str, comment_token: str = "#"
+) -> None:
     """Guard that the generated (source, target) pair is a valid split twin.
 
     Re-unifies the two halves and splits them back; the result must reproduce
@@ -320,8 +325,8 @@ def _assert_round_trips(source_text: str, target_text: str, source_lang: str) ->
     else:
         de_text, en_text = target_text, source_text
     try:
-        unified = split.unify_texts(de_text, en_text)
-        de_back, en_back = split.split_text(unified)
+        unified = split.unify_texts(de_text, en_text, comment_token)
+        de_back, en_back = split.split_text(unified, comment_token)
     except (split.UnifyError, split.SplitError) as exc:
         raise TranslateDeckError(
             f"generated translation does not form a valid split pair: {exc}"

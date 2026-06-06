@@ -187,28 +187,28 @@ across the wipe.
 
 #### Split-source build routing
 
-Slide files in split format — `<basename>.de.py` and
-`<basename>.en.py`, produced by `clm slides split` — route directly
-through the per-language pipeline: a `.de.py` file is built only
-for `lang=de` and a `.en.py` file only for `lang=en`. No unify
+Slide files in split format — `<basename>.de.<ext>` and
+`<basename>.en.<ext>`, produced by `clm slides split` — route directly
+through the per-language pipeline: a `.de.<ext>` file is built only
+for `lang=de` and a `.en.<ext>` file only for `lang=en`. No unify
 step, no temporary file. Build output is byte-identical to building
 the bilingual companion (same per-cell `lang` filter, same output
 paths, same section index — split companions are treated as one
 logical slot when numbering notebooks within a section).
 
 The build detects three other shapes per slide family
-(`slides_foo.py`, `slides_foo.de.py`, `slides_foo.en.py` all share
+(`slides_foo.<ext>`, `slides_foo.de.<ext>`, `slides_foo.en.<ext>` all share
 a *family*) and the routing rule is:
 
-- **Bilingual only** (`slides_foo.py`, no companions) — fed to both
+- **Bilingual only** (`slides_foo.<ext>`, no companions) — fed to both
   DE and EN pipelines exactly as before.
-- **Split pair** (`.de.py` + `.en.py`, no bilingual) — each file
+- **Split pair** (`.de.<ext>` + `.en.<ext>`, no bilingual) — each file
   routes to its own per-language pipeline.
 - **Dual-format conflict** (bilingual *and* at least one split
   companion present) — build refuses before any worker runs with
   category `split_slide_dual_format`. Resolve by running
   `clm slides unify` to merge or deleting the bilingual companion.
-- **Half-pair** (only one of `.de.py` / `.en.py`) — build refuses
+- **Half-pair** (only one of `.de.<ext>` / `.en.<ext>`) — build refuses
   before any worker runs with category `split_slide_half_pair`.
   Add the missing companion.
 
@@ -218,10 +218,10 @@ split pair and emits a `pairing` error finding for any divergence —
 the failure mode that silently produces different DE and EN output
 for what was meant to be language-neutral material.
 
-Phase 6 is Python-only today, mirroring Phase 5's scope: the
-sibling `header_de` / `header_en` macros only ship in
-`templates_python/macros.j2`. Phase 8 adds them to the
-cpp/csharp/java/typescript templates.
+The sibling `header_de` / `header_en` macros (the split prerequisite)
+ship in every language template — `templates_python` and the
+cpp/csharp/java/typescript templates — so split decks work across all
+supported prog_langs.
 
 #### Snapshot / verify
 
@@ -320,7 +320,7 @@ diff. If both a cell error and a verify diff are present, the cell
 error wins.
 
 Since CLM {version}, **dropped companion voiceover** is treated the same
-way. When a separated-voiceover companion (`voiceover_*.py`) has a
+way. When a separated-voiceover companion (`voiceover_*.<ext>`) has a
 `for_slide` that matches no `slide_id` in the slide it accompanies, that
 narration is dropped from the built output — usually because a `slide_id`
 was renamed out from under the companion. The build now reports each drop
@@ -403,7 +403,7 @@ clm spec decks [OPTIONS] [SPEC_FILE]
 
 Resolution mirrors the build exactly, which is the point of the command: a
 `<topic>` resolves to a topic **directory** and CLM builds **every**
-`slides_*.py` in it. The directory name often differs from the deck filenames
+`slides_*.<ext>` in it. The directory name often differs from the deck filenames
 (e.g. topic `properties` → `slides_properties.py` **and**
 `slides_property_setters.py`), so a deck-filename-stem heuristic silently misses
 decks. Module-bound `<topic>`/`<section>` references resolve in their module;
@@ -681,7 +681,7 @@ clm sync-includes course-specs/ml-azav.xml --data-dir /path/to/course
 
 ### `clm validate` (slides mode)
 
-`clm validate slides/` (or `clm validate slides_foo.py`) dispatches
+`clm validate slides/` (or `clm validate slides_foo.<ext>`) dispatches
 to slide validation when the argument is a `.py` file or directory.
 
 *Removed in CLM 1.8: the flat alias `clm validate-slides` no longer exists — use this group-qualified form.*
@@ -905,7 +905,7 @@ Special cases:
     stamped on both, deterministic regardless of file order (the same policy
     as a bilingual file). A pair that is not byte-faithfully unifiable
     (divergent shared cells) falls back to the per-file path below.
-  - **Single-file run** (`clm slides assign-ids slides_x.de.py`) — when the
+  - **Single-file run** (`clm slides assign-ids slides_x.de.<ext>`) — when the
     twin exists on disk with a matching slide count, an **id-less** slide
     adopts the twin's `slide_id` for the positionally-corresponding slide
     instead of minting a divergent slug. When both halves are id-less the
@@ -1075,7 +1075,7 @@ clm slides coverage-report slides/ --exclude _archive --shipping-only
 *Added in CLM {version}.*
 
 Single-language authoring sync for split-format decks
-(`<deck>.de.py` / `<deck>.en.py`, the layout produced by
+(`<deck>.de.<ext>` / `<deck>.en.<ext>`, the layout produced by
 `clm slides split`). After an author edits **one** half of a pair, this
 command brings the *other* half into sync in a single pass: edits are
 propagated, brand-new slides are translated and inserted, removed
@@ -1086,14 +1086,14 @@ minted onto both decks as it goes.
 sync checks that `DE_PATH` and `EN_PATH` are the two halves of **one** deck —
 one `.de` half and one `.en` half of the same name (the routing prefix is not
 required, so `apis.de.py` / `apis.en.py` is fine). A **swapped** order
-(`<deck>.en.py` first) is auto-corrected with a note; passing the **same file**
+(`<deck>.en.<ext>` first) is auto-corrected with a note; passing the **same file**
 twice, **two same-language** halves, **two different decks**, or a path that is
 **not a split half** at all (a bilingual or untagged file) is rejected with a
 usage error before any LLM call or write. This closes the #162 footgun where a
 mismatched pair could silently produce a divergent or no-op sync.
 
 **Single-path form (since CLM {version}).** `EN_PATH` is **optional**: pass just
-one half and the twin is derived from disk — `clm slides sync slides_x.de.py`
+one half and the twin is derived from disk — `clm slides sync slides_x.de.<ext>`
 syncs the pair. You may also pass the **bilingual deck stem** (`slides_x.py`, no
 `.de`/`.en` tag) when it still exists on disk, and both halves are derived. The
 derivation is prefix-agnostic (so `apis.de.py` works) and the resolved pair is
@@ -1299,8 +1299,8 @@ clm slides sync intro.de.py intro.en.py --no-cache
 *Added in CLM {version}. Alias: `clm slides bootstrap`.*
 
 Cold-start translation of a **single-language** deck into its other-language
-split half. When an author has written only `slides_x.de.py`, this synthesizes
-`slides_x.en.py` (and vice-versa) as a complete translation of the whole deck —
+split half. When an author has written only `slides_x.de.<ext>`, this synthesizes
+`slides_x.en.<ext>` (and vice-versa) as a complete translation of the whole deck —
 the one thing `clm slides sync` deliberately refuses to do (sync only fills
 per-cell gaps inside an *already-existing* pair). After the twin exists, keep the
 two halves in step with `clm slides sync`; run `clm slides unify` for a single
@@ -1451,8 +1451,8 @@ pair's cache entry — the rest of the deck stays cached.
 
 ### `clm slides split`
 
-Split a bilingual `.py` slide file into `<basename>.de.py` and
-`<basename>.en.py` companions. Cells with `lang="de"` go to the DE
+Split a bilingual `.py` slide file into `<basename>.de.<ext>` and
+`<basename>.en.<ext>` companions. Cells with `lang="de"` go to the DE
 file, `lang="en"` to the EN file, and shared cells (no `lang` — j2
 directives, language-neutral code) are copied verbatim to both. The
 bilingual `# {{ header("DE", "EN") }}` macro call is rewritten into
@@ -1491,12 +1491,14 @@ Round-trip with `clm slides unify` is byte-identical:
 `unify(*split(deck.py)) == deck.py`. Hard prerequisite: every slide
 carries a valid `slide_id` (Phase 3 enforces this with a warning,
 escalating to error in CLM 1.8) — `unify` pairs adjacent DE/EN cells
-by matching id. Currently Python-only: the slide parser recognises
-only `# %%` cell boundaries; non-Python prog_langs are deferred.
+by matching id. Since CLM {version} the parser recognises the deck's
+own comment token (`# %%` for Python/Rust, `// %%` for C#/C++/Java/TS),
+so split/unify and the rest of the authoring tooling work on every
+supported prog_lang — the token is derived from the file extension.
 
 **Voiceover companion.** If SOURCE has a sibling voiceover companion
-(`slides_<name>.py` → `voiceover_<name>.py`), `split` splits it in
-lockstep into `voiceover_<name>.de.py` / `voiceover_<name>.en.py`,
+(`slides_<name>.py` → `voiceover_<name>.<ext>`), `split` splits it in
+lockstep into `voiceover_<name>.de.<ext>` / `voiceover_<name>.en.<ext>`,
 routing each narration cell by its `lang` and preserving `for_slide` /
 `vo_anchor` verbatim. Without this the companion would be orphaned — the
 build would find no companion next to either split half. `--force`
@@ -1507,8 +1509,8 @@ written). Splitting a deck that has no companion creates no
 
 ### `clm slides unify`
 
-The inverse of `clm slides split`. Combine `<basename>.de.py` and
-`<basename>.en.py` into the bilingual `<basename>.py` companion. Pairs
+The inverse of `clm slides split`. Combine `<basename>.de.<ext>` and
+`<basename>.en.<ext>` into the bilingual `<basename>.<ext>` companion. Pairs
 adjacent DE/EN cells by matching `slide_id`, treats shared cells as
 alignment points (must be byte-identical between the two inputs —
 divergent shared content is an error), and rebuilds the bilingual
@@ -1520,7 +1522,7 @@ clm slides unify [OPTIONS] DE_SOURCE EN_SOURCE
 
 | Option | Description |
 |--------|-------------|
-| `--target FILE` | Explicit bilingual target path. Defaults to the basename shared by the two sources (e.g. `foo.de.py` + `foo.en.py` → `foo.py`). |
+| `--target FILE` | Explicit bilingual target path. Defaults to the basename shared by the two sources (e.g. `foo.de.<ext>` + `foo.en.<ext>` → `foo.<ext>`). |
 | `--force` | Overwrite an existing target file if present |
 | `--report-only`, `--dry-run` | Compute the unified text and report what would be written without modifying files |
 | `--json` | Emit a JSON report |
@@ -1540,8 +1542,8 @@ diverges …`. The same divergence is surfaced by
 build-time gate.
 
 **Voiceover companion.** If the pair has voiceover companions
-(`voiceover_<name>.de.py` / `voiceover_<name>.en.py`), `unify` recombines
-them in lockstep into `voiceover_<name>.py` — the inverse of `split`'s
+(`voiceover_<name>.de.<ext>` / `voiceover_<name>.en.<ext>`), `unify` recombines
+them in lockstep into `voiceover_<name>.<ext>` — the inverse of `split`'s
 companion split, byte-identical. The recombined companion is written to the
 **same directory** the split companions lived in (a `voiceover/` subdirectory
 stays foldered; see `clm slides tidy`). `--force` also covers overwriting an
@@ -1551,15 +1553,15 @@ existing companion target.
 
 Relocate a topic's authoring **sidecars** between the flat and foldered
 layouts. Sidecars are the files that are *not* core source and never reach
-output: voiceover companions (`voiceover_*.py`) and HTTP-replay cassettes
+output: voiceover companions (`voiceover_*.<ext>`) and HTTP-replay cassettes
 (`*.http-cassette.yaml`). `tidy` moves them into per-type subdirectories so a
-topic directory holds only the `slides_*.py` sources and genuine output
+topic directory holds only the `slides_*.<ext>` sources and genuine output
 companions (`img/`, `drawio/`):
 
 ```
 topic_070_rag_introduction/
 ├── cassettes/      ← *.http-cassette.yaml      (was: loose in the topic dir)
-├── voiceover/      ← voiceover_*.py            (was: loose in the topic dir)
+├── voiceover/      ← voiceover_*.<ext>         (was: loose in the topic dir)
 ├── drawio/  img/   ← output companions (unchanged)
 └── slides_010_*.de.py  slides_010_*.en.py      ← core sources
 ```
@@ -1644,7 +1646,7 @@ Suggests which cells need translation updates. Does not modify the file.
 > `clm slides --help` (it stays invocable by name and as the `suggest_sync` MCP
 > tool). It is a read-only suggester for the pre-split **bilingual** layout
 > (de/en cells co-located in one `.py`). For split-format decks
-> (`<deck>.de.py` / `<deck>.en.py`) use **`clm slides sync`**, which reconciles
+> (`<deck>.de.<ext>` / `<deck>.en.<ext>`) use **`clm slides sync`**, which reconciles
 > the pair and writes the changes. Two `sync`-named commands on the everyday
 > surface was a source of confusion — `sync` is the canonical funnel.
 
@@ -1669,7 +1671,7 @@ clm slides suggest-sync slides_intro.py --source-language de --json
 *Removed in CLM 1.8: the flat alias `clm extract-voiceover` no longer exists — use this group-qualified form.*
 
 Extract voiceover and notes cells from a slide file to a companion
-`voiceover_*.py` file, linked via `slide_id`/`for_slide` metadata.
+`voiceover_*.<ext>` file, linked via `slide_id`/`for_slide` metadata.
 Content cells without `slide_id` get auto-generated IDs before extraction.
 
 Since CLM {version}, that ID generation is **twin-aware** on a split half
@@ -1696,7 +1698,7 @@ right after the title slide rather than at the end of the title group. Legacy
 companions with no `vo_anchor` keep the group-end placement.
 
 **Paired extract (auto-pairing), since CLM {version}.** When `FILE` is a split
-half (`<deck>.de.py` / `<deck>.en.py`) whose twin exists on disk, both
+half (`<deck>.de.<ext>` / `<deck>.en.<ext>`) whose twin exists on disk, both
 companions are extracted in **one op** by default: the two halves are first
 minted with **EN-authority** `slide_id`s across both at once (the slug comes
 from the EN heading, stamped identically on both halves), then each half is
@@ -1769,7 +1771,7 @@ clm voiceover extract slides_intro.de.py --force
 
 *Removed in CLM 1.8: the flat alias `clm inline-voiceover` no longer exists — use this group-qualified form.*
 
-Inline voiceover cells from a companion `voiceover_*.py` file back into the
+Inline voiceover cells from a companion `voiceover_*.<ext>` file back into the
 slide file. The companion is deleted **only when every cell is placed**.
 
 Since CLM {version}, each voiceover is re-inserted immediately after the
@@ -2304,12 +2306,12 @@ between arguments is preserved.
 | `--model TEXT` | LLM model for merge/polished mode (default: `anthropic/claude-sonnet-4-6` via OpenRouter) |
 | `--transcript PATH` | Skip ASR; load precomputed transcript JSON (single-part only) |
 | `--alignment PATH` | Skip ASR, detection, matching; load precomputed alignment JSON |
-| `--companion/--no-companion` | Force companion-file merge on/off (default: auto-detect based on whether a `voiceover_*.py` companion exists, in a `voiceover/` subdir or next to SLIDES) |
+| `--companion/--no-companion` | Force companion-file merge on/off (default: auto-detect based on whether a `voiceover_*.<ext>` companion exists, in a `voiceover/` subdir or next to SLIDES) |
 | `--layout [subdir\|sibling]` | Where to create a **new** companion: `subdir` (a `voiceover/` folder) or `sibling`. Default: auto-detect an existing `voiceover/` folder, else sibling. Ignored when a companion already exists — it is updated in place. |
 | `--propagate-to [de\|en]` | After merging `--lang`, translate the changes into the given target language and update its voiceover cells |
 
 **Companion-file merge (auto-detected):**
-- If a `voiceover_*.py` companion file (as produced by `clm voiceover extract`)
+- If a `voiceover_*.<ext>` companion file (as produced by `clm voiceover extract`)
   exists next to `SLIDES`, sync reads baseline voiceover from the companion
   (keyed by `for_slide` → `slide_id`) and writes merged output back to the
   companion. The slide file itself is left untouched.

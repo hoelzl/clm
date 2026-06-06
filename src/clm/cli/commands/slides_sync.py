@@ -1,7 +1,7 @@
 """``clm slides sync`` — single-language authoring sync for split decks.
 
 Issue #166. After an author edits **one** half of a split-format deck pair
-(``<deck>.de.py`` / ``<deck>.en.py``, the layout produced by
+(``<deck>.de.<ext>`` / ``<deck>.en.<ext>``, the layout produced by
 ``clm slides split``), this command brings the *other* half into sync in a
 single pass: edits are propagated, brand-new slides are translated and inserted,
 removed slides are dropped, reorders are mirrored, and a shared ``slide_id`` is
@@ -101,6 +101,28 @@ if TYPE_CHECKING:
 CACHE_DB_NAME = "clm-llm.sqlite"
 
 
+def _resolve_prog_lang(path: Path) -> str:
+    """The deck's programming language for the translator prompt.
+
+    Resolves from a file's extension, or (batch mode) from the first deck found
+    under a directory. Falls back to ``"python"`` when unresolvable — the prompt
+    descriptors then degrade gracefully.
+    """
+    from clm.core.topic_resolver import find_slide_files_recursive
+    from clm.infrastructure.utils.path_utils import path_to_prog_lang
+
+    try:
+        target = path
+        if path.is_dir():
+            decks = find_slide_files_recursive(path)
+            if not decks:
+                return "python"
+            target = decks[0]
+        return path_to_prog_lang(target)
+    except (KeyError, ValueError):
+        return "python"
+
+
 def _resolve_sync_pair(de_path: Path, en_path: Path) -> tuple[Path, Path]:
     """Validate the two positional paths are the DE/EN halves of one split deck,
     auto-correcting a swapped order, and return them as ``(de, en)``.
@@ -116,14 +138,14 @@ def _resolve_sync_pair(de_path: Path, en_path: Path) -> tuple[Path, Path]:
     if de_path == en_path:
         raise click.UsageError(
             f"DE_PATH and EN_PATH are the same file ({de_path}); pass the two "
-            "halves of a split deck — <deck>.de.py and <deck>.en.py."
+            "halves of a split deck — <deck>.de.<ext> and <deck>.en.<ext>."
         )
     de_tag, en_tag = split_lang_tag(de_path), split_lang_tag(en_path)
     if de_tag is None or en_tag is None:
         bad = de_path if de_tag is None else en_path
         raise click.UsageError(
             f"{bad} is not a split-format slide half. `clm slides sync` expects "
-            "two paths named <deck>.de.py and <deck>.en.py "
+            "two paths named <deck>.de.<ext> and <deck>.en.<ext> "
             "(run `clm slides split <deck>.py` to produce them)."
         )
     if de_tag == en_tag:
@@ -147,9 +169,9 @@ def _resolve_sync_pair(de_path: Path, en_path: Path) -> tuple[Path, Path]:
 
 def _resolve_single_path(de_path: Path, en_path: Path | None) -> tuple[Path, Path]:
     """Single-path contract: when EN_PATH is omitted, derive the second half from
-    DE_PATH so the author can run ``clm slides sync <deck>.de.py``.
+    DE_PATH so the author can run ``clm slides sync <deck>.de.<ext>``.
 
-    DE_PATH may be **one half** (``<deck>.de.py`` / ``<deck>.en.py``) — the twin
+    DE_PATH may be **one half** (``<deck>.de.<ext>`` / ``<deck>.en.<ext>``) — the twin
     is derived from disk — or a **bilingual deck stem** (``<deck>.py``, no
     ``.de``/``.en`` tag) whose two halves both exist. Derivation is prefix-agnostic
     (so ``apis.de.py`` works) and the resolved pair is still funnelled through
@@ -167,8 +189,8 @@ def _resolve_single_path(de_path: Path, en_path: Path | None) -> tuple[Path, Pat
             if de_path.name.startswith("voiceover_"):
                 raise click.UsageError(
                     f"{de_path.name} is a voiceover companion, not a deck half; "
-                    f"`clm slides sync` reconciles slide decks (<deck>.de.py / "
-                    f"<deck>.en.py), not their voiceover companions."
+                    f"`clm slides sync` reconciles slide decks (<deck>.de.<ext> / "
+                    f"<deck>.en.<ext>), not their voiceover companions."
                 )
             other = "EN" if tag == "de" else "DE"
             raise click.UsageError(
@@ -186,7 +208,7 @@ def _resolve_single_path(de_path: Path, en_path: Path | None) -> tuple[Path, Pat
         ext = de_path.suffix
         stem = de_path.name[: -len(ext)] if ext else de_path.name
         raise click.UsageError(
-            f"{de_path.name} is neither a split half (<deck>.de.py / <deck>.en.py) "
+            f"{de_path.name} is neither a split half (<deck>.de.<ext> / <deck>.en.<ext>) "
             f"nor a deck stem with both halves present (expected {stem}.de{ext} and "
             f"{stem}.en{ext} on disk). Pass the two halves explicitly."
         )
@@ -381,9 +403,9 @@ def slides_sync_cmd(
     """Bring a split DE/EN deck pair into sync after editing one side.
 
     DE_PATH and EN_PATH are the two halves of a split-format deck
-    (``<deck>.de.py`` and ``<deck>.en.py``). EN_PATH is **optional**: pass just
+    (``<deck>.de.<ext>`` and ``<deck>.en.<ext>``). EN_PATH is **optional**: pass just
     one half (or the bilingual deck stem ``<deck>.py``) and the other half is
-    derived from disk — ``clm slides sync slides_x.de.py`` syncs the pair.
+    derived from disk — ``clm slides sync slides_x.de.<ext>`` syncs the pair.
 
     \b
     DE_PATH may also be a **directory** — batch mode: every ``.de``/``.en`` deck
@@ -462,7 +484,9 @@ def slides_sync_cmd(
             cache_dir=cache_dir,
             provider_available=provider_available,
             make_judge=lambda: _resolve_judge(provider, llm_model, ollama_url, llm_timeout),
-            make_translator=lambda: OpenRouterSlideTranslator(model=translation_model),
+            make_translator=lambda: OpenRouterSlideTranslator(
+                model=translation_model, prog_lang=_resolve_prog_lang(de_path)
+            ),
             make_recoverer=lambda: _resolve_recoverer(llm_recover, recovery_model),
             make_verifier=lambda: _resolve_verifier(verify_enabled),
         )
@@ -528,7 +552,9 @@ def slides_sync_cmd(
         elif interactive:
             mode = "interactive"
             judge = _resolve_judge(provider, llm_model, ollama_url, llm_timeout)
-            translator = OpenRouterSlideTranslator(model=translation_model)
+            translator = OpenRouterSlideTranslator(
+                model=translation_model, prog_lang=_resolve_prog_lang(de_path)
+            )
             recoverer = _resolve_recoverer(llm_recover, recovery_model)
             verifier = _resolve_verifier(verify_enabled)
             for issue in plan.issues:
@@ -548,7 +574,9 @@ def slides_sync_cmd(
         else:
             mode = "apply"
             judge = _resolve_judge(provider, llm_model, ollama_url, llm_timeout)
-            translator = OpenRouterSlideTranslator(model=translation_model)
+            translator = OpenRouterSlideTranslator(
+                model=translation_model, prog_lang=_resolve_prog_lang(de_path)
+            )
             recoverer = _resolve_recoverer(llm_recover, recovery_model)
             verifier = _resolve_verifier(verify_enabled)
             apply_result = apply_plan(

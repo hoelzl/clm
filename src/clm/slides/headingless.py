@@ -49,17 +49,21 @@ class Extraction:
     source: str = ""
 
 
-# Markdown heading: ``# ## Title`` (Python comment prefix included).
-_HEADING_RE = re.compile(r"^#\s+(#{1,6})\s+(?P<text>.+?)\s*$")
+# Each matcher anchors on the line-comment prefix of either family — ``#``
+# (python/rust) or ``//`` (cpp/csharp/java/typescript) — since a deck is
+# single-language the alternation never cross-matches.
+#
+# Markdown heading: ``# ## Title`` / ``// ## Title`` (comment prefix included).
+_HEADING_RE = re.compile(r"^(?:#|//)\s+(#{1,6})\s+(?P<text>.+?)\s*$")
 
-# Bullet: ``# - Text`` or ``# * Text`` (Python comment prefix included).
-_BULLET_RE = re.compile(r"^#\s+[-*]\s+(?P<text>.+?)\s*$")
+# Bullet: ``# - Text`` or ``# * Text`` (comment prefix included).
+_BULLET_RE = re.compile(r"^(?:#|//)\s+[-*]\s+(?P<text>.+?)\s*$")
 
 # Numbered list: ``# 1. Text``.
-_NUMBERED_RE = re.compile(r"^#\s+\d+\.\s+(?P<text>.+?)\s*$")
+_NUMBERED_RE = re.compile(r"^(?:#|//)\s+\d+\.\s+(?P<text>.+?)\s*$")
 
 # Bold *line*: a line that is essentially **bold text** with little else.
-_BOLD_LINE_RE = re.compile(r"^#\s+\*\*([^*]+)\*\*\s*$")
+_BOLD_LINE_RE = re.compile(r"^(?:#|//)\s+\*\*([^*]+)\*\*\s*$")
 
 # Image with alt text.
 _IMG_ALT_RE = re.compile(r'<img[^>]*\balt="([^"]+)"', re.IGNORECASE)
@@ -107,10 +111,13 @@ def _extract_first_prose_line(lines: list[str]) -> str | None:
     """
     for line in lines:
         # Skip blank markdown lines and any non-markdown line (e.g. raw
-        # Python statements in a code cell).
-        if not line.startswith("# "):
+        # code statements in a code cell). Recognize either comment family.
+        if line.startswith("# "):
+            content = line[2:]
+        elif line.startswith("// "):
+            content = line[3:]
+        else:
             continue
-        content = line[2:]
         content = _HTML_TAG_RE.sub("", content)
         content = _BOLD_INLINE_RE.sub(r"\1", content)
         content = _ITALIC_INLINE_RE.sub(r"\1", content)
@@ -187,11 +194,15 @@ def cell_text_for_llm(content: str, *, max_chars: int = 1500) -> str:
     for line in _iter_content_lines(content):
         if not line.strip():
             continue
-        # Drop the Python comment prefix on markdown lines.
+        # Drop the comment prefix on markdown lines (either comment family).
         if line.startswith("# "):
             stripped = line[2:]
+        elif line.startswith("// "):
+            stripped = line[3:]
         elif line.startswith("#"):
             stripped = line[1:]
+        elif line.startswith("//"):
+            stripped = line[2:]
         else:
             stripped = line
         if not stripped.strip():

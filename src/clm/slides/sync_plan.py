@@ -39,7 +39,7 @@ from typing import TYPE_CHECKING
 
 logger = logging.getLogger(__name__)
 
-from clm.notebooks.slide_parser import Cell, CellMetadata, parse_cells
+from clm.notebooks.slide_parser import Cell, CellMetadata, comment_token_for_path, parse_cells
 from clm.slides.sync_writeback import (
     cell_content_hash,
     construct_of,
@@ -633,11 +633,12 @@ def _baseline_from_watermark(
 
 
 def _lang_for_path(path: Path) -> str | None:
-    name = path.name
-    if name.endswith(".de.py"):
-        return "de"
-    if name.endswith(".en.py"):
-        return "en"
+    # The ``.de`` / ``.en`` tag sits before the final extension
+    # (``foo.de.cs`` -> "de"), so this is prefix- and extension-agnostic
+    # across .py/.cs/.cpp/.java/.ts split halves.
+    parts = path.name.split(".")
+    if len(parts) >= 3 and parts[-2] in ("de", "en"):
+        return parts[-2]
     return None
 
 
@@ -664,7 +665,7 @@ def _baseline_from_git_head(path: Path) -> list[BaselineCell] | None:
         return None
     if completed.returncode != 0:
         return None
-    cells = parse_cells(completed.stdout)
+    cells = parse_cells(completed.stdout, comment_token_for_path(path))
     return [
         BaselineCell(
             position=c.position,
@@ -1759,8 +1760,8 @@ def build_sync_plan(
     actionable plan upgrades to ``reconcile`` candidates (handled in
     :func:`classify_changes`) instead of refusing.
     """
-    de_cells = parse_cells(de_path.read_text(encoding="utf-8"))
-    en_cells = parse_cells(en_path.read_text(encoding="utf-8"))
+    de_cells = parse_cells(de_path.read_text(encoding="utf-8"), comment_token_for_path(de_path))
+    en_cells = parse_cells(en_path.read_text(encoding="utf-8"), comment_token_for_path(en_path))
     de_current = ordered_sync_cells(de_cells, "de")
     en_current = ordered_sync_cells(en_cells, "en")
 
@@ -2200,8 +2201,8 @@ def render_explain(
     lines.append("  legend: = unchanged  ~ edited  + new  - removed")
     lines.append("")
 
-    de_cells = parse_cells(de_path.read_text(encoding="utf-8"))
-    en_cells = parse_cells(en_path.read_text(encoding="utf-8"))
+    de_cells = parse_cells(de_path.read_text(encoding="utf-8"), comment_token_for_path(de_path))
+    en_cells = parse_cells(en_path.read_text(encoding="utf-8"), comment_token_for_path(en_path))
     de_current = watermark_rows(de_cells)
     en_current = watermark_rows(en_cells)
     current_by_partition = {

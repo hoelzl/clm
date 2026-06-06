@@ -30,7 +30,7 @@ from clm.core.topic_resolver import (
     find_slide_files_recursive,
     matches_for_binding,
 )
-from clm.notebooks.slide_parser import parse_cell_header
+from clm.notebooks.slide_parser import comment_token_for_path, parse_cell_header
 from clm.slides.pairing import build_slide_groups
 from clm.slides.raw_cells import RawCell as _RawCell
 from clm.slides.raw_cells import reconstruct as _reconstruct
@@ -146,7 +146,7 @@ def _apply_tag_migration(cells: list[_RawCell], file_path: str) -> list[Change]:
 # Workshop tags: add 'workshop' to workshop heading cells
 # ---------------------------------------------------------------------------
 
-_WORKSHOP_RE = re.compile(r"^#\s+##\s+(Workshop|Mini-Workshop)\s*:", re.MULTILINE)
+_WORKSHOP_RE = re.compile(r"^(?:#|//)\s+##\s+(Workshop|Mini-Workshop)\s*:", re.MULTILINE)
 
 
 def _apply_workshop_tags(cells: list[_RawCell], file_path: str) -> list[Change]:
@@ -495,11 +495,15 @@ def _check_similarity(de_cell: _RawCell, en_cell: _RawCell) -> list[str]:
 def _heading_level(cell: _RawCell) -> int:
     """Extract the markdown heading level (0 = no heading)."""
     for line in cell.lines[1:]:
-        # Strip Python comment prefix
+        # Strip the comment prefix (either comment family).
         if line.startswith("# "):
             inner = line[2:]
+        elif line.startswith("// "):
+            inner = line[3:]
         elif line.startswith("#"):
             inner = line[1:]
+        elif line.startswith("//"):
+            inner = line[2:]
         else:
             continue
         inner = inner.lstrip()
@@ -518,9 +522,9 @@ def _bullet_count(cell: _RawCell) -> int:
     """Count top-level list items in a markdown cell."""
     count = 0
     for line in cell.lines[1:]:
-        if line.startswith("# - ") or line.startswith("# * "):
+        if line.startswith(("# - ", "# * ", "// - ", "// * ")):
             count += 1
-        elif re.match(r"^# \d+\.\s", line):
+        elif re.match(r"^(?:#|//) \d+\.\s", line):
             count += 1
     return count
 
@@ -640,7 +644,9 @@ def _apply_slide_ids(
 # ---------------------------------------------------------------------------
 
 
-def _apply_cell_spacing(cells: list[_RawCell], file_path: str) -> list[Change]:
+def _apply_cell_spacing(
+    cells: list[_RawCell], file_path: str, comment_token: str = "#"
+) -> list[Change]:
     """Normalize inter-cell and intra-cell whitespace (two mechanical fixes).
 
     The counterparts of the validator's ``cell-separation`` and
@@ -666,19 +672,19 @@ def _apply_cell_spacing(cells: list[_RawCell], file_path: str) -> list[Change]:
         if not body:
             continue
         first = body[0]
-        if first.strip() == "#":
+        if first.strip() == comment_token:
             continue  # already a blank comment
         if first.strip() == "":
-            # A bare blank line where the `#` belongs — promote it to the comment.
-            cell.lines[1] = "#"
+            # A bare blank line where the comment belongs — promote it.
+            cell.lines[1] = comment_token
         else:
-            cell.lines.insert(1, "#")
+            cell.lines.insert(1, comment_token)
         changes.append(
             Change(
                 file=file_path,
                 operation="cell_spacing",
                 line=cell.line_number,
-                description="Added leading blank comment line (`#`) to markdown cell",
+                description=f"Added leading blank comment line (`{comment_token}`) to markdown cell",
             )
         )
 
@@ -738,8 +744,9 @@ def normalize_file(
         op_set = set(ALL_OPERATIONS)
 
     file_str = str(path)
+    comment_token = comment_token_for_path(path)
     text = path.read_text(encoding="utf-8")
-    preamble, cells = _split_raw_cells(text)
+    preamble, cells = _split_raw_cells(text, comment_token)
 
     all_changes: list[Change] = []
     all_review: list[ReviewItem] = []
@@ -769,7 +776,7 @@ def normalize_file(
     # Cell spacing runs last, on the final cell order (after any interleaving
     # reorder), so blank-line separation reflects the cells' final adjacency.
     if "cell_spacing" in op_set:
-        all_changes.extend(_apply_cell_spacing(cells, file_str))
+        all_changes.extend(_apply_cell_spacing(cells, file_str, comment_token))
 
     modified = False
     if all_changes and not dry_run:

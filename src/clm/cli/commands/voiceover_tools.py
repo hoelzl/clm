@@ -75,12 +75,12 @@ def extract_voiceover_cmd(
 ):
     """Extract voiceover cells from a slide file to a companion file.
 
-    Moves voiceover and notes cells to a companion voiceover_*.py file,
+    Moves voiceover and notes cells to a companion voiceover_*.<ext> file,
     linked via slide_id/for_slide metadata.  Content cells without
     slide_id get auto-generated IDs before extraction.  Refuses to
     overwrite an existing companion unless --force is given.
 
-    On a split half (``<deck>.de.py`` / ``<deck>.en.py``) whose twin exists on
+    On a split half (``<deck>.de.<ext>`` / ``<deck>.en.<ext>``) whose twin exists on
     disk, both companions are extracted in one op by default: the two halves are
     first minted with EN-authority slide_ids so the companions' for_slide sets
     agree, then each half is extracted and all writes commit atomically. Pass
@@ -102,8 +102,8 @@ def extract_voiceover_cmd(
     pair = None if single else derive_split_pair(path)
     if both and pair is None:
         raise click.ClickException(
-            f"--both needs a split deck: '{path.name}' has no <deck>.de.py / "
-            f"<deck>.en.py twin on disk."
+            f"--both needs a split deck: '{path.name}' has no <deck>.de.<ext> / "
+            f"<deck>.en.<ext> twin on disk."
         )
 
     # Fold the --layout flag with the course-wide default (CLM_SIDECAR_LAYOUT /
@@ -153,7 +153,7 @@ def inline_voiceover_cmd(
 ):
     """Inline voiceover cells from a companion file back into a slide file.
 
-    Merges voiceover cells from the companion voiceover_*.py file back
+    Merges voiceover cells from the companion voiceover_*.<ext> file back
     into the slide file, matching via for_slide/slide_id metadata.
     Deletes the companion only when every cell is placed; if any cell is
     unmatched (e.g. its owning slide_id was renamed) the companion is kept

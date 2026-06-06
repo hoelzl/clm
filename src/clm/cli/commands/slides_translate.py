@@ -1,7 +1,7 @@
 """``clm slides translate`` (alias ``bootstrap``) — full-deck cold-start translation.
 
 Issue #232. When an author writes a deck in a **single** language (only
-``slides_x.de.py``), this command synthesizes the other-language split half as a
+``slides_x.de.<ext>``), this command synthesizes the other-language split half as a
 complete translation of the whole deck — the cold start that ``clm slides sync``
 deliberately refuses to perform (``sync`` only fills per-cell gaps inside an
 *already-existing* pair).
@@ -46,6 +46,7 @@ from clm.infrastructure.llm.openrouter_client import (
     DEFAULT_SYNC_JUDGE_MODEL,
     has_openrouter_api_key,
 )
+from clm.infrastructure.utils.path_utils import path_to_prog_lang
 from clm.slides.sync_translate import (
     DEFAULT_TRANSLATION_MODEL,
     CachingSlideTranslator,
@@ -65,14 +66,17 @@ if TYPE_CHECKING:
 
 
 def _make_translator(
-    translation_model: str, translation_cache: TranslationCache | None
+    translation_model: str,
+    translation_cache: TranslationCache | None,
+    prog_lang: str = "python",
 ) -> SlideTranslator:
     """The OpenRouter slide translator, cache-wrapped unless ``--no-cache``.
 
     Factored out (and module-level) so tests can monkeypatch it with a static
     translator, exactly as the sync CLI tests patch ``OpenRouterSlideTranslator``.
+    ``prog_lang`` makes the prompt name the deck's language + comment token.
     """
-    inner = OpenRouterSlideTranslator(model=translation_model)
+    inner = OpenRouterSlideTranslator(model=translation_model, prog_lang=prog_lang)
     if translation_cache is None:
         return inner
     return CachingSlideTranslator(inner=inner, cache=translation_cache)
@@ -87,7 +91,7 @@ def _make_translator(
     default=None,
     help=(
         "Target language. Default: the opposite of SOURCE's .de/.en tag "
-        "(slides_x.de.py → en). Override when a source mixes/omits lang tags."
+        "(slides_x.de.<ext> → en). Override when a source mixes/omits lang tags."
     ),
 )
 @click.option(
@@ -168,8 +172,8 @@ def slides_translate_cmd(
 ) -> None:
     """Translate a single-language deck SOURCE into its other-language split half.
 
-    SOURCE is one half of a split deck (``slides_x.de.py`` or ``slides_x.en.py``).
-    The matching ``slides_x.en.py`` / ``slides_x.de.py`` is synthesized as a full
+    SOURCE is one half of a split deck (``slides_x.de.<ext>`` or ``slides_x.en.<ext>``).
+    The matching ``slides_x.en.<ext>`` / ``slides_x.de.<ext>`` is synthesized as a full
     translation; a voiceover companion is translated in lockstep. Run
     ``clm slides unify`` afterward for a bilingual file, or just keep editing the
     halves and ``clm slides sync`` them.
@@ -224,7 +228,9 @@ def slides_translate_cmd(
 
     result: BootstrapResult
     try:
-        translator = _make_translator(translation_model, translation_cache)
+        translator = _make_translator(
+            translation_model, translation_cache, path_to_prog_lang(source)
+        )
         # A judge is only consulted on the delegated-sync path (twin present).
         judge = _resolve_judge(provider, llm_model, None, None) if will_sync else None
         result = bootstrap_deck(

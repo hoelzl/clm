@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from clm.infrastructure.utils.path_utils import split_lang_suffix
-from clm.notebooks.slide_parser import parse_cell_header
+from clm.notebooks.slide_parser import comment_token_for_path, parse_cell_header
 from clm.slides.code_cell_extract import extract_from_code
 from clm.slides.headingless import (
     Category,
@@ -389,7 +389,7 @@ def assign_ids_for_text(
     ``twin_ids`` is forwarded to :func:`assign_ids_for_cells` (the #162
     defensive split-half id reuse — see its docstring).
     """
-    preamble, cells = _split_cells(text)
+    preamble, cells = _split_cells(text, comment_token_for_path(file_path))
     result = assign_ids_for_cells(cells, file_path, options, twin_ids=twin_ids)
     result.files_visited = 1
 
@@ -794,9 +794,9 @@ def _twin_ids_for(path: Path, text: str) -> list[str | None] | None:
     twin = split_twin(path)
     if twin is None:
         return None
-    _, own_cells = _split_cells(text)
+    _, own_cells = _split_cells(text, comment_token_for_path(path))
     own_ids = _slide_start_ids(own_cells)
-    _, twin_cells = _split_cells(twin.read_text(encoding="utf-8"))
+    _, twin_cells = _split_cells(twin.read_text(encoding="utf-8"), comment_token_for_path(twin))
     twin_ids = _slide_start_ids(twin_cells)
     if len(twin_ids) != len(own_ids):
         return None
@@ -841,10 +841,11 @@ def assign_ids_in_split_pair(
     """
     from clm.slides.split import SplitError, UnifyError, split_text, unify_texts
 
+    comment_token = comment_token_for_path(en_path)
     de_text = de_path.read_text(encoding="utf-8")
     en_text = en_path.read_text(encoding="utf-8")
     try:
-        unified = unify_texts(de_text, en_text)
+        unified = unify_texts(de_text, en_text, comment_token)
         # Proceed only when unify is *byte-faithful*: split(unify(de, en)) == (de, en).
         # ``unify`` is best-effort for solo / misaligned cells, so a structurally
         # divergent pair can unify without raising — but then the assign->split
@@ -852,7 +853,7 @@ def assign_ids_in_split_pair(
         # guarantees that adding ids and splitting back cannot corrupt the files;
         # otherwise fall back to the per-file defensive (the #162 detective then
         # surfaces the residual divergence).
-        rt_de, rt_en = split_text(unified)
+        rt_de, rt_en = split_text(unified, comment_token)
     except (SplitError, UnifyError):
         return None
     if (rt_de, rt_en) != (de_text, en_text):
@@ -865,7 +866,7 @@ def assign_ids_in_split_pair(
         return result
 
     try:
-        de_new, en_new = split_text(unified_new)
+        de_new, en_new = split_text(unified_new, comment_token)
     except SplitError:  # pragma: no cover - unify succeeded, split should too
         return None
 
