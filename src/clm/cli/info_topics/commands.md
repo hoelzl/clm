@@ -883,11 +883,20 @@ Three-category policy:
     (transliterated to ASCII).
   **Refused by default**; opt in with `--accept-content-derived` or
   `--llm-suggest`.
+- **code-derived** *(since CLM {version})* — a bare-expression code cell
+  with no heading and none of the AST constructs above (e.g.
+  `(1 + 1j) * (1 + 1j)`, `letters[0:3]`, `a == b`). **Refused by default**;
+  opt in with `--accept-code-derived`, which slugs the cell's first real
+  code line (`letters[0:3]` → `letters-0-3`). The scanner is
+  comment-token-aware, so non-Python decks (`.cs`/`.cpp`/`.java`/`.ts`),
+  which `ast` never parses, are completed too. Independent of
+  `--accept-content-derived` — the bilingual→split conversion typically
+  passes both.
 - **no content** — cell where no extractor produces anything (empty
-  cell, pure `<img>` without alt, unparsable code, magic-only cells).
-  **Hard refuse**; the author has to write `slide_id="…"` by hand,
-  or pass `--llm-suggest` to let the LLM propose a title as a last
-  resort.
+  cell, pure `<img>` without alt, pure-punctuation / `...` code,
+  magic-only cells). **Hard refuse**; the author has to write
+  `slide_id="…"` by hand, or pass `--llm-suggest` to let the LLM propose
+  a title as a last resort.
 
 Special cases:
 
@@ -920,7 +929,8 @@ clm slides assign-ids [OPTIONS] PATH
 | Option | Description |
 |--------|-------------|
 | `--force` | Regenerate ids where the algorithm can produce one. `!`-prefixed ids and cells without a proposal are left untouched. |
-| `--accept-content-derived` | Auto-accept proposals for the extractable category (no LLM). Hard-refusal cells still refuse. |
+| `--accept-content-derived` | Auto-accept proposals for the extractable category (no LLM). Bare-expression code cells and hard-refusal cells still refuse. |
+| `--accept-code-derived` | (since CLM {version}) Auto-accept a first-code-line slug for bare-expression code cells the AST extractors can't name (`(1 + 1j) * (1 + 1j)` → `1-1j-1-1j`, `letters[0:3]` → `letters-0-3`). Comment-token-aware, so it works on non-Python decks (`.cs`/`.cpp`/`.java`/`.ts`). Genuinely empty / pure-punctuation / magic-only cells still refuse. Independent of `--accept-content-derived`. |
 | `--llm-suggest` | Use the local LLM (Ollama, default model `qwen3:30b`) to propose a short title. Fires on both extractable cells (replacing the content-derived title when the LLM returns one) and on hard-refusal cells (last-resort fallback before refusing). Cached per `(content_hash, prompt_version, lang)` in the LLM cache. Falls back silently to refusal when Ollama is unreachable. |
 | `--report-only`, `--dry-run` | List planned assignments and refusals without modifying any file. |
 | `--llm-model TEXT` | Ollama model name (default: `qwen3:30b`). |
@@ -961,6 +971,8 @@ Examples:
 ```bash
 clm slides assign-ids slides/module_010/topic_100/slides_intro.py --report-only
 clm slides assign-ids slides/module_010/ --accept-content-derived
+# Fully automatable bilingual→split prep: also id bare-expression code cells
+clm slides assign-ids slides/module_110_basics/ --accept-content-derived --accept-code-derived
 clm slides assign-ids slides/module_010/topic_100/slides_intro.py --llm-suggest
 clm slides assign-ids slides/module_010/ --force        # regenerate all derivable ids
 # Scope: mint only the bilingual decks, leaving split pairs for `clm slides sync`

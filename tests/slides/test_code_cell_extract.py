@@ -172,3 +172,101 @@ class TestUnparsable:
 
     def test_magic_in_comment_returns_none(self):
         assert extract_from_code("# !pip install foo\n") is None
+
+
+class TestFirstCodeLineFallback:
+    """The opt-in ``accept_code_derived`` first-code-line fallback (#251).
+
+    For bare-expression code cells the five intent-based extractors can't
+    name — there is no salient construct — the fallback slugs the first real
+    code line. It is comment-token-aware so it works for non-Python decks
+    too, where ``ast.parse`` always fails. Off by default.
+    """
+
+    def test_off_by_default_returns_none(self):
+        # Back-compat: without the flag a bare expression is still None, so
+        # the content-anchor in sync_writeback and the four content-derived
+        # funnels are byte-for-byte unchanged.
+        assert extract_from_code("(1 + 1j) * (1 + 1j)") is None
+
+    def test_binop_expression(self):
+        e = extract_from_code("(1 + 1j) * (1 + 1j)", accept_code_derived=True)
+        assert e is not None
+        assert e.category == Category.EXTRACTABLE
+        assert e.source == "code:line"
+        assert e.text == "(1 + 1j) * (1 + 1j)"
+
+    def test_string_concatenation(self):
+        e = extract_from_code('"1" + "2"', accept_code_derived=True)
+        assert e is not None and e.source == "code:line" and e.text == '"1" + "2"'
+
+    def test_subscript_expression(self):
+        e = extract_from_code("letters[0:3]", accept_code_derived=True)
+        assert e is not None and e.text == "letters[0:3]"
+
+    def test_attribute_expression(self):
+        e = extract_from_code("response.choices[0].message.content", accept_code_derived=True)
+        assert e is not None and e.text == "response.choices[0].message.content"
+
+    def test_comparison_expression(self):
+        e = extract_from_code("a == b", accept_code_derived=True)
+        assert e is not None and e.text == "a == b"
+
+    def test_big_int_literal(self):
+        e = extract_from_code(
+            "10000000000000000000000000000000000000000000000000 + 1", accept_code_derived=True
+        )
+        assert e is not None and e.source == "code:line"
+
+    def test_list_literal(self):
+        e = extract_from_code("[1, 2, 3]", accept_code_derived=True)
+        assert e is not None and e.text == "[1, 2, 3]"
+
+    def test_ast_construct_still_wins_over_fallback(self):
+        # A parseable construct keeps its intent-based label even with the
+        # flag on — the fallback is the last extractor.
+        e = extract_from_code("x = 5\n", accept_code_derived=True)
+        assert e is not None and e.source == "code:assign" and e.text == "x"
+
+    def test_skips_leading_comment(self):
+        e = extract_from_code("#setup\n(1 + 1j) * (1 + 1j)\n", accept_code_derived=True)
+        assert e is not None and e.text == "(1 + 1j) * (1 + 1j)"
+
+    def test_comment_only_returns_none(self):
+        assert extract_from_code("# just a comment", "#", accept_code_derived=True) is None
+
+    def test_magic_only_returns_none(self):
+        # The pre-existing "unparsable/magic stays a refusal" contract holds:
+        # the magic line is skipped and nothing else remains.
+        assert extract_from_code("!pip install requests\n", accept_code_derived=True) is None
+
+    def test_punctuation_only_returns_none(self):
+        # No alphanumeric -> no usable slug -> genuinely content-less -> stays
+        # a refusal even with the flag on.
+        assert extract_from_code("...", accept_code_derived=True) is None
+        assert extract_from_code("()", accept_code_derived=True) is None
+        assert extract_from_code("_", accept_code_derived=True) is None
+
+    # -- non-Python: ast.parse always fails; the comment-token-aware scanner
+    #    is the path that completes a .cs / .cpp / .java / .ts deck. --
+
+    def test_non_python_first_line(self):
+        e = extract_from_code("var z = (1 + 2) * (3 + 4);", "//", accept_code_derived=True)
+        assert e is not None and e.source == "code:line"
+        assert e.text == "var z = (1 + 2) * (3 + 4);"
+
+    def test_non_python_skips_line_comment_no_space(self):
+        e = extract_from_code("//note\nDoThing(x);", "//", accept_code_derived=True)
+        assert e is not None and e.text == "DoThing(x);"
+
+    def test_non_python_skips_inline_block_comment(self):
+        e = extract_from_code("/* helper */\nDoThing(x);", "//", accept_code_derived=True)
+        assert e is not None and e.text == "DoThing(x);"
+
+    def test_non_python_skips_multiline_block_comment(self):
+        e = extract_from_code("/*\n multi\n line\n*/\nDoThing(x);", "//", accept_code_derived=True)
+        assert e is not None and e.text == "DoThing(x);"
+
+    def test_non_python_comment_only_returns_none(self):
+        assert extract_from_code("// just a comment", "//", accept_code_derived=True) is None
+        assert extract_from_code("/* block only */", "//", accept_code_derived=True) is None

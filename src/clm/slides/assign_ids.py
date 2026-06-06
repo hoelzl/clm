@@ -16,8 +16,11 @@ Rules in one paragraph:
   ``slide_id="title"`` without author input.
 - Headed cells get a slug from the heading. Headingless-but-extractable
   cells are refused by default; ``--accept-content-derived`` or
-  ``--llm-suggest`` opt into auto-acceptance. Hard-refusal cells (no
-  extractable content) always require manual authorship.
+  ``--llm-suggest`` opt into auto-acceptance. A bare-expression code cell
+  (no heading, no extractable construct — e.g. ``(1 + 1j) * (1 + 1j)``)
+  is covered by the opt-in ``--accept-code-derived`` first-code-line
+  fallback (#251). Only genuinely empty / pure-punctuation cells still
+  require manual authorship.
 - Voiceover and notes cells inherit the slide_id of the most recent
   preceding slide/subslide cell (1:N relationship). They are *never*
   written from an extracted heading of their own.
@@ -91,7 +94,12 @@ class AssignedId:
     file: str
     line: int
     slide_id: str
-    source: str  # "heading" / "title-macro" / "voiceover-inherit" / "llm" / "content"
+    # Which strategy produced the id, for the report. One of:
+    # "heading" / "sibling-heading" / "title-macro" / "voiceover-inherit" /
+    # "llm" / "paired" / "twin" / "content:<extractor>" (markdown bullet/bold/
+    # img/prose or the code AST extractors code:class/def/assign/import/call) /
+    # "code:line" (the opt-in first-code-line fallback, #251).
+    source: str
 
 
 @dataclass
@@ -171,6 +179,14 @@ def _write_slide_id(cell: _Cell, slide_id: str) -> None:
 class AssignOptions:
     """Knobs for one assign-ids pass.
 
+    ``accept_content_derived`` bulk-accepts the markdown/AST content
+    extractors (first bullet, bold, img alt, prose, ``code:class``/``def``/
+    ``assign``/``import``/``call``). ``accept_code_derived`` (#251)
+    separately opts into the last-resort first-code-line fallback for bare
+    expression code cells that have no extractable construct; it is a
+    distinct knob so the content-derived funnels never start minting opaque
+    code-line slugs by accident.
+
     ``llm_suggester`` is the mockable :class:`TitleSuggester` from
     :mod:`clm.infrastructure.llm.ollama_client`. Passing ``None`` skips
     LLM use even when ``llm_suggest`` is true (the protocol-level escape
@@ -180,6 +196,7 @@ class AssignOptions:
 
     force: bool = False
     accept_content_derived: bool = False
+    accept_code_derived: bool = False
     llm_suggest: bool = False
     report_only: bool = False
     llm_suggester: TitleSuggester | None = None
@@ -221,17 +238,21 @@ def _proposed_slug_from_extraction(
     return resolve_collision(base, used_ids)
 
 
-def _extract_from_cell(cell: _Cell) -> Extraction:
+def _extract_from_cell(cell: _Cell, comment_token: str, accept_code_derived: bool) -> Extraction:
     """Run the full extractor pipeline on a single cell.
 
     Markdown signals win first via :func:`classify`. When the cell is a
-    code cell and markdown found nothing, the AST extractor in
-    :mod:`clm.slides.code_cell_extract` gets a turn. Falls back to
+    code cell and markdown found nothing, the AST/first-code-line extractor
+    in :mod:`clm.slides.code_cell_extract` gets a turn — ``comment_token``
+    lets its first-code-line fallback recognize comment lines per prog_lang,
+    and ``accept_code_derived`` gates that fallback. Falls back to
     ``NON_EXTRACTABLE`` if neither path produces a proposal.
     """
     extraction = classify(cell.body)
     if extraction.category == Category.NON_EXTRACTABLE and cell.metadata.cell_type == "code":
-        code_extraction = extract_from_code(cell.body)
+        code_extraction = extract_from_code(
+            cell.body, comment_token, accept_code_derived=accept_code_derived
+        )
         if code_extraction is not None:
             return code_extraction
     return extraction
@@ -239,6 +260,13 @@ def _extract_from_cell(cell: _Cell) -> Extraction:
 
 def _content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+# Source labels produced by the opt-in first-code-line fallback (#251), direct
+# and via the DE/EN sibling fallback. Kept bare (not ``content:``-prefixed) so
+# they route through their own ``accept_code_derived`` write-gate clause rather
+# than the ``accept_content_derived`` one the markdown/AST extractors use.
+_CODE_LINE_SOURCES = ("code:line", "sibling-code:line")
 
 
 def assign_ids_for_cells(
@@ -300,6 +328,10 @@ def assign_ids_for_cells(
     # slide/subslide.
     current_slide_id: str | None = None
     file_str = str(file_path)
+    # Line-comment token of the deck's prog_lang ("#" python/rust, "//"
+    # c/c++/c#/java/ts) — needed by the first-code-line fallback so it skips
+    # comments per language. Derived once from the path extension.
+    comment_token = comment_token_for_path(file_path)
     slide_seen = 0  # index among slide/subslide cells (for twin_ids correspondence)
 
     for idx, cell in enumerate(cells):
@@ -352,6 +384,7 @@ def assign_ids_for_cells(
                 group_slug,
                 slug_source_idx=slug_source_idx,
                 alternate_cell=alternate_cell,
+                comment_token=comment_token,
             )
             if new_id is not None:
                 current_slide_id = new_id
@@ -427,6 +460,7 @@ def _handle_slide(
     group_slug: dict[int, str | None],
     slug_source_idx: int,
     alternate_cell: _Cell | None = None,
+    comment_token: str = "#",
 ) -> str | None:
     """Assign or preserve a slide_id on one slide/subslide cell.
 
@@ -487,8 +521,8 @@ def _handle_slide(
 
     # Slug is derived from the slug-source cell (EN sibling, or self).
     # ``_extract_from_cell`` combines the markdown classifier and the
-    # code-cell AST fallback into a single proposal.
-    extraction = _extract_from_cell(slug_source)
+    # code-cell AST/first-code-line fallback into a single proposal.
+    extraction = _extract_from_cell(slug_source, comment_token, options.accept_code_derived)
 
     # Phase 3 fallback: if the EN slug source has nothing to slug from
     # but the DE sibling does, slug from the DE sibling. Transliteration
@@ -498,7 +532,9 @@ def _handle_slide(
     # English titles, and the sibling content is German-side.
     sibling_fallback = False
     if extraction.category == Category.NON_EXTRACTABLE and alternate_cell is not None:
-        alt_extraction = _extract_from_cell(alternate_cell)
+        alt_extraction = _extract_from_cell(
+            alternate_cell, comment_token, options.accept_code_derived
+        )
         if alt_extraction.category != Category.NON_EXTRACTABLE:
             extraction = Extraction(
                 alt_extraction.category,
@@ -536,7 +572,12 @@ def _handle_slide(
         if not proposed_slug:
             proposed_title = extraction.text
             proposed_slug = _proposed_slug_from_extraction(extraction, local_used)
-            source = f"content:{extraction.source}"
+            # The first-code-line fallback keeps a bare label so it gets its
+            # own accept gate; every other content extractor is "content:"-tagged.
+            if extraction.source in _CODE_LINE_SOURCES:
+                source = extraction.source
+            else:
+                source = f"content:{extraction.source}"
 
     else:
         # NON_EXTRACTABLE: Phase 4 last-resort LLM. Without this fallback
@@ -587,22 +628,26 @@ def _handle_slide(
         return proposed_slug
 
     # We have a proposal. Decide whether to write it or refuse.
+    is_code_line = source in _CODE_LINE_SOURCES
     if extraction.category == Category.HEADED:
         write = True
-    elif extraction.category == Category.EXTRACTABLE and (
-        options.accept_content_derived or source == "llm"
-    ):
-        write = True
-    else:
+    elif extraction.category != Category.EXTRACTABLE:
         write = False
+    elif source == "llm":
+        write = True
+    elif is_code_line:
+        write = options.accept_code_derived
+    else:  # content-derived (markdown bullet/bold/img/prose or code AST extractors)
+        write = options.accept_content_derived
 
     if not write:
+        accept_flag = "--accept-code-derived" if is_code_line else "--accept-content-derived"
         result.refusals.append(
             Refusal(
                 file=file_str,
                 line=cell.line_number,
                 severity="soft",
-                reason="headingless slide; pass --accept-content-derived to accept",
+                reason=f"headingless slide; pass {accept_flag} to accept",
                 proposed_slug=proposed_slug,
                 proposed_title=proposed_title,
             )
