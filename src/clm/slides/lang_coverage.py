@@ -25,6 +25,7 @@ import enum
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from clm.notebooks.slide_parser import comment_token_for_path
 from clm.slides.pairing import iter_split_pairs, split_lang_tag
 from clm.slides.raw_cells import split_cells
 
@@ -49,13 +50,14 @@ class CoverageStatus(enum.Enum):
     IMBALANCED = "imbalanced"  # both present, counts differ — alignment fix
 
 
-def count_languages(text: str) -> tuple[int, int]:
+def count_languages(text: str, comment_token: str = "#") -> tuple[int, int]:
     """Return ``(de_cells, en_cells)`` — slide/subslide start cells by language.
 
     Narrative cells and language-neutral cells (``lang`` unset) are not counted.
+    ``comment_token`` is the source language's line-comment token (``"#"`` / ``"//"``).
     """
     de = en = 0
-    _, cells = split_cells(text)
+    _, cells = split_cells(text, comment_token)
     for cell in cells:
         if not cell.metadata.is_slide_start:
             continue
@@ -132,8 +134,8 @@ def scan_coverage(files: list[Path]) -> CoverageReport:
         de_text, en_text = _read(de_path), _read(en_path)
         if de_text is None or en_text is None:
             continue
-        de_cells = count_languages(de_text)[0]
-        en_cells = count_languages(en_text)[1]
+        de_cells = count_languages(de_text, comment_token_for_path(de_path))[0]
+        en_cells = count_languages(en_text, comment_token_for_path(en_path))[1]
         report.entries.append(
             CoverageEntry(
                 label=str(de_path),
@@ -149,7 +151,7 @@ def scan_coverage(files: list[Path]) -> CoverageReport:
         if text is None:
             continue
         tag = split_lang_tag(solo)
-        de_cells, en_cells = count_languages(text)
+        de_cells, en_cells = count_languages(text, comment_token_for_path(solo))
         if tag is None:
             kind = "bilingual"
         else:
