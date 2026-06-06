@@ -406,7 +406,12 @@ known-first-party = ["clm"]
 [tool.bumpversion]
 current_version = "1.9.0"
 commit = true
-tag = true
+# No local tag: the Release workflow (.github/workflows/release.yml) creates the
+# authoritative vX.Y.Z tag on the server *after* the CI-green gate, so a red
+# commit is never tagged. bump-my-version only produces the `Bump version …`
+# commit that the workflow keys on. (tag_name documents the format the server
+# uses; it is inert while tag = false.)
+tag = false
 tag_name = "v{new_version}"
 commit_message = "Bump version {current_version} → {new_version}"
 

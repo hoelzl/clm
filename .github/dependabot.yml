@@ -1,0 +1,20 @@
+version: 2
+
+# Keep GitHub Actions current so a runtime deprecation (e.g. the Node.js 20 ->
+# 24 forced migration) arrives as a routine, CI-gated PR instead of a surprise
+# annotation on a release run. Updates are grouped into a single monthly PR to
+# keep the noise low; CI must pass before any bump is merged.
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: ci
+    labels:
+      - dependencies
+      - github-actions
