@@ -53,7 +53,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from clm.infrastructure.llm.ollama_client import OllamaError
-from clm.notebooks.slide_parser import Cell, parse_cell_header, parse_cells
+from clm.notebooks.slide_parser import Cell, comment_token_for_path, parse_cell_header, parse_cells
 from clm.slides.raw_cells import RawCell
 from clm.slides.slug import resolve_collision, slugify
 from clm.slides.sync_code import apply_code_structure
@@ -845,7 +845,7 @@ def _slide_cells(path: Path, lang: str) -> list[Cell]:
     """The slide/subslide cells of ``lang`` — the units a cold mint stamps an id onto."""
     return [
         c
-        for c in parse_cells(path.read_text(encoding="utf-8"))
+        for c in parse_cells(path.read_text(encoding="utf-8"), comment_token_for_path(path))
         if c.metadata.lang == lang and role_of(c.metadata) in _SLIDE_ROLES
     ]
 
@@ -1688,7 +1688,13 @@ def _place_new_cell(
     """Stamp the source cell's id and insert the translated counterpart."""
     _stamp_slide_id(cell, new_id)
     source_state.dirty = True
-    new_cell = _build_cell(target_lang, cell.metadata.tags, new_id, target_body)
+    new_cell = _build_cell(
+        target_lang,
+        cell.metadata.tags,
+        new_id,
+        target_body,
+        comment_token_for_path(target_state.path),
+    )
     _insert_at_anchor(target_state, anchor, new_cell)
 
 
@@ -1706,10 +1712,16 @@ def _extract_heading(body: str) -> str:
     residual Markdown.
     """
     for raw in body.split("\n"):
+        # Drop the comment prefix as a literal prefix (either comment family),
+        # so a "**bold**" or "/path" lead-in survives.
         if raw.startswith("# "):
             md = raw[2:].strip()
+        elif raw.startswith("// "):
+            md = raw[3:].strip()
         elif raw.startswith("#"):
             md = raw[1:].strip()
+        elif raw.startswith("//"):
+            md = raw[2:].strip()
         else:
             md = raw.strip()
         if not md:
@@ -1730,14 +1742,17 @@ def _stamp_slide_id(cell: RawCell, slide_id: str) -> None:
     cell.metadata = parse_cell_header(header)
 
 
-def _build_cell(lang: str, tags: list[str], slide_id: str, body: str) -> RawCell:
+def _build_cell(
+    lang: str, tags: list[str], slide_id: str, body: str, comment_token: str = "#"
+) -> RawCell:
     """Build a fresh markdown RawCell carrying the translated counterpart.
 
     The body is built bare (no leading/trailing blank lines); the insert
     primitive grants the deck's inter-cell separator based on final position.
+    ``comment_token`` is the target deck's line-comment token (``"#"`` / ``"//"``).
     """
     tag_repr = ", ".join(f'"{t}"' for t in tags) if tags else '"slide"'
-    header = f'# %% [markdown] lang="{lang}" tags=[{tag_repr}] slide_id="{slide_id}"'
+    header = f'{comment_token} %% [markdown] lang="{lang}" tags=[{tag_repr}] slide_id="{slide_id}"'
     body_lines = body.split("\n")
     while body_lines and body_lines[0] == "":  # drop a stray leading blank
         body_lines.pop(0)
@@ -1928,7 +1943,7 @@ def content_index(path: Path, lang: str) -> dict[tuple[str, str], str]:
     walker can render each proposal's current source/target bodies.
     """
     index: dict[tuple[str, str], str] = {}
-    for cell in parse_cells(path.read_text(encoding="utf-8")):
+    for cell in parse_cells(path.read_text(encoding="utf-8"), comment_token_for_path(path)):
         role = role_of(cell.metadata)
         if role is None:
             continue
@@ -2457,8 +2472,8 @@ def _record_watermark(
     (``_baseline_from_watermark`` filters the synthetic membership roles), so this
     does not change its behavior.
     """
-    de_cells = parse_cells(de_path.read_text(encoding="utf-8"))
-    en_cells = parse_cells(en_path.read_text(encoding="utf-8"))
+    de_cells = parse_cells(de_path.read_text(encoding="utf-8"), comment_token_for_path(de_path))
+    en_cells = parse_cells(en_path.read_text(encoding="utf-8"), comment_token_for_path(en_path))
     de_rows = watermark_rows(de_cells)
     en_rows = watermark_rows(en_cells)
     # Issue #198: record each cell's tag set alongside its row so a later run can
@@ -2592,8 +2607,8 @@ def _record_watermark_partial(
     watermark and let the conflict re-surface instead of dropping it.
     """
     parsed = {
-        "de": parse_cells(de_path.read_text(encoding="utf-8")),
-        "en": parse_cells(en_path.read_text(encoding="utf-8")),
+        "de": parse_cells(de_path.read_text(encoding="utf-8"), comment_token_for_path(de_path)),
+        "en": parse_cells(en_path.read_text(encoding="utf-8"), comment_token_for_path(en_path)),
     }
     cells_by_lang = {
         "de": ordered_sync_cells(parsed["de"], "de"),

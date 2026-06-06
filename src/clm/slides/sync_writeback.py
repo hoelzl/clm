@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from clm.notebooks.slide_parser import CellMetadata, parse_cell_header
+from clm.notebooks.slide_parser import CellMetadata, comment_token_for_path, parse_cell_header
 from clm.slides.code_cell_extract import extract_from_code
 from clm.slides.raw_cells import RawCell, reconstruct, split_cells
 from clm.slides.slug import slugify
@@ -235,7 +235,10 @@ def swap_lang(header: str, lang: str) -> str:
         return _LANG_ATTR_RE.sub(f'lang="{lang}"', header)
     if "[markdown]" in header:
         return header.replace("[markdown]", f'[markdown] lang="{lang}"', 1)
-    return header.replace("# %%", f'# %% lang="{lang}"', 1)
+    # bare "<token> %%" code-cell header — insert lang after the %% marker for
+    # either comment family.
+    marker = "// %%" if header.startswith("// %%") else "# %%"
+    return header.replace(marker, f'{marker} lang="{lang}"', 1)
 
 
 def build_twin_cell(source_cell: RawCell, target_lang: str, target_body: str) -> RawCell:
@@ -314,7 +317,7 @@ class FileState:
     @classmethod
     def load(cls, path: Path) -> FileState:
         text = path.read_text(encoding="utf-8")
-        preamble, cells = split_cells(text)
+        preamble, cells = split_cells(text, comment_token_for_path(path))
         return cls(
             path=path,
             preamble=preamble,
