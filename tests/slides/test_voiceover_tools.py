@@ -899,10 +899,57 @@ TITLE_SLIDE_BILINGUAL = """\
 """
 
 
+# #246 — a title greeting authored *before* the title slide's trailing
+# ``keep``/code cells. The greeting's only predecessor is the slide_id-less j2
+# title macro, so it must be anchored to the macro (``tm:``) and restored at the
+# *start* of the title group, not dumped at the end.
+TITLE_BEFORE_KEEP_EN = """\
+# j2 from 'macros.j2' import header_en
+# {{ header_en("LangChain Tracing with LangSmith") }}
+
+# %% [markdown] lang="en" tags=["voiceover"] slide_id="title"
+# - Welcome back!
+
+# %% tags=["keep"]
+import os
+
+# %% tags=["keep"]
+from langchain_core.messages import HumanMessage
+
+# %% [markdown] lang="en" tags=["slide"] slide_id="what-is-langsmith"
+# - What Is LangSmith?
+"""
+
+# The same deck but with the greeting authored *after* a trailing ``keep`` cell:
+# its predecessor is a real content cell, so a normal ``fp:`` anchor restores it.
+TITLE_AFTER_KEEP_EN = """\
+# j2 from 'macros.j2' import header_en
+# {{ header_en("LangChain Tracing with LangSmith") }}
+
+# %% tags=["keep"]
+import os
+
+# %% [markdown] lang="en" tags=["voiceover"] slide_id="title"
+# - Welcome back!
+
+# %% [markdown] lang="en" tags=["slide"] slide_id="what-is-langsmith"
+# - What Is LangSmith?
+"""
+
+
 def _strip_for_slide(text: str) -> str:
     """Drop the ``for_slide`` attribute — the build worker strips it from output,
     so this is how we compare extract+merge against the inline-authored source."""
     return re.sub(r'\s*for_slide="[^"]*"', "", text)
+
+
+def _vo_anchor_of(comp: Path) -> str | None:
+    """The ``vo_anchor`` token on the companion's title voiceover cell, if any."""
+    for cell in parse_cells(comp.read_text(encoding="utf-8")):
+        if cell.metadata.is_narrative and cell.metadata.for_slide == "title":
+            m = re.search(r'vo_anchor="([^"]*)"', cell.header)
+            return m.group(1) if m else None
+    return None
 
 
 class TestTitleGreetingVoiceover:
@@ -1062,6 +1109,141 @@ agenda = 1
         assert unmatched == []
         assert merged.index("agenda = 1") < merged.index("Greeting.")
         assert merged.index("Greeting.") < merged.index("first-real-slide")
+
+    # -- #246: title greeting authored before trailing keep cells ----------
+
+    def test_extract_title_before_keep_emits_macro_anchor(self, tmp_path: Path):
+        """A title greeting with no content predecessor (authored before the
+        title slide's keep cells) is stamped with the ``tm:`` title-macro anchor
+        so the merge can restore its position rather than appending at the end of
+        the title group (#246)."""
+        slide = tmp_path / "slides_015.en.py"
+        slide.write_text(TITLE_BEFORE_KEEP_EN, encoding="utf-8")
+
+        extract_voiceover(slide, force=True)
+
+        comp = slide.with_name("voiceover_015.en.py")
+        assert _vo_anchor_of(comp) == "tm:title#0"
+
+    def test_extract_then_merge_title_before_keep_byte_identical(self, tmp_path: Path):
+        """#246 acceptance (build path): extract + the build merge restore the
+        greeting to its authored slot — immediately after the title slide and
+        *before* the trailing keep cells — byte-identically."""
+        slide = tmp_path / "slides_015.en.py"
+        slide.write_text(TITLE_BEFORE_KEEP_EN, encoding="utf-8")
+        extract_voiceover(slide, force=True)
+        comp = slide.with_name("voiceover_015.en.py")
+
+        merged, unmatched = merge_voiceover_text(
+            slide.read_text(encoding="utf-8"), comp.read_text(encoding="utf-8")
+        )
+
+        assert unmatched == []
+        # Greeting immediately after the title slide, before the keep cells.
+        assert merged.index("Welcome back") < merged.index("import os")
+        assert _strip_for_slide(merged).strip() == TITLE_BEFORE_KEEP_EN.strip()
+
+    def test_extract_then_inline_title_before_keep_byte_identical(self, tmp_path: Path):
+        """#246 acceptance (inline path): extract then inline restores the deck
+        exactly, with the greeting back before the keep cells and no relocation
+        reported."""
+        slide = tmp_path / "slides_015.en.py"
+        slide.write_text(TITLE_BEFORE_KEEP_EN, encoding="utf-8")
+
+        extract_voiceover(slide, force=True)
+        result = inline_voiceover(slide)
+
+        assert result.unmatched_cells == 0
+        assert result.relocated_cells == 0
+        assert result.companion_deleted
+        assert slide.read_text(encoding="utf-8").strip() == TITLE_BEFORE_KEEP_EN.strip()
+
+    def test_extract_title_after_keep_roundtrips_via_fp_anchor(self, tmp_path: Path):
+        """A greeting authored *after* a keep cell has a real content predecessor,
+        so it gets an ``fp:`` anchor (not ``tm:``) and still round-trips exactly —
+        the title-group bounds now resolve for the slide_id-less title slide."""
+        slide = tmp_path / "slides_015.en.py"
+        slide.write_text(TITLE_AFTER_KEEP_EN, encoding="utf-8")
+
+        extract_voiceover(slide, force=True)
+        comp = slide.with_name("voiceover_015.en.py")
+        anchor = _vo_anchor_of(comp)
+        assert anchor is not None and anchor.startswith("fp:")
+
+        merged, unmatched = merge_voiceover_text(
+            slide.read_text(encoding="utf-8"), comp.read_text(encoding="utf-8")
+        )
+        assert unmatched == []
+        assert merged.index("import os") < merged.index("Welcome back")
+        assert _strip_for_slide(merged).strip() == TITLE_AFTER_KEEP_EN.strip()
+
+    def test_legacy_anchorless_title_before_keep_unchanged(self):
+        """A *legacy* companion (``for_slide="title"`` with no ``vo_anchor``) keeps
+        the documented group-end fallback even when the title slide has trailing
+        cells — the #246 fix only affects freshly-extracted, anchored companions,
+        so already-built decks are unaffected."""
+        slide = """\
+# j2 from 'macros.j2' import header_en
+# {{ header_en("T") }}
+
+# %% tags=["keep"]
+import os
+
+# %% [markdown] lang="en" tags=["slide"] slide_id="real"
+# - Real
+"""
+        legacy = '# %% [markdown] lang="en" tags=["voiceover"] for_slide="title"\n# - Greeting.\n'
+        merged, unmatched = merge_voiceover_text(slide, legacy)
+
+        assert unmatched == []
+        # No anchor to honour → falls back to the end of the title group.
+        assert merged.index("import os") < merged.index("Greeting.")
+        assert merged.index("Greeting.") < merged.index("real")
+
+    def test_extract_title_with_cell_before_macro_uses_macro_anchor(self, tmp_path: Path):
+        """A content cell authored *before* the j2 title macro (e.g. a top-of-deck
+        import) is out of the title group. The predecessor walk skips the macro
+        and would otherwise land on that out-of-group cell, producing an ``fp:``
+        anchor that silently can't resolve within the title bounds at merge —
+        dumping the greeting at the group end. The title greeting must instead get
+        the ``tm:`` macro anchor and round-trip byte-identically (#246 regression
+        of the fix itself)."""
+        deck = """\
+# %% tags=["keep"]
+import preamble
+
+# j2 from 'macros.j2' import header_en
+# {{ header_en("Title") }}
+
+# %% [markdown] lang="en" tags=["voiceover"] slide_id="title"
+# - Welcome!
+
+# %% tags=["keep"]
+import os
+
+# %% [markdown] lang="en" tags=["slide"] slide_id="what-is-langsmith"
+# - What Is LangSmith?
+"""
+        slide = tmp_path / "slides_015.en.py"
+        slide.write_text(deck, encoding="utf-8")
+
+        extract_voiceover(slide, force=True)
+        comp = slide.with_name("voiceover_015.en.py")
+        assert _vo_anchor_of(comp) == "tm:title#0"
+
+        merged, unmatched = merge_voiceover_text(
+            slide.read_text(encoding="utf-8"), comp.read_text(encoding="utf-8")
+        )
+        assert unmatched == []
+        # Greeting after the macro, before the *in-group* trailing keep cell.
+        assert merged.index("Welcome!") < merged.index("import os")
+        assert _strip_for_slide(merged).strip() == deck.strip()
+
+        # And the inline round-trip restores it exactly, no relocation.
+        result = inline_voiceover(slide)
+        assert result.relocated_cells == 0
+        assert result.unmatched_cells == 0
+        assert slide.read_text(encoding="utf-8").strip() == deck.strip()
 
 
 # ---------------------------------------------------------------------------

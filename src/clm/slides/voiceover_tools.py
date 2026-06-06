@@ -344,11 +344,25 @@ def _ensure_slide_ids(cells: list[_RawCell], path: Path, text: str) -> int:
 # ordinal — ``id:<sid>#<n>`` / ``fp:<hash>#<n>`` — meaning "the n-th cell
 # in the group matching this token". Resolution is always scoped to the
 # owning slide group; it never searches across groups.
+#
+# A third kind ``tm:title#0`` (the title-macro anchor) addresses the
+# macro-generated title slide directly. That slide is a j2 ``header`` macro
+# cell carrying no slide_id, so it can be neither ``id:``- nor ``fp:``-anchored
+# (j2 cells are excluded from anchor candidates). A title greeting authored
+# *before* the title slide's trailing continuation cells therefore has no
+# content predecessor; ``tm:title#0`` records "right after the title macro" so
+# the merge restores it at the start of the title group rather than the end
+# (#246). ``occ`` is always 0 — a deck has exactly one title macro.
 # ---------------------------------------------------------------------------
 
 _FOR_SLIDE_RE = re.compile(r'\s*for_slide="[^"]*"')
 _VO_ANCHOR_RE = re.compile(r'\s*vo_anchor="[^"]*"')
 _VO_ANCHOR_VALUE_RE = re.compile(r'vo_anchor="([^"]*)"')
+
+# The title-macro anchor (#246): kind ``tm`` resolves to the j2 title macro
+# cell itself rather than a content cell within a slide group.
+_TITLE_MACRO_KIND = "tm"
+_TITLE_MACRO_ANCHOR = f"{_TITLE_MACRO_KIND}:{TITLE_SLIDE_ID}#0"
 
 
 def _body_fingerprint(cell: _RawCell) -> str:
@@ -600,11 +614,26 @@ def _plan_extraction(
         if slide_id:
             pred_idx = _find_predecessor_index(cells, idx, vo_lang)
             bounds = _slide_group_bounds(cells, slide_id, vo_lang, id_map)
-            anchor = (
-                _anchor_token(cells, pred_idx, bounds, vo_lang)
-                if pred_idx is not None and bounds is not None
-                else None
-            )
+            # The predecessor must lie *within* the owning slide group for its
+            # anchor to resolve there at merge time. For non-title slides this
+            # always holds (the slide-start cell is itself an eligible
+            # predecessor). For the title slide the group starts at the j2 macro,
+            # which the predecessor walk skips over — so the walk can escape
+            # *upward* past the macro onto a cell authored before it (e.g. a
+            # top-of-deck import). Such a predecessor is out of group; anchoring
+            # to it would silently misplace the greeting at the group end on
+            # merge (#246). Fall back to the title-macro anchor instead.
+            anchor: str | None
+            if pred_idx is not None and bounds is not None and bounds[0] <= pred_idx < bounds[1]:
+                anchor = _anchor_token(cells, pred_idx, bounds, vo_lang)
+            elif slide_id == TITLE_SLIDE_ID and bounds is not None:
+                # The title greeting has no in-group content predecessor: its
+                # only predecessor is the slide_id-less j2 title macro (or a cell
+                # above it). Record a title-macro anchor so the merge restores it
+                # at the *start* of the title group rather than the end (#246).
+                anchor = _TITLE_MACRO_ANCHOR
+            else:
+                anchor = None
             new_header = _build_voiceover_header(vo_cell, slide_id, anchor)
             vo_cell.lines[0] = new_header
             vo_cell.metadata = parse_cell_header(new_header)
@@ -967,11 +996,24 @@ def _is_title_intent(for_slide: str | None, slide_id: str | None) -> bool:
     return for_slide is None and slide_id == TITLE_SLIDE_ID
 
 
+def _find_title_macro_index(cells: list[_RawCell]) -> int | None:
+    """Index of the j2 ``header`` title-macro cell, or ``None`` if absent.
+
+    The macro-generated title slide carries no ``slide_id``, so it never appears
+    in ``id_map``; this is how the title group is located instead (#242, #246).
+    A deck has at most one title macro, so the first match is returned.
+    """
+    for i, cell in enumerate(cells):
+        if is_title_macro_cell(cell):
+            return i
+    return None
+
+
 def _find_title_insertion_point(
     cells: list[_RawCell],
     vo_lang: str | None,
 ) -> int | None:
-    """Find where to insert a title-greeting voiceover.
+    """Find where to insert an *anchorless* title-greeting voiceover.
 
     The macro-generated title slide is the j2 ``header`` macro cell, which
     carries no ``slide_id`` — so :func:`_find_insertion_point` cannot resolve
@@ -979,17 +1021,18 @@ def _find_title_insertion_point(
     and walks forward over its (id-less, non-slide-start) continuation cells —
     mirroring the group-end logic of :func:`_find_insertion_point` — so the
     voiceover lands at the end of the title slide group, just before the first
-    real slide. That matches where an inline title greeting sits.
+    real slide.
+
+    This is the *fallback* for a title companion with no ``vo_anchor`` (legacy
+    pre-#242/#246 extracts, hand-authored cells). A freshly-extracted title
+    greeting now carries a ``tm:`` anchor recording its exact authored position
+    and is restored via :func:`_match_anchor`, so it never reaches here (#246).
 
     Returns the insert-after index, or ``None`` when the deck has no title
     macro (e.g. a mis-authored ``slide_id="title"`` with no header macro), in
     which case the caller reports the cell unmatched rather than guessing.
     """
-    start: int | None = None
-    for i, cell in enumerate(cells):
-        if is_title_macro_cell(cell):
-            start = i
-            break
+    start = _find_title_macro_index(cells)
     if start is None:
         return None
 
@@ -1034,6 +1077,11 @@ def _slide_group_bounds(
     """
     indices = id_map.get(for_slide)
     if not indices:
+        # The macro-generated title slide carries no slide_id, so it never
+        # appears in id_map. Resolve its group via the title macro cell so a
+        # title voiceover's anchor can be scoped to the title group (#246).
+        if for_slide == TITLE_SLIDE_ID:
+            return _title_group_bounds(cells, vo_lang)
         return None
 
     start: int | None = None
@@ -1045,6 +1093,35 @@ def _slide_group_bounds(
             start = idx
     if start is None:
         start = indices[0]
+
+    end = len(cells)
+    for i in range(start + 1, len(cells)):
+        meta = cells[i].metadata
+        if not meta.is_slide_start:
+            continue
+        if vo_lang is not None and meta.lang is not None and meta.lang != vo_lang:
+            continue
+        end = i
+        break
+    return start, end
+
+
+def _title_group_bounds(
+    cells: list[_RawCell],
+    vo_lang: str | None,
+) -> tuple[int, int] | None:
+    """Return ``(start, end)`` bounds of the macro-generated title slide group.
+
+    ``start`` is the j2 title macro cell; ``end`` is the index of the next
+    slide-start after it (exclusive, language-aware), or ``len(cells)``. The
+    title slide has no ``slide_id``, so this is the title analogue of the
+    ``id_map`` lookup in :func:`_slide_group_bounds`, used to scope a title
+    voiceover's anchor to the title group (#246). Returns ``None`` when the deck
+    has no title macro.
+    """
+    start = _find_title_macro_index(cells)
+    if start is None:
+        return None
 
     end = len(cells)
     for i in range(start + 1, len(cells)):
@@ -1100,8 +1177,17 @@ def _match_anchor(
     foreign slide that happens to share a body fingerprint. The whole-file
     best-effort is used only for an anchor with no ``for_slide`` at all
     (hand-authored companions).
+
+    The title-macro anchor (``tm:``, #246) is resolved directly to the j2 title
+    macro cell, independent of ``id_map`` / group bounds — the title slide has
+    no ``slide_id`` to scope by, and a title greeting recorded with this anchor
+    sits immediately after the macro. Returns ``None`` (caller falls back) when
+    the deck no longer has a title macro.
     """
     kind, value, occ = _split_anchor(anchor)
+
+    if kind == _TITLE_MACRO_KIND:
+        return _find_title_macro_index(cells)
 
     if for_slide:
         bounds = _slide_group_bounds(cells, for_slide, vo_lang, id_map)

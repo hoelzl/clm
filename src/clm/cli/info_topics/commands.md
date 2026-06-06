@@ -1688,7 +1688,12 @@ carries no `slide_id` of its own — is anchored by the conventional
 build merge and `clm voiceover inline` anchor it back to the title slide, so a
 title greeting round-trips and builds in companion form exactly as it does
 inline. Companions extracted before the fix (which carried `slide_id="title"`
-with no `for_slide`) still merge — no re-extract needed.
+with no `for_slide`) still merge — no re-extract needed. Since CLM {version}
+(#246), the greeting's **exact position** within the opening segment is also
+preserved: a greeting authored *before* the title slide's trailing `keep`/code
+cells gets a title-macro `vo_anchor` (`tm:title#0`) so the merge restores it
+right after the title slide rather than at the end of the title group. Legacy
+companions with no `vo_anchor` keep the group-end placement.
 
 **Paired extract (auto-pairing), since CLM {version}.** When `FILE` is a split
 half (`<deck>.de.py` / `<deck>.en.py`) whose twin exists on disk, both
