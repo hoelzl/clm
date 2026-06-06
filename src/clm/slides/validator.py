@@ -21,7 +21,7 @@ from clm.core.topic_resolver import (
     matches_for_binding,
 )
 from clm.infrastructure.utils.path_utils import split_lang_suffix
-from clm.notebooks.slide_parser import Cell, parse_cells
+from clm.notebooks.slide_parser import Cell, comment_token_for_path, parse_cells
 from clm.slides.pairing import (
     TITLE_SLIDE_ID,
     build_slide_groups,
@@ -136,16 +136,17 @@ def _check_format(cells: list[Cell], file_path: str) -> list[Finding]:
         if meta.is_j2:
             continue
 
-        # Check that header starts with "# %%"
-        if not header.startswith("# %%"):
+        # Check that header starts with the language's "<token> %%" marker.
+        marker = f"{cell.comment_token} %%"
+        if not header.startswith(marker):
             findings.append(
                 Finding(
                     severity="error",
                     category="format",
                     file=file_path,
                     line=cell.line_number,
-                    message=f"Cell header does not start with '# %%': {header!r}",
-                    suggestion="Cell headers must begin with '# %%'",
+                    message=f"Cell header does not start with {marker!r}: {header!r}",
+                    suggestion=f"Cell headers must begin with {marker!r}",
                 )
             )
             continue
@@ -194,8 +195,8 @@ def _ends_with_blank_line(cell: RawCell) -> bool:
 
 
 def _is_blank_comment(line: str) -> bool:
-    """True iff ``line`` is a markdown blank-comment line (just ``#``)."""
-    return line.strip() == "#"
+    """True iff ``line`` is a markdown blank-comment line (just ``#`` or ``//``)."""
+    return line.strip() in ("#", "//")
 
 
 def _check_cell_separation(raw_cells: list[RawCell], file_path: str) -> list[Finding]:
@@ -413,15 +414,16 @@ def _is_workshop_heading_cell(cell: Cell) -> bool:
     """
     if cell.metadata.cell_type != "markdown":
         return False
+    token = cell.comment_token
     for line in cell.content.split("\n"):
-        if line.startswith("# "):
-            inner = line[2:]
-        elif line.startswith("#"):
-            inner = line[1:]
+        if line.startswith(token + " "):
+            inner = line[len(token) + 1 :]
+        elif line.startswith(token):
+            inner = line[len(token) :]
         else:
             continue
         inner = inner.strip()
-        if inner.startswith("#"):
+        if inner.startswith("#"):  # markdown heading marker (always "#")
             return bool(_WORKSHOP_HEADING_RE.match(inner))
     return False
 
@@ -978,8 +980,8 @@ def _check_shared_cell_parity(de_path: Path, en_path: Path) -> list[Finding]:
 
     de_text = de_path.read_text(encoding="utf-8")
     en_text = en_path.read_text(encoding="utf-8")
-    _, de_cells = split_raw_cells(de_text)
-    _, en_cells = split_raw_cells(en_text)
+    _, de_cells = split_raw_cells(de_text, comment_token_for_path(de_path))
+    _, en_cells = split_raw_cells(en_text, comment_token_for_path(en_path))
 
     de_shared = [c for c in de_cells if _is_shared(c)]
     en_shared = [c for c in en_cells if _is_shared(c)]
@@ -1052,8 +1054,10 @@ def _check_split_tag_parity(de_path: Path, en_path: Path) -> list[Finding]:
     can no longer attribute to one side.
     """
     findings: list[Finding] = []
-    _, de_cells = split_raw_cells(de_path.read_text(encoding="utf-8"))
-    _, en_cells = split_raw_cells(en_path.read_text(encoding="utf-8"))
+    de_token = comment_token_for_path(de_path)
+    en_token = comment_token_for_path(en_path)
+    _, de_cells = split_raw_cells(de_path.read_text(encoding="utf-8"), de_token)
+    _, en_cells = split_raw_cells(en_path.read_text(encoding="utf-8"), en_token)
     de_nonj2 = [c for c in de_cells if not c.metadata.is_j2]
     en_nonj2 = [c for c in en_cells if not c.metadata.is_j2]
     if len(de_nonj2) != len(en_nonj2):
@@ -1112,8 +1116,8 @@ def _check_split_slide_id_parity(de_path: Path, en_path: Path) -> list[Finding]:
     findings: list[Finding] = []
     de_file = str(de_path)
 
-    de_cells = parse_cells(de_path.read_text(encoding="utf-8"))
-    en_cells = parse_cells(en_path.read_text(encoding="utf-8"))
+    de_cells = parse_cells(de_path.read_text(encoding="utf-8"), comment_token_for_path(de_path))
+    en_cells = parse_cells(en_path.read_text(encoding="utf-8"), comment_token_for_path(en_path))
 
     def _ids(cells: list[Cell]) -> list[str]:
         return [
@@ -1248,7 +1252,7 @@ def _check_split_companion_for_slide_parity(de_path: Path, en_path: Path) -> lis
     def _for_slide_set(path: Path) -> set[str]:
         return {
             strip_preserve_marker(c.metadata.for_slide)
-            for c in parse_cells(path.read_text(encoding="utf-8"))
+            for c in parse_cells(path.read_text(encoding="utf-8"), comment_token_for_path(path))
             if c.metadata.for_slide
         }
 
@@ -1386,9 +1390,13 @@ def _extract_code_quality(cells: list[Cell], file_path: str) -> dict:
                 }
             )
 
-        # Detect leading comments in code cells
+        # Detect leading comments in code cells (either comment family)
         lines = content.strip().split("\n")
-        if lines and lines[0].startswith("#") and not lines[0].startswith("# %%"):
+        if (
+            lines
+            and lines[0].startswith(("#", "//"))
+            and not lines[0].startswith(("# %%", "// %%"))
+        ):
             # First line is a comment — may be unnecessary
             preview = "\n".join(lines[:3])
             leading_comments.append(
@@ -1574,11 +1582,15 @@ def _extract_markdown_heading(content: str) -> str:
     (exactly ``# `` or ``#``), then look for the markdown ``#`` heading marker.
     """
     for line in content.split("\n"):
-        # Remove the Python comment prefix
+        # Remove the comment prefix (either comment family)
         if line.startswith("# "):
             inner = line[2:]
+        elif line.startswith("// "):
+            inner = line[3:]
         elif line.startswith("#"):
             inner = line[1:]
+        elif line.startswith("//"):
+            inner = line[2:]
         else:
             continue
         inner = inner.strip()
@@ -1635,9 +1647,10 @@ def validate_file(
     """
     check_set = set(checks) if checks else set(DEFAULT_CHECKS)
     file_str = str(path)
+    comment_token = comment_token_for_path(path)
 
     text = path.read_text(encoding="utf-8")
-    cells = parse_cells(text)
+    cells = parse_cells(text, comment_token)
 
     findings: list[Finding] = []
 
@@ -1645,7 +1658,7 @@ def validate_file(
         findings.extend(_check_format(cells, file_str))
         # Cell spacing runs on the raw (whitespace-preserving) cells, since the
         # parsed Cell model strips the blank lines these checks inspect.
-        _, raw_cells = split_raw_cells(text)
+        _, raw_cells = split_raw_cells(text, comment_token)
         findings.extend(_check_cell_separation(raw_cells, file_str))
         findings.extend(_check_markdown_blank_lead(raw_cells, file_str))
     if "tags" in check_set:
@@ -1717,7 +1730,7 @@ def validate_quick(path: Path) -> ValidationResult:
     """
     file_str = str(path)
     text = path.read_text(encoding="utf-8")
-    cells = parse_cells(text)
+    cells = parse_cells(text, comment_token_for_path(path))
 
     findings: list[Finding] = []
     findings.extend(_check_format(cells, file_str))
