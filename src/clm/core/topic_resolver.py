@@ -274,7 +274,9 @@ def find_slide_files_recursive(path: Path) -> list[Path]:
     if direct:
         return direct
 
-    return sorted(f.resolve() for f in path.rglob("*.py") if is_slides_file(f))
+    # rglob("*") (not "*.py") so the is_slides_file filter — which already accepts
+    # every SUPPORTED_PROG_LANG_EXTENSIONS — finds .cs/.cpp/.java/.ts decks too.
+    return sorted(f.resolve() for f in path.rglob("*") if f.is_file() and is_slides_file(f))
 
 
 def resolve_topic(

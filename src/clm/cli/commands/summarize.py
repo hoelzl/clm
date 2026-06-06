@@ -104,8 +104,10 @@ def extract_notebook_content(
 
     if suffix == ".ipynb":
         return _extract_from_ipynb(text, audience, language)
-    elif suffix == ".py":
-        return _extract_from_py(text, audience)
+    elif suffix in (".py", ".cs", ".cpp", ".cxx", ".cc", ".java", ".ts", ".rs"):
+        from clm.notebooks.slide_parser import comment_token_for_path
+
+        return _extract_from_py(text, audience, comment_token_for_path(notebook_path))
     else:
         return None
 
@@ -140,18 +142,19 @@ def _extract_from_ipynb(text: str, audience: str, language: str = "en") -> str:
     return content[:MAX_CONTENT_CHARS]
 
 
-def _extract_from_py(text: str, audience: str) -> str:
-    """Extract content from a jupytext .py file.
+def _extract_from_py(text: str, audience: str, comment_token: str = "#") -> str:
+    """Extract content from a jupytext percent-format slide file.
 
-    Note: .py files have no per-cell language metadata, so no language
-    filtering is applied here.
+    ``comment_token`` is the deck's line-comment token ("#" python/rust, "//"
+    c-family). Note: these files have no per-cell language metadata, so no
+    language filtering is applied here.
     """
     parts = []
     in_markdown = False
     current_block: list[str] = []
 
     for line in text.splitlines():
-        if line.startswith("# %%") or line.startswith("# +"):
+        if line.startswith(comment_token + " %%") or line.startswith(comment_token + " +"):
             # Flush current block
             if current_block:
                 block_text = "\n".join(current_block)
@@ -165,10 +168,10 @@ def _extract_from_py(text: str, audience: str) -> str:
             continue
 
         if in_markdown:
-            # Strip leading "# " from markdown cells
-            if line.startswith("# "):
-                current_block.append(line[2:])
-            elif line == "#":
+            # Strip the leading comment prefix from markdown cells
+            if line.startswith(comment_token + " "):
+                current_block.append(line[len(comment_token) + 1 :])
+            elif line == comment_token:
                 current_block.append("")
             else:
                 current_block.append(line)
