@@ -1191,10 +1191,17 @@ def _emit_companion_dry_run_diff(
     results: list,
 ):
     """Emit a unified diff scoped to the companion file for dry-run mode."""
+    from clm.notebooks.slide_parser import comment_token_for_path
     from clm.slides.voiceover_tools import render_companion_update
 
     original_text = companion_file.read_text(encoding="utf-8") if companion_file.exists() else ""
-    updated_text = render_companion_update(original_text, merged_by_slide_id, lang, tag=tag)
+    updated_text = render_companion_update(
+        original_text,
+        merged_by_slide_id,
+        lang,
+        tag=tag,
+        comment_token=comment_token_for_path(companion_file),
+    )
 
     _print_diff_and_rewrite_warnings(original_text, updated_text, companion_file.name, results)
 

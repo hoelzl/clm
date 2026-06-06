@@ -14,33 +14,36 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from clm.notebooks.slide_parser import Cell, parse_cells
+from clm.notebooks.slide_parser import Cell, comment_token_for_path, parse_cells
 
 logger = logging.getLogger(__name__)
 
 
-def format_narrative_cell(text: str, lang: str, *, tag: str = "voiceover") -> str:
+def format_narrative_cell(
+    text: str, lang: str, *, tag: str = "voiceover", comment_token: str = "#"
+) -> str:
     """Format text as a percent-format narrative cell.
 
     Args:
         text: The narrative text (plain text, one thought per line).
         lang: Language code ("de" or "en").
         tag: Cell tag to use ("voiceover" or "notes").
+        comment_token: The deck's line-comment token ("#" python/rust, "//" c-family).
 
     Returns:
         Complete cell text including the header line.
     """
-    header = f'# %% [markdown] lang="{lang}" tags=["{tag}"]'
+    header = f'{comment_token} %% [markdown] lang="{lang}" tags=["{tag}"]'
     lines = text.strip().split("\n")
-    body_lines = ["#"]  # blank comment line after header
+    body_lines = [comment_token]  # blank comment line after header
     for line in lines:
         stripped = line.strip()
         if not stripped:
-            body_lines.append("#")
+            body_lines.append(comment_token)
         elif stripped.startswith("- ") or stripped.startswith("**["):
-            body_lines.append(f"# {stripped}")
+            body_lines.append(f"{comment_token} {stripped}")
         else:
-            body_lines.append(f"# - {stripped}")
+            body_lines.append(f"{comment_token} - {stripped}")
     return header + "\n" + "\n".join(body_lines)
 
 
@@ -54,6 +57,7 @@ def update_narrative(
     lang: str,
     *,
     tag: str = "voiceover",
+    comment_token: str = "#",
 ) -> str:
     """Update or insert narrative cells in a percent-format .py file.
 
@@ -71,7 +75,7 @@ def update_narrative(
     if not notes_map:
         return text
 
-    cells = parse_cells(text)
+    cells = parse_cells(text, comment_token)
     if not cells:
         return text
 
@@ -88,7 +92,9 @@ def update_narrative(
         notes_text = notes_map[slide_idx]
         info = slide_info[slide_idx]
 
-        notes_cell_text = format_narrative_cell(notes_text, lang, tag=tag)
+        notes_cell_text = format_narrative_cell(
+            notes_text, lang, tag=tag, comment_token=comment_token
+        )
 
         if info["existing_notes_lines"]:
             # Replace existing narrative cell
@@ -130,7 +136,9 @@ def write_narrative(
         Path to the written file.
     """
     text = path.read_text(encoding="utf-8")
-    updated = update_narrative(text, notes_map, lang, tag=tag)
+    updated = update_narrative(
+        text, notes_map, lang, tag=tag, comment_token=comment_token_for_path(path)
+    )
 
     dest = output_path or path
     dest.write_text(updated, encoding="utf-8", newline="\n")

@@ -107,7 +107,9 @@ SKIP_OUTPUT_FILE_PATTERNS = [
     # OUTPUT and (b) the kernel ``other_files`` payload (the raw author file is
     # never read at runtime). ``is_ignored_file_for_output`` governs exactly
     # those two; source mounts do not consult it, so workers still see it.
-    re.compile(r"voiceover_.*\.py$"),
+    # ``.py`` plus the //-family slide extensions (companion_name preserves the
+    # deck's extension), so a ``voiceover_<stem>.cs`` never leaks into output.
+    re.compile(r"voiceover_.*\.(py|cs|cpp|cxx|cc|java|ts|rs)$"),
 ]
 
 # Parallel glob form of ``SKIP_OUTPUT_FILE_PATTERNS`` for consumers that
@@ -117,7 +119,16 @@ SKIP_OUTPUT_FILE_GLOBS = [
     "*.http-cassette.yaml",
     "*.http-cassette.yaml.staging-*",
     "*.http-cassette.yaml.staging-*.completed",
-    "voiceover_*.py",  # separated-voiceover companions — output-suppressed (see above)
+    # separated-voiceover companions — output-suppressed (see above). One glob
+    # per slide extension (globs have no alternation); keep in sync with the regex.
+    "voiceover_*.py",
+    "voiceover_*.cs",
+    "voiceover_*.cpp",
+    "voiceover_*.cxx",
+    "voiceover_*.cc",
+    "voiceover_*.java",
+    "voiceover_*.ts",
+    "voiceover_*.rs",
 ]
 
 PLANTUML_EXTENSIONS = frozenset({".pu", ".puml", ".plantuml"})

@@ -39,7 +39,7 @@ from clm.slides.voiceover_tools import COMPANION_SUBDIR
 CASSETTE_SUBDIR = "cassettes"
 CASSETTE_LEGACY_SUBDIR = "_cassettes"
 
-_VOICEOVER_RE = re.compile(r"voiceover_.*\.py$")
+_VOICEOVER_RE = re.compile(r"voiceover_.*\.(py|cs|cpp|cxx|cc|java|ts|rs)$")
 _CASSETTE_RE = re.compile(r".*\.http-cassette\.yaml$")
 _STAGING_RE = re.compile(r".*\.http-cassette\.yaml\.staging-.*$")
 
