@@ -6,6 +6,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.8.4] - 2026-06-06
+
+### Changed
+
+- **C#/C++/Java/TypeScript decks now use the Python "header-line-less" title
+  convention.** The `header` macro in `templates_{cpp,csharp,java,typescript}`
+  now emits its own leading `%% [markdown] lang="de"` cell boundary (like
+  `templates_python` already did), so a deck's title is written as a standalone
+  `// {{ header("DE", "EN") }}` j2 call with **no** authored `// %% [markdown]`
+  wrapper cell. This makes one title convention across all languages, which is
+  the structural prerequisite for the multi-language authoring tooling (split
+  decks, `voiceover extract/inline`, `assign-ids`, `normalize`, `sync`). It also
+  fixes a latent bug in `//`-family decks that used a *neutral* wrapper
+  (`// %% [markdown] tags=["slide"]`): the German title content lived in a
+  language-neutral cell and therefore leaked into the **English** build (the EN
+  slides showed two titles); each language now has exactly one title.
+  **Migration:** existing `//`-family course decks must drop the wrapper line —
+  run `python scripts/reformat_header_convention.py <slides-dir> --apply` (see
+  `clm info migration`). A reformatted deck *requires* this release, so reformat
+  in lockstep with bumping the course's CLM pin. Python (`#`) decks are
+  unchanged. Investigation + validation: `docs/claude/multi-language-authoring-tooling-investigation.md` §10.
+
+### Added
+
+- **`header_de` / `header_en` sibling macros for the `//`-family templates**
+  (C#/C++/Java/TypeScript), mirroring `templates_python` — the per-language
+  title macros that split decks (`*.de.cs` / `*.en.cpp`) use.
+- **`scripts/reformat_header_convention.py`** — migrates `//`-family decks to the
+  header-line-less convention (dry-run by default; handles the simple,
+  neutral-wrapper, `clang-format`-wrapped and split-cell shapes; idempotent).
+- **`scripts/verify_header_reformat.py`** — corpus invariant checker: reformats
+  every deck, builds it with the current macro, and asserts exactly one title
+  slide per language. Verified across all 560 real decks (cpp 302, cs 131,
+  java 78, ts 49): 0 outliers, 0 violations.
+
 ### Fixed
 
 - **A voiceover authored after a mid-slide-group j2 cell now keeps its exact
@@ -36,6 +71,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   slide. A greeting authored *after* a title-slide content cell anchors to that
   cell as usual (`fp:`), and legacy companions with no `vo_anchor` keep the
   previous group-end placement, so already-built decks are unaffected.
+- **A `.c` source file no longer crashes programming-language resolution.**
+  `EXTENSION_TO_PROG_LANG` mapped `.c` to a `"c"` language that has no entry in
+  the worker's `prog_lang_utils` config (no jinja/jupytext/kernel), so any code
+  path that resolved a `.c` slide path through to `prog_lang_utils` raised
+  `ValueError: Unsupported language: c`. `.c` now resolves to `cpp` (the xcpp
+  kernel compiles C as C++); the dead `"c"` reverse mapping is removed.
 
 ## [1.8.3] - 2026-06-06
 
