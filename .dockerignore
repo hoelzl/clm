@@ -78,8 +78,21 @@ Dockerfile
 !services/**/Dockerfile
 docker-compose*.yml
 
-# Claude and development tools
+# Docker build directory — keep it out of the `COPY . ./clm` layer so images
+# stay slim. The Dockerfiles are read via `-f` (not from the context), and each
+# service COPYs only a couple of small assets from ${DOCKER_PATH}; re-include
+# exactly those. (.dockerignore is last-match-wins in BuildKit, so re-includes
+# inside an excluded directory — even one excluded by an earlier rule like
+# *.sh — are honored.)
+docker/
+!docker/plantuml/plantuml-1.2024.6.jar
+!docker/drawio/ArchitectsDaughter-Regular.ttf
+!docker/drawio/entrypoint.sh
+
+# Claude and development tools (worktrees, agents, settings — anywhere in the tree)
 .claude/
+**/.claude/
+**/.claude
 
 # Coverage and testing artifacts
 .coverage
