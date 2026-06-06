@@ -145,3 +145,25 @@ def test_parse_slides_resolves_token_from_extension(tmp_path: Path) -> None:
     titles = [g.title for g in groups]
     assert "Titel" in titles  # header macro, de side
     assert "Überschrift" in titles  # the de content slide
+
+
+def test_strip_preserves_content_leading_slashes() -> None:
+    """M1 regression: a literal-prefix strip must keep content slashes.
+
+    ``lstrip("// ")`` is a character-set strip that eats every leading slash, so
+    ``// /usr/bin`` would lose its path slash and C# ``///`` would collapse. The
+    parser must remove the comment token as a prefix, not a char set.
+    """
+    text = "\n".join(
+        [
+            '// %% [markdown] lang="de" tags=["slide"]',
+            "// /usr/local/bin is on PATH",
+            "// /// also keeps its slashes",
+        ]
+    )
+    md = parse_cells(text, "//")[0].text_content()
+    assert "/usr/local/bin is on PATH" in md
+    assert "/// also keeps its slashes" in md
+    # the Python analogue is likewise lossless for a path body
+    py = parse_cells('# %% [markdown] lang="de" tags=["slide"]\n# /usr/local/bin', "#")
+    assert "/usr/local/bin" in py[0].text_content()

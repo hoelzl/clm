@@ -365,12 +365,27 @@ def _is_cell_boundary(line: str, comment_token: str = "#") -> bool:
     )
 
 
+def _strip_comment_prefix(line: str, comment_token: str) -> str:
+    """Remove the leading comment token as a LITERAL prefix, then leading spaces.
+
+    Uses prefix removal, not ``str.lstrip(token + " ")`` — the latter is a
+    *character-set* strip, so for ``token="//"`` it would eat *every* leading
+    slash (the set ``{'/', ' '}``), corrupting content lines like ``// /usr/bin``
+    or C# ``///`` doc comments. For ``token="#"`` this reproduces the previous
+    behaviour: percent-format body lines always carry the comment token at
+    column 0, and the leading-space lstrip matches the old result.
+    """
+    if line.startswith(comment_token):
+        line = line[len(comment_token) :]
+    return line.lstrip(" ")
+
+
 def _strip_markdown(content: str, comment_token: str = "#") -> str:
     """Strip comment prefixes and markdown formatting from a markdown cell."""
     parts = []
     for line in content.split("\n"):
         # Remove the language comment prefix (e.g. "# " or "// ").
-        stripped = line.lstrip(comment_token + " ").rstrip()
+        stripped = _strip_comment_prefix(line, comment_token).rstrip()
         if stripped.startswith("#"):
             # Strip markdown heading markers (always "#", language-independent).
             stripped = stripped.lstrip("# ").strip()
@@ -391,7 +406,7 @@ def _strip_code_comments(content: str, comment_token: str = "#") -> str:
     """Strip comment prefixes from code content."""
     parts = []
     for line in content.split("\n"):
-        stripped = line.lstrip(comment_token + " ").strip()
+        stripped = _strip_comment_prefix(line, comment_token).strip()
         if stripped:
             parts.append(stripped)
     return " ".join(parts)
@@ -402,7 +417,7 @@ def _extract_title(cell: Cell) -> str:
     if cell.cell_type != "markdown":
         return ""
     for line in cell.content.split("\n"):
-        stripped = line.lstrip(cell.comment_token + " ").strip()
+        stripped = _strip_comment_prefix(line, cell.comment_token).strip()
         if stripped.startswith("#"):
             # Markdown heading
             return stripped.lstrip("# ").strip()
