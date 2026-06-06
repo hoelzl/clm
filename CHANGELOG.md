@@ -22,6 +22,71 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   pipeline passes both. Genuinely empty / pure-punctuation / magic-only cells
   still refuse. (#251)
 
+### Changed
+
+- **CI/release workflows upgraded to Node.js 24-based actions.** GitHub is
+  forcing JavaScript actions onto Node.js 24 (Node.js 20 is deprecated and
+  removed from runners in September 2026). `actions/checkout`, `setup-python`,
+  `setup-java`, `astral-sh/setup-uv`, `codecov/codecov-action`, and
+  `docker/setup-buildx-action` are bumped to their current Node-24 majors. No
+  behavioral change to CI or the release pipeline. A grouped monthly Dependabot
+  config (`.github/dependabot.yml`) now keeps the actions current so the next
+  runtime deprecation arrives as a routine PR.
+- **`bump-my-version` no longer creates a local `vX.Y.Z` tag** (`tag = false` in
+  `[tool.bumpversion]`). The Release workflow already creates the authoritative
+  tag on the server after the CI-green gate; dropping the local tag removes a
+  must-never-push footgun and the post-release tag-reconciliation step. Release
+  procedure docs updated accordingly.
+
+## [1.9.0] - 2026-06-06
+
+### Added
+
+- **The slide authoring tooling now works on C#/C++/Java/TypeScript decks, not
+  just Python.** CLM's *build* has long been multi-language, but the authoring
+  tooling — `slides split` / `unify`, `sync`, `voiceover extract` / `inline`,
+  `assign-ids`, `normalize`, `validate`, `coverage` / `lang-coverage` /
+  `language-view`, deck discovery, and `translate` / `bootstrap` — hardcoded the
+  Python `#` comment token and `.py` extension. The deck's comment token (`//`
+  for the c-family, `#` for Python) and extension are now threaded through every
+  authoring consumer, resolved per file from the extension via
+  `comment_token_for_path()`. The `//`-family languages (C#, C++, Java,
+  TypeScript) get the same split/sync/voiceover authoring workflow Python already
+  had, including `.de`/`.en` split companions that preserve the deck extension
+  (`*.de.cs`, `*.en.cpp`). The default everywhere stays `#`, so **Python output
+  is byte-identical**. This completes the multi-language authoring migration whose
+  structural prerequisite (the header-line-less title convention) shipped in
+  1.8.4. Investigation + validation:
+  `docs/claude/multi-language-authoring-tooling-investigation.md` §10.
+
+### Changed
+
+- **`sync translate` prompts are now language-aware.** A code cell in a `//`-deck
+  is translated as that language (e.g. C# is translated as C#, not "runnable
+  Python"), and the model is instructed to preserve `// ` comment prefixes. The
+  programming language folds into the translation-cache key for non-Python decks,
+  so cached Python translations are unaffected.
+- **`--help` text and `clm info` topics use a language-neutral `<ext>`
+  placeholder** instead of implying `.py`-only, and two now-inaccurate
+  "Python-only" claims in the info topics were corrected.
+
+### Fixed
+
+- **The build no longer silently drops voiceover on `//`-family decks.** The
+  host-side voiceover companion merge and the authoring `voiceover` writers were
+  Python-token-only, so a `voiceover_*.cs` / `*.cpp` companion was never merged
+  into the built notebook. The merge, the companion writers, and `extract` /
+  `inline` are now token-aware, and the `SKIP_OUTPUT` globs were broadened so
+  `voiceover_*.{cs,cpp,java,ts}` companions never leak into output.
+- **`assign-ids` / `normalize` / `validate` now discover `.cs` / `.cpp` / `.java`
+  / `.ts` decks.** Deck discovery (`rglob` + `is_slides_file`) and `validate`
+  kind-inference were Python-extension-only; the `//`-family decks are now found
+  and dispatched.
+- **Comment-prefix stripping removes the literal prefix, not a character set.**
+  `_strip_comment_prefix` previously used `lstrip("// ")`, which strips *any*
+  leading `/` or space — turning `// /usr/bin` into `usr/bin` and collapsing a C#
+  `///` doc comment. It now strips the exact `// ` prefix once.
+
 ## [1.8.4] - 2026-06-06
 
 ### Changed

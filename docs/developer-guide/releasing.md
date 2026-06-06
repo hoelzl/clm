@@ -76,9 +76,11 @@ the workflow releases. **Merge with a merge commit, not squash or rebase** — t
 workflow recognises the release by finding the `Bump version …` commit in the
 push, and squash/rebase rewrites it into a differently-worded commit.
 
-`bump-my-version` also creates a *local* `vA.B.C` tag; do **not** push it (don't
-`git push --tags`). The workflow creates the authoritative tag on `master`
-itself, after the CI gate.
+`bump-my-version` is configured with `tag = false`, so it creates **only** the
+`Bump version …` commit — no local tag. The `vA.B.C` tag is created on the server
+by the Release workflow, after the CI-green gate, so a red commit is never tagged.
+There is nothing to `git push --tags`; doing so is unnecessary and not part of the
+flow.
 
 **Direct (no PR).** If review isn't needed, push the bump commit straight to
 master:
@@ -89,9 +91,11 @@ git push        # pushes the bump commit; do NOT push the tag
 ```
 
 **Explicit tag (fallback).** You can still release by pushing a tag directly —
-useful to re-release or to tag a specific commit:
+useful to re-release or to tag a specific commit. Since the bump no longer
+creates a local tag, make it yourself first, then push it:
 
 ```bash
+git tag vX.Y.Z      # on the commit whose in-tree version is X.Y.Z
 git push origin vX.Y.Z
 ```
 

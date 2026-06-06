@@ -220,7 +220,10 @@ bump-my-version bump patch --dry-run --verbose
 This automatically:
 - Updates the version in `src/clm/__version__.py`, `pyproject.toml`, `README.md`, `CLAUDE.md`, `docs/developer-guide/architecture.md`, `docker/BUILDING.md`, and `tests/workers/notebook/test_notebook_error_context.py`
 - Creates a git commit with the message "Bump version X.Y.Z → A.B.C"
-- Creates a git tag `vA.B.C`
+
+It does **not** create a local `vA.B.C` tag (`tag = false`): the Release
+workflow tags the commit on the server after CI passes. See
+[Releasing](releasing.md) for the full pipeline.
 
 ## Common Development Tasks
 
