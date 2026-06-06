@@ -781,6 +781,7 @@ Since CLM {version}, the `format` check group also enforces **cell spacing**
 |---------|----------|-------|
 | cell is not separated from the previous cell by a blank line | `warning` | A blank line is required before every cell **except a j2 cell** — the title-header block (`# j2 … import header` immediately followed by `# {{ header(…) }}`) is tight-coupled and exempt. Cells run together are valid percent-format but render and diff poorly. Fix with `clm slides normalize`. |
 | markdown cell body does not start with a blank comment line (`#`) | `warning` | A markdown cell should open `# %% [markdown]` / `#` / `# <content>`; the leading `#` is what makes content that starts with a bullet (or heading) render correctly. j2 cells (the title macro) are exempt; empty-body cells are skipped. Fix with `clm slides normalize`. |
+| executable code appears before the first `%% ` cell marker (issue #253) | `warning` | (since CLM {version}) Code between the `# {{ header(…) }}` macro call and the first `# %%` cell has no cell marker, so jupytext folds it into the header cell. At build time it lands in the **title markdown** — silently dropped from a DE build (it rides the EN title in the bilingual macro) yet kept in the split DE half, so the bilingual and split builds diverge. A `warning`, not an `error`: the source still round-trips through `split`/`unify`. Fix with `clm slides normalize` (the `preamble_code` op wraps it in its own `# %%` cell). |
 
 Quick mode (`--quick`) runs the slide_id checks because they walk cells
 linearly and don't false-positive on in-progress edits. The workshop-scope
@@ -802,8 +803,9 @@ clm validate slides/module_010/topic_100_intro/ --quick
 *Removed in CLM 1.8: the flat alias `clm normalize-slides` no longer exists — use this group-qualified form.*
 
 Normalize slide files by applying mechanical fixes: tag migration (`alt`→`completed`),
-workshop tag insertion, DE/EN interleaving, slide ID auto-generation, and — since
-CLM {version} — **cell spacing** (`cell_spacing`).
+workshop tag insertion, DE/EN interleaving, slide ID auto-generation, **cell spacing**
+(`cell_spacing`), and — since CLM {version} — **preamble-code wrapping**
+(`preamble_code`).
 
 The `cell_spacing` operation fixes the two formatting issues the `format`
 validator now warns about: it inserts a blank line before every cell that lacks
@@ -811,13 +813,24 @@ one (except the tight-coupled j2 title-header block), and prepends a blank
 comment line (`#`) to any markdown cell whose body starts directly with content.
 It runs by default (part of `all`) and is idempotent.
 
+The `preamble_code` operation (since CLM {version}) fixes issue #253: code that
+sits between the `# {{ header(…) }}` macro call and the first `# %%` cell has no
+cell marker of its own, so jupytext folds it into the header cell and — at build
+time — into the **title markdown**, where it diverges between bilingual and split
+builds. The op moves that code into its own `# %%` code cell (a shared,
+language-neutral cell included in every build and copied verbatim to both split
+halves), making the conversion render-neutral and finally executing the code as
+code rather than rendering it as markdown text. It runs **first** (before the
+other passes), is default-on (part of `all`), idempotent, and a strict no-op on
+a conforming deck.
+
 ```
 clm slides normalize [OPTIONS] PATH
 ```
 
 | Option | Description |
 |--------|-------------|
-| `--operations TEXT` | Comma-separated operations: `tag_migration`, `workshop_tags`, `interleaving`, `slide_ids`, `cell_spacing`, `all` (default: `all`) |
+| `--operations TEXT` | Comma-separated operations: `preamble_code`, `tag_migration`, `workshop_tags`, `interleaving`, `slide_ids`, `cell_spacing`, `all` (default: `all`) |
 | `--dry-run` | Preview changes without modifying files |
 | `--canonicalize-start-completed` | Force `start`/`completed` cohesion pairs into the canonical DE/EN interleave, even when DE/EN code differs (e.g. localized identifiers). Run before `clm slides split` so `unify(split(deck)) == deck` holds byte-for-byte. Only affects the `interleaving` operation. |
 | `--json` | Output as JSON |
@@ -841,6 +854,8 @@ clm slides normalize slides/module_010/ --operations tag_migration
 clm slides normalize slides/module_010/ --operations slide_ids --json
 # Fix only cell spacing (blank line between cells + markdown leading `#`).
 clm slides normalize slides/module_010/ --operations cell_spacing
+# Fix only preamble code (wrap code before the first cell into its own `# %%` cell)
+clm slides normalize slides/module_010/ --operations preamble_code
 # Pre-conversion: canonicalize start/completed order so the split round-trips exactly
 clm slides normalize slides/module_010/topic_100_intro/ --operations interleaving --canonicalize-start-completed
 # Scope: mint ids on bilingual decks only, skipping an _archive/ dir
@@ -1507,6 +1522,15 @@ by matching id. Since CLM {version} the parser recognises the deck's
 own comment token (`# %%` for Python/Rust, `// %%` for C#/C++/Java/TS),
 so split/unify and the rest of the authoring tooling work on every
 supported prog_lang — the token is derived from the file extension.
+
+**Preamble code (issue #253).** Since CLM {version}, `split` emits a `warning:`
+(to stderr; does not fail) when SOURCE has executable code between the
+`# {{ header(…) }}` macro call and the first `# %%` cell. The split itself stays
+byte-identical (the code is copied to both halves), but such code folds into the
+**title markdown** at build time and is **not render-neutral** between the
+bilingual and split forms. `split` never rewrites the source — run
+`clm slides normalize` (the `preamble_code` op) first to wrap the code in its own
+`# %%` cell, then re-split.
 
 **Voiceover companion.** If SOURCE has a sibling voiceover companion
 (`slides_<name>.py` → `voiceover_<name>.<ext>`), `split` splits it in

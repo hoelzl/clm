@@ -111,6 +111,7 @@ class SplitResult:
     source_companion: str | None = None
     de_companion: str | None = None
     en_companion: str | None = None
+    warnings: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -361,6 +362,8 @@ def split_in_file(
     text = source.read_text(encoding="utf-8")
     de_text, en_text = split_text(text, comment_token)
 
+    warnings = _preamble_code_warnings(text, source, comment_token)
+
     companion = _plan_companion_split(source, de_path, en_path, comment_token)
 
     overwrote: list[str] = []
@@ -396,7 +399,33 @@ def split_in_file(
         source_companion=str(companion.source) if companion is not None else None,
         de_companion=str(companion.de_path) if companion is not None else None,
         en_companion=str(companion.en_path) if companion is not None else None,
+        warnings=warnings,
     )
+
+
+def _preamble_code_warnings(text: str, source: Path, comment_token: str = "#") -> list[str]:
+    """Warn (without rewriting) when ``text`` has code folded into a header cell.
+
+    Such code (between the ``{{ header(...) }}`` macro and the first ``%% `` cell)
+    is preserved byte-identically by the split — the round trip still holds — but
+    at build time it folds into the title markdown and is NOT render-neutral
+    between the bilingual and split forms (issue #253). We never mutate the source
+    here (that would break ``unify(split(x)) == x``); we only point the user at
+    ``clm slides normalize``, which moves the code into its own ``%% `` cell.
+    """
+    from clm.slides.preamble_code import find_preamble_code
+
+    _preamble, cells = split_cells(text, comment_token)
+    warnings: list[str] = []
+    for finding in find_preamble_code(cells, comment_token):
+        warnings.append(
+            f"{source}:{finding.first_code_line}: executable code before the first "
+            f"`%% ` cell is folded into the header cell and will be dropped or "
+            f"mis-rendered, so the split is not render-neutral with the bilingual "
+            f"build (issue #253). Run `clm slides normalize` to wrap it in a code "
+            f"cell, then re-split."
+        )
+    return warnings
 
 
 def _split_target(source: Path, lang: str) -> Path:

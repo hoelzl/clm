@@ -260,6 +260,44 @@ def _check_markdown_blank_lead(raw_cells: list[RawCell], file_path: str) -> list
     return findings
 
 
+def _check_preamble_code(
+    raw_cells: list[RawCell], file_path: str, comment_token: str = "#"
+) -> list[Finding]:
+    """Warn when executable code is folded into a leading j2 (header) cell body.
+
+    Code that sits between the ``# {{ header(...) }}`` macro call and the first
+    ``%% `` cell has no cell marker of its own, so jupytext folds it into the
+    header cell. At build time it lands in the title markdown — silently dropped
+    from a DE build (it rides the EN title in the bilingual macro) yet kept in
+    the split DE half, so bilingual and split builds diverge (issue #253). A
+    *warning*, not an error: the source still round-trips through split/unify,
+    and escalating it would block the 1.8 validator gate. Operates on
+    :class:`RawCell` because the parsed ``Cell`` model discards the j2 cell body.
+    """
+    from clm.slides.preamble_code import find_preamble_code
+
+    findings: list[Finding] = []
+    for finding in find_preamble_code(raw_cells, comment_token):
+        findings.append(
+            Finding(
+                severity="warning",
+                category="format",
+                file=file_path,
+                line=finding.first_code_line,
+                message=(
+                    "executable code appears before the first `%% ` cell marker; "
+                    "it is folded into the header cell and is silently dropped or "
+                    "mis-rendered across bilingual and split builds (issue #253)"
+                ),
+                suggestion=(
+                    "Move the code into its own `%% ` code cell "
+                    "(`clm slides normalize` fixes this automatically)."
+                ),
+            )
+        )
+    return findings
+
+
 def _check_tags(cells: list[Cell], file_path: str) -> list[Finding]:
     """Check tag validity, unclosed start/completed pairs, and orphan end-workshop tags."""
     findings: list[Finding] = []
@@ -1661,6 +1699,7 @@ def validate_file(
         _, raw_cells = split_raw_cells(text, comment_token)
         findings.extend(_check_cell_separation(raw_cells, file_str))
         findings.extend(_check_markdown_blank_lead(raw_cells, file_str))
+        findings.extend(_check_preamble_code(raw_cells, file_str, comment_token))
     if "tags" in check_set:
         findings.extend(_check_tags(cells, file_str))
     if "pairing" in check_set:

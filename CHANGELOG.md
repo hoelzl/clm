@@ -21,9 +21,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   minting funnels never start emitting opaque code-line slugs); the conversion
   pipeline passes both. Genuinely empty / pure-punctuation / magic-only cells
   still refuse. (#251)
+- **`clm slides normalize` gains a `preamble_code` operation** (default-on) that
+  fixes issue #253: executable code between the `# {{ header(…) }}` macro call and
+  the first `# %%` cell has no cell marker, so jupytext folds it into the header
+  cell — and, at build time, into the **title markdown**. In the bilingual
+  `header(de, en)` macro that code rides the EN title (silently dropped from a DE
+  build); in a split `.de.py` half it rides the DE title (kept), so the bilingual
+  and split builds diverge on the DE side and the conversion is not
+  render-neutral. The new op moves the code into its own shared `# %%` code cell —
+  included identically in every build and copied verbatim to both split halves —
+  so the builds become byte-identical and the code is finally executed as code
+  rather than rendered as markdown text. It runs first among the normalize passes,
+  is idempotent, and is a no-op on a conforming deck.
 
 ### Changed
 
+- **`clm validate` (`format` group) and `clm slides split` now warn about
+  preamble code** (issue #253). `validate` emits a `warning`-severity finding and
+  `split` prints a non-fatal `warning:` to stderr (it never rewrites the source,
+  so the byte-identical round-trip is preserved). Both point at `clm slides
+  normalize` for the fix. Top-of-file code *before* the `# j2` import line (a true
+  file preamble, e.g. a leading `import os`) is already render-neutral and is not
+  flagged.
 - **CI/release workflows upgraded to Node.js 24-based actions.** GitHub is
   forcing JavaScript actions onto Node.js 24 (Node.js 20 is deprecated and
   removed from runners in September 2026). `actions/checkout`, `setup-python`,

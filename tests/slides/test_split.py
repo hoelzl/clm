@@ -121,6 +121,19 @@ class TestSplitText:
         with pytest.raises(SplitError):
             split_text(text)
 
+    def test_preamble_code_split_still_round_trips(self):
+        # split must NOT rewrite preamble code (issue #253): it only warns at the
+        # CLI/file layer. The byte-identical round trip must still hold.
+        text = (
+            "# j2 from 'macros.j2' import header\n"
+            '# {{ header("Titel DE", "Title EN") }}\n'
+            "from typing import Iterable\n\n" + _slide_pair("a", "Eins", "One")
+        )
+        de, en = split_text(text)
+        assert "from typing import Iterable" in de
+        assert "from typing import Iterable" in en
+        assert unify_texts(de, en) == text
+
 
 class TestUnifyTexts:
     def test_round_trip_header_only(self):
@@ -284,6 +297,24 @@ class TestSplitInFile:
         assert result.wrote is True
         assert (tmp_path / "deck.de.py").read_text(encoding="utf-8") != "placeholder"
         assert (tmp_path / "deck.de.py").read_text(encoding="utf-8") != ""
+
+    def test_preamble_code_emits_warning(self, tmp_path: Path) -> None:
+        source = tmp_path / "deck.py"
+        source.write_text(
+            "# j2 from 'macros.j2' import header\n"
+            '# {{ header("Titel DE", "Title EN") }}\n'
+            "from typing import Iterable\n\n" + _slide_pair("a", "Eins", "One"),
+            encoding="utf-8",
+        )
+        result = split_in_file(source)
+        assert result.warnings
+        assert any("#253" in w for w in result.warnings)
+
+    def test_no_warning_for_clean_deck(self, tmp_path: Path) -> None:
+        source = tmp_path / "deck.py"
+        source.write_text(HEADER_PREAMBLE + _slide_pair("a", "Eins", "One"), encoding="utf-8")
+        result = split_in_file(source)
+        assert result.warnings == []
 
 
 class TestUnifyInFile:

@@ -105,8 +105,52 @@ class NormalizationResult:
 # ---------------------------------------------------------------------------
 
 ALL_OPERATIONS = frozenset(
-    {"tag_migration", "workshop_tags", "interleaving", "slide_ids", "cell_spacing"}
+    {
+        "preamble_code",
+        "tag_migration",
+        "workshop_tags",
+        "interleaving",
+        "slide_ids",
+        "cell_spacing",
+    }
 )
+
+
+# ---------------------------------------------------------------------------
+# Preamble code: wrap bare code folded into a header cell into its own cell
+# ---------------------------------------------------------------------------
+
+
+def _apply_preamble_code(
+    cells: list[_RawCell], file_path: str, comment_token: str = "#"
+) -> list[Change]:
+    """Move code folded into a leading j2 (header) cell into its own ``%% `` cell.
+
+    Code between the ``# {{ header(...) }}`` macro call and the first ``%% ``
+    cell has no cell marker, so jupytext folds it into the header cell and the
+    title markdown — silently dropped from a DE build yet kept in the split DE
+    half, so bilingual and split builds diverge (issue #253). Re-homing it in a
+    shared ``%% `` code cell makes every build include it identically (and run
+    it as code). Mutates ``cells`` in place; idempotent on a conforming deck.
+    Runs before the other passes so they see the canonical cell structure;
+    inter-cell spacing is finalized later by ``cell_spacing``.
+    """
+    from clm.slides.preamble_code import wrap_preamble_code
+
+    changes: list[Change] = []
+    for finding in wrap_preamble_code(cells, comment_token):
+        changes.append(
+            Change(
+                file=file_path,
+                operation="preamble_code",
+                line=finding.first_code_line,
+                description=(
+                    "Wrapped code that preceded the first cell marker into a "
+                    f"`{comment_token} %%` code cell"
+                ),
+            )
+        )
+    return changes
 
 
 # ---------------------------------------------------------------------------
@@ -751,7 +795,12 @@ def normalize_file(
     all_changes: list[Change] = []
     all_review: list[ReviewItem] = []
 
-    # Apply operations in deterministic order
+    # Apply operations in deterministic order. Preamble-code wrapping runs first
+    # so every later pass (interleaving, slide_ids, cell_spacing) sees the
+    # canonical cell structure with the code in its own cell.
+    if "preamble_code" in op_set:
+        all_changes.extend(_apply_preamble_code(cells, file_str, comment_token))
+
     if "tag_migration" in op_set:
         all_changes.extend(_apply_tag_migration(cells, file_str))
 

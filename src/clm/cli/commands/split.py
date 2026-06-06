@@ -76,6 +76,8 @@ def split_cmd(source: Path, force: bool, report_only: bool, as_json: bool) -> No
 
 
 def _print_human(result: SplitResult, *, report_only: bool) -> None:
+    for warning in result.warnings:
+        click.echo(f"warning: {warning}", err=True)
     prefix = "[report-only] " if report_only else ""
     verb = "would write" if report_only else "wrote"
     paths = [result.de_path, result.en_path]
@@ -96,5 +98,6 @@ def _to_dict(result: SplitResult, *, report_only: bool) -> dict[str, object]:
         "source_companion": result.source_companion,
         "de_companion": result.de_companion,
         "en_companion": result.en_companion,
+        "warnings": result.warnings,
         "report_only": report_only,
     }
