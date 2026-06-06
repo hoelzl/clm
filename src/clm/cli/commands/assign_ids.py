@@ -59,8 +59,22 @@ CACHE_DB_NAME = "clm-llm.sqlite"
     is_flag=True,
     help=(
         "Bulk-accept content-derived proposals (first bullet, prominent "
-        "bold, image alt) for headingless slides. Hard-refusal cells "
-        "still refuse."
+        "bold, image alt, prose, and the code AST constructs) for "
+        "headingless slides. Bare-expression code cells and hard-refusal "
+        "cells still refuse."
+    ),
+)
+@click.option(
+    "--accept-code-derived",
+    is_flag=True,
+    help=(
+        "Bulk-accept a first-code-line slug for bare-expression code cells "
+        "that have no heading and no extractable construct (e.g. "
+        "`(1 + 1j) * (1 + 1j)` -> `1-1j-1-1j`, `letters[0:3]` -> "
+        "`letters-0-3`). Comment-token-aware, so it works for non-Python "
+        "decks too. Genuinely empty / magic-only cells still refuse. "
+        "Independent of --accept-content-derived; the conversion pipeline "
+        "usually passes both."
     ),
 )
 @click.option(
@@ -161,6 +175,7 @@ def assign_ids_cmd(
     path: Path,
     force: bool,
     accept_content_derived: bool,
+    accept_code_derived: bool,
     llm_suggest: bool,
     report_only: bool,
     llm_model: str,
@@ -194,7 +209,10 @@ def assign_ids_cmd(
       headed       Slug derived from the first markdown heading.
       extractable  Refused by default; --accept-content-derived or
                    --llm-suggest opt into auto-acceptance.
-      no content   Hard refuse; author must write slide_id="..." by hand.
+      code-derived Bare-expression code cells (no heading, no construct);
+                   --accept-code-derived slugs the first code line.
+      no content   Hard refuse; author must write slide_id="..." by hand
+                   (genuinely empty / pure-punctuation / magic-only cells).
 
     \b
     Special cases:
@@ -226,6 +244,7 @@ def assign_ids_cmd(
     options = AssignOptions(
         force=force,
         accept_content_derived=accept_content_derived,
+        accept_code_derived=accept_code_derived,
         llm_suggest=llm_suggest and suggester is not None,
         report_only=report_only,
         llm_suggester=suggester,

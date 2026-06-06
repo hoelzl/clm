@@ -299,6 +299,35 @@ Voiceover and notes cells inherit the id of the preceding slide
 `clm info commands` → `clm slides assign-ids` for the full flag
 matrix.
 
+## Fully automatable bilingual→split id completion ({version} — additive, issue #251)
+
+Converting a bilingual course module to the split layout is a clean command
+sequence (`assign-ids → split → extract → tidy`) — except `assign-ids` used to
+**hard-refuse** content-less code subslides: a code cell whose first statement is
+a bare expression with no heading and no nameable construct
+(`(1 + 1j) * (1 + 1j)`, `letters[0:3]`, `a == b`). The only non-manual escape
+was the LLM, so a human had to hand-author `slide_id="…"` on **both** split
+halves mid-conversion.
+
+CLM {version} adds the opt-in **`--accept-code-derived`** flag. It slugs each
+such cell's first real code line (`letters[0:3]` → `letters-0-3`), is pair-safe
+(the same id on `.de` / `.en`), stable, and idempotent. The scanner is
+comment-token-aware, so non-Python decks (`.cs`/`.cpp`/`.java`/`.ts`) are
+completed too. Run it alongside `--accept-content-derived` to mint a whole
+module with no human in the loop:
+
+```bash
+clm slides assign-ids slides/module_110_basics/ \
+    --accept-content-derived --accept-code-derived
+```
+
+It is a **separate** flag from `--accept-content-derived` by design: the
+content-derived minting funnels (`clm course gate`, `clm slides sync`,
+`clm slides translate`) keep their current behavior and do not start emitting
+opaque code-line slugs. Genuinely empty / pure-punctuation / magic-only cells
+still refuse — `--report-refusals` then lists only the cells that truly need a
+human.
+
 ## Voiceover extract/inline: data-loss hardening ({version})
 
 CLM {version} closes two ways `clm voiceover extract` / `inline` could lose

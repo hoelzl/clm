@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+
+- **`clm slides assign-ids --accept-code-derived`** — a deterministic, opt-in
+  fallback that mints a `slide_id` for bare-expression code subslides the AST
+  extractors can't name (`(1 + 1j) * (1 + 1j)` → `1-1j-1-1j`, `letters[0:3]` →
+  `letters-0-3`), by slugifying the cell's first real code line. Previously
+  these hard-refused, with the non-deterministic LLM (`--llm-suggest`) as the
+  only non-manual escape — so the bilingual→split conversion needed a human to
+  hand-author ids on both split halves. The first-code-line scanner is
+  comment-token-aware, so it also completes non-Python decks
+  (`.cs`/`.cpp`/`.java`/`.ts`), which `ast` can never parse. It is independent
+  of `--accept-content-derived` (separately gated, so the content-derived
+  minting funnels never start emitting opaque code-line slugs); the conversion
+  pipeline passes both. Genuinely empty / pure-punctuation / magic-only cells
+  still refuse. (#251)
+
 ## [1.8.4] - 2026-06-06
 
 ### Changed
