@@ -19,7 +19,7 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
       with:
         lfs: false
 
@@ -31,12 +31,12 @@ jobs:
       run: git lfs pull --exclude="docker/**"
 
     - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v6
       with:
         python-version: ${{ matrix.python-version }}
 
     - name: Set up Java for PlantUML
-      uses: actions/setup-java@v4
+      uses: actions/setup-java@v5
       with:
         distribution: 'temurin'
         java-version: '17'
@@ -59,7 +59,7 @@ jobs:
         echo "DRAWIO_EXECUTABLE=/opt/drawio/drawio" >> $GITHUB_ENV
 
     - name: Install uv
-      uses: astral-sh/setup-uv@v4
+      uses: astral-sh/setup-uv@v8
       with:
         version: "latest"
 
@@ -115,7 +115,7 @@ jobs:
         CLM_LOG_LEVEL: INFO
 
     - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v4
+      uses: codecov/codecov-action@v6
       continue-on-error: true
       with:
         files: ./coverage.xml
@@ -129,15 +129,15 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
 
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v6
       with:
         python-version: "3.12"
 
     - name: Install uv
-      uses: astral-sh/setup-uv@v4
+      uses: astral-sh/setup-uv@v8
       with:
         version: "latest"
 
@@ -167,17 +167,17 @@ jobs:
     # now fetched + SHA-256-verified inside the Dockerfiles, so the only LFS
     # object the image builds need is the small drawio font.
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
       with:
         lfs: true
 
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v6
       with:
         python-version: "3.12"
 
     - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
+      uses: docker/setup-buildx-action@v4
 
     - name: Build notebook-processor:lite-test Docker image
       run: |
@@ -205,7 +205,7 @@ jobs:
           .
 
     - name: Install uv
-      uses: astral-sh/setup-uv@v4
+      uses: astral-sh/setup-uv@v8
       with:
         version: "latest"
 
