@@ -30,7 +30,7 @@ from clm.slides.normalizer import (
     _reconstruct,
     _split_raw_cells,
 )
-from clm.slides.pairing import order_split_pair
+from clm.slides.pairing import TITLE_SLIDE_ID, is_title_macro_cell, order_split_pair
 
 # ---------------------------------------------------------------------------
 # Result types
@@ -493,6 +493,13 @@ def _find_owning_slide_id(cells: list[_RawCell], voiceover_idx: int) -> str | No
 
     Walks backward from the voiceover cell to find the most recent
     slide/subslide cell in the same language (or language-neutral).
+
+    The macro-generated title slide carries no ``slide_id`` of its own, so a
+    voiceover sitting directly under the j2 ``header`` macro resolves to
+    :data:`TITLE_SLIDE_ID` (the ``"title"`` greeting convention) — mirroring
+    ``assign_ids._handle_title_macro`` and the validator (#242). A real
+    slide-start cell that still lacks an id stops the walk rather than letting
+    it run past into the title macro, which would mis-anchor the voiceover.
     """
     vo_cell = cells[voiceover_idx]
     vo_lang = vo_cell.metadata.lang
@@ -500,6 +507,9 @@ def _find_owning_slide_id(cells: list[_RawCell], voiceover_idx: int) -> str | No
     for i in range(voiceover_idx - 1, -1, -1):
         cell = cells[i]
         meta = cell.metadata
+        # Detect the title macro before the is_j2 skip below would hide it.
+        if is_title_macro_cell(cell):
+            return TITLE_SLIDE_ID
         if meta.is_j2:
             continue
         if meta.is_narrative:
@@ -509,6 +519,10 @@ def _find_owning_slide_id(cells: list[_RawCell], voiceover_idx: int) -> str | No
             continue
         if meta.slide_id:
             return meta.slide_id
+        # An id-less real slide is the owning slide but offers no id to
+        # reference; stop here instead of walking past it into the title macro.
+        if meta.is_slide_start:
+            return None
     return None
 
 
@@ -847,13 +861,15 @@ def merge_voiceover_text(
 
     for vo_cell in companion_cells:
         for_slide = vo_cell.metadata.for_slide
-        if not for_slide:
-            unmatched_ids.append("<no for_slide>")
-            continue
 
+        # Let _plan_insertion decide — it owns the for_slide match, the
+        # vo_anchor whole-file fallback, and the title-greeting fallback. A
+        # companion with no for_slide is no longer short-circuited here, so a
+        # title cell (slide_id="title", no for_slide — what pre-#242 extract
+        # wrote) and a hand-authored anchor-only cell can still be placed.
         insert_after, status = _plan_insertion(slide_cells, vo_cell, id_map)
         if insert_after is None:
-            unmatched_ids.append(for_slide)
+            unmatched_ids.append(for_slide if for_slide else "<no for_slide>")
             continue
 
         # vo_anchor is an author-only positional hint; never leak it into
@@ -929,6 +945,68 @@ def _find_insertion_point(
             break
         # If this cell is lang-tagged and doesn't match, stop
         if vo_lang and cell.metadata.lang and cell.metadata.lang != vo_lang:
+            break
+        insert_after = i
+
+    return insert_after
+
+
+def _is_title_intent(for_slide: str | None, slide_id: str | None) -> bool:
+    """True iff a companion cell narrates the macro-generated title slide.
+
+    Recognized by ``for_slide="title"`` (companions written by a fixed
+    ``extract``) or — for backward compatibility with companions extracted
+    before the #242 fix, and hand-authored ones — ``slide_id="title"`` with no
+    ``for_slide``. The latter is exactly what ``extract`` wrote historically
+    (the title voiceover inherits ``slide_id="title"`` but never got a
+    ``for_slide``), so those on-disk companions keep working without a
+    re-extract.
+    """
+    if for_slide == TITLE_SLIDE_ID:
+        return True
+    return for_slide is None and slide_id == TITLE_SLIDE_ID
+
+
+def _find_title_insertion_point(
+    cells: list[_RawCell],
+    vo_lang: str | None,
+) -> int | None:
+    """Find where to insert a title-greeting voiceover.
+
+    The macro-generated title slide is the j2 ``header`` macro cell, which
+    carries no ``slide_id`` — so :func:`_find_insertion_point` cannot resolve
+    ``for_slide="title"`` against ``id_map``. This locates the title macro cell
+    and walks forward over its (id-less, non-slide-start) continuation cells —
+    mirroring the group-end logic of :func:`_find_insertion_point` — so the
+    voiceover lands at the end of the title slide group, just before the first
+    real slide. That matches where an inline title greeting sits.
+
+    Returns the insert-after index, or ``None`` when the deck has no title
+    macro (e.g. a mis-authored ``slide_id="title"`` with no header macro), in
+    which case the caller reports the cell unmatched rather than guessing.
+    """
+    start: int | None = None
+    for i, cell in enumerate(cells):
+        if is_title_macro_cell(cell):
+            start = i
+            break
+    if start is None:
+        return None
+
+    insert_after = start
+    for i in range(start + 1, len(cells)):
+        meta = cells[i].metadata
+        if meta.is_narrative:
+            break
+        if meta.is_slide_start:
+            break
+        if meta.is_j2:
+            break
+        # A continuation cell carrying its own slide_id belongs to a later
+        # slide group (the title group has none of its own), so stop.
+        if meta.slide_id:
+            break
+        if vo_lang and meta.lang and meta.lang != vo_lang:
             break
         insert_after = i
 
@@ -1043,10 +1121,14 @@ def _plan_insertion(
 
     Returns ``(insert_after_index, status)`` where status is one of
     ``"anchored"`` (exact predecessor match), ``"placed"`` (legacy
-    for_slide group-end, no anchor recorded), ``"relocated"`` (an anchor
-    was recorded but its predecessor is gone, fell back to group end), or
-    ``"unmatched"`` (no placement found). ``insert_after_index`` is
-    ``None`` only for ``"unmatched"``.
+    for_slide group-end, no anchor recorded, or the title-macro fallback),
+    ``"relocated"`` (an anchor was recorded but its predecessor is gone,
+    fell back to group end), or ``"unmatched"`` (no placement found).
+    ``insert_after_index`` is ``None`` only for ``"unmatched"``.
+
+    A title-greeting voiceover is a special case: the title slide is the
+    macro-generated j2 ``header`` cell, which has no slide_id, so it resolves
+    through :func:`_find_title_insertion_point` rather than ``id_map`` (#242).
     """
     for_slide = vo_cell.metadata.for_slide
     anchor = _parse_vo_anchor(vo_cell.header)
@@ -1059,6 +1141,17 @@ def _plan_insertion(
 
     if for_slide:
         idx = _find_insertion_point(cells, for_slide, vo_lang, id_map)
+        if idx is not None:
+            return idx, ("relocated" if anchor else "placed")
+
+    # Title-greeting fallback (#242): the macro-generated title slide carries
+    # no slide_id in source, so for_slide="title" (or a pre-fix / hand-authored
+    # companion with slide_id="title" and no for_slide) never resolves via
+    # id_map. Anchor it to the title macro cell, mirroring the inline-by-
+    # position behaviour. This fires only after the normal path fails, so
+    # non-title voiceovers are never affected.
+    if _is_title_intent(for_slide, vo_cell.metadata.slide_id):
+        idx = _find_title_insertion_point(cells, vo_lang)
         if idx is not None:
             return idx, ("relocated" if anchor else "placed")
 
