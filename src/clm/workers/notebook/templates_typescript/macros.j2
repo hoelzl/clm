@@ -1,4 +1,5 @@
 {% macro header(title_de, title_en) -%}
+%% [markdown] lang="de" tags=["slide"]
 {% if is_notebook or is_html %}
 // <img src="data:image/svg+xml;base64,{% include 'typescript-logo.svg.base64' %}"
 //      alt="TypeScript Logo" style="display:block;margin:auto;width:5%"/>
@@ -32,6 +33,45 @@
 // <br/>
 {% endif %}
 {% endmacro -%}
+
+{% macro header_de(title_de) -%}
+%% [markdown] lang="de" tags=["slide"]
+{% if is_notebook or is_html %}
+// <img src="data:image/svg+xml;base64,{% include 'typescript-logo.svg.base64' %}"
+//      alt="TypeScript Logo" style="display:block;margin:auto;width:5%"/>
+// <br>
+{% endif %}
+// <div style="text-align:center; font-size:200%;">
+//   <b>{{ title_de }}</b>
+// </div>
+// <br/>
+// <div style="text-align:center; font-size:120%;">{{ author }}</div>
+// <br/>
+{% if organization %}
+// <div style="text-align:center;">{{ organization }}</div>
+// <br/>
+{% endif -%}
+{% endmacro -%}
+
+{% macro header_en(title_en) -%}
+%% [markdown] lang="en" tags=["slide"]
+{% if is_notebook or is_html %}
+// <img src="data:image/svg+xml;base64,{% include 'typescript-logo.svg.base64' %}"
+//      alt="TypeScript Logo" style="display:block;margin:auto;width:5%"/>
+// <br>
+{% endif %}
+// <div style="text-align:center; font-size:200%;">
+//   <b>{{ title_en }}</b>
+// </div>
+// <br/>
+// <div style="text-align:center; font-size:120%;">{{ author }}</div>
+// <br/>
+{% if organization %}
+// <div style="text-align:center;">{{ organization }}</div>
+// <br/>
+{% endif %}
+{% endmacro -%}
+
 
 {% macro eval(expr) -%}
 {{ expr }}

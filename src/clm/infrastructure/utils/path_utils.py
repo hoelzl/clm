@@ -143,7 +143,11 @@ SUPPORTED_PROG_LANG_EXTENSIONS = frozenset(
 )
 
 EXTENSION_TO_PROG_LANG = {
-    ".c": "c",
+    # ``.c`` is treated as C++: CLM has no standalone "c" language config
+    # (no jinja/jupytext/kernel entry in prog_lang_utils), and the xcpp kernel
+    # compiles C as C++. Mapping ``.c`` -> "c" produced a config-less prog_lang
+    # that crashed any resolver reaching prog_lang_utils.
+    ".c": "cpp",
     ".cpp": "cpp",
     ".cs": "csharp",
     ".java": "java",
@@ -155,7 +159,6 @@ EXTENSION_TO_PROG_LANG = {
 }
 
 PROG_LANG_TO_EXTENSION = {
-    "c": ".c",
     "cpp": ".cpp",
     "csharp": ".cs",
     "java": ".java",
