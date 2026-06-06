@@ -2133,3 +2133,245 @@ class TestPartialWatermarkAdvance:
         conflicts = [p.slide_id for p in plan2.proposals if p.kind == "conflict"]
         assert "b" in conflicts
         assert plan2.count("add") == 0
+
+
+# ---------------------------------------------------------------------------
+# Strategy-B reconcile (#228): mismatched-id twins on a committed baseline
+# ---------------------------------------------------------------------------
+
+
+def _git(cwd: Path, *args: str) -> None:
+    subprocess.run(["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True)
+
+
+def _commit_pair(tmp_path: Path, de: str, en: str) -> tuple[Path, Path]:
+    """Write + commit a split pair so ``build_sync_plan`` resolves a git-HEAD baseline."""
+    de_path, en_path = _write_pair(tmp_path, de, en)
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "config", "user.email", "t@example.com")
+    _git(tmp_path, "config", "user.name", "Test")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "baseline")
+    return de_path, en_path
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not available")
+class TestReconcileMismatchedTwins:
+    """A committed partial-overlap pair whose divergent-id twins are reconciled (#228).
+
+    The pair shares ``s1`` (so it keeps its git-HEAD baseline) but gives the second slide
+    a different id on each half. With a provider the bucket becomes ``reconcile``
+    candidates; apply verifies correspondence and rewrites the divergent id (EN-authority),
+    or — direction-guarded — cross-adds / defers, never doubling.
+    """
+
+    def test_confirmed_both_idd_twin_is_reconciled_en_authority(self, tmp_path: Path):
+        de_path, en_path = _commit_pair(
+            tmp_path,
+            _slide("de", "s1", "# ## A") + _slide("de", "d1", "# ## B"),
+            _slide("en", "s1", "# ## A") + _slide("en", "e1", "# ## B"),
+        )
+        en_before = en_path.read_text(encoding="utf-8")
+        plan = build_sync_plan(de_path, en_path, provider_available=True)
+        assert plan.count("reconcile") == 2
+        verifier = StaticCorrespondenceVerifier(default=True)
+        result = apply_plan(plan, judge=None, verifier=verifier, watermark_cache=None)
+        assert result.applied_reconcile == 1
+        assert result.deferred == 0
+        assert result.has_errors is False
+        assert verifier.calls == 1
+        # DE's divergent id was rewritten to EN's (EN-authority); no slide doubled.
+        assert _slide_order(de_path) == ["s1", "e1"]
+        assert _slide_order(en_path) == ["s1", "e1"]
+        # Only the loser (DE) half changed; the authority (EN) half is byte-identical.
+        assert en_path.read_text(encoding="utf-8") == en_before
+
+    def test_confirmed_mixed_twin_stamps_idd_onto_idless(self, tmp_path: Path):
+        # DE id'd "B" (d1), EN id-less "B": the id'd side wins → stamp d1 onto EN's twin.
+        de_path, en_path = _commit_pair(
+            tmp_path,
+            _slide("de", "s1", "# ## A") + _slide("de", "d1", "# ## B"),
+            _slide("en", "s1", "# ## A") + _slide_idless("en", "# ## B"),
+        )
+        de_before = de_path.read_text(encoding="utf-8")
+        plan = build_sync_plan(de_path, en_path, provider_available=True)
+        assert plan.count("reconcile") == 2
+        verifier = StaticCorrespondenceVerifier(default=True)
+        result = apply_plan(plan, judge=None, verifier=verifier, watermark_cache=None)
+        assert result.applied_reconcile == 1
+        assert result.deferred == 0
+        assert _slide_order(de_path) == ["s1", "d1"]
+        assert _slide_order(en_path) == ["s1", "d1"]  # EN's id-less twin adopted d1
+        assert de_path.read_text(encoding="utf-8") == de_before  # id'd half untouched
+
+    def test_denied_pair_defers_and_writes_nothing(self, tmp_path: Path):
+        de_path, en_path = _commit_pair(
+            tmp_path,
+            _slide("de", "s1", "# ## A") + _slide("de", "d1", "# ## B"),
+            _slide("en", "s1", "# ## A") + _slide("en", "e1", "# ## B"),
+        )
+        before_de = de_path.read_text(encoding="utf-8")
+        before_en = en_path.read_text(encoding="utf-8")
+        plan = build_sync_plan(de_path, en_path, provider_available=True)
+        verifier = StaticCorrespondenceVerifier(default=False)  # all "no"
+        result = apply_plan(plan, judge=None, verifier=verifier, watermark_cache=None)
+        assert result.applied_reconcile == 0
+        assert result.deferred == 2  # both suspects unresolved → both directions → defer
+        # NEVER DOUBLES: both files byte-identical, each deck still 2 slides.
+        assert de_path.read_text(encoding="utf-8") == before_de
+        assert en_path.read_text(encoding="utf-8") == before_en
+        assert len(_slide_order(de_path)) == 2 and len(_slide_order(en_path)) == 2
+
+    def test_no_verifier_defers(self, tmp_path: Path):
+        de_path, en_path = _commit_pair(
+            tmp_path,
+            _slide("de", "s1", "# ## A") + _slide("de", "d1", "# ## B"),
+            _slide("en", "s1", "# ## A") + _slide("en", "e1", "# ## B"),
+        )
+        before_de = de_path.read_text(encoding="utf-8")
+        plan = build_sync_plan(de_path, en_path, provider_available=True)
+        result = apply_plan(plan, judge=None, verifier=None, watermark_cache=None)
+        assert result.applied_reconcile == 0
+        assert result.deferred == 2
+        assert de_path.read_text(encoding="utf-8") == before_de
+
+    def test_safe_abort_defers(self, tmp_path: Path):
+        de_path, en_path = _commit_pair(
+            tmp_path,
+            _slide("de", "s1", "# ## A") + _slide("de", "d1", "# ## B"),
+            _slide("en", "s1", "# ## A") + _slide("en", "e1", "# ## B"),
+        )
+        before_de = de_path.read_text(encoding="utf-8")
+        plan = build_sync_plan(de_path, en_path, provider_available=True)
+        verifier = StaticCorrespondenceVerifier(raise_error=True)  # transport failure
+        result = apply_plan(plan, judge=None, verifier=verifier, watermark_cache=None)
+        assert result.applied_reconcile == 0
+        assert result.deferred == 2
+        assert de_path.read_text(encoding="utf-8") == before_de
+
+    def test_ambiguous_match_is_not_reconciled(self, tmp_path: Path):
+        # Two DE × two EN suspects, verifier says EVERY cross pair corresponds → no pair
+        # is a unique mutual match → none reconciled (defer all, never a wrong rewrite).
+        de_path, en_path = _commit_pair(
+            tmp_path,
+            _slide("de", "s1", "# ## A")
+            + _slide("de", "d1", "# ## B")
+            + _slide("de", "d2", "# ## C"),
+            _slide("en", "s1", "# ## A")
+            + _slide("en", "e1", "# ## B")
+            + _slide("en", "e2", "# ## C"),
+        )
+        plan = build_sync_plan(de_path, en_path, provider_available=True)
+        assert plan.count("reconcile") == 4
+        verifier = StaticCorrespondenceVerifier(default=True)  # all-yes → all ambiguous
+        result = apply_plan(plan, judge=None, verifier=verifier, watermark_cache=None)
+        assert result.applied_reconcile == 0
+        assert result.deferred == 4  # all suspects unresolved
+        assert len(_slide_order(de_path)) == 3 and len(_slide_order(en_path)) == 3
+
+    def test_confirmed_twin_plus_both_direction_leftover_defers_leftover(self, tmp_path: Path):
+        # d1/e1 are a confirmed twin ("B"); d2 ("C") and e2 ("D") are genuinely distinct,
+        # leftover in BOTH directions → the twin reconciles, the leftovers defer.
+        de_path, en_path = _commit_pair(
+            tmp_path,
+            _slide("de", "s1", "# ## A")
+            + _slide("de", "d1", "# ## B")
+            + _slide("de", "d2", "# ## C"),
+            _slide("en", "s1", "# ## A")
+            + _slide("en", "e1", "# ## B")
+            + _slide("en", "e2", "# ## D"),
+        )
+        plan = build_sync_plan(de_path, en_path, provider_available=True)
+        # de_suspects = [d1, d2], en_suspects = [e1, e2]; only d1↔e1 (idx 0) corresponds.
+        verifier = StaticCorrespondenceVerifier(verdicts={0: True}, default=False)
+        result = apply_plan(plan, judge=None, verifier=verifier, watermark_cache=None)
+        assert result.applied_reconcile == 1  # d1↔e1 reconciled
+        assert result.deferred == 2  # d2 + e2 leftover in both directions → defer
+        assert _slide_order(de_path) == ["s1", "e1", "d2"]  # d1→e1; d2 left in place
+        assert "e2" in _slide_order(en_path)  # e2 left in place, not cross-added
+
+    def test_single_direction_leftover_is_cross_added(self, tmp_path: Path):
+        # d1↔e1 confirmed; d2 ("C") is a genuinely-distinct one-sided slide with NO EN
+        # leftover (single direction) → cross-add its translated twin to EN.
+        de_path, en_path = _commit_pair(
+            tmp_path,
+            _slide("de", "s1", "# ## A")
+            + _slide("de", "d1", "# ## B")
+            + _slide("de", "d2", "# ## C"),
+            _slide("en", "s1", "# ## A") + _slide("en", "e1", "# ## B"),
+        )
+        plan = build_sync_plan(de_path, en_path, provider_available=True)
+        # de_suspects = [d1, d2], en_suspects = [e1]; (d1,e1)=idx0 yes, (d2,e1)=idx1 no.
+        verifier = StaticCorrespondenceVerifier(verdicts={0: True, 1: False}, default=False)
+        translator = StaticSlideTranslator(default="# ## C-translated")
+        result = apply_plan(
+            plan, judge=None, translator=translator, verifier=verifier, watermark_cache=None
+        )
+        assert result.applied_reconcile == 1  # d1↔e1
+        assert result.applied_add == 1  # d2 cross-added to EN
+        assert result.deferred == 0
+        assert _slide_order(de_path) == ["s1", "e1", "d2"]
+        assert _slide_order(en_path) == ["s1", "e1", "d2"]  # d2's twin landed on EN under d2
+
+    def test_single_direction_leftover_without_translator_defers(self, tmp_path: Path):
+        de_path, en_path = _commit_pair(
+            tmp_path,
+            _slide("de", "s1", "# ## A")
+            + _slide("de", "d1", "# ## B")
+            + _slide("de", "d2", "# ## C"),
+            _slide("en", "s1", "# ## A") + _slide("en", "e1", "# ## B"),
+        )
+        plan = build_sync_plan(de_path, en_path, provider_available=True)
+        verifier = StaticCorrespondenceVerifier(verdicts={0: True, 1: False}, default=False)
+        result = apply_plan(
+            plan, judge=None, translator=None, verifier=verifier, watermark_cache=None
+        )
+        assert result.applied_reconcile == 1  # the confirmed twin still reconciles
+        assert result.applied_add == 0
+        assert result.deferred == 1  # the leftover cannot be translated → defer
+
+    def test_watermark_advances_and_second_run_is_noop(self, tmp_path: Path):
+        de_path, en_path = _commit_pair(
+            tmp_path,
+            _slide("de", "s1", "# ## A") + _slide("de", "d1", "# ## B"),
+            _slide("en", "s1", "# ## A") + _slide("en", "e1", "# ## B"),
+        )
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache, provider_available=True)
+            verifier = StaticCorrespondenceVerifier(default=True)
+            result = apply_plan(plan, judge=None, verifier=verifier, watermark_cache=cache)
+            assert result.applied_reconcile == 1
+            assert result.watermark_recorded is True
+            # The post-rewrite (paired) state is the new baseline → a second run is a no-op.
+            plan2 = build_sync_plan(
+                de_path, en_path, watermark_cache=cache, provider_available=True
+            )
+            assert plan2.count("reconcile") == 0
+            assert plan2.is_noop
+        finally:
+            cache.close()
+
+    def test_reconcile_twin_collision_guard_defers(self):
+        # Unit test for the defensive collision guard: the winning id already lives on the
+        # loser deck (unreachable in the normal flow, but _reconcile_twin must never
+        # overwrite a sibling). It returns False (defer) and stamps nothing.
+        import tempfile
+
+        from clm.slides.sync_apply import _reconcile_twin
+
+        de_text = _slide("de", "d1", "# ## B") + _slide("de", "e1", "# ## OTHER")
+        en_text = _slide("en", "e1", "# ## B")
+
+        with tempfile.TemporaryDirectory() as d:
+            dp = Path(d) / "deck.de.py"
+            ep = Path(d) / "deck.en.py"
+            dp.write_text(de_text, encoding="utf-8")
+            ep.write_text(en_text, encoding="utf-8")
+            de_state = FileState.load(dp)
+            en_state = FileState.load(ep)
+            de_cell = de_state.find_cell("d1", "slide")
+            en_cell = en_state.find_cell("e1", "slide")
+            # EN-authority would rewrite DE's d1 → e1, but DE already has an `e1` cell.
+            assert _reconcile_twin(de_cell, en_cell, de_state, en_state) is False
+            assert _slide_order(dp) == ["d1", "e1"]  # nothing rewritten

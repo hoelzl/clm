@@ -36,9 +36,16 @@ def base(pos: int, sid: str | None, h: str, role: str = "slide") -> BaselineCell
     return BaselineCell(position=pos, slide_id=sid, role=role, content_hash=h)
 
 
-def classify(de_cur, en_cur, de_base, en_base, source: str = "watermark"):
+def classify(de_cur, en_cur, de_base, en_base, source: str = "watermark", provider_available=False):
     return classify_changes(
-        de_cur, en_cur, de_base, en_base, de_path=DE, en_path=EN, baseline_source=source
+        de_cur,
+        en_cur,
+        de_base,
+        en_base,
+        de_path=DE,
+        en_path=EN,
+        baseline_source=source,
+        provider_available=provider_available,
     )
 
 
@@ -460,6 +467,107 @@ class TestBothDirectionsRefusal:
         assert plan.in_sync_count == 1
 
 
+class TestReconcileEmission:
+    """Strategy B (#228): the git-head mismatched bucket upgrades to ``reconcile``.
+
+    Plan-time emission only — apply-time correspondence verification + id rewrite is
+    covered in ``test_sync_apply``. The candidate is emitted only when a provider is
+    available AND the ambiguous bucket is the whole actionable plan.
+    """
+
+    def test_git_head_mismatched_reconciles_with_provider(self):
+        plan = classify(
+            [cur(0, "intro", "d0"), cur(1, "d1", "dB")],
+            [cur(0, "intro", "e0"), cur(1, "e1", "eB")],
+            [base(0, "intro", "d0"), base(1, "d1", "dB")],
+            [base(0, "intro", "e0"), base(1, "e1", "eB")],
+            source="git-head",
+            provider_available=True,
+        )
+        assert plan.count("reconcile") == 2
+        assert plan.count("refuse") == 0
+        assert plan.count("add") == 0
+        assert plan.in_sync_count == 1
+        # The reconcile candidates carry the suspects' identity for apply-time pairing.
+        recs = [p for p in plan.proposals if p.kind == "reconcile"]
+        assert {p.direction for p in recs} == {"de->en", "en->de"}
+        assert {p.slide_id for p in recs} == {"d1", "e1"}
+        assert all(p.disposition == "pending" for p in recs)
+
+    def test_git_head_mismatched_refuses_without_provider(self):
+        # Parity: the SAME inputs without a provider keep the strategy-A refusal.
+        plan = classify(
+            [cur(0, "intro", "d0"), cur(1, "d1", "dB")],
+            [cur(0, "intro", "e0"), cur(1, "e1", "eB")],
+            [base(0, "intro", "d0"), base(1, "d1", "dB")],
+            [base(0, "intro", "e0"), base(1, "e1", "eB")],
+            source="git-head",
+            provider_available=False,
+        )
+        assert plan.count("reconcile") == 0
+        assert plan.count("refuse") == 2
+
+    def test_mixed_idd_idless_reconciles_with_provider(self):
+        # The mixed shape: committed id'd "B" on DE, id-less "B" on EN — both directions.
+        plan = classify(
+            [cur(0, "intro", "d0"), cur(1, "d1", "dB")],
+            [cur(0, "intro", "e0"), cur(1, None, "eB")],
+            [base(0, "intro", "d0"), base(1, "d1", "dB")],
+            [base(0, "intro", "e0")],
+            source="git-head",
+            provider_available=True,
+        )
+        assert plan.count("reconcile") == 2
+        assert plan.count("refuse") == 0
+        recs = [p for p in plan.proposals if p.kind == "reconcile"]
+        # The id-less EN suspect carries slide_id None (apply locates it by position).
+        assert {p.slide_id for p in recs} == {"d1", None}
+
+    def test_coexisting_edit_keeps_refuse_not_reconcile(self):
+        # The bucket is no longer the whole actionable plan (an edit on `intro`
+        # coexists) → the whole-plan short-circuit would skip it, so keep refuse.
+        plan = classify(
+            [cur(0, "intro", "d0_EDITED"), cur(1, "d1", "dB")],
+            [cur(0, "intro", "e0"), cur(1, "e1", "eB")],
+            [base(0, "intro", "d0"), base(1, "d1", "dB")],
+            [base(0, "intro", "e0"), base(1, "e1", "eB")],
+            source="git-head",
+            provider_available=True,
+        )
+        assert plan.count("edit") == 1
+        assert plan.count("reconcile") == 0
+        assert plan.count("refuse") == 2
+
+    def test_watermark_baseline_never_reconciles(self):
+        # The reconcile upgrade is git-HEAD-only (same gate as the #226 refusal): a
+        # watermark records both decks, so the committed one-sided slides stay by-design
+        # cross-adds even with a provider — never reconcile.
+        plan = classify(
+            [cur(0, "intro", "d0"), cur(1, "d1", "dB")],
+            [cur(0, "intro", "e0"), cur(1, "e1", "eB")],
+            [base(0, "intro", "d0"), base(1, "d1", "dB")],
+            [base(0, "intro", "e0"), base(1, "e1", "eB")],
+            source="watermark",
+            provider_available=True,
+        )
+        assert plan.count("reconcile") == 0
+        assert plan.count("add") == 2
+
+    def test_one_directional_committed_add_not_reconciled(self):
+        # A single-direction committed one-sided slide is the ordinary "add the missing
+        # counterpart" sync — never a reconcile candidate (the bucket needs both directions).
+        plan = classify(
+            [cur(0, "intro", "d0"), cur(1, "d1", "dB")],
+            [cur(0, "intro", "e0")],
+            [base(0, "intro", "d0"), base(1, "d1", "dB")],
+            [base(0, "intro", "e0")],
+            source="git-head",
+            provider_available=True,
+        )
+        assert plan.count("reconcile") == 0
+        assert plan.count("add") == 1
+
+
 # ---------------------------------------------------------------------------
 # build_sync_plan (IO wrapper: baseline resolution)
 # ---------------------------------------------------------------------------
@@ -688,11 +796,12 @@ class TestBuildSyncPlanGitFallback:
             assert plan.count("mint") == 0
             assert plan.count("adopt") == 0
 
-    def test_committed_partial_overlap_mismatched_refuses_never_doubles(self, tmp_path: Path):
-        # #226: the halves SHARE `s1` (so the pair is bootstrapped and keeps its
-        # git-HEAD baseline — not demoted by #225), but a different slide carries
-        # mismatched ids (`d1` on DE / `e1` on EN, same content "B"). The keyed path
-        # used to emit both as adds → translate-insert → DOUBLE "B". Now refused.
+    def test_committed_partial_overlap_mismatched_reconciles_with_provider(self, tmp_path: Path):
+        # #228 (strategy B): the halves SHARE `s1` (bootstrapped, keeps its git-HEAD
+        # baseline — not demoted by #225), but a different slide carries mismatched ids
+        # (`d1` on DE / `e1` on EN, same content "B"). With a provider available the
+        # both-directions ambiguous bucket — which IS the whole actionable plan — is
+        # upgraded to `reconcile` candidates instead of the strategy-A `refuse` (#226).
         de_path, en_path = self._commit_pair(
             tmp_path,
             _slide("de", "s1", "# ## A") + _slide("de", "d1", "# ## B"),
@@ -701,13 +810,31 @@ class TestBuildSyncPlanGitFallback:
         plan = build_sync_plan(de_path, en_path, provider_available=True)
         assert plan.baseline_source == "git-head"  # shares s1 → keeps its baseline
         assert plan.count("add") == 0  # the doubling adds are gone
-        assert plan.count("refuse") == 2
+        assert plan.count("reconcile") == 2
+        assert plan.count("refuse") == 0
         assert plan.in_sync_count == 1  # s1 still pairs
 
-    def test_committed_mixed_idd_idless_partial_overlap_refuses(self, tmp_path: Path):
-        # #226 mixed variant end-to-end: share `s1`, but "B" is committed id'd on DE
-        # (`d1`) and committed id-less on EN. Was a silent double (id'd add de->en +
-        # id-less add en->de, neither caught by a single-bucket guard); now refused.
+    def test_committed_partial_overlap_mismatched_refuses_without_provider(self, tmp_path: Path):
+        # Parity (#226): with NO provider the same pair keeps the strategy-A refusal —
+        # never silently doubled, never reconciled on a guess.
+        de_path, en_path = self._commit_pair(
+            tmp_path,
+            _slide("de", "s1", "# ## A") + _slide("de", "d1", "# ## B"),
+            _slide("en", "s1", "# ## A") + _slide("en", "e1", "# ## B"),
+        )
+        plan = build_sync_plan(de_path, en_path, provider_available=False)
+        assert plan.baseline_source == "git-head"
+        assert plan.count("add") == 0
+        assert plan.count("reconcile") == 0
+        assert plan.count("refuse") == 2
+        assert plan.in_sync_count == 1
+
+    def test_committed_mixed_idd_idless_partial_overlap_reconciles_with_provider(
+        self, tmp_path: Path
+    ):
+        # #228 mixed variant: share `s1`, but "B" is committed id'd on DE (`d1`) and
+        # committed id-less on EN. The id'd add (de->en) + id-less add (en->de) span both
+        # directions → with a provider they become reconcile candidates (one per suspect).
         de_path, en_path = self._commit_pair(
             tmp_path,
             _slide("de", "s1", "# ## A") + _slide("de", "d1", "# ## B"),
@@ -716,8 +843,45 @@ class TestBuildSyncPlanGitFallback:
         plan = build_sync_plan(de_path, en_path, provider_available=True)
         assert plan.baseline_source == "git-head"  # shares s1 → keeps its baseline
         assert plan.count("add") == 0
-        assert plan.count("refuse") == 2
+        assert plan.count("reconcile") == 2
+        assert plan.count("refuse") == 0
         assert plan.in_sync_count == 1
+
+    def test_committed_mixed_idd_idless_partial_overlap_refuses_without_provider(
+        self, tmp_path: Path
+    ):
+        # Parity: the mixed variant also keeps the strategy-A refusal with no provider.
+        de_path, en_path = self._commit_pair(
+            tmp_path,
+            _slide("de", "s1", "# ## A") + _slide("de", "d1", "# ## B"),
+            _slide("en", "s1", "# ## A") + _slide_idless("en", "# ## B"),
+        )
+        plan = build_sync_plan(de_path, en_path, provider_available=False)
+        assert plan.count("reconcile") == 0
+        assert plan.count("refuse") == 2
+
+    def test_committed_partial_overlap_coexisting_add_keeps_refuse(self, tmp_path: Path):
+        # The reconcile gate fires ONLY when the ambiguous bucket is the WHOLE actionable
+        # plan. Here a genuinely-new id'd slide on DE (id absent from the baseline) is a
+        # coexisting `add`, so reconcile would be a whole-plan short-circuit that skips it
+        # → stay with strategy-A refuse (the author syncs in two steps).
+        de_path, en_path = self._commit_pair(
+            tmp_path,
+            _slide("de", "s1", "# ## A") + _slide("de", "d1", "# ## B"),
+            _slide("en", "s1", "# ## A") + _slide("en", "e1", "# ## B"),
+        )
+        # Author appends a brand-new id'd slide on DE *after* the commit (id unknown to
+        # the baseline → a genuine cross-add that survives the refusal passes).
+        de_path.write_text(
+            _slide("de", "s1", "# ## A")
+            + _slide("de", "d1", "# ## B")
+            + _slide("de", "newde", "# ## C"),
+            encoding="utf-8",
+        )
+        plan = build_sync_plan(de_path, en_path, provider_available=True)
+        assert plan.count("reconcile") == 0  # bucket is not the whole plan → no reconcile
+        assert plan.count("refuse") == 2  # the mismatched twins still refuse
+        assert plan.count("add") == 1  # the genuine new slide still cross-adds
 
     def test_committed_one_directional_idcarrying_add_still_propagates(self, tmp_path: Path):
         # REGRESSION: the common "add the missing counterpart" — a committed id'd slide

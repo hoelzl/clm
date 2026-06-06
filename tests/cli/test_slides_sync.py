@@ -14,6 +14,8 @@ engine wiring, file writes, and watermark advance without a live LLM.
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -141,6 +143,23 @@ def _stub_verifier(monkeypatch, *, default: bool = True) -> None:
 
 def _idless_slide(lang: str, body: str) -> str:
     return f'# %% [markdown] lang="{lang}" tags=["slide"]\n{body}\n'
+
+
+def _commit_pair(tmp_path: Path, de_text: str, en_text: str, *, stem: str) -> tuple[Path, Path]:
+    """Write + git-commit a split pair so ``sync`` resolves a git-HEAD baseline (#228)."""
+    de_path, en_path = _write_pair(tmp_path, de_text, en_text, stem=stem)
+
+    def _git(*args: str) -> None:
+        subprocess.run(
+            ["git", *args], cwd=str(tmp_path), check=True, capture_output=True, text=True
+        )
+
+    _git("init", "-q")
+    _git("config", "user.email", "t@example.com")
+    _git("config", "user.name", "Test")
+    _git("add", "-A")
+    _git("-c", "commit.gpgsign=false", "commit", "-q", "-m", "baseline")
+    return de_path, en_path
 
 
 def _combined(result) -> str:
@@ -1211,3 +1230,33 @@ class TestDryRunApplyParity:
         # The DE half adopted EN's ids verbatim, not freshly-minted heading slugs.
         assert de_ids == ["intro", "vars"]
         assert en_path.read_text(encoding="utf-8") == en  # the id'd half is untouched
+
+    @pytest.mark.skipif(shutil.which("git") is None, reason="git not available")
+    def test_committed_mismatched_twin_reconciles_when_verified(
+        self, cli_runner: CliRunner, tmp_path: Path, monkeypatch
+    ):
+        # #228 strategy B end-to-end through the CLI: a committed pair sharing `s1` but
+        # giving slide "B" a divergent id on each half. Dry-run shows a pending reconcile
+        # (in the JSON counts); a writing run rewrites DE's `d1` to EN's `e1` (EN-authority).
+        de = _cell("de", "s1", "# ## A") + _cell("de", "d1", "# ## B")
+        en = _cell("en", "s1", "# ## A") + _cell("en", "e1", "# ## B")
+        de_path, en_path = _commit_pair(tmp_path, de, en, stem="reconcile")
+        _stub_verifier(monkeypatch, default=True)
+
+        dry = cli_runner.invoke(
+            slides_sync_cmd, [str(de_path), str(en_path), "--dry-run", "--no-cache", "--json"]
+        )
+        assert dry.exit_code == 1, _combined(dry)  # a pending reconcile is "changes pending"
+        payload = _json_payload(dry)
+        assert payload["plan"]["counts"]["reconcile"] == 2
+        assert payload["plan"]["counts"]["refuse"] == 0
+
+        applied = cli_runner.invoke(slides_sync_cmd, [str(de_path), str(en_path), "--no-cache"])
+        assert applied.exit_code == 0, _combined(applied)  # reconciled cleanly
+        de_ids = [
+            c.metadata.slide_id
+            for c in parse_cells(de_path.read_text(encoding="utf-8"))
+            if c.metadata.is_slide_start
+        ]
+        assert de_ids == ["s1", "e1"]  # DE's divergent id rewritten to EN's
+        assert en_path.read_text(encoding="utf-8") == en  # EN (authority) untouched

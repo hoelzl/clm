@@ -132,7 +132,8 @@ class Proposal:
     """One cross-language change the sync would make.
 
     ``kind`` is ``add`` / ``edit`` / ``retag`` / ``move`` / ``remove`` /
-    ``conflict`` / ``rename`` / ``refuse`` / ``mint`` / ``adopt``. ``direction``
+    ``conflict`` / ``rename`` / ``refuse`` / ``mint`` / ``adopt`` /
+    ``reconcile``. ``direction``
     is ``"de->en"`` / ``"en->de"`` (the side that drifted is the source), or
     ``None`` for a conflict / ``mint``. ``slide_id`` is ``None`` for an id-less
     add, and the *duplicated* id for a ``rename``. A ``retag`` mirrors a tag-only
@@ -148,6 +149,18 @@ class Proposal:
     ids — its ``direction`` is ``"{authority}->{other}"`` (the id-bearing side
     first). Both are confirmed by the apply-time correspondence verifier before
     any id reaches disk; an unconfirmed candidate downgrades to a deferral.
+
+    ``reconcile`` is the strategy-B mismatched-id-twin candidate (#228;
+    ``disposition == "pending"``): one suspect cell of a committed partial-overlap
+    pair whose halves carry the *same* content under *divergent* ids (per-half
+    ``assign-ids``). It is emitted only when the ambiguous both-directions bucket
+    (:func:`_refuse_idcarrying_mismatched`) is the whole actionable plan and a
+    provider is available; apply (2b) cross-pairs the suspects by content
+    correspondence and, for a confirmed twin, **rewrites** the divergent id
+    (EN-authority) so the two halves share one — distinct from ``adopt`` (which
+    only stamps onto an id-*less* twin) and ``mint`` (fresh ids). ``direction`` is
+    the suspect's own source direction; ``slide_id`` is its current id (or ``None``
+    for the id-less half of a *mixed* twin).
 
     ``disposition`` is the resolved verdict the classifier assigns (the
     resolve-then-apply redesign, #216): ``"apply"`` (the default — apply executes
@@ -302,6 +315,7 @@ class SyncPlan:
                 f"{self.count('refuse')} refuse",
                 f"{self.count('mint')} mint",
                 f"{self.count('adopt')} adopt",
+                f"{self.count('reconcile')} reconcile",
             ]
             tail = f"; {len(self.issues)} issue(s)" if self.issues else ""
             return (
@@ -882,12 +896,19 @@ def classify_changes(
     de_path: Path,
     en_path: Path,
     baseline_source: str,
+    provider_available: bool = False,
 ) -> SyncPlan:
     """Diff both decks against their baselines into a typed :class:`SyncPlan`.
 
     Pure: no IO, no LLM. ``de_baseline`` / ``en_baseline`` are ``None`` when no
     baseline exists for that deck; if either is ``None`` the pair runs in the
     limited cold-start path (id-less adds + shared-id pairing only).
+
+    ``provider_available`` (#228) is the plan-time fact "a correspondence verifier
+    will be available at apply time"; when true, a both-directions committed
+    mismatched-id bucket that is the whole actionable plan is upgraded to
+    ``reconcile`` candidates instead of ``refuse`` (:func:`_refuse_idcarrying_mismatched`).
+    A marker only — no LLM is called here; the verifier runs in apply.
     """
     plan = SyncPlan(de_path=de_path, en_path=en_path, baseline_source=baseline_source)
 
@@ -1052,7 +1073,7 @@ def classify_changes(
 
     _append_idless_adds(plan, de_idless, en_idless)
     _refuse_idless_both_directions(plan)
-    _refuse_idcarrying_mismatched(plan, de_base, en_base, baseline_source)
+    _refuse_idcarrying_mismatched(plan, de_base, en_base, baseline_source, provider_available)
     plan.proposals.sort(key=_proposal_sort_key)
     return plan
 
@@ -1176,6 +1197,35 @@ def _replace_adds_with_refusals(plan: SyncPlan, doomed: list[Proposal], reason: 
     plan.proposals.extend(_refuse(p, reason) for p in doomed)
 
 
+def _reconcile(source: Proposal) -> Proposal:
+    """A ``reconcile`` candidate standing in for an ambiguous add we will *resolve* (#228).
+
+    The strategy-B premium of :func:`_refuse`: instead of declining the suspect, mark
+    it for apply-time correspondence verification. Keeps the source cell's identity
+    (direction / slide_id / role / source_position) so apply can locate the cell, build
+    the cross-language candidate pairs, and — for a confirmed twin — rewrite the
+    divergent id (EN-authority). ``disposition == "pending"`` mirrors mint/adopt: the
+    dry-run discloses it, and apply confirms before any id reaches disk.
+    """
+    return Proposal(
+        kind="reconcile",
+        role=source.role,
+        direction=source.direction,
+        slide_id=source.slide_id,
+        reason="mismatched-id twins (committed) — pending correspondence verification "
+        "and id rewrite (#228)",
+        source_position=source.source_position,
+        disposition="pending",
+    )
+
+
+def _replace_adds_with_reconcile(plan: SyncPlan, doomed: list[Proposal]) -> None:
+    """Swap the ``doomed`` ambiguous add proposals out of the plan for ``reconcile`` items."""
+    doomed_ids = {id(p) for p in doomed}
+    plan.proposals = [p for p in plan.proposals if id(p) not in doomed_ids]
+    plan.proposals.extend(_reconcile(p) for p in doomed)
+
+
 def _refuse_cold_both_directions(plan: SyncPlan) -> None:
     """Cold start: if adds would flow BOTH ways, refuse them all (#216).
 
@@ -1230,6 +1280,7 @@ def _refuse_idcarrying_mismatched(
     de_base: dict[tuple[str, str], BaselineCell],
     en_base: dict[tuple[str, str], BaselineCell],
     baseline_source: str,
+    provider_available: bool = False,
 ) -> None:
     """Refuse ambiguous one-sided adds against a committed baseline (#226).
 
@@ -1247,11 +1298,16 @@ def _refuse_idcarrying_mismatched(
     These two buckets are considered **together**: when adds across **both** of them
     span both directions, applying them would translate-and-insert content the other
     deck already has → silently **double** it. ``slide_id`` alone cannot tell a twin
-    from a genuinely-distinct slide — only cross-language content correspondence can
-    (the planned strategy-B follow-up, #226) — so refuse the whole ambiguous set
-    rather than guess. (Considering the buckets separately misses the *mixed* case,
-    where the id'd half and the id-less half each flow in a single — but opposite —
-    direction.)
+    from a genuinely-distinct slide — only cross-language content correspondence can —
+    so the conservative default refuses the whole ambiguous set rather than guess.
+    (Considering the buckets separately misses the *mixed* case, where the id'd half
+    and the id-less half each flow in a single — but opposite — direction.)
+
+    Strategy B (#228): when ``provider_available`` and the ambiguous bucket is the
+    **whole actionable plan**, the set is upgraded to ``reconcile`` candidates
+    (:func:`_replace_adds_with_reconcile`) instead of refusing — apply then confirms a
+    twin by content correspondence and rewrites the divergent id. Any other case (no
+    provider, a coexisting proposal, or a plan issue/error) keeps the refusal.
 
     Conservative gating that leaves every safe path untouched:
 
@@ -1282,6 +1338,23 @@ def _refuse_idcarrying_mismatched(
         )
     ]
     if len({p.direction for p in ambiguous}) <= 1:
+        return
+    # Strategy B (#228): with a provider/verifier available, *reconcile* a confirmed
+    # mismatched twin (rewrite the divergent id) instead of refusing — but only when the
+    # ambiguous bucket IS the whole actionable plan (the canonical partial-overlap shape:
+    # a shared in-sync slide with no proposal, plus the mismatched twins). The apply-time
+    # reconcile is a whole-plan short-circuit (like mint/adopt), so a coexisting
+    # edit/add/move/conflict/issue would be skipped by it — those cases keep refusing
+    # (strategy A) and the author reconciles in a two-step sync. ``provider_available`` is
+    # a plan-time fact (identical in dry-run and apply), so the two agree on
+    # reconcile-vs-refuse.
+    if (
+        provider_available
+        and not plan.has_errors
+        and not plan.issues
+        and len(ambiguous) == len(plan.proposals)
+    ):
+        _replace_adds_with_reconcile(plan, ambiguous)
         return
     _replace_adds_with_refusals(
         plan,
@@ -1612,12 +1685,13 @@ _KIND_ORDER = {
     "refuse": 7,
     "mint": 8,
     "adopt": 9,
+    "reconcile": 10,
 }
 
 
 def _proposal_sort_key(p: Proposal) -> tuple:
     return (
-        _KIND_ORDER.get(p.kind, 10),
+        _KIND_ORDER.get(p.kind, 11),
         p.source_position if p.source_position is not None else 1_000_000,
         p.slide_id or "",
         p.role,
@@ -1680,7 +1754,10 @@ def build_sync_plan(
     both-id-less refusal over a *unifiable* pair is upgraded to a ``pending`` mint
     candidate instead of a `refuse`; the verifier (stage 2b, in apply) confirms the
     halves correspond before a shared id is minted. Identical in dry-run and apply,
-    so the two agree on `refuse`-vs-`pending`.
+    so the two agree on `refuse`-vs-`pending`. It also drives strategy-B
+    ``reconcile`` (#228): a committed mismatched-id bucket that is the whole
+    actionable plan upgrades to ``reconcile`` candidates (handled in
+    :func:`classify_changes`) instead of refusing.
     """
     de_cells = parse_cells(de_path.read_text(encoding="utf-8"))
     en_cells = parse_cells(en_path.read_text(encoding="utf-8"))
@@ -1726,6 +1803,7 @@ def build_sync_plan(
         de_path=de_path,
         en_path=en_path,
         baseline_source=source,
+        provider_available=provider_available,
     )
 
     # Item-2 (Phase 3a): detect a language-neutral code-only change the keyed
