@@ -884,7 +884,7 @@ wheels = [
 
 [[package]]
 name = "coding-academy-lecture-manager"
-version = "1.8.4"
+version = "1.9.0"
 source = { editable = "." }
 dependencies = [
     { name = "attrs" },
