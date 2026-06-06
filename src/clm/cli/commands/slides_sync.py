@@ -101,6 +101,28 @@ if TYPE_CHECKING:
 CACHE_DB_NAME = "clm-llm.sqlite"
 
 
+def _resolve_prog_lang(path: Path) -> str:
+    """The deck's programming language for the translator prompt.
+
+    Resolves from a file's extension, or (batch mode) from the first deck found
+    under a directory. Falls back to ``"python"`` when unresolvable — the prompt
+    descriptors then degrade gracefully.
+    """
+    from clm.core.topic_resolver import find_slide_files_recursive
+    from clm.infrastructure.utils.path_utils import path_to_prog_lang
+
+    try:
+        target = path
+        if path.is_dir():
+            decks = find_slide_files_recursive(path)
+            if not decks:
+                return "python"
+            target = decks[0]
+        return path_to_prog_lang(target)
+    except (KeyError, ValueError):
+        return "python"
+
+
 def _resolve_sync_pair(de_path: Path, en_path: Path) -> tuple[Path, Path]:
     """Validate the two positional paths are the DE/EN halves of one split deck,
     auto-correcting a swapped order, and return them as ``(de, en)``.
@@ -462,7 +484,9 @@ def slides_sync_cmd(
             cache_dir=cache_dir,
             provider_available=provider_available,
             make_judge=lambda: _resolve_judge(provider, llm_model, ollama_url, llm_timeout),
-            make_translator=lambda: OpenRouterSlideTranslator(model=translation_model),
+            make_translator=lambda: OpenRouterSlideTranslator(
+                model=translation_model, prog_lang=_resolve_prog_lang(de_path)
+            ),
             make_recoverer=lambda: _resolve_recoverer(llm_recover, recovery_model),
             make_verifier=lambda: _resolve_verifier(verify_enabled),
         )
@@ -528,7 +552,9 @@ def slides_sync_cmd(
         elif interactive:
             mode = "interactive"
             judge = _resolve_judge(provider, llm_model, ollama_url, llm_timeout)
-            translator = OpenRouterSlideTranslator(model=translation_model)
+            translator = OpenRouterSlideTranslator(
+                model=translation_model, prog_lang=_resolve_prog_lang(de_path)
+            )
             recoverer = _resolve_recoverer(llm_recover, recovery_model)
             verifier = _resolve_verifier(verify_enabled)
             for issue in plan.issues:
@@ -548,7 +574,9 @@ def slides_sync_cmd(
         else:
             mode = "apply"
             judge = _resolve_judge(provider, llm_model, ollama_url, llm_timeout)
-            translator = OpenRouterSlideTranslator(model=translation_model)
+            translator = OpenRouterSlideTranslator(
+                model=translation_model, prog_lang=_resolve_prog_lang(de_path)
+            )
             recoverer = _resolve_recoverer(llm_recover, recovery_model)
             verifier = _resolve_verifier(verify_enabled)
             apply_result = apply_plan(

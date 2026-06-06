@@ -81,6 +81,7 @@ class StaticSlideTranslator:
     default: str | None = None
     mapping: dict[str, str] = field(default_factory=dict)
     prompt_version: str = "static"
+    prog_lang: str = "python"  # protocol-uniformity; StaticSlideTranslator ignores it
 
     def translate(
         self,
@@ -113,6 +114,10 @@ class OpenRouterSlideTranslator:
     temperature: float = 0.2
     max_tokens: int = 4096
     prompt_version: str = "translate-v1"
+    # The deck's programming language (e.g. "python", "csharp", "cpp"). Drives the
+    # comment prefix and language name named in the prompt, so a //-deck is told to
+    # preserve "// " prefixes and a C# code cell is translated as C#, not Python.
+    prog_lang: str = "python"
 
     def _client(self):  # pragma: no cover - thin network adapter
         # Shared with the edit judge so key/base resolution stays in one place.
@@ -128,10 +133,13 @@ class OpenRouterSlideTranslator:
         target_lang: str,
         role: str,
     ) -> str:  # pragma: no cover - exercised via mocked client / integration
+        comment_prefix, prog_lang_name = _prog_lang_descriptors(self.prog_lang)
         system = _system_prompt_for(role).format(
             source_lang=_LANG_NAMES.get(source_lang, source_lang),
             target_lang=_LANG_NAMES.get(target_lang, target_lang),
             role=role,
+            comment_prefix=comment_prefix,
+            prog_lang_name=prog_lang_name,
         )
 
         def _create():
@@ -165,26 +173,27 @@ _LANG_NAMES = {"de": "German", "en": "English"}
 _SYSTEM_PROMPT = (
     "You translate a single slide cell from {source_lang} to {target_lang} for a "
     "programming course. The cell is a {role} cell in Jupyter percent-format: every "
-    "line is prefixed with '# ' and may contain Markdown (headings like '# ## Title', "
-    "bullet lists, inline code). Translate ONLY the natural-language prose. Preserve "
-    "verbatim: the '# ' line prefixes, Markdown structure and heading levels, code "
-    "spans and identifiers, URLs, and slide directives. Do not add, drop, or reorder "
-    "lines. Return only the translated cell body, no commentary, no code fences."
+    "line is prefixed with '{comment_prefix}' and may contain Markdown (headings like "
+    "'{comment_prefix}## Title', bullet lists, inline code). Translate ONLY the "
+    "natural-language prose. Preserve verbatim: the '{comment_prefix}' line prefixes, "
+    "Markdown structure and heading levels, code spans and identifiers, URLs, and slide "
+    "directives. Do not add, drop, or reorder lines. Return only the translated cell "
+    "body, no commentary, no code fences."
 )
 
-# Code cells are NOT comment-prefixed: they are runnable Python. Only the
+# Code cells are NOT comment-prefixed: they are runnable source. Only the
 # human-facing text inside them (string literals shown to the learner, comments)
 # differs across languages; the code itself is language-neutral and must stay
 # byte-identical so the cell still runs and the two decks share one logic.
 _CODE_SYSTEM_PROMPT = (
-    "You localize a single Python code cell of a {source_lang} programming-course "
-    "slide deck into its {target_lang} counterpart. Return runnable Python, NOT "
-    "Markdown. Translate ONLY human-facing natural-language text: the contents of "
-    "string literals that are shown to a learner (e.g. example prompts, questions, "
-    "user-visible messages) and code comments. Keep EVERYTHING else byte-identical: "
-    "all identifiers, function/variable/class names, keywords, imports, attribute "
-    "and method names, dict keys, operators, numbers, structure, indentation, and "
-    "string literals that are technical (model names, URLs, format strings, JSON "
+    "You localize a single {prog_lang_name} code cell of a {source_lang} "
+    "programming-course slide deck into its {target_lang} counterpart. Return runnable "
+    "{prog_lang_name}, NOT Markdown. Translate ONLY human-facing natural-language text: "
+    "the contents of string literals that are shown to a learner (e.g. example prompts, "
+    "questions, user-visible messages) and code comments. Keep EVERYTHING else "
+    "byte-identical: all identifiers, function/variable/class names, keywords, imports, "
+    "attribute and method names, dict keys, operators, numbers, structure, indentation, "
+    "and string literals that are technical (model names, URLs, format strings, JSON "
     'keys like "role"/"content"/"system"/"user"). Do not add, drop, reorder, '
     "or reformat lines. Return only the cell body, no commentary, no code fences."
 )
@@ -193,6 +202,29 @@ _CODE_SYSTEM_PROMPT = (
 def _system_prompt_for(role: str) -> str:
     """Pick the system prompt for a cell ``role`` (code cells are not Markdown)."""
     return _CODE_SYSTEM_PROMPT if role == "code" else _SYSTEM_PROMPT
+
+
+def _prog_lang_descriptors(prog_lang: str) -> tuple[str, str]:
+    """Return ``(comment_prefix, prog_lang_name)`` for prompt templating.
+
+    e.g. ``"python"`` -> ``("# ", "Python")``; ``"csharp"`` -> ``("// ", "C#")``.
+    Falls back to ``("# ", <prog_lang>)`` for an unknown language.
+    """
+    from clm.workers.notebook.utils.prog_lang_utils import language_info, line_comment_for
+
+    try:
+        prefix = line_comment_for(prog_lang) + " "
+    except (KeyError, ValueError):
+        prefix = "# "
+    try:
+        name = str(language_info(prog_lang).get("name", prog_lang))
+    except (KeyError, ValueError):
+        name = prog_lang
+    # language_info names are inconsistently cased ("python"/"C#"/"Java"); title
+    # only the all-lowercase ones so "C#"/"C++" keep their casing.
+    if name.islower():
+        name = name.capitalize()
+    return prefix, name
 
 
 @dataclass
@@ -218,9 +250,12 @@ class CachingSlideTranslator:
 
     def __post_init__(self) -> None:
         model = getattr(self.inner, "model", "")
-        self.prompt_version = (
-            f"{self.inner.prompt_version}:{model}" if model else self.inner.prompt_version
-        )
+        base = f"{self.inner.prompt_version}:{model}" if model else self.inner.prompt_version
+        # Fold the deck's prog_lang into the key so a C# code cell and a Python one
+        # with identical source never share an entry. Keep "python" un-suffixed so
+        # the existing Python cache stays valid (no flag-day invalidation).
+        prog_lang = getattr(self.inner, "prog_lang", "python")
+        self.prompt_version = f"{base}:{prog_lang}" if prog_lang and prog_lang != "python" else base
 
     def translate(
         self,

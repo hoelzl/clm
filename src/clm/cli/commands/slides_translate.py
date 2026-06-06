@@ -46,6 +46,7 @@ from clm.infrastructure.llm.openrouter_client import (
     DEFAULT_SYNC_JUDGE_MODEL,
     has_openrouter_api_key,
 )
+from clm.infrastructure.utils.path_utils import path_to_prog_lang
 from clm.slides.sync_translate import (
     DEFAULT_TRANSLATION_MODEL,
     CachingSlideTranslator,
@@ -65,14 +66,17 @@ if TYPE_CHECKING:
 
 
 def _make_translator(
-    translation_model: str, translation_cache: TranslationCache | None
+    translation_model: str,
+    translation_cache: TranslationCache | None,
+    prog_lang: str = "python",
 ) -> SlideTranslator:
     """The OpenRouter slide translator, cache-wrapped unless ``--no-cache``.
 
     Factored out (and module-level) so tests can monkeypatch it with a static
     translator, exactly as the sync CLI tests patch ``OpenRouterSlideTranslator``.
+    ``prog_lang`` makes the prompt name the deck's language + comment token.
     """
-    inner = OpenRouterSlideTranslator(model=translation_model)
+    inner = OpenRouterSlideTranslator(model=translation_model, prog_lang=prog_lang)
     if translation_cache is None:
         return inner
     return CachingSlideTranslator(inner=inner, cache=translation_cache)
@@ -224,7 +228,9 @@ def slides_translate_cmd(
 
     result: BootstrapResult
     try:
-        translator = _make_translator(translation_model, translation_cache)
+        translator = _make_translator(
+            translation_model, translation_cache, path_to_prog_lang(source)
+        )
         # A judge is only consulted on the delegated-sync path (twin present).
         judge = _resolve_judge(provider, llm_model, None, None) if will_sync else None
         result = bootstrap_deck(
