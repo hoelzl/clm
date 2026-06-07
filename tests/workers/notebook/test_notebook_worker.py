@@ -461,6 +461,64 @@ class TestNotebookWorkerProcessJob:
                 assert output_file.read_text() == result_content
 
     @pytest.mark.asyncio
+    async def test_process_job_async_writes_lf_line_endings(self, worker_id, db_path, tmp_path):
+        """Output must be written with LF line endings on every platform.
+
+        Regression test: the writer used ``open(path, "w")`` (text mode)
+        without ``newline=``, so Python's universal-newline translation
+        rewrote every ``\\n`` to ``os.linesep`` — i.e. CRLF on Windows
+        Direct workers, while Docker/Linux workers emitted LF. That platform
+        split produced spurious CRLF in built course output (noisy diffs,
+        "CRLF will be replaced by LF" warnings). Pinning ``newline="\\n"``
+        keeps output byte-identical regardless of the host OS, so we assert
+        on the raw bytes rather than the (translation-hiding) text read.
+        """
+        from clm.workers.notebook.notebook_worker import NotebookWorker
+
+        input_file = tmp_path / "notebook.ipynb"
+        input_file.write_text('{"cells": [], "metadata": {}, "nbformat": 4}')
+
+        output_file = tmp_path / "output" / "notebook.py"
+
+        job = Job(
+            id=1,
+            job_type="notebook",
+            input_file=str(input_file),
+            output_file=str(output_file),
+            content_hash="test-hash",
+            payload={
+                "kind": "completed",
+                "prog_lang": "python",
+                "language": "en",
+                "format": "notebook",
+            },
+            status="processing",
+            created_at=datetime.now(),
+        )
+
+        worker = NotebookWorker(worker_id, db_path)
+        # Multi-line, LF-only content as produced by jupytext/nbconvert.
+        result_content = "# %%\nprint('line one')\nprint('line two')\n"
+
+        with patch("clm.workers.notebook.notebook_worker.create_output_spec") as mock_create_spec:
+            mock_spec = MagicMock()
+            mock_create_spec.return_value = mock_spec
+
+            with patch("clm.workers.notebook.notebook_worker.NotebookProcessor") as MockProcessor:
+                mock_processor = MagicMock()
+                mock_processor.process_notebook = AsyncMock(return_value=result_content)
+                MockProcessor.return_value = mock_processor
+
+                await worker._process_job_async(job)
+
+        # Inspect raw bytes: text-mode reads would hide CRLF via universal
+        # newline translation, so we must read in binary.
+        raw = output_file.read_bytes()
+        assert b"\r\n" not in raw, "output contains CRLF — newline translation regressed"
+        assert b"\r" not in raw, "output contains a stray CR byte"
+        assert raw == result_content.encode("utf-8")
+
+    @pytest.mark.asyncio
     async def test_process_job_async_adds_to_cache(self, worker_id, db_path, tmp_path):
         """Should add result to cache after processing."""
         from clm.workers.notebook.notebook_worker import NotebookWorker
