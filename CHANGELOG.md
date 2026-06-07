@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.9.1] - 2026-06-07
+
 ### Added
 
 - **Day-of-week scheduling: `<subsection>` spec layer + `clm schedule`**
@@ -48,6 +50,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   so the builds become byte-identical and the code is finally executed as code
   rather than rendered as markdown text. It runs first among the normalize passes,
   is idempotent, and is a no-op on a conforming deck.
+- **Jinja `{% include %}` in slide source now resolves against the topic's own
+  siblings** (PR #258). A deck that does `{% include "add.h" %}` to show a file
+  sitting next to it previously failed with `TemplateNotFound`, because the Jinja
+  environment only loaded the bundled `templates_<prog_lang>/` package. The loader
+  is now a `ChoiceLoader`: the bundled package is tried **first** (so `macros.j2`
+  and friends can never be shadowed by a same-named sibling), then the notebook's
+  topic siblings as a fallback — a `FileSystemLoader` on `source_dir` in Docker
+  source-mount mode and/or a `DictLoader` decoded from `payload.other_files` in
+  direct mode (non-UTF-8 siblings are skipped). When a deck has no siblings the
+  plain package loader is used unchanged, so existing courses are unaffected. See
+  the new "Jinja `{% include %}` in slide source" section under `clm build` in
+  `clm info commands`.
 
 ### Changed
 
@@ -71,6 +85,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   tag on the server after the CI-green gate; dropping the local tag removes a
   must-never-push footgun and the post-release tag-reconciliation step. Release
   procedure docs updated accordingly.
+
+### Fixed
+
+- **Notebook-worker output is now written with LF newlines on every platform**
+  (PR #260). All notebook-worker outputs (executed `.ipynb`, jupytext `.py`, and
+  the HTML body) go through one `open(..., "w")` write that, lacking a `newline=`
+  argument, let Python's universal-newline translation rewrite every `\n` to
+  `os.linesep` — CRLF on Windows Direct workers, LF on Docker/Linux. So a Windows
+  `clm build` produced CRLF working-tree files, yielding trailing-`^M` diffs and
+  "CRLF will be replaced by LF" warnings in course repos that normalize to
+  `eol=lf`. The write now pins `newline="\n"`, matching the convention used
+  elsewhere in the codebase, so output is byte-identical regardless of host OS.
+- **Pool-shutdown orphan jobs are no longer mis-blamed on the user** (PR #259).
+  A worker-pool shutdown race could leave a valid job (e.g. a drawio diagram)
+  stamped with the orphan sentinel; the drawio categorizer matched none of its
+  specific patterns and fell through to `error_type="user"` ("Check your DrawIO
+  diagram for errors"). Because user errors are persisted to `processing_issues`
+  (and the content hash never changes), the stale error was then **replayed on
+  every subsequent cached build**. `categorize_job_error` now checks for the
+  orphan sentinel *before* the per-job-type dispatch and returns an
+  `infrastructure` / `orphaned_job` error with re-run guidance — infrastructure
+  errors are not cached, so the transient failure stays out of the replay store
+  and the false diagram-blame disappears. The central placement also covers
+  notebook and plantuml orphans from the same race.
 
 ## [1.9.0] - 2026-06-06
 
