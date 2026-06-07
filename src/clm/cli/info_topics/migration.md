@@ -47,6 +47,22 @@ pin — a reformatted deck requires CLM {version}):**
 
 Python (`#`) decks are unchanged.
 
+## Day-of-week scheduling: `<subsection>` + `clm schedule` (issue #261, {version} — additive)
+
+CLM {version} adds an optional `<subsection>` layer inside a `<section>`'s
+`<topics>` to express day-of-week scheduling for certification listings
+(`<section>` = week, `<subsection>` = day), plus a new `clm schedule` command
+that exports the weekday deck listing in Markdown or CSV. See
+`clm info spec-files` for the `<subsection>` grammar and `clm info commands`
+for `clm schedule`.
+
+**Nothing changes for existing specs.** The feature is entirely opt-in: a spec
+that declares no `<subsection>` parses and builds exactly as before. `clm build`
+flattens subsections away, so a spec with subsections builds **byte-identically**
+to the same spec with the wrappers removed — there is no migration step. To
+adopt it, wrap a section's `<topic>`s in `<subsection weekday="mon">…` groups
+and run `clm schedule course.xml`.
+
 ## Per-topic solution release (issue #208, {version} — additive)
 
 CLM {version} adds **per-topic solution release**: hand a student cohort a

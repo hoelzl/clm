@@ -196,6 +196,60 @@ will silently end up with an empty topic ID. CLM rejects this case with a
 clear error. Specifying the ID via both the `id=` attribute *and* text
 content is also a hard error — pick one form per topic.
 
+#### `<subsection>` — day-of-week / thematic grouping (Optional)
+
+A `<section>`'s `<topics>` may group its `<topic>`s into optional
+`<subsection>` elements. The intended use is **day-of-week scheduling** for
+certification listings (e.g. AZAV): a `<section>` is one week, and each
+`<subsection>` is one day. `<subsection>`s, bare `<topic>`s, or a mix of both
+may appear under `<topics>`, in any order.
+
+```xml
+<section module="module_550_ml_azav">
+    <name><de>Woche 01: …</de><en>Week 01: …</en></name>
+    <topics>
+        <subsection weekday="mon">
+            <topic>introduction_ml_course_azav</topic>
+            <topic>what_are_llms</topic>
+        </subsection>
+        <subsection weekday="tue">
+            <name><de>Dienstag — Recht</de><en>Tuesday — Law</en></name>
+            <topic>llm_ethics_azav</topic>   <!-- all its decks land on Tue -->
+        </subsection>
+    </topics>
+</section>
+```
+
+**The layer is purely additive.** `clm build` **flattens** subsections away:
+it collects the contained `<topic>`s in document order and ignores the
+wrapper, so a spec with subsections builds **byte-identically** to the same
+spec with the `<subsection>` wrappers removed. Subsections have **no** effect
+on output directories or topic→directory resolution. The grouping is retained
+only for `clm outline` (renders subsections indented) and `clm schedule`
+(exports the weekday deck listing).
+
+**Granularity is topic-level**: a subsection holds whole topics, and a
+multi-deck topic's decks all land on its day. To split one topic's decks
+across days, split the topic directory — there is no per-deck day override.
+
+Optional `<subsection>` attributes:
+
+| Attribute | Description |
+|-----------|-------------|
+| `weekday` | Optional, language-neutral token from `{mon, tue, wed, thu, fri, sat, sun}` (case-insensitive), localized at render time. `sat`/`sun` are valid; AZAV uses Mon–Fri only. A closed enum lets the validator check ordering/uniqueness. Omit it for a generic thematic group that carries only a `<name>`. |
+| `enabled` | `"true"` (default) or `"false"`. A disabled subsection is dropped entirely from the build — topics and all — exactly like a disabled `<section>`. It is retained only by tooling parsed with `--include-disabled`. |
+
+A `<subsection>` may also carry an optional `<name>` (`<de>`/`<en>`) label
+override; when omitted, the displayed label is derived from `weekday`. A
+`<subsection>` contains one or more `<topic>` elements using the **same topic
+grammar** as a bare `<topic>` (ids, `<include>`/`<dir-group>` children,
+attributes).
+
+`clm validate` adds four advisory subsection checks (none is an error):
+duplicate weekday within a section, weekdays out of Mon→Sun order, an empty
+day (a subsection with no topics or whose topics resolve to zero decks), and
+(info) bare topics mixed with subsections (they appear under no day).
+
 ### `<author>` (Optional)
 
 Author name displayed in notebook slide headers. Defaults to `Dr. Matthias Hölzl`.

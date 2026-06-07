@@ -210,6 +210,57 @@ class TopicSpec:
     includes: list[IncludeSpec] = Factory(list)
 
 
+# Weekday tokens for ``<subsection weekday="...">`` (issue #261). A closed,
+# language-neutral enum so the validator can check ordering/uniqueness; the
+# tokens are localized only at render time (see
+# ``clm.cli.commands.schedule.WEEKDAY_LABELS``). ``sat``/``sun`` are valid
+# (some industry courses run on Saturday); AZAV uses Mon–Fri only. The tuple
+# defines the canonical week order used for the out-of-order check.
+WEEKDAY_ORDER: tuple[str, ...] = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+VALID_WEEKDAYS: frozenset[str] = frozenset(WEEKDAY_ORDER)
+
+
+@frozen
+class SubsectionSpec:
+    """An optional ``<subsection>`` grouping inside a ``<section>``'s ``<topics>``.
+
+    Groups one or more ``<topic>`` elements under an optional weekday and/or
+    label. It expresses day-of-week scheduling for certification listings
+    (issue #261): ``<section>`` = week, ``<subsection>`` = day.
+
+    The layer is **purely additive**: :meth:`CourseSpec.parse_sections`
+    flattens the topics of *enabled* subsections into the parent
+    :attr:`SectionSpec.topics` list (in document order) so the build path
+    never sees the wrapper. A spec with subsections therefore builds
+    byte-identically to the same spec with the ``<subsection>`` wrappers
+    removed. The grouping is retained here only for outline/schedule output
+    and validation.
+
+    Attributes:
+        topics: The contained topics, in document order. For an *enabled*
+            subsection these are the very same :class:`TopicSpec` objects
+            that also appear in the parent :attr:`SectionSpec.topics` flat
+            list. A *disabled* subsection's topics are held only here — they
+            are deliberately kept out of the flat build list (see ``enabled``).
+        weekday: A language-neutral weekday token from :data:`VALID_WEEKDAYS`
+            (``"mon"``..``"sun"``), or ``None`` for a generic thematic group
+            that carries only a ``<name>``.
+        name: Optional bilingual label override. When ``None``, consumers
+            derive the displayed label from ``weekday``.
+        enabled: Mirrors ``<section enabled=...>``. A disabled subsection is
+            dropped entirely from the build — its topics never enter the flat
+            :attr:`SectionSpec.topics` list (the build path), regardless of
+            ``keep_disabled``. With ``keep_disabled=True`` the wrapper is still
+            retained in :attr:`SectionSpec.subsections` so tooling
+            (``clm outline --include-disabled``) can surface it.
+    """
+
+    topics: list[TopicSpec] = Factory(list)
+    weekday: str | None = None
+    name: Text | None = None
+    enabled: bool = True
+
+
 @frozen
 class SectionSpec:
     name: Text
@@ -227,6 +278,14 @@ class SectionSpec:
     # that do not themselves carry an explicit ``http-replay`` attribute.
     # Per-topic ``http-replay="yes"``/``"no"`` overrides this default.
     http_replay: bool = False
+    # Optional ``<subsection>`` groupings (issue #261). The contained topics
+    # are *also* present in ``topics`` (flattened); this list retains the
+    # day-of-week / thematic grouping for ``clm outline`` and
+    # ``clm schedule``. Empty for sections that use only bare ``<topic>``s.
+    # Honors ``keep_disabled`` the same way ``CourseSpec.sections`` does:
+    # disabled subsections appear here only when parsed with
+    # ``keep_disabled=True``.
+    subsections: list[SubsectionSpec] = Factory(list)
 
     def module_for(self, topic_spec: TopicSpec) -> str | None:
         """Effective module binding for *topic_spec* under this section.
@@ -361,6 +420,28 @@ def _parse_disable_attr(value: str | None, *, attr_name: str) -> bool:
     raise CourseSpecError(
         f"Invalid value for {attr_name!r} attribute: {value!r}. "
         f"Expected 'true'/'yes'/'1' or 'false'/'no'/'0' (case-insensitive)."
+    )
+
+
+def _parse_enabled_attr(value: str | None, *, label: str) -> bool:
+    """Parse an ``enabled`` attribute (default-on, strict true/false).
+
+    Shared by ``<section>`` and ``<subsection>`` parsing. Returns True when
+    the attribute is absent or ``"true"`` and False for ``"false"``
+    (case-insensitive). Any other value is a hard :class:`CourseSpecError`.
+    ``label`` identifies the element in the error message (e.g.
+    ``"section 'Week 1'"``).
+    """
+    if value is None:
+        return True
+    normalized = value.strip().lower()
+    if normalized == "true":
+        return True
+    if normalized == "false":
+        return False
+    raise CourseSpecError(
+        f"Invalid value for 'enabled' attribute on {label}: {value!r}. "
+        f"Expected 'true' or 'false' (case-insensitive)."
     )
 
 
@@ -1055,6 +1136,144 @@ class CourseSpec:
         )
 
     @staticmethod
+    def _parse_topic_element(topic_elem: ETree.Element, *, section_label: str) -> TopicSpec:
+        """Parse a single ``<topic>`` element into a :class:`TopicSpec`.
+
+        Shared by both the bare ``<topic>`` path and the ``<subsection>``
+        path so the topic grammar (id forms, ``<include>`` children,
+        attributes) is identical wherever a ``<topic>`` appears.
+        """
+        topic_id_attr = (topic_elem.attrib.get("id") or "").strip()
+        topic_id_text = (topic_elem.text or "").strip()
+        has_child_elements = len(topic_elem) > 0
+
+        if topic_id_attr and topic_id_text:
+            raise CourseSpecError(
+                f"Topic ID specified twice in {section_label}: "
+                f"both as id={topic_id_attr!r} attribute and as "
+                f"text content {topic_id_text!r}. Use only one "
+                f"form per topic. Prefer the id= attribute when "
+                f"the topic carries <include> or other child "
+                f"elements."
+            )
+
+        topic_id = topic_id_attr or topic_id_text
+
+        if has_child_elements and not topic_id:
+            raise CourseSpecError(
+                f"<topic> in {section_label} has child elements "
+                f"but no ID. When a <topic> contains <include> "
+                f"or other child elements, its ID must be set "
+                f'via the id= attribute (e.g. <topic id="my_topic">). '
+                f"The text-content form (<topic>my_topic</topic>) "
+                f"is unsafe with children: XML parsers assign "
+                f"text appearing after a child element to that "
+                f"child's tail rather than to the topic, which "
+                f"silently empties the topic ID."
+            )
+
+        topic_label = (
+            f"topic '{topic_id}' in {section_label}" if topic_id else f"<topic> in {section_label}"
+        )
+        topic_includes = _parse_includes(topic_elem, element_label=topic_label)
+        return TopicSpec(
+            id=topic_id,
+            skip_html=bool(topic_elem.attrib.get("html")),
+            skip_evaluation=_parse_disable_attr(
+                topic_elem.attrib.get("evaluate"), attr_name="evaluate"
+            ),
+            skip_errors=_parse_bool_attr(
+                topic_elem.attrib.get("skip-errors"),
+                attr_name="skip-errors",
+            ),
+            http_replay=_parse_optional_bool_attr(
+                topic_elem.attrib.get("http-replay"),
+                attr_name="http-replay",
+            ),
+            author=topic_elem.attrib.get("author", ""),
+            prog_lang=topic_elem.attrib.get("prog-lang", ""),
+            module=topic_elem.attrib.get("module") or None,
+            includes=topic_includes,
+        )
+
+    @staticmethod
+    def _parse_subsection_element(
+        sub_elem: ETree.Element, *, section_label: str, keep_disabled: bool
+    ) -> SubsectionSpec | None:
+        """Parse a ``<subsection>`` child of ``<topics>`` (issue #261).
+
+        Returns ``None`` when the subsection is disabled and
+        ``keep_disabled`` is False, so the caller drops it entirely
+        (topics and all) — mirroring how a disabled ``<section>`` is
+        dropped. ``weekday`` is validated against the closed
+        :data:`VALID_WEEKDAYS` enum; an unknown token is a hard error.
+        """
+        enabled = _parse_enabled_attr(
+            sub_elem.attrib.get("enabled"), label=f"subsection in {section_label}"
+        )
+        if not enabled and not keep_disabled:
+            return None
+
+        weekday_raw = sub_elem.attrib.get("weekday")
+        weekday: str | None = None
+        if weekday_raw is not None:
+            normalized = weekday_raw.strip().lower()
+            if normalized:
+                if normalized not in VALID_WEEKDAYS:
+                    raise CourseSpecError(
+                        f"Invalid weekday {weekday_raw!r} on a <subsection> in "
+                        f"{section_label}. Expected one of "
+                        f"{list(WEEKDAY_ORDER)} (language-neutral, lowercase)."
+                    )
+                weekday = normalized
+
+        name_elem = sub_elem.find("name")
+        name: Text | None = None
+        if name_elem is not None:
+            de = name_elem.findtext("de") or ""
+            en = name_elem.findtext("en") or ""
+            # An all-empty <name> reads as "absent" so the weekday fallback
+            # still fires; otherwise an empty override would blank the label.
+            name = Text(de=de, en=en) if (de or en) else None
+
+        topics = [
+            CourseSpec._parse_topic_element(topic_elem, section_label=section_label)
+            for topic_elem in sub_elem.findall("topic")
+        ]
+        return SubsectionSpec(topics=topics, weekday=weekday, name=name, enabled=enabled)
+
+    @staticmethod
+    def _iter_topic_elements(
+        section_elem: ETree.Element, *, keep_disabled: bool
+    ) -> "list[ETree.Element]":
+        """Yield every ``<topic>`` element of a section in document order.
+
+        Descends into ``<subsection>`` wrappers (issue #261), skipping
+        disabled subsections unless ``keep_disabled`` is set — the same
+        drop-entirely rule applied to disabled sections. Used by
+        :meth:`parse_dir_groups` so topic-scoped ``<dir-group>`` elements
+        nested inside subsections are still collected.
+        """
+        topics_elem = section_elem.find("topics")
+        if topics_elem is None:
+            return []
+        result: list[ETree.Element] = []
+        for child in topics_elem:
+            if child.tag == "topic":
+                result.append(child)
+            elif child.tag == "subsection":
+                # Loose, non-raising check (mirrors the section-level skip in
+                # parse_dir_groups): malformed ``enabled`` values are validated
+                # authoritatively by parse_sections, which runs first on the
+                # from_file path. Re-raising here would only hurt standalone
+                # callers with a less section-qualified message.
+                disabled = (child.attrib.get("enabled") or "").strip().lower() == "false"
+                if disabled and not keep_disabled:
+                    continue
+                result.extend(child.findall("topic"))
+        return result
+
+    @staticmethod
     def parse_sections(root: ETree.Element, *, keep_disabled: bool = False) -> list[SectionSpec]:
         """Parse <section> elements from a course spec root.
 
@@ -1070,21 +1289,9 @@ class CourseSpec:
         for i, section_elem in enumerate(root.findall("sections/section"), start=1):
             name = parse_multilang(root, f"sections/section[{i}]/name")
 
-            enabled_attr = section_elem.attrib.get("enabled")
-            if enabled_attr is None:
-                enabled = True
-            else:
-                normalized = enabled_attr.strip().lower()
-                if normalized == "true":
-                    enabled = True
-                elif normalized == "false":
-                    enabled = False
-                else:
-                    raise CourseSpecError(
-                        f"Invalid value for 'enabled' attribute on section "
-                        f"'{name.en}': {enabled_attr!r}. "
-                        f"Expected 'true' or 'false' (case-insensitive)."
-                    )
+            enabled = _parse_enabled_attr(
+                section_elem.attrib.get("enabled"), label=f"section '{name.en}'"
+            )
 
             section_id = section_elem.attrib.get("id") or None
             section_module = section_elem.attrib.get("module") or None
@@ -1104,68 +1311,49 @@ class CourseSpec:
 
             topics_elem = section_elem.find("topics")
             topics: list[TopicSpec] = []
+            subsections: list[SubsectionSpec] = []
             if topics_elem is None:
                 if enabled:
                     logger.warning(f"Malformed section: {name.en} has no topics")
                     continue
             else:
-                for topic_elem in topics_elem.findall("topic"):
-                    topic_id_attr = (topic_elem.attrib.get("id") or "").strip()
-                    topic_id_text = (topic_elem.text or "").strip()
-                    has_child_elements = len(topic_elem) > 0
-
-                    if topic_id_attr and topic_id_text:
-                        raise CourseSpecError(
-                            f"Topic ID specified twice in {section_label}: "
-                            f"both as id={topic_id_attr!r} attribute and as "
-                            f"text content {topic_id_text!r}. Use only one "
-                            f"form per topic. Prefer the id= attribute when "
-                            f"the topic carries <include> or other child "
-                            f"elements."
+                # Walk the direct children of <topics> in document order so
+                # bare <topic>s and <subsection> wrappers can be freely
+                # interleaved. Subsection topics are flattened into the same
+                # `topics` list (the build path), and the grouping is retained
+                # in `subsections` for outline/schedule. Comments and unknown
+                # children are ignored (their .tag is not a plain string).
+                for child in topics_elem:
+                    if child.tag == "topic":
+                        topics.append(
+                            CourseSpec._parse_topic_element(child, section_label=section_label)
                         )
-
-                    topic_id = topic_id_attr or topic_id_text
-
-                    if has_child_elements and not topic_id:
-                        raise CourseSpecError(
-                            f"<topic> in {section_label} has child elements "
-                            f"but no ID. When a <topic> contains <include> "
-                            f"or other child elements, its ID must be set "
-                            f'via the id= attribute (e.g. <topic id="my_topic">). '
-                            f"The text-content form (<topic>my_topic</topic>) "
-                            f"is unsafe with children: XML parsers assign "
-                            f"text appearing after a child element to that "
-                            f"child's tail rather than to the topic, which "
-                            f"silently empties the topic ID."
+                    elif child.tag == "subsection":
+                        subsection = CourseSpec._parse_subsection_element(
+                            child,
+                            section_label=section_label,
+                            keep_disabled=keep_disabled,
                         )
-
-                    topic_label = (
-                        f"topic '{topic_id}' in {section_label}"
-                        if topic_id
-                        else f"<topic> in {section_label}"
-                    )
-                    topic_includes = _parse_includes(topic_elem, element_label=topic_label)
-                    topics.append(
-                        TopicSpec(
-                            id=topic_id,
-                            skip_html=bool(topic_elem.attrib.get("html")),
-                            skip_evaluation=_parse_disable_attr(
-                                topic_elem.attrib.get("evaluate"), attr_name="evaluate"
-                            ),
-                            skip_errors=_parse_bool_attr(
-                                topic_elem.attrib.get("skip-errors"),
-                                attr_name="skip-errors",
-                            ),
-                            http_replay=_parse_optional_bool_attr(
-                                topic_elem.attrib.get("http-replay"),
-                                attr_name="http-replay",
-                            ),
-                            author=topic_elem.attrib.get("author", ""),
-                            prog_lang=topic_elem.attrib.get("prog-lang", ""),
-                            module=topic_elem.attrib.get("module") or None,
-                            includes=topic_includes,
-                        )
-                    )
+                        if subsection is None:
+                            # Disabled subsection, dropped entirely (topics and
+                            # all), exactly like a disabled section.
+                            continue
+                        subsections.append(subsection)
+                        # Only ENABLED subsections contribute to the flat build
+                        # list — ALWAYS, independent of keep_disabled. A disabled
+                        # subsection is retained in `subsections` (so outline
+                        # --include-disabled can still render it) but its topics
+                        # must never reach `topics`: that is the list `clm build`
+                        # flattens, and there is no per-topic enabled gate
+                        # downstream. Disabled *sections* are protected from the
+                        # build by SectionSelection.resolved_indices, but a
+                        # disabled subsection nested in an enabled, selected
+                        # section has no such guard — so the gate must live here
+                        # to keep `clm build --only-sections` (which parses with
+                        # keep_disabled=True) byte-identical and to keep disabled
+                        # decks out of the `clm release` ledger.
+                        if subsection.enabled:
+                            topics.extend(subsection.topics)
             sections.append(
                 SectionSpec(
                     name=name,
@@ -1175,6 +1363,7 @@ class CourseSpec:
                     module=section_module,
                     includes=section_includes,
                     http_replay=section_http_replay,
+                    subsections=subsections,
                 )
             )
         return sections
@@ -1215,7 +1404,13 @@ class CourseSpec:
             ):
                 continue
             section_id = section_elem.attrib.get("id") or None
-            for topic_elem in section_elem.findall("topics/topic"):
+            # Walk topic elements in document order, descending into
+            # <subsection> wrappers (issue #261) so dir-groups nested inside a
+            # subsection's topics are collected too. Disabled subsections are
+            # skipped unless keep_disabled, mirroring the section-level skip.
+            for topic_elem in CourseSpec._iter_topic_elements(
+                section_elem, keep_disabled=keep_disabled
+            ):
                 topic_id = (
                     (topic_elem.attrib.get("id") or "").strip()
                     or (topic_elem.text or "").strip()

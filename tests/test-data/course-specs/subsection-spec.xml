@@ -1,0 +1,45 @@
+<course>
+    <name>
+        <de>Mein Kurs</de>
+        <en>My Course</en>
+    </name>
+    <prog-lang>python</prog-lang>
+    <description>
+        <de>Ein Kurs über ein Thema</de>
+        <en>A course about a topic</en>
+    </description>
+    <certificate>
+        <de>...</de>
+        <en>...</en>
+    </certificate>
+    <sections>
+        <section>
+            <name>
+                <de>Woche 1</de>
+                <en>Week 1</en>
+            </name>
+            <topics>
+                <subsection weekday="mon">
+                    <topic>some_topic_from_test_1</topic>
+                    <topic>a_topic_from_test_2</topic>
+                </subsection>
+                <subsection weekday="tue">
+                    <name><de>Dienstag — Recht</de><en>Tuesday — Law</en></name>
+                    <topic>punctuation_test</topic>
+                </subsection>
+            </topics>
+        </section>
+        <section>
+            <name>
+                <de>Woche 2</de>
+                <en>Week 2</en>
+            </name>
+            <topics>
+                <topic>another_topic_from_test_1</topic>
+                <subsection weekday="wed">
+                    <topic>simple_notebook</topic>
+                </subsection>
+            </topics>
+        </section>
+    </sections>
+</course>
