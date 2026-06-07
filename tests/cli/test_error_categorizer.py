@@ -126,6 +126,67 @@ class TestDrawioErrorCategorization:
         )
 
 
+class TestOrphanedJobCategorization:
+    """Tests for pool-shutdown orphan categorization.
+
+    A job that is still in flight when the worker pool stops is stamped with
+    ``JobQueue.ORPHAN_ERROR_MESSAGE``. This is an infrastructure error (build
+    interrupted / shutdown race), never the input file's fault, and must not
+    be classified as a ``user`` error for any job type -- otherwise it would
+    blame the file and get persisted to ``processing_issues``, replaying on
+    every cached build.
+    """
+
+    def test_drawio_orphan_is_infrastructure_not_user(self):
+        """An orphaned drawio job must not be blamed on the diagram."""
+        from clm.infrastructure.database.job_queue import JobQueue
+
+        error = ErrorCategorizer.categorize_job_error(
+            job_type="drawio",
+            input_file="vector-difference.drawio",
+            error_message=JobQueue.ORPHAN_ERROR_MESSAGE,
+            job_payload={},
+            job_id=81111,
+        )
+
+        assert error.error_type == "infrastructure"
+        assert error.category == "orphaned_job"
+        # Must NOT carry the "check your diagram" user-error guidance.
+        assert "drawio diagram" not in error.actionable_guidance.lower()
+        assert "re-run" in error.actionable_guidance.lower()
+        assert error.job_id == 81111
+
+    def test_notebook_orphan_is_infrastructure_not_user(self):
+        """The same shutdown race orphans notebook jobs too (e.g. #81175)."""
+        from clm.infrastructure.database.job_queue import JobQueue
+
+        error = ErrorCategorizer.categorize_job_error(
+            job_type="notebook",
+            input_file="slides_010_simple_agent.de.py",
+            error_message=JobQueue.ORPHAN_ERROR_MESSAGE,
+            job_payload={},
+        )
+
+        assert error.error_type == "infrastructure"
+        assert error.category == "orphaned_job"
+
+    def test_orphan_sentinel_embedded_in_structured_error(self):
+        """Sentinel wrapped in a JSON error payload is still detected."""
+        import json
+
+        from clm.infrastructure.database.job_queue import JobQueue
+
+        error = ErrorCategorizer.categorize_job_error(
+            job_type="drawio",
+            input_file="test.drawio",
+            error_message=json.dumps({"error_message": JobQueue.ORPHAN_ERROR_MESSAGE}),
+            job_payload={},
+        )
+
+        assert error.error_type == "infrastructure"
+        assert error.category == "orphaned_job"
+
+
 class TestNotebookErrorCategorization:
     """Tests for notebook error categorization."""
 
