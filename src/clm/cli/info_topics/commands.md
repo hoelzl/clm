@@ -77,6 +77,42 @@ clm build course.xml --only-sections w03,w04 -w
 clm build course.xml --only-sections "Week 03"
 ```
 
+#### Jinja `{% include %}` in slide source
+
+Before a notebook is converted, its source is expanded as a Jinja
+template (this is what makes the `# {{ header(…) }}` title macro work).
+Two loaders back `{% include %}`, searched in this order:
+
+1. The bundled per-language template directory inside the `clm` package
+   (`src/clm/workers/notebook/templates_<prog_lang>/`) — the source of
+   `macros.j2` and friends.
+2. The notebook's own **topic siblings** — any non-image file sitting
+   next to the slide file in its topic directory (since CLM {version}).
+
+So a deck can render a sibling file verbatim, e.g. show a C++ header
+that lives beside it:
+
+````text
+// ```cpp
+// {% include "add.h" %}
+// ```
+````
+
+Resolution notes:
+
+- The include target is the sibling's path **relative to the topic
+  directory** (forward slashes), matching how the file is shipped to
+  the worker — the same set of files an `<include>` splices in are
+  also includable this way.
+- The bundled package directory is searched **first**, so a sibling can
+  never shadow a bundled template: a sibling named `macros.j2` is
+  ignored in favor of the shipped macros. Siblings only supply names the
+  package does not already provide.
+- Binary siblings (anything that is not valid UTF-8) are skipped — they
+  cannot be Jinja templates.
+- An include with no matching bundled template and no matching sibling
+  still fails the build with `TemplateNotFound`, as before.
+
 #### Iterating on a single section
 
 `--only-sections` is a dev-time iteration flag for large courses. It

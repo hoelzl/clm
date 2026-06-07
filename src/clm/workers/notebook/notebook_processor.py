@@ -16,7 +16,14 @@ from typing import TYPE_CHECKING, cast
 import jupytext.config as jupytext_config  # type: ignore[import-untyped]
 import psutil  # type: ignore[import-untyped]
 import traitlets.log
-from jinja2 import Environment, PackageLoader, StrictUndefined
+from jinja2 import (
+    ChoiceLoader,
+    DictLoader,
+    Environment,
+    FileSystemLoader,
+    PackageLoader,
+    StrictUndefined,
+)
 from jupyter_client.manager import AsyncKernelManager
 from jupytext import jupytext
 from nbconvert import HTMLExporter
@@ -1367,7 +1374,7 @@ class NotebookProcessor:
 
         # Normal processing path
         expanded_nb = await self.load_and_expand_jinja_template(
-            payload.data, payload.input_file_name, cid
+            payload.data, payload.input_file_name, cid, payload, source_dir
         )
         processed_nb = await self.process_notebook_for_spec(expanded_nb, payload)
         result = await self.create_contents(processed_nb, payload, source_dir=source_dir)
@@ -1490,10 +1497,15 @@ class NotebookProcessor:
         return filtered_nb
 
     async def load_and_expand_jinja_template(
-        self, notebook_text: str, notebook_file: str, cid
+        self,
+        notebook_text: str,
+        notebook_file: str,
+        cid,
+        payload: NotebookPayload | None = None,
+        source_dir: Path | None = None,
     ) -> str:
         logger.debug(f"{cid}:Loading and expanding Jinja template")
-        jinja_env = self._create_jinja_environment(cid)
+        jinja_env = self._create_jinja_environment(cid, payload, source_dir)
         nb_template = jinja_env.from_string(
             notebook_text,
             globals=self._create_jinja_globals(
@@ -1507,12 +1519,17 @@ class NotebookProcessor:
         logger.debug(f"{cid}:Jinja template expanded for {notebook_file}")
         return cast(str, expanded_nb)
 
-    def _create_jinja_environment(self, cid):
+    def _create_jinja_environment(
+        self,
+        cid,
+        payload: NotebookPayload | None = None,
+        source_dir: Path | None = None,
+    ):
         templates_path = f"{JINJA_TEMPLATES_PREFIX}_{self.output_spec.prog_lang}"
         logger.debug(f"{cid}:Creating Jinja environment with templates from {templates_path}")
         try:
             jinja_env = Environment(
-                loader=PackageLoader("clm.workers.notebook", templates_path),
+                loader=self._create_jinja_loader(cid, templates_path, payload, source_dir),
                 autoescape=False,
                 undefined=StrictUndefined,
                 line_statement_prefix=jinja_prefix_for(self.output_spec.prog_lang),
@@ -1528,6 +1545,70 @@ class NotebookProcessor:
                 f"'{templates_path}': {e}"
             )
             raise
+
+    def _create_jinja_loader(
+        self,
+        cid,
+        templates_path: str,
+        payload: NotebookPayload | None,
+        source_dir: Path | None,
+    ):
+        """Build the Jinja loader used to resolve ``{% include %}`` targets.
+
+        The bundled ``PackageLoader`` (the per-language ``templates_<lang>``
+        directory inside the ``clm`` package, source of ``macros.j2`` etc.)
+        is searched *first*. So that a notebook can ``{% include %}`` a file
+        that sits next to it in its topic (e.g. a ``add.h`` header shown in a
+        slide), the notebook's sibling files are layered *behind* it as a
+        fallback:
+
+        * In Docker source-mount mode the topic directory is on disk, so a
+          ``FileSystemLoader`` pointed at ``source_dir`` exposes the siblings.
+        * Otherwise the siblings travel in ``payload.other_files`` (base64),
+          which CLM already ships for kernel execution; a ``DictLoader`` built
+          from their decoded text makes them includable. Entries that are not
+          valid UTF-8 (e.g. binary assets) are skipped — they cannot be Jinja
+          templates anyway.
+
+        ``ChoiceLoader`` returns the *first* match, so keeping the
+        ``PackageLoader`` ahead of the siblings means a sibling can never
+        shadow a bundled macro file of the same name; it only supplies names
+        the package does not already provide.
+
+        Ordering trade-off (deliberate): if we ever want a course to be able
+        to **override** a bundled template — e.g. ship its own ``macros.j2``
+        next to a slide and have it win over the packaged one — move the
+        sibling loaders *ahead* of ``package_loader`` in this list (siblings
+        first, ``package_loader`` last). That was rejected here because it
+        lets any topic silently redefine the title macro and diverge from the
+        rest of the course; package-first is the safer default. Whoever flips
+        the order must update the "bundled macro not shadowed" test in
+        ``tests/workers/notebook/test_jinja_include_siblings.py`` and the
+        "Jinja ``{% include %}`` in slide source" section in
+        ``src/clm/cli/info_topics/commands.md``.
+        """
+        package_loader = PackageLoader("clm.workers.notebook", templates_path)
+        loaders: list = [package_loader]
+
+        if source_dir is not None:
+            loaders.append(FileSystemLoader(str(source_dir)))
+
+        if payload is not None and payload.other_files:
+            sibling_templates: dict[str, str] = {}
+            for name, encoded in payload.other_files.items():
+                try:
+                    sibling_templates[name] = b64decode(encoded).decode("utf-8")
+                except (ValueError, UnicodeDecodeError):
+                    logger.debug(
+                        f"{cid}:Skipping non-text sibling '{name}' for Jinja include resolution"
+                    )
+            if sibling_templates:
+                loaders.append(DictLoader(sibling_templates))
+
+        if len(loaders) == 1:
+            return package_loader
+
+        return ChoiceLoader(loaders)
 
     @staticmethod
     def _create_jinja_globals(
