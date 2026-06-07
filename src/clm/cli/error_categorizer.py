@@ -41,6 +41,35 @@ class ErrorCategorizer:
         # Try to parse structured error if it's JSON
         error_info = ErrorCategorizer._parse_error_message(error_message)
 
+        # Pool-shutdown orphans are infrastructure errors, never the input
+        # file's fault. The sentinel is stamped on any job that was still in
+        # flight when the worker pool stopped (build interrupted or shutdown
+        # race), regardless of job type, so this check is centralized here
+        # ahead of the per-type categorizers. Classifying it as ``user`` (the
+        # drawio/notebook default) would (a) wrongly blame the file and (b)
+        # persist it to ``processing_issues``, where it would replay on every
+        # subsequent cached build until the cache is wiped.
+        from clm.infrastructure.database.job_queue import JobQueue
+
+        orphan_sentinel = JobQueue.ORPHAN_ERROR_MESSAGE
+        if orphan_sentinel in (error_message or "") or orphan_sentinel in str(
+            error_info.get("error_message", "")
+        ):
+            return BuildError(
+                error_type="infrastructure",
+                category="orphaned_job",
+                severity="error",
+                file_path=input_file,
+                message=error_message,
+                actionable_guidance=(
+                    "The worker was stopped before it finished this job (build "
+                    "interrupted or worker-pool shutdown race), so the job never "
+                    "completed. Re-run the build; the input file is not at fault."
+                ),
+                job_id=job_id,
+                correlation_id=correlation_id,
+            )
+
         # Delegate to specific categorizer based on job type
         if job_type == "notebook":
             return ErrorCategorizer._categorize_notebook_error(
