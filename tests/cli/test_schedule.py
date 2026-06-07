@@ -1,0 +1,240 @@
+"""Tests for the ``clm schedule`` command (issue #261)."""
+
+from pathlib import Path
+
+import pytest
+from click.testing import CliRunner
+
+from clm.cli.commands.schedule import (
+    WEEKDAY_LABELS,
+    ScheduleDay,
+    ScheduleDeck,
+    ScheduleWeek,
+    build_schedule,
+    render_csv,
+    render_markdown,
+    subsection_label,
+)
+from clm.cli.main import cli
+from clm.core.course import Course
+from clm.core.course_spec import CourseSpec, SubsectionSpec
+from clm.core.utils.text_utils import Text
+
+SPEC_PATH = Path("tests/test-data/course-specs/subsection-spec.xml")
+
+
+@pytest.fixture
+def course() -> Course:
+    spec = CourseSpec.from_file(SPEC_PATH)
+    return Course.from_spec(spec, SPEC_PATH.parents[1], output_root=None)
+
+
+class TestSubsectionLabel:
+    def test_name_override_wins(self):
+        sub = SubsectionSpec(weekday="tue", name=Text(de="Recht", en="Law"))
+        assert subsection_label(sub, "de") == "Recht"
+        assert subsection_label(sub, "en") == "Law"
+
+    def test_weekday_localized_when_no_name(self):
+        sub = SubsectionSpec(weekday="mon")
+        assert subsection_label(sub, "de") == "Montag"
+        assert subsection_label(sub, "en") == "Monday"
+
+    def test_empty_when_neither(self):
+        sub = SubsectionSpec()
+        assert subsection_label(sub, "de") == ""
+
+    def test_all_weekdays_have_labels(self):
+        for token in ("mon", "tue", "wed", "thu", "fri", "sat", "sun"):
+            assert WEEKDAY_LABELS[token]["de"]
+            assert WEEKDAY_LABELS[token]["en"]
+
+
+class TestBuildSchedule:
+    def test_weeks_and_days_structure(self, course):
+        weeks = build_schedule(course, "en")
+        assert [w.number for w in weeks] == [1, 2]
+        assert weeks[0].title == "Week 1"
+        assert [d.weekday for d in weeks[0].days] == ["mon", "tue"]
+        assert [d.weekday for d in weeks[1].days] == ["wed"]
+
+    def test_deck_order_within_day(self, course):
+        weeks = build_schedule(course, "en")
+        monday = weeks[0].days[0]
+        assert [d.topic_id for d in monday.decks] == [
+            "some_topic_from_test_1",
+            "a_topic_from_test_2",
+        ]
+        assert monday.decks[0].video_title == "Some Topic from Test 1"
+
+    def test_label_uses_name_override(self, course):
+        weeks = build_schedule(course, "en")
+        tuesday = weeks[0].days[1]
+        assert tuesday.label == "Tuesday — Law"
+
+    def test_language_selects_titles(self, course):
+        weeks_de = build_schedule(course, "de")
+        monday = weeks_de[0].days[0]
+        assert monday.decks[0].video_title == "Folien von Test 1"
+        assert monday.label == "Montag"
+
+    def test_bare_topic_not_listed_as_a_day(self, course):
+        # Week 2 has a bare topic (another_topic_from_test_1) + a wed subsection;
+        # the schedule lists only the day, not the bare topic.
+        weeks = build_schedule(course, "en")
+        week2 = weeks[1]
+        all_topics = [deck.topic_id for day in week2.days for deck in day.decks]
+        assert all_topics == ["simple_notebook"]
+
+
+class TestRenderMarkdown:
+    def test_markdown_table_structure(self):
+        weeks = [
+            ScheduleWeek(
+                number=1,
+                title="Week 1",
+                days=[
+                    ScheduleDay(
+                        weekday="mon",
+                        label="Monday",
+                        decks=[
+                            ScheduleDeck("Intro", "intro", "slides_010_intro"),
+                            ScheduleDeck("More", "more", "slides_020_more"),
+                        ],
+                    ),
+                ],
+            )
+        ]
+        out = render_markdown("My Course", weeks, "en")
+        assert out.startswith("# My Course\n")
+        assert "## Week 1" in out
+        assert "| Day | Video (slides) | Topic |" in out
+        # Label only on the first deck row of the day.
+        assert "| Monday | Intro | intro |" in out
+        assert "|  | More | more |" in out
+
+    def test_markdown_german_headers(self):
+        weeks = [ScheduleWeek(number=1, title="Woche 1", days=[])]
+        out = render_markdown("Kurs", weeks, "de")
+        assert "_Keine Tage geplant._" in out
+
+    def test_markdown_empty_day_renders_placeholder(self):
+        weeks = [
+            ScheduleWeek(
+                number=1,
+                title="W1",
+                days=[ScheduleDay(weekday="mon", label="Monday", decks=[])],
+            )
+        ]
+        out = render_markdown("C", weeks, "en")
+        assert "| Monday | — | — |" in out
+
+    def test_markdown_escapes_pipe_in_title(self):
+        weeks = [
+            ScheduleWeek(
+                number=1,
+                title="W1",
+                days=[
+                    ScheduleDay(
+                        weekday="mon",
+                        label="Monday",
+                        decks=[ScheduleDeck("A | B", "t", "f")],
+                    )
+                ],
+            )
+        ]
+        out = render_markdown("C", weeks, "en")
+        assert r"A \| B" in out
+
+
+class TestRenderCsv:
+    def test_csv_header_and_rows(self):
+        weeks = [
+            ScheduleWeek(
+                number=1,
+                title="Week 1",
+                days=[
+                    ScheduleDay(
+                        weekday="mon",
+                        label="Monday",
+                        decks=[ScheduleDeck("Intro", "intro", "slides_010_intro")],
+                    )
+                ],
+            )
+        ]
+        out = render_csv(weeks)
+        lines = out.strip().splitlines()
+        assert lines[0] == "week,week_title,weekday,video_title,topic,deck_file"
+        assert lines[1] == "1,Week 1,mon,Intro,intro,slides_010_intro"
+
+    def test_csv_quotes_commas(self):
+        weeks = [
+            ScheduleWeek(
+                number=1,
+                title="Einführung, LLMs",
+                days=[
+                    ScheduleDay(
+                        weekday="mon",
+                        label="Montag",
+                        decks=[ScheduleDeck("A, B", "t", "f")],
+                    )
+                ],
+            )
+        ]
+        out = render_csv(weeks)
+        assert '"Einführung, LLMs"' in out
+        assert '"A, B"' in out
+
+
+class TestScheduleCli:
+    def test_markdown_default_german(self):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["schedule", str(SPEC_PATH)])
+        assert result.exit_code == 0, result.output
+        assert "# Mein Kurs" in result.output
+        assert "## Woche 1" in result.output
+        assert "| Montag | Folien von Test 1 | some_topic_from_test_1 |" in result.output
+        assert "| Dienstag — Recht |" in result.output
+
+    def test_markdown_english(self):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["schedule", str(SPEC_PATH), "-L", "en"])
+        assert result.exit_code == 0, result.output
+        assert "# My Course" in result.output
+        assert "| Monday | Some Topic from Test 1 | some_topic_from_test_1 |" in result.output
+
+    def test_csv_format(self):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["schedule", str(SPEC_PATH), "-f", "csv", "-L", "en"])
+        assert result.exit_code == 0, result.output
+        assert "week,week_title,weekday,video_title,topic,deck_file" in result.output
+        assert "1,Week 1,mon,Some Topic from Test 1,some_topic_from_test_1," in result.output
+        assert "2,Week 2,wed,Simple Notebook,simple_notebook," in result.output
+
+    def test_output_to_file(self, tmp_path):
+        out_file = tmp_path / "schedule.md"
+        runner = CliRunner()
+        result = runner.invoke(cli, ["schedule", str(SPEC_PATH), "-o", str(out_file)])
+        assert result.exit_code == 0, result.output
+        assert out_file.exists()
+        assert "## Woche 1" in out_file.read_text(encoding="utf-8")
+
+    def test_spec_without_subsections_notes_empty(self):
+        runner = CliRunner()
+        result = runner.invoke(
+            cli, ["schedule", "tests/test-data/course-specs/test-spec-1.xml", "-L", "en"]
+        )
+        assert result.exit_code == 0, result.output
+        assert "No days scheduled." in result.output
+
+    def test_help(self):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["schedule", "--help"])
+        assert result.exit_code == 0
+        assert "day-of-week" in result.output.lower() or "weekday" in result.output.lower()
+
+    def test_appears_in_main_help(self):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["--help"])
+        assert result.exit_code == 0
+        assert "schedule" in result.output

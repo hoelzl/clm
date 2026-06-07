@@ -1,0 +1,19 @@
+<course>
+    <name><de>Mein Kurs</de><en>My Course</en></name>
+    <prog-lang>python</prog-lang>
+    <description><de>Ein Kurs</de><en>A course</en></description>
+    <certificate><de>...</de><en>...</en></certificate>
+    <sections>
+        <section>
+            <name><de>Woche 1</de><en>Week 1</en></name>
+            <topics>
+                <subsection weekday="mon">
+                    <topic>some_topic_from_test_1</topic>
+                </subsection>
+                <subsection weekday="tue" enabled="false">
+                    <topic>punctuation_test</topic>
+                </subsection>
+            </topics>
+        </section>
+    </sections>
+</course>

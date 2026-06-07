@@ -8,6 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **Day-of-week scheduling: `<subsection>` spec layer + `clm schedule`**
+  (issue #261). A `<section>`'s `<topics>` may now group `<topic>`s into
+  optional `<subsection weekday="mon">…</subsection>` elements (`<section>` =
+  week, `<subsection>` = day) with an optional `<name>` label override and
+  `enabled="false"`. The layer is purely additive: `clm build` flattens
+  subsections away, so a spec with subsections builds **byte-identically** to
+  the same spec with the wrappers removed — no output-dir or topic-resolution
+  changes. A new top-level **`clm schedule`** command exports the certification
+  day-listing from the resolved course in Markdown (one table per week:
+  weekday / video / topic) or CSV (one row per deck), single-language via
+  `--lang` (default `de`). `clm outline` renders subsections indented under
+  their section (with `--include-disabled` surfacing disabled ones), and
+  `clm validate` adds four advisory subsection checks (duplicate weekday,
+  out-of-order weekdays, empty day, and bare-topics-mixed-with-subsections).
+  See `clm info spec-files` and `clm info commands`.
 - **`clm slides assign-ids --accept-code-derived`** — a deterministic, opt-in
   fallback that mints a `slide_id` for bare-expression code subslides the AST
   extractors can't name (`(1 + 1j) * (1 + 1j)` → `1-1j-1-1j`, `letters[0:3]` →

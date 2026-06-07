@@ -14,9 +14,14 @@ from pathlib import Path
 
 import tomllib
 
-from clm.core.course_spec import CourseSpec, IncludeSpec, SectionSpec
+from clm.core.course_spec import WEEKDAY_ORDER, CourseSpec, IncludeSpec, SectionSpec
 from clm.core.include_ledger import LEDGER_NAME, Ledger
-from clm.core.topic_resolver import TopicMatch, build_topic_map, matches_for_binding
+from clm.core.topic_resolver import (
+    TopicMatch,
+    build_topic_map,
+    find_slide_files,
+    matches_for_binding,
+)
 
 
 @dataclass
@@ -243,6 +248,14 @@ def validate_spec(
                 )
             )
 
+    # Subsection (day-of-week) checks (issue #261).
+    _validate_subsections(
+        spec=spec,
+        topic_map=topic_map,
+        findings=findings,
+        suffix=_suffix,
+    )
+
     # Dir-group path checks
     course_root = slides_dir.parent
     for dg in spec.dictionaries:
@@ -279,6 +292,165 @@ def validate_spec(
         topics_total=topics_total,
         findings=findings,
     )
+
+
+def _validate_subsections(
+    *,
+    spec: CourseSpec,
+    topic_map: dict[str, list[TopicMatch]],
+    findings: list[SpecFinding],
+    suffix: Callable[[bool, str], str],
+) -> None:
+    """Emit findings for ``<subsection>`` day-of-week groupings (issue #261).
+
+    Four checks, per the design:
+
+    1. ``duplicate_weekday`` (warning) — the same weekday token appears on
+       more than one subsection within a single section.
+    2. ``weekday_out_of_order`` (warning) — weekday tokens within a section
+       are not in canonical Mon→Sun order.
+    3. ``empty_day`` (warning) — a subsection that carries no ``<topic>``,
+       or whose resolvable topics produce zero slide decks.
+    4. ``unscheduled_topics`` (info) — a section mixes bare ``<topic>``s
+       (which appear under no day) with ``<subsection>``s.
+
+    Only enabled subsections are checked for 1–3 (a disabled subsection is
+    roadmap content, like a disabled section). All checks are
+    informational/advisory: none is an error.
+    """
+    for section in spec.sections:
+        section_name = section.name.en or section.name.de
+        section_disabled = not section.enabled
+
+        enabled_subs = [sub for sub in section.subsections if sub.enabled]
+        if not enabled_subs:
+            # No (enabled) subsections — nothing day-related to check.
+            # Check 4 still needs the *structure*; but with no enabled
+            # subsections there is no day to schedule against, so there are
+            # no "unscheduled" topics to report.
+            continue
+
+        # --- Checks 1 & 2: weekday duplicates and ordering ---
+        weekdays = [sub.weekday for sub in enabled_subs if sub.weekday is not None]
+
+        seen: set[str] = set()
+        reported_dup: set[str] = set()
+        for wd in weekdays:
+            if wd in seen and wd not in reported_dup:
+                reported_dup.add(wd)
+                findings.append(
+                    SpecFinding(
+                        severity="warning",
+                        type="duplicate_weekday",
+                        section=section_name,
+                        message=suffix(
+                            section_disabled,
+                            f"Section '{section_name}' assigns weekday "
+                            f"'{wd}' to more than one subsection.",
+                        ),
+                        suggestion=(
+                            "Merge the subsections that share a weekday, or "
+                            "correct the weekday on one of them."
+                        ),
+                    )
+                )
+            seen.add(wd)
+
+        prev_index = -1
+        reported_ooo: set[str] = set()
+        for wd in weekdays:
+            index = WEEKDAY_ORDER.index(wd)
+            # Report each offending weekday once (mirrors the duplicate check),
+            # otherwise a weekday that is both out of order and repeated would
+            # emit one identical finding per occurrence.
+            if index < prev_index and wd not in reported_ooo:
+                reported_ooo.add(wd)
+                findings.append(
+                    SpecFinding(
+                        severity="warning",
+                        type="weekday_out_of_order",
+                        section=section_name,
+                        message=suffix(
+                            section_disabled,
+                            f"Section '{section_name}': weekday '{wd}' appears "
+                            f"out of order (expected Mon→Sun order).",
+                        ),
+                        suggestion=(
+                            "Reorder the <subsection> elements so weekdays run "
+                            "Monday through Sunday."
+                        ),
+                    )
+                )
+            prev_index = max(prev_index, index)
+
+        # --- Check 3: empty days ---
+        for sub in enabled_subs:
+            label = sub.weekday or (sub.name.en or sub.name.de if sub.name else "") or "(unnamed)"
+            if not sub.topics:
+                findings.append(
+                    SpecFinding(
+                        severity="warning",
+                        type="empty_day",
+                        section=section_name,
+                        message=suffix(
+                            section_disabled,
+                            f"Section '{section_name}': subsection '{label}' contains no topics.",
+                        ),
+                    )
+                )
+                continue
+            resolved_any = False
+            deck_count = 0
+            for topic_spec in sub.topics:
+                matches = matches_for_binding(
+                    topic_map, topic_spec.id, section.module_for(topic_spec)
+                )
+                if len(matches) == 1:
+                    resolved_any = True
+                    deck_count += len(find_slide_files(matches[0].path))
+            # Only flag "resolves to zero decks" when at least one topic
+            # actually resolved — otherwise the unresolved_topic errors above
+            # already explain the emptiness and this would be noise.
+            if resolved_any and deck_count == 0:
+                findings.append(
+                    SpecFinding(
+                        severity="warning",
+                        type="empty_day",
+                        section=section_name,
+                        message=suffix(
+                            section_disabled,
+                            f"Section '{section_name}': subsection '{label}' "
+                            f"resolves to zero slide decks.",
+                        ),
+                    )
+                )
+
+        # --- Check 4: bare topics mixed with subsections (info) ---
+        # Key by object identity, not topic id: parse_sections appends the very
+        # same TopicSpec objects into both section.topics and the subsections,
+        # so identity cleanly separates bare topics even when a bare topic
+        # happens to share an id with a subsection topic.
+        subsection_topic_obj_ids = {id(t) for sub in section.subsections for t in sub.topics}
+        bare_ids = [t.id for t in section.topics if id(t) not in subsection_topic_obj_ids]
+        if bare_ids:
+            listed = ", ".join(bare_ids)
+            findings.append(
+                SpecFinding(
+                    severity="info",
+                    type="unscheduled_topics",
+                    section=section_name,
+                    message=suffix(
+                        section_disabled,
+                        f"Section '{section_name}' mixes {len(bare_ids)} bare "
+                        f"topic(s) with subsections; these appear under no "
+                        f"weekday: {listed}.",
+                    ),
+                    suggestion=(
+                        "Move each bare topic into a <subsection> to give it a "
+                        "day, or leave it as a deliberately unscheduled topic."
+                    ),
+                )
+            )
 
 
 @dataclass

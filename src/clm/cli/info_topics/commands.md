@@ -392,6 +392,14 @@ clm outline [OPTIONS] SPEC_FILE
 | `--include-disabled` | Include sections marked `enabled="false"` with a `(disabled)` marker (default: omitted). Topics that resolve to slide files on disk show the H1 header (each slide rendered as its own bullet); unresolvable topics fall back to the topic id |
 | `--sections-only` | Emit only section headings, omitting per-topic/slide entries within each section |
 
+When a section uses the optional `<subsection>` layer (see
+`clm info spec-files`), the outline renders each subsection as an indented
+group: a bold weekday/label bullet with the subsection's decks nested beneath
+it, after any bare (unscheduled) topics. `--include-disabled` additionally
+surfaces disabled subsections (and disabled sections) with a `(disabled)`
+marker. The JSON format adds a `subsections` array to each section that uses
+them (alongside the existing flat `topics` list).
+
 Examples:
 
 ```bash
@@ -401,6 +409,48 @@ clm outline course.xml -d ./docs
 clm outline course.xml --format json
 clm outline course.xml --include-disabled
 clm outline course.xml --sections-only
+```
+
+### `clm schedule`
+
+Export a **day-of-week deck listing** for certification (e.g. AZAV requires a
+listing of which weekday each video/slide deck is presented, per week). The
+listing is built from the spec's optional `<subsection weekday="...">` layer
+(`<section>` = week, `<subsection>` = day; see `clm info spec-files`) resolved
+against the decks discovered on disk.
+
+```
+clm schedule [OPTIONS] SPEC_FILE
+```
+
+| Option | Description |
+|--------|-------------|
+| `-L, --language`, `--lang [de\|en]` | Language for deck titles/labels (default: `de`). Titles come from the matching-language `header`/`header_de`/`header_en` macro. |
+| `-f, --format [md\|csv]` | Output format (default: `md`). |
+| `-o, --output FILE` | Write to FILE instead of stdout. |
+| `--data-dir DIR` | Course data directory (contains `slides/`). Default: inferred from the spec location. |
+
+Each listing is **single-language** — run once per language to produce both.
+Deck order within a (week, day) is topic document order, then `slides_NNN_`
+order within each topic, matching the build.
+
+- **`--format md`** (default): one Markdown table per week, columns
+  weekday / video (deck title) / topic. The weekday label appears on the first
+  deck row of each day. Days are fixed-length by definition, so there are no
+  durations/minutes. Empty days render a placeholder row.
+- **`--format csv`**: one row per deck, with header
+  `week,week_title,weekday,video_title,topic,deck_file`.
+
+Only enabled subsections are listed. Bare topics that sit under no subsection
+do not appear in the listing (`clm validate` reports them as an info finding).
+
+Examples:
+
+```bash
+clm schedule course.xml                  # German Markdown to stdout
+clm schedule course.xml -L en            # English listing
+clm schedule course.xml -f csv           # CSV (one row per deck)
+clm schedule course.xml -o schedule.md   # Write to a file
 ```
 
 ### `clm topic resolve`
