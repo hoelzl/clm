@@ -88,6 +88,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **Notebook-worker output is now written with LF newlines on every platform**
+  (PR #260). All notebook-worker outputs (executed `.ipynb`, jupytext `.py`, and
+  the HTML body) go through one `open(..., "w")` write that, lacking a `newline=`
+  argument, let Python's universal-newline translation rewrite every `\n` to
+  `os.linesep` — CRLF on Windows Direct workers, LF on Docker/Linux. So a Windows
+  `clm build` produced CRLF working-tree files, yielding trailing-`^M` diffs and
+  "CRLF will be replaced by LF" warnings in course repos that normalize to
+  `eol=lf`. The write now pins `newline="\n"`, matching the convention used
+  elsewhere in the codebase, so output is byte-identical regardless of host OS.
 - **Pool-shutdown orphan jobs are no longer mis-blamed on the user** (PR #259).
   A worker-pool shutdown race could leave a valid job (e.g. a drawio diagram)
   stamped with the orphan sentinel; the drawio categorizer matched none of its
