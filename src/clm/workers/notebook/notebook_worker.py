@@ -251,7 +251,13 @@ class NotebookWorker(Worker):
 
             output_path.parent.mkdir(parents=True, exist_ok=True)
 
-            with open(output_path, "w", encoding="utf-8") as f:
+            # newline="\n" is required: without it, Python's text-mode
+            # universal-newline translation rewrites every "\n" to os.linesep
+            # (CRLF) on Windows Direct workers, while Docker/Linux workers emit
+            # LF. That platform split produces spurious CRLF in built output
+            # (noisy diffs, "CRLF will be replaced by LF" warnings). Pinning
+            # LF keeps output byte-identical across platforms.
+            with open(output_path, "w", encoding="utf-8", newline="\n") as f:
                 f.write(result)
 
             logger.info(f"Notebook written to {output_path}")
