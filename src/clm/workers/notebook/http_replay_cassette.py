@@ -121,6 +121,7 @@ def merge_staging_into_canonical(
     *,
     sweep_orphans: bool = False,
     overwrite_existing: bool = False,
+    preserve_sequence: bool = False,
 ) -> int:
     """Merge per-worker staging files into the canonical cassette.
 
@@ -166,6 +167,17 @@ def merge_staging_into_canonical(
             is used, byte-identical to before this parameter existed. This is
             the producer-agnostic fix for the refresh-overwrite gap (issue
             #165 P3) and benefits both the vcrpy and mitmproxy transports.
+        preserve_sequence: Sequence-aware fold for the **mitmproxy** transport
+            only (the in-kernel vcrpy path leaves this ``False``). When ``True``
+            the fold keeps every distinct ``(request, response)`` interaction in
+            recorded order — deduping only an exact ``(request, response)`` pair,
+            never by request alone — so a per-request *response sequence* (the
+            same request answered differently on successive calls by a
+            non-deterministic endpoint) survives into canonical and replays
+            intact. With ``overwrite_existing`` (refresh) the build's staging
+            *is* the complete recording and replaces canonical wholesale;
+            otherwise (new-episodes) the staging sequence is appended after the
+            existing canonical entries.
 
     Returns:
         Number of staging files folded into the canonical (markered
@@ -245,11 +257,69 @@ def merge_staging_into_canonical(
                         f"before merge ({type(exc).__name__}: {exc}); treating as empty."
                     )
 
+            # ``preserve_sequence`` (mitmproxy transport) keeps every distinct
+            # (request, response) interaction in recorded order, deduping only
+            # exact pairs — so a per-request response *sequence* survives.
+            # ``overwrite_existing`` (refresh) then means "this build's staging
+            # is the complete recording" → replace canonical; otherwise append.
+            if preserve_sequence:
+                if overwrite_existing:
+                    merged_requests = []
+                    merged_responses = []
+                    seen_pairs: set = set()
+                else:
+                    merged_requests = list(canonical_requests)
+                    merged_responses = list(canonical_responses)
+                    seen_pairs = {
+                        (_dedup_key(req), _response_body_bytes(resp))
+                        for req, resp in zip(canonical_requests, canonical_responses, strict=False)
+                    }
+                for staging_path in markered:
+                    try:
+                        staging_requests, staging_responses = FilesystemPersister.load_cassette(
+                            staging_path, serializer=yamlserializer
+                        )
+                    except Exception as exc:  # noqa: BLE001 — defensive
+                        logger.warning(
+                            f"Could not load staging cassette '{staging_path}' "
+                            f"({type(exc).__name__}: {exc}); skipping."
+                        )
+                        _trace(
+                            "cassette.merge.decision",
+                            {
+                                "staging": str(staging_path),
+                                "decision": "load_failed",
+                                "exc_type": type(exc).__name__,
+                            },
+                        )
+                        continue
+                    folded_from_this = 0
+                    duplicates_in_this = 0
+                    for request, response in zip(staging_requests, staging_responses, strict=False):
+                        pair_key = (_dedup_key(request), _response_body_bytes(response))
+                        if pair_key in seen_pairs:
+                            duplicates_in_this += 1
+                            continue
+                        merged_requests.append(request)
+                        merged_responses.append(response)
+                        seen_pairs.add(pair_key)
+                        folded_from_this += 1
+                    _trace(
+                        "cassette.merge.decision",
+                        {
+                            "staging": str(staging_path),
+                            "decision": "folded_sequence",
+                            "marker_present": True,
+                            "interactions_loaded": len(staging_requests),
+                            "interactions_folded": folded_from_this,
+                            "interactions_deduped": duplicates_in_this,
+                        },
+                    )
             # ``overwrite_existing`` lets a staging interaction replace a
             # canonical one with the same fingerprint (refresh/``all``); the
             # default first-seen-wins path is kept verbatim so a no-op build's
             # cassette stays byte-identical to before this parameter existed.
-            if overwrite_existing:
+            elif overwrite_existing:
                 # Last-seen within staging wins (a freshly recorded response
                 # supersedes an earlier/seeded one); canonical entries are
                 # replaced in place to keep the diff minimal, and genuinely new
@@ -569,6 +639,24 @@ def _body_to_dedup_bytes(body) -> bytes:
             return bytes(data)
         return str(data).encode("utf-8", errors="replace")
     return repr(body).encode("utf-8", errors="replace")
+
+
+def _response_body_bytes(response) -> bytes:
+    """Coerce a recorded vcr response's body to stable bytes.
+
+    Pairs with :func:`_dedup_key` to form the exact-``(request, response)``
+    dedup key the sequence-preserving mitmproxy merge uses: a response loaded
+    from a cassette is a dict with ``body.string`` (vcrpy's stub format), so two
+    *different* responses to the same request hash differently and are kept as
+    separate ordered interactions, while a byte-identical re-record collapses.
+    """
+    body = (response or {}).get("body") if isinstance(response, dict) else None
+    raw = body.get("string", b"") if isinstance(body, dict) else b""
+    if isinstance(raw, bytes):
+        return raw
+    if isinstance(raw, bytearray):
+        return bytes(raw)
+    return str(raw).encode("utf-8", errors="replace")
 
 
 def _atomic_write_text(target: Path, text: str) -> None:

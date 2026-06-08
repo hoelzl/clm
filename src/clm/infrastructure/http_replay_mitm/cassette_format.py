@@ -220,6 +220,28 @@ def fingerprint(request: Request) -> tuple[str, str, bytes]:
     )
 
 
+def response_fingerprint(response: dict) -> bytes:
+    """Stable fingerprint of a recorded response body (sequence-aware dedup).
+
+    A non-deterministic endpoint (an LLM at temperature > 0, or OpenRouter
+    routing the same request to different providers) returns a *different*
+    response to the **same** request on each call. Sequence-aware recording
+    keeps those distinct responses as separate ordered interactions — so a
+    downstream request that embedded the second response still replay-matches —
+    while a byte-identical re-recording of the same ``(request, response)`` pair
+    still collapses. Pairing ``fingerprint(request)`` with this response
+    fingerprint is the dedup key for that: same request + same response → one
+    entry; same request + different response → two ordered entries.
+    """
+    body = (response or {}).get("body") or {}
+    raw = body.get("string", b"")
+    if isinstance(raw, bytes):
+        return raw
+    if isinstance(raw, bytearray):
+        return bytes(raw)
+    return str(raw).encode("utf-8", errors="replace")
+
+
 def build_request_filter(
     *,
     filter_headers: Iterable[object] = FILTER_HEADERS,

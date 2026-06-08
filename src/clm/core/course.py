@@ -486,6 +486,13 @@ class Course(NotebookMixin):
                     CassettePaths(canonical=canonical, staging=synthetic),
                     sweep_orphans=False,
                     overwrite_existing=overwrite_existing,
+                    # The mitmproxy transport records a per-request response
+                    # *sequence* (a non-deterministic endpoint answers an
+                    # identical request differently on successive calls); fold it
+                    # order-preserving so a downstream request that embedded the
+                    # later response still replay-matches. The vcrpy path keeps
+                    # the deduped fold (preserve_sequence defaults to False).
+                    preserve_sequence=True,
                 )
             except Exception as exc:  # noqa: BLE001 — never mask the build result
                 logger.warning(
