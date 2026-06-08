@@ -2,6 +2,51 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## Breaking changes in CLM 1.10
+
+CLM 1.10 carries **two intentional breaking changes** around HTTP replay —
+review these before upgrading a course repo's pin.
+
+### 1. mitmproxy is now the default HTTP-replay transport
+
+The HTTP-replay engine that records and replays a topic's network traffic
+(`http-replay="yes"`) now runs as an **out-of-process mitmproxy proxy** instead
+of the in-process `vcrpy` patcher. The proxy correctly matches **repeated and
+concurrent identical requests** that vcrpy's consume-once model mishandled — a
+LangChain chain invoked many times with the same body, or a `RunnableParallel`
+fan-out — which previously made such decks impossible to strict-replay.
+
+**Cassettes are not byte-compatible between the two transports.** An existing
+vcrpy cassette must be **re-recorded under mitmproxy** before strict
+`--http-replay=replay` (the CI default) passes. Re-record locally with the
+permissive default and commit the result:
+
+```bash
+clm build course.xml --http-replay=refresh   # re-record from scratch, review the diff
+git add <topic>/**/*.http-cassette.yaml
+```
+
+The on-disk format is still vcrpy's YAML layout (the mitmproxy addon serializes
+to it), and `vcrpy` stays installed — so you can **opt back into the old
+transport** during the transition:
+
+```bash
+CLM_HTTP_REPLAY_TRANSPORT=vcrpy clm build course.xml
+```
+
+Set `CLM_HTTP_REPLAY_TRANSPORT=mitmproxy` (the default) to go back. Starting the
+proxy is gated on the course actually containing an `http-replay` topic, so a
+replay-free build never spawns `mitmdump` and pays no cost. See
+`docs/user-guide/http-replay.md` → "Transports".
+
+### 2. Python 3.11 support dropped
+
+`requires-python` is now `>=3.12` — mitmproxy, the new default replay transport,
+requires Python 3.12+. Recreate any 3.11 virtualenv on 3.12, 3.13, or 3.14
+before upgrading; `pip install` refuses the package on 3.11 with a
+`requires-python` mismatch. Course repos that build in Docker get the bumped
+`python:3.12-slim` worker images automatically.
+
 ## Header-line-less title convention for C#/C++/Java/TypeScript ({version})
 
 CLM {version} makes the `//`-comment languages (C#, C++, Java, TypeScript) use

@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-06-08
+
 ### Changed
 
 - **mitmproxy is now the default HTTP-replay transport** (issue #165), replacing
@@ -21,10 +23,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   replay-free build never spawns `mitmdump`.
 - **Dropped Python 3.11 support** (`requires-python` is now `>=3.12`). mitmproxy,
   the new default replay transport, requires Python 3.12+; `mitmproxy>=12,<13` is
-  added to the `replay` extra.
+  added to the `replay` extra. The Docker worker base images (drawio, notebook /
+  notebooklite, plantuml) were bumped from `python:3.11-slim` to `python:3.12-slim`
+  to match the new floor — on 3.11 `pip install ./clm` now fails the
+  `requires-python` check.
 
 ### Added
 
+- **The `[ml]` extra now bundles `deepagents>=0.6.0` and `psycopg[binary]>=3.2`.**
+  `deepagents` (`create_deep_agent` on LangGraph) backs the AI-Agents-II deck and
+  `psycopg` is the PostgreSQL driver for the Docker/Postgres deployment decks, so
+  installing `[ml]` (or `[all]`) makes those decks build out of the box.
 - **`clm slides sync` honors the translation glossary on the new-slide path**
   (follow-up to PR #264). The `--glossary` translation conventions — a style note
   plus a term glossary appended to the translation prompt — were wired into
