@@ -92,6 +92,7 @@ ml = [
     "scikit-learn>=1.5.1",
     "skorch>=1.0.2",
     "sqlalchemy>=2.0.32",
+    "psycopg[binary]>=3.2",  # PostgreSQL driver for the Docker/Postgres deployment decks
     # Visualization
     "matplotlib>=3.9.2",
     "seaborn>=0.13.2",
@@ -125,6 +126,7 @@ ml = [
     "langchain-openrouter",
     "langchain-text-splitters",
     "langgraph>=1.1.2",
+    "deepagents>=0.6.0",  # AI-Agents-II deck (create_deep_agent on LangGraph)
     "qdrant-client>=1.13.0",
     "langchain-qdrant",
     "fastembed>=0.6.0",
