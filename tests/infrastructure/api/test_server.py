@@ -316,29 +316,43 @@ class TestGlobalSingleton:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.slow
+@pytest.mark.integration
+@pytest.mark.serial
 class TestRealUvicornStartup:
     """Bind an actual uvicorn server; hit /health; ensure clean shutdown.
 
     This is the one place that exercises the real threading path
-    end-to-end. It's marked ``slow`` so the fast suite skips it.
+    end-to-end — it opens a real socket and runs a real uvicorn server,
+    so it is an *integration* test (excluded from the fast unit suite)
+    rather than a unit test. It is also marked ``serial`` so that under
+    pytest-xdist it is pinned to a single worker instead of racing the
+    rest of the suite for CPU; a starved server thread is slow to bind
+    its port and used to make this test flaky under high worker counts.
     """
 
     def test_real_server_serves_health(self, db_path: Path) -> None:
         port = _free_port()
         server = WorkerApiServer(db_path, host="127.0.0.1", port=port)
 
-        assert server.start(timeout=5.0) is True
+        assert server.start(timeout=10.0) is True
         try:
             # Poll for readiness — uvicorn's port binding happens shortly
-            # after the started event is set.
+            # after the started event is set (``start`` only sleeps 0.1s
+            # before returning), so the first few requests may be refused
+            # or time out while the socket is still coming up. Catch the
+            # whole ``httpx.TransportError`` family — not just
+            # ``ConnectError`` — because under load the connect or read can
+            # exceed the per-request timeout and raise ``ConnectTimeout`` /
+            # ``ReadTimeout`` (subclasses of ``TimeoutException``, *not* of
+            # ``ConnectError``), which must be retried rather than fail the
+            # test. The per-request timeout is generous for the same reason.
             response = None
-            deadline = time.monotonic() + 5.0
+            deadline = time.monotonic() + 10.0
             while time.monotonic() < deadline:
                 try:
-                    response = httpx.get(f"{server.url}/health", timeout=1.0)
+                    response = httpx.get(f"{server.url}/health", timeout=5.0)
                     break
-                except httpx.ConnectError:
+                except httpx.TransportError:
                     time.sleep(0.05)
 
             assert response is not None, "Server did not accept connections"
