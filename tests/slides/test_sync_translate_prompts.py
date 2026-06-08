@@ -12,7 +12,10 @@ import pytest
 from clm.slides.sync_translate import (
     _CODE_SYSTEM_PROMPT,
     _SYSTEM_PROMPT,
+    _TITLE_SYSTEM_PROMPT,
+    OpenRouterSlideTranslator,
     _prog_lang_descriptors,
+    _system_prompt_for,
 )
 
 
@@ -73,3 +76,46 @@ def test_python_prompt_unchanged() -> None:
         prog_lang_name=name,
     )
     assert "'# '" in prompt  # regression: Python decks still told the # prefix
+
+
+# --- title role (the header_<lang> macro argument) -------------------------
+
+
+def test_title_role_selects_title_prompt() -> None:
+    assert _system_prompt_for("title") is _TITLE_SYSTEM_PROMPT
+    assert _system_prompt_for("code") is _CODE_SYSTEM_PROMPT
+    assert _system_prompt_for("slide") is _SYSTEM_PROMPT
+
+
+def test_title_prompt_forbids_prefix_and_quotes() -> None:
+    prompt = _TITLE_SYSTEM_PROMPT.format(
+        source_lang="English",
+        target_lang="German",
+        role="title",
+        comment_prefix="# ",
+        prog_lang_name="Python",
+    )
+    assert "no Markdown" in prompt
+    assert "no surrounding quotes" in prompt
+    assert "comment prefix" in prompt  # the leading-'# ' leak guard
+
+
+# --- guidance (glossary) folds into the cache key --------------------------
+
+
+def test_guidance_folds_into_prompt_version() -> None:
+    base = OpenRouterSlideTranslator()
+    assert base.prompt_version == "translate-v1"  # no glossary → v1 key, no flag-day
+
+    g = OpenRouterSlideTranslator(guidance="Address the reader with 'Sie'.")
+    assert g.prompt_version.startswith("translate-v1:g")
+    assert g.prompt_version != base.prompt_version
+
+    # Same guidance → same version (a stable, reusable cache key).
+    assert OpenRouterSlideTranslator(guidance="Address the reader with 'Sie'.").prompt_version == (
+        g.prompt_version
+    )
+    # Different guidance → different version (editing the glossary invalidates).
+    assert OpenRouterSlideTranslator(guidance="Use 'du'.").prompt_version != g.prompt_version
+    # Whitespace-only guidance is treated as none.
+    assert OpenRouterSlideTranslator(guidance="   \n").prompt_version == "translate-v1"

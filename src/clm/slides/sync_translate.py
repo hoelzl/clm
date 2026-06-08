@@ -41,6 +41,11 @@ __all__ = [
 # Claude Sonnet via OpenRouter — the voiceover propagate path's precedent.
 DEFAULT_TRANSLATION_MODEL = "anthropic/claude-sonnet-4-6"
 
+# Base cache/prompt version. A guidance glossary folds a fingerprint onto this
+# (see ``OpenRouterSlideTranslator.__post_init__``); the bare value is kept when
+# no glossary is supplied so the existing Python cache stays valid.
+_BASE_PROMPT_VERSION = "translate-v1"
+
 
 class TranslationError(Exception):
     """A new-slide translation could not be produced."""
@@ -113,11 +118,30 @@ class OpenRouterSlideTranslator:
     api_key: str | None = None
     temperature: float = 0.2
     max_tokens: int = 4096
-    prompt_version: str = "translate-v1"
     # The deck's programming language (e.g. "python", "csharp", "cpp"). Drives the
     # comment prefix and language name named in the prompt, so a //-deck is told to
     # preserve "// " prefixes and a C# code cell is translated as C#, not Python.
     prog_lang: str = "python"
+    # Optional target-language conventions (a style note + glossary), rendered as
+    # prompt text by the caller and appended verbatim to the system prompt. clm
+    # stays domain-agnostic: it knows nothing of "Sie" or "Dictionary" — the course
+    # repo supplies the text (see ``clm slides translate --glossary``). When set, it
+    # is folded into ``prompt_version`` so a different glossary keys a different cache
+    # entry and editing the glossary invalidates by cache miss.
+    guidance: str = ""
+    # Derived in ``__post_init__`` from the base version + a guidance fingerprint.
+    # ``init=False`` so it is never passed in; the cache wrapper reads it.
+    prompt_version: str = field(init=False, default=_BASE_PROMPT_VERSION)
+
+    def __post_init__(self) -> None:
+        guidance = self.guidance.strip()
+        if guidance:
+            fp = hashlib.sha256(guidance.encode("utf-8")).hexdigest()[:12]
+            self.prompt_version = f"{_BASE_PROMPT_VERSION}:g{fp}"
+        else:
+            # No guidance → byte-identical to the original v1 prompt, so keep the
+            # v1 key: no flag-day invalidation for callers that pass no glossary.
+            self.prompt_version = _BASE_PROMPT_VERSION
 
     def _client(self):  # pragma: no cover - thin network adapter
         # Shared with the edit judge so key/base resolution stays in one place.
@@ -141,6 +165,11 @@ class OpenRouterSlideTranslator:
             comment_prefix=comment_prefix,
             prog_lang_name=prog_lang_name,
         )
+        # Append the caller-supplied conventions AFTER .format() so any braces in
+        # the glossary (JSON, f-strings, code) are never read as format fields.
+        guidance = self.guidance.strip()
+        if guidance:
+            system = f"{system}\n\n{guidance}"
 
         def _create():
             return self._client().chat.completions.create(
@@ -199,9 +228,33 @@ _CODE_SYSTEM_PROMPT = (
 )
 
 
+# The deck title is the bare string argument of the ``header_<lang>("…")`` macro —
+# NOT a percent-format cell body. Running it through ``_SYSTEM_PROMPT`` (which
+# announces "every line is prefixed with '# '") makes the model hallucinate a
+# leading "# " and treat the title as a directive to preserve, so it comes back
+# untranslated and prefixed (e.g. ``header_de("# Your First Web Service")``). A
+# dedicated title prompt fixes both: plain phrase in, plain translated phrase out.
+_TITLE_SYSTEM_PROMPT = (
+    "You translate a single slide-deck title from {source_lang} to {target_lang} for a "
+    "{prog_lang_name} programming course. Return ONLY the translated title as a short "
+    "plain phrase: no Markdown, no leading '{comment_prefix}' or other comment prefix, "
+    "no surrounding quotes, no trailing punctuation, and no commentary. Keep code "
+    "identifiers, library names, and product names unchanged."
+)
+
+
 def _system_prompt_for(role: str) -> str:
-    """Pick the system prompt for a cell ``role`` (code cells are not Markdown)."""
-    return _CODE_SYSTEM_PROMPT if role == "code" else _SYSTEM_PROMPT
+    """Pick the system prompt for a cell ``role``.
+
+    Code cells get the identifier-preserving code prompt; the ``"title"`` pseudo-role
+    (the ``header_<lang>`` macro argument) gets the bare-phrase title prompt; all other
+    roles use the Markdown prose prompt.
+    """
+    if role == "code":
+        return _CODE_SYSTEM_PROMPT
+    if role == "title":
+        return _TITLE_SYSTEM_PROMPT
+    return _SYSTEM_PROMPT
 
 
 def _prog_lang_descriptors(prog_lang: str) -> tuple[str, str]:
