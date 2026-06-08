@@ -246,11 +246,14 @@ def _rewrite_header_macro(
     translated_title = title
     if title.strip():
         try:
+            # role="title": a dedicated bare-phrase prompt. Using "markdown" here
+            # makes the model add a stray "# " and skip translation (the title is
+            # not a percent-format cell body). See sync_translate._TITLE_SYSTEM_PROMPT.
             translated_title = translator.translate(
                 source_body=title,
                 source_lang=source_lang,
                 target_lang=target_lang,
-                role="markdown",
+                role="title",
             ).strip()
         except TranslationError as exc:
             raise TranslateDeckError(

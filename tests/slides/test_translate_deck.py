@@ -98,6 +98,25 @@ def _reverse_translator(de_text: str, en_text: str) -> StaticSlideTranslator:
     return StaticSlideTranslator(mapping=mapping)
 
 
+class _RoleRecorder:
+    """A translator that records each ``(source_body, role)`` and echoes the body.
+
+    Echoing the source body unchanged keeps the generated pair structurally valid
+    (it round-trips), so the engine runs to completion and we can inspect which
+    ``role`` each cell — especially the header title — was translated under.
+    """
+
+    prompt_version = "rec"
+    prog_lang = "python"
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    def translate(self, *, source_body: str, source_lang: str, target_lang: str, role: str) -> str:
+        self.calls.append((source_body, role))
+        return source_body
+
+
 def _split(text: str) -> tuple[str, str]:
     de, en = split_text(text)
     # Sanity: the fixture itself round-trips, so any later inequality is the
@@ -219,6 +238,19 @@ class TestTranslateDeckText:
         _assert_valid_pair(de, result.target_text)
         assert result.header_translated is False
         assert "Alone" in result.target_text
+
+    def test_header_title_uses_title_role(self):
+        # The header title must be translated via the dedicated "title" role, not
+        # the markdown prose role — otherwise the model adds a stray "# " prefix
+        # and leaves the title untranslated. See sync_translate._TITLE_SYSTEM_PROMPT.
+        text = HEADER_PREAMBLE + _slide_pair("intro", "Einleitung", "Introduction")
+        de, _en = _split(text)
+        rec = _RoleRecorder()
+        translate_deck_text(de, source_lang="de", target_lang="en", translator=rec)
+        roles_by_body = dict(rec.calls)
+        assert roles_by_body["Titel DE"] == "title"
+        # A slide body still goes through a prose role, never "title".
+        assert all(role != "title" for body, role in rec.calls if body != "Titel DE")
 
 
 # ---------------------------------------------------------------------------
