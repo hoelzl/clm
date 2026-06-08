@@ -1137,7 +1137,8 @@ def _outcome_line(result: ApplyResult) -> str:
         f"{result.applied_remove} remove, "
         f"{result.applied_move} move, {result.applied_add} add, "
         f"{result.applied_rename} rename, {result.applied_mint} mint, "
-        f"{result.applied_adopt} adopt, {result.applied_reconcile} reconcile; "
+        f"{result.applied_adopt} adopt, {result.applied_reconcile} reconcile, "
+        f"{result.applied_structural} structural; "
         f"{result.in_sync} already in sync; "
         f"{result.deferred} deferred; {len(result.errors)} error(s); "
         f"watermark {'advanced' if result.watermark_recorded else 'held'}."
@@ -1247,6 +1248,7 @@ def _apply_dict(result: ApplyResult) -> dict:
             "mint": result.applied_mint,
             "adopt": result.applied_adopt,
             "reconcile": result.applied_reconcile,
+            "structural": result.applied_structural,
             "total": result.applied,
         },
         "in_sync": result.in_sync,

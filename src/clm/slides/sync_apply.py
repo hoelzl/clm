@@ -63,6 +63,7 @@ from clm.slides.sync_plan import (
     Proposal,
     SyncPlan,
     TagHold,
+    _git_head_text,
     ordered_sync_cells,
     watermark_rows,
     watermark_tag_map,
@@ -148,6 +149,8 @@ class ApplyResult:
     applied_reconcile: int = (
         0  # a confirmed mismatched-id twin had its divergent id rewritten (#228)
     )
+    applied_structural: int = 0  # slide-group regions the structural pass rebuilt (#269):
+    # propagated language-neutral / id-less-localized cells the per-cell walk cannot reach
     in_sync: int = 0  # an edit the judge decided needed no change
     deferred: int = 0  # conflict (or moves/adds declined this pass)
     watermark_recorded: bool = False
@@ -166,6 +169,7 @@ class ApplyResult:
             + self.applied_mint
             + self.applied_adopt
             + self.applied_reconcile
+            + self.applied_structural
         )
 
     @property
@@ -372,7 +376,7 @@ def apply_plan(
         plan, de_state, en_state, watermark_cache, result, recoverer, alignment_cache
     )
 
-    baseline_anchors = _baseline_anchor_hashes(watermark_cache, plan.de_path, plan.en_path)
+    baseline_anchors = _baseline_anchor_hashes(watermark_cache, plan)
     apply_code_structure(plan, de_state, en_state, translator, result, baseline_anchors)
 
     # Fail-safe: a complete resolution leaves no duplicate id behind. If one
@@ -381,9 +385,15 @@ def apply_plan(
     _flag_residual_duplicates(de_state, "de", result)
     _flag_residual_duplicates(en_state, "en", result)
     # On an otherwise-clean pass both decks must carry the same (slide_id, role)
-    # set; a one-sided orphan is a silent cross-deck divergence.
+    # set; a one-sided orphan is a silent cross-deck divergence. The shared-cell
+    # parity check (Issue #269) is the cardinal-invariant fail-safe: language-neutral
+    # cells must be byte-identical across the halves after a clean apply, so a residual
+    # divergence means a shared-cell change was dropped — error rather than report
+    # "consistent" and advance the watermark over it.
     if not result.errors and result.deferred == 0 and not plan.has_errors:
         _flag_cross_deck_orphans(de_state, en_state, result)
+        _flag_shared_cell_divergence(de_state, en_state, result)
+        _flag_idless_localized_divergence(plan, de_state, en_state, result)
 
     # Buffered temp-swap (Issue #190 item 1): persist both decks atomically, and
     # ONLY when the whole pass is error-free — neither an apply-time error
@@ -554,6 +564,129 @@ def _flag_cross_deck_orphans(de_state: FileState, en_state: FileState, result: A
         result.errors.append(f"slide_id {sid!r}/{role} present on de but missing on en")
     for sid, role in sorted(en_keys - de_keys):
         result.errors.append(f"slide_id {sid!r}/{role} present on en but missing on de")
+
+
+def _shared_cell_hashes(state: FileState) -> list[str]:
+    """Ordered content hashes of a deck's language-neutral (``shared``) cells.
+
+    Partitioned exactly like :func:`clm.slides.sync_plan.watermark_rows` — a non-j2
+    cell whose ``lang`` is neither ``de`` nor ``en`` — so it spans neutral code,
+    neutral markdown, AND a markdown cell that carries a narrative tag but no
+    ``lang`` (the tagged-neutral blind spot). Hashed with the same
+    :func:`cell_content_hash` the rest of the engine uses, so trailing-blank
+    separator differences never register.
+    """
+    return [
+        cell_content_hash(cell.body)
+        for cell in state.cells
+        if not cell.metadata.is_j2 and cell.metadata.lang not in ("de", "en")
+    ]
+
+
+def _flag_shared_cell_divergence(
+    de_state: FileState, en_state: FileState, result: ApplyResult
+) -> None:
+    """Error if the two halves' language-neutral cells are not byte-identical (#269).
+
+    The cardinal-invariant fail-safe. Language-neutral cells are shared verbatim
+    across a split pair (the ``unify`` invariant), so after a clean apply their
+    ordered content hashes MUST match. If they still diverge, a one-sided edit /
+    add / remove of a neutral cell was *not* propagated — the engine must surface
+    that as an error (holding the watermark and writing nothing) rather than let
+    the pass report "decks already consistent". This backstops the neutral-cell
+    propagation paths (``align_anchored`` + the structural pass) for every neutral
+    cell shape, including a tagged-neutral cell the structural pass cannot rebuild.
+
+    Only invoked on an otherwise-clean pass (no prior error / deferral), so a
+    genuine mismatch here is always an un-propagated divergence, never a
+    double-report of an already-alerted problem.
+    """
+    if _shared_cell_hashes(de_state) != _shared_cell_hashes(en_state):
+        result.errors.append(
+            "language-neutral (shared) cells differ between de and en after sync — "
+            "a change to a shared cell was not propagated; re-run sync (a watermark "
+            "now exists) or resolve the divergence manually"
+        )
+
+
+def _idless_localized_group_kinds(state: FileState) -> list[tuple[int, str]]:
+    """Ordered ``(slide-group index, kind)`` of each id-less localized cell — structure only.
+
+    A ``lang=`` cell with no per-cell role (``role_of`` ``None`` — the ``("L", kind)``
+    set). Content- and language-free, so it is comparable **across** the two halves
+    (which hold translations, not identical text). Under the unify/split invariant the
+    halves place their id-less localized cells in the same slide groups in the same
+    order, so a mismatch is a move the structural pass did not mirror (Issue #269).
+    """
+    out: list[tuple[int, str]] = []
+    group = -1
+    for cell in state.cells:
+        meta = cell.metadata
+        if meta.is_slide_start:
+            group += 1
+        if meta.is_j2:
+            continue
+        if meta.lang in ("de", "en") and role_of(meta) is None:
+            out.append((group, "code" if meta.cell_type == "code" else "markdown"))
+    return out
+
+
+def _idless_localized_body_hashes(state: FileState) -> list[str]:
+    """Ordered content hashes of a deck's id-less localized cells (document order)."""
+    return [
+        cell_content_hash(cell.body)
+        for cell in state.cells
+        if not cell.metadata.is_j2
+        and cell.metadata.lang in ("de", "en")
+        and role_of(cell.metadata) is None
+    ]
+
+
+def _flag_idless_localized_divergence(
+    plan: SyncPlan, de_state: FileState, en_state: FileState, result: ApplyResult
+) -> None:
+    """Error on an un-mirrored move/reorder of id-less localized cells (Issue #269).
+
+    The neutral parity fail-safe (:func:`_flag_shared_cell_divergence`) cannot see
+    these cells — they carry a ``lang``, so they are language-specific (translations),
+    not byte-identical across halves. A one-sided **body edit** is handled by the
+    drift detector + structural pass, but a one-sided **move** (across slide groups)
+    or **reorder** (within a group) of an un-id'd cell can slip through: the flat,
+    order-blind machinery may not detect or cannot rebuild it, which would otherwise
+    leave the halves divergent while the run reports "consistent". Two content-free
+    (so false-positive-free) checks restore propagate-or-**alert**:
+
+    1. **Cross-half structure** — the ordered ``(group, kind)`` of id-less localized
+       cells must match across de and en. A cross-group move breaks it.
+    2. **One-sided pure reorder** — a half whose id-less localized cells are a pure
+       reorder of its baseline (same multiset, different order) while the other half is
+       unchanged. A pure reorder involves no translation, so comparing against the
+       baseline cannot false-positive on a re-translated body edit.
+
+    Documented residual: a one-sided reorder of two **same-kind** id-less cells within
+    one group is alerted (check 2), not auto-propagated — give such cells ``slide_id``s
+    for precise sync.
+    """
+    if _idless_localized_group_kinds(de_state) != _idless_localized_group_kinds(en_state):
+        result.errors.append(
+            "id-less localized cells (lang= cells with no slide_id) are placed "
+            "differently across de and en after sync — a move was not propagated; "
+            "give them slide_ids for precise sync, or resolve manually"
+        )
+        return
+    de_base, en_base = plan.idless_baseline_de, plan.idless_baseline_en
+    if de_base is None or en_base is None:
+        return
+    de_now = _idless_localized_body_hashes(de_state)
+    en_now = _idless_localized_body_hashes(en_state)
+    de_reorder = de_now != de_base and Counter(de_now) == Counter(de_base)
+    en_reorder = en_now != en_base and Counter(en_now) == Counter(en_base)
+    if (de_reorder and en_now == en_base) or (en_reorder and de_now == de_base):
+        result.errors.append(
+            "id-less localized cells were reordered on one deck but not the other "
+            "after sync — give them slide_ids so the order can be mirrored, or "
+            "resolve manually"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1956,35 +2089,69 @@ def content_index(path: Path, lang: str) -> dict[tuple[str, str], str]:
     return index
 
 
+def _anchor_map_from_rows(rows: list[tuple[str | None, str | None, str]]) -> dict[str, str]:
+    """``{anchor: content_hash}`` over ``(slide_id, construct, content_hash)`` rows.
+
+    A construct anchor is only a *name* (``extract_from_code``), so it is not
+    content-unique: two cells sharing it (two ``import os``, two ``def solution``)
+    cannot be told apart by anchor. Admit an anchor to the reuse set only when it
+    occurs exactly once — a non-unique anchor cannot reliably locate a twin, so its
+    cells re-translate (the honest §12 residual) rather than risk a wrong-twin
+    splice (Issue #190 review). Shared by the watermark and git-HEAD baselines.
+    """
+    anchors = [row_anchor(sid, construct, chash) for (sid, construct, chash) in rows]
+    counts = Counter(anchors)
+    return {
+        anchor: chash
+        for anchor, (_sid, _construct, chash) in zip(anchors, rows, strict=True)
+        if counts[anchor] == 1
+    }
+
+
 def _baseline_anchor_hashes(
     cache: SyncWatermarkCache | None,
-    de_path: Path,
-    en_path: Path,
+    plan: SyncPlan,
 ) -> dict[str, dict[str, str]]:
     """Per-language ``{anchor: content_hash}`` of the last-synced state.
 
-    Built from the widened watermark (every non-j2 cell). The structural pass
-    uses it to tell an UNCHANGED id-less localized code cell (anchor present with
-    the same hash) from an edited one, so the former is reused verbatim instead of
-    re-translated (Issue #190 item 3 / §8). Empty when there is no watermark — the
-    structural pass then translates as before.
+    The structural pass uses it to tell an UNCHANGED id-less localized code cell
+    (anchor present with the same hash) from an edited one — so the former is reused
+    verbatim and the latter is re-translated (Issue #190 item 3 / §8), and the same
+    drift signal lets a group with an otherwise-unchanged ``("L", kind)`` signature
+    rebuild (Issue #269). Built from whichever baseline the plan resolved:
+
+    - ``watermark`` — the widened watermark rows (every non-j2 cell);
+    - ``git-head`` — the committed (HEAD) decks, parsed the same way, so the
+      cold-start (first) sync gets the same drift detection instead of an empty map
+      that would silently drop an id-less-localized body edit (Issue #269).
+
+    Empty for a baseline of ``none`` (true cold start) — the structural pass then
+    translates as before.
     """
     out: dict[str, dict[str, str]] = {"de": {}, "en": {}}
-    if cache is None:
-        return out
-    for lang in ("de", "en"):
-        rows = cache.get_deck(str(de_path), str(en_path), lang)
-        anchors = [row_anchor(sid, construct, chash) for (_p, sid, _r, chash, construct) in rows]
-        # A construct anchor is only a *name* (``extract_from_code``), so it is not
-        # content-unique: two cells sharing it (two ``import os``, two
-        # ``def solution``) cannot be told apart by anchor. Admit an anchor to the
-        # reuse set only when it occurs exactly once — a non-unique anchor cannot
-        # reliably locate a twin, so its cells re-translate (the honest §12
-        # residual) rather than risk a wrong-twin splice (Issue #190 review).
-        counts = Counter(anchors)
-        for anchor, (_p, _sid, _r, chash, _c) in zip(anchors, rows, strict=True):
-            if counts[anchor] == 1:
-                out[lang][anchor] = chash
+    if plan.baseline_source == "watermark" and cache is not None:
+        for lang in ("de", "en"):
+            rows = cache.get_deck(str(plan.de_path), str(plan.en_path), lang)
+            out[lang] = _anchor_map_from_rows(
+                [(sid, construct, chash) for (_p, sid, _r, chash, construct) in rows]
+            )
+    elif plan.baseline_source == "git-head":
+        for lang, path in (("de", plan.de_path), ("en", plan.en_path)):
+            text = _git_head_text(path)
+            if text is None:
+                continue
+            cells = parse_cells(text, comment_token_for_path(path))
+            out[lang] = _anchor_map_from_rows(
+                [
+                    (
+                        c.metadata.slide_id,
+                        construct_of(c.metadata, c.content),
+                        cell_content_hash(c.content),
+                    )
+                    for c in cells
+                    if not c.metadata.is_j2
+                ]
+            )
     return out
 
 
@@ -2458,6 +2625,23 @@ def _clear_slide_id(cell: RawCell) -> None:
     cell.metadata = parse_cell_header(header)
 
 
+def _header_rows(cells: list[Cell]) -> list[tuple[int, str | None, str, str, str | None]]:
+    """Watermark rows for a file's j2 deck-header cells (Issue #269).
+
+    ``(position, slide_id=None, role="header", content_hash, construct=None)`` in
+    j2-cell order — the ``de-header`` / ``en-header`` partition the one-sided
+    header-drift check diffs against.
+    """
+    rows: list[tuple[int, str | None, str, str, str | None]] = []
+    pos = 0
+    for cell in cells:
+        if cell.metadata.is_j2:
+            # A j2 directive's macro text is its header line; Cell.content is empty.
+            rows.append((pos, None, "header", cell_content_hash(cell.header), None))
+            pos += 1
+    return rows
+
+
 def _record_watermark(
     cache: SyncWatermarkCache,
     de_path: Path,
@@ -2502,6 +2686,21 @@ def _record_watermark(
         lang="shared",
         cells=de_rows["shared"],
         tags=de_tags["shared"],
+    )
+    # Issue #269: record each half's j2 deck-header cells (excluded from every other
+    # partition) so a later run can detect a one-sided header edit — which sync never
+    # auto-translates — instead of silently reporting the decks consistent.
+    cache.put_deck(
+        de_path=str(de_path),
+        en_path=str(en_path),
+        lang="de-header",
+        cells=_header_rows(de_cells),
+    )
+    cache.put_deck(
+        de_path=str(de_path),
+        en_path=str(en_path),
+        lang="en-header",
+        cells=_header_rows(en_cells),
     )
 
 

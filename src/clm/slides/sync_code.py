@@ -38,6 +38,7 @@ this structural step.
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import TYPE_CHECKING
 
 from clm.slides.raw_cells import RawCell
@@ -94,6 +95,12 @@ def apply_code_structure(
     else:
         source_state, target_state, source_lang, target_lang = de_state, en_state, "de", "en"
     src_anchors = (baseline_anchors or {}).get(source_lang, {})
+    # Source-language baseline id-less localized hashes as a multiset (Issue #269):
+    # lets a region detect a HASH-anchored id-less body edit — one whose construct
+    # anchor changes with the body, so ``src_anchors`` (keyed by the *current*
+    # anchor) cannot see it — by content membership instead.
+    src_idless = plan.idless_baseline_de if source_lang == "de" else plan.idless_baseline_en
+    src_idless_counts = Counter(src_idless) if src_idless else None
 
     src_head, src_groups = _split_groups(source_state.cells)
     tgt_head, tgt_groups = _split_groups(target_state.cells)
@@ -113,10 +120,11 @@ def apply_code_structure(
         new_cells.extend(region)
         if was_rebuilt:
             rebuilt_ids.update(id(c) for c in region)
+            result.applied_structural += 1  # Issue #269: surface structural propagation
 
     def reconcile(src_region: list[RawCell], tgt_region: list[RawCell]) -> None:
         if _signature(src_region) == _signature(tgt_region) and not _region_has_localized_drift(
-            src_region, src_anchors
+            src_region, src_anchors, src_idless_counts
         ):
             emit(tgt_region, was_rebuilt=False)
             return
@@ -228,40 +236,71 @@ def _signature(cells: list[RawCell]) -> list[tuple]:
         if meta.is_j2:
             sig.append(("J",))
             continue
+        if meta.lang is None:
+            # Language-neutral: shared verbatim across the halves, so its TEXT is
+            # comparable — and it MUST be, even when the cell carries a narrative
+            # tag (``role_of`` set). The per-cell engine never reconciles a no-lang
+            # cell (``ordered_sync_cells`` filters by ``lang``), so the structural
+            # pass owns it; keying it on role alone would discard the body and let a
+            # one-sided body edit to a tagged-neutral cell slip through silently
+            # (Issue #269). Checked before ``role_of`` precisely so a tag cannot
+            # mask the body.
+            sig.append(("S", cell.body))
+            continue
         role = role_of(meta)
         if role is not None:
             sig.append(("R", role))
-        elif meta.lang is None:
-            sig.append(("S", cell.body))
         else:
             sig.append(("L", "code" if meta.cell_type == "code" else "markdown"))
     return sig
 
 
 def _region_has_localized_drift(
-    src_region: list[RawCell], src_anchors: dict[str, str] | None
+    src_region: list[RawCell],
+    src_anchors: dict[str, str] | None,
+    src_idless_counts: Counter[str] | None = None,
 ) -> str | None:
     """Whether the source region holds an id-less localized cell edited since baseline.
 
-    Item-2b (§7b). A localized id-less code cell that changed must be re-translated,
-    but its ``("L", kind)`` signature is unchanged by a body edit, so the group
-    would not otherwise rebuild. Detect the drift via the baseline anchor→hash map
-    (``baseline_anchors`` for the source language): the cell's anchor is recorded
-    but its current content hash differs. Returns the drifted cell's anchor (truthy)
-    or ``None``. ``src_anchors`` is already de-duplicated (the Phase 2 ``Counter``
-    guard), so a non-unique construct anchor is simply absent — that cell does not
-    force a rebuild (the honest §12 residual), never a wrong one.
+    Item-2b (§7b). A localized id-less cell that changed must be re-translated, but
+    its ``("L", kind)`` signature is unchanged by a body edit, so the group would
+    not otherwise rebuild. Two complementary detectors:
+
+    - **construct anchor** (``src_anchors``): a cell whose stable construct anchor
+      (``def foo`` → ``construct:foo``) is recorded in the baseline but whose current
+      content hash differs. ``src_anchors`` is de-duplicated (the Phase 2 ``Counter``
+      guard), so a non-unique construct anchor is simply absent — that cell does not
+      force a rebuild here (it falls to the hash-membership check below);
+    - **hash membership** (``src_idless_counts``, Issue #269): a *hash-anchored*
+      id-less cell (no nameable construct — a bare ``print(...)`` / expression) edits
+      its own anchor, so the construct check above can never see it. Instead compare
+      content membership: a source id-less cell whose body is not covered by the
+      source-language baseline multiset of id-less hashes is new or edited → drift.
+      The multiset is consumed as matched so an unchanged duplicate-bodied sibling
+      still matches while a genuinely new one does not.
+
+    Returns a truthy marker for the first drifted cell, or ``None``.
     """
-    if not src_anchors:
-        return None
-    for cell in src_region:
-        meta = cell.metadata
-        if meta.is_j2 or meta.lang is None or role_of(meta) is not None:
-            continue  # only id-less LOCALIZED cells (role_of None, lang set)
-        anchor = anchor_of(meta, cell.body)
-        baseline_hash = src_anchors.get(anchor)
-        if baseline_hash is not None and baseline_hash != cell_content_hash(cell.body):
-            return anchor
+    if src_anchors:
+        for cell in src_region:
+            meta = cell.metadata
+            if meta.is_j2 or meta.lang is None or role_of(meta) is not None:
+                continue  # only id-less LOCALIZED cells (role_of None, lang set)
+            anchor = anchor_of(meta, cell.body)
+            baseline_hash = src_anchors.get(anchor)
+            if baseline_hash is not None and baseline_hash != cell_content_hash(cell.body):
+                return anchor
+    if src_idless_counts:
+        remaining = Counter(src_idless_counts)
+        for cell in src_region:
+            meta = cell.metadata
+            if meta.is_j2 or meta.lang is None or role_of(meta) is not None:
+                continue
+            chash = cell_content_hash(cell.body)
+            if remaining.get(chash, 0) > 0:
+                remaining[chash] -= 1  # an unchanged baseline cell accounts for this one
+            else:
+                return f"idless-drift:{chash}"  # body not in baseline → new/edited
     return None
 
 
@@ -307,6 +346,15 @@ def _rebuild_region(
             out.append(twin if twin is not None else _copy_cell(cell))
             j2_seen += 1
             continue
+        if meta.lang is None:
+            # Language-neutral: shared verbatim across the halves, whatever its role.
+            # Checked before ``role_of`` so a tagged-neutral cell (``tags=["slide"]``
+            # but no ``lang``) is copied from the source rather than pulled as a
+            # stale ``(slide_id, role)`` twin — the body edit would otherwise be
+            # dropped (Issue #269). Its header is identical on both halves (no lang
+            # to swap), so a verbatim copy carries any tag/body change across.
+            out.append(_copy_cell(cell))
+            continue
         role = role_of(meta)
         if role is not None:
             twin = _find(tgt_cells, meta.slide_id, role)
@@ -322,8 +370,6 @@ def _rebuild_region(
                 if body is None:
                     return None
                 out.append(build_twin_cell(cell, target_lang, body))
-        elif meta.lang is None:
-            out.append(_copy_cell(cell))  # language-neutral: shared verbatim
         elif meta.lang == source_lang:
             # Item-3 reuse (§8): an UNCHANGED id-less localized cell keeps its
             # existing target twin verbatim instead of being re-translated. It is

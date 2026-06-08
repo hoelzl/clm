@@ -831,9 +831,16 @@ class SyncWatermarkCache:
         tag-only edit. A position absent from ``tags`` (or ``tags=None``) stores
         NULL — "tag set unknown" — which the classifier reads as "tag direction
         undeterminable" and skips, so a pre-#198 watermark degrades gracefully.
+
+        ``de-header`` / ``en-header`` (Issue #269) record each half's j2 deck-header
+        cells (excluded from every other partition) so a one-sided header edit —
+        which sync never auto-translates — can be detected and surfaced rather than
+        silently reported as "consistent".
         """
-        if lang not in ("de", "en", "shared"):
-            raise ValueError(f"lang must be 'de', 'en', or 'shared', got {lang!r}")
+        if lang not in ("de", "en", "shared", "de-header", "en-header"):
+            raise ValueError(
+                f"lang must be 'de', 'en', 'shared', 'de-header', or 'en-header', got {lang!r}"
+            )
         tag_for = tags or {}
         with self._conn:  # single transaction (BEGIN/COMMIT or ROLLBACK)
             self._conn.execute(
