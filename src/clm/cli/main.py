@@ -68,6 +68,7 @@ def help(ctx):
 from clm.cli.commands._groups import (  # noqa: E402
     authoring_group,
     course_group,
+    export_group,
     slides_group,
     spec_group,
     topic_group,
@@ -108,7 +109,7 @@ from clm.cli.commands.spec_orphans import spec_orphans_cmd  # noqa: E402
 from clm.cli.commands.split import split_cmd  # noqa: E402
 from clm.cli.commands.status import status  # noqa: E402
 from clm.cli.commands.suggest_sync import suggest_sync_cmd  # noqa: E402
-from clm.cli.commands.summarize import summarize  # noqa: E402
+from clm.cli.commands.summarize import summary  # noqa: E402
 from clm.cli.commands.sync_includes import sync_includes_cmd  # noqa: E402
 from clm.cli.commands.tidy import tidy_cmd  # noqa: E402
 from clm.cli.commands.unify import unify_cmd  # noqa: E402
@@ -148,15 +149,12 @@ from clm.cli.commands.jupyterlite import jupyterlite_group  # noqa: E402
 # ---------------------------------------------------------------------
 cli.add_command(build)
 cli.add_command(list_targets, name="targets")
-cli.add_command(outline)
-cli.add_command(schedule)
 cli.add_command(validate_cmd)
 cli.add_command(delete_database)
 cli.add_command(status)
 cli.add_command(monitor)
 cli.add_command(info)
 cli.add_command(sync_includes_cmd)
-cli.add_command(summarize)
 cli.add_command(serve)
 cli.add_command(completion_cmd)
 
@@ -200,6 +198,15 @@ cli.add_command(course_group)
 
 authoring_group.add_command(authoring_rules_cmd, name="rules")
 cli.add_command(authoring_group)
+
+# Course-document exports: outline, schedule, and LLM summary. These replace
+# the former flat ``clm outline`` / ``clm schedule`` / ``clm summarize``
+# top-level commands (removed; see migration docs).
+export_group.add_command(outline, name="outline")
+export_group.add_command(schedule, name="schedule")
+export_group.add_command(summary, name="summary")
+export_group.add_command(summary, name="summarize")  # noun-vs-verb alias
+cli.add_command(export_group)
 
 # ---------------------------------------------------------------------
 # Existing infrastructure groups (unchanged by Phase 0).

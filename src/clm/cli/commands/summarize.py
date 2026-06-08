@@ -13,6 +13,7 @@ import logging
 import re
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -29,14 +30,25 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 
+from clm.cli.commands._export_shared import (
+    check_exclusive_output,
+    disabled_topic_files,
+    language_option,
+    output_options,
+    section_visible,
+    selection_options,
+    spec_argument,
+)
 from clm.core.course import Course
 
 if TYPE_CHECKING:
+    from clm.core.course_spec import SectionSpec
     from clm.infrastructure.llm.cache import SummaryCache
 from clm.core.course_files.notebook_file import NotebookFile
 from clm.core.course_paths import resolve_course_paths
 from clm.core.course_spec import CourseSpec, CourseSpecError
-from clm.core.utils.text_utils import sanitize_file_name
+from clm.core.utils.notebook_utils import find_notebook_titles
+from clm.core.utils.text_utils import Text, sanitize_file_name
 
 logger = logging.getLogger(__name__)
 
@@ -307,15 +319,83 @@ def _format_client_entry(title: str, summary: str, style: str) -> str:
     return f"- **{title}**: {summary}"
 
 
-def _count_notebooks(course: Course) -> int:
-    """Count total notebook files in the course."""
-    return sum(
-        1 for section in course.sections for f in section.files if isinstance(f, NotebookFile)
-    )
+@dataclass
+class _DiskNotebook:
+    """A minimal notebook stand-in for files not in the built course.
+
+    Disabled sections are not part of ``course.sections``; their slide files are
+    read straight from disk. ``extract_notebook_content`` and the workshop
+    detector only need ``path``, and the renderers only need ``title`` — this
+    shim provides both with the same shape as :class:`NotebookFile`.
+    """
+
+    path: Path
+    title: Text
+
+
+# One section to summarize: its heading, the notebooks under it, and whether it
+# came from a disabled section (so the heading can be marked).
+SectionData = tuple[str, list, bool]
+
+
+def _disk_notebooks(
+    course: Course, section_spec: SectionSpec, language: str
+) -> list[_DiskNotebook]:
+    """Resolve a (disabled) section's slide files from the filesystem."""
+    notebooks: list[_DiskNotebook] = []
+    for topic_spec in section_spec.topics:
+        for path in disabled_topic_files(course, topic_spec) or []:
+            try:
+                title = find_notebook_titles(path.read_text(encoding="utf-8"), default=path.stem)
+            except (OSError, ValueError):
+                title = Text(de=path.stem, en=path.stem)
+            notebooks.append(_DiskNotebook(path=path, title=title))
+    return notebooks
+
+
+def build_sections_data(
+    course: Course,
+    language: str,
+    *,
+    include_optional: bool,
+    include_disabled: bool,
+    full_sections: list[SectionSpec] | None,
+) -> list[SectionData]:
+    """Build the (heading, notebooks, disabled) list the generator iterates.
+
+    Optional whole sections are dropped unless ``include_optional``. Note this
+    gates optional *sections* only — ``summary`` flattens a section to its
+    notebooks and cannot filter optional *subsections* within an included
+    section. Disabled sections are appended (read from disk) when
+    ``include_disabled`` and *full_sections* are supplied.
+    """
+    data: list[SectionData] = []
+    for section, section_spec in zip(course.sections, course.spec.sections, strict=True):
+        if not section_visible(section_spec, include_optional=include_optional):
+            continue
+        notebooks = [f for f in section.files if isinstance(f, NotebookFile)]
+        data.append((section.name[language], notebooks, False))
+
+    if include_disabled and full_sections is not None:
+        for section_spec in full_sections:
+            if section_spec.enabled:
+                continue
+            if section_spec.optional and not include_optional:
+                continue
+            data.append(
+                (section_spec.name[language], _disk_notebooks(course, section_spec, language), True)
+            )
+    return data
+
+
+def _count_notebooks(sections_data: list[SectionData]) -> int:
+    """Count total notebooks across the sections to summarize."""
+    return sum(len(notebooks) for _name, notebooks, _disabled in sections_data)
 
 
 async def generate_summaries(
     course: Course,
+    sections_data: list[SectionData],
     language: str,
     audience: str,
     granularity: str,
@@ -344,14 +424,13 @@ async def generate_summaries(
         lines.append("*Dry run — showing what would be summarized:*")
         lines.append("")
 
-    for section_idx, section in enumerate(course.sections):
-        section_name = section.name[language]
+    for section_idx, (section_name, notebooks, section_disabled) in enumerate(sections_data):
         if section_idx > 0:
             lines.append("")  # extra blank line between sections
-        lines.append(f"## {section_name}")
+        heading = f"{section_name} (disabled)" if section_disabled else section_name
+        lines.append(f"## {heading}")
         lines.append("")
 
-        notebooks = [f for f in section.files if isinstance(f, NotebookFile)]
         if not notebooks:
             continue
 
@@ -531,10 +610,7 @@ async def generate_summaries(
 
 
 @click.command()
-@click.argument(
-    "spec-file",
-    type=click.Path(exists=True, file_okay=True, dir_okay=False, path_type=Path),
-)
+@spec_argument
 @click.option(
     "--audience",
     required=True,
@@ -547,26 +623,9 @@ async def generate_summaries(
     default="notebook",
     help="Summary granularity level.",
 )
-@click.option(
-    "-L",
-    "--language",
-    type=click.Choice(["de", "en"], case_sensitive=False),
-    default="en",
-    help="Language for the outline structure.",
-)
-@click.option(
-    "-o",
-    "--output",
-    "output_file",
-    type=click.Path(dir_okay=False, path_type=Path),
-    help="Write output to FILE.",
-)
-@click.option(
-    "-d",
-    "--output-dir",
-    type=click.Path(file_okay=False, path_type=Path),
-    help="Write to DIR with auto-generated filenames.",
-)
+@language_option(default="en", help="Language for the summary structure.")
+@output_options
+@selection_options
 @click.option(
     "--model",
     default=None,
@@ -601,13 +660,15 @@ async def generate_summaries(
     default=False,
     help="Disable the progress bar.",
 )
-def summarize(
+def summary(
     spec_file: Path,
     audience: str,
     granularity: str,
     language: str,
     output_file: Path | None,
     output_dir: Path | None,
+    include_optional: bool,
+    include_disabled: bool,
     model: str | None,
     api_base: str | None,
     style: str,
@@ -620,15 +681,18 @@ def summarize(
     Creates a Markdown document with section headings and LLM-generated
     summaries of each notebook's content.
 
+    Optional whole sections are omitted unless --include-optional is given;
+    note this gates optional *sections* only (a summary flattens each section
+    to its notebooks and cannot drop optional *subsections*).
+
     \b
     Examples:
-        clm summarize course.xml --audience client --dry-run
-        clm summarize course.xml --audience trainer -o summary.md
-        clm summarize course.xml --audience client -d ./docs
-        clm summarize course.xml --audience trainer --model openai/gpt-4o
+        clm export summary course.xml --audience client --dry-run
+        clm export summary course.xml --audience trainer -o summary.md
+        clm export summary course.xml --audience client -d ./docs
+        clm export summary course.xml --audience trainer --model openai/gpt-4o
     """
-    if output_file and output_dir:
-        raise click.UsageError("--output and --output-dir are mutually exclusive.")
+    check_exclusive_output(output_file, output_dir)
 
     # Load config for LLM settings
     from clm.infrastructure.config import get_config
@@ -655,6 +719,14 @@ def summarize(
     except CourseSpecError as e:
         raise click.ClickException(f"Failed to parse spec file: {e}") from None
 
+    full_sections: list[SectionSpec] | None = None
+    if include_disabled:
+        try:
+            full_spec = CourseSpec.from_file(spec_file, keep_disabled=True)
+        except CourseSpecError as e:
+            raise click.ClickException(f"Failed to parse spec file: {e}") from None
+        full_sections = full_spec.sections
+
     validation_errors = spec.validate()
     if validation_errors:
         error_msg = "\n".join(f"  - {e}" for e in validation_errors)
@@ -664,6 +736,14 @@ def summarize(
 
     course = Course.from_spec(spec, data_dir, output_root=None)
 
+    sections_data = build_sections_data(
+        course,
+        language,
+        include_optional=include_optional,
+        include_disabled=include_disabled,
+        full_sections=full_sections,
+    )
+
     # Progress goes to stderr so it doesn't mix with markdown output on stdout
     show_bar = not no_progress and not dry_run
     console = Console(file=sys.stderr, force_terminal=not no_progress)
@@ -671,7 +751,7 @@ def summarize(
 
     if show_bar:
         progress_reporter = SummarizeProgress(console, show_progress=True)
-        total = _count_notebooks(course)
+        total = _count_notebooks(sections_data)
         progress_reporter.start(course.name[language], total, effective_model, audience)
 
     # Set up cache
@@ -686,6 +766,7 @@ def summarize(
         result = asyncio.run(
             generate_summaries(
                 course=course,
+                sections_data=sections_data,
                 language=language,
                 audience=audience,
                 granularity=granularity,

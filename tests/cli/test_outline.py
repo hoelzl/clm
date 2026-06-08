@@ -34,7 +34,7 @@ class TestOutlineCommandHelp:
     def test_outline_help(self):
         """Test outline command help text."""
         runner = CliRunner()
-        result = runner.invoke(cli, ["outline", "--help"])
+        result = runner.invoke(cli, ["export", "outline", "--help"])
         assert result.exit_code == 0
         assert "Generate an outline" in result.output
         assert "--output" in result.output
@@ -42,11 +42,14 @@ class TestOutlineCommandHelp:
         assert "--language" in result.output
 
     def test_outline_appears_in_main_help(self):
-        """Test that outline command appears in main CLI help."""
+        """Test that the export group is in main help and outline lives under it."""
         runner = CliRunner()
         result = runner.invoke(cli, ["--help"])
         assert result.exit_code == 0
-        assert "outline" in result.output
+        assert "export" in result.output
+        sub = runner.invoke(cli, ["export", "--help"])
+        assert sub.exit_code == 0
+        assert "outline" in sub.output
 
 
 class TestOutlineCommandArgumentValidation:
@@ -55,14 +58,14 @@ class TestOutlineCommandArgumentValidation:
     def test_outline_requires_spec_file(self):
         """Test that outline command requires spec-file argument."""
         runner = CliRunner()
-        result = runner.invoke(cli, ["outline"])
+        result = runner.invoke(cli, ["export", "outline"])
         assert result.exit_code != 0
         assert "Missing argument" in result.output or "Error" in result.output
 
     def test_outline_rejects_nonexistent_spec_file(self):
         """Test that outline command rejects non-existent spec files."""
         runner = CliRunner()
-        result = runner.invoke(cli, ["outline", "/nonexistent/spec.xml"])
+        result = runner.invoke(cli, ["export", "outline", "/nonexistent/spec.xml"])
         assert result.exit_code != 0
         assert "does not exist" in result.output.lower() or "error" in result.output.lower()
 
@@ -73,7 +76,7 @@ class TestOutlineCommandArgumentValidation:
         spec_file = "tests/test-data/course-specs/test-spec-1.xml"
         result = runner.invoke(
             cli,
-            ["outline", spec_file, "-o", "out.md", "-d", "outdir"],
+            ["export", "outline", spec_file, "-o", "out.md", "-d", "outdir"],
         )
         assert result.exit_code != 0
         assert "mutually exclusive" in result.output.lower()
@@ -95,7 +98,7 @@ class TestOutlineCommandOutput:
     def test_outline_stdout_default_english(self, test_spec_path):
         """Test outline outputs English to stdout by default."""
         runner = CliRunner()
-        result = runner.invoke(cli, ["outline", str(test_spec_path)])
+        result = runner.invoke(cli, ["export", "outline", str(test_spec_path)])
         assert result.exit_code == 0
         assert "# My Course" in result.output
         assert "## Week 1" in result.output
@@ -104,7 +107,7 @@ class TestOutlineCommandOutput:
     def test_outline_preserves_punctuation_in_titles(self, test_spec_path):
         """Test that punctuation in notebook titles is preserved."""
         runner = CliRunner()
-        result = runner.invoke(cli, ["outline", str(test_spec_path)])
+        result = runner.invoke(cli, ["export", "outline", str(test_spec_path)])
         assert result.exit_code == 0
         # The test spec includes a topic with a question mark in the title
         assert "- Was this really ML?" in result.output
@@ -112,14 +115,14 @@ class TestOutlineCommandOutput:
     def test_outline_preserves_punctuation_german(self, test_spec_path):
         """Test that punctuation in German titles is preserved."""
         runner = CliRunner()
-        result = runner.invoke(cli, ["outline", str(test_spec_path), "-L", "de"])
+        result = runner.invoke(cli, ["export", "outline", str(test_spec_path), "-L", "de"])
         assert result.exit_code == 0
         assert "- War das wirklich ML?" in result.output
 
     def test_outline_stdout_german(self, test_spec_path):
         """Test outline outputs German when -L de specified."""
         runner = CliRunner()
-        result = runner.invoke(cli, ["outline", str(test_spec_path), "-L", "de"])
+        result = runner.invoke(cli, ["export", "outline", str(test_spec_path), "-L", "de"])
         assert result.exit_code == 0
         assert "# Mein Kurs" in result.output
         assert "## Woche 1" in result.output
@@ -128,7 +131,9 @@ class TestOutlineCommandOutput:
         """Test outline writes to file with -o option."""
         output_file = tmp_path / "outline.md"
         runner = CliRunner()
-        result = runner.invoke(cli, ["outline", str(test_spec_path), "-o", str(output_file)])
+        result = runner.invoke(
+            cli, ["export", "outline", str(test_spec_path), "-o", str(output_file)]
+        )
         assert result.exit_code == 0
         assert f"Written: {output_file}" in result.output
         assert output_file.exists()
@@ -140,7 +145,7 @@ class TestOutlineCommandOutput:
         output_file = tmp_path / "outline.md"
         runner = CliRunner()
         result = runner.invoke(
-            cli, ["outline", str(test_spec_path), "-o", str(output_file), "-L", "de"]
+            cli, ["export", "outline", str(test_spec_path), "-o", str(output_file), "-L", "de"]
         )
         assert result.exit_code == 0
         content = output_file.read_text()
@@ -149,7 +154,7 @@ class TestOutlineCommandOutput:
     def test_outline_to_directory_both_languages(self, test_spec_path, tmp_path):
         """Test outline writes both languages to directory."""
         runner = CliRunner()
-        result = runner.invoke(cli, ["outline", str(test_spec_path), "-d", str(tmp_path)])
+        result = runner.invoke(cli, ["export", "outline", str(test_spec_path), "-d", str(tmp_path)])
         assert result.exit_code == 0
 
         # Check that both files were created (different titles, no suffix needed)
@@ -170,7 +175,7 @@ class TestOutlineCommandOutput:
         """Test outline writes single language to directory when -L specified."""
         runner = CliRunner()
         result = runner.invoke(
-            cli, ["outline", str(test_spec_path), "-d", str(tmp_path), "-L", "en"]
+            cli, ["export", "outline", str(test_spec_path), "-d", str(tmp_path), "-L", "en"]
         )
         assert result.exit_code == 0
 
@@ -186,7 +191,7 @@ class TestOutlineCommandOutput:
         """Test outline adds language suffix when titles are identical."""
         runner = CliRunner()
         result = runner.invoke(
-            cli, ["outline", str(test_spec_same_titles_path), "-d", str(tmp_path)]
+            cli, ["export", "outline", str(test_spec_same_titles_path), "-d", str(tmp_path)]
         )
         assert result.exit_code == 0
 
@@ -200,7 +205,9 @@ class TestOutlineCommandOutput:
         """Test outline creates output directory if it doesn't exist."""
         output_dir = tmp_path / "nested" / "output" / "dir"
         runner = CliRunner()
-        result = runner.invoke(cli, ["outline", str(test_spec_path), "-d", str(output_dir)])
+        result = runner.invoke(
+            cli, ["export", "outline", str(test_spec_path), "-d", str(output_dir)]
+        )
         assert result.exit_code == 0
         assert output_dir.exists()
 
@@ -208,7 +215,9 @@ class TestOutlineCommandOutput:
         """Test outline creates parent directories for output file."""
         output_file = tmp_path / "nested" / "dir" / "outline.md"
         runner = CliRunner()
-        result = runner.invoke(cli, ["outline", str(test_spec_path), "-o", str(output_file)])
+        result = runner.invoke(
+            cli, ["export", "outline", str(test_spec_path), "-o", str(output_file)]
+        )
         assert result.exit_code == 0
         assert output_file.exists()
 
@@ -291,7 +300,7 @@ class TestOutlineErrorHandling:
         spec_file.write_text("not valid xml <><>")
 
         runner = CliRunner()
-        result = runner.invoke(cli, ["outline", str(spec_file)])
+        result = runner.invoke(cli, ["export", "outline", str(spec_file)])
         assert result.exit_code != 0
         assert "Error" in result.output or "error" in result.output.lower()
 
@@ -303,7 +312,7 @@ class TestOutlineErrorHandling:
         )
 
         runner = CliRunner()
-        result = runner.invoke(cli, ["outline", str(spec_file)])
+        result = runner.invoke(cli, ["export", "outline", str(spec_file)])
         assert result.exit_code != 0
 
 
@@ -367,7 +376,7 @@ class TestOutlineIncludeDisabled:
     def test_outline_default_hides_disabled(self, spec_with_disabled_section):
         """Default outline should not mention the disabled section."""
         runner = CliRunner()
-        result = runner.invoke(cli, ["outline", str(spec_with_disabled_section)])
+        result = runner.invoke(cli, ["export", "outline", str(spec_with_disabled_section)])
         assert result.exit_code == 0, result.output
         assert "Week 1 active" in result.output
         assert "Week 99 Roadmap" not in result.output
@@ -378,7 +387,7 @@ class TestOutlineIncludeDisabled:
         runner = CliRunner()
         result = runner.invoke(
             cli,
-            ["outline", str(spec_with_disabled_section), "--include-disabled"],
+            ["export", "outline", str(spec_with_disabled_section), "--include-disabled"],
         )
         assert result.exit_code == 0, result.output
         assert "Week 1 active" in result.output
@@ -391,6 +400,7 @@ class TestOutlineIncludeDisabled:
         result = runner.invoke(
             cli,
             [
+                "export",
                 "outline",
                 str(spec_with_disabled_section),
                 "--include-disabled",
@@ -415,7 +425,7 @@ class TestOutlineIncludeDisabled:
         runner = CliRunner()
         result = runner.invoke(
             cli,
-            ["outline", str(spec_with_disabled_section), "--format", "json"],
+            ["export", "outline", str(spec_with_disabled_section), "--format", "json"],
         )
         assert result.exit_code == 0, result.output
         data = json.loads(result.output)
@@ -480,7 +490,7 @@ class TestOutlineDisabledShowsRealTitles:
         runner = CliRunner()
         result = runner.invoke(
             cli,
-            ["outline", str(spec_with_resolvable_disabled_section), "--include-disabled"],
+            ["export", "outline", str(spec_with_resolvable_disabled_section), "--include-disabled"],
         )
         assert result.exit_code == 0, result.output
         assert "## Week 2 archived (disabled)" in result.output
@@ -497,6 +507,7 @@ class TestOutlineDisabledShowsRealTitles:
         result = runner.invoke(
             cli,
             [
+                "export",
                 "outline",
                 str(spec_with_resolvable_disabled_section),
                 "--include-disabled",
@@ -514,6 +525,7 @@ class TestOutlineDisabledShowsRealTitles:
         result = runner.invoke(
             cli,
             [
+                "export",
                 "outline",
                 str(spec_with_resolvable_disabled_section),
                 "--include-disabled",
@@ -548,7 +560,7 @@ class TestOutlineSectionsOnly:
     def test_sections_only_markdown_omits_topic_bullets(self, test_spec_path):
         """Markdown sections-only output has no '- ' bullet lines."""
         runner = CliRunner()
-        result = runner.invoke(cli, ["outline", str(test_spec_path), "--sections-only"])
+        result = runner.invoke(cli, ["export", "outline", str(test_spec_path), "--sections-only"])
         assert result.exit_code == 0, result.output
         assert "# My Course" in result.output
         assert "## Week 1" in result.output
@@ -564,7 +576,7 @@ class TestOutlineSectionsOnly:
         runner = CliRunner()
         result = runner.invoke(
             cli,
-            ["outline", str(test_spec_path), "--sections-only", "--format", "json"],
+            ["export", "outline", str(test_spec_path), "--sections-only", "--format", "json"],
         )
         assert result.exit_code == 0, result.output
         data = json.loads(result.output)
@@ -608,6 +620,7 @@ class TestOutlineSectionsOnly:
             result = runner.invoke(
                 cli,
                 [
+                    "export",
                     "outline",
                     str(spec_file),
                     "--sections-only",
@@ -657,6 +670,7 @@ class TestOutlineSectionsOnly:
             result = runner.invoke(
                 cli,
                 [
+                    "export",
                     "outline",
                     str(spec_file),
                     "--sections-only",
@@ -675,3 +689,70 @@ class TestOutlineSectionsOnly:
                 assert "topics" not in section
         finally:
             spec_file.unlink(missing_ok=True)
+
+
+OPTIONAL_SPEC_PATH = Path("tests/test-data/course-specs/subsection-optional-spec.xml")
+
+
+class TestOutlineIncludeOptional:
+    """Tests for the --include-optional flag on `clm export outline`.
+
+    The fixture spec has an optional Wednesday subsection in Week 1 and an
+    optional Week 2 (whole section). By default both are hidden; the topic of a
+    hidden subsection must not leak out as a bare bullet.
+    """
+
+    def test_optional_hidden_by_default_no_bare_leak(self):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["export", "outline", str(OPTIONAL_SPEC_PATH), "-L", "en"])
+        assert result.exit_code == 0, result.output
+        assert "**Monday, Tuesday**" in result.output
+        # Optional Wednesday subsection, its topic, and optional Week 2 are gone.
+        assert "Wednesday" not in result.output
+        assert "## Week 2" not in result.output
+        assert "A Topic from Test 2" not in result.output
+
+    def test_include_optional_shows_modules(self):
+        runner = CliRunner()
+        result = runner.invoke(
+            cli, ["export", "outline", str(OPTIONAL_SPEC_PATH), "-L", "en", "--include-optional"]
+        )
+        assert result.exit_code == 0, result.output
+        assert "**Wednesday**" in result.output
+        assert "A Topic from Test 2" in result.output
+        assert "## Week 2" in result.output
+
+    def test_optional_hidden_in_json_topics_and_subsections(self):
+        runner = CliRunner()
+        result = runner.invoke(
+            cli, ["export", "outline", str(OPTIONAL_SPEC_PATH), "-L", "en", "-f", "json"]
+        )
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert len(data["sections"]) == 1  # optional Week 2 omitted
+        week1 = data["sections"][0]
+        topic_ids = {t["topic_id"] for t in week1["topics"]}
+        assert topic_ids == {"some_topic_from_test_1"}  # optional topic excluded
+        labels = {ss["label"] for ss in week1.get("subsections", [])}
+        assert "Wednesday" not in labels
+
+    def test_include_optional_json_includes_modules(self):
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "export",
+                "outline",
+                str(OPTIONAL_SPEC_PATH),
+                "-L",
+                "en",
+                "-f",
+                "json",
+                "--include-optional",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert len(data["sections"]) == 2
+        topic_ids = {t["topic_id"] for t in data["sections"][0]["topics"]}
+        assert "a_topic_from_test_2" in topic_ids

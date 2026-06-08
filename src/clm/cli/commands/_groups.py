@@ -41,3 +41,8 @@ def course_group() -> None:
 @click.group("authoring")
 def authoring_group() -> None:
     """Authoring-rules introspection."""
+
+
+@click.group("export")
+def export_group() -> None:
+    """Export course documents: outline, schedule, and LLM summary."""

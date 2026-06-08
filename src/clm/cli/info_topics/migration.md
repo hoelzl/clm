@@ -2,6 +2,34 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## Course-document commands moved under `clm export`
+
+The three commands that turn a course spec into a human-readable document are
+now subcommands of a new `clm export` group, and the **flat top-level forms were
+removed** (no deprecation alias):
+
+| Removed | Use instead |
+|---|---|
+| `clm outline …` | `clm export outline …` |
+| `clm schedule …` | `clm export schedule …` |
+| `clm summarize …` | `clm export summary …` (or `clm export summarize …`) |
+
+`summarize` was also renamed to the noun `summary` for consistency with
+`outline`/`schedule`; `clm export summarize` is kept as an alias. Update any
+scripts, Makefiles, or CI steps that call the old names.
+
+The three commands also gained a **consistent option vocabulary**:
+
+- `--include-optional` (now on all three) — include modules marked
+  `optional="true"` on a `<section>`/`<subsection>`. **Off by default**, so an
+  outline/summary that previously listed optional sections now hides them unless
+  you pass the flag. (The MCP `course_outline` tool is unchanged — it still
+  shows optional content.)
+- `--include-disabled` (now on all three) — include `enabled="false"`
+  sections/subsections, tagged `(disabled)`.
+- `clm export schedule` gained `-d/--output-dir`; `-L/--language` is the
+  canonical spelling everywhere (`schedule` keeps `--lang` as an alias).
+
 ## Breaking changes in CLM 1.10
 
 CLM 1.10 carries **two intentional breaking changes** around HTTP replay —

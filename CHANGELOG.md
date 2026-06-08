@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Changed
+
+- **The course-document commands `outline`, `schedule`, and `summarize` moved
+  under a new `clm export` group** (`clm export outline` / `clm export schedule`
+  / `clm export summary`), and the flat top-level forms were removed (no
+  deprecation alias). `summarize` was renamed to the noun `summary`, with
+  `clm export summarize` kept as an alias. The three commands now share a
+  consistent option vocabulary: `--include-optional` and `--include-disabled`
+  are available on all three (both **off by default**, so an outline/summary
+  that previously listed `optional="true"` modules now hides them unless the
+  flag is given), `clm export schedule` gained `-d/--output-dir`, and
+  `-L/--language` is the canonical spelling everywhere (`schedule` keeps
+  `--lang` as an alias). The MCP `course_outline` tool is unchanged (it still
+  shows optional content). See `clm info migration`.
+
 ### Fixed
 
 - **The mitmproxy transport now records and replays a per-request response

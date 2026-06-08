@@ -23,10 +23,26 @@ from pathlib import Path
 
 import click
 
+from clm.cli.commands._export_shared import (
+    check_exclusive_output,
+    disabled_topic_slides,
+    language_option,
+    output_options,
+    section_visible,
+    selection_options,
+    spec_argument,
+    subsection_visible,
+)
 from clm.core.course import Course
 from clm.core.course_paths import resolve_course_paths
-from clm.core.course_spec import CourseSpec, CourseSpecError, SubsectionSpec
-from clm.core.utils.text_utils import Text
+from clm.core.course_spec import (
+    CourseSpec,
+    CourseSpecError,
+    SectionSpec,
+    SubsectionSpec,
+)
+from clm.core.section import Section
+from clm.core.utils.text_utils import Text, sanitize_file_name
 
 # Localized weekday labels for the language-neutral tokens in
 # ``clm.core.course_spec.VALID_WEEKDAYS``. Presentation only — the spec and
@@ -57,6 +73,7 @@ class ScheduleDeck:
     video_title: str
     topic_id: str
     deck_file: str  # source stem, e.g. "slides_010_introduction_ml_course_azav"
+    disabled: bool = False
 
 
 @dataclass
@@ -66,6 +83,7 @@ class ScheduleDay:
     weekdays: list[str]  # language-neutral tokens; empty for a thematic group
     label: str  # localized display label
     decks: list[ScheduleDeck] = field(default_factory=list)
+    disabled: bool = False
 
     @property
     def weekday(self) -> str | None:
@@ -80,6 +98,7 @@ class ScheduleWeek:
     number: int
     title: str
     days: list[ScheduleDay] = field(default_factory=list)
+    disabled: bool = False
 
 
 def subsection_label(subsection: SubsectionSpec, language: str) -> str:
@@ -127,8 +146,84 @@ def _topic_decks(topic, language: str) -> list[ScheduleDeck]:
     return decks
 
 
+def _section_key(spec: SectionSpec) -> tuple:
+    """A stable identity for matching an enabled section to its full-spec twin."""
+    if spec.id is not None:
+        return ("id", spec.id)
+    return ("name", spec.name.de, spec.name.en)
+
+
+def _decks_for_subsection(
+    subsection: SubsectionSpec,
+    topic_decks: dict[str, list[ScheduleDeck]],
+    course: Course,
+    language: str,
+    *,
+    parent_disabled: bool,
+) -> list[ScheduleDeck]:
+    """Resolve a subsection's decks in build order.
+
+    Enabled topics of an enabled subsection in an enabled section read from
+    *topic_decks* (the resolved course). Anything disabled (or otherwise not
+    part of the built course) is read straight from the filesystem and tagged
+    ``disabled``.
+    """
+    disabled = parent_disabled or not subsection.enabled
+    decks: list[ScheduleDeck] = []
+    for topic_spec in subsection.topics:
+        if not disabled and topic_spec.id in topic_decks:
+            decks.extend(topic_decks[topic_spec.id])
+        else:
+            slides = disabled_topic_slides(course, topic_spec, language) or []
+            for file_name, title in slides:
+                decks.append(
+                    ScheduleDeck(
+                        video_title=title,
+                        topic_id=topic_spec.id,
+                        deck_file=Path(file_name).stem,
+                        disabled=disabled,
+                    )
+                )
+    return decks
+
+
+def _days_for_section(
+    section_spec: SectionSpec,
+    topic_decks: dict[str, list[ScheduleDeck]],
+    course: Course,
+    language: str,
+    *,
+    include_optional: bool,
+    include_disabled: bool,
+    parent_disabled: bool,
+) -> list[ScheduleDay]:
+    """Build the :class:`ScheduleDay` list for one section's subsections."""
+    days: list[ScheduleDay] = []
+    for subsection in section_spec.subsections:
+        if not subsection_visible(
+            subsection, include_optional=include_optional, include_disabled=include_disabled
+        ):
+            continue
+        days.append(
+            ScheduleDay(
+                weekdays=list(subsection.weekdays),
+                label=subsection_label(subsection, language),
+                decks=_decks_for_subsection(
+                    subsection, topic_decks, course, language, parent_disabled=parent_disabled
+                ),
+                disabled=parent_disabled or not subsection.enabled,
+            )
+        )
+    return days
+
+
 def build_schedule(
-    course: Course, language: str, *, include_optional: bool = False
+    course: Course,
+    language: str,
+    *,
+    include_optional: bool = False,
+    include_disabled: bool = False,
+    full_sections: list[SectionSpec] | None = None,
 ) -> list[ScheduleWeek]:
     """Build the day-of-week schedule from a resolved *course*.
 
@@ -140,38 +235,80 @@ def build_schedule(
     ``<subsection>``) are omitted unless ``include_optional`` is set. Skipped
     optional weeks keep their declared number (so an excluded optional Week 3
     leaves Weeks 1, 2, 4, … rather than renumbering).
+
+    When ``include_disabled`` is set and *full_sections* (the ``keep_disabled``
+    parse) is supplied, disabled subsections and disabled whole sections are
+    surfaced too, with their decks read from the filesystem and tagged
+    ``disabled``. In that mode weeks are numbered by their declared position in
+    *full_sections* (so a disabled Week 2 is shown as Week 2).
     """
+    if include_disabled and full_sections is not None:
+        return _build_schedule_with_disabled(course, language, full_sections, include_optional)
+
     weeks: list[ScheduleWeek] = []
     # course.sections aligns 1:1 with course.spec.sections (no section
     # selection is applied here, and the spec is parsed enabled-only).
     for number, (section, section_spec) in enumerate(
         zip(course.sections, course.spec.sections, strict=True), start=1
     ):
-        if section_spec.optional and not include_optional:
+        if not section_visible(section_spec, include_optional=include_optional):
             continue
-
-        topic_decks: dict[str, list[ScheduleDeck]] = {}
-        for topic in section.topics:
-            topic_decks[topic.id] = _topic_decks(topic, language)
-
-        days: list[ScheduleDay] = []
-        for subsection in section_spec.subsections:
-            if not subsection.enabled:
-                continue
-            if subsection.optional and not include_optional:
-                continue
-            decks: list[ScheduleDeck] = []
-            for topic_spec in subsection.topics:
-                decks.extend(topic_decks.get(topic_spec.id, []))
-            days.append(
-                ScheduleDay(
-                    weekdays=list(subsection.weekdays),
-                    label=subsection_label(subsection, language),
-                    decks=decks,
-                )
-            )
-
+        topic_decks = {topic.id: _topic_decks(topic, language) for topic in section.topics}
+        days = _days_for_section(
+            section_spec,
+            topic_decks,
+            course,
+            language,
+            include_optional=include_optional,
+            include_disabled=False,
+            parent_disabled=False,
+        )
         weeks.append(ScheduleWeek(number=number, title=section.name[language], days=days))
+    return weeks
+
+
+def _build_schedule_with_disabled(
+    course: Course,
+    language: str,
+    full_sections: list[SectionSpec],
+    include_optional: bool,
+) -> list[ScheduleWeek]:
+    """Build the schedule from the full (``keep_disabled``) section list.
+
+    Numbers weeks by declared position so disabled weeks keep their place, and
+    resolves enabled sections' decks from the built course while reading
+    disabled content from the filesystem.
+    """
+    built_by_key: dict[tuple, Section] = {}
+    for section, section_spec in zip(course.sections, course.spec.sections, strict=True):
+        built_by_key[_section_key(section_spec)] = section
+
+    weeks: list[ScheduleWeek] = []
+    for number, full_spec in enumerate(full_sections, start=1):
+        if full_spec.optional and not include_optional:
+            continue
+        built = built_by_key.get(_section_key(full_spec))
+        section_disabled = not full_spec.enabled
+        topic_decks: dict[str, list[ScheduleDeck]] = {}
+        if built is not None and not section_disabled:
+            topic_decks = {topic.id: _topic_decks(topic, language) for topic in built.topics}
+        days = _days_for_section(
+            full_spec,
+            topic_decks,
+            course,
+            language,
+            include_optional=include_optional,
+            include_disabled=True,
+            parent_disabled=section_disabled,
+        )
+        weeks.append(
+            ScheduleWeek(
+                number=number,
+                title=full_spec.name[language],
+                days=days,
+                disabled=section_disabled,
+            )
+        )
     return weeks
 
 
@@ -194,10 +331,12 @@ def render_markdown(
     """
     day_h, video_h, topic_h = _MD_HEADERS[language]
     empty_cell = "—"
+    disabled_tag = " (disabled)"
     lines: list[str] = [f"# {course_title}", ""]
 
     for week in weeks:
-        lines.append(f"## {week.title}")
+        week_title = week.title + (disabled_tag if week.disabled else "")
+        lines.append(f"## {week_title}")
         lines.append("")
         if not week.days:
             note = "_Keine Tage geplant._" if language == "de" else "_No days scheduled._"
@@ -212,7 +351,10 @@ def render_markdown(
             lines.append(f"| {day_h} | {video_h} | {topic_h} |")
             lines.append("|------|------|------|")
         for day in week.days:
-            day_label = _md_cell(day.label)
+            # Mark a disabled subsection inside an otherwise-enabled week; if the
+            # whole week is disabled the heading already carries the tag.
+            label_text = day.label + (disabled_tag if day.disabled and not week.disabled else "")
+            day_label = _md_cell(label_text)
             if not day.decks:
                 if no_topic:
                     lines.append(f"| {day_label} | {empty_cell} |")
@@ -220,7 +362,7 @@ def render_markdown(
                     lines.append(f"| {day_label} | {empty_cell} | {empty_cell} |")
                 continue
             for index, deck in enumerate(day.decks):
-                first = _md_cell(day.label) if index == 0 else ""
+                first = day_label if index == 0 else ""
                 video = _md_cell(deck.video_title)
                 if no_topic:
                     lines.append(f"| {first} | {video} |")
@@ -231,14 +373,20 @@ def render_markdown(
     return "\n".join(lines).rstrip("\n") + "\n"
 
 
-def render_csv(weeks: list[ScheduleWeek], *, no_topic: bool = False) -> str:
+def render_csv(
+    weeks: list[ScheduleWeek], *, no_topic: bool = False, include_disabled: bool = False
+) -> str:
     """Render the schedule as CSV: one row per deck.
 
     A multi-day subsection joins its weekday tokens with "," in the
     ``weekday`` field (the cell is quoted by the CSV writer). With
-    ``no_topic`` the ``topic`` column is dropped.
+    ``no_topic`` the ``topic`` column is dropped. With ``include_disabled`` a
+    trailing ``disabled`` column ("true"/"") is appended so disabled rows are
+    distinguishable; the default CSV schema is unchanged.
     """
     fields = [f for f in _CSV_FIELDS if not (no_topic and f == "topic")]
+    if include_disabled:
+        fields = [*fields, "disabled"]
     buffer = io.StringIO()
     writer = csv.writer(buffer, lineterminator="\n")
     writer.writerow(fields)
@@ -246,7 +394,7 @@ def render_csv(weeks: list[ScheduleWeek], *, no_topic: bool = False) -> str:
         for day in week.days:
             weekday_cell = ",".join(day.weekdays)
             for deck in day.decks:
-                row = [
+                row: list = [
                     week.number,
                     week.title,
                     weekday_cell,
@@ -255,22 +403,17 @@ def render_csv(weeks: list[ScheduleWeek], *, no_topic: bool = False) -> str:
                 if not no_topic:
                     row.append(deck.topic_id)
                 row.append(deck.deck_file)
+                if include_disabled:
+                    row.append("true" if deck.disabled else "")
                 writer.writerow(row)
     return buffer.getvalue()
 
 
 @click.command()
-@click.argument(
-    "spec-file",
-    type=click.Path(exists=True, file_okay=True, dir_okay=False, path_type=Path),
-)
-@click.option(
-    "-L",
-    "--language",
-    "--lang",
-    type=click.Choice(["de", "en"], case_sensitive=False),
+@spec_argument
+@language_option(
     default="de",
-    show_default=True,
+    aliases=("--lang",),
     help="Language for deck titles and labels (titles come from header_de/header_en).",
 )
 @click.option(
@@ -282,13 +425,7 @@ def render_csv(weeks: list[ScheduleWeek], *, no_topic: bool = False) -> str:
     show_default=True,
     help="Output format.",
 )
-@click.option(
-    "-o",
-    "--output",
-    "output_file",
-    type=click.Path(dir_okay=False, path_type=Path),
-    help="Write output to FILE instead of stdout.",
-)
+@output_options
 @click.option(
     "--no-topic",
     "no_topic",
@@ -296,14 +433,7 @@ def render_csv(weeks: list[ScheduleWeek], *, no_topic: bool = False) -> str:
     help="Omit the Topic column, leaving just day and video/slides "
     "(the columns a certification authority needs).",
 )
-@click.option(
-    "--include-optional",
-    "include_optional",
-    is_flag=True,
-    help='Include modules marked optional="true" (on a <section> or '
-    "<subsection>). Off by default; optional modules that are also "
-    'disabled (enabled="false") are never listed, flag or not.',
-)
+@selection_options
 @click.option(
     "--data-dir",
     type=click.Path(exists=True, file_okay=False, path_type=Path),
@@ -314,8 +444,10 @@ def schedule(
     language: str,
     output_format: str,
     output_file: Path | None,
+    output_dir: Path | None,
     no_topic: bool,
     include_optional: bool,
+    include_disabled: bool,
     data_dir: Path | None,
 ):
     """Export a day-of-week deck listing for certification.
@@ -325,20 +457,30 @@ def schedule(
 
     \b
     Examples:
-        clm schedule course.xml                  # German Markdown to stdout
-        clm schedule course.xml -L en            # English listing
-        clm schedule course.xml -f csv           # CSV (one row per deck)
-        clm schedule course.xml --no-topic       # Day + video/slides only
-        clm schedule course.xml --include-optional   # Add optional modules
-        clm schedule course.xml -o schedule.md   # Write to a file
+        clm export schedule course.xml                  # German Markdown to stdout
+        clm export schedule course.xml -L en            # English listing
+        clm export schedule course.xml -f csv           # CSV (one row per deck)
+        clm export schedule course.xml --no-topic       # Day + video/slides only
+        clm export schedule course.xml --include-optional   # Add optional modules
+        clm export schedule course.xml -o schedule.md   # Write to a file
+        clm export schedule course.xml -d ./docs        # Write into a directory
     """
     language = language.lower()
     output_format = output_format.lower()
+    check_exclusive_output(output_file, output_dir)
 
     try:
         spec = CourseSpec.from_file(spec_file)
     except CourseSpecError as e:
         raise click.ClickException(f"Failed to parse spec file: {e}") from None
+
+    full_sections: list[SectionSpec] | None = None
+    if include_disabled:
+        try:
+            full_spec = CourseSpec.from_file(spec_file, keep_disabled=True)
+        except CourseSpecError as e:
+            raise click.ClickException(f"Failed to parse spec file: {e}") from None
+        full_sections = full_spec.sections
 
     validation_errors = spec.validate()
     if validation_errors:
@@ -349,7 +491,13 @@ def schedule(
 
     course = Course.from_spec(spec, course_root, output_root=None)
 
-    weeks = build_schedule(course, language, include_optional=include_optional)
+    weeks = build_schedule(
+        course,
+        language,
+        include_optional=include_optional,
+        include_disabled=include_disabled,
+        full_sections=full_sections,
+    )
 
     if not any(week.days for week in weeks):
         click.echo(
@@ -360,11 +508,18 @@ def schedule(
         )
 
     if output_format == "csv":
-        content = render_csv(weeks, no_topic=no_topic)
+        content = render_csv(weeks, no_topic=no_topic, include_disabled=include_disabled)
     else:
         content = render_markdown(course.name[language], weeks, language, no_topic=no_topic)
 
-    if output_file is not None:
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        ext = "csv" if output_format == "csv" else "md"
+        title = sanitize_file_name(course.name[language])
+        file_path = output_dir / f"{title}-schedule-{language}.{ext}"
+        file_path.write_text(content, encoding="utf-8")
+        click.echo(f"Written: {file_path}")
+    elif output_file is not None:
         output_file.parent.mkdir(parents=True, exist_ok=True)
         output_file.write_text(content, encoding="utf-8")
         click.echo(f"Written: {output_file}")
