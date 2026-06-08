@@ -1,19 +1,13 @@
-"""Shared cell-preserving write infrastructure for sync apply paths.
+"""Shared cell-preserving write infrastructure for the sync apply path.
 
-Used by:
-
-- :mod:`clm.slides.sync_walker` — interactive ``--interactive`` walker
-- :mod:`clm.slides.sync_trivial` — ``--apply --trivial`` auto-applier
-- :mod:`clm.slides.sync_apply` — Issue #166 authoring apply engine
-  (drives ``find_cell`` / ``replace_cell_body`` / ``delete_cell``, keyed by
-  ``(slide_id, role)`` rather than line number)
+Used by :mod:`clm.slides.sync_apply` — the Issue #166 authoring apply
+engine — which drives ``find_cell`` / ``replace_cell_body`` /
+``delete_cell``, keyed by ``(slide_id, role)`` rather than line number.
 
 These paths must keep cell headers and trailing-blank padding verbatim so
-the surrounding bytes never shift; the v1 / Phase 5 round-trip
-invariant is what makes `clm slides split` / `unify` work, and the
-sync write paths inherit that contract. All three primitives here are
-the same primitives the v2 walker shipped with — extracted so a
-``--apply --trivial`` pass can share them rather than duplicate.
+the surrounding bytes never shift; the Phase 5 round-trip invariant is
+what makes `clm slides split` / `unify` work, and the sync write paths
+inherit that contract.
 """
 
 from __future__ import annotations
@@ -23,17 +17,11 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from clm.notebooks.slide_parser import CellMetadata, comment_token_for_path, parse_cell_header
 from clm.slides.code_cell_extract import extract_from_code
 from clm.slides.raw_cells import RawCell, reconstruct, split_cells
 from clm.slides.slug import slugify
-
-if TYPE_CHECKING:
-    from clm.infrastructure.llm.cache import SyncSnapshotCache
-    from clm.slides.sync import PairOutcome, SyncResult
-
 
 __all__ = [
     "CODE_ROLE",
@@ -42,17 +30,15 @@ __all__ = [
     "build_twin_cell",
     "cell_content_hash",
     "construct_of",
-    "record_snapshot",
     "role_of",
     "row_anchor",
     "set_header_tags",
     "swap_lang",
-    "target_path_for_outcome",
 ]
 
 # Markdown tags that name a narrative sync role. Duplicated from
-# ``clm.slides.sync`` / ``clm.slides.sync_plan`` to keep this low-level
-# write module free of an import cycle (sync_plan imports this module).
+# ``clm.slides.sync_plan`` to keep this low-level write module free of an
+# import cycle (sync_plan imports this module).
 _SYNC_ROLE_TAGS = {"slide", "subslide", "voiceover", "notes"}
 
 # The synthetic role for a localized (``lang=``) code cell that also carries a
@@ -125,21 +111,14 @@ def _set_trailing_blanks(cell: RawCell, n: int) -> None:
     cell.lines = [cell.lines[0], *body]
 
 
-def target_path_for_outcome(outcome: PairOutcome, result: SyncResult) -> Path:
-    """Return the file path the outcome would write to."""
-    if outcome.direction == "de->en":
-        return result.en_path
-    return result.de_path
-
-
 def cell_content_hash(text: str) -> str:
-    """Hash ``text`` the way :func:`clm.slides.sync._hash` does.
+    """Hash ``text`` the way ``Cell.content`` is hashed.
 
-    Both v1's ``_hash`` and ``Cell.content`` operate on the body as the
-    parser produces it: body lines joined by ``\\n`` then ``.strip()``-ed.
-    Apply-time writes carry whatever the LLM proposed (or the user
-    edited), which may have extra leading/trailing whitespace — strip
-    the same way before hashing so re-runs find a matching cache row.
+    ``Cell.content`` operates on the body as the parser produces it: body
+    lines joined by ``\\n`` then ``.strip()``-ed. Apply-time writes carry
+    whatever the LLM proposed (or the user edited), which may have extra
+    leading/trailing whitespace — strip the same way before hashing so
+    re-runs find a matching cache row.
     """
     return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()
 
@@ -259,50 +238,11 @@ def build_twin_cell(source_cell: RawCell, target_lang: str, target_body: str) ->
     return RawCell(lines=[header, *body_lines], line_number=0, metadata=parse_cell_header(header))
 
 
-def record_snapshot(
-    snapshot_cache: SyncSnapshotCache | None,
-    *,
-    result: SyncResult,
-    outcome: PairOutcome,
-    new_target_text: str,
-) -> None:
-    """Persist the post-write state as the new last-known-synced row.
-
-    The source side's hash was already computed by :mod:`clm.slides.sync`
-    and stashed on the outcome. The target side gets a fresh hash from
-    the text we just wrote (normalised by :func:`cell_content_hash`).
-    No-op when ``snapshot_cache`` is ``None`` or the outcome carries no
-    proposal.
-    """
-    if snapshot_cache is None:
-        return
-    if outcome.proposal is None:
-        return
-
-    target_hash = cell_content_hash(new_target_text)
-    if outcome.direction == "de->en":
-        de_hash = outcome.de_hash
-        en_hash = target_hash
-    else:
-        de_hash = target_hash
-        en_hash = outcome.en_hash
-
-    snapshot_cache.put(
-        de_path=str(result.de_path),
-        en_path=str(result.en_path),
-        slide_id=outcome.slide_id,
-        role=outcome.role,
-        de_hash=de_hash,
-        en_hash=en_hash,
-        direction=outcome.direction,
-    )
-
-
 @dataclass
 class FileState:
     """In-memory representation of one slide file, ready for batched writes.
 
-    Loaded once per path; ``replace_body`` mutates the matching cell
+    Loaded once per path; ``replace_cell_body`` mutates the matching cell
     in place; ``flush`` writes back via :func:`raw_cells.reconstruct`
     iff anything changed. Multiple writes against the same path share
     one ``FileState`` so they round-trip through a single read+write.
@@ -325,25 +265,6 @@ class FileState:
             ends_with_newline=text.endswith("\n"),
         )
 
-    def replace_body(self, outcome: PairOutcome, new_text: str) -> None:
-        """Replace the body of the target cell named by ``outcome``.
-
-        Target line number is ``outcome.en_line`` when direction is
-        ``de->en`` and ``outcome.de_line`` otherwise. The header line
-        and the trailing blank-line padding stay verbatim so the
-        surrounding bytes don't shift.
-        """
-        target_line = outcome.en_line if outcome.direction == "de->en" else outcome.de_line
-        for cell in self.cells:
-            if cell.line_number == target_line:
-                self._rewrite_cell_body(cell, new_text)
-                self.dirty = True
-                return
-        raise LookupError(
-            f"no cell at line {target_line} in {self.path}; "
-            "file changed since the sync pass parsed it?"
-        )
-
     def find_cell(self, slide_id: str, role: str) -> RawCell | None:
         """Return the cell carrying ``slide_id`` in ``role``, or ``None``.
 
@@ -360,8 +281,7 @@ class FileState:
         """Rewrite the body of the ``(slide_id, role)`` cell in place.
 
         Returns ``False`` when no such cell exists. Header and trailing
-        blank-line padding stay verbatim (same contract as
-        :meth:`replace_body`).
+        blank-line padding stay verbatim.
         """
         cell = self.find_cell(slide_id, role)
         if cell is None:

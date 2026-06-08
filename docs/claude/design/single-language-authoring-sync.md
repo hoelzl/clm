@@ -5,6 +5,21 @@
 **Date**: 2026-05-31
 **Scope**: `src/clm/slides/sync.py`, `sync_direction.py`, `sync_writeback.py`,
 `assign_ids.py`, the `clm slides sync` CLI, and the LLM sync/translation path
+
+> **2026-06-08 — legacy v1 engine deleted.** The dormant Phase-7-v1 modules
+> referenced throughout this note — `sync.py` (the `sync_split_pair`
+> pair-walker + `PairOutcome` / `SyncResult` / `SyncOptions` / `SyncIssue`
+> dataclasses), `sync_walker.py` (the v1 `run_interactive_walker`),
+> `sync_trivial.py`, and `sync_direction.py` (`infer_source_lang`) — **no
+> longer exist**. They were unused by `src/` (only their own tests imported
+> them) once the CLI was rewired onto the modern engine (`sync_plan.py` →
+> `sync_apply.py` / `sync_code.py`, with `sync_plan_walker.py` for
+> `--interactive`). `sync_writeback.py` survives but lost its v1-only members
+> (`target_path_for_outcome`, `FileState.replace_body`, `record_snapshot`).
+> The shared LLM **judge** (`SyncJudge` and friends in `infrastructure/llm/`)
+> was never legacy and is still used by the engine's `edit` path. Mentions of
+> the deleted modules below are kept as historical record — do not go looking
+> for those files.
 **Issues**: [#166](https://github.com/hoelzl/clm/issues/166) (this workflow) ·
 [#162](https://github.com/hoelzl/clm/issues/162) (the cross-language
 `slide_id` invariant it serves)
@@ -655,9 +670,11 @@ a `migration.md` breaking-change entry) and the CHANGELOG are updated per the
 **Info Topics Maintenance Rule**.
 
 The legacy engine modules (`sync.py`, `sync_walker.py`, `sync_trivial.py`,
-`sync_direction.py`) are left **dormant** (still unit-tested) rather than deleted
-— nothing in `src` imports them now that the CLI is rewired; pruning them is a
-follow-up so this phase's diff stays focused on the CLI + docs.
+`sync_direction.py`) were left **dormant** (still unit-tested) rather than
+deleted in Phase 5 so that phase's diff stayed focused on the CLI + docs.
+**That follow-up pruning landed 2026-06-08 — all four modules and their tests
+are now deleted** (see the status banner at the top of this note); nothing in
+`src` imported them once the CLI was rewired.
 
 Decision (user, 2026-05-31): both `--source-lang` and `--apply`/`--trivial` are
 **hard-removed**, not deprecated-and-ignored — a clean pre-1.0 surface for a
