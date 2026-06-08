@@ -131,7 +131,7 @@ CLM has several optional dependency groups for different features:
 
 **LLM Features**:
 - **[summarize]**: openai
-  - Required for: `clm summarize` command (LLM-powered course summaries) and `clm polish` (LLM note cleanup)
+  - Required for: `clm export summary` command (LLM-powered course summaries) and `clm polish` (LLM note cleanup)
   - Install: `pip install -e ".[summarize]"`
 
 **Voiceover**:

@@ -98,10 +98,10 @@ Optional `<section>` attributes:
 
 | Attribute | Description |
 |-----------|-------------|
-| `enabled` | `"true"` (default) or `"false"`, case-insensitive. A disabled section is dropped from the parsed spec entirely, so `clm build`, `clm outline`, `clm validate`, and all MCP tools ignore it without needing code changes. Disabled sections may omit `<topics>` or reference topic IDs that do not yet exist — they are never built or validated, which lets a full roadmap spec live as a single file instead of carrying a separate `-build.xml` subset. |
+| `enabled` | `"true"` (default) or `"false"`, case-insensitive. A disabled section is dropped from the parsed spec entirely, so `clm build`, `clm export outline`, `clm validate`, and all MCP tools ignore it without needing code changes. Disabled sections may omit `<topics>` or reference topic IDs that do not yet exist — they are never built or validated, which lets a full roadmap spec live as a single file instead of carrying a separate `-build.xml` subset. |
 | `id` | Optional stable identifier for the section (e.g. `id="w03"`). Recommended for courses that are frequently filtered, because IDs are stable under reordering and renaming. |
 | `module` | Optional module-directory binding (e.g. `module="module_545_ml_azav_cohort_2026_04"`). When set, every `<topic>` inside this section resolves only against that module — duplicate topic IDs in other modules are ignored. This is the supported mechanism for cohort archives or course variants that share topic IDs with the live module. The value is the literal directory name under `slides/`. Per-topic `module=` (see below) overrides the section default for individual topics. |
-| `optional` | `"true"` or `"false"` (default `false`). Marks a whole week an **optional module**: excluded from `clm schedule` / `clm outline` listings unless `--include-optional` is passed. Presentation-only — it never affects the build. Same semantics as `optional` on `<subsection>` (see below); `optional` + `enabled="false"` is never listed. An excluded optional section keeps its declared week number in `clm schedule`. |
+| `optional` | `"true"` or `"false"` (default `false`). Marks a whole week an **optional module**: excluded from `clm export schedule` / `clm export outline` listings unless `--include-optional` is passed. Presentation-only — it never affects the build. Same semantics as `optional` on `<subsection>` (see below); `optional` + `enabled="false"` is never listed. An excluded optional section keeps its declared week number in `clm export schedule`. |
 
 Example of a roadmap section deferred until its topics exist:
 
@@ -232,7 +232,7 @@ it collects the contained `<topic>`s in document order and ignores the
 wrapper, so a spec with subsections builds **byte-identically** to the same
 spec with the `<subsection>` wrappers removed. Subsections have **no** effect
 on output directories or topic→directory resolution. The grouping is retained
-only for `clm outline` (renders subsections indented) and `clm schedule`
+only for `clm export outline` (renders subsections indented) and `clm export schedule`
 (exports the weekday deck listing).
 
 **Granularity is topic-level**: a subsection holds whole topics, and a
@@ -245,7 +245,7 @@ Optional `<subsection>` attributes:
 |-----------|-------------|
 | `weekday` | Optional, one or more language-neutral tokens from `{mon, tue, wed, thu, fri, sat, sun}` (case-insensitive), localized at render time. A single token (`weekday="mon"`) or a comma-separated list (`weekday="mon,tue,wed"`) so **one subsection can span several days**; a multi-day subsection renders as a joined label ("Monday, Tuesday, Wednesday"). `sat`/`sun` are valid; AZAV uses Mon–Fri only. A closed enum lets the validator check ordering/uniqueness/coverage. Omit it for a generic thematic group that carries only a `<name>`. |
 | `enabled` | `"true"` (default) or `"false"`. A disabled subsection is dropped entirely from the build — topics and all — exactly like a disabled `<section>`. It is retained only by tooling parsed with `--include-disabled`. |
-| `optional` | `"true"` or `"false"` (default `false`). An **optional module**: excluded from `clm schedule` / `clm outline` listings unless `--include-optional` is passed. Presentation-only — it never affects the build (the topics still flatten in). `optional` + `enabled="false"` is never listed, flag or not (disabled wins). The same `optional` attribute is also accepted on `<section>` to mark a whole week optional. |
+| `optional` | `"true"` or `"false"` (default `false`). An **optional module**: excluded from `clm export schedule` / `clm export outline` listings unless `--include-optional` is passed. Presentation-only — it never affects the build (the topics still flatten in). `optional` + `enabled="false"` is never listed, flag or not (disabled wins). The same `optional` attribute is also accepted on `<section>` to mark a whole week optional. |
 
 A `<subsection>` may also carry an optional `<name>` (`<de>`/`<en>`) label
 override; when omitted, the displayed label is derived from `weekday`. A

@@ -1,7 +1,7 @@
 """Comment-token (``//``-family) coverage for CLI discovery + dispatch.
 
 Problem A Phase 5: recursive slide-file discovery finds .cs/.cpp/… decks (not just
-.py), ``clm validate`` infers "slides" for any slide extension, and ``clm summarize``
+.py), ``clm validate`` infers "slides" for any slide extension, and ``clm export summary``
 extracts content from //-family decks. (Voiceover/MCP already work via parse_slides,
 which resolves the token from the path.)
 """

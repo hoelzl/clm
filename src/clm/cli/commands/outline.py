@@ -10,6 +10,18 @@ from pathlib import Path
 
 import click
 
+from clm.cli.commands._export_shared import (
+    check_exclusive_output,
+    language_option,
+    output_options,
+    section_visible,
+    selection_options,
+    spec_argument,
+    subsection_visible,
+)
+from clm.cli.commands._export_shared import (
+    disabled_topic_slides as _disabled_topic_slides,
+)
 from clm.cli.commands.schedule import subsection_label
 from clm.core.course import Course
 from clm.core.course_files.notebook_file import NotebookFile
@@ -19,47 +31,9 @@ from clm.core.course_spec import (
     CourseSpecError,
     SectionSpec,
     SubsectionSpec,
-    TopicSpec,
 )
 from clm.core.section import Section
-from clm.core.utils.notebook_utils import find_notebook_titles
 from clm.core.utils.text_utils import sanitize_file_name
-from clm.infrastructure.utils.path_utils import is_slides_file
-
-
-def _disabled_topic_slides(
-    course: Course, topic_spec: TopicSpec, language: str
-) -> list[tuple[str, str]] | None:
-    """Return ``(file_name, title)`` pairs for slide files in a disabled topic.
-
-    Resolves ``topic_spec.id`` against the course's filesystem-wide topic map
-    and reads the H1 header from each slide file the same way
-    :class:`NotebookFile` does. Returns ``None`` when the topic id cannot be
-    resolved (so callers can fall back to the legacy ``<topic_id>`` display).
-    Returns an empty list when the topic resolves but contains no slide files.
-    """
-    topic_path = course._topic_path_map.get(topic_spec.id)
-    if topic_path is None:
-        return None
-
-    slide_paths: list[Path] = []
-    if topic_path.is_file():
-        if is_slides_file(topic_path):
-            slide_paths.append(topic_path)
-    elif topic_path.is_dir():
-        for child in sorted(topic_path.iterdir()):
-            if child.is_file() and is_slides_file(child):
-                slide_paths.append(child)
-
-    results: list[tuple[str, str]] = []
-    for path in slide_paths:
-        try:
-            text = path.read_text(encoding="utf-8")
-            title = find_notebook_titles(text, default=path.stem)
-            results.append((path.name, title[language]))
-        except (OSError, ValueError):
-            results.append((path.name, path.stem))
-    return results
 
 
 def _topic_deck_titles(topic, language: str) -> list[str]:
@@ -110,23 +84,60 @@ def _match_full_section(
     return None
 
 
-def _subsections_to_render(
+def _candidate_subsections(
     section_spec: SectionSpec,
     full_sections: list[SectionSpec] | None,
     include_disabled: bool,
 ) -> list[SubsectionSpec]:
-    """Return the subsections to render for a section.
+    """All declared subsections of a section, *before* visibility filtering.
 
     Normally the section's own (enabled-only) subsections; when
-    ``include_disabled`` is set and the full (``keep_disabled``) sections
-    are available, the matching full section's subsections — which also
-    carry the disabled ones.
+    ``include_disabled`` is set and the full (``keep_disabled``) sections are
+    available, the matching full section's subsections — which also carry the
+    disabled ones. Used both as the render source and as the set whose topics
+    are *not* "bare" (so hiding a subsection hides its topics rather than
+    demoting them to flat bullets).
     """
     if include_disabled and full_sections is not None:
         full = _match_full_section(section_spec, full_sections)
         if full is not None:
             return full.subsections
     return section_spec.subsections
+
+
+def _subsections_to_render(
+    candidates: list[SubsectionSpec],
+    include_disabled: bool,
+    include_optional: bool,
+) -> list[SubsectionSpec]:
+    """Filter candidate subsections down to the visible ones."""
+    return [
+        sub
+        for sub in candidates
+        if subsection_visible(
+            sub, include_optional=include_optional, include_disabled=include_disabled
+        )
+    ]
+
+
+def _visible_topic_ids(
+    section: Section,
+    candidates: list[SubsectionSpec],
+    visible: list[SubsectionSpec],
+) -> set[str]:
+    """Topic ids that should appear in a section's flat ``topics`` list.
+
+    A topic is visible if it is bare (under no declared subsection) or it is
+    under a *visible* subsection. Topics under a hidden (optional/disabled)
+    subsection are excluded.
+    """
+    candidate_ids = {t.id for sub in candidates for t in sub.topics}
+    visible_ids = {t.id for sub in visible for t in sub.topics}
+    return {
+        topic.id
+        for topic in section.topics
+        if topic.id not in candidate_ids or topic.id in visible_ids
+    }
 
 
 def _subsection_deck_titles(
@@ -160,18 +171,20 @@ def _subsection_deck_titles(
 def _render_section_subsections(
     section: Section,
     subsections: list[SubsectionSpec],
+    candidates: list[SubsectionSpec],
     course: Course,
     language: str,
 ) -> list[str]:
     """Render the bullet lines for a section that uses subsections.
 
-    Bare topics (not under any subsection) are listed first as flat
-    bullets; each subsection then renders as a bold-label bullet with its
-    decks indented beneath it. Disabled subsections get a ``(disabled)``
-    marker.
+    Bare topics (under *no* declared subsection) are listed first as flat
+    bullets; each visible subsection then renders as a bold-label bullet with
+    its decks indented beneath it. Disabled subsections get a ``(disabled)``
+    marker. ``candidates`` is the full declared subsection set (visible or not)
+    so a topic under a hidden subsection is not mistaken for a bare topic.
     """
     resolved_titles = {topic.id: _topic_deck_titles(topic, language) for topic in section.topics}
-    subsection_topic_ids = {t.id for sub in subsections for t in sub.topics}
+    subsection_topic_ids = {t.id for sub in candidates for t in sub.topics}
 
     lines: list[str] = []
     # Bare topics first, in section (document) order.
@@ -252,6 +265,7 @@ def generate_outline(
     sections_only: bool = False,
     full_sections: list[SectionSpec] | None = None,
     include_disabled: bool = False,
+    include_optional: bool = False,
 ) -> str:
     """Generate a Markdown outline for a course.
 
@@ -264,6 +278,8 @@ def generate_outline(
             appended at the end.
         sections_only: When True, emit only section headings (no topic
             bullet points).
+        include_optional: When False (default), sections/subsections marked
+            ``optional="true"`` are omitted.
 
     Returns:
         Markdown string with the course outline
@@ -278,13 +294,18 @@ def generate_outline(
     # selection is applied in the outline path, and the spec was parsed
     # enabled-only). The spec side carries the retained subsection grouping.
     for section, section_spec in zip(course.sections, course.spec.sections, strict=True):
+        if not section_visible(section_spec, include_optional=include_optional):
+            continue
         lines.append(f"## {section.name[language]}")
         lines.append("")
         if sections_only:
             continue
-        subsections = _subsections_to_render(section_spec, full_sections, include_disabled)
-        if subsections:
-            lines.extend(_render_section_subsections(section, subsections, course, language))
+        candidates = _candidate_subsections(section_spec, full_sections, include_disabled)
+        subsections = _subsections_to_render(candidates, include_disabled, include_optional)
+        if candidates:
+            lines.extend(
+                _render_section_subsections(section, subsections, candidates, course, language)
+            )
         else:
             # Unchanged flat rendering for sections without subsections.
             for notebook in section.notebooks:
@@ -294,6 +315,8 @@ def generate_outline(
         lines.append("")
 
     for section_spec in disabled_sections or []:
+        if section_spec.optional and not include_optional:
+            continue
         lines.append(f"## {section_spec.name[language]} (disabled)")
         lines.append("")
         if sections_only:
@@ -326,6 +349,7 @@ def generate_outline_json(
     sections_only: bool = False,
     full_sections: list[SectionSpec] | None = None,
     include_disabled: bool = False,
+    include_optional: bool = False,
 ) -> dict:
     """Generate a structured JSON outline for a course.
 
@@ -337,12 +361,16 @@ def generate_outline_json(
             appended after the enabled sections.
         sections_only: When True, omit the ``topics`` list from each section
             entry.
+        include_optional: When False (default), sections/subsections marked
+            ``optional="true"`` are omitted.
 
     Returns:
         Dict with the course outline in structured form.
     """
     sections: list[dict] = []
     for section, section_spec in zip(course.sections, course.spec.sections, strict=True):
+        if not section_visible(section_spec, include_optional=include_optional):
+            continue
         entry: dict = {
             "number": len(sections) + 1,
             "name": section.name[language],
@@ -351,8 +379,13 @@ def generate_outline_json(
         if section.id is not None:
             entry["id"] = section.id
         if not sections_only:
+            candidates = _candidate_subsections(section_spec, full_sections, include_disabled)
+            subsections = _subsections_to_render(candidates, include_disabled, include_optional)
+            visible_topic_ids = _visible_topic_ids(section, candidates, subsections)
             topics: list[dict] = []
             for topic in section.topics:
+                if topic.id not in visible_topic_ids:
+                    continue
                 slides: list[dict] = []
                 for f in topic.files:
                     if isinstance(f, NotebookFile):
@@ -370,12 +403,13 @@ def generate_outline_json(
                     }
                 )
             entry["topics"] = topics
-            subsections = _subsections_to_render(section_spec, full_sections, include_disabled)
-            if subsections:
+            if candidates:
                 entry["subsections"] = _subsections_json(section, subsections, course, language)
         sections.append(entry)
 
     for section_spec in disabled_sections or []:
+        if section_spec.optional and not include_optional:
+            continue
         entry = {
             "number": len(sections) + 1,
             "name": section_spec.name[language],
@@ -430,27 +464,10 @@ def titles_are_identical(course: Course) -> bool:
 
 
 @click.command()
-@click.argument(
-    "spec-file",
-    type=click.Path(exists=True, file_okay=True, dir_okay=False, path_type=Path),
-)
-@click.option(
-    "-o",
-    "--output",
-    "output_file",
-    type=click.Path(dir_okay=False, path_type=Path),
-    help="Write output to FILE (mutually exclusive with --output-dir).",
-)
-@click.option(
-    "-d",
-    "--output-dir",
-    type=click.Path(file_okay=False, path_type=Path),
-    help="Write to DIR with auto-generated filenames (mutually exclusive with --output).",
-)
-@click.option(
-    "-L",
-    "--language",
-    type=click.Choice(["de", "en"], case_sensitive=False),
+@spec_argument
+@output_options
+@language_option(
+    default=None,
     help="Language for the outline. Default: 'en' for stdout/--output, both for --output-dir.",
 )
 @click.option(
@@ -461,13 +478,7 @@ def titles_are_identical(course: Course) -> bool:
     default="markdown",
     help="Output format. Default: markdown.",
 )
-@click.option(
-    "--include-disabled",
-    is_flag=True,
-    default=False,
-    help="Include sections marked 'enabled=\"false\"' in the output, "
-    "tagged with a (disabled) marker. Default: disabled sections are omitted.",
-)
+@selection_options
 @click.option(
     "--sections-only",
     is_flag=True,
@@ -480,6 +491,7 @@ def outline(
     output_dir: Path | None,
     language: str | None,
     output_format: str,
+    include_optional: bool,
     include_disabled: bool,
     sections_only: bool,
 ):
@@ -490,16 +502,16 @@ def outline(
 
     \b
     Examples:
-        clm outline course.xml                  # Markdown to stdout
-        clm outline course.xml --format json    # JSON to stdout
-        clm outline course.xml -L de            # German outline
-        clm outline course.xml -o out.md        # Write to file
-        clm outline course.xml -d ./docs        # Both languages to directory
-        clm outline course.xml --sections-only  # Section headings only
+        clm export outline course.xml                  # Markdown to stdout
+        clm export outline course.xml --format json    # JSON to stdout
+        clm export outline course.xml -L de            # German outline
+        clm export outline course.xml -o out.md        # Write to file
+        clm export outline course.xml -d ./docs        # Both languages to directory
+        clm export outline course.xml --sections-only  # Section headings only
+        clm export outline course.xml --include-optional  # Keep optional modules
     """
     # Validate mutually exclusive options
-    if output_file and output_dir:
-        raise click.UsageError("--output and --output-dir are mutually exclusive.")
+    check_exclusive_output(output_file, output_dir)
 
     # Load course specification.
     # The main spec always drops disabled sections; if --include-disabled is
@@ -554,6 +566,7 @@ def outline(
                     sections_only=sections_only,
                     full_sections=full_sections,
                     include_disabled=include_disabled,
+                    include_optional=include_optional,
                 ),
                 indent=2,
             )
@@ -564,6 +577,7 @@ def outline(
             sections_only=sections_only,
             full_sections=full_sections,
             include_disabled=include_disabled,
+            include_optional=include_optional,
         )
 
     # Determine languages to generate

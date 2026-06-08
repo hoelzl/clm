@@ -375,43 +375,63 @@ List output targets defined in a course spec file.
 clm targets SPEC_FILE
 ```
 
-### `clm outline`
+### `clm export`
 
-Generate a Markdown outline of a course.
+Group for the **course-document exports** — commands that turn a course spec
+into a human-readable document: `outline`, `schedule`, and `summary`. (These
+replace the former flat `clm outline` / `clm schedule` / `clm summarize`
+top-level commands, which were removed.)
+
+All three share a common option vocabulary:
+
+| Option | Description |
+|--------|-------------|
+| `-L, --language [de\|en]` | Language of the generated document (defaults differ per command). |
+| `-o, --output FILE` | Write to FILE (mutually exclusive with `-d`). |
+| `-d, --output-dir DIR` | Write to DIR with auto-generated filenames (mutually exclusive with `-o`). |
+| `--include-optional` | Include modules marked `optional="true"` (on a `<section>` or `<subsection>`). Off by default. |
+| `--include-disabled` | Include sections/subsections marked `enabled="false"`, tagged `(disabled)`. Off by default. |
+
+`optional="true"` and `enabled="false"` are **presentation-only** for these
+commands — they never change the build, only what appears in the document. An
+element that is both optional and disabled needs **both** flags to appear.
+
+#### `clm export outline`
+
+Generate a Markdown (or JSON) outline of a course.
 
 ```
-clm outline [OPTIONS] SPEC_FILE
+clm export outline [OPTIONS] SPEC_FILE
 ```
 
 | Option | Description |
 |--------|-------------|
-| `-o, --output FILE` | Write to file (mutually exclusive with `-d`) |
-| `-d, --output-dir DIR` | Write both languages to directory |
-| `-L, --language [de\|en]` | Language selection |
-| `--format [markdown\|json]` | Output format (default: markdown) |
-| `--include-disabled` | Include sections marked `enabled="false"` with a `(disabled)` marker (default: omitted). Topics that resolve to slide files on disk show the H1 header (each slide rendered as its own bullet); unresolvable topics fall back to the topic id |
-| `--sections-only` | Emit only section headings, omitting per-topic/slide entries within each section |
+| `-o/-d/-L/--include-optional/--include-disabled` | Shared options (see `clm export` above; `-L` defaults to `en` for stdout/`-o`, both languages for `-d`). |
+| `--format [markdown\|json]` | Output format (default: markdown). |
+| `--sections-only` | Emit only section headings, omitting per-topic/slide entries within each section. |
 
 When a section uses the optional `<subsection>` layer (see
 `clm info spec-files`), the outline renders each subsection as an indented
 group: a bold weekday/label bullet with the subsection's decks nested beneath
-it, after any bare (unscheduled) topics. `--include-disabled` additionally
+it, after any bare (unscheduled) topics. Hiding an optional/disabled subsection
+also hides its topics (they are not demoted to bare bullets). `--include-disabled`
 surfaces disabled subsections (and disabled sections) with a `(disabled)`
-marker. The JSON format adds a `subsections` array to each section that uses
-them (alongside the existing flat `topics` list).
+marker, reading their decks from disk. The JSON format adds a `subsections`
+array to each section that uses them (alongside the flat `topics` list).
 
 Examples:
 
 ```bash
-clm outline course.xml
-clm outline course.xml -L de
-clm outline course.xml -d ./docs
-clm outline course.xml --format json
-clm outline course.xml --include-disabled
-clm outline course.xml --sections-only
+clm export outline course.xml
+clm export outline course.xml -L de
+clm export outline course.xml -d ./docs
+clm export outline course.xml --format json
+clm export outline course.xml --include-optional
+clm export outline course.xml --include-disabled
+clm export outline course.xml --sections-only
 ```
 
-### `clm schedule`
+#### `clm export schedule`
 
 Export a **day-of-week deck listing** for certification (e.g. AZAV requires a
 listing of which weekday each video/slide deck is presented, per week). The
@@ -420,16 +440,17 @@ listing is built from the spec's optional `<subsection weekday="...">` layer
 against the decks discovered on disk.
 
 ```
-clm schedule [OPTIONS] SPEC_FILE
+clm export schedule [OPTIONS] SPEC_FILE
 ```
 
 | Option | Description |
 |--------|-------------|
 | `-L, --language`, `--lang [de\|en]` | Language for deck titles/labels (default: `de`). Titles come from the matching-language `header`/`header_de`/`header_en` macro. |
 | `-f, --format [md\|csv]` | Output format (default: `md`). |
-| `-o, --output FILE` | Write to FILE instead of stdout. |
+| `-o, --output FILE` / `-d, --output-dir DIR` | Write to FILE / to a directory (filename `<course>-schedule-<lang>.<ext>`). |
 | `--no-topic` | Omit the Topic column, leaving just day and video/slides — the columns a certification authority needs (applies to both `md` and `csv`). |
-| `--include-optional` | Include modules marked `optional="true"` (on a `<section>` or `<subsection>`). Off by default; optional modules that are also `enabled="false"` are never listed, flag or not. |
+| `--include-optional` | Include modules marked `optional="true"` (on a `<section>` or `<subsection>`). |
+| `--include-disabled` | Surface disabled subsections/sections (read from disk), tagged `(disabled)`; the CSV gains a trailing `disabled` column. |
 | `--data-dir DIR` | Course data directory (contains `slides/`). Default: inferred from the spec location. |
 
 Each listing is **single-language** — run once per language to produce both.
@@ -444,24 +465,28 @@ order within each topic, matching the build.
   (`weekday="mon,tue"`) renders a single joined label.
 - **`--format csv`**: one row per deck, with header
   `week,week_title,weekday,video_title,topic,deck_file` (`topic` dropped with
-  `--no-topic`). A multi-day subsection joins its tokens in the `weekday` cell
-  (`mon,tue`, quoted by the CSV writer).
+  `--no-topic`; a trailing `disabled` column is added with `--include-disabled`).
+  A multi-day subsection joins its tokens in the `weekday` cell (`mon,tue`,
+  quoted by the CSV writer).
 
-Only enabled subsections are listed; optional ones require `--include-optional`.
-An excluded optional `<section>` keeps its declared week number (so omitting an
-optional Week 3 leaves Weeks 1, 2, 4, … rather than renumbering). Bare topics
-that sit under no subsection do not appear in the listing (`clm validate`
-reports them as an info finding).
+Only enabled subsections are listed by default; optional ones require
+`--include-optional` and disabled ones `--include-disabled`. An excluded
+optional `<section>` keeps its declared week number (so omitting an optional
+Week 3 leaves Weeks 1, 2, 4, … rather than renumbering). Bare topics that sit
+under no subsection do not appear in the listing (`clm validate` reports them as
+an info finding).
 
 Examples:
 
 ```bash
-clm schedule course.xml                  # German Markdown to stdout
-clm schedule course.xml -L en            # English listing
-clm schedule course.xml -f csv           # CSV (one row per deck)
-clm schedule course.xml --no-topic       # Day + video/slides only (cert authority)
-clm schedule course.xml --include-optional   # Add optional modules
-clm schedule course.xml -o schedule.md   # Write to a file
+clm export schedule course.xml                  # German Markdown to stdout
+clm export schedule course.xml -L en            # English listing
+clm export schedule course.xml -f csv           # CSV (one row per deck)
+clm export schedule course.xml --no-topic       # Day + video/slides only (cert authority)
+clm export schedule course.xml --include-optional   # Add optional modules
+clm export schedule course.xml --include-disabled   # Show disabled days, tagged
+clm export schedule course.xml -o schedule.md   # Write to a file
+clm export schedule course.xml -d ./docs        # Write into a directory
 ```
 
 ### `clm topic resolve`
@@ -2392,12 +2417,14 @@ clm workers reap --force           # reap this worktree's orphans
 clm workers reap --all --force     # emergency cross-worktree cleanup
 ```
 
-### `clm summarize`
+#### `clm export summary`
 
-Generate LLM-powered markdown summaries of course content. Requires `clm[summarize]` extra.
+Generate LLM-powered markdown summaries of course content. Requires
+`clm[summarize]` extra. (Canonical name `summary`; `clm export summarize` is
+kept as an alias.)
 
 ```
-clm summarize [OPTIONS] SPEC_FILE
+clm export summary [OPTIONS] SPEC_FILE
 ```
 
 | Option | Description |
@@ -2405,9 +2432,10 @@ clm summarize [OPTIONS] SPEC_FILE
 | `--audience [client\|trainer]` | Target audience (required) |
 | `--granularity [notebook\|section]` | Summary level (default: `notebook`) |
 | `--style [prose\|bullets]` | Output formatting (default: `prose`) |
-| `-L, --language [de\|en]` | Language for outline structure (default: `en`) |
-| `-o, --output FILE` | Write output to file |
-| `-d, --output-dir DIR` | Write to directory with auto-generated filename |
+| `-L, --language [de\|en]` | Language for the summary structure (default: `en`) |
+| `-o, --output FILE` / `-d, --output-dir DIR` | Shared output options (see `clm export`). |
+| `--include-optional` | Include optional **whole sections** (gates sections only — a summary flattens each section to its notebooks and cannot drop optional *subsections*). |
+| `--include-disabled` | Summarize disabled whole sections too (read from disk), tagged `(disabled)`. |
 | `--model TEXT` | LLM model identifier |
 | `--api-base TEXT` | Custom API base URL |
 | `--no-cache` | Skip cache, re-generate all summaries |
@@ -2417,11 +2445,11 @@ clm summarize [OPTIONS] SPEC_FILE
 Examples:
 
 ```bash
-clm summarize course.xml --audience client --dry-run
-clm summarize course.xml --audience trainer -o summary.md
-clm summarize course.xml --audience client -d ./docs
-clm summarize course.xml --audience trainer --model openai/gpt-4o
-clm summarize course.xml --audience client --style bullets
+clm export summary course.xml --audience client --dry-run
+clm export summary course.xml --audience trainer -o summary.md
+clm export summary course.xml --audience client -d ./docs
+clm export summary course.xml --audience trainer --model openai/gpt-4o
+clm export summary course.xml --audience client --style bullets
 ```
 
 ### `clm voiceover`

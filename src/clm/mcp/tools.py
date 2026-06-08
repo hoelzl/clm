@@ -265,7 +265,12 @@ async def handle_course_outline(
         full_spec = CourseSpec.from_file(spec_path, keep_disabled=True)
         disabled_sections = [s for s in full_spec.sections if not s.enabled]
 
-    outline = generate_outline_json(course, language, disabled_sections=disabled_sections)
+    # The MCP outline is a structured data view for agents, so it keeps showing
+    # optional modules (its pre-export-group behavior); only ``include_disabled``
+    # gates content here.
+    outline = generate_outline_json(
+        course, language, disabled_sections=disabled_sections, include_optional=True
+    )
     return json.dumps(outline, indent=2)
 
 

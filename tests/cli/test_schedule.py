@@ -254,7 +254,7 @@ class TestRenderCsv:
 class TestScheduleCli:
     def test_markdown_default_german(self):
         runner = CliRunner()
-        result = runner.invoke(cli, ["schedule", str(SPEC_PATH)])
+        result = runner.invoke(cli, ["export", "schedule", str(SPEC_PATH)])
         assert result.exit_code == 0, result.output
         assert "# Mein Kurs" in result.output
         assert "## Woche 1" in result.output
@@ -263,14 +263,14 @@ class TestScheduleCli:
 
     def test_markdown_english(self):
         runner = CliRunner()
-        result = runner.invoke(cli, ["schedule", str(SPEC_PATH), "-L", "en"])
+        result = runner.invoke(cli, ["export", "schedule", str(SPEC_PATH), "-L", "en"])
         assert result.exit_code == 0, result.output
         assert "# My Course" in result.output
         assert "| Monday | Some Topic from Test 1 | some_topic_from_test_1 |" in result.output
 
     def test_csv_format(self):
         runner = CliRunner()
-        result = runner.invoke(cli, ["schedule", str(SPEC_PATH), "-f", "csv", "-L", "en"])
+        result = runner.invoke(cli, ["export", "schedule", str(SPEC_PATH), "-f", "csv", "-L", "en"])
         assert result.exit_code == 0, result.output
         assert "week,week_title,weekday,video_title,topic,deck_file" in result.output
         assert "1,Week 1,mon,Some Topic from Test 1,some_topic_from_test_1," in result.output
@@ -279,7 +279,7 @@ class TestScheduleCli:
     def test_output_to_file(self, tmp_path):
         out_file = tmp_path / "schedule.md"
         runner = CliRunner()
-        result = runner.invoke(cli, ["schedule", str(SPEC_PATH), "-o", str(out_file)])
+        result = runner.invoke(cli, ["export", "schedule", str(SPEC_PATH), "-o", str(out_file)])
         assert result.exit_code == 0, result.output
         assert out_file.exists()
         assert "## Woche 1" in out_file.read_text(encoding="utf-8")
@@ -287,14 +287,14 @@ class TestScheduleCli:
     def test_spec_without_subsections_notes_empty(self):
         runner = CliRunner()
         result = runner.invoke(
-            cli, ["schedule", "tests/test-data/course-specs/test-spec-1.xml", "-L", "en"]
+            cli, ["export", "schedule", "tests/test-data/course-specs/test-spec-1.xml", "-L", "en"]
         )
         assert result.exit_code == 0, result.output
         assert "No days scheduled." in result.output
 
     def test_help(self):
         runner = CliRunner()
-        result = runner.invoke(cli, ["schedule", "--help"])
+        result = runner.invoke(cli, ["export", "schedule", "--help"])
         assert result.exit_code == 0
         assert "day-of-week" in result.output.lower() or "weekday" in result.output.lower()
 
@@ -302,11 +302,16 @@ class TestScheduleCli:
         runner = CliRunner()
         result = runner.invoke(cli, ["--help"])
         assert result.exit_code == 0
-        assert "schedule" in result.output
+        assert "export" in result.output
+        sub = runner.invoke(cli, ["export", "--help"])
+        assert sub.exit_code == 0
+        assert "schedule" in sub.output
 
     def test_no_topic_flag_markdown(self):
         runner = CliRunner()
-        result = runner.invoke(cli, ["schedule", str(SPEC_PATH), "-L", "en", "--no-topic"])
+        result = runner.invoke(
+            cli, ["export", "schedule", str(SPEC_PATH), "-L", "en", "--no-topic"]
+        )
         assert result.exit_code == 0, result.output
         assert "| Day | Video (slides) |" in result.output
         # The Topic *column* (header and topic-id cells) is gone; deck titles
@@ -317,7 +322,7 @@ class TestScheduleCli:
     def test_no_topic_flag_csv(self):
         runner = CliRunner()
         result = runner.invoke(
-            cli, ["schedule", str(SPEC_PATH), "-f", "csv", "-L", "en", "--no-topic"]
+            cli, ["export", "schedule", str(SPEC_PATH), "-f", "csv", "-L", "en", "--no-topic"]
         )
         assert result.exit_code == 0, result.output
         assert "week,week_title,weekday,video_title,deck_file" in result.output
@@ -330,7 +335,7 @@ OPTIONAL_SPEC_PATH = Path("tests/test-data/course-specs/subsection-optional-spec
 class TestScheduleOptional:
     def test_optional_excluded_by_default(self):
         runner = CliRunner()
-        result = runner.invoke(cli, ["schedule", str(OPTIONAL_SPEC_PATH), "-L", "en"])
+        result = runner.invoke(cli, ["export", "schedule", str(OPTIONAL_SPEC_PATH), "-L", "en"])
         assert result.exit_code == 0, result.output
         # The multi-day subsection localizes to a joined label.
         assert "| Monday, Tuesday |" in result.output
@@ -342,7 +347,7 @@ class TestScheduleOptional:
     def test_include_optional_adds_modules(self):
         runner = CliRunner()
         result = runner.invoke(
-            cli, ["schedule", str(OPTIONAL_SPEC_PATH), "-L", "en", "--include-optional"]
+            cli, ["export", "schedule", str(OPTIONAL_SPEC_PATH), "-L", "en", "--include-optional"]
         )
         assert result.exit_code == 0, result.output
         assert "## Week 2" in result.output
@@ -351,9 +356,86 @@ class TestScheduleOptional:
 
     def test_excluded_optional_section_keeps_week_numbering(self):
         runner = CliRunner()
-        result = runner.invoke(cli, ["schedule", str(OPTIONAL_SPEC_PATH), "-f", "csv", "-L", "en"])
+        result = runner.invoke(
+            cli, ["export", "schedule", str(OPTIONAL_SPEC_PATH), "-f", "csv", "-L", "en"]
+        )
         assert result.exit_code == 0, result.output
         # Week 1 is present; the optional Week 2 leaves no week-2 rows.
         assert ",mon,tue," not in result.output  # weekday cell is the joined token set
         assert '"mon,tue"' in result.output
         assert "2,Week 2," not in result.output
+
+
+DISABLED_SPEC_PATH = Path("tests/test-data/course-specs/subsection-disabled-spec.xml")
+
+
+class TestScheduleIncludeDisabled:
+    def test_disabled_subsection_hidden_by_default(self):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["export", "schedule", str(DISABLED_SPEC_PATH), "-L", "en"])
+        assert result.exit_code == 0, result.output
+        assert "| Monday | Some Topic from Test 1 |" in result.output
+        assert "(disabled)" not in result.output
+        assert "Tuesday" not in result.output
+
+    def test_include_disabled_surfaces_subsection_from_filesystem(self):
+        runner = CliRunner()
+        result = runner.invoke(
+            cli, ["export", "schedule", str(DISABLED_SPEC_PATH), "-L", "en", "--include-disabled"]
+        )
+        assert result.exit_code == 0, result.output
+        # The disabled Tuesday subsection's deck is read from disk and tagged.
+        assert "| Tuesday (disabled) |" in result.output
+
+    def test_include_disabled_csv_adds_disabled_column(self):
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "export",
+                "schedule",
+                str(DISABLED_SPEC_PATH),
+                "-f",
+                "csv",
+                "-L",
+                "en",
+                "--include-disabled",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        header = result.output.splitlines()[0]
+        assert header.endswith(",disabled")
+        # The enabled Monday deck has an empty disabled cell; the disabled
+        # Tuesday deck is flagged "true".
+        assert ",mon," in result.output
+        assert result.output.rstrip().endswith(",true")
+
+
+class TestScheduleOutputDir:
+    def test_output_dir_writes_named_file(self, tmp_path):
+        runner = CliRunner()
+        result = runner.invoke(
+            cli, ["export", "schedule", str(SPEC_PATH), "-L", "en", "-d", str(tmp_path)]
+        )
+        assert result.exit_code == 0, result.output
+        written = list(tmp_path.glob("*.md"))
+        assert len(written) == 1
+        assert written[0].name.endswith("-schedule-en.md")
+        assert "# " in written[0].read_text(encoding="utf-8")
+
+    def test_output_and_output_dir_mutually_exclusive(self, tmp_path):
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "export",
+                "schedule",
+                str(SPEC_PATH),
+                "-o",
+                str(tmp_path / "x.md"),
+                "-d",
+                str(tmp_path),
+            ],
+        )
+        assert result.exit_code != 0
+        assert "mutually exclusive" in result.output.lower()

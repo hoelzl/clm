@@ -126,7 +126,9 @@ class TestDisabledSubsectionInEnabledSection:
 
     def test_cli_include_disabled(self):
         runner = CliRunner()
-        result = runner.invoke(cli, ["outline", str(DISABLED_SUB_SPEC_PATH), "--include-disabled"])
+        result = runner.invoke(
+            cli, ["export", "outline", str(DISABLED_SUB_SPEC_PATH), "--include-disabled"]
+        )
         assert result.exit_code == 0, result.output
         assert "- **Tuesday** (disabled)" in result.output
 
@@ -134,20 +136,20 @@ class TestDisabledSubsectionInEnabledSection:
 class TestOutlineCliSubsections:
     def test_cli_markdown(self):
         runner = CliRunner()
-        result = runner.invoke(cli, ["outline", str(SPEC_PATH)])
+        result = runner.invoke(cli, ["export", "outline", str(SPEC_PATH)])
         assert result.exit_code == 0, result.output
         assert "- **Monday**" in result.output
 
     def test_cli_json(self):
         runner = CliRunner()
-        result = runner.invoke(cli, ["outline", str(SPEC_PATH), "-f", "json"])
+        result = runner.invoke(cli, ["export", "outline", str(SPEC_PATH), "-f", "json"])
         assert result.exit_code == 0, result.output
         data = json.loads(result.output)
         assert data["sections"][0]["subsections"][0]["weekday"] == "mon"
 
     def test_cli_sections_only_omits_subsections(self):
         runner = CliRunner()
-        result = runner.invoke(cli, ["outline", str(SPEC_PATH), "--sections-only"])
+        result = runner.invoke(cli, ["export", "outline", str(SPEC_PATH), "--sections-only"])
         assert result.exit_code == 0, result.output
         assert "**Monday**" not in result.output
         assert "## Week 1" in result.output

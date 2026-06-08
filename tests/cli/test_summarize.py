@@ -12,6 +12,7 @@ Tests cover:
 
 import json
 from pathlib import Path
+from textwrap import dedent
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -99,7 +100,7 @@ def summary_cache(tmp_path):
 class TestSummarizeCommandHelp:
     def test_summarize_help(self):
         runner = CliRunner()
-        result = runner.invoke(cli, ["summarize", "--help"])
+        result = runner.invoke(cli, ["export", "summary", "--help"])
         assert result.exit_code == 0
         assert "Generate LLM-powered summaries" in result.output
         assert "--audience" in result.output
@@ -109,18 +110,21 @@ class TestSummarizeCommandHelp:
         runner = CliRunner()
         result = runner.invoke(cli, ["--help"])
         assert result.exit_code == 0
-        assert "summarize" in result.output
+        assert "export" in result.output
+        sub = runner.invoke(cli, ["export", "--help"])
+        assert sub.exit_code == 0
+        assert "summary" in sub.output
 
 
 class TestSummarizeCommandValidation:
     def test_requires_spec_file(self):
         runner = CliRunner()
-        result = runner.invoke(cli, ["summarize", "--audience", "client"])
+        result = runner.invoke(cli, ["export", "summary", "--audience", "client"])
         assert result.exit_code != 0
 
     def test_requires_audience(self):
         runner = CliRunner()
-        result = runner.invoke(cli, ["summarize", "some-file.xml"])
+        result = runner.invoke(cli, ["export", "summary", "some-file.xml"])
         assert result.exit_code != 0
 
     def test_rejects_output_and_output_dir_together(self):
@@ -128,7 +132,7 @@ class TestSummarizeCommandValidation:
         spec_file = "tests/test-data/course-specs/test-spec-1.xml"
         result = runner.invoke(
             cli,
-            ["summarize", spec_file, "--audience", "client", "-o", "out.md", "-d", "dir"],
+            ["export", "summary", spec_file, "--audience", "client", "-o", "out.md", "-d", "dir"],
         )
         assert result.exit_code != 0
         assert "mutually exclusive" in result.output.lower()
@@ -145,7 +149,7 @@ class TestSummarizeCommandDryRun:
         runner = CliRunner()
         result = runner.invoke(
             cli,
-            ["summarize", str(test_spec_path), "--audience", "client", "--dry-run"],
+            ["export", "summary", str(test_spec_path), "--audience", "client", "--dry-run"],
         )
         assert result.exit_code == 0
         assert "Dry run" in result.output
@@ -155,7 +159,7 @@ class TestSummarizeCommandDryRun:
         runner = CliRunner()
         result = runner.invoke(
             cli,
-            ["summarize", str(test_spec_path), "--audience", "trainer", "--dry-run"],
+            ["export", "summary", str(test_spec_path), "--audience", "trainer", "--dry-run"],
         )
         assert result.exit_code == 0
         assert "Dry run" in result.output
@@ -164,7 +168,16 @@ class TestSummarizeCommandDryRun:
         runner = CliRunner()
         result = runner.invoke(
             cli,
-            ["summarize", str(test_spec_path), "--audience", "client", "--dry-run", "-L", "de"],
+            [
+                "export",
+                "summary",
+                str(test_spec_path),
+                "--audience",
+                "client",
+                "--dry-run",
+                "-L",
+                "de",
+            ],
         )
         assert result.exit_code == 0
         assert "# Mein Kurs" in result.output
@@ -824,7 +837,8 @@ class TestSummarizeNoProgressFlag:
         result = runner.invoke(
             cli,
             [
-                "summarize",
+                "export",
+                "summary",
                 str(test_spec_path),
                 "--audience",
                 "client",
@@ -834,3 +848,122 @@ class TestSummarizeNoProgressFlag:
         )
         assert result.exit_code == 0
         assert "# My Course" in result.output
+
+
+OPTIONAL_SPEC_PATH = Path("tests/test-data/course-specs/subsection-optional-spec.xml")
+
+
+class TestSummaryIncludeOptional:
+    """--include-optional on `clm export summary` (dry-run; no LLM)."""
+
+    def test_optional_section_hidden_by_default(self):
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "export",
+                "summary",
+                str(OPTIONAL_SPEC_PATH),
+                "--audience",
+                "client",
+                "--dry-run",
+                "-L",
+                "en",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert "## Week 1" in result.output
+        assert "## Week 2" not in result.output  # optional whole section omitted
+
+    def test_include_optional_shows_optional_section(self):
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "export",
+                "summary",
+                str(OPTIONAL_SPEC_PATH),
+                "--audience",
+                "client",
+                "--dry-run",
+                "-L",
+                "en",
+                "--include-optional",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert "## Week 2" in result.output
+
+
+class TestSummaryIncludeDisabled:
+    """--include-disabled on `clm export summary` (dry-run; no LLM)."""
+
+    @pytest.fixture
+    def spec_with_disabled_section(self, request):
+        specs_dir = Path("tests/test-data/course-specs")
+        spec_file = specs_dir / f"test-summary-disabled-{request.node.name}.xml"
+        spec_file.write_text(
+            dedent("""\
+                <course>
+                  <name><de>Mini-Kurs</de><en>Mini Course</en></name>
+                  <prog-lang>python</prog-lang>
+                  <description><de>Demo</de><en>Demo</en></description>
+                  <certificate><de>.</de><en>.</en></certificate>
+                  <sections>
+                    <section>
+                      <name><de>Woche 1</de><en>Week 1</en></name>
+                      <topics>
+                        <topic>some_topic_from_test_1</topic>
+                      </topics>
+                    </section>
+                    <section enabled="false">
+                      <name><de>Woche 2 Archiv</de><en>Week 2 archived</en></name>
+                      <topics>
+                        <topic>a_topic_from_test_2</topic>
+                      </topics>
+                    </section>
+                  </sections>
+                </course>
+                """),
+            encoding="utf-8",
+        )
+        yield spec_file
+        spec_file.unlink(missing_ok=True)
+
+    def test_disabled_section_hidden_by_default(self, spec_with_disabled_section):
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "export",
+                "summary",
+                str(spec_with_disabled_section),
+                "--audience",
+                "client",
+                "--dry-run",
+                "-L",
+                "en",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert "## Week 1" in result.output
+        assert "Week 2 archived" not in result.output
+
+    def test_include_disabled_summarizes_disabled_section(self, spec_with_disabled_section):
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "export",
+                "summary",
+                str(spec_with_disabled_section),
+                "--audience",
+                "client",
+                "--dry-run",
+                "-L",
+                "en",
+                "--include-disabled",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert "## Week 2 archived (disabled)" in result.output
