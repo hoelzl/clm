@@ -101,6 +101,7 @@ Optional `<section>` attributes:
 | `enabled` | `"true"` (default) or `"false"`, case-insensitive. A disabled section is dropped from the parsed spec entirely, so `clm build`, `clm outline`, `clm validate`, and all MCP tools ignore it without needing code changes. Disabled sections may omit `<topics>` or reference topic IDs that do not yet exist — they are never built or validated, which lets a full roadmap spec live as a single file instead of carrying a separate `-build.xml` subset. |
 | `id` | Optional stable identifier for the section (e.g. `id="w03"`). Recommended for courses that are frequently filtered, because IDs are stable under reordering and renaming. |
 | `module` | Optional module-directory binding (e.g. `module="module_545_ml_azav_cohort_2026_04"`). When set, every `<topic>` inside this section resolves only against that module — duplicate topic IDs in other modules are ignored. This is the supported mechanism for cohort archives or course variants that share topic IDs with the live module. The value is the literal directory name under `slides/`. Per-topic `module=` (see below) overrides the section default for individual topics. |
+| `optional` | `"true"` or `"false"` (default `false`). Marks a whole week an **optional module**: excluded from `clm schedule` / `clm outline` listings unless `--include-optional` is passed. Presentation-only — it never affects the build. Same semantics as `optional` on `<subsection>` (see below); `optional` + `enabled="false"` is never listed. An excluded optional section keeps its declared week number in `clm schedule`. |
 
 Example of a roadmap section deferred until its topics exist:
 
@@ -216,6 +217,12 @@ may appear under `<topics>`, in any order.
             <name><de>Dienstag — Recht</de><en>Tuesday — Law</en></name>
             <topic>llm_ethics_azav</topic>   <!-- all its decks land on Tue -->
         </subsection>
+        <subsection weekday="wed,thu">   <!-- one block spanning two days -->
+            <topic>deep_learning_intro</topic>
+        </subsection>
+        <subsection weekday="fri" optional="true">   <!-- excluded unless --include-optional -->
+            <topic>bonus_capstone</topic>
+        </subsection>
     </topics>
 </section>
 ```
@@ -236,8 +243,9 @@ Optional `<subsection>` attributes:
 
 | Attribute | Description |
 |-----------|-------------|
-| `weekday` | Optional, language-neutral token from `{mon, tue, wed, thu, fri, sat, sun}` (case-insensitive), localized at render time. `sat`/`sun` are valid; AZAV uses Mon–Fri only. A closed enum lets the validator check ordering/uniqueness. Omit it for a generic thematic group that carries only a `<name>`. |
+| `weekday` | Optional, one or more language-neutral tokens from `{mon, tue, wed, thu, fri, sat, sun}` (case-insensitive), localized at render time. A single token (`weekday="mon"`) or a comma-separated list (`weekday="mon,tue,wed"`) so **one subsection can span several days**; a multi-day subsection renders as a joined label ("Monday, Tuesday, Wednesday"). `sat`/`sun` are valid; AZAV uses Mon–Fri only. A closed enum lets the validator check ordering/uniqueness/coverage. Omit it for a generic thematic group that carries only a `<name>`. |
 | `enabled` | `"true"` (default) or `"false"`. A disabled subsection is dropped entirely from the build — topics and all — exactly like a disabled `<section>`. It is retained only by tooling parsed with `--include-disabled`. |
+| `optional` | `"true"` or `"false"` (default `false`). An **optional module**: excluded from `clm schedule` / `clm outline` listings unless `--include-optional` is passed. Presentation-only — it never affects the build (the topics still flatten in). `optional` + `enabled="false"` is never listed, flag or not (disabled wins). The same `optional` attribute is also accepted on `<section>` to mark a whole week optional. |
 
 A `<subsection>` may also carry an optional `<name>` (`<de>`/`<en>`) label
 override; when omitted, the displayed label is derived from `weekday`. A
@@ -248,7 +256,10 @@ attributes).
 `clm validate` adds four advisory subsection checks (none is an error):
 duplicate weekday within a section, weekdays out of Mon→Sun order, an empty
 day (a subsection with no topics or whose topics resolve to zero decks), and
-(info) bare topics mixed with subsections (they appear under no day).
+(info) bare topics mixed with subsections (they appear under no day). A fifth
+**opt-in** check, `clm validate --check-workdays`, warns (`missing_workday`)
+when a section that uses the day-of-week layer leaves a Mon–Fri workday
+uncovered.
 
 ### `<author>` (Optional)
 

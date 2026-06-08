@@ -35,9 +35,11 @@ def _spec_xml(topics_block: str) -> str:
 def test_subsection_defaults():
     sub = SubsectionSpec()
     assert sub.topics == []
+    assert sub.weekdays == ()
     assert sub.weekday is None
     assert sub.name is None
     assert sub.enabled is True
+    assert sub.optional is False
 
 
 def test_subsection_topics_flatten_into_topics_list():
@@ -262,6 +264,78 @@ def test_invalid_weekday_rejected():
     xml = _spec_xml('<subsection weekday="monday"><topic>t</topic></subsection>')
     with pytest.raises(CourseSpecError, match="Invalid weekday"):
         CourseSpec.from_file(io.StringIO(xml))
+
+
+def test_multiple_weekdays_parsed_in_order():
+    xml = _spec_xml('<subsection weekday="mon,tue,wed"><topic>t</topic></subsection>')
+    spec = CourseSpec.from_file(io.StringIO(xml))
+    sub = spec.sections[0].subsections[0]
+    assert sub.weekdays == ("mon", "tue", "wed")
+    # The back-compat single-day property returns the first token.
+    assert sub.weekday == "mon"
+
+
+def test_multiple_weekdays_whitespace_and_case_tolerant():
+    xml = _spec_xml('<subsection weekday=" MON , Tue ,wed"><topic>t</topic></subsection>')
+    spec = CourseSpec.from_file(io.StringIO(xml))
+    assert spec.sections[0].subsections[0].weekdays == ("mon", "tue", "wed")
+
+
+def test_duplicate_weekday_within_attr_collapsed():
+    xml = _spec_xml('<subsection weekday="mon,mon,tue"><topic>t</topic></subsection>')
+    spec = CourseSpec.from_file(io.StringIO(xml))
+    assert spec.sections[0].subsections[0].weekdays == ("mon", "tue")
+
+
+def test_invalid_weekday_in_list_rejected():
+    xml = _spec_xml('<subsection weekday="mon,funday"><topic>t</topic></subsection>')
+    with pytest.raises(CourseSpecError, match="Invalid weekday"):
+        CourseSpec.from_file(io.StringIO(xml))
+
+
+def test_empty_weekday_attr_is_no_days():
+    xml = _spec_xml(
+        '<subsection weekday=""><name><de>x</de><en>x</en></name><topic>t</topic></subsection>'
+    )
+    spec = CourseSpec.from_file(io.StringIO(xml))
+    sub = spec.sections[0].subsections[0]
+    assert sub.weekdays == ()
+    assert sub.weekday is None
+
+
+def test_subsection_optional_attribute_parsed():
+    xml = _spec_xml(
+        """
+        <subsection weekday="mon"><topic>a</topic></subsection>
+        <subsection weekday="tue" optional="true"><topic>b</topic></subsection>
+        """
+    )
+    spec = CourseSpec.from_file(io.StringIO(xml))
+    subs = spec.sections[0].subsections
+    assert [s.optional for s in subs] == [False, True]
+    # optional is presentation-only: both topics still flatten into the build.
+    assert [t.id for t in spec.sections[0].topics] == ["a", "b"]
+
+
+def test_section_optional_attribute_parsed():
+    xml = """
+    <course>
+        <name><de>K</de><en>C</en></name>
+        <prog-lang>python</prog-lang>
+        <description><de>d</de><en>d</en></description>
+        <certificate><de>c</de><en>c</en></certificate>
+        <sections>
+            <section optional="true">
+                <name><de>W1</de><en>W1</en></name>
+                <topics><topic>a</topic></topics>
+            </section>
+        </sections>
+    </course>
+    """
+    spec = CourseSpec.from_file(io.StringIO(xml))
+    assert spec.sections[0].optional is True
+    # Default is False.
+    assert SubsectionSpec().optional is False
 
 
 def test_invalid_subsection_enabled_value_rejected():

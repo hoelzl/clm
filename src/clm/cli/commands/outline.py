@@ -231,9 +231,13 @@ def _subsections_json(
                 )
         result.append(
             {
+                # `weekday` is the first token (back-compat); `weekdays` is the
+                # full ordered list for multi-day subsections.
                 "weekday": subsection.weekday,
+                "weekdays": list(subsection.weekdays),
                 "label": subsection_label(subsection, language),
                 "enabled": subsection.enabled,
+                "optional": subsection.optional,
                 "topics": topics_out,
             }
         )
