@@ -76,6 +76,25 @@ def _patch_translator(monkeypatch, translator) -> None:
     monkeypatch.setattr(cmd, "_make_translator", lambda *_a, **_k: translator)
 
 
+def _capture_translator_args(monkeypatch, translator) -> dict:
+    """Patch ``_make_translator`` to record the resolved guidance it is handed.
+
+    The command calls ``_make_translator(model, cache, prog_lang, guidance,
+    guidance_by_lang)`` positionally, so the fake captures both the single-string
+    ``guidance`` (bootstrap path) and the per-language ``guidance_by_lang``
+    (delegated-sync path) and returns a working static ``translator``.
+    """
+    captured: dict = {}
+
+    def fake(model, cache, prog_lang="python", guidance="", guidance_by_lang=None):
+        captured["guidance"] = guidance
+        captured["guidance_by_lang"] = guidance_by_lang
+        return translator
+
+    monkeypatch.setattr(cmd, "_make_translator", fake)
+    return captured
+
+
 def _patch_key(monkeypatch, present: bool = True) -> None:
     monkeypatch.setattr(cmd, "has_openrouter_api_key", lambda *_a, **_k: present)
 
@@ -248,6 +267,102 @@ class TestErrors:
             slides_translate_cmd, [str(tmp_path / "nope.de.py"), *_common(tmp_path)]
         )
         assert result.exit_code == 2  # click.Path(exists=True)
+
+
+# ---------------------------------------------------------------------------
+# --glossary (translation conventions) — original PR #264 feature + parity
+# ---------------------------------------------------------------------------
+
+
+class TestGlossary:
+    """CLI-level coverage for `--glossary` (the original PR #264 surface shipped
+    with only prompt_version unit tests) and the delegated-sync per-language parity.
+    """
+
+    def test_bootstrap_auto_discovers_target_glossary(self, cli_runner, tmp_path, monkeypatch):
+        de, en = _split(_DECK)
+        de_path = _write(tmp_path / "slides_x.de.py", de)
+        _patch_key(monkeypatch)
+        captured = _capture_translator_args(monkeypatch, _mirror_translator(de, en))
+        # source is .de → target en → clm-glossary.en.md is discovered.
+        (tmp_path / "clm-glossary.en.md").write_text("Use formal English.", encoding="utf-8")
+
+        result = cli_runner.invoke(slides_translate_cmd, [str(de_path), *_common(tmp_path)])
+
+        assert result.exit_code == 0, result.output
+        assert captured["guidance"] == "Use formal English."  # single-direction bootstrap
+        assert not captured["guidance_by_lang"]  # None or {} — bootstrap is one-way
+        assert "Using glossary:" in (result.stderr or "")
+
+    def test_explicit_glossary_wins_over_autodiscovery(self, cli_runner, tmp_path, monkeypatch):
+        de, en = _split(_DECK)
+        de_path = _write(tmp_path / "slides_x.de.py", de)
+        _patch_key(monkeypatch)
+        captured = _capture_translator_args(monkeypatch, _mirror_translator(de, en))
+        (tmp_path / "clm-glossary.en.md").write_text("auto", encoding="utf-8")
+        explicit = _write(tmp_path / "custom.md", "explicit conventions")
+
+        result = cli_runner.invoke(
+            slides_translate_cmd, [str(de_path), "--glossary", str(explicit), *_common(tmp_path)]
+        )
+
+        assert result.exit_code == 0, result.output
+        assert captured["guidance"] == "explicit conventions"
+
+    def test_json_suppresses_using_glossary_message(self, cli_runner, tmp_path, monkeypatch):
+        de, en = _split(_DECK)
+        de_path = _write(tmp_path / "slides_x.de.py", de)
+        _patch_key(monkeypatch)
+        _capture_translator_args(monkeypatch, _mirror_translator(de, en))
+        (tmp_path / "clm-glossary.en.md").write_text("conv", encoding="utf-8")
+
+        result = cli_runner.invoke(
+            slides_translate_cmd, [str(de_path), "--json", *_common(tmp_path)]
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "Using glossary" not in (result.output + (result.stderr or ""))
+
+    def test_no_glossary_passes_empty_guidance(self, cli_runner, tmp_path, monkeypatch):
+        de, en = _split(_DECK)
+        de_path = _write(tmp_path / "slides_x.de.py", de)
+        _patch_key(monkeypatch)
+        captured = _capture_translator_args(monkeypatch, _mirror_translator(de, en))
+
+        result = cli_runner.invoke(slides_translate_cmd, [str(de_path), *_common(tmp_path)])
+
+        assert result.exit_code == 0, result.output
+        assert captured["guidance"] == ""
+        assert "Using glossary" not in (result.stderr or "")
+
+    def test_delegated_sync_resolves_per_language_map(self, cli_runner, tmp_path, monkeypatch):
+        # When the twin already exists, translate degrades to the bidirectional sync
+        # engine — so it must resolve a PER-LANGUAGE map (not the single target
+        # glossary), or a reverse-direction add would get the wrong-language conventions.
+        from clm.infrastructure.llm.ollama_client import StaticSyncJudge, SyncProposal
+
+        de, en = _split(_DECK)
+        de_path = _write(tmp_path / "slides_x.de.py", de)
+        _write(tmp_path / "slides_x.en.py", en)  # twin present → delegated sync
+        _patch_key(monkeypatch)
+        captured = _capture_translator_args(monkeypatch, _mirror_translator(de, en))
+        monkeypatch.setattr(
+            cmd,
+            "_resolve_judge",
+            lambda *_a, **_k: StaticSyncJudge(
+                default_proposal=SyncProposal(verdict="in_sync", proposed_text="")
+            ),
+        )
+        (tmp_path / "clm-glossary.de.md").write_text("DE conventions", encoding="utf-8")
+        (tmp_path / "clm-glossary.en.md").write_text("EN conventions", encoding="utf-8")
+
+        result = cli_runner.invoke(slides_translate_cmd, [str(de_path), *_common(tmp_path)])
+
+        assert result.exit_code == 0, result.output
+        assert "incremental sync" in result.output  # delegated, not bootstrapped
+        # Per-language map (both directions), and the single guidance is NOT used.
+        assert captured["guidance"] == ""
+        assert captured["guidance_by_lang"] == {"de": "DE conventions", "en": "EN conventions"}
 
 
 # ---------------------------------------------------------------------------

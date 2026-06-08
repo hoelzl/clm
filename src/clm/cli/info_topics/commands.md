@@ -1320,6 +1320,19 @@ written into the file, so a deck stays id-light yet syncs precisely:
 Use `--explain` to see the anchor-level view (per-cell anchor + drift, the
 propagation direction, drifted ids) for any pair.
 
+**Translation conventions (glossary).** A brand-new slide on the add path is
+translated by the same model `clm slides translate` uses, and it honors the same
+**glossary** — a Markdown style note + term glossary appended to the translation
+prompt (keep "Dictionary", address the reader with "Sie"). Because sync is
+**bidirectional**, the glossary is resolved **per target language**: a new EN
+slide translated to DE uses the **DE** conventions and a new DE slide translated
+to EN uses the **EN** conventions. Each is auto-discovered as
+`clm-glossary.<lang>.md` walking up from the deck (a `clm-glossary.de.md` next to
+your slides is found automatically), or supplied explicitly with `--glossary-de` /
+`--glossary-en`. A language with no glossary simply translates with no conventions
+(unchanged from before). In **batch (`DIR`) mode** the translator is shared across
+the sweep, so the glossary is resolved once from the directory root.
+
 ```
 clm slides sync [OPTIONS] DE_PATH [EN_PATH]
 clm slides sync [OPTIONS] DIR          # batch: sync every pair under DIR
@@ -1335,6 +1348,8 @@ clm slides sync [OPTIONS] DIR          # batch: sync every pair under DIR
 | `--ollama-url TEXT` | Base URL of the Ollama daemon (only used with `--provider local`; default: `$OLLAMA_URL` or `http://localhost:11434`). |
 | `--llm-timeout SECONDS` | Per-call timeout for the edit judge. Provider-aware default: 120s for `openrouter` (fast hosted model), 300s for `local` (a large local reasoning model can spend minutes "thinking"). |
 | `--translation-model TEXT` | OpenRouter model used to translate brand-new slides for the add path (default: `anthropic/claude-sonnet-4-6`). Needs `$OPENROUTER_API_KEY` / `$OPENAI_API_KEY`; adds defer when absent. |
+| `--glossary-de PATH` | Translation conventions (Markdown: a style note + term glossary) for **German** targets — a brand-new EN slide translated to DE on the add path. Default: auto-discover `clm-glossary.de.md` walking up from the deck. |
+| `--glossary-en PATH` | Translation conventions for **English** targets — a brand-new DE slide translated to EN on the add path. Default: auto-discover `clm-glossary.en.md` walking up from the deck. |
 | `--verify-cold-pairs` / `--no-verify-cold-pairs` | **Bootstrap and reconcile split-pair `slide_id`s, gated by a cheap correspondence check (default on when an OpenRouter/OpenAI key is set).** A never-id'd cold pair is **minted** a shared id per slide; a half-id'd pair's id-less half **adopts** the id'd half's ids; a committed pair sharing some ids but giving one slide a *divergent* id on each half is **reconciled** — `sync` rewrites the divergent id so both halves share one (EN-authority), surfaced as a `reconcile` proposal (#228). Each is applied only after a cheap LLM (Haiku, via OpenRouter) confirms the two halves actually correspond. With `--no-verify-cold-pairs` (or no key) such a pair is **refused** instead — sync one direction at a time, or run `clm slides assign-ids`. |
 | `--llm-recover` | **Opt into the bounded-LLM recovery tier (default off).** When the deterministic id-migration is stuck on an *ambiguous* drifted `slide_id` (a function renamed while a cell was split, an unresolvable tie), ask Claude (Opus, via OpenRouter) for a **validated, body-free** id↔cell alignment. Without this flag such a region is left untouched and re-surfaces next run. The model only ever sees content anchors (construct + hash + id), never cell source, and its map is validated (it can never drop a stable `slide_id`) before any header is written. Needs `$OPENROUTER_API_KEY` / `$OPENAI_API_KEY`. |
 | `--recovery-model TEXT` | OpenRouter model for `--llm-recover` alignment (default: `anthropic/claude-opus-4`). |
@@ -1474,10 +1489,10 @@ clm slides bootstrap [OPTIONS] SOURCE   # alias
 | `--dry-run` | Preview only: show the target path and how many cells would be translated vs copied (and the companion), and write nothing. Uses no LLM and no API key. |
 | `--force` | Overwrite an existing twin (and its companion) by re-bootstrapping. Without it, an existing twin degrades to an incremental sync. |
 | `--translation-model TEXT` | OpenRouter model used to translate the deck (default: `anthropic/claude-sonnet-4-6`). Needs `$OPENROUTER_API_KEY` / `$OPENAI_API_KEY`. |
+| `--glossary PATH` | Translation conventions file (Markdown: a style note + term glossary) appended to the translation prompt. Default: auto-discover `clm-glossary.<target-lang>.md` walking up from SOURCE's directory. |
 | `--provider [openrouter\|local]` | Edit-judge backend for the *delegated-sync* path (when the twin already exists); unused on the bootstrap path. Overridable with `$CLM_SYNC_PROVIDER`. |
 | `--llm-model TEXT` | Model for the delegated-sync edit judge (default `anthropic/claude-sonnet-4-6` for openrouter). |
 | `--cache-dir PATH` | Directory holding the translation + watermark caches. Lookup: flag → `$CLM_CACHE_DIR` → `tool.clm.cache_dir` → `<cwd>/.clm-cache/`. |
-| `--glossary PATH` | Translation conventions file (Markdown: a style note + term glossary) appended to the translation prompt. Default: auto-discover `clm-glossary.<target-lang>.md` walking up from SOURCE's directory (like `.env`). |
 | `--no-cache` | Do not read or write the translation / watermark caches. |
 | `--no-env-file` | Do not auto-load a `.env` file. |
 | `--json` | Emit a JSON report instead of human-readable lines. |

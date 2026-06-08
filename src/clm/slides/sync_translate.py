@@ -128,20 +128,91 @@ class OpenRouterSlideTranslator:
     # repo supplies the text (see ``clm slides translate --glossary``). When set, it
     # is folded into ``prompt_version`` so a different glossary keys a different cache
     # entry and editing the glossary invalidates by cache miss.
+    #
+    # ``guidance`` applies to a translation in **any** direction — the one-direction
+    # ``translate`` / ``bootstrap`` case, which resolves a single target glossary.
+    # ``guidance_by_lang`` (target_lang → conventions) is the **bidirectional**
+    # ``sync`` case: a new DE slide is translated to EN with the EN conventions and a
+    # new EN slide to DE with the DE conventions, in one pass. The two are
+    # alternatives — when ``guidance_by_lang`` is non-empty it wins per target and
+    # ``guidance`` is ignored; see :meth:`_guidance_for`.
     guidance: str = ""
+    guidance_by_lang: dict[str, str] = field(default_factory=dict)
     # Derived in ``__post_init__`` from the base version + a guidance fingerprint.
     # ``init=False`` so it is never passed in; the cache wrapper reads it.
     prompt_version: str = field(init=False, default=_BASE_PROMPT_VERSION)
 
     def __post_init__(self) -> None:
+        self.prompt_version = self._compute_prompt_version()
+
+    def _compute_prompt_version(self) -> str:
+        """The cache key version: ``translate-v1`` plus a guidance fingerprint.
+
+        Two DISTINCT namespaces, so a single-string guidance and a per-language map
+        can never share a key whatever their text:
+
+        - per-language ``guidance_by_lang`` (bidirectional sync) → ``v1:gm<fp>`` over
+          the whole cleaned map, ordered by language. It takes precedence when it has
+          content, matching :meth:`_guidance_for`.
+        - single-direction ``guidance`` (translate/bootstrap) → ``v1:g<sha(text)>``,
+          the ORIGINAL shape, so an existing ``translate`` cache stays valid.
+        - neither → bare ``v1`` (no glossary, no flag-day invalidation).
+
+        The map is fingerprinted WHOLE (not per target), so the key is computed once
+        at construction. ``clm slides sync`` runs this translator **uncached**, so the
+        map key is inert there today; only the cached ``translate`` delegated-sync
+        path keys on it, where editing one language's glossary also re-translates the
+        other direction's adds (a cheap over-invalidation — incremental syncs add few
+        slides). A future cached standalone sync wanting to avoid that would need a
+        per-target signature (a ``prompt_version`` that varies per call).
+        """
+        cleaned = {k: v.strip() for k, v in self.guidance_by_lang.items() if v.strip()}
+        if cleaned:
+            # \x1e/\x1f are record/unit separators; the "gm" namespace keeps a
+            # one-entry map (encoded "lang\x1etext") from ever colliding with a
+            # single-string guidance of that exact text.
+            joined = "\x1f".join(f"{k}\x1e{cleaned[k]}" for k in sorted(cleaned))
+            fp = hashlib.sha256(joined.encode("utf-8")).hexdigest()[:12]
+            return f"{_BASE_PROMPT_VERSION}:gm{fp}"
         guidance = self.guidance.strip()
         if guidance:
             fp = hashlib.sha256(guidance.encode("utf-8")).hexdigest()[:12]
-            self.prompt_version = f"{_BASE_PROMPT_VERSION}:g{fp}"
-        else:
-            # No guidance → byte-identical to the original v1 prompt, so keep the
-            # v1 key: no flag-day invalidation for callers that pass no glossary.
-            self.prompt_version = _BASE_PROMPT_VERSION
+            return f"{_BASE_PROMPT_VERSION}:g{fp}"
+        return _BASE_PROMPT_VERSION
+
+    def _guidance_for(self, target_lang: str) -> str:
+        """The conventions text to append for a translation INTO ``target_lang``.
+
+        Per-language ``guidance_by_lang`` (bidirectional sync) wins when it has any
+        content; otherwise the single ``guidance`` string (one-direction
+        translate/bootstrap) applies regardless of direction. Whitespace-only is
+        treated as none, so an empty/absent glossary appends nothing.
+        """
+        if self.guidance_by_lang and any(v.strip() for v in self.guidance_by_lang.values()):
+            return self.guidance_by_lang.get(target_lang, "").strip()
+        return self.guidance.strip()
+
+    def _system_message(self, role: str, source_lang: str, target_lang: str) -> str:
+        """Assemble the system prompt for a cell ``role`` and direction.
+
+        The role-specific base prompt with the language/comment-token descriptors
+        filled in, then the caller-supplied conventions for ``target_lang``
+        appended AFTER ``.format()`` so any braces in the glossary (JSON, f-strings,
+        code) are never read as format fields. A pure, network-free seam so the
+        prompt assembly (incl. glossary selection) is unit-testable.
+        """
+        comment_prefix, prog_lang_name = _prog_lang_descriptors(self.prog_lang)
+        system = _system_prompt_for(role).format(
+            source_lang=_LANG_NAMES.get(source_lang, source_lang),
+            target_lang=_LANG_NAMES.get(target_lang, target_lang),
+            role=role,
+            comment_prefix=comment_prefix,
+            prog_lang_name=prog_lang_name,
+        )
+        guidance = self._guidance_for(target_lang)
+        if guidance:
+            system = f"{system}\n\n{guidance}"
+        return system
 
     def _client(self):  # pragma: no cover - thin network adapter
         # Shared with the edit judge so key/base resolution stays in one place.
@@ -157,19 +228,7 @@ class OpenRouterSlideTranslator:
         target_lang: str,
         role: str,
     ) -> str:  # pragma: no cover - exercised via mocked client / integration
-        comment_prefix, prog_lang_name = _prog_lang_descriptors(self.prog_lang)
-        system = _system_prompt_for(role).format(
-            source_lang=_LANG_NAMES.get(source_lang, source_lang),
-            target_lang=_LANG_NAMES.get(target_lang, target_lang),
-            role=role,
-            comment_prefix=comment_prefix,
-            prog_lang_name=prog_lang_name,
-        )
-        # Append the caller-supplied conventions AFTER .format() so any braces in
-        # the glossary (JSON, f-strings, code) are never read as format fields.
-        guidance = self.guidance.strip()
-        if guidance:
-            system = f"{system}\n\n{guidance}"
+        system = self._system_message(role, source_lang, target_lang)
 
         def _create():
             return self._client().chat.completions.create(
@@ -238,8 +297,9 @@ _TITLE_SYSTEM_PROMPT = (
     "You translate a single slide-deck title from {source_lang} to {target_lang} for a "
     "{prog_lang_name} programming course. Return ONLY the translated title as a short "
     "plain phrase: no Markdown, no leading '{comment_prefix}' or other comment prefix, "
-    "no surrounding quotes, no trailing punctuation, and no commentary. Keep code "
-    "identifiers, library names, and product names unchanged."
+    "no surrounding quotes, and no commentary. Preserve the title's own terminal "
+    "punctuation — keep a trailing '?' or '!' if the source title has one (but do not "
+    "add any). Keep code identifiers, library names, and product names unchanged."
 )
 
 
