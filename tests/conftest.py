@@ -121,6 +121,32 @@ def _isolate_clm_log_dir(tmp_path_factory):
             os.environ[LOG_DIR_ENV_VAR] = previous
 
 
+@pytest.fixture(autouse=True)
+def _isolate_http_replay_env():
+    """Restore the ``CLM_HTTP_REPLAY_*`` env vars around every test.
+
+    ``main_build`` pins the resolved HTTP-replay *mode* and *transport* into
+    ``os.environ`` (so Direct-worker kernels inherit them via
+    ``os.environ.copy()``). A test that runs the real build pipeline therefore
+    leaks those values to later tests in the same process, and a test that
+    reads the transport from ``os.environ`` (e.g. the vcrpy-bootstrap tests in
+    ``test_notebook_processor``) would then observe a stale ``mitmproxy`` —
+    a cross-test pollution flake under xdist. Snapshotting and restoring here
+    keeps each test's ambient transport/mode deterministic regardless of
+    execution order; tests that set these via ``monkeypatch`` are unaffected.
+    """
+    keys = ("CLM_HTTP_REPLAY_TRANSPORT", "CLM_HTTP_REPLAY_MODE")
+    saved = {k: os.environ.get(k) for k in keys}
+    try:
+        yield
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
 # ====================================================================
 # Tool Availability Detection
 # ====================================================================
