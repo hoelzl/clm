@@ -6,6 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.9.2] - 2026-06-08
+
+### Added
+
+- **`clm slides translate` / `bootstrap` glossary guidance (`--glossary`)**
+  (PR #264). The translator now accepts an optional translation conventions file
+  — a Markdown style note plus a term glossary — that is appended to the
+  translation system prompt, so a course can pin a formal register and keep or
+  translate technical terms consistently across a whole deck. Supply it with
+  `--glossary PATH`, or let the command auto-discover `clm-glossary.<target-lang>.md`
+  by walking up from the deck's directory (the same walk-up used for `.env`). The
+  guidance text is folded into the translation cache key (a fingerprint on the
+  `translate-v1` prompt version): a different glossary keys a different cache
+  entry and editing the glossary invalidates affected entries by cache miss,
+  while decks translated without a glossary keep the bare `v1` key (no flag-day
+  invalidation). See `clm info commands`.
+
+### Fixed
+
+- **Deck titles are now translated correctly** (PR #264). The
+  `header_<lang>("…")` deck title was being translated through the markdown-prose
+  prompt, which announces that every line is `#`-prefixed — so the model added a
+  stray `# ` and left the title itself untranslated (e.g.
+  `header_de("# Your First Web Service")`). A dedicated `title` translation role
+  now translates the bare title phrase and forbids any prefix or surrounding
+  quotes.
+
 ## [1.9.1] - 2026-06-07
 
 ### Added

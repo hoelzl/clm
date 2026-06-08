@@ -1453,6 +1453,16 @@ it finds (skip with `--no-env-file`). On the **bootstrap** path a missing key is
 a hard stop — the command exits `1` and writes nothing (a whole untranslated deck
 is useless), unlike sync's per-cell defer. `--dry-run` uses no key and no LLM.
 
+**Translation conventions (glossary).** Point `--glossary` at a Markdown file (a
+style note plus a term glossary) to pin a target-language register and keep or
+translate technical terms consistently across the deck; the text is appended to
+the translation system prompt. If `--glossary` is omitted, the command
+auto-discovers `clm-glossary.<target-lang>.md` walking up from the deck (the same
+walk-up as `.env`), so a course keeps its glossary next to its slides and needs
+no flag. The guidance is folded into the translation cache key: editing the
+glossary invalidates affected entries by cache miss, while decks translated
+without a glossary keep the bare key (no flag-day invalidation).
+
 ```
 clm slides translate [OPTIONS] SOURCE
 clm slides bootstrap [OPTIONS] SOURCE   # alias
@@ -1467,6 +1477,7 @@ clm slides bootstrap [OPTIONS] SOURCE   # alias
 | `--provider [openrouter\|local]` | Edit-judge backend for the *delegated-sync* path (when the twin already exists); unused on the bootstrap path. Overridable with `$CLM_SYNC_PROVIDER`. |
 | `--llm-model TEXT` | Model for the delegated-sync edit judge (default `anthropic/claude-sonnet-4-6` for openrouter). |
 | `--cache-dir PATH` | Directory holding the translation + watermark caches. Lookup: flag → `$CLM_CACHE_DIR` → `tool.clm.cache_dir` → `<cwd>/.clm-cache/`. |
+| `--glossary PATH` | Translation conventions file (Markdown: a style note + term glossary) appended to the translation prompt. Default: auto-discover `clm-glossary.<target-lang>.md` walking up from SOURCE's directory (like `.env`). |
 | `--no-cache` | Do not read or write the translation / watermark caches. |
 | `--no-env-file` | Do not auto-load a `.env` file. |
 | `--json` | Emit a JSON report instead of human-readable lines. |
