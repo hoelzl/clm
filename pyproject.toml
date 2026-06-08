@@ -497,7 +497,7 @@ dev = [
 # Only allow packages published before this date (supply-chain safety).
 # Update with: python scripts/update_exclude_newer.py
 # (also refreshes uv.lock; see scripts/check_exclude_newer.py for drift check)
-exclude-newer = "2026-04-20"
+exclude-newer = "2026-05-28"
 
 # Exempt PyTorch packages from exclude-newer: the cu130 index doesn't
 # provide upload dates on its wheels, so they must opt out entirely.

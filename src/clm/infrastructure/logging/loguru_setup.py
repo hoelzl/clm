@@ -1,6 +1,7 @@
 import sys
+from typing import Any
 
-import requests  # type: ignore[import-untyped]
+import requests
 from loguru import logger
 
 # A logging sink must never block the calling thread (often a background worker)
@@ -34,7 +35,7 @@ class LokiSink:
             }
         )
 
-        log_entry = {
+        log_entry: dict[str, Any] = {
             "streams": [
                 {
                     "stream": {k: str(v) for k, v in labels.items()},
