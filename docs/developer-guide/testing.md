@@ -285,7 +285,6 @@ The GitHub Actions runner includes:
 ### Test Matrix
 
 Tests run on multiple Python versions:
-- Python 3.11
 - Python 3.12
 - Python 3.13
 

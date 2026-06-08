@@ -116,8 +116,9 @@ CLM has several optional dependency groups for different features:
   - Install: `pip install -e ".[drawio]"`
 - **[all-workers]**: All worker dependencies combined
   - Install: `pip install -e ".[all-workers]"`
-- **[ml]**: PyTorch, FastAI, transformers
-  - Optional for advanced ML notebooks
+- **[ml]**: PyTorch, FastAI, transformers, deepagents, psycopg
+  - Optional for advanced ML notebooks (incl. the LangGraph deep-agents deck and
+    the Postgres deployment decks)
   - Install: `pip install -e ".[ml]"`
 
 **UI Features**:
@@ -160,8 +161,9 @@ CLM has several optional dependency groups for different features:
   - Install: `pip install -e ".[jupyterlite]"`
 
 **HTTP Replay**:
-- **[replay]**: vcrpy, filelock
+- **[replay]**: mitmproxy, vcrpy, filelock
   - HTTP request/response replay for notebooks that call live services
+    (mitmproxy is the default transport since CLM 1.10; vcrpy is the opt-out)
   - Install: `pip install -e ".[replay]"`
 
 **Development Tools**:

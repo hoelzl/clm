@@ -16,9 +16,42 @@ Install CLM with the `[replay]` extra:
 pip install "coding-academy-lecture-manager[replay]"
 ```
 
-This pulls in `vcrpy`. The extra is also included in `[all]`. Topics that
-do not opt in pay zero runtime cost — no imports, no patches, no cassette
-lookup.
+This pulls in `mitmproxy` (the default transport, see below) and `vcrpy`. The
+extra is also included in `[all]`. Topics that do not opt in pay zero runtime
+cost — no imports, no proxy, no cassette lookup. The extra requires **Python
+3.12+** (mitmproxy's floor).
+
+## Transports
+
+The replay engine records and replays a topic's HTTP traffic through one of two
+interchangeable **transports**:
+
+- **`mitmproxy` (default).** An out-of-process proxy (`mitmdump`) that all
+  notebook traffic is routed through. It matches **repeated and concurrent
+  identical requests** correctly — a LangChain chain invoked many times with the
+  same request body, or a `RunnableParallel` fan-out — which the in-process
+  transport could not. The proxy is started only when a build actually contains
+  an `http-replay` topic, so a replay-free build never spawns it.
+- **`vcrpy`.** The original in-process transport. It patches the HTTP libraries
+  inside the kernel and serves each recorded interaction at most once
+  (consume-once), so a deck that replays the same request multiple times cannot
+  be strict-replayed under it.
+
+Select the transport with the `CLM_HTTP_REPLAY_TRANSPORT` environment variable
+(`mitmproxy` or `vcrpy`); it defaults to `mitmproxy`.
+
+```bash
+CLM_HTTP_REPLAY_TRANSPORT=vcrpy clm build course.xml   # opt back into the old path
+```
+
+> **Cassettes are not byte-compatible between the two transports.** The on-disk
+> format is the same vcrpy YAML layout (the mitmproxy addon serializes to it),
+> but the recorded bytes differ enough that a cassette recorded under one
+> transport will fail strict `replay` under the other. A course upgrading from a
+> pre-1.10 CLM must **re-record its cassettes under mitmproxy** once
+> (`--http-replay=refresh`, review the diff, commit) before CI's strict `replay`
+> passes. During the transition you can keep building against existing cassettes
+> by pinning `CLM_HTTP_REPLAY_TRANSPORT=vcrpy`.
 
 ## Opting a topic in
 
