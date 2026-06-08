@@ -157,6 +157,7 @@ class _Target:
         "recorded",
         "to_write",
         "seen",
+        "served",
     )
 
     def __init__(self, canonical: Path, write_path: Path, *, is_staging: bool) -> None:
@@ -181,9 +182,19 @@ class _Target:
         # cassette (seeded existing entries + new) so the in-place rewrite
         # preserves prior recordings.
         self.to_write: list[tuple] = []
-        # Fingerprints already recorded this build (dedup; mirrors the host
-        # merge's ``_dedup_key`` so the addon and merge agree).
-        self.seen: set[tuple[str, str, bytes]] = set()
+        # Sequence-aware dedup key: ``fingerprint(request) + (response_fp,)``.
+        # Same request + same response collapses; same request + a *different*
+        # response (non-deterministic endpoint) is kept as a separate ordered
+        # interaction so a downstream request embedding the later response still
+        # replay-matches. The host-side mitmproxy merge preserves the same
+        # ordering (``preserve_sequence=True``).
+        self.seen: set[tuple] = set()
+        # Replay cursor: indices of ``recorded`` already served this build.
+        # Repeated identical requests are served in recorded order (R1, R2, …);
+        # once a request's recordings are exhausted the *last* match is served
+        # again, so a genuinely repeatable request never misses and a
+        # single-entry cassette stays byte-for-byte replay-compatible.
+        self.served: set[int] = set()
 
 
 class ClmReplayAddon:
@@ -364,12 +375,13 @@ class ClmReplayAddon:
         serve, record, _overwrite = self._modes_for(target.cassette_existed)
 
         if serve:
-            for rec_request, rec_response in target.recorded:
-                if cf.requests_match(filtered, rec_request):
-                    flow.response = self._build_reply(rec_response)
-                    flow.metadata[_FLOW_SERVED_KEY] = True
-                    self._trace_request(flow, tag, "served")
-                    return
+            chosen = self._select_serve_index(target.recorded, filtered, target.served)
+            if chosen is not None:
+                target.served.add(chosen)
+                flow.response = self._build_reply(target.recorded[chosen][1])
+                flow.metadata[_FLOW_SERVED_KEY] = True
+                self._trace_request(flow, tag, "served")
+                return
 
         if not record:
             # Strict replay (``replay``, or ``once`` with an existing cassette):
@@ -407,10 +419,6 @@ class ClmReplayAddon:
         if request is None:
             return  # defensive: should have been flagged ignored in request()
 
-        key = cf.fingerprint(request)
-        if key in target.seen:
-            return  # already recorded this build — keep the eager rewrite cheap
-
         response = cf.vcr_response_dict_from_parts(
             flow.response.status_code,
             flow.response.reason,
@@ -418,6 +426,13 @@ class ClmReplayAddon:
             flow.response.raw_content or b"",
             decode_compressed=True,
         )
+        # Sequence-aware key: same request + same response collapses (cheap eager
+        # rewrite), but the same request returning a *different* response is kept
+        # as a new ordered interaction so the replay sequence is complete.
+        key = cf.fingerprint(request) + (cf.response_fingerprint(response),)
+        if key in target.seen:
+            return  # this exact (request, response) already recorded this build
+
         target.recorded.append((request, response))
         target.to_write.append((request, response))
         target.seen.add(key)
@@ -502,7 +517,7 @@ class ClmReplayAddon:
             return
         for request, response in interactions:
             target.recorded.append((request, response))
-            target.seen.add(cf.fingerprint(request))
+            target.seen.add(cf.fingerprint(request) + (cf.response_fingerprint(response),))
             # The catch-all rewrites the whole cassette in place, so it must
             # keep existing entries; tagged staging files hold only this
             # build's new interactions (the host merge folds them into
@@ -618,6 +633,29 @@ class ClmReplayAddon:
             if k.lower() not in _SERVE_DROP_HEADERS
         ]
         return http.Response.make(status_code, content, headers)
+
+    @staticmethod
+    def _select_serve_index(recorded: list, filtered, served: set) -> int | None:
+        """Pick which recorded interaction to serve for ``filtered`` (replay cursor).
+
+        Scans ``recorded`` in order and returns the index of the first
+        not-yet-served interaction whose request matches; once every match has
+        been served, returns the **last** matching index (the repeatable tail);
+        ``None`` when nothing matches. This replays a per-request response
+        *sequence* in recorded order — so a deck that re-issues an identical
+        request whose non-deterministic response feeds a *later* request matches
+        — while a single-entry recording (the overwhelmingly common case) is
+        still served repeatably, byte-for-byte as before this cursor existed.
+        """
+        chosen: int | None = None
+        last_match: int | None = None
+        for i, (rec_request, _rec_response) in enumerate(recorded):
+            if cf.requests_match(filtered, rec_request):
+                last_match = i
+                if i not in served:
+                    chosen = i
+                    break
+        return chosen if chosen is not None else last_match
 
     @staticmethod
     def _is_replay_miss_marker(response: http.Response) -> bool:

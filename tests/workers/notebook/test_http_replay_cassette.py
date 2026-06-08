@@ -213,3 +213,102 @@ class TestMergeOverwriteExisting:
         merged = cf.load_interactions(canonical)
         assert len(merged) == 1
         assert merged[0][1]["body"]["string"] in (b"FRESH_NEW", "FRESH_NEW")
+
+
+class TestMergePreserveSequence:
+    """Sequence-aware fold for the mitmproxy transport (``preserve_sequence``).
+
+    A non-deterministic endpoint answers the *same* request differently on
+    successive calls. The deduped fold (used by vcrpy and the default path)
+    collapses those to one entry, so a downstream request that embedded the
+    second response can no longer replay-match. ``preserve_sequence=True`` keeps
+    every distinct ``(request, response)`` in recorded order — deduping only an
+    exact pair — so the per-request response sequence survives into canonical.
+    """
+
+    @staticmethod
+    def _interaction(cf, method, url, body, resp_body):
+        request = cf.vcr_request_from_parts(method, url, [(b"content-type", b"text/plain")], body)
+        response = cf.vcr_response_dict_from_parts(
+            200, "OK", [(b"content-type", b"text/plain")], resp_body
+        )
+        return request, response
+
+    def _write_canonical_and_markered_staging(self, tmp_path, canonical_pairs, staging_pairs):
+        cf = pytest.importorskip("clm.infrastructure.http_replay_mitm.cassette_format")
+        canonical = tmp_path / "slides.http-cassette.yaml"
+        staging = canonical.parent / f"{canonical.name}.staging-mitm-test"
+        if canonical_pairs:
+            cf.write_cassette(canonical, canonical_pairs)
+        cf.write_cassette(staging, staging_pairs)
+        write_completion_marker(CassettePaths(canonical=canonical, staging=staging))
+        return cf, canonical, staging
+
+    def test_refresh_keeps_distinct_responses_for_same_request_in_order(self, tmp_path):
+        """The fix: same request, two distinct responses → both kept, in order
+        (the default last-seen-wins fold would collapse them to one)."""
+        cf = pytest.importorskip("clm.infrastructure.http_replay_mitm.cassette_format")
+        url = "https://o.ai/v1/c"
+        staging_pairs = [
+            self._interaction(cf, "POST", url, b"same", b"R1"),
+            self._interaction(cf, "POST", url, b"same", b"R2"),
+        ]
+        cf, canonical, staging = self._write_canonical_and_markered_staging(
+            tmp_path, [], staging_pairs
+        )
+
+        merge_staging_into_canonical(
+            CassettePaths(canonical=canonical, staging=staging),
+            overwrite_existing=True,
+            preserve_sequence=True,
+        )
+        merged = cf.load_interactions(canonical)
+        bodies = [resp["body"]["string"] for _, resp in merged]
+        assert [b if isinstance(b, bytes) else b.encode() for b in bodies] == [b"R1", b"R2"]
+
+    def test_preserve_sequence_collapses_exact_duplicate_pairs(self, tmp_path):
+        """An exact ``(request, response)`` repeat (a byte-identical re-record)
+        still collapses — only *distinct* responses extend the sequence."""
+        cf = pytest.importorskip("clm.infrastructure.http_replay_mitm.cassette_format")
+        url = "https://o.ai/v1/c"
+        staging_pairs = [
+            self._interaction(cf, "POST", url, b"same", b"R1"),
+            self._interaction(cf, "POST", url, b"same", b"R1"),  # exact dup
+            self._interaction(cf, "POST", url, b"same", b"R2"),
+        ]
+        cf, canonical, staging = self._write_canonical_and_markered_staging(
+            tmp_path, [], staging_pairs
+        )
+
+        merge_staging_into_canonical(
+            CassettePaths(canonical=canonical, staging=staging),
+            overwrite_existing=True,
+            preserve_sequence=True,
+        )
+        merged = cf.load_interactions(canonical)
+        bodies = [resp["body"]["string"] for _, resp in merged]
+        assert [b if isinstance(b, bytes) else b.encode() for b in bodies] == [b"R1", b"R2"]
+
+    def test_new_episodes_appends_sequence_after_canonical(self, tmp_path):
+        """Without ``overwrite_existing`` (new-episodes), canonical entries are
+        kept and the staging sequence is appended, skipping exact pairs already
+        present."""
+        cf = pytest.importorskip("clm.infrastructure.http_replay_mitm.cassette_format")
+        url = "https://o.ai/v1/c"
+        canonical_pairs = [self._interaction(cf, "POST", url, b"same", b"R1")]
+        staging_pairs = [
+            self._interaction(cf, "POST", url, b"same", b"R1"),  # already in canonical
+            self._interaction(cf, "POST", url, b"same", b"R2"),  # new distinct response
+        ]
+        cf, canonical, staging = self._write_canonical_and_markered_staging(
+            tmp_path, canonical_pairs, staging_pairs
+        )
+
+        merge_staging_into_canonical(
+            CassettePaths(canonical=canonical, staging=staging),
+            overwrite_existing=False,
+            preserve_sequence=True,
+        )
+        merged = cf.load_interactions(canonical)
+        bodies = [resp["body"]["string"] for _, resp in merged]
+        assert [b if isinstance(b, bytes) else b.encode() for b in bodies] == [b"R1", b"R2"]

@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The mitmproxy transport now records and replays a per-request response
+  *sequence*** instead of collapsing a repeated request to its first response.
+  A non-deterministic endpoint (a temperature>0 LLM, or OpenRouter routing the
+  same request to different providers) answers an identical request differently
+  on successive calls; when a *later* request embeds an earlier response (e.g.
+  `summarize | translate`, where `translate` carries the generated summary), the
+  old first-seen-wins dedup dropped every response after the first, so the
+  downstream request matched nothing on replay and failed with `clm_replay_miss`.
+  Recording now keys dedup on `(request, response)` so distinct responses to the
+  same request are kept in order, and replay serves them in recorded order via a
+  per-request cursor — sticking on the last match once exhausted, so a genuinely
+  repeatable request never misses and a single-entry cassette still serves
+  repeatably (unchanged). The host-side fold gained `preserve_sequence=True`
+  (mitmproxy only; the vcrpy path keeps the deduped fold). Decks affected before
+  this fix: `chains_and_lcel/slides_020`, `prompt_templates/slides_010`,
+  `langgraph_intro/slides_010`.
+
 ## [1.10.0] - 2026-06-08
 
 ### Changed

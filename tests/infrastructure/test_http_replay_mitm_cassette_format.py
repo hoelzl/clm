@@ -92,6 +92,66 @@ def test_response_dict_matches_vcrpy():
     assert actual == expected
 
 
+def test_response_fingerprint_distinguishes_distinct_bodies():
+    """The response fingerprint keys sequence-aware dedup: two responses to the
+    same request collapse only when their bodies are identical."""
+    r1 = cf.vcr_response_dict_from_parts(200, "OK", [], b'{"hit":1}')
+    r1_again = cf.vcr_response_dict_from_parts(200, "OK", [], b'{"hit":1}')
+    r2 = cf.vcr_response_dict_from_parts(200, "OK", [], b'{"hit":2}')
+    assert cf.response_fingerprint(r1) == cf.response_fingerprint(r1_again)
+    assert cf.response_fingerprint(r1) != cf.response_fingerprint(r2)
+    # Robust against a missing/oddly-shaped body dict.
+    assert cf.response_fingerprint({}) == b""
+
+
+def test_select_serve_index_replays_response_sequence_then_repeats_last():
+    """The replay cursor serves a per-request response *sequence* in recorded
+    order, then sticks on the last match once exhausted; a single-entry
+    recording stays repeatable; a non-matching request yields no index.
+
+    Imports the addon (which needs ``mitmproxy``); skipped where the proxy
+    package isn't installed, like the integration module.
+    """
+    pytest.importorskip("mitmproxy")
+    from clm.infrastructure.http_replay_mitm.addon import ClmReplayAddon
+
+    def _req(body: bytes):
+        return cf.vcr_request_from_parts(
+            "POST", "https://api/x", [(b"content-type", b"application/json")], body
+        )
+
+    body = b'{"prompt":"same"}'
+    # Two interactions for the SAME request with distinct responses (R1, R2) —
+    # a non-deterministic endpoint answering one prompt two different ways.
+    recorded = [
+        (_req(body), cf.vcr_response_dict_from_parts(200, "OK", [], b"R1")),
+        (_req(body), cf.vcr_response_dict_from_parts(200, "OK", [], b"R2")),
+    ]
+    incoming = _req(body)
+    served: set[int] = set()
+
+    i1 = ClmReplayAddon._select_serve_index(recorded, incoming, served)
+    assert i1 == 0
+    served.add(i1)
+    i2 = ClmReplayAddon._select_serve_index(recorded, incoming, served)
+    assert i2 == 1
+    served.add(i2)
+    # Sequence exhausted → stick on the last matching entry (repeatable tail).
+    assert ClmReplayAddon._select_serve_index(recorded, incoming, served) == 1
+
+    # A request that matches nothing → no index (strict-replay miss upstream).
+    other = _req(b'{"prompt":"different"}')
+    assert ClmReplayAddon._select_serve_index(recorded, other, set()) is None
+
+    # Single-entry recording stays repeatable (backward-compatible).
+    single = [(_req(body), cf.vcr_response_dict_from_parts(200, "OK", [], b"only"))]
+    seen: set[int] = set()
+    first = ClmReplayAddon._select_serve_index(single, incoming, seen)
+    assert first == 0
+    seen.add(first)
+    assert ClmReplayAddon._select_serve_index(single, incoming, seen) == 0
+
+
 def test_serialized_yaml_byte_identical_plain():
     assert _bridge_yaml(_POST_JSON) == _vcrpy_reference_yaml(_POST_JSON)
 
