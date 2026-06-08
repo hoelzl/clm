@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Changed
+
+- **mitmproxy is now the default HTTP-replay transport** (issue #165), replacing
+  the in-process vcrpy path. The out-of-process proxy matches repeated and
+  concurrent identical requests that vcrpy's consume-once model mishandles — e.g.
+  a LangChain chain invoked many times with the same body, or `RunnableParallel`
+  fan-out — which previously made such decks impossible to strict-replay. Opt back
+  into vcrpy with `CLM_HTTP_REPLAY_TRANSPORT=vcrpy`. **Cassettes are not
+  byte-compatible between the two transports**, so existing vcrpy cassettes must be
+  re-recorded under mitmproxy before strict replay passes (vcrpy stays installed —
+  the mitmproxy addon serializes cassettes in vcrpy's on-disk format). Starting the
+  proxy is gated on the course actually having an `http-replay` notebook, so a
+  replay-free build never spawns `mitmdump`.
+- **Dropped Python 3.11 support** (`requires-python` is now `>=3.12`). mitmproxy,
+  the new default replay transport, requires Python 3.12+; `mitmproxy>=12,<13` is
+  added to the `replay` extra.
+
 ### Added
 
 - **`clm slides sync` honors the translation glossary on the new-slide path**

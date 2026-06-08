@@ -3,7 +3,7 @@
 # Notebook Processor Worker - Multi-variant build
 #
 # This Dockerfile supports two variants:
-#   - lite: Smaller image using python:3.11-slim base (multi-arch: amd64, arm64)
+#   - lite: Smaller image using python:3.12-slim base (multi-arch: amd64, arm64)
 #   - full: Larger image with CUDA/PyTorch using nvidia/cuda base (amd64 only)
 #
 # Build lite version (cross-platform, no GPU):
@@ -27,7 +27,7 @@ ARG VARIANT=full
 
 # Lite base: Python slim (multi-arch: amd64, arm64)
 # Suitable for macOS (Apple Silicon), Linux, Windows without GPU
-FROM python:3.11-slim AS base-lite
+FROM python:3.12-slim AS base-lite
 
 WORKDIR /app
 

@@ -10,7 +10,7 @@ authors = [
     {name = "Dr. Matthias Hölzl", email = "tc@xantira.com"},
 ]
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 license = {text = "MIT"}
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -18,7 +18,6 @@ classifiers = [
     "Intended Audience :: Education",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
@@ -196,7 +195,18 @@ slides = [
 # HTTP request/response replay for notebooks that call live services
 # (e.g. ``requests``, ``httpx``). Enables offline, deterministic HTML
 # builds when a topic opts in via ``http-replay="yes"`` in the spec.
+#
+# Two transports ship here. ``mitmproxy`` is the **default** (issue #165):
+# an out-of-process proxy that matches repeated / concurrent identical
+# requests vcrpy mishandles — it requires Python >=3.12 (which is why clm's
+# floor is 3.12). ``vcrpy`` is the opt-out transport
+# (``CLM_HTTP_REPLAY_TRANSPORT=vcrpy``) AND is still required regardless,
+# because the mitmproxy addon serializes cassettes in vcrpy's on-disk format.
 replay = [
+    # Out-of-process replay transport (the default). Pinned to the 12.x line
+    # validated against the addon (``clm/infrastructure/http_replay_mitm``);
+    # mitmproxy 11.1+/12.x require Python >=3.12.
+    "mitmproxy>=12,<13",
     # Upper bound is deliberately tight. The HTTP-replay bootstrap in
     # ``clm/workers/notebook/notebook_processor.py`` forks vcrpy *internals*
     # to compensate for upstream bugs: notably the issue #143 connection-leak
@@ -327,7 +337,7 @@ exclude_lines = [
 ]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false

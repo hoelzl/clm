@@ -76,6 +76,30 @@ def _resolve_http_replay_mode(cli_value: str | None) -> str:
     return "new-episodes"
 
 
+def _resolve_http_replay_transport(cli_value: str | None = None) -> str:
+    """Resolve the effective HTTP-replay transport.
+
+    ``mitmproxy`` is the default (issue #165): the out-of-process proxy
+    matches repeated and concurrent identical requests that vcrpy's
+    in-kernel, consume-once model mishandles (e.g. a chain invoked many
+    times with the same body, or ``RunnableParallel`` fan-out). Opt back
+    into the legacy in-process vcrpy transport with
+    ``CLM_HTTP_REPLAY_TRANSPORT=vcrpy``.
+
+    Precedence: explicit ``cli_value`` > ``CLM_HTTP_REPLAY_TRANSPORT`` env
+    var > default (``mitmproxy``). Any value other than ``vcrpy``
+    (case-insensitive) resolves to ``mitmproxy``.
+    """
+    import os
+
+    value = (
+        (cli_value if cli_value is not None else os.environ.get("CLM_HTTP_REPLAY_TRANSPORT", ""))
+        .strip()
+        .lower()
+    )
+    return "vcrpy" if value == "vcrpy" else "mitmproxy"
+
+
 def _resolve_fail_on_error(cli_value: bool | None, resolved_http_replay_mode: str) -> bool:
     """Resolve whether ``clm build`` should exit non-zero when the
     build summary reports errors (issue #90).
@@ -176,10 +200,15 @@ def _build_has_docker_notebook_worker(worker_config: object | None) -> bool:
 def _maybe_start_mitmproxy_transport(
     mode: str | None, jobs_db_path: Path, worker_config: object | None = None
 ):
-    """Start an out-of-process mitmproxy HTTP-replay transport when opted in.
+    """Start an out-of-process mitmproxy HTTP-replay transport.
 
-    Experimental (issue #165). Opt in with ``CLM_HTTP_REPLAY_TRANSPORT=mitmproxy``;
-    default unset keeps the in-process vcrpy path unchanged. Returns the running
+    mitmproxy is the **default** transport (issue #165): it matches repeated
+    and concurrent identical requests that the legacy in-process vcrpy path
+    mishandles. Opt back into vcrpy with ``CLM_HTTP_REPLAY_TRANSPORT=vcrpy``.
+    This helper is a no-op (returns ``None``) when the resolved transport is
+    not mitmproxy or the replay mode is disabled; the caller additionally
+    skips it entirely when the course has no http-replay notebook, so a
+    replay-free build never starts ``mitmdump``. Returns the running
     :class:`MitmproxyManager` (so the caller can stop it) or ``None``.
 
     When active it (1) starts one ``mitmdump`` for the whole build, (2) sets
@@ -1507,6 +1536,16 @@ async def main_build(
 
     _os.environ["CLM_HTTP_REPLAY_MODE"] = resolved_http_replay_mode
 
+    # Resolve and pin the effective HTTP-replay transport. mitmproxy is the
+    # default (issue #165); opt out with CLM_HTTP_REPLAY_TRANSPORT=vcrpy. Pin
+    # the resolved value into os.environ here, before workers spawn, so the
+    # proxy-start gate below, Direct-worker kernels (os.environ.copy()), the
+    # Docker env builder, and the trace label all read one explicit value
+    # instead of re-deriving the default independently. (Starting the proxy is
+    # still gated on the course actually using http-replay — see below — so a
+    # course with no replay topics never spawns mitmdump.)
+    _os.environ["CLM_HTTP_REPLAY_TRANSPORT"] = _resolve_http_replay_transport()
+
     # Forensic HTTP-replay trace harness. When CLM_HTTP_REPLAY_TRACE=1 is
     # set on the host, create a per-invocation trace directory and pin it
     # so subsequent get_writer("host") / get_invocation_dir() calls land
@@ -1621,13 +1660,21 @@ async def main_build(
         data_dir=data_dir,
     )
 
-    # Experimental out-of-process HTTP-replay transport (issue #165). Must run
-    # BEFORE workers spawn so they inherit HTTP(S)_PROXY + the CA bundle via
-    # os.environ.copy() (Direct) or the per-container injection (Docker, P4).
-    # No-op unless CLM_HTTP_REPLAY_TRANSPORT=mitmproxy. ``worker_config`` lets
-    # it bind 0.0.0.0 when Docker workers will reach it via host.docker.internal.
-    mitm_manager = _maybe_start_mitmproxy_transport(
-        config.http_replay_mode, config.jobs_db_path, worker_config=worker_config
+    # Out-of-process HTTP-replay transport (issue #165), the default since the
+    # transport flip. Must run BEFORE workers spawn so they inherit HTTP(S)_PROXY
+    # + the CA bundle via os.environ.copy() (Direct) or the per-container
+    # injection (Docker, P4). No-op unless the resolved transport is mitmproxy
+    # AND this course actually has an http-replay notebook — a course with no
+    # replay topics never needs the proxy (and so never requires mitmdump), even
+    # though mitmproxy is the global default. ``worker_config`` lets it bind
+    # 0.0.0.0 when Docker workers will reach it via host.docker.internal.
+    course_uses_http_replay = any(getattr(f, "http_replay", False) for f in course.files)
+    mitm_manager = (
+        _maybe_start_mitmproxy_transport(
+            config.http_replay_mode, config.jobs_db_path, worker_config=worker_config
+        )
+        if course_uses_http_replay
+        else None
     )
 
     output_formatter.show_startup_message("Starting workers...")

@@ -16,7 +16,7 @@
 #=============================================================================
 # DEPS STAGE - System dependencies and PlantUML JAR
 #=============================================================================
-FROM python:3.11-slim AS deps
+FROM python:3.12-slim AS deps
 
 WORKDIR /app
 
