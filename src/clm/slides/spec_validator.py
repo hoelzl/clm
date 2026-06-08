@@ -14,7 +14,13 @@ from pathlib import Path
 
 import tomllib
 
-from clm.core.course_spec import WEEKDAY_ORDER, CourseSpec, IncludeSpec, SectionSpec
+from clm.core.course_spec import (
+    REQUIRED_WORKDAYS,
+    WEEKDAY_ORDER,
+    CourseSpec,
+    IncludeSpec,
+    SectionSpec,
+)
 from clm.core.include_ledger import LEDGER_NAME, Ledger
 from clm.core.topic_resolver import (
     TopicMatch,
@@ -60,6 +66,7 @@ def validate_spec(
     slides_dir: Path,
     *,
     include_disabled: bool = False,
+    check_workdays: bool = False,
 ) -> SpecValidationResult:
     """Validate a course spec XML file for consistency.
 
@@ -82,6 +89,11 @@ def validate_spec(
             False (disabled sections are dropped at parse time and
             therefore invisible to validation, which is the desired
             behavior for the fast build path).
+        check_workdays: If True, add the opt-in ``missing_workday`` check —
+            for every section that uses the day-of-week subsection layer,
+            warn when a Mon–Fri workday (:data:`REQUIRED_WORKDAYS`) is left
+            uncovered. Off by default (most courses do not fill all five
+            days). See ``clm validate --check-workdays``.
 
     Returns:
         A :class:`SpecValidationResult` with all findings.
@@ -254,6 +266,7 @@ def validate_spec(
         topic_map=topic_map,
         findings=findings,
         suffix=_suffix,
+        check_workdays=check_workdays,
     )
 
     # Dir-group path checks
@@ -300,10 +313,11 @@ def _validate_subsections(
     topic_map: dict[str, list[TopicMatch]],
     findings: list[SpecFinding],
     suffix: Callable[[bool, str], str],
+    check_workdays: bool = False,
 ) -> None:
     """Emit findings for ``<subsection>`` day-of-week groupings (issue #261).
 
-    Four checks, per the design:
+    Four default checks, per the design:
 
     1. ``duplicate_weekday`` (warning) — the same weekday token appears on
        more than one subsection within a single section.
@@ -314,9 +328,15 @@ def _validate_subsections(
     4. ``unscheduled_topics`` (info) — a section mixes bare ``<topic>``s
        (which appear under no day) with ``<subsection>``s.
 
-    Only enabled subsections are checked for 1–3 (a disabled subsection is
-    roadmap content, like a disabled section). All checks are
-    informational/advisory: none is an error.
+    Plus one opt-in check, gated on *check_workdays*:
+
+    5. ``missing_workday`` (warning) — a section that uses the day-of-week
+       layer leaves a Mon–Fri workday uncovered.
+
+    A subsection may span several days (``weekday="mon,tue"``); every check
+    operates on the flattened weekday tokens. Only enabled subsections are
+    checked (a disabled subsection is roadmap content, like a disabled
+    section). All checks are informational/advisory: none is an error.
     """
     for section in spec.sections:
         section_name = section.name.en or section.name.de
@@ -331,7 +351,9 @@ def _validate_subsections(
             continue
 
         # --- Checks 1 & 2: weekday duplicates and ordering ---
-        weekdays = [sub.weekday for sub in enabled_subs if sub.weekday is not None]
+        # Flatten across subsections AND across each subsection's own tokens
+        # so a multi-day subsection participates in both checks.
+        weekdays = [wd for sub in enabled_subs for wd in sub.weekdays]
 
         seen: set[str] = set()
         reported_dup: set[str] = set()
@@ -385,7 +407,11 @@ def _validate_subsections(
 
         # --- Check 3: empty days ---
         for sub in enabled_subs:
-            label = sub.weekday or (sub.name.en or sub.name.de if sub.name else "") or "(unnamed)"
+            label = (
+                ",".join(sub.weekdays)
+                or (sub.name.en or sub.name.de if sub.name else "")
+                or "(unnamed)"
+            )
             if not sub.topics:
                 findings.append(
                     SpecFinding(
@@ -451,6 +477,35 @@ def _validate_subsections(
                     ),
                 )
             )
+
+        # --- Check 5 (opt-in): workday coverage ---
+        # Only sections that actually use the day-of-week layer (at least one
+        # enabled subsection carrying a weekday) are held to full Mon–Fri
+        # coverage; purely thematic, name-only subsections are exempt.
+        if check_workdays:
+            weekday_subs = [sub for sub in enabled_subs if sub.weekdays]
+            if weekday_subs:
+                covered = {wd for sub in weekday_subs for wd in sub.weekdays}
+                missing = [wd for wd in REQUIRED_WORKDAYS if wd not in covered]
+                if missing:
+                    listed = ", ".join(missing)
+                    findings.append(
+                        SpecFinding(
+                            severity="warning",
+                            type="missing_workday",
+                            section=section_name,
+                            message=suffix(
+                                section_disabled,
+                                f"Section '{section_name}' has no subsection for "
+                                f"workday(s): {listed}.",
+                            ),
+                            suggestion=(
+                                'Add a <subsection weekday="..."> for each missing '
+                                "workday, or omit --check-workdays if partial weeks "
+                                "are intended."
+                            ),
+                        )
+                    )
 
 
 @dataclass

@@ -428,6 +428,8 @@ clm schedule [OPTIONS] SPEC_FILE
 | `-L, --language`, `--lang [de\|en]` | Language for deck titles/labels (default: `de`). Titles come from the matching-language `header`/`header_de`/`header_en` macro. |
 | `-f, --format [md\|csv]` | Output format (default: `md`). |
 | `-o, --output FILE` | Write to FILE instead of stdout. |
+| `--no-topic` | Omit the Topic column, leaving just day and video/slides — the columns a certification authority needs (applies to both `md` and `csv`). |
+| `--include-optional` | Include modules marked `optional="true"` (on a `<section>` or `<subsection>`). Off by default; optional modules that are also `enabled="false"` are never listed, flag or not. |
 | `--data-dir DIR` | Course data directory (contains `slides/`). Default: inferred from the spec location. |
 
 Each listing is **single-language** — run once per language to produce both.
@@ -435,14 +437,21 @@ Deck order within a (week, day) is topic document order, then `slides_NNN_`
 order within each topic, matching the build.
 
 - **`--format md`** (default): one Markdown table per week, columns
-  weekday / video (deck title) / topic. The weekday label appears on the first
-  deck row of each day. Days are fixed-length by definition, so there are no
-  durations/minutes. Empty days render a placeholder row.
+  weekday / video (deck title) / topic (the Topic column is dropped with
+  `--no-topic`). The weekday label appears on the first deck row of each day.
+  Days are fixed-length by definition, so there are no durations/minutes. Empty
+  days render a placeholder row. A subsection that spans several days
+  (`weekday="mon,tue"`) renders a single joined label.
 - **`--format csv`**: one row per deck, with header
-  `week,week_title,weekday,video_title,topic,deck_file`.
+  `week,week_title,weekday,video_title,topic,deck_file` (`topic` dropped with
+  `--no-topic`). A multi-day subsection joins its tokens in the `weekday` cell
+  (`mon,tue`, quoted by the CSV writer).
 
-Only enabled subsections are listed. Bare topics that sit under no subsection
-do not appear in the listing (`clm validate` reports them as an info finding).
+Only enabled subsections are listed; optional ones require `--include-optional`.
+An excluded optional `<section>` keeps its declared week number (so omitting an
+optional Week 3 leaves Weeks 1, 2, 4, … rather than renumbering). Bare topics
+that sit under no subsection do not appear in the listing (`clm validate`
+reports them as an info finding).
 
 Examples:
 
@@ -450,6 +459,8 @@ Examples:
 clm schedule course.xml                  # German Markdown to stdout
 clm schedule course.xml -L en            # English listing
 clm schedule course.xml -f csv           # CSV (one row per deck)
+clm schedule course.xml --no-topic       # Day + video/slides only (cert authority)
+clm schedule course.xml --include-optional   # Add optional modules
 clm schedule course.xml -o schedule.md   # Write to a file
 ```
 
@@ -684,6 +695,7 @@ that referenced dir-group paths exist.
 | `--data-dir DIR` | Course data directory (contains slides/) |
 | `--json` | Output as JSON |
 | `--include-disabled` | Also validate sections marked `enabled="false"`; each finding from a disabled section has `(disabled)` appended to its message (default: disabled sections are skipped) |
+| `--check-workdays` | Warn (`missing_workday`) when a section that uses the day-of-week `<subsection>` layer leaves a Mon–Fri workday uncovered. Off by default (most courses do not fill all five days). Spec-only. |
 | `--deep` | After structure validation, run the full slide validator on **every deck the spec pulls in** (its shipping set) and report both. Exits non-zero on a structure error or a deck-content error (`--fail-on` governs the deck-content threshold). Resolves decks with the same build-faithful semantics as `clm spec decks`. |
 | `--summary` | Roll the deck-content findings up into a category/kind histogram with per-deck counts instead of a flat list (intended for corpus-scale validates that emit thousands of findings). On a spec, `--summary` implies `--deep`. |
 | `--checks LIST`, `--fail-on [error\|warning]` | Slides-validator options (see slides mode); valid on a spec only together with `--deep`, where they apply to the deck-content pass. |

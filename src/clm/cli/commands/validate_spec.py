@@ -30,11 +30,19 @@ from clm.slides.spec_validator import validate_spec
     "from a disabled section has '(disabled)' appended to its message so you "
     "can distinguish roadmap content from active content.",
 )
+@click.option(
+    "--check-workdays",
+    is_flag=True,
+    default=False,
+    help="Warn ('missing_workday') when a section that uses the day-of-week "
+    "<subsection> layer leaves a Mon–Fri workday uncovered. Off by default.",
+)
 def validate_spec_cmd(
     spec_file: Path,
     data_dir: Path | None,
     as_json: bool,
     include_disabled: bool,
+    check_workdays: bool,
 ):
     """Validate a course specification XML file.
 
@@ -51,7 +59,12 @@ def validate_spec_cmd(
     slides_dir = _resolve_slides_dir(data_dir, spec_file)
 
     try:
-        result = validate_spec(spec_file, slides_dir, include_disabled=include_disabled)
+        result = validate_spec(
+            spec_file,
+            slides_dir,
+            include_disabled=include_disabled,
+            check_workdays=check_workdays,
+        )
     except CourseSpecError as e:
         raise click.ClickException(str(e)) from None
 

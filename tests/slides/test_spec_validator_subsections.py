@@ -229,3 +229,89 @@ class TestDisabledSubsectionNotChecked:
         )
         result = validate_spec(spec, tmp_path / "slides")
         assert "duplicate_weekday" not in _types(result)
+
+
+class TestMultipleWeekdays:
+    def test_multi_weekday_subsection_counts_each_day(self, tmp_path):
+        """A ``weekday="tue,mon"`` subsection is flattened, so the out-of-order
+        pair (tue before mon) is still flagged."""
+        _make_topic(tmp_path, "module_100", "topic_010_a")
+        spec = _write_spec(
+            tmp_path,
+            '<subsection weekday="tue,mon"><topic>a</topic></subsection>',
+        )
+        result = validate_spec(spec, tmp_path / "slides")
+        assert "weekday_out_of_order" in _types(result)
+
+    def test_duplicate_across_multi_weekday_subsections(self, tmp_path):
+        _make_topic(tmp_path, "module_100", "topic_010_a")
+        _make_topic(tmp_path, "module_100", "topic_020_b")
+        spec = _write_spec(
+            tmp_path,
+            """\
+            <subsection weekday="mon,tue"><topic>a</topic></subsection>
+            <subsection weekday="tue,wed"><topic>b</topic></subsection>""",
+        )
+        result = validate_spec(spec, tmp_path / "slides")
+        dups = [f for f in result.findings if f.type == "duplicate_weekday"]
+        assert len(dups) == 1
+        assert "tue" in dups[0].message
+
+
+class TestWorkdayCoverage:
+    def test_missing_workday_off_by_default(self, tmp_path):
+        _make_topic(tmp_path, "module_100", "topic_010_a")
+        spec = _write_spec(
+            tmp_path,
+            '<subsection weekday="mon"><topic>a</topic></subsection>',
+        )
+        result = validate_spec(spec, tmp_path / "slides")
+        assert "missing_workday" not in _types(result)
+
+    def test_missing_workday_warns_when_enabled(self, tmp_path):
+        _make_topic(tmp_path, "module_100", "topic_010_a")
+        spec = _write_spec(
+            tmp_path,
+            '<subsection weekday="mon"><topic>a</topic></subsection>',
+        )
+        result = validate_spec(spec, tmp_path / "slides", check_workdays=True)
+        missing = [f for f in result.findings if f.type == "missing_workday"]
+        assert len(missing) == 1
+        assert missing[0].severity == "warning"
+        for day in ("tue", "wed", "thu", "fri"):
+            assert day in missing[0].message
+
+    def test_full_week_passes(self, tmp_path):
+        for letter in "abcde":
+            _make_topic(tmp_path, "module_100", f"topic_0{ord(letter)}_{letter}")
+        spec = _write_spec(
+            tmp_path,
+            """\
+            <subsection weekday="mon"><topic>a</topic></subsection>
+            <subsection weekday="tue"><topic>b</topic></subsection>
+            <subsection weekday="wed"><topic>c</topic></subsection>
+            <subsection weekday="thu"><topic>d</topic></subsection>
+            <subsection weekday="fri"><topic>e</topic></subsection>""",
+        )
+        result = validate_spec(spec, tmp_path / "slides", check_workdays=True)
+        assert "missing_workday" not in _types(result)
+
+    def test_one_multi_weekday_subsection_can_cover_the_week(self, tmp_path):
+        _make_topic(tmp_path, "module_100", "topic_010_a")
+        spec = _write_spec(
+            tmp_path,
+            '<subsection weekday="mon,tue,wed,thu,fri"><topic>a</topic></subsection>',
+        )
+        result = validate_spec(spec, tmp_path / "slides", check_workdays=True)
+        assert "missing_workday" not in _types(result)
+
+    def test_thematic_only_section_exempt(self, tmp_path):
+        """A section whose subsections carry no weekday (thematic grouping)
+        is not held to workday coverage."""
+        _make_topic(tmp_path, "module_100", "topic_010_a")
+        spec = _write_spec(
+            tmp_path,
+            "<subsection><name><de>Thema</de><en>Theme</en></name><topic>a</topic></subsection>",
+        )
+        result = validate_spec(spec, tmp_path / "slides", check_workdays=True)
+        assert "missing_workday" not in _types(result)

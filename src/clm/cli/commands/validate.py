@@ -111,6 +111,15 @@ def _slides_dir_for_spec(data_dir: Path | None, spec_file: Path) -> Path:
     help=('Spec-only: validate sections marked enabled="false". Not valid with --kind=slides.'),
 )
 @click.option(
+    "--check-workdays",
+    is_flag=True,
+    help=(
+        "Spec-only: warn ('missing_workday') when a section that uses the "
+        "day-of-week <subsection> layer leaves a Mon–Fri workday uncovered. "
+        "Off by default. Not valid with --kind=slides."
+    ),
+)
+@click.option(
     "--fail-on",
     type=click.Choice(["error", "warning"], case_sensitive=False),
     default=None,
@@ -162,6 +171,7 @@ def validate_cmd(
     checks: str | None,
     quick: bool,
     include_disabled: bool,
+    check_workdays: bool,
     fail_on: str | None,
     deep: bool,
     summary: bool,
@@ -196,12 +206,15 @@ def validate_cmd(
             checks=checks,
             quick=quick,
             include_disabled=include_disabled,
+            check_workdays=check_workdays,
             fail_on=fail_on,
             deep=deep,
             summary=summary,
             shipping_only=shipping_only,
         )
     else:  # slides
+        if check_workdays:
+            raise click.UsageError("--check-workdays is spec-only; not valid with --kind=slides.")
         _validate_slides_path(
             ctx,
             path,
@@ -227,6 +240,7 @@ def _validate_spec_path(
     checks: str | None,
     quick: bool,
     include_disabled: bool,
+    check_workdays: bool,
     fail_on: str | None,
     deep: bool,
     summary: bool,
@@ -257,6 +271,7 @@ def _validate_spec_path(
             data_dir=data_dir,
             as_json=as_json,
             include_disabled=include_disabled,
+            check_workdays=check_workdays,
         )
         return
 
@@ -266,6 +281,7 @@ def _validate_spec_path(
         as_json=as_json,
         checks=checks,
         include_disabled=include_disabled,
+        check_workdays=check_workdays,
         fail_on=fail_on,
         summary=summary,
     )
@@ -278,6 +294,7 @@ def _run_deep_spec(
     as_json: bool,
     checks: str | None,
     include_disabled: bool,
+    check_workdays: bool,
     fail_on: str | None,
     summary: bool,
 ) -> None:
@@ -290,7 +307,12 @@ def _run_deep_spec(
     check_list = _parse_checks(checks)
 
     try:
-        spec_result = validate_spec(spec_file, slides_dir, include_disabled=include_disabled)
+        spec_result = validate_spec(
+            spec_file,
+            slides_dir,
+            include_disabled=include_disabled,
+            check_workdays=check_workdays,
+        )
     except CourseSpecError as e:
         raise click.ClickException(str(e)) from None
 

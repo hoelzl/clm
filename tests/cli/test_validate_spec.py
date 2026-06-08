@@ -244,3 +244,53 @@ class TestValidateSpecIncludeDisabled:
         assert len(unresolved) == 1
         assert unresolved[0]["topic_id"] == "not_yet_implemented"
         assert "(disabled)" in unresolved[0]["message"]
+
+
+class TestCheckWorkdays:
+    def test_check_workdays_off_by_default(self, tmp_path):
+        _make_topic(tmp_path, "module_100_basics", "topic_010_intro")
+        spec_file = _write_spec(
+            tmp_path,
+            """\
+            <sections><section>
+              <name><de>S</de><en>S</en></name>
+              <topics>
+                <subsection weekday="mon"><topic>intro</topic></subsection>
+              </topics>
+            </section></sections>""",
+        )
+        runner = CliRunner()
+        result = runner.invoke(cli, ["validate", str(spec_file), "--data-dir", str(tmp_path)])
+        assert result.exit_code == 0
+        assert "missing_workday" not in result.output
+        assert "workday" not in result.output.lower()
+
+    def test_check_workdays_warns(self, tmp_path):
+        _make_topic(tmp_path, "module_100_basics", "topic_010_intro")
+        spec_file = _write_spec(
+            tmp_path,
+            """\
+            <sections><section>
+              <name><de>S</de><en>S</en></name>
+              <topics>
+                <subsection weekday="mon"><topic>intro</topic></subsection>
+              </topics>
+            </section></sections>""",
+        )
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            ["validate", str(spec_file), "--data-dir", str(tmp_path), "--check-workdays", "--json"],
+        )
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        missing = [f for f in data["findings"] if f["type"] == "missing_workday"]
+        assert len(missing) == 1
+        assert "tue" in missing[0]["message"]
+
+    def test_check_workdays_rejected_for_slides(self, tmp_path):
+        (tmp_path / "slides").mkdir(parents=True)
+        runner = CliRunner()
+        result = runner.invoke(cli, ["validate", str(tmp_path / "slides"), "--check-workdays"])
+        assert result.exit_code != 0
+        assert "spec-only" in result.output.lower()

@@ -31,14 +31,19 @@ def course() -> Course:
 
 class TestSubsectionLabel:
     def test_name_override_wins(self):
-        sub = SubsectionSpec(weekday="tue", name=Text(de="Recht", en="Law"))
+        sub = SubsectionSpec(weekdays=("tue",), name=Text(de="Recht", en="Law"))
         assert subsection_label(sub, "de") == "Recht"
         assert subsection_label(sub, "en") == "Law"
 
     def test_weekday_localized_when_no_name(self):
-        sub = SubsectionSpec(weekday="mon")
+        sub = SubsectionSpec(weekdays=("mon",))
         assert subsection_label(sub, "de") == "Montag"
         assert subsection_label(sub, "en") == "Monday"
+
+    def test_multiple_weekdays_join_localized_labels(self):
+        sub = SubsectionSpec(weekdays=("mon", "tue", "wed"))
+        assert subsection_label(sub, "en") == "Monday, Tuesday, Wednesday"
+        assert subsection_label(sub, "de") == "Montag, Dienstag, Mittwoch"
 
     def test_empty_when_neither(self):
         sub = SubsectionSpec()
@@ -95,7 +100,7 @@ class TestRenderMarkdown:
                 title="Week 1",
                 days=[
                     ScheduleDay(
-                        weekday="mon",
+                        weekdays=["mon"],
                         label="Monday",
                         decks=[
                             ScheduleDeck("Intro", "intro", "slides_010_intro"),
@@ -123,7 +128,7 @@ class TestRenderMarkdown:
             ScheduleWeek(
                 number=1,
                 title="W1",
-                days=[ScheduleDay(weekday="mon", label="Monday", decks=[])],
+                days=[ScheduleDay(weekdays=["mon"], label="Monday", decks=[])],
             )
         ]
         out = render_markdown("C", weeks, "en")
@@ -136,7 +141,7 @@ class TestRenderMarkdown:
                 title="W1",
                 days=[
                     ScheduleDay(
-                        weekday="mon",
+                        weekdays=["mon"],
                         label="Monday",
                         decks=[ScheduleDeck("A | B", "t", "f")],
                     )
@@ -145,6 +150,29 @@ class TestRenderMarkdown:
         ]
         out = render_markdown("C", weeks, "en")
         assert r"A \| B" in out
+
+    def test_no_topic_drops_topic_column(self):
+        weeks = [
+            ScheduleWeek(
+                number=1,
+                title="Week 1",
+                days=[
+                    ScheduleDay(
+                        weekdays=["mon"],
+                        label="Monday",
+                        decks=[ScheduleDeck("Intro", "intro", "slides_010_intro")],
+                    ),
+                    ScheduleDay(weekdays=["tue"], label="Tuesday", decks=[]),
+                ],
+            )
+        ]
+        out = render_markdown("My Course", weeks, "en", no_topic=True)
+        # Two-column header, no Topic.
+        assert "| Day | Video (slides) |" in out
+        assert "Topic" not in out
+        assert "| Monday | Intro |" in out
+        # Empty day still renders a single placeholder column.
+        assert "| Tuesday | — |" in out
 
 
 class TestRenderCsv:
@@ -155,7 +183,7 @@ class TestRenderCsv:
                 title="Week 1",
                 days=[
                     ScheduleDay(
-                        weekday="mon",
+                        weekdays=["mon"],
                         label="Monday",
                         decks=[ScheduleDeck("Intro", "intro", "slides_010_intro")],
                     )
@@ -174,7 +202,7 @@ class TestRenderCsv:
                 title="Einführung, LLMs",
                 days=[
                     ScheduleDay(
-                        weekday="mon",
+                        weekdays=["mon"],
                         label="Montag",
                         decks=[ScheduleDeck("A, B", "t", "f")],
                     )
@@ -184,6 +212,43 @@ class TestRenderCsv:
         out = render_csv(weeks)
         assert '"Einführung, LLMs"' in out
         assert '"A, B"' in out
+
+    def test_no_topic_drops_topic_field(self):
+        weeks = [
+            ScheduleWeek(
+                number=1,
+                title="Week 1",
+                days=[
+                    ScheduleDay(
+                        weekdays=["mon"],
+                        label="Monday",
+                        decks=[ScheduleDeck("Intro", "intro", "slides_010_intro")],
+                    )
+                ],
+            )
+        ]
+        out = render_csv(weeks, no_topic=True)
+        lines = out.strip().splitlines()
+        assert lines[0] == "week,week_title,weekday,video_title,deck_file"
+        assert lines[1] == "1,Week 1,mon,Intro,slides_010_intro"
+
+    def test_multi_weekday_joined_in_cell(self):
+        weeks = [
+            ScheduleWeek(
+                number=1,
+                title="Week 1",
+                days=[
+                    ScheduleDay(
+                        weekdays=["mon", "tue"],
+                        label="Monday, Tuesday",
+                        decks=[ScheduleDeck("Intro", "intro", "slides_010_intro")],
+                    )
+                ],
+            )
+        ]
+        out = render_csv(weeks)
+        # The comma-joined token set is quoted by the CSV writer.
+        assert '"mon,tue"' in out
 
 
 class TestScheduleCli:
@@ -238,3 +303,57 @@ class TestScheduleCli:
         result = runner.invoke(cli, ["--help"])
         assert result.exit_code == 0
         assert "schedule" in result.output
+
+    def test_no_topic_flag_markdown(self):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["schedule", str(SPEC_PATH), "-L", "en", "--no-topic"])
+        assert result.exit_code == 0, result.output
+        assert "| Day | Video (slides) |" in result.output
+        # The Topic *column* (header and topic-id cells) is gone; deck titles
+        # that merely contain the word "Topic" are unaffected.
+        assert "| Topic |" not in result.output
+        assert "some_topic_from_test_1" not in result.output
+
+    def test_no_topic_flag_csv(self):
+        runner = CliRunner()
+        result = runner.invoke(
+            cli, ["schedule", str(SPEC_PATH), "-f", "csv", "-L", "en", "--no-topic"]
+        )
+        assert result.exit_code == 0, result.output
+        assert "week,week_title,weekday,video_title,deck_file" in result.output
+        assert "topic" not in result.output.splitlines()[0]
+
+
+OPTIONAL_SPEC_PATH = Path("tests/test-data/course-specs/subsection-optional-spec.xml")
+
+
+class TestScheduleOptional:
+    def test_optional_excluded_by_default(self):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["schedule", str(OPTIONAL_SPEC_PATH), "-L", "en"])
+        assert result.exit_code == 0, result.output
+        # The multi-day subsection localizes to a joined label.
+        assert "| Monday, Tuesday |" in result.output
+        # Optional Week 2 (whole section) and the optional Wednesday subsection
+        # are both omitted without the flag.
+        assert "## Week 2" not in result.output
+        assert "Wednesday" not in result.output
+
+    def test_include_optional_adds_modules(self):
+        runner = CliRunner()
+        result = runner.invoke(
+            cli, ["schedule", str(OPTIONAL_SPEC_PATH), "-L", "en", "--include-optional"]
+        )
+        assert result.exit_code == 0, result.output
+        assert "## Week 2" in result.output
+        assert "| Wednesday |" in result.output
+        assert "| Thursday |" in result.output
+
+    def test_excluded_optional_section_keeps_week_numbering(self):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["schedule", str(OPTIONAL_SPEC_PATH), "-f", "csv", "-L", "en"])
+        assert result.exit_code == 0, result.output
+        # Week 1 is present; the optional Week 2 leaves no week-2 rows.
+        assert ",mon,tue," not in result.output  # weekday cell is the joined token set
+        assert '"mon,tue"' in result.output
+        assert "2,Week 2," not in result.output

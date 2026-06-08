@@ -219,6 +219,11 @@ class TopicSpec:
 WEEKDAY_ORDER: tuple[str, ...] = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 VALID_WEEKDAYS: frozenset[str] = frozenset(WEEKDAY_ORDER)
 
+# The workdays a Mon–Fri course is expected to fill. Used by the opt-in
+# ``clm validate --check-workdays`` coverage check, which warns when a section
+# that uses the day-of-week subsection layer leaves one of these uncovered.
+REQUIRED_WORKDAYS: tuple[str, ...] = ("mon", "tue", "wed", "thu", "fri")
+
 
 @frozen
 class SubsectionSpec:
@@ -242,23 +247,38 @@ class SubsectionSpec:
             that also appear in the parent :attr:`SectionSpec.topics` flat
             list. A *disabled* subsection's topics are held only here — they
             are deliberately kept out of the flat build list (see ``enabled``).
-        weekday: A language-neutral weekday token from :data:`VALID_WEEKDAYS`
-            (``"mon"``..``"sun"``), or ``None`` for a generic thematic group
-            that carries only a ``<name>``.
+        weekdays: Zero or more language-neutral weekday tokens from
+            :data:`VALID_WEEKDAYS` (``"mon"``..``"sun"``), in declared order.
+            A single ``<subsection weekday="mon,tue,wed">`` spans several
+            days; an empty tuple is a generic thematic group that carries
+            only a ``<name>``. The :attr:`weekday` property returns the first
+            token (or ``None``) for callers that only handle a single day.
         name: Optional bilingual label override. When ``None``, consumers
-            derive the displayed label from ``weekday``.
+            derive the displayed label from ``weekdays``.
         enabled: Mirrors ``<section enabled=...>``. A disabled subsection is
             dropped entirely from the build — its topics never enter the flat
             :attr:`SectionSpec.topics` list (the build path), regardless of
             ``keep_disabled``. With ``keep_disabled=True`` the wrapper is still
             retained in :attr:`SectionSpec.subsections` so tooling
             (``clm outline --include-disabled``) can surface it.
+        optional: An optional module that is excluded from ``clm schedule`` /
+            ``clm outline`` listings unless ``--include-optional`` is passed.
+            Presentation-only: it never affects the build (the topics still
+            flatten into :attr:`SectionSpec.topics` like any enabled
+            subsection). An ``optional`` *and* disabled subsection is dropped
+            entirely (``enabled`` wins) — it is never listed, flag or not.
     """
 
     topics: list[TopicSpec] = Factory(list)
-    weekday: str | None = None
+    weekdays: tuple[str, ...] = ()
     name: Text | None = None
     enabled: bool = True
+    optional: bool = False
+
+    @property
+    def weekday(self) -> str | None:
+        """The first weekday token, or ``None`` — convenience for single-day callers."""
+        return self.weekdays[0] if self.weekdays else None
 
 
 @frozen
@@ -286,6 +306,12 @@ class SectionSpec:
     # disabled subsections appear here only when parsed with
     # ``keep_disabled=True``.
     subsections: list[SubsectionSpec] = Factory(list)
+    # An optional module (whole week). Excluded from ``clm schedule`` /
+    # ``clm outline`` listings unless ``--include-optional`` is passed.
+    # Presentation-only, exactly like :attr:`SubsectionSpec.optional`: it
+    # never gates the build. An ``optional`` *and* disabled section is still
+    # dropped at parse time (``enabled`` wins) and is never listed.
+    optional: bool = False
 
     def module_for(self, topic_spec: TopicSpec) -> str | None:
         """Effective module binding for *topic_spec* under this section.
@@ -443,6 +469,36 @@ def _parse_enabled_attr(value: str | None, *, label: str) -> bool:
         f"Invalid value for 'enabled' attribute on {label}: {value!r}. "
         f"Expected 'true' or 'false' (case-insensitive)."
     )
+
+
+def _parse_weekdays_attr(value: str | None, *, section_label: str) -> tuple[str, ...]:
+    """Parse a ``<subsection>`` ``weekday`` attribute into ordered tokens.
+
+    Accepts a single token (``"mon"``) or a comma-separated list
+    (``"mon,tue,wed"``), so one ``<subsection>`` can span several days
+    (issue #261 follow-up). Each token is normalized to lowercase and
+    validated against the closed :data:`VALID_WEEKDAYS` enum; an unknown
+    token is a hard :class:`CourseSpecError`. Returns an empty tuple when the
+    attribute is absent or blank (a thematic group carrying only a
+    ``<name>``). Duplicate tokens collapse, preserving first-occurrence
+    order.
+    """
+    if value is None:
+        return ()
+    result: list[str] = []
+    for raw in value.split(","):
+        token = raw.strip().lower()
+        if not token:
+            continue
+        if token not in VALID_WEEKDAYS:
+            raise CourseSpecError(
+                f"Invalid weekday {raw.strip()!r} on a <subsection> in "
+                f"{section_label}. Expected one of {list(WEEKDAY_ORDER)} "
+                f"(language-neutral, lowercase), optionally comma-separated."
+            )
+        if token not in result:
+            result.append(token)
+    return tuple(result)
 
 
 @frozen
@@ -1205,8 +1261,9 @@ class CourseSpec:
         Returns ``None`` when the subsection is disabled and
         ``keep_disabled`` is False, so the caller drops it entirely
         (topics and all) — mirroring how a disabled ``<section>`` is
-        dropped. ``weekday`` is validated against the closed
-        :data:`VALID_WEEKDAYS` enum; an unknown token is a hard error.
+        dropped. ``weekday`` accepts a single token or a comma-separated
+        list, each validated against the closed :data:`VALID_WEEKDAYS`
+        enum; an unknown token is a hard error.
         """
         enabled = _parse_enabled_attr(
             sub_elem.attrib.get("enabled"), label=f"subsection in {section_label}"
@@ -1214,18 +1271,8 @@ class CourseSpec:
         if not enabled and not keep_disabled:
             return None
 
-        weekday_raw = sub_elem.attrib.get("weekday")
-        weekday: str | None = None
-        if weekday_raw is not None:
-            normalized = weekday_raw.strip().lower()
-            if normalized:
-                if normalized not in VALID_WEEKDAYS:
-                    raise CourseSpecError(
-                        f"Invalid weekday {weekday_raw!r} on a <subsection> in "
-                        f"{section_label}. Expected one of "
-                        f"{list(WEEKDAY_ORDER)} (language-neutral, lowercase)."
-                    )
-                weekday = normalized
+        weekdays = _parse_weekdays_attr(sub_elem.attrib.get("weekday"), section_label=section_label)
+        optional = _parse_bool_attr(sub_elem.attrib.get("optional"), attr_name="optional")
 
         name_elem = sub_elem.find("name")
         name: Text | None = None
@@ -1240,7 +1287,13 @@ class CourseSpec:
             CourseSpec._parse_topic_element(topic_elem, section_label=section_label)
             for topic_elem in sub_elem.findall("topic")
         ]
-        return SubsectionSpec(topics=topics, weekday=weekday, name=name, enabled=enabled)
+        return SubsectionSpec(
+            topics=topics,
+            weekdays=weekdays,
+            name=name,
+            enabled=enabled,
+            optional=optional,
+        )
 
     @staticmethod
     def _iter_topic_elements(
@@ -1297,6 +1350,9 @@ class CourseSpec:
             section_module = section_elem.attrib.get("module") or None
             section_http_replay = _parse_bool_attr(
                 section_elem.attrib.get("http-replay"), attr_name="http-replay"
+            )
+            section_optional = _parse_bool_attr(
+                section_elem.attrib.get("optional"), attr_name="optional"
             )
 
             if not enabled and not keep_disabled:
@@ -1364,6 +1420,7 @@ class CourseSpec:
                     includes=section_includes,
                     http_replay=section_http_replay,
                     subsections=subsections,
+                    optional=section_optional,
                 )
             )
         return sections
