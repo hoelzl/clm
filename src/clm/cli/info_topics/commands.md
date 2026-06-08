@@ -1296,10 +1296,18 @@ structurally, so it is **not** minted a `slide_id`.
 by a **content anchor** (`hand slide_id > construct slug > content hash`), never
 written into the file, so a deck stays id-light yet syncs precisely:
 
-- **Code-only edits propagate.** Editing *only* a language-neutral code cell on
-  one side — no narrative or id change — is now detected (the anchor diff sees
-  which half drifted) and copied verbatim to the twin. Previously such an edit was
-  silently dropped.
+- **Code-only edits propagate — on the first sync too (Issue #269).** Editing
+  *only* a language-neutral code (or markdown) cell on one side — no narrative or id
+  change — is detected (the anchor diff sees which half drifted) and copied verbatim
+  to the twin. This now also fires on the **cold-start (git `HEAD`) baseline** — the
+  first sync of a freshly-split pair, before any watermark exists. Previously the
+  neutral-cell diff ran only against a watermark, so such an edit on a first sync was
+  silently dropped and reported "decks already consistent".
+- **Id-less localized cell edits propagate (Issue #269).** A `lang=` cell with **no**
+  `slide_id` (a one-off demo / output cell) edited on one side is re-translated onto
+  the twin — both bare statements and named constructs (`def` / `class` / `import`),
+  under either baseline. Previously an id-less-localized-only edit had no direction
+  signal and was silently dropped.
 - **Unchanged localized code is never re-translated.** When a slide group is
   rebuilt for a sibling's sake, an unchanged id-less localized code cell is spliced
   verbatim by its anchor instead of being re-translated — no churn, no LLM spend.
@@ -1316,6 +1324,17 @@ written into the file, so a deck stays id-light yet syncs precisely:
 - **Genuinely ambiguous id realignment** (a function renamed *while* a cell was
   split, an unresolvable tie) is left untouched and re-surfaces next run, unless
   you opt in with `--llm-recover` (above).
+- **The deck header is never silently dropped (Issue #269).** Sync does **not**
+  auto-translate the j2 deck header (`{{ header_xx(…) }}`) — it is language-specific
+  and each half keeps its own. But a header edited on **one** half only is now an
+  **error** (the watermark holds, exit 2) telling you to update the other header (or
+  run `clm slides translate`), instead of being reported "consistent". A header
+  updated on **both** halves is accepted.
+- **A shared-cell parity fail-safe guards the invariant (Issue #269).** After an
+  otherwise-clean apply, the language-neutral cells of the two halves must be
+  byte-identical (the `unify` invariant); if any still differ, sync **errors** and
+  holds the watermark rather than report the decks consistent — so an
+  un-propagatable shared-cell change is always surfaced, never silently banked.
 
 Use `--explain` to see the anchor-level view (per-cell anchor + drift, the
 propagation direction, drifted ids) for any pair.

@@ -250,6 +250,13 @@ class SyncPlan:
     # keyed classifier found none — the Issue #190 item-2 signal. ``None`` when
     # no non-keyed cell drifted. Consumed by the structural pass (sync_code).
     anchor_direction: str | None = None
+    # Issue #269: per-language ordered content hashes of the baseline's id-less
+    # localized cells (the ("L", kind) set). ``None`` when no baseline was
+    # resolved. The structural pass uses them (as a multiset) to detect a
+    # hash-anchored id-less body edit a construct anchor cannot see, and apply uses
+    # them post-pass to fail-safe on any id-less drift that was not propagated.
+    idless_baseline_de: list[str] | None = None
+    idless_baseline_en: list[str] | None = None
 
     @property
     def has_baseline(self) -> bool:
@@ -329,6 +336,16 @@ class SyncPlan:
                 "baseline=none: no watermark and no git HEAD to diff against — "
                 "cannot detect edits/removes. Pass --source-lang or commit a "
                 "baseline. (id-less adds are still detected.)"
+            )
+        if self.anchor_direction is not None:
+            # A language-neutral / id-less-localized (structural) change carries no
+            # proposal but DID drift one half: the structural pass propagates it this
+            # run, so the headline must not claim "already consistent" (mirrors
+            # ``is_noop``, which already counts ``anchor_direction``). Issue #269.
+            return (
+                f"baseline={self.baseline_source}: language-neutral/structural "
+                f"change propagating {self.anchor_direction} "
+                f"({self.in_sync_count} cell(s) in sync)."
             )
         return (
             f"baseline={self.baseline_source}: 0 changes — decks already "
@@ -460,6 +477,20 @@ def _shared_hashes(cells: list[Cell]) -> list[str]:
     return [chash for (_pos, _sid, _role, chash, _construct) in watermark_rows(cells)["shared"]]
 
 
+def _header_hashes(cells: list[Cell]) -> list[str]:
+    """Ordered content hashes of a file's j2 deck-header cells (Issue #269).
+
+    The deck header (``# j2 … {{ header_xx(…) }}``) is excluded from every sync
+    partition (``watermark_rows`` / ``role_of`` / ``_shared_hashes`` all skip
+    ``is_j2`` cells) and is language-specific, so sync never auto-translates it. To
+    keep the "never report consistent while a change was dropped" invariant, the
+    header is hashed here so a one-sided header edit can be detected and surfaced.
+    A j2 cell's macro text lives in its **header line** (``Cell.content`` is empty
+    for a directive cell), so that is what is hashed.
+    """
+    return [cell_content_hash(c.header) for c in cells if c.metadata.is_j2]
+
+
 @dataclass(frozen=True)
 class AnchorAlignment:
     """How the language-neutral cells drifted, and what the sync should do.
@@ -555,6 +586,150 @@ def align_anchored(
     return AnchorAlignment(direction=None, diverged=True)
 
 
+def _idless_localized_hashes(cells: list[Cell], lang: str) -> list[str]:
+    """Ordered content hashes of the id-less localized cells of ``lang`` (Issue #269).
+
+    The ``("L", kind)`` set the structural pass owns: a ``lang=``-bearing cell with
+    no per-cell role (``role_of`` ``None`` — i.e. no ``slide_id`` and no narrative
+    tag). The keyed walk skips it (no slide_id) and :func:`align_anchored` skips it
+    (not in the ``shared`` partition), so this ordered sequence is what a one-sided
+    drift detector compares — the localized analog of :func:`_shared_hashes`.
+    """
+    return [
+        cell_content_hash(c.content)
+        for c in cells
+        if not c.metadata.is_j2 and c.metadata.lang == lang and role_of(c.metadata) is None
+    ]
+
+
+def _idless_localized_baseline_from_rows(
+    rows: list[tuple[int, str | None, str, str, str | None]],
+) -> list[str]:
+    """Ordered id-less localized baseline hashes from a watermark ``de``/``en`` partition.
+
+    The membership-widened watermark files an id-less localized cell under the
+    synthetic :data:`LOCALIZED_CODE_ROLE` / :data:`LOCALIZED_MARKDOWN_ROLE` role
+    (its ``role_of`` is ``None``); an id-carrying cell keeps a real role. Selecting
+    those two roles reproduces :func:`_idless_localized_hashes` over the baseline.
+    """
+    return [
+        chash
+        for (_pos, _sid, role, chash, _construct) in rows
+        if role in (LOCALIZED_CODE_ROLE, LOCALIZED_MARKDOWN_ROLE)
+    ]
+
+
+def _idless_localized_baseline_from_git_head(path: Path, lang: str) -> list[str] | None:
+    """git-HEAD counterpart of :func:`_idless_localized_baseline_from_rows`, or ``None``."""
+    text = _git_head_text(path)
+    if text is None:
+        return None
+    return _idless_localized_hashes(parse_cells(text, comment_token_for_path(path)), lang)
+
+
+def _classify_idless_localized_drift(
+    plan: SyncPlan,
+    de_cells: list[Cell],
+    en_cells: list[Cell],
+    de_baseline: list[str],
+    en_baseline: list[str],
+) -> None:
+    """Feed a direction for a one-sided id-less localized drift, or alert (Issue #269).
+
+    Compares each half's ordered id-less localized hashes against its baseline. A
+    one-sided drift yields a propagation direction handed to the structural pass
+    (which re-translates the changed cell via ``_region_has_localized_drift`` /
+    signature rebuild); a two-sided drift, or one whose direction conflicts with the
+    direction the rest of the pass already established (keyed proposals or the
+    neutral anchor), is irreconcilable and surfaces as an error so the watermark
+    holds and the user is alerted — never a silent drop.
+    """
+    de_drifted = _idless_localized_hashes(de_cells, "de") != de_baseline
+    en_drifted = _idless_localized_hashes(en_cells, "en") != en_baseline
+    if not de_drifted and not en_drifted:
+        return
+    # The direction the rest of the pass already established: a single keyed edit
+    # direction if any, else the neutral anchor.
+    established = _keyed_direction(plan)
+    if established is None:
+        established = plan.anchor_direction
+    if de_drifted and en_drifted:
+        # Both halves' id-less localized streams changed. When a direction is already
+        # established (a keyed edit or the neutral anchor), the existing id-migration
+        # + structural pass resolve these along it — e.g. a localized id'd code cell
+        # split into import+def on BOTH decks, where the new id-less def appears on
+        # each half. Only when there is NO direction signal at all is this a genuine
+        # both-sides edit a single-direction sync cannot reconcile -> alert.
+        if established is None:
+            plan.issues.append(
+                PlanIssue(
+                    severity="error",
+                    slide_id=None,
+                    reason="id-less localized cells (lang= cells with no slide_id) were "
+                    "edited on both decks; sync cannot determine a single direction — "
+                    "resolve manually or assign slide_ids so the cells can be paired",
+                )
+            )
+        return
+    direction = "de->en" if de_drifted else "en->de"
+    # Reconcile with the established direction. A conflict means the author edited
+    # different cell classes in opposite directions — not safely applicable in one
+    # pass, so alert rather than overwrite one side's edit.
+    if established is not None and established != direction:
+        plan.issues.append(
+            PlanIssue(
+                severity="error",
+                slide_id=None,
+                reason=f"an id-less localized cell drifted {direction} but other cells "
+                f"drifted {established}; sync cannot apply both directions at once — "
+                "resolve manually",
+            )
+        )
+        return
+    if plan.anchor_direction is None:
+        plan.anchor_direction = direction
+
+
+def _classify_header_drift(
+    plan: SyncPlan,
+    de_cells: list[Cell],
+    en_cells: list[Cell],
+    de_baseline: list[str],
+    en_baseline: list[str],
+) -> None:
+    """Alert on a one-sided j2 deck-header edit (Issue #269).
+
+    The deck header is language-specific (``header_de`` vs ``header_en``) and is
+    excluded from every sync partition, so sync neither translates nor propagates
+    it — the structural pass deliberately keeps each half's own header. That is
+    correct behavior, but it must NOT be reported as "decks already consistent"
+    when one half's header was edited and the other's was not. Compare each half's
+    header against its baseline: a one-sided drift is an error so the watermark
+    holds, the run exits non-zero, and the user is told to update the other header
+    (or run ``clm slides translate``). A both-sided drift is treated as "both
+    halves were updated" (no alert); neither-side is a no-op.
+
+    An error rather than a warning because (a) sync genuinely cannot resolve it and
+    (b) only an error makes ``is_noop`` False and the summary non-"consistent" — a
+    warning would still report the decks consistent and exit 0.
+    """
+    de_drifted = _header_hashes(de_cells) != de_baseline
+    en_drifted = _header_hashes(en_cells) != en_baseline
+    if de_drifted == en_drifted:
+        return  # neither changed, or both updated — no one-sided header divergence
+    side, other = ("de", "en") if de_drifted else ("en", "de")
+    plan.issues.append(
+        PlanIssue(
+            severity="error",
+            slide_id=None,
+            reason=f"the {side.upper()} deck header changed since the last sync but the "
+            f"{other.upper()} header did not — sync does not auto-translate the deck "
+            f"header; update the {other.upper()} header to match (or run "
+            "`clm slides translate`), then re-run sync",
+        )
+    )
+
+
 # ``CLM_SYNC__SHARED_DIVERGENCE`` (the §7a knob): how to handle a language-neutral
 # cell edited differently on both decks. ``auto-heal`` propagates the winning side
 # with a warning; ``error`` surfaces it and writes nothing.
@@ -642,16 +817,13 @@ def _lang_for_path(path: Path) -> str | None:
     return None
 
 
-def _baseline_from_git_head(path: Path) -> list[BaselineCell] | None:
-    """Derive a baseline from the committed (HEAD) version of ``path``.
+def _git_head_text(path: Path) -> str | None:
+    """The committed (HEAD) text of ``path``, or ``None`` if unavailable.
 
-    Returns ``None`` when git is unavailable, the file is untracked, or the
-    deck's language cannot be inferred from its name. An empty list means the
-    file existed at HEAD but had no sync-relevant cells.
+    ``None`` when git is unavailable, the file is untracked, or ``git show``
+    fails. Shared by the per-cell baseline (:func:`_baseline_from_git_head`) and
+    the shared/header baselines so they all read the *same* committed snapshot.
     """
-    lang = _lang_for_path(path)
-    if lang is None:
-        return None
     try:
         completed = subprocess.run(
             ["git", "show", f"HEAD:./{path.name}"],
@@ -665,7 +837,23 @@ def _baseline_from_git_head(path: Path) -> list[BaselineCell] | None:
         return None
     if completed.returncode != 0:
         return None
-    cells = parse_cells(completed.stdout, comment_token_for_path(path))
+    return completed.stdout
+
+
+def _baseline_from_git_head(path: Path) -> list[BaselineCell] | None:
+    """Derive a baseline from the committed (HEAD) version of ``path``.
+
+    Returns ``None`` when git is unavailable, the file is untracked, or the
+    deck's language cannot be inferred from its name. An empty list means the
+    file existed at HEAD but had no sync-relevant cells.
+    """
+    lang = _lang_for_path(path)
+    if lang is None:
+        return None
+    text = _git_head_text(path)
+    if text is None:
+        return None
+    cells = parse_cells(text, comment_token_for_path(path))
     return [
         BaselineCell(
             position=c.position,
@@ -676,6 +864,36 @@ def _baseline_from_git_head(path: Path) -> list[BaselineCell] | None:
         )
         for c in ordered_sync_cells(cells, lang)
     ]
+
+
+def _shared_baseline_from_git_head(path: Path) -> list[str] | None:
+    """Ordered language-neutral (``shared``) cell hashes from HEAD:``path``, or ``None``.
+
+    The git-HEAD counterpart of the watermark's ``shared`` partition: neutral
+    cells are byte-identical across the two halves (the ``unify`` invariant), so
+    either committed half yields the same sequence. Returns ``None`` when the
+    committed text is unavailable — :func:`align_anchored` then degrades to "no
+    shared baseline" exactly as it does for a pre-#190 watermark. Without this,
+    the git-HEAD (cold-start / first-sync) path could not detect a one-sided
+    edit, add, or removal of a neutral cell, silently dropping it (Issue #269).
+    """
+    text = _git_head_text(path)
+    if text is None:
+        return None
+    return _shared_hashes(parse_cells(text, comment_token_for_path(path)))
+
+
+def _header_baseline_from_git_head(path: Path) -> list[str] | None:
+    """git-HEAD counterpart of the watermark ``de-header`` / ``en-header`` partition.
+
+    Ordered j2 header hashes from the committed half (Issue #269), or ``None`` when
+    the committed text is unavailable. Used so the cold-start (first) sync can detect
+    a one-sided header edit even before a watermark exists.
+    """
+    text = _git_head_text(path)
+    if text is None:
+        return None
+    return _header_hashes(parse_cells(text, comment_token_for_path(path)))
 
 
 # ---------------------------------------------------------------------------
@@ -1768,16 +1986,24 @@ def build_sync_plan(
     de_baseline: list[BaselineCell] | None = None
     en_baseline: list[BaselineCell] | None = None
     baseline_shared: list[str] | None = None
+    # Issue #269: ordered content hashes of each half's *id-less localized* cells
+    # (the ("L", kind) set the structural pass owns). None when no baseline.
+    de_idless_baseline: list[str] | None = None
+    en_idless_baseline: list[str] | None = None
+    # Issue #269: ordered content hashes of each half's j2 deck-header cells, for the
+    # one-sided header-drift alert. None when no baseline.
+    de_header_baseline: list[str] | None = None
+    en_header_baseline: list[str] | None = None
     source = "none"
 
     if watermark_cache is not None and watermark_cache.has_pair(str(de_path), str(en_path)):
+        de_rows = watermark_cache.get_deck(str(de_path), str(en_path), "de")
+        en_rows = watermark_cache.get_deck(str(de_path), str(en_path), "en")
         de_baseline = _baseline_from_watermark(
-            watermark_cache.get_deck(str(de_path), str(en_path), "de"),
-            watermark_cache.get_deck_tags(str(de_path), str(en_path), "de"),
+            de_rows, watermark_cache.get_deck_tags(str(de_path), str(en_path), "de")
         )
         en_baseline = _baseline_from_watermark(
-            watermark_cache.get_deck(str(de_path), str(en_path), "en"),
-            watermark_cache.get_deck_tags(str(de_path), str(en_path), "en"),
+            en_rows, watermark_cache.get_deck_tags(str(de_path), str(en_path), "en")
         )
         # Ordered content hashes of the baseline's neutral cells (position order),
         # matching _shared_hashes — see align_anchored for why this is a sequence,
@@ -1788,12 +2014,37 @@ def build_sync_plan(
                 str(de_path), str(en_path), "shared"
             )
         ]
+        de_idless_baseline = _idless_localized_baseline_from_rows(de_rows)
+        en_idless_baseline = _idless_localized_baseline_from_rows(en_rows)
+        de_header_baseline = [
+            chash
+            for (_p, _sid, _r, chash, _c) in watermark_cache.get_deck(
+                str(de_path), str(en_path), "de-header"
+            )
+        ]
+        en_header_baseline = [
+            chash
+            for (_p, _sid, _r, chash, _c) in watermark_cache.get_deck(
+                str(de_path), str(en_path), "en-header"
+            )
+        ]
         source = "watermark"
     elif allow_git_fallback and not _pair_is_unbootstrapped(de_current, en_current):
         gb_de = _baseline_from_git_head(de_path)
         gb_en = _baseline_from_git_head(en_path)
         if gb_de is not None and gb_en is not None:
             de_baseline, en_baseline = gb_de, gb_en
+            # Issue #269: derive the ``shared`` (language-neutral) baseline from the
+            # committed half too, so the ``align_anchored`` gate below fires on the
+            # cold-start (first) sync — without it a one-sided edit/add/remove of a
+            # neutral cell is invisible and silently dropped while the run reports
+            # "decks already consistent". Neutral cells are byte-identical across
+            # halves (the unify invariant), so either half yields the same sequence.
+            baseline_shared = _shared_baseline_from_git_head(de_path)
+            de_idless_baseline = _idless_localized_baseline_from_git_head(de_path, "de")
+            en_idless_baseline = _idless_localized_baseline_from_git_head(en_path, "en")
+            de_header_baseline = _header_baseline_from_git_head(de_path)
+            en_header_baseline = _header_baseline_from_git_head(en_path)
             source = "git-head"
 
     plan = classify_changes(
@@ -1806,6 +2057,11 @@ def build_sync_plan(
         baseline_source=source,
         provider_available=provider_available,
     )
+    # Carry the id-less localized baselines onto the plan so the structural pass
+    # (hash-anchored drift detection) and the apply-time fail-safe can reach them
+    # without re-deriving the baseline (Issue #269).
+    plan.idless_baseline_de = de_idless_baseline
+    plan.idless_baseline_en = en_idless_baseline
 
     # Item-2 (Phase 3a): detect a language-neutral code-only change the keyed
     # classifier cannot see, and hand its direction to the structural pass. Only
@@ -1827,6 +2083,26 @@ def build_sync_plan(
             _apply_divergence(plan, de_path, en_path, forced=alignment.direction)
         else:
             plan.anchor_direction = alignment.direction
+
+    # Issue #269: id-less localized cells (a ``lang=`` cell with no ``slide_id`` —
+    # the ("L", kind) set) are reached by neither the keyed walk (no slide_id) nor
+    # ``align_anchored`` (it inspects only the neutral ``shared`` partition). A
+    # one-sided body edit to one therefore has no direction signal, so the structural
+    # pass skips it and the change is dropped while the run reports "consistent".
+    # Detect the drift against the baseline and feed a direction (or alert if it is
+    # two-sided / conflicts with the other cells' direction). Runs on BOTH baselines.
+    if de_idless_baseline is not None and en_idless_baseline is not None:
+        _classify_idless_localized_drift(
+            plan, de_cells, en_cells, de_idless_baseline, en_idless_baseline
+        )
+
+    # Issue #269: the j2 deck header is excluded from every sync partition and is
+    # never auto-translated, so a one-sided header edit must be surfaced rather than
+    # silently reported "consistent". Runs on BOTH baselines (a pre-#269 watermark
+    # recorded no header rows -> empty baseline -> both halves read as "drifted" ->
+    # no false one-sided alert, and the next clean sync records the headers).
+    if de_header_baseline is not None and en_header_baseline is not None:
+        _classify_header_drift(plan, de_cells, en_cells, de_header_baseline, en_header_baseline)
 
     # Tier C (Issue #198 / #190 item 3): mirror a tag-only edit on an id-less
     # localized cell — the per-cell engine cannot key it (no slide_id) and the

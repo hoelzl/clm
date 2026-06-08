@@ -43,6 +43,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **`clm slides sync` no longer silently drops one-sided edits to shared /
+  id-less / header cells (Issue #269).** Sync's promise is that editing one half
+  of a split deck carries *all* changes to the other half, and that it never
+  reports "decks already consistent" while a change was in fact dropped. Several
+  classes of edit violated that — each was silently lost, the run reported "0
+  changes — decks already consistent", and the watermark advanced over the
+  divergence (permanently baselining the loss). All are now propagated, or alerted
+  when they cannot be:
+  - **Language-neutral code/markdown cells on the first sync.** The neutral-cell
+    drift diff ran only against a watermark, so the **cold-start (git `HEAD`)
+    baseline** — the first sync of a freshly-split pair — missed a one-sided edit,
+    add, or removal of a shared cell entirely. The git-HEAD baseline now supplies
+    the shared-cell sequence, so cold-start syncs detect and propagate them (and
+    surface a both-sides divergence) exactly like the watermark path.
+  - **Id-less localized cells** (a `lang=` cell with no `slide_id`). A one-sided
+    body edit had no propagation direction, so it was dropped under *both*
+    baselines. A drift detector now feeds the structural pass a direction; both
+    bare statements (hash-anchored) and named constructs (`def`/`class`/`import`)
+    are re-translated onto the twin. A genuine both-sides id-less edit with no other
+    direction is surfaced rather than guessed.
+  - **The j2 deck header.** A one-sided header edit (a retitle, or a should-be-
+    identical neutral arg) was reported "consistent". Sync still does not
+    auto-translate the header, but a one-sided change is now an **error** that holds
+    the watermark and tells you to update the other header (or run `clm slides
+    translate`).
+  - **Honest reporting + fail-safe.** The summary no longer says "0 changes —
+    decks already consistent" on a run that propagated a structural change (it names
+    the direction), the apply outcome counts a new `structural` figure, and a
+    post-apply parity check errors if the two halves' neutral cells still differ —
+    so an un-propagatable shared-cell change can never be silently banked.
 - **`clm slides translate`'s delegated-sync path now selects the glossary
   per-language too.** When the twin already exists, `translate` degrades to the
   bidirectional sync engine; it previously applied the single target-language
