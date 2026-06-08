@@ -67,6 +67,7 @@ from clm.infrastructure.llm.openrouter_client import (
     OpenRouterSyncJudge,
     has_openrouter_api_key,
 )
+from clm.slides.glossary import GLOSSARY_STEM, resolve_guidance_by_lang
 from clm.slides.pairing import (
     derive_split_pair_from_stem,
     derive_split_twin,
@@ -121,6 +122,34 @@ def _resolve_prog_lang(path: Path) -> str:
         return path_to_prog_lang(target)
     except (KeyError, ValueError):
         return "python"
+
+
+def _resolve_sync_guidance(
+    source_dir: Path,
+    glossary_de: Path | None,
+    glossary_en: Path | None,
+    *,
+    as_json: bool,
+) -> dict[str, str]:
+    """Resolve the per-target-language translation conventions for the add path.
+
+    ``sync`` is bidirectional — a brand-new EN slide is translated to DE (using the
+    DE conventions) and a brand-new DE slide to EN (using the EN conventions) in the
+    same pass — so a glossary is resolved **per target language**: an explicit
+    ``--glossary-de`` / ``--glossary-en``, else an auto-discovered
+    ``clm-glossary.<lang>.md`` walking up from ``source_dir`` (a deck's directory,
+    or the batch root). Returns the ``{target_lang: conventions_text}`` map the
+    :class:`OpenRouterSlideTranslator` selects from; echoes which file supplied each
+    (unless ``--json``). A language with no glossary is simply absent — that
+    direction translates with no conventions, exactly as before this option.
+    """
+    guidance, used = resolve_guidance_by_lang(
+        source_dir, explicit={"de": glossary_de, "en": glossary_en}
+    )
+    if not as_json:
+        for lang in sorted(used):
+            click.echo(f"Using glossary ({lang}): {used[lang]}", err=True)
+    return guidance
 
 
 def _resolve_sync_pair(de_path: Path, en_path: Path) -> tuple[Path, Path]:
@@ -307,6 +336,26 @@ def _resolve_single_path(de_path: Path, en_path: Path | None) -> tuple[Path, Pat
     ),
 )
 @click.option(
+    "--glossary-de",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help=(
+        "Translation conventions (Markdown: a style note + term glossary) for "
+        "German targets — a brand-new EN slide translated to DE on the add path. "
+        f"Default: auto-discover '{GLOSSARY_STEM}.de.md' walking up from the deck."
+    ),
+)
+@click.option(
+    "--glossary-en",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help=(
+        "Translation conventions (Markdown: a style note + term glossary) for "
+        "English targets — a brand-new DE slide translated to EN on the add path. "
+        f"Default: auto-discover '{GLOSSARY_STEM}.en.md' walking up from the deck."
+    ),
+)
+@click.option(
     "--llm-recover",
     is_flag=True,
     default=False,
@@ -391,6 +440,8 @@ def slides_sync_cmd(
     ollama_url: str | None,
     llm_timeout: float | None,
     translation_model: str,
+    glossary_de: Path | None,
+    glossary_en: Path | None,
     llm_recover: bool,
     recovery_model: str,
     verify_cold_pairs: bool | None,
@@ -474,6 +525,16 @@ def slides_sync_cmd(
                 "--dry-run / --explain over the directory."
             )
         batch_mode = "explain" if explain else ("dry-run" if dry_run else "apply")
+        # One glossary resolution for the whole sweep (the translator is shared across
+        # pairs), discovered from the batch root. Only an apply sweep translates, so a
+        # dry-run / explain sweep neither reads a glossary nor echoes a "Using glossary"
+        # line. A glossary buried below the root, beside a single deck, is not found by
+        # this root-level walk — pass it explicitly, or sync that deck on its own.
+        batch_guidance = (
+            _resolve_sync_guidance(de_path, glossary_de, glossary_en, as_json=as_json)
+            if batch_mode == "apply"
+            else {}
+        )
         _run_batch(
             de_path,
             mode=batch_mode,
@@ -485,7 +546,9 @@ def slides_sync_cmd(
             provider_available=provider_available,
             make_judge=lambda: _resolve_judge(provider, llm_model, ollama_url, llm_timeout),
             make_translator=lambda: OpenRouterSlideTranslator(
-                model=translation_model, prog_lang=_resolve_prog_lang(de_path)
+                model=translation_model,
+                prog_lang=_resolve_prog_lang(de_path),
+                guidance_by_lang=batch_guidance,
             ),
             make_recoverer=lambda: _resolve_recoverer(llm_recover, recovery_model),
             make_verifier=lambda: _resolve_verifier(verify_enabled),
@@ -520,6 +583,15 @@ def slides_sync_cmd(
 
         load_env_files(de_path.parent, en_path.parent)
 
+    # Resolve per-target-language translation conventions (style + glossary) for the
+    # bidirectional add path. Only the writing modes build a translator, so dry-run /
+    # explain resolve nothing (and echo no "Using glossary" line).
+    guidance_by_lang: dict[str, str] = {}
+    if not dry_run and not explain:
+        guidance_by_lang = _resolve_sync_guidance(
+            de_path.parent, glossary_de, glossary_en, as_json=as_json
+        )
+
     watermark_cache: SyncWatermarkCache | None = None
     alignment_cache: SyncAlignmentCache | None = None
     correspondence_cache: SyncCorrespondenceCache | None = None
@@ -553,7 +625,9 @@ def slides_sync_cmd(
             mode = "interactive"
             judge = _resolve_judge(provider, llm_model, ollama_url, llm_timeout)
             translator = OpenRouterSlideTranslator(
-                model=translation_model, prog_lang=_resolve_prog_lang(de_path)
+                model=translation_model,
+                prog_lang=_resolve_prog_lang(de_path),
+                guidance_by_lang=guidance_by_lang,
             )
             recoverer = _resolve_recoverer(llm_recover, recovery_model)
             verifier = _resolve_verifier(verify_enabled)
@@ -575,7 +649,9 @@ def slides_sync_cmd(
             mode = "apply"
             judge = _resolve_judge(provider, llm_model, ollama_url, llm_timeout)
             translator = OpenRouterSlideTranslator(
-                model=translation_model, prog_lang=_resolve_prog_lang(de_path)
+                model=translation_model,
+                prog_lang=_resolve_prog_lang(de_path),
+                guidance_by_lang=guidance_by_lang,
             )
             recoverer = _resolve_recoverer(llm_recover, recovery_model)
             verifier = _resolve_verifier(verify_enabled)

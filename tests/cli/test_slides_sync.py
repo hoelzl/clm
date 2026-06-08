@@ -333,6 +333,317 @@ class TestApply:
 
 
 # ---------------------------------------------------------------------------
+# Glossary (translation conventions) wiring into the bidirectional add path
+# ---------------------------------------------------------------------------
+
+
+def _capture_translator(monkeypatch) -> dict:
+    """Patch the translator factory to capture its construction kwargs.
+
+    Proves the glossary the CLI resolved is actually handed to the translator that
+    drives new-slide translation (the prompt assembly itself is unit-tested in
+    tests/slides/test_sync_translate_prompts.py). Returns a dict the test inspects
+    after the run.
+    """
+    from clm.cli.commands import slides_sync as cmd
+    from clm.slides.sync_translate import StaticSlideTranslator
+
+    captured: dict = {}
+
+    def fake(**kwargs):
+        captured.update(kwargs)
+        return StaticSlideTranslator(default="# ## Translated\n#\n# - point")
+
+    monkeypatch.setattr(cmd, "OpenRouterSlideTranslator", fake)
+    return captured
+
+
+class TestGlossary:
+    """`clm slides sync` resolves per-target-language conventions for the add path:
+    explicit `--glossary-de` / `--glossary-en`, else an auto-discovered
+    `clm-glossary.<lang>.md`. The resolved map reaches the translator; dry-run /
+    explain (no translator) resolve nothing.
+    """
+
+    def test_auto_discovers_de_glossary_next_to_deck(
+        self, cli_runner: CliRunner, tmp_path: Path, monkeypatch
+    ):
+        _stub_judge(monkeypatch, _EN_PROPOSAL)
+        captured = _capture_translator(monkeypatch)
+        de_path, en_path, cache_dir = _edit_scenario(tmp_path)
+        (tmp_path / "clm-glossary.de.md").write_text("Address with 'Sie'.\n", encoding="utf-8")
+
+        result = cli_runner.invoke(
+            slides_sync_cmd, [str(de_path), str(en_path), "--cache-dir", str(cache_dir)]
+        )
+
+        assert result.exit_code == 0, _combined(result)
+        assert captured["guidance_by_lang"] == {"de": "Address with 'Sie'."}
+        assert "Using glossary (de):" in (result.stderr or "")
+
+    def test_auto_discovers_both_languages(
+        self, cli_runner: CliRunner, tmp_path: Path, monkeypatch
+    ):
+        _stub_judge(monkeypatch, _EN_PROPOSAL)
+        captured = _capture_translator(monkeypatch)
+        de_path, en_path, cache_dir = _edit_scenario(tmp_path)
+        (tmp_path / "clm-glossary.de.md").write_text("Sie", encoding="utf-8")
+        (tmp_path / "clm-glossary.en.md").write_text("formal", encoding="utf-8")
+
+        result = cli_runner.invoke(
+            slides_sync_cmd, [str(de_path), str(en_path), "--cache-dir", str(cache_dir)]
+        )
+
+        assert result.exit_code == 0, _combined(result)
+        assert captured["guidance_by_lang"] == {"de": "Sie", "en": "formal"}
+
+    def test_explicit_flag_overrides_and_supplies(
+        self, cli_runner: CliRunner, tmp_path: Path, monkeypatch
+    ):
+        _stub_judge(monkeypatch, _EN_PROPOSAL)
+        captured = _capture_translator(monkeypatch)
+        de_path, en_path, cache_dir = _edit_scenario(tmp_path)
+        # A discoverable DE glossary, plus an EN one supplied explicitly by path.
+        (tmp_path / "clm-glossary.de.md").write_text("auto-de", encoding="utf-8")
+        explicit_en = tmp_path / "my-en-conventions.md"
+        explicit_en.write_text("explicit-en", encoding="utf-8")
+
+        result = cli_runner.invoke(
+            slides_sync_cmd,
+            [
+                str(de_path),
+                str(en_path),
+                "--glossary-en",
+                str(explicit_en),
+                "--cache-dir",
+                str(cache_dir),
+            ],
+        )
+
+        assert result.exit_code == 0, _combined(result)
+        assert captured["guidance_by_lang"] == {"de": "auto-de", "en": "explicit-en"}
+
+    def test_no_glossary_passes_empty_map(self, cli_runner: CliRunner, tmp_path: Path, monkeypatch):
+        _stub_judge(monkeypatch, _EN_PROPOSAL)
+        captured = _capture_translator(monkeypatch)
+        de_path, en_path, cache_dir = _edit_scenario(tmp_path)
+
+        result = cli_runner.invoke(
+            slides_sync_cmd, [str(de_path), str(en_path), "--cache-dir", str(cache_dir)]
+        )
+
+        assert result.exit_code == 0, _combined(result)
+        assert captured["guidance_by_lang"] == {}
+        assert "Using glossary" not in (result.stderr or "")
+
+    def test_dry_run_resolves_no_glossary(self, cli_runner: CliRunner, tmp_path: Path, monkeypatch):
+        # Dry-run builds no translator, so it must not echo a "Using glossary" line
+        # (and must not need a key) even when a glossary is present on disk.
+        captured = _capture_translator(monkeypatch)
+        de_path, en_path, cache_dir = _edit_scenario(tmp_path)
+        (tmp_path / "clm-glossary.de.md").write_text("Sie", encoding="utf-8")
+
+        result = cli_runner.invoke(
+            slides_sync_cmd,
+            [str(de_path), str(en_path), "--dry-run", "--cache-dir", str(cache_dir)],
+        )
+
+        assert result.exit_code == 1, _combined(result)  # an edit is pending
+        assert captured == {}  # no translator constructed on a dry-run
+        assert "Using glossary" not in _combined(result)
+
+    def test_missing_explicit_glossary_is_usage_error(self, cli_runner: CliRunner, tmp_path: Path):
+        de_path, en_path = _write_pair(tmp_path, _DE_BASE, _EN_BASE)
+        result = cli_runner.invoke(
+            slides_sync_cmd,
+            [str(de_path), str(en_path), "--glossary-de", str(tmp_path / "nope.md"), "--no-cache"],
+        )
+        assert result.exit_code == 2  # click.Path(exists=True)
+
+    def test_no_glossary_under_interactive(
+        self, cli_runner: CliRunner, tmp_path: Path, monkeypatch
+    ):
+        # The interactive constructor is a separate call site; prove guidance_by_lang
+        # reaches it too (a discoverable DE glossary, applied via the 'a' decision).
+        _stub_judge(monkeypatch, _EN_PROPOSAL)
+        captured = _capture_translator(monkeypatch)
+        de_path, en_path, cache_dir = _edit_scenario(tmp_path)
+        (tmp_path / "clm-glossary.de.md").write_text("Sie", encoding="utf-8")
+
+        result = cli_runner.invoke(
+            slides_sync_cmd,
+            [str(de_path), str(en_path), "--interactive", "--cache-dir", str(cache_dir)],
+            input="a\n",
+        )
+
+        assert result.exit_code == 0, _combined(result)
+        assert captured["guidance_by_lang"] == {"de": "Sie"}
+
+    def test_empty_glossary_file_is_no_glossary(
+        self, cli_runner: CliRunner, tmp_path: Path, monkeypatch
+    ):
+        # A whitespace-only glossary file contributes nothing: empty map, no echo.
+        _stub_judge(monkeypatch, _EN_PROPOSAL)
+        captured = _capture_translator(monkeypatch)
+        de_path, en_path, cache_dir = _edit_scenario(tmp_path)
+        (tmp_path / "clm-glossary.de.md").write_text("   \n\n", encoding="utf-8")
+
+        result = cli_runner.invoke(
+            slides_sync_cmd, [str(de_path), str(en_path), "--cache-dir", str(cache_dir)]
+        )
+
+        assert result.exit_code == 0, _combined(result)
+        assert captured["guidance_by_lang"] == {}
+        assert "Using glossary" not in (result.stderr or "")
+
+    def test_glossary_reaches_translator_in_batch_apply(
+        self, cli_runner: CliRunner, tmp_path: Path, monkeypatch
+    ):
+        # The shared batch translator is built once from the root-level glossary.
+        _stub_judge(monkeypatch, _EN_PROPOSAL)
+        captured = _capture_translator(monkeypatch)
+        root = tmp_path / "decks"
+        root.mkdir()
+        cache_dir = tmp_path / "cache"
+        a_de, a_en = _write_pair(root, _DE_EDITED, _EN_BASE, stem="apis")
+        _seed_watermark(
+            cache_dir, a_de.resolve(), a_en.resolve(), de_text=_DE_BASE, en_text=_EN_BASE
+        )
+        (root / "clm-glossary.de.md").write_text("Sie", encoding="utf-8")
+
+        result = cli_runner.invoke(
+            slides_sync_cmd, [str(root), "--yes", "--cache-dir", str(cache_dir)]
+        )
+
+        assert result.exit_code == 0, _combined(result)
+        assert captured["guidance_by_lang"] == {"de": "Sie"}
+
+
+def _recording_translator(monkeypatch, sink: list) -> None:
+    """Patch the translator with a REAL OpenRouterSlideTranslator whose network
+    client is faked to record the assembled system prompt and echo the source body.
+
+    Unlike ``_capture_translator`` (which records only construction kwargs), this
+    drives the genuine ``_system_message`` / ``_guidance_for`` selection on an actual
+    ``translate()`` call, so a test can prove the per-target glossary text reaches the
+    prompt end-to-end through the engine on a real add.
+    """
+    from types import SimpleNamespace
+
+    from clm.cli.commands import slides_sync as cmd
+    from clm.slides.sync_translate import OpenRouterSlideTranslator
+
+    def factory(**kwargs):
+        translator = OpenRouterSlideTranslator(**kwargs)
+
+        def fake_client():
+            def create(*, model, messages, temperature, max_tokens):
+                sink.append({"system": messages[0]["content"], "user": messages[1]["content"]})
+                # Echo the source body as the "translation" — structurally valid.
+                return SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(message=SimpleNamespace(content=messages[1]["content"]))
+                    ]
+                )
+
+            return SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+
+        translator._client = fake_client
+        return translator
+
+    monkeypatch.setattr(cmd, "OpenRouterSlideTranslator", factory)
+
+
+class TestGlossaryReachesPrompt:
+    """End-to-end: a new-slide ADD during sync drives the real translator, and the
+    per-target glossary text lands in the assembled system prompt — the bidirectional
+    behavior the docs advertise, proven through the engine (not just construction).
+    """
+
+    def _baseline_with_new_slide(self, tmp_path: Path, *, side: str):
+        """Watermark-baselined id'd pair, then append ONE id-less slide on ``side``.
+
+        A new DE slide flows DE->EN (target en); a new EN slide flows EN->DE
+        (target de). Returns ``(de_path, en_path, cache_dir)``.
+        """
+        cache_dir = tmp_path / "cache"
+        de_base = _cell("de", "a", "# ## A")
+        en_base = _cell("en", "a", "# ## A")
+        de_path, en_path = _write_pair(tmp_path, de_base, en_base, stem="gloss")
+        _seed_watermark(
+            cache_dir, de_path.resolve(), en_path.resolve(), de_text=de_base, en_text=en_base
+        )
+        if side == "de":
+            de_path.write_text(de_base + _idless_slide("de", "# ## Neu"), encoding="utf-8")
+        else:
+            en_path.write_text(en_base + _idless_slide("en", "# ## New"), encoding="utf-8")
+        return de_path, en_path, cache_dir
+
+    def test_de_to_en_add_uses_en_glossary(
+        self, cli_runner: CliRunner, tmp_path: Path, monkeypatch
+    ):
+        # A brand-new DE slide is translated INTO English → the EN glossary applies.
+        _stub_judge(monkeypatch, _EN_PROPOSAL)
+        sink: list = []
+        _recording_translator(monkeypatch, sink)
+        de_path, en_path, cache_dir = self._baseline_with_new_slide(tmp_path, side="de")
+        (tmp_path / "clm-glossary.en.md").write_text("EN-CONVENTIONS-XYZ", encoding="utf-8")
+
+        result = cli_runner.invoke(
+            slides_sync_cmd, [str(de_path), str(en_path), "--cache-dir", str(cache_dir)]
+        )
+
+        assert result.exit_code == 0, _combined(result)
+        systems = [r["system"] for r in sink]
+        assert systems, "the add must have driven at least one translate() call"
+        # The English glossary reached the prompt; it is a translation INTO English.
+        assert any("EN-CONVENTIONS-XYZ" in s for s in systems)
+        assert any("to English" in s for s in systems)
+
+    def test_en_to_de_add_uses_de_glossary(
+        self, cli_runner: CliRunner, tmp_path: Path, monkeypatch
+    ):
+        # The reverse direction: a brand-new EN slide is translated INTO German → the
+        # DE glossary applies (the asymmetry a single-glossary design would get wrong).
+        _stub_judge(monkeypatch, _EN_PROPOSAL)
+        sink: list = []
+        _recording_translator(monkeypatch, sink)
+        de_path, en_path, cache_dir = self._baseline_with_new_slide(tmp_path, side="en")
+        (tmp_path / "clm-glossary.de.md").write_text("DE-CONVENTIONS-ABC", encoding="utf-8")
+
+        result = cli_runner.invoke(
+            slides_sync_cmd, [str(de_path), str(en_path), "--cache-dir", str(cache_dir)]
+        )
+
+        assert result.exit_code == 0, _combined(result)
+        systems = [r["system"] for r in sink]
+        assert systems, "the add must have driven at least one translate() call"
+        assert any("DE-CONVENTIONS-ABC" in s for s in systems)
+        assert any("to German" in s for s in systems)
+
+    def test_de_to_en_add_does_not_leak_de_glossary(
+        self, cli_runner: CliRunner, tmp_path: Path, monkeypatch
+    ):
+        # Both glossaries present: a DE->EN add must use ONLY the EN one (no leak).
+        _stub_judge(monkeypatch, _EN_PROPOSAL)
+        sink: list = []
+        _recording_translator(monkeypatch, sink)
+        de_path, en_path, cache_dir = self._baseline_with_new_slide(tmp_path, side="de")
+        (tmp_path / "clm-glossary.en.md").write_text("EN-ONLY", encoding="utf-8")
+        (tmp_path / "clm-glossary.de.md").write_text("DE-ONLY", encoding="utf-8")
+
+        result = cli_runner.invoke(
+            slides_sync_cmd, [str(de_path), str(en_path), "--cache-dir", str(cache_dir)]
+        )
+
+        assert result.exit_code == 0, _combined(result)
+        systems = [r["system"] for r in sink]
+        assert any("EN-ONLY" in s for s in systems)
+        # The German conventions must NOT appear in an English-target prompt.
+        assert all("DE-ONLY" not in s for s in systems)
+
+
+# ---------------------------------------------------------------------------
 # Interactive
 # ---------------------------------------------------------------------------
 

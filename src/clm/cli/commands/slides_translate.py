@@ -47,6 +47,7 @@ from clm.infrastructure.llm.openrouter_client import (
     has_openrouter_api_key,
 )
 from clm.infrastructure.utils.path_utils import path_to_prog_lang
+from clm.slides.glossary import GLOSSARY_STEM, resolve_guidance, resolve_guidance_by_lang
 from clm.slides.sync_translate import (
     DEFAULT_TRANSLATION_MODEL,
     CachingSlideTranslator,
@@ -70,6 +71,7 @@ def _make_translator(
     translation_cache: TranslationCache | None,
     prog_lang: str = "python",
     guidance: str = "",
+    guidance_by_lang: dict[str, str] | None = None,
 ) -> SlideTranslator:
     """The OpenRouter slide translator, cache-wrapped unless ``--no-cache``.
 
@@ -77,44 +79,20 @@ def _make_translator(
     translator, exactly as the sync CLI tests patch ``OpenRouterSlideTranslator``.
     ``prog_lang`` makes the prompt name the deck's language + comment token;
     ``guidance`` carries optional target-language conventions (style + glossary)
-    appended to the system prompt and folded into the cache key.
+    for the **single-direction** bootstrap path; ``guidance_by_lang`` carries
+    **per-language** conventions for the delegated-sync path (bidirectional, like
+    ``clm slides sync``). Either is appended to the system prompt and folded into
+    the cache key.
     """
     inner = OpenRouterSlideTranslator(
-        model=translation_model, prog_lang=prog_lang, guidance=guidance
+        model=translation_model,
+        prog_lang=prog_lang,
+        guidance=guidance,
+        guidance_by_lang=guidance_by_lang or {},
     )
     if translation_cache is None:
         return inner
     return CachingSlideTranslator(inner=inner, cache=translation_cache)
-
-
-# Auto-discovered glossary filename, parameterized by target language, e.g.
-# ``clm-glossary.de.md``. The first such file found walking up from the deck's
-# directory supplies translation conventions for that target language.
-_GLOSSARY_STEM = "clm-glossary"
-
-
-def _discover_glossary(start: Path, target_lang: str) -> Path | None:
-    """First ``clm-glossary.<target_lang>.md`` found walking up from ``start``.
-
-    Mirrors the ``.env`` auto-load: the course repo keeps the (domain-specific,
-    human-edited) glossary near its slides and clm finds it without a flag.
-    """
-    name = f"{_GLOSSARY_STEM}.{target_lang}.md"
-    for directory in [start, *start.parents]:
-        candidate = directory / name
-        if candidate.is_file():
-            return candidate
-    return None
-
-
-def _resolve_guidance(
-    glossary: Path | None, source_dir: Path, target_lang: str
-) -> tuple[str, Path | None]:
-    """Return ``(guidance_text, path)``: explicit ``--glossary`` wins, else auto-discover."""
-    path = glossary if glossary is not None else _discover_glossary(source_dir, target_lang)
-    if path is None:
-        return "", None
-    return path.read_text(encoding="utf-8").strip(), path
 
 
 @click.command("translate")
@@ -185,7 +163,7 @@ def _resolve_guidance(
     help=(
         "Translation conventions file (Markdown: a style note + term glossary) "
         "appended to the translation prompt. Default: auto-discover "
-        f"'{_GLOSSARY_STEM}.<target-lang>.md' walking up from SOURCE's directory."
+        f"'{GLOSSARY_STEM}.<target-lang>.md' walking up from SOURCE's directory."
     ),
 )
 @click.option(
@@ -272,16 +250,36 @@ def slides_translate_cmd(
         watermark_cache = SyncWatermarkCache(cache_root / CACHE_DB_NAME)
         translation_cache = TranslationCache(cache_root / CACHE_DB_NAME)
 
-    # Resolve translation conventions (style + glossary) for the target language:
-    # an explicit --glossary, else an auto-discovered clm-glossary.<lang>.md.
-    guidance, glossary_path = _resolve_guidance(glossary, source.parent, paths.target_lang)
-    if glossary_path is not None and not as_json:
-        click.echo(f"Using glossary: {glossary_path}", err=True)
+    # Resolve translation conventions (style + glossary). The bootstrap path is
+    # single-direction (source -> target), so the target-language glossary applies
+    # (an explicit --glossary, else an auto-discovered clm-glossary.<target>.md). The
+    # delegated-sync path (twin present) translates brand-new slides in BOTH
+    # directions — exactly like `clm slides sync` — so it resolves a per-language map
+    # there, so a reverse-direction add gets ITS language's conventions rather than
+    # the target's (parity with sync; --glossary still pins the target language).
+    guidance = ""
+    guidance_by_lang: dict[str, str] = {}
+    if will_sync:
+        guidance_by_lang, used = resolve_guidance_by_lang(
+            source.parent,
+            explicit={paths.target_lang: glossary, paths.source_lang: None},
+        )
+        if not as_json:
+            for lang in sorted(used):
+                click.echo(f"Using glossary ({lang}): {used[lang]}", err=True)
+    else:
+        guidance, glossary_path = resolve_guidance(glossary, source.parent, paths.target_lang)
+        if glossary_path is not None and not as_json:
+            click.echo(f"Using glossary: {glossary_path}", err=True)
 
     result: BootstrapResult
     try:
         translator = _make_translator(
-            translation_model, translation_cache, path_to_prog_lang(source), guidance
+            translation_model,
+            translation_cache,
+            path_to_prog_lang(source),
+            guidance,
+            guidance_by_lang,
         )
         # A judge is only consulted on the delegated-sync path (twin present).
         judge = _resolve_judge(provider, llm_model, None, None) if will_sync else None

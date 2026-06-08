@@ -119,3 +119,114 @@ def test_guidance_folds_into_prompt_version() -> None:
     assert OpenRouterSlideTranslator(guidance="Use 'du'.").prompt_version != g.prompt_version
     # Whitespace-only guidance is treated as none.
     assert OpenRouterSlideTranslator(guidance="   \n").prompt_version == "translate-v1"
+
+
+# --- per-language guidance (the bidirectional sync add path) ----------------
+
+
+def test_guidance_by_lang_selects_per_target() -> None:
+    # sync is bidirectional: a DE target gets the DE conventions, an EN target the
+    # EN conventions, from one translator instance.
+    t = OpenRouterSlideTranslator(guidance_by_lang={"de": "Sie", "en": "formal English"})
+    assert t._guidance_for("de") == "Sie"
+    assert t._guidance_for("en") == "formal English"
+
+
+def test_guidance_by_lang_absent_language_appends_nothing() -> None:
+    # The common course shape: only a DE glossary. A DE->EN add (target en) has no
+    # conventions; an EN->DE add (target de) uses the DE conventions.
+    t = OpenRouterSlideTranslator(guidance_by_lang={"de": "Sie"})
+    assert t._guidance_for("de") == "Sie"
+    assert t._guidance_for("en") == ""
+
+
+def test_guidance_by_lang_wins_over_single_guidance() -> None:
+    # The two are alternatives; when guidance_by_lang has content it takes precedence
+    # per target and the single string is ignored.
+    t = OpenRouterSlideTranslator(guidance="single", guidance_by_lang={"de": "per-de"})
+    assert t._guidance_for("de") == "per-de"
+    assert t._guidance_for("en") == ""  # not "single"
+
+
+def test_empty_guidance_by_lang_falls_back_to_single() -> None:
+    # An all-empty map is treated as no map, so the single guidance still applies.
+    t = OpenRouterSlideTranslator(guidance="single", guidance_by_lang={"de": "  \n"})
+    assert t._guidance_for("de") == "single"
+    assert t._guidance_for("en") == "single"
+
+
+def test_guidance_by_lang_folds_into_prompt_version() -> None:
+    base = OpenRouterSlideTranslator()
+    g = OpenRouterSlideTranslator(guidance_by_lang={"de": "Sie", "en": "formal"})
+    assert g.prompt_version.startswith("translate-v1:g")
+    assert g.prompt_version != base.prompt_version
+    # Stable per content, order-independent (sorted by language).
+    assert (
+        OpenRouterSlideTranslator(guidance_by_lang={"en": "formal", "de": "Sie"}).prompt_version
+        == g.prompt_version
+    )
+    # Editing either side invalidates by cache miss.
+    assert (
+        OpenRouterSlideTranslator(guidance_by_lang={"de": "du", "en": "formal"}).prompt_version
+        != g.prompt_version
+    )
+    # All-empty map → bare v1 key (no flag-day invalidation).
+    assert OpenRouterSlideTranslator(guidance_by_lang={"de": "  "}).prompt_version == "translate-v1"
+
+
+def test_single_guidance_prompt_version_unchanged_by_new_field() -> None:
+    # Regression: adding guidance_by_lang must not change the single-guidance cache
+    # key shape (an existing translate cache stays valid).
+    import hashlib
+
+    text = "Address the reader with 'Sie'."
+    fp = hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+    assert OpenRouterSlideTranslator(guidance=text).prompt_version == f"translate-v1:g{fp}"
+
+
+def test_single_string_and_map_signatures_do_not_collide() -> None:
+    # Distinct cache-key namespaces (:g for single-string, :gm for the map) mean a
+    # single-string guidance and a per-language map NEVER share a key — even this
+    # adversarial input, where the one-entry map encodes to exactly the single string
+    # ("de\x1eSie") and so produces the same sha, must still key different entries.
+    single = OpenRouterSlideTranslator(guidance="de\x1eSie")
+    mapped = OpenRouterSlideTranslator(guidance_by_lang={"de": "Sie"})
+    assert single.prompt_version != mapped.prompt_version
+    assert single.prompt_version.startswith("translate-v1:g")
+    assert mapped.prompt_version.startswith("translate-v1:gm")
+
+
+# --- the system-prompt assembly seam (base + selected guidance) -------------
+
+
+def test_system_message_appends_selected_guidance() -> None:
+    t = OpenRouterSlideTranslator(guidance_by_lang={"de": "GLOSSARY-DE", "en": "GLOSSARY-EN"})
+    # EN->DE add: the DE conventions are appended; the EN ones are not.
+    de_msg = t._system_message("slide", "en", "de")
+    assert de_msg.endswith("\n\nGLOSSARY-DE")
+    assert "GLOSSARY-EN" not in de_msg
+    # DE->EN add: the EN conventions.
+    en_msg = t._system_message("slide", "de", "en")
+    assert en_msg.endswith("\n\nGLOSSARY-EN")
+
+
+def test_system_message_no_guidance_is_bare_prompt() -> None:
+    t = OpenRouterSlideTranslator()
+    msg = t._system_message("slide", "de", "en")
+    # With no glossary the message is EXACTLY the formatted base prompt — no appended
+    # "\n\n<guidance>" block. The equality check fully proves that.
+    assert msg == _SYSTEM_PROMPT.format(
+        source_lang="German",
+        target_lang="English",
+        role="slide",
+        comment_prefix="# ",
+        prog_lang_name="Python",
+    )
+
+
+def test_system_message_brace_safe_guidance() -> None:
+    # A glossary with JSON / f-string braces must be appended verbatim, never read
+    # as a .format() field (it is concatenated AFTER formatting).
+    t = OpenRouterSlideTranslator(guidance_by_lang={"de": 'keep {"role": "system"} literal'})
+    msg = t._system_message("slide", "en", "de")
+    assert msg.endswith('keep {"role": "system"} literal')

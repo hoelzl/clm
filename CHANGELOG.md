@@ -6,6 +6,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+
+- **`clm slides sync` honors the translation glossary on the new-slide path**
+  (follow-up to PR #264). The `--glossary` translation conventions — a style note
+  plus a term glossary appended to the translation prompt — were wired into
+  `clm slides translate` / `bootstrap` but not into the incremental `clm slides
+  sync` add path, so a brand-new slide translated *during a sync* ignored the
+  course's conventions. `sync` now resolves a glossary too. Because sync is
+  **bidirectional** (a new EN slide flows to DE and a new DE slide flows to EN in
+  the same pass), it resolves the conventions **per target language**: a new EN
+  slide translated to DE uses the **DE** glossary, a new DE slide translated to EN
+  uses the **EN** glossary. Each is auto-discovered as `clm-glossary.<lang>.md`
+  walking up from the deck, or supplied explicitly with `--glossary-de` /
+  `--glossary-en`; a language with no glossary translates with no conventions, as
+  before. Batch (`DIR`) runs resolve one glossary from the directory root (the
+  translator is shared across the sweep). The glossary-discovery helpers are now
+  shared by both commands (`clm.slides.glossary`).
+
+### Fixed
+
+- **`clm slides translate`'s delegated-sync path now selects the glossary
+  per-language too.** When the twin already exists, `translate` degrades to the
+  bidirectional sync engine; it previously applied the single target-language
+  glossary to *both* add directions, so a reverse-direction new slide got the
+  wrong-language conventions. It now resolves a per-language map there (parity with
+  `clm slides sync`); the cold-start bootstrap path is single-direction and
+  unchanged.
+- **The dedicated deck-title translation prompt no longer strips terminal
+  punctuation.** The `title` role prompt (PR #264) told the model to drop trailing
+  punctuation, which silently mangled a legitimately punctuated title (e.g.
+  `header_de("Was ist neu?")` → "What's New?"). It now preserves the source title's
+  terminal `?`/`!` (while still forbidding the stray leading `# ` / quotes that were
+  the actual bug being fixed).
+
 ## [1.9.2] - 2026-06-08
 
 ### Added
