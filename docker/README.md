@@ -53,13 +53,13 @@ From the repository root:
 
 ### PlantUML Worker
 
-- Base: `python:3.11-slim`
+- Base: `python:3.12-slim`
 - External deps: Java Runtime, PlantUML JAR
 - Python deps: Minimal (aiofiles, tenacity)
 
 ### DrawIO Worker
 
-- Base: `python:3.11-slim`
+- Base: `python:3.12-slim`
 - External deps: Draw.io desktop, Xvfb, fonts
 - Python deps: Minimal (aiofiles, tenacity)
 - Requires: D-Bus, Xvfb virtual display

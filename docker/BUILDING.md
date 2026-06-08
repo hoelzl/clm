@@ -53,7 +53,7 @@ On Windows (PowerShell):
 - `docker.io/mhoelzl/clm-plantuml-converter:1.9.2`
 - `docker.io/mhoelzl/clm-plantuml-converter:latest`
 
-**Base Image:** `python:3.11-slim`
+**Base Image:** `python:3.12-slim`
 
 **Build:**
 ```bash
@@ -76,7 +76,7 @@ docker build -f docker/plantuml/Dockerfile -t docker.io/mhoelzl/clm-plantuml-con
 - `docker.io/mhoelzl/clm-drawio-converter:1.9.2`
 - `docker.io/mhoelzl/clm-drawio-converter:latest`
 
-**Base Image:** `python:3.11-slim`
+**Base Image:** `python:3.12-slim`
 
 **Build:**
 ```bash
@@ -110,7 +110,7 @@ The notebook processor has **two variants** to support different use cases:
 - `docker.io/mhoelzl/clm-notebook-processor:1.9.2-lite`
 - `docker.io/mhoelzl/clm-notebook-processor:lite`
 
-**Base Image:** `python:3.11-slim` (multi-arch: amd64, arm64)
+**Base Image:** `python:3.12-slim` (multi-arch: amd64, arm64)
 
 **Build:**
 ```bash
@@ -176,7 +176,7 @@ docker build -f docker/notebook/Dockerfile -t docker.io/mhoelzl/clm-notebook-pro
 - micromamba + xeus-cpp (C++ kernel)
 
 **Jupyter Kernels:**
-- Python 3.11
+- Python 3.12
 - C++ (xeus-cpp)
 - C# and F# (.NET Interactive)
 - Java (IJava)
