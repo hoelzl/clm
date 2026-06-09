@@ -190,3 +190,81 @@ def test_released_but_unbuilt_topic_is_not_frozen(tmp_path):
     )
     assert result.copied_topics == ()
     assert not frozen.is_frozen("ghost")
+
+
+# ---------------------------------------------------------------------------
+# Failed topics in a partial manifest (issue #295)
+# ---------------------------------------------------------------------------
+
+
+def _partial_manifest() -> dict:
+    return {
+        "source_commit": "abc",
+        "partial": True,
+        "failed_topics": ["flaky"],
+        "files": [
+            {"path": "Sec/01 Good.ipynb", "topic_id": "good", "content_hash": "sha256:a"},
+            # Stale leftovers from a previous build of the failed topic must
+            # not appear in a partial manifest, but even if they did, the plan
+            # gate (not the file list) is what refuses promotion.
+        ],
+    }
+
+
+def test_plan_refuses_released_topics_that_failed_in_the_source_build():
+    plan = plan_sync(
+        manifest=_partial_manifest(),
+        ledger_released=["good", "flaky"],
+        frozen=FrozenManifest(channel="jan"),
+    )
+    actions = {t.topic_id: t.action for t in plan.topics}
+    assert actions == {"good": "copy", "flaky": "skip-failed"}
+    assert [t.topic_id for t in plan.failed] == ["flaky"]
+    assert [t.topic_id for t in plan.to_copy] == ["good"]
+
+
+def test_already_frozen_failed_topic_stays_an_ordinary_frozen_skip():
+    frozen = FrozenManifest(channel="jan")
+    frozen.freeze("flaky", FrozenRecord(source_commit="old", copied_at="t", topic_digest="d"))
+    plan = plan_sync(
+        manifest=_partial_manifest(),
+        ledger_released=["flaky"],
+        frozen=frozen,
+    )
+    assert plan.topics[0].action == "skip-frozen"
+
+
+def test_refreeze_of_a_failed_topic_is_refused():
+    frozen = FrozenManifest(channel="jan")
+    frozen.freeze("flaky", FrozenRecord(source_commit="old", copied_at="t", topic_digest="d"))
+    plan = plan_sync(
+        manifest=_partial_manifest(),
+        ledger_released=["flaky"],
+        frozen=frozen,
+        refreeze={"flaky"},
+    )
+    assert plan.topics[0].action == "skip-failed"
+
+
+def test_apply_skips_failed_topics_without_freezing(tmp_path):
+    source = tmp_path / "src"
+    (source / "Sec").mkdir(parents=True)
+    (source / "Sec" / "01 Good.ipynb").write_text("good", encoding="utf-8")
+    dest = tmp_path / "dest"
+    frozen = FrozenManifest(channel="jan")
+
+    manifest = _partial_manifest()
+    plan = plan_sync(manifest=manifest, ledger_released=["good", "flaky"], frozen=frozen)
+    result = apply_sync(
+        plan=plan,
+        manifest=manifest,
+        source_root=source,
+        dest_root=dest,
+        frozen=frozen,
+        copied_at="2026-06-10T00:00:00Z",
+    )
+
+    assert result.copied_topics == ("good",)
+    assert result.failed_topics == ("flaky",)
+    assert frozen.is_frozen("good")
+    assert not frozen.is_frozen("flaky")

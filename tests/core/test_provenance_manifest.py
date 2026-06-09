@@ -488,3 +488,51 @@ def test_restrict_does_not_mutate_the_input():
     restrict_manifest_to_language(manifest, "en", "ml-en")
     assert manifest["files"][0]["path"] == "ml-de/Folien/01 Intro.ipynb"
     assert "language" not in manifest
+
+
+# ---------------------------------------------------------------------------
+# Partial manifest for errored builds (issue #295)
+# ---------------------------------------------------------------------------
+
+
+def test_failed_topics_are_excluded_and_recorded(course_1):
+    target = course_1.output_targets[0]
+    expected = list(enumerate_expected_outputs(course_1, target))
+    # Materialize every enumerated output so only the failed-topic filter,
+    # not the existence filter, decides what lands in the manifest.
+    failed_topic = expected[0][1]["topic_id"]
+    for out_path, _record in expected:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text("x", encoding="utf-8")
+
+    manifest = build_provenance_manifest(
+        course_1,
+        target,
+        source_commit="abc",
+        source_dirty=False,
+        built_at=BUILT_AT,
+        spec_name="course.xml",
+        failed_topics={failed_topic},
+    )
+
+    assert manifest["partial"] is True
+    assert manifest["failed_topics"] == [failed_topic]
+    assert all(f["topic_id"] != failed_topic for f in manifest["files"])
+    # The cleanly-built topics are still fully recorded.
+    other_topics = {r["topic_id"] for _p, r in expected} - {failed_topic}
+    recorded = {f["topic_id"] for f in manifest["files"]}
+    assert other_topics <= recorded
+
+
+def test_clean_build_manifest_is_not_partial(course_1):
+    target = course_1.output_targets[0]
+    manifest = build_provenance_manifest(
+        course_1,
+        target,
+        source_commit="abc",
+        source_dirty=False,
+        built_at=BUILT_AT,
+        spec_name="course.xml",
+    )
+    assert manifest["partial"] is False
+    assert manifest["failed_topics"] == []

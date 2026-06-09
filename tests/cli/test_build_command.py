@@ -25,6 +25,7 @@ from clm.cli.commands import build as build_module
 from clm.cli.commands.build import (
     BuildConfig,
     _compute_section_dirs_for_cleanup,
+    _failed_topic_ids,
     _find_env_file,
     _report_duplicate_file_warnings,
     _report_image_collisions,
@@ -1550,10 +1551,12 @@ class TestProvenanceManifestWiring:
 
 
 class TestShouldEmitProvenanceManifest:
-    """The post-build write decision: only a complete, successful, whole-course
-    build emits the manifest (it is a full overwrite of the prior index). Guards
-    against silently corrupting the release join key with a partial/incomplete
-    manifest (issue #208 step 3d review)."""
+    """The post-build write decision: only a whole-course build emits the
+    manifest (it is a full overwrite of the prior index). Guards against
+    silently corrupting the release join key with a partial/incomplete
+    manifest (issue #208 step 3d review). Errored builds are no longer an
+    outright skip here — error handling moved to the topic-attribution step
+    (_failed_topic_ids, issue #295)."""
 
     @staticmethod
     def _summary(*, errors=None, timed_out: bool = False):
@@ -1583,13 +1586,72 @@ class TestShouldEmitProvenanceManifest:
         )
         assert _should_emit_provenance_manifest(self._summary(), config) is False
 
-    def test_errored_build_does_not_emit(self) -> None:
+    def test_errored_build_still_reaches_the_attribution_step(self) -> None:
+        # Issue #295: errors alone no longer suppress the manifest; whether it
+        # is written depends on _failed_topic_ids (tested below).
         config = _make_config(write_provenance_manifest=True)
-        assert _should_emit_provenance_manifest(self._summary(errors=["boom"]), config) is False
+        assert _should_emit_provenance_manifest(self._summary(errors=["boom"]), config) is True
 
     def test_timed_out_build_does_not_emit(self) -> None:
         config = _make_config(write_provenance_manifest=True)
         assert _should_emit_provenance_manifest(self._summary(timed_out=True), config) is False
+
+
+class TestFailedTopicIds:
+    """Error→topic attribution for the partial provenance manifest (issue #295)."""
+
+    @staticmethod
+    def _course(tmp_path):
+        intro = tmp_path / "slides" / "intro.py"
+        deep = tmp_path / "slides" / "deep.py"
+        for p in (intro, deep):
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text("# slide", encoding="utf-8")
+        return SimpleNamespace(
+            files=[
+                SimpleNamespace(path=intro, topic=SimpleNamespace(id="intro")),
+                SimpleNamespace(path=deep, topic=SimpleNamespace(id="deep")),
+            ]
+        )
+
+    @staticmethod
+    def _error(file_path: str, severity: str = "error"):
+        return SimpleNamespace(severity=severity, file_path=file_path)
+
+    def test_clean_build_yields_empty_set(self, tmp_path) -> None:
+        summary = SimpleNamespace(errors=[])
+        assert _failed_topic_ids(summary, self._course(tmp_path)) == set()
+
+    def test_errors_map_to_their_topics(self, tmp_path) -> None:
+        course = self._course(tmp_path)
+        summary = SimpleNamespace(errors=[self._error(str(course.files[0].path))])
+        assert _failed_topic_ids(summary, course) == {"intro"}
+
+    def test_warning_severity_is_ignored(self, tmp_path) -> None:
+        course = self._course(tmp_path)
+        summary = SimpleNamespace(
+            errors=[self._error(str(course.files[0].path), severity="warning")]
+        )
+        assert _failed_topic_ids(summary, course) == set()
+
+    def test_fatal_error_is_unattributable(self, tmp_path) -> None:
+        course = self._course(tmp_path)
+        summary = SimpleNamespace(errors=[self._error("", severity="fatal")])
+        assert _failed_topic_ids(summary, course) is None
+
+    def test_error_without_file_path_is_unattributable(self, tmp_path) -> None:
+        summary = SimpleNamespace(errors=[self._error("")])
+        assert _failed_topic_ids(summary, self._course(tmp_path)) is None
+
+    def test_error_on_a_non_course_file_is_unattributable(self, tmp_path) -> None:
+        summary = SimpleNamespace(errors=[self._error(str(tmp_path / "course.xml"))])
+        assert _failed_topic_ids(summary, self._course(tmp_path)) is None
+
+    def test_multiple_errors_on_one_topic_collapse(self, tmp_path) -> None:
+        course = self._course(tmp_path)
+        path = str(course.files[1].path)
+        summary = SimpleNamespace(errors=[self._error(path), self._error(path)])
+        assert _failed_topic_ids(summary, course) == {"deep"}
 
 
 # ---------------------------------------------------------------------------

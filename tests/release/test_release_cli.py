@@ -853,3 +853,38 @@ def test_missing_language_root_is_a_clear_error(tmp_path):
     sync = runner.invoke(release_group, ["sync", str(spec_file), "--channel", "jan-de"])
     assert sync.exit_code != 0
     assert "Language root not found" in sync.output
+
+
+# ---------------------------------------------------------------------------
+# Partial manifest from an errored build (issue #295)
+# ---------------------------------------------------------------------------
+
+
+def test_sync_promotes_green_topics_and_refuses_failed_ones(tmp_path):
+    runner = CliRunner()
+    source = tmp_path / "src"
+    _write_source(source)
+    # Mark the build partial with a failed topic that is also released.
+    manifest = json.loads((source / MANIFEST_FILENAME).read_text(encoding="utf-8"))
+    manifest["partial"] = True
+    manifest["failed_topics"] = ["flaky"]
+    (source / MANIFEST_FILENAME).write_text(json.dumps(manifest), encoding="utf-8")
+
+    ledger = tmp_path / "jan.txt"
+    Ledger(["intro", "flaky"]).save(ledger)
+    dest = tmp_path / "jan"
+
+    result = runner.invoke(
+        release_group,
+        ["sync", "--ledger", str(ledger), "--source", str(source), "--dest", str(dest)],
+    )
+    assert result.exit_code == 0, result.output
+    # The green topic was promoted and frozen...
+    assert (dest / "Sec/01 Intro.ipynb").is_file()
+    frozen = FrozenManifest.load(dest / FROZEN_FILENAME, channel="jan")
+    assert frozen.is_frozen("intro")
+    # ...the failed one was refused, loudly, and stays unfrozen (retried later).
+    assert not frozen.is_frozen("flaky")
+    assert "skip-failed" in result.output
+    assert "NOT promoted" in result.output
+    assert "partial" in result.output

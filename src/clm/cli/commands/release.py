@@ -484,6 +484,12 @@ def sync_cmd(
         refreeze=refreeze,
     )
 
+    if manifest.get("partial"):
+        click.echo(
+            "Note: the source build manifest is partial (the build reported "
+            "errors); topics that failed in that build are refused below "
+            "and promote once a build succeeds for them."
+        )
     click.echo(
         f"Channel '{channel_name or '?'}': "
         f"skeleton {'copy' if plan.copy_skeleton else 'frozen'} "
@@ -515,6 +521,13 @@ def sync_cmd(
         f"{len(result.refrozen_topics)} re-frozen, "
         f"{len(result.skipped_topics)} already frozen (skipped)."
     )
+    if result.failed_topics:
+        click.echo(
+            f"Warning: {len(result.failed_topics)} released topic(s) NOT promoted "
+            f"— they failed in the source build: {', '.join(result.failed_topics)}. "
+            f"Rebuild, then re-run sync.",
+            err=True,
+        )
 
     if push:
         _push_channel_repo(
