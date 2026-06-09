@@ -176,16 +176,20 @@ def _render_section_subsections(
     language: str,
     *,
     mark_disabled: bool = True,
+    show_weekdays: bool = False,
 ) -> list[str]:
     """Render the bullet lines for a section that uses subsections.
 
     Bare topics (under *no* declared subsection) are listed first as flat
-    bullets; each visible subsection then renders as a bold-label bullet with
-    its decks indented beneath it. Disabled subsections get a ``(disabled)``
-    marker unless ``mark_disabled`` is False (``--include-disabled=merge``, which
-    folds disabled content into the normal flow). ``candidates`` is the full
-    declared subsection set (visible or not) so a topic under a hidden
-    subsection is not mistaken for a bare topic.
+    bullets. With ``show_weekdays`` each visible subsection then renders as a
+    bold-label bullet (its weekday/name) with its decks indented beneath it;
+    without it (the default) the subsection grouping is dropped and its decks
+    are emitted as flat bullets in document order — so the outline reads the
+    same whether or not a section happens to declare ``<subsection>`` groups.
+    Disabled subsections get a ``(disabled)`` marker unless ``mark_disabled`` is
+    False (``--include-disabled=merge``, which folds disabled content into the
+    normal flow). ``candidates`` is the full declared subsection set (visible or
+    not) so a topic under a hidden subsection is not mistaken for a bare topic.
     """
     resolved_titles = {topic.id: _topic_deck_titles(topic, language) for topic in section.topics}
     subsection_topic_ids = {t.id for sub in candidates for t in sub.topics}
@@ -200,10 +204,15 @@ def _render_section_subsections(
 
     for subsection in subsections:
         marker = "" if (subsection.enabled or not mark_disabled) else " (disabled)"
-        label = subsection_label(subsection, language) or "(unnamed)"
-        lines.append(f"- **{label}**{marker}")
-        for title in _subsection_deck_titles(subsection, course, language, resolved_titles):
-            lines.append(f"  - {title}{marker}")
+        titles = _subsection_deck_titles(subsection, course, language, resolved_titles)
+        if show_weekdays:
+            label = subsection_label(subsection, language) or "(unnamed)"
+            lines.append(f"- **{label}**{marker}")
+            for title in titles:
+                lines.append(f"  - {title}{marker}")
+        else:
+            for title in titles:
+                lines.append(f"- {title}{marker}")
     return lines
 
 
@@ -272,12 +281,15 @@ def _render_enabled_section_block(
     include_disabled: bool,
     include_optional: bool,
     mark_disabled: bool,
+    show_weekdays: bool,
 ) -> list[str]:
     """Markdown lines for one enabled section (heading, body, trailing blank).
 
     ``mark_disabled`` controls whether disabled *subsections* nested in this
     section keep their ``(disabled)`` marker (True, default/marked mode) or are
-    folded in silently (False, ``--include-disabled=merge``).
+    folded in silently (False, ``--include-disabled=merge``). ``show_weekdays``
+    controls whether ``<subsection>`` weekday/name groupings are rendered as
+    bold labels or flattened into plain bullets.
     """
     lines = [f"## {section.name[language]}", ""]
     if sections_only:
@@ -287,7 +299,13 @@ def _render_enabled_section_block(
     if candidates:
         lines.extend(
             _render_section_subsections(
-                section, subsections, candidates, course, language, mark_disabled=mark_disabled
+                section,
+                subsections,
+                candidates,
+                course,
+                language,
+                mark_disabled=mark_disabled,
+                show_weekdays=show_weekdays,
             )
         )
     else:
@@ -300,6 +318,50 @@ def _render_enabled_section_block(
     return lines
 
 
+def _disabled_topic_titles(course: Course, topic_spec, language: str) -> list[str]:
+    """Deck titles for one *disabled* topic, read from disk (id fallback).
+
+    Returns the topic id (as a single-element list) when the topic has no
+    resolvable slide files, so a planned-but-absent topic still appears.
+    """
+    slides = _disabled_topic_slides(course, topic_spec, language)
+    if not slides:
+        return [topic_spec.id]
+    return [title for _file_name, title in slides]
+
+
+def _render_disabled_section_subsections(
+    section_spec: SectionSpec,
+    course: Course,
+    language: str,
+    marker: str,
+) -> list[str]:
+    """Render a disabled whole section's bullets with its ``<subsection>`` groups.
+
+    Used by ``--weekdays always`` so disabled weeks show the same weekday/name
+    grouping as enabled ones. All decks are read from the filesystem (disabled
+    topics are not part of the built course). Bare topics (under no subsection)
+    are listed first; each subsection then renders as a bold-label bullet with
+    its decks indented beneath it. Every line carries the section's ``marker``
+    (the whole section is disabled); the subsection's own ``enabled`` flag adds
+    no extra marker beyond that.
+    """
+    subsection_topic_ids = {t.id for sub in section_spec.subsections for t in sub.topics}
+    lines: list[str] = []
+    for topic_spec in section_spec.topics:
+        if topic_spec.id in subsection_topic_ids:
+            continue
+        for title in _disabled_topic_titles(course, topic_spec, language):
+            lines.append(f"- {title}{marker}")
+    for subsection in section_spec.subsections:
+        label = subsection_label(subsection, language) or "(unnamed)"
+        lines.append(f"- **{label}**{marker}")
+        for topic_spec in subsection.topics:
+            for title in _disabled_topic_titles(course, topic_spec, language):
+                lines.append(f"  - {title}{marker}")
+    return lines
+
+
 def _render_disabled_section_block(
     section_spec: SectionSpec,
     course: Course,
@@ -307,29 +369,31 @@ def _render_disabled_section_block(
     *,
     sections_only: bool,
     mark_disabled: bool,
+    show_weekdays: bool,
 ) -> list[str]:
     """Markdown lines for one disabled whole section, read from the filesystem.
 
     With ``mark_disabled`` the heading and every bullet carry a ``(disabled)``
     marker; ``--include-disabled=merge`` passes False so the section reads like
-    any enabled one.
+    any enabled one. With ``show_weekdays`` and a section that declares
+    ``<subsection>`` groups, the decks render grouped under bold weekday/name
+    labels (mirroring enabled sections); otherwise they are flat bullets.
     """
     marker = " (disabled)" if mark_disabled else ""
     lines = [f"## {section_spec.name[language]}{marker}", ""]
     if sections_only:
+        return lines
+    if show_weekdays and section_spec.subsections:
+        lines.extend(_render_disabled_section_subsections(section_spec, course, language, marker))
+        lines.append("")
         return lines
     if not section_spec.topics:
         lines.append("- (no topics declared)")
         lines.append("")
         return lines
     for topic_spec in section_spec.topics:
-        slides = _disabled_topic_slides(course, topic_spec, language)
-        if not slides:
-            # Topic missing on disk, or resolved with no slide files: show its id.
-            lines.append(f"- {topic_spec.id}{marker}")
-        else:
-            for _file_name, title in slides:
-                lines.append(f"- {title}{marker}")
+        for title in _disabled_topic_titles(course, topic_spec, language):
+            lines.append(f"- {title}{marker}")
     lines.append("")
     return lines
 
@@ -344,6 +408,7 @@ def generate_outline(
     include_disabled: bool = False,
     include_optional: bool = False,
     merge_disabled: bool = False,
+    show_weekdays: bool = False,
 ) -> str:
     """Generate a Markdown outline for a course.
 
@@ -358,6 +423,11 @@ def generate_outline(
             bullet points).
         include_optional: When False (default), sections/subsections marked
             ``optional="true"`` are omitted.
+        show_weekdays: When True, ``<subsection>`` weekday/name groupings are
+            rendered as bold labels with their decks indented beneath. When
+            False (default), the grouping is dropped and every deck is a flat
+            bullet, so the outline reads uniformly regardless of which sections
+            declare subsections.
 
     Returns:
         Markdown string with the course outline
@@ -385,6 +455,7 @@ def generate_outline(
                         include_disabled=include_disabled,
                         include_optional=include_optional,
                         mark_disabled=False,
+                        show_weekdays=show_weekdays,
                     )
                 )
             else:
@@ -395,6 +466,7 @@ def generate_outline(
                         language,
                         sections_only=sections_only,
                         mark_disabled=False,
+                        show_weekdays=show_weekdays,
                     )
                 )
         return "\n".join(lines)
@@ -418,6 +490,7 @@ def generate_outline(
                 include_disabled=include_disabled,
                 include_optional=include_optional,
                 mark_disabled=True,
+                show_weekdays=show_weekdays,
             )
         )
 
@@ -431,6 +504,7 @@ def generate_outline(
                 language,
                 sections_only=sections_only,
                 mark_disabled=True,
+                show_weekdays=show_weekdays,
             )
         )
 
@@ -661,6 +735,18 @@ def titles_are_identical(course: Course) -> bool:
     default=False,
     help="Emit only section headings, omitting the topic/slide entries within each section.",
 )
+@click.option(
+    "--weekdays",
+    "weekdays_mode",
+    type=click.Choice(["never", "always"], case_sensitive=False),
+    default="never",
+    show_default=True,
+    help="Show the <subsection> weekday/name groupings as bold labels. "
+    "never (default): flatten every section's decks into plain bullets, so "
+    "weeks read uniformly whether or not they declare subsections. always: "
+    "group decks under their weekday/name label in every week. Markdown only; "
+    "JSON always carries the grouping as structured data.",
+)
 def outline(
     spec_file: Path,
     output_file: Path | None,
@@ -670,6 +756,7 @@ def outline(
     include_optional: bool,
     disabled_mode: str | None,
     sections_only: bool,
+    weekdays_mode: str,
 ):
     """Generate an outline of a course in Markdown or JSON format.
 
@@ -684,6 +771,7 @@ def outline(
         clm export outline course.xml -o out.md        # Write to file
         clm export outline course.xml -d ./docs        # Both languages to directory
         clm export outline course.xml --sections-only  # Section headings only
+        clm export outline course.xml --weekdays always # Group decks by weekday
         clm export outline course.xml --include-optional  # Keep optional modules
         clm export outline course.xml --include-disabled         # Roadmap, tagged
         clm export outline course.xml --include-disabled=merge   # Roadmap, in flow
@@ -692,6 +780,7 @@ def outline(
     check_exclusive_output(output_file, output_dir)
 
     include_disabled, merge_disabled = resolve_disabled_mode(disabled_mode)
+    show_weekdays = weekdays_mode.lower() == "always"
 
     # Load course specification.
     # The main spec always drops disabled sections; if --include-disabled is
@@ -760,6 +849,7 @@ def outline(
             include_disabled=include_disabled,
             include_optional=include_optional,
             merge_disabled=merge_disabled,
+            show_weekdays=show_weekdays,
         )
 
     # Determine languages to generate

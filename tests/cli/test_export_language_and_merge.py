@@ -457,6 +457,8 @@ class TestOutlineDisabledSubsectionMerge:
             "-L",
             "de",
             "--include-disabled=merge",
+            "--weekdays",
+            "always",
         )
         assert result.exit_code == 0, result.output
         assert "(disabled)" not in result.output
@@ -466,7 +468,14 @@ class TestOutlineDisabledSubsectionMerge:
 
     def test_markdown_disabled_subsection_marked_by_default(self, subsection_split_course):
         result = _run(
-            "export", "outline", str(subsection_split_course), "-L", "de", "--include-disabled"
+            "export",
+            "outline",
+            str(subsection_split_course),
+            "-L",
+            "de",
+            "--include-disabled",
+            "--weekdays",
+            "always",
         )
         assert result.exit_code == 0, result.output
         assert "**Dienstag** (disabled)" in result.output
