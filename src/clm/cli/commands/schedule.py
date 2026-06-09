@@ -124,6 +124,7 @@ class Bucket:
     span: int
     week: int  # plan-relative week number (from the originating ScheduleWeek)
     weekday_label: str  # localized plan-relative label (e.g. "Montag")
+    weekdays: tuple[str, ...] = ()  # language-neutral tokens, e.g. ("mon", "tue")
 
     @property
     def ref_ids(self) -> set[str]:
@@ -368,6 +369,7 @@ def build_buckets(weeks: list[ScheduleWeek]) -> list[Bucket]:
             span=max(1, len(day.weekdays)),
             week=week.number,
             weekday_label=day.label,
+            weekdays=tuple(day.weekdays),
         )
         for week in weeks
         for day in week.days

@@ -27,17 +27,27 @@ from clm.cohort_calendar.config import (
     load_calendar_config,
     parse_calendar_config,
 )
+from clm.cohort_calendar.projection import (
+    Assignment,
+    Diagnostic,
+    Projection,
+    project,
+)
 
 __all__ = [
     "Adjustment",
+    "Assignment",
     "CohortCalendarConfig",
     "CohortCalendarError",
+    "Diagnostic",
     "Holiday",
     "Insert",
     "Merge",
     "Pin",
+    "Projection",
     "Split",
     "effective_pattern",
     "load_calendar_config",
     "parse_calendar_config",
+    "project",
 ]

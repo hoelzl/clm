@@ -128,8 +128,10 @@ class TestBuildBuckets:
                 ],
             )
         ]
-        spans = [b.span for b in build_buckets(weeks)]
-        assert spans == [1, 2]
+        buckets = build_buckets(weeks)
+        assert [b.span for b in buckets] == [1, 2]
+        # The language-neutral weekday tokens are carried for pattern derivation.
+        assert [b.weekdays for b in buckets] == [("mon",), ("mon", "tue")]
 
     def test_span_defaults_to_one_for_thematic_group(self):
         # A subsection with no weekday (thematic <name>-only group) still
