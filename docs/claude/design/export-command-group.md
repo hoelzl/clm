@@ -113,9 +113,65 @@ cli.add_command(export_group)
 The flat `cli.add_command(outline/schedule/summarize)` registrations are
 removed.
 
+## Follow-up (2026-06-09): split-language filtering + `--include-disabled=merge`
+
+Two issues surfaced once the group shipped against a real split-language course
+(`machine-learning-azav`):
+
+### 1. Both languages leaked for split decks (bug)
+
+A split topic ships `slides_x.de.py` + `slides_x.en.py`; each companion carries
+the requested `-L` language's title in *both* `Text` slots and an
+`output_language_filter` of its own language. The subsection path already
+filtered on that (`_topic_deck_titles` / `_topic_decks`), but four other
+enumerations did not, so `-L de` emitted both the German and English title:
+
+- **Family A — resolved `NotebookFile`** (filter on `output_language_filter`):
+  `outline.generate_outline` flat else-branch, `outline.generate_outline_json`
+  topic-slides, `outline._subsections_json` enabled-subsection slides,
+  `summary.build_sections_data`.
+- **Family B — on-disk paths** (filter on the `.de`/`.en` filename suffix):
+  `_export_shared.disabled_topic_files`, the single chokepoint for every
+  disabled-topic read across all three commands.
+
+Fix: two shared predicates in `_export_shared.py` —
+`notebook_in_language(notebook, language)` and `path_in_language(path,
+language)` (the latter built on `split_lang_suffix`) — applied at every
+enumeration. `disabled_topic_files` gained a required `language` parameter.
+Known limitation: a topic that ships *both* a bilingual file and split
+companions still lists both (family dedup is the build's `slide_family_key`
+concern, out of scope here).
+
+### 2. `--include-disabled=merge`
+
+`--include-disabled` became an *optional-value* option (the only one in the
+CLI): omitted ⇒ excluded; bare / `=marked` ⇒ the original "tagged + appended"
+behaviour; `=merge` ⇒ disabled content folded into the **normal declared
+order** with **no `(disabled)` marker**, so a roadmap spec reads like a finished
+course.
+
+- Threading: the option dest is `disabled_mode: str | None`; each handler calls
+  `resolve_disabled_mode()` → `(include_disabled, merge_disabled)` bools. The
+  generators keep plain-`bool` signatures and gained a defaulted
+  `merge_disabled` — so the MCP `course_outline` caller and the direct-generator
+  tests are unaffected.
+- outline/summary needed real **declared-order interleaving** (a `built_section_map`
+  keyed by `section_match_key` lets the merge path walk the full `keep_disabled`
+  section list and recover each enabled section's built object). schedule already
+  numbered disabled weeks in declared position, so merge is render-only there
+  (`render_markdown(mark_disabled=…)`); the schedule data flags stay truthful so
+  the CSV `disabled` column is unaffected.
+- Structured outputs keep the disabled bit as **metadata** under `=merge`
+  (`outline --format json` `"disabled": true`, `schedule --format csv` `disabled`
+  column); merge changes only the human-readable placement and marker.
+- Click caveat: a bare `--include-disabled` immediately before the `SPEC_FILE`
+  positional is consumed as the value — documented; use `=VALUE` and keep the
+  spec first.
+
 ## Out of scope
 
 - Folding `clm slides slug-report` / `coverage-report` into `export` (they are
   slide-corpus reports, already grouped under `slides`).
 - Subsection-level optional filtering inside `summary` (see limitation above).
 - Any change to build behavior.
+- Deduping a bilingual file against its own split companions in document views.

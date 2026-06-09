@@ -27,7 +27,9 @@ from clm.cli.commands._export_shared import (
     check_exclusive_output,
     disabled_topic_slides,
     language_option,
+    notebook_in_language,
     output_options,
+    resolve_disabled_mode,
     section_visible,
     selection_options,
     spec_argument,
@@ -125,10 +127,7 @@ def _topic_decks(topic, language: str) -> list[ScheduleDeck]:
     """
     decks: list[ScheduleDeck] = []
     for notebook in topic.notebooks:
-        if (
-            notebook.output_language_filter is not None
-            and notebook.output_language_filter != language
-        ):
+        if not notebook_in_language(notebook, language):
             continue
         try:
             title = notebook.title[language]
@@ -323,11 +322,17 @@ def render_markdown(
     language: str,
     *,
     no_topic: bool = False,
+    mark_disabled: bool = True,
 ) -> str:
     """Render the schedule as Markdown: one table per week.
 
     With ``no_topic`` the Topic column is dropped, leaving just Day and
     Video (slides) — the columns a certification authority needs.
+
+    With ``mark_disabled`` False (``--include-disabled=merge``) the ``(disabled)``
+    tags are suppressed so disabled weeks/days read like enabled ones; the weeks
+    already appear in declared order. The schedule data (and the CSV ``disabled``
+    column) keep their truthful flags regardless.
     """
     day_h, video_h, topic_h = _MD_HEADERS[language]
     empty_cell = "—"
@@ -335,7 +340,7 @@ def render_markdown(
     lines: list[str] = [f"# {course_title}", ""]
 
     for week in weeks:
-        week_title = week.title + (disabled_tag if week.disabled else "")
+        week_title = week.title + (disabled_tag if (week.disabled and mark_disabled) else "")
         lines.append(f"## {week_title}")
         lines.append("")
         if not week.days:
@@ -352,8 +357,11 @@ def render_markdown(
             lines.append("|------|------|------|")
         for day in week.days:
             # Mark a disabled subsection inside an otherwise-enabled week; if the
-            # whole week is disabled the heading already carries the tag.
-            label_text = day.label + (disabled_tag if day.disabled and not week.disabled else "")
+            # whole week is disabled the heading already carries the tag. Merge
+            # mode (mark_disabled False) suppresses the tag entirely.
+            label_text = day.label + (
+                disabled_tag if (day.disabled and not week.disabled and mark_disabled) else ""
+            )
             day_label = _md_cell(label_text)
             if not day.decks:
                 if no_topic:
@@ -447,7 +455,7 @@ def schedule(
     output_dir: Path | None,
     no_topic: bool,
     include_optional: bool,
-    include_disabled: bool,
+    disabled_mode: str | None,
     data_dir: Path | None,
 ):
     """Export a day-of-week deck listing for certification.
@@ -462,12 +470,16 @@ def schedule(
         clm export schedule course.xml -f csv           # CSV (one row per deck)
         clm export schedule course.xml --no-topic       # Day + video/slides only
         clm export schedule course.xml --include-optional   # Add optional modules
+        clm export schedule course.xml --include-disabled        # Disabled days, tagged
+        clm export schedule course.xml --include-disabled=merge  # Disabled days, in flow
         clm export schedule course.xml -o schedule.md   # Write to a file
         clm export schedule course.xml -d ./docs        # Write into a directory
     """
     language = language.lower()
     output_format = output_format.lower()
     check_exclusive_output(output_file, output_dir)
+
+    include_disabled, merge_disabled = resolve_disabled_mode(disabled_mode)
 
     try:
         spec = CourseSpec.from_file(spec_file)
@@ -510,7 +522,13 @@ def schedule(
     if output_format == "csv":
         content = render_csv(weeks, no_topic=no_topic, include_disabled=include_disabled)
     else:
-        content = render_markdown(course.name[language], weeks, language, no_topic=no_topic)
+        content = render_markdown(
+            course.name[language],
+            weeks,
+            language,
+            no_topic=no_topic,
+            mark_disabled=not merge_disabled,
+        )
 
     if output_dir is not None:
         output_dir.mkdir(parents=True, exist_ok=True)

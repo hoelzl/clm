@@ -20,9 +20,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   `-L/--language` is the canonical spelling everywhere (`schedule` keeps
   `--lang` as an alias). The MCP `course_outline` tool is unchanged (it still
   shows optional content). See `clm info migration`.
+- **`--include-disabled` now takes an optional value** on all three `clm export`
+  commands: a bare `--include-disabled` (or `=marked`) keeps the previous
+  behaviour (disabled content tagged `(disabled)`, disabled whole sections
+  listed after the enabled ones in `outline`/`summary`), while
+  `--include-disabled=merge` folds disabled content into the normal course flow
+  — in declared order, with no marker — so a roadmap spec reads like a finished
+  course. Structured outputs (`outline --format json`, `schedule --format csv`)
+  keep the disabled state recorded even under `=merge`.
 
 ### Fixed
 
+- **`clm export` commands no longer emit both languages of a split deck.**
+  When a topic ships split `slides_x.de.py` + `slides_x.en.py` companions, a
+  `-L de` outline/summary listed *both* the German and the English title (and
+  the JSON `slides` array carried both), because the section-flat, JSON-slide,
+  summary, and disabled-topic enumerations skipped the `output_language_filter`
+  the subsection path already applied. All enumerations now filter split
+  companions to the requested language (via `output_language_filter` for the
+  built course and the `.de`/`.en` filename suffix for disabled topics read
+  from disk), so a split pair contributes a single entry — matching the build's
+  per-language routing. Bilingual decks are unaffected.
 - **The mitmproxy transport now records and replays a per-request response
   *sequence*** instead of collapsing a repeated request to its first response.
   A non-deterministic endpoint (a temperature>0 LLM, or OpenRouter routing the

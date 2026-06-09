@@ -12,18 +12,20 @@ commands — they never change the build, only what appears in the document.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar
 
 import click
 
 from clm.core.utils.notebook_utils import find_notebook_titles
-from clm.infrastructure.utils.path_utils import is_slides_file
+from clm.infrastructure.utils.path_utils import is_slides_file, split_lang_suffix
 
 if TYPE_CHECKING:
     from clm.core.course import Course
+    from clm.core.course_files.notebook_file import NotebookFile
     from clm.core.course_spec import SectionSpec, SubsectionSpec, TopicSpec
+    from clm.core.section import Section
 
 F = TypeVar("F", bound=Callable[..., object])
 
@@ -84,14 +86,29 @@ def output_options(func: F) -> F:
 
 
 def selection_options(func: F) -> F:
-    """``--include-optional`` and ``--include-disabled`` selection gates."""
+    """``--include-optional`` and ``--include-disabled`` selection gates.
+
+    ``--include-disabled`` is an *optional-value* option (the only one in the
+    CLI): omitted it excludes disabled content; a bare ``--include-disabled``
+    (or ``=marked``) includes it tagged ``(disabled)``; ``=merge`` folds it into
+    the normal course flow with no marker. Use the ``=VALUE`` form to be
+    unambiguous — a bare flag placed *immediately before* the ``SPEC_FILE``
+    positional would consume it as the value (Click optional-value behaviour),
+    so keep the spec file first.
+    """
     func = click.option(
         "--include-disabled",
-        "include_disabled",
-        is_flag=True,
-        default=False,
-        help='Include sections/subsections marked enabled="false", tagged with a '
-        "(disabled) marker. Off by default.",
+        "disabled_mode",
+        is_flag=False,
+        flag_value="marked",
+        default=None,
+        type=click.Choice(["marked", "merge"], case_sensitive=False),
+        metavar="[marked|merge]",
+        help='Include sections/subsections marked enabled="false". Bare (or '
+        "=marked): tagged with a (disabled) marker (disabled whole sections "
+        "after the enabled ones in outline/summary). =merge: folded into the "
+        "normal course flow, in declared order, with no marker. Omitted: "
+        "disabled content is excluded (default).",
     )(func)
     func = click.option(
         "--include-optional",
@@ -103,6 +120,21 @@ def selection_options(func: F) -> F:
         "--include-disabled is given as well.",
     )(func)
     return func
+
+
+def resolve_disabled_mode(disabled_mode: str | None) -> tuple[bool, bool]:
+    """Translate the ``--include-disabled`` value into two booleans.
+
+    Returns ``(include_disabled, merge_disabled)``:
+
+    * ``None``      -> ``(False, False)`` — disabled content excluded (default).
+    * ``"marked"``  -> ``(True, False)``  — included with a ``(disabled)`` marker.
+    * ``"merge"``   -> ``(True, True)``   — folded into the normal flow, no marker.
+
+    The export command handlers call this once and thread the two booleans into
+    the generators, which keep their plain-``bool`` signatures.
+    """
+    return (disabled_mode is not None, disabled_mode == "merge")
 
 
 def check_exclusive_output(output_file: Path | None, output_dir: Path | None) -> None:
@@ -143,9 +175,59 @@ def subsection_visible(
 
 
 # ---------------------------------------------------------------------------
+# Per-language filtering (split .de/.en companions)
+# ---------------------------------------------------------------------------
+def notebook_in_language(notebook: NotebookFile, language: str) -> bool:
+    """Whether a resolved ``NotebookFile`` belongs in a *language*'s document.
+
+    A bilingual file (``output_language_filter is None``) belongs to every
+    language; a split ``.de``/``.en`` companion only to its own. This is the
+    predicate every "resolved course" enumeration must apply so a split pair
+    contributes a single entry, matching the build's per-language routing.
+    """
+    flt = notebook.output_language_filter
+    return flt is None or flt == language
+
+
+def path_in_language(path: Path, language: str) -> bool:
+    """The filesystem twin of :func:`notebook_in_language`.
+
+    Used where slide files are read straight from disk (disabled topics, which
+    are not part of the built course). A bilingual ``slides_x.py`` matches every
+    language; a split ``slides_x.de.py`` / ``slides_x.en.py`` only its own.
+    """
+    lang = split_lang_suffix(path)
+    return lang is None or lang == language
+
+
+# ---------------------------------------------------------------------------
+# Declared-order section walk (used by --include-disabled=merge)
+# ---------------------------------------------------------------------------
+def iter_declared_sections(
+    course: Course, full_sections: list[SectionSpec]
+) -> Iterator[tuple[SectionSpec, tuple[Section, SectionSpec] | None]]:
+    """Walk the full declared section list in document order for merge mode.
+
+    Yields ``(full_spec, built)`` where *built* is the ``(Section,
+    SectionSpec)`` pair from the enabled-parse course for an enabled section, or
+    ``None`` for a disabled one. Enabled sections are matched to the built
+    course **positionally** — ``course.sections`` is the enabled subset of
+    *full_sections* in the same document order — so this is robust to duplicate,
+    id-less section names. (A name/id-keyed map would collapse two same-named
+    id-less sections onto one built object; the positional walk does not.)
+    """
+    built_iter = iter(zip(course.sections, course.spec.sections, strict=False))
+    for full_spec in full_sections:
+        if full_spec.enabled:
+            yield full_spec, next(built_iter, None)
+        else:
+            yield full_spec, None
+
+
+# ---------------------------------------------------------------------------
 # Disabled-topic resolution (filesystem fallback)
 # ---------------------------------------------------------------------------
-def disabled_topic_files(course: Course, topic_spec: TopicSpec) -> list[Path] | None:
+def disabled_topic_files(course: Course, topic_spec: TopicSpec, language: str) -> list[Path] | None:
     """Return the slide-file paths of a topic, resolved from the filesystem.
 
     Used to surface topics that are *not* part of the built course (disabled
@@ -153,6 +235,11 @@ def disabled_topic_files(course: Course, topic_spec: TopicSpec) -> list[Path] | 
     filesystem-wide topic map. Returns ``None`` when the id cannot be resolved
     (so callers can fall back to a ``<topic_id>`` display); an empty list when
     the topic resolves but contains no slide files.
+
+    Split ``.de``/``.en`` companions are filtered to *language* via
+    :func:`path_in_language` so a split pair contributes one file — the same
+    per-language routing the built course applies, kept consistent for the
+    not-built (disabled) topics read straight from disk.
     """
     topic_path = course._topic_path_map.get(topic_spec.id)
     if topic_path is None:
@@ -160,11 +247,11 @@ def disabled_topic_files(course: Course, topic_spec: TopicSpec) -> list[Path] | 
 
     slide_paths: list[Path] = []
     if topic_path.is_file():
-        if is_slides_file(topic_path):
+        if is_slides_file(topic_path) and path_in_language(topic_path, language):
             slide_paths.append(topic_path)
     elif topic_path.is_dir():
         for child in sorted(topic_path.iterdir()):
-            if child.is_file() and is_slides_file(child):
+            if child.is_file() and is_slides_file(child) and path_in_language(child, language):
                 slide_paths.append(child)
     return slide_paths
 
@@ -177,7 +264,7 @@ def disabled_topic_slides(
     Reads the H1 header from each slide file the same way :class:`NotebookFile`
     does. Returns ``None``/``[]`` following :func:`disabled_topic_files`.
     """
-    slide_paths = disabled_topic_files(course, topic_spec)
+    slide_paths = disabled_topic_files(course, topic_spec, language)
     if slide_paths is None:
         return None
 

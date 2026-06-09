@@ -390,11 +390,23 @@ All three share a common option vocabulary:
 | `-o, --output FILE` | Write to FILE (mutually exclusive with `-d`). |
 | `-d, --output-dir DIR` | Write to DIR with auto-generated filenames (mutually exclusive with `-o`). |
 | `--include-optional` | Include modules marked `optional="true"` (on a `<section>` or `<subsection>`). Off by default. |
-| `--include-disabled` | Include sections/subsections marked `enabled="false"`, tagged `(disabled)`. Off by default. |
+| `--include-disabled[=marked\|merge]` | Include sections/subsections marked `enabled="false"`. Off by default (excluded). A bare `--include-disabled` (or `=marked`) tags them `(disabled)` — disabled whole sections are listed after the enabled ones in `outline`/`summary`. `=merge` folds them into the normal course flow, in declared order, with no marker. |
 
 `optional="true"` and `enabled="false"` are **presentation-only** for these
 commands — they never change the build, only what appears in the document. An
 element that is both optional and disabled needs **both** flags to appear.
+
+Because `--include-disabled` takes an optional value, give the value with `=`
+(e.g. `--include-disabled=merge`) and keep `SPEC_FILE` first — a bare
+`--include-disabled` placed immediately before the spec path would be parsed as
+its value. In the structured outputs (`outline --format json`, `schedule
+--format csv`) the disabled state stays recorded (`"disabled": true` /
+`disabled` column) even under `=merge`; merge only changes the human-readable
+placement and marker.
+
+Split-language decks (`slides_x.de.py` + `slides_x.en.py`) are filtered to the
+requested `-L` language across all three commands, so a split pair contributes a
+single entry — the same per-language routing the build applies.
 
 #### `clm export outline`
 
@@ -416,8 +428,10 @@ group: a bold weekday/label bullet with the subsection's decks nested beneath
 it, after any bare (unscheduled) topics. Hiding an optional/disabled subsection
 also hides its topics (they are not demoted to bare bullets). `--include-disabled`
 surfaces disabled subsections (and disabled sections) with a `(disabled)`
-marker, reading their decks from disk. The JSON format adds a `subsections`
-array to each section that uses them (alongside the flat `topics` list).
+marker, reading their decks from disk and appending disabled whole sections
+after the enabled ones; `--include-disabled=merge` instead interleaves them in
+declared order with no marker. The JSON format adds a `subsections` array to
+each section that uses them (alongside the flat `topics` list).
 
 Examples:
 
@@ -427,7 +441,8 @@ clm export outline course.xml -L de
 clm export outline course.xml -d ./docs
 clm export outline course.xml --format json
 clm export outline course.xml --include-optional
-clm export outline course.xml --include-disabled
+clm export outline course.xml --include-disabled          # roadmap weeks, tagged + appended
+clm export outline course.xml --include-disabled=merge     # roadmap weeks folded into the flow
 clm export outline course.xml --sections-only
 ```
 
@@ -450,7 +465,7 @@ clm export schedule [OPTIONS] SPEC_FILE
 | `-o, --output FILE` / `-d, --output-dir DIR` | Write to FILE / to a directory (filename `<course>-schedule-<lang>.<ext>`). |
 | `--no-topic` | Omit the Topic column, leaving just day and video/slides — the columns a certification authority needs (applies to both `md` and `csv`). |
 | `--include-optional` | Include modules marked `optional="true"` (on a `<section>` or `<subsection>`). |
-| `--include-disabled` | Surface disabled subsections/sections (read from disk), tagged `(disabled)`; the CSV gains a trailing `disabled` column. |
+| `--include-disabled[=marked\|merge]` | Surface disabled subsections/sections (read from disk). Bare/`=marked`: tagged `(disabled)`. `=merge`: no tag (weeks already appear in declared order). The CSV gains a trailing `disabled` column whenever disabled content is included (truthful even under `=merge`). |
 | `--data-dir DIR` | Course data directory (contains `slides/`). Default: inferred from the spec location. |
 
 Each listing is **single-language** — run once per language to produce both.
@@ -485,6 +500,7 @@ clm export schedule course.xml -f csv           # CSV (one row per deck)
 clm export schedule course.xml --no-topic       # Day + video/slides only (cert authority)
 clm export schedule course.xml --include-optional   # Add optional modules
 clm export schedule course.xml --include-disabled   # Show disabled days, tagged
+clm export schedule course.xml --include-disabled=merge   # Show disabled days, no tag
 clm export schedule course.xml -o schedule.md   # Write to a file
 clm export schedule course.xml -d ./docs        # Write into a directory
 ```
@@ -2435,7 +2451,7 @@ clm export summary [OPTIONS] SPEC_FILE
 | `-L, --language [de\|en]` | Language for the summary structure (default: `en`) |
 | `-o, --output FILE` / `-d, --output-dir DIR` | Shared output options (see `clm export`). |
 | `--include-optional` | Include optional **whole sections** (gates sections only — a summary flattens each section to its notebooks and cannot drop optional *subsections*). |
-| `--include-disabled` | Summarize disabled whole sections too (read from disk), tagged `(disabled)`. |
+| `--include-disabled[=marked\|merge]` | Summarize disabled whole sections too (read from disk). Bare/`=marked`: heading tagged `(disabled)`, appended after the enabled sections. `=merge`: interleaved in declared order with no marker. |
 | `--model TEXT` | LLM model identifier |
 | `--api-base TEXT` | Custom API base URL |
 | `--no-cache` | Skip cache, re-generate all summaries |
@@ -2450,6 +2466,7 @@ clm export summary course.xml --audience trainer -o summary.md
 clm export summary course.xml --audience client -d ./docs
 clm export summary course.xml --audience trainer --model openai/gpt-4o
 clm export summary course.xml --audience client --style bullets
+clm export summary course.xml --audience client --include-disabled=merge
 ```
 
 ### `clm voiceover`

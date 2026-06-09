@@ -26,7 +26,13 @@ The three commands also gained a **consistent option vocabulary**:
   you pass the flag. (The MCP `course_outline` tool is unchanged — it still
   shows optional content.)
 - `--include-disabled` (now on all three) — include `enabled="false"`
-  sections/subsections, tagged `(disabled)`.
+  sections/subsections. It takes an **optional value**: a bare
+  `--include-disabled` (or `=marked`) tags them `(disabled)` (disabled whole
+  sections listed after the enabled ones in `outline`/`summary`), while
+  `--include-disabled=merge` folds them into the normal course flow, in
+  declared order, with no marker. Give the value with `=` and keep `SPEC_FILE`
+  first, since a bare flag placed immediately before the spec path would be
+  read as its value.
 - `clm export schedule` gained `-d/--output-dir`; `-L/--language` is the
   canonical spelling everywhere (`schedule` keeps `--lang` as an alias).
 
