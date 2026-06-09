@@ -1,5 +1,6 @@
 import io
 import logging
+from collections.abc import Iterator
 from enum import Enum
 from pathlib import Path
 from xml.etree import ElementTree as ETree
@@ -721,25 +722,33 @@ class GitHubSpec:
         project_slug: str | None = None,
         remote_template: str = "",
         remote_path: str = "",
+        stream: str = "",
+        language: str = "",
     ) -> str | None:
-        """Derive the remote URL for a release channel (issue #208).
+        """Derive the remote URL for a release channel (issues #208, #291, #293).
 
-        A cohort channel is *not* language-scoped — one repo serves one cohort
-        — so the repo name is ``{slug}-{channel_name}`` (the cohort name, e.g.
-        ``cohort-jan``, disambiguates it) rather than appending a ``{lang}``
-        segment and a target suffix. Reusing :meth:`derive_remote_url` with an
-        empty language would emit a stray ``--`` in the repo name; this method
-        avoids that while sharing the same base/remote-path/template handling.
+        The repo name is ``{slug}-{channel_name}`` for the single unnamed
+        ``<release-channels>`` block (the cohort name, e.g. ``cohort-jan``,
+        disambiguates it); a named stream appends its name —
+        ``{slug}-{channel_name}-{stream}`` (e.g. ``ml-2026-04-materials``) —
+        so the two streams of one cohort land in distinct repos, and a
+        language-scoped channel appends its ``lang`` as the final segment
+        (``…-materials-de``), matching the per-language repo convention.
+        Reusing :meth:`derive_remote_url` with an empty language would emit a
+        stray ``--`` in the repo name; this method avoids that while sharing
+        the same base/remote-path/template handling.
 
-        The ``{lang}`` and ``{suffix}`` template placeholders are bound to the
-        empty string for channels. Returns ``None`` when git config is not set.
+        The ``{suffix}`` template placeholder is bound to the empty string for
+        channels; ``{stream}`` carries the stream name and ``{lang}`` the
+        channel language (each empty when unset). Returns ``None`` when git
+        config is not set.
         """
         slug = project_slug or self.project_slug
         if not (slug and self.repository_base):
             return None
 
         effective_remote_path = remote_path or self.remote_path
-        repo = f"{slug}-{channel_name}"
+        repo = "-".join(part for part in (slug, channel_name, stream, language) if part)
         template = remote_template or self.remote_template
         if not template:
             if effective_remote_path:
@@ -751,8 +760,9 @@ class GitHubSpec:
             remote_path=effective_remote_path,
             repo=repo,
             slug=slug,
-            lang="",
+            lang=language,
             suffix="",
+            stream=stream,
         )
 
 
@@ -840,6 +850,12 @@ class OutputTargetSpec:
         remote_path: Optional remote path override for this target (e.g., GitLab
             group). When set, overrides the course-level <remote-path> from
             <github> for remote URL construction.
+        distribute_attr: Raw ``distribute`` XML attribute (issue #292).
+            ``"false"`` marks the target as a private build input (e.g. a
+            release-stream source) that ``clm git`` must not turn into a
+            distributed repo; ``""`` means unset — see
+            :meth:`CourseSpec.is_distributed_target` for the effective default,
+            which auto-excludes release ``source-target``\\ s.
     """
 
     name: str
@@ -849,6 +865,14 @@ class OutputTargetSpec:
     languages: list[str] | None = None
     remote_path: str = ""
     jupyterlite: "JupyterLiteConfig | None" = None
+    distribute_attr: str = ""
+
+    @property
+    def distribute(self) -> bool | None:
+        """The parsed ``distribute`` attribute; ``None`` when unset."""
+        if not self.distribute_attr:
+            return None
+        return self.distribute_attr.lower() == "true"
 
     @classmethod
     def from_element(cls, element: ETree.Element) -> "OutputTargetSpec":
@@ -856,6 +880,7 @@ class OutputTargetSpec:
         name = element.get("name", "default")
         path = element_text(element, "path")
         remote_path = element_text(element, "remote-path") or ""
+        distribute_attr = element.get("distribute", "")
 
         # Parse optional filter lists. Normalize deprecated kind aliases here
         # so downstream consumers (output_targets, execution dependencies,
@@ -875,6 +900,7 @@ class OutputTargetSpec:
             languages=languages,
             remote_path=remote_path,
             jupyterlite=jupyterlite,
+            distribute_attr=distribute_attr,
         )
 
     @staticmethod
@@ -929,6 +955,14 @@ class OutputTargetSpec:
                         f"Invalid language '{lang}' in target '{self.name}'. "
                         f"Valid values: {sorted(VALID_LANGUAGES)}"
                     )
+
+        # Validate the distribute attribute (issue #292). A typo like
+        # distribute="flase" must not silently flip distribution behavior.
+        if self.distribute_attr and self.distribute_attr.lower() not in ("true", "false"):
+            errors.append(
+                f"Invalid distribute value {self.distribute_attr!r} in target "
+                f"'{self.name}'. Valid values: true, false"
+            )
 
         return errors
 
@@ -1114,6 +1148,31 @@ def _parse_launcher(text: str) -> str:
     return text
 
 
+# GitLab group-share access levels accepted by <share-with access="...">
+# (issue #294). Mapped to GitLab's numeric levels by the provisioning code.
+VALID_SHARE_ACCESS: frozenset[str] = frozenset({"guest", "reporter", "developer", "maintainer"})
+
+
+@frozen
+class ShareWithSpec:
+    """One ``<share-with>`` declaration: share the channel repo into a group.
+
+    ``group`` is the full GitLab group path (e.g.
+    ``students/azav-ml/ml-2026-04``); ``access`` the access level granted
+    (default ``reporter``). Applied by ``clm release provision`` (issue #294).
+    """
+
+    group: str
+    access: str = "reporter"
+
+    @classmethod
+    def from_element(cls, element: ETree.Element) -> "ShareWithSpec":
+        return cls(
+            group=(element.text or "").strip(),
+            access=element.get("access", "reporter"),
+        )
+
+
 @frozen
 class ReleaseChannelSpec:
     """One cohort's solution-release channel (issue #208).
@@ -1122,49 +1181,94 @@ class ReleaseChannelSpec:
     ``ledger`` (in the course source repo). ``remote_path`` overrides the
     parent ``<release-channels>`` default for remote-URL derivation, mirroring
     :class:`OutputTargetSpec.remote_path`.
+
+    ``lang`` (issue #293) scopes the channel to a single language: ``clm
+    release sync`` then promotes only that language's files, re-rooted at the
+    language directory, and the derived repo name gains a ``-{lang}`` suffix —
+    matching the established per-language distribution convention (e.g.
+    ``…/machine-learning-azav-de``). When unset, the channel receives **every**
+    built language root (the pre-#293 behavior).
+
+    ``share_with`` (issue #294) lists the GitLab groups the channel repo is
+    shared into by ``clm release provision`` — block-level ``<share-with>``
+    entries (e.g. a trainers group) are inherited by every channel and come
+    first; a channel-level entry for the same group overrides the inherited
+    access level.
     """
 
     name: str
     path: str
     ledger: str
     remote_path: str = ""
+    lang: str = ""
+    share_with: tuple[ShareWithSpec, ...] = ()
 
     @classmethod
     def from_element(
-        cls, element: ETree.Element, *, default_remote_path: str = ""
+        cls,
+        element: ETree.Element,
+        *,
+        default_remote_path: str = "",
+        default_shares: "tuple[ShareWithSpec, ...]" = (),
     ) -> "ReleaseChannelSpec":
+        own_shares = tuple(ShareWithSpec.from_element(sw) for sw in element.findall("share-with"))
+        # Inherited entries first; a channel-level entry for the same group
+        # replaces the inherited one (its access wins).
+        own_groups = {s.group for s in own_shares}
+        shares = tuple(s for s in default_shares if s.group not in own_groups) + own_shares
         return cls(
             name=element.get("name", ""),
             path=element.get("path", ""),
             ledger=element.get("ledger", ""),
             remote_path=(element_text(element, "remote-path") or default_remote_path),
+            lang=element.get("lang", ""),
+            share_with=shares,
         )
 
 
 @frozen
 class ReleaseChannelsSpec:
-    """The ``<release-channels>`` block: per-cohort solution-release channels.
+    """One ``<release-channels>`` block: a release *stream* and its channels.
 
-    ``source_target`` names the ``completed``-kind ``<output-target>`` that is
-    the frozen source. ``remote_path`` is the default remote path for channels
-    that do not override it.
+    ``source_target`` names the ``<output-target>`` that is the frozen source
+    of this stream (typically a ``completed``-kind target for solutions, or a
+    ``code-along``/``partial`` target for pre-session materials). ``remote_path``
+    is the default remote path for channels that do not override it.
+
+    A course may declare **several** blocks — one per release stream (issue
+    #291), e.g. ``materials`` fed by a ``shared`` target and ``solutions`` fed
+    by a ``completed`` target. With more than one block each needs a unique
+    ``name`` attribute (the stream name); channels are then addressed as
+    ``<stream>/<channel>`` (or by bare channel name when unambiguous). A single
+    unnamed block keeps the original issue-#208 behavior.
     """
 
     source_target: str
     channels: list[ReleaseChannelSpec] = field(factory=list)
     remote_path: str = ""
+    # Stream name. Empty for the single-block (issue #208) layout; required
+    # and unique when several <release-channels> blocks are declared.
+    name: str = ""
 
     @classmethod
     def from_element(cls, element: ETree.Element) -> "ReleaseChannelsSpec":
         remote_path = element_text(element, "remote-path") or ""
+        # Block-level <share-with> entries are inherited by every channel
+        # (issue #294) — e.g. one trainers group shared across all cohorts.
+        default_shares = tuple(
+            ShareWithSpec.from_element(sw) for sw in element.findall("share-with")
+        )
         channels = [
-            ReleaseChannelSpec.from_element(ch, default_remote_path=remote_path)
+            ReleaseChannelSpec.from_element(
+                ch, default_remote_path=remote_path, default_shares=default_shares
+            )
             for ch in element.findall("channel")
         ]
         return cls(
             source_target=element.get("source-target", ""),
             channels=channels,
             remote_path=remote_path,
+            name=element.get("name", ""),
         )
 
     def channel(self, name: str) -> "ReleaseChannelSpec | None":
@@ -1172,6 +1276,16 @@ class ReleaseChannelsSpec:
             if channel.name == name:
                 return channel
         return None
+
+
+def release_channel_ref(block: ReleaseChannelsSpec, channel: ReleaseChannelSpec) -> str:
+    """The canonical CLI address of *channel*: ``stream/channel`` or bare name.
+
+    A channel in a named stream is addressed as ``<stream>/<channel>`` (e.g.
+    ``materials/2026-04``); a channel in the single unnamed block keeps its
+    bare name, so issue-#208 era commands are unchanged.
+    """
+    return f"{block.name}/{channel.name}" if block.name else channel.name
 
 
 @frozen
@@ -1185,7 +1299,9 @@ class CourseSpec:
     github: GitHubSpec = field(factory=GitHubSpec)
     dictionaries: list[DirGroupSpec] = field(factory=list)
     output_targets: list[OutputTargetSpec] = field(factory=list)
-    release_channels: "ReleaseChannelsSpec | None" = None
+    # One entry per <release-channels> block (a release *stream*, issue #291).
+    # Empty list = the solution-release feature is dormant.
+    release_channel_blocks: list[ReleaseChannelsSpec] = field(factory=list)
     image_options: ImageOptionsSpec = field(factory=ImageOptionsSpec)
     jupyterlite: JupyterLiteConfig | None = None
     author: str = "Dr. Matthias Hölzl"
@@ -1586,16 +1702,85 @@ class CourseSpec:
         return targets
 
     @staticmethod
-    def parse_release_channels(root: ETree.Element) -> "ReleaseChannelsSpec | None":
-        """Parse the optional <release-channels> element (issue #208).
+    def parse_release_channels(root: ETree.Element) -> "list[ReleaseChannelsSpec]":
+        """Parse every ``<release-channels>`` element (issues #208, #291).
 
-        Returns ``None`` when the element is absent, in which case the solution-
-        release feature is dormant and all other behavior is unchanged.
+        Returns an empty list when no element is present, in which case the
+        solution-release feature is dormant and all other behavior is
+        unchanged. Each block is one release stream; uniqueness/naming rules
+        are enforced by :meth:`validate`, not here, so a malformed spec can
+        still be loaded for inspection.
         """
-        elem = root.find("release-channels")
-        if elem is None:
-            return None
-        return ReleaseChannelsSpec.from_element(elem)
+        return [ReleaseChannelsSpec.from_element(elem) for elem in root.findall("release-channels")]
+
+    def iter_release_channels(
+        self,
+    ) -> "Iterator[tuple[ReleaseChannelsSpec, ReleaseChannelSpec]]":
+        """Yield every ``(stream block, channel)`` pair in declaration order."""
+        for block in self.release_channel_blocks:
+            for channel in block.channels:
+                yield block, channel
+
+    def is_distributed_target(self, target: OutputTargetSpec) -> bool:
+        """Whether ``clm git`` (without ``--target``) manages a repo for *target*.
+
+        An explicit ``distribute`` attribute wins (issue #292). When unset, a
+        target that feeds a release stream (named as some ``<release-channels
+        source-target>``) defaults to **not** distributed — it is a private
+        build input whose content reaches students only through ``clm release
+        sync`` into per-cohort channel repos, so ``clm git init`` must not
+        create a student-facing repo for it. Every other target defaults to
+        distributed (the pre-#292 behavior).
+        """
+        if target.distribute is not None:
+            return target.distribute
+        release_sources = {block.source_target for block in self.release_channel_blocks}
+        return target.name not in release_sources
+
+    def release_channel_refs(self) -> list[str]:
+        """The canonical CLI addresses of all channels (see :func:`release_channel_ref`)."""
+        return [
+            release_channel_ref(block, channel) for block, channel in self.iter_release_channels()
+        ]
+
+    def resolve_release_channel(self, ref: str) -> "tuple[ReleaseChannelsSpec, ReleaseChannelSpec]":
+        """Resolve a CLI channel reference to its ``(stream block, channel)`` pair.
+
+        *ref* is either ``<stream>/<channel>`` (exact) or a bare channel name,
+        which must be unique across all streams. Raises :class:`CourseSpecError`
+        with the available addresses on an unknown or ambiguous reference —
+        callers (``clm release``, ``clm git``, ``clm calendar``) surface the
+        message verbatim.
+        """
+        if not self.release_channel_blocks:
+            raise CourseSpecError("The spec declares no <release-channels> block.")
+        if "/" in ref:
+            stream, _, channel_name = ref.partition("/")
+            block = next((b for b in self.release_channel_blocks if b.name == stream), None)
+            if block is None:
+                streams = ", ".join(b.name or "(unnamed)" for b in self.release_channel_blocks)
+                raise CourseSpecError(
+                    f"Unknown release stream {stream!r}. Defined streams: {streams}."
+                )
+            channel = block.channel(channel_name)
+            if channel is None:
+                available = ", ".join(release_channel_ref(block, c) for c in block.channels)
+                raise CourseSpecError(
+                    f"Unknown channel {channel_name!r} in stream {stream!r}. "
+                    f"Defined channels: {available or '(none defined)'}."
+                )
+            return block, channel
+
+        matches = [(b, c) for b, c in self.iter_release_channels() if c.name == ref]
+        if len(matches) == 1:
+            return matches[0]
+        if not matches:
+            available = ", ".join(self.release_channel_refs()) or "(none defined)"
+            raise CourseSpecError(f"Unknown channel {ref!r}. Defined channels: {available}.")
+        qualified = ", ".join(release_channel_ref(b, c) for b, c in matches)
+        raise CourseSpecError(
+            f"Channel name {ref!r} exists in several streams; use a qualified address: {qualified}."
+        )
 
     def resolve_section_selectors(self, tokens: list[str]) -> SectionSelection:
         """Resolve a list of ``--only-sections`` selector tokens.
@@ -1838,6 +2023,102 @@ class CourseSpec:
                         f"'clm info jupyterlite' for the required fields."
                     )
 
+        errors.extend(self._validate_release_channels(target_names))
+
+        return errors
+
+    def _validate_release_channels(self, target_names: set[str]) -> list[str]:
+        """Validate the ``<release-channels>`` blocks (issues #208, #291).
+
+        Stream naming: with several blocks every block needs a unique,
+        ``/``-free ``name`` (the stream name used in ``stream/channel``
+        addressing). Channels need unique, ``/``-free names within their block,
+        and a channel's destination ``path`` and ``ledger`` must be unique
+        across *all* streams — two streams writing the same destination would
+        fight over one frozen manifest.
+        """
+        errors: list[str] = []
+        blocks = self.release_channel_blocks
+
+        block_names: set[str] = set()
+        dest_paths: dict[str, str] = {}
+        ledgers: dict[str, str] = {}
+        for block in blocks:
+            block_label = (
+                f"<release-channels name={block.name!r}>" if block.name else "<release-channels>"
+            )
+            if len(blocks) > 1 and not block.name:
+                errors.append(
+                    "With several <release-channels> blocks every block needs a "
+                    "unique name attribute (the release stream name)."
+                )
+            if block.name:
+                if "/" in block.name:
+                    errors.append(
+                        f"{block_label}: stream names must not contain '/' "
+                        f"(it separates stream and channel in CLI addresses)."
+                    )
+                if block.name in block_names:
+                    errors.append(f"Duplicate release stream name: {block.name!r}")
+                block_names.add(block.name)
+
+            if not block.source_target:
+                errors.append(f"{block_label} must declare a source-target attribute.")
+            elif self.output_targets and block.source_target not in target_names:
+                errors.append(
+                    f"{block_label}: source-target {block.source_target!r} does not "
+                    f"name an <output-target>."
+                )
+
+            channel_names: set[str] = set()
+            for channel in block.channels:
+                ref = release_channel_ref(block, channel)
+                if not channel.name:
+                    errors.append(f"{block_label}: every <channel> needs a name attribute.")
+                elif "/" in channel.name:
+                    errors.append(
+                        f"{block_label}: channel name {channel.name!r} must not contain '/'."
+                    )
+                elif channel.name in channel_names:
+                    errors.append(f"{block_label}: duplicate channel name {channel.name!r}.")
+                channel_names.add(channel.name)
+
+                if not channel.path:
+                    errors.append(f"Channel '{ref}' needs a path attribute.")
+                elif channel.path in dest_paths:
+                    errors.append(
+                        f"Channels '{dest_paths[channel.path]}' and '{ref}' share the "
+                        f"destination path {channel.path!r}; every channel needs its own "
+                        f"destination repository."
+                    )
+                else:
+                    dest_paths[channel.path] = ref
+
+                if not channel.ledger:
+                    errors.append(f"Channel '{ref}' needs a ledger attribute.")
+                elif channel.ledger in ledgers:
+                    errors.append(
+                        f"Channels '{ledgers[channel.ledger]}' and '{ref}' share the "
+                        f"ledger {channel.ledger!r}; every channel needs its own ledger."
+                    )
+                else:
+                    ledgers[channel.ledger] = ref
+
+                if channel.lang and channel.lang not in VALID_LANGUAGES:
+                    errors.append(
+                        f"Channel '{ref}': invalid lang {channel.lang!r}. "
+                        f"Valid values: {sorted(VALID_LANGUAGES)}"
+                    )
+
+                for share in channel.share_with:
+                    if not share.group:
+                        errors.append(f"Channel '{ref}': <share-with> needs a group path.")
+                    if share.access not in VALID_SHARE_ACCESS:
+                        errors.append(
+                            f"Channel '{ref}': invalid share-with access "
+                            f"{share.access!r}. Valid values: {sorted(VALID_SHARE_ACCESS)}"
+                        )
+
         return errors
 
     @classmethod
@@ -1945,7 +2226,7 @@ class CourseSpec:
             github=github_spec,
             dictionaries=cls.parse_dir_groups(root, keep_disabled=keep_disabled),
             output_targets=cls.parse_output_targets(root),
-            release_channels=cls.parse_release_channels(root),
+            release_channel_blocks=cls.parse_release_channels(root),
             image_options=ImageOptionsSpec.from_element(root.find("image-options")),
             jupyterlite=JupyterLiteConfig.from_element(root.find("jupyterlite")),
             author=author,

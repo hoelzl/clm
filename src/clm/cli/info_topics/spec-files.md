@@ -558,6 +558,7 @@ Define multiple output directories with content filters.
 | Element | Required | Description |
 |---------|----------|-------------|
 | `name` (attr) | Yes | Unique target identifier |
+| `distribute` (attr) | No | `true`/`false`. `false` marks the target as a **private build input** that `clm git` (without `--target`) never turns into a distributed repo. **Default**: `false` for any target named as a `<release-channels source-target>` (its content reaches students only via `clm release sync`), `true` for everything else. An explicit `--target NAME` always wins over the skip. (Issue #292) |
 | `<path>` | Yes | Output directory (relative or absolute) |
 | `<kinds>` | No | Filter by output kind (omit for all) |
 | `<formats>` | No | Filter by output format (omit for all) |
@@ -630,19 +631,75 @@ the spec stays diff-clean as you release week by week.
 </release-channels>
 ```
 
+#### Multiple release streams (issue #291)
+
+A course may declare **several** `<release-channels>` blocks — one per release
+*stream*, each fed by its own `source-target` and gated by its own ledgers.
+The canonical two-stream setup releases **materials** (code-along + partial,
+before each session) and **solutions** (completed, after the workshop) to the
+same cohort on independent schedules:
+
+```xml
+<release-channels name="materials" source-target="shared">
+    <channel name="2026-04" lang="de"
+             path="./release/materials/2026-04"
+             ledger="release/materials-2026-04.txt"/>
+</release-channels>
+<release-channels name="solutions" source-target="completed">
+    <channel name="2026-04" lang="de"
+             path="./release/solutions/2026-04"
+             ledger="release/solutions-2026-04.txt"/>
+</release-channels>
+```
+
+With more than one block, each needs a unique `name` attribute (the stream
+name). Channels are then addressed as `STREAM/CHANNEL` on the CLI — e.g.
+`--channel materials/2026-04` — and a bare channel name keeps working when it
+is unique across streams. A single unnamed block keeps the original issue-#208
+addressing unchanged.
+
 | Attribute / child | On | Required | Description |
 |---|---|----------|-------------|
-| `source-target` (attr) | `<release-channels>` | Yes | Name of the `completed`-kind `<output-target>` that is the frozen source. Topics are promoted out of this target's built tree. |
+| `name` (attr) | `<release-channels>` | With >1 block | Stream name (unique, no `/`). Appears in CLI addresses (`stream/channel`) and the derived repo name. |
+| `source-target` (attr) | `<release-channels>` | Yes | Name of the `<output-target>` that is this stream's frozen source (e.g. a `completed` target for solutions, a `code-along`/`partial` target for materials). Must name a declared output target. |
 | `<remote-path>` | `<release-channels>` | No | Default remote path (e.g. a GitLab group) for every channel that does not override it. |
-| `name` (attr) | `<channel>` | Yes | Cohort identifier. Addresses the channel on the CLI (`--channel jan`) and forms the derived repo name `{project-slug}-{name}`. |
-| `path` (attr) | `<channel>` | Yes | The cohort repo's working tree (relative to the course root, or absolute). One repo per cohort; **not** language-scoped. |
-| `ledger` (attr) | `<channel>` | Yes | Path to the cohort's release ledger — a plain-text file, **one released topic id per line**, created/appended by `clm release add`. Keep it in the course source repo. |
+| `<share-with>` | `<release-channels>` | No | Default GitLab group share inherited by every channel (issue #294, see below). |
+| `name` (attr) | `<channel>` | Yes | Cohort identifier (no `/`). Addresses the channel on the CLI and forms the derived repo name. |
+| `path` (attr) | `<channel>` | Yes | The cohort repo's working tree (relative to the course root, or absolute). One repo per channel; must be unique across **all** streams. |
+| `ledger` (attr) | `<channel>` | Yes | Path to the channel's release ledger — a plain-text file, **one released topic id per line**, created/appended by `clm release add`. Keep it in the course source repo. Unique across all streams. |
+| `lang` (attr) | `<channel>` | No | Scope the channel to one language (`de`/`en`, issue #293). `clm release sync` then promotes only that language's files, **re-rooted** so the repo root is the language directory (matching per-language repos like `…-azav-de`), and the derived repo name appends `-{lang}`. **Unset**: the channel receives every built language root. |
 | `<remote-path>` | `<channel>` | No | Override the block-level `<remote-path>` for this one cohort. |
+| `<share-with>` | `<channel>` | No | GitLab group(s) to share the channel repo into (issue #294, see below). |
 
-The remote URL is derived as `{repository-base}/{remote-path}/{project-slug}-{name}`
-(the `<remote-path>` segment is omitted when unset) — see `<github>` and
-`<project-slug>` above. Unlike output targets, a channel repo carries no language
-segment: the cohort `name` disambiguates it.
+The remote URL is derived as
+`{repository-base}/{remote-path}/{project-slug}-{channel}[-{stream}][-{lang}]`
+(the `<remote-path>` segment is omitted when unset; the stream/lang segments
+appear only for named streams / language-scoped channels) — see `<github>`
+and `<project-slug>` above.
+
+#### `<share-with>` — cohort access groups (issue #294)
+
+Declare which GitLab access groups a channel repo is shared into, then apply
+the shares with `clm release provision` (requires a `CLM_GITLAB_TOKEN` /
+`GITLAB_TOKEN` with `api` scope; idempotent; the repo must already exist on
+the remote). Block-level entries (e.g. a trainers group) are inherited by
+every channel; a channel-level entry for the same group overrides the
+inherited access level.
+
+```xml
+<release-channels name="solutions" source-target="completed">
+    <share-with access="maintainer">trainers</share-with>
+    <channel name="2026-04" path="./release/solutions/2026-04"
+             ledger="release/solutions-2026-04.txt">
+        <share-with access="reporter">students/azav-ml/ml-2026-04</share-with>
+    </channel>
+</release-channels>
+```
+
+The element text is the full group path; `access` is one of `guest`,
+`reporter` (default), `developer`, `maintainer`.
+
+#### Provenance and freeze records
 
 The build artifact that makes per-topic promotion possible is the **provenance
 manifest** (`.clm-manifest.json`, written by `clm build` — on by default since
@@ -651,8 +708,16 @@ path alone cannot recover. The manifest is private and is automatically excluded
 from every distributed repo by `clm git`. The per-cohort **frozen manifest**
 (`.clm-released.json`) *does* ship in the channel repo — it is the freeze record.
 
-Drive the workflow with `clm release` (add/status/sync) and `clm git --channel`
-(init/commit/push the cohort repos); run `clm info commands` for both.
+Since CLM {version} (issue #295), a whole-course build that errors on some
+topics still writes the manifest for the cleanly-built subset, recording the
+failed topics (`partial: true` + `failed_topics`). `clm release sync` promotes
+every green topic and refuses the failed ones (`skip-failed`, never frozen)
+until a build succeeds for them — one flaky deck no longer blocks all releases.
+
+Drive the workflow with `clm release` (add/week/status/sync/provision) and
+`clm git --channel` (init/commit/push the cohort repos); run
+`clm info commands` for both. Targets that only feed a release stream are
+skipped by `clm git` without `--target` (issue #292, see `distribute` above).
 
 ### `<jupyterlite>`
 

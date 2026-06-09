@@ -17,6 +17,7 @@ from click.testing import CliRunner
 from clm.cli.commands.git_ops import (
     OutputRepo,
     _select_repos,
+    find_output_repos,
     find_release_channel_repos,
     git_group,
 )
@@ -183,6 +184,69 @@ class TestFindReleaseChannelRepos:
         assert repo.path == abs_cohort  # preserved, NOT joined under course_root
 
 
+SPEC_TWO_STREAMS = """<?xml version="1.0"?>
+<course>
+  <name><de>T</de><en>T</en></name>
+  <prog-lang>python</prog-lang>
+  <project-slug>ml-course</project-slug>
+  <github>
+    <repository-base>https://github.com/Org</repository-base>
+  </github>
+  <sections>
+    <section>
+      <name><de>S</de><en>S</en></name>
+      <topics><topic>intro</topic></topics>
+    </section>
+  </sections>
+  <output-targets>
+    <output-target name="shared"><path>./output/shared</path></output-target>
+    <output-target name="completed"><path>./output/completed</path></output-target>
+  </output-targets>
+  <release-channels name="materials" source-target="shared">
+    <channel name="2026-04" path="./release/materials/2026-04" ledger="release/materials-2026-04.txt"/>
+  </release-channels>
+  <release-channels name="solutions" source-target="completed">
+    <channel name="2026-04" path="./release/solutions/2026-04" ledger="release/solutions-2026-04.txt"/>
+    <channel name="2026-10" path="./release/solutions/2026-10" ledger="release/solutions-2026-10.txt"/>
+  </release-channels>
+</course>
+"""
+
+
+class TestMultiStreamChannelRepos:
+    """Several <release-channels> blocks — one per release stream (issue #291)."""
+
+    def test_all_channels_enumerates_every_stream(self, tmp_path: Path):
+        spec_file = _write_spec(tmp_path, SPEC_TWO_STREAMS)
+        repos = find_release_channel_repos(spec_file)
+        assert [r.target_name for r in repos] == [
+            "materials/2026-04",
+            "solutions/2026-04",
+            "solutions/2026-10",
+        ]
+
+    def test_qualified_filter_selects_one_stream_channel(self, tmp_path: Path):
+        spec_file = _write_spec(tmp_path, SPEC_TWO_STREAMS)
+        repos = find_release_channel_repos(spec_file, "solutions/2026-04")
+        assert [r.path for r in repos] == [tmp_path / "release" / "solutions" / "2026-04"]
+
+    def test_bare_filter_resolves_when_unique(self, tmp_path: Path):
+        spec_file = _write_spec(tmp_path, SPEC_TWO_STREAMS)
+        repos = find_release_channel_repos(spec_file, "2026-10")
+        assert [r.target_name for r in repos] == ["solutions/2026-10"]
+
+    def test_ambiguous_bare_filter_is_a_clear_cli_error(self, tmp_path: Path):
+        spec_file = _write_spec(tmp_path, SPEC_TWO_STREAMS)
+        with pytest.raises(click.ClickException, match="several streams"):
+            _select_repos(spec_file, target=None, channel="2026-04", all_channels=False)
+
+    def test_remote_urls_carry_the_stream_suffix(self, tmp_path: Path):
+        spec_file = _write_spec(tmp_path, SPEC_TWO_STREAMS)
+        by_name = {r.target_name: r.remote_url for r in find_release_channel_repos(spec_file)}
+        assert by_name["materials/2026-04"] == "https://github.com/Org/ml-course-2026-04-materials"
+        assert by_name["solutions/2026-04"] == "https://github.com/Org/ml-course-2026-04-solutions"
+
+
 # ---------------------------------------------------------------------------
 # _select_repos guards
 # ---------------------------------------------------------------------------
@@ -209,12 +273,73 @@ class TestSelectReposGuards:
         repos = _select_repos(spec_file, target=None, channel=None, all_channels=True)
         assert {r.target_name for r in repos} == {"jan", "may"}
 
-    def test_default_mode_uses_output_targets(self, tmp_path: Path):
+    def test_default_mode_uses_output_targets_minus_release_sources(self, tmp_path: Path):
         spec_file = _write_spec(tmp_path, SPEC_WITH_CHANNELS)
         repos = _select_repos(spec_file, target=None, channel=None, all_channels=False)
-        # The single completed output target, one repo per language.
-        assert {r.source for r in repos} == {"output"}
-        assert {r.target_name for r in repos} == {"solutions-source"}
+        # The only output target is the release source-target, which is a
+        # private build input — default enumeration skips it (issue #292).
+        assert repos == []
+
+
+# ---------------------------------------------------------------------------
+# distribute="false" / release-source auto-exclusion (issue #292)
+# ---------------------------------------------------------------------------
+
+SPEC_DISTRIBUTE = """<?xml version="1.0"?>
+<course>
+  <name><de>T</de><en>T</en></name>
+  <prog-lang>python</prog-lang>
+  <project-slug>ml-course</project-slug>
+  <sections>
+    <section>
+      <name><de>S</de><en>S</en></name>
+      <topics><topic>intro</topic></topics>
+    </section>
+  </sections>
+  <output-targets>
+    <output-target name="trainer"><path>./output/trainer</path></output-target>
+    <output-target name="shared" distribute="false"><path>./output/shared</path></output-target>
+    <output-target name="completed"><path>./output/completed</path></output-target>
+    <output-target name="legacy" distribute="true"><path>./output/legacy</path></output-target>
+  </output-targets>
+  <release-channels source-target="completed">
+    <channel name="jan" path="./solutions/jan" ledger="release/jan.txt"/>
+  </release-channels>
+</course>
+"""
+
+
+class TestDistributeFlag:
+    def test_default_enumeration_skips_explicit_and_auto_excluded_targets(self, tmp_path: Path):
+        """`shared` opts out via distribute="false"; `completed` is auto-excluded
+        as the release source-target; `legacy` shows distribute="true" overrides
+        the auto-exclusion (here it is not a source-target, so it is moot but
+        harmless)."""
+        spec_file = _write_spec(tmp_path, SPEC_DISTRIBUTE)
+        repos = find_output_repos(spec_file)
+        assert {r.target_name for r in repos} == {"trainer", "legacy"}
+
+    def test_explicit_target_request_wins_over_the_skip(self, tmp_path: Path):
+        spec_file = _write_spec(tmp_path, SPEC_DISTRIBUTE)
+        assert {r.target_name for r in find_output_repos(spec_file, "shared")} == {"shared"}
+        assert {r.target_name for r in find_output_repos(spec_file, "completed")} == {"completed"}
+
+    def test_distribute_true_keeps_a_release_source_distributed(self, tmp_path: Path):
+        body = SPEC_DISTRIBUTE.replace(
+            '<output-target name="completed">',
+            '<output-target name="completed" distribute="true">',
+        )
+        spec_file = _write_spec(tmp_path, body)
+        repos = find_output_repos(spec_file)
+        assert {r.target_name for r in repos} == {"trainer", "completed", "legacy"}
+
+    def test_invalid_distribute_value_is_a_validation_error(self, tmp_path: Path):
+        from clm.core.course_spec import CourseSpec
+
+        body = SPEC_DISTRIBUTE.replace('distribute="false"', 'distribute="flase"')
+        spec_file = _write_spec(tmp_path, body)
+        errors = CourseSpec.from_file(spec_file).validate()
+        assert any("Invalid distribute value" in e for e in errors)
 
 
 # ---------------------------------------------------------------------------

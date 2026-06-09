@@ -215,8 +215,9 @@ in bulk.
 |----------|-------------|---------|
 | `CLM_GIT__REMOTE_TEMPLATE` | URL template for git remotes | `{repository_base}/{repo}` |
 | `CLM_GIT__REMOTE_PATH` | Path segment between base URL and repo name (e.g., GitLab group). Per-target `<remote-path>` overrides still win. | (unset) |
+| `CLM_GITLAB_TOKEN` | GitLab API token (`api` scope) used by `clm release provision` to share channel repos into access groups (issue #294). `GITLAB_TOKEN` is accepted as a fallback. | (unset) |
 
-The remote template supports placeholders: `{repository_base}`, `{remote_path}`, `{repo}`, `{slug}`, `{lang}`, `{suffix}`.
+The remote template supports placeholders: `{repository_base}`, `{remote_path}`, `{repo}`, `{slug}`, `{lang}`, `{suffix}` — plus, for release-channel repos, `{stream}` (the release stream name, issue #291).
 This is useful for SSH access with custom host aliases:
 
 ```bash

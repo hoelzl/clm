@@ -2464,10 +2464,16 @@ Key options for `git commit`, `git push`, and `git sync`:
 | `-m, --message` | commit, sync | Commit message (required unless `--amend`) |
 | `--amend` | commit, sync | Amend previous commit instead of creating new one |
 | `--force-with-lease` | push, sync | Safe force push (implied by `--amend` on sync) |
-| `--target` | all | Filter to specific output target |
-| `--channel NAME` | all | Act on the named release-channel (cohort) repo instead of output targets (issue #208). Mutually exclusive with `--target`. |
-| `--all-channels` | all | Act on every release-channel (cohort) repo instead of output targets. Mutually exclusive with `--target`. |
+| `--target` | all | Filter to specific output target. Also the only way to act on a non-distributed target (see below). |
+| `--channel NAME` | all | Act on the named release-channel (cohort) repo instead of output targets (issues #208, #291). With several release streams, address a channel as `STREAM/CHANNEL` (e.g. `materials/2026-04`); a bare name works when unique. Mutually exclusive with `--target`. |
+| `--all-channels` | all | Act on every release-channel (cohort) repo of every stream instead of output targets. Mutually exclusive with `--target`. |
 | `--dry-run` | all | Show what would be done |
+
+**Non-distributed targets (issue #292).** Without `--target`, `clm git` skips
+any output target with `distribute="false"` — and, by default, any target named
+as a `<release-channels source-target>` (a private build input for `clm
+release`). Pass `--target NAME` explicitly to act on such a target anyway, or
+set `distribute="true"` on it to restore wholesale distribution.
 
 Examples:
 
@@ -2510,9 +2516,15 @@ Per-topic solution release to student cohorts (issue #208). After a topic's
 workshop has been discussed, release that topic's full solution — and only that
 topic's — into a cohort repository, **frozen** so later course edits never change
 what a cohort already received. Channels are declared in the spec's
-`<release-channels>` block (`clm info spec-files`); the volatile per-topic
+`<release-channels>` block(s) (`clm info spec-files`); the volatile per-topic
 release state lives in a plain-text **ledger** (one topic id per line), never in
 the spec.
+
+A course may declare several `<release-channels>` blocks — one per release
+*stream* (issue #291), e.g. `materials` fed by a `shared` target and
+`solutions` fed by a `completed` target. Channels in a named stream are
+addressed as `STREAM/CHANNEL` (e.g. `--channel materials/2026-04`); a bare
+channel name keeps working when it is unique across streams.
 
 | Subcommand | Description |
 |------------|-------------|
@@ -2520,6 +2532,7 @@ the spec.
 | `release week SPEC_FILE SELECTORS… --channel NAME` | Append **every topic in the selected section(s)** to the ledger — a section-scoped `release add`. `SELECTORS` use the `build --only-sections` grammar (`id:`/`idx:`/`name:` prefixes, or a bare 1-based index / name substring). Section indices are disabled-inclusive; a selected-but-`enabled="false"` section is reported and skipped. |
 | `release status SPEC_FILE --channel NAME` | Show released vs pending topics, and (with a resolvable `--dest`/`--channel`) frozen vs awaiting-sync. |
 | `release sync SPEC_FILE --channel NAME` | Promote released-but-not-frozen topics from the built source into the cohort repo and freeze them. |
+| `release provision SPEC_FILE [--channel NAME]` | Apply the spec's `<share-with>` declarations: share each channel repo into its GitLab access group(s) via the API (issue #294). Idempotent; needs `CLM_GITLAB_TOKEN`/`GITLAB_TOKEN` with `api` scope; repos must already exist on the remote. `--dry-run` previews. Channels without a parseable GitLab remote are skipped with a note. |
 
 A channel can be addressed two ways: `--channel NAME` (resolves the ledger, the
 frozen `--source` build root, and the `--dest` cohort repo from the spec's
@@ -2530,10 +2543,11 @@ Key options for `release sync`:
 
 | Option | Description |
 |--------|-------------|
-| `--channel NAME` | Resolve ledger/source/dest from the spec's `<release-channels>`. |
+| `--channel NAME` | Resolve ledger/source/dest from the spec's `<release-channels>` (use `STREAM/CHANNEL` with several streams). |
 | `--ledger PATH` | Channel release ledger (overrides `--channel` resolution). |
 | `--source DIR` | Built frozen-source output root (must contain `.clm-manifest.json`). |
 | `--dest DIR` | Cohort destination repository (created if absent). |
+| `--language de\|en` | Promote only this language's files, re-rooted at the language directory (issue #293). Overrides the channel's `lang` attribute; requires `SPEC_FILE`; `--source` must point at the output-target root. |
 | `--refreeze TOPIC` | Re-copy and re-freeze an already-frozen topic (e.g. a bug fix). Repeatable. |
 | `--refreeze-all` | Re-copy and re-freeze every released topic. |
 | `--push` | After promoting, commit and push the cohort repo (via `clm git`'s commit/push). The repo must already exist — run `clm git init … --channel` once first. |
@@ -2545,6 +2559,14 @@ default since CLM {version}). Promotion copies bytes by manifest and records eac
 topic in the cohort's frozen manifest (`.clm-released.json`); a frozen topic is
 never re-propagated unless you pass `--refreeze`.
 
+**Partial manifests (issue #295).** A whole-course build that errors on some
+topics still writes the manifest for the cleanly-built subset, recording the
+failed topics. `release sync` promotes every green topic and reports the failed
+ones as `skip-failed` (loudly, but exit 0) — they are never frozen, so they
+promote automatically once a build succeeds for them. Builds whose errors
+cannot be attributed to topics (and timed-out or `--only-sections` builds)
+still write no manifest.
+
 Examples:
 
 ```bash
@@ -2555,6 +2577,13 @@ clm release status course.xml --channel jan                # what's released vs 
 clm git init course.xml --channel jan                      # one-time: create the cohort repo
 clm release sync course.xml --channel jan --push -m "Release functions, lists"
 clm release sync course.xml --channel jan --dry-run        # preview promotion
+
+# Two-stream setup (issue #291): materials before the session, solutions after.
+clm release week course.xml idx:3 --channel materials/2026-04
+clm release sync course.xml --channel materials/2026-04 --push
+clm release week course.xml idx:3 --channel solutions/2026-04   # after the workshop
+clm release sync course.xml --channel solutions/2026-04 --push
+clm release provision course.xml                                # apply <share-with> group shares
 ```
 
 ### `clm jobs`
@@ -3405,6 +3434,7 @@ Create and manage ZIP archives of course output.
 | `CLM_DATA_DIR` | Default data directory for MCP server (contains slides/, course-specs/) |
 | `CLM_GIT__REMOTE_TEMPLATE` | Git remote URL template (e.g., `git@github.com-cam:Org/{repo}.git`) |
 | `CLM_GIT__REMOTE_PATH` | Default remote path between base URL and repo name (e.g., GitLab group) |
+| `CLM_GITLAB_TOKEN` | GitLab API token (`api` scope) used by `clm release provision` for group shares; `GITLAB_TOKEN` is accepted as a fallback. |
 | `CLM_LLM__MODEL` | Default LLM model for summarize (default: `anthropic/claude-sonnet-4-6`) |
 | `CLM_LLM__API_KEY` | API key for LLM provider (or use `OPENAI_API_KEY`) |
 | `CLM_LLM__API_BASE` | API base URL (e.g. `https://openrouter.ai/api/v1`) |

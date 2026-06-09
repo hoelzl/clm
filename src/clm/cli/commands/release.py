@@ -25,8 +25,17 @@ from clm.cli.commands.git_ops import (
     find_release_channel_repos,
 )
 from clm.core.course_paths import resolve_course_paths
-from clm.core.course_spec import CourseSpec, CourseSpecError, SectionSpec
-from clm.core.provenance_manifest import MANIFEST_FILENAME, load_manifest
+from clm.core.course_spec import (
+    CourseSpec,
+    CourseSpecError,
+    SectionSpec,
+    release_channel_ref,
+)
+from clm.core.provenance_manifest import (
+    MANIFEST_FILENAME,
+    load_manifest,
+    restrict_manifest_to_language,
+)
 from clm.release.frozen_manifest import FROZEN_FILENAME, FrozenManifest
 from clm.release.ledger import Ledger, partition_known
 from clm.release.sync import SyncResult, apply_sync, plan_sync
@@ -39,8 +48,10 @@ _SPEC_ARG = click.argument(
 _CHANNEL_OPT = click.option(
     "--channel",
     default="",
-    help="Channel name; resolves --ledger/--source/--dest from the spec's "
-    "<release-channels>. Explicit paths override resolution.",
+    help="Channel address; resolves --ledger/--source/--dest from the spec's "
+    "<release-channels>. Use STREAM/CHANNEL (e.g. materials/2026-04) when "
+    "several streams are declared; a bare name works when unique. Explicit "
+    "paths override resolution.",
 )
 _LEDGER_OPT = click.option(
     "--ledger",
@@ -57,6 +68,9 @@ class _ResolvedChannel:
     ledger: Path
     source: Path | None
     dest: Path
+    # Channel language scope (issue #293). Empty = the channel receives every
+    # built language root.
+    lang: str = ""
 
 
 @click.group("release")
@@ -70,27 +84,26 @@ def _abs_under(course_root: Path, value: str) -> Path:
 
 
 def _resolve_channel(spec_file: Path, channel_name: str) -> _ResolvedChannel:
+    """Resolve a channel address (``stream/channel`` or unique bare name, #291)."""
     spec = CourseSpec.from_file(spec_file)
-    channels = spec.release_channels
-    if channels is None:
+    if not spec.release_channel_blocks:
         raise click.ClickException(
             f"{spec_file} has no <release-channels> block; pass explicit "
             f"--ledger/--source/--dest instead of --channel."
         )
-    channel = channels.channel(channel_name)
-    if channel is None:
-        available = ", ".join(c.name for c in channels.channels) or "(none defined)"
-        raise click.ClickException(
-            f"Unknown channel {channel_name!r}. Defined channels: {available}."
-        )
+    try:
+        block, channel = spec.resolve_release_channel(channel_name)
+    except CourseSpecError as e:
+        raise click.ClickException(str(e)) from None
     course_root, _ = resolve_course_paths(spec_file)
-    source_target = next((t for t in spec.output_targets if t.name == channels.source_target), None)
+    source_target = next((t for t in spec.output_targets if t.name == block.source_target), None)
     source = _abs_under(course_root, source_target.path) if source_target else None
     return _ResolvedChannel(
-        name=channel_name,
+        name=release_channel_ref(block, channel),
         ledger=_abs_under(course_root, channel.ledger),
         source=source,
         dest=_abs_under(course_root, channel.path),
+        lang=channel.lang,
     )
 
 
@@ -176,6 +189,101 @@ def _push_channel_repo(
         remote_ahead_hint=remote_ahead_hint,
     )
     if not ok:
+        raise SystemExit(1)
+
+
+@release_group.command("provision")
+@_SPEC_ARG
+@click.option(
+    "--channel",
+    default="",
+    help="Provision a single channel (STREAM/CHANNEL or unique bare name). "
+    "Default: every channel that declares <share-with>.",
+)
+@click.option("--dry-run", is_flag=True, help="Show the shares that would be applied.")
+def provision_cmd(spec_file: Path, channel: str, dry_run: bool) -> None:
+    """Share channel repos into their GitLab access groups (issue #294).
+
+    For every selected channel with ``<share-with>`` declarations, performs
+    the GitLab group-share via the REST API (idempotent — an existing share is
+    reported, not an error). The repo itself must already exist on the remote
+    (push it first via ``clm git init/sync --channel``); provisioning only
+    grants group access, replacing the manual per-cohort UI step.
+
+    Requires a GitLab token with ``api`` scope in ``CLM_GITLAB_TOKEN`` (or
+    ``GITLAB_TOKEN``). Channels without a parseable GitLab remote URL are
+    skipped with a note, so the command is a safe no-op for non-GitLab hosts.
+    """
+    from clm.infrastructure.gitlab_api import (
+        GitLabApiError,
+        gitlab_token,
+        parse_gitlab_remote,
+        share_project_with_group,
+    )
+
+    spec = CourseSpec.from_file(spec_file)
+    if not spec.release_channel_blocks:
+        raise click.ClickException(f"{spec_file} has no <release-channels> block.")
+
+    repos = {r.target_name: r for r in find_release_channel_repos(spec_file, channel or None)}
+    if channel:
+        try:
+            pairs = [spec.resolve_release_channel(channel)]
+        except CourseSpecError as e:
+            raise click.ClickException(str(e)) from None
+    else:
+        pairs = list(spec.iter_release_channels())
+
+    work: list[tuple[str, str, str, str, str]] = []  # ref, base, project, group, access
+    for block, ch in pairs:
+        ref = release_channel_ref(block, ch)
+        if not ch.share_with:
+            if channel:
+                click.echo(f"[{ref}] no <share-with> declared — nothing to provision.")
+            continue
+        repo = repos.get(ref)
+        remote = parse_gitlab_remote(repo.remote_url or "") if repo else None
+        if remote is None:
+            click.echo(
+                f"[{ref}] skipped: no GitLab remote URL could be derived "
+                f"(configure <github> repository-base / remote-path)."
+            )
+            continue
+        base_url, project_path = remote
+        for share in ch.share_with:
+            work.append((ref, base_url, project_path, share.group, share.access))
+
+    if not work:
+        click.echo("Nothing to provision.")
+        return
+
+    if dry_run:
+        click.echo("[DRY RUN] Would apply the following group shares:")
+        for ref, base_url, project_path, group, access in work:
+            click.echo(f"  [{ref}] {base_url}/{project_path} -> {group} ({access})")
+        return
+
+    token = gitlab_token()
+    if token is None:
+        raise click.ClickException(
+            "No GitLab token configured. Set CLM_GITLAB_TOKEN (or GITLAB_TOKEN) "
+            "to a token with 'api' scope, or use --dry-run to preview."
+        )
+
+    errors = 0
+    for ref, base_url, project_path, group, access in work:
+        try:
+            status = share_project_with_group(base_url, project_path, group, access, token)
+        except GitLabApiError as e:
+            click.echo(f"[{ref}] ERROR sharing with {group}: {e}", err=True)
+            errors += 1
+            continue
+        if status == "already-shared":
+            click.echo(f"[{ref}] already shared with {group} — unchanged.")
+        else:
+            click.echo(f"[{ref}] shared {project_path} with {group} ({access}).")
+
+    if errors:
         raise SystemExit(1)
 
 
@@ -359,6 +467,14 @@ def status_cmd(
     help="Re-copy and re-freeze these already-frozen topics (e.g. a bug fix).",
 )
 @click.option("--refreeze-all", is_flag=True, help="Re-copy and re-freeze every released topic.")
+@click.option(
+    "--language",
+    type=click.Choice(["de", "en"]),
+    default=None,
+    help="Promote only this language's files, re-rooted at the language "
+    "directory (issue #293). Overrides the channel's lang attribute; requires "
+    "SPEC_FILE. --source must point at the output-target root.",
+)
 @click.option("--dry-run", is_flag=True, help="Print the plan; copy nothing.")
 @click.option(
     "--push",
@@ -381,6 +497,7 @@ def sync_cmd(
     dest_path: Path | None,
     refreeze_ids: tuple[str, ...],
     refreeze_all: bool,
+    language: str | None,
     dry_run: bool,
     push: bool,
     commit_message: str | None,
@@ -391,14 +508,24 @@ def sync_cmd(
     ``SPEC_FILE``'s <release-channels>) or with explicit
     ``--ledger``/``--source``/``--dest`` paths. With ``--push`` the cohort repo
     is committed and pushed afterward, reusing ``clm git``'s machinery.
+
+    A channel with a ``lang`` attribute — or an explicit ``--language`` —
+    promotes only that language's files, re-rooted so the cohort repo's root
+    is the language directory (issue #293). Without either, the destination
+    receives every built language root.
     """
+    channel_lang = ""
     if channel:
         if spec_file is None:
             raise click.ClickException("--channel requires the SPEC_FILE argument.")
         resolved = _resolve_channel(spec_file, channel)
+        # Use the canonical stream/channel address everywhere downstream
+        # (messages, the frozen manifest's channel field, push hints).
+        channel = resolved.name
         ledger_path = ledger_path or resolved.ledger
         source_path = source_path or resolved.source
         dest_path = dest_path or resolved.dest
+        channel_lang = resolved.lang
 
     if ledger_path is None or source_path is None or dest_path is None:
         raise click.ClickException(
@@ -414,6 +541,31 @@ def sync_cmd(
             f"`clm build --provenance-manifest` first."
         )
     manifest = load_manifest(manifest_path)
+
+    # Language scoping (issue #293): restrict the manifest to one language and
+    # re-root both it and the copy source at the language directory.
+    effective_lang = language or channel_lang
+    if effective_lang:
+        if spec_file is None:
+            raise click.ClickException(
+                "--language requires the SPEC_FILE argument (it resolves the "
+                "language directory name from the spec)."
+            )
+        lang_dir = str(CourseSpec.from_file(spec_file).output_dir_name[effective_lang])
+        lang_root = source_path / lang_dir
+        if not lang_root.is_dir():
+            raise click.ClickException(
+                f"Language root not found: {lang_root}. Build the source target "
+                f"for language {effective_lang!r} first."
+            )
+        manifest = restrict_manifest_to_language(manifest, effective_lang, lang_dir)
+        if not manifest["files"]:
+            raise click.ClickException(
+                f"The provenance manifest records no {effective_lang!r} files under "
+                f"{lang_dir!r}; nothing could ever be promoted. Was the source "
+                f"built without that language?"
+            )
+        source_path = lang_root
     ledger = Ledger.load(ledger_path)
     channel_name = channel or dest_path.name
     frozen_path = dest_path / FROZEN_FILENAME
@@ -427,6 +579,12 @@ def sync_cmd(
         refreeze=refreeze,
     )
 
+    if manifest.get("partial"):
+        click.echo(
+            "Note: the source build manifest is partial (the build reported "
+            "errors); topics that failed in that build are refused below "
+            "and promote once a build succeeds for them."
+        )
     click.echo(
         f"Channel '{channel_name or '?'}': "
         f"skeleton {'copy' if plan.copy_skeleton else 'frozen'} "
@@ -458,6 +616,13 @@ def sync_cmd(
         f"{len(result.refrozen_topics)} re-frozen, "
         f"{len(result.skipped_topics)} already frozen (skipped)."
     )
+    if result.failed_topics:
+        click.echo(
+            f"Warning: {len(result.failed_topics)} released topic(s) NOT promoted "
+            f"— they failed in the source build: {', '.join(result.failed_topics)}. "
+            f"Rebuild, then re-run sync.",
+            err=True,
+        )
 
     if push:
         _push_channel_repo(

@@ -15,7 +15,7 @@ from pathlib import Path
 import click
 
 from clm.core.course_paths import resolve_course_paths
-from clm.core.course_spec import CourseSpec
+from clm.core.course_spec import CourseSpec, CourseSpecError, release_channel_ref
 from clm.core.provenance_manifest import MANIFEST_FILENAME
 from clm.infrastructure.config import get_config
 
@@ -34,8 +34,9 @@ class OutputRepo:
     """Represents an output directory that may have a git repository.
 
     ``source`` distinguishes an ``<output-target>`` repo (``"output"``) from a
-    per-cohort release channel repo (``"channel"``, issue #208). Channel repos
-    are not language-scoped, so their ``language`` is the empty string.
+    per-cohort release channel repo (``"channel"``, issue #208). A channel
+    repo's ``language`` is the empty string unless the channel is
+    language-scoped via its ``lang`` attribute (issue #293).
     """
 
     def __init__(
@@ -258,6 +259,11 @@ def find_output_repos(
 ) -> list[OutputRepo]:
     """Find all output repositories for a course spec.
 
+    Targets that are not distributed — an explicit ``distribute="false"`` or,
+    by default, a target feeding a release stream (issue #292) — are skipped
+    when enumerating all targets. Naming one explicitly via *target_filter*
+    still selects it: an explicit request wins over the default-safe skip.
+
     Args:
         spec_file: Path to course spec file
         target_filter: Optional target name to filter by
@@ -278,6 +284,13 @@ def find_output_repos(
         # Course has explicit output targets
         for i, target_spec in enumerate(spec.output_targets):
             if target_filter and target_spec.name != target_filter:
+                continue
+            if not target_filter and not spec.is_distributed_target(target_spec):
+                logger.debug(
+                    "Skipping non-distributed output target %r (release build source "
+                    'or distribute="false")',
+                    target_spec.name,
+                )
                 continue
 
             # Resolve path
@@ -350,27 +363,34 @@ def find_release_channel_repos(
     spec_file: Path,
     channel_filter: str | None = None,
 ) -> list[OutputRepo]:
-    """Find the per-cohort release-channel repositories for a course (#208).
+    """Find the per-cohort release-channel repositories for a course (#208, #291).
 
     Mirrors :func:`find_output_repos` but enumerates the ``<release-channels>``
-    block instead of ``<output-targets>``. Each channel is a single,
-    non-language-scoped cohort repo whose working tree is the channel ``path``
+    blocks (one per release stream) instead of ``<output-targets>``. Each
+    channel is a single cohort repo whose working tree is the channel ``path``
     (resolved under the course root, identically to ``clm release``). The remote
     URL is best-effort (used only by ``clm git init``); push/commit operate on
     whatever ``origin`` the repo actually has.
 
     Args:
         spec_file: Path to the course spec file.
-        channel_filter: Optional channel name to restrict the result to.
+        channel_filter: Optional channel address (``stream/channel`` or a
+            unique bare channel name) to restrict the result to. Raises
+            :class:`CourseSpecError` when it does not resolve.
 
     Returns:
-        One :class:`OutputRepo` per matching channel (``source="channel"``);
-        empty when the spec declares no ``<release-channels>`` block.
+        One :class:`OutputRepo` per matching channel (``source="channel"``,
+        ``target_name`` = the canonical channel address); empty when the spec
+        declares no ``<release-channels>`` block.
     """
     spec = CourseSpec.from_file(spec_file)
-    channels_spec = spec.release_channels
-    if channels_spec is None:
+    if not spec.release_channel_blocks:
         return []
+
+    if channel_filter:
+        pairs = [spec.resolve_release_channel(channel_filter)]
+    else:
+        pairs = list(spec.iter_release_channels())
 
     course_root, _ = resolve_course_paths(spec_file)
     github_config = spec.github
@@ -379,10 +399,7 @@ def find_release_channel_repos(
     config_remote_path = config.git.remote_path
 
     repos: list[OutputRepo] = []
-    for channel in channels_spec.channels:
-        if channel_filter and channel.name != channel_filter:
-            continue
-
+    for block, channel in pairs:
         path = Path(channel.path)
         if not path.is_absolute():
             path = course_root / path
@@ -393,13 +410,18 @@ def find_release_channel_repos(
             project_slug=spec.project_slug,
             remote_template=remote_template,
             remote_path=effective_remote_path,
+            stream=block.name,
+            language=channel.lang,
         )
 
         repos.append(
             OutputRepo(
                 path=path,
-                target_name=channel.name,
-                language="",
+                # A language-scoped channel (issue #293) carries its lang so the
+                # display name reads e.g. "materials/2026-04/de"; the repo path
+                # is still the single channel dest (one repo per channel).
+                target_name=release_channel_ref(block, channel),
+                language=channel.lang,
                 remote_url=remote_url,
                 source="channel",
             )
@@ -425,18 +447,16 @@ def _select_repos(
     if channel or all_channels:
         if target:
             raise click.UsageError("--target cannot be combined with --channel/--all-channels.")
-        channels_spec = CourseSpec.from_file(spec_file).release_channels
-        if channels_spec is None or not channels_spec.channels:
+        spec = CourseSpec.from_file(spec_file)
+        if not any(block.channels for block in spec.release_channel_blocks):
             raise click.ClickException(
                 f"{spec_file.name} declares no <release-channels>; "
                 f"--channel/--all-channels is not available for this course."
             )
-        if channel and channels_spec.channel(channel) is None:
-            available = ", ".join(c.name for c in channels_spec.channels)
-            raise click.ClickException(
-                f"Unknown channel {channel!r}. Defined channels: {available}."
-            )
-        return find_release_channel_repos(spec_file, channel or None)
+        try:
+            return find_release_channel_repos(spec_file, channel or None)
+        except CourseSpecError as e:
+            raise click.ClickException(str(e)) from None
     return find_output_repos(spec_file, target)
 
 
@@ -738,17 +758,19 @@ def _init_create_new_repo(repo: OutputRepo, branch: str) -> None:
 # =============================================================================
 
 # Shared options that switch a subcommand from <output-targets> repos to the
-# per-cohort <release-channels> repos (issue #208). Mutually exclusive with
-# --target; see _select_repos.
+# per-cohort <release-channels> repos (issues #208, #291). Mutually exclusive
+# with --target; see _select_repos.
 _channel_option = click.option(
     "--channel",
     default=None,
-    help="Act on the named release-channel (cohort) repo instead of output targets.",
+    help="Act on the named release-channel (cohort) repo instead of output "
+    "targets. Address a channel in a named stream as STREAM/CHANNEL "
+    "(e.g. materials/2026-04); a bare name works when unique.",
 )
 _all_channels_option = click.option(
     "--all-channels",
     is_flag=True,
-    help="Act on every release-channel (cohort) repo instead of output targets.",
+    help="Act on every release-channel (cohort) repo of every stream instead of output targets.",
 )
 
 

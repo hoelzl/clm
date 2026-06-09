@@ -421,3 +421,118 @@ def test_find_manifest_missing_returns_none(tmp_path):
     out = tmp_path / "out"
     out.mkdir()
     assert find_course_manifest_path(output_root=out) is None
+
+
+# ---------------------------------------------------------------------------
+# restrict_manifest_to_language (issue #293)
+# ---------------------------------------------------------------------------
+
+
+def _two_language_manifest() -> dict:
+    return {
+        "version": 1,
+        "target": "shared",
+        "source_commit": "abc",
+        "files": [
+            {
+                "path": "ml-de/Folien/01 Intro.ipynb",
+                "topic_id": "intro",
+                "language": "de",
+                "content_hash": "sha256:a",
+            },
+            {
+                "path": "ml-en/Slides/01 Intro.ipynb",
+                "topic_id": "intro",
+                "language": "en",
+                "content_hash": "sha256:b",
+            },
+            {
+                "path": "ml-de/data/d.csv",
+                "topic_id": None,
+                "language": "de",
+                "content_hash": "sha256:c",
+            },
+        ],
+    }
+
+
+def test_restrict_keeps_only_the_language_and_strips_the_root():
+    from clm.core.provenance_manifest import restrict_manifest_to_language
+
+    restricted = restrict_manifest_to_language(_two_language_manifest(), "de", "ml-de")
+    assert [f["path"] for f in restricted["files"]] == [
+        "Folien/01 Intro.ipynb",
+        "data/d.csv",
+    ]
+    assert restricted["language"] == "de"
+    # Build-level metadata is preserved for freeze records.
+    assert restricted["source_commit"] == "abc"
+
+
+def test_restrict_requires_both_language_and_path_prefix():
+    from clm.core.provenance_manifest import restrict_manifest_to_language
+
+    manifest = _two_language_manifest()
+    # An entry claiming "de" but living outside the de root is dropped.
+    manifest["files"].append(
+        {"path": "stray/x.txt", "topic_id": "intro", "language": "de", "content_hash": "sha256:x"}
+    )
+    restricted = restrict_manifest_to_language(manifest, "de", "ml-de")
+    assert all(not f["path"].startswith("stray") for f in restricted["files"])
+
+
+def test_restrict_does_not_mutate_the_input():
+    from clm.core.provenance_manifest import restrict_manifest_to_language
+
+    manifest = _two_language_manifest()
+    restrict_manifest_to_language(manifest, "en", "ml-en")
+    assert manifest["files"][0]["path"] == "ml-de/Folien/01 Intro.ipynb"
+    assert "language" not in manifest
+
+
+# ---------------------------------------------------------------------------
+# Partial manifest for errored builds (issue #295)
+# ---------------------------------------------------------------------------
+
+
+def test_failed_topics_are_excluded_and_recorded(course_1):
+    target = course_1.output_targets[0]
+    expected = list(enumerate_expected_outputs(course_1, target))
+    # Materialize every enumerated output so only the failed-topic filter,
+    # not the existence filter, decides what lands in the manifest.
+    failed_topic = expected[0][1]["topic_id"]
+    for out_path, _record in expected:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text("x", encoding="utf-8")
+
+    manifest = build_provenance_manifest(
+        course_1,
+        target,
+        source_commit="abc",
+        source_dirty=False,
+        built_at=BUILT_AT,
+        spec_name="course.xml",
+        failed_topics={failed_topic},
+    )
+
+    assert manifest["partial"] is True
+    assert manifest["failed_topics"] == [failed_topic]
+    assert all(f["topic_id"] != failed_topic for f in manifest["files"])
+    # The cleanly-built topics are still fully recorded.
+    other_topics = {r["topic_id"] for _p, r in expected} - {failed_topic}
+    recorded = {f["topic_id"] for f in manifest["files"]}
+    assert other_topics <= recorded
+
+
+def test_clean_build_manifest_is_not_partial(course_1):
+    target = course_1.output_targets[0]
+    manifest = build_provenance_manifest(
+        course_1,
+        target,
+        source_commit="abc",
+        source_dirty=False,
+        built_at=BUILT_AT,
+        spec_name="course.xml",
+    )
+    assert manifest["partial"] is False
+    assert manifest["failed_topics"] == []

@@ -36,6 +36,10 @@ logger = logging.getLogger(__name__)
 COPY = "copy"
 REFREEZE = "refreeze"
 SKIP_FROZEN = "skip-frozen"
+# The source build errored for this topic (recorded in the manifest's
+# failed_topics, issue #295): its on-disk output is suspect, so promotion is
+# refused until a build succeeds for it. Never frozen, so it is retried.
+SKIP_FAILED = "skip-failed"
 
 
 @frozen
@@ -59,6 +63,10 @@ class SyncPlan:
     def skipped(self) -> tuple[TopicPlan, ...]:
         return tuple(t for t in self.topics if t.action == SKIP_FROZEN)
 
+    @property
+    def failed(self) -> tuple[TopicPlan, ...]:
+        return tuple(t for t in self.topics if t.action == SKIP_FAILED)
+
 
 @frozen
 class SyncResult:
@@ -67,6 +75,9 @@ class SyncResult:
     skipped_topics: tuple[str, ...]
     skeleton_copied: bool
     files_copied: int
+    # Released topics refused because the source build errored for them
+    # (issue #295). Not frozen — they promote once a build succeeds.
+    failed_topics: tuple[str, ...] = ()
 
 
 def plan_sync(
@@ -76,14 +87,24 @@ def plan_sync(
     frozen: FrozenManifest,
     refreeze: Iterable[str] = (),
 ) -> SyncPlan:
-    """Compute what a sync would do, without touching the filesystem."""
+    """Compute what a sync would do, without touching the filesystem.
+
+    A released topic listed in the manifest's ``failed_topics`` (a partial
+    manifest from an errored build, issue #295) is refused with
+    :data:`SKIP_FAILED` rather than copied — unless it is already frozen and
+    not being refrozen, in which case the ordinary :data:`SKIP_FROZEN` applies
+    (the cohort already has it; nothing would be copied anyway).
+    """
     refreeze_set = set(refreeze)
+    failed_topics = set(manifest.get("failed_topics", []))
     by_topic = manifest_files_by_topic(manifest)
     plans: list[TopicPlan] = []
     for topic_id in ledger_released:
         file_count = len(by_topic.get(topic_id, []))
         if frozen.is_frozen(topic_id) and topic_id not in refreeze_set:
             action = SKIP_FROZEN
+        elif topic_id in failed_topics:
+            action = SKIP_FAILED
         elif frozen.is_frozen(topic_id):
             action = REFREEZE
         else:
@@ -118,6 +139,7 @@ def apply_sync(
     copied: list[str] = []
     refrozen: list[str] = []
     skipped: list[str] = []
+    failed: list[str] = []
 
     if plan.copy_skeleton:
         files_copied += _copy_files(by_topic.get(None, []), source_root, dest_root)
@@ -126,6 +148,14 @@ def apply_sync(
     for topic_plan in plan.topics:
         if topic_plan.action == SKIP_FROZEN:
             skipped.append(topic_plan.topic_id)
+            continue
+        if topic_plan.action == SKIP_FAILED:
+            logger.warning(
+                "release sync: topic %r failed in the source build; refusing to "
+                "promote it until a build succeeds (issue #295)",
+                topic_plan.topic_id,
+            )
+            failed.append(topic_plan.topic_id)
             continue
         files = by_topic.get(topic_plan.topic_id, [])
         if not files:
@@ -155,6 +185,7 @@ def apply_sync(
         skipped_topics=tuple(skipped),
         skeleton_copied=plan.copy_skeleton,
         files_copied=files_copied,
+        failed_topics=tuple(failed),
     )
 
 

@@ -204,6 +204,85 @@ def test_channel_resolves_ledger_source_and_dest_from_spec(tmp_path):
     assert frozen.skeleton_frozen is True
 
 
+SPEC_TWO_STREAMS = """
+<course>
+  <name><de>T</de><en>T</en></name>
+  <prog-lang>python</prog-lang>
+  <sections>
+    <section>
+      <name><de>S</de><en>S</en></name>
+      <topics><topic>intro</topic></topics>
+    </section>
+  </sections>
+  <output-targets>
+    <output-target name="shared">
+      <path>output/shared</path>
+      <kinds><kind>code-along</kind></kinds>
+    </output-target>
+    <output-target name="completed">
+      <path>output/completed</path>
+      <kinds><kind>completed</kind></kinds>
+    </output-target>
+  </output-targets>
+  <release-channels name="materials" source-target="shared">
+    <channel name="2026-04" path="release/materials/2026-04" ledger="release/materials-2026-04.txt"/>
+  </release-channels>
+  <release-channels name="solutions" source-target="completed">
+    <channel name="2026-04" path="release/solutions/2026-04" ledger="release/solutions-2026-04.txt"/>
+  </release-channels>
+</course>
+""".strip()
+
+
+def test_two_streams_release_independently_from_their_own_sources(tmp_path):
+    """The keystone scenario of issue #291: one cohort, two declarative streams.
+
+    materials/2026-04 promotes from the `shared` build target, solutions/2026-04
+    from the `completed` target, each gated by its own ledger — without ever
+    falling back to explicit --ledger/--source/--dest plumbing.
+    """
+    runner = CliRunner()
+    course_root = tmp_path
+    spec_file = _write_spec(tmp_path, SPEC_TWO_STREAMS)
+    _write_source(course_root / "output" / "shared")
+    _write_source(course_root / "output" / "completed")
+
+    # Release the topic on the materials stream only.
+    add = runner.invoke(
+        release_group, ["add", str(spec_file), "intro", "--channel", "materials/2026-04"]
+    )
+    assert add.exit_code == 0, add.output
+    assert Ledger.load(course_root / "release" / "materials-2026-04.txt").released == ["intro"]
+    assert not (course_root / "release" / "solutions-2026-04.txt").exists()
+
+    sync = runner.invoke(release_group, ["sync", str(spec_file), "--channel", "materials/2026-04"])
+    assert sync.exit_code == 0, sync.output
+    materials_dest = course_root / "release" / "materials" / "2026-04"
+    assert (materials_dest / "Sec/01 Intro.ipynb").is_file()
+    # The other stream's destination is untouched: its ledger is empty.
+    assert not (course_root / "release" / "solutions" / "2026-04" / "Sec").exists()
+
+    # Now release on the solutions stream; it promotes from ITS source target.
+    runner.invoke(release_group, ["add", str(spec_file), "intro", "--channel", "solutions/2026-04"])
+    sync2 = runner.invoke(release_group, ["sync", str(spec_file), "--channel", "solutions/2026-04"])
+    assert sync2.exit_code == 0, sync2.output
+    solutions_dest = course_root / "release" / "solutions" / "2026-04"
+    assert (solutions_dest / "Sec/01 Intro.ipynb").is_file()
+
+    # Each destination froze under its canonical stream/channel address.
+    frozen = FrozenManifest.load(solutions_dest / FROZEN_FILENAME, channel="?")
+    assert frozen.channel == "solutions/2026-04"
+
+
+def test_ambiguous_bare_channel_is_a_clear_error(tmp_path):
+    runner = CliRunner()
+    spec_file = _write_spec(tmp_path, SPEC_TWO_STREAMS)
+    result = runner.invoke(release_group, ["add", str(spec_file), "intro", "--channel", "2026-04"])
+    assert result.exit_code != 0
+    assert "several streams" in result.output
+    assert "materials/2026-04" in result.output
+
+
 # ---------------------------------------------------------------------------
 # `clm release week` (follow-up 3) — section-scoped ledger append
 # ---------------------------------------------------------------------------
@@ -619,3 +698,193 @@ class TestSyncPush:
         assert FROZEN_FILENAME in tracked
         assert _last_subject(dest) == "Release to jan: 1 new"
         assert _git(remote, "log", "-1", "--format=%s").stdout.strip() == "Release to jan: 1 new"
+
+
+# ---------------------------------------------------------------------------
+# Language-scoped channels (issue #293)
+# ---------------------------------------------------------------------------
+
+SPEC_LANG_CHANNELS = """
+<course>
+  <name><de>T</de><en>T</en></name>
+  <prog-lang>python</prog-lang>
+  <project-slug>ml</project-slug>
+  <sections>
+    <section>
+      <name><de>S</de><en>S</en></name>
+      <topics><topic>intro</topic></topics>
+    </section>
+  </sections>
+  <output-targets>
+    <output-target name="src">
+      <path>output/src</path>
+      <kinds><kind>completed</kind></kinds>
+    </output-target>
+  </output-targets>
+  <release-channels source-target="src">
+    <channel name="jan-de" lang="de" path="solutions/jan-de" ledger="release/jan-de.txt"/>
+    <channel name="jan-en" lang="en" path="solutions/jan-en" ledger="release/jan-en.txt"/>
+    <channel name="jan-all" path="solutions/jan-all" ledger="release/jan-all.txt"/>
+  </release-channels>
+</course>
+""".strip()
+
+
+def _write_two_language_source(root: Path) -> None:
+    """A built `src` target with de (ml-de) and en (ml-en) language roots."""
+    root.mkdir(parents=True, exist_ok=True)
+    manifest = {
+        "version": 1,
+        "source_commit": "abc",
+        "source_dirty": False,
+        "built_at": "t",
+        "target": "src",
+        "files": [
+            {
+                "path": "ml-de/Folien/01 Intro.ipynb",
+                "topic_id": "intro",
+                "section_id": "w01",
+                "kind": "completed",
+                "format": "notebook",
+                "language": "de",
+                "content_hash": "sha256:a",
+            },
+            {
+                "path": "ml-en/Slides/01 Intro.ipynb",
+                "topic_id": "intro",
+                "section_id": "w01",
+                "kind": "completed",
+                "format": "notebook",
+                "language": "en",
+                "content_hash": "sha256:b",
+            },
+        ],
+    }
+    (root / MANIFEST_FILENAME).write_text(json.dumps(manifest), encoding="utf-8")
+    for entry in manifest["files"]:
+        path = root / entry["path"]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(entry["content_hash"], encoding="utf-8")
+
+
+def test_lang_channel_promotes_one_language_rerooted(tmp_path):
+    runner = CliRunner()
+    spec_file = _write_spec(tmp_path, SPEC_LANG_CHANNELS)
+    _write_two_language_source(tmp_path / "output" / "src")
+
+    runner.invoke(release_group, ["add", str(spec_file), "intro", "--channel", "jan-de"])
+    sync = runner.invoke(release_group, ["sync", str(spec_file), "--channel", "jan-de"])
+    assert sync.exit_code == 0, sync.output
+
+    dest = tmp_path / "solutions" / "jan-de"
+    # Re-rooted at the language directory: no ml-de/ segment in the repo.
+    assert (dest / "Folien/01 Intro.ipynb").is_file()
+    assert not (dest / "ml-de").exists()
+    # The other language never leaks into the scoped channel.
+    assert not (dest / "Slides").exists()
+    assert not (dest / "ml-en").exists()
+
+
+def test_unscoped_channel_still_receives_every_language_root(tmp_path):
+    runner = CliRunner()
+    spec_file = _write_spec(tmp_path, SPEC_LANG_CHANNELS)
+    _write_two_language_source(tmp_path / "output" / "src")
+
+    runner.invoke(release_group, ["add", str(spec_file), "intro", "--channel", "jan-all"])
+    sync = runner.invoke(release_group, ["sync", str(spec_file), "--channel", "jan-all"])
+    assert sync.exit_code == 0, sync.output
+
+    dest = tmp_path / "solutions" / "jan-all"
+    assert (dest / "ml-de/Folien/01 Intro.ipynb").is_file()
+    assert (dest / "ml-en/Slides/01 Intro.ipynb").is_file()
+
+
+def test_language_option_overrides_channel_scope(tmp_path):
+    runner = CliRunner()
+    spec_file = _write_spec(tmp_path, SPEC_LANG_CHANNELS)
+    _write_two_language_source(tmp_path / "output" / "src")
+
+    runner.invoke(release_group, ["add", str(spec_file), "intro", "--channel", "jan-all"])
+    sync = runner.invoke(
+        release_group,
+        ["sync", str(spec_file), "--channel", "jan-all", "--language", "en"],
+    )
+    assert sync.exit_code == 0, sync.output
+
+    dest = tmp_path / "solutions" / "jan-all"
+    assert (dest / "Slides/01 Intro.ipynb").is_file()
+    assert not (dest / "ml-de").exists()
+
+
+def test_language_without_spec_file_errors(tmp_path):
+    runner = CliRunner()
+    source = tmp_path / "src"
+    _write_source(source)
+    ledger = tmp_path / "jan.txt"
+    Ledger(["intro"]).save(ledger)
+    result = runner.invoke(
+        release_group,
+        [
+            "sync",
+            "--ledger",
+            str(ledger),
+            "--source",
+            str(source),
+            "--dest",
+            str(tmp_path / "dest"),
+            "--language",
+            "de",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "requires the SPEC_FILE" in result.output
+
+
+def test_missing_language_root_is_a_clear_error(tmp_path):
+    runner = CliRunner()
+    spec_file = _write_spec(tmp_path, SPEC_LANG_CHANNELS)
+    source = tmp_path / "output" / "src"
+    _write_two_language_source(source)
+    import shutil
+
+    shutil.rmtree(source / "ml-de")
+
+    runner.invoke(release_group, ["add", str(spec_file), "intro", "--channel", "jan-de"])
+    sync = runner.invoke(release_group, ["sync", str(spec_file), "--channel", "jan-de"])
+    assert sync.exit_code != 0
+    assert "Language root not found" in sync.output
+
+
+# ---------------------------------------------------------------------------
+# Partial manifest from an errored build (issue #295)
+# ---------------------------------------------------------------------------
+
+
+def test_sync_promotes_green_topics_and_refuses_failed_ones(tmp_path):
+    runner = CliRunner()
+    source = tmp_path / "src"
+    _write_source(source)
+    # Mark the build partial with a failed topic that is also released.
+    manifest = json.loads((source / MANIFEST_FILENAME).read_text(encoding="utf-8"))
+    manifest["partial"] = True
+    manifest["failed_topics"] = ["flaky"]
+    (source / MANIFEST_FILENAME).write_text(json.dumps(manifest), encoding="utf-8")
+
+    ledger = tmp_path / "jan.txt"
+    Ledger(["intro", "flaky"]).save(ledger)
+    dest = tmp_path / "jan"
+
+    result = runner.invoke(
+        release_group,
+        ["sync", "--ledger", str(ledger), "--source", str(source), "--dest", str(dest)],
+    )
+    assert result.exit_code == 0, result.output
+    # The green topic was promoted and frozen...
+    assert (dest / "Sec/01 Intro.ipynb").is_file()
+    frozen = FrozenManifest.load(dest / FROZEN_FILENAME, channel="jan")
+    assert frozen.is_frozen("intro")
+    # ...the failed one was refused, loudly, and stays unfrozen (retried later).
+    assert not frozen.is_frozen("flaky")
+    assert "skip-failed" in result.output
+    assert "NOT promoted" in result.output
+    assert "partial" in result.output

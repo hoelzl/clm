@@ -448,27 +448,77 @@ def _should_emit_provenance_manifest(summary: BuildSummary | None, config: Build
     """Whether to write the ``.clm-manifest.json`` after a finished build.
 
     Beyond the resolved request flag (``config.write_provenance_manifest``), the
-    manifest is written only for a **complete, successful, whole-course** build —
-    mirroring the post-build sweep's conservative skips, because the manifest is a
-    full overwrite of the prior index:
+    manifest is written only for a **whole-course** build — mirroring the
+    post-build sweep's conservative skips, because the manifest is a full
+    overwrite of the prior index:
 
     - ``--watch``: long-running rebuilds populate only the changed file.
     - ``--only-sections``: a section selection would overwrite the full manifest
       with a partial index that silently drops every unselected section's
       provenance (the release engine's join key). The sweep skips this mode for
       the same cross-section-damage reason.
-    - errored / timed-out builds: the output tree is incomplete, so the hashed
-      manifest would claim clean provenance over output the build reported broken.
-      (The non-zero exit happens later, in the ``build`` entry point.)
+    - timed-out builds: pending jobs mean an unknown set of topics never ran,
+      so no honest manifest can be written at all.
+
+    A build with **errors** is no longer an outright skip (issue #295): when
+    every error attributes to a topic (see :func:`_failed_topic_ids`), the
+    manifest is written for the cleanly-built subset with the failed topics
+    excluded and recorded — one flaky deck must not block releasing every
+    other topic. (The non-zero exit still happens later, in the ``build``
+    entry point.)
     """
     return (
         summary is not None
         and config.write_provenance_manifest
         and not config.watch
         and config.resolved_section_selection is None
-        and not summary.errors
         and not summary.timed_out
     )
+
+
+def _failed_topic_ids(summary: BuildSummary, course) -> set[str] | None:
+    """Attribute the build's errors to topics, for the partial manifest (#295).
+
+    Returns the set of topic ids owning at least one errored source file —
+    empty when the build was clean. Returns ``None`` when the errors cannot
+    all be pinned to topics, in which case the caller must skip the manifest
+    entirely (the pre-#295 strict behavior), because an unattributable error
+    leaves unknown parts of the output tree suspect:
+
+    - any ``fatal``-severity error (stage-level breakage, e.g. no workers);
+    - an error without a ``file_path``;
+    - a ``file_path`` that matches no course file (e.g. the spec itself).
+    """
+    relevant = [e for e in summary.errors if e.severity in ("error", "fatal")]
+    if not relevant:
+        return set()
+    if any(e.severity == "fatal" for e in relevant):
+        return None
+
+    topic_by_path: dict[str, str] = {}
+    for file in course.files:
+        try:
+            topic_by_path[str(Path(file.path).resolve())] = file.topic.id
+        except OSError:  # pragma: no cover - unresolvable paths are just skipped
+            continue
+
+    failed: set[str] = set()
+    for error in relevant:
+        if not error.file_path:
+            return None
+        try:
+            topic_id = topic_by_path.get(str(Path(error.file_path).resolve()))
+        except OSError:
+            topic_id = None
+        if topic_id is None:
+            logger.info(
+                "Provenance manifest: error on %r is not attributable to a topic; "
+                "falling back to the strict whole-course gate.",
+                error.file_path,
+            )
+            return None
+        failed.add(topic_id)
+    return failed
 
 
 def create_output_formatter(config: BuildConfig) -> OutputFormatter:
@@ -1737,28 +1787,45 @@ async def main_build(
 
     # Provenance manifests: one .clm-manifest.json per output root (issue #208).
     # On by default since step 3d (and suppressed for --snapshot / --verify-against
-    # at the entry point). Only written for a complete, successful, whole-course
-    # build — see _should_emit_provenance_manifest, which mirrors the post-build
-    # sweep's conservative skips. Capturing the source commit and writing the
-    # manifest must never fail an otherwise successful build, so any error here is
-    # logged and swallowed.
-    if _should_emit_provenance_manifest(summary, config):
+    # at the entry point). Only written for a whole-course build — see
+    # _should_emit_provenance_manifest, which mirrors the post-build sweep's
+    # conservative skips. A build with topic-attributable errors writes a
+    # *partial* manifest that excludes and records the failed topics (issue
+    # #295) so unrelated topics stay releasable. Capturing the source commit
+    # and writing the manifest must never fail an otherwise successful build,
+    # so any error here is logged and swallowed.
+    if summary is not None and _should_emit_provenance_manifest(summary, config):
         from datetime import datetime, timezone
 
         from clm.core.git_info import get_git_info
         from clm.core.provenance_manifest import write_provenance_manifests
 
         try:
-            git = get_git_info(course.course_root)
-            written = write_provenance_manifests(
-                course,
-                source_commit=git["commit"],
-                source_dirty=git["dirty"],
-                built_at=datetime.now(timezone.utc).isoformat(),
-                spec_name=config.spec_file.name,
-            )
-            if written:
-                logger.info("Wrote %d provenance manifest(s)", len(written))
+            failed_topics = _failed_topic_ids(summary, course)
+            if failed_topics is None:
+                logger.warning(
+                    "Skipping provenance manifest(s): the build reported errors "
+                    "that cannot be attributed to specific topics."
+                )
+            else:
+                if failed_topics:
+                    logger.warning(
+                        "Writing partial provenance manifest(s): %d failed topic(s) "
+                        "excluded and recorded (%s).",
+                        len(failed_topics),
+                        ", ".join(sorted(failed_topics)),
+                    )
+                git = get_git_info(course.course_root)
+                written = write_provenance_manifests(
+                    course,
+                    source_commit=git["commit"],
+                    source_dirty=git["dirty"],
+                    built_at=datetime.now(timezone.utc).isoformat(),
+                    spec_name=config.spec_file.name,
+                    failed_topics=failed_topics,
+                )
+                if written:
+                    logger.info("Wrote %d provenance manifest(s)", len(written))
         except Exception as e:
             logger.warning("Failed to write provenance manifest(s): %s", e, exc_info=True)
 
