@@ -61,6 +61,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   course. Structured outputs (`outline --format json`, `schedule --format csv`)
   keep the disabled state recorded even under `=merge`.
 
+### Added
+
+- **Two new `clm slides sync` test oracles** close the architecture review's
+  remaining coverage gaps (issue #289 P4): `tests/slides/test_sync_non_python.py`
+  drives the engine end-to-end on a C# (`//`-token) split pair for the first
+  time — neutral verbatim copy, id-less re-translation, add-with-insert (the
+  built twin must carry the `// %%` header family), tag mirroring, and the
+  neutral tag-drift alert, on both baselines — and
+  `tests/slides/test_sync_corpus_mutation.py` (slow/integration, corpus-gated
+  like the no-op backstop) is the corpus' first **positive propagation
+  oracle**: scripted one-sided mutations of real PythonCourses decks per
+  change-type (neutral edit/add, id-less localized edit, companion remove,
+  tag-only retag, judge-reconciled edit), asserting each is propagated to the
+  other half or alerted — never silently dropped — on pairs selected per
+  target cell class and verified post-sync-clean.
+
 ### Fixed
 
 - **`clm slides sync`'s structural pass no longer calls the translator inside
