@@ -58,6 +58,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   now reconciles slide-group **order** against the propagation source after the
   structural pass (committing only a reorder that reproduces the source's group
   and `(slide_id, role)` order exactly), so such an insertion propagates cleanly.
+- **`clm slides sync` no longer silently drops (or destructively overwrites) a
+  one-sided edit made while the other half reorders slide groups.** When one half
+  reordered slide groups (a `move`) while the other half independently edited a
+  language-neutral (no `lang=`) or id-less-localized cell, the two changes flowed
+  in opposite directions. The reorder permutes the source half's neutral/id-less
+  cell *sequence*, which the positional drift detectors misread as a "drift" —
+  masking the target half's edit. The run reported the decks consistent and
+  advanced the watermark while the edit was lost from **both** halves; for two or
+  more reordered neutral cells the positional shift was even misclassified as a
+  same-cell divergence and **auto-healed**, overwriting the edit on disk (Issue
+  #282). Because a group reorder makes positional pairing unsound, sync now
+  **errors** whenever one half reorders slide groups while the other half has any
+  unreconciled neutral / id-less change (an edit, add, remove, or cross-group
+  reassignment), holding the watermark and leaving both halves untouched on disk so
+  the change is preserved. A neutral edit applied **identically** to both halves
+  alongside a reorder still merges cleanly (the halves agree, so nothing is lost).
+  Reconcile a genuine conflict by hand (apply the reorder and the edit on the same
+  half, or sync them in separate steps) and re-run.
 
 ### Changed
 
