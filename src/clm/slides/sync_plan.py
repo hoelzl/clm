@@ -236,6 +236,35 @@ class PlanIssue:
     tag_hold: TagHold | None = None
 
 
+#: One membership-widened watermark row: (position, slide_id, role, content_hash, construct).
+_WatermarkRow = tuple[int, str | None, str, str, str | None]
+
+
+@dataclass(frozen=True)
+class BaselineBundle:
+    """The single baseline representation every consumer reads (#289 P1).
+
+    Both baseline sources produce this one membership-widened shape — the
+    watermark cache by reading its stored partitions
+    (:func:`_bundle_from_watermark`), git HEAD by re-deriving the *same* rows
+    from the committed text via :func:`watermark_rows` /
+    :func:`watermark_tag_map` (:func:`_bundle_from_git_head`). Every baseline
+    consumer — the keyed diff, the shared / id-less / header drift detectors,
+    Tier C retag, and the apply-side anchor / id-migration passes (via
+    ``SyncPlan.baseline_bundle``) — reads from here, so the two sources can
+    never again diverge in *coverage*: the per-aspect parallel git-HEAD
+    plumbing this replaces is how #269 (git path missing the shared/id-less/
+    header baselines), #225/#226 (git-gate predicates), and the #289 git-HEAD
+    tag drop shipped. ``source`` is provenance, not plumbing — the #225/#226
+    committed-pair semantics still key on it.
+    """
+
+    source: str  # "watermark" | "git-head"
+    rows: dict[str, list[_WatermarkRow]]  # partitions "de" | "en" | "shared"
+    tags: dict[str, dict[int, frozenset[str]]]  # partitions "de" | "en" | "shared"
+    header_hashes: dict[str, list[str]]  # "de" | "en" (ordered j2 header hashes)
+
+
 @dataclass
 class SyncPlan:
     """The full result of classifying one split pair against its baseline."""
@@ -257,6 +286,10 @@ class SyncPlan:
     # them post-pass to fail-safe on any id-less drift that was not propagated.
     idless_baseline_de: list[str] | None = None
     idless_baseline_en: list[str] | None = None
+    # The resolved baseline itself (#289 P1), carried so the apply engine reads
+    # the SAME rows the classifier diffed against (anchor reuse, id-migration)
+    # instead of re-deriving them — plan and apply agree by construction.
+    baseline_bundle: BaselineBundle | None = None
 
     @property
     def has_baseline(self) -> bool:
@@ -619,14 +652,6 @@ def _idless_localized_baseline_from_rows(
     ]
 
 
-def _idless_localized_baseline_from_git_head(path: Path, lang: str) -> list[str] | None:
-    """git-HEAD counterpart of :func:`_idless_localized_baseline_from_rows`, or ``None``."""
-    text = _git_head_text(path)
-    if text is None:
-        return None
-    return _idless_localized_hashes(parse_cells(text, comment_token_for_path(path)), lang)
-
-
 def _classify_idless_localized_drift(
     plan: SyncPlan,
     de_cells: list[Cell],
@@ -969,60 +994,70 @@ def _git_head_text(path: Path) -> str | None:
     return completed.stdout
 
 
-def _baseline_from_git_head(path: Path) -> list[BaselineCell] | None:
-    """Derive a baseline from the committed (HEAD) version of ``path``.
+def _bundle_from_watermark(
+    cache: SyncWatermarkCache, de_path: Path, en_path: Path
+) -> BaselineBundle | None:
+    """The pair's recorded watermark as a :class:`BaselineBundle`, or ``None``.
 
-    Returns ``None`` when git is unavailable, the file is untracked, or the
-    deck's language cannot be inferred from its name. An empty list means the
-    file existed at HEAD but had no sync-relevant cells.
+    A straight read of the partitions :func:`clm.slides.sync_apply._record_watermark`
+    stores. ``None`` when the pair has no watermark (the caller then falls back to
+    git HEAD). A pre-#198 watermark simply yields empty tag maps (direction
+    degrades to undeterminable); a pre-#269 one yields empty header partitions
+    (both halves read as drifted → no false one-sided alert).
     """
-    lang = _lang_for_path(path)
-    if lang is None:
+    if not cache.has_pair(str(de_path), str(en_path)):
         return None
-    text = _git_head_text(path)
-    if text is None:
-        return None
-    cells = parse_cells(text, comment_token_for_path(path))
-    return [
-        BaselineCell(
-            position=c.position,
-            slide_id=c.slide_id,
-            role=c.role,
-            content_hash=c.content_hash,
-            tags=c.tags,
-        )
-        for c in ordered_sync_cells(cells, lang)
-    ]
+    de, en = str(de_path), str(en_path)
+    return BaselineBundle(
+        source="watermark",
+        rows={
+            "de": cache.get_deck(de, en, "de"),
+            "en": cache.get_deck(de, en, "en"),
+            "shared": cache.get_deck(de, en, "shared"),
+        },
+        tags={
+            "de": cache.get_deck_tags(de, en, "de"),
+            "en": cache.get_deck_tags(de, en, "en"),
+            "shared": cache.get_deck_tags(de, en, "shared"),
+        },
+        header_hashes={
+            "de": [chash for (_p, _s, _r, chash, _c) in cache.get_deck(de, en, "de-header")],
+            "en": [chash for (_p, _s, _r, chash, _c) in cache.get_deck(de, en, "en-header")],
+        },
+    )
 
 
-def _shared_baseline_from_git_head(path: Path) -> list[str] | None:
-    """Ordered language-neutral (``shared``) cell hashes from HEAD:``path``, or ``None``.
+def _bundle_from_git_head(de_path: Path, en_path: Path) -> BaselineBundle | None:
+    """The committed (HEAD) pair re-derived as a :class:`BaselineBundle`, or ``None``.
 
-    The git-HEAD counterpart of the watermark's ``shared`` partition: neutral
-    cells are byte-identical across the two halves (the ``unify`` invariant), so
-    either committed half yields the same sequence. Returns ``None`` when the
-    committed text is unavailable — :func:`align_anchored` then degrades to "no
-    shared baseline" exactly as it does for a pre-#190 watermark. Without this,
-    the git-HEAD (cold-start / first-sync) path could not detect a one-sided
-    edit, add, or removal of a neutral cell, silently dropping it (Issue #269).
+    Derives **exactly** the rows a watermark recording of the HEAD text would
+    store — the same :func:`watermark_rows` / :func:`watermark_tag_map` /
+    :func:`_header_hashes` chokepoints ``_record_watermark`` uses — so every
+    consumer downstream is source-agnostic by construction. The ``shared``
+    partition is taken from the DE half (neutral cells are byte-identical across
+    the halves — the ``unify`` invariant — exactly as ``_record_watermark``
+    records it). ``None`` when git/the committed text is unavailable or a deck's
+    language cannot be inferred from its name (the caller then runs with no
+    baseline).
     """
-    text = _git_head_text(path)
-    if text is None:
+    if _lang_for_path(de_path) is None or _lang_for_path(en_path) is None:
         return None
-    return _shared_hashes(parse_cells(text, comment_token_for_path(path)))
-
-
-def _header_baseline_from_git_head(path: Path) -> list[str] | None:
-    """git-HEAD counterpart of the watermark ``de-header`` / ``en-header`` partition.
-
-    Ordered j2 header hashes from the committed half (Issue #269), or ``None`` when
-    the committed text is unavailable. Used so the cold-start (first) sync can detect
-    a one-sided header edit even before a watermark exists.
-    """
-    text = _git_head_text(path)
-    if text is None:
+    de_text = _git_head_text(de_path)
+    en_text = _git_head_text(en_path)
+    if de_text is None or en_text is None:
         return None
-    return _header_hashes(parse_cells(text, comment_token_for_path(path)))
+    de_head = parse_cells(de_text, comment_token_for_path(de_path))
+    en_head = parse_cells(en_text, comment_token_for_path(en_path))
+    de_rows = watermark_rows(de_head)
+    en_rows = watermark_rows(en_head)
+    de_tags = watermark_tag_map(de_head)
+    en_tags = watermark_tag_map(en_head)
+    return BaselineBundle(
+        source="git-head",
+        rows={"de": de_rows["de"], "en": en_rows["en"], "shared": de_rows["shared"]},
+        tags={"de": de_tags["de"], "en": en_tags["en"], "shared": de_tags["shared"]},
+        header_hashes={"de": _header_hashes(de_head), "en": _header_hashes(en_head)},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2285,56 +2320,38 @@ def build_sync_plan(
     en_header_baseline: list[str] | None = None
     source = "none"
 
-    if watermark_cache is not None and watermark_cache.has_pair(str(de_path), str(en_path)):
-        de_rows = watermark_cache.get_deck(str(de_path), str(en_path), "de")
-        en_rows = watermark_cache.get_deck(str(de_path), str(en_path), "en")
-        de_baseline = _baseline_from_watermark(
-            de_rows, watermark_cache.get_deck_tags(str(de_path), str(en_path), "de")
-        )
-        en_baseline = _baseline_from_watermark(
-            en_rows, watermark_cache.get_deck_tags(str(de_path), str(en_path), "en")
-        )
+    # Resolve the baseline into the ONE representation every consumer reads
+    # (#289 P1): the watermark when recorded, else git HEAD re-derived into the
+    # identical membership-widened shape. Each per-baseline aspect below — the
+    # keyed diff, the neutral/id-less/header drift sequences, Tier C retag, and
+    # the apply-side passes (via plan.baseline_bundle) — is derived from the
+    # bundle by ONE code path, so the two sources cannot diverge in coverage
+    # (the parallel per-aspect git-HEAD plumbing this replaces is how the #269
+    # baseline gaps and the #289 git-HEAD tag drop shipped).
+    bundle: BaselineBundle | None = None
+    if watermark_cache is not None:
+        bundle = _bundle_from_watermark(watermark_cache, de_path, en_path)
+    if (
+        bundle is None
+        and allow_git_fallback
+        and not _pair_is_unbootstrapped(de_current, en_current)
+    ):
+        bundle = _bundle_from_git_head(de_path, en_path)
+
+    if bundle is not None:
+        source = bundle.source
+        de_baseline = _baseline_from_watermark(bundle.rows["de"], bundle.tags["de"])
+        en_baseline = _baseline_from_watermark(bundle.rows["en"], bundle.tags["en"])
         # Ordered content hashes of the baseline's neutral cells (position order),
         # matching _shared_hashes — see align_anchored for why this is a sequence,
         # not an anchor map.
         baseline_shared = [
-            chash
-            for (_pos, _sid, _role, chash, _construct) in watermark_cache.get_deck(
-                str(de_path), str(en_path), "shared"
-            )
+            chash for (_pos, _sid, _role, chash, _construct) in bundle.rows["shared"]
         ]
-        de_idless_baseline = _idless_localized_baseline_from_rows(de_rows)
-        en_idless_baseline = _idless_localized_baseline_from_rows(en_rows)
-        de_header_baseline = [
-            chash
-            for (_p, _sid, _r, chash, _c) in watermark_cache.get_deck(
-                str(de_path), str(en_path), "de-header"
-            )
-        ]
-        en_header_baseline = [
-            chash
-            for (_p, _sid, _r, chash, _c) in watermark_cache.get_deck(
-                str(de_path), str(en_path), "en-header"
-            )
-        ]
-        source = "watermark"
-    elif allow_git_fallback and not _pair_is_unbootstrapped(de_current, en_current):
-        gb_de = _baseline_from_git_head(de_path)
-        gb_en = _baseline_from_git_head(en_path)
-        if gb_de is not None and gb_en is not None:
-            de_baseline, en_baseline = gb_de, gb_en
-            # Issue #269: derive the ``shared`` (language-neutral) baseline from the
-            # committed half too, so the ``align_anchored`` gate below fires on the
-            # cold-start (first) sync — without it a one-sided edit/add/remove of a
-            # neutral cell is invisible and silently dropped while the run reports
-            # "decks already consistent". Neutral cells are byte-identical across
-            # halves (the unify invariant), so either half yields the same sequence.
-            baseline_shared = _shared_baseline_from_git_head(de_path)
-            de_idless_baseline = _idless_localized_baseline_from_git_head(de_path, "de")
-            en_idless_baseline = _idless_localized_baseline_from_git_head(en_path, "en")
-            de_header_baseline = _header_baseline_from_git_head(de_path)
-            en_header_baseline = _header_baseline_from_git_head(en_path)
-            source = "git-head"
+        de_idless_baseline = _idless_localized_baseline_from_rows(bundle.rows["de"])
+        en_idless_baseline = _idless_localized_baseline_from_rows(bundle.rows["en"])
+        de_header_baseline = bundle.header_hashes["de"]
+        en_header_baseline = bundle.header_hashes["en"]
 
     plan = classify_changes(
         de_current,
@@ -2348,9 +2365,12 @@ def build_sync_plan(
     )
     # Carry the id-less localized baselines onto the plan so the structural pass
     # (hash-anchored drift detection) and the apply-time fail-safe can reach them
-    # without re-deriving the baseline (Issue #269).
+    # without re-deriving the baseline (Issue #269) — and the whole bundle, so the
+    # apply engine's anchor-reuse / id-migration passes read the SAME baseline the
+    # classifier diffed against (#289 P1).
     plan.idless_baseline_de = de_idless_baseline
     plan.idless_baseline_en = en_idless_baseline
+    plan.baseline_bundle = bundle
 
     # Item-2 (Phase 3a): detect a language-neutral code-only change the keyed
     # classifier cannot see, and hand its direction to the structural pass. Only
@@ -2440,40 +2460,19 @@ def build_sync_plan(
     # Tier C (Issue #198 / #190 item 3): mirror a tag-only edit on an id-less
     # localized cell — the per-cell engine cannot key it (no slide_id) and the
     # body-hash classifier is blind to a tag change. Baseline rows + tags come
-    # from the watermark, or (#289) are re-derived from the committed git-HEAD
-    # text — the same membership-widened shape via watermark_rows/watermark_tag_map
-    # — so the first sync of a committed pair mirrors the edit too. Appends
-    # id-less ``retag`` proposals, then re-sorts to interleave with the keyed plan.
-    retag_baseline: (
-        tuple[
-            list[tuple[int, str | None, str, str, str | None]],
-            list[tuple[int, str | None, str, str, str | None]],
-            dict[int, frozenset[str]],
-            dict[int, frozenset[str]],
-        ]
-        | None
-    ) = None
-    if source == "watermark" and watermark_cache is not None:
-        retag_baseline = (
-            watermark_cache.get_deck(str(de_path), str(en_path), "de"),
-            watermark_cache.get_deck(str(de_path), str(en_path), "en"),
-            watermark_cache.get_deck_tags(str(de_path), str(en_path), "de"),
-            watermark_cache.get_deck_tags(str(de_path), str(en_path), "en"),
+    # straight off the bundle (#289: both sources, so the first sync of a
+    # committed pair mirrors the edit too). Appends id-less ``retag`` proposals,
+    # then re-sorts so they interleave with the keyed plan.
+    if bundle is not None:
+        _classify_localized_idless_retags(
+            de_cells,
+            en_cells,
+            bundle.rows["de"],
+            bundle.rows["en"],
+            bundle.tags["de"],
+            bundle.tags["en"],
+            plan,
         )
-    elif source == "git-head":
-        de_head_text = _git_head_text(de_path)
-        en_head_text = _git_head_text(en_path)
-        if de_head_text is not None and en_head_text is not None:
-            de_head = parse_cells(de_head_text, comment_token_for_path(de_path))
-            en_head = parse_cells(en_head_text, comment_token_for_path(en_path))
-            retag_baseline = (
-                watermark_rows(de_head)["de"],
-                watermark_rows(en_head)["en"],
-                watermark_tag_map(de_head)["de"],
-                watermark_tag_map(en_head)["en"],
-            )
-    if retag_baseline is not None:
-        _classify_localized_idless_retags(de_cells, en_cells, *retag_baseline, plan)
         plan.proposals.sort(key=_proposal_sort_key)
 
     # Phase 3 (#216 §12): a cold-start refusal becomes a `pending` bootstrap

@@ -358,6 +358,68 @@ def test_phase4_def_my_fun_id_migration(tmp_path: Path):
         assert "import time" in by_id["import-time"].content  # orphan got a content slug
 
 
+def test_phase4_id_migration_works_on_git_head_baseline(tmp_path: Path):
+    """The §9 def-my-fun migration on a COMMITTED pair's first sync (#289 P1).
+
+    Pre-P1 the migration read its baseline straight from the watermark cache, so
+    on a git-HEAD baseline (a committed, never-synced pair) it was silently inert
+    — the drifted id surfaced as churn instead of one targeted header write. The
+    unified :class:`BaselineBundle` feeds it the same ``shared`` constructs from
+    the committed text, so the first sync migrates the id exactly like a
+    watermark run.
+    """
+    import shutil
+    import subprocess
+
+    import pytest
+
+    if shutil.which("git") is None:
+        pytest.skip("git not available")
+    de = _slide("de", "s", "# ## S") + _code_idd_neutral(
+        "def-my-fun", 'def my_fun():\n    print("foo")'
+    )
+    en = _slide("en", "s", "# ## S") + _code_idd_neutral(
+        "def-my-fun", 'def my_fun():\n    print("foo")'
+    )
+    de_path, en_path = _write_pair(tmp_path, de, en)
+    for args in (
+        ("init", "-q"),
+        ("config", "user.email", "t@example.com"),
+        ("config", "user.name", "Test"),
+        ("add", "-A"),
+        ("-c", "commit.gpgsign=false", "commit", "-q", "-m", "baseline"),
+    ):
+        subprocess.run(["git", *args], cwd=str(tmp_path), check=True, capture_output=True)
+
+    de_path.write_text(
+        _slide("de", "s", "# ## S")
+        + _code_idd_neutral("def-my-fun", "import time")  # id left on the import half
+        + _code_shared('def my_fun():\n    time.sleep(1)\n    print("foo")'),  # id-less def
+        encoding="utf-8",
+    )
+    cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")  # fresh — no pair recorded
+    translator = CountingTranslator()
+    judge = CountingJudge()
+    try:
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+        assert plan.baseline_source == "git-head"
+        result = apply_plan(plan, judge=judge, translator=translator, watermark_cache=cache)
+    finally:
+        cache.close()
+
+    assert result.applied_migrate == 1
+    assert translator.calls == []  # deterministic, no LLM
+    for path in (de_path, en_path):  # corrected ids on BOTH decks (neutral -> symmetric)
+        by_id = {
+            c.metadata.slide_id: c
+            for c in parse_cells(path.read_text(encoding="utf-8"))
+            if c.metadata.slide_id
+        }
+        assert "def my_fun" in by_id["def-my-fun"].content
+        assert "time.sleep(1)" in by_id["def-my-fun"].content
+        assert "import time" in by_id["import-time"].content
+
+
 def test_phase4_no_migration_without_matching_idless_cell(tmp_path: Path):
     # The id drifted (def -> import on the SAME cell) but there is NO id-less cell
     # carrying the old construct (no split — a genuine replacement). The migration

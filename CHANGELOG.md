@@ -63,6 +63,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **`clm slides sync`'s baseline plumbing is unified, and the deterministic
+  id-migration now also runs on a committed (git-HEAD) baseline** (issue #289
+  P1). Both baseline sources now produce one representation (`BaselineBundle`,
+  the membership-widened watermark shape — git HEAD is re-derived through the
+  exact chokepoints a watermark recording uses) consumed by a single code path
+  for every baseline aspect: the keyed diff, the neutral / id-less / header
+  drift detectors, tag mirroring, and the apply engine's anchor-reuse and
+  id-migration passes (which now read the same rows the classifier diffed
+  against, carried on the plan). This deletes the per-aspect parallel git-HEAD
+  derivations whose coverage gaps produced the #269 silent drops and the #289
+  git-HEAD tag drop — the two sources can no longer diverge in coverage by
+  construction. User-visible improvement: the `def-my-fun` drifted-id
+  migration (and the opt-in `--llm-recover` tier) previously read only the
+  watermark, so on the *first* sync of a committed pair a split id'd cell was
+  not re-united with its construct; it now migrates identically on both
+  baselines.
 - **`clm slides sync` no longer silently drops a one-sided tag-only edit**
   (issue #289, found by the sync architecture review in
   `docs/claude/sync-engine-architecture-assessment.md`). Three tag-channel
