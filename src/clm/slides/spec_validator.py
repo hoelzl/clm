@@ -413,6 +413,11 @@ def _validate_subsections(
                 or "(unnamed)"
             )
             if not sub.topics:
+                # An activity-only day (project work, exam, …) is intentionally
+                # deck-free — it fills the schedule without a topic, so it is
+                # not an "empty day".
+                if sub.activities:
+                    continue
                 findings.append(
                     SpecFinding(
                         severity="warning",

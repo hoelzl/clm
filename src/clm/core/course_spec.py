@@ -208,6 +208,13 @@ class TopicSpec:
     # merged in by :meth:`SectionSpec.includes_for`; the topic's own
     # entries override section defaults sharing the same ``as_path``.
     includes: list[IncludeSpec] = Factory(list)
+    # Presentation-only export-visibility flag (the build/export split,
+    # mirroring how ``optional``/``enabled`` are presentation-only). When
+    # False (``export="false"``) the topic still BUILDS — it flattens into the
+    # section's flat topic list like any topic — but is omitted from
+    # ``clm export schedule`` / ``clm export outline`` listings. It is the
+    # complement of an ``<activity>`` (export-only, never built). Default True.
+    export: bool = True
 
 
 # Weekday tokens for ``<subsection weekday="...">`` (issue #261). A closed,
@@ -223,6 +230,39 @@ VALID_WEEKDAYS: frozenset[str] = frozenset(WEEKDAY_ORDER)
 # ``clm validate --check-workdays`` coverage check, which warns when a section
 # that uses the day-of-week subsection layer leaves one of these uncovered.
 REQUIRED_WORKDAYS: tuple[str, ...] = ("mon", "tue", "wed", "thu", "fri")
+
+
+@frozen
+class ActivitySpec:
+    """A non-deck schedule entry inside a ``<subsection>``.
+
+    Represents scheduled time that has **no slide deck on disk** and is never
+    built — e.g. a project-work day, an exam, or a holiday — yet should still
+    appear in ``clm export schedule`` / ``clm export outline`` so a
+    certification listing has no empty days. It is the complement of an
+    ``export="false"`` topic (built but unlisted).
+
+    An ``<activity>`` is never handed to the topic resolver, so it cannot fail
+    resolution and produces no build output. Authored as::
+
+        <subsection weekday="thu">
+            <activity kind="project">
+                <de>Projektarbeit: RAG-App (kein Video)</de>
+                <en>Project work: RAG app (no video)</en>
+            </activity>
+        </subsection>
+
+    Attributes:
+        text: The bilingual label shown in the Video column of the schedule
+            (and as a bullet in the outline).
+        kind: Optional free-form classifier (``"project"``, ``"exam"``,
+            ``"holiday"``, …) for styling/filtering. Never affects resolution.
+        id: Optional, purely informational identifier.
+    """
+
+    text: Text
+    kind: str = ""
+    id: str | None = None
 
 
 @frozen
@@ -267,6 +307,10 @@ class SubsectionSpec:
             flatten into :attr:`SectionSpec.topics` like any enabled
             subsection). An ``optional`` *and* disabled subsection is dropped
             entirely (``enabled`` wins) — it is never listed, flag or not.
+        activities: Zero or more :class:`ActivitySpec` entries (``<activity>``
+            children) — non-deck schedule rows (project work, exams, …) that
+            appear in ``clm export`` output but are never resolved or built.
+            Held only here; they never enter the flat build list.
     """
 
     topics: list[TopicSpec] = Factory(list)
@@ -274,6 +318,7 @@ class SubsectionSpec:
     name: Text | None = None
     enabled: bool = True
     optional: bool = False
+    activities: list[ActivitySpec] = Factory(list)
 
     @property
     def weekday(self) -> str | None:
@@ -469,6 +514,19 @@ def _parse_enabled_attr(value: str | None, *, label: str) -> bool:
         f"Invalid value for 'enabled' attribute on {label}: {value!r}. "
         f"Expected 'true' or 'false' (case-insensitive)."
     )
+
+
+def _parse_export_attr(value: str | None) -> bool:
+    """Parse a default-on ``export`` attribute on ``<topic>``.
+
+    Absent or truthy → True (the topic is listed in ``clm export`` output);
+    ``"false"``/``"no"``/``"0"`` → False (built, but hidden from exports).
+    Reuses :func:`_parse_bool_attr`'s truthy/falsy vocabulary; an unknown
+    value is a hard :class:`CourseSpecError`.
+    """
+    if value is None:
+        return True
+    return _parse_bool_attr(value, attr_name="export")
 
 
 def _parse_weekdays_attr(value: str | None, *, section_label: str) -> tuple[str, ...]:
@@ -1250,7 +1308,30 @@ class CourseSpec:
             prog_lang=topic_elem.attrib.get("prog-lang", ""),
             module=topic_elem.attrib.get("module") or None,
             includes=topic_includes,
+            export=_parse_export_attr(topic_elem.attrib.get("export")),
         )
+
+    @staticmethod
+    def _parse_activity_element(act_elem: ETree.Element, *, section_label: str) -> ActivitySpec:
+        """Parse an ``<activity>`` child of a ``<subsection>``.
+
+        An ``<activity>`` carries bilingual ``<de>``/``<en>`` label text and an
+        optional ``kind`` / ``id`` attribute. It is never resolved or built —
+        it only contributes a non-deck row to ``clm export`` output. Missing
+        label text is a hard error (an empty schedule row helps nobody).
+        """
+        de = act_elem.findtext("de") or ""
+        en = act_elem.findtext("en") or ""
+        if not (de.strip() or en.strip()):
+            raise CourseSpecError(
+                f"<activity> in {section_label} has no label text. Provide "
+                f"<de> and <en> children with the text to show in the "
+                f"schedule (e.g. <activity><de>Projektarbeit</de>"
+                f"<en>Project work</en></activity>)."
+            )
+        kind = (act_elem.attrib.get("kind") or "").strip()
+        act_id = (act_elem.attrib.get("id") or "").strip() or None
+        return ActivitySpec(text=Text(de=de, en=en), kind=kind, id=act_id)
 
     @staticmethod
     def _parse_subsection_element(
@@ -1287,12 +1368,17 @@ class CourseSpec:
             CourseSpec._parse_topic_element(topic_elem, section_label=section_label)
             for topic_elem in sub_elem.findall("topic")
         ]
+        activities = [
+            CourseSpec._parse_activity_element(act_elem, section_label=section_label)
+            for act_elem in sub_elem.findall("activity")
+        ]
         return SubsectionSpec(
             topics=topics,
             weekdays=weekdays,
             name=name,
             enabled=enabled,
             optional=optional,
+            activities=activities,
         )
 
     @staticmethod

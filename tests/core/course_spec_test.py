@@ -347,6 +347,123 @@ def test_parse_topic_with_invalid_evaluate_rejected():
         CourseSpec.parse_sections(root)
 
 
+def test_parse_topic_export_attribute():
+    """``export="false"`` parses to ``TopicSpec.export=False`` (default True)."""
+    from xml.etree import ElementTree as ETree
+
+    xml = """
+    <course>
+        <name><de>Test</de><en>Test</en></name>
+        <prog-lang>python</prog-lang>
+        <sections>
+            <section>
+                <name><de>S1</de><en>S1</en></name>
+                <topics>
+                    <topic export="false">hidden_from_exports</topic>
+                    <topic export="true">shown</topic>
+                    <topic>default_shown</topic>
+                </topics>
+            </section>
+        </sections>
+    </course>
+    """
+    root = ETree.fromstring(xml)
+    topics = CourseSpec.parse_sections(root)[0].topics
+    assert topics[0].export is False
+    assert topics[1].export is True
+    assert topics[2].export is True
+    # An export="false" topic still flattens into the build list.
+    assert [t.id for t in topics] == [
+        "hidden_from_exports",
+        "shown",
+        "default_shown",
+    ]
+
+
+def test_parse_topic_invalid_export_rejected():
+    """A bogus ``export`` value raises ``CourseSpecError``."""
+    from xml.etree import ElementTree as ETree
+
+    xml = """
+    <course>
+        <name><de>Test</de><en>Test</en></name>
+        <prog-lang>python</prog-lang>
+        <sections>
+            <section>
+                <name><de>S1</de><en>S1</en></name>
+                <topics><topic export="maybe">bogus</topic></topics>
+            </section>
+        </sections>
+    </course>
+    """
+    root = ETree.fromstring(xml)
+    with pytest.raises(CourseSpecError, match="export"):
+        CourseSpec.parse_sections(root)
+
+
+def test_parse_subsection_activity():
+    """An ``<activity>`` parses into ``SubsectionSpec.activities`` and never builds."""
+    from xml.etree import ElementTree as ETree
+
+    xml = """
+    <course>
+        <name><de>Test</de><en>Test</en></name>
+        <prog-lang>python</prog-lang>
+        <sections>
+            <section>
+                <name><de>S1</de><en>S1</en></name>
+                <topics>
+                    <subsection weekday="mon">
+                        <topic>real_topic</topic>
+                    </subsection>
+                    <subsection weekday="tue">
+                        <activity kind="project" id="proj1">
+                            <de>Projektarbeit</de>
+                            <en>Project work</en>
+                        </activity>
+                    </subsection>
+                </topics>
+            </section>
+        </sections>
+    </course>
+    """
+    root = ETree.fromstring(xml)
+    section = CourseSpec.parse_sections(root)[0]
+    # Activities are not topics: only the real topic flattens into the build.
+    assert [t.id for t in section.topics] == ["real_topic"]
+    tue = section.subsections[1]
+    assert len(tue.activities) == 1
+    activity = tue.activities[0]
+    assert activity.text["de"] == "Projektarbeit"
+    assert activity.text["en"] == "Project work"
+    assert activity.kind == "project"
+    assert activity.id == "proj1"
+    assert tue.topics == []
+
+
+def test_parse_activity_without_text_rejected():
+    """An ``<activity>`` with no <de>/<en> text is a hard error."""
+    from xml.etree import ElementTree as ETree
+
+    xml = """
+    <course>
+        <name><de>Test</de><en>Test</en></name>
+        <prog-lang>python</prog-lang>
+        <sections>
+            <section>
+                <name><de>S1</de><en>S1</en></name>
+                <topics>
+                    <subsection weekday="mon"><activity kind="exam"/></subsection>
+                </topics>
+            </section>
+        </sections>
+    </course>
+    """
+    root = ETree.fromstring(xml)
+    with pytest.raises(CourseSpecError, match="activity"):
+        CourseSpec.parse_sections(root)
+
+
 def test_parse_topic_with_invalid_http_replay_rejected():
     """A bogus ``http-replay`` value raises ``CourseSpecError``."""
     from xml.etree import ElementTree as ETree

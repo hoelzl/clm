@@ -7,6 +7,7 @@ from click.testing import CliRunner
 
 from clm.cli.commands.schedule import (
     WEEKDAY_LABELS,
+    ScheduleActivity,
     ScheduleDay,
     ScheduleDeck,
     ScheduleWeek,
@@ -231,6 +232,82 @@ class TestRenderCsv:
         lines = out.strip().splitlines()
         assert lines[0] == "week,week_title,weekday,video_title,deck_file"
         assert lines[1] == "1,Week 1,mon,Intro,slides_010_intro"
+
+
+def _week_with_activity_day() -> list[ScheduleWeek]:
+    """A week whose Monday has one deck and Tuesday has only an activity."""
+    return [
+        ScheduleWeek(
+            number=1,
+            title="Week 1",
+            days=[
+                ScheduleDay(
+                    weekdays=["mon"],
+                    label="Monday",
+                    decks=[ScheduleDeck("Intro", "intro", "slides_010_intro")],
+                ),
+                ScheduleDay(
+                    weekdays=["tue"],
+                    label="Tuesday",
+                    activities=[ScheduleActivity("Project work", kind="project")],
+                ),
+            ],
+        )
+    ]
+
+
+class TestActivityRendering:
+    """Feature: <activity> rows — listed in exports, no deck on disk."""
+
+    def test_markdown_activity_row_has_em_dash_topic(self):
+        out = render_markdown("C", _week_with_activity_day(), "en")
+        # Activity fills the day; topic column is the placeholder, not a topic id.
+        assert "| Tuesday | Project work | — |" in out
+        # The real deck day is unaffected.
+        assert "| Monday | Intro | intro |" in out
+
+    def test_markdown_activity_after_decks_same_day(self):
+        weeks = [
+            ScheduleWeek(
+                number=1,
+                title="W1",
+                days=[
+                    ScheduleDay(
+                        weekdays=["mon"],
+                        label="Monday",
+                        decks=[ScheduleDeck("Intro", "intro", "slides_010_intro")],
+                        activities=[ScheduleActivity("Lab time")],
+                    )
+                ],
+            )
+        ]
+        out = render_markdown("C", weeks, "en")
+        assert "| Monday | Intro | intro |" in out
+        # Activity row follows, with no repeated day label and an em-dash topic.
+        assert "|  | Lab time | — |" in out
+
+    def test_markdown_no_topic_activity(self):
+        out = render_markdown("C", _week_with_activity_day(), "en", no_topic=True)
+        assert "| Tuesday | Project work |" in out
+
+    def test_csv_activity_row_empty_topic_and_deck(self):
+        out = render_csv(_week_with_activity_day())
+        lines = out.strip().splitlines()
+        # video_title carries the label; topic and deck_file are empty.
+        assert lines[-1] == "1,Week 1,tue,Project work,,"
+
+    def test_csv_activity_no_topic(self):
+        out = render_csv(_week_with_activity_day(), no_topic=True)
+        lines = out.strip().splitlines()
+        assert lines[-1] == "1,Week 1,tue,Project work,"
+
+    def test_csv_activity_disabled_column(self):
+        weeks = _week_with_activity_day()
+        weeks[0].days[1].activities[0].disabled = True
+        out = render_csv(weeks, include_disabled=True)
+        lines = out.strip().splitlines()
+        assert lines[0].endswith(",disabled")
+        assert lines[-1] == "1,Week 1,tue,Project work,,,true"
 
     def test_multi_weekday_joined_in_cell(self):
         weeks = [
