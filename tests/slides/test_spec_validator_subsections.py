@@ -63,6 +63,54 @@ class TestCleanSubsections:
         assert not (set(_types(result)) & subsection_types)
 
 
+class TestActivityDays:
+    def test_activity_only_day_is_not_an_empty_day(self, tmp_path):
+        """A subsection with an <activity> but no <topic> fills the day."""
+        _make_topic(tmp_path, "module_100", "topic_010_a")
+        spec = _write_spec(
+            tmp_path,
+            """\
+            <subsection weekday="mon"><topic>a</topic></subsection>
+            <subsection weekday="tue">
+              <activity kind="project"><de>Projektarbeit</de><en>Project work</en></activity>
+            </subsection>""",
+        )
+        result = validate_spec(spec, tmp_path / "slides")
+        assert "empty_day" not in _types(result)
+
+    def test_truly_empty_day_still_warns(self, tmp_path):
+        """A subsection with neither topics nor activities is still flagged."""
+        _make_topic(tmp_path, "module_100", "topic_010_a")
+        spec = _write_spec(
+            tmp_path,
+            """\
+            <subsection weekday="mon"><topic>a</topic></subsection>
+            <subsection weekday="tue"></subsection>""",
+        )
+        result = validate_spec(spec, tmp_path / "slides")
+        assert "empty_day" in _types(result)
+
+    def test_activity_day_satisfies_workday_coverage(self, tmp_path):
+        """An activity-only Friday counts toward Mon–Fri coverage."""
+        _make_topic(tmp_path, "module_100", "topic_010_a")
+        _make_topic(tmp_path, "module_100", "topic_020_b")
+        _make_topic(tmp_path, "module_100", "topic_030_c")
+        _make_topic(tmp_path, "module_100", "topic_040_d")
+        spec = _write_spec(
+            tmp_path,
+            """\
+            <subsection weekday="mon"><topic>a</topic></subsection>
+            <subsection weekday="tue"><topic>b</topic></subsection>
+            <subsection weekday="wed"><topic>c</topic></subsection>
+            <subsection weekday="thu"><topic>d</topic></subsection>
+            <subsection weekday="fri">
+              <activity><de>Projekt</de><en>Project</en></activity>
+            </subsection>""",
+        )
+        result = validate_spec(spec, tmp_path / "slides", check_workdays=True)
+        assert "missing_workday" not in _types(result)
+
+
 class TestDuplicateWeekday:
     def test_duplicate_weekday_warns_once(self, tmp_path):
         _make_topic(tmp_path, "module_100", "topic_010_a")

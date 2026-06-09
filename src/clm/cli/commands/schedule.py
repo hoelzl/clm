@@ -79,12 +79,27 @@ class ScheduleDeck:
 
 
 @dataclass
+class ScheduleActivity:
+    """A non-deck scheduled entry (project work, exam, …) within a day.
+
+    Resolved from an ``<activity>`` element: it has display text but no deck on
+    disk and is never built. Surfaced so a certification listing has no empty
+    days. See :class:`clm.core.course_spec.ActivitySpec`.
+    """
+
+    text: str
+    kind: str = ""
+    disabled: bool = False
+
+
+@dataclass
 class ScheduleDay:
-    """One day (``<subsection>``) of a week, with its decks in order."""
+    """One day (``<subsection>``) of a week, with its decks/activities in order."""
 
     weekdays: list[str]  # language-neutral tokens; empty for a thematic group
     label: str  # localized display label
     decks: list[ScheduleDeck] = field(default_factory=list)
+    activities: list[ScheduleActivity] = field(default_factory=list)
     disabled: bool = False
 
     @property
@@ -209,6 +224,9 @@ def _decks_for_subsection(
     disabled = parent_disabled or not subsection.enabled
     decks: list[ScheduleDeck] = []
     for topic_spec in subsection.topics:
+        # Feature: export="false" — built but hidden from the export listing.
+        if not topic_spec.export:
+            continue
         if not disabled and topic_spec.id in topic_decks:
             decks.extend(topic_decks[topic_spec.id])
         else:
@@ -223,6 +241,25 @@ def _decks_for_subsection(
                     )
                 )
     return decks
+
+
+def _activities_for_subsection(
+    subsection: SubsectionSpec, language: str, *, disabled: bool
+) -> list[ScheduleActivity]:
+    """Resolve a subsection's ``<activity>`` entries for *language*, in order.
+
+    Activities are non-deck schedule rows (project work, exams, …); they are
+    never resolved against the filesystem, so they appear identically whether
+    or not the surrounding section is built.
+    """
+    return [
+        ScheduleActivity(
+            text=activity.text[language],
+            kind=activity.kind,
+            disabled=disabled,
+        )
+        for activity in subsection.activities
+    ]
 
 
 def _days_for_section(
@@ -242,6 +279,7 @@ def _days_for_section(
             subsection, include_optional=include_optional, include_disabled=include_disabled
         ):
             continue
+        day_disabled = parent_disabled or not subsection.enabled
         days.append(
             ScheduleDay(
                 weekdays=list(subsection.weekdays),
@@ -249,7 +287,8 @@ def _days_for_section(
                 decks=_decks_for_subsection(
                     subsection, topic_decks, course, language, parent_disabled=parent_disabled
                 ),
-                disabled=parent_disabled or not subsection.enabled,
+                activities=_activities_for_subsection(subsection, language, disabled=day_disabled),
+                disabled=day_disabled,
             )
         )
     return days
@@ -428,19 +467,24 @@ def render_markdown(
                 disabled_tag if (day.disabled and not week.disabled and mark_disabled) else ""
             )
             day_label = _md_cell(label_text)
-            if not day.decks:
+            # One row per deck, then one per activity (no-deck entries render the
+            # day label like a deck but leave the Topic column empty).
+            rows: list[tuple[str, str]] = [(deck.video_title, deck.topic_id) for deck in day.decks]
+            rows += [(activity.text, "") for activity in day.activities]
+            if not rows:
                 if no_topic:
                     lines.append(f"| {day_label} | {empty_cell} |")
                 else:
                     lines.append(f"| {day_label} | {empty_cell} | {empty_cell} |")
                 continue
-            for index, deck in enumerate(day.decks):
+            for index, (video_title, topic_id) in enumerate(rows):
                 first = day_label if index == 0 else ""
-                video = _md_cell(deck.video_title)
+                video = _md_cell(video_title)
                 if no_topic:
                     lines.append(f"| {first} | {video} |")
                 else:
-                    lines.append(f"| {first} | {video} | {_md_cell(deck.topic_id)} |")
+                    topic_cell = _md_cell(topic_id) if topic_id else empty_cell
+                    lines.append(f"| {first} | {video} | {topic_cell} |")
         lines.append("")
 
     return "\n".join(lines).rstrip("\n") + "\n"
@@ -478,6 +522,16 @@ def render_csv(
                 row.append(deck.deck_file)
                 if include_disabled:
                     row.append("true" if deck.disabled else "")
+                writer.writerow(row)
+            for activity in day.activities:
+                # A non-deck row: video_title carries the label; topic and
+                # deck_file are empty (there is no topic id or source stem).
+                row = [week.number, week.title, weekday_cell, activity.text]
+                if not no_topic:
+                    row.append("")
+                row.append("")
+                if include_disabled:
+                    row.append("true" if activity.disabled else "")
                 writer.writerow(row)
     return buffer.getvalue()
 

@@ -133,10 +133,13 @@ def _visible_topic_ids(
     """
     candidate_ids = {t.id for sub in candidates for t in sub.topics}
     visible_ids = {t.id for sub in visible for t in sub.topics}
+    # Topics built but hidden from exports (export="false") never appear.
+    hidden_export_ids = {t.id for sub in candidates for t in sub.topics if not t.export}
     return {
         topic.id
         for topic in section.topics
-        if topic.id not in candidate_ids or topic.id in visible_ids
+        if (topic.id not in candidate_ids or topic.id in visible_ids)
+        and topic.id not in hidden_export_ids
     }
 
 
@@ -157,9 +160,13 @@ def _subsection_deck_titles(
     titles: list[str] = []
     if subsection.enabled:
         for topic_spec in subsection.topics:
+            if not topic_spec.export:  # built but hidden from exports
+                continue
             titles.extend(resolved_titles.get(topic_spec.id, []))
         return titles
     for topic_spec in subsection.topics:
+        if not topic_spec.export:
+            continue
         slides = _disabled_topic_slides(course, topic_spec, language)
         if slides:
             titles.extend(title for _file_name, title in slides)
@@ -193,11 +200,13 @@ def _render_section_subsections(
     """
     resolved_titles = {topic.id: _topic_deck_titles(topic, language) for topic in section.topics}
     subsection_topic_ids = {t.id for sub in candidates for t in sub.topics}
+    # Topics built but hidden from exports (export="false").
+    hidden_export_ids = {t.id for sub in candidates for t in sub.topics if not t.export}
 
     lines: list[str] = []
     # Bare topics first, in section (document) order.
     for topic in section.topics:
-        if topic.id in subsection_topic_ids:
+        if topic.id in subsection_topic_ids or topic.id in hidden_export_ids:
             continue
         for title in resolved_titles.get(topic.id, []):
             lines.append(f"- {title}")
@@ -205,14 +214,20 @@ def _render_section_subsections(
     for subsection in subsections:
         marker = "" if (subsection.enabled or not mark_disabled) else " (disabled)"
         titles = _subsection_deck_titles(subsection, course, language, resolved_titles)
+        # Non-deck activity rows (project work, exams, …) follow the decks.
+        activity_texts = [activity.text[language] for activity in subsection.activities]
         if show_weekdays:
             label = subsection_label(subsection, language) or "(unnamed)"
             lines.append(f"- **{label}**{marker}")
             for title in titles:
                 lines.append(f"  - {title}{marker}")
+            for text in activity_texts:
+                lines.append(f"  - {text}{marker}")
         else:
             for title in titles:
                 lines.append(f"- {title}{marker}")
+            for text in activity_texts:
+                lines.append(f"- {text}{marker}")
     return lines
 
 
@@ -243,6 +258,8 @@ def _subsections_json(
     for subsection in subsections:
         topics_out: list[dict] = []
         for topic_spec in subsection.topics:
+            if not topic_spec.export:  # built but hidden from exports
+                continue
             if subsection.enabled and topic_spec.id in resolved:
                 topics_out.append({"topic_id": topic_spec.id, **resolved[topic_spec.id]})
             else:
@@ -255,18 +272,22 @@ def _subsections_json(
                         "slides": [{"file": fname, "title": title} for fname, title in slides_data],
                     }
                 )
-        result.append(
-            {
-                # `weekday` is the first token (back-compat); `weekdays` is the
-                # full ordered list for multi-day subsections.
-                "weekday": subsection.weekday,
-                "weekdays": list(subsection.weekdays),
-                "label": subsection_label(subsection, language),
-                "enabled": subsection.enabled,
-                "optional": subsection.optional,
-                "topics": topics_out,
-            }
-        )
+        entry: dict = {
+            # `weekday` is the first token (back-compat); `weekdays` is the
+            # full ordered list for multi-day subsections.
+            "weekday": subsection.weekday,
+            "weekdays": list(subsection.weekdays),
+            "label": subsection_label(subsection, language),
+            "enabled": subsection.enabled,
+            "optional": subsection.optional,
+            "topics": topics_out,
+        }
+        if subsection.activities:
+            entry["activities"] = [
+                {"text": activity.text[language], "kind": activity.kind}
+                for activity in subsection.activities
+            ]
+        result.append(entry)
     return result
 
 

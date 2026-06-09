@@ -251,15 +251,49 @@ A `<subsection>` may also carry an optional `<name>` (`<de>`/`<en>`) label
 override; when omitted, the displayed label is derived from `weekday`. A
 `<subsection>` contains one or more `<topic>` elements using the **same topic
 grammar** as a bare `<topic>` (ids, `<include>`/`<dir-group>` children,
-attributes).
+attributes), and/or one or more `<activity>` elements (see below).
+
+##### Export visibility: the build / export split
+
+By default a topic is both **built** and **listed** in `clm export schedule` /
+`clm export outline`. Two complementary controls cover the other corners:
+
+| Want | Use |
+|------|-----|
+| Built, but **not listed** in exports | `export="false"` on the `<topic>` |
+| **Listed** in exports, but no deck on disk and never built | an `<activity>` element |
+
+`export="false"` (default `"true"`) keeps the topic in the build (it flattens
+into the section like any topic) but drops it from the schedule/outline — for a
+deck you ship to students yet do not want on the certification listing. It is
+unconditional (unlike `optional`, which `--include-optional` can reveal).
+
+An `<activity>` is a **non-deck schedule row** — scheduled time with no slide
+deck on disk, never resolved and never built — so a certification listing has
+**no empty days** for project work, exams, or holidays:
+
+```xml
+<subsection weekday="thu">
+    <activity kind="project">
+        <de>Projektarbeit: RAG-App (kein Video)</de>
+        <en>Project work: RAG app (no video)</en>
+    </activity>
+</subsection>
+```
+
+The `<de>`/`<en>` text (required) is shown in the Video column; the Topic column
+is left blank (`—`). `kind` (optional: `"project"`, `"exam"`, …) and `id` are
+informational. An activity-only day satisfies the `--check-workdays` coverage
+check and is **not** flagged as an empty day. A subsection may mix `<topic>` and
+`<activity>` children; activity rows render after the day's decks.
 
 `clm validate` adds four advisory subsection checks (none is an error):
 duplicate weekday within a section, weekdays out of Mon→Sun order, an empty
-day (a subsection with no topics or whose topics resolve to zero decks), and
-(info) bare topics mixed with subsections (they appear under no day). A fifth
-**opt-in** check, `clm validate --check-workdays`, warns (`missing_workday`)
-when a section that uses the day-of-week layer leaves a Mon–Fri workday
-uncovered.
+day (a subsection with no topics **and no activities**, or whose topics resolve
+to zero decks), and (info) bare topics mixed with subsections (they appear under
+no day). A fifth **opt-in** check, `clm validate --check-workdays`, warns
+(`missing_workday`) when a section that uses the day-of-week layer leaves a
+Mon–Fri workday uncovered.
 
 ### `<author>` (Optional)
 
