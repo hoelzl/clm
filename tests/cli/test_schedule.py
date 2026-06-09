@@ -7,9 +7,11 @@ from click.testing import CliRunner
 
 from clm.cli.commands.schedule import (
     WEEKDAY_LABELS,
+    Bucket,
     ScheduleDay,
     ScheduleDeck,
     ScheduleWeek,
+    build_buckets,
     build_schedule,
     render_csv,
     render_markdown,
@@ -90,6 +92,82 @@ class TestBuildSchedule:
         week2 = weeks[1]
         all_topics = [deck.topic_id for day in week2.days for deck in day.decks]
         assert all_topics == ["simple_notebook"]
+
+
+class TestBuildBuckets:
+    """The content sequence flattener for the cohort calendar (issue #283)."""
+
+    def _week(self, number, days):
+        return ScheduleWeek(number=number, title=f"Week {number}", days=days)
+
+    def test_flattens_days_in_week_then_document_order(self):
+        weeks = [
+            self._week(
+                1,
+                [
+                    ScheduleDay(weekdays=["mon"], label="Monday", decks=[]),
+                    ScheduleDay(weekdays=["tue"], label="Tuesday", decks=[]),
+                ],
+            ),
+            self._week(2, [ScheduleDay(weekdays=["wed"], label="Wednesday", decks=[])]),
+        ]
+        buckets = build_buckets(weeks)
+        assert [(b.week, b.weekday_label) for b in buckets] == [
+            (1, "Monday"),
+            (1, "Tuesday"),
+            (2, "Wednesday"),
+        ]
+
+    def test_span_is_weekday_count(self):
+        weeks = [
+            self._week(
+                1,
+                [
+                    ScheduleDay(weekdays=["mon"], label="Mon", decks=[]),
+                    ScheduleDay(weekdays=["mon", "tue"], label="Mon, Tue", decks=[]),
+                ],
+            )
+        ]
+        spans = [b.span for b in build_buckets(weeks)]
+        assert spans == [1, 2]
+
+    def test_span_defaults_to_one_for_thematic_group(self):
+        # A subsection with no weekday (thematic <name>-only group) still
+        # occupies a single teaching date.
+        weeks = [self._week(1, [ScheduleDay(weekdays=[], label="Intro", decks=[])])]
+        assert build_buckets(weeks)[0].span == 1
+
+    def test_decks_preserved_in_order(self):
+        decks = [
+            ScheduleDeck("Intro", "intro", "slides_010_intro"),
+            ScheduleDeck("More", "more", "slides_020_more"),
+        ]
+        weeks = [self._week(1, [ScheduleDay(weekdays=["mon"], label="Mon", decks=decks)])]
+        bucket = build_buckets(weeks)[0]
+        assert bucket.decks == decks
+
+    def test_empty_day_still_yields_a_bucket(self):
+        weeks = [self._week(1, [ScheduleDay(weekdays=["mon"], label="Mon", decks=[])])]
+        assert len(build_buckets(weeks)) == 1
+
+    def test_ref_ids_includes_topic_and_deck_file(self):
+        bucket = Bucket(
+            decks=[ScheduleDeck("Intro", "intro", "slides_010_intro")],
+            span=1,
+            week=1,
+            weekday_label="Mon",
+        )
+        assert bucket.ref_ids == {"intro", "slides_010_intro"}
+
+    def test_from_real_schedule(self, course):
+        # The fixture spec: Week 1 (mon: two decks, tue: Law), Week 2 (wed).
+        buckets = build_buckets(build_schedule(course, "en"))
+        assert [(b.week, b.span) for b in buckets] == [(1, 1), (1, 1), (2, 1)]
+        assert [d.topic_id for d in buckets[0].decks] == [
+            "some_topic_from_test_1",
+            "a_topic_from_test_2",
+        ]
+        assert "some_topic_from_test_1" in buckets[0].ref_ids
 
 
 class TestRenderMarkdown:
