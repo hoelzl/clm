@@ -192,6 +192,101 @@ def _push_channel_repo(
         raise SystemExit(1)
 
 
+@release_group.command("provision")
+@_SPEC_ARG
+@click.option(
+    "--channel",
+    default="",
+    help="Provision a single channel (STREAM/CHANNEL or unique bare name). "
+    "Default: every channel that declares <share-with>.",
+)
+@click.option("--dry-run", is_flag=True, help="Show the shares that would be applied.")
+def provision_cmd(spec_file: Path, channel: str, dry_run: bool) -> None:
+    """Share channel repos into their GitLab access groups (issue #294).
+
+    For every selected channel with ``<share-with>`` declarations, performs
+    the GitLab group-share via the REST API (idempotent — an existing share is
+    reported, not an error). The repo itself must already exist on the remote
+    (push it first via ``clm git init/sync --channel``); provisioning only
+    grants group access, replacing the manual per-cohort UI step.
+
+    Requires a GitLab token with ``api`` scope in ``CLM_GITLAB_TOKEN`` (or
+    ``GITLAB_TOKEN``). Channels without a parseable GitLab remote URL are
+    skipped with a note, so the command is a safe no-op for non-GitLab hosts.
+    """
+    from clm.infrastructure.gitlab_api import (
+        GitLabApiError,
+        gitlab_token,
+        parse_gitlab_remote,
+        share_project_with_group,
+    )
+
+    spec = CourseSpec.from_file(spec_file)
+    if not spec.release_channel_blocks:
+        raise click.ClickException(f"{spec_file} has no <release-channels> block.")
+
+    repos = {r.target_name: r for r in find_release_channel_repos(spec_file, channel or None)}
+    if channel:
+        try:
+            pairs = [spec.resolve_release_channel(channel)]
+        except CourseSpecError as e:
+            raise click.ClickException(str(e)) from None
+    else:
+        pairs = list(spec.iter_release_channels())
+
+    work: list[tuple[str, str, str, str, str]] = []  # ref, base, project, group, access
+    for block, ch in pairs:
+        ref = release_channel_ref(block, ch)
+        if not ch.share_with:
+            if channel:
+                click.echo(f"[{ref}] no <share-with> declared — nothing to provision.")
+            continue
+        repo = repos.get(ref)
+        remote = parse_gitlab_remote(repo.remote_url or "") if repo else None
+        if remote is None:
+            click.echo(
+                f"[{ref}] skipped: no GitLab remote URL could be derived "
+                f"(configure <github> repository-base / remote-path)."
+            )
+            continue
+        base_url, project_path = remote
+        for share in ch.share_with:
+            work.append((ref, base_url, project_path, share.group, share.access))
+
+    if not work:
+        click.echo("Nothing to provision.")
+        return
+
+    if dry_run:
+        click.echo("[DRY RUN] Would apply the following group shares:")
+        for ref, base_url, project_path, group, access in work:
+            click.echo(f"  [{ref}] {base_url}/{project_path} -> {group} ({access})")
+        return
+
+    token = gitlab_token()
+    if token is None:
+        raise click.ClickException(
+            "No GitLab token configured. Set CLM_GITLAB_TOKEN (or GITLAB_TOKEN) "
+            "to a token with 'api' scope, or use --dry-run to preview."
+        )
+
+    errors = 0
+    for ref, base_url, project_path, group, access in work:
+        try:
+            status = share_project_with_group(base_url, project_path, group, access, token)
+        except GitLabApiError as e:
+            click.echo(f"[{ref}] ERROR sharing with {group}: {e}", err=True)
+            errors += 1
+            continue
+        if status == "already-shared":
+            click.echo(f"[{ref}] already shared with {group} — unchanged.")
+        else:
+            click.echo(f"[{ref}] shared {project_path} with {group} ({access}).")
+
+    if errors:
+        raise SystemExit(1)
+
+
 @release_group.command("add")
 @_SPEC_ARG
 @click.argument("topic_ids", nargs=-1, required=True)

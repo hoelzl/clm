@@ -1148,6 +1148,31 @@ def _parse_launcher(text: str) -> str:
     return text
 
 
+# GitLab group-share access levels accepted by <share-with access="...">
+# (issue #294). Mapped to GitLab's numeric levels by the provisioning code.
+VALID_SHARE_ACCESS: frozenset[str] = frozenset({"guest", "reporter", "developer", "maintainer"})
+
+
+@frozen
+class ShareWithSpec:
+    """One ``<share-with>`` declaration: share the channel repo into a group.
+
+    ``group`` is the full GitLab group path (e.g.
+    ``students/azav-ml/ml-2026-04``); ``access`` the access level granted
+    (default ``reporter``). Applied by ``clm release provision`` (issue #294).
+    """
+
+    group: str
+    access: str = "reporter"
+
+    @classmethod
+    def from_element(cls, element: ETree.Element) -> "ShareWithSpec":
+        return cls(
+            group=(element.text or "").strip(),
+            access=element.get("access", "reporter"),
+        )
+
+
 @frozen
 class ReleaseChannelSpec:
     """One cohort's solution-release channel (issue #208).
@@ -1163,6 +1188,12 @@ class ReleaseChannelSpec:
     matching the established per-language distribution convention (e.g.
     ``…/machine-learning-azav-de``). When unset, the channel receives **every**
     built language root (the pre-#293 behavior).
+
+    ``share_with`` (issue #294) lists the GitLab groups the channel repo is
+    shared into by ``clm release provision`` — block-level ``<share-with>``
+    entries (e.g. a trainers group) are inherited by every channel and come
+    first; a channel-level entry for the same group overrides the inherited
+    access level.
     """
 
     name: str
@@ -1170,17 +1201,28 @@ class ReleaseChannelSpec:
     ledger: str
     remote_path: str = ""
     lang: str = ""
+    share_with: tuple[ShareWithSpec, ...] = ()
 
     @classmethod
     def from_element(
-        cls, element: ETree.Element, *, default_remote_path: str = ""
+        cls,
+        element: ETree.Element,
+        *,
+        default_remote_path: str = "",
+        default_shares: "tuple[ShareWithSpec, ...]" = (),
     ) -> "ReleaseChannelSpec":
+        own_shares = tuple(ShareWithSpec.from_element(sw) for sw in element.findall("share-with"))
+        # Inherited entries first; a channel-level entry for the same group
+        # replaces the inherited one (its access wins).
+        own_groups = {s.group for s in own_shares}
+        shares = tuple(s for s in default_shares if s.group not in own_groups) + own_shares
         return cls(
             name=element.get("name", ""),
             path=element.get("path", ""),
             ledger=element.get("ledger", ""),
             remote_path=(element_text(element, "remote-path") or default_remote_path),
             lang=element.get("lang", ""),
+            share_with=shares,
         )
 
 
@@ -1211,8 +1253,15 @@ class ReleaseChannelsSpec:
     @classmethod
     def from_element(cls, element: ETree.Element) -> "ReleaseChannelsSpec":
         remote_path = element_text(element, "remote-path") or ""
+        # Block-level <share-with> entries are inherited by every channel
+        # (issue #294) — e.g. one trainers group shared across all cohorts.
+        default_shares = tuple(
+            ShareWithSpec.from_element(sw) for sw in element.findall("share-with")
+        )
         channels = [
-            ReleaseChannelSpec.from_element(ch, default_remote_path=remote_path)
+            ReleaseChannelSpec.from_element(
+                ch, default_remote_path=remote_path, default_shares=default_shares
+            )
             for ch in element.findall("channel")
         ]
         return cls(
@@ -2060,6 +2109,15 @@ class CourseSpec:
                         f"Channel '{ref}': invalid lang {channel.lang!r}. "
                         f"Valid values: {sorted(VALID_LANGUAGES)}"
                     )
+
+                for share in channel.share_with:
+                    if not share.group:
+                        errors.append(f"Channel '{ref}': <share-with> needs a group path.")
+                    if share.access not in VALID_SHARE_ACCESS:
+                        errors.append(
+                            f"Channel '{ref}': invalid share-with access "
+                            f"{share.access!r}. Valid values: {sorted(VALID_SHARE_ACCESS)}"
+                        )
 
         return errors
 
