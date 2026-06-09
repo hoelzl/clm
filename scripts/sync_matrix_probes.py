@@ -10,10 +10,12 @@ and reports:
   SILENT-DROP - plan.is_noop, no alert, change not propagated (the forbidden state)
 
 On master ``fab89615`` (pre-#289), P1 / P5 / P9 were the three live SILENT-DROP
-cells (all tag-channel). The #289 fix closed them — P1 now PROPAGATES (Tier C on
-the git-HEAD baseline), P5 / P9 ALERT with the watermark held — and promoted the
-probes into ``tests/slides/test_sync_tag_drift.py``; this script remains the
-quick whole-matrix smoke run.
+cells (all tag-channel). The #289 fix closed them — P1 PROPAGATES (Tier C on the
+git-HEAD baseline), P9 ALERTS with the watermark held, and P5 (#285), first
+alerted by #290, now PROPAGATES too (the tag is mirrored across the reorder via
+its baseline twin). The probes are promoted into
+``tests/slides/test_sync_tag_drift.py``; this script remains the quick
+whole-matrix smoke run.
 
 Run: ``uv run python scripts/sync_matrix_probes.py``
 """

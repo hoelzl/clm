@@ -1971,9 +1971,9 @@ def _classify_localized_idless_retags(
     Conservative by construction — any doubt declines either the whole pass or the
     individual cell rather than risk mirroring a tag onto the wrong cell:
 
-    - **no ``move``**: a reorder invalidates positional pairing — but a tag drift
-      under a move is *alerted* (:func:`_alert_idless_tag_drift_under_move`, #285)
-      rather than silently skipped;
+    - **no ``move``**: a reorder invalidates LIVE positional pairing — a tag drift
+      under a move is mirrored via the reorder-invariant baseline-twin route, or
+      alerted (:func:`_classify_idless_retags_under_move`, #285) — never skipped;
     - **structural alignment**: each language's localized stream must have the same
       length as the other *and* as its own baseline (so position *i* still names the
       same cell), and every positionally-paired cell must be a true twin
@@ -1999,11 +1999,10 @@ def _classify_localized_idless_retags(
     ``_maybe_retag`` ``both`` path and the reorder/ambiguity warnings; see #198.)
     """
     if plan.count("move") > 0:
-        # A reorder this pass — positional pairing is unsound, so the mirror is
-        # declined. But declining silently was Issue #285: a one-sided tag-only
-        # edit was dropped while the move applied and the watermark advanced over
-        # the loss. Detect the drift order-blind (hash-keyed) and alert instead.
-        _alert_idless_tag_drift_under_move(
+        # A reorder this pass — CURRENT-position pairing is unsound. Mirror via
+        # the reorder-invariant hash/baseline-position route instead (#285); a
+        # drift that route cannot mirror safely is alerted, never dropped.
+        _classify_idless_retags_under_move(
             plan, de_cells, en_cells, de_rows, en_rows, de_base_tags, en_base_tags
         )
         return
@@ -2068,7 +2067,16 @@ def _classify_localized_idless_retags(
             )
 
 
-def _alert_idless_tag_drift_under_move(
+# Proposal kinds that make the under-move tag mirror unsafe: any of these can
+# reshape a localized stream between plan time and the retag's apply step (a
+# remove shifts the current positions the id-less retag applier targets), so a
+# pass carrying one keeps the conservative alert instead of mirroring.
+_MOVE_RETAG_BLOCKERS = frozenset(
+    {"add", "remove", "rename", "conflict", "refuse", "mint", "adopt", "reconcile"}
+)
+
+
+def _classify_idless_retags_under_move(
     plan: SyncPlan,
     de_cells: list[Cell],
     en_cells: list[Cell],
@@ -2077,61 +2085,171 @@ def _alert_idless_tag_drift_under_move(
     de_base_tags: dict[int, frozenset[str]],
     en_base_tags: dict[int, frozenset[str]],
 ) -> None:
-    """Alert on an id-less localized tag drift Tier C declined under a move (#285/#289).
+    """Mirror a tag-only id-less edit across a group reorder, or alert (#285).
 
-    Positional mirroring is unsound across a reorder, so Tier C bails — but a
-    one-sided tag-only edit must not then vanish while the move applies and the
-    watermark advances over the loss (the #285 silent drop). Detection is
-    **hash-keyed**, so it is reorder-invariant: each half's id-less localized
-    cells whose body is *unchanged* (its hash present in that half's own baseline,
-    unique on both sides — the recurring non-unique-anchor guard) are compared by
-    tag set against the baseline's recorded tags at that hash. A drift on either
-    half is something this pass cannot mirror → error, so the watermark holds and
-    the buffered flush writes nothing. A changed-body cell is skipped — body drift
-    under a move is the #282 detector's domain. Degrades silently when the
-    baseline recorded no tags (a pre-#198 watermark). One clear error per pass.
+    Tier C's live positional pairing is unsound under a move, but the **baseline**
+    still provides a sound, reorder-invariant join:
+
+    1. the drifted cell is located in its own half by **unique body hash**
+       against its own baseline (a tag-only edit never changes the body);
+    2. its **baseline position** indexes the twin: at the last sync the two
+       localized streams were positional twins (the invariant the no-move path
+       asserts live; verified here on the recorded rows), so the same position
+       in the *other* half's baseline names the twin's body hash;
+    3. that hash locates the twin in the other half's **current** (reordered)
+       stream — hash-keyed, so the reorder cannot mis-pair it.
+
+    Every lookup carries the recurring non-unique-anchor guard (the hash must be
+    unique in baseline AND current, on the half where it is used). Anything the
+    route cannot mirror — a duplicated body, a twin whose own body changed, tags
+    drifted on *both* twins, misaligned baseline streams, or a pass that also
+    carries a stream-reshaping proposal (:data:`_MOVE_RETAG_BLOCKERS` — a remove
+    would shift the current positions the retag applier targets) — is **alerted**
+    (error, watermark held, nothing written), never silently dropped: the pre-#289
+    behavior was the #285 silent drop, the #290 fix alerted, this mirrors.
     """
     if plan.has_errors:
         return
-    sides = (
+    localized = (LOCALIZED_CODE_ROLE, LOCALIZED_MARKDOWN_ROLE)
+    mirror_ok = not any(p.kind in _MOVE_RETAG_BLOCKERS for p in plan.proposals)
+    # The cross-half join key is the BASELINE position — sound only if the
+    # recorded streams are positional twins (same length, localized rows of the
+    # same kind facing each other).
+    aligned = len(de_rows) == len(en_rows) and all(
+        (de_row[2] in localized) == (en_row[2] in localized)
+        and (de_row[2] == en_row[2] if de_row[2] in localized else True)
+        for de_row, en_row in zip(de_rows, en_rows, strict=True)
+    )
+
+    def _index_half(lang: str, cells: list[Cell], rows, base_tags):
+        """Per half: baseline pos→hash (+uniqueness) and unique-hash→current cell."""
+        idless_rows = [(pos, chash) for (pos, _sid, role, chash, _c) in rows if role in localized]
+        base_counts = Counter(chash for _pos, chash in idless_rows)
+        hash_by_pos = dict(idless_rows)
+        stream = [c for c in cells if not c.metadata.is_j2 and c.metadata.lang == lang]
+        cur_counts = Counter(
+            cell_content_hash(c.content) for c in stream if role_of(c.metadata) is None
+        )
+        cell_by_hash: dict[str, tuple[int, Cell]] = {}
+        for idx, c in enumerate(stream):
+            if role_of(c.metadata) is not None:
+                continue
+            chash = cell_content_hash(c.content)
+            if cur_counts[chash] == 1 and base_counts.get(chash, 0) <= 1:
+                cell_by_hash[chash] = (idx, c)
+        return base_counts, hash_by_pos, base_tags, cell_by_hash
+
+    halves = {
+        "de": _index_half("de", de_cells, de_rows, de_base_tags),
+        "en": _index_half("en", en_cells, en_rows, en_base_tags),
+    }
+
+    def _locate(lang: str, pos: int):
+        """``(drifted, tags_now, stream_idx, cell)`` at baseline ``pos``, or ``None``.
+
+        ``None`` when the cell cannot be soundly located there: no recorded
+        hash/tags at ``pos``, a non-unique body (baseline or current), or the
+        body itself changed (the cell's hash no longer occurs — #282's domain).
+        """
+        base_counts, hash_by_pos, base_tags, cell_by_hash = halves[lang]
+        chash = hash_by_pos.get(pos)
+        recorded = base_tags.get(pos)
+        if chash is None or recorded is None or base_counts[chash] != 1:
+            return None
+        entry = cell_by_hash.get(chash)
+        if entry is None:
+            return None
+        idx, cell = entry
+        now = frozenset(cell.metadata.tags)
+        return (now != recorded, now, idx, cell)
+
+    def _alert(reason: str) -> None:
+        plan.issues.append(PlanIssue(severity="error", slide_id=None, reason=reason))
+
+    # Duplicate-bodied cells defeat the hash anchor, so a tag drift among them
+    # cannot be attributed to a cell — but it can still be DETECTED: for a hash
+    # whose multiplicity is unchanged, the multiset of tag sets across the
+    # duplicates must match the baseline's. A pure swap of identical cells keeps
+    # the multiset (no false positive); a tag edit changes it → alert (the
+    # pre-#285 paths skipped these silently, deferring to the validator). A
+    # multiplicity change is a body add/remove — the body channel's domain.
+    for lang, cells, rows, base_tags in (
         ("de", de_cells, de_rows, de_base_tags),
         ("en", en_cells, en_rows, en_base_tags),
-    )
-    for lang, cells, rows, base_tags in sides:
-        idless_rows = [
-            (pos, chash)
-            for (pos, _sid, role, chash, _construct) in rows
-            if role in (LOCALIZED_CODE_ROLE, LOCALIZED_MARKDOWN_ROLE)
-        ]
-        base_counts = Counter(chash for _pos, chash in idless_rows)
-        base_map = {
-            chash: base_tags.get(pos) for pos, chash in idless_rows if base_counts[chash] == 1
-        }
-        current = [
-            c
-            for c in cells
-            if not c.metadata.is_j2 and c.metadata.lang == lang and role_of(c.metadata) is None
-        ]
-        cur_counts = Counter(cell_content_hash(c.content) for c in current)
-        for cell in current:
-            chash = cell_content_hash(cell.content)
-            if cur_counts[chash] != 1:
-                continue  # duplicated body — cannot anchor; validator flags asymmetry
-            recorded = base_map.get(chash)
-            if recorded is None:
-                continue  # body changed/new (#282's domain) or no recorded tags
-            if frozenset(cell.metadata.tags) != recorded:
-                plan.issues.append(
-                    PlanIssue(
-                        severity="error",
-                        slide_id=None,
-                        reason=f"tags changed on an id-less localized {lang} cell while "
-                        "slide groups were reordered; tag mirroring is positional and "
-                        "unsound across a reorder (#285) — apply the tag change on both "
-                        "halves (or sync the reorder first), then re-run",
-                    )
+    ):
+        base_groups: dict[str, list[frozenset[str] | None]] = {}
+        for pos, _sid, role, chash, _c in rows:
+            if role in localized:
+                base_groups.setdefault(chash, []).append(base_tags.get(pos))
+        cur_groups: dict[str, list[frozenset[str]]] = {}
+        for c in cells:
+            if not c.metadata.is_j2 and c.metadata.lang == lang and role_of(c.metadata) is None:
+                cur_groups.setdefault(cell_content_hash(c.content), []).append(
+                    frozenset(c.metadata.tags)
+                )
+        for chash, base_tag_sets in base_groups.items():
+            if len(base_tag_sets) < 2 or any(t is None for t in base_tag_sets):
+                continue  # unique (the positional route's job) or pre-#198 rows
+            now_tag_sets = cur_groups.get(chash, [])
+            if len(now_tag_sets) != len(base_tag_sets):
+                continue  # a duplicate was added/removed — body channel's domain
+            if Counter(now_tag_sets) != Counter(base_tag_sets):
+                _alert(
+                    f"tags changed on duplicate-bodied id-less localized {lang} cells "
+                    "while slide groups were reordered; identical bodies cannot anchor "
+                    "a tag mirror (#285) — apply the tag change on both halves, then "
+                    "re-run"
                 )
                 return
+
+    positions = sorted(
+        {pos for (pos, _s, role, _h, _c) in de_rows if role in localized}
+        | {pos for (pos, _s, role, _h, _c) in en_rows if role in localized}
+    )
+    for pos in positions:
+        de_loc = _locate("de", pos)
+        en_loc = _locate("en", pos)
+        de_drift = de_loc is not None and de_loc[0]
+        en_drift = en_loc is not None and en_loc[0]
+        if not de_drift and not en_drift:
+            continue
+        if de_drift and en_drift:
+            _alert(
+                f"tags of the id-less localized twin pair at baseline position {pos} "
+                "changed on both decks while slide groups were reordered; "
+                "reconcile the tags manually, then re-run"
+            )
+            return
+        source_lang = "de" if de_drift else "en"
+        target_lang = "en" if de_drift else "de"
+        source = de_loc if de_drift else en_loc
+        target = en_loc if de_drift else de_loc
+        assert source is not None
+        if not (mirror_ok and aligned) or target is None:
+            _alert(
+                f"tags changed on an id-less localized {source_lang} cell while slide "
+                "groups were reordered, and the twin cannot be safely located "
+                "(#285) — apply the tag change on both halves (or sync the reorder "
+                "first), then re-run"
+            )
+            return
+        _drifted, tags_now, source_idx, source_cell = source
+        _t_drifted, _t_tags, target_idx, _target_cell = target
+        kind_label = "code" if source_cell.metadata.cell_type == "code" else "markdown"
+        plan.proposals.append(
+            Proposal(
+                kind="retag",
+                role=kind_label,
+                direction=f"{source_lang}->{target_lang}",
+                slide_id=None,
+                reason=f"tags changed on {source_lang.upper()} ({sorted(tags_now)}) — "
+                "id-less localized cell, mirrored across a group reorder via its "
+                "baseline twin (#285)",
+                source_position=source_idx,
+                target_position=target_idx,
+                tags=tuple(source_cell.metadata.tags),
+            )
+        )
 
 
 def _cell_first_line(body: str, limit: int = 48) -> str:
