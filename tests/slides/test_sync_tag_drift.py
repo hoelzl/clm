@@ -63,6 +63,10 @@ def _idless_md(lang: str, body: str, tags: str | None = None) -> str:
     return f'# %% [markdown] lang="{lang}"{t}\n{body}\n'
 
 
+def _vo(lang: str, sid: str, body: str) -> str:
+    return f'# %% [markdown] lang="{lang}" tags=["voiceover"] slide_id="{sid}"\n{body}\n'
+
+
 def _deck(*parts: str) -> str:
     return "\n".join(parts)
 
@@ -213,12 +217,15 @@ class TestNeutralTagDrift:
 
 
 # ---------------------------------------------------------------------------
-# Id-less retag under a concurrent move — alerted, watermark held (#285)
+# Id-less retag under a concurrent move — MIRRORED via the baseline twin (#285)
 # ---------------------------------------------------------------------------
 
 
 class TestIdlessRetagUnderMove:
-    def test_target_half_tag_edit_under_move_alerts(self, tmp_path: Path):
+    def test_target_half_tag_edit_under_move_is_mirrored(self, tmp_path: Path):
+        """#285 closed: pre-#289 this silently dropped (and baselined the loss);
+        #290 alerted; the baseline-twin route now MIRRORS the tag across the
+        reorder — both changes land, clean pass, watermark advances."""
         de0 = _deck(
             _slide("de", "a", "A"), _idless_code("de", 'print("hallo")'), _slide("de", "b", "B")
         )
@@ -235,14 +242,18 @@ class TestIdlessRetagUnderMove:
             _slide("en", "b", "B"), _slide("en", "a", "A"), _idless_code("en", 'print("hello")')
         )
         plan, result, de_after, en_after = _sync(tmp_path, "watermark", de0, en0, de1, en1)
-        assert _alerted(plan, result)
-        assert result.watermark_recorded is False  # pre-#289 this ADVANCED over the drop
-        assert '# %% lang="en" tags=["keep"]' not in en_after  # not mis-mirrored
+        assert not _alerted(plan, result)
+        assert result.applied_retag == 1
+        assert '# %% lang="en" tags=["keep"]' in en_after  # tag mirrored onto the EN twin
         assert 'tags=["keep"]' in de_after  # the author's own edit intact
+        assert result.applied_move >= 1  # the reorder applied too
+        assert de_after.index('slide_id="b"') < de_after.index('slide_id="a"')  # mirrored to DE
+        assert result.watermark_recorded
+        assert not _falsely_consistent(plan, result, True)
 
-    def test_source_half_tag_edit_under_own_move_alerts(self, tmp_path: Path):
-        """The reordering half tag-edits its own id-less cell — equally
-        un-mirrorable (Tier C declined), so it must alert, not vanish."""
+    def test_source_half_tag_edit_under_own_move_is_mirrored(self, tmp_path: Path):
+        """The reordering half tag-edits its own id-less cell — same route, the
+        twin is located on the unreordered half."""
         de0 = _deck(
             _slide("de", "a", "A"), _idless_code("de", 'print("hallo")'), _slide("de", "b", "B")
         )
@@ -255,6 +266,92 @@ class TestIdlessRetagUnderMove:
             _idless_code("de", 'print("hallo")', tags='["keep"]'),
         )
         plan, result, _, en_after = _sync(tmp_path, "watermark", de0, en0, de1, en0)
+        assert not _alerted(plan, result)
+        assert result.applied_retag == 1
+        assert '# %% lang="en" tags=["keep"]' in en_after
+        assert result.watermark_recorded
+
+    def test_duplicate_body_under_move_alerts(self, tmp_path: Path):
+        """Two byte-identical id-less cells defeat the hash anchor — the mirror
+        declines and ALERTS (never guesses a twin, never drops)."""
+        de0 = _deck(
+            _slide("de", "a", "A"),
+            _idless_code("de", 'print("x")'),
+            _slide("de", "b", "B"),
+            _idless_code("de", 'print("x")'),
+        )
+        en0 = _deck(
+            _slide("en", "a", "A"),
+            _idless_code("en", 'print("x")'),
+            _slide("en", "b", "B"),
+            _idless_code("en", 'print("x")'),
+        )
+        de1 = _deck(
+            _slide("de", "a", "A"),
+            _idless_code("de", 'print("x")', tags='["keep"]'),
+            _slide("de", "b", "B"),
+            _idless_code("de", 'print("x")'),
+        )
+        en1 = _deck(
+            _slide("en", "b", "B"),
+            _idless_code("en", 'print("x")'),
+            _slide("en", "a", "A"),
+            _idless_code("en", 'print("x")'),
+        )
+        plan, result, _, en_after = _sync(tmp_path, "watermark", de0, en0, de1, en1)
+        assert _alerted(plan, result)
+        assert result.watermark_recorded is False
+        assert 'tags=["keep"]' not in en_after
+
+    def test_both_sided_tag_drift_under_move_alerts(self, tmp_path: Path):
+        """Both twins' tags drifted — a conflict no direction can resolve."""
+        de0 = _deck(
+            _slide("de", "a", "A"), _idless_code("de", 'print("hallo")'), _slide("de", "b", "B")
+        )
+        en0 = _deck(
+            _slide("en", "a", "A"), _idless_code("en", 'print("hello")'), _slide("en", "b", "B")
+        )
+        de1 = _deck(
+            _slide("de", "a", "A"),
+            _idless_code("de", 'print("hallo")', tags='["keep"]'),
+            _slide("de", "b", "B"),
+        )
+        en1 = _deck(
+            _slide("en", "b", "B"),
+            _slide("en", "a", "A"),
+            _idless_code("en", 'print("hello")', tags='["alt"]'),
+        )
+        plan, result, de_after, en_after = _sync(tmp_path, "watermark", de0, en0, de1, en1)
+        assert _alerted(plan, result)
+        assert result.watermark_recorded is False
+        assert '"alt"' not in de_after and '"keep"' not in en_after  # neither overwritten
+
+    def test_move_with_concurrent_remove_alerts_not_mirrors(self, tmp_path: Path):
+        """A coexisting remove reshapes the stream the retag applier targets —
+        the mirror declines to today's alert rather than retag a shifted cell."""
+        de0 = _deck(
+            _slide("de", "a", "A"),
+            _idless_code("de", 'print("hallo")'),
+            _slide("de", "b", "B"),
+            _vo("de", "b", "# N"),
+        )
+        en0 = _deck(
+            _slide("en", "a", "A"),
+            _idless_code("en", 'print("hello")'),
+            _slide("en", "b", "B"),
+            _vo("en", "b", "# N"),
+        )
+        # DE: tag edit. EN: reorders groups AND removes the voiceover companion.
+        de1 = _deck(
+            _slide("de", "a", "A"),
+            _idless_code("de", 'print("hallo")', tags='["keep"]'),
+            _slide("de", "b", "B"),
+            _vo("de", "b", "# N"),
+        )
+        en1 = _deck(
+            _slide("en", "b", "B"), _slide("en", "a", "A"), _idless_code("en", 'print("hello")')
+        )
+        plan, result, _, en_after = _sync(tmp_path, "watermark", de0, en0, de1, en1)
         assert _alerted(plan, result)
         assert result.watermark_recorded is False
         assert 'tags=["keep"]' not in en_after
@@ -344,12 +441,12 @@ CHANNEL_COVERAGE: dict[tuple[str, str], list[tuple[object, str]]] = {
     ("de", "tags"): [
         (sync_plan_mod, "_maybe_retag"),
         (sync_plan_mod, "_classify_localized_idless_retags"),
-        (sync_plan_mod, "_alert_idless_tag_drift_under_move"),
+        (sync_plan_mod, "_classify_idless_retags_under_move"),
     ],
     ("en", "tags"): [
         (sync_plan_mod, "_maybe_retag"),
         (sync_plan_mod, "_classify_localized_idless_retags"),
-        (sync_plan_mod, "_alert_idless_tag_drift_under_move"),
+        (sync_plan_mod, "_classify_idless_retags_under_move"),
     ],
     ("shared", "tags"): [
         (sync_plan_mod, "_classify_neutral_tag_drift"),

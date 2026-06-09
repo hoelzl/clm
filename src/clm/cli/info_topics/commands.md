@@ -1442,13 +1442,16 @@ in the summary. Resolve it with `--interactive` (`[d]e-wins` /
 synced pair carries identical tag sets per cell. A one-sided tag-only edit
 (e.g. adding `keep`/`alt`) on an id'd cell, or on an **id-less localized**
 cell, is **mirrored** to the twin — on both the watermark and the committed
-(git-HEAD) baseline. Two tag shapes sync cannot mirror are **errored, never
-silently dropped** (the watermark holds and nothing is written): a tag edit
-on a **language-neutral** cell (shared verbatim across the halves — apply the
-tag change to both halves yourself, the bodies stay untouched), and an
-id-less tag edit made **while the other half reorders slide groups**
-(positional mirroring is unsound across a reorder — sync the reorder first,
-then re-run).
+(git-HEAD) baseline, and **also across a concurrent slide-group reorder**
+(the twin is located reorder-invariantly via the baseline, by body hash).
+Tag shapes sync cannot mirror are **errored, never silently dropped** (the
+watermark holds and nothing is written): a tag edit on a **language-neutral**
+cell (shared verbatim across the halves — apply the tag change to both halves
+yourself, the bodies stay untouched), a tag edit among **byte-identical
+duplicate** id-less cells (nothing can anchor which twin to retag), tags
+changed on **both** twins, and an under-reorder tag edit coinciding with
+other structural changes (add/remove) in the same pass — sync those in two
+steps.
 
 **Two LLMs.** Edits are reconciled by a judge whose backend you pick
 with `--provider`: **`openrouter`** (the default — Claude Sonnet via

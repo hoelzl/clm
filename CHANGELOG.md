@@ -79,6 +79,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **`clm slides sync` now mirrors a tag-only edit on an id-less localized cell
+  across a concurrent slide-group reorder** (issue #285). Live positional
+  pairing is unsound under a reorder, so the Tier C retag mirror used to
+  decline — silently before #289, with an error after #290. The baseline
+  provides a sound, reorder-invariant join instead: the drifted cell is found
+  by unique body hash against its own baseline (a tag-only edit never changes
+  the body), its baseline *position* indexes the twin (the two localized
+  streams are positional twins at the last sync, verified on the recorded
+  rows), and the twin's baseline hash locates it in the current, reordered
+  stream. The tag mirrors and the reorder applies in the same clean pass.
+  Anything the route cannot anchor still **errors** rather than guessing or
+  dropping: byte-identical duplicate bodies (detected via per-group tag
+  multisets — previously these slipped silently to the validator even in the
+  alert path), tags drifted on both twins, misaligned baseline streams, or a
+  pass that also adds/removes cells (a remove would shift the positions the
+  retag applier targets — sync in two steps).
 - **`clm slides sync`'s structural pass no longer calls the translator inside
   its region rebuild** (issue #289 P2, completing the resolve-then-apply
   redesign's last deferred follow-up). The translations a rebuild needs are
