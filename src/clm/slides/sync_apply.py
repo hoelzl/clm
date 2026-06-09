@@ -63,7 +63,6 @@ from clm.slides.sync_plan import (
     Proposal,
     SyncPlan,
     TagHold,
-    _git_head_text,
     ordered_sync_cells,
     watermark_rows,
     watermark_tag_map,
@@ -372,11 +371,9 @@ def apply_plan(
     # cell, the slide_id is left on the wrong half. Move it back onto the cell whose
     # construct it names BEFORE the structural pass propagates, so the corrected ids
     # ride along to the twin.
-    _migrate_drifted_ids(
-        plan, de_state, en_state, watermark_cache, result, recoverer, alignment_cache
-    )
+    _migrate_drifted_ids(plan, de_state, en_state, result, recoverer, alignment_cache)
 
-    baseline_anchors = _baseline_anchor_hashes(watermark_cache, plan)
+    baseline_anchors = _baseline_anchor_hashes(plan)
     apply_code_structure(plan, de_state, en_state, translator, result, baseline_anchors)
 
     # Place a newly-added slide group at its source position. The per-cell add path
@@ -2306,50 +2303,29 @@ def _anchor_map_from_rows(rows: list[tuple[str | None, str | None, str]]) -> dic
     }
 
 
-def _baseline_anchor_hashes(
-    cache: SyncWatermarkCache | None,
-    plan: SyncPlan,
-) -> dict[str, dict[str, str]]:
+def _baseline_anchor_hashes(plan: SyncPlan) -> dict[str, dict[str, str]]:
     """Per-language ``{anchor: content_hash}`` of the last-synced state.
 
     The structural pass uses it to tell an UNCHANGED id-less localized code cell
     (anchor present with the same hash) from an edited one — so the former is reused
     verbatim and the latter is re-translated (Issue #190 item 3 / §8), and the same
     drift signal lets a group with an otherwise-unchanged ``("L", kind)`` signature
-    rebuild (Issue #269). Built from whichever baseline the plan resolved:
-
-    - ``watermark`` — the widened watermark rows (every non-j2 cell);
-    - ``git-head`` — the committed (HEAD) decks, parsed the same way, so the
-      cold-start (first) sync gets the same drift detection instead of an empty map
-      that would silently drop an id-less-localized body edit (Issue #269).
-
-    Empty for a baseline of ``none`` (true cold start) — the structural pass then
-    translates as before.
+    rebuild (Issue #269). Read straight off the plan's resolved
+    :class:`~clm.slides.sync_plan.BaselineBundle` (#289 P1) — watermark or
+    git-HEAD, the same rows the classifier diffed against, so plan and apply
+    agree by construction (this replaces a per-source re-derivation whose
+    git-HEAD branch keyed anchors over a *different* cell population than the
+    watermark branch). Empty for a baseline of ``none`` (true cold start) — the
+    structural pass then translates as before.
     """
     out: dict[str, dict[str, str]] = {"de": {}, "en": {}}
-    if plan.baseline_source == "watermark" and cache is not None:
-        for lang in ("de", "en"):
-            rows = cache.get_deck(str(plan.de_path), str(plan.en_path), lang)
-            out[lang] = _anchor_map_from_rows(
-                [(sid, construct, chash) for (_p, sid, _r, chash, construct) in rows]
-            )
-    elif plan.baseline_source == "git-head":
-        for lang, path in (("de", plan.de_path), ("en", plan.en_path)):
-            text = _git_head_text(path)
-            if text is None:
-                continue
-            cells = parse_cells(text, comment_token_for_path(path))
-            out[lang] = _anchor_map_from_rows(
-                [
-                    (
-                        c.metadata.slide_id,
-                        construct_of(c.metadata, c.content),
-                        cell_content_hash(c.content),
-                    )
-                    for c in cells
-                    if not c.metadata.is_j2
-                ]
-            )
+    bundle = plan.baseline_bundle
+    if bundle is None:
+        return out
+    for lang in ("de", "en"):
+        out[lang] = _anchor_map_from_rows(
+            [(sid, construct, chash) for (_p, sid, _r, chash, construct) in bundle.rows[lang]]
+        )
     return out
 
 
@@ -2361,22 +2337,24 @@ def _effective_direction(plan: SyncPlan) -> str | None:
     return plan.anchor_direction
 
 
-def _baseline_shared(
-    cache: SyncWatermarkCache | None, de_path: Path, en_path: Path
-) -> tuple[dict[str, str], set[str]]:
+def _baseline_shared(plan: SyncPlan) -> tuple[dict[str, str], set[str]]:
     """Baseline ``{slide_id: construct}`` and the set of content hashes, ``shared`` only.
 
     The §9 migration only touches language-neutral code cells, which live in the
     ``shared`` partition — so the baseline is read from there alone (a slide_id
     reused across partitions must not borrow another partition's construct). The
     content-hash set lets the migration tell a genuine split-product (a *new* cell)
-    from a pre-existing cell that merely shares a construct name.
+    from a pre-existing cell that merely shares a construct name. Read from the
+    plan's :class:`~clm.slides.sync_plan.BaselineBundle` (#289 P1) — so the
+    migration now also runs on a committed (git-HEAD) baseline, where it was
+    previously inert (the cache had no pair to read).
     """
     constructs: dict[str, str] = {}
     hashes: set[str] = set()
-    if cache is None:
+    bundle = plan.baseline_bundle
+    if bundle is None:
         return constructs, hashes
-    for _pos, sid, _role, chash, construct in cache.get_deck(str(de_path), str(en_path), "shared"):
+    for _pos, sid, _role, chash, construct in bundle.rows["shared"]:
         hashes.add(chash)
         if sid is not None and construct is not None:
             constructs.setdefault(sid, construct)
@@ -2387,7 +2365,6 @@ def _migrate_drifted_ids(
     plan: SyncPlan,
     de_state: FileState,
     en_state: FileState,
-    cache: SyncWatermarkCache | None,
     result: ApplyResult,
     recoverer: AlignmentRecoverer | None = None,
     alignment_cache: SyncAlignmentCache | None = None,
@@ -2432,20 +2409,18 @@ def _migrate_drifted_ids(
     if _effective_direction(plan) is None:
         return
     before = result.applied_migrate
-    baseline_constructs, baseline_hashes = _baseline_shared(cache, plan.de_path, plan.en_path)
+    baseline_constructs, baseline_hashes = _baseline_shared(plan)
     if baseline_constructs:
         _migrate_one_deck(de_state, baseline_constructs, baseline_hashes, result)
         _migrate_one_deck(en_state, baseline_constructs, baseline_hashes, result)
-    loc_constructs, loc_de_hashes, loc_en_hashes = _baseline_localized(
-        cache, plan.de_path, plan.en_path
-    )
+    loc_constructs, loc_de_hashes, loc_en_hashes = _baseline_localized(plan)
     if loc_constructs:
         _migrate_localized_paired(
             de_state, en_state, loc_constructs, loc_de_hashes, loc_en_hashes, result
         )
     if recoverer is not None and baseline_constructs and result.applied_migrate == before:
         _recover_drifted_ids(
-            plan, de_state, en_state, cache, baseline_constructs, recoverer, alignment_cache, result
+            plan, de_state, en_state, baseline_constructs, recoverer, alignment_cache, result
         )
 
 
@@ -2503,9 +2478,7 @@ def _migrate_one_deck(
         idless_by_construct.pop(base_construct, None)  # at most one migration per construct
 
 
-def _baseline_localized(
-    cache: SyncWatermarkCache | None, de_path: Path, en_path: Path
-) -> tuple[dict[str, str], set[str], set[str]]:
+def _baseline_localized(plan: SyncPlan) -> tuple[dict[str, str], set[str], set[str]]:
     """Baseline ``{slide_id: construct}`` for localized id'd code, + per-deck hashes.
 
     Localized cells live in the ``de``/``en`` partitions (not ``shared``): an id'd
@@ -2514,18 +2487,21 @@ def _baseline_localized(
     agree — it is read from the ``de`` partition. The per-deck content-hash sets
     (every recorded row of each deck) let the paired migration tell a genuine
     split-product (a *new* cell) from a pre-existing one (each deck checked against
-    its own baseline, since localized bodies differ across decks).
+    its own baseline, since localized bodies differ across decks). Read from the
+    plan's :class:`~clm.slides.sync_plan.BaselineBundle` (#289 P1), so it works on
+    a committed (git-HEAD) baseline too.
     """
     constructs: dict[str, str] = {}
     de_hashes: set[str] = set()
     en_hashes: set[str] = set()
-    if cache is None:
+    bundle = plan.baseline_bundle
+    if bundle is None:
         return constructs, de_hashes, en_hashes
-    for _pos, sid, role, chash, construct in cache.get_deck(str(de_path), str(en_path), "de"):
+    for _pos, sid, role, chash, construct in bundle.rows["de"]:
         de_hashes.add(chash)
         if role == CODE_ROLE and sid is not None and construct is not None:
             constructs.setdefault(sid, construct)
-    for _pos, _sid, _role, chash, _construct in cache.get_deck(str(de_path), str(en_path), "en"):
+    for _pos, _sid, _role, chash, _construct in bundle.rows["en"]:
         en_hashes.add(chash)
     return constructs, de_hashes, en_hashes
 
@@ -2645,22 +2621,20 @@ def _region_of(cells: list[RawCell]) -> list[RegionCell]:
     ]
 
 
-def _shared_region(
-    cache: SyncWatermarkCache | None, de_path: Path, en_path: Path
-) -> list[RegionCell]:
-    """The baseline neutral-**code** region from the watermark ``shared`` partition.
+def _shared_region(plan: SyncPlan) -> list[RegionCell]:
+    """The baseline neutral-**code** region from the bundle's ``shared`` partition.
 
     Filters the membership-widened ``shared`` rows to the ``neutral-code`` role so
     the base region covers exactly the cells :func:`_neutral_code_cells` yields live
-    (neutral markdown is excluded). Position order is preserved.
+    (neutral markdown is excluded). Position order is preserved. Read from the
+    plan's :class:`~clm.slides.sync_plan.BaselineBundle` (#289 P1).
     """
-    if cache is None:
+    bundle = plan.baseline_bundle
+    if bundle is None:
         return []
     return [
         RegionCell(slide_id=sid, construct=construct, content_hash=chash)
-        for (_pos, sid, role, chash, construct) in cache.get_deck(
-            str(de_path), str(en_path), "shared"
-        )
+        for (_pos, sid, role, chash, construct) in bundle.rows["shared"]
         if role == NEUTRAL_CODE_ROLE
     ]
 
@@ -2684,7 +2658,6 @@ def _recover_drifted_ids(
     plan: SyncPlan,
     de_state: FileState,
     en_state: FileState,
-    cache: SyncWatermarkCache | None,
     baseline_constructs: dict[str, str],
     recoverer: AlignmentRecoverer,
     alignment_cache: SyncAlignmentCache | None,
@@ -2716,7 +2689,7 @@ def _recover_drifted_ids(
         return
     if not _has_drifted_id(baseline_constructs, current_region):
         return  # nothing genuinely drifted -> do not spend the LLM
-    base_region = _shared_region(cache, plan.de_path, plan.en_path)
+    base_region = _shared_region(plan)
     if not base_region:
         return
     # Only escalate when there is a genuine realignment target: a *new* id-less
