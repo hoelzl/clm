@@ -12,8 +12,11 @@ import click
 
 from clm.cli.commands._export_shared import (
     check_exclusive_output,
+    iter_declared_sections,
     language_option,
+    notebook_in_language,
     output_options,
+    resolve_disabled_mode,
     section_visible,
     selection_options,
     spec_argument,
@@ -45,10 +48,7 @@ def _topic_deck_titles(topic, language: str) -> list[str]:
     """
     titles: list[str] = []
     for notebook in topic.notebooks:
-        if (
-            notebook.output_language_filter is not None
-            and notebook.output_language_filter != language
-        ):
+        if not notebook_in_language(notebook, language):
             continue
         try:
             title = notebook.title[language]
@@ -174,14 +174,18 @@ def _render_section_subsections(
     candidates: list[SubsectionSpec],
     course: Course,
     language: str,
+    *,
+    mark_disabled: bool = True,
 ) -> list[str]:
     """Render the bullet lines for a section that uses subsections.
 
     Bare topics (under *no* declared subsection) are listed first as flat
     bullets; each visible subsection then renders as a bold-label bullet with
     its decks indented beneath it. Disabled subsections get a ``(disabled)``
-    marker. ``candidates`` is the full declared subsection set (visible or not)
-    so a topic under a hidden subsection is not mistaken for a bare topic.
+    marker unless ``mark_disabled`` is False (``--include-disabled=merge``, which
+    folds disabled content into the normal flow). ``candidates`` is the full
+    declared subsection set (visible or not) so a topic under a hidden
+    subsection is not mistaken for a bare topic.
     """
     resolved_titles = {topic.id: _topic_deck_titles(topic, language) for topic in section.topics}
     subsection_topic_ids = {t.id for sub in candidates for t in sub.topics}
@@ -195,7 +199,7 @@ def _render_section_subsections(
             lines.append(f"- {title}")
 
     for subsection in subsections:
-        marker = "" if subsection.enabled else " (disabled)"
+        marker = "" if (subsection.enabled or not mark_disabled) else " (disabled)"
         label = subsection_label(subsection, language) or "(unnamed)"
         lines.append(f"- **{label}**{marker}")
         for title in _subsection_deck_titles(subsection, course, language, resolved_titles):
@@ -222,7 +226,7 @@ def _subsections_json(
             "slides": [
                 {"file": f.path.name, "title": f.title[language]}
                 for f in topic.files
-                if isinstance(f, NotebookFile)
+                if isinstance(f, NotebookFile) and notebook_in_language(f, language)
             ],
         }
 
@@ -257,6 +261,79 @@ def _subsections_json(
     return result
 
 
+def _render_enabled_section_block(
+    section: Section,
+    section_spec: SectionSpec,
+    course: Course,
+    language: str,
+    *,
+    sections_only: bool,
+    full_sections: list[SectionSpec] | None,
+    include_disabled: bool,
+    include_optional: bool,
+    mark_disabled: bool,
+) -> list[str]:
+    """Markdown lines for one enabled section (heading, body, trailing blank).
+
+    ``mark_disabled`` controls whether disabled *subsections* nested in this
+    section keep their ``(disabled)`` marker (True, default/marked mode) or are
+    folded in silently (False, ``--include-disabled=merge``).
+    """
+    lines = [f"## {section.name[language]}", ""]
+    if sections_only:
+        return lines
+    candidates = _candidate_subsections(section_spec, full_sections, include_disabled)
+    subsections = _subsections_to_render(candidates, include_disabled, include_optional)
+    if candidates:
+        lines.extend(
+            _render_section_subsections(
+                section, subsections, candidates, course, language, mark_disabled=mark_disabled
+            )
+        )
+    else:
+        # Flat rendering for sections without subsections; split .de/.en
+        # companions are filtered to the requested language.
+        for notebook in section.notebooks:
+            if isinstance(notebook, NotebookFile) and notebook_in_language(notebook, language):
+                lines.append(f"- {notebook.title[language]}")
+    lines.append("")
+    return lines
+
+
+def _render_disabled_section_block(
+    section_spec: SectionSpec,
+    course: Course,
+    language: str,
+    *,
+    sections_only: bool,
+    mark_disabled: bool,
+) -> list[str]:
+    """Markdown lines for one disabled whole section, read from the filesystem.
+
+    With ``mark_disabled`` the heading and every bullet carry a ``(disabled)``
+    marker; ``--include-disabled=merge`` passes False so the section reads like
+    any enabled one.
+    """
+    marker = " (disabled)" if mark_disabled else ""
+    lines = [f"## {section_spec.name[language]}{marker}", ""]
+    if sections_only:
+        return lines
+    if not section_spec.topics:
+        lines.append("- (no topics declared)")
+        lines.append("")
+        return lines
+    for topic_spec in section_spec.topics:
+        slides = _disabled_topic_slides(course, topic_spec, language)
+        if not slides:
+            # Topic missing on disk, or resolved with no slide files: show its id.
+            lines.append(f"- {topic_spec.id}{marker}")
+        else:
+            for _file_name, title in slides:
+                lines.append(f"- {title}{marker}")
+    lines.append("")
+    return lines
+
+
 def generate_outline(
     course: Course,
     language: str,
@@ -266,6 +343,7 @@ def generate_outline(
     full_sections: list[SectionSpec] | None = None,
     include_disabled: bool = False,
     include_optional: bool = False,
+    merge_disabled: bool = False,
 ) -> str:
     """Generate a Markdown outline for a course.
 
@@ -284,61 +362,154 @@ def generate_outline(
     Returns:
         Markdown string with the course outline
     """
-    lines = []
+    # Course title as H1.
+    lines = [f"# {course.name[language]}", ""]
 
-    # Course title as H1
-    lines.append(f"# {course.name[language]}")
-    lines.append("")
+    if merge_disabled and full_sections is not None:
+        # Fold disabled whole sections into declared order, with no markers.
+        for full_spec, built in iter_declared_sections(course, full_sections):
+            if full_spec.optional and not include_optional:
+                continue
+            if full_spec.enabled:
+                if built is None:
+                    continue
+                section, section_spec = built
+                lines.extend(
+                    _render_enabled_section_block(
+                        section,
+                        section_spec,
+                        course,
+                        language,
+                        sections_only=sections_only,
+                        full_sections=full_sections,
+                        include_disabled=include_disabled,
+                        include_optional=include_optional,
+                        mark_disabled=False,
+                    )
+                )
+            else:
+                lines.extend(
+                    _render_disabled_section_block(
+                        full_spec,
+                        course,
+                        language,
+                        sections_only=sections_only,
+                        mark_disabled=False,
+                    )
+                )
+        return "\n".join(lines)
 
+    # Default / marked mode: enabled sections in order, then disabled whole
+    # sections appended at the end with a (disabled) marker.
     # course.sections aligns 1:1 with course.spec.sections (no section
     # selection is applied in the outline path, and the spec was parsed
     # enabled-only). The spec side carries the retained subsection grouping.
     for section, section_spec in zip(course.sections, course.spec.sections, strict=True):
         if not section_visible(section_spec, include_optional=include_optional):
             continue
-        lines.append(f"## {section.name[language]}")
-        lines.append("")
-        if sections_only:
-            continue
-        candidates = _candidate_subsections(section_spec, full_sections, include_disabled)
-        subsections = _subsections_to_render(candidates, include_disabled, include_optional)
-        if candidates:
-            lines.extend(
-                _render_section_subsections(section, subsections, candidates, course, language)
+        lines.extend(
+            _render_enabled_section_block(
+                section,
+                section_spec,
+                course,
+                language,
+                sections_only=sections_only,
+                full_sections=full_sections,
+                include_disabled=include_disabled,
+                include_optional=include_optional,
+                mark_disabled=True,
             )
-        else:
-            # Unchanged flat rendering for sections without subsections.
-            for notebook in section.notebooks:
-                if isinstance(notebook, NotebookFile):
-                    title = notebook.title[language]
-                    lines.append(f"- {title}")
-        lines.append("")
+        )
 
     for section_spec in disabled_sections or []:
         if section_spec.optional and not include_optional:
             continue
-        lines.append(f"## {section_spec.name[language]} (disabled)")
-        lines.append("")
-        if sections_only:
-            continue
-        if not section_spec.topics:
-            lines.append("- (no topics declared)")
-            lines.append("")
-            continue
-        for topic_spec in section_spec.topics:
-            slides = _disabled_topic_slides(course, topic_spec, language)
-            if slides is None:
-                # Topic does not exist on disk — fall back to topic id.
-                lines.append(f"- {topic_spec.id} (disabled)")
-            elif not slides:
-                # Topic resolved but has no slide files.
-                lines.append(f"- {topic_spec.id} (disabled)")
-            else:
-                for _file_name, title in slides:
-                    lines.append(f"- {title} (disabled)")
-        lines.append("")
+        lines.extend(
+            _render_disabled_section_block(
+                section_spec,
+                course,
+                language,
+                sections_only=sections_only,
+                mark_disabled=True,
+            )
+        )
 
     return "\n".join(lines)
+
+
+def _enabled_section_json(
+    section: Section,
+    section_spec: SectionSpec,
+    course: Course,
+    language: str,
+    *,
+    number: int,
+    sections_only: bool,
+    full_sections: list[SectionSpec] | None,
+    include_disabled: bool,
+    include_optional: bool,
+) -> dict:
+    """JSON entry for one enabled section.
+
+    Split ``.de``/``.en`` companions are filtered to *language* so a split pair
+    contributes one slide entry.
+    """
+    entry: dict = {"number": number, "name": section.name[language], "disabled": False}
+    if section.id is not None:
+        entry["id"] = section.id
+    if not sections_only:
+        candidates = _candidate_subsections(section_spec, full_sections, include_disabled)
+        subsections = _subsections_to_render(candidates, include_disabled, include_optional)
+        visible_topic_ids = _visible_topic_ids(section, candidates, subsections)
+        topics: list[dict] = []
+        for topic in section.topics:
+            if topic.id not in visible_topic_ids:
+                continue
+            slides = [
+                {"file": f.path.name, "title": f.title[language]}
+                for f in topic.files
+                if isinstance(f, NotebookFile) and notebook_in_language(f, language)
+            ]
+            topics.append({"topic_id": topic.id, "directory": str(topic.path), "slides": slides})
+        entry["topics"] = topics
+        if candidates:
+            entry["subsections"] = _subsections_json(section, subsections, course, language)
+    return entry
+
+
+def _disabled_section_json(
+    section_spec: SectionSpec,
+    course: Course,
+    language: str,
+    *,
+    number: int,
+    sections_only: bool,
+) -> dict:
+    """JSON entry for one disabled whole section, read from the filesystem.
+
+    The ``"disabled"`` field stays ``True`` even under ``merge`` — it is
+    structured metadata, not a visible marker — while ``merge`` changes only the
+    section's *placement* (declared order rather than appended at the end).
+    """
+    entry: dict = {"number": number, "name": section_spec.name[language], "disabled": True}
+    if section_spec.id is not None:
+        entry["id"] = section_spec.id
+    if not sections_only:
+        topics: list[dict] = []
+        for topic_spec in section_spec.topics:
+            slides_data = _disabled_topic_slides(course, topic_spec, language)
+            topic_path = course._topic_path_map.get(topic_spec.id)
+            topics.append(
+                {
+                    "topic_id": topic_spec.id,
+                    "directory": str(topic_path) if topic_path is not None else None,
+                    "slides": [
+                        {"file": fname, "title": title} for fname, title in (slides_data or [])
+                    ],
+                }
+            )
+        entry["topics"] = topics
+    return entry
 
 
 def generate_outline_json(
@@ -350,6 +521,7 @@ def generate_outline_json(
     full_sections: list[SectionSpec] | None = None,
     include_disabled: bool = False,
     include_optional: bool = False,
+    merge_disabled: bool = False,
 ) -> dict:
     """Generate a structured JSON outline for a course.
 
@@ -368,71 +540,75 @@ def generate_outline_json(
         Dict with the course outline in structured form.
     """
     sections: list[dict] = []
+
+    if merge_disabled and full_sections is not None:
+        # Fold disabled whole sections into declared order (placement only; the
+        # per-entry "disabled" flag stays truthful).
+        for full_spec, built in iter_declared_sections(course, full_sections):
+            if full_spec.optional and not include_optional:
+                continue
+            if full_spec.enabled:
+                if built is None:
+                    continue
+                section, section_spec = built
+                sections.append(
+                    _enabled_section_json(
+                        section,
+                        section_spec,
+                        course,
+                        language,
+                        number=len(sections) + 1,
+                        sections_only=sections_only,
+                        full_sections=full_sections,
+                        include_disabled=include_disabled,
+                        include_optional=include_optional,
+                    )
+                )
+            else:
+                sections.append(
+                    _disabled_section_json(
+                        full_spec,
+                        course,
+                        language,
+                        number=len(sections) + 1,
+                        sections_only=sections_only,
+                    )
+                )
+        return {
+            "course_name": course.name[language],
+            "language": language,
+            "sections": sections,
+        }
+
     for section, section_spec in zip(course.sections, course.spec.sections, strict=True):
         if not section_visible(section_spec, include_optional=include_optional):
             continue
-        entry: dict = {
-            "number": len(sections) + 1,
-            "name": section.name[language],
-            "disabled": False,
-        }
-        if section.id is not None:
-            entry["id"] = section.id
-        if not sections_only:
-            candidates = _candidate_subsections(section_spec, full_sections, include_disabled)
-            subsections = _subsections_to_render(candidates, include_disabled, include_optional)
-            visible_topic_ids = _visible_topic_ids(section, candidates, subsections)
-            topics: list[dict] = []
-            for topic in section.topics:
-                if topic.id not in visible_topic_ids:
-                    continue
-                slides: list[dict] = []
-                for f in topic.files:
-                    if isinstance(f, NotebookFile):
-                        slides.append(
-                            {
-                                "file": f.path.name,
-                                "title": f.title[language],
-                            }
-                        )
-                topics.append(
-                    {
-                        "topic_id": topic.id,
-                        "directory": str(topic.path),
-                        "slides": slides,
-                    }
-                )
-            entry["topics"] = topics
-            if candidates:
-                entry["subsections"] = _subsections_json(section, subsections, course, language)
-        sections.append(entry)
+        sections.append(
+            _enabled_section_json(
+                section,
+                section_spec,
+                course,
+                language,
+                number=len(sections) + 1,
+                sections_only=sections_only,
+                full_sections=full_sections,
+                include_disabled=include_disabled,
+                include_optional=include_optional,
+            )
+        )
 
     for section_spec in disabled_sections or []:
         if section_spec.optional and not include_optional:
             continue
-        entry = {
-            "number": len(sections) + 1,
-            "name": section_spec.name[language],
-            "disabled": True,
-        }
-        if section_spec.id is not None:
-            entry["id"] = section_spec.id
-        if not sections_only:
-            topics = []
-            for t in section_spec.topics:
-                slides_data = _disabled_topic_slides(course, t, language)
-                topic_path = course._topic_path_map.get(t.id)
-                topics.append(
-                    {
-                        "topic_id": t.id,
-                        "directory": str(topic_path) if topic_path is not None else None,
-                        "slides": [
-                            {"file": fname, "title": title} for fname, title in (slides_data or [])
-                        ],
-                    }
-                )
-            entry["topics"] = topics
-        sections.append(entry)
+        sections.append(
+            _disabled_section_json(
+                section_spec,
+                course,
+                language,
+                number=len(sections) + 1,
+                sections_only=sections_only,
+            )
+        )
 
     return {
         "course_name": course.name[language],
@@ -492,7 +668,7 @@ def outline(
     language: str | None,
     output_format: str,
     include_optional: bool,
-    include_disabled: bool,
+    disabled_mode: str | None,
     sections_only: bool,
 ):
     """Generate an outline of a course in Markdown or JSON format.
@@ -509,9 +685,13 @@ def outline(
         clm export outline course.xml -d ./docs        # Both languages to directory
         clm export outline course.xml --sections-only  # Section headings only
         clm export outline course.xml --include-optional  # Keep optional modules
+        clm export outline course.xml --include-disabled         # Roadmap, tagged
+        clm export outline course.xml --include-disabled=merge   # Roadmap, in flow
     """
     # Validate mutually exclusive options
     check_exclusive_output(output_file, output_dir)
+
+    include_disabled, merge_disabled = resolve_disabled_mode(disabled_mode)
 
     # Load course specification.
     # The main spec always drops disabled sections; if --include-disabled is
@@ -567,6 +747,7 @@ def outline(
                     full_sections=full_sections,
                     include_disabled=include_disabled,
                     include_optional=include_optional,
+                    merge_disabled=merge_disabled,
                 ),
                 indent=2,
             )
@@ -578,6 +759,7 @@ def outline(
             full_sections=full_sections,
             include_disabled=include_disabled,
             include_optional=include_optional,
+            merge_disabled=merge_disabled,
         )
 
     # Determine languages to generate

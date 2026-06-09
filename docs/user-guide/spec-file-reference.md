@@ -298,8 +298,10 @@ Example of a roadmap section deferred until its topics exist:
 Building such a spec (`clm build course.xml`) silently skips the
 disabled section and all its unresolved topic references. Use
 `clm export outline course.xml --include-disabled` to see the full roadmap
-including disabled sections, and `clm validate course.xml
---include-disabled` to validate disabled sections' topics with a
+with disabled sections tagged `(disabled)` (or
+`clm export outline course.xml --include-disabled=merge` to fold them into the
+normal course flow with no marker, in declared order), and `clm validate
+course.xml --include-disabled` to validate disabled sections' topics with a
 `(disabled)` suffix on each finding.
 
 #### `<topic>`

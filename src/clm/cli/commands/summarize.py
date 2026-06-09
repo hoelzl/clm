@@ -33,8 +33,11 @@ from rich.progress import (
 from clm.cli.commands._export_shared import (
     check_exclusive_output,
     disabled_topic_files,
+    iter_declared_sections,
     language_option,
+    notebook_in_language,
     output_options,
+    resolve_disabled_mode,
     section_visible,
     selection_options,
     spec_argument,
@@ -344,13 +347,27 @@ def _disk_notebooks(
     """Resolve a (disabled) section's slide files from the filesystem."""
     notebooks: list[_DiskNotebook] = []
     for topic_spec in section_spec.topics:
-        for path in disabled_topic_files(course, topic_spec) or []:
+        for path in disabled_topic_files(course, topic_spec, language) or []:
             try:
                 title = find_notebook_titles(path.read_text(encoding="utf-8"), default=path.stem)
             except (OSError, ValueError):
                 title = Text(de=path.stem, en=path.stem)
             notebooks.append(_DiskNotebook(path=path, title=title))
     return notebooks
+
+
+def _enabled_section_notebooks(section, language: str) -> list:
+    """Built-course notebooks for an enabled section, filtered to *language*.
+
+    Split ``.de``/``.en`` companions are filtered by ``output_language_filter``
+    so a split pair is summarized once (under the requested language) rather
+    than producing a duplicate entry for the other language's companion.
+    """
+    return [
+        f
+        for f in section.files
+        if isinstance(f, NotebookFile) and notebook_in_language(f, language)
+    ]
 
 
 def build_sections_data(
@@ -360,21 +377,45 @@ def build_sections_data(
     include_optional: bool,
     include_disabled: bool,
     full_sections: list[SectionSpec] | None,
+    merge_disabled: bool = False,
 ) -> list[SectionData]:
     """Build the (heading, notebooks, disabled) list the generator iterates.
 
     Optional whole sections are dropped unless ``include_optional``. Note this
     gates optional *sections* only — ``summary`` flattens a section to its
     notebooks and cannot filter optional *subsections* within an included
-    section. Disabled sections are appended (read from disk) when
-    ``include_disabled`` and *full_sections* are supplied.
+    section.
+
+    Disabled sections (read from disk) are surfaced when ``include_disabled``
+    and *full_sections* are supplied: in the default/marked mode they are
+    appended after the enabled sections with their ``disabled`` flag set (so the
+    heading gets a ``(disabled)`` marker); with ``merge_disabled`` they are
+    interleaved in declared order and reported as not-disabled, so they read
+    like any enabled section.
     """
-    data: list[SectionData] = []
+    if merge_disabled and full_sections is not None:
+        data: list[SectionData] = []
+        for full_spec, built in iter_declared_sections(course, full_sections):
+            if full_spec.optional and not include_optional:
+                continue
+            if full_spec.enabled:
+                if built is None:
+                    continue
+                section, _section_spec = built
+                data.append(
+                    (section.name[language], _enabled_section_notebooks(section, language), False)
+                )
+            else:
+                data.append(
+                    (full_spec.name[language], _disk_notebooks(course, full_spec, language), False)
+                )
+        return data
+
+    data = []
     for section, section_spec in zip(course.sections, course.spec.sections, strict=True):
         if not section_visible(section_spec, include_optional=include_optional):
             continue
-        notebooks = [f for f in section.files if isinstance(f, NotebookFile)]
-        data.append((section.name[language], notebooks, False))
+        data.append((section.name[language], _enabled_section_notebooks(section, language), False))
 
     if include_disabled and full_sections is not None:
         for section_spec in full_sections:
@@ -668,7 +709,7 @@ def summary(
     output_file: Path | None,
     output_dir: Path | None,
     include_optional: bool,
-    include_disabled: bool,
+    disabled_mode: str | None,
     model: str | None,
     api_base: str | None,
     style: str,
@@ -691,8 +732,11 @@ def summary(
         clm export summary course.xml --audience trainer -o summary.md
         clm export summary course.xml --audience client -d ./docs
         clm export summary course.xml --audience trainer --model openai/gpt-4o
+        clm export summary course.xml --audience client --include-disabled=merge
     """
     check_exclusive_output(output_file, output_dir)
+
+    include_disabled, merge_disabled = resolve_disabled_mode(disabled_mode)
 
     # Load config for LLM settings
     from clm.infrastructure.config import get_config
@@ -742,6 +786,7 @@ def summary(
         include_optional=include_optional,
         include_disabled=include_disabled,
         full_sections=full_sections,
+        merge_disabled=merge_disabled,
     )
 
     # Progress goes to stderr so it doesn't mix with markdown output on stdout
