@@ -1283,6 +1283,10 @@ run requires **`--yes`** (or an interactive confirm), since it writes to every
 pair at once; `--dry-run` / `--explain` directory runs are unprompted.
 `--interactive` is single-pair only (it walks one pair's proposals) and is
 rejected with a directory. Do **not** pass a second path with a directory.
+Since CLM {version} a sweep prints a `[i/N] <deck> …` **progress header** per
+pair (stderr), and a writing run prints a short stderr tick per LLM call
+(`· reconciling …` / `· translating …`) so a long sync is visibly alive;
+progress is suppressed under `--json`.
 
 **Default behavior changed in CLM {version}: the command now writes to
 the working tree.** A bare `clm slides sync de en` applies the agreed
@@ -1388,6 +1392,16 @@ written into the file, so a deck stays id-light yet syncs precisely:
   byte-identical (the `unify` invariant); if any still differ, sync **errors** and
   holds the watermark rather than report the decks consistent — so an
   un-propagatable shared-cell change is always surfaced, never silently banked.
+  Since CLM {version} the error **names the diverging cell(s)** — the cell text
+  present on one half but missing on the other (or the first out-of-order cell),
+  and for id-less localized cells the slide group and cell kind — so you can
+  locate the divergence without a manual diff.
+- **A new slide group added next to a neutral cell is placed correctly (since CLM
+  {version}).** Inserting a new id'd slide (a localized markdown cell plus its
+  language-neutral code cells) right after a language-neutral or id-less neighbour
+  used to land the new group in the wrong inter-group slot on the other half and
+  trip the parity fail-safe above; sync now reconciles slide-group **order**
+  against the propagation source, so the insertion propagates cleanly.
 
 Use `--explain` to see the anchor-level view (per-cell anchor + drift, the
 propagation direction, drifted ids) for any pair.

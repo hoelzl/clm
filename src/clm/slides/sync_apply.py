@@ -379,6 +379,15 @@ def apply_plan(
     baseline_anchors = _baseline_anchor_hashes(watermark_cache, plan)
     apply_code_structure(plan, de_state, en_state, translator, result, baseline_anchors)
 
+    # Place a newly-added slide group at its source position. The per-cell add path
+    # anchors a new group beside the nearest neighbour it can name by (slide_id,
+    # role); a language-neutral or id-less neighbour is invisible to that anchor, so
+    # a new group can land in the wrong inter-group slot. The structural pass above
+    # rebuilds each group's CONTENTS but never reorders GROUPS, so reconcile group
+    # order against the source here — otherwise the misplacement survives only to
+    # trip the shared-cell / id-less parity fail-safe below (the reported bug).
+    _reconcile_group_order(plan, de_state, en_state, result)
+
     # Fail-safe: a complete resolution leaves no duplicate id behind. If one
     # survives (a should-not-happen bug), error so the watermark cannot advance
     # over a corrupt state and the situation is surfaced rather than baselined.
@@ -583,6 +592,77 @@ def _shared_cell_hashes(state: FileState) -> list[str]:
     ]
 
 
+def _cell_snippet(body: str, limit: int = 48) -> str:
+    """A short, human-locatable excerpt of a cell body (its first meaningful line).
+
+    Strips a leading line-comment prefix (``# `` / ``// ``) so a markdown cell reads
+    as its heading text, and truncates to ``limit`` so an error line stays scannable.
+    """
+    for raw in body.split("\n"):
+        line = raw.strip()
+        for pre in ("# ", "// "):
+            if line.startswith(pre):
+                line = line[len(pre) :].strip()
+                break
+        else:
+            if line in ("#", "//"):
+                continue
+        if line:
+            return line[:limit] + ("…" if len(line) > limit else "")
+    return "(empty cell)"
+
+
+def _snippet_list(snippets: list[str], limit: int = 3) -> str:
+    """Render up to ``limit`` cell snippets, with a ``(+N more)`` tail if truncated."""
+    shown = ", ".join(repr(s) for s in snippets[:limit])
+    extra = len(snippets) - limit
+    return f"{shown}, … (+{extra} more)" if extra > 0 else shown
+
+
+def _shared_cell_descriptors(state: FileState) -> list[tuple[str, str]]:
+    """``(content_hash, snippet)`` of each language-neutral cell, in document order.
+
+    Partitioned exactly like :func:`_shared_cell_hashes` (the parity invariant), but
+    carries a snippet too so a divergence can name the offending cell(s).
+    """
+    return [
+        (cell_content_hash(cell.body), _cell_snippet(cell.body))
+        for cell in state.cells
+        if not cell.metadata.is_j2 and cell.metadata.lang not in ("de", "en")
+    ]
+
+
+def _describe_shared_divergence(de: list[tuple[str, str]], en: list[tuple[str, str]]) -> str:
+    """Name the language-neutral cells that diverge between the two halves.
+
+    Reports cells present on one half but not the other (an un-propagated add /
+    remove), else — when both halves hold the same cells in a different order — the
+    first positional mismatch. Caps the listed snippets so the message stays short.
+    """
+    de_by_hash = dict(de)
+    en_by_hash = dict(en)
+    cde, cen = Counter(h for h, _ in de), Counter(h for h, _ in en)
+    # ``dict.fromkeys`` de-dups the multiset diff to DISTINCT hashes (preserving
+    # first-seen order), so two byte-identical added cells list one snippet, not the
+    # same text twice.
+    de_only = list(dict.fromkeys((cde - cen).elements()))
+    en_only = list(dict.fromkeys((cen - cde).elements()))
+    parts: list[str] = []
+    if de_only:
+        parts.append("on de but missing on en: " + _snippet_list([de_by_hash[h] for h in de_only]))
+    if en_only:
+        parts.append("on en but missing on de: " + _snippet_list([en_by_hash[h] for h in en_only]))
+    if parts:
+        return "; ".join(parts)
+    for i, (a, b) in enumerate(zip(de, en, strict=False)):
+        if a[0] != b[0]:
+            return (
+                f"the shared cells are in a different order across the halves (first "
+                f"mismatch at shared-cell #{i + 1}: de has {a[1]!r}, en has {b[1]!r})"
+            )
+    return "the shared cells are in a different order across the halves"
+
+
 def _flag_shared_cell_divergence(
     de_state: FileState, en_state: FileState, result: ApplyResult
 ) -> None:
@@ -596,16 +676,20 @@ def _flag_shared_cell_divergence(
     the pass report "decks already consistent". This backstops the neutral-cell
     propagation paths (``align_anchored`` + the structural pass) for every neutral
     cell shape, including a tagged-neutral cell the structural pass cannot rebuild.
+    The message names the offending cell(s) so the author can find the divergence.
 
     Only invoked on an otherwise-clean pass (no prior error / deferral), so a
     genuine mismatch here is always an un-propagated divergence, never a
     double-report of an already-alerted problem.
     """
-    if _shared_cell_hashes(de_state) != _shared_cell_hashes(en_state):
+    de = _shared_cell_descriptors(de_state)
+    en = _shared_cell_descriptors(en_state)
+    if [h for h, _ in de] != [h for h, _ in en]:
         result.errors.append(
             "language-neutral (shared) cells differ between de and en after sync — "
-            "a change to a shared cell was not propagated; re-run sync (a watermark "
-            "now exists) or resolve the divergence manually"
+            f"{_describe_shared_divergence(de, en)}; a change to a shared cell was "
+            "not propagated; re-run sync (a watermark now exists) or resolve the "
+            "divergence manually"
         )
 
 
@@ -642,6 +726,25 @@ def _idless_localized_body_hashes(state: FileState) -> list[str]:
     ]
 
 
+def _describe_idless_divergence(
+    de_kinds: list[tuple[int, str]], en_kinds: list[tuple[int, str]]
+) -> str:
+    """Name the first slide group where the id-less localized cell layout diverges.
+
+    Each entry is ``(slide-group index, kind)``; the divergence is content-free
+    (these cells are language-specific translations), so the most locatable handle
+    is the 1-based slide-group number and the cell kind (code / markdown).
+    """
+    for i in range(max(len(de_kinds), len(en_kinds))):
+        a = de_kinds[i] if i < len(de_kinds) else None
+        b = en_kinds[i] if i < len(en_kinds) else None
+        if a != b:
+            de_desc = f"a {a[1]} cell in slide group {a[0] + 1}" if a is not None else "(none)"
+            en_desc = f"a {b[1]} cell in slide group {b[0] + 1}" if b is not None else "(none)"
+            return f"de has {de_desc} where en has {en_desc}"
+    return "the id-less localized cell layout differs"
+
+
 def _flag_idless_localized_divergence(
     plan: SyncPlan, de_state: FileState, en_state: FileState, result: ApplyResult
 ) -> None:
@@ -667,11 +770,14 @@ def _flag_idless_localized_divergence(
     one group is alerted (check 2), not auto-propagated — give such cells ``slide_id``s
     for precise sync.
     """
-    if _idless_localized_group_kinds(de_state) != _idless_localized_group_kinds(en_state):
+    de_kinds = _idless_localized_group_kinds(de_state)
+    en_kinds = _idless_localized_group_kinds(en_state)
+    if de_kinds != en_kinds:
         result.errors.append(
             "id-less localized cells (lang= cells with no slide_id) are placed "
-            "differently across de and en after sync — a move was not propagated; "
-            "give them slide_ids for precise sync, or resolve manually"
+            f"differently across de and en after sync — {_describe_idless_divergence(de_kinds, en_kinds)}; "
+            "a move was not propagated; give them slide_ids for precise sync, or "
+            "resolve manually"
         )
         return
     de_base, en_base = plan.idless_baseline_de, plan.idless_baseline_en
@@ -682,9 +788,10 @@ def _flag_idless_localized_divergence(
     de_reorder = de_now != de_base and Counter(de_now) == Counter(de_base)
     en_reorder = en_now != en_base and Counter(en_now) == Counter(en_base)
     if (de_reorder and en_now == en_base) or (en_reorder and de_now == de_base):
+        which = "de" if de_reorder else "en"
         result.errors.append(
-            "id-less localized cells were reordered on one deck but not the other "
-            "after sync — give them slide_ids so the order can be mirrored, or "
+            f"id-less localized cells were reordered on the {which} deck but not the "
+            "other after sync — give them slide_ids so the order can be mirrored, or "
             "resolve manually"
         )
 
@@ -1954,6 +2061,64 @@ def _apply_moves(
             "some moves are not expressible by a slide-group reorder "
             "(narrative companion reassigned to a different slide) — deferred"
         )
+
+
+def _reconcile_group_order(
+    plan: SyncPlan, de_state: FileState, en_state: FileState, result: ApplyResult
+) -> None:
+    """Reorder the target deck's slide groups to match the source's group order.
+
+    The per-cell add path (:func:`_add_idcarrying_one_direction` /
+    :func:`_add_one_direction`) anchors a brand-new slide group beside the nearest
+    preceding neighbour it can name by ``(slide_id, role)``. A language-neutral or
+    id-less neighbour is invisible to that anchor, so a new group can be inserted in
+    the wrong inter-group slot — e.g. a new subslide added right after a neutral
+    code cell lands *before* it instead. The structural pass
+    (:func:`apply_code_structure`) rebuilds each group's *contents* from the source
+    but iterates the target's groups in their current order, so it never reorders
+    *groups*; the misplacement would otherwise survive and surface only as the
+    shared-cell / id-less-localized parity error.
+
+    Run after adds + the structural rebuild, against the run's single propagation
+    source (the keyed-proposal direction, else the neutral-cell anchor direction).
+    Only a reorder that reproduces the source's group order **and** its localized
+    ``(slide_id, role)`` order exactly is committed — the same bar
+    :func:`_apply_moves` uses — so a partial or ambiguous reorder is left untouched
+    for the parity fail-safe rather than guessed at. Whole groups move as verbatim
+    units (each group's internal order was already reconciled above), so this only
+    fixes placement, never content.
+
+    Gated on a fully clean pass (:func:`_pass_is_clean`), exactly like
+    :func:`_apply_moves`: a deferred pass still *writes* its applied changes, so
+    without this guard a reorder a user **skipped** in ``--interactive`` (deferred,
+    never added to ``moves``) would be silently re-applied here against the source
+    and persisted — overriding the skip and re-surfacing nothing next run. Holding
+    the reorder for a clean pass keeps the skip honoured; a misplaced new group on
+    a deferred pass simply re-reconciles on the next (clean) run.
+    """
+    if not _pass_is_clean(plan, result):
+        return
+    directions = {p.direction for p in plan.proposals if p.direction in ("de->en", "en->de")}
+    direction = next(iter(directions)) if len(directions) == 1 else plan.anchor_direction
+    if direction is None:
+        return
+    source_state, target_state = (
+        (de_state, en_state) if direction == "de->en" else (en_state, de_state)
+    )
+    reordered = _group_reorder(target_state.cells, _group_order(source_state.cells))
+    if reordered is None:
+        return  # group order already matches the source
+    if _group_order(reordered) != _group_order(source_state.cells) or _sync_key_order(
+        reordered
+    ) != _sync_key_order(source_state.cells):
+        return  # would not fully reconcile — leave the divergence for the fail-safe
+    sep = target_state.separator_blanks()
+    original_last = target_state.cells[-1] if target_state.cells else None
+    target_state.cells = reordered
+    target_state.dirty = True
+    if original_last is not None:
+        target_state.normalize_displaced_last(original_last, sep)
+    result.applied_structural += 1
 
 
 def _group_order(cells: list[RawCell]) -> list[str]:
