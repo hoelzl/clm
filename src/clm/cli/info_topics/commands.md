@@ -512,6 +512,125 @@ clm export schedule course.xml -o schedule.md   # Write to a file
 clm export schedule course.xml -d ./docs        # Write into a directory
 ```
 
+#### `clm export calendar`
+
+*New in {version}.* Project the course **schedule onto a cohort's real calendar
+dates**. Where `export schedule` is course-relative ("Week 3, Tuesday"), a
+*calendar* maps the same ordered day-buckets onto actual dates for one cohort,
+absorbing that cohort's holidays, delayed start, breaks, and catch-up. The
+trainer maintains only a small hand-edited `release/<channel>.calendar.toml`
+(see **Cohort calendar file** below); the dates are computed.
+
+```
+clm export calendar [OPTIONS] SPEC_FILE
+```
+
+| Option | Description |
+|--------|-------------|
+| `--channel NAME` | Cohort channel; resolves the calendar file as `<channel>.calendar.toml` beside the channel's ledger in `<release-channels>`. |
+| `--calendar PATH` | Explicit calendar TOML (overrides `--channel`). |
+| `-L, --language`, `--lang [de\|en]` | Language for deck titles and weekday labels (default: `de`). |
+| `-f, --format [md\|csv\|ics]` | Output format (default: `md`). `ics` is the subscribable student feed. |
+| `-o, --output FILE` / `-d, --output-dir DIR` | Write to FILE / to a directory (filename `<course>-calendar-<channel-or-lang>.<ext>`). |
+| `--data-dir DIR` | Course data directory. Default: inferred from the spec location. |
+
+- **`md`** — a date-ordered `Date | Content` table; multi-date spans show a date
+  range and `insert` days show their label in italics.
+- **`csv`** — one row per deck:
+  `date,end_date,weekday,kind,label,video_title,topic,deck_file` (`insert` rows
+  carry an empty deck triple).
+- **`ics`** — one all-day `VEVENT` per assignment, spans using the exclusive-end
+  `DTEND` convention, with **stable per-assignment UIDs** so re-exporting an
+  updated calendar *updates* events in a subscribed client rather than
+  duplicating them.
+
+Projection **errors** (over-full segment, unknown pin/split ref, end overflow)
+are printed to stderr and abort the export with a non-zero exit; fix the
+calendar (or run `clm calendar check`) first. Warnings (free dates, stray
+inserts) are printed but do not block.
+
+```bash
+clm export calendar course.xml --channel jan            # German Markdown
+clm export calendar course.xml --channel jan -f ics     # student .ics feed
+clm export calendar course.xml --calendar c.toml -L en -f csv
+clm export calendar course.xml --channel jan -o jan.ics -f ics
+```
+
+##### Cohort calendar file (`release/<channel>.calendar.toml`)
+
+A small, hand-edited TOML file holding only the *deltas* from the ideal plan.
+Lives beside the channel's release ledger; it is **not** part of the spec.
+
+```toml
+start = 2026-03-02              # first teaching date (required)
+end   = 2026-06-30              # last allowable teaching date (optional; checked)
+pattern = ["mon", "tue", "wed"] # teaching weekdays; default = weekdays the spec uses
+
+holidays = [
+  2026-04-06,                                            # a single day
+  {from = 2026-05-18, to = 2026-05-29, label = "Break"}, # an inclusive interval
+]
+
+# Ordered perturbations of the default 1-bucket-per-teaching-date mapping.
+[[adjustments]]
+merge = 2026-06-09   # collapse `count` buckets onto one date (catch up)
+count = 2
+
+[[adjustments]]
+pin  = "control_flow"  # anchor the bucket containing this topic/deck id to a date
+date = 2026-04-09
+
+[[adjustments]]
+insert = 2026-03-30    # a teaching date with no new video
+label  = "Review & Q&A"
+
+[[adjustments]]
+split = "long_topic"   # spread a bucket across several dates (slow down)
+dates = [2026-03-25, 2026-03-26]
+```
+
+A holiday removes a teaching date, so every later bucket slides one date
+later automatically. `pin`/`split` reference a bucket by a **stable topic/deck
+id** it contains (anchoring the whole day, not the single deck). Pins *segment*
+the timeline; when more buckets fall between two pins than there are teaching
+dates, the engine never guesses — `clm calendar check` reports the exact
+deficit and you resolve it with an explicit `merge`.
+
+### `clm calendar`
+
+*New in {version}.* Inspect a cohort's viewing calendar (see
+`clm export calendar` for the file format).
+
+#### `clm calendar check`
+
+**Date-free validation** of a calendar against the course schedule. Reports
+errors — unknown/ambiguous pin/split refs, over-full segments (with the exact
+"merge ≥ N buckets" deficit), content overflowing `end` — and warnings (free
+teaching dates before a pin, `insert`/`merge` dates that are not teaching
+dates). Exits non-zero if there are errors, so it suits a pre-push hook.
+
+```
+clm calendar check [OPTIONS] SPEC_FILE      # --channel/--calendar/--data-dir
+```
+
+#### `clm calendar status`
+
+Show **where a cohort is today** relative to the plan — the only now-relative
+command. Defaults to the system date; pass `--as-of YYYY-MM-DD` for tests, dated
+handouts, or what-if previews. Reports today's assignment (or the next one), its
+plan coordinate (e.g. `W4 Tuesday`), the **drift** in days versus the ideal
+(no-holiday, no-adjustment) calendar, and an upcoming lookahead.
+
+```
+clm calendar status [OPTIONS] SPEC_FILE     # --channel/--calendar/-L/--as-of/--data-dir
+```
+
+```bash
+clm calendar check  course.xml --channel jan
+clm calendar status course.xml --channel jan -L en
+clm calendar status course.xml --channel jan --as-of 2026-05-06
+```
+
 ### `clm topic resolve`
 
 *Removed in CLM 1.8: the flat alias `clm resolve-topic` no longer exists — use this group-qualified form.*
