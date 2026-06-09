@@ -704,7 +704,9 @@ class TestOutlineIncludeOptional:
 
     def test_optional_hidden_by_default_no_bare_leak(self):
         runner = CliRunner()
-        result = runner.invoke(cli, ["export", "outline", str(OPTIONAL_SPEC_PATH), "-L", "en"])
+        result = runner.invoke(
+            cli, ["export", "outline", str(OPTIONAL_SPEC_PATH), "-L", "en", "--weekdays", "always"]
+        )
         assert result.exit_code == 0, result.output
         assert "**Monday, Tuesday**" in result.output
         # Optional Wednesday subsection, its topic, and optional Week 2 are gone.
@@ -715,7 +717,17 @@ class TestOutlineIncludeOptional:
     def test_include_optional_shows_modules(self):
         runner = CliRunner()
         result = runner.invoke(
-            cli, ["export", "outline", str(OPTIONAL_SPEC_PATH), "-L", "en", "--include-optional"]
+            cli,
+            [
+                "export",
+                "outline",
+                str(OPTIONAL_SPEC_PATH),
+                "-L",
+                "en",
+                "--include-optional",
+                "--weekdays",
+                "always",
+            ],
         )
         assert result.exit_code == 0, result.output
         assert "**Wednesday**" in result.output

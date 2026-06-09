@@ -32,7 +32,7 @@ def plain_course() -> Course:
 
 class TestMarkdownSubsections:
     def test_subsections_render_as_bold_groups(self, course):
-        out = generate_outline(course, "en")
+        out = generate_outline(course, "en", show_weekdays=True)
         assert "## Week 1" in out
         assert "- **Monday**" in out
         assert "  - Some Topic from Test 1" in out
@@ -41,7 +41,7 @@ class TestMarkdownSubsections:
         assert "  - Was this really ML?" in out
 
     def test_bare_topic_rendered_before_subsection(self, course):
-        out = generate_outline(course, "en")
+        out = generate_outline(course, "en", show_weekdays=True)
         # Week 2 has a bare topic then a wed subsection.
         week2 = out.split("## Week 2", 1)[1]
         assert "- Another Topic from Test 1" in week2
@@ -49,7 +49,7 @@ class TestMarkdownSubsections:
         assert week2.index("Another Topic from Test 1") < week2.index("**Wednesday**")
 
     def test_german_weekday_labels(self, course):
-        out = generate_outline(course, "de")
+        out = generate_outline(course, "de", show_weekdays=True)
         assert "- **Montag**" in out
         assert "- **Dienstag — Recht**" in out
 
@@ -58,6 +58,36 @@ class TestMarkdownSubsections:
         out = generate_outline(plain_course, "en")
         assert "- Some Topic from Test 1" in out
         assert "**" not in out
+
+
+class TestMarkdownWeekdaysDefault:
+    """``show_weekdays`` defaults to False: subsection groupings are flattened.
+
+    The decks still appear (in document order) but without the bold weekday
+    label or indentation, so a spec reads the same whether or not it happens to
+    declare ``<subsection>`` groups (the reported inconsistency)."""
+
+    def test_default_flattens_subsections(self, course):
+        out = generate_outline(course, "en")
+        assert "## Week 1" in out
+        # No bold weekday labels anywhere.
+        assert "**" not in out
+        # ...but every deck is still listed as a flat bullet.
+        assert "- Some Topic from Test 1" in out
+        assert "- A Topic from Test 2" in out
+        assert "- Was this really ML?" in out
+
+    def test_bare_topic_still_first_when_flattened(self, course):
+        out = generate_outline(course, "en")
+        week2 = out.split("## Week 2", 1)[1]
+        assert "- Another Topic from Test 1" in week2
+
+    def test_flat_default_matches_plain_spec_shape(self, course, plain_course):
+        """Flattened subsection output uses the same bullet shape as a plain spec."""
+        sub_out = generate_outline(course, "en")
+        plain_out = generate_outline(plain_course, "en")
+        for line in (*sub_out.splitlines(), *plain_out.splitlines()):
+            assert not line.startswith("  - ")  # no indented deck lines in either
 
 
 class TestJsonSubsections:
@@ -102,14 +132,16 @@ class TestDisabledSubsectionInEnabledSection:
 
     def test_default_hides_disabled_subsection(self):
         course, _full = self._course_and_full()
-        out = generate_outline(course, "en")
+        out = generate_outline(course, "en", show_weekdays=True)
         assert "- **Monday**" in out
         assert "Tuesday" not in out
         assert "(disabled)" not in out
 
     def test_include_disabled_shows_disabled_subsection(self):
         course, full = self._course_and_full()
-        out = generate_outline(course, "en", full_sections=full.sections, include_disabled=True)
+        out = generate_outline(
+            course, "en", full_sections=full.sections, include_disabled=True, show_weekdays=True
+        )
         assert "- **Monday**" in out
         assert "- **Tuesday** (disabled)" in out
         # Its deck title is resolved from the filesystem fallback.
@@ -127,7 +159,15 @@ class TestDisabledSubsectionInEnabledSection:
     def test_cli_include_disabled(self):
         runner = CliRunner()
         result = runner.invoke(
-            cli, ["export", "outline", str(DISABLED_SUB_SPEC_PATH), "--include-disabled"]
+            cli,
+            [
+                "export",
+                "outline",
+                str(DISABLED_SUB_SPEC_PATH),
+                "--include-disabled",
+                "--weekdays",
+                "always",
+            ],
         )
         assert result.exit_code == 0, result.output
         assert "- **Tuesday** (disabled)" in result.output
@@ -136,9 +176,17 @@ class TestDisabledSubsectionInEnabledSection:
 class TestOutlineCliSubsections:
     def test_cli_markdown(self):
         runner = CliRunner()
-        result = runner.invoke(cli, ["export", "outline", str(SPEC_PATH)])
+        result = runner.invoke(cli, ["export", "outline", str(SPEC_PATH), "--weekdays", "always"])
         assert result.exit_code == 0, result.output
         assert "- **Monday**" in result.output
+
+    def test_cli_weekdays_default_is_flat(self):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["export", "outline", str(SPEC_PATH)])
+        assert result.exit_code == 0, result.output
+        # Default (never): no bold weekday labels, decks listed flat.
+        assert "**" not in result.output
+        assert "- Some Topic from Test 1" in result.output
 
     def test_cli_json(self):
         runner = CliRunner()

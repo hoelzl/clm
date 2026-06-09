@@ -421,17 +421,23 @@ clm export outline [OPTIONS] SPEC_FILE
 | `-o/-d/-L/--include-optional/--include-disabled` | Shared options (see `clm export` above; `-L` defaults to `en` for stdout/`-o`, both languages for `-d`). |
 | `--format [markdown\|json]` | Output format (default: markdown). |
 | `--sections-only` | Emit only section headings, omitting per-topic/slide entries within each section. |
+| `--weekdays [never\|always]` | Show the `<subsection>` weekday/name groupings as bold labels (Markdown only). `never` (default): flatten every section's decks into plain bullets, so weeks read uniformly whether or not they declare subsections. `always`: group decks under their weekday/name label in every week (including disabled weeks under `--include-disabled`). |
 
-When a section uses the optional `<subsection>` layer (see
-`clm info spec-files`), the outline renders each subsection as an indented
-group: a bold weekday/label bullet with the subsection's decks nested beneath
-it, after any bare (unscheduled) topics. Hiding an optional/disabled subsection
-also hides its topics (they are not demoted to bare bullets). `--include-disabled`
+A section may use the optional `<subsection>` layer (see `clm info spec-files`)
+to group its decks under a weekday or label (`<section>` = week,
+`<subsection>` = day). By default (`--weekdays never`) the outline ignores that
+grouping and lists every deck as a flat bullet, so a section reads the same
+whether or not it declares subsections. Pass `--weekdays always` to render each
+subsection as an indented group instead: a bold weekday/label bullet with the
+subsection's decks nested beneath it, after any bare (unscheduled) topics.
+Hiding an optional/disabled subsection always hides its topics (they are not
+demoted to bare bullets), regardless of `--weekdays`. `--include-disabled`
 surfaces disabled subsections (and disabled sections) with a `(disabled)`
 marker, reading their decks from disk and appending disabled whole sections
 after the enabled ones; `--include-disabled=merge` instead interleaves them in
-declared order with no marker. The JSON format adds a `subsections` array to
-each section that uses them (alongside the flat `topics` list).
+declared order with no marker. The JSON format always adds a `subsections`
+array to each section that uses them (alongside the flat `topics` list) — it
+carries the grouping as structured data and is unaffected by `--weekdays`.
 
 Examples:
 
@@ -440,6 +446,7 @@ clm export outline course.xml
 clm export outline course.xml -L de
 clm export outline course.xml -d ./docs
 clm export outline course.xml --format json
+clm export outline course.xml --weekdays always           # group decks by weekday/label
 clm export outline course.xml --include-optional
 clm export outline course.xml --include-disabled          # roadmap weeks, tagged + appended
 clm export outline course.xml --include-disabled=merge     # roadmap weeks folded into the flow

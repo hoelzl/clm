@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+
+- **`clm export outline --weekdays [never|always]`** controls whether a
+  section's `<subsection>` weekday/name groupings are rendered as bold labels
+  in the Markdown outline. The default is `never`: every section's decks are
+  flattened into plain bullets, so weeks read uniformly whether or not they
+  declare subsections (previously, weeks that declared subsections rendered
+  weekday groups while weeks that did not — and disabled weeks under
+  `--include-disabled=merge`, which ignored subsections entirely — rendered
+  flat, an inconsistent mix). Pass `--weekdays always` to group decks under
+  their weekday/name label in every week, disabled weeks included. The JSON
+  format is unaffected — it always carries the grouping as a structured
+  `subsections` array.
+
 ### Changed
 
 - **The course-document commands `outline`, `schedule`, and `summarize` moved
