@@ -150,35 +150,56 @@ can be overridden per cohort.
 ## 6. The cohort calendar file
 
 One small, hand-editable file per channel, living beside the channel's ledger
-(`release/jan.txt` → `release/jan.calendar.yaml`). It is **not** part of the
+(`release/jan.txt` → `release/jan.calendar.toml`). It is **not** part of the
 spec XML — the spec stays diff-clean while this file absorbs the per-cohort
-churn, exactly mirroring the ledger philosophy. YAML, because the content is a
-few scalars plus two lists and it produces clean per-deviation diffs.
+churn, exactly mirroring the ledger philosophy. **TOML**, because it is the
+project's existing config idiom (`[tool.clm]`), parses with the stdlib
+`tomllib` (no new dependency — a value the ledger module shares), has **native
+date literals** (so `start`/`holidays`/`pin` dates become `datetime.date`
+directly), and produces clean per-deviation diffs. The file is only ever *read*
+programmatically (it is hand-edited; there is no `calendar add` writer), so
+`tomllib`'s read-only nature is no limitation.
 
-```yaml
+```toml
 # Cohort "jan" of ml-course — viewing calendar
-start: 2026-03-02              # first teaching date (a Monday)
-end:   2026-06-30              # last allowable teaching date; enforced by `check`
-pattern: [mon, tue, wed]       # optional; defaults to weekdays used in the spec
+start = 2026-03-02              # first teaching date (a Monday)
+end   = 2026-06-30              # last allowable teaching date; enforced by `check`
+pattern = ["mon", "tue", "wed"] # optional; defaults to weekdays used in the spec
 
-holidays:
-  - 2026-04-06                                   # single day (Easter Monday)
-  - 2026-05-01                                   # single day (Labour Day)
-  - {from: 2026-07-20, to: 2026-08-02, label: "Summer break"}   # inclusive interval
+holidays = [
+  2026-04-06,                                            # single day (Easter Monday)
+  2026-05-01,                                            # single day (Labour Day)
+  {from = 2026-07-20, to = 2026-08-02, label = "Summer break"},  # inclusive interval
+]
 
-adjustments:                   # ordered; the only thing the trainer routinely touches
-  - {merge: 2026-03-18, count: 2}                       # catch-up: 2 buckets on one date
-  - {split: variables_intro, dates: [2026-03-25, 2026-03-26]}   # slow down one bucket
-  - {insert: 2026-03-30, label: "Review & Q&A"}         # teaching date, no new video
-  - {pin: control_flow, date: 2026-04-09}               # anchor a bucket to a date
+# adjustments are an ordered array-of-tables — the only thing the trainer
+# routinely touches. Order is the file order of the [[adjustments]] blocks.
+[[adjustments]]
+merge = 2026-03-18              # catch-up: collapse `count` buckets onto one date
+count = 2
+
+[[adjustments]]
+split = "variables_intro"       # slow down one bucket across several dates
+dates = [2026-03-25, 2026-03-26]
+
+[[adjustments]]
+insert = 2026-03-30             # a teaching date carrying no new video
+label = "Review & Q&A"
+
+[[adjustments]]
+pin  = "control_flow"           # anchor a bucket to an exact date
+date = 2026-04-09
 ```
+
+Each `[[adjustments]]` table is identified by which of `merge` / `split` /
+`insert` / `pin` key it carries (exactly one is required per table).
 
 ### 6.1 Holidays
 
 Each entry is either:
 
 - a **single date**: `2026-04-06`, or
-- an **interval**: `{from: <date>, to: <date>, label?: <text>}`, **inclusive**
+- an **interval**: `{from = <date>, to = <date>, label = <text>?}`, **inclusive**
   on both ends. Intervals exist specifically for multi-day closures such as a
   two-week break — far less cumbersome than listing fourteen dates.
 
@@ -189,16 +210,18 @@ falling on a non-teaching weekday is a harmless no-op, and `check` notes it).
 
 An ordered list of perturbations applied to the default 1:1 zip, in sequence.
 
-| Form | Meaning |
+Each is a `[[adjustments]]` table carrying exactly one of these keys:
+
+| Keys | Meaning |
 |---|---|
-| `{merge: <date>, count: N}` | The next `N` buckets all land on `<date>` (collapse to one date). Catch-up. Pulls all subsequent buckets earlier. |
-| `{split: <bucket-ref>, dates: [<date>, ...]}` | The referenced bucket is spread across the listed dates. Decks may be distributed across the dates (optional per-date deck lists in a later iteration); by default the bucket's decks are shown on the first date and the rest are "continue". Pushes subsequent buckets later. |
-| `{insert: <date>, label: <text>}` | A teaching date carrying no new video (review, exam, guest session). Consumes a date; pushes subsequent buckets later. |
-| `{pin: <bucket-ref>, date: <date>}` | Anchor: the referenced bucket lands on exactly `<date>`. See §6.3. |
+| `merge = <date>`, `count = N` | The next `N` buckets all land on `<date>` (collapse to one date). Catch-up. Pulls all subsequent buckets earlier. |
+| `split = <bucket-ref>`, `dates = [<date>, ...]` | The referenced bucket is spread across the listed dates. Decks may be distributed across the dates (optional per-date deck lists in a later iteration); by default the bucket's decks are shown on the first date and the rest are "continue". Pushes subsequent buckets later. |
+| `insert = <date>`, `label = <text>` | A teaching date carrying no new video (review, exam, guest session). Consumes a date; pushes subsequent buckets later. |
+| `pin = <bucket-ref>`, `date = <date>` | Anchor: the referenced bucket lands on exactly `<date>`. See §6.3. |
 
 **Bucket references** (`<bucket-ref>`) are **topic or deck ids**, not week/weekday
 coordinates. Topic ids are the stable identifiers already used by the ledger;
-week/weekday coordinates shift whenever the spec is edited. `pin: control_flow`
+week/weekday coordinates shift whenever the spec is edited. `pin = "control_flow"`
 means "the bucket containing the deck/topic `control_flow`". If a ref is
 ambiguous or missing, `check` errors (§8).
 
@@ -268,21 +291,32 @@ The cohort started a day late, so the real teaching dates are **Tue, Wed, Thu,
 Fri** (4 dates). The trainer wants Monday's content to begin Tuesday but still
 finish the week on Friday:
 
-```yaml
-adjustments:
-  - {pin: M1, date: 2026-03-03}   # B_Mon starts Tue
-  - {pin: F2, date: 2026-03-06}   # B_Fri lands Fri
+```toml
+[[adjustments]]
+pin  = "M1"        # B_Mon starts Tue
+date = 2026-03-03
+
+[[adjustments]]
+pin  = "F2"        # B_Fri lands Fri
+date = 2026-03-06
 ```
 
 Segment Tue–Fri now holds 5 buckets in 4 dates → `calendar check` errors:
 `merge ≥ 1 bucket`. The trainer picks where to double up (say, the two lightest
 adjacent days, Tue + Wed):
 
-```yaml
-adjustments:
-  - {pin: M1, date: 2026-03-03}
-  - {pin: F2, date: 2026-03-06}
-  - {merge: 2026-03-04, count: 2}   # B_Tue + B_Wed share Wednesday
+```toml
+[[adjustments]]
+pin  = "M1"
+date = 2026-03-03
+
+[[adjustments]]
+pin  = "F2"
+date = 2026-03-06
+
+[[adjustments]]
+merge = 2026-03-04   # B_Tue + B_Wed share Wednesday
+count = 2
 ```
 
 Result — predictable, and only the day the trainer chose is doubled:
@@ -389,12 +423,12 @@ class Bucket:
     weekday_label: str          # plan-relative label
 
 @define
-class CohortCalendarConfig:     # parsed from release/<channel>.calendar.yaml
+class CohortCalendarConfig:     # parsed from release/<channel>.calendar.toml
     start: date
     end: date | None
     pattern: tuple[str, ...]    # weekday tokens; empty → derive from spec
-    holidays: list[Holiday]     # Holiday = single date | inclusive interval
-    adjustments: list[Adjustment]
+    holidays: tuple[Holiday, ...]   # Holiday = single date | inclusive interval
+    adjustments: tuple[Adjustment, ...]   # Merge | Split | Insert | Pin, in file order
 
 @define
 class Assignment:               # one calendar row
@@ -418,17 +452,20 @@ Course planned as 12 weeks × Mon/Tue/Wed. This cohort started a few days late a
 hit two single-day public holidays plus a two-week break, and is now ~1 week
 behind. The trainer wants to recover one day.
 
-```yaml
-# release/spring.calendar.yaml
-start: 2026-03-04        # started Wed, not Mon — two slots simply don't exist
-end:   2026-06-17
-pattern: [mon, tue, wed]
-holidays:
-  - 2026-04-06                                   # Easter Monday
-  - 2026-05-01                                   # Labour Day
-  - {from: 2026-05-18, to: 2026-05-29, label: "Two-week break"}
-adjustments:
-  - {merge: 2026-06-09, count: 2}                # double up one day to recover
+```toml
+# release/spring.calendar.toml
+start = 2026-03-04        # started Wed, not Mon — two slots simply don't exist
+end   = 2026-06-17
+pattern = ["mon", "tue", "wed"]
+holidays = [
+  2026-04-06,                                    # Easter Monday
+  2026-05-01,                                    # Labour Day
+  {from = 2026-05-18, to = 2026-05-29, label = "Two-week break"},
+]
+
+[[adjustments]]
+merge = 2026-06-09        # double up one day to recover
+count = 2
 ```
 
 - The late start, two holidays, and the break all drop teaching dates; content
@@ -436,7 +473,7 @@ adjustments:
 - `calendar check` confirms the 12 weeks of buckets still fit before
   `2026-06-17` *given* the one `merge`; without it, `check` would report the
   deficit ("merge ≥ 1 bucket to finish by Jun 17").
-- `export calendar spring.calendar.yaml -f ics` gives students a feed that, after
+- `export calendar spring.calendar.toml -f ics` gives students a feed that, after
   the next push, shows the recovered day and the shifted dates with no duplicate
   events.
 
@@ -456,7 +493,7 @@ and what-if previews).
 
 1. **Content sequence** — refactor `export schedule` to expose ordered `Bucket`s
    (incl. `span`); no behavior change to `schedule`.
-2. **Config + parse** — `release/<channel>.calendar.yaml` schema, loader,
+2. **Config + parse** — `release/<channel>.calendar.toml` schema, loader,
    `Holiday` interval support, defaulted `pattern`.
 3. **Projection engine** — date generation, pin segmentation, adjustments; pure
    and unit-tested.
