@@ -9,9 +9,11 @@ and reports:
   ALERTED     - errors/deferred/issue-error raised, watermark held
   SILENT-DROP - plan.is_noop, no alert, change not propagated (the forbidden state)
 
-As of master ``fab89615``, P1 / P5 / P9 are the three live SILENT-DROP cells (all
-tag-channel); promote each into ``tests/slides/`` as an expected-alert regression
-test once the channel-generic tag-parity fail-safe (assessment §5 P0) lands.
+On master ``fab89615`` (pre-#289), P1 / P5 / P9 were the three live SILENT-DROP
+cells (all tag-channel). The #289 fix closed them — P1 now PROPAGATES (Tier C on
+the git-HEAD baseline), P5 / P9 ALERT with the watermark held — and promoted the
+probes into ``tests/slides/test_sync_tag_drift.py``; this script remains the
+quick whole-matrix smoke run.
 
 Run: ``uv run python scripts/sync_matrix_probes.py``
 """

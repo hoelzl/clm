@@ -63,6 +63,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **`clm slides sync` no longer silently drops a one-sided tag-only edit**
+  (issue #289, found by the sync architecture review in
+  `docs/claude/sync-engine-architecture-assessment.md`). Three tag-channel
+  gaps — all of which previously reported *"decks already consistent"* and
+  advanced the watermark over the divergence, permanently hiding it from
+  later syncs — are closed:
+  - a tag-only edit on an **id-less localized** cell is now **mirrored** on a
+    committed (git-HEAD) baseline too, not only against a watermark: the
+    Tier C retag classifier re-derives the baseline rows + tag sets from the
+    committed text, so the first sync of a freshly-split committed pair
+    carries a `keep`/`alt` tag change across;
+  - a tag-only edit on a **language-neutral (shared)** cell — whose tags must
+    match across the halves, since a neutral cell is shared verbatim header
+    included — now **errors** (the body-hash detectors are blind to it, and
+    sync has no neutral-retag mirror yet): the watermark holds and nothing is
+    written. A combined body+tag edit still propagates both via the structural
+    rebuild's verbatim header copy, with no false alert. The post-apply
+    shared-cell parity fail-safe also compares tag sets now;
+  - a tag-only edit on an id-less localized cell **while the other half
+    reorders slide groups** (issue #285) now **errors** instead of vanishing:
+    positional tag mirroring is unsound across a reorder, so the drift is
+    detected order-blind (hash-keyed against each half's own baseline) and the
+    watermark holds.
+  A new channel-coverage meta-test pins the class: every channel the sync
+  watermark records (body hash, tags, header, order, identity, construct — per
+  partition) must name a live detector or fail-safe, so a future recorded
+  channel can no longer ship unconsumed the way shared-partition tags did.
 - **`clm slides sync` no longer errors when a new slide group is inserted next
   to a language-neutral cell.** Adding a new id'd slide (a localized markdown
   cell + its following language-neutral code cells) right after a neutral cell —
