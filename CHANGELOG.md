@@ -8,6 +8,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **Multiple release streams per cohort (issue #291).** A course can declare
+  several `<release-channels>` blocks — one per release *stream*, each fed by
+  its own `source-target` (e.g. `materials` from a `shared` target released
+  before each session, `solutions` from a `completed` target released after
+  the workshop). With more than one block each needs a unique `name`; channels
+  are addressed as `STREAM/CHANNEL` (`--channel materials/2026-04`) across
+  `clm release`, `clm git --channel/--all-channels`, and `clm calendar`, with
+  bare names still accepted when unique. Derived channel repo names gain the
+  stream segment (`{slug}-{channel}-{stream}`); spec validation rejects
+  duplicate stream/channel names and channels sharing a destination or ledger
+  across streams.
+- **Language-scoped release channels (issue #293).** `<channel lang="de">`
+  promotes only that language's files, re-rooted so the cohort repo's root is
+  the language directory — matching per-language distribution repos like
+  `…/machine-learning-azav-de` — and appends `-{lang}` to the derived repo
+  name. `clm release sync --language de|en` overrides per invocation. A
+  channel without `lang` keeps receiving every built language root (now
+  documented as the defined default).
+- **Declarative GitLab access-group shares (issue #294).** `<share-with
+  access="reporter">students/azav-ml/ml-2026-04</share-with>` on a `<channel>`
+  (or on the block, inherited by every channel) declares which GitLab groups a
+  channel repo is shared into; the new `clm release provision` applies the
+  shares via the GitLab API (idempotent, token from
+  `CLM_GITLAB_TOKEN`/`GITLAB_TOKEN`, safe no-op for non-GitLab remotes,
+  `--dry-run` preview). Repo creation itself stays push-to-create/manual.
+- **`clm git` skips release build-source targets (issue #292).** Without
+  `--target`, `clm git init/status/commit/push/sync/reset` no longer creates
+  or manages repos for output targets that only feed a release stream (named
+  as a `<release-channels source-target>`), nor for targets with an explicit
+  `distribute="false"` — those are private build inputs whose content reaches
+  students only through `clm release sync`. An explicit `--target NAME` still
+  selects such a target, and `distribute="true"` restores wholesale
+  distribution for a release source that is also pushed directly.
+- **A failing deck no longer blocks all releases (issue #295).** A
+  whole-course build with topic-attributable errors now writes the provenance
+  manifest for the cleanly-built subset, excluding the failed topics' entries
+  and recording them (`partial: true`, `failed_topics`). `clm release sync`
+  promotes every green topic and refuses the failed ones (`skip-failed`,
+  never frozen, loud warning) until a build succeeds for them. Errors that
+  cannot be attributed to a topic — and timed-out, `--watch`, or
+  `--only-sections` builds — still suppress the manifest entirely.
 - **Cohort viewing calendars (`clm export calendar`, `clm calendar check` /
   `status`)** project a course's schedule onto one cohort's real calendar dates
   (issue #283). Where `clm export schedule` is course-relative ("Week 3,

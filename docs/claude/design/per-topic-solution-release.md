@@ -458,3 +458,18 @@ drive straight through). Each step is independently testable and leaves the tree
 4. Payload round-trip guarantee (Issue #17): `src/clm/infrastructure/messaging/base_classes.py`
 5. Git machinery: `src/clm/cli/commands/git_ops.py`, `GitHubSpec.derive_remote_url()` in
    `src/clm/core/course_spec.py`
+
+---
+
+## 11. Post-ship extensions (issues #291–#295, 2026-06)
+
+Adoption by the ML-AZAV course surfaced five usability gaps, fixed in one
+follow-up batch (PR branch `claude/release-streams-291-295`):
+
+| Issue | Extension |
+|---|---|
+| #291 | **Multiple release streams**: several named `<release-channels>` blocks, each with its own `source-target`; channels addressed as `stream/channel` everywhere (`clm release`, `clm git`, `clm calendar`); repo names gain a `-{stream}` segment. Single unnamed block = unchanged #208 behavior. |
+| #292 | `<output-target distribute="false">`, defaulting to `false` for release `source-target`s — `clm git` (without `--target`) no longer turns private build inputs into distributed repos. |
+| #293 | `<channel lang="de">` / `clm release sync --language`: promote one language root, re-rooted at the language dir (`restrict_manifest_to_language`); repo names gain `-{lang}`. Unset = all language roots (documented default). |
+| #294 | `<share-with access="…">group/path</share-with>` + `clm release provision`: GitLab group shares via API (`src/clm/infrastructure/gitlab_api.py`); share-only by design — repo creation stays push-to-create/manual. |
+| #295 | Partial provenance manifests: an errored whole-course build writes the manifest for the built subset when every error attributes to a topic (`_failed_topic_ids` in `build.py`); manifest records `partial`/`failed_topics`; `plan_sync` refuses those topics with `skip-failed` (never frozen). Unattributable/fatal/timed-out → strict skip as before. |
