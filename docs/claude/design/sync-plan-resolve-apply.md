@@ -9,10 +9,22 @@ apply divergence** it exposed.
 
 **Status:** design accepted (2 forks settled — see §3); implementation phased
 (§10). **Phase 1 DONE** (the `refuse` disposition + both-directions guard moved to
-the resolver; all 5 parity/doubling xfails flipped — §9). **Phase 2 DONE (scoped):**
-the edit and add paths are materialize-then-execute (the model calls moved to 2b;
-execute writes mechanically). The id-migration recoverer and the `sync_code`
-structural translate remain inline as **explicitly-deferred follow-ups** (§10).
+the resolver; all 5 parity/doubling xfails flipped — §9). **Phase 2 DONE, follow-ups
+resolved 2026-06-10 (#289 P2):** the edit, add, **and structural** paths are
+materialize-then-execute — `_materialize_structural` pre-resolves the changed
+id-less localized cells into the run's **shared** `TranslationOutcome` cache (now
+defined in `sync_code`, consumed by both the add walks and the region rebuild, so
+a deferred add's outcome is already cached when the rebuild reaches for the cell);
+the rebuild reads cache-first with the documented inline fallback for a miss (a
+reuse-eligible cell whose target twin turns out absent/ambiguous). The
+**id-migration recoverer stays inline by decision, not omission**: it only fires
+when the deterministic migration tier is stuck, which is knowable before execute
+only by simulating that tier on copied states — a new lock-step contract (the
+simulation must track the real migration forever) bought for zero behavioral gain,
+since the recoverer is already opt-in, fingerprint-cached, hard-validated
+(`validate_alignment`), and safe-aborts to a deferral that holds the watermark.
+Materializing it would also force the LLM spend on passes the deterministic tier
+goes on to handle. Recorded as the accepted end-state of Phase 2.
 **Phase 3.1 (id-less cold-pair minting) DONE** — `build_sync_plan` emits a `pending`
 mint candidate, `apply_plan` verifies via the new `CorrespondenceVerifier` and mints
 via `assign_ids_in_split_pair`; `--verify-cold-pairs` default-on with a provider.
@@ -22,9 +34,9 @@ run right after the mint pass and mutually exclusive with it); `apply_plan` veri
 the same way and stamps the id'd half's *existing* ids onto the id-less twin
 (`_apply_cold_adopt` / `_adopt_ids_in_split_pair` — an explicit per-cell header stamp,
 **not** `assign_ids_in_split_pair`, which cannot pair an id-less cell with an id'd
-one). Mismatched-id and mixed-authority stay `refuse`. The whole #216 cluster is now
-resolved end-to-end; the only remaining items are the Phase-2 deferred follow-ups
-(the id-migration recoverer + `sync_code` structural translate).
+one). Mismatched-id and mixed-authority stay `refuse`. The whole #216 cluster is
+resolved end-to-end, and the Phase-2 follow-ups are closed (structural translate
+materialized; recoverer inline-by-decision — see the Phase 2 status above).
 
 ---
 
@@ -244,10 +256,14 @@ test: judge called once, in materialize). The add path materializes via
 source-cell id; the two add walks read the cache through `_translate`, with a
 model fallback for a cache miss that never fires because the materialize walks
 enumerate a **superset** of what execute translates (boundary test: translator
-called once per cell). Behavior-preserving (1106 sync tests green). **Deferred
-follow-ups (call models inline still):** the id-migration recoverer and the
-`sync_code` structural translate; and a single bundled `MaterializedPlan` object
-(the two materialize seams suffice, and the add seam is ordering-sensitive).
+called once per cell). Behavior-preserving (1106 sync tests green). **Follow-ups
+resolved 2026-06-10 (#289 P2):** the `sync_code` structural translate is
+materialized (`_materialize_structural` → the shared `TranslationOutcome` cache,
+inline fallback retained); the id-migration recoverer is **inline by decision**
+(see the Status block at the top — predicting its stuck-gate requires simulating
+the deterministic tier, a lock-step contract for zero behavioral gain); a bundled
+`MaterializedPlan` object stays rejected (the materialize seams suffice, and the
+add seam is ordering-sensitive).
 
 **Phase 3 — Cold-start minting + correspondence gate. [3.1 (id-less) DONE; 3.2
 (half-id'd) DONE — see §12].** `build_sync_plan` emits a `pending` mint candidate for

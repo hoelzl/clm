@@ -56,7 +56,7 @@ from clm.infrastructure.llm.ollama_client import OllamaError
 from clm.notebooks.slide_parser import Cell, comment_token_for_path, parse_cell_header, parse_cells
 from clm.slides.raw_cells import RawCell
 from clm.slides.slug import resolve_collision, slugify
-from clm.slides.sync_code import apply_code_structure
+from clm.slides.sync_code import TranslationOutcome, apply_code_structure
 from clm.slides.sync_plan import (
     MEMBERSHIP_ROLES,
     NEUTRAL_CODE_ROLE,
@@ -89,6 +89,7 @@ from clm.slides.sync_translate import TranslationError
 from clm.slides.sync_writeback import (
     CODE_ROLE,
     FileState,
+    anchor_of,
     build_twin_cell,
     cell_content_hash,
     construct_of,
@@ -194,21 +195,6 @@ class _EditOutcome:
 
     verdict: str  # "update" | "in_sync" | "blocked"
     proposed_text: str | None = None
-    error: str | None = None
-
-
-@dataclass
-class _TransOutcome:
-    """The materialized translation of one add/rename source cell (#216 2b).
-
-    Computed by :func:`_materialize_idcarrying` / :func:`_materialize_idless` so the
-    add execute walks call no translator: ``body`` is the translated counterpart, or
-    ``error`` is the deferral message to record (the translation raised). Exactly one
-    is set. Keyed by ``id(cell)`` of the source cell (stable: both decks load once
-    and the walks hold the same cell objects).
-    """
-
-    body: str | None = None
     error: str | None = None
 
 
@@ -349,12 +335,18 @@ def apply_plan(
             _note_deferred(deferred_keys, proposal)
         # "add" / "rename" are handled by _apply_adds below (always applied).
 
+    # The run's shared translation-outcome cache (#216 2b / #289 P2), keyed by
+    # source-cell id: the add materializers fill it for the add walks, the
+    # structural materializer below adds the changed id-less localized cells, and
+    # both execute passes read it — one model-call site per cell for the run.
+    translations: dict[int, TranslationOutcome] = {}
+
     # Adds run before moves so a freshly-inserted slide takes part in any
     # reorder. Adds are sticky via the stamped id (a re-run no longer sees an
     # id-less cell), so unlike moves they apply even on a *deferred* (non-clean)
     # pass — but, like every cell, the stamped id only reaches disk on an
     # error-free pass (the end-of-pass flush is gated on no errors).
-    _apply_adds(de_state, en_state, result, plan, translator)
+    _apply_adds(de_state, en_state, result, plan, translator, translations)
 
     # Moves are applied last, and only if the rest of the pass is clean (so the
     # watermark will advance and the reorder stays idempotent).
@@ -373,8 +365,16 @@ def apply_plan(
     # ride along to the twin.
     _migrate_drifted_ids(plan, de_state, en_state, result, recoverer, alignment_cache)
 
+    # Stage 2b for the structural pass (#289 P2): pre-resolve every translation
+    # the region rebuild will need into the shared cache, so the rebuild itself
+    # is mechanical. Runs after the id-migration (a freshly-stamped id moves a
+    # cell out of the id-less set, so enumerating here matches the rebuild
+    # exactly) and before any structural mutation.
     baseline_anchors = _baseline_anchor_hashes(plan)
-    apply_code_structure(plan, de_state, en_state, translator, result, baseline_anchors)
+    _materialize_structural(plan, de_state, en_state, translator, baseline_anchors, translations)
+    apply_code_structure(
+        plan, de_state, en_state, translator, result, baseline_anchors, translations
+    )
 
     # Place a newly-added slide group at its source position. The per-cell add path
     # anchors a new group beside the nearest neighbour it can name by (slide_id,
@@ -1554,6 +1554,7 @@ def _apply_adds(
     result: ApplyResult,
     plan: SyncPlan,
     translator: SlideTranslator | None,
+    translations: dict[int, TranslationOutcome],
 ) -> None:
     """Translate and insert counterparts for new and copy-pasted cells.
 
@@ -1590,15 +1591,17 @@ def _apply_adds(
         return
 
     # Stage 2b for the add path (#216 resolve-then-apply): every translation is
-    # materialized into ``translations`` (keyed by source-cell id) just before the
-    # execute walk that consumes it, the only place the add path calls the
-    # translator. The walks below mint ids (deterministic) and insert twins,
-    # reading the cache; the ``translator`` they still receive is only a safety
-    # fallback for a cache miss (the materialize walks are built to enumerate a
-    # superset of what the execute walks translate, so a miss never happens). The
-    # materialize calls sit right before their walks so cell identity — and the
-    # post-id-carrying state the id-less walk reads — match exactly.
-    translations: dict[int, _TransOutcome] = {}
+    # materialized into ``translations`` — the run's SHARED outcome cache, keyed
+    # by source-cell id (#289 P2: the structural pass later reads the same cache,
+    # so a deferred add's outcome is already there when a rebuild reaches for the
+    # cell) — just before the execute walk that consumes it, the only place the
+    # add path calls the translator. The walks below mint ids (deterministic) and
+    # insert twins, reading the cache; the ``translator`` they still receive is
+    # only a safety fallback for a cache miss (the materialize walks are built to
+    # enumerate a superset of what the execute walks translate, so a miss never
+    # happens). The materialize calls sit right before their walks so cell
+    # identity — and the post-id-carrying state the id-less walk reads — match
+    # exactly.
 
     # id-carrying adds: a new cell (slide / subslide / narrative / aux markdown /
     # localized code) already minted with a slide_id on one side only — e.g. a
@@ -1657,7 +1660,7 @@ def _cache_translation(
     target_lang: str,
     role: str,
     translator: SlideTranslator,
-    cache: dict[int, _TransOutcome],
+    cache: dict[int, TranslationOutcome],
 ) -> None:
     """Translate one add source cell into ``cache`` (no ``result`` accounting here).
 
@@ -1673,9 +1676,9 @@ def _cache_translation(
             target_lang=target_lang,
             role=role,
         )
-        cache[id(cell)] = _TransOutcome(body=body)
+        cache[id(cell)] = TranslationOutcome(body=body)
     except TranslationError as exc:
-        cache[id(cell)] = _TransOutcome(error=f"{role}: translation failed: {exc}")
+        cache[id(cell)] = TranslationOutcome(error=f"{role}: translation failed: {exc}")
 
 
 def _materialize_idcarrying(
@@ -1684,7 +1687,7 @@ def _materialize_idcarrying(
     target_lang: str,
     add_keys: set[tuple[str | None, str]],
     translator: SlideTranslator,
-    cache: dict[int, _TransOutcome],
+    cache: dict[int, TranslationOutcome],
 ) -> None:
     """Pre-translate every id-carrying add cell (those :func:`_add_idcarrying_one_direction` translates)."""
     for cell in list(source_state.cells):
@@ -1703,7 +1706,7 @@ def _materialize_idless(
     target_lang: str,
     copy_slide_ids: set[int],
     translator: SlideTranslator,
-    cache: dict[int, _TransOutcome],
+    cache: dict[int, TranslationOutcome],
 ) -> None:
     """Pre-translate every cell :func:`_add_one_direction` will translate.
 
@@ -1740,6 +1743,53 @@ def _materialize_idless(
         _cache_translation(cell, source_lang, target_lang, role, translator, cache)
 
 
+def _materialize_structural(
+    plan: SyncPlan,
+    de_state: FileState,
+    en_state: FileState,
+    translator: SlideTranslator | None,
+    baseline_anchors: dict[str, dict[str, str]],
+    translations: dict[int, TranslationOutcome],
+) -> None:
+    """Pre-translate the structural pass's changed id-less localized cells (#289 P2).
+
+    Stage 2b for the structural path: enumerates the id-less localized source
+    cells :func:`clm.slides.sync_code._rebuild_region` translates — those whose
+    content anchor is **not** recorded unchanged in the baseline (an unchanged
+    cell is reuse-spliced verbatim, Issue #190 item 3, and must not be translated
+    here either) — and resolves each through the run's shared outcome cache. The
+    execute pass then reads the cache; a miss (a reuse-eligible cell whose target
+    twin turns out absent or ambiguous mid-rebuild) falls back to translating
+    inline, the same documented safety net the add path carries. Keyed-cell
+    fallback translations need no enumeration here: a deferred add's source cell
+    already sits in the shared cache from the add materializers.
+
+    Skipped without a baseline (``plan.baseline_bundle`` ``None``): a no-baseline
+    run has no reuse path, so the rebuild translates every id-less cell of a
+    rebuilding region — but only of *rebuilding* regions, which cannot be
+    enumerated without replaying the rebuild decisions; the inline path keeps
+    that rare cold shape exactly as it was.
+    """
+    if translator is None or plan.baseline_bundle is None:
+        return
+    direction = _effective_direction(plan)
+    if direction is None:
+        return
+    if direction == "en->de":
+        source_state, source_lang, target_lang = en_state, "en", "de"
+    else:
+        source_state, source_lang, target_lang = de_state, "de", "en"
+    src_anchors = baseline_anchors.get(source_lang, {})
+    for cell in list(source_state.cells):
+        meta = cell.metadata
+        if meta.is_j2 or meta.lang != source_lang or role_of(meta) is not None:
+            continue
+        if src_anchors.get(anchor_of(meta, cell.body)) == cell_content_hash(cell.body):
+            continue  # unchanged since baseline → spliced verbatim, never translated
+        kind = CODE_ROLE if meta.cell_type == "code" else "markdown"
+        _cache_translation(cell, source_lang, target_lang, kind, translator, translations)
+
+
 def _add_idcarrying_one_direction(
     source_state: FileState,
     target_state: FileState,
@@ -1748,7 +1798,7 @@ def _add_idcarrying_one_direction(
     add_keys: set[tuple[str | None, str]],
     translator: SlideTranslator,
     result: ApplyResult,
-    translations: dict[int, _TransOutcome],
+    translations: dict[int, TranslationOutcome],
 ) -> None:
     """Insert the twin of each id-carrying new cell, under the same id, at anchor.
 
@@ -1831,7 +1881,7 @@ def _add_one_direction(
     used_ids: set[str],
     result: ApplyResult,
     copy_slide_ids: set[int],
-    translations: dict[int, _TransOutcome],
+    translations: dict[int, TranslationOutcome],
 ) -> None:
     """Walk the source deck, minting ids for new and copy-pasted slides.
 
@@ -1915,7 +1965,7 @@ def _translate(
     translator: SlideTranslator,
     role: str,
     result: ApplyResult,
-    translations: dict[int, _TransOutcome],
+    translations: dict[int, TranslationOutcome],
 ) -> str | None:
     """Return the materialized translation of a cell, recording a deferral on failure.
 
