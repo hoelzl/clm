@@ -34,8 +34,9 @@ class OutputRepo:
     """Represents an output directory that may have a git repository.
 
     ``source`` distinguishes an ``<output-target>`` repo (``"output"``) from a
-    per-cohort release channel repo (``"channel"``, issue #208). Channel repos
-    are not language-scoped, so their ``language`` is the empty string.
+    per-cohort release channel repo (``"channel"``, issue #208). A channel
+    repo's ``language`` is the empty string unless the channel is
+    language-scoped via its ``lang`` attribute (issue #293).
     """
 
     def __init__(
@@ -410,13 +411,17 @@ def find_release_channel_repos(
             remote_template=remote_template,
             remote_path=effective_remote_path,
             stream=block.name,
+            language=channel.lang,
         )
 
         repos.append(
             OutputRepo(
                 path=path,
+                # A language-scoped channel (issue #293) carries its lang so the
+                # display name reads e.g. "materials/2026-04/de"; the repo path
+                # is still the single channel dest (one repo per channel).
                 target_name=release_channel_ref(block, channel),
-                language="",
+                language=channel.lang,
                 remote_url=remote_url,
                 source="channel",
             )

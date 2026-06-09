@@ -421,3 +421,70 @@ def test_find_manifest_missing_returns_none(tmp_path):
     out = tmp_path / "out"
     out.mkdir()
     assert find_course_manifest_path(output_root=out) is None
+
+
+# ---------------------------------------------------------------------------
+# restrict_manifest_to_language (issue #293)
+# ---------------------------------------------------------------------------
+
+
+def _two_language_manifest() -> dict:
+    return {
+        "version": 1,
+        "target": "shared",
+        "source_commit": "abc",
+        "files": [
+            {
+                "path": "ml-de/Folien/01 Intro.ipynb",
+                "topic_id": "intro",
+                "language": "de",
+                "content_hash": "sha256:a",
+            },
+            {
+                "path": "ml-en/Slides/01 Intro.ipynb",
+                "topic_id": "intro",
+                "language": "en",
+                "content_hash": "sha256:b",
+            },
+            {
+                "path": "ml-de/data/d.csv",
+                "topic_id": None,
+                "language": "de",
+                "content_hash": "sha256:c",
+            },
+        ],
+    }
+
+
+def test_restrict_keeps_only_the_language_and_strips_the_root():
+    from clm.core.provenance_manifest import restrict_manifest_to_language
+
+    restricted = restrict_manifest_to_language(_two_language_manifest(), "de", "ml-de")
+    assert [f["path"] for f in restricted["files"]] == [
+        "Folien/01 Intro.ipynb",
+        "data/d.csv",
+    ]
+    assert restricted["language"] == "de"
+    # Build-level metadata is preserved for freeze records.
+    assert restricted["source_commit"] == "abc"
+
+
+def test_restrict_requires_both_language_and_path_prefix():
+    from clm.core.provenance_manifest import restrict_manifest_to_language
+
+    manifest = _two_language_manifest()
+    # An entry claiming "de" but living outside the de root is dropped.
+    manifest["files"].append(
+        {"path": "stray/x.txt", "topic_id": "intro", "language": "de", "content_hash": "sha256:x"}
+    )
+    restricted = restrict_manifest_to_language(manifest, "de", "ml-de")
+    assert all(not f["path"].startswith("stray") for f in restricted["files"])
+
+
+def test_restrict_does_not_mutate_the_input():
+    from clm.core.provenance_manifest import restrict_manifest_to_language
+
+    manifest = _two_language_manifest()
+    restrict_manifest_to_language(manifest, "en", "ml-en")
+    assert manifest["files"][0]["path"] == "ml-de/Folien/01 Intro.ipynb"
+    assert "language" not in manifest

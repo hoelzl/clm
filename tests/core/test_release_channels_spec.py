@@ -212,3 +212,38 @@ class TestChannelRemoteUrl:
         assert url == "https://gitlab.example.com/ca/ml-2026-04-materials"
         plain = spec.github.derive_channel_remote_url("jan", project_slug="ml")
         assert plain == "https://gitlab.example.com/ca/ml-jan"
+
+
+class TestLanguageScopedChannels:
+    """Channel `lang` attribute (issue #293)."""
+
+    LANG_BLOCK = """
+    <release-channels source-target="shared">
+      <channel name="jan-de" lang="de" path="./solutions/jan-de" ledger="release/jan-de.txt"/>
+      <channel name="jan" path="./solutions/jan" ledger="release/jan.txt"/>
+    </release-channels>
+    """
+
+    def test_lang_parses_and_defaults_to_unscoped(self):
+        spec = _spec(self.LANG_BLOCK, TWO_STREAM_TARGETS)
+        block = spec.release_channel_blocks[0]
+        assert block.channel("jan-de").lang == "de"
+        assert block.channel("jan").lang == ""
+
+    def test_invalid_lang_is_a_validation_error(self):
+        bad = self.LANG_BLOCK.replace('lang="de"', 'lang="fr"')
+        errors = _spec(bad, TWO_STREAM_TARGETS).validate()
+        assert any("invalid lang 'fr'" in e for e in errors)
+
+    def test_valid_lang_validates_clean(self):
+        assert _spec(self.LANG_BLOCK, TWO_STREAM_TARGETS).validate() == []
+
+    def test_remote_url_appends_lang_after_stream(self):
+        from clm.core.course_spec import GitHubSpec
+
+        gh = GitHubSpec(project_slug="ml", repository_base="https://gitlab.example.com/ca")
+        url = gh.derive_channel_remote_url("2026-04", stream="materials", language="de")
+        assert url == "https://gitlab.example.com/ca/ml-2026-04-materials-de"
+        # Lang without stream (single unnamed block).
+        url = gh.derive_channel_remote_url("jan", language="en")
+        assert url == "https://gitlab.example.com/ca/ml-jan-en"

@@ -377,6 +377,41 @@ def find_course_manifest_path(
     return None
 
 
+def restrict_manifest_to_language(
+    manifest: dict[str, Any], language: str, lang_dir_name: str
+) -> dict[str, Any]:
+    """A copy of *manifest* holding only *language*'s files, re-rooted (issue #293).
+
+    A build manifest lives at the output-target root and spans every built
+    language; a language-scoped release channel promotes one language root
+    into a repo whose *own* root is that language directory (matching the
+    per-language repo convention, e.g. ``…-azav-de``). So this keeps only
+    entries recorded for *language* whose path lies under *lang_dir_name*
+    (the localized course directory, ``CourseSpec.output_dir_name[lang]``)
+    and strips that leading segment. Both conditions must hold: the language
+    field alone could collide when a course names its de/en directories
+    identically, and the path prefix alone is what makes the re-rooting valid.
+
+    The result is what the release engine should treat as "the manifest" —
+    callers pass ``<target root>/<lang_dir_name>`` as the source root so the
+    rewritten relative paths resolve unchanged.
+    """
+    prefix = lang_dir_name.rstrip("/") + "/"
+    files: list[dict[str, Any]] = []
+    for entry in manifest.get("files", []):
+        if entry.get("language") != language:
+            continue
+        path = entry.get("path", "")
+        if not path.startswith(prefix):
+            logger.debug("language restriction: %r is not under %r; skipped", path, lang_dir_name)
+            continue
+        files.append({**entry, "path": path[len(prefix) :]})
+    restricted = dict(manifest)
+    restricted["files"] = files
+    restricted["language"] = language
+    return restricted
+
+
 def manifest_files_by_topic(
     manifest: dict[str, Any],
 ) -> dict[str | None, list[dict[str, Any]]]:

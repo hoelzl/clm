@@ -698,3 +698,158 @@ class TestSyncPush:
         assert FROZEN_FILENAME in tracked
         assert _last_subject(dest) == "Release to jan: 1 new"
         assert _git(remote, "log", "-1", "--format=%s").stdout.strip() == "Release to jan: 1 new"
+
+
+# ---------------------------------------------------------------------------
+# Language-scoped channels (issue #293)
+# ---------------------------------------------------------------------------
+
+SPEC_LANG_CHANNELS = """
+<course>
+  <name><de>T</de><en>T</en></name>
+  <prog-lang>python</prog-lang>
+  <project-slug>ml</project-slug>
+  <sections>
+    <section>
+      <name><de>S</de><en>S</en></name>
+      <topics><topic>intro</topic></topics>
+    </section>
+  </sections>
+  <output-targets>
+    <output-target name="src">
+      <path>output/src</path>
+      <kinds><kind>completed</kind></kinds>
+    </output-target>
+  </output-targets>
+  <release-channels source-target="src">
+    <channel name="jan-de" lang="de" path="solutions/jan-de" ledger="release/jan-de.txt"/>
+    <channel name="jan-en" lang="en" path="solutions/jan-en" ledger="release/jan-en.txt"/>
+    <channel name="jan-all" path="solutions/jan-all" ledger="release/jan-all.txt"/>
+  </release-channels>
+</course>
+""".strip()
+
+
+def _write_two_language_source(root: Path) -> None:
+    """A built `src` target with de (ml-de) and en (ml-en) language roots."""
+    root.mkdir(parents=True, exist_ok=True)
+    manifest = {
+        "version": 1,
+        "source_commit": "abc",
+        "source_dirty": False,
+        "built_at": "t",
+        "target": "src",
+        "files": [
+            {
+                "path": "ml-de/Folien/01 Intro.ipynb",
+                "topic_id": "intro",
+                "section_id": "w01",
+                "kind": "completed",
+                "format": "notebook",
+                "language": "de",
+                "content_hash": "sha256:a",
+            },
+            {
+                "path": "ml-en/Slides/01 Intro.ipynb",
+                "topic_id": "intro",
+                "section_id": "w01",
+                "kind": "completed",
+                "format": "notebook",
+                "language": "en",
+                "content_hash": "sha256:b",
+            },
+        ],
+    }
+    (root / MANIFEST_FILENAME).write_text(json.dumps(manifest), encoding="utf-8")
+    for entry in manifest["files"]:
+        path = root / entry["path"]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(entry["content_hash"], encoding="utf-8")
+
+
+def test_lang_channel_promotes_one_language_rerooted(tmp_path):
+    runner = CliRunner()
+    spec_file = _write_spec(tmp_path, SPEC_LANG_CHANNELS)
+    _write_two_language_source(tmp_path / "output" / "src")
+
+    runner.invoke(release_group, ["add", str(spec_file), "intro", "--channel", "jan-de"])
+    sync = runner.invoke(release_group, ["sync", str(spec_file), "--channel", "jan-de"])
+    assert sync.exit_code == 0, sync.output
+
+    dest = tmp_path / "solutions" / "jan-de"
+    # Re-rooted at the language directory: no ml-de/ segment in the repo.
+    assert (dest / "Folien/01 Intro.ipynb").is_file()
+    assert not (dest / "ml-de").exists()
+    # The other language never leaks into the scoped channel.
+    assert not (dest / "Slides").exists()
+    assert not (dest / "ml-en").exists()
+
+
+def test_unscoped_channel_still_receives_every_language_root(tmp_path):
+    runner = CliRunner()
+    spec_file = _write_spec(tmp_path, SPEC_LANG_CHANNELS)
+    _write_two_language_source(tmp_path / "output" / "src")
+
+    runner.invoke(release_group, ["add", str(spec_file), "intro", "--channel", "jan-all"])
+    sync = runner.invoke(release_group, ["sync", str(spec_file), "--channel", "jan-all"])
+    assert sync.exit_code == 0, sync.output
+
+    dest = tmp_path / "solutions" / "jan-all"
+    assert (dest / "ml-de/Folien/01 Intro.ipynb").is_file()
+    assert (dest / "ml-en/Slides/01 Intro.ipynb").is_file()
+
+
+def test_language_option_overrides_channel_scope(tmp_path):
+    runner = CliRunner()
+    spec_file = _write_spec(tmp_path, SPEC_LANG_CHANNELS)
+    _write_two_language_source(tmp_path / "output" / "src")
+
+    runner.invoke(release_group, ["add", str(spec_file), "intro", "--channel", "jan-all"])
+    sync = runner.invoke(
+        release_group,
+        ["sync", str(spec_file), "--channel", "jan-all", "--language", "en"],
+    )
+    assert sync.exit_code == 0, sync.output
+
+    dest = tmp_path / "solutions" / "jan-all"
+    assert (dest / "Slides/01 Intro.ipynb").is_file()
+    assert not (dest / "ml-de").exists()
+
+
+def test_language_without_spec_file_errors(tmp_path):
+    runner = CliRunner()
+    source = tmp_path / "src"
+    _write_source(source)
+    ledger = tmp_path / "jan.txt"
+    Ledger(["intro"]).save(ledger)
+    result = runner.invoke(
+        release_group,
+        [
+            "sync",
+            "--ledger",
+            str(ledger),
+            "--source",
+            str(source),
+            "--dest",
+            str(tmp_path / "dest"),
+            "--language",
+            "de",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "requires the SPEC_FILE" in result.output
+
+
+def test_missing_language_root_is_a_clear_error(tmp_path):
+    runner = CliRunner()
+    spec_file = _write_spec(tmp_path, SPEC_LANG_CHANNELS)
+    source = tmp_path / "output" / "src"
+    _write_two_language_source(source)
+    import shutil
+
+    shutil.rmtree(source / "ml-de")
+
+    runner.invoke(release_group, ["add", str(spec_file), "intro", "--channel", "jan-de"])
+    sync = runner.invoke(release_group, ["sync", str(spec_file), "--channel", "jan-de"])
+    assert sync.exit_code != 0
+    assert "Language root not found" in sync.output

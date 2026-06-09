@@ -723,28 +723,32 @@ class GitHubSpec:
         remote_template: str = "",
         remote_path: str = "",
         stream: str = "",
+        language: str = "",
     ) -> str | None:
-        """Derive the remote URL for a release channel (issues #208, #291).
+        """Derive the remote URL for a release channel (issues #208, #291, #293).
 
         The repo name is ``{slug}-{channel_name}`` for the single unnamed
         ``<release-channels>`` block (the cohort name, e.g. ``cohort-jan``,
         disambiguates it); a named stream appends its name —
         ``{slug}-{channel_name}-{stream}`` (e.g. ``ml-2026-04-materials``) —
-        so the two streams of one cohort land in distinct repos. Reusing
-        :meth:`derive_remote_url` with an empty language would emit a stray
-        ``--`` in the repo name; this method avoids that while sharing the
-        same base/remote-path/template handling.
+        so the two streams of one cohort land in distinct repos, and a
+        language-scoped channel appends its ``lang`` as the final segment
+        (``…-materials-de``), matching the per-language repo convention.
+        Reusing :meth:`derive_remote_url` with an empty language would emit a
+        stray ``--`` in the repo name; this method avoids that while sharing
+        the same base/remote-path/template handling.
 
-        The ``{lang}`` and ``{suffix}`` template placeholders are bound to the
-        empty string for channels; ``{stream}`` carries the stream name (empty
-        for an unnamed block). Returns ``None`` when git config is not set.
+        The ``{suffix}`` template placeholder is bound to the empty string for
+        channels; ``{stream}`` carries the stream name and ``{lang}`` the
+        channel language (each empty when unset). Returns ``None`` when git
+        config is not set.
         """
         slug = project_slug or self.project_slug
         if not (slug and self.repository_base):
             return None
 
         effective_remote_path = remote_path or self.remote_path
-        repo = "-".join(part for part in (slug, channel_name, stream) if part)
+        repo = "-".join(part for part in (slug, channel_name, stream, language) if part)
         template = remote_template or self.remote_template
         if not template:
             if effective_remote_path:
@@ -756,7 +760,7 @@ class GitHubSpec:
             remote_path=effective_remote_path,
             repo=repo,
             slug=slug,
-            lang="",
+            lang=language,
             suffix="",
             stream=stream,
         )
@@ -1152,12 +1156,20 @@ class ReleaseChannelSpec:
     ``ledger`` (in the course source repo). ``remote_path`` overrides the
     parent ``<release-channels>`` default for remote-URL derivation, mirroring
     :class:`OutputTargetSpec.remote_path`.
+
+    ``lang`` (issue #293) scopes the channel to a single language: ``clm
+    release sync`` then promotes only that language's files, re-rooted at the
+    language directory, and the derived repo name gains a ``-{lang}`` suffix —
+    matching the established per-language distribution convention (e.g.
+    ``…/machine-learning-azav-de``). When unset, the channel receives **every**
+    built language root (the pre-#293 behavior).
     """
 
     name: str
     path: str
     ledger: str
     remote_path: str = ""
+    lang: str = ""
 
     @classmethod
     def from_element(
@@ -1168,6 +1180,7 @@ class ReleaseChannelSpec:
             path=element.get("path", ""),
             ledger=element.get("ledger", ""),
             remote_path=(element_text(element, "remote-path") or default_remote_path),
+            lang=element.get("lang", ""),
         )
 
 
@@ -2041,6 +2054,12 @@ class CourseSpec:
                     )
                 else:
                     ledgers[channel.ledger] = ref
+
+                if channel.lang and channel.lang not in VALID_LANGUAGES:
+                    errors.append(
+                        f"Channel '{ref}': invalid lang {channel.lang!r}. "
+                        f"Valid values: {sorted(VALID_LANGUAGES)}"
+                    )
 
         return errors
 

@@ -31,7 +31,11 @@ from clm.core.course_spec import (
     SectionSpec,
     release_channel_ref,
 )
-from clm.core.provenance_manifest import MANIFEST_FILENAME, load_manifest
+from clm.core.provenance_manifest import (
+    MANIFEST_FILENAME,
+    load_manifest,
+    restrict_manifest_to_language,
+)
 from clm.release.frozen_manifest import FROZEN_FILENAME, FrozenManifest
 from clm.release.ledger import Ledger, partition_known
 from clm.release.sync import SyncResult, apply_sync, plan_sync
@@ -64,6 +68,9 @@ class _ResolvedChannel:
     ledger: Path
     source: Path | None
     dest: Path
+    # Channel language scope (issue #293). Empty = the channel receives every
+    # built language root.
+    lang: str = ""
 
 
 @click.group("release")
@@ -96,6 +103,7 @@ def _resolve_channel(spec_file: Path, channel_name: str) -> _ResolvedChannel:
         ledger=_abs_under(course_root, channel.ledger),
         source=source,
         dest=_abs_under(course_root, channel.path),
+        lang=channel.lang,
     )
 
 
@@ -364,6 +372,14 @@ def status_cmd(
     help="Re-copy and re-freeze these already-frozen topics (e.g. a bug fix).",
 )
 @click.option("--refreeze-all", is_flag=True, help="Re-copy and re-freeze every released topic.")
+@click.option(
+    "--language",
+    type=click.Choice(["de", "en"]),
+    default=None,
+    help="Promote only this language's files, re-rooted at the language "
+    "directory (issue #293). Overrides the channel's lang attribute; requires "
+    "SPEC_FILE. --source must point at the output-target root.",
+)
 @click.option("--dry-run", is_flag=True, help="Print the plan; copy nothing.")
 @click.option(
     "--push",
@@ -386,6 +402,7 @@ def sync_cmd(
     dest_path: Path | None,
     refreeze_ids: tuple[str, ...],
     refreeze_all: bool,
+    language: str | None,
     dry_run: bool,
     push: bool,
     commit_message: str | None,
@@ -396,7 +413,13 @@ def sync_cmd(
     ``SPEC_FILE``'s <release-channels>) or with explicit
     ``--ledger``/``--source``/``--dest`` paths. With ``--push`` the cohort repo
     is committed and pushed afterward, reusing ``clm git``'s machinery.
+
+    A channel with a ``lang`` attribute — or an explicit ``--language`` —
+    promotes only that language's files, re-rooted so the cohort repo's root
+    is the language directory (issue #293). Without either, the destination
+    receives every built language root.
     """
+    channel_lang = ""
     if channel:
         if spec_file is None:
             raise click.ClickException("--channel requires the SPEC_FILE argument.")
@@ -407,6 +430,7 @@ def sync_cmd(
         ledger_path = ledger_path or resolved.ledger
         source_path = source_path or resolved.source
         dest_path = dest_path or resolved.dest
+        channel_lang = resolved.lang
 
     if ledger_path is None or source_path is None or dest_path is None:
         raise click.ClickException(
@@ -422,6 +446,31 @@ def sync_cmd(
             f"`clm build --provenance-manifest` first."
         )
     manifest = load_manifest(manifest_path)
+
+    # Language scoping (issue #293): restrict the manifest to one language and
+    # re-root both it and the copy source at the language directory.
+    effective_lang = language or channel_lang
+    if effective_lang:
+        if spec_file is None:
+            raise click.ClickException(
+                "--language requires the SPEC_FILE argument (it resolves the "
+                "language directory name from the spec)."
+            )
+        lang_dir = str(CourseSpec.from_file(spec_file).output_dir_name[effective_lang])
+        lang_root = source_path / lang_dir
+        if not lang_root.is_dir():
+            raise click.ClickException(
+                f"Language root not found: {lang_root}. Build the source target "
+                f"for language {effective_lang!r} first."
+            )
+        manifest = restrict_manifest_to_language(manifest, effective_lang, lang_dir)
+        if not manifest["files"]:
+            raise click.ClickException(
+                f"The provenance manifest records no {effective_lang!r} files under "
+                f"{lang_dir!r}; nothing could ever be promoted. Was the source "
+                f"built without that language?"
+            )
+        source_path = lang_root
     ledger = Ledger.load(ledger_path)
     channel_name = channel or dest_path.name
     frozen_path = dest_path / FROZEN_FILENAME
