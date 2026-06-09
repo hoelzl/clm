@@ -39,6 +39,7 @@ this structural step.
 from __future__ import annotations
 
 from collections import Counter
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from clm.slides.raw_cells import RawCell
@@ -57,7 +58,27 @@ if TYPE_CHECKING:
     from clm.slides.sync_plan import SyncPlan
     from clm.slides.sync_translate import SlideTranslator
 
-__all__ = ["apply_code_structure"]
+__all__ = ["TranslationOutcome", "apply_code_structure"]
+
+
+@dataclass
+class TranslationOutcome:
+    """The materialized translation of one source cell (#216 2b / #289 P2).
+
+    ``body`` is the translated counterpart, or ``error`` is the deferral message
+    to record (the translation raised). Exactly one is set. Keyed by ``id(cell)``
+    of the source cell (stable: both decks load once and every walk holds the
+    same cell objects). One shared cache serves the add walks
+    (:func:`clm.slides.sync_apply._materialize_idcarrying` /
+    ``_materialize_idless``) AND the structural pass
+    (``_materialize_structural``), so e.g. a deferred add's source cell already
+    carries its outcome when the structural rebuild reaches for it. Defined here
+    (the lowest consumer) because :mod:`clm.slides.sync_apply` imports this
+    module.
+    """
+
+    body: str | None = None
+    error: str | None = None
 
 
 def apply_code_structure(
@@ -67,6 +88,7 @@ def apply_code_structure(
     translator: SlideTranslator | None,
     result: ApplyResult,
     baseline_anchors: dict[str, dict[str, str]] | None = None,
+    translations: dict[int, TranslationOutcome] | None = None,
 ) -> None:
     """Propagate language-neutral / id-less-localized cells and fix group order.
 
@@ -79,6 +101,13 @@ def apply_code_structure(
     localized code cell is **unchanged** (its source-side anchor is in the
     baseline with the same content hash), the existing target twin is spliced
     verbatim instead of re-translated — Issue #190 item 3 (§8).
+
+    ``translations`` is the shared pre-materialized translation cache (#289 P2,
+    stage 2b): the rebuild reads each needed translation from it by source-cell
+    id, so the common path calls no model inside the execute walk. A miss —
+    e.g. a reuse-eligible cell whose target twin turned out absent/ambiguous —
+    falls back to translating inline, the same documented safety net as the add
+    path.
     """
     direction = _single_direction(plan)
     if direction is None:
@@ -137,6 +166,7 @@ def apply_code_structure(
             translator,
             result,
             src_anchors,
+            translations,
         )
         if rebuilt is None:
             # A translation needed for the rebuild failed (no translator, or it
@@ -318,6 +348,7 @@ def _rebuild_region(
     translator: SlideTranslator | None,
     result: ApplyResult,
     src_anchors: dict[str, str] | None = None,
+    translations: dict[int, TranslationOutcome] | None = None,
 ) -> list[RawCell] | None:
     """Rebuild a target region to mirror the source region's cell order.
 
@@ -364,9 +395,12 @@ def _rebuild_region(
                 out.append(twin)
             else:
                 # The per-cell pass should have placed this twin (add/edit). If it
-                # is missing (e.g. translation deferred), translate as a fallback;
+                # is missing (e.g. translation deferred), translate as a fallback —
+                # the shared cache already carries a deferred add's outcome — and
                 # on failure, abort the whole region rather than drop the cell.
-                body = _translate(cell, source_lang, target_lang, role, translator, result)
+                body = _translate(
+                    cell, source_lang, target_lang, role, translator, result, translations
+                )
                 if body is None:
                     return None
                 out.append(build_twin_cell(cell, target_lang, body))
@@ -381,7 +415,9 @@ def _rebuild_region(
                 out.append(reused)
                 continue
             kind = CODE_ROLE if meta.cell_type == "code" else "markdown"
-            body = _translate(cell, source_lang, target_lang, kind, translator, result)
+            body = _translate(
+                cell, source_lang, target_lang, kind, translator, result, translations
+            )
             if body is None:
                 return None
             out.append(build_twin_cell(cell, target_lang, body))
@@ -434,8 +470,23 @@ def _translate(
     role: str,
     translator: SlideTranslator | None,
     result: ApplyResult,
+    translations: dict[int, TranslationOutcome] | None = None,
 ) -> str | None:
-    """Translate a cell body for the structural pass, recording failures."""
+    """Resolve a cell's translation for the structural pass, recording failures.
+
+    Reads the pre-materialized outcome from the shared ``translations`` cache
+    first (#289 P2 — the model call happened in stage 2b); a miss falls back to
+    translating inline, the documented safety net for a cell the materializer
+    could not foresee needing (e.g. a reuse-eligible cell whose target twin
+    turned out absent or ambiguous).
+    """
+    cached = translations.get(id(cell)) if translations is not None else None
+    if cached is not None:
+        if cached.error is not None:
+            result.deferred += 1
+            result.errors.append(f"code-structure: {cached.error}")
+            return None
+        return cached.body
     if translator is None:
         result.deferred += 1
         result.errors.append(f"code-structure: no translator for a {role} cell")

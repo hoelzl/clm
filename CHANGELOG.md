@@ -63,6 +63,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **`clm slides sync`'s structural pass no longer calls the translator inside
+  its region rebuild** (issue #289 P2, completing the resolve-then-apply
+  redesign's last deferred follow-up). The translations a rebuild needs are
+  pre-resolved into the run's shared outcome cache (the same cache the add
+  walks use, so a deferred add's outcome is already there when the rebuild
+  reaches for the cell); the rebuild itself is mechanical, with the documented
+  inline fallback for a cache miss. Unchanged id-less cells stay on the
+  verbatim-reuse path (never translated). Behavior-preserving — the full
+  slides suite is green unchanged. The opt-in `--llm-recover` tier remains
+  inline **by decision** (it fires only when the deterministic id-migration is
+  stuck, which cannot be known before execute without simulating that tier;
+  it is already cached, validated, and safe-aborting) — recorded in
+  `docs/claude/design/sync-plan-resolve-apply.md`.
 - **`clm slides sync`'s baseline plumbing is unified, and the deterministic
   id-migration now also runs on a committed (git-HEAD) baseline** (issue #289
   P1). Both baseline sources now produce one representation (`BaselineBundle`,
