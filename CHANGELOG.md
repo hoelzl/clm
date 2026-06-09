@@ -45,7 +45,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
-- **`clm export` commands no longer emit both languages of a split deck.**
+- **`clm slides sync` no longer errors when a new slide group is inserted next
+  to a language-neutral cell.** Adding a new id'd slide (a localized markdown
+  cell + its following language-neutral code cells) right after a neutral cell —
+  e.g. a `slide_id`-carrying code cell with no `lang=` — made sync place the new
+  group in the wrong inter-group position on the other half and then fail with
+  `language-neutral (shared) cells differ …` / `id-less localized cells … placed
+  differently …`, writing nothing. The id-carrying add path anchors a new group
+  only beside cells it can name by `(slide_id, role)`, so a neutral / id-less
+  neighbour was skipped; the structural pass rebuilds each group's *contents* but
+  never reordered *groups*, so the misplacement survived as a parity error. Sync
+  now reconciles slide-group **order** against the propagation source after the
+  structural pass (committing only a reorder that reproduces the source's group
+  and `(slide_id, role)` order exactly), so such an insertion propagates cleanly.
+
+### Changed
+
+- **`clm slides sync` parity errors now name the diverging cells**, instead of a
+  generic "a change to a shared cell was not propagated". The shared-cell error
+  lists the cell text present on one half but missing on the other (or the first
+  out-of-order cell), and the id-less-localized error points at the slide group
+  and cell kind — so the divergence can be located without a manual diff.
+- **`clm slides sync` shows progress while it runs.** A directory (batch) sweep
+  prints a `[i/N] <deck> …` header per pair, and a writing run prints a short
+  stderr tick per LLM call (`· reconciling …` / `· translating …`) so a long
+  sync is visibly alive. Progress goes to stderr and is suppressed under
+  `--json` (stdout stays pure JSON).
+
+
   When a topic ships split `slides_x.de.py` + `slides_x.en.py` companions, a
   `-L de` outline/summary listed *both* the German and the English title (and
   the JSON `slides` array carried both), because the section-flat, JSON-slide,

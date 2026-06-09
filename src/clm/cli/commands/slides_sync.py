@@ -95,7 +95,7 @@ from clm.slides.sync_translate import DEFAULT_TRANSLATION_MODEL, OpenRouterSlide
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from clm.infrastructure.llm.ollama_client import SyncJudge
+    from clm.infrastructure.llm.ollama_client import SyncJudge, SyncProposal
     from clm.slides.sync_recover import AlignmentRecoverer, CorrespondenceVerifier
     from clm.slides.sync_translate import SlideTranslator
 
@@ -629,14 +629,15 @@ def slides_sync_cmd(
                 prog_lang=_resolve_prog_lang(de_path),
                 guidance_by_lang=guidance_by_lang,
             )
+            run_judge, run_translator = _wrap_progress(judge, translator, enabled=True)
             recoverer = _resolve_recoverer(llm_recover, recovery_model)
             verifier = _resolve_verifier(verify_enabled)
             for issue in plan.issues:
                 click.echo(_issue_line(issue))
             walk = run_plan_walker(
                 plan,
-                judge=judge,
-                translator=translator,
+                judge=run_judge,
+                translator=run_translator,
                 watermark_cache=watermark_cache,
                 options=WalkerOptions(),
                 recoverer=recoverer,
@@ -653,12 +654,13 @@ def slides_sync_cmd(
                 prog_lang=_resolve_prog_lang(de_path),
                 guidance_by_lang=guidance_by_lang,
             )
+            run_judge, run_translator = _wrap_progress(judge, translator, enabled=not as_json)
             recoverer = _resolve_recoverer(llm_recover, recovery_model)
             verifier = _resolve_verifier(verify_enabled)
             apply_result = apply_plan(
                 plan,
-                judge=judge,
-                translator=translator,
+                judge=run_judge,
+                translator=run_translator,
                 watermark_cache=watermark_cache,
                 recoverer=recoverer,
                 alignment_cache=alignment_cache,
@@ -790,6 +792,9 @@ def _run_batch(
     if writing:
         judge = make_judge()
         translator = make_translator()
+        # Per-LLM-call progress ticks (stderr) so a long writing sweep shows what it
+        # is working on; suppressed under --json (stdout must stay pure JSON).
+        judge, translator = _wrap_progress(judge, translator, enabled=not as_json)
         recoverer = make_recoverer()
         verifier = make_verifier()
         if recoverer is not None and cache_root is not None:
@@ -799,7 +804,11 @@ def _run_batch(
 
     results: list[_PairResult] = []
     try:
-        for de_path, en_path in pairs:
+        for i, (de_path, en_path) in enumerate(pairs, 1):
+            # Progress header (stderr) so a multi-pair sweep shows which pair is in
+            # flight — the per-pair result lines are printed together at the end.
+            if not as_json:
+                click.echo(f"[{i}/{len(pairs)}] {_deck_label(de_path, root)} …", err=True)
             results.append(
                 _sync_one_pair(
                     de_path,
@@ -1079,6 +1088,80 @@ def _resolve_recoverer(llm_recover: bool, recovery_model: str) -> AlignmentRecov
         )
         return None
     return OpenRouterAlignmentRecoverer(model=recovery_model)
+
+
+def _progress_snippet(text: str, limit: int = 44) -> str:
+    """A short, scannable handle for a cell being reconciled / translated."""
+    for raw in text.split("\n"):
+        line = raw.strip()
+        for pre in ("# ", "// "):
+            if line.startswith(pre):
+                line = line[len(pre) :].strip()
+                break
+        if line and line not in ("#", "//"):
+            return line[:limit] + ("…" if len(line) > limit else "")
+    return "a cell"
+
+
+class _ProgressJudge:
+    """A :class:`SyncJudge` wrapper that emits a stderr tick before each LLM call.
+
+    The judge / translator calls are the slow part of a sync (each is a hosted-LLM
+    round-trip), so a tick per call shows the command is alive and what it is
+    working on. Pure pass-through otherwise; ``None`` judges are never wrapped.
+    """
+
+    def __init__(self, inner: SyncJudge, echo: Callable[[str], None]) -> None:
+        self.inner = inner
+        self.echo = echo
+        self.prompt_version = inner.prompt_version  # protocol member (writable)
+
+    def propose(
+        self, source_text: str, target_text: str, *, source_lang: str, target_lang: str
+    ) -> SyncProposal:
+        self.echo(f"  · reconciling {_progress_snippet(source_text)} …")
+        return self.inner.propose(
+            source_text, target_text, source_lang=source_lang, target_lang=target_lang
+        )
+
+
+class _ProgressTranslator:
+    """A :class:`SlideTranslator` wrapper that emits a stderr tick before each call."""
+
+    def __init__(self, inner: SlideTranslator, echo: Callable[[str], None]) -> None:
+        self.inner = inner
+        self.echo = echo
+        self.prompt_version = inner.prompt_version  # protocol member (writable)
+
+    def translate(self, *, source_body: str, source_lang: str, target_lang: str, role: str) -> str:
+        self.echo(f"  · translating {_progress_snippet(source_body)} …")
+        return self.inner.translate(
+            source_body=source_body,
+            source_lang=source_lang,
+            target_lang=target_lang,
+            role=role,
+        )
+
+
+def _wrap_progress(
+    judge: SyncJudge | None, translator: SlideTranslator | None, *, enabled: bool
+) -> tuple[SyncJudge | None, SlideTranslator | None]:
+    """Wrap the judge/translator so each LLM call prints a progress tick to stderr.
+
+    No-op when ``enabled`` is False (e.g. ``--json``, where stderr ticks would not
+    matter and stdout must stay pure JSON) or when the backend is unavailable
+    (``None``). Wrapping is transparent — the wrappers satisfy the same protocols.
+    """
+    if not enabled:
+        return judge, translator
+
+    def echo(msg: str) -> None:
+        click.echo(msg, err=True)
+
+    return (
+        _ProgressJudge(judge, echo) if judge is not None else None,
+        _ProgressTranslator(translator, echo) if translator is not None else None,
+    )
 
 
 def _resolve_verifier(verify_enabled: bool) -> CorrespondenceVerifier | None:
