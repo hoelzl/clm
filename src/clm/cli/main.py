@@ -79,7 +79,7 @@ from clm.cli.commands.build import (  # noqa: E402
     build,
     list_targets,
 )
-from clm.cli.commands.calendar import calendar  # noqa: E402
+from clm.cli.commands.calendar import calendar, calendar_group  # noqa: E402
 from clm.cli.commands.cassette import cassette_group  # noqa: E402
 from clm.cli.commands.completion import completion_cmd  # noqa: E402
 from clm.cli.commands.config import config  # noqa: E402
@@ -206,6 +206,7 @@ cli.add_command(authoring_group)
 export_group.add_command(outline, name="outline")
 export_group.add_command(schedule, name="schedule")
 export_group.add_command(calendar, name="calendar")
+cli.add_command(calendar_group, name="calendar")
 export_group.add_command(summary, name="summary")
 export_group.add_command(summary, name="summarize")  # noun-vs-verb alias
 cli.add_command(export_group)

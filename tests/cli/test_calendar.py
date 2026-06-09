@@ -110,3 +110,74 @@ class TestExportCalendar:
         result = runner.invoke(cli, ["export", "--help"])
         assert result.exit_code == 0
         assert "calendar" in result.output
+
+
+class TestCalendarGroup:
+    def test_check_ok(self, tmp_path):
+        cal = _write(tmp_path, CAL_OK)
+        runner = CliRunner()
+        result = runner.invoke(cli, ["calendar", "check", str(SPEC_PATH), "--calendar", str(cal)])
+        assert result.exit_code == 0, result.output
+        assert "Calendar OK" in result.output
+
+    def test_check_reports_errors_and_exits_nonzero(self, tmp_path):
+        cal = _write(tmp_path, CAL_TOO_SHORT)
+        runner = CliRunner()
+        result = runner.invoke(cli, ["calendar", "check", str(SPEC_PATH), "--calendar", str(cal)])
+        assert result.exit_code != 0
+        assert "error:" in result.output
+        assert "merge" in result.output
+
+    def test_status_today(self, tmp_path):
+        cal = _write(tmp_path, CAL_OK)
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "calendar",
+                "status",
+                str(SPEC_PATH),
+                "--calendar",
+                str(cal),
+                "-L",
+                "en",
+                "--as-of",
+                "2026-03-02",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert "As of 2026-03-02:" in result.output
+        assert "Today: Monday 2026-03-02" in result.output
+        assert "Some Topic from Test 1" in result.output
+        assert "Upcoming:" in result.output
+
+    def test_status_no_class_today(self, tmp_path):
+        cal = _write(tmp_path, CAL_OK)
+        runner = CliRunner()
+        # Thu 5 Mar: no class (mon/tue/wed); all three are in the past -> finished.
+        result = runner.invoke(
+            cli,
+            [
+                "calendar",
+                "status",
+                str(SPEC_PATH),
+                "--calendar",
+                str(cal),
+                "-L",
+                "en",
+                "--as-of",
+                "2026-03-05",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert "finished" in result.output.lower()
+
+    def test_group_registered(self):
+        runner = CliRunner()
+        top = runner.invoke(cli, ["--help"])
+        assert top.exit_code == 0
+        assert "calendar" in top.output
+        grp = runner.invoke(cli, ["calendar", "--help"])
+        assert grp.exit_code == 0
+        assert "check" in grp.output
+        assert "status" in grp.output

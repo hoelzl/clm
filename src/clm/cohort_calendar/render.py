@@ -59,6 +59,16 @@ def _content_text(a: Assignment) -> str:
     return "; ".join(d.video_title for d in a.decks)
 
 
+def assignment_date_label(a: Assignment, language: str) -> str:
+    """Public: the localized 'Weekday date' (or range) for one assignment."""
+    return _fmt_span(a, language)
+
+
+def assignment_content(a: Assignment) -> str:
+    """Public: an assignment's display content (deck titles, or the insert label)."""
+    return _content_text(a)
+
+
 def render_markdown(course_title: str, projection: Projection, language: str) -> str:
     """One date-ordered table: ``Date | Content`` (insert rows shown in italics)."""
     date_h, content_h = _MD_HEADERS[language]

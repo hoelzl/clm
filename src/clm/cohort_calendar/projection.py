@@ -69,6 +69,7 @@ class Assignment:
     label: str | None  # set for inserts; else None
     kind: str  # "video" | "merged" | "insert"
     bucket_refs: tuple[str, ...]  # stable id seeds (deck-file stems) for .ics UIDs
+    plan_label: str = ""  # plan-relative coordinate, e.g. "W4 Tuesday" (drift/status)
 
 
 @frozen
@@ -163,6 +164,11 @@ def _resolve_ref(ref: str, buckets) -> tuple[int | None, str | None]:
 
 def _bucket_refs(decks: tuple[ScheduleDeck, ...]) -> tuple[str, ...]:
     return tuple(d.deck_file for d in decks)
+
+
+def _plan_label(bucket) -> str:
+    """The bucket's plan-relative coordinate, e.g. 'W4 Tuesday' (or just 'W4')."""
+    return f"W{bucket.week} {bucket.weekday_label}".rstrip()
 
 
 def project(buckets: list[Bucket], config: CohortCalendarConfig) -> Projection:
@@ -386,7 +392,11 @@ def _emit_segment(
             decks: tuple[ScheduleDeck, ...] = tuple(
                 deck for gi in group for deck in buckets[gi].decks
             )
-            assignments.append(Assignment(d, d, decks, None, "merged", _bucket_refs(decks)))
+            assignments.append(
+                Assignment(
+                    d, d, decks, None, "merged", _bucket_refs(decks), _plan_label(buckets[group[0]])
+                )
+            )
             di += 1
             bi = group[-1] + 1
             continue
@@ -394,6 +404,8 @@ def _emit_segment(
         span = len(splits[bi].dates) if bi in splits else bucket.span
         last = dates.at(di + span - 1) or d
         decks = tuple(bucket.decks)
-        assignments.append(Assignment(d, last, decks, None, "video", _bucket_refs(decks)))
+        assignments.append(
+            Assignment(d, last, decks, None, "video", _bucket_refs(decks), _plan_label(bucket))
+        )
         di += span
         bi += 1

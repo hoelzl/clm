@@ -12,6 +12,7 @@ channel's ledger in the spec's ``<release-channels>``) or by an explicit
 
 from __future__ import annotations
 
+import datetime as dt
 import logging
 from pathlib import Path
 
@@ -23,10 +24,21 @@ from clm.cli.commands._export_shared import (
     output_options,
     spec_argument,
 )
-from clm.cli.commands.schedule import build_buckets, build_schedule
-from clm.cohort_calendar.config import CohortCalendarError, load_calendar_config
+from clm.cli.commands.schedule import Bucket, build_buckets, build_schedule
+from clm.cohort_calendar.config import (
+    CohortCalendarConfig,
+    CohortCalendarError,
+    load_calendar_config,
+)
 from clm.cohort_calendar.projection import project
-from clm.cohort_calendar.render import render_csv, render_ics, render_markdown
+from clm.cohort_calendar.render import (
+    assignment_content,
+    assignment_date_label,
+    render_csv,
+    render_ics,
+    render_markdown,
+)
+from clm.cohort_calendar.status import compute_status
 from clm.core.course import Course
 from clm.core.course_paths import resolve_course_paths
 from clm.core.course_spec import CourseSpec, CourseSpecError
@@ -37,6 +49,53 @@ logger = logging.getLogger(__name__)
 def _abs_under(course_root: Path, value: str) -> Path:
     path = Path(value)
     return path if path.is_absolute() else course_root / path
+
+
+def _channel_options(func):
+    """Shared ``--channel`` / ``--calendar`` / ``--data-dir`` for calendar commands."""
+    func = click.option(
+        "--data-dir",
+        type=click.Path(exists=True, file_okay=False, path_type=Path),
+        help="Course data directory (contains slides/). Default: inferred from spec.",
+    )(func)
+    func = click.option(
+        "--calendar",
+        "calendar_path",
+        type=click.Path(exists=True, dir_okay=False, path_type=Path),
+        default=None,
+        help="Explicit path to the cohort calendar TOML (overrides --channel).",
+    )(func)
+    func = click.option(
+        "--channel",
+        default="",
+        help="Cohort channel name; resolves the calendar file beside its ledger.",
+    )(func)
+    return func
+
+
+def _load_config(spec_file: Path, channel: str, calendar_path: Path | None) -> CohortCalendarConfig:
+    cal_path = resolve_calendar_path(spec_file, channel, calendar_path)
+    try:
+        return load_calendar_config(cal_path)
+    except CohortCalendarError as e:
+        raise click.ClickException(f"Failed to load calendar {cal_path}: {e}") from None
+
+
+def _resolve_buckets(
+    spec_file: Path, language: str, data_dir: Path | None
+) -> tuple[Course, list[Bucket]]:
+    """Parse + validate the spec, build the course, and flatten the schedule to buckets."""
+    try:
+        spec = CourseSpec.from_file(spec_file)
+    except CourseSpecError as e:
+        raise click.ClickException(f"Failed to parse spec file: {e}") from None
+    validation_errors = spec.validate()
+    if validation_errors:
+        error_msg = "\n".join(f"  - {e}" for e in validation_errors)
+        raise click.ClickException(f"Spec validation failed:\n{error_msg}")
+    course_root, _ = resolve_course_paths(spec_file, data_dir=data_dir)
+    course = Course.from_spec(spec, course_root, output_root=None)
+    return course, build_buckets(build_schedule(course, language))
 
 
 def resolve_calendar_path(spec_file: Path, channel_name: str, explicit: Path | None) -> Path:
@@ -125,24 +184,8 @@ def calendar(
     output_format = output_format.lower()
     check_exclusive_output(output_file, output_dir)
 
-    cal_path = resolve_calendar_path(spec_file, channel, calendar_path)
-    try:
-        config = load_calendar_config(cal_path)
-    except CohortCalendarError as e:
-        raise click.ClickException(f"Failed to load calendar {cal_path}: {e}") from None
-
-    try:
-        spec = CourseSpec.from_file(spec_file)
-    except CourseSpecError as e:
-        raise click.ClickException(f"Failed to parse spec file: {e}") from None
-    validation_errors = spec.validate()
-    if validation_errors:
-        error_msg = "\n".join(f"  - {e}" for e in validation_errors)
-        raise click.ClickException(f"Spec validation failed:\n{error_msg}")
-
-    course_root, _ = resolve_course_paths(spec_file, data_dir=data_dir)
-    course = Course.from_spec(spec, course_root, output_root=None)
-    buckets = build_buckets(build_schedule(course, language))
+    config = _load_config(spec_file, channel, calendar_path)
+    course, buckets = _resolve_buckets(spec_file, language, data_dir)
 
     proj = project(buckets, config)
     for diag in proj.diagnostics:
@@ -153,7 +196,9 @@ def calendar(
             "(or run `clm calendar check`) before exporting."
         )
 
-    namespace = channel or cal_path.stem.replace(".calendar", "")
+    namespace = channel or resolve_calendar_path(spec_file, channel, calendar_path).stem.replace(
+        ".calendar", ""
+    )
     if output_format == "csv":
         content = render_csv(proj, language)
         ext = "csv"
@@ -179,3 +224,118 @@ def calendar(
         click.echo(f"Written: {output_file}")
     else:
         click.echo(content, nl=False)
+
+
+@click.group("calendar")
+def calendar_group() -> None:
+    """Inspect a cohort's viewing calendar: validate it or show today's status (#283)."""
+
+
+@calendar_group.command("check")
+@spec_argument
+@_channel_options
+def check_cmd(
+    spec_file: Path, channel: str, calendar_path: Path | None, data_dir: Path | None
+) -> None:
+    """Validate a cohort calendar against the course schedule.
+
+    Date-free: reports unknown/ambiguous refs, over-full segments (with the
+    exact deficit), end overflow, and warnings (free dates, stray inserts).
+    Exits non-zero if there are errors — suitable for a pre-push hook.
+    """
+    config = _load_config(spec_file, channel, calendar_path)
+    _, buckets = _resolve_buckets(spec_file, "en", data_dir)
+    proj = project(buckets, config)
+
+    for diag in proj.errors:
+        click.echo(f"error: {diag.message}", err=True)
+    for diag in proj.warnings:
+        click.echo(f"warning: {diag.message}", err=True)
+    n_err, n_warn = len(proj.errors), len(proj.warnings)
+    if n_err:
+        click.echo(f"✗ {n_err} error(s), {n_warn} warning(s).", err=True)
+        raise SystemExit(1)
+    click.echo(f"✓ Calendar OK ({n_warn} warning(s)).")
+
+
+def _format_status(report, language: str) -> list[str]:
+    """Human-readable status lines (pure, for testability)."""
+    lines = [f"As of {report.as_of.isoformat()}:", ""]
+    if report.reference is None and not report.finished:
+        lines.append("No assignments in this calendar.")
+        return lines
+
+    if report.finished:
+        lines.append("Course finished — all assignments are in the past.")
+    elif report.not_started:
+        first = report.reference
+        lines.append(
+            f"Course not started. First class "
+            f"{assignment_date_label(first, language)} — {assignment_content(first)}"
+        )
+    elif report.current is not None:
+        a = report.current
+        lines.append(
+            f"Today: {assignment_date_label(a, language)} — "
+            f"{assignment_content(a) or '(no new video)'}"
+        )
+        if a.plan_label:
+            lines.append(f"   plan: {a.plan_label}")
+    else:
+        lines.append("No class today.")
+        if report.reference is not None:
+            n = report.reference
+            lines.append(f"   next: {assignment_date_label(n, language)} — {assignment_content(n)}")
+
+    if report.drift_days is not None:
+        if report.drift_days == 0:
+            lines.append("Drift: on schedule.")
+        elif report.drift_days > 0:
+            lines.append(f"Drift: {report.drift_days} day(s) behind the ideal plan.")
+        else:
+            lines.append(f"Drift: {abs(report.drift_days)} day(s) ahead of the ideal plan.")
+
+    if report.upcoming:
+        lines.append("")
+        lines.append("Upcoming:")
+        for a in report.upcoming:
+            lines.append(
+                f"  {assignment_date_label(a, language)} — "
+                f"{assignment_content(a) or '(no new video)'}"
+            )
+    return lines
+
+
+@calendar_group.command("status")
+@spec_argument
+@language_option(default="de", aliases=("--lang",), help="Language for titles and labels.")
+@_channel_options
+@click.option(
+    "--as-of",
+    "as_of",
+    type=click.DateTime(formats=["%Y-%m-%d"]),
+    default=None,
+    help="Reference date (default: today). For tests, dated handouts, what-if previews.",
+)
+def status_cmd(
+    spec_file: Path,
+    language: str,
+    channel: str,
+    calendar_path: Path | None,
+    data_dir: Path | None,
+    as_of: dt.datetime | None,
+) -> None:
+    """Show where a cohort is today vs the plan (the only now-relative command)."""
+    language = language.lower()
+    config = _load_config(spec_file, channel, calendar_path)
+    _, buckets = _resolve_buckets(spec_file, language, data_dir)
+    as_of_date = as_of.date() if as_of is not None else dt.date.today()
+
+    report = compute_status(buckets, config, as_of_date)
+    for line in _format_status(report, language):
+        click.echo(line)
+    if report.has_errors:
+        click.echo(
+            "warning: this calendar has projection errors; run `clm calendar check`.",
+            err=True,
+        )
