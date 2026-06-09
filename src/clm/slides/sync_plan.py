@@ -1907,9 +1907,10 @@ def _retag_idless(
 def _classify_localized_idless_retags(
     de_cells: list[Cell],
     en_cells: list[Cell],
-    watermark_cache: SyncWatermarkCache,
-    de_path: Path,
-    en_path: Path,
+    de_rows: list[tuple[int, str | None, str, str, str | None]],
+    en_rows: list[tuple[int, str | None, str, str, str | None]],
+    de_base_tags: dict[int, frozenset[str]],
+    en_base_tags: dict[int, frozenset[str]],
     plan: SyncPlan,
 ) -> None:
     """Mirror a tag-only edit on an **id-less localized** cell across the halves.
@@ -1921,16 +1922,23 @@ def _classify_localized_idless_retags(
     to :func:`_maybe_retag`. This pass gives those cells a cross-language identity
     by **position** in their language's cell stream (the #190 item-3 identity,
     already recorded in the membership-widened watermark) and applies the same
-    one-sided-drift rule (:func:`_retag_direction`) against the watermark's recorded
+    one-sided-drift rule (:func:`_retag_direction`) against the baseline's recorded
     tag set, emitting an id-less ``retag`` the apply targets by position.
+
+    ``de_rows``/``en_rows`` and ``de_base_tags``/``en_base_tags`` are the
+    membership-widened baseline rows + per-position tag sets, from **either**
+    baseline source: the watermark, or — Issue #289 — re-derived from the committed
+    git-HEAD text via :func:`watermark_rows` / :func:`watermark_tag_map`, so the
+    first sync of a committed pair mirrors an id-less tag edit instead of silently
+    dropping it (the pre-#289 ``source == "watermark"`` gate). A pre-#198 watermark
+    row simply has no recorded tag set, so direction degrades to undeterminable.
 
     Conservative by construction — any doubt declines either the whole pass or the
     individual cell rather than risk mirroring a tag onto the wrong cell:
 
-    - **watermark baseline only** (the caller gates on ``source == "watermark"``):
-      the git-HEAD baseline records no tags for id-less cells, so direction would
-      be undeterminable;
-    - **no ``move``**: a reorder invalidates positional pairing;
+    - **no ``move``**: a reorder invalidates positional pairing — but a tag drift
+      under a move is *alerted* (:func:`_alert_idless_tag_drift_under_move`, #285)
+      rather than silently skipped;
     - **structural alignment**: each language's localized stream must have the same
       length as the other *and* as its own baseline (so position *i* still names the
       same cell), and every positionally-paired cell must be a true twin
@@ -1956,11 +1964,16 @@ def _classify_localized_idless_retags(
     ``_maybe_retag`` ``both`` path and the reorder/ambiguity warnings; see #198.)
     """
     if plan.count("move") > 0:
-        return  # a reorder this pass — positional pairing is unsound
+        # A reorder this pass — positional pairing is unsound, so the mirror is
+        # declined. But declining silently was Issue #285: a one-sided tag-only
+        # edit was dropped while the move applied and the watermark advanced over
+        # the loss. Detect the drift order-blind (hash-keyed) and alert instead.
+        _alert_idless_tag_drift_under_move(
+            plan, de_cells, en_cells, de_rows, en_rows, de_base_tags, en_base_tags
+        )
+        return
     de_loc = _localized_lang_cells(de_cells, "de")
     en_loc = _localized_lang_cells(en_cells, "en")
-    de_rows = watermark_cache.get_deck(str(de_path), str(en_path), "de")
-    en_rows = watermark_cache.get_deck(str(de_path), str(en_path), "en")
     if not (len(de_loc) == len(en_loc) == len(de_rows) == len(en_rows)):
         return  # structural drift — positions unreliable; validator flags asymmetry
     if not _streams_aligned(de_loc, en_loc):
@@ -1981,8 +1994,6 @@ def _classify_localized_idless_retags(
     en_cur_counts = Counter(en_cur_hash)
     de_base_counts = Counter(de_base_hash.values())
     en_base_counts = Counter(en_base_hash.values())
-    de_base_tags = watermark_cache.get_deck_tags(str(de_path), str(en_path), "de")
-    en_base_tags = watermark_cache.get_deck_tags(str(de_path), str(en_path), "en")
     for i, (de_cell, en_cell) in enumerate(zip(de_loc, en_loc, strict=True)):
         # Only the id-less localized cells; id-carrying twins ride the per-cell path.
         if role_of(de_cell.metadata) is not None or role_of(en_cell.metadata) is not None:
@@ -2020,6 +2031,155 @@ def _classify_localized_idless_retags(
                     tag_hold=TagHold(position=i),
                 )
             )
+
+
+def _alert_idless_tag_drift_under_move(
+    plan: SyncPlan,
+    de_cells: list[Cell],
+    en_cells: list[Cell],
+    de_rows: list[tuple[int, str | None, str, str, str | None]],
+    en_rows: list[tuple[int, str | None, str, str, str | None]],
+    de_base_tags: dict[int, frozenset[str]],
+    en_base_tags: dict[int, frozenset[str]],
+) -> None:
+    """Alert on an id-less localized tag drift Tier C declined under a move (#285/#289).
+
+    Positional mirroring is unsound across a reorder, so Tier C bails — but a
+    one-sided tag-only edit must not then vanish while the move applies and the
+    watermark advances over the loss (the #285 silent drop). Detection is
+    **hash-keyed**, so it is reorder-invariant: each half's id-less localized
+    cells whose body is *unchanged* (its hash present in that half's own baseline,
+    unique on both sides — the recurring non-unique-anchor guard) are compared by
+    tag set against the baseline's recorded tags at that hash. A drift on either
+    half is something this pass cannot mirror → error, so the watermark holds and
+    the buffered flush writes nothing. A changed-body cell is skipped — body drift
+    under a move is the #282 detector's domain. Degrades silently when the
+    baseline recorded no tags (a pre-#198 watermark). One clear error per pass.
+    """
+    if plan.has_errors:
+        return
+    sides = (
+        ("de", de_cells, de_rows, de_base_tags),
+        ("en", en_cells, en_rows, en_base_tags),
+    )
+    for lang, cells, rows, base_tags in sides:
+        idless_rows = [
+            (pos, chash)
+            for (pos, _sid, role, chash, _construct) in rows
+            if role in (LOCALIZED_CODE_ROLE, LOCALIZED_MARKDOWN_ROLE)
+        ]
+        base_counts = Counter(chash for _pos, chash in idless_rows)
+        base_map = {
+            chash: base_tags.get(pos) for pos, chash in idless_rows if base_counts[chash] == 1
+        }
+        current = [
+            c
+            for c in cells
+            if not c.metadata.is_j2 and c.metadata.lang == lang and role_of(c.metadata) is None
+        ]
+        cur_counts = Counter(cell_content_hash(c.content) for c in current)
+        for cell in current:
+            chash = cell_content_hash(cell.content)
+            if cur_counts[chash] != 1:
+                continue  # duplicated body — cannot anchor; validator flags asymmetry
+            recorded = base_map.get(chash)
+            if recorded is None:
+                continue  # body changed/new (#282's domain) or no recorded tags
+            if frozenset(cell.metadata.tags) != recorded:
+                plan.issues.append(
+                    PlanIssue(
+                        severity="error",
+                        slide_id=None,
+                        reason=f"tags changed on an id-less localized {lang} cell while "
+                        "slide groups were reordered; tag mirroring is positional and "
+                        "unsound across a reorder (#285) — apply the tag change on both "
+                        "halves (or sync the reorder first), then re-run",
+                    )
+                )
+                return
+
+
+def _cell_first_line(body: str, limit: int = 48) -> str:
+    """A short locatable excerpt of a cell body (its first non-blank line)."""
+    for raw in body.split("\n"):
+        line = raw.strip()
+        if line.startswith("# "):
+            line = line[2:].strip()
+        elif line.startswith("// "):
+            line = line[3:].strip()
+        if line and line not in ("#", "//"):
+            return line[:limit] + ("…" if len(line) > limit else "")
+    return "(empty cell)"
+
+
+def _grouped_neutral_tagged(
+    cells: list[Cell],
+) -> dict[str | None, list[tuple[str, frozenset[str], str]]]:
+    """``group_slide_id -> ordered [(content_hash, tags, body)]`` of its neutral cells.
+
+    The tag-carrying sibling of :func:`_grouped_neutral_map` (same group-keyed,
+    reorder-invariant association, same ``shared`` predicate); the body rides along
+    only so an alert can name the cell.
+    """
+    out: dict[str | None, list[tuple[str, frozenset[str], str]]] = {}
+    group_sid: str | None = None
+    for cell in cells:
+        meta = cell.metadata
+        if meta.is_slide_start:
+            group_sid = meta.slide_id
+        if meta.is_j2 or meta.lang in ("de", "en"):
+            continue
+        out.setdefault(group_sid, []).append(
+            (cell_content_hash(cell.content), frozenset(meta.tags), cell.content)
+        )
+    return out
+
+
+def _classify_neutral_tag_drift(plan: SyncPlan, de_cells: list[Cell], en_cells: list[Cell]) -> None:
+    """Alert on a tag-only divergence of a language-neutral shared cell (Issue #289).
+
+    A neutral cell is shared **verbatim** across the split halves — header
+    included — so its tag set must match across de and en. Every body-channel
+    detector hashes ``Cell.content`` (body only), so a one-sided tag-only edit was
+    invisible: the run reported "decks already consistent" and the watermark
+    advanced over the divergence (the #289 P9 silent drop; the watermark even
+    records shared-partition tags, but nothing consumed them).
+
+    Scoped to **equal-body groups**: a group whose neutral *hash sequence* differs
+    across the halves is skipped entirely — body drift is owned by
+    :func:`align_anchored` + the structural pass, whose region rebuild copies the
+    source cell verbatim *including its header*, so a combined body+tag edit
+    propagates there and must not be double-alerted here. Only when the bodies
+    fully agree and the tags do not is the divergence un-propagatable by any
+    existing path → error, watermark held, nothing written. Group-keyed like
+    :func:`_grouped_neutral_map`, so a one-sided group reorder cannot mis-pair the
+    comparison. Baseline-free by design (like the post-apply parity fail-safe): a
+    standing tag asymmetry is a unify-invariant violation the run must not call
+    "consistent", whoever caused it.
+    """
+    if plan.has_errors:
+        return
+    de_map = _grouped_neutral_tagged(de_cells)
+    en_map = _grouped_neutral_tagged(en_cells)
+    for key in sorted(de_map.keys() | en_map.keys(), key=lambda k: (k is None, k or "")):
+        de_list = de_map.get(key, [])
+        en_list = en_map.get(key, [])
+        if [h for h, _t, _b in de_list] != [h for h, _t, _b in en_list]:
+            continue  # body drift in this group — the body machinery owns it
+        for (_h, de_tags, body), (_h2, en_tags, _b2) in zip(de_list, en_list, strict=True):
+            if de_tags != en_tags:
+                plan.issues.append(
+                    PlanIssue(
+                        severity="error",
+                        slide_id=None,
+                        reason="tags on a language-neutral (shared) cell differ between "
+                        f"the halves (cell {_cell_first_line(body)!r}: "
+                        f"de={sorted(de_tags)}, en={sorted(en_tags)}); sync does not "
+                        "mirror neutral-cell tag edits — apply the tag change to both "
+                        "halves, then re-run",
+                    )
+                )
+                return
 
 
 _KIND_ORDER = {
@@ -2268,15 +2428,52 @@ def build_sync_plan(
         plan, de_cells, en_cells, baseline_shared, de_idless_baseline, en_idless_baseline
     )
 
+    # Issue #289: a language-neutral cell is shared verbatim INCLUDING its header,
+    # but every body-channel detector hashes the body only — so a one-sided
+    # tag-only edit on a neutral cell was silently dropped (and baselined) while
+    # the run reported "consistent". Alert on an equal-body / unequal-tags neutral
+    # pair; a body-differing group is left to the body machinery, whose verbatim
+    # region rebuild carries the header (and so the tags) across.
+    if plan.has_baseline:
+        _classify_neutral_tag_drift(plan, de_cells, en_cells)
+
     # Tier C (Issue #198 / #190 item 3): mirror a tag-only edit on an id-less
     # localized cell — the per-cell engine cannot key it (no slide_id) and the
-    # body-hash classifier is blind to a tag change. Only against a real watermark
-    # baseline (the git-HEAD baseline records no id-less tags). Appends id-less
-    # ``retag`` proposals, then re-sorts so they interleave with the keyed plan.
+    # body-hash classifier is blind to a tag change. Baseline rows + tags come
+    # from the watermark, or (#289) are re-derived from the committed git-HEAD
+    # text — the same membership-widened shape via watermark_rows/watermark_tag_map
+    # — so the first sync of a committed pair mirrors the edit too. Appends
+    # id-less ``retag`` proposals, then re-sorts to interleave with the keyed plan.
+    retag_baseline: (
+        tuple[
+            list[tuple[int, str | None, str, str, str | None]],
+            list[tuple[int, str | None, str, str, str | None]],
+            dict[int, frozenset[str]],
+            dict[int, frozenset[str]],
+        ]
+        | None
+    ) = None
     if source == "watermark" and watermark_cache is not None:
-        _classify_localized_idless_retags(
-            de_cells, en_cells, watermark_cache, de_path, en_path, plan
+        retag_baseline = (
+            watermark_cache.get_deck(str(de_path), str(en_path), "de"),
+            watermark_cache.get_deck(str(de_path), str(en_path), "en"),
+            watermark_cache.get_deck_tags(str(de_path), str(en_path), "de"),
+            watermark_cache.get_deck_tags(str(de_path), str(en_path), "en"),
         )
+    elif source == "git-head":
+        de_head_text = _git_head_text(de_path)
+        en_head_text = _git_head_text(en_path)
+        if de_head_text is not None and en_head_text is not None:
+            de_head = parse_cells(de_head_text, comment_token_for_path(de_path))
+            en_head = parse_cells(en_head_text, comment_token_for_path(en_path))
+            retag_baseline = (
+                watermark_rows(de_head)["de"],
+                watermark_rows(en_head)["en"],
+                watermark_tag_map(de_head)["de"],
+                watermark_tag_map(en_head)["en"],
+            )
+    if retag_baseline is not None:
+        _classify_localized_idless_retags(de_cells, en_cells, *retag_baseline, plan)
         plan.proposals.sort(key=_proposal_sort_key)
 
     # Phase 3 (#216 §12): a cold-start refusal becomes a `pending` bootstrap

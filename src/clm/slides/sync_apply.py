@@ -691,6 +691,39 @@ def _flag_shared_cell_divergence(
             "not propagated; re-run sync (a watermark now exists) or resolve the "
             "divergence manually"
         )
+        return
+    # Issue #289: the bodies agree, but a neutral cell is shared verbatim
+    # INCLUDING its header — so the tag sets must match too. The body hash is
+    # blind to a tag-only change, which let a one-sided tag edit slip every body
+    # detector; this is the post-apply net behind the plan-time
+    # ``_classify_neutral_tag_drift`` detector. Positional zip is sound here:
+    # the pass was otherwise clean, so the orders are reconciled (and the hash
+    # sequences just compared equal).
+    de_tags = _shared_cell_tag_sets(de_state)
+    en_tags = _shared_cell_tag_sets(en_state)
+    for i, (dt, et) in enumerate(zip(de_tags, en_tags, strict=True)):
+        if dt != et:
+            result.errors.append(
+                "language-neutral (shared) cell tags differ between de and en after "
+                f"sync (cell {de[i][1]!r}: de={sorted(dt)}, en={sorted(et)}); a "
+                "tag-only change was not propagated — apply it to both halves or "
+                "resolve manually"
+            )
+            return
+
+
+def _shared_cell_tag_sets(state: FileState) -> list[frozenset[str]]:
+    """Ordered tag sets of a deck's language-neutral cells (Issue #289).
+
+    Partitioned exactly like :func:`_shared_cell_hashes` /
+    :func:`_shared_cell_descriptors` (the parity invariant), so index *i* names the
+    same cell in all three views.
+    """
+    return [
+        frozenset(cell.metadata.tags)
+        for cell in state.cells
+        if not cell.metadata.is_j2 and cell.metadata.lang not in ("de", "en")
+    ]
 
 
 def _idless_localized_group_kinds(state: FileState) -> list[tuple[int, str]]:
