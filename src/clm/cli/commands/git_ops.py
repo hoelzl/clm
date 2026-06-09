@@ -258,6 +258,11 @@ def find_output_repos(
 ) -> list[OutputRepo]:
     """Find all output repositories for a course spec.
 
+    Targets that are not distributed — an explicit ``distribute="false"`` or,
+    by default, a target feeding a release stream (issue #292) — are skipped
+    when enumerating all targets. Naming one explicitly via *target_filter*
+    still selects it: an explicit request wins over the default-safe skip.
+
     Args:
         spec_file: Path to course spec file
         target_filter: Optional target name to filter by
@@ -278,6 +283,13 @@ def find_output_repos(
         # Course has explicit output targets
         for i, target_spec in enumerate(spec.output_targets):
             if target_filter and target_spec.name != target_filter:
+                continue
+            if not target_filter and not spec.is_distributed_target(target_spec):
+                logger.debug(
+                    "Skipping non-distributed output target %r (release build source "
+                    'or distribute="false")',
+                    target_spec.name,
+                )
                 continue
 
             # Resolve path

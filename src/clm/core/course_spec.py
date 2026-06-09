@@ -846,6 +846,12 @@ class OutputTargetSpec:
         remote_path: Optional remote path override for this target (e.g., GitLab
             group). When set, overrides the course-level <remote-path> from
             <github> for remote URL construction.
+        distribute_attr: Raw ``distribute`` XML attribute (issue #292).
+            ``"false"`` marks the target as a private build input (e.g. a
+            release-stream source) that ``clm git`` must not turn into a
+            distributed repo; ``""`` means unset — see
+            :meth:`CourseSpec.is_distributed_target` for the effective default,
+            which auto-excludes release ``source-target``\\ s.
     """
 
     name: str
@@ -855,6 +861,14 @@ class OutputTargetSpec:
     languages: list[str] | None = None
     remote_path: str = ""
     jupyterlite: "JupyterLiteConfig | None" = None
+    distribute_attr: str = ""
+
+    @property
+    def distribute(self) -> bool | None:
+        """The parsed ``distribute`` attribute; ``None`` when unset."""
+        if not self.distribute_attr:
+            return None
+        return self.distribute_attr.lower() == "true"
 
     @classmethod
     def from_element(cls, element: ETree.Element) -> "OutputTargetSpec":
@@ -862,6 +876,7 @@ class OutputTargetSpec:
         name = element.get("name", "default")
         path = element_text(element, "path")
         remote_path = element_text(element, "remote-path") or ""
+        distribute_attr = element.get("distribute", "")
 
         # Parse optional filter lists. Normalize deprecated kind aliases here
         # so downstream consumers (output_targets, execution dependencies,
@@ -881,6 +896,7 @@ class OutputTargetSpec:
             languages=languages,
             remote_path=remote_path,
             jupyterlite=jupyterlite,
+            distribute_attr=distribute_attr,
         )
 
     @staticmethod
@@ -935,6 +951,14 @@ class OutputTargetSpec:
                         f"Invalid language '{lang}' in target '{self.name}'. "
                         f"Valid values: {sorted(VALID_LANGUAGES)}"
                     )
+
+        # Validate the distribute attribute (issue #292). A typo like
+        # distribute="flase" must not silently flip distribution behavior.
+        if self.distribute_attr and self.distribute_attr.lower() not in ("true", "false"):
+            errors.append(
+                f"Invalid distribute value {self.distribute_attr!r} in target "
+                f"'{self.name}'. Valid values: true, false"
+            )
 
         return errors
 
@@ -1634,6 +1658,22 @@ class CourseSpec:
         for block in self.release_channel_blocks:
             for channel in block.channels:
                 yield block, channel
+
+    def is_distributed_target(self, target: OutputTargetSpec) -> bool:
+        """Whether ``clm git`` (without ``--target``) manages a repo for *target*.
+
+        An explicit ``distribute`` attribute wins (issue #292). When unset, a
+        target that feeds a release stream (named as some ``<release-channels
+        source-target>``) defaults to **not** distributed — it is a private
+        build input whose content reaches students only through ``clm release
+        sync`` into per-cohort channel repos, so ``clm git init`` must not
+        create a student-facing repo for it. Every other target defaults to
+        distributed (the pre-#292 behavior).
+        """
+        if target.distribute is not None:
+            return target.distribute
+        release_sources = {block.source_target for block in self.release_channel_blocks}
+        return target.name not in release_sources
 
     def release_channel_refs(self) -> list[str]:
         """The canonical CLI addresses of all channels (see :func:`release_channel_ref`)."""
