@@ -81,6 +81,12 @@ def _sub_code(sid: str, body: str) -> str:
     return f'# %% tags=["subslide"] slide_id="{sid}"\n{body}\n'
 
 
+def _idd_code(lang: str, sid: str, body: str) -> str:
+    """A localized (id'd) code cell — keyed by ``(slide_id, role)`` so an edit to it
+    yields an ``edit``/keyed proposal in the run's direction."""
+    return f'# %% lang="{lang}" tags=["keep"] slide_id="{sid}"\n{body}\n'
+
+
 def _deck(*parts: str) -> str:
     return "\n".join(parts)
 
@@ -662,3 +668,651 @@ def test_new_neutral_code_group_start_alerts_not_silent(tmp_path: Path, baseline
     assert _alerted(plan, result)
     assert not result.watermark_recorded
     assert not _falsely_consistent(plan, result, False)
+
+
+# ---------------------------------------------------------------------------
+# Issue #282 — a one-sided neutral / id-less edit INSIDE a moved slide group.
+# One half reorders groups (a `move`) while the other independently edits a
+# language-neutral cell inside a moved group: the two changes flow OPPOSITE
+# directions. The structural pass keys on the move's direction and would copy
+# the move source's neutral cell over the target's edit — a silent #269 drop.
+# Sync must ALERT (watermark held, edit untouched on disk), never report
+# consistent. The id-less-localized analog already alerted via
+# _classify_idless_localized_drift; the neutral path was the remaining gap.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("baseline", BASELINES)
+def test_move_with_opposite_neutral_edit_alerts(tmp_path: Path, baseline: str):
+    # DE reorders groups (B before A → a move de->en); EN edits the neutral cell
+    # inside the moved group A (x = 1 → x = 2 → an en->de drift). Opposite
+    # directions: alert, hold the watermark, leave the EN edit on disk.
+    de = _deck(
+        _title("de", "intro"),
+        _sub_md("de", "A", "Alpha"),
+        _ncode("x = 1"),
+        _sub_md("de", "B", "Beta"),
+    )
+    en = _deck(
+        _title("en", "intro"),
+        _sub_md("en", "A", "Alpha"),
+        _ncode("x = 1"),
+        _sub_md("en", "B", "Beta"),
+    )
+    de1 = _deck(
+        _title("de", "intro"),
+        _sub_md("de", "B", "Beta"),
+        _sub_md("de", "A", "Alpha"),
+        _ncode("x = 1"),
+    )
+    en1 = _deck(
+        _title("en", "intro"),
+        _sub_md("en", "A", "Alpha"),
+        _ncode("x = 2"),
+        _sub_md("en", "B", "Beta"),
+    )
+    plan, result, de_after, en_after = _sync(tmp_path, baseline, de, en, de1, en1)
+    assert any(p.kind == "move" for p in plan.proposals)  # the reorder WAS detected
+    assert _alerted(plan, result)  # opposite-direction conflict surfaced
+    assert not result.watermark_recorded  # watermark held over the conflict
+    assert not _falsely_consistent(plan, result, False)
+    # The EN edit is NOT silently dropped: nothing was written, so it stays on disk.
+    assert "x = 2" in en_after
+    assert "x = 2" not in de_after  # and was not (wrongly) reverted/auto-applied either
+    # The error explains the reorder-vs-edit conflict so the author can act on it.
+    msg = "\n".join(i.reason for i in plan.issues if i.severity == "error")
+    assert "reorder" in msg
+
+
+@pytest.mark.parametrize("baseline", BASELINES)
+def test_move_with_opposite_neutral_edit_mirror_direction_alerts(tmp_path: Path, baseline: str):
+    # The mirror of the above: EN reorders (a move en->de); DE edits the neutral cell
+    # (a de->en drift). Same conflict, opposite roles — must alert symmetrically.
+    de = _deck(
+        _title("de", "intro"),
+        _sub_md("de", "A", "Alpha"),
+        _ncode("x = 1"),
+        _sub_md("de", "B", "Beta"),
+    )
+    en = _deck(
+        _title("en", "intro"),
+        _sub_md("en", "A", "Alpha"),
+        _ncode("x = 1"),
+        _sub_md("en", "B", "Beta"),
+    )
+    en1 = _deck(
+        _title("en", "intro"),
+        _sub_md("en", "B", "Beta"),
+        _sub_md("en", "A", "Alpha"),
+        _ncode("x = 1"),
+    )
+    de1 = _deck(
+        _title("de", "intro"),
+        _sub_md("de", "A", "Alpha"),
+        _ncode("x = 2"),
+        _sub_md("de", "B", "Beta"),
+    )
+    plan, result, de_after, en_after = _sync(tmp_path, baseline, de, en, de1, en1)
+    assert _alerted(plan, result)
+    assert not result.watermark_recorded
+    assert not _falsely_consistent(plan, result, False)
+    assert "x = 2" in de_after  # the DE edit stays on disk, not dropped
+
+
+@pytest.mark.parametrize("baseline", BASELINES)
+def test_move_with_opposite_idless_localized_edit_alerts(tmp_path: Path, baseline: str):
+    # The id-less-LOCALIZED sibling of #282 (already covered by
+    # _classify_idless_localized_drift): DE reorders (move de->en) while EN edits an
+    # id-less localized cell inside the moved group (en->de). The family must alert.
+    de = _deck(
+        _title("de", "intro"),
+        _sub_md("de", "A", "Alpha"),
+        _idless_code("de", 'print("Hallo")'),
+        _sub_md("de", "B", "Beta"),
+    )
+    en = _deck(
+        _title("en", "intro"),
+        _sub_md("en", "A", "Alpha"),
+        _idless_code("en", 'print("Hello")'),
+        _sub_md("en", "B", "Beta"),
+    )
+    de1 = _deck(
+        _title("de", "intro"),
+        _sub_md("de", "B", "Beta"),
+        _sub_md("de", "A", "Alpha"),
+        _idless_code("de", 'print("Hallo")'),
+    )
+    en1 = _deck(
+        _title("en", "intro"),
+        _sub_md("en", "A", "Alpha"),
+        _idless_code("en", 'print("HELLO")'),
+        _sub_md("en", "B", "Beta"),
+    )
+    plan, result, _de_after, en_after = _sync(tmp_path, baseline, de, en, de1, en1)
+    assert _alerted(plan, result)
+    assert not result.watermark_recorded
+    assert not _falsely_consistent(plan, result, False)
+    assert "HELLO" in en_after  # the EN edit not silently overwritten
+
+
+@pytest.mark.parametrize("baseline", BASELINES)
+def test_move_with_same_direction_neutral_edit_merges(tmp_path: Path, baseline: str):
+    # Non-regression: DE both reorders groups AND edits the neutral cell (both de->en).
+    # No conflict — the move applies and the neutral edit propagates to EN. Must NOT
+    # alert (the #282 fix only fires on OPPOSITE directions).
+    de = _deck(
+        _title("de", "intro"),
+        _sub_md("de", "A", "Alpha"),
+        _ncode("x = 1"),
+        _sub_md("de", "B", "Beta"),
+    )
+    en = _deck(
+        _title("en", "intro"),
+        _sub_md("en", "A", "Alpha"),
+        _ncode("x = 1"),
+        _sub_md("en", "B", "Beta"),
+    )
+    de1 = _deck(
+        _title("de", "intro"),
+        _sub_md("de", "B", "Beta"),
+        _sub_md("de", "A", "Alpha"),
+        _ncode("x = 99"),
+    )
+    plan, result, de_after, en_after = _sync(tmp_path, baseline, de, en, de1, en)
+    assert not _alerted(plan, result)
+    assert result.watermark_recorded
+    assert _group_ids(en_after) == ["intro", "B", "A"]  # the reorder reached EN
+    assert "x = 99" in en_after  # the neutral edit reached EN too
+    assert _neutral_bodies(en_after) == _neutral_bodies(de_after)
+
+
+@pytest.mark.parametrize("baseline", BASELINES)
+def test_move_only_no_neutral_edit_applies_cleanly(tmp_path: Path, baseline: str):
+    # Non-regression: a pure one-sided group reorder (no concurrent neutral edit)
+    # still applies cleanly and advances — the #282 guard must not false-alert when
+    # the neutral cells are byte-identical across the halves.
+    de = _deck(
+        _title("de", "intro"),
+        _sub_md("de", "A", "Alpha"),
+        _ncode("x = 1"),
+        _sub_md("de", "B", "Beta"),
+    )
+    en = _deck(
+        _title("en", "intro"),
+        _sub_md("en", "A", "Alpha"),
+        _ncode("x = 1"),
+        _sub_md("en", "B", "Beta"),
+    )
+    de1 = _deck(
+        _title("de", "intro"),
+        _sub_md("de", "B", "Beta"),
+        _sub_md("de", "A", "Alpha"),
+        _ncode("x = 1"),
+    )
+    plan, result, _de_after, en_after = _sync(tmp_path, baseline, de, en, de1, en)
+    assert not _alerted(plan, result)
+    assert result.watermark_recorded
+    assert _group_ids(en_after) == ["intro", "B", "A"]
+
+
+# ---------------------------------------------------------------------------
+# Issue #282 (deeper variants found by adversarial review). The single
+# `_conflicts_with_keyed` guard above only catches the move + ONE neutral cell
+# shape, where align_anchored still yields a clean opposing direction. When the
+# move reorders >=2 neutral / id-less cells, the positional drift detectors
+# mis-read the reorder itself as a "drift" — silently dropping the opposite-side
+# edit (id-less / >=2 neutral) or, worse, mis-classifying it as a §7a same-cell
+# divergence and AUTO-HEALING it (overwriting the edit on disk). The order-blind
+# move-target-edit detector must alert in every case and leave the edit on disk.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("baseline", BASELINES)
+def test_move_reordering_idless_with_opposite_idless_edit_alerts(tmp_path: Path, baseline: str):
+    # DE reorders two groups, each holding an id-less localized cell (so DE's id-less
+    # SEQUENCE permutes with no content change); EN edits one id-less cell. The
+    # both-sides-"drift" branch of _classify_idless_localized_drift used to trust the
+    # move direction and return silently, stranding EN's edit. Must alert; edit kept.
+    de = _deck(
+        _title("de"),
+        _sub_md("de", "A", "Alpha"),
+        _idless_code("de", "l1_de"),
+        _sub_md("de", "B", "Beta"),
+        _idless_code("de", "l2_de"),
+    )
+    en = _deck(
+        _title("en"),
+        _sub_md("en", "A", "Alpha"),
+        _idless_code("en", "l1_en"),
+        _sub_md("en", "B", "Beta"),
+        _idless_code("en", "l2_en"),
+    )
+    de1 = _deck(
+        _title("de"),
+        _sub_md("de", "B", "Beta"),
+        _idless_code("de", "l2_de"),
+        _sub_md("de", "A", "Alpha"),
+        _idless_code("de", "l1_de"),
+    )
+    en1 = _deck(
+        _title("en"),
+        _sub_md("en", "A", "Alpha"),
+        _idless_code("en", "l1X_en"),
+        _sub_md("en", "B", "Beta"),
+        _idless_code("en", "l2_en"),
+    )
+    plan, result, _de_after, en_after = _sync(tmp_path, baseline, de, en, de1, en1)
+    assert any(p.kind == "move" for p in plan.proposals)
+    assert _alerted(plan, result)
+    assert not result.watermark_recorded
+    assert not _falsely_consistent(plan, result, False)
+    assert "l1X_en" in en_after  # EN's id-less edit not silently dropped
+
+
+@pytest.mark.parametrize("baseline", BASELINES)
+def test_move_reordering_neutrals_with_opposite_neutral_edit_alerts(tmp_path: Path, baseline: str):
+    # DE reorders two groups each holding a NEUTRAL code cell (DE's neutral SEQUENCE
+    # permutes, content unchanged); EN edits one neutral cell. align_anchored's
+    # positional zip used to mis-read this as a same-cell §7a divergence and
+    # AUTO-HEAL it — overwriting EN's edit on disk (destructive). Must alert AND the
+    # EN edit must remain on disk (nothing written).
+    de = _deck(
+        _title("de"),
+        _sub_md("de", "A", "Alpha"),
+        _ncode("p = 1"),
+        _sub_md("de", "B", "Beta"),
+        _ncode("q = 2"),
+    )
+    en = _deck(
+        _title("en"),
+        _sub_md("en", "A", "Alpha"),
+        _ncode("p = 1"),
+        _sub_md("en", "B", "Beta"),
+        _ncode("q = 2"),
+    )
+    de1 = _deck(
+        _title("de"),
+        _sub_md("de", "B", "Beta"),
+        _ncode("q = 2"),
+        _sub_md("de", "A", "Alpha"),
+        _ncode("p = 1"),
+    )
+    en1 = _deck(
+        _title("en"),
+        _sub_md("en", "A", "Alpha"),
+        _ncode("p = 99"),
+        _sub_md("en", "B", "Beta"),
+        _ncode("q = 2"),
+    )
+    plan, result, de_after, en_after = _sync(tmp_path, baseline, de, en, de1, en1)
+    assert _alerted(plan, result)
+    assert not result.watermark_recorded
+    assert "p = 99" in en_after  # the edit survives on disk — NOT auto-healed away
+    assert "p = 99" not in de_after  # and was not (wrongly) written into DE either
+
+
+@pytest.mark.parametrize("baseline", BASELINES)
+def test_move_with_two_keyed_dirs_and_opposite_idless_edit_alerts(tmp_path: Path, baseline: str):
+    # The two-opposite-keyed-directions variant. DE reorders groups (move de->en)
+    # AND edits a neutral cell (de->en, setting anchor_direction); EN edits an id'd
+    # cell (en->de, making _keyed_direction ambiguous → None) AND an id-less cell
+    # (en->de). With two keyed directions, _conflicts_with_keyed cannot fire and the
+    # id-less both-drifted branch falls back to the (non-None) anchor_direction and
+    # returns silently — stranding EN's id-less edit. The move-target detector keys
+    # on the MOVE direction (not _keyed_direction / established), so it still alerts.
+    de = _deck(
+        _title("de"),
+        _sub_md("de", "A", "Alpha"),
+        _idless_code("de", "l1_de"),
+        _ncode("n = 1"),
+        _idd_code("de", "C", "c = 1"),
+        _sub_md("de", "B", "Beta"),
+        _idless_code("de", "l2_de"),
+    )
+    en = _deck(
+        _title("en"),
+        _sub_md("en", "A", "Alpha"),
+        _idless_code("en", "l1_en"),
+        _ncode("n = 1"),
+        _idd_code("en", "C", "c = 1"),
+        _sub_md("en", "B", "Beta"),
+        _idless_code("en", "l2_en"),
+    )
+    # DE reorders B before A and edits the neutral cell (n=1 -> n=2, de->en).
+    de1 = _deck(
+        _title("de"),
+        _sub_md("de", "B", "Beta"),
+        _idless_code("de", "l2_de"),
+        _sub_md("de", "A", "Alpha"),
+        _idless_code("de", "l1_de"),
+        _ncode("n = 2"),
+        _idd_code("de", "C", "c = 1"),
+    )
+    # EN edits the id'd cell C (c=1 -> c=2, en->de) and its id-less l1 (en->de).
+    en1 = _deck(
+        _title("en"),
+        _sub_md("en", "A", "Alpha"),
+        _idless_code("en", "l1X_en"),
+        _ncode("n = 1"),
+        _idd_code("en", "C", "c = 2"),
+        _sub_md("en", "B", "Beta"),
+        _idless_code("en", "l2_en"),
+    )
+    plan, result, _de_after, en_after = _sync(
+        tmp_path, baseline, de, en, de1, en1, mapping={"c = 2": "c = 2", "n = 2": "n = 2"}
+    )
+    assert any(p.kind == "move" for p in plan.proposals)
+    assert _alerted(plan, result)
+    assert not result.watermark_recorded
+    assert "l1X_en" in en_after  # EN's id-less edit survives, not silently dropped
+
+
+@pytest.mark.parametrize("baseline", BASELINES)
+def test_add_keyed_with_opposite_neutral_edit_alerts(tmp_path: Path, baseline: str):
+    # The conflict guard must cover an ADD-keyed direction, not just move — a future
+    # narrowing to move-only would silently reintroduce the drop. DE adds a new slide
+    # (de->en) while EN edits a neutral cell (en->de): opposite directions → alert.
+    de = _deck(_title("de"), _ncode("x = 1"))
+    en = _deck(_title("en"), _ncode("x = 1"))
+    de1 = _deck(_title("de"), _ncode("x = 1"), _sub_md("de", "NEW", "Neu"))
+    en1 = _deck(_title("en"), _ncode("x = 2"))
+    plan, result, _de_after, en_after = _sync(
+        tmp_path, baseline, de, en, de1, en1, mapping={"# ## Neu": "# ## New"}
+    )
+    assert any(p.kind in ("add", "rename") for p in plan.proposals)
+    assert _alerted(plan, result)
+    assert not result.watermark_recorded
+    assert "x = 2" in en_after  # the neutral edit survives
+
+
+@pytest.mark.parametrize("baseline", BASELINES)
+def test_edit_keyed_with_opposite_neutral_edit_alerts(tmp_path: Path, baseline: str):
+    # Same, with an EDIT-keyed direction: DE edits an id'd slide body (de->en) while
+    # EN edits a neutral cell (en->de). Opposite directions → alert, edit kept.
+    de = _deck(_title("de", "s1", "T1"), _ncode("x = 1"))
+    en = _deck(_title("en", "s1", "T1"), _ncode("x = 1"))
+    de1 = _deck(_title("de", "s1", "T1 EDIT"), _ncode("x = 1"))
+    en1 = _deck(_title("en", "s1", "T1"), _ncode("x = 2"))
+    plan, result, _de_after, en_after = _sync(
+        tmp_path, baseline, de, en, de1, en1, mapping={"# # T1 EDIT": "# # T1 EDIT EN"}
+    )
+    assert _alerted(plan, result)
+    assert not result.watermark_recorded
+    assert "x = 2" in en_after
+
+
+# ---------------------------------------------------------------------------
+# Issue #282 — the reordering half may ALSO edit its own content. A group
+# reorder makes positional pairing of neutral / id-less cells unsound, so ANY
+# concurrent change on the OTHER (target) half — a body edit to a DIFFERENT
+# cell, or a cross-group reassignment that leaves the content multiset
+# unchanged — is mis-paired and silently overwritten (a §7a destructive
+# auto-heal, or a watermark-advancing drop). Sync must alert on any target-half
+# neutral/id-less change while one half reorders, and the merge where only the
+# reordering half changed content (target untouched) must still succeed.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("baseline", BASELINES)
+def test_move_with_source_and_target_neutral_edits_alerts(tmp_path: Path, baseline: str):
+    # DE reorders groups AND edits its own neutral cell p; EN independently edits a
+    # DIFFERENT neutral cell q. The reorder cross-pairs p and q in the positional
+    # §7a check, which used to auto-heal toward DE and DESTROY EN's q edit on disk.
+    # Must alert and leave BOTH edits on disk (nothing written).
+    de = _deck(
+        _title("de"),
+        _sub_md("de", "A", "Al"),
+        _ncode("p = 1"),
+        _sub_md("de", "B", "Be"),
+        _ncode("q = 2"),
+    )
+    en = _deck(
+        _title("en"),
+        _sub_md("en", "A", "Al"),
+        _ncode("p = 1"),
+        _sub_md("en", "B", "Be"),
+        _ncode("q = 2"),
+    )
+    de1 = _deck(
+        _title("de"),
+        _sub_md("de", "B", "Be"),
+        _ncode("q = 2"),
+        _sub_md("de", "A", "Al"),
+        _ncode("p = 11"),
+    )
+    en1 = _deck(
+        _title("en"),
+        _sub_md("en", "A", "Al"),
+        _ncode("p = 1"),
+        _sub_md("en", "B", "Be"),
+        _ncode("q = 22"),
+    )
+    plan, result, de_after, en_after = _sync(tmp_path, baseline, de, en, de1, en1)
+    assert _alerted(plan, result)
+    assert not result.watermark_recorded
+    assert "p = 11" in de_after  # DE's edit untouched
+    assert "q = 22" in en_after  # EN's edit NOT destructively auto-healed away
+
+
+@pytest.mark.parametrize("baseline", BASELINES)
+def test_move_with_source_and_target_idless_edits_alerts(tmp_path: Path, baseline: str):
+    # DE reorders groups AND edits its own id-less cell l1; EN edits a DIFFERENT
+    # id-less cell l2. The both-drifted id-less branch used to trust the move
+    # direction and return silently, advancing the watermark and stranding EN's
+    # l2 edit. Must alert; EN's edit kept.
+    de = _deck(
+        _title("de"),
+        _sub_md("de", "A", "Al"),
+        _idless_code("de", "l1_de"),
+        _sub_md("de", "B", "Be"),
+        _idless_code("de", "l2_de"),
+    )
+    en = _deck(
+        _title("en"),
+        _sub_md("en", "A", "Al"),
+        _idless_code("en", "l1_en"),
+        _sub_md("en", "B", "Be"),
+        _idless_code("en", "l2_en"),
+    )
+    de1 = _deck(
+        _title("de"),
+        _sub_md("de", "B", "Be"),
+        _idless_code("de", "l2_de"),
+        _sub_md("de", "A", "Al"),
+        _idless_code("de", "l1X_de"),
+    )
+    en1 = _deck(
+        _title("en"),
+        _sub_md("en", "A", "Al"),
+        _idless_code("en", "l1_en"),
+        _sub_md("en", "B", "Be"),
+        _idless_code("en", "l2X_en"),
+    )
+    plan, result, _de_after, en_after = _sync(tmp_path, baseline, de, en, de1, en1)
+    assert _alerted(plan, result)
+    assert not result.watermark_recorded
+    assert "l2X_en" in en_after  # EN's id-less edit not silently dropped
+
+
+@pytest.mark.parametrize("baseline", BASELINES)
+def test_move_with_target_neutral_cross_group_reassign_alerts(tmp_path: Path, baseline: str):
+    # DE reorders groups; EN re-associates its neutral cells across groups (codeA
+    # under B, codeB under A) — a change that leaves the content MULTISET unchanged,
+    # so a Counter-based check is blind to it. The ordered (positional) compare on
+    # the non-reordering target half still detects it. Must alert.
+    de = _deck(
+        _title("de"),
+        _sub_md("de", "A", "Al"),
+        _ncode("codeA = 1"),
+        _sub_md("de", "B", "Be"),
+        _ncode("codeB = 2"),
+    )
+    en = _deck(
+        _title("en"),
+        _sub_md("en", "A", "Al"),
+        _ncode("codeA = 1"),
+        _sub_md("en", "B", "Be"),
+        _ncode("codeB = 2"),
+    )
+    de1 = _deck(
+        _title("de"),
+        _sub_md("de", "B", "Be"),
+        _ncode("codeB = 2"),
+        _sub_md("de", "A", "Al"),
+        _ncode("codeA = 1"),
+    )
+    en1 = _deck(
+        _title("en"),
+        _sub_md("en", "A", "Al"),
+        _ncode("codeB = 2"),
+        _sub_md("en", "B", "Be"),
+        _ncode("codeA = 1"),
+    )
+    plan, result, _de_after, _en_after = _sync(tmp_path, baseline, de, en, de1, en1)
+    assert _alerted(plan, result)
+    assert not result.watermark_recorded
+
+
+@pytest.mark.parametrize("baseline", BASELINES)
+def test_move_with_source_edit_only_merges(tmp_path: Path, baseline: str):
+    # The legitimate merge that must NOT alert: the author edits ONE half (DE) —
+    # reordering its groups AND editing its own neutral cell — while the OTHER half
+    # (EN) is untouched. The reorder + edit both flow de->en, so EN receives both.
+    de = _deck(
+        _title("de"),
+        _sub_md("de", "A", "Al"),
+        _ncode("p = 1"),
+        _sub_md("de", "B", "Be"),
+        _ncode("q = 2"),
+    )
+    en = _deck(
+        _title("en"),
+        _sub_md("en", "A", "Al"),
+        _ncode("p = 1"),
+        _sub_md("en", "B", "Be"),
+        _ncode("q = 2"),
+    )
+    de1 = _deck(
+        _title("de"),
+        _sub_md("de", "B", "Be"),
+        _ncode("q = 2"),
+        _sub_md("de", "A", "Al"),
+        _ncode("p = 11"),
+    )
+    plan, result, de_after, en_after = _sync(tmp_path, baseline, de, en, de1, en)
+    assert not _alerted(plan, result)
+    assert result.watermark_recorded
+    assert _group_ids(en_after) == ["title", "B", "A"]  # the reorder reached EN
+    assert "p = 11" in en_after  # DE's neutral edit propagated to EN
+    assert _neutral_bodies(en_after) == _neutral_bodies(de_after)
+
+
+@pytest.mark.parametrize("baseline", BASELINES)
+def test_move_with_identical_neutral_edit_on_both_halves_merges(tmp_path: Path, baseline: str):
+    # The conflict guard must NOT fire when a neutral edit was applied IDENTICALLY to
+    # both halves (the unify invariant still holds: de == en) while one half reorders.
+    # The halves agree on the cell, so a reorder cannot clobber it — sync must apply
+    # the reorder cleanly. (The guard gates on a reorder-invariant per-group compare of
+    # the two halves, not just target-vs-baseline, precisely to allow this.)
+    de = _deck(_title("de"), _sub_md("de", "A", "Al"), _ncode("x = 1"), _sub_md("de", "B", "Be"))
+    en = _deck(_title("en"), _sub_md("en", "A", "Al"), _ncode("x = 1"), _sub_md("en", "B", "Be"))
+    # DE reorders B before A AND edits x; EN edits x to the SAME value (no reorder).
+    de1 = _deck(_title("de"), _sub_md("de", "B", "Be"), _sub_md("de", "A", "Al"), _ncode("x = 2"))
+    en1 = _deck(_title("en"), _sub_md("en", "A", "Al"), _ncode("x = 2"), _sub_md("en", "B", "Be"))
+    plan, result, de_after, en_after = _sync(tmp_path, baseline, de, en, de1, en1)
+    assert not _alerted(plan, result)
+    assert result.watermark_recorded
+    assert _group_ids(en_after) == ["title", "B", "A"]  # the reorder reached EN
+    assert "x = 2" in en_after and "x = 1" not in en_after  # the shared edit is kept, once
+    assert _neutral_bodies(en_after) == _neutral_bodies(de_after)
+
+
+@pytest.mark.parametrize("baseline", BASELINES)
+def test_move_with_target_intra_group_neutral_reorder_alerts(tmp_path: Path, baseline: str):
+    # DE reorders slide GROUPS; EN reorders two neutral cells WITHIN one group. The two
+    # halves' per-group neutral *multisets* are equal, so a Counter-based gate would
+    # miss it and align_anchored's positional §7a check would destructively auto-heal
+    # EN's reorder away. The per-group ORDERED compare (and bypassing align_anchored
+    # under a move) catches it: must alert and keep EN's order on disk.
+    de = _deck(
+        _title("de"),
+        _sub_md("de", "A", "Al"),
+        _ncode("a1 = 1"),
+        _ncode("a2 = 2"),
+        _sub_md("de", "B", "Be"),
+        _ncode("b1 = 3"),
+    )
+    en = _deck(
+        _title("en"),
+        _sub_md("en", "A", "Al"),
+        _ncode("a1 = 1"),
+        _ncode("a2 = 2"),
+        _sub_md("en", "B", "Be"),
+        _ncode("b1 = 3"),
+    )
+    de1 = _deck(
+        _title("de"),
+        _sub_md("de", "B", "Be"),
+        _ncode("b1 = 3"),
+        _sub_md("de", "A", "Al"),
+        _ncode("a1 = 1"),
+        _ncode("a2 = 2"),
+    )
+    en1 = _deck(
+        _title("en"),
+        _sub_md("en", "A", "Al"),
+        _ncode("a2 = 2"),
+        _ncode("a1 = 1"),
+        _sub_md("en", "B", "Be"),
+        _ncode("b1 = 3"),
+    )
+    plan, result, _de_after, en_after = _sync(tmp_path, baseline, de, en, de1, en1)
+    assert _alerted(plan, result)
+    assert not result.watermark_recorded
+    # EN's one-sided intra-group reorder is preserved on disk (not auto-healed away).
+    assert _neutral_bodies(en_after) == ["a2 = 2", "a1 = 1", "b1 = 3"]
+
+
+@pytest.mark.parametrize("baseline", BASELINES)
+def test_move_with_multiple_identical_neutral_edits_on_both_halves_merges(
+    tmp_path: Path, baseline: str
+):
+    # The >=2-cell analog of the identical-both-halves merge: two neutral cells edited
+    # to the SAME new values on both halves while DE reorders groups. Here de_shared !=
+    # en_shared (the reorder permutes DE's flat sequence), which used to make
+    # align_anchored false-diverge; bypassing it under a move and gating on the
+    # per-group signature lets this merge cleanly with no alert.
+    de = _deck(
+        _title("de"),
+        _sub_md("de", "A", "Al"),
+        _ncode("a = 1"),
+        _sub_md("de", "B", "Be"),
+        _ncode("b = 2"),
+    )
+    en = _deck(
+        _title("en"),
+        _sub_md("en", "A", "Al"),
+        _ncode("a = 1"),
+        _sub_md("en", "B", "Be"),
+        _ncode("b = 2"),
+    )
+    de1 = _deck(
+        _title("de"),
+        _sub_md("de", "B", "Be"),
+        _ncode("b = 22"),
+        _sub_md("de", "A", "Al"),
+        _ncode("a = 11"),
+    )
+    en1 = _deck(
+        _title("en"),
+        _sub_md("en", "A", "Al"),
+        _ncode("a = 11"),
+        _sub_md("en", "B", "Be"),
+        _ncode("b = 22"),
+    )
+    plan, result, de_after, en_after = _sync(tmp_path, baseline, de, en, de1, en1)
+    assert not _alerted(plan, result)
+    assert result.watermark_recorded
+    assert _group_ids(en_after) == ["title", "B", "A"]  # the reorder reached EN
+    assert "a = 11" in en_after and "b = 22" in en_after
+    assert _neutral_bodies(en_after) == _neutral_bodies(de_after)

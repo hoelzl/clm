@@ -118,6 +118,45 @@ class ScheduleWeek:
     disabled: bool = False
 
 
+@dataclass
+class Bucket:
+    """One teaching unit of the content sequence — a plan-day's decks.
+
+    A :class:`Bucket` is the atomic unit the cohort *calendar* (issue #283)
+    projects onto real dates: each :class:`ScheduleDay` (one ``<subsection>``)
+    becomes one bucket. It is deliberately the same data the certification
+    schedule renders, so the calendar and ``export schedule`` cannot drift apart.
+
+    ``span`` is the number of teaching dates the bucket occupies: the count of
+    weekday tokens on the originating subsection (a ``weekday="mon,tue"``
+    subsection represents — and so consumes — two teaching days), or 1 for a
+    thematic group with no weekday. ``week`` and ``weekday_label`` carry the
+    plan-relative coordinates, used for labelling and drift reporting; they are
+    never used to *place* the bucket (placement is by real date).
+    """
+
+    decks: list[ScheduleDeck]
+    span: int
+    week: int  # plan-relative week number (from the originating ScheduleWeek)
+    weekday_label: str  # localized plan-relative label (e.g. "Montag")
+    weekdays: tuple[str, ...] = ()  # language-neutral tokens, e.g. ("mon", "tue")
+
+    @property
+    def ref_ids(self) -> set[str]:
+        """Topic ids and deck-file stems in this bucket.
+
+        These are the stable handles a calendar ``pin``/``split`` adjustment
+        uses to name a bucket (see the cohort-viewing-calendar design doc):
+        week/weekday coordinates move when the spec is edited, deck and topic
+        ids do not.
+        """
+        ids: set[str] = set()
+        for deck in self.decks:
+            ids.add(deck.topic_id)
+            ids.add(deck.deck_file)
+        return ids
+
+
 def subsection_label(subsection: SubsectionSpec, language: str) -> str:
     """Resolve a subsection's display label for *language*.
 
@@ -348,6 +387,32 @@ def _build_schedule_with_disabled(
             )
         )
     return weeks
+
+
+def build_buckets(weeks: list[ScheduleWeek]) -> list[Bucket]:
+    """Flatten a schedule into the ordered *content sequence* for a calendar.
+
+    Each :class:`ScheduleDay` (one ``<subsection>``) becomes one :class:`Bucket`,
+    in week-then-document order — the same order the build and ``export schedule``
+    use. A multi-weekday subsection yields a bucket whose ``span`` equals its
+    weekday count, so it consumes that many teaching dates when projected onto a
+    cohort calendar (issue #283).
+
+    Flattening is faithful and policy-free: every day in *weeks* yields a bucket
+    (including empty-deck days). Whether disabled or optional content appears is
+    the caller's choice, made upstream via :func:`build_schedule`'s flags.
+    """
+    return [
+        Bucket(
+            decks=day.decks,
+            span=max(1, len(day.weekdays)),
+            week=week.number,
+            weekday_label=day.label,
+            weekdays=tuple(day.weekdays),
+        )
+        for week in weeks
+        for day in week.days
+    ]
 
 
 def _md_cell(text: str) -> str:

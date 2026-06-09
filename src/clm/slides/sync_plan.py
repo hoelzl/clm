@@ -755,6 +755,135 @@ def _keyed_direction(plan: SyncPlan) -> str | None:
     return next(iter(directions)) if len(directions) == 1 else None
 
 
+def _conflicts_with_keyed(plan: SyncPlan, direction: str | None) -> bool:
+    """Whether ``direction`` opposes the plan's single keyed propagation direction.
+
+    ``True`` only when both a keyed direction (a move/edit proposal) and
+    ``direction`` are present and they disagree — the Issue #282 conflict where a
+    structural change flows one way and a language-neutral edit the other. A
+    missing keyed direction (no keyed proposals, or keyed proposals both ways) or
+    a matching one is not a conflict.
+    """
+    if direction is None:
+        return False
+    keyed = _keyed_direction(plan)
+    return keyed is not None and keyed != direction
+
+
+def _grouped_neutral_map(cells: list[Cell]) -> dict[str | None, list[str]]:
+    """Map ``group_slide_id -> ordered list of neutral content hashes in that group``.
+
+    Associates each language-neutral (``shared``) cell with the ``slide_id`` of the
+    slide group it sits in (``None`` for the head, before the first slide). A GROUP
+    reorder moves whole groups as units — it never reorders cells *within* a group nor
+    changes which group a neutral cell belongs to — so comparing two halves' maps with
+    ``==`` is invariant to a one-sided group reorder (dict key order is irrelevant) yet
+    sensitive to (a) a cross-group reassignment (the cell appears under a different
+    key), (b) an intra-group neutral reorder (the per-group list is ordered), and (c)
+    an edit / add / remove (the list contents change). A flat multiset misses (a) and
+    (b); a flat ordered compare is fooled by the group reorder. The ``shared``
+    predicate (non-j2, language-neutral) matches :func:`watermark_rows`.
+    """
+    out: dict[str | None, list[str]] = {}
+    group_sid: str | None = None
+    for cell in cells:
+        meta = cell.metadata
+        if meta.is_slide_start:
+            group_sid = meta.slide_id
+        if meta.is_j2 or meta.lang in ("de", "en"):
+            continue
+        out.setdefault(group_sid, []).append(cell_content_hash(cell.content))
+    return out
+
+
+def _classify_move_target_edit_conflict(
+    plan: SyncPlan,
+    de_cells: list[Cell],
+    en_cells: list[Cell],
+    baseline_shared: list[str] | None,
+    de_idless_baseline: list[str] | None,
+    en_idless_baseline: list[str] | None,
+) -> None:
+    """Alert when a one-sided group reorder coincides with an opposite-half edit (Issue #282).
+
+    A single-direction ``move`` proposal means one half reordered its slide GROUPS.
+    A reorder makes positional pairing of language-neutral / id-less-localized cells
+    UNSOUND (the same reason the keyed walk refuses positional pairing under a move,
+    `_maybe_retag`): the structural pass (:func:`apply_code_structure`) rebuilds each
+    group's contents from the reordering (source) half and the per-cell detectors
+    (:func:`align_anchored`, :func:`_classify_idless_localized_drift`) compare the now
+    permuted sequences positionally. So ANY concurrent change the OTHER (target) half
+    made to its own neutral / id-less cells — a body edit, an add/remove, or a
+    cross-group reassignment — is mis-read or shadowed and silently overwritten with
+    the source's version. Observed failure modes (Issue #282 review):
+
+    - the target's edit is dropped and the watermark advances (no issue at all);
+    - the positional collision is mis-classified as a same-cell §7a divergence and
+      *auto-healed*, overwriting the target edit on disk with only a warning;
+    - a cross-group reassignment (content multiset unchanged) is rebuilt away.
+
+    All are #269 cardinal-invariant violations. Rather than chase each positional
+    artifact, detect the precondition directly: the target half (which did NOT
+    reorder — there is a single move direction) changed its neutral or id-less
+    content relative to its OWN baseline. Because the target's group order is
+    unchanged, that comparison is an ordinary positional compare and is itself sound
+    — and it is exhaustive (edit / add / remove / reassignment all perturb the
+    ordered sequence). Raise an error so the watermark holds and the buffered flush
+    writes nothing, leaving both halves intact on disk for manual reconciliation.
+
+    The legitimate same-direction merge — the author edits ONE half (reordering its
+    groups *and* editing its content) while the other half is untouched — never
+    fires: there the target half equals its baseline. A no-op when a per-cell
+    detector already alerted (``plan.has_errors``), for one clear error per scenario.
+    """
+    if plan.has_errors:
+        return
+    move_dirs = {p.direction for p in plan.proposals if p.kind == "move"}
+    if len(move_dirs) != 1:
+        return  # no move, or moves both ways (ambiguous — deferred elsewhere)
+    move_dir = next(iter(move_dirs))
+    # The move flows source->target; only the SOURCE half reordered, so the TARGET
+    # half's group order still matches baseline and an ordered compare is sound.
+    if move_dir == "de->en":
+        tgt_neutral = _shared_hashes(en_cells)
+        tgt_idless, tgt_idless_base = _idless_localized_hashes(en_cells, "en"), en_idless_baseline
+        target = "en"
+    else:
+        tgt_neutral = _shared_hashes(de_cells)
+        tgt_idless, tgt_idless_base = _idless_localized_hashes(de_cells, "de"), de_idless_baseline
+        target = "de"
+
+    # Neutral cells are shared across the halves, so the target's baseline IS
+    # ``baseline_shared``. A difference (ordered) means the target half edited,
+    # added, removed, or re-associated a neutral cell. But that is only a *conflict*
+    # if the two halves actually DISAGREE on per-group neutral content: a neutral
+    # edit applied identically to BOTH halves keeps the ``unify`` invariant (de == en),
+    # so a reorder cannot clobber it — there is nothing one-sided to lose. Gate on a
+    # reorder-invariant per-group comparison (a flat hash multiset is blind to a
+    # cross-group reassignment; a flat ORDERED compare is fooled by the reorder).
+    neutral_conflict = (
+        baseline_shared is not None
+        and tgt_neutral != baseline_shared
+        and _grouped_neutral_map(de_cells) != _grouped_neutral_map(en_cells)
+    )
+    # Id-less localized cells are per-language (translated), so the two halves cannot
+    # be compared directly; a target-side change from its own baseline is treated as a
+    # conflict (the structural pass would re-translate over it). Conservative by design.
+    idless_changed = tgt_idless_base is not None and tgt_idless != tgt_idless_base
+    if neutral_conflict or idless_changed:
+        plan.issues.append(
+            PlanIssue(
+                severity="error",
+                slide_id=None,
+                reason=f"slide groups were reordered {move_dir} but the {target} half also "
+                "changed a language-neutral or id-less-localized cell; a group reorder and a "
+                "concurrent edit on the other half cannot be reconciled in one pass (positional "
+                "pairing is unsound across a reorder) — apply both on the same half, or sync "
+                "them in separate steps, then re-run",
+            )
+        )
+
+
 def _resolve_divergence_winner(plan: SyncPlan, de_path: Path, en_path: Path) -> str | None:
     """Pick the winning direction for a diverged shared cell (§7a), or ``None``.
 
@@ -2067,7 +2196,16 @@ def build_sync_plan(
     # classifier cannot see, and hand its direction to the structural pass. Only
     # against a real (watermark) baseline; the keyed direction, when present,
     # already drives the structural pass, so the anchor direction is a *fallback*.
-    if baseline_shared is not None:
+    #
+    # Skipped when a single-direction group reorder (a ``move``) is present (Issue
+    # #282): a reorder permutes the neutral-cell *sequence*, so ``align_anchored``'s
+    # flat POSITIONAL compare is unsound — it mis-reads the permutation as a drift,
+    # or cross-pairs two independently edited cells into a phantom §7a divergence and
+    # auto-heals (overwriting one half's edit on disk). Under a reorder, neutral
+    # reconciliation is governed instead by the reorder-invariant per-group signature
+    # in :func:`_classify_move_target_edit_conflict` below.
+    single_move = len({p.direction for p in plan.proposals if p.kind == "move"}) == 1
+    if baseline_shared is not None and not single_move:
         alignment = align_anchored(de_cells, en_cells, baseline_shared)
         if alignment.irreconcilable:
             plan.issues.append(
@@ -2081,6 +2219,22 @@ def build_sync_plan(
             )
         elif alignment.diverged:
             _apply_divergence(plan, de_path, en_path, forced=alignment.direction)
+        elif _conflicts_with_keyed(plan, alignment.direction):
+            # Issue #282 (non-move case): the neutral-cell drift flows the OPPOSITE way
+            # to a keyed propagation direction (an add / edit / remove proposal — a
+            # reorder is handled above). The structural pass keys on the keyed direction
+            # (``_single_direction``) and would silently overwrite the neutral edit, so
+            # alert and hold the watermark — as :func:`_classify_idless_localized_drift`
+            # does for the id-less-localized analog.
+            plan.issues.append(
+                PlanIssue(
+                    severity="error",
+                    slide_id=None,
+                    reason=f"a language-neutral cell drifted {alignment.direction} but "
+                    f"other cells drifted {_keyed_direction(plan)}; sync cannot apply "
+                    "both directions at once — resolve manually",
+                )
+            )
         else:
             plan.anchor_direction = alignment.direction
 
@@ -2103,6 +2257,16 @@ def build_sync_plan(
     # no false one-sided alert, and the next clean sync records the headers).
     if de_header_baseline is not None and en_header_baseline is not None:
         _classify_header_drift(plan, de_cells, en_cells, de_header_baseline, en_header_baseline)
+
+    # Issue #282: a one-sided group reorder (a `move`) on one half collides with an
+    # opposite-side neutral / id-less content edit on the other. The positional drift
+    # detectors above mis-read the reorder as a drift (or a §7a divergence), masking
+    # the edit — a silent drop, or a destructive auto-heal for >=2 reordered neutral
+    # cells. Detect it order-blind via multisets and alert. Runs after the per-cell
+    # classifiers so it defers to (and dedups against) any error they already raised.
+    _classify_move_target_edit_conflict(
+        plan, de_cells, en_cells, baseline_shared, de_idless_baseline, en_idless_baseline
+    )
 
     # Tier C (Issue #198 / #190 item 3): mirror a tag-only edit on an id-less
     # localized cell — the per-cell engine cannot key it (no slide_id) and the

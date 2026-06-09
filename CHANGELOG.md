@@ -8,6 +8,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **Cohort viewing calendars (`clm export calendar`, `clm calendar check` /
+  `status`)** project a course's schedule onto one cohort's real calendar dates
+  (issue #283). Where `clm export schedule` is course-relative ("Week 3,
+  Tuesday"), a *calendar* maps the same ordered day-buckets onto actual dates
+  for a cohort, absorbing that cohort's holidays, delayed start, multi-week
+  breaks, and catch-up days. The trainer maintains only the deltas in a small
+  hand-edited `release/<channel>.calendar.toml` (start/end, weekly teaching
+  pattern, single-or-interval holidays, and ordered `merge`/`split`/`insert`/
+  `pin` adjustments) beside the channel's release ledger; the per-video dates
+  are computed. A holiday removes a teaching date so later content slides
+  automatically; `pin`s anchor a day to a date and segment the timeline, and an
+  over-full segment is reported with the exact "merge ≥ N buckets" deficit
+  rather than silently redistributed. `clm export calendar` renders Markdown,
+  CSV, or a subscribable `.ics` feed (stable event UIDs, so a re-export updates
+  events in place); `clm calendar check` validates a calendar (date-free,
+  non-zero exit on errors); `clm calendar status [--as-of DATE]` shows where a
+  cohort is today, its plan coordinate, and the drift in days versus the ideal
+  plan. See `clm info commands`.
 - **`clm export outline --weekdays [never|always]`** controls whether a
   section's `<subsection>` weekday/name groupings are rendered as bold labels
   in the Markdown outline. The default is `never`: every section's decks are
@@ -58,6 +76,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   now reconciles slide-group **order** against the propagation source after the
   structural pass (committing only a reorder that reproduces the source's group
   and `(slide_id, role)` order exactly), so such an insertion propagates cleanly.
+- **`clm slides sync` no longer silently drops (or destructively overwrites) a
+  one-sided edit made while the other half reorders slide groups.** When one half
+  reordered slide groups (a `move`) while the other half independently edited a
+  language-neutral (no `lang=`) or id-less-localized cell, the two changes flowed
+  in opposite directions. The reorder permutes the source half's neutral/id-less
+  cell *sequence*, which the positional drift detectors misread as a "drift" —
+  masking the target half's edit. The run reported the decks consistent and
+  advanced the watermark while the edit was lost from **both** halves; for two or
+  more reordered neutral cells the positional shift was even misclassified as a
+  same-cell divergence and **auto-healed**, overwriting the edit on disk (Issue
+  #282). Because a group reorder makes positional pairing unsound, sync now
+  **errors** whenever one half reorders slide groups while the other half has any
+  unreconciled neutral / id-less change (an edit, add, remove, or cross-group
+  reassignment), holding the watermark and leaving both halves untouched on disk so
+  the change is preserved. A neutral edit applied **identically** to both halves
+  alongside a reorder still merges cleanly (the halves agree, so nothing is lost).
+  Reconcile a genuine conflict by hand (apply the reorder and the edit on the same
+  half, or sync them in separate steps) and re-run.
 
 ### Changed
 
