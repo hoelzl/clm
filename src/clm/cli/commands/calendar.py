@@ -110,21 +110,21 @@ def resolve_calendar_path(spec_file: Path, channel_name: str, explicit: Path | N
     if not channel_name:
         raise click.UsageError("Pass --channel NAME or --calendar PATH.")
     spec = CourseSpec.from_file(spec_file)
-    channels = spec.release_channels
-    if channels is None:
+    if not spec.release_channel_blocks:
         raise click.ClickException(
             f"{spec_file} has no <release-channels> block; pass --calendar PATH "
             "instead of --channel."
         )
-    channel = channels.channel(channel_name)
-    if channel is None:
-        available = ", ".join(c.name for c in channels.channels) or "(none defined)"
-        raise click.ClickException(
-            f"Unknown channel {channel_name!r}. Defined channels: {available}."
-        )
+    try:
+        _block, channel = spec.resolve_release_channel(channel_name)
+    except CourseSpecError as e:
+        raise click.ClickException(str(e)) from None
     course_root, _ = resolve_course_paths(spec_file)
     ledger = _abs_under(course_root, channel.ledger)
-    return ledger.parent / f"{channel_name}.calendar.toml"
+    # The cohort has one timeline regardless of release stream, so the
+    # calendar file is keyed by the bare channel (cohort) name — the
+    # materials and solutions streams of one cohort share it (#291).
+    return ledger.parent / f"{channel.name}.calendar.toml"
 
 
 @click.command("calendar")

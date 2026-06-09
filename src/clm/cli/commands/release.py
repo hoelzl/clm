@@ -25,7 +25,12 @@ from clm.cli.commands.git_ops import (
     find_release_channel_repos,
 )
 from clm.core.course_paths import resolve_course_paths
-from clm.core.course_spec import CourseSpec, CourseSpecError, SectionSpec
+from clm.core.course_spec import (
+    CourseSpec,
+    CourseSpecError,
+    SectionSpec,
+    release_channel_ref,
+)
 from clm.core.provenance_manifest import MANIFEST_FILENAME, load_manifest
 from clm.release.frozen_manifest import FROZEN_FILENAME, FrozenManifest
 from clm.release.ledger import Ledger, partition_known
@@ -39,8 +44,10 @@ _SPEC_ARG = click.argument(
 _CHANNEL_OPT = click.option(
     "--channel",
     default="",
-    help="Channel name; resolves --ledger/--source/--dest from the spec's "
-    "<release-channels>. Explicit paths override resolution.",
+    help="Channel address; resolves --ledger/--source/--dest from the spec's "
+    "<release-channels>. Use STREAM/CHANNEL (e.g. materials/2026-04) when "
+    "several streams are declared; a bare name works when unique. Explicit "
+    "paths override resolution.",
 )
 _LEDGER_OPT = click.option(
     "--ledger",
@@ -70,24 +77,22 @@ def _abs_under(course_root: Path, value: str) -> Path:
 
 
 def _resolve_channel(spec_file: Path, channel_name: str) -> _ResolvedChannel:
+    """Resolve a channel address (``stream/channel`` or unique bare name, #291)."""
     spec = CourseSpec.from_file(spec_file)
-    channels = spec.release_channels
-    if channels is None:
+    if not spec.release_channel_blocks:
         raise click.ClickException(
             f"{spec_file} has no <release-channels> block; pass explicit "
             f"--ledger/--source/--dest instead of --channel."
         )
-    channel = channels.channel(channel_name)
-    if channel is None:
-        available = ", ".join(c.name for c in channels.channels) or "(none defined)"
-        raise click.ClickException(
-            f"Unknown channel {channel_name!r}. Defined channels: {available}."
-        )
+    try:
+        block, channel = spec.resolve_release_channel(channel_name)
+    except CourseSpecError as e:
+        raise click.ClickException(str(e)) from None
     course_root, _ = resolve_course_paths(spec_file)
-    source_target = next((t for t in spec.output_targets if t.name == channels.source_target), None)
+    source_target = next((t for t in spec.output_targets if t.name == block.source_target), None)
     source = _abs_under(course_root, source_target.path) if source_target else None
     return _ResolvedChannel(
-        name=channel_name,
+        name=release_channel_ref(block, channel),
         ledger=_abs_under(course_root, channel.ledger),
         source=source,
         dest=_abs_under(course_root, channel.path),
@@ -396,6 +401,9 @@ def sync_cmd(
         if spec_file is None:
             raise click.ClickException("--channel requires the SPEC_FILE argument.")
         resolved = _resolve_channel(spec_file, channel)
+        # Use the canonical stream/channel address everywhere downstream
+        # (messages, the frozen manifest's channel field, push hints).
+        channel = resolved.name
         ledger_path = ledger_path or resolved.ledger
         source_path = source_path or resolved.source
         dest_path = dest_path or resolved.dest

@@ -183,6 +183,69 @@ class TestFindReleaseChannelRepos:
         assert repo.path == abs_cohort  # preserved, NOT joined under course_root
 
 
+SPEC_TWO_STREAMS = """<?xml version="1.0"?>
+<course>
+  <name><de>T</de><en>T</en></name>
+  <prog-lang>python</prog-lang>
+  <project-slug>ml-course</project-slug>
+  <github>
+    <repository-base>https://github.com/Org</repository-base>
+  </github>
+  <sections>
+    <section>
+      <name><de>S</de><en>S</en></name>
+      <topics><topic>intro</topic></topics>
+    </section>
+  </sections>
+  <output-targets>
+    <output-target name="shared"><path>./output/shared</path></output-target>
+    <output-target name="completed"><path>./output/completed</path></output-target>
+  </output-targets>
+  <release-channels name="materials" source-target="shared">
+    <channel name="2026-04" path="./release/materials/2026-04" ledger="release/materials-2026-04.txt"/>
+  </release-channels>
+  <release-channels name="solutions" source-target="completed">
+    <channel name="2026-04" path="./release/solutions/2026-04" ledger="release/solutions-2026-04.txt"/>
+    <channel name="2026-10" path="./release/solutions/2026-10" ledger="release/solutions-2026-10.txt"/>
+  </release-channels>
+</course>
+"""
+
+
+class TestMultiStreamChannelRepos:
+    """Several <release-channels> blocks — one per release stream (issue #291)."""
+
+    def test_all_channels_enumerates_every_stream(self, tmp_path: Path):
+        spec_file = _write_spec(tmp_path, SPEC_TWO_STREAMS)
+        repos = find_release_channel_repos(spec_file)
+        assert [r.target_name for r in repos] == [
+            "materials/2026-04",
+            "solutions/2026-04",
+            "solutions/2026-10",
+        ]
+
+    def test_qualified_filter_selects_one_stream_channel(self, tmp_path: Path):
+        spec_file = _write_spec(tmp_path, SPEC_TWO_STREAMS)
+        repos = find_release_channel_repos(spec_file, "solutions/2026-04")
+        assert [r.path for r in repos] == [tmp_path / "release" / "solutions" / "2026-04"]
+
+    def test_bare_filter_resolves_when_unique(self, tmp_path: Path):
+        spec_file = _write_spec(tmp_path, SPEC_TWO_STREAMS)
+        repos = find_release_channel_repos(spec_file, "2026-10")
+        assert [r.target_name for r in repos] == ["solutions/2026-10"]
+
+    def test_ambiguous_bare_filter_is_a_clear_cli_error(self, tmp_path: Path):
+        spec_file = _write_spec(tmp_path, SPEC_TWO_STREAMS)
+        with pytest.raises(click.ClickException, match="several streams"):
+            _select_repos(spec_file, target=None, channel="2026-04", all_channels=False)
+
+    def test_remote_urls_carry_the_stream_suffix(self, tmp_path: Path):
+        spec_file = _write_spec(tmp_path, SPEC_TWO_STREAMS)
+        by_name = {r.target_name: r.remote_url for r in find_release_channel_repos(spec_file)}
+        assert by_name["materials/2026-04"] == "https://github.com/Org/ml-course-2026-04-materials"
+        assert by_name["solutions/2026-04"] == "https://github.com/Org/ml-course-2026-04-solutions"
+
+
 # ---------------------------------------------------------------------------
 # _select_repos guards
 # ---------------------------------------------------------------------------

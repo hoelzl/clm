@@ -204,6 +204,85 @@ def test_channel_resolves_ledger_source_and_dest_from_spec(tmp_path):
     assert frozen.skeleton_frozen is True
 
 
+SPEC_TWO_STREAMS = """
+<course>
+  <name><de>T</de><en>T</en></name>
+  <prog-lang>python</prog-lang>
+  <sections>
+    <section>
+      <name><de>S</de><en>S</en></name>
+      <topics><topic>intro</topic></topics>
+    </section>
+  </sections>
+  <output-targets>
+    <output-target name="shared">
+      <path>output/shared</path>
+      <kinds><kind>code-along</kind></kinds>
+    </output-target>
+    <output-target name="completed">
+      <path>output/completed</path>
+      <kinds><kind>completed</kind></kinds>
+    </output-target>
+  </output-targets>
+  <release-channels name="materials" source-target="shared">
+    <channel name="2026-04" path="release/materials/2026-04" ledger="release/materials-2026-04.txt"/>
+  </release-channels>
+  <release-channels name="solutions" source-target="completed">
+    <channel name="2026-04" path="release/solutions/2026-04" ledger="release/solutions-2026-04.txt"/>
+  </release-channels>
+</course>
+""".strip()
+
+
+def test_two_streams_release_independently_from_their_own_sources(tmp_path):
+    """The keystone scenario of issue #291: one cohort, two declarative streams.
+
+    materials/2026-04 promotes from the `shared` build target, solutions/2026-04
+    from the `completed` target, each gated by its own ledger — without ever
+    falling back to explicit --ledger/--source/--dest plumbing.
+    """
+    runner = CliRunner()
+    course_root = tmp_path
+    spec_file = _write_spec(tmp_path, SPEC_TWO_STREAMS)
+    _write_source(course_root / "output" / "shared")
+    _write_source(course_root / "output" / "completed")
+
+    # Release the topic on the materials stream only.
+    add = runner.invoke(
+        release_group, ["add", str(spec_file), "intro", "--channel", "materials/2026-04"]
+    )
+    assert add.exit_code == 0, add.output
+    assert Ledger.load(course_root / "release" / "materials-2026-04.txt").released == ["intro"]
+    assert not (course_root / "release" / "solutions-2026-04.txt").exists()
+
+    sync = runner.invoke(release_group, ["sync", str(spec_file), "--channel", "materials/2026-04"])
+    assert sync.exit_code == 0, sync.output
+    materials_dest = course_root / "release" / "materials" / "2026-04"
+    assert (materials_dest / "Sec/01 Intro.ipynb").is_file()
+    # The other stream's destination is untouched: its ledger is empty.
+    assert not (course_root / "release" / "solutions" / "2026-04" / "Sec").exists()
+
+    # Now release on the solutions stream; it promotes from ITS source target.
+    runner.invoke(release_group, ["add", str(spec_file), "intro", "--channel", "solutions/2026-04"])
+    sync2 = runner.invoke(release_group, ["sync", str(spec_file), "--channel", "solutions/2026-04"])
+    assert sync2.exit_code == 0, sync2.output
+    solutions_dest = course_root / "release" / "solutions" / "2026-04"
+    assert (solutions_dest / "Sec/01 Intro.ipynb").is_file()
+
+    # Each destination froze under its canonical stream/channel address.
+    frozen = FrozenManifest.load(solutions_dest / FROZEN_FILENAME, channel="?")
+    assert frozen.channel == "solutions/2026-04"
+
+
+def test_ambiguous_bare_channel_is_a_clear_error(tmp_path):
+    runner = CliRunner()
+    spec_file = _write_spec(tmp_path, SPEC_TWO_STREAMS)
+    result = runner.invoke(release_group, ["add", str(spec_file), "intro", "--channel", "2026-04"])
+    assert result.exit_code != 0
+    assert "several streams" in result.output
+    assert "materials/2026-04" in result.output
+
+
 # ---------------------------------------------------------------------------
 # `clm release week` (follow-up 3) — section-scoped ledger append
 # ---------------------------------------------------------------------------
