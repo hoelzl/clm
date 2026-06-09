@@ -1409,6 +1409,17 @@ written into the file, so a deck stays id-light yet syncs precisely:
   used to land the new group in the wrong inter-group slot on the other half and
   trip the parity fail-safe above; sync now reconciles slide-group **order**
   against the propagation source, so the insertion propagates cleanly.
+- **Reordering groups on one half while editing a neutral / id-less cell on the
+  other is surfaced, not silently dropped (since CLM {version}, Issue #282).** If
+  one half reorders slide groups (a *move*) while the other half independently
+  edits a language-neutral or id-less-localized cell, the two changes flow in
+  opposite directions and a single sync pass cannot apply both. (The reorder
+  shuffles the source half's cell order, which the drift detectors would otherwise
+  mistake for an edit — masking the real one on the other half, and for two or more
+  reordered cells even auto-healing over it on disk.) Sync now **errors** and holds
+  the watermark, leaving both halves untouched on disk, instead of overwriting the
+  edit. Reconcile by hand (apply the edit and the reorder on the same half, or sync
+  them in separate steps) and re-run.
 
 Use `--explain` to see the anchor-level view (per-cell anchor + drift, the
 propagation direction, drifted ids) for any pair.
