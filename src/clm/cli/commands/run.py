@@ -38,17 +38,21 @@ def unknown_cli_command_error(tokens: list[str]) -> str | None:
     # validator calls this function from outside the command tree.
     from clm.cli.main import cli
 
+    # Walk via list_commands/get_command (not the .commands dict): the CLI
+    # registers commands lazily, so .commands only holds what has already
+    # been loaded. get_command imports just the named command's module.
+    ctx = click.Context(cli)
     current: click.Command = cli
     path = "clm"
     i = 0
     while isinstance(current, click.Group):
         if i >= len(tokens) or tokens[i].startswith("-"):
-            subcommands = ", ".join(sorted(current.commands))
+            subcommands = ", ".join(sorted(current.list_commands(ctx)))
             return f"'{path}' needs a subcommand (one of: {subcommands})"
         name = tokens[i]
-        subcommand = current.commands.get(name)
+        subcommand = current.get_command(ctx, name)
         if subcommand is None:
-            subcommands = ", ".join(sorted(current.commands))
+            subcommands = ", ".join(sorted(current.list_commands(ctx)))
             return f"'{path} {name}' is not a clm command (available: {subcommands})"
         current = subcommand
         path = f"{path} {name}"

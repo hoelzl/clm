@@ -163,8 +163,14 @@ class DataProvider:
 
             conn = self.job_queue._get_conn()
 
-            # Query job events (started, completed, failed)
-            # We'll use the jobs table to derive events
+            # Query job events (started, completed, failed) derived from the
+            # jobs table. Sorting by COALESCE(...) cannot use an index, so a
+            # naive ORDER BY ... LIMIT sorts *every* finished job ever
+            # recorded — the main reason monitor startup crawled on large
+            # databases. Restrict the sort to an index-friendly candidate
+            # set first: all in-flight jobs (bounded by worker count, via
+            # idx_jobs_status) plus the most recently completed/failed jobs
+            # (via idx_jobs_completed_at), then order those few rows.
             cursor = conn.execute(
                 """
                 SELECT
@@ -178,14 +184,24 @@ class DataProvider:
                     j.error,
                     j.job_type,
                     j.payload
-                FROM jobs j
+                FROM (
+                    SELECT id FROM jobs WHERE status = 'processing'
+                    UNION
+                    SELECT id FROM (
+                        SELECT id FROM jobs
+                        WHERE status IN ('completed', 'failed')
+                          AND completed_at IS NOT NULL
+                        ORDER BY completed_at DESC
+                        LIMIT ?
+                    )
+                ) candidates
+                JOIN jobs j ON j.id = candidates.id
                 LEFT JOIN workers w ON w.id = j.worker_id
-                WHERE j.status IN ('processing', 'completed', 'failed')
                 ORDER BY
                     COALESCE(j.completed_at, j.started_at, j.created_at) DESC
                 LIMIT ?
                 """,
-                (limit,),
+                (limit, limit),
             )
 
             for row in cursor.fetchall():

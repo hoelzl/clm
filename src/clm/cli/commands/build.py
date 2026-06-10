@@ -1158,6 +1158,11 @@ def _maybe_run_sweep(
             f"sweep skipped to avoid removing files from prior successful builds"
         )
 
+    if skip_reason is None:
+        # The sweep walks every output root; on big courses that is a
+        # noticeable pause after the last stage, so tell the user.
+        build_reporter.formatter.show_startup_message("Sweeping stale output files...")
+
     report = sweep_stray_files(
         root_dirs,
         backend.output_write_registry,
@@ -1759,6 +1764,7 @@ async def main_build(
         raise
     finally:
         if started_workers and worker_config.auto_stop:
+            output_formatter.show_startup_message("Stopping workers...")
             logger.info("Stopping managed workers...")
             try:
                 lifecycle_manager.stop_managed_workers(started_workers)
@@ -1766,6 +1772,7 @@ async def main_build(
             except Exception as e:
                 logger.error(f"Failed to stop workers: {e}", exc_info=True)
         if mitm_manager is not None:
+            output_formatter.show_startup_message("Merging HTTP replay cassettes...")
             logger.info("Stopping mitmproxy transport...")
             try:
                 mitm_manager.stop()
@@ -1815,6 +1822,7 @@ async def main_build(
                         len(failed_topics),
                         ", ".join(sorted(failed_topics)),
                     )
+                output_formatter.show_startup_message("Writing provenance manifests...")
                 git = get_git_info(course.course_root)
                 written = write_provenance_manifests(
                     course,

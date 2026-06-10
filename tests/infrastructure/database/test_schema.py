@@ -456,7 +456,9 @@ class TestMigrateDatabase:
         db_path = tmp_path / "test.db"
         conn = sqlite3.connect(str(db_path))
 
-        # Create minimal v1 schema
+        # Create minimal v1 schema. The timestamp columns were part of the
+        # original v1 SCHEMA_SQL and the v9 index migration relies on
+        # completed_at existing, so the fixture must include them.
         conn.execute("""
             CREATE TABLE jobs (
                 id INTEGER PRIMARY KEY,
@@ -465,7 +467,10 @@ class TestMigrateDatabase:
                 input_file TEXT NOT NULL,
                 output_file TEXT NOT NULL,
                 content_hash TEXT NOT NULL,
-                payload TEXT NOT NULL
+                payload TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                started_at TIMESTAMP,
+                completed_at TIMESTAMP
             )
         """)
         conn.execute("""
@@ -649,5 +654,80 @@ class TestMigrateDatabase:
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='worker_heartbeats'"
             )
             assert cursor.fetchone() is not None
+        finally:
+            conn.close()
+
+    def test_migrate_v8_to_v9_adds_completed_at_indexes(self, tmp_path):
+        """Migration from v8 to v9 creates the time-windowed job indexes.
+
+        These back the monitor/status queries ("completed in the last
+        hour", "most recently completed") and the retention cleanup, which
+        otherwise scan every finished job row.
+        """
+        db_path = tmp_path / "test.db"
+        conn = sqlite3.connect(str(db_path))
+
+        # Minimal v8 schema — just the jobs table the indexes attach to.
+        conn.execute("""
+            CREATE TABLE jobs (
+                id INTEGER PRIMARY KEY,
+                job_type TEXT NOT NULL,
+                status TEXT NOT NULL,
+                completed_at TIMESTAMP
+            )
+        """)
+        conn.execute(
+            "CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TIMESTAMP)"
+        )
+        conn.execute("INSERT INTO schema_version (version) VALUES (8)")
+        conn.commit()
+
+        migrate_database(conn, 8, 9)
+
+        indexes = {
+            row[0]
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index'").fetchall()
+        }
+        assert "idx_jobs_status_completed" in indexes
+        assert "idx_jobs_completed_at" in indexes
+        assert get_schema_version(conn) == 9
+
+        conn.close()
+
+    def test_init_database_adds_v9_indexes_to_existing_v8_db(self, tmp_path):
+        """init_database upgrades a pre-v9 database in place.
+
+        This is the path `clm monitor` / the next build takes against an
+        existing jobs database: the SCHEMA_SQL CREATE INDEX IF NOT EXISTS
+        statements plus the migration must leave the DB at v9 with the new
+        indexes present.
+        """
+        db_path = tmp_path / "test.db"
+        init_database(db_path)
+
+        conn = sqlite3.connect(str(db_path))
+        try:
+            # Rewind the recorded version to v8 and drop the new indexes to
+            # simulate a database created before this release.
+            conn.execute("DELETE FROM schema_version WHERE version >= 9")
+            conn.execute("DROP INDEX IF EXISTS idx_jobs_status_completed")
+            conn.execute("DROP INDEX IF EXISTS idx_jobs_completed_at")
+            conn.commit()
+        finally:
+            conn.close()
+
+        init_database(db_path)
+
+        conn = sqlite3.connect(str(db_path))
+        try:
+            indexes = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='index'"
+                ).fetchall()
+            }
+            assert "idx_jobs_status_completed" in indexes
+            assert "idx_jobs_completed_at" in indexes
+            assert get_schema_version(conn) == DATABASE_VERSION
         finally:
             conn.close()

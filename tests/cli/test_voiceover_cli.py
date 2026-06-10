@@ -259,13 +259,21 @@ class TestPolishCommand:
 
 
 class TestMainCliRegistration:
+    # Commands register lazily, so resolve them through Click's public
+    # API instead of peeking at the (lazily populated) .commands dict.
+
     def test_voiceover_registered(self):
+        import click
+
         from clm.cli.main import cli
 
-        command_names = list(cli.commands)
-        assert "voiceover" in command_names
+        ctx = click.Context(cli)
+        assert "voiceover" in cli.list_commands(ctx)
+        assert cli.get_command(ctx, "voiceover") is not None
 
     def test_polish_registered_under_slides(self):
+        # The slides group self-registers its subcommands at import, so
+        # its .commands dict is fully populated once the group is loaded.
         from clm.cli.main import slides_group
 
         command_names = list(slides_group.commands)

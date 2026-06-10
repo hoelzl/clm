@@ -28,10 +28,15 @@ class TestRecordingsGroup:
         assert "compare" in result.output
 
     def test_recordings_registered_in_cli(self):
+        import click
+
         from clm.cli.main import cli
 
-        command_names = list(cli.commands)
-        assert "recordings" in command_names
+        # Commands register lazily — resolve via Click's public API
+        # rather than the (lazily populated) .commands dict.
+        ctx = click.Context(cli)
+        assert "recordings" in cli.list_commands(ctx)
+        assert cli.get_command(ctx, "recordings") is not None
 
 
 class TestJobsSubcommands:
