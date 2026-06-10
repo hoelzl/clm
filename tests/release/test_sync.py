@@ -1,7 +1,18 @@
 """Tests for the release sync/promote algorithm (issue #208, step 2)."""
 
+import hashlib
+
 from clm.release.frozen_manifest import FrozenManifest, FrozenRecord
-from clm.release.sync import COPY, REFREEZE, SKIP_FROZEN, apply_sync, plan_sync
+from clm.release.sync import (
+    COPY,
+    REFREEZE,
+    REFRESH,
+    SKIP_FROZEN,
+    UP_TO_DATE,
+    apply_sync,
+    plan_sync,
+    scan_evergreen,
+)
 
 INTRO_PATH = "En/Course/Notebooks/Completed/Sec/01 Intro.ipynb"
 FUNCS_PATH = "En/Course/Notebooks/Completed/Sec/02 Funcs.ipynb"
@@ -240,6 +251,181 @@ def test_sync_refuses_vcs_paths_from_a_polluted_manifest(tmp_path, caplog):
     assert (dest / ".git" / "index").read_bytes() == b"REAL"
     assert result.files_copied == 2
     assert "refused to copy 1 VCS metadata file" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Evergreen skeleton files (never frozen; re-copied when the content changes)
+# ---------------------------------------------------------------------------
+
+NEWS_PATH = "NEWS.md"
+
+
+def _sha(text: str) -> str:
+    return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _evergreen_manifest(news_content: str = "news v1") -> dict:
+    """The standard manifest plus a NEWS skeleton file with a *real* hash.
+
+    Evergreen comparisons hash the destination bytes, so — unlike the other
+    fixtures, where ``content_hash`` is a fake — the NEWS entry's hash must be
+    the true sha256 of its content.
+    """
+    manifest = _manifest()
+    manifest["files"].append(
+        {
+            "path": NEWS_PATH,
+            "topic_id": None,
+            "section_id": None,
+            "kind": None,
+            "format": "dir-group",
+            "language": "en",
+            "content_hash": _sha(news_content),
+        }
+    )
+    return manifest
+
+
+def _materialize_evergreen_source(tmp_path, manifest, news_content: str = "news v1"):
+    source = _materialize_source(tmp_path, manifest)
+    (source / NEWS_PATH).write_text(news_content, encoding="utf-8")
+    return source
+
+
+def test_scan_plans_refresh_when_dest_missing_and_up_to_date_when_current(tmp_path):
+    manifest = _evergreen_manifest("news v1")
+    dest = tmp_path / "jan"
+
+    scan = scan_evergreen(manifest=manifest, patterns=["NEWS.md"], dest_root=dest)
+    assert [(p.path, p.action) for p in scan.plans] == [(NEWS_PATH, REFRESH)]
+    assert [p.path for p in scan.to_refresh] == [NEWS_PATH]
+
+    dest.mkdir()
+    (dest / NEWS_PATH).write_text("news v1", encoding="utf-8")
+    scan = scan_evergreen(manifest=manifest, patterns=["NEWS.md"], dest_root=dest)
+    assert [(p.path, p.action) for p in scan.plans] == [(NEWS_PATH, UP_TO_DATE)]
+    assert scan.to_refresh == ()
+
+
+def test_scan_reports_topic_owned_matches_and_never_plans_them(tmp_path):
+    manifest = _evergreen_manifest()
+    scan = scan_evergreen(manifest=manifest, patterns=["*"], dest_root=tmp_path / "jan")
+    # Only skeleton entries are planned; topic-owned matches are reported.
+    assert {p.path for p in scan.plans} == {SKELETON_PATH, NEWS_PATH}
+    assert set(scan.topic_owned_matches) == {INTRO_PATH, FUNCS_PATH}
+
+
+def test_scan_refuses_vcs_paths(tmp_path):
+    manifest = _evergreen_manifest()
+    manifest["files"].append({"path": ".git/index", "topic_id": None, "content_hash": "sha256:x"})
+    scan = scan_evergreen(manifest=manifest, patterns=["*"], dest_root=tmp_path / "jan")
+    assert ".git/index" not in {p.path for p in scan.plans}
+
+
+def test_scan_without_patterns_is_empty(tmp_path):
+    scan = scan_evergreen(manifest=_evergreen_manifest(), patterns=[], dest_root=tmp_path / "jan")
+    assert scan.plans == ()
+    assert scan.topic_owned_matches == ()
+
+
+def test_first_sync_delivers_evergreen_via_skeleton_not_the_refresh_pass(tmp_path):
+    manifest = _evergreen_manifest("news v1")
+    source = _materialize_evergreen_source(tmp_path, manifest, "news v1")
+    dest = tmp_path / "jan"
+    frozen = FrozenManifest(channel="jan")
+
+    scan = scan_evergreen(manifest=manifest, patterns=["NEWS.md"], dest_root=dest)
+    plan = plan_sync(
+        manifest=manifest, ledger_released=["intro"], frozen=frozen, evergreen=scan.plans
+    )
+    assert plan.copy_skeleton is True
+
+    result = apply_sync(
+        plan=plan,
+        manifest=manifest,
+        source_root=source,
+        dest_root=dest,
+        frozen=frozen,
+        copied_at="t1",
+    )
+    # NEWS arrived with the skeleton; the refresh pass did not run again.
+    assert (dest / NEWS_PATH).read_text(encoding="utf-8") == "news v1"
+    assert result.refreshed_files == ()
+
+
+def test_changed_evergreen_refreshes_after_skeleton_freeze(tmp_path):
+    # First sync freezes topic + skeleton.
+    manifest = _evergreen_manifest("news v1")
+    source = _materialize_evergreen_source(tmp_path, manifest, "news v1")
+    dest = tmp_path / "jan"
+    frozen = FrozenManifest(channel="jan")
+    scan = scan_evergreen(manifest=manifest, patterns=["NEWS.md"], dest_root=dest)
+    plan = plan_sync(
+        manifest=manifest, ledger_released=["intro"], frozen=frozen, evergreen=scan.plans
+    )
+    apply_sync(
+        plan=plan,
+        manifest=manifest,
+        source_root=source,
+        dest_root=dest,
+        frozen=frozen,
+        copied_at="t1",
+    )
+    record_before = frozen.frozen["intro"]
+
+    # The source NEWS changes; the next build records the new hash.
+    manifest = _evergreen_manifest("news v2")
+    source = _materialize_evergreen_source(tmp_path, manifest, "news v2")
+
+    scan = scan_evergreen(manifest=manifest, patterns=["NEWS.md"], dest_root=dest)
+    plan = plan_sync(
+        manifest=manifest, ledger_released=["intro"], frozen=frozen, evergreen=scan.plans
+    )
+    assert plan.copy_skeleton is False
+    assert plan.topics[0].action == SKIP_FROZEN
+
+    result = apply_sync(
+        plan=plan,
+        manifest=manifest,
+        source_root=source,
+        dest_root=dest,
+        frozen=frozen,
+        copied_at="t2",
+    )
+    assert result.refreshed_files == (NEWS_PATH,)
+    assert result.files_copied == 1
+    assert (dest / NEWS_PATH).read_text(encoding="utf-8") == "news v2"
+    # The freeze record is untouched: evergreen never touches topic state.
+    assert frozen.frozen["intro"] == record_before
+
+    # A third sync with unchanged content is a no-op.
+    scan = scan_evergreen(manifest=manifest, patterns=["NEWS.md"], dest_root=dest)
+    assert [(p.path, p.action) for p in scan.plans] == [(NEWS_PATH, UP_TO_DATE)]
+
+
+def test_evergreen_added_after_skeleton_freeze_is_promoted(tmp_path):
+    """A NEWS file that did not exist when the skeleton froze still reaches the
+    cohort once it matches an evergreen pattern (dest missing -> refresh)."""
+    manifest = _evergreen_manifest("late news")
+    source = _materialize_evergreen_source(tmp_path, manifest, "late news")
+    dest = tmp_path / "jan"
+    dest.mkdir()
+    frozen = FrozenManifest(channel="jan", skeleton_frozen=True)
+
+    scan = scan_evergreen(manifest=manifest, patterns=["NEWS.md"], dest_root=dest)
+    plan = plan_sync(manifest=manifest, ledger_released=[], frozen=frozen, evergreen=scan.plans)
+    result = apply_sync(
+        plan=plan,
+        manifest=manifest,
+        source_root=source,
+        dest_root=dest,
+        frozen=frozen,
+        copied_at="t1",
+    )
+    assert result.refreshed_files == (NEWS_PATH,)
+    assert (dest / NEWS_PATH).read_text(encoding="utf-8") == "late news"
+    # The rest of the skeleton stays frozen out, as before.
+    assert not (dest / SKELETON_PATH).exists()
 
 
 # ---------------------------------------------------------------------------

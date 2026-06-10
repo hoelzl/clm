@@ -1,5 +1,6 @@
 """Tests for the ``clm release`` CLI (issue #208, steps 2 + 3d)."""
 
+import hashlib
 import json
 import subprocess
 from pathlib import Path
@@ -853,6 +854,173 @@ def test_missing_language_root_is_a_clear_error(tmp_path):
     sync = runner.invoke(release_group, ["sync", str(spec_file), "--channel", "jan-de"])
     assert sync.exit_code != 0
     assert "Language root not found" in sync.output
+
+
+# ---------------------------------------------------------------------------
+# Evergreen skeleton files (never frozen; re-copied when content changes)
+# ---------------------------------------------------------------------------
+
+SPEC_WITH_EVERGREEN = SPEC_WITH_CHANNELS.replace(
+    '<release-channels source-target="src">',
+    '<release-channels source-target="src">\n    <evergreen>NEWS.md</evergreen>',
+)
+
+
+def _sha(text: str) -> str:
+    return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _set_news(root: Path, content: str, *, path: str = "NEWS.md", language: str = "en") -> None:
+    """Write/update a NEWS skeleton file in a built source, with a real hash.
+
+    Evergreen compares the destination's sha256 against the manifest's
+    ``content_hash``, so the entry must carry the true digest of the bytes —
+    unlike the other fixtures' fake hashes.
+    """
+    manifest = json.loads((root / MANIFEST_FILENAME).read_text(encoding="utf-8"))
+    manifest["files"] = [e for e in manifest["files"] if e["path"] != path] + [
+        {
+            "path": path,
+            "topic_id": None,
+            "section_id": None,
+            "kind": None,
+            "format": "dir-group",
+            "language": language,
+            "content_hash": _sha(content),
+        }
+    ]
+    (root / MANIFEST_FILENAME).write_text(json.dumps(manifest), encoding="utf-8")
+    target = root / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content, encoding="utf-8")
+
+
+def test_channel_evergreen_refreshes_news_across_syncs(tmp_path):
+    runner = CliRunner()
+    spec_file = _write_spec(tmp_path, SPEC_WITH_EVERGREEN)
+    source = tmp_path / "output" / "src"
+    _write_source(source)
+    _set_news(source, "news v1")
+
+    runner.invoke(release_group, ["add", str(spec_file), "intro", "--channel", "jan"])
+    first = runner.invoke(release_group, ["sync", str(spec_file), "--channel", "jan"])
+    assert first.exit_code == 0, first.output
+    dest = tmp_path / "solutions" / "jan"
+    # First sync ships NEWS with the skeleton; no refresh pass yet.
+    assert (dest / "NEWS.md").read_text(encoding="utf-8") == "news v1"
+    assert "refresh" not in first.output
+
+    # The course publishes a new NEWS; the next sync refreshes it while the
+    # frozen topic stays untouched.
+    _set_news(source, "news v2")
+    second = runner.invoke(release_group, ["sync", str(spec_file), "--channel", "jan"])
+    assert second.exit_code == 0, second.output
+    assert "refresh" in second.output
+    assert "NEWS.md" in second.output
+    assert "skip-frozen" in second.output
+    assert (dest / "NEWS.md").read_text(encoding="utf-8") == "news v2"
+    frozen = FrozenManifest.load(dest / FROZEN_FILENAME, channel="jan")
+    assert frozen.is_frozen("intro")
+    assert frozen.skeleton_frozen is True
+
+    # Unchanged content -> up-to-date, nothing copied.
+    third = runner.invoke(release_group, ["sync", str(spec_file), "--channel", "jan"])
+    assert third.exit_code == 0, third.output
+    assert "up-to-date" in third.output
+    assert "Evergreen: refreshed" not in third.output
+
+
+def test_evergreen_flag_in_explicit_paths_mode(tmp_path):
+    runner = CliRunner()
+    source = tmp_path / "src"
+    dest = tmp_path / "jan"
+    _write_source(source)
+    _set_news(source, "news v1")
+    ledger = tmp_path / "jan.txt"
+    Ledger(["intro"]).save(ledger)
+    args = ["sync", "--ledger", str(ledger), "--source", str(source), "--dest", str(dest)]
+
+    first = runner.invoke(release_group, [*args, "--evergreen", "NEWS.md"])
+    assert first.exit_code == 0, first.output
+
+    _set_news(source, "news v2")
+    second = runner.invoke(release_group, [*args, "--evergreen", "NEWS.md"])
+    assert second.exit_code == 0, second.output
+    assert (dest / "NEWS.md").read_text(encoding="utf-8") == "news v2"
+    assert "Evergreen: refreshed 1 file(s): NEWS.md" in second.output
+
+    # Without the flag (and no spec patterns) the file stays frozen.
+    _set_news(source, "news v3")
+    third = runner.invoke(release_group, args)
+    assert third.exit_code == 0, third.output
+    assert (dest / "NEWS.md").read_text(encoding="utf-8") == "news v2"
+
+
+def test_evergreen_pattern_matching_topic_files_warns_and_ignores(tmp_path):
+    runner = CliRunner()
+    source = tmp_path / "src"
+    dest = tmp_path / "jan"
+    _write_source(source)
+    ledger = tmp_path / "jan.txt"
+    Ledger(["intro"]).save(ledger)
+    args = ["sync", "--ledger", str(ledger), "--source", str(source), "--dest", str(dest)]
+
+    first = runner.invoke(release_group, args)
+    assert first.exit_code == 0, first.output
+
+    # The pattern matches a topic-owned notebook: warned about, never planned.
+    (source / "Sec" / "01 Intro.ipynb").write_text("patched", encoding="utf-8")
+    second = runner.invoke(release_group, [*args, "--evergreen", "Sec/*"])
+    assert second.exit_code == 0, second.output
+    assert "topic-owned" in second.output
+    assert "--refreeze" in second.output
+    assert (dest / "Sec/01 Intro.ipynb").read_text(encoding="utf-8") == "sha256:a"
+
+
+def test_evergreen_dry_run_shows_refresh_and_copies_nothing(tmp_path):
+    runner = CliRunner()
+    source = tmp_path / "src"
+    dest = tmp_path / "jan"
+    _write_source(source)
+    _set_news(source, "news v1")
+    ledger = tmp_path / "jan.txt"
+    Ledger(["intro"]).save(ledger)
+    args = ["sync", "--ledger", str(ledger), "--source", str(source), "--dest", str(dest)]
+
+    first = runner.invoke(release_group, [*args, "--evergreen", "NEWS.md"])
+    assert first.exit_code == 0, first.output
+
+    _set_news(source, "news v2")
+    dry = runner.invoke(release_group, [*args, "--evergreen", "NEWS.md", "--dry-run"])
+    assert dry.exit_code == 0, dry.output
+    assert "refresh" in dry.output
+    assert "NEWS.md" in dry.output
+    assert (dest / "NEWS.md").read_text(encoding="utf-8") == "news v1"
+
+
+def test_lang_channel_evergreen_matches_rerooted_path(tmp_path):
+    """Patterns are destination-relative: for a lang-scoped channel the NEWS
+    at ``ml-de/NEWS.md`` in the source matches the pattern ``NEWS.md``."""
+    runner = CliRunner()
+    spec = SPEC_LANG_CHANNELS.replace(
+        '<release-channels source-target="src">',
+        '<release-channels source-target="src">\n    <evergreen>NEWS.md</evergreen>',
+    )
+    spec_file = _write_spec(tmp_path, spec)
+    source = tmp_path / "output" / "src"
+    _write_two_language_source(source)
+    _set_news(source, "de news v1", path="ml-de/NEWS.md", language="de")
+
+    runner.invoke(release_group, ["add", str(spec_file), "intro", "--channel", "jan-de"])
+    first = runner.invoke(release_group, ["sync", str(spec_file), "--channel", "jan-de"])
+    assert first.exit_code == 0, first.output
+    dest = tmp_path / "solutions" / "jan-de"
+    assert (dest / "NEWS.md").read_text(encoding="utf-8") == "de news v1"
+
+    _set_news(source, "de news v2", path="ml-de/NEWS.md", language="de")
+    second = runner.invoke(release_group, ["sync", str(spec_file), "--channel", "jan-de"])
+    assert second.exit_code == 0, second.output
+    assert (dest / "NEWS.md").read_text(encoding="utf-8") == "de news v2"
 
 
 # ---------------------------------------------------------------------------

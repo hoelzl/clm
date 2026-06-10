@@ -38,7 +38,14 @@ from clm.core.provenance_manifest import (
 )
 from clm.release.frozen_manifest import FROZEN_FILENAME, FrozenManifest
 from clm.release.ledger import Ledger, partition_known
-from clm.release.sync import SyncResult, apply_sync, plan_sync
+from clm.release.sync import (
+    REFRESH,
+    EvergreenScan,
+    SyncResult,
+    apply_sync,
+    plan_sync,
+    scan_evergreen,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +78,8 @@ class _ResolvedChannel:
     # Channel language scope (issue #293). Empty = the channel receives every
     # built language root.
     lang: str = ""
+    # Evergreen glob patterns (block-level inherited + channel additions).
+    evergreen: tuple[str, ...] = ()
 
 
 @click.group("release")
@@ -104,6 +113,7 @@ def _resolve_channel(spec_file: Path, channel_name: str) -> _ResolvedChannel:
         source=source,
         dest=_abs_under(course_root, channel.path),
         lang=channel.lang,
+        evergreen=channel.evergreen,
     )
 
 
@@ -118,6 +128,8 @@ def _default_push_message(channel_name: str, result: SyncResult) -> str:
         parts.append(f"{len(result.copied_topics)} new")
     if result.refrozen_topics:
         parts.append(f"{len(result.refrozen_topics)} refrozen")
+    if result.refreshed_files:
+        parts.append(f"{len(result.refreshed_files)} evergreen")
     # The first sync of a cohort ships the skeleton (dir-group/shared files) even
     # with no topics released yet — don't call that "no topic changes".
     if not parts and result.skeleton_copied:
@@ -475,6 +487,15 @@ def status_cmd(
     "directory (issue #293). Overrides the channel's lang attribute; requires "
     "SPEC_FILE. --source must point at the output-target root.",
 )
+@click.option(
+    "--evergreen",
+    "evergreen_patterns",
+    multiple=True,
+    help="Glob pattern (destination-relative POSIX path) of skeleton files "
+    "kept evergreen: re-copied whenever the built content differs from the "
+    "cohort's copy (e.g. NEWS.md). Repeatable; adds to the channel's "
+    "<evergreen> patterns from the spec.",
+)
 @click.option("--dry-run", is_flag=True, help="Print the plan; copy nothing.")
 @click.option(
     "--push",
@@ -498,6 +519,7 @@ def sync_cmd(
     refreeze_ids: tuple[str, ...],
     refreeze_all: bool,
     language: str | None,
+    evergreen_patterns: tuple[str, ...],
     dry_run: bool,
     push: bool,
     commit_message: str | None,
@@ -513,8 +535,14 @@ def sync_cmd(
     promotes only that language's files, re-rooted so the cohort repo's root
     is the language directory (issue #293). Without either, the destination
     receives every built language root.
+
+    Skeleton files matching an evergreen pattern (the channel's ``<evergreen>``
+    declarations plus any ``--evergreen`` options) are exempt from the
+    skeleton freeze: each sync re-copies a matching file whose built content
+    differs from the cohort's copy.
     """
     channel_lang = ""
+    channel_evergreen: tuple[str, ...] = ()
     if channel:
         if spec_file is None:
             raise click.ClickException("--channel requires the SPEC_FILE argument.")
@@ -526,6 +554,7 @@ def sync_cmd(
         source_path = source_path or resolved.source
         dest_path = dest_path or resolved.dest
         channel_lang = resolved.lang
+        channel_evergreen = resolved.evergreen
 
     if ledger_path is None or source_path is None or dest_path is None:
         raise click.ClickException(
@@ -571,12 +600,32 @@ def sync_cmd(
     frozen_path = dest_path / FROZEN_FILENAME
     frozen = FrozenManifest.load(frozen_path, channel=channel_name)
 
+    # Channel patterns plus CLI additions; the scan runs against the
+    # (possibly language-restricted) manifest, so patterns are matched on
+    # destination-relative paths.
+    patterns = tuple(dict.fromkeys((*channel_evergreen, *evergreen_patterns)))
+    scan = (
+        scan_evergreen(manifest=manifest, patterns=patterns, dest_root=dest_path)
+        if patterns
+        else EvergreenScan()
+    )
+    if scan.topic_owned_matches:
+        click.echo(
+            f"Warning: evergreen pattern(s) matched {len(scan.topic_owned_matches)} "
+            f"topic-owned file(s) — evergreen applies only to global (skeleton) "
+            f"files; use --refreeze to update released topic content: "
+            + ", ".join(scan.topic_owned_matches[:5])
+            + (", …" if len(scan.topic_owned_matches) > 5 else ""),
+            err=True,
+        )
+
     refreeze = set(ledger.released) if refreeze_all else set(refreeze_ids)
     plan = plan_sync(
         manifest=manifest,
         ledger_released=ledger.released,
         frozen=frozen,
         refreeze=refreeze,
+        evergreen=scan.plans,
     )
 
     if manifest.get("partial"):
@@ -594,6 +643,15 @@ def sync_cmd(
         click.echo(
             f"  {topic_plan.action:<11} {topic_plan.topic_id} ({topic_plan.file_count} files)"
         )
+    # On the first sync the skeleton copy delivers evergreen files itself, so
+    # the evergreen lines only appear once the skeleton is frozen.
+    if plan.evergreen and not plan.copy_skeleton:
+        for evergreen_plan in plan.evergreen:
+            if evergreen_plan.action == REFRESH:
+                click.echo(f"  {REFRESH:<11} {evergreen_plan.path} (evergreen)")
+        up_to_date = sum(1 for e in plan.evergreen if e.action != REFRESH)
+        if up_to_date:
+            click.echo(f"  evergreen: {up_to_date} file(s) up-to-date")
 
     if dry_run:
         click.echo("Dry run: nothing copied.")
@@ -616,6 +674,11 @@ def sync_cmd(
         f"{len(result.refrozen_topics)} re-frozen, "
         f"{len(result.skipped_topics)} already frozen (skipped)."
     )
+    if result.refreshed_files:
+        click.echo(
+            f"Evergreen: refreshed {len(result.refreshed_files)} file(s): "
+            + ", ".join(result.refreshed_files)
+        )
     if result.failed_topics:
         click.echo(
             f"Warning: {len(result.failed_topics)} released topic(s) NOT promoted "

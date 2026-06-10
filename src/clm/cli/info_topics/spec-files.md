@@ -664,12 +664,14 @@ addressing unchanged.
 | `source-target` (attr) | `<release-channels>` | Yes | Name of the `<output-target>` that is this stream's frozen source (e.g. a `completed` target for solutions, a `code-along`/`partial` target for materials). Must name a declared output target. |
 | `<remote-path>` | `<release-channels>` | No | Default remote path (e.g. a GitLab group) for every channel that does not override it. |
 | `<share-with>` | `<release-channels>` | No | Default GitLab group share inherited by every channel (issue #294, see below). |
+| `<evergreen>` | `<release-channels>` | No | Glob pattern of **skeleton files exempt from the freeze**, inherited by every channel (see below). |
 | `name` (attr) | `<channel>` | Yes | Cohort identifier (no `/`). Addresses the channel on the CLI and forms the derived repo name. |
 | `path` (attr) | `<channel>` | Yes | The cohort repo's working tree (relative to the course root, or absolute). One repo per channel; must be unique across **all** streams. |
 | `ledger` (attr) | `<channel>` | Yes | Path to the channel's release ledger — a plain-text file, **one released topic id per line**, created/appended by `clm release add`. Keep it in the course source repo. Unique across all streams. |
 | `lang` (attr) | `<channel>` | No | Scope the channel to one language (`de`/`en`, issue #293). `clm release sync` then promotes only that language's files, **re-rooted** so the repo root is the language directory (matching per-language repos like `…-azav-de`), and the derived repo name appends `-{lang}`. **Unset**: the channel receives every built language root. |
 | `<remote-path>` | `<channel>` | No | Override the block-level `<remote-path>` for this one cohort. |
 | `<share-with>` | `<channel>` | No | GitLab group(s) to share the channel repo into (issue #294, see below). |
+| `<evergreen>` | `<channel>` | No | Additional evergreen pattern(s) for this one cohort (additive to the block's). |
 
 The remote URL is derived as
 `{repository-base}/{remote-path}/{project-slug}-{channel}[-{stream}][-{lang}]`
@@ -698,6 +700,37 @@ inherited access level.
 
 The element text is the full group path; `access` is one of `guest`,
 `reporter` (default), `developer`, `maintainer`.
+
+#### `<evergreen>` — skeleton files exempt from the freeze (CLM {version}+)
+
+Global (skeleton) files matching an `<evergreen>` glob pattern are **never
+frozen**: every `clm release sync` re-copies a matching file whose built
+content differs from the cohort's copy. Use this for files that are *meant*
+to change over a cohort's lifetime — a NEWS file, announcements, a schedule —
+which would otherwise freeze with the rest of the skeleton after the first
+sync.
+
+```xml
+<release-channels source-target="solutions">
+    <evergreen>NEWS.md</evergreen>
+    <evergreen>announcements/*</evergreen>
+    <channel name="jan" path="./solutions/jan" ledger="release/jan.txt">
+        <evergreen>jan-schedule.md</evergreen>
+    </channel>
+</release-channels>
+```
+
+Block-level patterns are inherited by every channel; channel-level patterns
+are **additive**. Patterns are `fnmatch` globs matched against the file's
+path **as it appears in the cohort repo** (POSIX separators; for a
+`lang`-scoped channel that is the re-rooted path). `*` crosses `/`, so
+`NEWS*.md` matches at the root and `*/NEWS.md` at any depth.
+
+Evergreen is **skeleton-only by design**: a pattern matching a topic-owned
+file is reported and ignored — released topic content changes only via
+`clm release sync --refreeze`, keeping the per-topic freeze record truthful.
+Sync never deletes: removing an evergreen file from the source stops
+refreshing it but leaves the cohort's copy in place.
 
 #### Provenance and freeze records
 

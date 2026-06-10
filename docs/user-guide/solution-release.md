@@ -141,6 +141,38 @@ clm release sync course.xml --channel jan --refreeze functions --push -m "Fix fu
 clm release sync course.xml --channel jan --refreeze-all       # re-freeze everything (rare)
 ```
 
+## Evergreen files (e.g. a NEWS file)
+
+Global (skeleton) files — those not owned by any topic, such as shared data or
+dir-group content — are copied once on the first sync and then frozen with the
+rest of the skeleton. Some of them are *meant* to change over a cohort's
+lifetime: a NEWS file, announcements, a schedule. Declare those as
+**evergreen** and every sync re-copies them whenever the built content differs
+from the cohort's copy:
+
+```xml
+<release-channels source-target="solutions">
+    <evergreen>NEWS.md</evergreen>
+    <channel name="jan" path="./solutions/jan" ledger="release/jan.txt">
+        <evergreen>jan-schedule.md</evergreen>   <!-- additive per cohort -->
+    </channel>
+</release-channels>
+```
+
+```bash
+# Edit NEWS.md in the course source, rebuild, sync — the cohort's copy follows.
+clm build course.xml
+clm release sync course.xml --channel jan --push -m "Update NEWS"
+```
+
+Patterns are `fnmatch` globs matched against the path as it appears in the
+cohort repo (POSIX separators; the re-rooted path for `lang`-scoped channels);
+the repeatable `--evergreen PATTERN` option adds patterns per invocation.
+Evergreen is **skeleton-only**: a pattern matching a topic-owned file is
+warned about and ignored — released topic content still changes only via
+`--refreeze`. Syncing never deletes; removing an evergreen file from the
+source just stops refreshing it.
+
 ## How `clm git --channel` differs from ordinary `clm git`
 
 The regular `clm git` subcommands operate on your `<output-targets>` repos.
