@@ -1073,6 +1073,23 @@ tool / the `validate_file`/`validate_directory`/`validate_course` library
 functions now exclude `voiceover` from their `checks=None` default too. The other
 review checks (`code_quality`, `completeness`) still run by default.
 
+Since CLM {version}, a deck that **is** meant to be fully narrated can opt back
+in **per deck** (issue #178) with a header directive comment — any line before
+the first cell marker:
+
+```python
+# clm: voiceover-coverage
+```
+
+(`// clm: voiceover-coverage` in a `//`-comment-token deck, e.g. `.cs`/`.cpp`.)
+A default validate run (CLI without `--checks`, MCP / library `checks=None`)
+then includes the `voiceover` coverage check **for that deck only**, so a
+missing narration cell on a narrated deck is caught automatically while
+voiceover-less decks stay silent. An explicit `--checks` / `checks=[…]` list is
+always honored verbatim — the marker neither adds nor removes checks there.
+Use the marker (not a has-any-voiceover heuristic) so a deck mid-authoring
+isn't prematurely flooded with gap findings.
+
 The `pairing` check group covers DE/EN cell count, tag consistency,
 adjacency, and — since CLM {version} — **`slide_id` metadata**:
 

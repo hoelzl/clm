@@ -123,6 +123,32 @@ OPT_IN_CHECKS = frozenset({"voiceover"})
 # completeness).
 DEFAULT_CHECKS = ALL_CHECKS - OPT_IN_CHECKS
 
+# Per-deck opt-in marker (#178): a deck that is meant to be fully narrated
+# declares it with this directive comment in the file header (any line
+# before the first cell marker), e.g. ``# clm: voiceover-coverage`` (or
+# ``// clm: voiceover-coverage`` in a ``//``-comment-token deck). The
+# default check bundle then includes the ``voiceover`` coverage check for
+# THAT deck only — voiceover-less decks stay silent (#176). An explicit
+# ``checks=[…]`` request is honored verbatim and ignores the marker.
+VOICEOVER_COVERAGE_MARKER = "clm: voiceover-coverage"
+_VOICEOVER_MARKER_RE = re.compile(r"^(?:#|//)\s*clm:\s*voiceover-coverage\s*$")
+
+
+def has_voiceover_coverage_marker(text: str, comment_token: str = "#") -> bool:
+    """Whether the deck opts into voiceover coverage via its header (#178).
+
+    Scans only the file header — lines before the first ``<token> %%`` cell
+    marker — so the directive is a per-file declaration, not cell content.
+    """
+    cell_marker = f"{comment_token} %%"
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(cell_marker):
+            break
+        if _VOICEOVER_MARKER_RE.match(stripped):
+            return True
+    return False
+
 
 def _check_format(cells: list[Cell], file_path: str) -> list[Finding]:
     """Check cell header syntax and structure."""
@@ -1658,6 +1684,7 @@ def validate_file(
     checks: list[str] | None = None,
     *,
     cross_file_parity: bool = True,
+    marker_opt_in: bool | None = None,
 ) -> ValidationResult:
     """Validate a single slide file.
 
@@ -1670,7 +1697,9 @@ def validate_file(
             Review: ``"code_quality"``, ``"voiceover"``, ``"completeness"``.
             ``"voiceover"`` is **opt-in** (issue #176): voiceover is optional
             per deck, so coverage runs only when you name it explicitly in
-            ``checks`` — never as part of the default bundle.
+            ``checks`` — never as part of the default bundle — or when the
+            deck itself opts in via the ``clm: voiceover-coverage`` header
+            marker (#178, see ``marker_opt_in``).
         cross_file_parity: When ``True`` (the default for standalone callers —
             the CLI single-file path, MCP, the pre-commit gate) and ``path`` is
             a split half whose twin exists on disk, run the #162 cross-file
@@ -1679,16 +1708,28 @@ def validate_file(
             (the both-language voiceover compatibility check). Directory/course
             entrypoints pass ``False`` and run those once at their own scope
             instead, so a directory run does not duplicate the findings.
+        marker_opt_in: Whether the per-deck ``clm: voiceover-coverage`` header
+            marker (#178) may promote ``voiceover`` into the effective check
+            set. ``None`` (the default) resolves to ``checks is None`` — the
+            marker applies on a default-bundle run and an explicit ``checks``
+            list is honored verbatim. The CLI passes ``True`` for its own
+            default run (which names the deterministic checks explicitly) and
+            ``False`` when the user gave ``--checks``.
 
     Returns:
         A :class:`ValidationResult` with findings and optional review material.
     """
-    check_set = set(checks) if checks else set(DEFAULT_CHECKS)
     file_str = str(path)
     comment_token = comment_token_for_path(path)
 
     text = path.read_text(encoding="utf-8")
     cells = parse_cells(text, comment_token)
+
+    check_set = set(checks) if checks else set(DEFAULT_CHECKS)
+    honor_marker = (checks is None) if marker_opt_in is None else marker_opt_in
+    if honor_marker and "voiceover" not in check_set:
+        if has_voiceover_coverage_marker(text, comment_token):
+            check_set.add("voiceover")
 
     findings: list[Finding] = []
 
@@ -1786,6 +1827,8 @@ def validate_quick(path: Path) -> ValidationResult:
 def validate_directory(
     path: Path,
     checks: list[str] | None = None,
+    *,
+    marker_opt_in: bool | None = None,
 ) -> ValidationResult:
     """Validate all slide files at or under ``path``.
 
@@ -1799,14 +1842,20 @@ def validate_directory(
         path: Path to a directory containing slide files (at any depth).
         checks: Which checks to run (passed to :func:`validate_file`).
             ``None`` runs the default bundle, which excludes the opt-in
-            ``voiceover`` coverage check (issue #176).
+            ``voiceover`` coverage check (issue #176) unless a deck opts in
+            via the ``clm: voiceover-coverage`` header marker (#178).
+        marker_opt_in: Passed to :func:`validate_file` (#178).
     """
-    return validate_files(find_slide_files_recursive(path), checks=checks)
+    return validate_files(
+        find_slide_files_recursive(path), checks=checks, marker_opt_in=marker_opt_in
+    )
 
 
 def validate_files(
     slide_files: list[Path],
     checks: list[str] | None = None,
+    *,
+    marker_opt_in: bool | None = None,
 ) -> ValidationResult:
     """Validate an explicit list of slide files (same logic as a directory walk).
 
@@ -1820,17 +1869,26 @@ def validate_files(
         slide_files: The slide files to validate.
         checks: Which checks to run (passed to :func:`validate_file`).
             ``None`` runs the default bundle, which excludes the opt-in
-            ``voiceover`` coverage check (issue #176).
+            ``voiceover`` coverage check (issue #176) unless a deck opts in
+            via the ``clm: voiceover-coverage`` header marker (#178).
+        marker_opt_in: Passed to :func:`validate_file` (#178).
     """
     all_findings: list[Finding] = []
-    combined_review = ReviewMaterial() if (not checks or set(checks) & ALL_REVIEW_CHECKS) else None
+    # Created lazily on the first file that produced review material, so a
+    # marker-driven voiceover pass (#178) is collected even when ``checks``
+    # is an explicit deterministic list.
+    combined_review: ReviewMaterial | None = None
 
     for sf in slide_files:
         # Cross-file parity is run once per pair below (not per file), so the
         # per-file pass skips it to avoid duplicate findings.
-        result = validate_file(sf, checks=checks, cross_file_parity=False)
+        result = validate_file(
+            sf, checks=checks, cross_file_parity=False, marker_opt_in=marker_opt_in
+        )
         all_findings.extend(result.findings)
-        if combined_review is not None and result.review_material is not None:
+        if result.review_material is not None:
+            if combined_review is None:
+                combined_review = ReviewMaterial()
             _merge_review_material(combined_review, result.review_material)
 
     # Phase 6: surface divergent shared cells between split pairs as
@@ -1857,6 +1915,8 @@ def validate_course(
     course_spec_path: Path,
     slides_dir: Path,
     checks: list[str] | None = None,
+    *,
+    marker_opt_in: bool | None = None,
 ) -> ValidationResult:
     """Validate all slides referenced by a course spec.
 
@@ -1865,7 +1925,9 @@ def validate_course(
         slides_dir: Path to the ``slides/`` directory.
         checks: Which checks to run (passed to :func:`validate_file`).
             ``None`` runs the default bundle, which excludes the opt-in
-            ``voiceover`` coverage check (issue #176).
+            ``voiceover`` coverage check (issue #176) unless a deck opts in
+            via the ``clm: voiceover-coverage`` header marker (#178).
+        marker_opt_in: Passed to :func:`validate_file` (#178).
     """
     from clm.core.course_spec import CourseSpec
 
@@ -1874,7 +1936,8 @@ def validate_course(
 
     all_findings: list[Finding] = []
     files_checked = 0
-    combined_review = ReviewMaterial() if (not checks or set(checks) & ALL_REVIEW_CHECKS) else None
+    # Lazy, like validate_files — see the comment there (#178).
+    combined_review: ReviewMaterial | None = None
 
     check_set = set(checks) if checks else set(DEFAULT_CHECKS)
 
@@ -1884,10 +1947,14 @@ def validate_course(
             slide_files = find_slide_files(match.path)
             for sf in slide_files:
                 # Cross-file parity runs once per pair below, not per file.
-                result = validate_file(sf, checks=checks, cross_file_parity=False)
+                result = validate_file(
+                    sf, checks=checks, cross_file_parity=False, marker_opt_in=marker_opt_in
+                )
                 all_findings.extend(result.findings)
                 files_checked += 1
-                if combined_review is not None and result.review_material is not None:
+                if result.review_material is not None:
+                    if combined_review is None:
+                        combined_review = ReviewMaterial()
                     _merge_review_material(combined_review, result.review_material)
 
             # Phase 6 shared-cell parity per topic: walk the topic's split
