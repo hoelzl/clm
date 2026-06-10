@@ -1,9 +1,9 @@
 """Per-topic ledger of include materializations.
 
-Written by ``clm sync-includes`` to ``<topic-dir>/.clm-include``. Two
+Written by ``clm course sync-includes`` to ``<topic-dir>/.clm-include``. Two
 consumers read it:
 
-1. ``clm sync-includes --remove``: only paths listed in the ledger are
+1. ``clm course sync-includes --remove``: only paths listed in the ledger are
    deleted, so untracked user files in the topic dir are never touched.
 2. ``Topic.apply_includes`` at build time: a real on-disk file that
    matches a ledger entry (same ``as_path`` *and* same ``source``) is the
@@ -49,7 +49,7 @@ class LedgerEntry:
 
 @dataclass
 class Ledger:
-    """Per-topic record of materializations made by ``clm sync-includes``."""
+    """Per-topic record of materializations made by ``clm course sync-includes``."""
 
     entries: list[LedgerEntry] = field(default_factory=list)
 

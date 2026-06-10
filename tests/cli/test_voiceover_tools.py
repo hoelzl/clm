@@ -6,7 +6,7 @@ from pathlib import Path
 
 from click.testing import CliRunner
 
-from clm.cli.commands.voiceover_tools import extract_voiceover_cmd, inline_voiceover_cmd
+from clm.cli.commands.voiceover import extract_voiceover_cmd, inline_voiceover_cmd
 
 SLIDE_WITH_VOICEOVER = """\
 # j2 from 'macros.j2' import header

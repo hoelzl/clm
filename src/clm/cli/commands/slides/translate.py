@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING
 
 import click
 
-from clm.cli.commands.slides_sync import CACHE_DB_NAME, _resolve_judge
+from clm.cli.commands.slides.sync import CACHE_DB_NAME, _resolve_judge
 from clm.infrastructure.llm.cache import (
     SyncWatermarkCache,
     TranslationCache,

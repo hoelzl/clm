@@ -190,7 +190,7 @@ def _clean_git_config():
 
     mock_config = MagicMock()
     mock_config.git = GitConfig()
-    with patch("clm.cli.commands.git_ops.get_config", return_value=mock_config):
+    with patch("clm.cli.commands.git.get_config", return_value=mock_config):
         yield
 
 

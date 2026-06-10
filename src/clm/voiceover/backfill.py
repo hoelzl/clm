@@ -1,7 +1,7 @@
 """Scratch-dir and git-extraction helpers for ``clm voiceover backfill``.
 
 The command itself is a thin composition of ``identify-rev`` →
-``sync-at-rev`` → ``port-voiceover`` (see
+``sync-at-rev`` → ``port`` (see
 ``docs/proposals/VOICEOVER_BACKFILL.md`` §3). The helpers here handle
 the filesystem plumbing so the CLI layer stays readable:
 

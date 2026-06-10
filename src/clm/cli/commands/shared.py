@@ -3,6 +3,7 @@
 This module contains utilities used by multiple CLI command modules.
 """
 
+import copy
 import locale
 import logging
 import sys
@@ -191,3 +192,16 @@ def is_ci_environment() -> bool:
     ]
 
     return any(os.getenv(indicator) for indicator in ci_indicators)
+
+
+def hidden_alias(cmd: click.Command, name: str) -> click.Command:
+    """A hidden second name for ``cmd``.
+
+    The alias stays invocable but is not listed in ``--help``, so each
+    command shows up exactly once. The shallow copy shares params and
+    callback with the canonical command.
+    """
+    alias = copy.copy(cmd)
+    alias.name = name
+    alias.hidden = True
+    return alias

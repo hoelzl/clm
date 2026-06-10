@@ -2,7 +2,7 @@
 
 CLM reaches OpenRouter through the OpenAI SDK — OpenRouter speaks the OpenAI
 chat-completions wire format. Several paths already do this: the voiceover
-propagate / merge / compare steps, ``clm summarize``, ``clm polish``, and the
+propagate / merge / compare steps, ``clm summarize``, ``clm slides polish``, and the
 new-slide :class:`~clm.slides.sync_translate.OpenRouterSlideTranslator`. This
 module centralizes the construction (:func:`build_openrouter_client`,
 :func:`resolve_openrouter_api_key`) so every call site resolves the key and

@@ -7,7 +7,7 @@ from textwrap import dedent
 
 from click.testing import CliRunner
 
-from clm.cli.commands.language_view import language_view_cmd
+from clm.cli.commands.slides.language_view import language_view_cmd
 
 
 def _write_slide(tmp_path: Path, name: str, content: str) -> Path:

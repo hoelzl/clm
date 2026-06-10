@@ -689,7 +689,7 @@ class TestSyncPush:
         clean_config = MagicMock()
         clean_config.git.remote_template = ""
         clean_config.git.remote_path = ""
-        with patch("clm.cli.commands.git_ops.get_config", return_value=clean_config):
+        with patch("clm.cli.commands.git.get_config", return_value=clean_config):
             result = runner.invoke(
                 release_group, ["sync", str(spec_file), "--channel", "jan", "--push"]
             )

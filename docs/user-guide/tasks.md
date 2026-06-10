@@ -19,7 +19,7 @@ Add a `<tasks>` block to the course spec:
     ...
     <tasks>
         <task name="pre-release" description="Regenerate exports, then build">
-            <step>export calendar {spec} --channel jan -f ics -o release/jan.ics</step>
+            <step>calendar generate {spec} --channel jan -f ics -o release/jan.ics</step>
             <step>export outline {spec} -o outline/</step>
             <step>build {spec} --provenance-manifest</step>
         </task>

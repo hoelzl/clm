@@ -276,19 +276,19 @@ class TestDbClean:
 
 class TestDeleteDatabase:
     def test_delete_both_when_present(self, initialized_dbs):
-        result = _invoke(initialized_dbs, "delete-database", "--which=both")
+        result = _invoke(initialized_dbs, "db", "delete", "--which=both")
         assert result.exit_code == 0, result.output
         assert not initialized_dbs["jobs"].exists()
         assert not initialized_dbs["cache"].exists()
 
     def test_delete_only_jobs(self, initialized_dbs):
-        result = _invoke(initialized_dbs, "delete-database", "--which=jobs")
+        result = _invoke(initialized_dbs, "db", "delete", "--which=jobs")
         assert result.exit_code == 0, result.output
         assert not initialized_dbs["jobs"].exists()
         assert initialized_dbs["cache"].exists()
 
     def test_delete_when_absent(self, db_paths):
-        result = _invoke(db_paths, "delete-database", "--which=both")
+        result = _invoke(db_paths, "db", "delete", "--which=both")
         assert result.exit_code == 0, result.output
         assert "No databases found" in result.output
 

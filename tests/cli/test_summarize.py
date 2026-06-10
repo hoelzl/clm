@@ -18,7 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from click.testing import CliRunner
 
-from clm.cli.commands.summarize import (
+from clm.cli.commands.export.summary import (
     SKIP_TAGS,
     content_hash,
     detect_workshop,
@@ -597,26 +597,26 @@ class TestContentHash:
 
 class TestCellLanguageFiltering:
     def test_no_lang_metadata_included(self):
-        from clm.cli.commands.summarize import _is_cell_included_for_language
+        from clm.cli.commands.export.summary import _is_cell_included_for_language
 
         cell = {"metadata": {}}
         assert _is_cell_included_for_language(cell, "en") is True
         assert _is_cell_included_for_language(cell, "de") is True
 
     def test_matching_lang_included(self):
-        from clm.cli.commands.summarize import _is_cell_included_for_language
+        from clm.cli.commands.export.summary import _is_cell_included_for_language
 
         cell = {"metadata": {"lang": "de"}}
         assert _is_cell_included_for_language(cell, "de") is True
 
     def test_non_matching_lang_excluded(self):
-        from clm.cli.commands.summarize import _is_cell_included_for_language
+        from clm.cli.commands.export.summary import _is_cell_included_for_language
 
         cell = {"metadata": {"lang": "de"}}
         assert _is_cell_included_for_language(cell, "en") is False
 
     def test_empty_lang_included(self):
-        from clm.cli.commands.summarize import _is_cell_included_for_language
+        from clm.cli.commands.export.summary import _is_cell_included_for_language
 
         cell = {"metadata": {"lang": ""}}
         assert _is_cell_included_for_language(cell, "en") is True
@@ -730,7 +730,7 @@ class TestSummarizeProgress:
 
         from rich.console import Console
 
-        from clm.cli.commands.summarize import SummarizeProgress
+        from clm.cli.commands.export.summary import SummarizeProgress
 
         console = Console(file=StringIO(), force_terminal=False)
         prog = SummarizeProgress(console, show_progress=False)
@@ -746,7 +746,7 @@ class TestSummarizeProgress:
 
         from rich.console import Console
 
-        from clm.cli.commands.summarize import SummarizeProgress
+        from clm.cli.commands.export.summary import SummarizeProgress
 
         console = Console(file=StringIO(), force_terminal=False)
         prog = SummarizeProgress(console, show_progress=False)
@@ -760,7 +760,7 @@ class TestSummarizeProgress:
 
         from rich.console import Console
 
-        from clm.cli.commands.summarize import SummarizeProgress
+        from clm.cli.commands.export.summary import SummarizeProgress
 
         console = Console(file=StringIO(), force_terminal=False)
         prog = SummarizeProgress(console, show_progress=False)
@@ -773,7 +773,7 @@ class TestSummarizeProgress:
 
         from rich.console import Console
 
-        from clm.cli.commands.summarize import SummarizeProgress
+        from clm.cli.commands.export.summary import SummarizeProgress
 
         buf = StringIO()
         console = Console(file=buf, force_terminal=False)
@@ -796,7 +796,7 @@ class TestSummarizeProgress:
 
         from rich.console import Console
 
-        from clm.cli.commands.summarize import SummarizeProgress
+        from clm.cli.commands.export.summary import SummarizeProgress
 
         buf = StringIO()
         console = Console(file=buf, force_terminal=False)
@@ -814,7 +814,7 @@ class TestSummarizeProgress:
 
         from rich.console import Console
 
-        from clm.cli.commands.summarize import SummarizeProgress
+        from clm.cli.commands.export.summary import SummarizeProgress
 
         buf = StringIO()
         console = Console(file=buf, force_terminal=False)

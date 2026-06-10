@@ -837,7 +837,7 @@ class TestExtractVoiceover:
 
     def test_paired_serializer_matches_cli(self, tmp_path):
         # The MCP and CLI paired serializers are a contract — keep them byte-equal.
-        from clm.cli.commands.voiceover_tools import (
+        from clm.cli.commands.voiceover import (
             _paired_extraction_to_dict as cli_dict,
         )
         from clm.mcp.tools import _paired_extraction_result_to_dict as mcp_dict

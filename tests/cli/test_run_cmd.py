@@ -199,7 +199,7 @@ def test_task_nesting_is_rejected(tmp_path: Path, recorded_runs: list):
 
 def test_unknown_cli_command_error_resolves_real_commands():
     assert unknown_cli_command_error(["build", "spec.xml"]) is None
-    assert unknown_cli_command_error(["export", "calendar", "spec.xml"]) is None
+    assert unknown_cli_command_error(["calendar", "generate", "spec.xml"]) is None
     error = unknown_cli_command_error(["export", "nope"])
     assert error is not None and "not a clm command" in error
     error = unknown_cli_command_error(["export"])

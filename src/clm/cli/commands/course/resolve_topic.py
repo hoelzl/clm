@@ -49,10 +49,10 @@ def resolve_topic_cmd(
 
     \b
     Examples:
-        clm topic resolve what_is_ml
-        clm topic resolve "decorators*"
-        clm topic resolve intro --course-spec course-specs/python.xml
-        clm topic resolve intro --module module_545_ml_azav_cohort_2026_04
+        clm course resolve-topic what_is_ml
+        clm course resolve-topic "decorators*"
+        clm course resolve-topic intro --course-spec course-specs/python.xml
+        clm course resolve-topic intro --module module_545_ml_azav_cohort_2026_04
     """
     slides_dir = _resolve_slides_dir(data_dir, course_spec)
 

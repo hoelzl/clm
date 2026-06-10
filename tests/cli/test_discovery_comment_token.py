@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from clm.cli.commands.summarize import _extract_from_py
+from clm.cli.commands.export.summary import _extract_from_py
 from clm.cli.commands.validate import _infer_kind
 from clm.core.topic_resolver import find_slide_files_recursive
 

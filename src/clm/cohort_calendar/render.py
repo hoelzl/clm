@@ -13,7 +13,7 @@ import csv
 import datetime as dt
 import io
 
-from clm.cli.commands.schedule import WEEKDAY_LABELS
+from clm.cli.commands.export.schedule import WEEKDAY_LABELS
 from clm.cohort_calendar.projection import Assignment, Projection
 from clm.core.course_spec import WEEKDAY_ORDER
 

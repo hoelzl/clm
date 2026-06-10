@@ -1,14 +1,20 @@
-"""Tests for the Phase 0 CLI restructure: verb groups, and the removal of
-the deprecated flat aliases in CLM 1.8.
+"""Tests for the CLI command-tree structure.
 
 The flat top-level commands (``normalize-slides``, ``extract-voiceover``,
 ``resolve-topic``, ...) were moved under verb groups in CLM 1.6, kept as
-deprecated aliases through 1.7, and **removed in 1.8**. These tests verify:
+deprecated aliases through 1.7, and **removed in 1.8**. Issue #310 then
+merged the single-command groups (``topic``, ``spec``, ``authoring``) and
+remaining strays (``targets``, ``sync-includes``, ``delete-database``,
+``polish``) into the domain groups ``course``, ``slides``, ``db``, and
+``calendar`` — as a clean break, without aliases. These tests verify:
 
-1. New canonical invocations work (``clm slides normalize``, ``clm
-   voiceover extract``, ``clm topic resolve``, ``clm authoring rules``).
-2. The old flat top-level names are no longer registered and error out.
-3. The unified ``clm validate`` dispatches to spec/slide validation.
+1. Canonical invocations work (``clm slides normalize``, ``clm course
+   resolve-topic``, ``clm slides rules``, ``clm db delete``, ...).
+2. Old names — both the 1.8 alias removals and the #310 regrouping —
+   are no longer registered and error out.
+3. Intentional synonyms (``slides bootstrap``, ``export summarize``)
+   stay invocable but are hidden from ``--help``.
+4. The unified ``clm validate`` dispatches to spec/slide validation.
 """
 
 from __future__ import annotations
@@ -36,8 +42,9 @@ class TestNewGroupStructure:
         "group_path",
         [
             ["slides", "--help"],
-            ["topic", "--help"],
-            ["authoring", "--help"],
+            ["course", "--help"],
+            ["export", "--help"],
+            ["calendar", "--help"],
         ],
     )
     def test_groups_are_reachable(self, group_path: list[str]) -> None:
@@ -51,8 +58,15 @@ class TestNewGroupStructure:
             ["slides", "language-view", "--help"],
             ["slides", "suggest-sync", "--help"],
             ["slides", "search", "--help"],
-            ["topic", "resolve", "--help"],
-            ["authoring", "rules", "--help"],
+            ["slides", "rules", "--help"],
+            ["course", "resolve-topic", "--help"],
+            ["course", "decks", "--help"],
+            ["course", "orphans", "--help"],
+            ["course", "targets", "--help"],
+            ["course", "gate", "--help"],
+            ["course", "sync-includes", "--help"],
+            ["calendar", "generate", "--help"],
+            ["db", "delete", "--help"],
         ],
     )
     def test_canonical_subcommands_resolve(self, subcommand_path: list[str]) -> None:
@@ -69,32 +83,83 @@ class TestNewGroupStructure:
 # ---------------------------------------------------------------------------
 
 
-# The flat names that used to exist as deprecated top-level aliases, with the
-# canonical invocation that replaced each one (kept here as documentation).
-REMOVED_ALIASES: list[tuple[str, str]] = [
+# Top-level names that no longer exist, with the canonical invocation that
+# replaced each one (kept here as documentation). The first block is the
+# 1.8 removal of the 1.6-era deprecated aliases; the second block is the
+# #310 regrouping (clean break, no aliases).
+REMOVED_NAMES: list[tuple[str, str]] = [
     ("normalize-slides", "slides normalize"),
     ("language-view", "slides language-view"),
     ("suggest-sync", "slides suggest-sync"),
     ("search-slides", "slides search"),
-    ("resolve-topic", "topic resolve"),
-    ("authoring-rules", "authoring rules"),
+    ("resolve-topic", "course resolve-topic"),
+    ("authoring-rules", "slides rules"),
     ("validate-slides", "validate"),
     ("validate-spec", "validate"),
     ("extract-voiceover", "voiceover extract"),
     ("inline-voiceover", "voiceover inline"),
+    # Issue #310 regrouping:
+    ("topic", "course resolve-topic"),
+    ("spec", "course decks / course orphans"),
+    ("authoring", "slides rules"),
+    ("targets", "course targets"),
+    ("sync-includes", "course sync-includes"),
+    ("delete-database", "db delete"),
+    ("polish", "slides polish"),
 ]
 
 
-class TestDeprecatedAliasesRemoved:
-    @pytest.mark.parametrize("old, _new", REMOVED_ALIASES)
-    def test_alias_is_not_registered(self, old: str, _new: str) -> None:
+class TestRemovedNames:
+    @pytest.mark.parametrize("old, _new", REMOVED_NAMES)
+    def test_name_is_not_registered(self, old: str, _new: str) -> None:
         assert old not in cli.commands
 
-    @pytest.mark.parametrize("old, _new", REMOVED_ALIASES)
-    def test_invoking_alias_errors(self, old: str, _new: str) -> None:
+    @pytest.mark.parametrize("old, _new", REMOVED_NAMES)
+    def test_invoking_name_errors(self, old: str, _new: str) -> None:
         result = _invoke([old, "--help"])
         assert result.exit_code != 0
         assert "No such command" in result.output
+
+    def test_export_calendar_moved_to_calendar_generate(self) -> None:
+        result = _invoke(["export", "calendar", "--help"])
+        assert result.exit_code != 0
+        assert "No such command" in result.output
+
+    def test_voiceover_port_voiceover_renamed_to_port(self) -> None:
+        from clm.cli.main import voiceover_group
+
+        if voiceover_group is None:
+            pytest.skip("voiceover extra not installed")
+        result = _invoke(["voiceover", "port-voiceover", "--help"])
+        assert result.exit_code != 0
+        assert "No such command" in result.output
+
+
+class TestHiddenSynonyms:
+    """`bootstrap`/`summarize` stay invocable but appear in --help once."""
+
+    @pytest.mark.parametrize(
+        "path, canonical",
+        [
+            (["slides", "bootstrap", "--help"], "translate"),
+            (["export", "summarize", "--help"], "summary"),
+        ],
+    )
+    def test_synonym_invocable(self, path: list[str], canonical: str) -> None:
+        result = _invoke(path)
+        assert result.exit_code == 0
+
+    @pytest.mark.parametrize(
+        "group_path, synonym",
+        [
+            (["slides", "--help"], "bootstrap"),
+            (["export", "--help"], "summarize"),
+        ],
+    )
+    def test_synonym_hidden_from_group_help(self, group_path: list[str], synonym: str) -> None:
+        result = _invoke(group_path)
+        assert result.exit_code == 0
+        assert synonym not in result.output
 
 
 class TestCanonicalVoiceoverSubcommands:

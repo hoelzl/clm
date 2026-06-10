@@ -2,7 +2,7 @@
 
 import datetime as dt
 
-from clm.cli.commands.schedule import ScheduleDeck
+from clm.cli.commands.export.schedule import ScheduleDeck
 from clm.cohort_calendar.projection import Assignment, Projection
 from clm.cohort_calendar.render import render_csv, render_ics, render_markdown
 

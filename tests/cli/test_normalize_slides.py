@@ -7,7 +7,7 @@ from pathlib import Path
 
 from click.testing import CliRunner
 
-from clm.cli.commands.normalize_slides import normalize_slides_cmd
+from clm.cli.commands.slides.normalize import normalize_slides_cmd
 
 
 def _write_slide(path: Path, content: str) -> Path:
