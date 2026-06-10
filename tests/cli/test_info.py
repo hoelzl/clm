@@ -141,4 +141,7 @@ class TestLoadTopicContent:
         assert "commands" in TOPICS
         assert "migration" in TOPICS
         assert "jupyterlite" in TOPICS
-        assert len(TOPICS) == 4
+        assert "calendar" in TOPICS
+        assert "slide-format" in TOPICS
+        assert "releases" in TOPICS
+        assert len(TOPICS) == 7
