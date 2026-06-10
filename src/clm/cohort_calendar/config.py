@@ -90,6 +90,8 @@ class CohortCalendarConfig:
     ``pattern`` may be empty, meaning "derive from the weekdays the spec
     actually uses" — resolve it with :func:`effective_pattern`. ``adjustments``
     preserve file order (the order in which they apply).
+    ``google_calendar_id`` is the optional ``[google] calendar_id`` push target
+    for ``clm calendar push``.
     """
 
     start: dt.date
@@ -97,6 +99,7 @@ class CohortCalendarConfig:
     pattern: tuple[str, ...]
     holidays: tuple[Holiday, ...]
     adjustments: tuple[Adjustment, ...]
+    google_calendar_id: str | None = None
 
 
 # --- internal value coercion -------------------------------------------------
@@ -229,7 +232,20 @@ def _parse_adjustment(table: Any, index: int) -> Adjustment:
 
 # --- public API --------------------------------------------------------------
 
-_TOP_LEVEL_KEYS = {"start", "end", "pattern", "holidays", "adjustments"}
+_TOP_LEVEL_KEYS = {"start", "end", "pattern", "holidays", "adjustments", "google"}
+
+
+def _parse_google(raw: Any) -> str | None:
+    """Parse the optional ``[google]`` table; returns the calendar id (or None)."""
+    if not isinstance(raw, dict):
+        raise CohortCalendarError(f"google: expected a table, got {raw!r}.")
+    _reject_unknown_keys(raw, {"calendar_id"}, "google")
+    if "calendar_id" not in raw:
+        return None
+    calendar_id = _as_str(raw["calendar_id"], "google.calendar_id").strip()
+    if not calendar_id:
+        raise CohortCalendarError("google.calendar_id: must be a non-empty string.")
+    return calendar_id
 
 
 def parse_calendar_config(text: str) -> CohortCalendarConfig:
@@ -270,12 +286,15 @@ def parse_calendar_config(text: str) -> CohortCalendarConfig:
         )
     adjustments = tuple(_parse_adjustment(a, i) for i, a in enumerate(adjustments_raw))
 
+    google_calendar_id = _parse_google(data["google"]) if "google" in data else None
+
     return CohortCalendarConfig(
         start=start,
         end=end,
         pattern=pattern,
         holidays=holidays,
         adjustments=adjustments,
+        google_calendar_id=google_calendar_id,
     )
 
 

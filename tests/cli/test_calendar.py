@@ -181,3 +181,185 @@ class TestCalendarGroup:
         assert grp.exit_code == 0
         assert "check" in grp.output
         assert "status" in grp.output
+
+
+class TestCalendarPush:
+    """``clm calendar push`` — Google API boundary mocked at the google_sync seam."""
+
+    CAL_WITH_ID = CAL_OK + '\n[google]\ncalendar_id = "cal-id"\n'
+
+    @staticmethod
+    def _creds(tmp_path) -> Path:
+        # Content is irrelevant: load_credentials is monkeypatched in tests
+        # that get past the option checks; click only verifies existence.
+        p = tmp_path / "creds.json"
+        p.write_text("{}", encoding="utf-8")
+        return p
+
+    @staticmethod
+    def _patch_api(monkeypatch, existing=None):
+        from clm.cohort_calendar import google_sync
+
+        monkeypatch.setattr(google_sync, "load_credentials", lambda path, **kw: object())
+        monkeypatch.setattr(google_sync, "build_service", lambda creds: object())
+        monkeypatch.setattr(
+            google_sync, "fetch_managed_events", lambda service, cal_id, ns: existing or []
+        )
+
+    def test_requires_calendar_id(self, tmp_path):
+        cal = _write(tmp_path, CAL_OK)
+        result = CliRunner().invoke(
+            cli,
+            [
+                "calendar",
+                "push",
+                str(SPEC_PATH),
+                "--calendar",
+                str(cal),
+                "--credentials",
+                str(self._creds(tmp_path)),
+            ],
+        )
+        assert result.exit_code != 0
+        assert "--calendar-id" in result.output
+
+    def test_requires_credentials(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CLM_GOOGLE_CREDENTIALS", raising=False)
+        cal = _write(tmp_path, self.CAL_WITH_ID)
+        result = CliRunner().invoke(
+            cli, ["calendar", "push", str(SPEC_PATH), "--calendar", str(cal)]
+        )
+        assert result.exit_code != 0
+        assert "CLM_GOOGLE_CREDENTIALS" in result.output
+
+    def test_dry_run_prints_plan_and_changes_nothing(self, tmp_path, monkeypatch):
+        self._patch_api(monkeypatch)
+        from clm.cohort_calendar import google_sync
+
+        def _no_apply(*args, **kwargs):
+            raise AssertionError("apply_plan must not run under --dry-run")
+
+        monkeypatch.setattr(google_sync, "apply_plan", _no_apply)
+        cal = _write(tmp_path, self.CAL_WITH_ID)
+        result = CliRunner().invoke(
+            cli,
+            [
+                "calendar",
+                "push",
+                str(SPEC_PATH),
+                "--calendar",
+                str(cal),
+                "-L",
+                "en",
+                "--credentials",
+                str(self._creds(tmp_path)),
+                "--dry-run",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert "+ 2026-03-02" in result.output
+        assert "Some Topic from Test 1" in result.output
+        assert "Dry run" in result.output
+
+    def test_push_applies_plan(self, tmp_path, monkeypatch):
+        self._patch_api(monkeypatch)
+        from clm.cohort_calendar import google_sync
+
+        applied = {}
+        monkeypatch.setattr(
+            google_sync,
+            "apply_plan",
+            lambda service, cal_id, plan: applied.update(calendar_id=cal_id, plan=plan),
+        )
+        cal = _write(tmp_path, self.CAL_WITH_ID)
+        result = CliRunner().invoke(
+            cli,
+            [
+                "calendar",
+                "push",
+                str(SPEC_PATH),
+                "--calendar",
+                str(cal),
+                "-L",
+                "en",
+                "--credentials",
+                str(self._creds(tmp_path)),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert applied["calendar_id"] == "cal-id"
+        assert len(applied["plan"].inserts) == 3
+        assert "Pushed: 3 insert(s)" in result.output
+
+    def test_cli_calendar_id_overrides_toml(self, tmp_path, monkeypatch):
+        self._patch_api(monkeypatch)
+        from clm.cohort_calendar import google_sync
+
+        applied = {}
+        monkeypatch.setattr(
+            google_sync,
+            "apply_plan",
+            lambda service, cal_id, plan: applied.update(calendar_id=cal_id),
+        )
+        cal = _write(tmp_path, self.CAL_WITH_ID)
+        result = CliRunner().invoke(
+            cli,
+            [
+                "calendar",
+                "push",
+                str(SPEC_PATH),
+                "--calendar",
+                str(cal),
+                "--calendar-id",
+                "other-cal",
+                "--credentials",
+                str(self._creds(tmp_path)),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert applied["calendar_id"] == "other-cal"
+
+    def test_google_error_becomes_clean_cli_error(self, tmp_path, monkeypatch):
+        from clm.cohort_calendar import google_sync
+
+        def _boom(path, **kwargs):
+            raise google_sync.GoogleSyncError("Google Calendar push requires the [gcal] extra")
+
+        monkeypatch.setattr(google_sync, "load_credentials", _boom)
+        cal = _write(tmp_path, self.CAL_WITH_ID)
+        result = CliRunner().invoke(
+            cli,
+            [
+                "calendar",
+                "push",
+                str(SPEC_PATH),
+                "--calendar",
+                str(cal),
+                "--credentials",
+                str(self._creds(tmp_path)),
+            ],
+        )
+        assert result.exit_code != 0
+        assert "[gcal]" in result.output
+
+    def test_projection_errors_block_push(self, tmp_path):
+        cal = _write(tmp_path, CAL_TOO_SHORT + '[google]\ncalendar_id = "cal-id"\n')
+        result = CliRunner().invoke(
+            cli,
+            [
+                "calendar",
+                "push",
+                str(SPEC_PATH),
+                "--calendar",
+                str(cal),
+                "--credentials",
+                str(self._creds(tmp_path)),
+            ],
+        )
+        assert result.exit_code != 0
+        assert "errors" in result.output
+
+    def test_push_registered_in_group_help(self):
+        result = CliRunner().invoke(cli, ["calendar", "--help"])
+        assert result.exit_code == 0
+        assert "push" in result.output

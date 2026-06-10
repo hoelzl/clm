@@ -111,12 +111,14 @@ def _ics_escape(text: str) -> str:
     return text.replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", "\\n")
 
 
-def _ics_uid(a: Assignment, namespace: str) -> str:
+def assignment_uid(a: Assignment, namespace: str) -> str:
     """A stable UID per assignment so re-exports update rather than duplicate.
 
     Seeded by the assignment's bucket refs (deck-file stems) for video/merged
     rows, or the date for an insert — both stable across re-projection of the
-    same content, even as dates shift.
+    same content, even as dates shift. Shared with the Google Calendar push
+    (:mod:`clm.cohort_calendar.google_sync`) so the ``.ics`` feed and a pushed
+    calendar agree on event identity.
     """
     if a.kind == "insert":
         key = f"insert-{a.start_date.isoformat()}"
@@ -146,7 +148,7 @@ def render_ics(course_title: str, projection: Projection, *, namespace: str) -> 
         stamp = a.start_date.strftime("%Y%m%dT000000Z")
         lines += [
             "BEGIN:VEVENT",
-            f"UID:{_ics_uid(a, namespace)}",
+            f"UID:{assignment_uid(a, namespace)}",
             f"DTSTAMP:{stamp}",
             f"DTSTART;VALUE=DATE:{a.start_date.strftime('%Y%m%d')}",
             f"DTEND;VALUE=DATE:{dtend.strftime('%Y%m%d')}",

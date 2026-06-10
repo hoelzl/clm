@@ -10,9 +10,10 @@ records the start date, teaching-day pattern, holidays, and any adjustments.
 clm export calendar <spec>   # Render the cohort schedule (md/csv/ics)
 clm calendar check  <spec>   # Validate the calendar file; non-zero on errors
 clm calendar status <spec>   # Show today's position vs plan
+clm calendar push   <spec>   # Mirror the calendar into a Google calendar
 ```
 
-### Common flags (all three commands)
+### Common flags (all four commands)
 
 | Flag | Description |
 |---|---|
@@ -37,6 +38,25 @@ Exactly one of `--channel` or `--calendar` is required.
 |---|---|
 | `-L de\|en` | Language for titles (default: `de`) |
 | `--as-of DATE` | Reference date in YYYY-MM-DD (default: today) |
+
+### `clm calendar push` flags
+
+*New in {version}.* Requires the `[gcal]` extra
+(`pip install "coding-academy-lecture-manager[gcal]"`).
+
+| Flag | Description |
+|---|---|
+| `--calendar-id ID` | Target Google calendar id (default: `calendar_id` from the TOML's `[google]` table) |
+| `--credentials PATH` | Google credentials JSON (env: `CLM_GOOGLE_CREDENTIALS`): an OAuth "Desktop app" client (one-time browser consent, cached token) or a service-account key the calendar is shared with |
+| `-L de\|en` | Language for event titles (default: `de`) |
+| `--dry-run` | Print the insert/update/delete plan; change nothing |
+
+The push only touches **CLM-managed events**: each event is tagged (private
+extended properties) with the cohort namespace and the same stable
+per-assignment UID the ICS output uses, so re-pushing updates events in place,
+deletes events whose assignment disappeared, and never disturbs other events
+in the same calendar. Events are all-day and marked free (transparent).
+Projection errors (see `clm calendar check`) block the push.
 
 ## Calendar file format
 
@@ -76,6 +96,10 @@ label = "Review & Q&A"
 [[adjustments]]
 pin = "control_flow"  # anchor: this bucket lands on exactly this date
 date  = 2026-04-09    # also segments the timeline — miscounts can't cascade past a pin
+
+# Optional: default target for `clm calendar push`
+[google]
+calendar_id = "abc123...@group.calendar.google.com"
 ```
 
 ### Weekday tokens
@@ -144,4 +168,8 @@ clm calendar status course.xml --channel jan -L en
 
 # Check status as of a specific date
 clm calendar status course.xml --channel jan --as-of 2026-04-15
+
+# Preview, then push the calendar to Google Calendar
+clm calendar push course.xml --channel jan --dry-run
+clm calendar push course.xml --channel jan --credentials oauth-client.json
 ```

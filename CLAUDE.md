@@ -42,7 +42,7 @@ pip install -e ".[all]"           # everything (recommended for development)
 
 For the full list of optional extras (`[notebook]`, `[plantuml]`, `[drawio]`,
 `[all-workers]`, `[recordings]`, `[summarize]`, `[voiceover]`, `[slides]`,
-`[mcp]`, `[ml]`, `[dev]`, `[tui]`, `[web]`) see
+`[gcal]`, `[mcp]`, `[ml]`, `[dev]`, `[tui]`, `[web]`) see
 `docs/user-guide/installation.md`.
 
 ## Testing

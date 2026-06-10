@@ -483,6 +483,12 @@ count = 2
   the bucket's decks on the first date; richer per-date deck lists can come later.
 - **Dated release policy** — the §9 coupling, if pilots want it.
 - **Validation in CI** — wiring `calendar check` into the course repo's hooks.
+- **Google Calendar push** — *shipped* as `clm calendar push`
+  (`clm.cohort_calendar.google_sync`, `[gcal]` extra): a one-way mirror into a
+  shared Google calendar, diffing against CLM-managed events tagged with the
+  cohort namespace plus the §8.1 stable UIDs (private extended properties), so
+  re-pushes update in place and foreign events are never touched. Target id
+  from `--calendar-id` or the `[google]` table in the calendar TOML.
 
 **Decided:** `check` and `export calendar` are pure functions of the config and
 take no date. `status` is the only "now"-relative command — it defaults to the

@@ -228,7 +228,7 @@ def calendar(
 
 @click.group("calendar")
 def calendar_group() -> None:
-    """Inspect a cohort's viewing calendar: validate it or show today's status (#283)."""
+    """A cohort's viewing calendar: validate, show today's status, or push to Google (#283)."""
 
 
 @calendar_group.command("check")
@@ -256,6 +256,104 @@ def check_cmd(
         click.echo(f"✗ {n_err} error(s), {n_warn} warning(s).", err=True)
         raise SystemExit(1)
     click.echo(f"✓ Calendar OK ({n_warn} warning(s)).")
+
+
+def _plan_totals(plan, *, prefix: str) -> str:
+    return (
+        f"{prefix}{len(plan.inserts)} insert(s), {len(plan.updates)} update(s), "
+        f"{len(plan.deletes)} delete(s); {plan.unchanged} unchanged."
+    )
+
+
+@calendar_group.command("push")
+@spec_argument
+@language_option(default="de", aliases=("--lang",), help="Language for event titles.")
+@_channel_options
+@click.option(
+    "--calendar-id",
+    default="",
+    help="Google calendar id (overrides [google] calendar_id in the calendar TOML).",
+)
+@click.option(
+    "--credentials",
+    "credentials_path",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    envvar="CLM_GOOGLE_CREDENTIALS",
+    show_envvar=True,
+    default=None,
+    help="Google credentials JSON: an OAuth 'Desktop app' client or a service-account key.",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Show the insert/update/delete plan without changing the calendar.",
+)
+def push_cmd(
+    spec_file: Path,
+    language: str,
+    channel: str,
+    calendar_path: Path | None,
+    data_dir: Path | None,
+    calendar_id: str,
+    credentials_path: Path | None,
+    dry_run: bool,
+) -> None:
+    """Mirror a cohort's viewing calendar into a Google calendar.
+
+    Only events tagged as CLM-managed for this cohort are created, updated, or
+    deleted — other events in the same calendar are never touched. Event
+    identity matches the .ics export's stable UIDs, so re-pushing after a
+    schedule change updates events in place instead of duplicating them.
+
+    Requires the [gcal] extra and a Google credentials JSON (--credentials or
+    CLM_GOOGLE_CREDENTIALS): either an OAuth "Desktop app" client (a browser
+    consent flow runs once, then the token is cached) or a service account the
+    target calendar is shared with ("Make changes to events").
+    """
+    from clm.cohort_calendar import google_sync
+
+    language = language.lower()
+    config = _load_config(spec_file, channel, calendar_path)
+    _, buckets = _resolve_buckets(spec_file, language, data_dir)
+    proj = project(buckets, config)
+    for diag in proj.diagnostics:
+        click.echo(f"{diag.level}: {diag.message}", err=True)
+    if not proj.ok:
+        raise click.ClickException(
+            "Calendar has errors (see above); fix the calendar file "
+            "(or run `clm calendar check`) before pushing."
+        )
+
+    target = calendar_id or config.google_calendar_id
+    if not target:
+        raise click.ClickException(
+            "No Google calendar id: pass --calendar-id or set\n"
+            '  [google]\n  calendar_id = "..."\nin the cohort calendar file.'
+        )
+    if credentials_path is None:
+        raise click.ClickException(
+            "No Google credentials: pass --credentials PATH or set CLM_GOOGLE_CREDENTIALS."
+        )
+
+    namespace = channel or resolve_calendar_path(spec_file, channel, calendar_path).stem.replace(
+        ".calendar", ""
+    )
+    desired = google_sync.build_desired_events(proj, namespace=namespace)
+
+    try:
+        creds = google_sync.load_credentials(credentials_path)
+        service = google_sync.build_service(creds)
+        existing = google_sync.fetch_managed_events(service, target, namespace)
+        plan = google_sync.plan_sync(desired, existing)
+        if dry_run:
+            for line in google_sync.describe_plan(plan):
+                click.echo(line)
+            click.echo(_plan_totals(plan, prefix="Dry run — would apply: "))
+            return
+        google_sync.apply_plan(service, target, plan)
+    except google_sync.GoogleSyncError as e:
+        raise click.ClickException(str(e)) from None
+    click.echo(_plan_totals(plan, prefix="Pushed: "))
 
 
 def _format_status(report, language: str) -> list[str]:

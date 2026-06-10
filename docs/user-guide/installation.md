@@ -155,6 +155,11 @@ CLM has several optional dependency groups for different features:
   - MCP server for AI-assisted slide authoring
   - Install: `pip install -e ".[mcp]"`
 
+**Cohort Calendars**:
+- **[gcal]**: google-api-python-client, google-auth, google-auth-oauthlib
+  - Required for: `clm calendar push` (mirror a cohort's viewing calendar into Google Calendar)
+  - Install: `pip install -e ".[gcal]"`
+
 **Output Bundling**:
 - **[jupyterlite]**: jupyterlite-core, jupyterlite-pyodide-kernel, jupyterlite-xeus, jupyter-server
   - Required for: the `jupyterlite` output format (browser-based notebook site bundler)
@@ -172,7 +177,7 @@ CLM has several optional dependency groups for different features:
   - Install: `pip install -e ".[dev]"`
 
 **Everything**:
-- **[all]**: All of the above (all-workers, ml, summarize, voiceover, recordings, slides, mcp, jupyterlite, replay, dev, tui, web)
+- **[all]**: All of the above (all-workers, ml, summarize, voiceover, recordings, slides, gcal, mcp, jupyterlite, replay, dev, tui, web)
   - Required for: Full development and testing
   - Install: `pip install -e ".[all]"`
 
