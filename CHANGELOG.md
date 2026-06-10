@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-06-10
+
 ### Added
 
 - **Multiple release streams per cohort (issue #291).** A course can declare
@@ -78,6 +80,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   their weekday/name label in every week, disabled weeks included. The JSON
   format is unaffected — it always carries the grouping as a structured
   `subsections` array.
+- **Two new `clm slides sync` test oracles** close the architecture review's
+  remaining coverage gaps (issue #289 P4): `tests/slides/test_sync_non_python.py`
+  drives the engine end-to-end on a C# (`//`-token) split pair for the first
+  time — neutral verbatim copy, id-less re-translation, add-with-insert (the
+  built twin must carry the `// %%` header family), tag mirroring, and the
+  neutral tag-drift alert, on both baselines — and
+  `tests/slides/test_sync_corpus_mutation.py` (slow/integration, corpus-gated
+  like the no-op backstop) is the corpus' first **positive propagation
+  oracle**: scripted one-sided mutations of real PythonCourses decks per
+  change-type (neutral edit/add, id-less localized edit, companion remove,
+  tag-only retag, judge-reconciled edit), asserting each is propagated to the
+  other half or alerted — never silently dropped — on pairs selected per
+  target cell class and verified post-sync-clean.
 
 ### Changed
 
@@ -101,22 +116,43 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   — in declared order, with no marker — so a roadmap spec reads like a finished
   course. Structured outputs (`outline --format json`, `schedule --format csv`)
   keep the disabled state recorded even under `=merge`.
-
-### Added
-
-- **Two new `clm slides sync` test oracles** close the architecture review's
-  remaining coverage gaps (issue #289 P4): `tests/slides/test_sync_non_python.py`
-  drives the engine end-to-end on a C# (`//`-token) split pair for the first
-  time — neutral verbatim copy, id-less re-translation, add-with-insert (the
-  built twin must carry the `// %%` header family), tag mirroring, and the
-  neutral tag-drift alert, on both baselines — and
-  `tests/slides/test_sync_corpus_mutation.py` (slow/integration, corpus-gated
-  like the no-op backstop) is the corpus' first **positive propagation
-  oracle**: scripted one-sided mutations of real PythonCourses decks per
-  change-type (neutral edit/add, id-less localized edit, companion remove,
-  tag-only retag, judge-reconciled edit), asserting each is propagated to the
-  other half or alerted — never silently dropped — on pairs selected per
-  target cell class and verified post-sync-clean.
+- **`clm export outline` / `clm export summary` now filter split-companion decks
+  to the requested language.** When a topic ships split `slides_x.de.py` +
+  `slides_x.en.py` companions, a `-L de` outline/summary listed *both* the
+  German and the English title (and the JSON `slides` array carried both),
+  because the section-flat, JSON-slide, summary, and disabled-topic enumerations
+  skipped the `output_language_filter` the subsection path already applied. All
+  enumerations now filter split companions to the requested language (via
+  `output_language_filter` for the built course and the `.de`/`.en` filename
+  suffix for disabled topics read from disk), so a split pair contributes a
+  single entry — matching the build's per-language routing. Bilingual decks are
+  unaffected.
+- **`clm slides sync` parity errors now name the diverging cells**, instead of a
+  generic "a change to a shared cell was not propagated". The shared-cell error
+  lists the cell text present on one half but missing on the other (or the first
+  out-of-order cell), and the id-less-localized error points at the slide group
+  and cell kind — so the divergence can be located without a manual diff.
+- **`clm slides sync` shows progress while it runs.** A directory (batch) sweep
+  prints a `[i/N] <deck> …` header per pair, and a writing run prints a short
+  stderr tick per LLM call (`· reconciling …` / `· translating …`) so a long
+  sync is visibly alive. Progress goes to stderr and is suppressed under
+  `--json` (stdout stays pure JSON).
+- **The mitmproxy transport now records and replays a per-request response
+  *sequence*** instead of collapsing a repeated request to its first response.
+  A non-deterministic endpoint (a temperature>0 LLM, or OpenRouter routing the
+  same request to different providers) answers an identical request differently
+  on successive calls; when a *later* request embeds an earlier response (e.g.
+  `summarize | translate`, where `translate` carries the generated summary), the
+  old first-seen-wins dedup dropped every response after the first, so the
+  downstream request matched nothing on replay and failed with `clm_replay_miss`.
+  Recording now keys dedup on `(request, response)` so distinct responses to the
+  same request are kept in order, and replay serves them in recorded order via a
+  per-request cursor — sticking on the last match once exhausted, so a genuinely
+  repeatable request never misses and a single-entry cassette still serves
+  repeatably (unchanged). The host-side fold gained `preserve_sequence=True`
+  (mitmproxy only; the vcrpy path keeps the deduped fold). Decks affected before
+  this fix: `chains_and_lcel/slides_020`, `prompt_templates/slides_010`,
+  `langgraph_intro/slides_010`.
 
 ### Fixed
 
@@ -223,46 +259,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   alongside a reorder still merges cleanly (the halves agree, so nothing is lost).
   Reconcile a genuine conflict by hand (apply the reorder and the edit on the same
   half, or sync them in separate steps) and re-run.
-
-### Changed
-
-- **`clm slides sync` parity errors now name the diverging cells**, instead of a
-  generic "a change to a shared cell was not propagated". The shared-cell error
-  lists the cell text present on one half but missing on the other (or the first
-  out-of-order cell), and the id-less-localized error points at the slide group
-  and cell kind — so the divergence can be located without a manual diff.
-- **`clm slides sync` shows progress while it runs.** A directory (batch) sweep
-  prints a `[i/N] <deck> …` header per pair, and a writing run prints a short
-  stderr tick per LLM call (`· reconciling …` / `· translating …`) so a long
-  sync is visibly alive. Progress goes to stderr and is suppressed under
-  `--json` (stdout stays pure JSON).
-
-
-  When a topic ships split `slides_x.de.py` + `slides_x.en.py` companions, a
-  `-L de` outline/summary listed *both* the German and the English title (and
-  the JSON `slides` array carried both), because the section-flat, JSON-slide,
-  summary, and disabled-topic enumerations skipped the `output_language_filter`
-  the subsection path already applied. All enumerations now filter split
-  companions to the requested language (via `output_language_filter` for the
-  built course and the `.de`/`.en` filename suffix for disabled topics read
-  from disk), so a split pair contributes a single entry — matching the build's
-  per-language routing. Bilingual decks are unaffected.
-- **The mitmproxy transport now records and replays a per-request response
-  *sequence*** instead of collapsing a repeated request to its first response.
-  A non-deterministic endpoint (a temperature>0 LLM, or OpenRouter routing the
-  same request to different providers) answers an identical request differently
-  on successive calls; when a *later* request embeds an earlier response (e.g.
-  `summarize | translate`, where `translate` carries the generated summary), the
-  old first-seen-wins dedup dropped every response after the first, so the
-  downstream request matched nothing on replay and failed with `clm_replay_miss`.
-  Recording now keys dedup on `(request, response)` so distinct responses to the
-  same request are kept in order, and replay serves them in recorded order via a
-  per-request cursor — sticking on the last match once exhausted, so a genuinely
-  repeatable request never misses and a single-entry cassette still serves
-  repeatably (unchanged). The host-side fold gained `preserve_sequence=True`
-  (mitmproxy only; the vcrpy path keeps the deduped fold). Decks affected before
-  this fix: `chains_and_lcel/slides_020`, `prompt_templates/slides_010`,
-  `langgraph_intro/slides_010`.
 
 ## [1.10.0] - 2026-06-08
 
