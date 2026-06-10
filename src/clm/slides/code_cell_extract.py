@@ -10,15 +10,26 @@ cell whose ``cell_type == "code"``. Walks the top-level statements with
     3. top-level assignment   -> ``<target>``
     4. import / from-import   -> ``import <name> [<name>...]``
     5. expression-stmt call   -> ``<obj> <method>`` (or ``<func>``)
-    6. first code line        -> the raw first non-comment/non-magic line
+    6. for / async for loop   -> ``for <target> in <iterable>``
+    7. expression-stmt value  -> ``<name> [<key>...]`` (subscript /
+                                 attribute / bare-name display, #233)
+    8. first code line        -> the raw first non-comment/non-magic line
                                  (only when ``accept_code_derived`` is set)
 
-Extractors 1-5 are intent-based: they name a salient construct. A bare
-expression statement (``(1 + 1j) * (1 + 1j)``, ``letters[0:3]``,
-``a == b``) has no such construct, so by default it returns ``None`` and
-the caller hard-refuses — the only non-manual escape historically being
-the LLM (#251). Extractor 6 is the **opt-in deterministic fallback** for
-exactly those cells: it slugs the first real code line. It is
+Extractors 1-7 are intent-based: they name a salient construct.
+Extractors 6-7 (#233) cover the display-style cells common on subslides:
+``data[:5]`` names ``data``, ``response.headers["Content-Type"]`` names
+``response headers Content-Type``, ``for student in classroom: …`` names
+``for student in classroom``. They run only when ``display_exprs`` is
+set: ``assign-ids`` enables it, but the sync content-anchor caller
+(:func:`clm.slides.sync_writeback.construct_of`) must NOT — anchors are
+re-derived against persisted watermark baselines, so widening the
+extractor set there would make unchanged cells' anchors drift. A bare
+expression with no salient name (``(1 + 1j) * (1 + 1j)``, ``a == b``)
+still has no construct, so by default it returns ``None`` and the caller
+hard-refuses — the only non-manual escape historically being the LLM
+(#251). Extractor 8 is the **opt-in deterministic fallback** for exactly
+those cells: it slugs the first real code line. It is
 comment-token-aware (:func:`_first_code_line`) so it works across every
 supported prog_lang, not just Python; ``ast`` is Python-only, so for a
 ``.cs`` / ``.cpp`` / ``.java`` / ``.ts`` cell the AST extractors never
@@ -32,10 +43,11 @@ LLM-fallback path.
 
 Extractor labels (``Extraction.source``) match the precedence order:
 ``code:class``, ``code:def``, ``code:assign``, ``code:import``,
-``code:call``, ``code:line``. Labels 1-5 surface in the ``assign-ids``
-report as ``content:code:<kind>`` (gated by ``--accept-content-derived``);
-``code:line`` keeps its bare label and is gated by ``--accept-code-derived``
-so it never silently activates inside the content-derived funnels.
+``code:call``, ``code:for``, ``code:expr``, ``code:line``. Labels 1-7
+surface in the ``assign-ids`` report as ``content:code:<kind>`` (gated by
+``--accept-content-derived``); ``code:line`` keeps its bare label and is
+gated by ``--accept-code-derived`` so it never silently activates inside
+the content-derived funnels.
 """
 
 from __future__ import annotations
@@ -64,7 +76,11 @@ _MAX_IMPORT_NAMES = 4
 
 
 def extract_from_code(
-    source: str, comment_token: str = "#", *, accept_code_derived: bool = False
+    source: str,
+    comment_token: str = "#",
+    *,
+    accept_code_derived: bool = False,
+    display_exprs: bool = False,
 ) -> Extraction | None:
     """Return an ``EXTRACTABLE`` proposal derived from code, or ``None``.
 
@@ -81,9 +97,13 @@ def extract_from_code(
     parseable by :mod:`ast` — be completed. ``None`` is returned only when
     nothing matched, so the caller hard-refuses as before.
 
-    ``accept_code_derived`` defaults to ``False`` so every existing caller
-    (the content-anchor in :mod:`clm.slides.sync_writeback`, the direct unit
-    tests, the four content-derived funnels) is byte-for-byte unchanged.
+    ``accept_code_derived`` and ``display_exprs`` both default to ``False``
+    so every existing caller (the content-anchor in
+    :mod:`clm.slides.sync_writeback`, the direct unit tests, the four
+    content-derived funnels) is byte-for-byte unchanged. ``display_exprs``
+    (#233) additionally enables the for-loop / display-expression
+    extractors — ``assign-ids`` sets it; the sync content-anchor must not
+    (see the module docstring).
     """
     try:
         tree = ast.parse(source)
@@ -91,13 +111,16 @@ def extract_from_code(
         tree = None
 
     if tree is not None:
-        for extractor in (
+        extractors = [
             _from_class_def,
             _from_function_def,
             _from_assignment,
             _from_import,
             _from_call,
-        ):
+        ]
+        if display_exprs:
+            extractors += [_from_for_loop, _from_expr_value]
+        for extractor in extractors:
             result = extractor(tree)
             if result is not None:
                 return result
@@ -241,6 +264,66 @@ def _from_call(tree: ast.Module) -> Extraction | None:
             name = _call_name(stmt.value.func)
             if name:
                 return Extraction(Category.EXTRACTABLE, name, "code:call")
+    return None
+
+
+def _from_for_loop(tree: ast.Module) -> Extraction | None:
+    """``for student in classroom: …`` -> ``for student in classroom`` (#233)."""
+    for stmt in tree.body:
+        if isinstance(stmt, ast.For | ast.AsyncFor):
+            target = _assignment_target_name(stmt.target)
+            iterable = _value_name(stmt.iter)
+            if target and iterable:
+                return Extraction(Category.EXTRACTABLE, f"for {target} in {iterable}", "code:for")
+            if target:
+                return Extraction(Category.EXTRACTABLE, f"for {target}", "code:for")
+    return None
+
+
+def _from_expr_value(tree: ast.Module) -> Extraction | None:
+    """Bare display expressions: subscript / attribute / name (#233).
+
+    ``data[:5]``                          -> ``data``
+    ``result["choices"]``                 -> ``result choices``
+    ``response.headers["Content-Type"]``  -> ``response headers Content-Type``
+
+    Runs after :func:`_from_call`, so a call expression never lands here.
+    Expressions with no salient head name (arithmetic, comparisons,
+    literals) return ``None`` and keep the hard-refusal behavior.
+    """
+    for stmt in tree.body:
+        if isinstance(stmt, ast.Expr):
+            name = _value_name(stmt.value)
+            if name:
+                return Extraction(Category.EXTRACTABLE, name, "code:expr")
+    return None
+
+
+def _value_name(node: ast.AST) -> str | None:
+    """Render a value expression's salient name as readable text.
+
+    Subscript keys that are string constants are appended
+    (``post["title"]`` -> ``post title``); slices, numeric indexes, and
+    computed keys contribute nothing beyond the base name
+    (``data[:5]`` -> ``data``, ``items[0]`` -> ``items``).
+    """
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        prefix = _value_name(node.value)
+        if prefix:
+            return f"{prefix} {node.attr}"
+        return node.attr
+    if isinstance(node, ast.Subscript):
+        prefix = _value_name(node.value)
+        if prefix is None:
+            return None
+        key = node.slice
+        if isinstance(key, ast.Constant) and isinstance(key.value, str):
+            return f"{prefix} {key.value}"
+        return prefix
+    if isinstance(node, ast.Call):
+        return _call_name(node.func)
     return None
 
 

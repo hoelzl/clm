@@ -11,8 +11,9 @@ from clm.slides.refusal_report import (
     worklist_to_dict,
 )
 
-# A deck with: a headed slide, a hard-refusal slide (img, no alt), and a
-# soft-refusal slide (bullet content but no heading).
+# A deck with: a headed slide, a hard-refusal slide (an HTML comment —
+# an alt-less <img src> stopped hard-refusing with the #233 filename-stem
+# fallback), and a soft-refusal slide (bullet content but no heading).
 DECK = (
     '# %% [markdown] lang="en" tags=["slide"]\n'
     "# ## Introduction\n"
@@ -20,7 +21,7 @@ DECK = (
     "# Welcome.\n"
     "\n"
     '# %% [markdown] lang="en" tags=["slide"]\n'
-    '# <img src="img/diagram.png">\n'
+    "# <!-- placeholder-diagram -->\n"
     "\n"
     '# %% [markdown] lang="en" tags=["slide"]\n'
     "# - first bullet here\n"
@@ -60,7 +61,7 @@ class TestBuildWorklist:
         hard = wl.hard[0]
         assert hard.context is not None
         assert hard.context.marker.startswith("# %% [markdown]")
-        assert "img/diagram.png" in hard.context.body
+        assert "placeholder-diagram" in hard.context.body
         assert hard.context.preceding_heading == "Introduction"
         assert hard.context.cell_type == "markdown"
         assert hard.context.lang == "en"
@@ -90,7 +91,7 @@ class TestBuildWorklist:
         assert wl.entries[0].context is None
 
     def test_start_of_deck_has_no_anchors(self, tmp_path):
-        text = '# %% [markdown] lang="en" tags=["slide"]\n# <img src="x.png">\n'
+        text = '# %% [markdown] lang="en" tags=["slide"]\n# <!-- x -->\n'
         f = _write(tmp_path, text)
         result = assign_ids_in_file(f, AssignOptions(report_only=True))
         wl = build_refusal_worklist(result.refusals, with_context=True)
@@ -111,7 +112,7 @@ class TestRender:
         out = render_worklist(build_refusal_worklist(result.refusals, with_context=True))
         assert "[hard]" in out
         assert 'heading "Introduction"' in out
-        assert "img/diagram.png" in out
+        assert "placeholder-diagram" in out
         assert "1 hard refusal(s)" in out
 
     def test_render_without_context_is_compact(self, tmp_path):
@@ -120,7 +121,7 @@ class TestRender:
         out = render_worklist(build_refusal_worklist(result.refusals))
         assert "[hard]" in out
         # No body lines piped in without context.
-        assert "img/diagram.png" not in out
+        assert "placeholder-diagram" not in out
 
 
 class TestToDict:
