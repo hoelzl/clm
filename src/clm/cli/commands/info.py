@@ -39,6 +39,21 @@ TOPICS: dict[str, TopicInfo] = {
         "JupyterLite output format: opt-in gates and <jupyterlite> config",
         "jupyterlite.md",
     ),
+    "calendar": TopicInfo(
+        "calendar",
+        "Cohort calendar: project course schedule onto real teaching dates",
+        "calendar.md",
+    ),
+    "slide-format": TopicInfo(
+        "slide-format",
+        "Jupytext percent-format: cell markers, tags, slide_id, bilingual/split structure",
+        "slide-format.md",
+    ),
+    "releases": TopicInfo(
+        "releases",
+        "Per-topic solution release: channels, ledger, sync, clm git",
+        "releases.md",
+    ),
 }
 
 
@@ -70,6 +85,9 @@ def info(topic: str | None) -> None:
         clm info spec-files     # Spec file format reference
         clm info commands       # CLI command reference
         clm info migration      # Breaking changes and migration guide
+        clm info calendar       # Cohort calendar reference
+        clm info slide-format   # Slide file format reference
+        clm info releases       # Per-topic solution release reference
     """
     if topic is None:
         click.echo(f"CLM {__version__} — Available documentation topics:\n")

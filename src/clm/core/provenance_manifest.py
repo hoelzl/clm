@@ -45,6 +45,7 @@ from clm.core.image_registry import get_relative_img_path
 from clm.infrastructure.utils.path_utils import (
     ext_for,
     is_ignored_file_for_output,
+    is_ignored_path_in_output_tree,
     output_path_for,
     output_specs,
 )
@@ -208,6 +209,13 @@ def _enumerate_dir_group_outputs(
     and record the files actually found on disk; placements the build did not
     produce simply have no directory. Ownership comes from the recorded
     ``DirGroup.spec`` (``None``/``None`` for a global ``<dir-groups>`` entry).
+
+    The walk applies the same ignore filter as the build's dir-group copy
+    (:func:`is_ignored_path_in_output_tree`): the copy never produces files
+    under ``.git``/IDE/cache directories, so anything found there — e.g. the
+    ``.git`` that ``clm git init`` creates inside an output target — is not a
+    build output and must not enter the manifest (issue #302), where the
+    release sync would promote it into cohort repos.
     """
     for dir_group in course.dir_groups:
         spec = dir_group.spec
@@ -221,17 +229,20 @@ def _enumerate_dir_group_outputs(
                     if not out_dir.is_dir():
                         continue
                     for path in sorted(out_dir.rglob("*")):
-                        if path.is_file():
-                            yield (
-                                path,
-                                {
-                                    "section_id": section_id,
-                                    "topic_id": topic_id,
-                                    "kind": None,
-                                    "format": "dir-group",
-                                    "language": lang,
-                                },
-                            )
+                        if not path.is_file():
+                            continue
+                        if is_ignored_path_in_output_tree(path.relative_to(out_dir)):
+                            continue
+                        yield (
+                            path,
+                            {
+                                "section_id": section_id,
+                                "topic_id": topic_id,
+                                "kind": None,
+                                "format": "dir-group",
+                                "language": lang,
+                            },
+                        )
 
 
 def _hash_file(path: Path) -> str:

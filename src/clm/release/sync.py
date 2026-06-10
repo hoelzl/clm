@@ -14,7 +14,11 @@ index. The rules (issue #208):
 
 Promotion copies bytes verbatim from the source tree; it never rebuilds or
 re-executes anything, and — because the manifest lists only topic output files —
-it never copies ``.clm-*`` build sidecars into the destination.
+it never copies ``.clm-*`` build sidecars into the destination. As defense in
+depth it also refuses any manifest entry under a VCS metadata directory
+(``.git``/``.svn``/``.hg``): a polluted manifest from an older build that
+walked a stray ``.git`` into the skeleton (issue #302) must never overwrite
+the destination repo's own ``.git``.
 """
 
 from __future__ import annotations
@@ -22,7 +26,7 @@ from __future__ import annotations
 import logging
 import shutil
 from collections.abc import Iterable
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from attrs import frozen
@@ -189,10 +193,25 @@ def apply_sync(
     )
 
 
+# Never promote VCS metadata, no matter what the manifest claims (issue #302):
+# copying e.g. ``.git/index`` into the destination working tree would corrupt
+# the cohort repo the sync is populating.
+_VCS_DIR_NAMES = frozenset({".git", ".svn", ".hg"})
+
+
+def _is_vcs_path(rel: str) -> bool:
+    return any(part in _VCS_DIR_NAMES for part in PurePosixPath(rel).parts)
+
+
 def _copy_files(files: list[dict[str, Any]], source_root: Path, dest_root: Path) -> int:
     copied = 0
+    refused_vcs = 0
     for entry in files:
         rel = entry["path"]
+        if _is_vcs_path(rel):
+            refused_vcs += 1
+            logger.debug("release sync: refusing VCS metadata path from manifest: %s", rel)
+            continue
         src = source_root / rel
         if not src.is_file():
             logger.warning("release sync: source file missing, skipping: %s", src)
@@ -201,4 +220,11 @@ def _copy_files(files: list[dict[str, Any]], source_root: Path, dest_root: Path)
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)
         copied += 1
+    if refused_vcs:
+        logger.warning(
+            "release sync: refused to copy %d VCS metadata file(s) (.git/.svn/.hg) "
+            "listed in the source manifest — the manifest is polluted (issue #302); "
+            "rebuild the source target to clean it",
+            refused_vcs,
+        )
     return copied

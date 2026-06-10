@@ -20,6 +20,7 @@ from clm.infrastructure.utils.path_utils import (
     is_ignored_dir_for_output,
     is_ignored_file_for_course,
     is_ignored_file_for_output,
+    is_ignored_path_in_output_tree,
     is_slides_file,
     output_path_for,
     output_specs,
@@ -458,6 +459,35 @@ class TestSidecarSubdirSkips:
         cassette = nested / "slides_010v.http-cassette.yaml"
         cassette.write_text("interactions: []")
         assert is_ignored_file_for_output(cassette)
+
+
+class TestIsIgnoredPathInOutputTree:
+    """The output-tree walk filter (issue #302) mirrors the dir-group copy ignore."""
+
+    def test_rejects_files_under_a_git_dir(self):
+        assert is_ignored_path_in_output_tree(Path(".git/COMMIT_EDITMSG"))
+        assert is_ignored_path_in_output_tree(Path(".git/refs/heads/master"))
+        assert is_ignored_path_in_output_tree(Path("nested/.git/index"))
+
+    def test_rejects_a_worktree_style_git_file(self):
+        # In a linked worktree ``.git`` is a *file*; the final segment counts.
+        assert is_ignored_path_in_output_tree(Path(".git"))
+
+    def test_rejects_other_vcs_and_cache_dirs(self):
+        assert is_ignored_path_in_output_tree(Path(".idea/workspace.xml"))
+        assert is_ignored_path_in_output_tree(Path("examples/__pycache__/mod.pyc"))
+
+    def test_rejects_output_suppressed_file_names(self):
+        assert is_ignored_path_in_output_tree(Path("topic/slides_010v.http-cassette.yaml"))
+        assert is_ignored_path_in_output_tree(Path("topic/voiceover_slides_010.py"))
+
+    def test_keeps_ordinary_skeleton_files(self):
+        assert not is_ignored_path_in_output_tree(Path("README.md"))
+        assert not is_ignored_path_in_output_tree(Path(".gitignore"))
+        assert not is_ignored_path_in_output_tree(Path("setup/uv.lock"))
+        # Suffix rules from course scanning do NOT apply: the dir-group copy
+        # ships e.g. ``.bin`` data files, so the manifest must record them.
+        assert not is_ignored_path_in_output_tree(Path("data/model.bin"))
 
 
 class TestOutputFilePatterns:

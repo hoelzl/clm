@@ -305,6 +305,35 @@ def test_manifest_records_dir_group_outputs_with_ownership(tmp_path):
     assert entry["content_hash"].startswith("sha256:")
 
 
+def test_dir_group_walk_ignores_vcs_and_output_suppressed_files(tmp_path):
+    """A ``.git`` inside a dir-group output dir (e.g. left by ``clm git init``
+    on the target) must not enter the manifest — the release sync would
+    otherwise promote stale ``.git/*`` into cohort repos (issue #302)."""
+    course = _course_from_test_spec_1(tmp_path / "out")
+    target = course.output_targets[0]
+
+    owned = [dg for dg in course.dir_groups if dg.spec is not None and dg.spec.topic_id]
+    dir_group = owned[0]
+    out_dirs = dir_group.output_dirs(
+        False, "de", target.output_root, skip_toplevel=target.is_explicit
+    )
+    placed_dir = out_dirs[0]
+    git_dir = placed_dir / ".git"
+    (git_dir / "refs" / "heads").mkdir(parents=True, exist_ok=True)
+    (git_dir / "index").write_bytes(b"DIRC")
+    (git_dir / "refs" / "heads" / "master").write_text("0" * 40, encoding="utf-8")
+    (placed_dir / "slides_x.http-cassette.yaml").write_text("interactions: []", encoding="utf-8")
+    (placed_dir / "example.txt").write_text("hi", encoding="utf-8")
+
+    manifest = build_provenance_manifest(
+        course, target, source_commit=None, source_dirty=None, built_at=BUILT_AT
+    )
+    paths = [f["path"] for f in manifest["files"] if f["format"] == "dir-group"]
+    assert any(p.endswith("example.txt") for p in paths)
+    assert not any(".git/" in p for p in paths)
+    assert not any(p.endswith(".http-cassette.yaml") for p in paths)
+
+
 # ---------------------------------------------------------------------------
 # topic_digest_from_files / manifest_topic_digest (issue #208 step 5 join key)
 # ---------------------------------------------------------------------------
