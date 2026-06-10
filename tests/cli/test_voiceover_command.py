@@ -345,7 +345,7 @@ class TestTranscribeCommand:
         runner = CliRunner()
         result = runner.invoke(
             voiceover_group,
-            ["transcribe", str(video), "--lang", "de"],
+            ["--cache-root", str(tmp_path / "cache"), "transcribe", str(video), "--lang", "de"],
         )
 
         assert result.exit_code == 0, result.output
@@ -367,7 +367,14 @@ class TestTranscribeCommand:
         runner = CliRunner()
         result = runner.invoke(
             voiceover_group,
-            ["transcribe", str(video), "-o", str(out_file)],
+            [
+                "--cache-root",
+                str(tmp_path / "cache"),
+                "transcribe",
+                str(video),
+                "-o",
+                str(out_file),
+            ],
         )
 
         assert result.exit_code == 0, result.output

@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from click.testing import CliRunner
 
-from clm.cli.commands import polish as polish_module
-from clm.cli.commands.polish import _parse_range, polish
+from clm.cli.commands.slides import polish as polish_module
+from clm.cli.commands.slides.polish import _parse_range, polish
 
 
 class TestParseRange:
@@ -247,7 +247,7 @@ class TestPolishCommand:
 
 
 def test_module_exposes_logger_and_console():
-    assert polish_module.logger.name == "clm.cli.commands.polish"
+    assert polish_module.logger.name == "clm.cli.commands.slides.polish"
     # console is a rich.console.Console instance
     from rich.console import Console
 

@@ -32,7 +32,7 @@ class TestResolveTopicCommand:
         runner = CliRunner()
         result = runner.invoke(
             cli,
-            ["topic", "resolve", "intro", "--data-dir", str(course_tree)],
+            ["course", "resolve-topic", "intro", "--data-dir", str(course_tree)],
         )
         assert result.exit_code == 0
         assert "topic_010_intro" in result.output
@@ -41,7 +41,7 @@ class TestResolveTopicCommand:
         runner = CliRunner()
         result = runner.invoke(
             cli,
-            ["topic", "resolve", "nonexistent", "--data-dir", str(course_tree)],
+            ["course", "resolve-topic", "nonexistent", "--data-dir", str(course_tree)],
         )
         assert result.exit_code != 0
         assert "not found" in result.output.lower()
@@ -50,7 +50,7 @@ class TestResolveTopicCommand:
         runner = CliRunner()
         result = runner.invoke(
             cli,
-            ["topic", "resolve", "intro", "--data-dir", str(course_tree), "--json"],
+            ["course", "resolve-topic", "intro", "--data-dir", str(course_tree), "--json"],
         )
         assert result.exit_code == 0
         data = json.loads(result.output)
@@ -62,7 +62,7 @@ class TestResolveTopicCommand:
         runner = CliRunner()
         result = runner.invoke(
             cli,
-            ["topic", "resolve", "*", "--data-dir", str(course_tree)],
+            ["course", "resolve-topic", "*", "--data-dir", str(course_tree)],
         )
         assert result.exit_code == 0
         assert "intro" in result.output
@@ -72,6 +72,6 @@ class TestResolveTopicCommand:
         runner = CliRunner()
         result = runner.invoke(
             cli,
-            ["topic", "resolve", "zzz*", "--data-dir", str(course_tree)],
+            ["course", "resolve-topic", "zzz*", "--data-dir", str(course_tree)],
         )
         assert result.exit_code != 0

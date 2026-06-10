@@ -96,8 +96,10 @@ class AssignedId:
     slide_id: str
     # Which strategy produced the id, for the report. One of:
     # "heading" / "sibling-heading" / "title-macro" / "voiceover-inherit" /
+    # "voiceover-reinherit" (a <deck-stem>-cell-N placeholder re-pointed, #233) /
     # "llm" / "paired" / "twin" / "content:<extractor>" (markdown bullet/bold/
-    # img/prose or the code AST extractors code:class/def/assign/import/call) /
+    # img_alt/img_src/prose or the code AST extractors
+    # code:class/def/assign/import/call/for/expr) /
     # "code:line" (the opt-in first-code-line fallback, #251).
     source: str
 
@@ -251,7 +253,10 @@ def _extract_from_cell(cell: _Cell, comment_token: str, accept_code_derived: boo
     extraction = classify(cell.body)
     if extraction.category == Category.NON_EXTRACTABLE and cell.metadata.cell_type == "code":
         code_extraction = extract_from_code(
-            cell.body, comment_token, accept_code_derived=accept_code_derived
+            cell.body,
+            comment_token,
+            accept_code_derived=accept_code_derived,
+            display_exprs=True,
         )
         if code_extraction is not None:
             return code_extraction
@@ -397,7 +402,7 @@ def assign_ids_for_cells(
             continue
 
         if role == "narrative":
-            _handle_narrative(cell, current_slide_id, options, file_str, result)
+            _handle_narrative(cell, current_slide_id, options, file_path, file_str, result)
             continue
 
         # role == "skip": unchanged.
@@ -773,10 +778,45 @@ def _try_llm_suggestion(
     return title
 
 
+# Conversion-era placeholder ids stamped on voiceover/notes cells:
+# ``<deck-stem-ish>-cell-<N>`` (e.g. ``simple_chatbot-cell-1`` in deck
+# ``slides_030v_simple_chatbot``). Sequential counters, not slide
+# references — never authoritative (#233).
+_PLACEHOLDER_CELL_RE = re.compile(r"^(?P<prefix>.+)-cell-\d+$")
+
+
+def _normalize_for_stem_match(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+
+
+def _is_placeholder_narrative_id(existing: str, file_path: Path) -> bool:
+    """Whether ``existing`` is a ``<deck-stem>-cell-N`` conversion placeholder.
+
+    Both conditions must hold: the id matches the ``…-cell-<N>`` shape AND
+    its prefix is the deck's filename stem (or a ``-``-boundary suffix of
+    it, after normalizing ``_``/``-``). A hand-written id that merely ends
+    in a number, or a ``…-cell-N`` id unrelated to this deck's name, is
+    left alone.
+    """
+    m = _PLACEHOLDER_CELL_RE.match(strip_preserve_marker(existing))
+    if m is None:
+        return False
+    prefix = _normalize_for_stem_match(m.group("prefix"))
+    if not prefix:
+        return False
+    stem = file_path.stem
+    for lang_suffix in (".de", ".en"):
+        if stem.endswith(lang_suffix):
+            stem = stem[: -len(lang_suffix)]
+    stem = _normalize_for_stem_match(stem)
+    return stem == prefix or stem.endswith(f"-{prefix}")
+
+
 def _handle_narrative(
     cell: _Cell,
     current_slide_id: str | None,
     options: AssignOptions,
+    file_path: Path,
     file_str: str,
     result: AssignResult,
 ) -> None:
@@ -794,11 +834,15 @@ def _handle_narrative(
 
     bare = current_slide_id
 
-    if existing and not options.force:
-        return
-
     if existing and strip_preserve_marker(existing) == bare:
         return  # idempotent
+
+    # An existing id normally wins without --force — except a
+    # ``<deck-stem>-cell-N`` conversion placeholder, which is never
+    # authoritative and is re-pointed by the normal inherit pass (#233).
+    placeholder = existing is not None and _is_placeholder_narrative_id(existing, file_path)
+    if existing and not options.force and not placeholder:
+        return
 
     if not options.report_only:
         _write_slide_id(cell, bare)
@@ -807,7 +851,7 @@ def _handle_narrative(
             file=file_str,
             line=cell.line_number,
             slide_id=bare,
-            source="voiceover-inherit",
+            source="voiceover-reinherit" if placeholder else "voiceover-inherit",
         )
     )
 

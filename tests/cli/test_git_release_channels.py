@@ -14,7 +14,7 @@ import click
 import pytest
 from click.testing import CliRunner
 
-from clm.cli.commands.git_ops import (
+from clm.cli.commands.git import (
     OutputRepo,
     _select_repos,
     find_output_repos,
@@ -88,7 +88,7 @@ def _mock_config():
 
     mock_config = MagicMock()
     mock_config.git = GitConfig()
-    with patch("clm.cli.commands.git_ops.get_config", return_value=mock_config):
+    with patch("clm.cli.commands.git.get_config", return_value=mock_config):
         yield
 
 
@@ -425,8 +425,8 @@ class TestChannelGitEndToEnd:
         slow and a CI flake vector. Mirrors tests/cli/test_git_ops.py.
         """
         with (
-            patch("clm.cli.commands.git_ops.remote_exists", return_value=False),
-            patch("clm.cli.commands.git_ops.remote_has_commits", return_value=False),
+            patch("clm.cli.commands.git.remote_exists", return_value=False),
+            patch("clm.cli.commands.git.remote_has_commits", return_value=False),
         ):
             yield
 

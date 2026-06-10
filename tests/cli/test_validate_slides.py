@@ -339,3 +339,44 @@ class TestValidateSlidesCommand:
         data = json.loads(result.output)
         assert "review_material" in data
         assert "code_quality" in data["review_material"]
+
+
+class TestVoiceoverCoverageMarkerCli:
+    """Issue #178: the per-deck `clm: voiceover-coverage` header marker."""
+
+    _MARKED_GAPPY = """\
+        # clm: voiceover-coverage
+
+        # %% [markdown] lang="de" tags=["slide"] slide_id="title"
+        #
+        # ## Titel
+
+        # %% tags=["keep"]
+        x = 1
+        """
+
+    def test_default_run_reports_gaps_for_marked_deck(self, tmp_path):
+        p = _write_slide(tmp_path, "slides_marked.py", self._MARKED_GAPPY)
+        runner = CliRunner()
+        result = runner.invoke(cli, ["validate", str(p), "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert "voiceover_gaps" in data.get("review_material", {})
+        assert data["review_material"]["voiceover_gaps"]
+
+    def test_explicit_checks_ignore_marker(self, tmp_path):
+        p = _write_slide(tmp_path, "slides_marked.py", self._MARKED_GAPPY)
+        runner = CliRunner()
+        result = runner.invoke(cli, ["validate", str(p), "--checks", "format,tags", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert "voiceover_gaps" not in data.get("review_material", {})
+
+    def test_unmarked_deck_stays_silent_on_default_run(self, tmp_path):
+        unmarked = self._MARKED_GAPPY.replace("# clm: voiceover-coverage\n\n", "")
+        p = _write_slide(tmp_path, "slides_unmarked.py", unmarked)
+        runner = CliRunner()
+        result = runner.invoke(cli, ["validate", str(p), "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert "voiceover_gaps" not in data.get("review_material", {})

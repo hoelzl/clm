@@ -14,12 +14,16 @@ clm [OPTIONS] COMMAND [ARGS]...
 
 ## Commands
 
-The CLI is organised into a small top-level surface plus verb groups
-(`slides`, `topic`, `authoring`, `voiceover`). The reference below
-uses the canonical (group-qualified) names. The older flat names
-(`clm normalize-slides`, `clm validate-slides`, etc.), deprecated since
-CLM 1.6, were **removed in CLM 1.8** — use the group-qualified forms; see
-`clm info migration` for the full rename table.
+The CLI is organised into a small top-level surface (the everyday verbs:
+`build`, `validate`, `run`, ...) plus domain groups: `slides` (deck-level
+authoring tools), `course` (course/spec structure: decks, targets, topics,
+includes, readiness gate), `export` (rendered course documents), `calendar`
+(cohort viewing calendars), `voiceover`, and the infrastructure groups
+(`db`, `docker`, `git`, `jobs`, `workers`, `zip`, ...). The reference below
+uses the canonical (group-qualified) names. Older flat names were removed
+in CLM 1.8 and the remaining single-command groups (`topic`, `spec`,
+`authoring`) were merged into `course`/`slides` after 1.11 — see
+`clm info migration` for the full rename tables.
 
 ### `clm build`
 
@@ -367,12 +371,12 @@ then re-extract, or `clm slides sync`), or pass `--no-fail-on-error` to
 tolerate it. `clm validate`'s #162 detectives catch the underlying
 divergence earlier (pre-commit), before it reaches a build.
 
-### `clm targets`
+### `clm course targets`
 
 List output targets defined in a course spec file.
 
 ```
-clm targets SPEC_FILE
+clm course targets SPEC_FILE
 ```
 
 ### `clm run` (CLM {version}+)
@@ -551,7 +555,12 @@ clm export schedule course.xml -o schedule.md   # Write to a file
 clm export schedule course.xml -d ./docs        # Write into a directory
 ```
 
-#### `clm export calendar`
+### `clm calendar`
+
+Work with a cohort's viewing calendar: validate it, show today's status, or
+push it to Google Calendar (see `clm calendar generate` for the file format).
+
+#### `clm calendar generate`
 
 *New in {version}.* Project the course **schedule onto a cohort's real calendar
 dates**. Where `export schedule` is course-relative ("Week 3, Tuesday"), a
@@ -561,7 +570,7 @@ trainer maintains only a small hand-edited `release/<channel>.calendar.toml`
 (see **Cohort calendar file** below); the dates are computed.
 
 ```
-clm export calendar [OPTIONS] SPEC_FILE
+clm calendar generate [OPTIONS] SPEC_FILE
 ```
 
 | Option | Description |
@@ -589,10 +598,10 @@ calendar (or run `clm calendar check`) first. Warnings (free dates, stray
 inserts) are printed but do not block.
 
 ```bash
-clm export calendar course.xml --channel jan            # German Markdown
-clm export calendar course.xml --channel jan -f ics     # student .ics feed
-clm export calendar course.xml --calendar c.toml -L en -f csv
-clm export calendar course.xml --channel jan -o jan.ics -f ics
+clm calendar generate course.xml --channel jan            # German Markdown
+clm calendar generate course.xml --channel jan -f ics     # student .ics feed
+clm calendar generate course.xml --calendar c.toml -L en -f csv
+clm calendar generate course.xml --channel jan -o jan.ics -f ics
 ```
 
 ##### Cohort calendar file (`release/<channel>.calendar.toml`)
@@ -635,11 +644,6 @@ the timeline; when more buckets fall between two pins than there are teaching
 dates, the engine never guesses — `clm calendar check` reports the exact
 deficit and you resolve it with an explicit `merge`.
 
-### `clm calendar`
-
-Work with a cohort's viewing calendar: validate it, show today's status, or
-push it to Google Calendar (see `clm export calendar` for the file format).
-
 #### `clm calendar check`
 
 **Date-free validation** of a calendar against the course schedule. Reports
@@ -677,7 +681,7 @@ clm calendar push [OPTIONS] SPEC_FILE
 
 | Option | Meaning |
 |---|---|
-| `--channel NAME` / `--calendar PATH` | Locate the cohort calendar TOML (as in `clm export calendar`). |
+| `--channel NAME` / `--calendar PATH` | Locate the cohort calendar TOML (as in `clm calendar generate`). |
 | `--calendar-id ID` | Target Google calendar id. Default: `calendar_id` from the TOML's `[google]` table. |
 | `--credentials PATH` | Google credentials JSON (env: `CLM_GOOGLE_CREDENTIALS`). Either an OAuth "Desktop app" client — a browser consent flow runs once, then the token is cached — or a service-account key for a service account the calendar is shared with ("Make changes to events"). |
 | `-L, --language` | Language for event titles (default `de`). |
@@ -708,14 +712,14 @@ clm calendar push   course.xml --channel jan --dry-run
 clm calendar push   course.xml --channel jan --credentials oauth-client.json
 ```
 
-### `clm topic resolve`
+### `clm course resolve-topic`
 
 *Removed in CLM 1.8: the flat alias `clm resolve-topic` no longer exists — use this group-qualified form.*
 
 Resolve a topic ID to its filesystem path.
 
 ```
-clm topic resolve [OPTIONS] TOPIC_ID
+clm course resolve-topic [OPTIONS] TOPIC_ID
 ```
 
 | Option | Description |
@@ -728,18 +732,18 @@ clm topic resolve [OPTIONS] TOPIC_ID
 Examples:
 
 ```bash
-clm topic resolve what_is_ml
-clm topic resolve "decorators*"
-clm topic resolve intro --course-spec course-specs/python.xml
-clm topic resolve intro --module module_545_ml_azav_cohort_2026_04
+clm course resolve-topic what_is_ml
+clm course resolve-topic "decorators*"
+clm course resolve-topic intro --course-spec course-specs/python.xml
+clm course resolve-topic intro --module module_545_ml_azav_cohort_2026_04
 ```
 
-### `clm spec decks`
+### `clm course decks`
 
 List the deck files a course spec actually pulls in — its "shipping set".
 
 ```
-clm spec decks [OPTIONS] [SPEC_FILE]
+clm course decks [OPTIONS] [SPEC_FILE]
 ```
 
 Resolution mirrors the build exactly, which is the point of the command: a
@@ -764,14 +768,14 @@ Topic references that resolve to no directory on disk are reported as a warning
 Examples:
 
 ```bash
-clm spec decks course-specs/python.xml
-clm spec decks course-specs/python.xml --lang de --json
-clm spec decks --all-specs course-specs/
+clm course decks course-specs/python.xml
+clm course decks course-specs/python.xml --lang de --json
+clm course decks --all-specs course-specs/
 ```
 
 ### `clm slides referenced-by`
 
-Reverse of `clm spec decks`: show which spec(s)/topic(s) pull a given deck into
+Reverse of `clm course decks`: show which spec(s)/topic(s) pull a given deck into
 their shipping set. A deck reachable from no spec is reported as `unreferenced` —
 useful for spotting orphaned or superseded decks before a corpus-wide change.
 
@@ -792,17 +796,17 @@ clm slides referenced-by slides/module_x/topic_y/slides_intro.py
 clm slides referenced-by slides_intro.py --specs-dir course-specs/
 ```
 
-### `clm spec orphans`
+### `clm course orphans`
 
 *Added in CLM {version}.*
 
-The inverse of `clm spec decks`: scan **every** spec in a course and report the
+The inverse of `clm course decks`: scan **every** spec in a course and report the
 decks on disk that *no* spec pulls in, grouped by likely intent — so you can
 archive the dead ones without deleting intentional alternates. Also surfaces
 (and optionally removes) gitignored `.ipynb_checkpoints/` cache cruft.
 
 ```
-clm spec orphans [OPTIONS] SPECS_DIR
+clm course orphans [OPTIONS] SPECS_DIR
 ```
 
 `SPECS_DIR` is the directory of course spec `*.xml` files. Orphans are computed
@@ -830,10 +834,10 @@ would delete real content):
 The exit code is always `0` — this is a report. Examples:
 
 ```bash
-clm spec orphans course-specs/                                 # full orphan report
-clm spec orphans course-specs/ --kind superseded               # just the archivable ones
-clm spec orphans course-specs/ --clean-checkpoints             # report + delete checkpoint cruft
-clm spec orphans course-specs/ --slides-dir ../other/slides --json
+clm course orphans course-specs/                                 # full orphan report
+clm course orphans course-specs/ --kind superseded               # just the archivable ones
+clm course orphans course-specs/ --clean-checkpoints             # report + delete checkpoint cruft
+clm course orphans course-specs/ --slides-dir ../other/slides --json
 ```
 
 ### `clm course gate`
@@ -940,7 +944,7 @@ that referenced dir-group paths exist.
 | `--json` | Output as JSON |
 | `--include-disabled` | Also validate sections marked `enabled="false"`; each finding from a disabled section has `(disabled)` appended to its message (default: disabled sections are skipped) |
 | `--check-workdays` | Warn (`missing_workday`) when a section that uses the day-of-week `<subsection>` layer leaves a Mon–Fri workday uncovered. Off by default (most courses do not fill all five days). Spec-only. |
-| `--deep` | After structure validation, run the full slide validator on **every deck the spec pulls in** (its shipping set) and report both. Exits non-zero on a structure error or a deck-content error (`--fail-on` governs the deck-content threshold). Resolves decks with the same build-faithful semantics as `clm spec decks`. |
+| `--deep` | After structure validation, run the full slide validator on **every deck the spec pulls in** (its shipping set) and report both. Exits non-zero on a structure error or a deck-content error (`--fail-on` governs the deck-content threshold). Resolves decks with the same build-faithful semantics as `clm course decks`. |
 | `--summary` | Roll the deck-content findings up into a category/kind histogram with per-deck counts instead of a flat list (intended for corpus-scale validates that emit thousands of findings). On a spec, `--summary` implies `--deep`. |
 | `--checks LIST`, `--fail-on [error\|warning]` | Slides-validator options (see slides mode); valid on a spec only together with `--deep`, where they apply to the deck-content pass. |
 
@@ -961,7 +965,7 @@ clm validate course-specs/python.xml --summary           # deep, rolled up
 clm validate course-specs/python.xml --deep --fail-on warning
 ```
 
-### `clm sync-includes`
+### `clm course sync-includes`
 
 Materialize `<include>` declarations from a course spec onto the
 filesystem. The build pipeline splices includes virtually, so `clm build`
@@ -970,7 +974,7 @@ never needs this command; it exists for *local* notebook execution
 included package to physically sit next to the slide file.
 
 ```
-clm sync-includes [OPTIONS] SPEC_FILE
+clm course sync-includes [OPTIONS] SPEC_FILE
 ```
 
 For each topic that declares (or inherits) one or more `<include>`
@@ -1013,12 +1017,12 @@ Behavior notes:
 Examples:
 
 ```bash
-clm sync-includes course-specs/ml-azav.xml
-clm sync-includes course-specs/ml-azav.xml --mode=symlink
-clm sync-includes course-specs/ml-azav.xml --remove
-clm sync-includes course-specs/ml-azav.xml --print-gitignore >> .gitignore
-clm sync-includes course-specs/ml-azav.xml --dry-run
-clm sync-includes course-specs/ml-azav.xml --data-dir /path/to/course
+clm course sync-includes course-specs/ml-azav.xml
+clm course sync-includes course-specs/ml-azav.xml --mode=symlink
+clm course sync-includes course-specs/ml-azav.xml --remove
+clm course sync-includes course-specs/ml-azav.xml --print-gitignore >> .gitignore
+clm course sync-includes course-specs/ml-azav.xml --dry-run
+clm course sync-includes course-specs/ml-azav.xml --data-dir /path/to/course
 ```
 
 ### `clm validate` (slides mode)
@@ -1050,7 +1054,7 @@ clm validate [OPTIONS] PATH
 `PATH` can be a single slide file, a topic directory, or a course spec XML file.
 
 > `--shipping-only` resolves the shipping set with the same build-faithful logic
-> as `clm spec decks`, and filters that resolved deck list to the decks under
+> as `clm course decks`, and filters that resolved deck list to the decks under
 > `PATH` — so it correctly includes non-`.py` decks (`.cs`, `.cpp`) that the
 > plain directory walk currently misses.
 
@@ -1072,6 +1076,23 @@ the CLI default was already deterministic-only, and the MCP `validate_slides`
 tool / the `validate_file`/`validate_directory`/`validate_course` library
 functions now exclude `voiceover` from their `checks=None` default too. The other
 review checks (`code_quality`, `completeness`) still run by default.
+
+Since CLM {version}, a deck that **is** meant to be fully narrated can opt back
+in **per deck** (issue #178) with a header directive comment — any line before
+the first cell marker:
+
+```python
+# clm: voiceover-coverage
+```
+
+(`// clm: voiceover-coverage` in a `//`-comment-token deck, e.g. `.cs`/`.cpp`.)
+A default validate run (CLI without `--checks`, MCP / library `checks=None`)
+then includes the `voiceover` coverage check **for that deck only**, so a
+missing narration cell on a narrated deck is caught automatically while
+voiceover-less decks stay silent. An explicit `--checks` / `checks=[…]` list is
+always honored verbatim — the marker neither adds nor removes checks there.
+Use the marker (not a has-any-voiceover heuristic) so a deck mid-authoring
+isn't prematurely flooded with gap findings.
 
 The `pairing` check group covers DE/EN cell count, tag consistency,
 adjacency, and — since CLM {version} — **`slide_id` metadata**:
@@ -1213,7 +1234,14 @@ clm slides normalize slides/ --shipping-only
 Generate stable `slide_id` metadata for slide/subslide cells per the
 EN-derived, kebab-case, ASCII policy. Cells in a DE/EN pair share the
 same id (derived from the EN heading); voiceover/notes cells inherit
-the id of the preceding slide.
+the id of the preceding slide. A voiceover/notes cell that already
+carries a **conversion placeholder** id of the form `<deck-stem>-cell-N`
+(a sequential counter stamped by older conversion tooling, e.g.
+`simple_chatbot-cell-1` inside `slides_030v_simple_chatbot`) is treated
+as id-less and re-pointed to the preceding slide on the normal pass —
+no `--force` needed (since CLM {version}, issue #233). Any other
+existing id still requires `--force` (or the `!` preserve marker to pin
+it permanently).
 
 > **Plumbing (since CLM {version}).** This command is **hidden** from
 > `clm slides --help` and is intended for agents/scripts and one-off id fixes —
@@ -1232,9 +1260,19 @@ Three-category policy:
   - a first bullet, prominent bold line, or `<img alt="…">`,
   - a first non-empty prose line (HTML tags and inline markdown
     stripped, trailing terminal punctuation dropped),
+  - an image without alt text: the **filename stem** of the first
+    `<img src="…">` (since CLM {version}, issue #233) —
+    `<img src="img/robots-playing-checkers.png">` proposes
+    `img-robots-playing-checkers`. Real prose in the same cell wins;
+    multi-line `<img>` tags are recognized too,
   - in a code cell: top-level `class`, `def`, assignment, `import`/
-    `from-import`, or method call (AST-based; precedence in that
-    order),
+    `from-import`, method call, `for`/`async for` loop
+    (`for student in classroom: …` → `for-student-in-classroom`), or a
+    display expression — subscript/attribute/bare name with string keys
+    kept and slices/numeric indexes dropped (`data[:5]` → `data`,
+    `response.headers["Content-Type"]` →
+    `response-headers-content-type`) (AST-based; precedence in that
+    order; loop/display extraction since CLM {version}, issue #233),
   - in a DE/EN pair: when the EN slug source has none of the above
     but the DE sibling does, the slug derives from the DE sibling
     (transliterated to ASCII).
@@ -1242,18 +1280,20 @@ Three-category policy:
   `--llm-suggest`.
 - **code-derived** *(since CLM {version})* — a bare-expression code cell
   with no heading and none of the AST constructs above (e.g.
-  `(1 + 1j) * (1 + 1j)`, `letters[0:3]`, `a == b`). **Refused by default**;
+  `(1 + 1j) * (1 + 1j)`, `a == b`). **Refused by default**;
   opt in with `--accept-code-derived`, which slugs the cell's first real
-  code line (`letters[0:3]` → `letters-0-3`). The scanner is
+  code line (`a == b` → `a-b`). The scanner is
   comment-token-aware, so non-Python decks (`.cs`/`.cpp`/`.java`/`.ts`),
   which `ast` never parses, are completed too. Independent of
   `--accept-content-derived` — the bilingual→split conversion typically
-  passes both.
+  passes both. (Subscript displays like `letters[0:3]` moved **up** to
+  the extractable category in CLM {version}; with only
+  `--accept-code-derived` they now soft-refuse pointing at
+  `--accept-content-derived`.)
 - **no content** — cell where no extractor produces anything (empty
-  cell, pure `<img>` without alt, pure-punctuation / `...` code,
-  magic-only cells). **Hard refuse**; the author has to write
-  `slide_id="…"` by hand, or pass `--llm-suggest` to let the LLM propose
-  a title as a last resort.
+  cell, divider, pure-punctuation / `...` code, magic-only cells).
+  **Hard refuse**; the author has to write `slide_id="…"` by hand, or
+  pass `--llm-suggest` to let the LLM propose a title as a last resort.
 
 Special cases:
 
@@ -1286,8 +1326,8 @@ clm slides assign-ids [OPTIONS] PATH
 | Option | Description |
 |--------|-------------|
 | `--force` | Regenerate ids where the algorithm can produce one. `!`-prefixed ids and cells without a proposal are left untouched. |
-| `--accept-content-derived` | Auto-accept proposals for the extractable category (no LLM). Bare-expression code cells and hard-refusal cells still refuse. |
-| `--accept-code-derived` | (since CLM {version}) Auto-accept a first-code-line slug for bare-expression code cells the AST extractors can't name (`(1 + 1j) * (1 + 1j)` → `1-1j-1-1j`, `letters[0:3]` → `letters-0-3`). Comment-token-aware, so it works on non-Python decks (`.cs`/`.cpp`/`.java`/`.ts`). Genuinely empty / pure-punctuation / magic-only cells still refuse. Independent of `--accept-content-derived`. |
+| `--accept-content-derived` | Auto-accept proposals for the extractable category (no LLM), including image-filename, loop, and display-expression proposals (#233). Bare-expression code cells with no salient name and hard-refusal cells still refuse. |
+| `--accept-code-derived` | (since CLM {version}) Auto-accept a first-code-line slug for bare-expression code cells the AST extractors can't name (`(1 + 1j) * (1 + 1j)` → `1-1j-1-1j`, `a == b` → `a-b`). Comment-token-aware, so it works on non-Python decks (`.cs`/`.cpp`/`.java`/`.ts`). Genuinely empty / pure-punctuation / magic-only cells still refuse. Independent of `--accept-content-derived`. |
 | `--llm-suggest` | Use the local LLM (Ollama, default model `qwen3:30b`) to propose a short title. Fires on both extractable cells (replacing the content-derived title when the LLM returns one) and on hard-refusal cells (last-resort fallback before refusing). Cached per `(content_hash, prompt_version, lang)` in the LLM cache. Falls back silently to refusal when Ollama is unreachable. |
 | `--report-only`, `--dry-run` | List planned assignments and refusals without modifying any file. |
 | `--llm-model TEXT` | Ollama model name (default: `qwen3:30b`). |
@@ -1356,7 +1396,7 @@ clm slides slug-report [OPTIONS] PATH
 ```
 
 `PATH` is a directory of slide files **or** a course spec `.xml` (resolved to
-the decks it pulls in, via the same build-faithful logic as `clm spec decks`).
+the decks it pulls in, via the same build-faithful logic as `clm course decks`).
 
 | Option | Description |
 |--------|-------------|
@@ -2290,7 +2330,7 @@ clm voiceover inline slides_intro.py
 clm voiceover inline slides_intro.py --dry-run
 ```
 
-### `clm authoring rules`
+### `clm slides rules`
 
 *Removed in CLM 1.8: the flat alias `clm authoring-rules` no longer exists — use this group-qualified form.*
 
@@ -2298,7 +2338,7 @@ Look up merged authoring rules (common + course-specific) for a course.
 Reads per-course `.authoring.md` files from the `course-specs/` directory.
 
 ```
-clm authoring rules [OPTIONS]
+clm slides rules [OPTIONS]
 ```
 
 | Option | Description |
@@ -2313,9 +2353,9 @@ At least one of `--course-spec` or `--slide-path` must be provided.
 Examples:
 
 ```bash
-clm authoring rules --course-spec python-basics
-clm authoring rules --slide-path slides/module_010/topic_100_intro/slides_intro.py
-clm authoring rules --course-spec python-basics --json
+clm slides rules --course-spec python-basics
+clm slides rules --slide-path slides/module_010/topic_100_intro/slides_intro.py
+clm slides rules --course-spec python-basics --json
 ```
 
 ### `clm mcp`
@@ -2493,6 +2533,7 @@ Database management commands.
 | `db prune` | Prune old jobs, events, and cache entries |
 | `db vacuum` | Compact databases |
 | `db clean` | Combined prune + vacuum (with confirmation) |
+| `db delete` | Delete the database files outright (`--which cache\|jobs\|both`) |
 
 `db prune` options:
 
@@ -2515,10 +2556,6 @@ Database management commands.
 | `--cache-versions N` | Cache versions to keep per file (default: 1) |
 | `--force` | Skip confirmation prompt |
 | `--remove-missing` | Remove entries for source files no longer on disk |
-
-### `clm delete-database`
-
-Delete CLM databases (job queue and/or cache).
 
 ### `clm docker`
 
@@ -2984,13 +3021,13 @@ clm voiceover sync-at-rev SLIDE_FILE VIDEO... --rev SHA -o PATH --lang {de|en} [
 | `--scratch-dir PATH` | Use this directory for the exported slide file (default: fresh `.clm/voiceover-backfill/<topic>-<ts>/`) |
 
 Use `clm voiceover backfill` to chain Step 1 (identify-rev), this
-command (Step 2), and Step 3 (port-voiceover) in one shot.
+command (Step 2), and Step 3 (port) in one shot.
 
 #### `clm voiceover backfill`
 
 One-shot wrapper that extracts voiceover content from old recordings
 onto the current SLIDE_FILE. Chains `identify-rev` → `sync-at-rev` →
-`port-voiceover`. **Patch-by-default:** writes a unified diff to
+`port`. **Patch-by-default:** writes a unified diff to
 `.clm/voiceover-backfill/<topic>-<ts>/port.patch` and prints it;
 `--apply` is required to mutate the working-copy SLIDE_FILE.
 
@@ -3028,7 +3065,7 @@ also copied to
 above the timestamped scratch) so the "just show me the most recent
 diff" lookup is a predictable read.
 
-#### `clm voiceover port-voiceover`
+#### `clm voiceover port`
 
 Port polished voiceover content from one slide file onto another,
 file-to-file. Typical use: after running `clm voiceover sync` against
@@ -3043,7 +3080,7 @@ present on the target; baseline content is preserved unless directly
 contradicted.
 
 ```
-clm voiceover port-voiceover SOURCE TARGET --lang {de|en} [OPTIONS]
+clm voiceover port SOURCE TARGET --lang {de|en} [OPTIONS]
 ```
 
 | Option | Description |
@@ -3056,12 +3093,12 @@ clm voiceover port-voiceover SOURCE TARGET --lang {de|en} [OPTIONS]
 
 Prefer `clm voiceover backfill` when you want one-shot extraction plus
 porting in a single command with automatic git-revision detection;
-`port-voiceover` is the file-to-file primitive that `backfill` composes.
+`port` is the file-to-file primitive that `backfill` composes.
 
 #### `clm voiceover compare`
 
 Evaluate bullet-level differences between two slide-file revisions
-without modifying either one. Read-only sibling to `port-voiceover`:
+without modifying either one. Read-only sibling to `port`:
 the LLM labels each bullet on each side as `covered`, `rewritten`,
 `added`, `dropped`, or `manual_review`. Useful for auditing a port
 (`source = sync-at-rev output`, `target = slides@HEAD` after a port)
@@ -3082,7 +3119,7 @@ clm voiceover compare SOURCE TARGET --lang {de|en} [OPTIONS]
 | `--api-base TEXT` | Override the LLM API base URL |
 
 Slide matching uses the same `slide_id`/title/content pipeline as
-`port-voiceover`. Slides present on only one side appear in the
+`port`. Slides present on only one side appear in the
 report under their `new_at_head` / `removed_at_head` bucket with no
 LLM call. The JSON schema mirrors the in-memory `CompareReport`:
 top-level `status_totals` and `kind_totals`, plus a `slides[]` list
@@ -3205,8 +3242,8 @@ clm voiceover detect video.mp4 -o transitions.txt
 clm voiceover identify video.mp4 slides.py --lang de
 clm voiceover identify-rev slides.py part1.mp4 part2.mp4 --lang de
 clm voiceover identify-rev slides.py recording.mp4 --lang en --top 10 --json
-clm voiceover port-voiceover /tmp/slides-at-abc123.py slides.py --lang de --dry-run
-clm voiceover port-voiceover old.py new.py --lang en
+clm voiceover port /tmp/slides-at-abc123.py slides.py --lang de --dry-run
+clm voiceover port old.py new.py --lang en
 clm voiceover sync-at-rev slides.py video.mp4 --rev abc1234 --lang de -o /tmp/synced.py
 clm voiceover backfill slides.py video.mp4 --lang de --auto
 clm voiceover backfill slides.py video.mp4 --lang en --rev abc1234 --apply
@@ -3222,13 +3259,13 @@ clm voiceover --no-cache sync slides.py video.mp4 --lang de
 clm voiceover trace show .clm/voiceover-traces/slides_intro-20260412-012020.jsonl
 ```
 
-### `clm polish`
+### `clm slides polish`
 
 Polish existing speaker notes in slide files using an LLM. Removes filler words,
 fixes grammar, and preserves technical terms. Requires `clm[summarize]` extra (openai).
 
 ```
-clm polish SLIDES --lang {de|en} [OPTIONS]
+clm slides polish SLIDES --lang {de|en} [OPTIONS]
 ```
 
 | Option | Description |
@@ -3243,10 +3280,10 @@ clm polish SLIDES --lang {de|en} [OPTIONS]
 Examples:
 
 ```bash
-clm polish slides.py --lang de
-clm polish slides.py --lang en --slides-range 5-10 --dry-run
-clm polish slides.py --lang de --polish-level heavy -o polished.py
-clm polish slides.py --lang de --model openai/gpt-4o -o polished.py
+clm slides polish slides.py --lang de
+clm slides polish slides.py --lang en --slides-range 5-10 --dry-run
+clm slides polish slides.py --lang de --polish-level heavy -o polished.py
+clm slides polish slides.py --lang de --model openai/gpt-4o -o polished.py
 ```
 
 ### `clm recordings`

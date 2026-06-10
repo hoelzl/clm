@@ -496,7 +496,7 @@ parent element.
   shadowed. The build emits an `include_shadowed_by_local` warning and
   `validate` surfaces the same condition as `include_shadowed`.
   *Exception* (CLM {version}+): when the shadowing file was materialized
-  by `clm sync-includes` — i.e., the topic's `.clm-include` ledger lists
+  by `clm course sync-includes` — i.e., the topic's `.clm-include` ledger lists
   a matching `as_path` + `source` entry — the warning is suppressed, since
   the on-disk copy *is* the include's authorized output rather than an
   ad-hoc override.
@@ -510,7 +510,7 @@ parent element.
 Includes are virtual at build time, but running a notebook directly in
 VS Code or JupyterLab needs the included package to physically sit next
 to the notebook (Python's import system reads from the filesystem).
-`clm sync-includes` materializes every include declared in a spec — as
+`clm course sync-includes` materializes every include declared in a spec — as
 a copy, symlink, or hardlink — and tracks what it created in a
 per-topic `.clm-include` ledger so it can clean up safely later. See
 `clm info commands` for the command reference.
@@ -790,7 +790,7 @@ them into the output directory:
 ```xml
 <tasks>
     <task name="pre-release" description="Regenerate exports, then build">
-        <step>export calendar {spec} --channel jan -f ics -o release/jan.ics</step>
+        <step>calendar generate {spec} --channel jan -f ics -o release/jan.ics</step>
         <step>export outline {spec} -o outline/</step>
         <step>build {spec} --provenance-manifest</step>
     </task>

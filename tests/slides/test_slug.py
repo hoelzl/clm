@@ -141,3 +141,33 @@ class TestResolveCollision:
     def test_preserve_marker_collides(self):
         # !foo and foo are the same identifier — collision must trigger.
         assert resolve_collision("foo", ["!foo"]) == "foo-2"
+
+    def test_suffix_never_exceeds_length_cap(self):
+        # Issue #233: a 28-char base + "-2" used to mint a 31-char id that
+        # is_valid_slug then rejected. The base must be trimmed at a word
+        # boundary so the suffixed result stays within the cap.
+        base = "load-data-from-database-using"
+        assert len(base) >= MAX_SLUG_LENGTH - 2
+        result = resolve_collision(base, [base])
+        assert result == "load-data-from-database-2"
+        assert is_valid_slug(result)
+
+    def test_suffix_at_exact_cap_is_kept(self):
+        # Base short enough that base + "-2" fits exactly: no trimming.
+        base = "a" * (MAX_SLUG_LENGTH - 2)
+        result = resolve_collision(base, [base])
+        assert result == f"{base}-2"
+        assert is_valid_slug(result)
+
+    def test_trimmed_candidate_collisions_keep_counting(self):
+        base = "load-data-from-database-using"
+        used = [base, "load-data-from-database-2"]
+        result = resolve_collision(base, used)
+        assert result == "load-data-from-database-3"
+        assert is_valid_slug(result)
+
+    def test_single_long_token_is_hard_truncated(self):
+        base = "x" * MAX_SLUG_LENGTH
+        result = resolve_collision(base, [base])
+        assert result == "x" * (MAX_SLUG_LENGTH - 2) + "-2"
+        assert is_valid_slug(result)

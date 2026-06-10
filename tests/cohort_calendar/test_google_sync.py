@@ -8,7 +8,7 @@ import datetime as dt
 
 import pytest
 
-from clm.cli.commands.schedule import ScheduleDeck
+from clm.cli.commands.export.schedule import ScheduleDeck
 from clm.cohort_calendar import google_sync as gs
 from clm.cohort_calendar.projection import Assignment, Projection
 

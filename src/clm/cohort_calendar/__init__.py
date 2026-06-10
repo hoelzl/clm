@@ -3,7 +3,7 @@
 Projects a course's certification *schedule* (the course-relative plan of
 ``export schedule``) onto a cohort's real calendar dates. A *calendar* is the
 zip of a shared content sequence (ordered day-buckets — see
-:func:`clm.cli.commands.schedule.build_buckets`) with a per-cohort date
+:func:`clm.cli.commands.export.schedule.build_buckets`) with a per-cohort date
 sequence generated from a small hand-edited ``release/<channel>.calendar.toml``
 file.
 

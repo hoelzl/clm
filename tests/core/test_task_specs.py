@@ -29,7 +29,7 @@ def _spec(tasks_block: str) -> CourseSpec:
 PRE_RELEASE = """
 <tasks>
   <task name="pre-release" description="Exports, then build">
-    <step>export calendar {spec} --channel jan -f ics -o release/jan.ics</step>
+    <step>calendar generate {spec} --channel jan -f ics -o release/jan.ics</step>
     <step>build {spec}</step>
   </task>
   <task name="check">
@@ -55,7 +55,7 @@ def test_parses_tasks_in_order_with_steps_and_description():
     pre = tasks[0]
     assert pre.description == "Exports, then build"
     assert pre.steps == (
-        "export calendar {spec} --channel jan -f ics -o release/jan.ics",
+        "calendar generate {spec} --channel jan -f ics -o release/jan.ics",
         "build {spec}",
     )
     assert tasks[1].description == ""
@@ -127,8 +127,8 @@ def test_spec_validate_includes_task_errors():
 
 def test_resolve_step_tokenizes_and_substitutes_spec(tmp_path: Path):
     spec_path = tmp_path / "course.xml"
-    tokens = resolve_step("export calendar {spec} --channel jan", spec_path=spec_path)
-    assert tokens == ["export", "calendar", str(spec_path.resolve()), "--channel", "jan"]
+    tokens = resolve_step("calendar generate {spec} --channel jan", spec_path=spec_path)
+    assert tokens == ["calendar", "generate", str(spec_path.resolve()), "--channel", "jan"]
 
 
 def test_spec_path_with_spaces_and_backslashes_stays_one_token(tmp_path: Path):

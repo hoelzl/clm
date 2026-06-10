@@ -66,12 +66,69 @@ class TestClassify:
     def test_non_extractable_empty(self):
         assert classify("").category == Category.NON_EXTRACTABLE
 
-    def test_non_extractable_img_without_alt(self):
-        content = '#\n# <img src="divider.png"/>\n'
-        assert classify(content).category == Category.NON_EXTRACTABLE
-
     def test_non_extractable_only_whitespace(self):
         assert classify("#\n#  \n#\n").category == Category.NON_EXTRACTABLE
+
+
+class TestImgSrcFallback:
+    """Alt-less image cells derive a slug from the filename stem (#233)."""
+
+    def test_img_without_alt_uses_filename_stem(self):
+        content = '#\n# <img src="img/robots-playing-checkers.png" style="width:60%"/>\n'
+        e = classify(content)
+        assert e.category == Category.EXTRACTABLE
+        assert e.source == "img_src"
+        assert e.text == "img robots-playing-checkers"
+
+    def test_img_without_alt_short_src(self):
+        content = '#\n# <img src="divider.png"/>\n'
+        e = classify(content)
+        assert e.category == Category.EXTRACTABLE
+        assert e.source == "img_src"
+        assert e.text == "img divider"
+
+    def test_multiline_img_tag(self):
+        # src on the first line, attributes continuing on later lines —
+        # the tag fragments must not be mistaken for prose.
+        content = (
+            "#\n"
+            '# <img src="img/robots-playing-checkers.png"\n'
+            '#      style="display:block; width:60%"\n'
+            '#      class="centered">\n'
+        )
+        e = classify(content)
+        assert e.source == "img_src"
+        assert e.text == "img robots-playing-checkers"
+
+    def test_alt_still_wins_over_src(self):
+        content = '#\n# <img src="img/foo.png" alt="A diagram"/>\n'
+        e = classify(content)
+        assert e.source == "img_alt"
+        assert e.text == "A diagram"
+
+    def test_prose_still_wins_over_src(self):
+        content = '#\n# <img src="divider.png"/>\n# Real prose here\n'
+        e = classify(content)
+        assert e.source == "prose"
+        assert e.text == "Real prose here"
+
+    def test_url_src_query_dropped(self):
+        content = '#\n# <img src="https://example.com/pics/foo.png?v=2#frag"/>\n'
+        e = classify(content)
+        assert e.source == "img_src"
+        assert e.text == "img foo"
+
+    def test_prose_after_multiline_img_tag_wins(self):
+        content = '#\n# <img src="img/foo.png"\n#      style="width:60%">\n# A caption line\n'
+        e = classify(content)
+        assert e.source == "prose"
+        assert e.text == "A caption line"
+
+    def test_comparison_prose_not_eaten_by_tag_rule(self):
+        content = "#\n# Check that a < b holds\n"
+        e = classify(content)
+        assert e.source == "prose"
+        assert e.text == "Check that a < b holds"
 
 
 class TestProseLineExtraction:
@@ -126,9 +183,12 @@ class TestProseLineExtraction:
         assert e.source == "prose"
         assert e.text == "Real prose here"
 
-    def test_naked_img_alone_refuses(self):
+    def test_naked_img_alone_is_not_prose(self):
+        # A naked <img> never reads as prose; since #233 it extracts via
+        # the filename-stem fallback instead of hard-refusing.
         content = '#\n# <img src="divider.png"/>\n'
-        assert classify(content).category == Category.NON_EXTRACTABLE
+        e = classify(content)
+        assert e.source == "img_src"
 
     def test_strips_inline_italic(self):
         content = "#\n# *Some italic prose*\n"

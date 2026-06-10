@@ -65,7 +65,7 @@ class TestSpecDecksCommand:
         spec_file = _write_spec(tmp_path, f"<sections>{_section('S', 'props')}</sections>")
 
         result = CliRunner().invoke(
-            cli, ["spec", "decks", str(spec_file), "--data-dir", str(tmp_path)]
+            cli, ["course", "decks", str(spec_file), "--data-dir", str(tmp_path)]
         )
 
         assert result.exit_code == 0
@@ -77,7 +77,7 @@ class TestSpecDecksCommand:
         spec_file = _write_spec(tmp_path, f"<sections>{_section('S', 'intro')}</sections>")
 
         result = CliRunner().invoke(
-            cli, ["spec", "decks", str(spec_file), "--data-dir", str(tmp_path), "--json"]
+            cli, ["course", "decks", str(spec_file), "--data-dir", str(tmp_path), "--json"]
         )
 
         assert result.exit_code == 0
@@ -99,7 +99,7 @@ class TestSpecDecksCommand:
 
         result = CliRunner().invoke(
             cli,
-            ["spec", "decks", str(spec_file), "--data-dir", str(tmp_path), "--lang", "de"],
+            ["course", "decks", str(spec_file), "--data-dir", str(tmp_path), "--lang", "de"],
         )
 
         assert result.exit_code == 0
@@ -113,7 +113,7 @@ class TestSpecDecksCommand:
         spec_file = _write_spec(tmp_path, f"<sections>{_section('S', 'intro', 'ghost')}</sections>")
 
         result = CliRunner().invoke(
-            cli, ["spec", "decks", str(spec_file), "--data-dir", str(tmp_path)]
+            cli, ["course", "decks", str(spec_file), "--data-dir", str(tmp_path)]
         )
 
         assert result.exit_code == 0
@@ -135,7 +135,7 @@ class TestSpecDecksCommand:
         result = CliRunner().invoke(
             cli,
             [
-                "spec",
+                "course",
                 "decks",
                 "--all-specs",
                 str(tmp_path / "course-specs"),
@@ -152,7 +152,7 @@ class TestSpecDecksCommand:
         assert by_name["slides_extra.py"] == ["b.xml"]
 
     def test_requires_spec_or_all_specs(self, tmp_path):
-        result = CliRunner().invoke(cli, ["spec", "decks"])
+        result = CliRunner().invoke(cli, ["course", "decks"])
         assert result.exit_code != 0
         assert "SPEC_FILE or --all-specs" in result.output
 
@@ -160,7 +160,7 @@ class TestSpecDecksCommand:
         spec_file = _write_spec(tmp_path, f"<sections>{_section('S')}</sections>")
         result = CliRunner().invoke(
             cli,
-            ["spec", "decks", str(spec_file), "--all-specs", str(tmp_path / "course-specs")],
+            ["course", "decks", str(spec_file), "--all-specs", str(tmp_path / "course-specs")],
         )
         assert result.exit_code != 0
         assert "not both" in result.output

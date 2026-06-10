@@ -25,7 +25,7 @@ from clm.cli.commands._export_shared import (
 from clm.cli.commands._export_shared import (
     disabled_topic_slides as _disabled_topic_slides,
 )
-from clm.cli.commands.schedule import subsection_label
+from clm.cli.commands.export.schedule import subsection_label
 from clm.core.course import Course
 from clm.core.course_files.notebook_file import NotebookFile
 from clm.core.course_paths import resolve_course_paths

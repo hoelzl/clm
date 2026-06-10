@@ -7,7 +7,7 @@ records the start date, teaching-day pattern, holidays, and any adjustments.
 ## Commands
 
 ```
-clm export calendar <spec>   # Render the cohort schedule (md/csv/ics)
+clm calendar generate <spec>   # Render the cohort schedule (md/csv/ics)
 clm calendar check  <spec>   # Validate the calendar file; non-zero on errors
 clm calendar status <spec>   # Show today's position vs plan
 clm calendar push   <spec>   # Mirror the calendar into a Google calendar
@@ -23,7 +23,7 @@ clm calendar push   <spec>   # Mirror the calendar into a Google calendar
 
 Exactly one of `--channel` or `--calendar` is required.
 
-### `clm export calendar` flags
+### `clm calendar generate` flags
 
 | Flag | Description |
 |---|---|
@@ -152,13 +152,13 @@ multi-day event. The `DTSTAMP` is fixed to the start date for determinism.
 
 ```bash
 # German Markdown to stdout
-clm export calendar course.xml --channel jan
+clm calendar generate course.xml --channel jan
 
 # English iCalendar file for student subscriptions
-clm export calendar course.xml --channel jan -f ics -L en -o jan.ics
+clm calendar generate course.xml --channel jan -f ics -L en -o jan.ics
 
 # CSV for spreadsheet import
-clm export calendar course.xml --calendar release/jan.calendar.toml -L en -f csv
+clm calendar generate course.xml --calendar release/jan.calendar.toml -L en -f csv
 
 # Validate before pushing
 clm calendar check course.xml --channel jan

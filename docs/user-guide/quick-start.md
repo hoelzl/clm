@@ -260,7 +260,7 @@ When multiple topics need to import the same Python package, declare an
 notebook's `from simple_chatbot import …` resolves at build time without
 keeping a physical copy. To run that same notebook directly in VS Code or
 JupyterLab — where Python's import system reads from disk — run
-`clm sync-includes course.xml` once. See
+`clm course sync-includes course.xml` once. See
 [Shared-Source Includes](spec-file-reference.md#shared-source-includes-include)
 for the full reference.
 

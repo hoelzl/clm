@@ -14,8 +14,8 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from clm.cli.commands import slides_translate as cmd
-from clm.cli.commands.slides_translate import slides_translate_cmd
+from clm.cli.commands.slides import translate as cmd
+from clm.cli.commands.slides.translate import slides_translate_cmd
 from clm.slides.raw_cells import split_cells
 from clm.slides.split import split_text, unify_texts
 from clm.slides.sync_translate import StaticSlideTranslator

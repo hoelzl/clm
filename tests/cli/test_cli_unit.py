@@ -23,7 +23,7 @@ class TestCliBasics:
         result = runner.invoke(cli, ["--help"])
         assert result.exit_code == 0
         assert "build" in result.output
-        assert "delete-database" in result.output
+        assert "db" in result.output
 
     def test_cli_version(self):
         """Test that 'clm --version' displays the version"""
@@ -370,7 +370,7 @@ class TestDeleteDatabaseCommand:
     def test_delete_database_help(self):
         """Test delete_database command help text"""
         runner = CliRunner()
-        result = runner.invoke(cli, ["delete-database", "--help"])
+        result = runner.invoke(cli, ["db", "delete", "--help"])
         assert result.exit_code == 0
 
     def test_delete_database_when_not_exists(self):
@@ -384,7 +384,8 @@ class TestDeleteDatabaseCommand:
                     "nonexistent_cache.db",
                     "--jobs-db-path",
                     "nonexistent_jobs.db",
-                    "delete-database",
+                    "db",
+                    "delete",
                 ],
             )
             assert result.exit_code == 0
@@ -407,7 +408,8 @@ class TestDeleteDatabaseCommand:
                     str(cache_db_path),
                     "--jobs-db-path",
                     str(jobs_db_path),
-                    "delete-database",
+                    "db",
+                    "delete",
                 ],
             )
             assert result.exit_code == 0

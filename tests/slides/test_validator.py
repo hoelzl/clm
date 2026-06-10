@@ -13,6 +13,7 @@ from clm.slides.validator import (
     Finding,
     ReviewMaterial,
     ValidationResult,
+    has_voiceover_coverage_marker,
     validate_course,
     validate_directory,
     validate_file,
@@ -251,6 +252,34 @@ class TestCheckTags:
         assert len(errors) == 1
         assert "completed" in errors[0].message
         assert "without" in errors[0].message
+        # No 'keep' predecessor: the generic suggestion, no #233 hint.
+        assert "did you mean 'start'" not in (errors[0].suggestion or "")
+
+    def test_completed_after_keep_hints_at_mistag(self, tmp_path):
+        # #233 item 4(b): an incremental build whose "before" cell was tagged
+        # 'keep' instead of 'start' leaves the 'completed' orphaned — the
+        # suggestion points at the likely mis-tag.
+        p = _write_slide(
+            tmp_path,
+            "slides_keep_completed.py",
+            """\
+            # %% tags=["keep"]
+            class PointV2:
+                def __init__(self):
+                    pass
+
+            # %% tags=["completed"]
+            class PointV2:
+                def __init__(self, x, y):
+                    self.x, self.y = x, y
+            """,
+        )
+        result = validate_file(p, checks=["tags"])
+        errors = [f for f in result.findings if f.severity == "error"]
+        assert len(errors) == 1
+        assert "completed" in errors[0].message
+        assert "did you mean 'start'" in (errors[0].suggestion or "")
+        assert "line 1" in (errors[0].suggestion or "")
 
     def test_consecutive_starts_without_completed(self, tmp_path):
         p = _write_slide(
@@ -2627,6 +2656,103 @@ class TestVoiceoverOptIn:
         assert result.review_material is not None
         assert result.review_material.voiceover_gaps
         assert len(result.review_material.voiceover_gaps) > 0
+
+
+class TestVoiceoverCoverageMarker:
+    """Issue #178: a `clm: voiceover-coverage` header marker re-enables the
+    voiceover coverage check for THAT deck under the default bundle, so a
+    fully-narrated deck is coverage-checked automatically while
+    voiceover-less decks stay silent (#176)."""
+
+    # A gappy deck that DECLARES it should be fully narrated.
+    _MARKED_DECK = """\
+        # clm: voiceover-coverage
+
+        # %% [markdown] lang="de" tags=["slide"]
+        # ## Titel
+
+        # %% [markdown] lang="en" tags=["slide"]
+        # ## Title
+
+        # %% tags=["keep"]
+        x = 1
+        """
+
+    _UNMARKED_DECK = """\
+        # %% [markdown] lang="de" tags=["slide"]
+        # ## Titel
+
+        # %% [markdown] lang="en" tags=["slide"]
+        # ## Title
+
+        # %% tags=["keep"]
+        x = 1
+        """
+
+    def test_marker_detection(self):
+        assert has_voiceover_coverage_marker("# clm: voiceover-coverage\n")
+        assert has_voiceover_coverage_marker("#  clm:  voiceover-coverage  \n")
+        assert has_voiceover_coverage_marker("// clm: voiceover-coverage\n", "//")
+        assert not has_voiceover_coverage_marker("# clm: something-else\n")
+        assert not has_voiceover_coverage_marker("# voiceover-coverage\n")
+
+    def test_marker_inside_a_cell_does_not_count(self):
+        # The directive is a file-header declaration: a comment after the
+        # first cell marker is cell content, not a directive.
+        text = '# %% [markdown] lang="de" tags=["slide"]\n# clm: voiceover-coverage\n'
+        assert not has_voiceover_coverage_marker(text)
+
+    def test_marked_deck_gets_coverage_under_default_bundle(self, tmp_path):
+        p = _write_slide(tmp_path, "slides_marked.py", self._MARKED_DECK)
+        result = validate_file(p, checks=None)
+        assert result.review_material is not None
+        assert result.review_material.voiceover_gaps is not None
+        assert len(result.review_material.voiceover_gaps) > 0
+
+    def test_unmarked_deck_stays_silent(self, tmp_path):
+        p = _write_slide(tmp_path, "slides_unmarked.py", self._UNMARKED_DECK)
+        result = validate_file(p, checks=None)
+        assert result.review_material is not None
+        assert result.review_material.voiceover_gaps is None
+
+    def test_explicit_checks_ignore_marker(self, tmp_path):
+        # An explicit checks list is honored verbatim (issue spec).
+        p = _write_slide(tmp_path, "slides_marked.py", self._MARKED_DECK)
+        result = validate_file(p, checks=["format", "tags"])
+        assert result.review_material is None
+
+    def test_marker_opt_in_true_promotes_on_explicit_list(self, tmp_path):
+        # The CLI default path: deterministic checks named explicitly, but
+        # marker_opt_in=True because the user did not pass --checks.
+        p = _write_slide(tmp_path, "slides_marked.py", self._MARKED_DECK)
+        result = validate_file(p, checks=["format", "pairing", "tags"], marker_opt_in=True)
+        assert result.review_material is not None
+        assert result.review_material.voiceover_gaps
+
+    def test_directory_mixes_marked_and_unmarked(self, tmp_path):
+        _write_slide(tmp_path, "slides_marked.py", self._MARKED_DECK)
+        _write_slide(tmp_path, "slides_unmarked.py", self._UNMARKED_DECK)
+        result = validate_directory(tmp_path, checks=None)
+        assert result.review_material is not None
+        gaps = result.review_material.voiceover_gaps or []
+        # Only the marked deck contributed coverage gaps.
+        assert gaps
+        assert all("slides_marked" in g["file"] for g in gaps)
+
+    def test_fully_narrated_marked_deck_is_clean(self, tmp_path):
+        deck = """\
+            # clm: voiceover-coverage
+
+            # %% [markdown] lang="de" tags=["slide"]
+            # ## Titel
+
+            # %% [markdown] lang="de" tags=["voiceover"]
+            # - sprich hier
+            """
+        p = _write_slide(tmp_path, "slides_narrated.py", deck)
+        result = validate_file(p, checks=None)
+        gaps = result.review_material.voiceover_gaps if result.review_material is not None else None
+        assert not gaps
 
 
 class TestCompletenessExtraction:

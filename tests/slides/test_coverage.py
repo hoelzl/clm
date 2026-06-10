@@ -699,7 +699,7 @@ class TestCoverageCli:
     def test_dump_empty_cache(self, tmp_path: Path):
         from click.testing import CliRunner
 
-        from clm.cli.commands.coverage import coverage_cmd
+        from clm.cli.commands.slides.coverage import coverage_cmd
 
         runner = CliRunner()
         result = runner.invoke(coverage_cmd, ["--dump", "--cache-dir", str(tmp_path)])
@@ -709,7 +709,7 @@ class TestCoverageCli:
     def test_dump_json_empty_cache(self, tmp_path: Path):
         from click.testing import CliRunner
 
-        from clm.cli.commands.coverage import coverage_cmd
+        from clm.cli.commands.slides.coverage import coverage_cmd
 
         runner = CliRunner()
         result = runner.invoke(coverage_cmd, ["--dump", "--json", "--cache-dir", str(tmp_path)])
@@ -724,7 +724,7 @@ class TestCoverageCli:
         """
         from click.testing import CliRunner
 
-        from clm.cli.commands.coverage import coverage_cmd
+        from clm.cli.commands.slides.coverage import coverage_cmd
 
         deck = tmp_path / "deck.py"
         deck.write_text(
@@ -756,7 +756,7 @@ class TestCoverageCli:
     def test_requires_path_unless_dump(self, tmp_path: Path):
         from click.testing import CliRunner
 
-        from clm.cli.commands.coverage import coverage_cmd
+        from clm.cli.commands.slides.coverage import coverage_cmd
 
         runner = CliRunner()
         result = runner.invoke(coverage_cmd, ["--cache-dir", str(tmp_path)])
