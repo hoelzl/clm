@@ -252,6 +252,34 @@ class TestCheckTags:
         assert len(errors) == 1
         assert "completed" in errors[0].message
         assert "without" in errors[0].message
+        # No 'keep' predecessor: the generic suggestion, no #233 hint.
+        assert "did you mean 'start'" not in (errors[0].suggestion or "")
+
+    def test_completed_after_keep_hints_at_mistag(self, tmp_path):
+        # #233 item 4(b): an incremental build whose "before" cell was tagged
+        # 'keep' instead of 'start' leaves the 'completed' orphaned — the
+        # suggestion points at the likely mis-tag.
+        p = _write_slide(
+            tmp_path,
+            "slides_keep_completed.py",
+            """\
+            # %% tags=["keep"]
+            class PointV2:
+                def __init__(self):
+                    pass
+
+            # %% tags=["completed"]
+            class PointV2:
+                def __init__(self, x, y):
+                    self.x, self.y = x, y
+            """,
+        )
+        result = validate_file(p, checks=["tags"])
+        errors = [f for f in result.findings if f.severity == "error"]
+        assert len(errors) == 1
+        assert "completed" in errors[0].message
+        assert "did you mean 'start'" in (errors[0].suggestion or "")
+        assert "line 1" in (errors[0].suggestion or "")
 
     def test_consecutive_starts_without_completed(self, tmp_path):
         p = _write_slide(

@@ -369,6 +369,9 @@ def _check_tags(cells: list[Cell], file_path: str) -> list[Finding]:
                 )
             )
 
+    # The most recent code cell per language stream — lets the orphaned
+    # 'completed' finding hint at a mis-tagged 'keep' predecessor (#233).
+    last_code_cell: dict[str | None, Cell] = {}
     for cell in cells:
         meta = cell.metadata
         if meta.is_j2:
@@ -426,6 +429,22 @@ def _check_tags(cells: list[Cell], file_path: str) -> list[Finding]:
 
         if "completed" in tags:
             if pending_starts.pop(meta.lang, None) is None:
+                # An incremental class/function build whose "before" cell was
+                # tagged 'keep' instead of 'start' is a recurring authoring
+                # slip (#233) — point straight at it when the shape matches.
+                prev_code = last_code_cell.get(meta.lang)
+                if (
+                    meta.cell_type == "code"
+                    and prev_code is not None
+                    and "keep" in prev_code.metadata.tags
+                ):
+                    suggestion = (
+                        f"The preceding code cell (line {prev_code.line_number}) is "
+                        "tagged 'keep' — did you mean 'start'? Otherwise add a "
+                        "'start' cell before this 'completed' cell."
+                    )
+                else:
+                    suggestion = "Add a cell with tag 'start' before this 'completed' cell"
                 findings.append(
                     Finding(
                         severity="error",
@@ -433,9 +452,12 @@ def _check_tags(cells: list[Cell], file_path: str) -> list[Finding]:
                         file=file_path,
                         line=cell.line_number,
                         message="'completed' tag without a preceding 'start' cell",
-                        suggestion="Add a cell with tag 'start' before this 'completed' cell",
+                        suggestion=suggestion,
                     )
                 )
+
+        if meta.cell_type == "code":
+            last_code_cell[meta.lang] = cell
 
     # Check for unclosed starts at end of file
     for prior in pending_starts.values():
