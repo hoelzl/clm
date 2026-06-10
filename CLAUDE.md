@@ -113,6 +113,13 @@ Full procedure lives in `docs/developer-guide/releasing.md`. The hard rules:
 ## Git Workflow
 
 - Branch prefix: `claude/` for AI-generated branches.
+- **Commit, push, and open PRs autonomously — do not wait for a go-ahead.**
+  When a task is finished (in particular after a significant chunk of work is
+  committed), push the branch without asking. When a feature or bugfix is
+  complete and you are working in a worktree, create a Pull Request without
+  asking for permission. Asking is only warranted for genuinely destructive
+  operations (force-push to a shared branch, history rewrites) or pushes to
+  `master` itself.
 - **Git hooks**: install with `uv run pre-commit install` (wires up both hook
   types via `default_install_hook_types`). The **pre-commit** hook runs ruff +
   mypy (fast, every commit); the **pre-push** hook runs the fast test suite
@@ -177,4 +184,4 @@ do not fabricate options.
 
 **Repository**: https://github.com/hoelzl/clm/ | **Issues**: https://github.com/hoelzl/clm/issues
 
-**Last Updated**: 2026-06-05
+**Last Updated**: 2026-06-10
