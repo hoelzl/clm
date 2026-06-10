@@ -186,16 +186,23 @@ def is_valid_slug(slide_id: str, *, max_length: int = MAX_SLUG_LENGTH) -> bool:
     return bool(re.fullmatch(r"[a-z0-9]+(-[a-z0-9]+)*", bare))
 
 
-def resolve_collision(base: str, used: Iterable[str]) -> str:
+def resolve_collision(base: str, used: Iterable[str], *, max_length: int = MAX_SLUG_LENGTH) -> str:
     """Append ``-2``/``-3``/... until the slug is unique within ``used``.
 
     Comparisons are done on the bare (marker-stripped) form so that
-    ``!intro`` and ``intro`` correctly count as a collision.
+    ``!intro`` and ``intro`` correctly count as a collision. The suffixed
+    result always fits within ``max_length`` — the base is trimmed at a
+    word boundary if needed so that minted ids never fail
+    :func:`is_valid_slug` (issue #233).
     """
     used_bare = {strip_preserve_marker(s) for s in used}
     if base not in used_bare:
         return base
     n = 2
-    while f"{base}-{n}" in used_bare:
+    while True:
+        suffix = f"-{n}"
+        head = "-".join(_truncate_to_cap(base.split("-"), max_length - len(suffix)))
+        candidate = f"{head}{suffix}"
+        if candidate not in used_bare:
+            return candidate
         n += 1
-    return f"{base}-{n}"
