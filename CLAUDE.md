@@ -93,6 +93,16 @@ If the info topics are stale, downstream agents will produce incorrect output.
 Keeping these files current is as important as updating tests. Do not
 hardcode version numbers — use `{version}`.
 
+## Changelog Entries
+
+Never edit the `## [Unreleased]` section of `CHANGELOG.md` in a PR — every
+concurrent PR inserting there made changelog merge conflicts near-universal.
+Instead, add a fragment file `changelog.d/<pr-or-issue>-<slug>.<type>.md`
+(type = `added` | `changed` | `deprecated` | `removed` | `fixed` |
+`security`) containing the finished markdown bullet(s). Fragments are folded
+into `CHANGELOG.md` at release time by `python scripts/collect_changelog.py
+X.Y.Z`. Conventions: `changelog.d/README.md`.
+
 ## Release Rules
 
 Full procedure lives in `docs/developer-guide/releasing.md`. The hard rules:
