@@ -8,6 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **`clm run` — spec-defined task sequences.** A new `<tasks>` block in the
+  course spec declares named sequences of clm commands (e.g. a `pre-release`
+  task that regenerates calendar/outline exports and then builds, so the
+  output never ships stale files). `clm run pre-release course.xml` executes
+  the steps in order; `clm run course.xml` lists the spec's tasks; `--dry-run`
+  previews the resolved commands. Steps are clm commands only (no shell — that
+  is what makes tasks portable across machines), support a `{spec}`
+  placeholder, run as subprocesses in the same Python environment, and are all
+  validated (placeholders + command existence) before the first one executes.
+  The first failing step aborts the task with its exit code. `clm validate`
+  checks declared tasks too. `python -m clm` now works (new module entry
+  point). See `clm info spec-files` / `clm info commands` and
+  `docs/user-guide/tasks.md`.
 - **Evergreen release files — `<evergreen>` patterns and `clm release sync
   --evergreen`.** Skeleton (global) files matching an evergreen glob pattern
   are exempt from the release freeze: every sync re-copies a matching file
@@ -23,7 +36,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   only via `--refreeze`), and the comparison is stateless (destination hash
   vs. manifest hash) so the `.clm-released.json` format is unchanged and
   re-runs are idempotent.
-
 - **`clm calendar push` — mirror a cohort's viewing calendar into Google
   Calendar.** Students subscribe to one shared Google calendar and pushed
   schedule changes propagate within minutes (no `.ics` hosting, no feed-refresh

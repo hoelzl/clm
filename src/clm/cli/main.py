@@ -97,6 +97,7 @@ from clm.cli.commands.normalize_slides import normalize_slides_cmd  # noqa: E402
 from clm.cli.commands.outline import outline  # noqa: E402
 from clm.cli.commands.release import release_group  # noqa: E402
 from clm.cli.commands.resolve_topic import resolve_topic_cmd  # noqa: E402
+from clm.cli.commands.run import run_cmd  # noqa: E402
 from clm.cli.commands.schedule import schedule  # noqa: E402
 from clm.cli.commands.search_slides import search_slides_cmd  # noqa: E402
 from clm.cli.commands.slides_sync import slides_sync_cmd  # noqa: E402
@@ -155,6 +156,7 @@ cli.add_command(delete_database)
 cli.add_command(status)
 cli.add_command(monitor)
 cli.add_command(info)
+cli.add_command(run_cmd, name="run")
 cli.add_command(sync_includes_cmd)
 cli.add_command(serve)
 cli.add_command(completion_cmd)
