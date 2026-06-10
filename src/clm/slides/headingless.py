@@ -9,13 +9,14 @@ Three categories, matching §2.3 of ``handover-slide-format-redesign-clm.md``:
                       assign-ids algorithm handles this directly via
                       :func:`extract_heading`.
 - ``EXTRACTABLE``   — no heading, but a first bullet, a prominent bold
-                      line, or an ``<img alt="...">`` provides enough text
-                      to suggest a slug. The tool refuses by default and
-                      lists the proposal; ``--accept-content-derived``
-                      bulk-accepts.
-- ``NON_EXTRACTABLE`` — pure-image without alt, divider, empty cell, or
-                        anything else that yields no usable text. Hard
-                        refuse — the author has to write the id by hand.
+                      line, an ``<img alt="...">``, or an image filename
+                      (``<img src="...">`` without alt, #233) provides
+                      enough text to suggest a slug. The tool refuses by
+                      default and lists the proposal;
+                      ``--accept-content-derived`` bulk-accepts.
+- ``NON_EXTRACTABLE`` — divider, empty cell, or anything else that yields
+                        no usable text. Hard refuse — the author has to
+                        write the id by hand.
 """
 
 from __future__ import annotations
@@ -40,8 +41,8 @@ class Extraction:
     ``category`` is the classification. ``text`` is the raw extracted
     string (markdown formatting intact — slugification happens later via
     :func:`clm.slides.slug.slugify`). ``source`` identifies *which* extractor
-    matched (``heading``/``bullet``/``bold``/``img_alt``/``prose``) for
-    diagnostics.
+    matched (``heading``/``bullet``/``bold``/``img_alt``/``img_src``/``prose``)
+    for diagnostics.
     """
 
     category: Category
@@ -68,8 +69,20 @@ _BOLD_LINE_RE = re.compile(r"^(?:#|//)\s+\*\*([^*]+)\*\*\s*$")
 # Image with alt text.
 _IMG_ALT_RE = re.compile(r'<img[^>]*\balt="([^"]+)"', re.IGNORECASE)
 
+# Image src attribute — fallback when no alt text exists (#233). Matched
+# per line without requiring a closing ``>``, so a multi-line ``<img``
+# tag (src on the first line, style attributes on later lines) is still
+# recognized instead of leaking tag fragments into prose extraction.
+_IMG_SRC_RE = re.compile(r'<img[^>]*\bsrc="([^"]+)"', re.IGNORECASE)
+
 # HTML tag (used to drop naked <img> noise before prose extraction).
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
+
+# Unterminated opening tag fragment at end of line — the first line of a
+# multi-line ``<img src="..."`` tag whose attributes continue on later
+# lines (#233). Requires a tag-name character after ``<`` so legit prose
+# like ``a < b`` is untouched.
+_UNCLOSED_TAG_RE = re.compile(r"<[A-Za-z!/][^>]*$")
 
 # Inline markdown formatting to unwrap before treating a line as prose.
 _BOLD_INLINE_RE = re.compile(r"\*\*([^*]+)\*\*")
@@ -107,8 +120,11 @@ def _extract_first_prose_line(lines: list[str]) -> str | None:
     matching here on `import`/`def` lines. Lines that reduce to empty
     text after stripping HTML, inline markdown formatting, and trailing
     terminal punctuation are skipped; lines with no word characters at
-    all are rejected.
+    all are rejected. A tag opened on one line and closed on a later one
+    (a multi-line ``<img …`` with per-line attributes, #233) is consumed
+    across lines so its attribute soup never reads as prose.
     """
+    in_tag = False
     for line in lines:
         # Skip blank markdown lines and any non-markdown line (e.g. raw
         # code statements in a code cell). Recognize either comment family.
@@ -118,7 +134,18 @@ def _extract_first_prose_line(lines: list[str]) -> str | None:
             content = line[3:]
         else:
             continue
+        if in_tag:
+            # Inside a multi-line tag: consume up to its ``>`` (or the
+            # whole line when the tag is still open).
+            if ">" not in content:
+                continue
+            content = content.split(">", 1)[1]
+            in_tag = False
         content = _HTML_TAG_RE.sub("", content)
+        m = _UNCLOSED_TAG_RE.search(content)
+        if m is not None:
+            in_tag = True
+            content = content[: m.start()]
         content = _BOLD_INLINE_RE.sub(r"\1", content)
         content = _ITALIC_INLINE_RE.sub(r"\1", content)
         content = _CODE_INLINE_RE.sub(r"\1", content)
@@ -137,8 +164,9 @@ def classify(content: str) -> Extraction:
 
     Precedence within the EXTRACTABLE category: first bullet/numbered item,
     then prominent bold line, then first ``<img alt="...">``, then the
-    first non-empty prose line. Whichever appears first in source order
-    wins among items of the same precedence.
+    first non-empty prose line, then — last, #233 — the filename stem of
+    the first ``<img src="...">`` without alt text. Whichever appears
+    first in source order wins among items of the same precedence.
     """
     lines = _iter_content_lines(content)
 
@@ -154,6 +182,7 @@ def classify(content: str) -> Extraction:
     first_bullet: str | None = None
     first_bold: str | None = None
     first_img_alt: str | None = None
+    first_img_src: str | None = None
 
     for line in lines:
         if first_bullet is None:
@@ -168,6 +197,10 @@ def classify(content: str) -> Extraction:
             m = _IMG_ALT_RE.search(line)
             if m:
                 first_img_alt = m.group(1).strip()
+        if first_img_src is None:
+            m = _IMG_SRC_RE.search(line)
+            if m:
+                first_img_src = m.group(1).strip()
 
     if first_bullet:
         return Extraction(Category.EXTRACTABLE, first_bullet, "bullet")
@@ -180,7 +213,26 @@ def classify(content: str) -> Extraction:
     if prose:
         return Extraction(Category.EXTRACTABLE, prose, "prose")
 
+    if first_img_src:
+        # Image-only cell with no alt text: derive from the image
+        # filename stem (#233) — ``img/robots-playing-checkers.png`` ->
+        # ``img robots-playing-checkers``. Real prose (a caption) still
+        # wins above; this only rescues the previously hard-refused case.
+        stem = _img_src_stem(first_img_src)
+        if stem:
+            return Extraction(Category.EXTRACTABLE, f"img {stem}", "img_src")
+
     return Extraction(Category.NON_EXTRACTABLE)
+
+
+def _img_src_stem(src: str) -> str:
+    """Filename stem of an image src (path/URL noise and extension dropped)."""
+    name = src.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+    # Drop a URL query/fragment, then the extension.
+    name = name.split("?", 1)[0].split("#", 1)[0]
+    if "." in name:
+        name = name.rsplit(".", 1)[0]
+    return name.strip()
 
 
 def cell_text_for_llm(content: str, *, max_chars: int = 1500) -> str:

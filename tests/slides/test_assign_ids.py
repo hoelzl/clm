@@ -194,8 +194,16 @@ class TestNonExtractableSlides:
         assert result.refusals[0].severity == "hard"
         assert new_text == text
 
-    def test_image_without_alt_hard_refuses(self):
+    def test_image_without_alt_soft_refuses_with_filename_proposal(self):
+        # Used to hard-refuse; since #233 the filename stem is proposed as
+        # a content-derived slug (accepted via --accept-content-derived).
         text = '# %% [markdown] lang="en" tags=["slide"]\n#\n# <img src="divider.png"/>\n'
+        new_text, result = _run(text)
+        assert result.refusals[0].severity == "soft"
+        assert result.refusals[0].proposed_slug == "img-divider"
+
+    def test_divider_cell_hard_refuses(self):
+        text = '# %% [markdown] lang="en" tags=["slide"]\n#\n# ---\n'
         new_text, result = _run(text)
         assert result.refusals[0].severity == "hard"
 
@@ -317,6 +325,67 @@ class TestVoiceoverInheritance:
         assert narrative[0].slide_id == "rag"
         assert 'slide_id="rag"' in new_text
         assert 'slide_id="old-cell-id"' not in new_text
+
+
+class TestPlaceholderVoiceoverReinherit:
+    """``<deck-stem>-cell-N`` placeholder ids are re-pointed without --force (#233)."""
+
+    DECK = (
+        '# %% [markdown] lang="de" tags=["slide"]\n'
+        "# ## RAG Architecture\n"
+        '# %% [markdown] lang="de" tags=["voiceover"] slide_id="{vo_id}"\n'
+        "# - voiceover content\n"
+    )
+
+    def _run_at(self, vo_id: str, path: str, **kwargs):
+        options = AssignOptions(**kwargs)
+        return assign_ids_for_text(self.DECK.format(vo_id=vo_id), Path(path), options)
+
+    def test_full_stem_placeholder_repointed(self):
+        new_text, result = self._run_at(
+            "slides_030v_simple_chatbot-cell-3", "slides_030v_simple_chatbot.de.py"
+        )
+        narrative = [a for a in result.assignments if a.source == "voiceover-reinherit"]
+        assert len(narrative) == 1
+        assert narrative[0].slide_id == "rag-architecture"
+        assert 'slide_id="rag-architecture"' in new_text
+        assert "cell-3" not in new_text
+
+    def test_stem_suffix_placeholder_repointed(self):
+        # Conversion tools stamped a *suffix* of the deck stem, e.g.
+        # ``simple_chatbot-cell-1`` in deck slides_030v_simple_chatbot.
+        new_text, result = self._run_at("simple_chatbot-cell-1", "slides_030v_simple_chatbot.de.py")
+        narrative = [a for a in result.assignments if a.source == "voiceover-reinherit"]
+        assert len(narrative) == 1
+        assert 'slide_id="rag-architecture"' in new_text
+
+    def test_unrelated_cell_n_id_kept(self):
+        # ``…-cell-N`` whose prefix is NOT this deck's stem is left alone.
+        new_text, result = self._run_at("other-deck-cell-2", "slides_030v_simple_chatbot.de.py")
+        assert not [a for a in result.assignments if a.source == "voiceover-reinherit"]
+        assert 'slide_id="other-deck-cell-2"' in new_text
+
+    def test_legit_existing_id_kept(self):
+        new_text, result = self._run_at("rag-overview", "slides_030v_simple_chatbot.de.py")
+        assert not [a for a in result.assignments if "voiceover" in a.source]
+        assert 'slide_id="rag-overview"' in new_text
+
+    def test_preserved_placeholder_wins(self):
+        new_text, result = self._run_at(
+            "!slides_030v_simple_chatbot-cell-3", "slides_030v_simple_chatbot.de.py"
+        )
+        assert not [a for a in result.assignments if "voiceover" in a.source]
+        assert 'slide_id="!slides_030v_simple_chatbot-cell-3"' in new_text
+
+    def test_report_only_proposes_without_writing(self):
+        new_text, result = self._run_at(
+            "slides_030v_simple_chatbot-cell-3",
+            "slides_030v_simple_chatbot.de.py",
+            report_only=True,
+        )
+        narrative = [a for a in result.assignments if a.source == "voiceover-reinherit"]
+        assert len(narrative) == 1
+        assert 'slide_id="slides_030v_simple_chatbot-cell-3"' in new_text
 
 
 # ---------------------------------------------------------------------------
@@ -763,13 +832,32 @@ class TestCodeDerivedFallback:
         assert new_text2 == new_text
 
     def test_collision_suffix_for_identical_code_lines(self):
+        # Comparison expressions stay on the code:line path (#233 moved
+        # subscript displays like letters[0:3] up to content:code:expr).
         text = (
-            '# %% lang="en" tags=["subslide"]\nletters[0:3]\n'
-            '# %% lang="en" tags=["subslide"]\nletters[0:3]\n'
+            '# %% lang="en" tags=["subslide"]\na == b\n# %% lang="en" tags=["subslide"]\na == b\n'
         )
         new_text, result = _run(text, accept_code_derived=True)
         slugs = [a.slide_id for a in result.assignments]
-        assert slugs == ["letters-0-3", "letters-0-3-2"]
+        assert slugs == ["a-b", "a-b-2"]
+
+    def test_subscript_display_is_content_derived(self):
+        # letters[0:3] is intent-extracted since #233: content:code:expr,
+        # gated by --accept-content-derived, with the clean base-name slug.
+        text = '# %% lang="en" tags=["subslide"]\nletters[0:3]\n'
+        new_text, result = _run(text, accept_content_derived=True)
+        assert [a.slide_id for a in result.assignments] == ["letters"]
+        assert result.assignments[0].source == "content:code:expr"
+
+    def test_for_loop_is_content_derived(self):
+        text = (
+            '# %% lang="en" tags=["subslide"]\n'
+            "for student in classroom:\n"
+            "    print(evaluate_student(student))\n"
+        )
+        new_text, result = _run(text, accept_content_derived=True)
+        assert [a.slide_id for a in result.assignments] == ["for-student-in-classroom"]
+        assert result.assignments[0].source == "content:code:for"
 
     def test_preserve_marker_untouched(self):
         text = '# %% lang="en" tags=["subslide"] slide_id="!keep"\n(1 + 1j) * (1 + 1j)\n'
@@ -819,26 +907,26 @@ class TestCodeDerivedFallback:
 
     def test_pair_safe_directory(self, tmp_path: Path):
         # find_slide_files only discovers slides_*/topic_*/project_* names.
-        _write(tmp_path, '# %% lang="de" tags=["subslide"]\nletters[0:3]\n', "slides_deck.de.py")
-        _write(tmp_path, '# %% lang="en" tags=["subslide"]\nletters[0:3]\n', "slides_deck.en.py")
+        _write(tmp_path, '# %% lang="de" tags=["subslide"]\na == b\n', "slides_deck.de.py")
+        _write(tmp_path, '# %% lang="en" tags=["subslide"]\na == b\n', "slides_deck.en.py")
         assign_ids_in_directory(tmp_path, AssignOptions(accept_code_derived=True))
         de_text = (tmp_path / "slides_deck.de.py").read_text(encoding="utf-8")
         en_text = (tmp_path / "slides_deck.en.py").read_text(encoding="utf-8")
-        assert 'slide_id="letters-0-3"' in de_text
-        assert 'slide_id="letters-0-3"' in en_text
+        assert 'slide_id="a-b"' in de_text
+        assert 'slide_id="a-b"' in en_text
 
     def test_pair_safe_per_file_twin(self, tmp_path: Path):
         # EN minted via code-derived, then the id-less DE half adopts the twin
         # id through the per-file twin path — code-derived ids stay in parity.
-        de = _write(tmp_path, '# %% lang="de" tags=["subslide"]\nletters[0:3]\n', "deck.de.py")
-        en = _write(tmp_path, '# %% lang="en" tags=["subslide"]\nletters[0:3]\n', "deck.en.py")
+        de = _write(tmp_path, '# %% lang="de" tags=["subslide"]\na == b\n', "deck.de.py")
+        en = _write(tmp_path, '# %% lang="en" tags=["subslide"]\na == b\n', "deck.en.py")
         assign_ids_in_file(en, AssignOptions(accept_code_derived=True))
         assign_ids_in_file(de, AssignOptions(accept_code_derived=True))
         import re
 
         de_id = re.search(r'slide_id="([^"]+)"', de.read_text(encoding="utf-8")).group(1)
         en_id = re.search(r'slide_id="([^"]+)"', en.read_text(encoding="utf-8")).group(1)
-        assert de_id == en_id == "letters-0-3"
+        assert de_id == en_id == "a-b"
 
     def test_non_python_pair_safe(self):
         # ast.parse can't parse C#; the comment-token-aware fallback completes
@@ -860,7 +948,9 @@ class TestLLMSuggestOnHardRefusal:
     entire hard-refusal set (the dominant pattern in real corpora).
     """
 
-    HARD_REFUSAL_TEXT = '# %% [markdown] lang="en" tags=["slide"]\n#\n# <img src="x.png"/>\n'
+    # A divider-only cell: genuinely nothing to extract (an alt-less <img>
+    # stopped being a hard refusal with the #233 filename-stem fallback).
+    HARD_REFUSAL_TEXT = '# %% [markdown] lang="en" tags=["slide"]\n#\n# ---\n'
 
     def test_llm_fires_on_hard_refusal(self):
         suggester = StaticTitleSuggester(default="RAG Architecture Diagram")

@@ -52,8 +52,9 @@ class TestPrecedence:
 
     def test_call_when_nothing_else(self):
         source = "response.choices[0].message.content\n"
-        # Bare attribute access — not a Call expression — falls through.
-        # That's an ast.Expr wrapping ast.Attribute, not ast.Call.
+        # Bare attribute access — not a Call expression — falls through
+        # by default. The opt-in ``display_exprs`` extractor (#233) names
+        # it; see TestDisplayExprExtractors.
         e = extract_from_code(source)
         assert e is None
 
@@ -270,3 +271,83 @@ class TestFirstCodeLineFallback:
     def test_non_python_comment_only_returns_none(self):
         assert extract_from_code("// just a comment", "//", accept_code_derived=True) is None
         assert extract_from_code("/* block only */", "//", accept_code_derived=True) is None
+
+
+class TestDisplayExprExtractors:
+    """The opt-in ``display_exprs`` extractors for display-style cells (#233).
+
+    Off by default so the sync content-anchor (`construct_of`) keeps
+    deriving exactly the anchors recorded in existing watermark baselines;
+    ``assign-ids`` opts in.
+    """
+
+    def test_off_by_default(self):
+        assert extract_from_code("data[:5]\n") is None
+        assert extract_from_code("for x in items:\n    print(x)\n") is None
+
+    def test_subscript_slice(self):
+        e = extract_from_code("data[:5]\n", display_exprs=True)
+        assert e is not None
+        assert e.category == Category.EXTRACTABLE
+        assert e.source == "code:expr"
+        assert e.text == "data"
+
+    def test_subscript_string_key(self):
+        e = extract_from_code('result["choices"]\n', display_exprs=True)
+        assert e is not None
+        assert e.source == "code:expr"
+        assert e.text == "result choices"
+
+    def test_attribute_plus_subscript_key(self):
+        e = extract_from_code('response.headers["Content-Type"]\n', display_exprs=True)
+        assert e is not None
+        assert e.text == "response headers Content-Type"
+
+    def test_numeric_index_dropped(self):
+        e = extract_from_code("items[0]\n", display_exprs=True)
+        assert e is not None
+        assert e.text == "items"
+
+    def test_attribute_chain_with_numeric_index(self):
+        e = extract_from_code("response.choices[0].message.content\n", display_exprs=True)
+        assert e is not None
+        assert e.text == "response choices message content"
+
+    def test_bare_name(self):
+        e = extract_from_code("ice_cream_x\n", display_exprs=True)
+        assert e is not None
+        assert e.text == "ice_cream_x"
+
+    def test_for_loop(self):
+        source = "for student in classroom:\n    print(evaluate_student(student))\n"
+        e = extract_from_code(source, display_exprs=True)
+        assert e is not None
+        assert e.source == "code:for"
+        assert e.text == "for student in classroom"
+
+    def test_for_loop_over_call(self):
+        e = extract_from_code("for i in range(10):\n    pass\n", display_exprs=True)
+        assert e is not None
+        assert e.text == "for i in range"
+
+    def test_for_loop_tuple_target(self):
+        e = extract_from_code("for k, v in mapping.items():\n    pass\n", display_exprs=True)
+        assert e is not None
+        assert e.source == "code:for"
+        assert e.text.startswith("for k v in mapping")
+
+    def test_call_still_wins_over_expr(self):
+        e = extract_from_code("print(data[:5])\n", display_exprs=True)
+        assert e is not None
+        assert e.source == "code:call"
+
+    def test_arithmetic_still_refuses(self):
+        assert extract_from_code("(1 + 1j) * (1 + 1j)\n", display_exprs=True) is None
+
+    def test_comparison_still_refuses(self):
+        assert extract_from_code("a == b\n", display_exprs=True) is None
+
+    def test_falls_back_to_code_line_when_both_flags(self):
+        e = extract_from_code("a == b\n", display_exprs=True, accept_code_derived=True)
+        assert e is not None
+        assert e.source == "code:line"

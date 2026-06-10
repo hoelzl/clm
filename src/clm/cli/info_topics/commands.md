@@ -1217,7 +1217,14 @@ clm slides normalize slides/ --shipping-only
 Generate stable `slide_id` metadata for slide/subslide cells per the
 EN-derived, kebab-case, ASCII policy. Cells in a DE/EN pair share the
 same id (derived from the EN heading); voiceover/notes cells inherit
-the id of the preceding slide.
+the id of the preceding slide. A voiceover/notes cell that already
+carries a **conversion placeholder** id of the form `<deck-stem>-cell-N`
+(a sequential counter stamped by older conversion tooling, e.g.
+`simple_chatbot-cell-1` inside `slides_030v_simple_chatbot`) is treated
+as id-less and re-pointed to the preceding slide on the normal pass —
+no `--force` needed (since CLM {version}, issue #233). Any other
+existing id still requires `--force` (or the `!` preserve marker to pin
+it permanently).
 
 > **Plumbing (since CLM {version}).** This command is **hidden** from
 > `clm slides --help` and is intended for agents/scripts and one-off id fixes —
@@ -1236,9 +1243,19 @@ Three-category policy:
   - a first bullet, prominent bold line, or `<img alt="…">`,
   - a first non-empty prose line (HTML tags and inline markdown
     stripped, trailing terminal punctuation dropped),
+  - an image without alt text: the **filename stem** of the first
+    `<img src="…">` (since CLM {version}, issue #233) —
+    `<img src="img/robots-playing-checkers.png">` proposes
+    `img-robots-playing-checkers`. Real prose in the same cell wins;
+    multi-line `<img>` tags are recognized too,
   - in a code cell: top-level `class`, `def`, assignment, `import`/
-    `from-import`, or method call (AST-based; precedence in that
-    order),
+    `from-import`, method call, `for`/`async for` loop
+    (`for student in classroom: …` → `for-student-in-classroom`), or a
+    display expression — subscript/attribute/bare name with string keys
+    kept and slices/numeric indexes dropped (`data[:5]` → `data`,
+    `response.headers["Content-Type"]` →
+    `response-headers-content-type`) (AST-based; precedence in that
+    order; loop/display extraction since CLM {version}, issue #233),
   - in a DE/EN pair: when the EN slug source has none of the above
     but the DE sibling does, the slug derives from the DE sibling
     (transliterated to ASCII).
@@ -1246,18 +1263,20 @@ Three-category policy:
   `--llm-suggest`.
 - **code-derived** *(since CLM {version})* — a bare-expression code cell
   with no heading and none of the AST constructs above (e.g.
-  `(1 + 1j) * (1 + 1j)`, `letters[0:3]`, `a == b`). **Refused by default**;
+  `(1 + 1j) * (1 + 1j)`, `a == b`). **Refused by default**;
   opt in with `--accept-code-derived`, which slugs the cell's first real
-  code line (`letters[0:3]` → `letters-0-3`). The scanner is
+  code line (`a == b` → `a-b`). The scanner is
   comment-token-aware, so non-Python decks (`.cs`/`.cpp`/`.java`/`.ts`),
   which `ast` never parses, are completed too. Independent of
   `--accept-content-derived` — the bilingual→split conversion typically
-  passes both.
+  passes both. (Subscript displays like `letters[0:3]` moved **up** to
+  the extractable category in CLM {version}; with only
+  `--accept-code-derived` they now soft-refuse pointing at
+  `--accept-content-derived`.)
 - **no content** — cell where no extractor produces anything (empty
-  cell, pure `<img>` without alt, pure-punctuation / `...` code,
-  magic-only cells). **Hard refuse**; the author has to write
-  `slide_id="…"` by hand, or pass `--llm-suggest` to let the LLM propose
-  a title as a last resort.
+  cell, divider, pure-punctuation / `...` code, magic-only cells).
+  **Hard refuse**; the author has to write `slide_id="…"` by hand, or
+  pass `--llm-suggest` to let the LLM propose a title as a last resort.
 
 Special cases:
 
@@ -1290,8 +1309,8 @@ clm slides assign-ids [OPTIONS] PATH
 | Option | Description |
 |--------|-------------|
 | `--force` | Regenerate ids where the algorithm can produce one. `!`-prefixed ids and cells without a proposal are left untouched. |
-| `--accept-content-derived` | Auto-accept proposals for the extractable category (no LLM). Bare-expression code cells and hard-refusal cells still refuse. |
-| `--accept-code-derived` | (since CLM {version}) Auto-accept a first-code-line slug for bare-expression code cells the AST extractors can't name (`(1 + 1j) * (1 + 1j)` → `1-1j-1-1j`, `letters[0:3]` → `letters-0-3`). Comment-token-aware, so it works on non-Python decks (`.cs`/`.cpp`/`.java`/`.ts`). Genuinely empty / pure-punctuation / magic-only cells still refuse. Independent of `--accept-content-derived`. |
+| `--accept-content-derived` | Auto-accept proposals for the extractable category (no LLM), including image-filename, loop, and display-expression proposals (#233). Bare-expression code cells with no salient name and hard-refusal cells still refuse. |
+| `--accept-code-derived` | (since CLM {version}) Auto-accept a first-code-line slug for bare-expression code cells the AST extractors can't name (`(1 + 1j) * (1 + 1j)` → `1-1j-1-1j`, `a == b` → `a-b`). Comment-token-aware, so it works on non-Python decks (`.cs`/`.cpp`/`.java`/`.ts`). Genuinely empty / pure-punctuation / magic-only cells still refuse. Independent of `--accept-content-derived`. |
 | `--llm-suggest` | Use the local LLM (Ollama, default model `qwen3:30b`) to propose a short title. Fires on both extractable cells (replacing the content-derived title when the LLM returns one) and on hard-refusal cells (last-resort fallback before refusing). Cached per `(content_hash, prompt_version, lang)` in the LLM cache. Falls back silently to refusal when Ollama is unreachable. |
 | `--report-only`, `--dry-run` | List planned assignments and refusals without modifying any file. |
 | `--llm-model TEXT` | Ollama model name (default: `qwen3:30b`). |

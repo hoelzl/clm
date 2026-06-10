@@ -9,12 +9,14 @@ from click.testing import CliRunner
 
 from clm.cli.main import cli
 
+# The hard-refusal cell is an HTML comment: an alt-less <img src> stopped
+# hard-refusing with the #233 filename-stem fallback.
 DECK = (
     '# %% [markdown] lang="en" tags=["slide"]\n'
     "# ## Introduction\n"
     "\n"
     '# %% [markdown] lang="en" tags=["slide"]\n'
-    '# <img src="img/diagram.png">\n'
+    "# <!-- placeholder-diagram -->\n"
 )
 
 
@@ -31,7 +33,7 @@ def test_report_refusals_lists_hard(tmp_path):
     assert "[hard]" in r.output
     assert "1 hard refusal(s)" in r.output
     # Without --context, no cell body is shown.
-    assert "img/diagram.png" not in r.output
+    assert "placeholder-diagram" not in r.output
 
 
 def test_report_refusals_does_not_write(tmp_path):
@@ -46,7 +48,7 @@ def test_context_implies_report_refusals_and_shows_body(tmp_path):
     # --context alone (no explicit --report-refusals) still produces the worklist.
     r = CliRunner().invoke(cli, ["slides", "assign-ids", str(f), "--context", "--report-only"])
     assert "[hard]" in r.output
-    assert "img/diagram.png" in r.output
+    assert "placeholder-diagram" in r.output
     assert 'heading "Introduction"' in r.output
 
 
@@ -59,7 +61,7 @@ def test_report_refusals_json(tmp_path):
     assert data["hard_refusals"] == 1
     ctx = data["refusals"][0]["context"]
     assert ctx["preceding_heading"] == "Introduction"
-    assert "diagram.png" in ctx["body"]
+    assert "placeholder-diagram" in ctx["body"]
 
 
 def test_clean_deck_reports_no_refusals(tmp_path):
