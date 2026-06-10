@@ -259,6 +259,22 @@ from a project `.env` automatically (pass `--no-env-file` to skip).
 | `CLM_MAX_WORKER_STARTUP_CONCURRENCY` | Max concurrent worker starts | `10` |
 | `CLM_OUTPUT_DEDUP_HASH_LIMIT_MB` | Skip output-write deduplication for files larger than this many megabytes. Repeat writes to a large-file output are reported as a single summary collision counter rather than per-event warnings. Set to `0` to force every write through the large-file fast path (useful for tests). | `50` |
 
+### Database Retention
+
+Finished job rows are diagnostic only (the results cache lives in separate
+tables), but they used to accumulate forever, which made `clm status` and
+`clm monitor` startup degrade over time. Old rows are now pruned at build
+end by default.
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `CLM_RETENTION__COMPLETED_JOBS_RETENTION_DAYS` | Days to keep completed job rows before build-end cleanup deletes them. | `7` |
+| `CLM_RETENTION__FAILED_JOBS_RETENTION_DAYS` | Days to keep failed job rows (longer, for debugging). | `30` |
+| `CLM_RETENTION__CANCELLED_JOBS_RETENTION_DAYS` | Days to keep cancelled job rows. | `1` |
+| `CLM_RETENTION__WORKER_EVENTS_RETENTION_DAYS` | Days to keep worker lifecycle events (audit log). | `30` |
+| `CLM_RETENTION__AUTO_CLEANUP_ON_BUILD_END` | Run the retention cleanup after each build. | `true` |
+| `CLM_RETENTION__AUTO_VACUUM_AFTER_CLEANUP` | Run `VACUUM` after cleanup to reclaim disk space (slow on large databases; the build prints a progress message while it runs). | `false` |
+
 ### Notebook Execution Diagnostics
 
 These help diagnose builds that hang on a single notebook (see issue #143).

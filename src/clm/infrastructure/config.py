@@ -105,17 +105,22 @@ class RetentionConfig(BaseModel):
         description="Number of processed file versions to keep per file (older versions are deleted)",
     )
 
-    # Jobs retention - how long to keep completed/failed jobs
-    # None means keep indefinitely (no automatic pruning by age)
+    # Jobs retention - how long to keep completed/failed jobs.
+    # None means keep indefinitely (no automatic pruning by age). The
+    # defaults match the values the generated sample config has always
+    # documented; finished job rows are purely diagnostic — the results
+    # cache and executed-notebook cache live in separate tables, so
+    # pruning them never causes re-execution. Unbounded growth here is
+    # what made `clm status` / `clm monitor` startup degrade over time.
     completed_jobs_retention_days: int | None = Field(
-        default=None,
+        default=7,
         ge=1,
         le=365,
         description="Days to keep completed jobs before automatic deletion (None = indefinite)",
     )
 
     failed_jobs_retention_days: int | None = Field(
-        default=None,
+        default=30,
         ge=1,
         le=365,
         description="Days to keep failed jobs before automatic deletion (None = indefinite)",

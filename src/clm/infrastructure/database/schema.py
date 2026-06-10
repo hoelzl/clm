@@ -8,7 +8,7 @@ workers.
 import sqlite3
 from pathlib import Path
 
-DATABASE_VERSION = 8
+DATABASE_VERSION = 9
 
 SCHEMA_SQL = """
 -- Jobs table (replaces message queue)
@@ -46,6 +46,12 @@ CREATE TABLE IF NOT EXISTS jobs (
 
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, job_type);
 CREATE INDEX IF NOT EXISTS idx_jobs_content_hash ON jobs(content_hash);
+-- v9: time-windowed status queries ("completed/failed in the last hour",
+-- retention cleanup) and "most recently completed" lookups used by
+-- clm status / clm monitor. Without these every such query scans all
+-- completed jobs, which makes monitor startup crawl on big databases.
+CREATE INDEX IF NOT EXISTS idx_jobs_status_completed ON jobs(status, completed_at);
+CREATE INDEX IF NOT EXISTS idx_jobs_completed_at ON jobs(completed_at);
 
 -- Results cache table
 CREATE TABLE IF NOT EXISTS results_cache (
@@ -402,5 +408,20 @@ def migrate_database(conn: sqlite3.Connection, from_version: int, to_version: in
             CREATE INDEX IF NOT EXISTS idx_worker_heartbeats_job ON worker_heartbeats(job_id);
 
             INSERT OR IGNORE INTO schema_version (version) VALUES (8);
+        """)
+        conn.commit()
+
+    # Migration from v8 to v9: indexes for time-windowed job queries.
+    # The CREATE INDEX statements also live in SCHEMA_SQL (IF NOT EXISTS),
+    # which init_database executes before migrating, so this mainly
+    # records the version bump for databases created before v9.
+    if from_version < 9 <= to_version:
+        conn.executescript("""
+            CREATE INDEX IF NOT EXISTS idx_jobs_status_completed
+                ON jobs(status, completed_at);
+            CREATE INDEX IF NOT EXISTS idx_jobs_completed_at
+                ON jobs(completed_at);
+
+            INSERT OR IGNORE INTO schema_version (version) VALUES (9);
         """)
         conn.commit()

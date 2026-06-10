@@ -121,9 +121,9 @@ def _read_heartbeat(db_path: Path, worker_id: int) -> dict | None:
 
 
 class TestHeartbeatSchema:
-    def test_schema_version_is_v8(self, db_path: Path) -> None:
+    def test_schema_version_is_current(self, db_path: Path) -> None:
         """After init the schema is at the documented latest version."""
-        assert DATABASE_VERSION == 8
+        assert DATABASE_VERSION == 9
 
     def test_table_exists_with_expected_columns(self, db_path: Path) -> None:
         conn = sqlite3.connect(str(db_path))

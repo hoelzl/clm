@@ -804,6 +804,19 @@ class SqliteBackend(LocalOpsBackend):
         except Exception as e:
             logger.warning(f"Session start cleanup failed: {e}")
 
+    def _show_progress(self, message: str) -> None:
+        """Surface a shutdown-phase progress message to the user.
+
+        The build summary has already been printed when ``shutdown`` runs,
+        and ``logger.info`` only reaches the log file by default — so
+        without these messages the cleanup phase looks like a silent hang.
+        """
+        # getattr: tests drive shutdown with duck-typed stub reporters that
+        # don't carry a formatter — progress display must never break them.
+        formatter = getattr(self.build_reporter, "formatter", None)
+        if formatter is not None:
+            formatter.show_startup_message(message)
+
     def _perform_build_end_cleanup(self) -> None:
         """Perform cleanup at build end if configured.
 
@@ -817,6 +830,7 @@ class SqliteBackend(LocalOpsBackend):
         if not retention_config.auto_cleanup_on_build_end:
             return
 
+        self._show_progress("Cleaning up job and cache databases...")
         try:
             # Clean up jobs database
             if self.job_queue:
@@ -858,6 +872,7 @@ class SqliteBackend(LocalOpsBackend):
 
             # Vacuum if configured (can be slow for large DBs)
             if retention_config.auto_vacuum_after_cleanup:
+                self._show_progress("Compacting databases (VACUUM, may take a while)...")
                 if self.job_queue:
                     try:
                         self.job_queue.vacuum()
