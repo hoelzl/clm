@@ -965,6 +965,7 @@ the spec stays diff-clean as you release week by week.
 | `path` (attr) | `<channel>` | Yes | The cohort repo's working tree (relative to the course root, or absolute). One repo per cohort; **not** language-scoped. |
 | `ledger` (attr) | `<channel>` | Yes | Path to the cohort's release ledger — a plain-text file, **one released topic id per line**, created/appended by `clm release add`. Keep it in the course source repo. |
 | `<remote-path>` | `<channel>` | No | Override the block-level `<remote-path>` for this one cohort. |
+| `<evergreen>` | `<release-channels>` or `<channel>` | No | Glob pattern of **skeleton files exempt from the freeze**: every `clm release sync` re-copies a matching file whose built content differs from the cohort's copy (e.g. a NEWS file). Block-level patterns are inherited by every channel; channel-level patterns are additive. Skeleton-only — patterns matching topic-owned files are warned about and ignored. See the [Solution Release guide](solution-release.md#evergreen-files-eg-a-news-file). |
 
 The remote URL is derived as
 `{repository-base}/{remote-path}/{project-slug}-{name}` (the `<remote-path>`

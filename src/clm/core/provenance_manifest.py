@@ -245,7 +245,13 @@ def _enumerate_dir_group_outputs(
                         )
 
 
-def _hash_file(path: Path) -> str:
+def hash_file(path: Path) -> str:
+    """The ``sha256:<hex>`` digest of *path*'s bytes, as recorded in manifests.
+
+    Public because the release sync's evergreen scan compares destination
+    files against manifest ``content_hash`` values, so both sides must use
+    the same digest format.
+    """
     digest = hashlib.sha256()
     with path.open("rb") as fh:
         for chunk in iter(lambda: fh.read(_HASH_CHUNK), b""):
@@ -297,7 +303,7 @@ def build_provenance_manifest(
                 "kind": record["kind"],
                 "format": record["format"],
                 "language": record["language"],
-                "content_hash": _hash_file(out_path),
+                "content_hash": hash_file(out_path),
             }
         )
     files.sort(key=lambda r: r["path"])

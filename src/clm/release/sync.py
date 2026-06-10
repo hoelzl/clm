@@ -10,7 +10,13 @@ index. The rules (issue #208):
 * a released topic **already frozen** -> skip (students keep what they were
   given) unless it is in *refreeze*;
 * the skeleton (global, topic-less files) is copied once at channel init, then
-  frozen.
+  frozen;
+* **evergreen** skeleton files (glob patterns from ``<evergreen>`` /
+  ``--evergreen``) are exempt from the skeleton freeze: every sync re-copies a
+  matching file whose built content differs from the destination's (e.g. a
+  NEWS file). Evergreen is skeleton-only by design — topic content changes
+  only via *refreeze*, keeping the per-topic ``topic_digest`` truthful and
+  making it impossible for a pattern to leak files of an unreleased topic.
 
 Promotion copies bytes verbatim from the source tree; it never rebuilds or
 re-executes anything, and — because the manifest lists only topic output files —
@@ -26,12 +32,17 @@ from __future__ import annotations
 import logging
 import shutil
 from collections.abc import Iterable
+from fnmatch import fnmatchcase
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 from attrs import frozen
 
-from clm.core.provenance_manifest import manifest_files_by_topic, topic_digest_from_files
+from clm.core.provenance_manifest import (
+    hash_file,
+    manifest_files_by_topic,
+    topic_digest_from_files,
+)
 from clm.release.frozen_manifest import FrozenManifest, FrozenRecord
 
 logger = logging.getLogger(__name__)
@@ -45,6 +56,10 @@ SKIP_FROZEN = "skip-frozen"
 # refused until a build succeeds for it. Never frozen, so it is retried.
 SKIP_FAILED = "skip-failed"
 
+# Evergreen plan actions.
+REFRESH = "refresh"
+UP_TO_DATE = "up-to-date"
+
 
 @frozen
 class TopicPlan:
@@ -54,10 +69,36 @@ class TopicPlan:
 
 
 @frozen
+class EvergreenPlan:
+    """One evergreen skeleton file: re-copy (*refresh*) or already current."""
+
+    path: str
+    action: str
+
+
+@frozen
+class EvergreenScan:
+    """Result of matching evergreen patterns against a source manifest.
+
+    ``topic_owned_matches`` lists paths a pattern matched but that belong to a
+    topic — evergreen is skeleton-only, so they are ignored (the caller warns;
+    topic content changes only via ``--refreeze``).
+    """
+
+    plans: tuple[EvergreenPlan, ...] = ()
+    topic_owned_matches: tuple[str, ...] = ()
+
+    @property
+    def to_refresh(self) -> tuple[EvergreenPlan, ...]:
+        return tuple(p for p in self.plans if p.action == REFRESH)
+
+
+@frozen
 class SyncPlan:
     copy_skeleton: bool
     skeleton_file_count: int
     topics: tuple[TopicPlan, ...]
+    evergreen: tuple[EvergreenPlan, ...] = ()
 
     @property
     def to_copy(self) -> tuple[TopicPlan, ...]:
@@ -82,6 +123,50 @@ class SyncResult:
     # Released topics refused because the source build errored for them
     # (issue #295). Not frozen — they promote once a build succeeds.
     failed_topics: tuple[str, ...] = ()
+    # Evergreen skeleton files re-copied because their built content differed
+    # from the destination's.
+    refreshed_files: tuple[str, ...] = ()
+
+
+def scan_evergreen(
+    *,
+    manifest: dict[str, Any],
+    patterns: Iterable[str],
+    dest_root: Path,
+) -> EvergreenScan:
+    """Match evergreen *patterns* against *manifest* and the destination state.
+
+    Patterns are matched (``fnmatch.fnmatchcase``) against the manifest's
+    destination-relative POSIX paths — for a language-scoped channel that is
+    the path *after* re-rooting, i.e. exactly the path inside the cohort repo.
+
+    A matching **skeleton** entry (``topic_id: null``) plans :data:`REFRESH`
+    when the destination file is missing or its content hash differs from the
+    manifest's ``content_hash``, else :data:`UP_TO_DATE`. The comparison is
+    stateless — the destination *is* the record — which is sound because
+    promotion copies bytes verbatim (after a copy, dest hash == manifest
+    hash). Matching topic-owned entries are collected separately and never
+    planned; VCS metadata paths are refused outright (issue #302).
+    """
+    pattern_list = [p for p in patterns if p]
+    if not pattern_list:
+        return EvergreenScan()
+    plans: list[EvergreenPlan] = []
+    topic_owned: list[str] = []
+    for entry in manifest.get("files", []):
+        rel = entry.get("path", "")
+        if not any(fnmatchcase(rel, pattern) for pattern in pattern_list):
+            continue
+        if _is_vcs_path(rel):
+            logger.debug("evergreen: refusing VCS metadata path: %s", rel)
+            continue
+        if entry.get("topic_id") is not None:
+            topic_owned.append(rel)
+            continue
+        dst = dest_root / rel
+        current = dst.is_file() and hash_file(dst) == entry.get("content_hash")
+        plans.append(EvergreenPlan(rel, UP_TO_DATE if current else REFRESH))
+    return EvergreenScan(plans=tuple(plans), topic_owned_matches=tuple(topic_owned))
 
 
 def plan_sync(
@@ -90,6 +175,7 @@ def plan_sync(
     ledger_released: Iterable[str],
     frozen: FrozenManifest,
     refreeze: Iterable[str] = (),
+    evergreen: Iterable[EvergreenPlan] = (),
 ) -> SyncPlan:
     """Compute what a sync would do, without touching the filesystem.
 
@@ -98,6 +184,9 @@ def plan_sync(
     :data:`SKIP_FAILED` rather than copied — unless it is already frozen and
     not being refrozen, in which case the ordinary :data:`SKIP_FROZEN` applies
     (the cohort already has it; nothing would be copied anyway).
+
+    *evergreen* carries the plans of a prior :func:`scan_evergreen` (which
+    reads the destination, so it stays out of this pure planning step).
     """
     refreeze_set = set(refreeze)
     failed_topics = set(manifest.get("failed_topics", []))
@@ -119,6 +208,7 @@ def plan_sync(
         copy_skeleton=not frozen.skeleton_frozen,
         skeleton_file_count=len(skeleton_files),
         topics=tuple(plans),
+        evergreen=tuple(evergreen),
     )
 
 
@@ -136,6 +226,10 @@ def apply_sync(
     Mutates *frozen* in place (the caller persists it afterward). A topic with
     no files in the source manifest (e.g. released but not yet built) is logged
     and **not** frozen, so it is retried once it is built.
+
+    The evergreen pass runs only once the skeleton is frozen: on the first
+    sync the skeleton copy itself delivers every skeleton file — evergreen
+    ones included — so refreshing then would re-copy bytes just written.
     """
     by_topic = manifest_files_by_topic(manifest)
     source_commit = manifest.get("source_commit")
@@ -144,10 +238,28 @@ def apply_sync(
     refrozen: list[str] = []
     skipped: list[str] = []
     failed: list[str] = []
+    refreshed: list[str] = []
 
     if plan.copy_skeleton:
         files_copied += _copy_files(by_topic.get(None, []), source_root, dest_root)
         frozen.skeleton_frozen = True
+    else:
+        skeleton_by_path = {e["path"]: e for e in by_topic.get(None, [])}
+        for evergreen_plan in plan.evergreen:
+            if evergreen_plan.action != REFRESH:
+                continue
+            entry = skeleton_by_path.get(evergreen_plan.path)
+            if entry is None:
+                # The scan only plans skeleton entries; a miss means the plan
+                # and manifest went out of sync — skip rather than guess.
+                logger.warning(
+                    "evergreen: %r is not a skeleton file in the manifest; skipped",
+                    evergreen_plan.path,
+                )
+                continue
+            if _copy_files([entry], source_root, dest_root):
+                files_copied += 1
+                refreshed.append(evergreen_plan.path)
 
     for topic_plan in plan.topics:
         if topic_plan.action == SKIP_FROZEN:
@@ -190,6 +302,7 @@ def apply_sync(
         skeleton_copied=plan.copy_skeleton,
         files_copied=files_copied,
         failed_topics=tuple(failed),
+        refreshed_files=tuple(refreshed),
     )
 
 

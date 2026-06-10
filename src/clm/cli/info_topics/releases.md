@@ -20,6 +20,7 @@ never rewrite what students already received.
 <release-channels source-target="solutions" name="materials">
     <remote-path>cohorts</remote-path>
     <share-with group="trainers" access="maintainer" />
+    <evergreen>NEWS.md</evergreen>
 
     <channel name="jan" path="./cohorts/jan" ledger="release/jan.txt">
         <share-with group="cohort-jan" access="developer" />
@@ -38,6 +39,7 @@ never rewrite what students already received.
 | `ledger` | `<channel>` | yes | Path to the release ledger file |
 | `lang` | `<channel>` | no | Restrict promotion to one language; re-roots files at the language directory |
 | `<share-with group="…" access="…">` | block or channel | no | GitLab group sharing (applied by `clm release provision`) |
+| `<evergreen>` | block or channel | no | Glob pattern of skeleton files exempt from the freeze — re-copied on every sync when the built content changed (e.g. a NEWS file). Block patterns are inherited; channel patterns are additive |
 
 The derived remote URL is:
 `{repository-base}/{remote-path}/{project-slug}-{channel}-{stream}[-{lang}]`
@@ -139,6 +141,7 @@ clm release status SPEC --channel NAME
 clm release sync SPEC --channel NAME [--dry-run] [--push] [-m MESSAGE]
 clm release sync SPEC --channel NAME --refreeze TOPIC_ID... [--push]
 clm release sync SPEC --channel NAME --refreeze-all [--push]
+clm release sync SPEC --channel NAME --evergreen PATTERN [--push]
 ```
 
 Sync actions per topic:
@@ -150,7 +153,14 @@ Sync actions per topic:
 | `refreeze` | Frozen but in `--refreeze` set → re-copy, update freeze |
 | `skip-failed` | Build errored for this topic → refuse until next clean build |
 
-Skeleton (global files) is copied once on first sync and then frozen.
+Skeleton (global files) is copied once on first sync and then frozen —
+**except evergreen files**: skeleton files matching the channel's
+`<evergreen>` patterns (or `--evergreen` options) plan `refresh` whenever the
+built content differs from the cohort's copy, and `up-to-date` otherwise.
+Evergreen is skeleton-only; patterns matching topic-owned files are warned
+about and ignored (topic content changes only via `--refreeze`). The
+comparison is stateless (destination hash vs. manifest hash), so nothing is
+recorded in the frozen manifest and re-runs are idempotent.
 `--push` chains `clm git commit` + `clm git push` after promotion.
 
 ### `clm release provision`
@@ -226,10 +236,21 @@ clm release add course.xml introduction variables --channel may
 clm release sync course.xml --channel may --push -m "may: release week 1"
 ```
 
+### Updating a NEWS file across releases
+
+```bash
+# Spec: <evergreen>NEWS.md</evergreen> inside <release-channels>.
+# Edit the source NEWS file, rebuild, and sync — every cohort's copy follows.
+clm build course.xml
+clm release sync course.xml --channel jan --push -m "Update NEWS"
+```
+
 ## Key design properties
 
 - **Cumulative ledger** — entries are never removed; minimal per-release git diff.
-- **Immutable freezing** — frozen topics are never re-propagated without `--refreeze`.
+- **Immutable freezing** — frozen topics are never re-propagated without `--refreeze`;
+  the only exception is **evergreen** skeleton files (declared via `<evergreen>`),
+  which follow the latest build by design.
 - **Provenance-driven** — files are promoted via manifest lookup, not path inference.
 - **Idempotent syncs** — re-running sync is safe; frozen topics are skipped.
 - **Manifest exclusion** — `.clm-manifest.json` is never distributed; the frozen manifest `.clm-released.json` is.
