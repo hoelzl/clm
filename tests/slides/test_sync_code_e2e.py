@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from clm.cli.commands.slides_sync import CACHE_DB_NAME, slides_sync_cmd
+from clm.cli.commands.slides.sync import CACHE_DB_NAME, slides_sync_cmd
 from clm.infrastructure.llm.cache import SyncWatermarkCache
 from clm.infrastructure.llm.ollama_client import SyncProposal
 from clm.notebooks.slide_parser import parse_cells
@@ -340,7 +340,7 @@ class TestSyncCodeE2E:
         en_path.write_text(mod_en, encoding="utf-8")
 
         # Inject the gold-derived judge + translator into the live command.
-        from clm.cli.commands import slides_sync as cmd
+        from clm.cli.commands.slides import sync as cmd
 
         monkeypatch.setattr(cmd, "_resolve_judge", lambda *_a, **_k: _GoldJudge(mapping))
         monkeypatch.setattr(cmd, "OpenRouterSlideTranslator", lambda **_k: _GoldTranslator(mapping))
@@ -381,7 +381,7 @@ class TestSyncCodeE2E:
         _seed_watermark(cache_dir, de_path, en_path, orig_de, orig_en)
         en_path.write_text(mod_en, encoding="utf-8")
 
-        from clm.cli.commands import slides_sync as cmd
+        from clm.cli.commands.slides import sync as cmd
 
         monkeypatch.setattr(cmd, "_resolve_judge", lambda *_a, **_k: _GoldJudge(mapping))
         monkeypatch.setattr(cmd, "OpenRouterSlideTranslator", lambda **_k: _GoldTranslator(mapping))

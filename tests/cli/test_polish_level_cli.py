@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from click.testing import CliRunner
 
-from clm.cli.commands.polish import polish
+from clm.cli.commands.slides.polish import polish
 from clm.cli.commands.voiceover import voiceover_group
 
 # ---------------------------------------------------------------------------

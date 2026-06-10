@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from clm.cli.commands.slides_sync import _apply_exit_code, _plan_exit_code
+from clm.cli.commands.slides.sync import _apply_exit_code, _plan_exit_code
 from clm.infrastructure.llm.cache import SyncWatermarkCache
 from clm.infrastructure.llm.ollama_client import StaticSyncJudge, SyncProposal
 from clm.notebooks.slide_parser import parse_cells

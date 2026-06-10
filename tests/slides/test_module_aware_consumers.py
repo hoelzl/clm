@@ -26,7 +26,7 @@ from textwrap import dedent
 
 from click.testing import CliRunner
 
-from clm.cli.commands.resolve_topic import resolve_topic_cmd
+from clm.cli.commands.course.resolve_topic import resolve_topic_cmd
 from clm.slides.authoring_rules import get_authoring_rules
 from clm.slides.normalizer import normalize_course
 from clm.slides.search import search_slides

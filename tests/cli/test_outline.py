@@ -18,7 +18,7 @@ from textwrap import dedent
 import pytest
 from click.testing import CliRunner
 
-from clm.cli.commands.outline import (
+from clm.cli.commands.export.outline import (
     generate_outline,
     get_output_filename,
     titles_are_identical,

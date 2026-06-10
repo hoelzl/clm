@@ -1,7 +1,7 @@
 """Projection engine: map the content sequence onto a cohort's real dates.
 
 Pure, I/O-free, date-deterministic. Given the ordered *buckets* (the content
-sequence from :func:`clm.cli.commands.schedule.build_buckets`) and a
+sequence from :func:`clm.cli.commands.export.schedule.build_buckets`) and a
 :class:`~clm.cohort_calendar.config.CohortCalendarConfig`, :func:`project`
 produces the cohort *calendar*: a list of :class:`Assignment` rows plus
 structural :class:`Diagnostic` s.
@@ -50,7 +50,7 @@ from clm.cohort_calendar.config import (
 from clm.core.course_spec import WEEKDAY_ORDER
 
 if TYPE_CHECKING:
-    from clm.cli.commands.schedule import Bucket, ScheduleDeck
+    from clm.cli.commands.export.schedule import Bucket, ScheduleDeck
 
 # Generating teaching dates one calendar day at a time needs an upper bound so a
 # misconfigured (e.g. empty) pattern can't loop forever. Six years comfortably

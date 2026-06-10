@@ -289,6 +289,19 @@ Workers are now integrated into the main `clm` package under `clm.workers/`. Pre
 
 **Entry Point**: `clm` command (via `clm.cli.main:cli`)
 
+**Command module layout** (issue #310): the file layout under
+`src/clm/cli/commands/` mirrors the command tree, so finding a command's
+definition is mechanical:
+
+- `clm <cmd>` (flat) → `commands/<cmd>.py` (e.g. `clm build` → `build.py`)
+- `clm <group> <cmd>` → `commands/<group>/<cmd>.py` for package groups
+  (`slides/`, `course/`, `export/`; dashes become underscores), or
+  `commands/<group>.py` when the whole group is one cohesive module
+  (`calendar.py`, `db.py`, `git.py`, `voiceover.py`, ...)
+
+Each group registers its own subcommands where it is defined;
+`main.py` is the single manifest that assembles the top level.
+
 **Main Commands**:
 ```bash
 clm build <course.xml>          # Build/convert course

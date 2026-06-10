@@ -221,7 +221,7 @@ class TopicSpec:
 # Weekday tokens for ``<subsection weekday="...">`` (issue #261). A closed,
 # language-neutral enum so the validator can check ordering/uniqueness; the
 # tokens are localized only at render time (see
-# ``clm.cli.commands.schedule.WEEKDAY_LABELS``). ``sat``/``sun`` are valid
+# ``clm.cli.commands.export.schedule.WEEKDAY_LABELS``). ``sat``/``sun`` are valid
 # (some industry courses run on Saturday); AZAV uses Mon–Fri only. The tuple
 # defines the canonical week order used for the out-of-order check.
 WEEKDAY_ORDER: tuple[str, ...] = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")

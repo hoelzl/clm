@@ -249,7 +249,7 @@ class TestTraceSubgroup:
 
 class TestPolishCommand:
     def test_help(self):
-        from clm.cli.commands.polish import polish
+        from clm.cli.commands.slides.polish import polish
 
         runner = CliRunner()
         result = runner.invoke(polish, ["--help"])

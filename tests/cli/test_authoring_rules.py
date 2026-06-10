@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from clm.cli.commands.authoring_rules import authoring_rules_cmd
+from clm.cli.commands.slides.rules import authoring_rules_cmd
 
 
 @pytest.fixture()

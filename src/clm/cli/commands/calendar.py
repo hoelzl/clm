@@ -25,7 +25,7 @@ from clm.cli.commands._export_shared import (
     output_options,
     spec_argument,
 )
-from clm.cli.commands.schedule import Bucket, build_buckets, build_schedule
+from clm.cli.commands.export.schedule import Bucket, build_buckets, build_schedule
 from clm.cohort_calendar.config import (
     CohortCalendarConfig,
     CohortCalendarError,
@@ -229,7 +229,10 @@ def calendar(
 
 @click.group("calendar")
 def calendar_group() -> None:
-    """A cohort's viewing calendar: validate, show today's status, or push to Google (#283)."""
+    """A cohort's viewing calendar: generate, validate, show today's status, or push to Google (#283)."""
+
+
+calendar_group.add_command(calendar)  # the projection: `clm calendar generate`
 
 
 @calendar_group.command("check")

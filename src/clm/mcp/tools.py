@@ -252,7 +252,7 @@ async def handle_course_outline(
     Returns:
         JSON string with the course outline.
     """
-    from clm.cli.commands.outline import generate_outline_json
+    from clm.cli.commands.export.outline import generate_outline_json
 
     spec_path = Path(spec_file)
     if not spec_path.is_absolute():

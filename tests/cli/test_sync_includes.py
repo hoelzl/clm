@@ -18,7 +18,7 @@ from unittest.mock import patch
 import pytest
 from click.testing import CliRunner
 
-from clm.cli.commands.sync_includes import (
+from clm.cli.commands.course.sync_includes import (
     LEDGER_NAME,
     _compute_gitignore_patterns,
 )
@@ -359,7 +359,7 @@ class TestSyncIncludesSymlinkAndHardlink:
         # Force the symlink call to fail so we exercise the fallback path
         # deterministically on any host.
         with patch(
-            "clm.cli.commands.sync_includes.os.symlink",
+            "clm.cli.commands.course.sync_includes.os.symlink",
             side_effect=OSError("simulated no-perm"),
         ):
             result = _invoke(
