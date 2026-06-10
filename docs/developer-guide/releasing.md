@@ -13,15 +13,25 @@ not skip ahead.
 Before bumping the version, make sure all documentation reflects the current
 state of the code:
 
-1. **CHANGELOG.md** — Add an entry for the new version with a summary of
-   changes (Added / Changed / Fixed / Removed, following Keep a Changelog).
-   **Verify every merged PR since the last release is represented** — a PR can
-   merge without adding its own `[Unreleased]` entry (e.g. 1.8.0's cell-spacing
-   feature shipped with none and had to be backfilled at cut time). Cross-check
-   `git log <last-tag>..HEAD --merges` against the `[Unreleased]` section, then
-   rename `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD` and leave a fresh empty
-   `## [Unreleased]` above it. `bump-my-version` does **not** touch the
-   CHANGELOG, so this rename is manual.
+1. **CHANGELOG.md** — Changelog entries accumulate as fragment files in
+   `changelog.d/` (one per PR; see `changelog.d/README.md` — PRs must not edit
+   the `[Unreleased]` section directly, which is what used to cause constant
+   merge conflicts). Collect them into the new version's section with:
+
+   ```bash
+   python scripts/collect_changelog.py X.Y.Z   # --dry-run to preview
+   ```
+
+   This prepends `## [X.Y.Z] - YYYY-MM-DD` (grouped Added / Changed /
+   Deprecated / Removed / Fixed / Security), folds in any entries still
+   hand-written under `[Unreleased]`, and deletes the collected fragments.
+   **Verify every merged PR since the last release is represented** — a PR
+   can merge without adding its own fragment (e.g. 1.8.0's cell-spacing
+   feature shipped with none and had to be backfilled at cut time).
+   Cross-check `git log <last-tag>..HEAD --merges` against the generated
+   section and backfill missing entries by editing it directly.
+   `bump-my-version` does **not** touch the CHANGELOG, so this step is
+   manual.
 2. **README.md** — Update if there are new features, changed commands, or
    altered setup instructions.
 3. **CLAUDE.md** — Update only if there are new **guardrails** or
