@@ -328,6 +328,28 @@ def is_ignored_file_for_output(file_path: Path) -> bool:
     return False
 
 
+def is_ignored_path_in_output_tree(rel_path: Path) -> bool:
+    """Return True if a path *found inside* an output tree cannot be a build output.
+
+    Mirrors the dir-group copy filter (``shutil.ignore_patterns(*SKIP_DIRS_FOR_OUTPUT,
+    *SKIP_DIRS_PATTERNS, *SKIP_OUTPUT_FILE_GLOBS)`` in
+    ``LocalOpsBackend.copy_dir_group_files``): the build never copies VCS/IDE/cache
+    directories or output-suppressed files, so anything found beneath them was put
+    there by something else — e.g. the ``.git`` that ``clm git init`` creates inside
+    an output target (issue #302) — and must not be recorded as build provenance.
+
+    Unlike :func:`is_ignored_file_for_output` (which classifies *source* files and
+    also applies course-scan suffix rules), this checks every segment of the
+    output-relative path **including the final name**, so a worktree-style ``.git``
+    *file* is rejected too, and deliberately does not reject suffixes like ``.bin``
+    that the dir-group copy does ship.
+    """
+    if is_ignored_dir_for_output(rel_path):
+        return True
+    name = rel_path.name
+    return any(pattern.match(name) for pattern in SKIP_OUTPUT_FILE_PATTERNS)
+
+
 def simplify_ordered_name(name: str, prefix: str | None = None) -> str:
     name = name.rsplit(".", maxsplit=1)[0]
     parts = name.split("_")

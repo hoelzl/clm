@@ -192,6 +192,56 @@ def test_released_but_unbuilt_topic_is_not_frozen(tmp_path):
     assert not frozen.is_frozen("ghost")
 
 
+def test_sync_refuses_vcs_paths_from_a_polluted_manifest(tmp_path, caplog):
+    """Defense in depth (issue #302): a manifest from an older build that
+    walked a stray ``.git`` into the skeleton must never overwrite the
+    destination repo's own ``.git``."""
+    manifest = _manifest()
+    manifest["files"] += [
+        {
+            "path": ".git/index",
+            "topic_id": None,
+            "section_id": None,
+            "kind": None,
+            "format": "dir-group",
+            "language": "de",
+            "content_hash": "sha256:ddd",
+        },
+        {
+            "path": "Sec/.svn/entries",
+            "topic_id": "intro",
+            "section_id": "w01",
+            "kind": None,
+            "format": "dir-group",
+            "language": "en",
+            "content_hash": "sha256:eee",
+        },
+    ]
+    source = _materialize_source(tmp_path, manifest)
+    dest = tmp_path / "jan"
+    (dest / ".git").mkdir(parents=True)
+    (dest / ".git" / "index").write_bytes(b"REAL")
+    frozen = FrozenManifest(channel="jan")
+
+    plan = plan_sync(manifest=manifest, ledger_released=["intro"], frozen=frozen)
+    result = apply_sync(
+        plan=plan,
+        manifest=manifest,
+        source_root=source,
+        dest_root=dest,
+        frozen=frozen,
+        copied_at="t1",
+    )
+
+    # The legitimate skeleton + topic files were copied; the VCS entries were not.
+    assert (dest / INTRO_PATH).is_file()
+    assert (dest / SKELETON_PATH).is_file()
+    assert not (dest / "Sec" / ".svn").exists()
+    assert (dest / ".git" / "index").read_bytes() == b"REAL"
+    assert result.files_copied == 2
+    assert "refused to copy 1 VCS metadata file" in caplog.text
+
+
 # ---------------------------------------------------------------------------
 # Failed topics in a partial manifest (issue #295)
 # ---------------------------------------------------------------------------
