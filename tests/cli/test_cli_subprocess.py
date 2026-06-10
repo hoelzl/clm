@@ -29,7 +29,7 @@ class TestCliCommandExists:
         )
         assert result.returncode == 0
         assert "build" in result.stdout
-        assert "delete-database" in result.stdout
+        assert "db" in result.stdout
 
     def test_clm_command_shows_version_info(self):
         """Test that clm command provides version/help information"""
@@ -152,7 +152,7 @@ class TestDeleteDatabaseSubprocess:
     def test_delete_database_help(self):
         """Test delete_database --help"""
         result = subprocess.run(
-            ["clm", "delete-database", "--help"],
+            ["clm", "db", "delete", "--help"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -171,7 +171,8 @@ class TestDeleteDatabaseSubprocess:
                 str(jobs_db_path),
                 "--cache-db-path",
                 str(cache_db_path),
-                "delete-database",
+                "db",
+                "delete",
             ],
             capture_output=True,
             text=True,
@@ -200,7 +201,8 @@ class TestDeleteDatabaseSubprocess:
                 str(jobs_db_path),
                 "--cache-db-path",
                 str(cache_db_path),
-                "delete-database",
+                "db",
+                "delete",
             ],
             capture_output=True,
             text=True,

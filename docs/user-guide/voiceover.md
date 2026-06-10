@@ -138,7 +138,7 @@ subcommands recover the voiceover and port it forward onto the current HEAD:
 - `clm voiceover sync-at-rev SLIDE_FILE VIDEOS... --rev <sha> -o scratch.py` —
   export `SLIDE_FILE` at `--rev` to scratch and run `sync` against it (the
   working tree is never touched).
-- `clm voiceover port-voiceover SOURCE TARGET` — file-to-file transfer of
+- `clm voiceover port SOURCE TARGET` — file-to-file transfer of
   voiceover cells from an older synced `SOURCE` onto the current `TARGET`.
 - `clm voiceover compare SOURCE TARGET` — read-only sibling of
   `port-voiceover`; the LLM labels each bullet as covered/rewritten/added/

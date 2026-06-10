@@ -39,10 +39,10 @@ from clm.cli.commands.build import (
     create_output_formatter,
     enable_jupyterlite_workers_if_needed,
     initialize_paths_and_course,
-    list_targets,
     report_validation_errors,
     start_managed_workers,
 )
+from clm.cli.commands.course.targets import list_targets
 from clm.cli.output_formatter import (
     DefaultOutputFormatter,
     JSONOutputFormatter,

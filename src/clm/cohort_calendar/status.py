@@ -22,7 +22,7 @@ from clm.cohort_calendar.config import CohortCalendarConfig
 from clm.cohort_calendar.projection import Assignment, project
 
 if TYPE_CHECKING:
-    from clm.cli.commands.schedule import Bucket
+    from clm.cli.commands.export.schedule import Bucket
 
 _DEFAULT_LOOKAHEAD = 5
 

@@ -72,7 +72,7 @@ class TestVoiceoverGroup:
 
     def test_port_voiceover_help(self):
         runner = CliRunner()
-        result = runner.invoke(voiceover_group, ["port-voiceover", "--help"])
+        result = runner.invoke(voiceover_group, ["port", "--help"])
         assert result.exit_code == 0
         assert "--lang" in result.output
         assert "--dry-run" in result.output
@@ -249,7 +249,7 @@ class TestTraceSubgroup:
 
 class TestPolishCommand:
     def test_help(self):
-        from clm.cli.commands.polish import polish
+        from clm.cli.commands.slides.polish import polish
 
         runner = CliRunner()
         result = runner.invoke(polish, ["--help"])
@@ -271,11 +271,10 @@ class TestMainCliRegistration:
         assert "voiceover" in cli.list_commands(ctx)
         assert cli.get_command(ctx, "voiceover") is not None
 
-    def test_polish_registered(self):
-        import click
+    def test_polish_registered_under_slides(self):
+        # The slides group self-registers its subcommands at import, so
+        # its .commands dict is fully populated once the group is loaded.
+        from clm.cli.main import slides_group
 
-        from clm.cli.main import cli
-
-        ctx = click.Context(cli)
-        assert "polish" in cli.list_commands(ctx)
-        assert cli.get_command(ctx, "polish") is not None
+        command_names = list(slides_group.commands)
+        assert "polish" in command_names

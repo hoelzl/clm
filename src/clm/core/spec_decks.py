@@ -18,7 +18,7 @@ The functions here mirror the build's resolution semantics exactly so the
 - **first-occurrence-wins** when an unbound topic ID matches multiple modules,
   matching ``Course._build_topic_map``.
 
-Used by ``clm spec decks`` and ``clm slides referenced-by``; intended to be the
+Used by ``clm course decks`` and ``clm slides referenced-by``; intended to be the
 single source of truth for the spec→deck operation that gaps #2 (deep validate),
 #3 (course gate), and #7 (orphans) will also need.
 """

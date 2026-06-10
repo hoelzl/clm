@@ -44,7 +44,7 @@ def _course(tmp_path: Path) -> Path:
 
 def test_lists_orphans_grouped(tmp_path):
     _course(tmp_path)
-    r = CliRunner().invoke(cli, ["spec", "orphans", str(tmp_path / "course-specs")])
+    r = CliRunner().invoke(cli, ["course", "orphans", str(tmp_path / "course-specs")])
     assert r.exit_code == 0
     assert "slides_b_old.py" in r.output
     assert "slides_b_part1.py" in r.output
@@ -58,7 +58,7 @@ def test_lists_orphans_grouped(tmp_path):
 def test_kind_filter(tmp_path):
     _course(tmp_path)
     r = CliRunner().invoke(
-        cli, ["spec", "orphans", str(tmp_path / "course-specs"), "--kind", "superseded", "--json"]
+        cli, ["course", "orphans", str(tmp_path / "course-specs"), "--kind", "superseded", "--json"]
     )
     data = json.loads(r.output[r.output.index("{") : r.output.rindex("}") + 1])
     kinds = {o["kind"] for o in data["orphans"]}
@@ -67,7 +67,7 @@ def test_kind_filter(tmp_path):
 
 def test_json_shape(tmp_path):
     _course(tmp_path)
-    r = CliRunner().invoke(cli, ["spec", "orphans", str(tmp_path / "course-specs"), "--json"])
+    r = CliRunner().invoke(cli, ["course", "orphans", str(tmp_path / "course-specs"), "--json"])
     data = json.loads(r.output[r.output.index("{") : r.output.rindex("}") + 1])
     assert data["orphan_count"] == 3
     assert data["by_kind"] == {"superseded": 1, "alternate": 1, "unknown": 1}
@@ -79,7 +79,7 @@ def test_clean_checkpoints_removes(tmp_path):
     ck = tmp_path / "slides" / "module_100_x" / "topic_0000_a" / ".ipynb_checkpoints"
     assert ck.exists()
     r = CliRunner().invoke(
-        cli, ["spec", "orphans", str(tmp_path / "course-specs"), "--clean-checkpoints"]
+        cli, ["course", "orphans", str(tmp_path / "course-specs"), "--clean-checkpoints"]
     )
     assert "Removed 1" in r.output
     assert not ck.exists()
@@ -89,7 +89,7 @@ def test_clean_checkpoints_json_records_removed(tmp_path):
     _course(tmp_path)
     r = CliRunner().invoke(
         cli,
-        ["spec", "orphans", str(tmp_path / "course-specs"), "--clean-checkpoints", "--json"],
+        ["course", "orphans", str(tmp_path / "course-specs"), "--clean-checkpoints", "--json"],
     )
     data = json.loads(r.output[r.output.index("{") : r.output.rindex("}") + 1])
     assert len(data["checkpoints_removed"]) == 1
@@ -105,7 +105,7 @@ def test_slides_dir_override(tmp_path):
     )
     r = CliRunner().invoke(
         cli,
-        ["spec", "orphans", str(far), "--slides-dir", str(tmp_path / "slides"), "--json"],
+        ["course", "orphans", str(far), "--slides-dir", str(tmp_path / "slides"), "--json"],
     )
     data = json.loads(r.output[r.output.index("{") : r.output.rindex("}") + 1])
     assert data["orphan_count"] == 3
@@ -123,7 +123,7 @@ def test_missing_slides_dir_errors(tmp_path):
         """),
         encoding="utf-8",
     )
-    r = CliRunner().invoke(cli, ["spec", "orphans", str(specs)])
+    r = CliRunner().invoke(cli, ["course", "orphans", str(specs)])
     assert r.exit_code != 0
     assert "Slides directory not found" in r.output
 
@@ -132,6 +132,6 @@ def test_no_specs_errors(tmp_path):
     empty = tmp_path / "course-specs"
     empty.mkdir()
     (tmp_path / "slides").mkdir()
-    r = CliRunner().invoke(cli, ["spec", "orphans", str(empty)])
+    r = CliRunner().invoke(cli, ["course", "orphans", str(empty)])
     assert r.exit_code != 0
     assert "No *.xml specs" in r.output

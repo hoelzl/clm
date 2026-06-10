@@ -19,7 +19,7 @@ from pathlib import Path
 import click
 from attrs import frozen
 
-from clm.cli.commands.git_ops import (
+from clm.cli.commands.git import (
     OutputRepo,
     commit_and_push_repo,
     find_release_channel_repos,

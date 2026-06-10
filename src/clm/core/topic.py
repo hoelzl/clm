@@ -238,7 +238,7 @@ class Topic(NotebookMixin, ABC):
         Single-file includes register a single entry at
         ``topic.path / include.as_path``.
 
-        Files materialized on disk by ``clm sync-includes`` (recorded in
+        Files materialized on disk by ``clm course sync-includes`` (recorded in
         the topic's ``.clm-include`` ledger) shadow the virtual entry by
         design — the shadow warning is suppressed for those, since they
         *are* the include's output, not competing overrides.

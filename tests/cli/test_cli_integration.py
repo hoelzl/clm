@@ -218,7 +218,8 @@ class TestDeleteDatabaseIntegration:
                 str(db_path),
                 "--cache-db-path",
                 str(tmp_path / "nonexistent_cache.db"),
-                "delete-database",
+                "db",
+                "delete",
                 "--which=jobs",
             ],
         )
@@ -241,7 +242,8 @@ class TestDeleteDatabaseIntegration:
                 str(db_path),
                 "--cache-db-path",
                 str(tmp_path / "nonexistent_cache.db"),
-                "delete-database",
+                "db",
+                "delete",
                 "--which=jobs",
             ],
         )
@@ -256,7 +258,8 @@ class TestDeleteDatabaseIntegration:
                 str(db_path),
                 "--cache-db-path",
                 str(tmp_path / "nonexistent_cache.db"),
-                "delete-database",
+                "db",
+                "delete",
                 "--which=jobs",
             ],
         )

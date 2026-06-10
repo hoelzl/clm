@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from clm.cli.commands.outline import generate_outline, generate_outline_json
+from clm.cli.commands.export.outline import generate_outline, generate_outline_json
 from clm.cli.main import cli
 from clm.core.course import Course
 from clm.core.course_spec import CourseSpec

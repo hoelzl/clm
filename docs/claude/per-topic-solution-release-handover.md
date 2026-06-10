@@ -216,7 +216,9 @@ divergence (step 4), recordings (step 5).
 
 - User prefers granular commit history kept (atomic, each green) — do NOT squash
   the branch; choose squash-vs-merge at PR time. Commit at sensible checkpoints
-  without asking; **push needs an explicit request**.
+  without asking. (Historical note: at the time of this handover pushes needed
+  an explicit request; since 2026-06-10 agents push and open PRs autonomously —
+  see CLAUDE.md "Git Workflow".)
 - PlantUML/DrawIo source diagrams emit only a *source-tree* intermediate image;
   their output copy is a separate image `CourseFile` already covered — don't
   double-count or treat them as missing.

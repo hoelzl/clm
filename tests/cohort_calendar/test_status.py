@@ -2,7 +2,7 @@
 
 import datetime as dt
 
-from clm.cli.commands.schedule import Bucket, ScheduleDeck
+from clm.cli.commands.export.schedule import Bucket, ScheduleDeck
 from clm.cohort_calendar.config import CohortCalendarConfig, Holiday
 from clm.cohort_calendar.status import compute_status
 

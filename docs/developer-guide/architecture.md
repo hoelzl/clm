@@ -289,6 +289,19 @@ Workers are now integrated into the main `clm` package under `clm.workers/`. Pre
 
 **Entry Point**: `clm` command (via `clm.cli.main:cli`)
 
+**Command module layout** (issue #310): the file layout under
+`src/clm/cli/commands/` mirrors the command tree, so finding a command's
+definition is mechanical:
+
+- `clm <cmd>` (flat) → `commands/<cmd>.py` (e.g. `clm build` → `build.py`)
+- `clm <group> <cmd>` → `commands/<group>/<cmd>.py` for package groups
+  (`slides/`, `course/`, `export/`; dashes become underscores), or
+  `commands/<group>.py` when the whole group is one cohesive module
+  (`calendar.py`, `db.py`, `git.py`, `voiceover.py`, ...)
+
+Each group registers its own subcommands where it is defined;
+`main.py` is the single manifest that assembles the top level.
+
 **Main Commands**:
 ```bash
 clm build <course.xml>          # Build/convert course
@@ -955,7 +968,7 @@ clm build course.xml --targets students,solutions
 
 **New `targets` command**:
 ```bash
-clm targets course.xml
+clm course targets course.xml
 ```
 
 ### Backward Compatibility
@@ -1021,12 +1034,12 @@ the `clm.slides` CLI tools.
 
 ### `clm.slides` (authoring tools)
 
-CLI-facing tooling for AI-assisted slide authoring. Powers `clm topic resolve`,
+CLI-facing tooling for AI-assisted slide authoring. Powers `clm course resolve-topic`,
 `clm slides search`, `clm validate` (spec + slide validation),
 `clm slides normalize`, `clm slides language-view`, `clm slides suggest-sync`,
 `clm slides assign-ids`, `clm slides coverage`, `clm slides split` /
 `clm slides unify`, `clm slides sync`, `clm slides tidy`,
-`clm voiceover extract` / `clm voiceover inline`, and `clm authoring rules`.
+`clm voiceover extract` / `clm voiceover inline`, and `clm slides rules`.
 (The flat-form aliases — `clm resolve-topic`, `clm search-slides`, etc. — were
 removed in CLM 1.8; use the verb-grouped invocations above.)
 

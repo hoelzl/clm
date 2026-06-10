@@ -8,7 +8,7 @@ from pathlib import Path
 
 from click.testing import CliRunner
 
-from clm.cli.commands.suggest_sync import suggest_sync_cmd
+from clm.cli.commands.slides.suggest_sync import suggest_sync_cmd
 
 
 def _init_git_repo(tmp_path: Path) -> Path:

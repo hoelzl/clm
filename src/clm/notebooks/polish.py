@@ -2,7 +2,7 @@
 
 This module cleans up raw transcript text or rough speaker notes using an LLM.
 It is independent of the voiceover pipeline and can be used standalone via
-``clm polish`` or as part of the voiceover workflow.
+``clm slides polish`` or as part of the voiceover workflow.
 
 Requires the ``[summarize]`` extra (openai).
 """

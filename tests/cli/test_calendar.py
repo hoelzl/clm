@@ -26,7 +26,7 @@ class TestExportCalendar:
         cal = _write(tmp_path, CAL_OK)
         runner = CliRunner()
         result = runner.invoke(
-            cli, ["export", "calendar", str(SPEC_PATH), "--calendar", str(cal), "-L", "en"]
+            cli, ["calendar", "generate", str(SPEC_PATH), "--calendar", str(cal), "-L", "en"]
         )
         assert result.exit_code == 0, result.output
         assert "— Calendar" in result.output
@@ -41,7 +41,17 @@ class TestExportCalendar:
         runner = CliRunner()
         result = runner.invoke(
             cli,
-            ["export", "calendar", str(SPEC_PATH), "--calendar", str(cal), "-L", "en", "-f", "csv"],
+            [
+                "calendar",
+                "generate",
+                str(SPEC_PATH),
+                "--calendar",
+                str(cal),
+                "-L",
+                "en",
+                "-f",
+                "csv",
+            ],
         )
         assert result.exit_code == 0, result.output
         assert "date,end_date,weekday,kind,label,video_title,topic,deck_file" in result.output
@@ -55,7 +65,17 @@ class TestExportCalendar:
         runner = CliRunner()
         result = runner.invoke(
             cli,
-            ["export", "calendar", str(SPEC_PATH), "--calendar", str(cal), "-L", "en", "-f", "ics"],
+            [
+                "calendar",
+                "generate",
+                str(SPEC_PATH),
+                "--calendar",
+                str(cal),
+                "-L",
+                "en",
+                "-f",
+                "ics",
+            ],
         )
         assert result.exit_code == 0, result.output
         assert "BEGIN:VCALENDAR" in result.output
@@ -69,8 +89,8 @@ class TestExportCalendar:
         result = runner.invoke(
             cli,
             [
-                "export",
                 "calendar",
+                "generate",
                 str(SPEC_PATH),
                 "--calendar",
                 str(cal),
@@ -88,28 +108,28 @@ class TestExportCalendar:
         cal = _write(tmp_path, CAL_TOO_SHORT)
         runner = CliRunner()
         result = runner.invoke(
-            cli, ["export", "calendar", str(SPEC_PATH), "--calendar", str(cal), "-L", "en"]
+            cli, ["calendar", "generate", str(SPEC_PATH), "--calendar", str(cal), "-L", "en"]
         )
         assert result.exit_code != 0
         assert "merge" in result.output  # quantified deficit reported to stderr
 
     def test_channel_without_release_channels_errors(self):
         runner = CliRunner()
-        result = runner.invoke(cli, ["export", "calendar", str(SPEC_PATH), "--channel", "jan"])
+        result = runner.invoke(cli, ["calendar", "generate", str(SPEC_PATH), "--channel", "jan"])
         assert result.exit_code != 0
         assert "release-channels" in result.output
 
     def test_requires_channel_or_calendar(self):
         runner = CliRunner()
-        result = runner.invoke(cli, ["export", "calendar", str(SPEC_PATH)])
+        result = runner.invoke(cli, ["calendar", "generate", str(SPEC_PATH)])
         assert result.exit_code != 0
         assert "--channel" in result.output or "--calendar" in result.output
 
-    def test_registered_in_export_help(self):
+    def test_registered_in_calendar_group_help(self):
         runner = CliRunner()
-        result = runner.invoke(cli, ["export", "--help"])
+        result = runner.invoke(cli, ["calendar", "--help"])
         assert result.exit_code == 0
-        assert "calendar" in result.output
+        assert "generate" in result.output
 
 
 class TestCalendarGroup:

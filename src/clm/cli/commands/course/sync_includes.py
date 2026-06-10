@@ -6,7 +6,7 @@ covers ``clm build`` execution. But notebook authors running a deck
 directly (VS Code, ``jupyter lab``) need the included package to sit
 physically next to the slide file so Python's import system finds it.
 
-``clm sync-includes`` resolves every ``<include>`` declared in a course
+``clm course sync-includes`` resolves every ``<include>`` declared in a course
 spec and materializes the source under ``<topic-dir>/<as>`` as a copy
 (default), symlink, or set of hardlinks. Each topic that received at
 least one materialization gets a JSON ledger at ``<topic-dir>/.clm-include``
@@ -140,10 +140,10 @@ def sync_includes_cmd(
 
     \b
     Examples:
-        clm sync-includes course-specs/ml-azav.xml
-        clm sync-includes course-specs/ml-azav.xml --mode=symlink
-        clm sync-includes course-specs/ml-azav.xml --remove
-        clm sync-includes course-specs/ml-azav.xml --print-gitignore >> .gitignore
+        clm course sync-includes course-specs/ml-azav.xml
+        clm course sync-includes course-specs/ml-azav.xml --mode=symlink
+        clm course sync-includes course-specs/ml-azav.xml --remove
+        clm course sync-includes course-specs/ml-azav.xml --print-gitignore >> .gitignore
     """
     if print_gitignore and remove:
         raise click.UsageError("--print-gitignore and --remove are mutually exclusive.")
@@ -467,7 +467,7 @@ def _compute_gitignore_patterns(as_paths: Iterable[str]) -> list[str]:
 
     The universal ledger pattern (``**/.clm-include``) is always emitted,
     even when no ``as`` paths exist, so a fresh checkout can bootstrap
-    with `clm sync-includes spec.xml --print-gitignore`. Each ``as`` path
+    with `clm course sync-includes spec.xml --print-gitignore`. Each ``as`` path
     is anchored under ``slides/**/`` to avoid accidentally matching the
     canonical source under ``examples/`` (or anywhere else).
     """
@@ -482,7 +482,7 @@ def _compute_gitignore_patterns(as_paths: Iterable[str]) -> list[str]:
 
 def _emit_gitignore_patterns(as_paths: Iterable[str]) -> None:
     """Write the suggested gitignore block to stdout."""
-    click.echo("# Added by `clm sync-includes --print-gitignore`")
+    click.echo("# Added by `clm course sync-includes --print-gitignore`")
     click.echo("# Materialized include targets and per-topic ledgers.")
     for pattern in _compute_gitignore_patterns(as_paths):
         click.echo(pattern)
@@ -519,7 +519,7 @@ def _print_summary(summary: _SyncSummary, *, dry_run: bool, remove: bool) -> Non
     click.echo(f"{prefix}{'; '.join(parts)}.")
     if summary.materialized + summary.refreshed > 0:
         click.echo(
-            "Tip: run `clm sync-includes <spec> --print-gitignore` for suggested .gitignore rules."
+            "Tip: run `clm course sync-includes <spec> --print-gitignore` for suggested .gitignore rules."
         )
 
 

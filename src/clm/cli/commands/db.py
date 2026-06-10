@@ -396,8 +396,7 @@ def db_clean(ctx, completed_days, failed_days, events_days, cache_versions, forc
     click.echo("\nCleanup complete!")
 
 
-# Keep the legacy delete-database command for backwards compatibility
-@click.command()
+@db.command(name="delete")
 @click.option(
     "--which",
     type=click.Choice(["cache", "jobs", "both"], case_sensitive=False),
@@ -413,9 +412,9 @@ def delete_database(ctx, which):
 
     \b
     Examples:
-        clm delete-database --which=cache
-        clm delete-database --which=jobs
-        clm delete-database --which=both
+        clm db delete --which=cache
+        clm db delete --which=jobs
+        clm db delete --which=both
     """
     cache_db_path = ctx.obj["CACHE_DB_PATH"]
     jobs_db_path = ctx.obj["JOBS_DB_PATH"]

@@ -8,8 +8,10 @@ from unittest.mock import MagicMock
 import pytest
 from click.testing import CliRunner
 
-from clm.cli.commands import monitoring as monitoring_module
-from clm.cli.commands.monitoring import monitor, serve
+from clm.cli.commands import monitor as monitor_module
+from clm.cli.commands import serve as serve_module
+from clm.cli.commands.monitor import monitor
+from clm.cli.commands.serve import serve
 
 
 class TestMonitorCommand:
@@ -315,5 +317,6 @@ class TestServeCommand:
 
 
 def test_module_logger_name():
-    # Confirm the module exposes a logger with the expected name.
-    assert monitoring_module.logger.name == "clm.cli.commands.monitoring"
+    # Confirm both modules expose a logger with the expected name.
+    assert monitor_module.logger.name == "clm.cli.commands.monitor"
+    assert serve_module.logger.name == "clm.cli.commands.serve"

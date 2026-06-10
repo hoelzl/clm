@@ -7,8 +7,8 @@ from unittest.mock import MagicMock
 import pytest
 from click.testing import CliRunner
 
-from clm.cli.commands import zip_ops as zip_ops_module
-from clm.cli.commands.zip_ops import (
+from clm.cli.commands import zip as zip_ops_module
+from clm.cli.commands.zip import (
     OutputDirectory,
     _archive_name,
     find_output_directories,
