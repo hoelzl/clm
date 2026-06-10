@@ -214,6 +214,79 @@ class TestChannelRemoteUrl:
         assert plain == "https://gitlab.example.com/ca/ml-jan"
 
 
+class TestEvergreen:
+    """``<evergreen>`` patterns: skeleton files exempt from the freeze."""
+
+    BLOCK = """
+    <release-channels source-target="shared">
+      <evergreen>NEWS.md</evergreen>
+      <evergreen>announcements/*</evergreen>
+      <channel name="jan" path="./solutions/jan" ledger="release/jan.txt">
+        <evergreen>jan-schedule.md</evergreen>
+        <evergreen>NEWS.md</evergreen>
+      </channel>
+      <channel name="may" path="./solutions/may" ledger="release/may.txt"/>
+    </release-channels>
+    """
+
+    def test_block_patterns_inherited_and_channel_additions_unioned(self):
+        block = _spec(self.BLOCK, TWO_STREAM_TARGETS).release_channel_blocks[0]
+        assert block.evergreen == ("NEWS.md", "announcements/*")
+        # Channel-level entries are additive; the duplicate NEWS.md is dropped.
+        assert block.channel("jan").evergreen == (
+            "NEWS.md",
+            "announcements/*",
+            "jan-schedule.md",
+        )
+        # A channel without its own entries inherits the block's.
+        assert block.channel("may").evergreen == ("NEWS.md", "announcements/*")
+
+    def test_absent_evergreen_defaults_empty(self):
+        block = """
+        <release-channels source-target="shared">
+          <channel name="jan" path="./solutions/jan" ledger="release/jan.txt"/>
+        </release-channels>
+        """
+        rc = _spec(block, TWO_STREAM_TARGETS).release_channel_blocks[0]
+        assert rc.evergreen == ()
+        assert rc.channel("jan").evergreen == ()
+
+    def test_valid_evergreen_validates_clean(self):
+        assert _spec(self.BLOCK, TWO_STREAM_TARGETS).validate() == []
+
+    def test_empty_pattern_is_a_validation_error(self):
+        block = """
+        <release-channels source-target="shared">
+          <evergreen></evergreen>
+          <channel name="jan" path="./solutions/jan" ledger="release/jan.txt"/>
+        </release-channels>
+        """
+        errors = _spec(block, TWO_STREAM_TARGETS).validate()
+        assert any("<evergreen> needs a glob pattern" in e for e in errors)
+
+    def test_backslash_pattern_is_a_validation_error(self):
+        block = r"""
+        <release-channels source-target="shared">
+          <channel name="jan" path="./solutions/jan" ledger="release/jan.txt">
+            <evergreen>docs\NEWS.md</evergreen>
+          </channel>
+        </release-channels>
+        """
+        errors = _spec(block, TWO_STREAM_TARGETS).validate()
+        assert any("backslash" in e and "Channel 'jan'" in e for e in errors)
+
+    def test_block_level_error_not_repeated_per_channel(self):
+        block = """
+        <release-channels source-target="shared">
+          <evergreen></evergreen>
+          <channel name="jan" path="./solutions/jan" ledger="release/jan.txt"/>
+          <channel name="may" path="./solutions/may" ledger="release/may.txt"/>
+        </release-channels>
+        """
+        errors = _spec(block, TWO_STREAM_TARGETS).validate()
+        assert sum("<evergreen> needs a glob pattern" in e for e in errors) == 1
+
+
 class TestLanguageScopedChannels:
     """Channel `lang` attribute (issue #293)."""
 

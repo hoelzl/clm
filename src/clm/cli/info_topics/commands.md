@@ -2627,6 +2627,7 @@ Key options for `release sync`:
 | `--language de\|en` | Promote only this language's files, re-rooted at the language directory (issue #293). Overrides the channel's `lang` attribute; requires `SPEC_FILE`; `--source` must point at the output-target root. |
 | `--refreeze TOPIC` | Re-copy and re-freeze an already-frozen topic (e.g. a bug fix). Repeatable. |
 | `--refreeze-all` | Re-copy and re-freeze every released topic. |
+| `--evergreen PATTERN` | Glob pattern (destination-relative POSIX path) of **skeleton files kept evergreen**: re-copied whenever the built content differs from the cohort's copy (e.g. `NEWS.md`). Repeatable; adds to the channel's `<evergreen>` spec patterns. Skeleton-only — a pattern matching topic-owned files is warned about and ignored (use `--refreeze`). |
 | `--push` | After promoting, commit and push the cohort repo (via `clm git`'s commit/push). The repo must already exist — run `clm git init … --channel` once first. |
 | `-m, --message` | Commit message used by `--push` (default: a one-line summary of the sync). |
 | `--dry-run` | Print the promotion plan; copy nothing. |
@@ -2635,6 +2636,14 @@ The source must be built with the provenance manifest (`clm build` writes it by
 default since CLM {version}). Promotion copies bytes by manifest and records each
 topic in the cohort's frozen manifest (`.clm-released.json`); a frozen topic is
 never re-propagated unless you pass `--refreeze`.
+
+**Evergreen files.** Skeleton (global) files matching the channel's
+`<evergreen>` patterns — or `--evergreen` options — are exempt from the
+skeleton freeze: each sync re-copies a matching file whose built content
+differs from the cohort's copy, with no freeze-record bookkeeping (the
+destination's content is the state, so re-runs are idempotent and `--push`
+commits nothing when nothing changed). See `clm info spec-files` for the
+`<evergreen>` element.
 
 **Partial manifests (issue #295).** A whole-course build that errors on some
 topics still writes the manifest for the cleanly-built subset, recording the

@@ -1194,6 +1194,12 @@ class ReleaseChannelSpec:
     entries (e.g. a trainers group) are inherited by every channel and come
     first; a channel-level entry for the same group overrides the inherited
     access level.
+
+    ``evergreen`` lists glob patterns (matched against destination-relative
+    POSIX paths) of skeleton files that are **never frozen**: ``clm release
+    sync`` re-promotes a matching file whenever the built content differs from
+    the cohort's copy (e.g. a NEWS file). Block-level ``<evergreen>`` entries
+    are inherited by every channel; channel-level entries are additive.
     """
 
     name: str
@@ -1202,6 +1208,7 @@ class ReleaseChannelSpec:
     remote_path: str = ""
     lang: str = ""
     share_with: tuple[ShareWithSpec, ...] = ()
+    evergreen: tuple[str, ...] = ()
 
     @classmethod
     def from_element(
@@ -1210,12 +1217,17 @@ class ReleaseChannelSpec:
         *,
         default_remote_path: str = "",
         default_shares: "tuple[ShareWithSpec, ...]" = (),
+        default_evergreen: "tuple[str, ...]" = (),
     ) -> "ReleaseChannelSpec":
         own_shares = tuple(ShareWithSpec.from_element(sw) for sw in element.findall("share-with"))
         # Inherited entries first; a channel-level entry for the same group
         # replaces the inherited one (its access wins).
         own_groups = {s.group for s in own_shares}
         shares = tuple(s for s in default_shares if s.group not in own_groups) + own_shares
+        own_evergreen = tuple((eg.text or "").strip() for eg in element.findall("evergreen"))
+        # Inherited patterns first, channel additions after; duplicates dropped
+        # (patterns have no identity key, so union — not override — semantics).
+        evergreen = tuple(dict.fromkeys(default_evergreen + own_evergreen))
         return cls(
             name=element.get("name", ""),
             path=element.get("path", ""),
@@ -1223,6 +1235,7 @@ class ReleaseChannelSpec:
             remote_path=(element_text(element, "remote-path") or default_remote_path),
             lang=element.get("lang", ""),
             share_with=shares,
+            evergreen=evergreen,
         )
 
 
@@ -1249,6 +1262,8 @@ class ReleaseChannelsSpec:
     # Stream name. Empty for the single-block (issue #208) layout; required
     # and unique when several <release-channels> blocks are declared.
     name: str = ""
+    # Block-level evergreen patterns, inherited by every channel.
+    evergreen: tuple[str, ...] = ()
 
     @classmethod
     def from_element(cls, element: ETree.Element) -> "ReleaseChannelsSpec":
@@ -1258,9 +1273,14 @@ class ReleaseChannelsSpec:
         default_shares = tuple(
             ShareWithSpec.from_element(sw) for sw in element.findall("share-with")
         )
+        # Block-level <evergreen> patterns likewise apply to every channel.
+        default_evergreen = tuple((eg.text or "").strip() for eg in element.findall("evergreen"))
         channels = [
             ReleaseChannelSpec.from_element(
-                ch, default_remote_path=remote_path, default_shares=default_shares
+                ch,
+                default_remote_path=remote_path,
+                default_shares=default_shares,
+                default_evergreen=default_evergreen,
             )
             for ch in element.findall("channel")
         ]
@@ -1269,6 +1289,7 @@ class ReleaseChannelsSpec:
             channels=channels,
             remote_path=remote_path,
             name=element.get("name", ""),
+            evergreen=default_evergreen,
         )
 
     def channel(self, name: str) -> "ReleaseChannelSpec | None":
@@ -1309,6 +1330,25 @@ def release_channel_ref(block: ReleaseChannelsSpec, channel: ReleaseChannelSpec)
     bare name, so issue-#208 era commands are unchanged.
     """
     return f"{block.name}/{channel.name}" if block.name else channel.name
+
+
+def _validate_evergreen_patterns(patterns: tuple[str, ...], owner_label: str) -> list[str]:
+    """Validation errors for ``<evergreen>`` patterns declared on *owner_label*.
+
+    Patterns are matched against destination-relative POSIX paths by the
+    release sync, so an empty pattern (matches nothing) or a backslash
+    separator (never matches a POSIX path) is a spec mistake, not a no-op.
+    """
+    errors: list[str] = []
+    for pattern in patterns:
+        if not pattern:
+            errors.append(f"{owner_label}: <evergreen> needs a glob pattern as text content.")
+        elif "\\" in pattern:
+            errors.append(
+                f"{owner_label}: evergreen pattern {pattern!r} contains a backslash; "
+                f"patterns match POSIX paths — use '/' as the separator."
+            )
+    return errors
 
 
 @frozen
@@ -2147,6 +2187,8 @@ class CourseSpec:
                     f"name an <output-target>."
                 )
 
+            errors.extend(_validate_evergreen_patterns(block.evergreen, block_label))
+
             channel_names: set[str] = set()
             for channel in block.channels:
                 ref = release_channel_ref(block, channel)
@@ -2195,6 +2237,11 @@ class CourseSpec:
                             f"Channel '{ref}': invalid share-with access "
                             f"{share.access!r}. Valid values: {sorted(VALID_SHARE_ACCESS)}"
                         )
+
+                # Channel-own patterns only — inherited ones were validated at
+                # block level and would otherwise repeat per channel.
+                own_evergreen = tuple(p for p in channel.evergreen if p not in set(block.evergreen))
+                errors.extend(_validate_evergreen_patterns(own_evergreen, f"Channel '{ref}'"))
 
         return errors
 
