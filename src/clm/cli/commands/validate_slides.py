@@ -34,7 +34,9 @@ from clm.slides.validator import (
         "Review: code_quality, voiceover, completeness. "
         "Default: all deterministic checks. "
         "voiceover coverage is opt-in (voiceover is optional per deck) — "
-        "it runs only when you name it explicitly, e.g. --checks voiceover."
+        "it runs only when you name it explicitly (e.g. --checks voiceover) "
+        "or when a deck opts in via a `clm: voiceover-coverage` header "
+        "comment (#178; default run only)."
     ),
 )
 @click.option(
@@ -95,7 +97,10 @@ def validate_slides_cmd(
         result = validate_quick(path)
     else:
         check_list = _parse_checks(checks)
-        result = _dispatch_validation(path, check_list, data_dir)
+        # The per-deck `clm: voiceover-coverage` header marker (#178) applies
+        # on the default run only; an explicit --checks list is honored
+        # verbatim.
+        result = _dispatch_validation(path, check_list, data_dir, marker_opt_in=checks is None)
 
     if as_json:
         click.echo(json.dumps(_result_to_dict(result), indent=2))
@@ -144,16 +149,18 @@ def _dispatch_validation(
     path: Path,
     check_list: list[str] | None,
     data_dir: Path | None,
+    *,
+    marker_opt_in: bool,
 ) -> ValidationResult:
     """Dispatch to the right validate_* function based on path type."""
     if path.is_file() and path.suffix in (".xml",):
         # Course spec file
         slides_dir = _resolve_slides_dir(data_dir, path)
-        return validate_course(path, slides_dir, checks=check_list)
+        return validate_course(path, slides_dir, checks=check_list, marker_opt_in=marker_opt_in)
     elif path.is_dir():
-        return validate_directory(path, checks=check_list)
+        return validate_directory(path, checks=check_list, marker_opt_in=marker_opt_in)
     elif path.is_file():
-        return validate_file(path, checks=check_list)
+        return validate_file(path, checks=check_list, marker_opt_in=marker_opt_in)
     else:
         raise click.ClickException(f"Path is not a file or directory: {path}")
 
