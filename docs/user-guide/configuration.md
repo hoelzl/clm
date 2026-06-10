@@ -276,6 +276,25 @@ These help diagnose builds that hang on a single notebook (see issue #143).
 |----------|-------------|---------|
 | `CLM_DATA_DIR` | Default data directory for the MCP server (contains `slides/`, `course-specs/`). Used by `clm mcp` and the `clm.slides` CLI tools when no `--data-dir` is given. | (cwd) |
 
+### Google Calendar Push (`clm calendar push`)
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `CLM_GOOGLE_CREDENTIALS` | Path to the Google credentials JSON used by `clm calendar push` (same as `--credentials`). Either an OAuth "Desktop app" client — a browser consent flow runs once, then the token is cached in the user config dir (`google-calendar-token.json`) — or a service-account key for a service account the target calendar is shared with ("Make changes to events"). | (unset) |
+
+The target calendar id can be stored per cohort in the calendar TOML instead of
+passing `--calendar-id` on every push:
+
+```toml
+# release/<channel>.calendar.toml
+[google]
+calendar_id = "abc123…@group.calendar.google.com"
+```
+
+One-time Google-side setup: create a Google Cloud project, enable the
+**Google Calendar API**, and create either an OAuth client (type "Desktop app")
+or a service account; download the JSON. Requires the `[gcal]` extra.
+
 ### Recording Management (`clm recordings`)
 
 The recordings module has its own `[recordings]` config section with a nested

@@ -216,3 +216,31 @@ class TestLoadFromFile:
     def test_missing_file_errors(self, tmp_path):
         with pytest.raises(CohortCalendarError, match="not found"):
             load_calendar_config(tmp_path / "nope.calendar.toml")
+
+
+class TestGoogleTable:
+    def test_absent_means_none(self):
+        cfg = parse_calendar_config("start = 2026-03-02")
+        assert cfg.google_calendar_id is None
+
+    def test_calendar_id_parsed(self):
+        cfg = parse_calendar_config(
+            'start = 2026-03-02\n[google]\ncalendar_id = "abc123@group.calendar.google.com"\n'
+        )
+        assert cfg.google_calendar_id == "abc123@group.calendar.google.com"
+
+    def test_empty_table_means_none(self):
+        cfg = parse_calendar_config("start = 2026-03-02\n[google]\n")
+        assert cfg.google_calendar_id is None
+
+    def test_empty_calendar_id_rejected(self):
+        with pytest.raises(CohortCalendarError, match="non-empty"):
+            parse_calendar_config('start = 2026-03-02\n[google]\ncalendar_id = "  "\n')
+
+    def test_unknown_key_rejected(self):
+        with pytest.raises(CohortCalendarError, match="google: unknown key"):
+            parse_calendar_config('start = 2026-03-02\n[google]\ncalender_id = "typo"\n')
+
+    def test_non_string_calendar_id_rejected(self):
+        with pytest.raises(CohortCalendarError, match="expected a string"):
+            parse_calendar_config("start = 2026-03-02\n[google]\ncalendar_id = 42\n")

@@ -192,6 +192,12 @@ jupyterlite = [
 slides = [
     "rapidfuzz>=3.0.0",
 ]
+# Google Calendar push for cohort viewing calendars (`clm calendar push`)
+gcal = [
+    "google-api-python-client>=2.100.0",
+    "google-auth>=2.23.0",
+    "google-auth-oauthlib>=1.2.0",
+]
 # HTTP request/response replay for notebooks that call live services
 # (e.g. ``requests``, ``httpx``). Enables offline, deterministic HTML
 # builds when a topic opts in via ``http-replay="yes"`` in the spec.
@@ -255,7 +261,7 @@ web = [
 ]
 # Everything
 all = [
-    "coding-academy-lecture-manager[all-workers,ml,summarize,voiceover,recordings,slides,mcp,jupyterlite,replay,dev,tui,web]",
+    "coding-academy-lecture-manager[all-workers,ml,summarize,voiceover,recordings,slides,gcal,mcp,jupyterlite,replay,dev,tui,web]",
 ]
 
 [project.urls]
@@ -378,6 +384,13 @@ module = [
     "vcr.*",
     "filelock",
     "filelock.*",
+    # The [gcal] extra's packages ship without (complete) type stubs; they are
+    # also only imported lazily inside functions.
+    "googleapiclient",
+    "googleapiclient.*",
+    "google.*",
+    "google_auth_oauthlib",
+    "google_auth_oauthlib.*",
     # mitmproxy runs out-of-process (uv tool install); the addon module is
     # loaded by mitmdump's own interpreter, not clm's venv, so the package is
     # intentionally absent from clm's environment.

@@ -598,8 +598,8 @@ deficit and you resolve it with an explicit `merge`.
 
 ### `clm calendar`
 
-*New in {version}.* Inspect a cohort's viewing calendar (see
-`clm export calendar` for the file format).
+Work with a cohort's viewing calendar: validate it, show today's status, or
+push it to Google Calendar (see `clm export calendar` for the file format).
 
 #### `clm calendar check`
 
@@ -625,10 +625,48 @@ plan coordinate (e.g. `W4 Tuesday`), the **drift** in days versus the ideal
 clm calendar status [OPTIONS] SPEC_FILE     # --channel/--calendar/-L/--as-of/--data-dir
 ```
 
+#### `clm calendar push`
+
+*New in {version}.* **Mirror the cohort's calendar into a Google calendar.**
+Students subscribe to that one shared calendar; unlike a subscribed `.ics`
+URL, pushed changes propagate within minutes. Requires the `[gcal]` extra
+(`pip install "coding-academy-lecture-manager[gcal]"`).
+
+```
+clm calendar push [OPTIONS] SPEC_FILE
+```
+
+| Option | Meaning |
+|---|---|
+| `--channel NAME` / `--calendar PATH` | Locate the cohort calendar TOML (as in `clm export calendar`). |
+| `--calendar-id ID` | Target Google calendar id. Default: `calendar_id` from the TOML's `[google]` table. |
+| `--credentials PATH` | Google credentials JSON (env: `CLM_GOOGLE_CREDENTIALS`). Either an OAuth "Desktop app" client — a browser consent flow runs once, then the token is cached — or a service-account key for a service account the calendar is shared with ("Make changes to events"). |
+| `-L, --language` | Language for event titles (default `de`). |
+| `--dry-run` | Print the insert/update/delete plan; change nothing. |
+| `--data-dir DIR` | Course data directory (as elsewhere). |
+
+The push only ever touches **CLM-managed events**: every event it creates is
+tagged (via private extended properties) with the cohort namespace and the
+same stable per-assignment UID the `.ics` export uses. Re-pushing after a
+schedule change therefore updates events in place, deletes events whose
+assignment disappeared, and never touches other events in the same calendar.
+Events are all-day and marked free (transparent).
+
+The optional `[google]` table in the cohort calendar TOML holds the target:
+
+```toml
+[google]
+calendar_id = "abc123…@group.calendar.google.com"
+```
+
+A projection error (see `clm calendar check`) blocks the push.
+
 ```bash
 clm calendar check  course.xml --channel jan
 clm calendar status course.xml --channel jan -L en
 clm calendar status course.xml --channel jan --as-of 2026-05-06
+clm calendar push   course.xml --channel jan --dry-run
+clm calendar push   course.xml --channel jan --credentials oauth-client.json
 ```
 
 ### `clm topic resolve`
