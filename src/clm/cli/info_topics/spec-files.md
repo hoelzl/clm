@@ -747,6 +747,52 @@ course-level settings, copy the full block into the target.
 an effective `<jupyterlite>` block at either level; otherwise the build fails
 with a pointer to this topic.
 
+### `<tasks>` (CLM {version}+)
+
+Named sequences of clm commands, executed in order by `clm run <task> <spec>`.
+Use this for course-specific routines that must not be forgotten — e.g.
+regenerating calendar and outline exports **before** the build that copies
+them into the output directory:
+
+```xml
+<tasks>
+    <task name="pre-release" description="Regenerate exports, then build">
+        <step>export calendar {spec} --channel jan -f ics -o release/jan.ics</step>
+        <step>export outline {spec} -o outline/</step>
+        <step>build {spec} --provenance-manifest</step>
+    </task>
+</tasks>
+```
+
+- **`<task name="...">`** — required, unique within the spec. The optional
+  `description` attribute is shown by `clm run <spec>` (task listing).
+- **`<step>`** — one clm command line **without** the leading `clm`. Steps run
+  in declaration order; the first failing step aborts the task and its exit
+  code becomes clm's exit code.
+
+**Placeholders** (substituted before execution; unknown placeholders are an
+error):
+
+| Placeholder | Expands to |
+|---|---|
+| `{spec}` | Absolute path of the spec file passed to `clm run` |
+
+Literal braces are written `{{` / `}}`.
+
+**Rules**:
+
+- Steps must be clm commands — there is no shell, so pipes, redirection, and
+  external programs are not available. This keeps tasks portable across
+  machines and operating systems.
+- Paths inside steps must use **forward slashes** (`-o release/jan.ics`);
+  quoting works as in a POSIX shell (`-o "out dir/"`). clm accepts
+  forward-slash paths on every platform, including Windows.
+- A step must not invoke `clm run` (tasks cannot invoke other tasks).
+
+`clm validate <spec>` checks every task: structure (unique names, non-empty
+steps), placeholders, and that each step names a real clm command in the
+current CLM version.
+
 ## Complete Example
 
 ```xml

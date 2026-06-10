@@ -1278,6 +1278,29 @@ class ReleaseChannelsSpec:
         return None
 
 
+@frozen
+class TaskSpec:
+    """One named ``<task>`` from the spec's ``<tasks>`` block (``clm run``).
+
+    Each ``<step>`` child holds one clm command line **without** the leading
+    ``clm`` (e.g. ``export calendar {spec} --channel jan``). Steps run in
+    declaration order; resolution rules (placeholders, tokenization) live in
+    :mod:`clm.core.tasks`.
+    """
+
+    name: str
+    description: str = ""
+    steps: tuple[str, ...] = ()
+
+    @classmethod
+    def from_element(cls, element: ETree.Element) -> "TaskSpec":
+        return cls(
+            name=element.get("name", ""),
+            description=element.get("description", ""),
+            steps=tuple((step.text or "").strip() for step in element.findall("step")),
+        )
+
+
 def release_channel_ref(block: ReleaseChannelsSpec, channel: ReleaseChannelSpec) -> str:
     """The canonical CLI address of *channel*: ``stream/channel`` or bare name.
 
@@ -1302,6 +1325,8 @@ class CourseSpec:
     # One entry per <release-channels> block (a release *stream*, issue #291).
     # Empty list = the solution-release feature is dormant.
     release_channel_blocks: list[ReleaseChannelsSpec] = field(factory=list)
+    # Named clm-command sequences for `clm run` (empty = feature dormant).
+    tasks: list[TaskSpec] = field(factory=list)
     image_options: ImageOptionsSpec = field(factory=ImageOptionsSpec)
     jupyterlite: JupyterLiteConfig | None = None
     author: str = "Dr. Matthias Hölzl"
@@ -1713,6 +1738,27 @@ class CourseSpec:
         """
         return [ReleaseChannelsSpec.from_element(elem) for elem in root.findall("release-channels")]
 
+    @staticmethod
+    def parse_tasks(root: ETree.Element) -> "list[TaskSpec]":
+        """Parse the optional ``<tasks>`` element (``clm run``).
+
+        Returns an empty list when no element is present — the task-runner
+        feature is then dormant. Naming/step rules are enforced by
+        :meth:`validate_tasks`, not here, so a malformed spec can still be
+        loaded for inspection.
+        """
+        container = root.find("tasks")
+        if container is None:
+            return []
+        return [TaskSpec.from_element(elem) for elem in container.findall("task")]
+
+    def task(self, name: str) -> "TaskSpec | None":
+        """Look up a ``<task>`` by name (None when absent)."""
+        for task in self.tasks:
+            if task.name == name:
+                return task
+        return None
+
     def iter_release_channels(
         self,
     ) -> "Iterator[tuple[ReleaseChannelsSpec, ReleaseChannelSpec]]":
@@ -2024,7 +2070,38 @@ class CourseSpec:
                     )
 
         errors.extend(self._validate_release_channels(target_names))
+        errors.extend(self.validate_tasks())
 
+        return errors
+
+    def validate_tasks(self) -> list[str]:
+        """Validate the ``<tasks>`` block structurally (``clm run``).
+
+        Structural rules only — placeholder and command-existence checks need
+        step resolution and the CLI command tree, so they live in
+        :mod:`clm.core.tasks` / the ``clm run`` command and are surfaced by
+        ``clm validate``. Public so the spec validator can reuse the checks
+        without running full-spec validation.
+        """
+        errors: list[str] = []
+        task_names: set[str] = set()
+        for task in self.tasks:
+            label = f"<task name={task.name!r}>" if task.name else "<task>"
+            if not task.name:
+                errors.append("Every <task> needs a name attribute.")
+            elif task.name in task_names:
+                errors.append(f"Duplicate task name: {task.name!r}")
+            task_names.add(task.name)
+
+            if not task.steps:
+                errors.append(f"{label} has no <step> elements.")
+            for i, step in enumerate(task.steps, start=1):
+                if not step:
+                    errors.append(f"{label}: step {i} is empty.")
+                elif step.split()[0] == "run":
+                    errors.append(
+                        f"{label}: step {i} invokes 'clm run' — tasks cannot invoke other tasks."
+                    )
         return errors
 
     def _validate_release_channels(self, target_names: set[str]) -> list[str]:
@@ -2227,6 +2304,7 @@ class CourseSpec:
             dictionaries=cls.parse_dir_groups(root, keep_disabled=keep_disabled),
             output_targets=cls.parse_output_targets(root),
             release_channel_blocks=cls.parse_release_channels(root),
+            tasks=cls.parse_tasks(root),
             image_options=ImageOptionsSpec.from_element(root.find("image-options")),
             jupyterlite=JupyterLiteConfig.from_element(root.find("jupyterlite")),
             author=author,

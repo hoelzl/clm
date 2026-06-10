@@ -1172,3 +1172,52 @@ class TestCrossReferences:
 
         result = validate_spec(spec_file, tmp_path / "slides")
         assert [f for f in result.findings if f.type.startswith("cross_reference")] == []
+
+
+class TestValidateTasks:
+    """``<tasks>`` findings (``clm run``): structure + step resolution."""
+
+    SECTIONS = """\
+            <sections><section>
+              <name><de>S</de><en>S</en></name>
+              <topics><topic>intro</topic></topics>
+            </section></sections>"""
+
+    def _validate(self, tmp_path: Path, tasks_xml: str) -> SpecValidationResult:
+        _make_topic(tmp_path, "module_100_basics", "topic_010_intro")
+        spec_file = _write_spec(tmp_path, self.SECTIONS, tasks_xml)
+        return validate_spec(spec_file, tmp_path / "slides")
+
+    def test_clean_tasks_produce_no_findings(self, tmp_path):
+        result = self._validate(
+            tmp_path,
+            """<tasks>
+              <task name="pre-release">
+                <step>export outline {spec} -o outline/</step>
+                <step>build {spec}</step>
+              </task>
+            </tasks>""",
+        )
+        assert result.findings == []
+
+    def test_structural_error_is_reported(self, tmp_path):
+        result = self._validate(tmp_path, '<tasks><task name="empty"/></tasks>')
+        assert any(f.type == "invalid_task" for f in result.errors)
+
+    def test_unknown_command_is_reported(self, tmp_path):
+        result = self._validate(
+            tmp_path,
+            '<tasks><task name="bad"><step>frobnicate {spec}</step></task></tasks>',
+        )
+        errors = [f for f in result.errors if f.type == "unknown_task_command"]
+        assert len(errors) == 1
+        assert "frobnicate" in errors[0].message
+
+    def test_unknown_placeholder_is_reported(self, tmp_path):
+        result = self._validate(
+            tmp_path,
+            '<tasks><task name="bad"><step>build {sepc}</step></task></tasks>',
+        )
+        errors = [f for f in result.errors if f.type == "invalid_task_step"]
+        assert len(errors) == 1
+        assert "{sepc}" in errors[0].message

@@ -68,6 +68,11 @@ clm build course.xml        # writes .clm-manifest.json under each output root
 `--only-sections`, and errored builds — so build the *whole* solutions target
 when you intend to release from it.)
 
+If this build is preceded by the same routine every time (regenerating
+calendar/outline exports so the build copies current files), declare the
+sequence as a `<tasks>` entry in the spec and run it with one command —
+see [Task Sequences](tasks.md).
+
 ## 3. Create each cohort repo (once)
 
 ```bash

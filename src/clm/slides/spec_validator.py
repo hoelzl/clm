@@ -300,11 +300,65 @@ def validate_spec(
         suffix=_suffix,
     )
 
+    # ``<tasks>`` block (``clm run``): structure plus full step resolution
+    # (placeholders + command existence), so a broken task surfaces here
+    # instead of on release day.
+    _validate_tasks(spec=spec, course_spec_path=course_spec_path, findings=findings)
+
     return SpecValidationResult(
         course_spec=str(course_spec_path),
         topics_total=topics_total,
         findings=findings,
     )
+
+
+def _validate_tasks(
+    *,
+    spec: CourseSpec,
+    course_spec_path: Path,
+    findings: list[SpecFinding],
+) -> None:
+    """Validate the ``<tasks>`` block (``clm run``).
+
+    Structural rules are shared with :meth:`CourseSpec.validate_tasks`; on
+    top of those, every step is resolved (placeholder substitution +
+    tokenization, :mod:`clm.core.tasks`) and its command checked against the
+    actual Click command tree — the same checks ``clm run`` performs before
+    executing anything.
+    """
+    from clm.core.tasks import TaskStepError, resolve_step
+
+    for message in spec.validate_tasks():
+        findings.append(SpecFinding(severity="error", type="invalid_task", message=message))
+
+    # The CLI import is deferred so this module stays importable without
+    # pulling in the whole command tree (e.g. from the MCP server).
+    from clm.cli.commands.run import unknown_cli_command_error
+
+    for task in spec.tasks:
+        for i, step in enumerate(task.steps, start=1):
+            if not step:
+                continue  # already reported by validate_tasks()
+            try:
+                tokens = resolve_step(step, spec_path=course_spec_path)
+            except TaskStepError as e:
+                findings.append(
+                    SpecFinding(
+                        severity="error",
+                        type="invalid_task_step",
+                        message=f"Task '{task.name}', step {i}: {e}",
+                    )
+                )
+                continue
+            error = unknown_cli_command_error(tokens)
+            if error:
+                findings.append(
+                    SpecFinding(
+                        severity="error",
+                        type="unknown_task_command",
+                        message=f"Task '{task.name}', step {i}: {error}",
+                    )
+                )
 
 
 def _validate_subsections(

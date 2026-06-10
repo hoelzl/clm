@@ -375,6 +375,45 @@ List output targets defined in a course spec file.
 clm targets SPEC_FILE
 ```
 
+### `clm run` (CLM {version}+)
+
+Run a named task sequence declared in the spec's `<tasks>` block (see
+`clm info spec-files`). Tasks automate course-specific routines — e.g. a
+`pre-release` task that regenerates calendar/outline exports and then builds,
+so nothing is forgotten when promoting materials.
+
+```
+clm run TASK SPEC_FILE [OPTIONS]   # run a task
+clm run SPEC_FILE                  # list the spec's tasks
+```
+
+| Option | Description |
+|--------|-------------|
+| `--dry-run` | Print the fully resolved commands without executing anything. |
+| `--list` | List the spec's tasks instead of running one (same as omitting TASK). |
+
+Behavior:
+
+- All steps are resolved and validated (placeholders, command existence)
+  **before** the first one runs — a typo in step 3 fails fast, not after a
+  long build in step 1.
+- Each step is echoed as `[i/N] clm <command>` and runs as a subprocess with
+  the same Python interpreter and environment as the parent `clm`, inheriting
+  the current working directory.
+- The first failing step aborts the task; its exit code becomes clm's exit
+  code.
+
+```bash
+# Iterate while authoring...
+clm build course.xml --watch
+
+# ...then run the whole pre-release sequence in one shot:
+clm run pre-release course.xml
+
+# Preview what would run:
+clm run pre-release course.xml --dry-run
+```
+
 ### `clm export`
 
 Group for the **course-document exports** — commands that turn a course spec
