@@ -971,7 +971,14 @@ def _emit_batch(
     # dry-run / apply: a scannable one-liner per pair, then the rollup.
     for r in results:
         click.echo(_batch_pair_line(r, root))
-    # Surface each pair's apply-time errors in full (the one-liner only counts them).
+    # Surface each pair's cold-start deferral detail (#231) and apply-time
+    # errors in full (the one-liner only counts them).
+    for r in results:
+        if r.apply_result is not None and r.apply_result.cold_deferrals:
+            label = _deck_label(r.de_path, root)
+            click.echo(f"  {label}:")
+            for line in _cold_deferral_lines(r.apply_result, indent="    "):
+                click.echo(line)
     for r in results:
         if r.apply_result is not None and r.apply_result.errors:
             label = _deck_label(r.de_path, root)
@@ -1228,6 +1235,52 @@ def _outcome_line(result: ApplyResult) -> str:
     )
 
 
+def _cold_deferral_lines(result: ApplyResult, *, indent: str = "  ") -> list[str]:
+    """Actionable detail for each cold-start mint/adopt deferral (#231).
+
+    Turns the opaque ``N deferred`` count into a lead the author can act
+    on — on a verifier "no" this names the rejected pair indices and both
+    headings (crossed DE/EN content and alignment-shifting missing/merged
+    cells are the usual causes).
+    """
+    lines: list[str] = []
+    for d in result.cold_deferrals:
+        if d.reason == "rejected-pairs":
+            lines.append(
+                f"{indent}deferred {d.kind}: {len(d.rejected_pairs)} pair(s) "
+                "judged non-corresponding:"
+            )
+            for rp in d.rejected_pairs:
+                lines.append(
+                    f'{indent}  pair {rp.index}: DE "{rp.de_heading}" / EN "{rp.en_heading}"'
+                )
+            lines.append(
+                f"{indent}  hint: crossed DE/EN content or a missing/merged cell "
+                "usually explains this — `clm slides validate <deck>` can pinpoint it."
+            )
+        elif d.reason == "no-verifier":
+            lines.append(
+                f"{indent}deferred {d.kind}: no correspondence verifier "
+                "(verification disabled or no API key) — nothing was written."
+            )
+        elif d.reason == "safe-abort":
+            lines.append(
+                f"{indent}deferred {d.kind}: correspondence verification failed "
+                "(transport/parse) — safe-abort, nothing was written; re-run to retry."
+            )
+        elif d.reason == "plan-errors":
+            lines.append(
+                f"{indent}deferred {d.kind}: the plan carries classifier errors "
+                "(see issues above) — fix those first."
+            )
+        elif d.reason == "race":
+            lines.append(
+                f"{indent}deferred {d.kind}: the files changed between planning and "
+                "apply — re-run sync."
+            )
+    return lines
+
+
 def _print_human(
     plan: SyncPlan,
     apply_result: ApplyResult | None,
@@ -1251,6 +1304,8 @@ def _print_human(
         click.echo("")
         click.echo(_outcome_line(apply_result))
 
+    for line in _cold_deferral_lines(apply_result):
+        click.echo(line)
     for err in apply_result.errors:
         click.echo(f"  error: {err}")
     if apply_result.applied > 0:
@@ -1336,6 +1391,21 @@ def _apply_dict(result: ApplyResult) -> dict:
         },
         "in_sync": result.in_sync,
         "deferred": result.deferred,
+        "cold_deferrals": [
+            {
+                "kind": d.kind,
+                "reason": d.reason,
+                "rejected_pairs": [
+                    {
+                        "index": rp.index,
+                        "de_heading": rp.de_heading,
+                        "en_heading": rp.en_heading,
+                    }
+                    for rp in d.rejected_pairs
+                ],
+            }
+            for d in result.cold_deferrals
+        ],
         "watermark_recorded": result.watermark_recorded,
         "errors": list(result.errors),
     }

@@ -1685,10 +1685,22 @@ identified (`error`), or cell order that drifted on both decks
 (`warning`, order not propagated). Any issue holds the whole watermark
 so the signal is never silently baselined.
 
+A **cold-start mint/adopt deferral** is reported with actionable detail
+(since CLM {version}, issue #231), not just a count: when the
+correspondence verifier rejects one or more DE/EN slide pairs, the
+output names each rejected pair's index and both headings (e.g.
+`pair 3: DE "## Resources …" / EN "## Ressourcen …"`) plus a hint —
+crossed DE/EN content or a missing/merged cell shifting the alignment
+usually explains it, and `clm slides validate <deck>` can pinpoint it.
+Verifier-unavailable, safe-abort, plan-error, and race deferrals state
+their reason too. Nothing is written in any of these cases.
+
 The JSON report carries `mode` (`dry-run` / `apply` / `interactive`),
 `exit_code`, a `plan` block (`baseline_source`, per-kind `counts`,
 `in_sync`, the `proposals`, and `issues`), an `apply` block (per-kind
-`applied` counts, `in_sync`, `deferred`, `watermark_recorded`, and
+`applied` counts, `in_sync`, `deferred`, `cold_deferrals` — each with
+`kind`, `reason`, and the `rejected_pairs` (`index` / `de_heading` /
+`en_heading`) on a verifier rejection —, `watermark_recorded`, and
 `errors`) — `null` under `--dry-run` — and a `walker` block of
 accept/skip/defer counters under `--interactive`. These counters are the
 pilot accept-rate instrumentation.

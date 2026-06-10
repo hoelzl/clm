@@ -1021,6 +1021,39 @@ class TestColdStartMint:
         assert de_path.read_text(encoding="utf-8") == before_de
         assert en_path.read_text(encoding="utf-8") == before_en
 
+    def test_denied_pair_records_which_pairs_failed(self, tmp_path: Path):
+        # #231: a deferral is no longer a bare count — it names the rejected
+        # pair indices and both headings so the author can find the divergence.
+        de_path, en_path = self._cold_pair(tmp_path)
+        plan = build_sync_plan(de_path, en_path, watermark_cache=None, provider_available=True)
+        verifier = StaticCorrespondenceVerifier(verdicts={1: False}, default=True)
+        result = apply_plan(plan, judge=None, verifier=verifier, watermark_cache=None)
+        assert result.deferred == 1
+        assert len(result.cold_deferrals) == 1
+        d = result.cold_deferrals[0]
+        assert d.kind == "mint"
+        assert d.reason == "rejected-pairs"
+        assert [rp.index for rp in d.rejected_pairs] == [1]
+        assert "Variablen" in d.rejected_pairs[0].de_heading
+        assert "Variables" in d.rejected_pairs[0].en_heading
+
+    def test_confirmed_pair_records_no_deferral_detail(self, tmp_path: Path):
+        de_path, en_path = self._cold_pair(tmp_path)
+        plan = build_sync_plan(de_path, en_path, watermark_cache=None, provider_available=True)
+        verifier = StaticCorrespondenceVerifier(default=True)
+        result = apply_plan(plan, judge=None, verifier=verifier, watermark_cache=None)
+        assert result.applied_mint == 1
+        assert result.cold_deferrals == []
+
+    def test_safe_abort_records_reason(self, tmp_path: Path):
+        de_path, en_path = self._cold_pair(tmp_path)
+        plan = build_sync_plan(de_path, en_path, watermark_cache=None, provider_available=True)
+        verifier = StaticCorrespondenceVerifier(raise_error=True)
+        result = apply_plan(plan, judge=None, verifier=verifier, watermark_cache=None)
+        assert result.deferred == 1
+        assert [d.reason for d in result.cold_deferrals] == ["safe-abort"]
+        assert result.cold_deferrals[0].rejected_pairs == ()
+
     def test_no_verifier_refuses(self, tmp_path: Path):
         de_path, en_path = self._cold_pair(tmp_path)
         before_de = de_path.read_text(encoding="utf-8")
@@ -1029,6 +1062,7 @@ class TestColdStartMint:
         assert result.applied_mint == 0
         assert result.deferred == 1
         assert de_path.read_text(encoding="utf-8") == before_de
+        assert [d.reason for d in result.cold_deferrals] == ["no-verifier"]
 
     def test_no_provider_keeps_refuse(self, tmp_path: Path):
         de_path, en_path = self._cold_pair(tmp_path)
@@ -1143,6 +1177,12 @@ class TestColdStartAdopt:
         assert result.deferred == 1
         assert de_path.read_text(encoding="utf-8") == before_de
         assert en_path.read_text(encoding="utf-8") == before_en
+        # #231: the deferral names the rejected pairs (here: all of them).
+        assert len(result.cold_deferrals) == 1
+        d = result.cold_deferrals[0]
+        assert d.kind == "adopt"
+        assert d.reason == "rejected-pairs"
+        assert [rp.index for rp in d.rejected_pairs] == [0, 1]
 
     def test_no_verifier_refuses(self, tmp_path: Path):
         de_path, en_path = self._half_idd_pair(tmp_path)
