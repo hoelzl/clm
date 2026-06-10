@@ -1,6 +1,6 @@
 """Match slides between two slide-file revisions.
 
-Used by ``port-voiceover`` (and the future ``compare``) to decide, for
+Used by ``port`` (and the future ``compare``) to decide, for
 each slide in the target file, which slide in the source file (if any)
 it corresponds to. The matching strategy (per proposal §3.3):
 

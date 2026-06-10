@@ -1,6 +1,6 @@
-"""``clm spec orphans`` — decks reachable from no spec, plus cruft (gap #7).
+"""``clm course orphans`` — decks reachable from no spec, plus cruft (gap #7).
 
-The inverse of ``clm spec decks``: scan every spec in a course and report the
+The inverse of ``clm course decks``: scan every spec in a course and report the
 decks on disk that *no* spec pulls in, grouped by likely intent (explicit
 ``_old`` / ``_bak`` = superseded; ``_partN`` / ``_short`` / ``_long`` =
 probably-intentional alternate content; everything else = review). Also

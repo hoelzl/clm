@@ -2422,8 +2422,8 @@ def list_targets(spec_file, output_format):
 
     \b
     Examples:
-        clm targets course.xml
-        clm targets course.xml --format=json
+        clm course targets course.xml
+        clm course targets course.xml --format=json
     """
     try:
         spec = CourseSpec.from_file(spec_file)

@@ -935,7 +935,7 @@ async def handle_voiceover_backfill_dry(
 
     Invokes ``clm voiceover backfill --dry-run`` as a subprocess so the
     full three-step composition (identify-rev → sync-at-rev →
-    port-voiceover) stays DRY. The working copy is never mutated.
+    port) stays DRY. The working copy is never mutated.
 
     Args:
         slide_file: Path to the slide file at HEAD.

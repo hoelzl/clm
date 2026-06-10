@@ -1,9 +1,10 @@
-"""``clm export calendar`` — a per-cohort viewing calendar on real dates (#283).
+"""``clm calendar`` — a per-cohort viewing calendar on real dates (#283).
 
-Projects the course schedule (the same ordered day-buckets ``export schedule``
-produces) onto one cohort's real calendar dates, using the cohort's hand-edited
-``release/<channel>.calendar.toml``. Emits a trainer-facing Markdown/CSV view or
-the student-facing ``.ics`` feed.
+``clm calendar generate`` projects the course schedule (the same ordered
+day-buckets ``export schedule`` produces) onto one cohort's real calendar
+dates, using the cohort's hand-edited ``release/<channel>.calendar.toml``.
+It emits a trainer-facing Markdown/CSV view or the student-facing ``.ics``
+feed; ``check``/``status``/``push`` consume the same calendar file.
 
 The calendar file is addressed either by ``--channel NAME`` (resolved beside the
 channel's ledger in the spec's ``<release-channels>``) or by an explicit
@@ -127,7 +128,7 @@ def resolve_calendar_path(spec_file: Path, channel_name: str, explicit: Path | N
     return ledger.parent / f"{channel.name}.calendar.toml"
 
 
-@click.command("calendar")
+@click.command("generate")
 @spec_argument
 @language_option(
     default="de",
@@ -175,10 +176,10 @@ def calendar(
 
     \b
     Examples:
-        clm export calendar course.xml --channel jan          # German Markdown
-        clm export calendar course.xml --channel jan -f ics   # student .ics feed
-        clm export calendar course.xml --calendar c.toml -L en -f csv
-        clm export calendar course.xml --channel jan -o jan.ics -f ics
+        clm calendar generate course.xml --channel jan          # German Markdown
+        clm calendar generate course.xml --channel jan -f ics   # student .ics feed
+        clm calendar generate course.xml --calendar c.toml -L en -f csv
+        clm calendar generate course.xml --channel jan -o jan.ics -f ics
     """
     language = language.lower()
     output_format = output_format.lower()

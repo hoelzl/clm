@@ -95,7 +95,7 @@ class TestSyncIncludesCopyMode:
             </section></sections>""",
         )
 
-        result = _invoke("sync-includes", str(spec), "--data-dir", str(tmp_path))
+        result = _invoke("course", "sync-includes", str(spec), "--data-dir", str(tmp_path))
 
         assert result.exit_code == 0
         topic_dir = tmp_path / "slides" / "module_100" / "topic_010_intro"
@@ -132,7 +132,7 @@ class TestSyncIncludesCopyMode:
             </section></sections>""",
         )
 
-        result = _invoke("sync-includes", str(spec), "--data-dir", str(tmp_path))
+        result = _invoke("course", "sync-includes", str(spec), "--data-dir", str(tmp_path))
 
         assert result.exit_code == 0
         topic_dir = tmp_path / "slides" / "module_100" / "topic_010_intro"
@@ -158,14 +158,14 @@ class TestSyncIncludesCopyMode:
         )
 
         # First run.
-        first = _invoke("sync-includes", str(spec), "--data-dir", str(tmp_path))
+        first = _invoke("course", "sync-includes", str(spec), "--data-dir", str(tmp_path))
         assert first.exit_code == 0
 
         # Modify source.
         (src / "core.py").write_text("def hello(): return 'updated'\n", encoding="utf-8")
 
         # Second run: should refresh, not error.
-        second = _invoke("sync-includes", str(spec), "--data-dir", str(tmp_path))
+        second = _invoke("course", "sync-includes", str(spec), "--data-dir", str(tmp_path))
         assert second.exit_code == 0
         topic_dir = tmp_path / "slides" / "module_100" / "topic_010_intro"
         assert "updated" in (topic_dir / "pkg" / "core.py").read_text(encoding="utf-8")
@@ -192,7 +192,7 @@ class TestSyncIncludesCopyMode:
             </section></sections>""",
         )
 
-        result = _invoke("sync-includes", str(spec), "--data-dir", str(tmp_path))
+        result = _invoke("course", "sync-includes", str(spec), "--data-dir", str(tmp_path))
 
         assert result.exit_code == 0
         # Local file survived; include did not overwrite the user's pkg dir.
@@ -219,7 +219,7 @@ class TestSyncIncludesOptionalAndMissing:
             </section></sections>""",
         )
 
-        result = _invoke("sync-includes", str(spec), "--data-dir", str(tmp_path))
+        result = _invoke("course", "sync-includes", str(spec), "--data-dir", str(tmp_path))
 
         assert result.exit_code == 0
 
@@ -239,7 +239,7 @@ class TestSyncIncludesOptionalAndMissing:
             </section></sections>""",
         )
 
-        result = _invoke("sync-includes", str(spec), "--data-dir", str(tmp_path))
+        result = _invoke("course", "sync-includes", str(spec), "--data-dir", str(tmp_path))
 
         assert result.exit_code == 1
         assert "missing" in result.stderr.lower() or "missing" in result.stdout.lower()
@@ -263,12 +263,14 @@ class TestSyncIncludesRemove:
             </section></sections>""",
         )
 
-        _invoke("sync-includes", str(spec), "--data-dir", str(tmp_path))
+        _invoke("course", "sync-includes", str(spec), "--data-dir", str(tmp_path))
         # Drop an unrelated file alongside the include — must survive --remove.
         bystander = topic_dir / "user_file.txt"
         bystander.write_text("keep me\n", encoding="utf-8")
 
-        result = _invoke("sync-includes", str(spec), "--data-dir", str(tmp_path), "--remove")
+        result = _invoke(
+            "course", "sync-includes", str(spec), "--data-dir", str(tmp_path), "--remove"
+        )
 
         assert result.exit_code == 0
         assert not (topic_dir / "pkg").exists()
@@ -292,7 +294,9 @@ class TestSyncIncludesRemove:
             </section></sections>""",
         )
 
-        result = _invoke("sync-includes", str(spec), "--data-dir", str(tmp_path), "--remove")
+        result = _invoke(
+            "course", "sync-includes", str(spec), "--data-dir", str(tmp_path), "--remove"
+        )
 
         assert result.exit_code == 0
 
@@ -316,6 +320,7 @@ class TestSyncIncludesSymlinkAndHardlink:
         )
 
         result = _invoke(
+            "course",
             "sync-includes",
             str(spec),
             "--data-dir",
@@ -358,6 +363,7 @@ class TestSyncIncludesSymlinkAndHardlink:
             side_effect=OSError("simulated no-perm"),
         ):
             result = _invoke(
+                "course",
                 "sync-includes",
                 str(spec),
                 "--data-dir",
@@ -392,6 +398,7 @@ class TestSyncIncludesSymlinkAndHardlink:
         )
 
         result = _invoke(
+            "course",
             "sync-includes",
             str(spec),
             "--data-dir",
@@ -425,7 +432,7 @@ class TestSyncIncludesSectionInheritance:
             </section></sections>""",
         )
 
-        result = _invoke("sync-includes", str(spec), "--data-dir", str(tmp_path))
+        result = _invoke("course", "sync-includes", str(spec), "--data-dir", str(tmp_path))
 
         assert result.exit_code == 0
         intro_dir = tmp_path / "slides" / "module_100" / "topic_010_intro"
@@ -460,7 +467,7 @@ class TestSyncIncludesSectionInheritance:
             </section></sections>""",
         )
 
-        result = _invoke("sync-includes", str(spec), "--data-dir", str(tmp_path))
+        result = _invoke("course", "sync-includes", str(spec), "--data-dir", str(tmp_path))
 
         assert result.exit_code == 0
         intro_dir = tmp_path / "slides" / "module_100" / "topic_010_intro"
@@ -511,6 +518,7 @@ class TestSyncIncludesPrintGitignore:
         spec = _spec_with_includes(tmp_path, "pkg")
 
         result = _invoke(
+            "course",
             "sync-includes",
             str(spec),
             "--data-dir",
@@ -537,6 +545,7 @@ class TestSyncIncludesPrintGitignore:
         )
 
         result = _invoke(
+            "course",
             "sync-includes",
             str(spec),
             "--data-dir",
@@ -553,6 +562,7 @@ class TestSyncIncludesPrintGitignore:
         spec = _spec_with_includes(tmp_path, "pkg_b", "pkg_a")
 
         result = _invoke(
+            "course",
             "sync-includes",
             str(spec),
             "--data-dir",
@@ -574,6 +584,7 @@ class TestSyncIncludesPrintGitignore:
         spec = _spec_with_includes(tmp_path, "pkg")
 
         result = _invoke(
+            "course",
             "sync-includes",
             str(spec),
             "--data-dir",
@@ -591,6 +602,7 @@ class TestSyncIncludesPrintGitignore:
         spec = _spec_with_includes(tmp_path, "pkg")
 
         result = _invoke(
+            "course",
             "sync-includes",
             str(spec),
             "--data-dir",
@@ -606,7 +618,7 @@ class TestSyncIncludesSummaryTip:
     def test_summary_tip_shown_when_materializations_happened(self, tmp_path):
         spec = _spec_with_includes(tmp_path, "pkg")
 
-        result = _invoke("sync-includes", str(spec), "--data-dir", str(tmp_path))
+        result = _invoke("course", "sync-includes", str(spec), "--data-dir", str(tmp_path))
 
         assert result.exit_code == 0
         assert "--print-gitignore" in result.stdout
@@ -623,7 +635,7 @@ class TestSyncIncludesSummaryTip:
             </section></sections>""",
         )
 
-        result = _invoke("sync-includes", str(spec), "--data-dir", str(tmp_path))
+        result = _invoke("course", "sync-includes", str(spec), "--data-dir", str(tmp_path))
 
         assert result.exit_code == 0
         assert "--print-gitignore" not in result.stdout
@@ -631,9 +643,11 @@ class TestSyncIncludesSummaryTip:
     def test_summary_tip_absent_for_remove(self, tmp_path):
         spec = _spec_with_includes(tmp_path, "pkg")
         # First materialize so --remove has something to do.
-        _invoke("sync-includes", str(spec), "--data-dir", str(tmp_path))
+        _invoke("course", "sync-includes", str(spec), "--data-dir", str(tmp_path))
 
-        result = _invoke("sync-includes", str(spec), "--data-dir", str(tmp_path), "--remove")
+        result = _invoke(
+            "course", "sync-includes", str(spec), "--data-dir", str(tmp_path), "--remove"
+        )
 
         assert result.exit_code == 0
         assert "--print-gitignore" not in result.stdout
@@ -651,25 +665,28 @@ class TestSyncIncludesNoDotGitignoreLeak:
         return _spec_with_includes(tmp_path, "pkg")
 
     def test_default_run_writes_no_gitignore(self, tmp_path, staged_spec):
-        result = _invoke("sync-includes", str(staged_spec), "--data-dir", str(tmp_path))
+        result = _invoke("course", "sync-includes", str(staged_spec), "--data-dir", str(tmp_path))
         assert result.exit_code == 0
         assert _walk_for_gitignore_files(tmp_path) == []
 
     def test_dry_run_writes_no_gitignore(self, tmp_path, staged_spec):
         result = _invoke(
-            "sync-includes", str(staged_spec), "--data-dir", str(tmp_path), "--dry-run"
+            "course", "sync-includes", str(staged_spec), "--data-dir", str(tmp_path), "--dry-run"
         )
         assert result.exit_code == 0
         assert _walk_for_gitignore_files(tmp_path) == []
 
     def test_remove_writes_no_gitignore(self, tmp_path, staged_spec):
-        _invoke("sync-includes", str(staged_spec), "--data-dir", str(tmp_path))
-        result = _invoke("sync-includes", str(staged_spec), "--data-dir", str(tmp_path), "--remove")
+        _invoke("course", "sync-includes", str(staged_spec), "--data-dir", str(tmp_path))
+        result = _invoke(
+            "course", "sync-includes", str(staged_spec), "--data-dir", str(tmp_path), "--remove"
+        )
         assert result.exit_code == 0
         assert _walk_for_gitignore_files(tmp_path) == []
 
     def test_print_gitignore_writes_no_gitignore(self, tmp_path, staged_spec):
         result = _invoke(
+            "course",
             "sync-includes",
             str(staged_spec),
             "--data-dir",
@@ -734,7 +751,9 @@ class TestSyncIncludesDryRun:
             </section></sections>""",
         )
 
-        result = _invoke("sync-includes", str(spec), "--data-dir", str(tmp_path), "--dry-run")
+        result = _invoke(
+            "course", "sync-includes", str(spec), "--data-dir", str(tmp_path), "--dry-run"
+        )
 
         assert result.exit_code == 0
         assert "dry-run" in result.stdout.lower() or "would" in result.stdout.lower()
@@ -761,7 +780,7 @@ class TestSyncIncludesInferredDataDir:
         )
 
         # No --data-dir passed; should infer from spec_file.parent.parent.
-        result = _invoke("sync-includes", str(spec))
+        result = _invoke("course", "sync-includes", str(spec))
 
         assert result.exit_code == 0
         topic_dir = tmp_path / "slides" / "module_100" / "topic_010_intro"
@@ -780,7 +799,7 @@ class TestSyncIncludesNoIncludes:
             </section></sections>""",
         )
 
-        result = _invoke("sync-includes", str(spec), "--data-dir", str(tmp_path))
+        result = _invoke("course", "sync-includes", str(spec), "--data-dir", str(tmp_path))
 
         assert result.exit_code == 0
         assert "no includes" in result.stdout.lower()
@@ -805,10 +824,11 @@ class TestSyncIncludesModeChange:
         )
 
         # First, materialize as copy.
-        _invoke("sync-includes", str(spec), "--data-dir", str(tmp_path), "--mode", "copy")
+        _invoke("course", "sync-includes", str(spec), "--data-dir", str(tmp_path), "--mode", "copy")
         assert (topic_dir / "pkg" / "core.py").is_file()
         # Re-run as hardlink — the existing copy must be cleared first.
         result = _invoke(
+            "course",
             "sync-includes",
             str(spec),
             "--data-dir",

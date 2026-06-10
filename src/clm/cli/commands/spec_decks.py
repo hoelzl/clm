@@ -1,4 +1,4 @@
-"""``clm spec decks`` and ``clm slides referenced-by``.
+"""``clm course decks`` and ``clm slides referenced-by``.
 
 Spec → deck resolution (gap #1). ``spec decks`` answers "which decks does this
 spec build?"; ``referenced-by`` is the reverse lookup. Both delegate to
@@ -94,9 +94,9 @@ def spec_decks_cmd(
 
     \b
     Examples:
-        clm spec decks course-specs/python.xml
-        clm spec decks course-specs/python.xml --lang de --json
-        clm spec decks --all-specs course-specs/
+        clm course decks course-specs/python.xml
+        clm course decks course-specs/python.xml --lang de --json
+        clm course decks --all-specs course-specs/
     """
     if all_specs is not None and spec_file is not None:
         raise click.UsageError("Pass either SPEC_FILE or --all-specs, not both.")
@@ -237,7 +237,7 @@ def referenced_by_cmd(
 ) -> None:
     """Show which spec(s)/topic(s) pull DECK into their shipping set.
 
-    Reverse of ``clm spec decks``. A deck reachable from no spec is reported as
+    Reverse of ``clm course decks``. A deck reachable from no spec is reported as
     unreferenced — useful for spotting orphaned or superseded decks before a
     corpus-wide change.
 

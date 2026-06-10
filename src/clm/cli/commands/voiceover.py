@@ -1660,7 +1660,7 @@ def sync_at_rev_cmd(
     1. ``clm voiceover identify-rev`` suggests a SHA
     2. ``clm voiceover sync-at-rev --rev <sha> -o scratch.py`` produces
        voiceover cells against the historical slides
-    3. ``clm voiceover port-voiceover scratch.py slide.py`` ports forward
+    3. ``clm voiceover port scratch.py slide.py`` ports forward
 
     \b
     Examples:
@@ -1736,7 +1736,7 @@ def sync_at_rev_cmd(
     )
 
 
-@voiceover_group.command("port-voiceover")
+@voiceover_group.command("port")
 @click.argument("source", type=click.Path(exists=True, path_type=Path))
 @click.argument("target", type=click.Path(exists=True, path_type=Path))
 @click.option("--lang", required=True, type=click.Choice(["de", "en"]), help="Slide language.")
@@ -1772,8 +1772,8 @@ def port_voiceover_cmd(source, target, lang, dry_run, tag, model, api_base):
 
     \b
     Examples:
-        clm voiceover port-voiceover /tmp/slides-at-abc123.py slides.py --lang de
-        clm voiceover port-voiceover old.py new.py --lang en --dry-run
+        clm voiceover port /tmp/slides-at-abc123.py slides.py --lang de
+        clm voiceover port old.py new.py --lang en --dry-run
     """
     notes_map = _port_voiceover_notes(
         source=source,
@@ -1812,7 +1812,7 @@ def _port_voiceover_notes(
 
     Returns a ``notes_map`` keyed by target-group index suitable for
     passing to :func:`clm.notebooks.slide_writer.update_narrative`.
-    Shared by ``port-voiceover`` and ``backfill`` so both commands use
+    Shared by ``port`` and ``backfill`` so both commands use
     identical LLM orchestration and reporting.
     """
     import asyncio
@@ -1959,7 +1959,7 @@ def _emit_unified_diff(target: Path, original_text: str, updated_text: str) -> N
 def compare_cmd(source, target, lang, as_json, fmt, output, model, api_base):
     """Evaluate voiceover differences between SOURCE and TARGET slide files.
 
-    Read-only sibling to ``port-voiceover``. SOURCE typically comes
+    Read-only sibling to ``port``. SOURCE typically comes
     from ``clm voiceover sync-at-rev`` against an older revision;
     TARGET is the current HEAD version. For each matched slide pair,
     the LLM labels every bullet as ``covered`` / ``rewritten`` /
@@ -2510,7 +2510,7 @@ def compare_from_inventory_cmd(
 @click.option(
     "--api-base",
     default=None,
-    help="Override the LLM API base URL (passed through to port-voiceover).",
+    help="Override the LLM API base URL (passed through to port).",
 )
 @click.pass_context
 def backfill_cmd(
@@ -2541,7 +2541,7 @@ def backfill_cmd(
        (skipped if --rev is supplied)
     2. sync-at-rev — export that revision to scratch and run sync
        against it
-    3. port-voiceover — port the resulting voiceover cells onto the
+    3. port — port the resulting voiceover cells onto the
        current HEAD SLIDE_FILE
     \b
 

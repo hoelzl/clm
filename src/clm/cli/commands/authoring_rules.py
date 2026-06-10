@@ -44,9 +44,9 @@ def authoring_rules_cmd(
 
     \b
     Examples:
-        clm authoring rules --course-spec machine-learning-azav
-        clm authoring rules --slide-path slides/module_550/topic_010/slides_010.py
-        clm authoring rules --course-spec ml-azav --json
+        clm slides rules --course-spec machine-learning-azav
+        clm slides rules --slide-path slides/module_550/topic_010/slides_010.py
+        clm slides rules --course-spec ml-azav --json
     """
     if not course_spec and not slide_path:
         raise click.UsageError("At least one of --course-spec or --slide-path is required.")

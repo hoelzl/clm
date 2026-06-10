@@ -77,7 +77,7 @@ class IncludeSpec:
 
 # Glob metacharacters rejected in ``as`` paths. These are valid filename
 # characters on POSIX but they turn the path into a glob pattern when
-# pasted into a ``.gitignore`` (see ``clm sync-includes --print-gitignore``),
+# pasted into a ``.gitignore`` (see ``clm course sync-includes --print-gitignore``),
 # and they're vanishingly rare in real filenames — reject them at parse
 # time rather than let them surface as confusing gitignore behavior later.
 _GLOB_METACHARS = frozenset("*?[]")

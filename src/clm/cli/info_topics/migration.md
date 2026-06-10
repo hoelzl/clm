@@ -2,6 +2,37 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## Command-tree regrouping (issue #310, after 1.11)
+
+The single-command groups `topic`, `spec`, and `authoring` were merged into
+the domain groups `course` and `slides`, and the remaining stray top-level
+commands moved into their natural groups. This is a **clean break** — the old
+names are gone, with no deprecation aliases:
+
+| Removed | Use instead |
+|---|---|
+| `clm targets SPEC` | `clm course targets SPEC` |
+| `clm sync-includes SPEC` | `clm course sync-includes SPEC` |
+| `clm spec decks …` | `clm course decks …` |
+| `clm spec orphans …` | `clm course orphans …` |
+| `clm topic resolve …` | `clm course resolve-topic …` |
+| `clm authoring rules …` | `clm slides rules …` |
+| `clm polish …` | `clm slides polish …` |
+| `clm delete-database …` | `clm db delete …` |
+| `clm export calendar …` | `clm calendar generate …` |
+| `clm voiceover port-voiceover …` | `clm voiceover port …` |
+
+`clm course gate` is unchanged. The whole cohort-calendar lifecycle now lives
+in one group: `clm calendar generate` → `check` → `status` → `push`.
+
+The synonym pairs `slides translate`/`slides bootstrap` and `export
+summary`/`export summarize` both still work, but `--help` now lists only the
+canonical name (`translate`, `summary`).
+
+**Update course repos:** scripts, Makefiles, CI steps, agent prompts, and
+`<tasks>` blocks in spec files that call a removed name fail with *"No such
+command"* after upgrading — replace them with the new invocations above.
+
 ## Course-document commands moved under `clm export`
 
 The three commands that turn a course spec into a human-readable document are
@@ -350,8 +381,8 @@ verb-grouped invocations:
 | `clm language-view` | `clm slides language-view` |
 | `clm suggest-sync` | `clm slides suggest-sync` |
 | `clm search-slides` | `clm slides search` |
-| `clm resolve-topic` | `clm topic resolve` |
-| `clm authoring-rules` | `clm authoring rules` |
+| `clm resolve-topic` | `clm course resolve-topic` |
+| `clm authoring-rules` | `clm slides rules` |
 | `clm validate-slides` | `clm validate` |
 | `clm validate-spec` | `clm validate` |
 | `clm extract-voiceover` | `clm voiceover extract` |
@@ -975,8 +1006,8 @@ commands moved under new groups for a smaller, more scannable layout:
 | `clm language-view`                  | `clm slides language-view`   |
 | `clm suggest-sync`                   | `clm slides suggest-sync`    |
 | `clm search-slides`                  | `clm slides search`          |
-| `clm resolve-topic`                  | `clm topic resolve`          |
-| `clm authoring-rules`                | `clm authoring rules`        |
+| `clm resolve-topic`                  | `clm course resolve-topic`   |
+| `clm authoring-rules`                | `clm slides rules`           |
 | `clm extract-voiceover`              | `clm voiceover extract`      |
 | `clm inline-voiceover`               | `clm voiceover inline`       |
 | `clm validate-slides PATH`           | `clm validate PATH`          |

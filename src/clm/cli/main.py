@@ -66,12 +66,10 @@ def help(ctx):
 # These imports must come after cli is defined, hence noqa: E402
 # Re-export commonly used functions for backwards compatibility with tests
 from clm.cli.commands._groups import (  # noqa: E402
-    authoring_group,
     course_group,
     export_group,
+    hidden_alias,
     slides_group,
-    spec_group,
-    topic_group,
 )
 from clm.cli.commands.assign_ids import assign_ids_cmd  # noqa: E402
 from clm.cli.commands.authoring_rules import authoring_rules_cmd  # noqa: E402
@@ -86,7 +84,7 @@ from clm.cli.commands.config import config  # noqa: E402
 from clm.cli.commands.course_gate import course_gate_cmd  # noqa: E402
 from clm.cli.commands.coverage import coverage_cmd  # noqa: E402
 from clm.cli.commands.coverage_report import coverage_report_cmd  # noqa: E402
-from clm.cli.commands.database import db, delete_database  # noqa: E402
+from clm.cli.commands.database import db  # noqa: E402
 from clm.cli.commands.docker import docker_group  # noqa: E402
 from clm.cli.commands.git_ops import git_group  # noqa: E402
 from clm.cli.commands.info import info  # noqa: E402
@@ -147,17 +145,14 @@ except ImportError:
 from clm.cli.commands.jupyterlite import jupyterlite_group  # noqa: E402
 
 # ---------------------------------------------------------------------
-# Top-level commands that stay flat after the Phase 0 restructure.
+# Top-level commands that stay flat: the everyday verbs.
 # ---------------------------------------------------------------------
 cli.add_command(build)
-cli.add_command(list_targets, name="targets")
 cli.add_command(validate_cmd)
-cli.add_command(delete_database)
 cli.add_command(status)
 cli.add_command(monitor)
 cli.add_command(info)
 cli.add_command(run_cmd, name="run")
-cli.add_command(sync_includes_cmd)
 cli.add_command(serve)
 cli.add_command(completion_cmd)
 
@@ -169,7 +164,7 @@ from clm.cli.completion import register_powershell_completion  # noqa: E402
 register_powershell_completion()
 
 # ---------------------------------------------------------------------
-# Verb-grouped commands (Phase 0): the canonical invocations.
+# Domain groups (issue #310): the canonical invocations.
 # ---------------------------------------------------------------------
 slides_group.add_command(normalize_slides_cmd, name="normalize")
 slides_group.add_command(assign_ids_cmd, name="assign-ids")
@@ -180,38 +175,39 @@ slides_group.add_command(language_view_cmd, name="language-view")
 slides_group.add_command(suggest_sync_cmd, name="suggest-sync")
 slides_group.add_command(slides_sync_cmd, name="sync")
 slides_group.add_command(slides_translate_cmd, name="translate")
-# `bootstrap` is an alias for the cold-start direction of the same command.
-slides_group.add_command(slides_translate_cmd, name="bootstrap")
+# `bootstrap` is the cold-start direction of `translate`; keep it
+# invocable but list the command only once in --help.
+slides_group.add_command(hidden_alias(slides_translate_cmd, "bootstrap"))
 slides_group.add_command(search_slides_cmd, name="search")
 slides_group.add_command(tidy_cmd, name="tidy")
 slides_group.add_command(referenced_by_cmd, name="referenced-by")
 slides_group.add_command(slug_report_cmd, name="slug-report")
 slides_group.add_command(coverage_report_cmd, name="coverage-report")
+slides_group.add_command(authoring_rules_cmd, name="rules")
 cli.add_command(slides_group)
 
-topic_group.add_command(resolve_topic_cmd, name="resolve")
-cli.add_command(topic_group)
-
-spec_group.add_command(spec_decks_cmd, name="decks")
-spec_group.add_command(spec_orphans_cmd, name="orphans")
-cli.add_command(spec_group)
-
+# Everything that operates on the course/spec structure lives under
+# ``course`` (issue #310 merged the former ``spec``/``topic`` groups and
+# the flat ``targets``/``sync-includes`` commands into it).
+course_group.add_command(spec_decks_cmd, name="decks")
+course_group.add_command(spec_orphans_cmd, name="orphans")
+course_group.add_command(list_targets, name="targets")
 course_group.add_command(course_gate_cmd, name="gate")
+course_group.add_command(resolve_topic_cmd, name="resolve-topic")
+course_group.add_command(sync_includes_cmd, name="sync-includes")
 cli.add_command(course_group)
 
-authoring_group.add_command(authoring_rules_cmd, name="rules")
-cli.add_command(authoring_group)
-
-# Course-document exports: outline, schedule, and LLM summary. These replace
-# the former flat ``clm outline`` / ``clm schedule`` / ``clm summarize``
-# top-level commands (removed; see migration docs).
+# Course-document exports: outline, schedule, and LLM summary.
 export_group.add_command(outline, name="outline")
 export_group.add_command(schedule, name="schedule")
-export_group.add_command(calendar, name="calendar")
-cli.add_command(calendar_group, name="calendar")
 export_group.add_command(summary, name="summary")
-export_group.add_command(summary, name="summarize")  # noun-vs-verb alias
+export_group.add_command(hidden_alias(summary, "summarize"))  # noun-vs-verb
 cli.add_command(export_group)
+
+# The full cohort-calendar lifecycle in one group: generate the
+# projection, then check/status/push the resulting calendar file.
+calendar_group.add_command(calendar)  # named "generate"
+cli.add_command(calendar_group, name="calendar")
 
 # ---------------------------------------------------------------------
 # Existing infrastructure groups (unchanged by Phase 0).
@@ -236,7 +232,8 @@ if voiceover_group is not None:
     cli.add_command(voiceover_group)
 
 if polish_cmd is not None:
-    cli.add_command(polish_cmd)
+    # LLM cleanup of speaker notes in a slide file → slide authoring.
+    slides_group.add_command(polish_cmd, name="polish")
 if recordings_group is not None:
     cli.add_command(recordings_group)
 if mcp_cmd is not None:

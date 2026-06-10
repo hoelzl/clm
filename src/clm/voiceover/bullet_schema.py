@@ -1,7 +1,7 @@
 """Shared structured-output schema for the per-slide LLM operations.
 
 Both the future ``clm voiceover compare`` judge and the
-``polish_and_port`` primitive (backing ``clm voiceover port-voiceover``
+``polish_and_port`` primitive (backing ``clm voiceover port``
 and ``clm voiceover backfill``) need to reason about bullet-level
 provenance: for every bullet in an output or target, did it survive
 untouched, get modified, appear from nowhere, or vanish from the source?

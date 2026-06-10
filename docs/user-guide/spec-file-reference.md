@@ -606,7 +606,7 @@ shared source: drop a local copy in for the duration of an edit, then
 remove it when you're done.
 
 **Exception — sync-includes materializations.** When the shadowing file
-was created by `clm sync-includes` — i.e., the topic's `.clm-include`
+was created by `clm course sync-includes` — i.e., the topic's `.clm-include`
 ledger lists a matching `as_path` + `source` entry — the warning is
 suppressed, since the on-disk copy *is* the include's authorized output
 rather than an ad-hoc override. Unauthorized shadowings (no ledger or
@@ -631,15 +631,15 @@ A virtual splice is enough for `clm build`, but running a notebook
 directly in VS Code or JupyterLab needs the included package to
 physically sit next to the slide file (Python imports read from the
 filesystem, not from the build's in-memory file map). Run
-`clm sync-includes course.xml` to materialize every declared include on
+`clm course sync-includes course.xml` to materialize every declared include on
 disk:
 
 ```bash
-clm sync-includes course.xml                       # default: copy
-clm sync-includes course.xml --mode=symlink        # if you have admin / Developer Mode
-clm sync-includes course.xml --remove              # undo (only paths we created)
-clm sync-includes course.xml --print-gitignore     # print suggested .gitignore lines
-clm sync-includes course.xml --dry-run             # preview without writing
+clm course sync-includes course.xml                       # default: copy
+clm course sync-includes course.xml --mode=symlink        # if you have admin / Developer Mode
+clm course sync-includes course.xml --remove              # undo (only paths we created)
+clm course sync-includes course.xml --print-gitignore     # print suggested .gitignore lines
+clm course sync-includes course.xml --dry-run             # preview without writing
 ```
 
 Each topic that received a materialization gets a small JSON ledger
@@ -649,13 +649,13 @@ directory are never touched.
 
 #### Keeping materialized includes out of git
 
-`clm sync-includes` does not edit `.gitignore` files; that's the
+`clm course sync-includes` does not edit `.gitignore` files; that's the
 author's file, not CLM's. To exclude materialized include targets and
 ledgers from version control, run `--print-gitignore` once and append
 the output to your course-root `.gitignore`:
 
 ```bash
-clm sync-includes course.xml --print-gitignore >> .gitignore
+clm course sync-includes course.xml --print-gitignore >> .gitignore
 ```
 
 The output is deterministic and paste-safe — re-running it produces
@@ -690,7 +690,7 @@ several topic directories, migrate them like this:
 2. Declare `<include>` on each topic that needs the package, pointing
    at the canonical location.
 3. Remove the physical copies from `slides/.../topic_*/`.
-4. Run `clm sync-includes course.xml` so local notebook execution still
+4. Run `clm course sync-includes course.xml` so local notebook execution still
    works. Optionally `--mode=symlink` if you have admin / Developer
    Mode.
 5. Run `clm build course.xml` and compare against a pre-migration build
@@ -893,7 +893,7 @@ If no `<output-targets>` element is present, CLM uses legacy behavior:
 
 **List defined targets**:
 ```bash
-clm targets course.xml
+clm course targets course.xml
 ```
 
 Output:

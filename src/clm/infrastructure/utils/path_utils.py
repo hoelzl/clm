@@ -76,7 +76,7 @@ SKIP_FILE_SUFFIXES = [".keras", ".bkp", ".bin"]
 
 # Exact file names that are build-internal artifacts and must not enter the
 # course file map (so they never reach workers, source mounts, or output).
-# ``.clm-include`` is the per-topic ledger written by ``clm sync-includes``.
+# ``.clm-include`` is the per-topic ledger written by ``clm course sync-includes``.
 SKIP_FILE_NAMES = frozenset({".clm-include"})
 
 # File-name patterns (regex) that are allowed during course scanning (so they

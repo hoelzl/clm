@@ -318,7 +318,7 @@ Reset database if needed:
 
 ```bash
 # Delete database
-clm delete-database
+clm db delete
 
 # Rebuild
 clm build course.xml
