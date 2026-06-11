@@ -9,6 +9,253 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 Unreleased changes are collected as fragment files in [`changelog.d/`](changelog.d/)
 and folded into this file by `scripts/collect_changelog.py` at release time.
 
+## [1.12.0] - 2026-06-11
+
+### Added
+
+- `clm validate`: a deck meant to be fully narrated can opt into the
+  (default-off, #176) voiceover coverage check per deck with a
+  `# clm: voiceover-coverage` header directive (#178) — a default
+  validate run then coverage-checks that deck only, while an explicit
+  `--checks`/`checks=[…]` list is still honored verbatim.
+
+- `clm slides sync` cold-start mint/adopt deferrals are no longer an
+  opaque count (#231): when the correspondence verifier rejects DE/EN
+  slide pairs, the output (and `--json` via `apply.cold_deferrals`) names
+  each rejected pair's index and both headings plus a
+  `clm slides validate` hint, and verifier-unavailable / safe-abort /
+  plan-error / race deferrals state their reason.
+
+- `clm slides assign-ids` automates three more cold-start fixes (#233):
+  display expressions (`data[:5]`, `result["choices"]`,
+  `response.headers["Content-Type"]`) and `for` loops are now
+  content-derived AST extractions instead of hard refusals; an alt-less
+  `<img src="…">` proposes a slug from the image filename stem
+  (`img-robots-playing-checkers`) instead of hard-refusing (multi-line
+  `<img>` tags no longer leak attribute fragments into prose extraction);
+  and voiceover/notes cells carrying `<deck-stem>-cell-N` conversion
+  placeholder ids are re-pointed to the preceding slide on the normal
+  inherit pass, without `--force`.
+
+- `clm slides normalize` gained a `placeholder_start` operation (issue #233
+  item 4a): a code cell tagged `start` whose body is only a solution
+  placeholder (`# Your solution here`, `pass`, `...`) followed by a markdown
+  `completed`/`alt` cell is demoted to a plain cell, and an already-promoted
+  markdown `completed` partner is renamed back to `alt`. Placeholder `start`
+  cells paired with a code `completed` cell are left untouched. Runs before
+  `tag_migration` (which otherwise promotes the adjacent markdown `alt` to
+  `completed`), is part of `all`, and is idempotent.
+
+- `clm slides split` now warns (without failing or rewriting the source) when
+  the bilingual source contains `slide`/`subslide` cells missing a `slide_id`,
+  pointing at `clm slides assign-ids`. Lightweight substitute for the deferred
+  `split --assign-ids` proposal (#255): the documented
+  `assign-ids --accept-content-derived --accept-code-derived` → `split`
+  pipeline already guarantees id-complete halves; the warning catches the
+  forgotten-first-step case at split time instead of one `validate` later.
+
+- **`clm calendar push` — mirror a cohort's viewing calendar into Google
+  Calendar.** Students subscribe to one shared Google calendar and pushed
+  schedule changes propagate within minutes (no `.ics` hosting, no feed-refresh
+  lag). The push only touches CLM-managed events: each event is tagged (private
+  extended properties) with the cohort namespace and the same stable
+  per-assignment UID the `.ics` export uses, so re-pushing updates events in
+  place, deletes vanished ones, and never disturbs other events in the same
+  calendar. Credentials (`--credentials` / `CLM_GOOGLE_CREDENTIALS`) accept an
+  OAuth "Desktop app" client (one-time browser consent, cached token) or a
+  service-account key, auto-detected; the target comes from `--calendar-id` or
+  a new optional `[google] calendar_id` table in the cohort calendar TOML.
+  `--dry-run` previews the insert/update/delete plan. Requires the new `[gcal]`
+  extra (`google-api-python-client`, `google-auth`, `google-auth-oauthlib`).
+
+- **Evergreen release files — `<evergreen>` patterns and `clm release sync
+  --evergreen`.** Skeleton (global) files matching an evergreen glob pattern
+  are exempt from the release freeze: every sync re-copies a matching file
+  whose built content differs from the cohort's copy — for files that are
+  *meant* to change over a cohort's lifetime (a NEWS file, announcements),
+  which previously froze with the rest of the skeleton after the first sync
+  and could never be updated. Patterns are declared on `<release-channels>`
+  (inherited by every channel; channel-level entries are additive) or passed
+  per-invocation with the repeatable `--evergreen` option, and match
+  destination-relative POSIX paths (re-rooted paths for `lang`-scoped
+  channels). Evergreen is skeleton-only by design: patterns matching
+  topic-owned files are warned about and ignored (topic content still changes
+  only via `--refreeze`), and the comparison is stateless (destination hash
+  vs. manifest hash) so the `.clm-released.json` format is unchanged and
+  re-runs are idempotent.
+
+- **`clm run` — spec-defined task sequences.** A new `<tasks>` block in the
+  course spec declares named sequences of clm commands (e.g. a `pre-release`
+  task that regenerates calendar/outline exports and then builds, so the
+  output never ships stale files). `clm run pre-release course.xml` executes
+  the steps in order; `clm run course.xml` lists the spec's tasks; `--dry-run`
+  previews the resolved commands. Steps are clm commands only (no shell — that
+  is what makes tasks portable across machines), support a `{spec}`
+  placeholder, run as subprocesses in the same Python environment, and are all
+  validated (placeholders + command existence) before the first one executes.
+  The first failing step aborts the task with its exit code. `clm validate`
+  checks declared tasks too. `python -m clm` now works (new module entry
+  point). See `clm info spec-files` / `clm info commands` and
+  `docs/user-guide/tasks.md`.
+
+- `clm build` now reports what it is doing after the last build stage instead
+  of appearing to hang: stale-output sweep, database cleanup/VACUUM, worker
+  shutdown, HTTP-replay cassette merging, and provenance-manifest writing each
+  print a progress message.
+
+- **Shared release destinations.** Channels of *different* release streams may
+  now declare the same `path`, releasing e.g. materials and solutions into a
+  single cohort repository on independent per-topic timelines (#325). Frozen
+  manifests are now per stream (`.clm-released.<stream>.json`; a matching
+  legacy `.clm-released.json` is adopted and renamed automatically on the next
+  sync), skeleton files already present at the destination are kept rather
+  than overwritten (presence-as-frozen), `clm release sync` refuses to promote
+  when the sharing streams' builds claim a topic-owned path with differing
+  content (byte-identical static files, e.g. project scaffolding, are
+  allowed), spec validation
+  requires sharing channels to agree on `lang`, and `clm git --all-channels` /
+  `clm release provision` treat a shared destination as one repository. See
+  `clm info releases` ("Shared destination") and `clm info migration`.
+
+- New `clm cache explain SOURCE_FILE --spec SPEC` (#328): read-only, per-deck
+  view of the execution-cache key components (hashed topic siblings, template
+  fingerprint, worker image identity, execution flags), the resulting hashes,
+  and the hit/miss state of every cache layer with stored-at timestamps,
+  ending in a per-artifact "replays / skips / will execute" verdict — the
+  one-screen answer to "why did this deck replay stale output?" that the
+  #321 diagnosis lacked.
+
+### Changed
+
+- `clm validate`: the `'completed' tag without a preceding 'start' cell`
+  error now points at a `keep`-tagged preceding code cell when present
+  ("did you mean 'start'?") — the recurring incremental-build mis-tag
+  found during cold-start conversions (#233 item 4b).
+
+- **Changelog entries are now fragment files in `changelog.d/`.** PRs no
+  longer edit the `[Unreleased]` section of `CHANGELOG.md` (concurrent PRs
+  inserting at the same lines made changelog merge conflicts near-universal);
+  each PR instead adds `changelog.d/<pr-or-issue>-<slug>.<type>.md` with the
+  finished markdown bullet. At release time the new
+  `scripts/collect_changelog.py` folds all fragments (plus any stray
+  hand-written `[Unreleased]` entries) into a `## [X.Y.Z]` section, grouped
+  Added/Changed/Deprecated/Removed/Fixed/Security, and deletes them.
+  Conventions in `changelog.d/README.md`; release procedure updated in
+  `docs/developer-guide/releasing.md`.
+
+- **Breaking: command-tree regrouping (#310).** The single-command groups
+  `topic`, `spec`, and `authoring` were merged into the domain groups
+  `course` and `slides`, and the remaining stray top-level commands moved
+  into their natural groups — a clean break with no deprecation aliases:
+  `clm targets`/`clm sync-includes`/`clm spec decks|orphans`/`clm topic
+  resolve` → `clm course targets|sync-includes|decks|orphans|resolve-topic`;
+  `clm authoring rules` → `clm slides rules`; `clm polish` →
+  `clm slides polish`; `clm delete-database` → `clm db delete`;
+  `clm export calendar` → `clm calendar generate` (the whole cohort-calendar
+  lifecycle now lives in one group: `generate` → `check` → `status` →
+  `push`); `clm voiceover port-voiceover` → `clm voiceover port`. The
+  synonym pairs `slides translate`/`bootstrap` and `export
+  summary`/`summarize` still work but are listed once in `--help`. The top
+  level shrinks from 31 to 26 entries. See `clm info migration` for the full
+  table.
+
+- **Internal: command modules mirror the command tree.** Finding a command's
+  definition is now mechanical: flat `clm <cmd>` lives in
+  `commands/<cmd>.py`; `clm <group> <cmd>` lives in
+  `commands/<group>/<cmd>.py` (package groups `slides/`, `course/`,
+  `export/`) or `commands/<group>.py` (single-file groups, e.g. `db.py`,
+  `git.py`, `calendar.py`). Groups register their own subcommands where
+  they are defined; `main.py` is just the top-level manifest. No
+  user-visible change, but `clm.cli.commands.*` import paths moved —
+  external code importing them must follow the renames.
+
+- CLI startup is ~4x faster: `clm.cli.main` now loads command modules lazily
+  (`LazyGroup`), and the `clm`/`clm.core`/`clm.infrastructure` package inits
+  resolve their convenience exports via PEP 562 instead of importing the whole
+  core/infrastructure stack on every invocation. `from clm import Course` and
+  `from clm.cli.main import BuildConfig`-style imports keep working unchanged.
+
+- Finished job rows are now pruned at build end by default: completed jobs are
+  kept 7 days and failed jobs 30 days (previously both were kept forever, which
+  made the jobs database — and `clm monitor` startup — grow without bound).
+  Job rows are diagnostic only; the results/execution caches live in separate
+  tables, so this never causes re-execution. Set
+  `CLM_RETENTION__COMPLETED_JOBS_RETENTION_DAYS` /
+  `CLM_RETENTION__FAILED_JOBS_RETENTION_DAYS` to tune.
+
+### Fixed
+
+- `clm slides assign-ids` no longer mints collision-suffixed slide ids that
+  exceed the 30-character slug cap (and that `clm slides validate` then
+  rejected) — the base slug is trimmed at a word boundary before the `-N`
+  dedup suffix is appended (#233).
+
+- The voiceover transcribe CLI tests no longer leak a
+  `.clm/voiceover-cache/transcripts/` directory into the working directory
+  `pytest` was invoked from — they now isolate the transcript cache under
+  `tmp_path` via `--cache-root` (#235).
+
+- **Provenance manifest no longer records `.git` (and other never-copied
+  paths) from output trees (issue #302).** The manifest's dir-group walk now
+  applies the same ignore filter as the build's dir-group copy, so a `.git`
+  left inside an output target (e.g. by `clm git init`) no longer enters the
+  skeleton as 1000+ topic-less entries that `clm release sync` would then
+  copy into a cohort repo — for a language-scoped channel landing at the repo
+  root and clobbering the destination's real `.git`. As defense in depth,
+  `clm release sync` now refuses to copy any manifest path containing a
+  `.git`/`.svn`/`.hg` segment (with a warning), so a polluted manifest from
+  an older build can never overwrite a destination repo's VCS metadata.
+
+- `clm monitor` / `clm status` no longer take many seconds to start against a
+  large jobs database: schema v9 adds indexes on `jobs(status, completed_at)`
+  and `jobs(completed_at)` (existing databases migrate automatically), and the
+  monitor's activity query restricts its un-indexable `COALESCE` sort to an
+  index-friendly candidate set instead of sorting every finished job ever
+  recorded.
+
+- Underscore-prefixed directories under `slides/` (e.g. `_archive/`, `_drafts/`)
+  are now invisible to module/topic discovery, to the recursive deck walks behind
+  the `clm slides` batch tools and `clm slides sync`, and to `clm course orphans`
+  — previously an archived module under `slides/_archive/` participated in topic
+  resolution and could silently shadow a live topic ID via first-occurrence-wins,
+  shipping retired decks in its place. A spec binding `module="_archive"` now
+  fails validation with `unknown_module`. The legacy `_cassettes/` sidecar inside
+  a topic is unaffected (#318).
+
+- `clm build` notebook caches no longer replay stale execution results when
+  a dependency changes with unchanged deck text (#321): the cache keys now
+  cover every topic sibling shipped to the kernel (C++ `#include` headers,
+  Jinja `{% include %}` targets, runtime data files), a fingerprint of the
+  bundled Jinja templates (`macros.j2` etc.) plus the CLM version, the
+  worker execution environment (`direct`, or the configured Docker image
+  reference — a cache populated under one worker image is no longer
+  replayed under another; pin versioned tags rather than `:latest` for
+  exact invalidation), and the per-topic `evaluate=` / `skip-errors=`
+  flags. The HTTP-replay cassette remains deliberately excluded
+  (record-after-run miss loop). The first build after upgrading re-executes
+  everything once (key schema change).
+- Cached-issue replay actually works for notebook jobs again (#321): stored
+  errors/warnings were keyed under `str(tuple)` output metadata while
+  lookups used the colon-joined form, so a cache hit never re-surfaced the
+  warnings/errors recorded for that content. Both cache layers (database
+  result cache and job-level cache) now replay stored issues on a hit; the
+  job-level path previously dropped them entirely.
+- A successful build of a deck now clears errors/warnings stored by earlier
+  runs of the same content (#321): previously a transient failure's stored
+  error would have been replayed on every later cache hit, and repeated
+  `--ignore-cache` runs accumulated duplicate warnings.
+- `clm build --output-mode verbose` now prints an explicit
+  `↻ Replayed from cache` line for every file served from a cache instead
+  of executed (#321) — replayed output is freshly timestamped and was
+  previously indistinguishable from executed output.
+
+- Docker source-mount workers no longer discard the host's voiceover-merged
+  notebook payload by re-reading the raw slide file from the mount (#324).
+  The payload's `data` is now the canonical input in both Direct and Docker
+  modes, so (1) companion narration reaches docker-built output and (2) the
+  worker-side `execution_cache_hash` agrees with the host's again, restoring
+  Stage-4 cache replay for voiceover decks built with docker workers.
+
 ## [1.11.0] - 2026-06-10
 
 ### Added
