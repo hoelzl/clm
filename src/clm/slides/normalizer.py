@@ -2,6 +2,10 @@
 
 Applies mechanical fixes to percent-format ``.py`` slide files:
 
+- **Placeholder start demotion**: removes the ``start`` tag from code cells
+  with no real scaffolding (body only ``# Your solution here`` / ``pass`` /
+  ``...``) when the workshop solution that follows is a markdown ``alt`` /
+  ``completed`` run rather than a paired ``completed`` code cell
 - **Tag migration**: ``alt`` → ``completed`` after ``start`` cells
 - **Workshop tag insertion**: adds ``workshop`` to workshop heading cells,
   and symmetrizes ``workshop``/``end-workshop`` tags across DE/EN heading
@@ -107,6 +111,7 @@ class NormalizationResult:
 ALL_OPERATIONS = frozenset(
     {
         "preamble_code",
+        "placeholder_start",
         "tag_migration",
         "workshop_tags",
         "interleaving",
@@ -150,6 +155,127 @@ def _apply_preamble_code(
                 ),
             )
         )
+    return changes
+
+
+# ---------------------------------------------------------------------------
+# Placeholder start demotion: scaffolding-less start cells (#233 item 4a)
+# ---------------------------------------------------------------------------
+
+# A line that is *only* a solution-placeholder comment. Anchored on both ends:
+# a placeholder phrase followed by real text (e.g. "# Your code here: Train
+# linear model") is a genuine hint, not a placeholder.
+_PLACEHOLDER_COMMENT_RE = re.compile(
+    r"^(?:#|//)\s*(?:"
+    r"your (?:solution|code) here"
+    r"|(?:ihre?|deine?) l(?:ö|oe)sung hier"
+    r"|(?:ihr|dein) code hier"
+    r")\s*[:!.]?\s*$",
+    re.IGNORECASE,
+)
+
+# Code lines that carry no scaffolding on their own.
+_PLACEHOLDER_CODE_LINES = frozenset({"pass", "..."})
+
+
+def _is_placeholder_body(cell: _RawCell) -> bool:
+    """True if a code cell's body is only solution placeholders (no scaffolding)."""
+    non_blank = [ln.strip() for ln in cell.lines[1:] if ln.strip()]
+    if not non_blank:
+        return False
+    return all(
+        ln in _PLACEHOLDER_CODE_LINES or _PLACEHOLDER_COMMENT_RE.match(ln) for ln in non_blank
+    )
+
+
+def _remove_tag_from_header(header: str, tag: str) -> str:
+    """Remove a tag from a cell header line, dropping ``tags=[]`` if it empties."""
+    tags_match = re.search(r"tags=\[([^\]]*)\]", header)
+    if not tags_match:
+        return header
+    kept = [
+        t.strip()
+        for t in tags_match.group(1).split(",")
+        if t.strip() and t.strip().strip("\"'") != tag
+    ]
+    if kept:
+        new_attr = f"tags=[{', '.join(kept)}]"
+        return header[: tags_match.start()] + new_attr + header[tags_match.end() :]
+    before = header[: tags_match.start()].rstrip()
+    after = header[tags_match.end() :].strip()
+    return f"{before} {after}" if after else before
+
+
+def _apply_placeholder_start(cells: list[_RawCell], file_path: str) -> list[Change]:
+    """Demote ``start`` cells that hold no scaffolding (issue #233 item 4a).
+
+    Workshop tasks are authored as a plain placeholder cell (``# Your solution
+    here``) followed by markdown/code ``alt`` solution cells — the workshop
+    range mechanism blanks the solutions in code-along output, so the
+    ``start``/``completed`` pairing has no role there. Tagging the placeholder
+    ``start`` anyway is a recurring authoring slip, and ``tag_migration`` then
+    compounds it by promoting the adjacent markdown ``alt`` to ``completed`` —
+    a shape that is semantically impossible (a markdown cell cannot be the
+    solution code of a live-coding pair).
+
+    The fix mirrors the manual repair applied across the PythonCourses decks:
+    drop the ``start`` tag, and rename an already-promoted markdown
+    ``completed`` partner back to ``alt``. The discriminator is deliberately
+    a conjunction — the ``start`` body must be placeholder-only AND the
+    immediately following cell must be a markdown ``alt``/``completed`` cell.
+    Placeholder ``start`` cells paired with a *code* ``completed`` cell are
+    left untouched: that pairing validates and renders correctly.
+
+    Must run before ``_apply_tag_migration`` so the demotion wins before the
+    migration can promote the adjacent markdown ``alt``.
+    """
+    changes: list[Change] = []
+
+    for idx, cell in enumerate(cells):
+        meta = cell.metadata
+        if meta.is_j2 or meta.cell_type != "code" or "start" not in meta.tags:
+            continue
+        if not _is_placeholder_body(cell):
+            continue
+
+        nxt = cells[idx + 1] if idx + 1 < len(cells) else None
+        if nxt is None or nxt.metadata.is_j2 or nxt.metadata.cell_type != "markdown":
+            continue
+        nxt_tags = nxt.metadata.tags
+        if "completed" not in nxt_tags and "alt" not in nxt_tags:
+            continue
+
+        new_header = _remove_tag_from_header(cell.header, "start")
+        cell.header = new_header
+        cell.metadata = parse_cell_header(new_header)
+        changes.append(
+            Change(
+                file=file_path,
+                operation="placeholder_start",
+                line=cell.line_number,
+                description=(
+                    "Removed 'start' tag from placeholder-only cell "
+                    "(workshop solution follows as markdown, not a code 'completed')"
+                ),
+            )
+        )
+
+        if "completed" in nxt_tags:
+            new_nxt_header = nxt.header.replace('"completed"', '"alt"')
+            nxt.header = new_nxt_header
+            nxt.metadata = parse_cell_header(new_nxt_header)
+            changes.append(
+                Change(
+                    file=file_path,
+                    operation="placeholder_start",
+                    line=nxt.line_number,
+                    description=(
+                        'Renamed "completed" -> "alt" '
+                        "(markdown cell promoted after a placeholder-only start)"
+                    ),
+                )
+            )
+
     return changes
 
 
@@ -800,6 +926,12 @@ def normalize_file(
     # canonical cell structure with the code in its own cell.
     if "preamble_code" in op_set:
         all_changes.extend(_apply_preamble_code(cells, file_str, comment_token))
+
+    # Placeholder-start demotion must precede tag migration: once the bogus
+    # 'start' tag is gone, the migration no longer promotes the adjacent
+    # markdown 'alt' to 'completed' (#233 item 4a).
+    if "placeholder_start" in op_set:
+        all_changes.extend(_apply_placeholder_start(cells, file_str))
 
     if "tag_migration" in op_set:
         all_changes.extend(_apply_tag_migration(cells, file_str))

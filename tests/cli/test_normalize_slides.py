@@ -40,6 +40,22 @@ class TestNormalizeSlidesCmd:
         assert result.exit_code == 0
         assert "tag_migration" in result.output
 
+    def test_placeholder_start(self, tmp_path):
+        path = _write_slide(
+            tmp_path / "slides_test.py",
+            '# %% tags=["start"]\n# Your solution here\n\n'
+            '# %% [markdown] tags=["completed"]\n# Discussion.\n',
+        )
+        runner = CliRunner()
+        result = runner.invoke(
+            normalize_slides_cmd, [str(path), "--operations", "placeholder_start"]
+        )
+        assert result.exit_code == 0
+        assert "placeholder_start" in result.output
+        new_text = path.read_text(encoding="utf-8")
+        assert '"start"' not in new_text
+        assert 'tags=["alt"]' in new_text
+
     def test_dry_run(self, tmp_path):
         text = '# %% tags=["start"]\nx = 1\n\n# %% tags=["alt"]\nx = 2\n'
         path = _write_slide(tmp_path / "slides_test.py", text)

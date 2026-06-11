@@ -14,6 +14,7 @@ from clm.slides.normalizer import (
     _apply_tag_migration,
     _apply_workshop_tags,
     _reconstruct,
+    _remove_tag_from_header,
     _split_raw_cells,
     normalize_directory,
     normalize_file,
@@ -137,6 +138,207 @@ class TestTagMigration:
 
         assert len(result.changes) == 0
         assert result.files_modified == 0
+
+
+# ---------------------------------------------------------------------------
+# Placeholder start demotion (#233 item 4a)
+# ---------------------------------------------------------------------------
+
+
+class TestPlaceholderStart:
+    def test_markdown_completed_after_placeholder_start_fixed(self, tmp_path):
+        text = (
+            '# %% tags=["start"]\n'
+            "# Your solution here\n"
+            "\n"
+            '# %% [markdown] lang="de" tags=["completed"]\n'
+            "# Die Loesung verwendet np.array.\n"
+            "\n"
+            '# %% tags=["alt"]\n'
+            "ages = np.array([25, 32, 18, 45, 28])\n"
+        )
+        path = _write_slide(tmp_path / "slides_test.py", text)
+        result = normalize_file(path, operations=["placeholder_start"])
+
+        assert len(result.changes) == 2
+        assert all(c.operation == "placeholder_start" for c in result.changes)
+        new_text = path.read_text(encoding="utf-8")
+        assert '"start"' not in new_text
+        assert new_text.startswith("# %%\n# Your solution here\n")
+        assert '# %% [markdown] lang="de" tags=["alt"]' in new_text
+        assert '"completed"' not in new_text
+
+    def test_markdown_alt_after_placeholder_start_demotes_start_only(self, tmp_path):
+        # The pre-migration authored shape: the markdown solution run is still
+        # tagged "alt". The start tag is dropped so tag_migration can no
+        # longer promote the alt cell.
+        text = (
+            '# %% tags=["start"]\n'
+            "# Your solution here\n"
+            "\n"
+            '# %% [markdown] lang="de" tags=["alt"]\n'
+            "# Die Loesung verwendet np.array.\n"
+        )
+        path = _write_slide(tmp_path / "slides_test.py", text)
+        result = normalize_file(path, operations=["placeholder_start"])
+
+        assert len(result.changes) == 1
+        new_text = path.read_text(encoding="utf-8")
+        assert '"start"' not in new_text
+        assert 'tags=["alt"]' in new_text
+
+    def test_full_run_does_not_promote_alt_after_demoted_start(self, tmp_path):
+        # With all operations enabled, placeholder_start must win over
+        # tag_migration: the markdown alt stays alt.
+        text = (
+            '# %% tags=["start"]\n'
+            "# Your solution here\n"
+            "\n"
+            '# %% [markdown] lang="de" tags=["alt"]\n'
+            "#\n"
+            "# Die Loesung verwendet np.array.\n"
+        )
+        path = _write_slide(tmp_path / "slides_test.py", text)
+        normalize_file(path)
+
+        new_text = path.read_text(encoding="utf-8")
+        assert '"start"' not in new_text
+        assert 'tags=["alt"]' in new_text
+        assert '"completed"' not in new_text
+
+    def test_code_completed_pair_untouched(self, tmp_path):
+        # A placeholder start paired with a *code* completed cell is a valid
+        # live-coding pair — never touched.
+        text = (
+            '# %% tags=["start"]\n'
+            "# Your solution here\n"
+            "\n"
+            '# %% tags=["completed"]\n'
+            "ages = np.array([25, 32, 18, 45, 28])\n"
+        )
+        path = _write_slide(tmp_path / "slides_test.py", text)
+        result = normalize_file(path, operations=["placeholder_start"])
+
+        assert len(result.changes) == 0
+        assert path.read_text(encoding="utf-8") == text
+
+    def test_real_scaffolding_start_untouched(self, tmp_path):
+        text = (
+            '# %% tags=["start"]\n'
+            "def evaluate(student):\n"
+            "    ...\n"
+            "\n"
+            '# %% [markdown] tags=["completed"]\n'
+            "# Discussion.\n"
+        )
+        path = _write_slide(tmp_path / "slides_test.py", text)
+        result = normalize_file(path, operations=["placeholder_start"])
+
+        assert len(result.changes) == 0
+        assert path.read_text(encoding="utf-8") == text
+
+    def test_hint_comment_is_not_a_placeholder(self, tmp_path):
+        # A placeholder phrase followed by real text is a genuine hint.
+        text = (
+            '# %% tags=["start"]\n'
+            "# Your code here: Train linear model\n"
+            "\n"
+            '# %% [markdown] tags=["completed"]\n'
+            "# Discussion.\n"
+        )
+        path = _write_slide(tmp_path / "slides_test.py", text)
+        result = normalize_file(path, operations=["placeholder_start"])
+
+        assert len(result.changes) == 0
+        assert path.read_text(encoding="utf-8") == text
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            "pass\n",
+            "...\n",
+            "# Ihre Lösung hier\n",
+            "# Deine Loesung hier!\n",
+            "# Ihr Code hier:\n",
+            "# YOUR SOLUTION HERE\n",
+            "# Your solution here\npass\n",
+        ],
+    )
+    def test_placeholder_body_variants(self, tmp_path, body):
+        text = (
+            '# %% tags=["start"]\n'
+            + body
+            + "\n"
+            + '# %% [markdown] tags=["completed"]\n'
+            + "# Discussion.\n"
+        )
+        path = _write_slide(tmp_path / "slides_test.py", text)
+        result = normalize_file(path, operations=["placeholder_start"])
+
+        assert len(result.changes) == 2
+        new_text = path.read_text(encoding="utf-8")
+        assert '"start"' not in new_text
+        assert 'tags=["alt"]' in new_text
+
+    def test_other_tags_on_start_cell_preserved(self, tmp_path):
+        text = (
+            '# %% tags=["start", "subslide"]\n'
+            "# Your solution here\n"
+            "\n"
+            '# %% [markdown] tags=["completed"]\n'
+            "# Discussion.\n"
+        )
+        path = _write_slide(tmp_path / "slides_test.py", text)
+        result = normalize_file(path, operations=["placeholder_start"])
+
+        assert len(result.changes) == 2
+        new_text = path.read_text(encoding="utf-8")
+        assert 'tags=["subslide"]' in new_text
+        assert '"start"' not in new_text
+
+    def test_untagged_markdown_follower_untouched(self, tmp_path):
+        text = '# %% tags=["start"]\n# Your solution here\n\n# %% [markdown]\n# Plain markdown.\n'
+        path = _write_slide(tmp_path / "slides_test.py", text)
+        result = normalize_file(path, operations=["placeholder_start"])
+
+        assert len(result.changes) == 0
+        assert path.read_text(encoding="utf-8") == text
+
+    def test_idempotent(self, tmp_path):
+        text = (
+            '# %% tags=["start"]\n'
+            "# Your solution here\n"
+            "\n"
+            '# %% [markdown] tags=["completed"]\n'
+            "# Discussion.\n"
+        )
+        path = _write_slide(tmp_path / "slides_test.py", text)
+        normalize_file(path, operations=["placeholder_start"])
+        first = path.read_text(encoding="utf-8")
+        result = normalize_file(path, operations=["placeholder_start"])
+
+        assert len(result.changes) == 0
+        assert path.read_text(encoding="utf-8") == first
+
+
+class TestRemoveTagFromHeader:
+    def test_sole_tag_drops_attribute(self):
+        assert _remove_tag_from_header('# %% tags=["start"]', "start") == "# %%"
+
+    def test_other_tags_kept(self):
+        assert (
+            _remove_tag_from_header('# %% tags=["start", "subslide"]', "start")
+            == '# %% tags=["subslide"]'
+        )
+
+    def test_trailing_attributes_kept(self):
+        assert (
+            _remove_tag_from_header('# %% tags=["start"] slide_id="abc"', "start")
+            == '# %% slide_id="abc"'
+        )
+
+    def test_no_tags_attribute_is_noop(self):
+        assert _remove_tag_from_header("# %%", "start") == "# %%"
 
 
 # ---------------------------------------------------------------------------
