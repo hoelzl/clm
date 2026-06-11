@@ -54,9 +54,20 @@ class NotebookPayload(Payload):
     # resolved worker-side from the installed clm package, so without this
     # field a ``macros.j2`` change (shipped with a new clm version) would
     # invalidate nothing and every deck would replay stale title slides
-    # from a warm cache (issue #321 class 4). Folded into both cache
-    # hashes below.
+    # from a warm cache (issue #321 class 4). Covers HOST-side changes
+    # only; worker-image divergence is covered by ``worker_image_identity``
+    # below. Folded into both cache hashes.
     template_fingerprint: str = ""
+    # Identity of the execution environment this job is configured to run
+    # in: "direct", or "docker:<image reference>", computed HOST-side
+    # (``compute_worker_image_identity``). A Docker image carries its own
+    # clm version, templates, and kernel, so a cache populated under one
+    # image must not be replayed under another (issue #321 class 5) — and
+    # the template fingerprint above cannot see a worker-image change when
+    # the host is unchanged. Image reference, not content digest: mutable
+    # tags (":latest") weaken this; pin versioned tags/digests for exact
+    # invalidation. Folded into both cache hashes.
+    worker_image_identity: str = ""
     other_files: dict[str, bytes] = {}
     fallback_execute: bool = False
     # If True, the notebook is rendered to all configured output formats
@@ -123,8 +134,9 @@ class NotebookPayload(Payload):
         Folds in ``other_files`` (the complete byte content of every
         non-image topic sibling — C++ headers a deck ``#include``s, files
         pulled in via Jinja ``{% include %}``, runtime data files), the
-        template fingerprint, and the ``skip_evaluation`` / ``skip_errors``
-        execution flags. Editing any topic sibling re-executes the deck:
+        template fingerprint, the worker image identity, and the
+        ``skip_evaluation`` / ``skip_errors`` execution flags. Editing any
+        topic sibling re-executes the deck:
         that over-invalidates slightly (a sibling the deck never reads also
         triggers re-execution), but over-invalidation is safe and cheap
         relative to silently shipping stale teaching material (issue #321).
@@ -145,7 +157,8 @@ class NotebookPayload(Payload):
         """
         hasher = hashlib.sha256()
         hasher.update(
-            f"{self.template_fingerprint}:{self.skip_evaluation}:{self.skip_errors}".encode()
+            f"{self.template_fingerprint}:{self.worker_image_identity}:"
+            f"{self.skip_evaluation}:{self.skip_errors}".encode()
         )
         cassette_key = self.http_replay_cassette_name
         for name in sorted(self.other_files):

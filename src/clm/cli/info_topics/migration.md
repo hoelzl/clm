@@ -9,8 +9,9 @@ alone, so editing a sibling file the deck depends on (a C++ header it
 `#include`s, a Jinja `{% include %}` target, a CSV it reads) silently
 replayed stale execution output with a fresh timestamp, and only
 `--ignore-cache` recovered. The cache keys now also cover every non-image
-topic sibling, a fingerprint of CLM's bundled Jinja templates, and the
-per-topic `evaluate=` / `skip-errors=` attributes.
+topic sibling, a fingerprint of CLM's bundled Jinja templates, the worker
+execution environment (`direct` or the configured Docker image reference),
+and the per-topic `evaluate=` / `skip-errors=` attributes.
 
 Consequences for course repos:
 
@@ -19,6 +20,10 @@ Consequences for course repos:
 - Editing any non-image file in a topic directory re-executes the decks in
   that topic — you no longer need `--ignore-cache` after changing a shared
   header or data file.
+- Changing the configured Docker worker image (or switching direct↔docker)
+  invalidates too. The key uses the image *reference*, not a content digest:
+  a re-pulled `:latest` tag does not invalidate — pin worker images to
+  versioned tags or `@sha256:` digests for exact invalidation.
 - Editing the HTTP-replay cassette still does **not** invalidate (deliberate;
   record-capable modes rewrite cassettes after execution). Use
   `--ignore-cache` after a manual cassette edit.

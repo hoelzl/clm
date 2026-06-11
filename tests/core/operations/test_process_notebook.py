@@ -1,11 +1,17 @@
 """Tests for ProcessNotebookOperation helpers.
 
-Currently covers ``compute_template_fingerprint`` (issue #321): the
-host-side digest of the bundled Jinja template directory that travels in
-``NotebookPayload.template_fingerprint`` and is folded into the cache keys.
+Covers the host-side cache-key components from issue #321:
+``compute_template_fingerprint`` (digest of the bundled Jinja template
+directory, shipped via ``NotebookPayload.template_fingerprint``) and
+``worker_image_identity_for`` (execution-environment identity, shipped via
+``NotebookPayload.worker_image_identity``).
 """
 
-from clm.core.operations.process_notebook import compute_template_fingerprint
+from clm.core.operations.process_notebook import (
+    compute_template_fingerprint,
+    compute_worker_image_identity,
+    worker_image_identity_for,
+)
 
 
 class TestComputeTemplateFingerprint:
@@ -44,3 +50,45 @@ class TestComputeTemplateFingerprint:
         compute_template_fingerprint.cache_clear()
         second = compute_template_fingerprint("cpp")
         assert first == second
+
+
+class TestWorkerImageIdentity:
+    def test_direct_mode(self):
+        """Direct mode has no image — the host environment (already covered
+        by the template fingerprint) is the identity."""
+        assert worker_image_identity_for("direct", None) == "direct"
+        # An image configured but unused (direct mode) must not leak into
+        # the key — it does not describe the executing environment.
+        assert worker_image_identity_for("direct", "ignored:1.0") == "direct"
+
+    def test_docker_mode_with_configured_image(self):
+        assert (
+            worker_image_identity_for("docker", "ghcr.io/me/clm-notebook:1.11.0")
+            == "docker:ghcr.io/me/clm-notebook:1.11.0"
+        )
+
+    def test_docker_mode_default_image_matches_pool_starter(self):
+        """With no per-type image configured, the identity must resolve the
+        SAME default the pool starter uses — otherwise the key describes a
+        different image than the one executing."""
+        from clm.infrastructure.config import DEFAULT_WORKER_IMAGES
+
+        assert worker_image_identity_for("docker", None) == (
+            f"docker:{DEFAULT_WORKER_IMAGES['notebook']}"
+        )
+
+    def test_image_change_changes_identity(self):
+        """The whole point: two different images yield two different
+        identities, so the cache key differs."""
+        old = worker_image_identity_for("docker", "clm-notebook:xeus-cling")
+        new = worker_image_identity_for("docker", "clm-notebook:xeus-cpp")
+        assert old != new
+
+    def test_compute_from_global_config_is_stable_and_nonempty(self):
+        """The cached global-config wrapper returns a stable, non-empty
+        identity (cache-key components must not flap within a process)."""
+        compute_worker_image_identity.cache_clear()
+        first = compute_worker_image_identity()
+        second = compute_worker_image_identity()
+        assert first == second
+        assert first.startswith(("direct", "docker:"))

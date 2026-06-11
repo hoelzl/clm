@@ -41,10 +41,21 @@ def compute_template_fingerprint(prog_lang: str) -> str:
     else the package ships that can affect output (worker code, bootstrap
     templates). The fingerprint must be computed on ONE side only — host and
     worker may run different clm versions (Docker images), and the cache key
-    must be computed identically by every layer, so the worker reuses the
-    host's value from the payload instead of recomputing.
+    must be computed identically by every layer: two of the three cache
+    layers are consulted host-side at job-submission time, before any worker
+    (or its version) is known, so the worker reuses the host's value from
+    the payload instead of recomputing.
 
-    ``lru_cache`` makes this a one-time cost per prog_lang per process; the
+    Scope, stated honestly: this fingerprint covers HOST-side template
+    changes only. In direct mode workers run the host's environment, so it
+    is exact. In Docker mode it covers the common lockstep case (host and
+    image upgraded together) — but a worker-image change with an unchanged
+    host is invisible to it. That divergence is covered separately by
+    ``compute_worker_image_identity`` (the image reference is host-known
+    config, so it can change the key even when this fingerprint cannot see
+    inside the new image).
+
+    ``cache`` makes this a one-time cost per prog_lang per process; the
     template directories are a handful of small files.
     """
     from clm import __version__
@@ -58,6 +69,66 @@ def compute_template_fingerprint(prog_lang: str) -> str:
             hasher.update(f"\n{name}:".encode())
             hasher.update(entry.read_bytes())
     return hasher.hexdigest()
+
+
+def worker_image_identity_for(execution_mode: str, image: str | None) -> str:
+    """Resolve the execution-environment identity string for the cache key.
+
+    Pure resolution logic, separated from the global-config read in
+    :func:`compute_worker_image_identity` so it is directly testable.
+
+    - ``direct`` mode → ``"direct"``: the worker runs the host's own
+      environment, whose version/template content is already covered by
+      ``compute_template_fingerprint``.
+    - ``docker`` mode → ``"docker:<image>"`` with the same effective-image
+      resolution the pool starter uses (per-type override, else the bundled
+      default) — the key must describe the image that actually executes.
+    """
+    if execution_mode != "docker":
+        return "direct"
+    from clm.infrastructure.config import DEFAULT_WORKER_IMAGES
+
+    effective = image or DEFAULT_WORKER_IMAGES.get("notebook", "")
+    return f"docker:{effective}"
+
+
+@cache
+def compute_worker_image_identity() -> str:
+    """Identity of the execution environment notebook jobs will run in.
+
+    Computed HOST-side at payload construction (like
+    ``compute_template_fingerprint``) and shipped via
+    ``NotebookPayload.worker_image_identity``, where it is folded into the
+    cache keys. This closes the worker-divergence gap the template
+    fingerprint cannot see: a Docker worker image carries its own clm
+    version, templates, and kernel (xeus-cpp etc.), so a cache populated
+    under one image must not be replayed under another (issue #321 class 5,
+    the xeus-cling → xeus-cpp incident). The image reference is host-known
+    configuration, so every cache layer can compute the key identically
+    without asking the worker.
+
+    Limitation: this is the configured image *reference*, not a content
+    digest. A mutable tag (``:latest``) that is re-pulled to point at a new
+    image does NOT change the key — pin worker images to versioned tags or
+    ``@sha256:...`` digests for the invalidation to be exact. (Resolving the
+    local digest at payload time would require a Docker API call per build
+    and a running daemon; not worth it host-side.)
+
+    Defensive ``""`` on any config error: a payload must never fail to
+    build because worker config is unreadable; an empty identity merely
+    reverts that build to the pre-#321 keying for this component.
+    """
+    try:
+        from clm.infrastructure.config import get_config
+
+        worker_management = get_config().worker_management
+        execution_mode = (
+            worker_management.notebook.execution_mode or worker_management.default_execution_mode
+        )
+        return worker_image_identity_for(execution_mode, worker_management.notebook.image)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning(f"Could not resolve worker image identity for cache key: {exc}")
+        return ""
 
 
 def _resolve_trace_dir_for_payload() -> str:
@@ -405,6 +476,7 @@ class ProcessNotebookOperation(Operation):
             language=self.language,
             format=self.format,
             template_fingerprint=compute_template_fingerprint(self.prog_lang),
+            worker_image_identity=compute_worker_image_identity(),
             other_files=self.compute_other_files(),
             fallback_execute=self.fallback_execute,
             skip_evaluation=self.skip_evaluation,

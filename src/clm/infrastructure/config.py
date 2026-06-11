@@ -39,6 +39,17 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Default Docker images per worker type, used when docker mode is active but
+# no per-type image is configured. Module-level so other components (e.g.
+# the cache-key image identity in ``compute_worker_image_identity``) resolve
+# the SAME effective image as the pool starter — a divergence here would make
+# the cache key describe a different image than the one actually executing.
+DEFAULT_WORKER_IMAGES = {
+    "notebook": "docker.io/mhoelzl/clm-notebook-processor:latest",
+    "plantuml": "docker.io/mhoelzl/clm-plantuml-converter:latest",
+    "drawio": "docker.io/mhoelzl/clm-drawio-converter:latest",
+}
+
 
 class LegacyEnvSettingsSource(PydanticBaseSettingsSource):
     """Custom settings source to handle legacy environment variables.
@@ -461,13 +472,7 @@ class WorkersManagementConfig(BaseModel):
         # Determine image
         image = type_config.image
         if execution_mode == "docker" and not image:
-            # Use default images
-            default_images = {
-                "notebook": "docker.io/mhoelzl/clm-notebook-processor:latest",
-                "plantuml": "docker.io/mhoelzl/clm-plantuml-converter:latest",
-                "drawio": "docker.io/mhoelzl/clm-drawio-converter:latest",
-            }
-            image = default_images.get(worker_type)
+            image = DEFAULT_WORKER_IMAGES.get(worker_type)
 
         return WorkerConfig(
             worker_type=worker_type,
