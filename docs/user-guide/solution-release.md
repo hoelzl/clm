@@ -199,9 +199,10 @@ students pull from, each on its own ledger and timeline:
 
 Each stream keeps its own frozen manifest (`.clm-released.<stream>.json`), so
 releasing a topic's materials never freezes its solutions and `--refreeze`
-stays scoped to one stream. The streams' source targets must build **disjoint**
-topic outputs (`clm release sync` cross-checks and refuses overlap), channels
-sharing a path must agree on `lang`, and skeleton files already present in the
+stays scoped to one stream. The streams' notebook outputs must be **disjoint**;
+topic-owned static files may appear in both builds when byte-identical
+(`clm release sync` cross-checks and refuses only *conflicting* content),
+channels sharing a path must agree on `lang`, and skeleton files already present in the
 destination are kept rather than overwritten — sync both streams after the
 same `clm build` so evergreen files don't ping-pong between builds. See
 `clm info releases` ("Shared destination") for the full rules and the

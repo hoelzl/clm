@@ -761,9 +761,10 @@ behavior (`clm info releases` has the details):
 - channels sharing a path must agree on `lang` (validation error otherwise);
 - each stream keeps its own frozen manifest (`.clm-released.<stream>.json`),
   so one stream releasing a topic never freezes it for the other;
-- the streams' built topic outputs must be **disjoint** (e.g. code-along /
-  partial kinds vs completed kinds) — `clm release sync` cross-checks the
-  source manifests and refuses overlap;
+- the streams' notebook outputs must be **disjoint** (e.g. code-along /
+  partial kinds vs completed kinds); topic-owned static files may appear in
+  both builds when byte-identical — `clm release sync` cross-checks the
+  source manifests and refuses only *conflicting* content;
 - skeleton files already present in the destination are kept, not
   overwritten (presence-as-frozen) — sync both streams after the same
   `clm build` to avoid evergreen files ping-ponging between builds;
