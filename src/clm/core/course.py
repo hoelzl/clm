@@ -231,7 +231,7 @@ class Course(NotebookMixin):
             logger.info(f"Implicit executions required for cache population: {implicit}")
 
         logger.debug(f"Creating course from spec {spec}: {course_root} -> {effective_output_root}")
-        logger.info(f"Output targets: {[t.name for t in targets]}")
+        logger.debug(f"Output targets: {[t.name for t in targets]}")
 
         course = cls(
             spec,
@@ -372,7 +372,7 @@ class Course(NotebookMixin):
     async def process_all(self, backend: Backend):
         """Process all files for all output targets."""
         logger.info(f"Processing all files for {self.course_root}")
-        logger.info(f"Output targets: {[t.name for t in self.output_targets]}")
+        logger.debug(f"Output targets: {[t.name for t in self.output_targets]}")
 
         # Sweep orphan HTTP-replay staging files into their canonical
         # cassettes *before* any payload is constructed. Otherwise a
