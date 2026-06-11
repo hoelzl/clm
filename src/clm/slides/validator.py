@@ -22,6 +22,11 @@ from clm.core.topic_resolver import (
 )
 from clm.infrastructure.utils.path_utils import split_lang_suffix
 from clm.notebooks.slide_parser import Cell, comment_token_for_path, parse_cells
+from clm.slides.cpp_code_analysis import (
+    DEFINITION_CATEGORIES,
+    STATEMENT_CATEGORIES,
+    classify_source,
+)
 from clm.slides.pairing import (
     TITLE_SLIDE_ID,
     build_slide_groups,
@@ -49,7 +54,7 @@ class Finding:
     """A single deterministic validation finding."""
 
     severity: str  # "error", "warning", "info"
-    category: str  # "format", "pairing", "tags"
+    category: str  # "format", "pairing", "tags", "code_export"
     file: str
     line: int
     message: str
@@ -104,7 +109,7 @@ class ValidationResult:
 # Deterministic check categories
 # ---------------------------------------------------------------------------
 
-ALL_DETERMINISTIC_CHECKS = frozenset({"format", "pairing", "tags"})
+ALL_DETERMINISTIC_CHECKS = frozenset({"format", "pairing", "tags", "code_export"})
 ALL_REVIEW_CHECKS = frozenset({"code_quality", "voiceover", "completeness"})
 # Universe of valid check names — used to validate an explicit ``--checks`` /
 # ``checks=`` request. A name in here is always *runnable* when asked for by
@@ -133,9 +138,17 @@ DEFAULT_CHECKS = ALL_CHECKS - OPT_IN_CHECKS
 VOICEOVER_COVERAGE_MARKER = "clm: voiceover-coverage"
 _VOICEOVER_MARKER_RE = re.compile(r"^(?:#|//)\s*clm:\s*voiceover-coverage\s*$")
 
+# Per-deck whitelist marker for the code-export conformance check (#331): a
+# deck that intentionally defines ``main()`` (e.g. to discuss documentation of
+# a complete program) declares it with ``// clm: allow-main`` in the file
+# header. The compilable project export (#333) will skip generating its own
+# ``main()`` for such decks.
+ALLOW_MAIN_MARKER = "clm: allow-main"
+_ALLOW_MAIN_MARKER_RE = re.compile(r"^(?:#|//)\s*clm:\s*allow-main\s*$")
 
-def has_voiceover_coverage_marker(text: str, comment_token: str = "#") -> bool:
-    """Whether the deck opts into voiceover coverage via its header (#178).
+
+def _has_header_marker(text: str, comment_token: str, marker_re: re.Pattern[str]) -> bool:
+    """Whether the deck's file header contains a ``clm:`` directive comment.
 
     Scans only the file header — lines before the first ``<token> %%`` cell
     marker — so the directive is a per-file declaration, not cell content.
@@ -145,9 +158,19 @@ def has_voiceover_coverage_marker(text: str, comment_token: str = "#") -> bool:
         stripped = line.strip()
         if stripped.startswith(cell_marker):
             break
-        if _VOICEOVER_MARKER_RE.match(stripped):
+        if marker_re.match(stripped):
             return True
     return False
+
+
+def has_voiceover_coverage_marker(text: str, comment_token: str = "#") -> bool:
+    """Whether the deck opts into voiceover coverage via its header (#178)."""
+    return _has_header_marker(text, comment_token, _VOICEOVER_MARKER_RE)
+
+
+def has_allow_main_marker(text: str, comment_token: str = "#") -> bool:
+    """Whether the deck whitelists its ``main()`` definition via its header (#331)."""
+    return _has_header_marker(text, comment_token, _ALLOW_MAIN_MARKER_RE)
 
 
 def _check_format(cells: list[Cell], file_path: str) -> list[Finding]:
@@ -1697,6 +1720,152 @@ def _brief_cell_context(cell: Cell) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Code-export conformance (#331)
+# ---------------------------------------------------------------------------
+
+# Jinja templating inside a code-cell *body* (the j2 header cells are a
+# separate cell type). ``{%`` cannot appear in valid C++; ``{{`` can (nested
+# brace-init), so the expression form additionally requires the whitespace
+# the course macros use: ``{{ header(...) }}``. The string-literal escape
+# idiom ``{{'{{...}}'}}`` (Jinja emitting literal braces) is intentionally
+# not flagged: it expands to plain C++ before the notebook pipeline and the
+# code export ever see it.
+_JINJA_IN_CODE_RE = re.compile(r"\{%|\{\{\s")
+
+
+def _check_code_export(
+    cells: list[Cell], file_path: str, *, allow_main: bool = False
+) -> list[Finding]:
+    """Check the structural invariants the compilable C++ export relies on.
+
+    The export (#333) turns each (language × kind) view of a deck into one
+    translation unit, so within such a view no variable, function (same
+    normalized signature incl. const-ness), or type may be defined twice —
+    which is also what xeus-cpp requires at runtime. Checks run per language
+    view: a ``lang="de"`` cell and its ``lang="en"`` sibling never coexist in
+    one output, so paired definitions are NOT redefinitions; untagged cells
+    count for both views. The view checked is the *completed* one (``start``
+    cells are replaced by their ``completed``/``alt`` twin there; ``del``
+    cells appear in no output).
+
+    Also flags ``main()`` definitions (the export generates its own ``main``
+    unless the deck carries the ``clm: allow-main`` header marker), Jinja
+    directives inside code cells (untransformable), and — informationally —
+    cells mixing definitions with statements.
+    """
+    findings: list[Finding] = []
+    # (lang, kind, key) -> line of first definition, in the completed view.
+    seen: dict[tuple[str, str, str], int] = {}
+    # (kind, display-name, first line, line) -> langs, to merge the DE and EN
+    # findings of an untagged-cell redefinition into one.
+    redefs: dict[tuple[str, str, int, int], set[str]] = {}
+
+    for cell in cells:
+        meta = cell.metadata
+        if meta.is_j2 or meta.cell_type != "code":
+            continue
+        source = cell.content
+        if not source.strip():
+            continue
+
+        if _JINJA_IN_CODE_RE.search(source):
+            findings.append(
+                Finding(
+                    severity="warning",
+                    category="code_export",
+                    file=file_path,
+                    line=cell.line_number,
+                    message="Jinja directive inside a code cell",
+                    suggestion=(
+                        "The code export classifies raw cell source and cannot "
+                        "transform templated code; move the Jinja part into a "
+                        "markdown cell or expand it manually."
+                    ),
+                )
+            )
+            continue
+
+        items = classify_source(source)
+
+        categories = {item.category for item in items}
+        has_statement = bool(categories & STATEMENT_CATEGORIES)
+        has_definition = bool(categories & DEFINITION_CATEGORIES) or "main_def" in categories
+        has_variable = "var_decl" in categories
+        if has_statement and (has_definition or has_variable):
+            findings.append(
+                Finding(
+                    severity="info",
+                    category="code_export",
+                    file=file_path,
+                    line=cell.line_number,
+                    message="Code cell mixes definitions and statements",
+                    suggestion=(
+                        "The export splits such cells automatically, but separate "
+                        "definition and usage cells read better on slides."
+                    ),
+                )
+            )
+
+        in_completed_view = "start" not in meta.tags and "del" not in meta.tags
+        langs = (meta.lang,) if meta.lang else ("de", "en")
+        for item in items:
+            if item.category == "main_def" and not allow_main:
+                findings.append(
+                    Finding(
+                        severity="error",
+                        category="code_export",
+                        file=file_path,
+                        line=cell.line_number,
+                        message="main() defined in a deck without the allow-main marker",
+                        suggestion=(
+                            "The code export generates its own main(). If this deck "
+                            f"intentionally defines main(), add a `{ALLOW_MAIN_MARKER}` "
+                            "comment to the file header (before the first cell)."
+                        ),
+                    )
+                )
+            if not in_completed_view:
+                continue
+            if item.category == "var_decl" and item.name:
+                kind, key, display = "variable", item.name, item.name
+            elif item.category in ("fn_def", "member_fn_def") and item.signature:
+                kind, key, display = "function", item.signature, item.signature
+            elif item.category == "type_def" and item.name:
+                kind, key, display = "type", item.name, item.name
+            else:
+                continue
+            for lang in langs:
+                first = seen.setdefault((lang, kind, key), cell.line_number)
+                if first != cell.line_number:
+                    redefs.setdefault((kind, display, first, cell.line_number), set()).add(lang)
+
+    for (kind, display, first_line, line), langs_hit in sorted(
+        redefs.items(), key=lambda kv: (kv[0][3], kv[0][0], kv[0][1])
+    ):
+        view = (
+            "both language views" if len(langs_hit) > 1 else f'lang="{next(iter(langs_hit))}" view'
+        )
+        findings.append(
+            Finding(
+                severity="error",
+                category="code_export",
+                file=file_path,
+                line=line,
+                message=(
+                    f"{kind} '{display}' redefined (first defined at line {first_line}, {view})"
+                ),
+                suggestion=(
+                    "xeus-cpp forbids redefinition and the code export emits one "
+                    "translation unit per deck; rename the entity or remove the "
+                    "duplicate definition."
+                ),
+            )
+        )
+
+    return sorted(findings, key=lambda f: f.line)
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -1715,7 +1884,9 @@ def validate_file(
         checks: Which checks to run. Default (``None``): every check except
             the opt-in ones — ``format``, ``pairing``, ``tags``,
             ``code_quality``, ``completeness``.
-            Deterministic: ``"format"``, ``"pairing"``, ``"tags"``.
+            Deterministic: ``"format"``, ``"pairing"``, ``"tags"``,
+            ``"code_export"`` (the latter applies to ``.cpp`` decks only and
+            is a no-op elsewhere, #331).
             Review: ``"code_quality"``, ``"voiceover"``, ``"completeness"``.
             ``"voiceover"`` is **opt-in** (issue #176): voiceover is optional
             per deck, so coverage runs only when you name it explicitly in
@@ -1789,6 +1960,15 @@ def validate_file(
             if pair is not None:
                 findings.extend(_check_split_slide_id_parity(*pair))
                 findings.extend(_check_split_companion_for_slide_parity(*pair))
+    if "code_export" in check_set and path.suffix == ".cpp":
+        # Structural invariants of the compilable C++ project export (#331).
+        # C++-only: the classifier heuristics are C++-specific, and other
+        # languages have no code-export backend.
+        findings.extend(
+            _check_code_export(
+                cells, file_str, allow_main=has_allow_main_marker(text, comment_token)
+            )
+        )
 
     # Review material extraction
     review_checks = check_set & ALL_REVIEW_CHECKS
