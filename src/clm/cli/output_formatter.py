@@ -499,12 +499,35 @@ class DefaultOutputFormatter(OutputFormatter):
                     f"  ... and {len(summary.warnings) - max_warnings_to_show} more warnings"
                 )
 
+        self._show_flaky_files(summary)
+
         # Show log file location for detailed debugging
         if summary.errors or summary.warnings:
             from clm.infrastructure.logging.log_paths import get_log_dir
 
             log_dir = get_log_dir()
             self.console.print(f"\n[dim]Full logs available in: {log_dir}[/dim]")
+
+    def _show_flaky_files(self, summary: BuildSummary) -> None:
+        """Show decks that passed only after a retry (issue #330)."""
+        if not summary.flaky_files:
+            return
+        self.console.print(
+            f"\n[bold yellow]Flaky decks "
+            f"({len(summary.flaky_files)} passed only after retry):[/bold yellow]"
+        )
+        for flaky in summary.flaky_files:
+            display_path = format_error_path(flaky.file_path)
+            details: list[str] = [f"attempts: {flaky.max_attempts}"]
+            if flaky.failure_types:
+                details.append(", ".join(flaky.failure_types))
+            if flaky.languages:
+                details.append("/".join(flaky.languages))
+            self.console.print(f"  [yellow]{display_path} ({'; '.join(details)})[/yellow]")
+        self.console.print(
+            "  [dim]Kernel flakes are tracked across builds in the telemetry "
+            "database; run 'clm kernel-triage' to re-test them.[/dim]"
+        )
 
     def cleanup(self) -> None:
         """Clean up progress bar."""
@@ -663,6 +686,8 @@ class VerboseOutputFormatter(DefaultOutputFormatter):
                 self.console.print(
                     f"  [yellow]{i}. [{warning.severity}] {warning.message}{location}[/yellow]"
                 )
+
+        self._show_flaky_files(summary)
 
         # Show log file location for detailed debugging
         if summary.errors or summary.warnings:
@@ -892,6 +917,19 @@ class JSONOutputFormatter(OutputFormatter):
         # Add counts for convenience
         self.output_data["error_count"] = len(summary.errors)
         self.output_data["warning_count"] = len(summary.warnings)
+
+        # Decks that passed only after a retry (issue #330). Always emit the
+        # key so machine consumers don't have to special-case its absence.
+        self.output_data["flaky_files"] = [
+            {
+                "file_path": f.file_path,
+                "max_attempts": f.max_attempts,
+                "failure_types": f.failure_types,
+                "languages": f.languages,
+                "flake_count": f.flake_count,
+            }
+            for f in summary.flaky_files
+        ]
 
         # Output-write registry summary (PR 2.3). Always emit the keys
         # so machine consumers don't have to special-case their absence

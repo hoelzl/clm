@@ -1001,6 +1001,72 @@ class CellContext:
     cell_type: str = "code"
 
 
+def classify_execution_failure(error: BaseException) -> tuple[str, str]:
+    """Classify one failed execution attempt for telemetry (issue #330).
+
+    Distinguishes the failure classes the xeus-cpp crash triage cares
+    about: a cell raising (``cell_execution_error``), the kernel process
+    dying (``dead_kernel``), the kernel never becoming ready
+    (``startup_timeout``), and a cell exceeding its timeout
+    (``cell_timeout``). Everything else is ``other``.
+
+    Returns:
+        ``(failure_type, error_class_name)``.
+    """
+    from nbclient.exceptions import CellExecutionError, CellTimeoutError, DeadKernelError
+
+    error_class = type(error).__name__
+    if isinstance(error, CellExecutionError):
+        return "cell_execution_error", error_class
+    if isinstance(error, DeadKernelError):
+        return "dead_kernel", error_class
+    if isinstance(error, CellTimeoutError):
+        return "cell_timeout", error_class
+    message = str(error)
+    # jupyter_client raises plain RuntimeErrors for these kernel-level
+    # failures, so the message is the only classification signal.
+    if "Kernel died" in message:
+        return "dead_kernel", error_class
+    if "Kernel didn't respond" in message:
+        return "startup_timeout", error_class
+    if isinstance(error, TimeoutError):
+        return "cell_timeout", error_class
+    return "other", error_class
+
+
+def summarize_execution_attempts(
+    failed_attempts: list[dict],
+    *,
+    attempts_made: int,
+    succeeded: bool,
+) -> dict:
+    """Build the telemetry record for one notebook execution (issue #330).
+
+    ``failed_attempts`` holds one record per failed attempt (as produced in
+    ``_execute_notebook_with_path``). The record's ``classification``
+    separates deterministic crashes (every attempt failed with the same
+    failure type at the same cell — retries are wasted on these) from
+    flakes (``flaky`` when a retry passed, ``mixed`` when attempts failed
+    in different ways).
+    """
+    last = failed_attempts[-1] if failed_attempts else {}
+    if succeeded:
+        classification = "flaky"
+    else:
+        signatures = {(a["failure_type"], a["failing_cell_index"]) for a in failed_attempts}
+        classification = "deterministic" if len(signatures) == 1 else "mixed"
+    return {
+        "schema": 1,
+        "attempts": attempts_made,
+        "outcome": "passed_after_retry" if succeeded else "failed",
+        "classification": classification,
+        "failure_type": last.get("failure_type", ""),
+        "failing_cell_index": last.get("failing_cell_index"),
+        "error_message": last.get("message", ""),
+        "attempts_detail": failed_attempts,
+    }
+
+
 def reap_kernel_descendants(
     kernel_pid: int | None,
     descendants: list[psutil.Process],
@@ -2042,6 +2108,10 @@ class NotebookProcessor:
             source_dir: Source directory if using source mount (for logging)
         """
         last_error: Exception | None = None
+        attempts_made = 0
+        # One record per FAILED attempt — the telemetry that distinguishes
+        # deterministic crashes from transient flakes (issue #330).
+        failed_attempts: list[dict] = []
         for attempt in range(1, NUM_RETRIES_FOR_HTML + 1):
             # Create FRESH TrackingExecutePreprocessor for each attempt
             # This ensures no stale ZMQ state from previous failures
@@ -2049,6 +2119,11 @@ class NotebookProcessor:
             # Expose the correlation id to the preprocessor's per-cell
             # timing logs (issue #143 instrumentation).
             self._current_cid = cid
+            attempts_made = attempt
+            # Clear stale cell context from a previous attempt so a failure
+            # before any cell runs (e.g. a startup timeout) is not blamed on
+            # the previous attempt's failing cell.
+            self._current_cell = None
             cell_timeout = _effective_cell_timeout(payload)
             if cell_timeout is not None:
                 logger.info(
@@ -2086,6 +2161,20 @@ class NotebookProcessor:
                 # - Other nbclient exceptions
                 last_error = e
                 error_type = type(e).__name__
+                failure_type, error_class = classify_execution_failure(e)
+                failed_attempts.append(
+                    {
+                        "attempt": attempt,
+                        "failure_type": failure_type,
+                        "error_class": error_class,
+                        "failing_cell_index": (
+                            self._current_cell.cell_index
+                            if self._current_cell is not None
+                            else None
+                        ),
+                        "message": str(e)[:500],
+                    }
+                )
                 if not logger.isEnabledFor(logging.DEBUG):
                     logger.info(
                         f"{cid}: Execution failed ({error_type}, attempt {attempt}/{NUM_RETRIES_FOR_HTML})"
@@ -2100,6 +2189,9 @@ class NotebookProcessor:
                 await asyncio.sleep(1.0 * attempt)
 
         if last_error is not None:
+            telemetry = summarize_execution_attempts(
+                failed_attempts, attempts_made=attempts_made, succeeded=False
+            )
             if payload.skip_errors:
                 # The topic opted into error-tolerant execution. Kernel-level
                 # failures (dead kernel, startup timeout, etc.) still raise;
@@ -2112,18 +2204,63 @@ class NotebookProcessor:
                         f"{cid}: Suppressing CellExecutionError under skip_errors "
                         f"for '{payload.input_file_name}'"
                     )
+                    telemetry["outcome"] = "suppressed_failure"
+                    self._add_execution_telemetry_warning(payload, telemetry)
                     self._current_cell = None
                     return
 
             # Enhance the error message with more context
             # _current_cell may contain context from the failed cell
             enhanced_error = self._enhance_notebook_error(last_error, processed_nb, payload)
+            # Attach the per-attempt telemetry so the worker's structured
+            # error JSON carries it to the host (issue #330); worker_base
+            # copies ``execution_telemetry`` into ``error_info``.
+            enhanced_error.execution_telemetry = telemetry  # type: ignore[attr-defined]
             # Clear cell context after using it for error enhancement
             self._current_cell = None
             raise enhanced_error from last_error
 
+        if failed_attempts:
+            # Passed, but only after at least one failed attempt — the
+            # transient-flake class the build summary surfaces (issue #330).
+            self._add_execution_telemetry_warning(
+                payload,
+                summarize_execution_attempts(
+                    failed_attempts, attempts_made=attempts_made, succeeded=True
+                ),
+            )
+
         if payload.skip_errors:
             self._clear_error_outputs(processed_nb, payload)
+
+    def _add_execution_telemetry_warning(self, payload: NotebookPayload, telemetry: dict) -> None:
+        """Attach an execution-telemetry record to the job result.
+
+        Rides the existing ``ProcessingWarning`` channel because that is the
+        only structured worker→host side channel that survives the job-table
+        round trip for *completed* jobs. The host (``SqliteBackend``)
+        intercepts the ``execution_telemetry`` category: it persists the
+        record to the telemetry database and reports flakes to the build
+        summary — the record is NOT shown or stored as a regular warning.
+        """
+        outcome = telemetry.get("outcome", "")
+        if outcome == "passed_after_retry":
+            message = (
+                f"'{payload.input_file_name}' passed only after "
+                f"{telemetry.get('attempts')} attempts (kernel flake)"
+            )
+        else:
+            message = (
+                f"'{payload.input_file_name}' execution telemetry: {outcome} "
+                f"after {telemetry.get('attempts')} attempts"
+            )
+        self.add_warning(
+            category="execution_telemetry",
+            message=message,
+            file_path=payload.input_file,
+            severity="low",
+            details=telemetry,
+        )
 
     def _clear_error_outputs(self, processed_nb: NotebookNode, payload: NotebookPayload) -> None:
         """Clear outputs of cells that raised during skip-errors execution.

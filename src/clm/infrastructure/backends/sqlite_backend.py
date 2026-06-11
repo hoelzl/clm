@@ -30,6 +30,7 @@ from clm.infrastructure.workers.progress_tracker import ProgressTracker, get_pro
 if TYPE_CHECKING:
     from clm.cli.build_data_classes import BuildWarning
     from clm.cli.build_reporter import BuildReporter
+    from clm.infrastructure.database.execution_telemetry import ExecutionTelemetryStore
     from clm.infrastructure.utils.copy_dir_group_data import CopyDirGroupData
     from clm.infrastructure.utils.copy_file_data import CopyFileData
 
@@ -58,6 +59,12 @@ class SqliteBackend(LocalOpsBackend):
     skip_worker_check: bool = False  # Skip worker availability check (for unit tests only)
     build_reporter: Optional["BuildReporter"] = None  # Optional build reporter for improved output
     incremental: bool = False  # Incremental mode: skip writing cached results
+    # Persistent per-deck execution telemetry (issue #330). When set, the
+    # backend records retry/crash telemetry the notebook worker attached to
+    # its results (completed jobs: ``execution_telemetry`` warnings; failed
+    # jobs: the structured error JSON) and reports passed-only-after-retry
+    # decks to the build summary's flake list.
+    telemetry_store: Optional["ExecutionTelemetryStore"] = None
 
     def __attrs_post_init__(self):
         """Initialize SQLite database and job queue."""
@@ -654,6 +661,20 @@ class SqliteBackend(LocalOpsBackend):
                     payload_dict = json.loads(payload_row[0]) if payload_row else {}
                     content_hash = payload_row[1] if payload_row else ""
 
+                    # Persist execution telemetry the notebook worker attached
+                    # to its structured error JSON (issue #330) — this is how
+                    # deterministic kernel crashes become part of the per-deck
+                    # crash history.
+                    try:
+                        error_info = json.loads(error) if error else {}
+                    except (json.JSONDecodeError, TypeError):
+                        error_info = {}
+                    failure_telemetry = error_info.get("execution_telemetry")
+                    if isinstance(failure_telemetry, dict):
+                        self._persist_execution_telemetry(
+                            job_info["input_file"], payload_dict, content_hash, failure_telemetry
+                        )
+
                     # Import ErrorCategorizer
                     from clm.cli.error_categorizer import ErrorCategorizer
 
@@ -1108,6 +1129,40 @@ class SqliteBackend(LocalOpsBackend):
         except Exception as e:
             logger.warning(f"Could not clear stored issues for job {job_id}: {e}")
 
+    def _persist_execution_telemetry(
+        self,
+        input_file: str,
+        payload_dict: dict,
+        content_hash: str,
+        telemetry: dict,
+    ) -> None:
+        """Record one worker-reported execution-telemetry event (issue #330).
+
+        No-op when no telemetry store is configured. Never raises — the
+        store itself logs and swallows write failures.
+        """
+        if self.telemetry_store is None:
+            return
+        from clm.infrastructure.database.execution_telemetry import TelemetryEvent
+
+        attempts_detail = telemetry.get("attempts_detail")
+        self.telemetry_store.record_event(
+            TelemetryEvent(
+                input_file=input_file,
+                outcome=str(telemetry.get("outcome", "") or ""),
+                classification=str(telemetry.get("classification", "") or ""),
+                attempts=int(telemetry.get("attempts", 0) or 0),
+                failure_type=str(telemetry.get("failure_type", "") or ""),
+                failing_cell_index=telemetry.get("failing_cell_index"),
+                error_message=str(telemetry.get("error_message", "") or ""),
+                prog_lang=str(payload_dict.get("prog_lang", "") or ""),
+                language=str(payload_dict.get("language", "") or ""),
+                content_hash=content_hash or "",
+                worker_image_identity=str(payload_dict.get("worker_image_identity", "") or ""),
+                attempts_detail=attempts_detail if isinstance(attempts_detail, list) else [],
+            )
+        )
+
     def _extract_and_report_job_warnings(self, job_id: int, job_info: dict) -> None:
         """Extract warnings from completed job and report/store them.
 
@@ -1154,6 +1209,29 @@ class SqliteBackend(LocalOpsBackend):
             output_metadata = self._get_output_metadata(job_info["job_type"], payload_dict)
 
             for warn_data in warnings_data:
+                # Execution telemetry rides the warning channel but is not a
+                # user-facing warning (issue #330): persist it and surface
+                # flakes in the build summary's dedicated list instead. It is
+                # also deliberately NOT stored via store_warning — a cache hit
+                # replays no execution, so it must not replay telemetry.
+                if warn_data.get("category") == "execution_telemetry":
+                    details = warn_data.get("details") or {}
+                    self._persist_execution_telemetry(
+                        job_info["input_file"], payload_dict, content_hash, details
+                    )
+                    if self.build_reporter and details.get("outcome") == "passed_after_retry":
+                        failure_types = [
+                            a.get("failure_type", "other")
+                            for a in details.get("attempts_detail") or []
+                        ]
+                        self.build_reporter.report_flaky_file(
+                            file_path=job_info["input_file"],
+                            attempts=int(details.get("attempts", 0) or 0),
+                            failure_types=failure_types,
+                            language=str(payload_dict.get("language", "") or ""),
+                        )
+                    continue
+
                 # Create BuildWarning from ProcessingWarning data
                 warning = BuildWarning(
                     category=warn_data.get("category", "general"),

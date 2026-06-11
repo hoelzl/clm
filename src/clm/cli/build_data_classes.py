@@ -93,6 +93,31 @@ class BuildWarning:
 
 
 @dataclass
+class FlakyFileInfo:
+    """One deck that passed only after at least one failed execution attempt.
+
+    Aggregated per source file across the build (a bilingual deck that
+    flaked in both languages is one entry). Surfaced as the build summary's
+    flake list so kernel flakiness is observable over time (issue #330);
+    the full per-attempt history is in the execution-telemetry database.
+
+    Attributes:
+        file_path: Source path of the flaky deck.
+        max_attempts: Highest attempt count that was needed for a pass.
+        failure_types: Distinct failure types seen across the failed
+            attempts (e.g. ``dead_kernel``, ``cell_execution_error``).
+        languages: Output languages in which the deck flaked.
+        flake_count: Number of flaky executions of this deck in the build.
+    """
+
+    file_path: str
+    max_attempts: int
+    failure_types: list[str] = field(default_factory=list)
+    languages: list[str] = field(default_factory=list)
+    flake_count: int = 1
+
+
+@dataclass
 class OutputConflictInfo:
     """One output-path conflict surfaced by :class:`OutputWriteRegistry`.
 
@@ -145,6 +170,9 @@ class BuildSummary:
     output_dedup_count: int = 0
     output_conflicts: list[OutputConflictInfo] = field(default_factory=list)
     output_large_file_collision_count: int = 0
+    flaky_files: list[FlakyFileInfo] = field(default_factory=list)
+    """Decks that passed only after at least one failed execution attempt
+    (issue #330). Empty on builds where every execution passed first try."""
     timed_out: bool = False
     """True when the build aborted because one or more worker jobs did not
     complete within ``max_wait_for_completion_duration`` (issue #143). A
@@ -208,6 +236,13 @@ class BuildSummary:
                 parts.append(f"  {warning}")
             if len(self.warnings) > 3:
                 parts.append(f"  ... and {len(self.warnings) - 3} more warnings")
+
+        if self.flaky_files:
+            parts.append("")
+            parts.append("Flaky decks (passed only after retry):")
+            for flaky in self.flaky_files:
+                types = ", ".join(flaky.failure_types) or "unknown"
+                parts.append(f"  {flaky.file_path} (attempts: {flaky.max_attempts}, {types})")
 
         return "\n".join(parts)
 

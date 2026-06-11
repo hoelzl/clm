@@ -738,6 +738,12 @@ class Worker(ABC):
                     nb_snippet = getattr(e, "notebook_code_snippet", None)
                     if nb_snippet:
                         error_info["notebook_code_snippet"] = nb_snippet
+                    # Per-attempt execution telemetry attached by the notebook
+                    # processor's retry loop (issue #330). The host persists it
+                    # to the telemetry database when it processes the failure.
+                    nb_telemetry = getattr(e, "execution_telemetry", None)
+                    if isinstance(nb_telemetry, dict):
+                        error_info["execution_telemetry"] = nb_telemetry
 
                     # Add error categorization for better monitoring integration
                     try:
