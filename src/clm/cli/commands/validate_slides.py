@@ -30,7 +30,8 @@ from clm.slides.validator import (
     default=None,
     help=(
         "Comma-separated list of checks to run. "
-        "Deterministic: format, pairing, tags. "
+        "Deterministic: format, pairing, tags, code_export "
+        "(code_export applies to .cpp decks only; #331). "
         "Review: code_quality, voiceover, completeness. "
         "Default: all deterministic checks. "
         "voiceover coverage is opt-in (voiceover is optional per deck) — "
