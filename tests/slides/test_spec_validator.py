@@ -470,6 +470,26 @@ class TestModuleBindingValidation:
         assert len(unknown) == 1
         assert "module_999_nope" in unknown[0].message
 
+    def test_underscore_module_binding_is_unknown(self, tmp_path):
+        """``module="_archive"`` errors: discovery ignores underscore dirs (#318)."""
+        _make_topic(tmp_path, "module_100_live", "topic_010_intro")
+        _make_topic(tmp_path, "_archive", "topic_010_intro")
+
+        spec_file = _write_spec(
+            tmp_path,
+            """\
+            <sections>
+              <section module="_archive">
+                <name><de>X</de><en>X</en></name>
+                <topics><topic>intro</topic></topics>
+              </section>
+            </sections>""",
+        )
+        result = validate_spec(spec_file, tmp_path / "slides")
+        unknown = [f for f in result.findings if f.type == "unknown_module"]
+        assert len(unknown) == 1
+        assert "_archive" in unknown[0].message
+
     def test_topic_module_override_resolves(self, tmp_path):
         """Per-topic ``module=`` overrides the section default."""
         _make_topic(tmp_path, "module_100_live", "topic_010_intro")

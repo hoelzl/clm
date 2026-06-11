@@ -444,6 +444,29 @@ class TestFindSplitSlideFilesRecursive:
         found = find_split_slide_files_recursive(tmp_path)
         assert set(found) == {legit_de.resolve(), legit_en.resolve()}
 
+    def test_excludes_pairs_under_underscore_dirs(self, tmp_path: Path):
+        # Underscore-prefixed dirs (_archive, _drafts, …) are invisible to
+        # discovery (issue #318); a parked pair must never be enumerated —
+        # and thus never written on a directory apply.
+        legit_de = tmp_path / "module_x" / "topic_a" / "apis.de.py"
+        legit_en = tmp_path / "module_x" / "topic_a" / "apis.en.py"
+        self._touch(legit_de, legit_en)
+        self._touch(
+            tmp_path / "_archive" / "module_y" / "old.de.py",
+            tmp_path / "_archive" / "module_y" / "old.en.py",
+        )
+        found = find_split_slide_files_recursive(tmp_path)
+        assert set(found) == {legit_de.resolve(), legit_en.resolve()}
+
+    def test_root_named_underscore_still_enumerates(self, tmp_path: Path):
+        # Like the ignored-dir test, the underscore prune is applied RELATIVE
+        # to the root: explicitly walking _archive/ itself is honoured.
+        root = tmp_path / "_archive"
+        de, en = root / "apis.de.py", root / "apis.en.py"
+        self._touch(de, en)
+        found = find_split_slide_files_recursive(root)
+        assert set(found) == {de.resolve(), en.resolve()}
+
     def test_root_under_ignored_component_still_enumerates(self, tmp_path: Path):
         # The ignored-dir test is applied RELATIVE to the root, so a root that
         # itself lives under a dir named like an ignored one (e.g. ``build/``)

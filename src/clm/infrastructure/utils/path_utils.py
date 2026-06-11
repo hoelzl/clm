@@ -280,6 +280,20 @@ def atomic_write_all(writes: list[tuple[Path, str]]) -> None:
                 tmp.unlink()
 
 
+def is_private_dir_name(name: str) -> bool:
+    """True for underscore-prefixed directory names (``_archive``, ``_drafts``, …).
+
+    Underscore-prefixed directories under ``slides/`` hold author-parked
+    content (retired decks, drafts). They are excluded from module/topic
+    *discovery* and from the recursive slide-file walks so an archived copy
+    can never shadow a live topic ID (issue #318). This is a discovery rule,
+    not a course-file-map rule: the legacy ``_cassettes/`` sidecar inside a
+    topic stays in the course file map because the kernel reads it at
+    runtime (see ``SKIP_DIRS_FOR_OUTPUT``).
+    """
+    return name.startswith("_")
+
+
 def is_ignored_dir_for_course(dir_path: Path) -> bool:
     for part in dir_path.parts:
         if part in SKIP_DIRS_FOR_COURSE:

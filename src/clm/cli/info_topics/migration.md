@@ -2,6 +2,30 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## Underscore-prefixed dirs under `slides/` are no longer discovered (issue #318, after 1.11)
+
+Directories whose name starts with `_` (e.g. `slides/_archive/`,
+`slides/_drafts/`, or an `_old_…` dir inside a module) are now invisible to
+module/topic discovery, to the recursive deck walks behind the `clm slides`
+batch tools, and to `clm course orphans`. Previously an archived module under
+`slides/_archive/` participated in topic resolution and — because unbound
+resolution is first-occurrence-wins and `_archive` sorts before `module_*` —
+could silently *shadow* a live topic ID, shipping retired decks in its place.
+
+Consequences for course repos:
+
+- Parking retired content under `slides/_archive/` is now safe; moving the
+  archive out of `slides/` is no longer necessary.
+- A spec that binds `module="_archive"` (or any underscore-prefixed name) now
+  fails validation with `unknown_module` — archived content cannot be built.
+  Rename the directory (drop the leading underscore) if you genuinely need to
+  build from it.
+- `--exclude _archive` on `clm slides normalize` / `assign-ids` /
+  `slug-report` / `coverage-report` is now redundant for underscore-named
+  dirs (but still works, and is still needed for non-underscore names).
+- The legacy `_cassettes/` sidecar inside a topic is unaffected: it is not a
+  module/topic directory and stays in the course file map.
+
 ## Execution cache keys now cover dependencies (issue #321, after 1.11)
 
 `clm build` previously keyed its notebook execution caches on the deck text

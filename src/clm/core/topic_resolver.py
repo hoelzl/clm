@@ -16,6 +16,7 @@ from typing import Literal
 
 from clm.infrastructure.utils.path_utils import (
     is_ignored_dir_for_course,
+    is_private_dir_name,
     is_slides_file,
     simplify_ordered_name,
     slide_family_key,
@@ -71,6 +72,11 @@ def build_topic_map(slides_dir: Path) -> dict[str, list[TopicMatch]]:
         slides_dir: Path to the ``slides/`` directory (should contain
             ``module_*/`` subdirectories).
 
+    Underscore-prefixed directories (``_archive``, ``_drafts``, …) are
+    invisible to discovery at both the module and the topic level: parked
+    content must never shadow a live topic ID via first-occurrence-wins
+    resolution (issue #318).
+
     Returns:
         Mapping from topic ID to a list of :class:`TopicMatch` objects.
         Most topic IDs will have exactly one match.  Multiple matches
@@ -87,8 +93,12 @@ def build_topic_map(slides_dir: Path) -> dict[str, list[TopicMatch]]:
             continue
         if is_ignored_dir_for_course(module_dir):
             continue
+        if is_private_dir_name(module_dir.name):
+            continue
 
         for topic_path in sorted(module_dir.iterdir()):
+            if is_private_dir_name(topic_path.name):
+                continue
             topic_id = simplify_ordered_name(topic_path.name)
             if not topic_id:
                 continue
@@ -261,6 +271,13 @@ def find_slide_files_recursive(path: Path) -> list[Path]:
     was lifted out of ``normalizer._find_slide_files_recursive``; it
     preserves topic-resolver semantics for topic dirs while still letting
     callers operate on coarser paths.
+
+    Underscore-prefixed directories *below* ``path`` are pruned from the
+    walk, matching :func:`build_topic_map` discovery (issue #318): a deck
+    parked under ``slides/_archive/`` is invisible when walking ``slides/``.
+    The prune is applied to each file's path relative to ``path``, so an
+    explicitly named root (``find_slide_files_recursive(Path("_archive"))``)
+    is still honoured.
     """
     if path.is_file():
         if is_slides_file(path):
@@ -276,7 +293,13 @@ def find_slide_files_recursive(path: Path) -> list[Path]:
 
     # rglob("*") (not "*.py") so the is_slides_file filter — which already accepts
     # every SUPPORTED_PROG_LANG_EXTENSIONS — finds .cs/.cpp/.java/.ts decks too.
-    return sorted(f.resolve() for f in path.rglob("*") if f.is_file() and is_slides_file(f))
+    return sorted(
+        f.resolve()
+        for f in path.rglob("*")
+        if f.is_file()
+        and is_slides_file(f)
+        and not any(is_private_dir_name(part) for part in f.relative_to(path).parts[:-1])
+    )
 
 
 def resolve_topic(
