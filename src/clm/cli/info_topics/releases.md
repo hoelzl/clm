@@ -12,7 +12,7 @@ never rewrite what students already received.
 | **Channel** | One student cohort's git repository, declared in the spec |
 | **Ledger** | Plain-text list of released topic ids for that cohort (`release/<name>.txt`) |
 | **Provenance manifest** | `.clm-manifest.json` — maps every built output file to its source topic; written by `clm build`; never distributed |
-| **Frozen manifest** | `.clm-released.json` — per-cohort freeze record inside the cohort repo; distributed to students |
+| **Frozen manifest** | `.clm-released.<stream>.json` (legacy `.clm-released.json` for a single unnamed stream) — per-cohort, per-stream freeze record inside the cohort repo; distributed to students |
 
 ## Spec configuration
 
@@ -35,7 +35,7 @@ never rewrite what students already received.
 | `source-target` | `<release-channels>` | yes | Name of the `<output-target>` to promote from (typically a `completed`-kind target) |
 | `name` | `<release-channels>` | when multiple blocks | Stream name; channels are addressed as `stream/channel` (e.g. `materials/jan`) |
 | `name` | `<channel>` | yes | Cohort identifier used on the CLI |
-| `path` | `<channel>` | yes | Path to the cohort's git working tree |
+| `path` | `<channel>` | yes | Path to the cohort's git working tree. Unique within a stream; channels of *different* streams may share a path to release into one repository (see below) |
 | `ledger` | `<channel>` | yes | Path to the release ledger file |
 | `lang` | `<channel>` | no | Restrict promotion to one language; re-roots files at the language directory |
 | `<share-with group="…" access="…">` | block or channel | no | GitLab group sharing (applied by `clm release provision`) |
@@ -83,9 +83,14 @@ automatically.
 `failed_topics` lists topics whose build errored; they are refused by sync until
 the next successful build.
 
-### Frozen manifest (`.clm-released.json`)
+### Frozen manifest (`.clm-released.<stream>.json`)
 
 Written into the cohort repo by `clm release sync`. Committed and distributed.
+The file is **per release stream**: a named stream writes
+`.clm-released.<stream>.json` (e.g. `.clm-released.materials.json`); a single
+unnamed `<release-channels>` block keeps the legacy `.clm-released.json` name.
+A pre-existing legacy file whose `channel` field matches is adopted and
+renamed on the channel's next sync — no manual migration.
 
 ```json
 {
@@ -163,6 +168,59 @@ comparison is stateless (destination hash vs. manifest hash), so nothing is
 recorded in the frozen manifest and re-runs are idempotent.
 `--push` chains `clm git commit` + `clm git push` after promotion.
 
+### Shared destination: several streams, one cohort repo
+
+Channels of **different** streams may point at the same `path` — both streams
+then release into a single repository students pull from (e.g. materials at
+session start, solutions after the exercise), each on its own ledger and
+timeline. Sharing is detected from the spec; no extra configuration:
+
+```xml
+<release-channels name="materials" source-target="shared">
+    <channel name="2026-04-de" lang="de" path="cohorts/2026-04/combined-de"
+             ledger="release/materials-2026-04-de.txt"/>
+</release-channels>
+<release-channels name="solutions" source-target="solutions">
+    <channel name="2026-04-de" lang="de" path="cohorts/2026-04/combined-de"
+             ledger="release/solutions-2026-04-de.txt"/>
+</release-channels>
+```
+
+How the pieces interact:
+
+- **Per-stream freeze records.** Each stream keeps its own
+  `.clm-released.<stream>.json`, so materials releasing a topic never freezes
+  it for solutions (and `--refreeze` stays scoped to one stream's files).
+- **Disjoint outputs required.** The streams' source targets must build
+  disjoint topic files (e.g. code-along/partial kinds vs completed kinds —
+  they land in different subtrees). `clm release sync` cross-checks the
+  source manifests of all streams sharing the destination and refuses to
+  promote if a topic-owned path is claimed twice. A sharer that is not built
+  yet is skipped with a note.
+- **Skeleton: presence-as-frozen.** A skeleton file already present in the
+  destination is kept, never overwritten — the second stream's first sync
+  copies only the skeleton files the first one didn't deliver. Evergreen
+  files still refresh by content. Because the two streams may sync from
+  different builds, **sync both streams after the same `clm build`** to keep
+  evergreen content from ping-ponging.
+- **Same `lang` required.** Channels sharing a path must declare the same
+  `lang` (spec validation error otherwise).
+- **One repo to `clm git`.** `--all-channels` visits the shared working tree
+  once (displayed as `materials/… (+ solutions/…)`); `clm release provision`
+  applies each group share once per repository. **Caveat:** `clm git reset
+  --channel` hard-resets the whole repo — it discards the *other* stream's
+  uncommitted promotions too; re-run that stream's sync afterward.
+- **What you give up.** With separate repos the materials repo *cannot*
+  contain a solution. Shared, the ledger is the only gate: a wrong
+  `release add` or premature sync publishes solutions into the repo students
+  already pull (and into its git history). Double-check `--dry-run` output
+  on the solutions stream.
+
+To migrate a running cohort, point the solutions channels' `path` at the
+existing materials working trees: students keep their remotes, the materials
+stream adopts the legacy `.clm-released.json` on its next sync, and the
+standalone solutions repos simply stop receiving syncs.
+
 ### `clm release provision`
 
 Share channel repos with GitLab groups (requires `CLM_GITLAB_TOKEN`).
@@ -175,8 +233,9 @@ clm release provision SPEC [--channel NAME] [--dry-run]
 
 All `clm git` subcommands operate on output targets by default; add
 `--channel NAME` or `--all-channels` to operate on cohort repos instead.
-`.clm-manifest.json` is always excluded from staging; `.clm-released.json`
-is always included.
+`.clm-manifest.json` is always excluded from staging; the frozen manifests
+(`.clm-released*.json`) are always included. Channels sharing a destination
+are visited once per repo, not once per channel.
 
 | Command | What it does |
 |---|---|
@@ -253,6 +312,7 @@ clm release sync course.xml --channel jan --push -m "Update NEWS"
   which follow the latest build by design.
 - **Provenance-driven** — files are promoted via manifest lookup, not path inference.
 - **Idempotent syncs** — re-running sync is safe; frozen topics are skipped.
-- **Manifest exclusion** — `.clm-manifest.json` is never distributed; the frozen manifest `.clm-released.json` is.
+- **Manifest exclusion** — `.clm-manifest.json` is never distributed; the per-stream frozen manifests (`.clm-released.<stream>.json`) are.
+- **Stream-scoped freezing** — streams sharing one destination repo freeze independently; presence-as-frozen protects the shared skeleton.
 
 See `clm info commands` for the full flag reference.

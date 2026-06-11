@@ -233,12 +233,31 @@ timestamp and commit, so it never enters a reproducibility baseline).
      that topic into the cohort repo and push it.
 
 The ledger (one topic id per line) is the source-repo-side record of what was
-released; the per-cohort `.clm-released.json` is the freeze record that ships in
+released; the per-cohort frozen manifest is the freeze record that ships in
 the cohort repo. A frozen topic is never re-propagated unless you pass
 `--refreeze`. Full command reference: `clm info commands` → `clm release` and
 `clm git`.
 
-## Authoring sidecar subdirectories: `voiceover/` and `cassettes/` (additive — no break)
+## Per-stream frozen manifests / shared destination repos (issue #325, {version} — auto-migrating)
+
+Channels of **different** release streams may now share one destination `path`,
+releasing materials and solutions into a single repository students pull from
+(see `clm info releases` → "Shared destination"). To make that possible the
+frozen manifest is now **per stream**: a channel in a named stream writes
+`.clm-released.<stream>.json` instead of `.clm-released.json` (a single
+*unnamed* `<release-channels>` block keeps the legacy name).
+
+**No manual migration.** On a channel's next `clm release sync`, an existing
+legacy `.clm-released.json` whose `channel` field matches is adopted, rewritten
+under the per-stream name, and the legacy file is removed — freeze state is
+preserved (the sync output reports the migration). Commit the rename with the
+usual `--push` / `clm git sync`. A legacy file recording a *different* channel
+is left untouched (it belongs to the stream that has not synced yet).
+
+To merge an existing materials + solutions repo pair for a running cohort,
+point the solutions channels' `path` at the existing materials working trees —
+students keep their remotes; the standalone solutions repos simply stop
+receiving syncs.
 
 CLM {version} lets a topic keep its authoring **sidecars** — voiceover
 companions (`voiceover_*.py`) and HTTP-replay cassettes (`*.http-cassette.yaml`)

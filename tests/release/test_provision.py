@@ -250,6 +250,41 @@ class TestProvisionCli:
         assert result.exit_code == 0, result.output
         assert "nothing to provision" in result.output.lower()
 
+    def test_shared_destination_shares_are_applied_once_per_repo(self, tmp_path, monkeypatch):
+        """Channels of different streams releasing into one repo (issue #325)
+        collapse identical shares; all of them target the first channel's
+        project, since that is the repository they all are."""
+        for var in ("CLM_GITLAB_TOKEN", "GITLAB_TOKEN"):
+            monkeypatch.delenv(var, raising=False)
+        spec = SPEC_WITH_SHARES.replace(
+            '<channel name="2026-10" path="release/2026-10" ledger="release/2026-10.txt">\n'
+            '      <share-with access="guest">trainers</share-with>\n'
+            "    </channel>\n"
+            "  </release-channels>",
+            "</release-channels>\n"
+            '  <release-channels name="materials" source-target="completed">\n'
+            '    <channel name="2026-04" path="release/2026-04" '
+            'ledger="release/materials-2026-04.txt">\n'
+            "      <share-with>students/azav-ml/ml-2026-04</share-with>\n"
+            '      <share-with access="developer">trainers</share-with>\n'
+            "    </channel>\n"
+            "  </release-channels>",
+        )
+        specs_dir = tmp_path / "course-specs"
+        specs_dir.mkdir()
+        spec_file = specs_dir / "course.xml"
+        spec_file.write_text(spec, encoding="utf-8")
+
+        result = CliRunner().invoke(release_group, ["provision", str(spec_file), "--dry-run"])
+        assert result.exit_code == 0, result.output
+        # The student share appears once, against the first stream's project.
+        assert result.output.count("-> students/azav-ml/ml-2026-04") == 1
+        assert result.output.count("ca/ml-2026-04-solutions") >= 1
+        assert "ca/ml-2026-04-materials" not in result.output
+        # The conflicting trainers access level is reported, not re-applied.
+        assert "collapsed" in result.output
+        assert result.output.count("-> trainers") == 1
+
     def test_api_error_exits_nonzero_but_continues(self, tmp_path, monkeypatch):
         monkeypatch.setenv("CLM_GITLAB_TOKEN", "tok")
         spec_file = _write_spec(tmp_path)

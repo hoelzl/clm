@@ -10,7 +10,10 @@ index. The rules (issue #208):
 * a released topic **already frozen** -> skip (students keep what they were
   given) unless it is in *refreeze*;
 * the skeleton (global, topic-less files) is copied once at channel init, then
-  frozen;
+  frozen — **presence-as-frozen** (issue #325): a skeleton file already present
+  at the destination is kept, not overwritten, so when several release streams
+  share one destination repository the later stream's first sync cannot clobber
+  the skeleton the earlier stream froze from a different build;
 * **evergreen** skeleton files (glob patterns from ``<evergreen>`` /
   ``--evergreen``) are exempt from the skeleton freeze: every sync re-copies a
   matching file whose built content differs from the destination's (e.g. a
@@ -94,15 +97,79 @@ class EvergreenScan:
 
 
 @frozen
+class SkeletonScan:
+    """Presence of the manifest's skeleton files at the destination (issue #325).
+
+    Files already ``present`` are kept, not overwritten — presence-as-frozen:
+    in a destination shared by several release streams, the skeleton an
+    earlier stream froze for its cohort must not be clobbered by a later
+    stream's first sync from a possibly newer build. Only ``missing`` files
+    are copied (evergreen patterns still refresh present files by content).
+    """
+
+    missing: tuple[str, ...] = ()
+    present: tuple[str, ...] = ()
+
+
+def scan_skeleton(*, manifest: dict[str, Any], dest_root: Path) -> SkeletonScan:
+    """Classify the manifest's skeleton entries by presence at *dest_root*."""
+    missing: list[str] = []
+    present: list[str] = []
+    for entry in manifest.get("files", []):
+        if entry.get("topic_id") is not None:
+            continue
+        rel = entry.get("path", "")
+        if _is_vcs_path(rel):
+            continue
+        (present if (dest_root / rel).is_file() else missing).append(rel)
+    return SkeletonScan(missing=tuple(missing), present=tuple(present))
+
+
+def topic_path_overlap(manifest_a: dict[str, Any], manifest_b: dict[str, Any]) -> tuple[str, ...]:
+    """Destination-relative paths claimed by a topic in *both* manifests.
+
+    Streams sharing one destination (issue #325) must own disjoint topic
+    files — only skeleton paths may overlap (byte-identical builds of the
+    same source). Any topic-owned overlap means the streams' output targets
+    produce colliding kinds and a sync would clobber the other stream's
+    frozen content; the sync preflight refuses it.
+    """
+    a = {e["path"] for e in manifest_a.get("files", []) if e.get("topic_id") is not None}
+    b = {e["path"] for e in manifest_b.get("files", []) if e.get("topic_id") is not None}
+    return tuple(sorted(a & b))
+
+
+@frozen
 class SyncPlan:
     copy_skeleton: bool
     skeleton_file_count: int
     topics: tuple[TopicPlan, ...]
     evergreen: tuple[EvergreenPlan, ...] = ()
+    # Skeleton paths the copy is restricted to (presence-as-frozen, issue
+    # #325). None = copy every skeleton file (no scan was taken — the
+    # pre-#325 contract, kept for callers that plan without a destination).
+    skeleton_to_copy: tuple[str, ...] | None = None
+    # Skeleton files kept because the destination already has them.
+    skeleton_present_count: int = 0
 
     @property
     def to_copy(self) -> tuple[TopicPlan, ...]:
         return tuple(t for t in self.topics if t.action in (COPY, REFREEZE))
+
+    @property
+    def evergreen_refresh(self) -> tuple[EvergreenPlan, ...]:
+        """The REFRESH plans the apply step executes.
+
+        A refresh already satisfied by this sync's own skeleton copy is
+        dropped: with a full copy (``skeleton_to_copy is None``) that is every
+        evergreen file; with a presence-restricted copy only the missing ones
+        — a *present* evergreen file whose content differs still refreshes,
+        even on a first sync (issue #325).
+        """
+        if self.copy_skeleton and self.skeleton_to_copy is None:
+            return ()
+        covered = frozenset(self.skeleton_to_copy or ()) if self.copy_skeleton else frozenset()
+        return tuple(p for p in self.evergreen if p.action == REFRESH and p.path not in covered)
 
     @property
     def skipped(self) -> tuple[TopicPlan, ...]:
@@ -176,6 +243,7 @@ def plan_sync(
     frozen: FrozenManifest,
     refreeze: Iterable[str] = (),
     evergreen: Iterable[EvergreenPlan] = (),
+    skeleton: SkeletonScan | None = None,
 ) -> SyncPlan:
     """Compute what a sync would do, without touching the filesystem.
 
@@ -185,8 +253,12 @@ def plan_sync(
     not being refrozen, in which case the ordinary :data:`SKIP_FROZEN` applies
     (the cohort already has it; nothing would be copied anyway).
 
-    *evergreen* carries the plans of a prior :func:`scan_evergreen` (which
-    reads the destination, so it stays out of this pure planning step).
+    *evergreen* and *skeleton* carry the results of prior
+    :func:`scan_evergreen` / :func:`scan_skeleton` calls (they read the
+    destination, so they stay out of this pure planning step). Without a
+    *skeleton* scan a needed skeleton copy covers every skeleton file; with
+    one it is restricted to the files missing at the destination
+    (presence-as-frozen, issue #325).
     """
     refreeze_set = set(refreeze)
     failed_topics = set(manifest.get("failed_topics", []))
@@ -204,11 +276,22 @@ def plan_sync(
             action = COPY
         plans.append(TopicPlan(topic_id, action, file_count))
     skeleton_files = by_topic.get(None, [])
+    copy_skeleton = not frozen.skeleton_frozen
+    if copy_skeleton and skeleton is not None:
+        skeleton_to_copy: tuple[str, ...] | None = skeleton.missing
+        skeleton_file_count = len(skeleton.missing)
+        skeleton_present_count = len(skeleton.present)
+    else:
+        skeleton_to_copy = None
+        skeleton_file_count = len(skeleton_files)
+        skeleton_present_count = 0
     return SyncPlan(
-        copy_skeleton=not frozen.skeleton_frozen,
-        skeleton_file_count=len(skeleton_files),
+        copy_skeleton=copy_skeleton,
+        skeleton_file_count=skeleton_file_count,
         topics=tuple(plans),
         evergreen=tuple(evergreen),
+        skeleton_to_copy=skeleton_to_copy,
+        skeleton_present_count=skeleton_present_count,
     )
 
 
@@ -227,9 +310,11 @@ def apply_sync(
     no files in the source manifest (e.g. released but not yet built) is logged
     and **not** frozen, so it is retried once it is built.
 
-    The evergreen pass runs only once the skeleton is frozen: on the first
-    sync the skeleton copy itself delivers every skeleton file — evergreen
-    ones included — so refreshing then would re-copy bytes just written.
+    The evergreen pass executes ``plan.evergreen_refresh`` — the refreshes not
+    already satisfied by this sync's own skeleton copy. On a plain first sync
+    the skeleton copy delivers every skeleton file, evergreen ones included;
+    with a presence-restricted copy (issue #325) a *present* evergreen file
+    whose content differs still refreshes.
     """
     by_topic = manifest_files_by_topic(manifest)
     source_commit = manifest.get("source_commit")
@@ -239,27 +324,30 @@ def apply_sync(
     skipped: list[str] = []
     failed: list[str] = []
     refreshed: list[str] = []
+    skeleton_entries = by_topic.get(None, [])
 
     if plan.copy_skeleton:
-        files_copied += _copy_files(by_topic.get(None, []), source_root, dest_root)
+        entries = skeleton_entries
+        if plan.skeleton_to_copy is not None:
+            wanted = set(plan.skeleton_to_copy)
+            entries = [e for e in skeleton_entries if e["path"] in wanted]
+        files_copied += _copy_files(entries, source_root, dest_root)
         frozen.skeleton_frozen = True
-    else:
-        skeleton_by_path = {e["path"]: e for e in by_topic.get(None, [])}
-        for evergreen_plan in plan.evergreen:
-            if evergreen_plan.action != REFRESH:
-                continue
-            entry = skeleton_by_path.get(evergreen_plan.path)
-            if entry is None:
-                # The scan only plans skeleton entries; a miss means the plan
-                # and manifest went out of sync — skip rather than guess.
-                logger.warning(
-                    "evergreen: %r is not a skeleton file in the manifest; skipped",
-                    evergreen_plan.path,
-                )
-                continue
-            if _copy_files([entry], source_root, dest_root):
-                files_copied += 1
-                refreshed.append(evergreen_plan.path)
+
+    skeleton_by_path = {e["path"]: e for e in skeleton_entries}
+    for evergreen_plan in plan.evergreen_refresh:
+        entry = skeleton_by_path.get(evergreen_plan.path)
+        if entry is None:
+            # The scan only plans skeleton entries; a miss means the plan
+            # and manifest went out of sync — skip rather than guess.
+            logger.warning(
+                "evergreen: %r is not a skeleton file in the manifest; skipped",
+                evergreen_plan.path,
+            )
+            continue
+        if _copy_files([entry], source_root, dest_root):
+            files_copied += 1
+            refreshed.append(evergreen_plan.path)
 
     for topic_plan in plan.topics:
         if topic_plan.action == SKIP_FROZEN:

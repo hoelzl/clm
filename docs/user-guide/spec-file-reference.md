@@ -962,7 +962,7 @@ the spec stays diff-clean as you release week by week.
 | `source-target` (attr) | `<release-channels>` | Yes | Name of the `completed`-kind `<output-target>` that is the frozen source. Topics are promoted out of this target's built tree. |
 | `<remote-path>` | `<release-channels>` | No | Default remote path (e.g. a GitLab group) for every channel that does not override it. |
 | `name` (attr) | `<channel>` | Yes | Cohort identifier. Addresses the channel on the CLI (`--channel jan`) and forms the derived repo name `{project-slug}-{name}`. |
-| `path` (attr) | `<channel>` | Yes | The cohort repo's working tree (relative to the course root, or absolute). One repo per cohort; **not** language-scoped. |
+| `path` (attr) | `<channel>` | Yes | The cohort repo's working tree (relative to the course root, or absolute). Unique within a stream; channels of *different* streams may share a path to release into one repository (issue #325, same `lang` required) — see `clm info releases`. |
 | `ledger` (attr) | `<channel>` | Yes | Path to the cohort's release ledger — a plain-text file, **one released topic id per line**, created/appended by `clm release add`. Keep it in the course source repo. |
 | `<remote-path>` | `<channel>` | No | Override the block-level `<remote-path>` for this one cohort. |
 | `<evergreen>` | `<release-channels>` or `<channel>` | No | Glob pattern of **skeleton files exempt from the freeze**: every `clm release sync` re-copies a matching file whose built content differs from the cohort's copy (e.g. a NEWS file). Block-level patterns are inherited by every channel; channel-level patterns are additive. Skeleton-only — patterns matching topic-owned files are warned about and ignored. See the [Solution Release guide](solution-release.md#evergreen-files-eg-a-news-file). |
@@ -976,8 +976,9 @@ Per-topic promotion relies on the build **provenance manifest**
 (`.clm-manifest.json`, written by `clm build` on by default), which maps each
 output file to its owning topic — information the output path alone cannot
 recover. The manifest is private and is excluded from every distributed repo by
-`clm git`; the per-cohort **frozen manifest** (`.clm-released.json`) *does* ship
-in the channel repo as the freeze record. Drive the workflow with `clm release`
+`clm git`; the per-cohort, per-stream **frozen manifest**
+(`.clm-released.<stream>.json`; legacy `.clm-released.json` for a single
+unnamed block) *does* ship in the channel repo as the freeze record. Drive the workflow with `clm release`
 (`add` / `week` / `status` / `sync`) and `clm git --channel` (init/commit/push
 the cohort repos); run `clm info commands` for both.
 

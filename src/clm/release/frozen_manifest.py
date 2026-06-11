@@ -1,12 +1,22 @@
 """Frozen manifest: the per-destination record of what has been released.
 
-Written into the cohort's own repository as ``.clm-released.json``, this is the
-**freeze boundary**: a topic recorded here is never re-propagated by a later
-sync (so students keep exactly what they were given), unless an explicit
-``--refreeze`` overrides it. Each record is per-topic — ``source_commit`` (the
-build the cohort received), ``copied_at``, and a single rolled-up
-``topic_digest`` for tamper/drift detection — NOT a per-file hash map, keeping
-the student-shipped artifact small (issue #208, D7).
+Written into the cohort's own repository, this is the **freeze boundary**: a
+topic recorded here is never re-propagated by a later sync (so students keep
+exactly what they were given), unless an explicit ``--refreeze`` overrides it.
+Each record is per-topic — ``source_commit`` (the build the cohort received),
+``copied_at``, and a single rolled-up ``topic_digest`` for tamper/drift
+detection — NOT a per-file hash map, keeping the student-shipped artifact
+small (issue #208, D7).
+
+The file is **per release stream** (issue #325): a named stream writes
+``.clm-released.<stream>.json`` so several streams (e.g. materials and
+solutions) can release into the *same* destination repository without
+colliding on freeze records — topic ids are shared across streams, so a
+single file would make stream A's release freeze the topic for stream B. The
+unnamed single-block layout (issue #208) keeps the legacy
+``.clm-released.json`` name. :func:`load_frozen_manifest` adopts a legacy
+file whose ``channel`` field matches, so existing deployments migrate on
+their next sync.
 """
 
 from __future__ import annotations
@@ -21,6 +31,15 @@ logger = logging.getLogger(__name__)
 
 FROZEN_FILENAME = ".clm-released.json"
 FROZEN_VERSION = 1
+
+
+def frozen_manifest_filename(stream: str) -> str:
+    """The frozen manifest's filename for a release *stream* (issue #325).
+
+    A named stream owns ``.clm-released.<stream>.json``; the unnamed
+    single-block layout keeps the legacy ``.clm-released.json``.
+    """
+    return f".clm-released.{stream}.json" if stream else FROZEN_FILENAME
 
 
 @frozen
@@ -78,3 +97,49 @@ class FrozenManifest:
 
     def freeze(self, topic_id: str, record: FrozenRecord) -> None:
         self.frozen[topic_id] = record
+
+
+@frozen
+class LoadedFrozenManifest:
+    """A frozen manifest resolved to its per-stream location (issue #325).
+
+    ``path`` is where a subsequent :meth:`FrozenManifest.save` belongs (always
+    the per-stream filename). ``adopted_legacy`` names a legacy
+    ``.clm-released.json`` whose records were adopted — the caller deletes it
+    after a successful save so the destination carries one file per stream.
+    ``ignored_legacy_channel`` is set when a legacy file exists but records a
+    *different* channel (normal in a shared destination: it belongs to the
+    stream that has not migrated yet) so callers can surface a note.
+    """
+
+    manifest: FrozenManifest
+    path: Path
+    adopted_legacy: Path | None = None
+    ignored_legacy_channel: str | None = None
+
+
+def load_frozen_manifest(dest_root: Path, *, stream: str, channel: str) -> LoadedFrozenManifest:
+    """Load *channel*'s frozen manifest from *dest_root* (issue #325).
+
+    Reads the per-stream file (:func:`frozen_manifest_filename`). When a named
+    stream's file does not exist yet but the legacy ``.clm-released.json``
+    does **and** its ``channel`` field equals *channel*, the legacy records
+    are adopted — the pre-#325 deployment migrates to the per-stream name on
+    its next save. A legacy file recording a different channel is left alone
+    (it belongs to another stream sharing this destination).
+    """
+    path = dest_root / frozen_manifest_filename(stream)
+    if not stream or path.exists():
+        return LoadedFrozenManifest(FrozenManifest.load(path, channel=channel), path)
+    legacy = dest_root / FROZEN_FILENAME
+    if legacy.exists():
+        legacy_channel = json.loads(legacy.read_text(encoding="utf-8")).get("channel", "")
+        if legacy_channel == channel:
+            logger.info("adopting legacy frozen manifest %s for channel %r", legacy, channel)
+            return LoadedFrozenManifest(
+                FrozenManifest.load(legacy, channel=channel), path, adopted_legacy=legacy
+            )
+        return LoadedFrozenManifest(
+            FrozenManifest(channel=channel), path, ignored_legacy_channel=legacy_channel
+        )
+    return LoadedFrozenManifest(FrozenManifest(channel=channel), path)

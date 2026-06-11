@@ -2150,15 +2150,21 @@ class CourseSpec:
         Stream naming: with several blocks every block needs a unique,
         ``/``-free ``name`` (the stream name used in ``stream/channel``
         addressing). Channels need unique, ``/``-free names within their block,
-        and a channel's destination ``path`` and ``ledger`` must be unique
-        across *all* streams — two streams writing the same destination would
-        fight over one frozen manifest.
+        and a channel's ``ledger`` must be unique across *all* streams.
+
+        Destination paths must be unique **within** a stream (one frozen
+        manifest per stream and destination). Channels of *different* streams
+        may share a destination — several streams releasing into one cohort
+        repository (issue #325) — but then they must agree on ``lang``: the
+        destination layout is re-rooted per language, so mixed-language
+        streams would interleave incompatible trees.
         """
         errors: list[str] = []
         blocks = self.release_channel_blocks
 
         block_names: set[str] = set()
-        dest_paths: dict[str, str] = {}
+        # Normalized dest path -> [(ref, stream name, lang)] of its claimants.
+        dest_paths: dict[str, list[tuple[str, str, str]]] = {}
         ledgers: dict[str, str] = {}
         for block in blocks:
             block_label = (
@@ -2204,14 +2210,25 @@ class CourseSpec:
 
                 if not channel.path:
                     errors.append(f"Channel '{ref}' needs a path attribute.")
-                elif channel.path in dest_paths:
-                    errors.append(
-                        f"Channels '{dest_paths[channel.path]}' and '{ref}' share the "
-                        f"destination path {channel.path!r}; every channel needs its own "
-                        f"destination repository."
-                    )
                 else:
-                    dest_paths[channel.path] = ref
+                    norm = str(Path(channel.path))
+                    for other_ref, other_stream, other_lang in dest_paths.get(norm, []):
+                        if other_stream == block.name:
+                            errors.append(
+                                f"Channels '{other_ref}' and '{ref}' share the "
+                                f"destination path {channel.path!r}; within one release "
+                                f"stream every channel needs its own destination "
+                                f"repository."
+                            )
+                        elif other_lang != channel.lang:
+                            errors.append(
+                                f"Channels '{other_ref}' and '{ref}' release into the "
+                                f"shared destination {channel.path!r} but declare "
+                                f"different lang values ({other_lang or '(all)'} vs "
+                                f"{channel.lang or '(all)'}); streams sharing a "
+                                f"destination must agree on lang."
+                            )
+                    dest_paths.setdefault(norm, []).append((ref, block.name, channel.lang))
 
                 if not channel.ledger:
                     errors.append(f"Channel '{ref}' needs a ledger attribute.")

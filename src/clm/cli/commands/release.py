@@ -36,7 +36,7 @@ from clm.core.provenance_manifest import (
     load_manifest,
     restrict_manifest_to_language,
 )
-from clm.release.frozen_manifest import FROZEN_FILENAME, FrozenManifest
+from clm.release.frozen_manifest import FROZEN_FILENAME, load_frozen_manifest
 from clm.release.ledger import Ledger, partition_known
 from clm.release.sync import (
     REFRESH,
@@ -45,6 +45,8 @@ from clm.release.sync import (
     apply_sync,
     plan_sync,
     scan_evergreen,
+    scan_skeleton,
+    topic_path_overlap,
 )
 
 logger = logging.getLogger(__name__)
@@ -80,6 +82,9 @@ class _ResolvedChannel:
     lang: str = ""
     # Evergreen glob patterns (block-level inherited + channel additions).
     evergreen: tuple[str, ...] = ()
+    # Release stream name (empty for the single unnamed block). Selects the
+    # per-stream frozen-manifest filename (issue #325).
+    stream: str = ""
 
 
 @click.group("release")
@@ -114,7 +119,61 @@ def _resolve_channel(spec_file: Path, channel_name: str) -> _ResolvedChannel:
         dest=_abs_under(course_root, channel.path),
         lang=channel.lang,
         evergreen=channel.evergreen,
+        stream=block.name,
     )
+
+
+def _check_shared_destination_overlap(
+    spec_file: Path, channel_ref: str, dest_path: Path, manifest: dict
+) -> None:
+    """Sync preflight for shared destinations (issue #325).
+
+    When another stream's channel releases into the same destination, its
+    source manifest and ours must claim **disjoint** topic files — skeleton
+    overlap is fine (presence-as-frozen keeps the first copy), but a
+    topic-owned path in both manifests means the streams' output targets
+    collide and a sync would clobber the other stream's frozen content. A
+    sharer whose source target has no manifest yet (not built) is skipped
+    with a note. *manifest* is this sync's already language-restricted
+    manifest, so paths compare in destination-relative form.
+    """
+    spec = CourseSpec.from_file(spec_file)
+    block, _ = spec.resolve_release_channel(channel_ref)
+    course_root, _ = resolve_course_paths(spec_file)
+    for other_block, other_channel in spec.iter_release_channels():
+        if other_block.name == block.name:
+            continue
+        if _abs_under(course_root, other_channel.path).resolve() != dest_path.resolve():
+            continue
+        other_ref = release_channel_ref(other_block, other_channel)
+        target = next((t for t in spec.output_targets if t.name == other_block.source_target), None)
+        if target is None:
+            continue
+        other_manifest_path = _abs_under(course_root, target.path) / MANIFEST_FILENAME
+        if not other_manifest_path.is_file():
+            click.echo(
+                f"Note: '{other_ref}' shares this destination but its source "
+                f"target is not built; the cross-stream overlap check will run "
+                f"once it is."
+            )
+            continue
+        other_manifest = load_manifest(other_manifest_path)
+        if other_channel.lang:
+            lang_dir = str(spec.output_dir_name[other_channel.lang])
+            other_manifest = restrict_manifest_to_language(
+                other_manifest, other_channel.lang, lang_dir
+            )
+        overlap = topic_path_overlap(manifest, other_manifest)
+        if overlap:
+            examples = ", ".join(overlap[:5]) + (", …" if len(overlap) > 5 else "")
+            raise click.ClickException(
+                f"Refusing to sync: {len(overlap)} topic-owned file(s) are claimed "
+                f"by both '{channel_ref}' and '{other_ref}', which share the "
+                f"destination {dest_path} — promoting would clobber the other "
+                f"stream's released content: {examples}. Streams sharing a "
+                f"destination must build disjoint outputs (e.g. code-along/partial "
+                f"vs completed kinds)."
+            )
 
 
 def _spec_topic_ids(spec_file: Path) -> list[str]:
@@ -238,6 +297,12 @@ def provision_cmd(spec_file: Path, channel: str, dry_run: bool) -> None:
         raise click.ClickException(f"{spec_file} has no <release-channels> block.")
 
     repos = {r.target_name: r for r in find_release_channel_repos(spec_file, channel or None)}
+    # Channels sharing one destination share one repository (issue #325):
+    # route every share through the first channel's entry (spec order) so all
+    # of them target the project that repo actually is.
+    canonical_by_dest: dict[Path, OutputRepo] = {}
+    for channel_repo in find_release_channel_repos(spec_file, None):
+        canonical_by_dest.setdefault(channel_repo.path.resolve(), channel_repo)
     if channel:
         try:
             pairs = [spec.resolve_release_channel(channel)]
@@ -247,6 +312,7 @@ def provision_cmd(spec_file: Path, channel: str, dry_run: bool) -> None:
         pairs = list(spec.iter_release_channels())
 
     work: list[tuple[str, str, str, str, str]] = []  # ref, base, project, group, access
+    seen: dict[tuple[str, str, str], tuple[str, str]] = {}
     for block, ch in pairs:
         ref = release_channel_ref(block, ch)
         if not ch.share_with:
@@ -254,6 +320,8 @@ def provision_cmd(spec_file: Path, channel: str, dry_run: bool) -> None:
                 click.echo(f"[{ref}] no <share-with> declared — nothing to provision.")
             continue
         repo = repos.get(ref)
+        if repo is not None:
+            repo = canonical_by_dest.get(repo.path.resolve(), repo)
         remote = parse_gitlab_remote(repo.remote_url or "") if repo else None
         if remote is None:
             click.echo(
@@ -263,6 +331,19 @@ def provision_cmd(spec_file: Path, channel: str, dry_run: bool) -> None:
             continue
         base_url, project_path = remote
         for share in ch.share_with:
+            # One share per (project, group) — channels sharing a destination
+            # would otherwise apply the same share once per stream.
+            key = (base_url, project_path, share.group)
+            prior = seen.get(key)
+            if prior is not None:
+                if prior[1] != share.access:
+                    click.echo(
+                        f"[{ref}] share with {share.group} ({share.access}) collapsed "
+                        f"into [{prior[0]}]'s {prior[1]} share — the channels share "
+                        f"one repository."
+                    )
+                continue
+            seen[key] = (ref, share.access)
             work.append((ref, base_url, project_path, share.group, share.access))
 
     if not work:
@@ -421,10 +502,13 @@ def status_cmd(
     spec_file: Path, channel: str, ledger_path: Path | None, dest_path: Path | None
 ) -> None:
     """Show released vs pending topics (and frozen state with --dest/--channel)."""
+    stream = ""
     if channel:
         resolved = _resolve_channel(spec_file, channel)
+        channel = resolved.name
         ledger_path = ledger_path or resolved.ledger
         dest_path = dest_path or resolved.dest
+        stream = resolved.stream
     if ledger_path is None:
         raise click.ClickException("Pass --ledger PATH or --channel NAME.")
 
@@ -440,7 +524,7 @@ def status_cmd(
         click.echo("  pending:  " + ", ".join(pending))
 
     if dest_path is not None:
-        frozen = FrozenManifest.load(dest_path / FROZEN_FILENAME, channel=channel or "?")
+        frozen = load_frozen_manifest(dest_path, stream=stream, channel=channel or "?").manifest
         awaiting = [tid for tid in ledger.released if not frozen.is_frozen(tid)]
         click.echo(
             f"Destination: {len(frozen.frozen)} frozen, {len(awaiting)} released "
@@ -543,6 +627,7 @@ def sync_cmd(
     """
     channel_lang = ""
     channel_evergreen: tuple[str, ...] = ()
+    stream = ""
     if channel:
         if spec_file is None:
             raise click.ClickException("--channel requires the SPEC_FILE argument.")
@@ -555,6 +640,7 @@ def sync_cmd(
         dest_path = dest_path or resolved.dest
         channel_lang = resolved.lang
         channel_evergreen = resolved.evergreen
+        stream = resolved.stream
 
     if ledger_path is None or source_path is None or dest_path is None:
         raise click.ClickException(
@@ -595,10 +681,22 @@ def sync_cmd(
                 f"built without that language?"
             )
         source_path = lang_root
+
+    # Shared-destination preflight (issue #325): when another stream releases
+    # into this destination, their built topic outputs must be disjoint.
+    if channel and spec_file is not None:
+        _check_shared_destination_overlap(spec_file, channel, dest_path, manifest)
+
     ledger = Ledger.load(ledger_path)
     channel_name = channel or dest_path.name
-    frozen_path = dest_path / FROZEN_FILENAME
-    frozen = FrozenManifest.load(frozen_path, channel=channel_name)
+    loaded = load_frozen_manifest(dest_path, stream=stream, channel=channel_name)
+    frozen = loaded.manifest
+    if loaded.ignored_legacy_channel is not None:
+        click.echo(
+            f"Note: leaving the legacy {FROZEN_FILENAME} alone — it records "
+            f"channel '{loaded.ignored_legacy_channel}', not '{channel_name}' "
+            f"(it migrates to a per-stream file on that channel's next sync)."
+        )
 
     # Channel patterns plus CLI additions; the scan runs against the
     # (possibly language-restricted) manifest, so patterns are matched on
@@ -620,12 +718,21 @@ def sync_cmd(
         )
 
     refreeze = set(ledger.released) if refreeze_all else set(refreeze_ids)
+    # Presence-as-frozen (issue #325): a needed skeleton copy is restricted to
+    # the files missing at the destination, so a stream joining a shared repo
+    # never overwrites the skeleton another stream already froze there.
+    skeleton_scan = (
+        scan_skeleton(manifest=manifest, dest_root=dest_path)
+        if not frozen.skeleton_frozen
+        else None
+    )
     plan = plan_sync(
         manifest=manifest,
         ledger_released=ledger.released,
         frozen=frozen,
         refreeze=refreeze,
         evergreen=scan.plans,
+        skeleton=skeleton_scan,
     )
 
     if manifest.get("partial"):
@@ -634,21 +741,24 @@ def sync_cmd(
             "errors); topics that failed in that build are refused below "
             "and promote once a build succeeds for them."
         )
-    click.echo(
+    skeleton_line = (
         f"Channel '{channel_name or '?'}': "
         f"skeleton {'copy' if plan.copy_skeleton else 'frozen'} "
         f"({plan.skeleton_file_count} files)"
     )
+    if plan.skeleton_present_count:
+        skeleton_line += f", {plan.skeleton_present_count} already present (kept)"
+    click.echo(skeleton_line)
     for topic_plan in plan.topics:
         click.echo(
             f"  {topic_plan.action:<11} {topic_plan.topic_id} ({topic_plan.file_count} files)"
         )
-    # On the first sync the skeleton copy delivers evergreen files itself, so
-    # the evergreen lines only appear once the skeleton is frozen.
+    # Refreshes the skeleton copy itself does not already deliver — on a plain
+    # first sync that is none, so the lines only appear once the skeleton is
+    # frozen (or kept via presence-as-frozen, issue #325).
+    for evergreen_plan in plan.evergreen_refresh:
+        click.echo(f"  {REFRESH:<11} {evergreen_plan.path} (evergreen)")
     if plan.evergreen and not plan.copy_skeleton:
-        for evergreen_plan in plan.evergreen:
-            if evergreen_plan.action == REFRESH:
-                click.echo(f"  {REFRESH:<11} {evergreen_plan.path} (evergreen)")
         up_to_date = sum(1 for e in plan.evergreen if e.action != REFRESH)
         if up_to_date:
             click.echo(f"  evergreen: {up_to_date} file(s) up-to-date")
@@ -667,7 +777,13 @@ def sync_cmd(
         frozen=frozen,
         copied_at=datetime.now(timezone.utc).isoformat(),
     )
-    frozen.save(frozen_path)
+    frozen.save(loaded.path)
+    if loaded.adopted_legacy is not None:
+        loaded.adopted_legacy.unlink(missing_ok=True)
+        click.echo(
+            f"Migrated the legacy {FROZEN_FILENAME} to the per-stream "
+            f"{loaded.path.name} (issue #325)."
+        )
     click.echo(
         f"Copied {result.files_copied} file(s): "
         f"{len(result.copied_topics)} newly frozen, "

@@ -2655,10 +2655,14 @@ spec's `<release-channels>` block (see `clm info spec-files`) instead of the
 pointed at the cohort working trees. The private provenance manifest
 (`.clm-manifest.json`) is always excluded from staging (and a copy a pre-exclusion
 commit already tracked is purged on the next commit); the per-cohort frozen
-manifest (`.clm-released.json`) is committed normally. The course must declare a
+manifests (`.clm-released*.json`) are committed normally. The course must declare a
 `<release-channels>` block or these flags error. Populating these working trees
 is the job of `clm release sync`; `clm git --channel` then versions and
 distributes them (and `clm git init --channel` creates each cohort repo once).
+Channels of different streams sharing one destination path (issue #325) are one
+repo to `clm git`: `--all-channels` visits the shared working tree once, and
+`clm git reset` on it is repo-wide — it discards the other stream's uncommitted
+promotions too.
 
 ### `clm release`
 
@@ -2707,8 +2711,12 @@ Key options for `release sync`:
 
 The source must be built with the provenance manifest (`clm build` writes it by
 default since CLM {version}). Promotion copies bytes by manifest and records each
-topic in the cohort's frozen manifest (`.clm-released.json`); a frozen topic is
-never re-propagated unless you pass `--refreeze`.
+topic in the cohort's per-stream frozen manifest (`.clm-released.<stream>.json`;
+legacy `.clm-released.json` for a single unnamed stream — adopted and renamed
+automatically); a frozen topic is never re-propagated unless you pass
+`--refreeze`. Channels of different streams may share one destination repo —
+see `clm info releases` ("Shared destination") for the rules (disjoint outputs,
+same `lang`, presence-as-frozen skeleton).
 
 **Evergreen files.** Skeleton (global) files matching the channel's
 `<evergreen>` patterns — or `--evergreen` options — are exempt from the

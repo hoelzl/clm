@@ -666,7 +666,7 @@ addressing unchanged.
 | `<share-with>` | `<release-channels>` | No | Default GitLab group share inherited by every channel (issue #294, see below). |
 | `<evergreen>` | `<release-channels>` | No | Glob pattern of **skeleton files exempt from the freeze**, inherited by every channel (see below). |
 | `name` (attr) | `<channel>` | Yes | Cohort identifier (no `/`). Addresses the channel on the CLI and forms the derived repo name. |
-| `path` (attr) | `<channel>` | Yes | The cohort repo's working tree (relative to the course root, or absolute). One repo per channel; must be unique across **all** streams. |
+| `path` (attr) | `<channel>` | Yes | The cohort repo's working tree (relative to the course root, or absolute). Unique within a stream. Channels of **different** streams may share a path — they then release into the same repository (issue #325, see below) and must agree on `lang`. |
 | `ledger` (attr) | `<channel>` | Yes | Path to the channel's release ledger — a plain-text file, **one released topic id per line**, created/appended by `clm release add`. Keep it in the course source repo. Unique across all streams. |
 | `lang` (attr) | `<channel>` | No | Scope the channel to one language (`de`/`en`, issue #293). `clm release sync` then promotes only that language's files, **re-rooted** so the repo root is the language directory (matching per-language repos like `…-azav-de`), and the derived repo name appends `-{lang}`. **Unset**: the channel receives every built language root. |
 | `<remote-path>` | `<channel>` | No | Override the block-level `<remote-path>` for this one cohort. |
@@ -732,6 +732,39 @@ file is reported and ignored — released topic content changes only via
 Sync never deletes: removing an evergreen file from the source stops
 refreshing it but leaves the cohort's copy in place.
 
+#### Shared destination — several streams, one cohort repo (CLM {version}+)
+
+Channels of **different** streams may declare the same `path`: both streams
+then release into a single repository students pull from (issue #325) —
+e.g. materials at session start and solutions later, each on its own ledger:
+
+```xml
+<release-channels name="materials" source-target="shared">
+    <channel name="2026-04-de" lang="de" path="cohorts/2026-04/combined-de"
+             ledger="release/materials-2026-04-de.txt"/>
+</release-channels>
+<release-channels name="solutions" source-target="solutions">
+    <channel name="2026-04-de" lang="de" path="cohorts/2026-04/combined-de"
+             ledger="release/solutions-2026-04-de.txt"/>
+</release-channels>
+```
+
+Sharing is detected from the spec — no extra element. Constraints and
+behavior (`clm info releases` has the details):
+
+- channels sharing a path must agree on `lang` (validation error otherwise);
+- each stream keeps its own frozen manifest (`.clm-released.<stream>.json`),
+  so one stream releasing a topic never freezes it for the other;
+- the streams' built topic outputs must be **disjoint** (e.g. code-along /
+  partial kinds vs completed kinds) — `clm release sync` cross-checks the
+  source manifests and refuses overlap;
+- skeleton files already present in the destination are kept, not
+  overwritten (presence-as-frozen) — sync both streams after the same
+  `clm build` to avoid evergreen files ping-ponging between builds;
+- `clm git` treats the shared path as one repo (visited once by
+  `--all-channels`; note `clm git reset` is repo-wide and discards the other
+  stream's uncommitted state too).
+
 #### Provenance and freeze records
 
 The build artifact that makes per-topic promotion possible is the **provenance
@@ -739,7 +772,8 @@ manifest** (`.clm-manifest.json`, written by `clm build` — on by default since
 CLM {version}); it maps each output file to its owning topic, which the output
 path alone cannot recover. The manifest is private and is automatically excluded
 from every distributed repo by `clm git`. The per-cohort **frozen manifest**
-(`.clm-released.json`) *does* ship in the channel repo — it is the freeze record.
+(`.clm-released.<stream>.json`; `.clm-released.json` for the single unnamed
+block) *does* ship in the channel repo — it is the freeze record.
 
 Since CLM {version} (issue #295), a whole-course build that errors on some
 topics still writes the manifest for the cleanly-built subset, recording the
