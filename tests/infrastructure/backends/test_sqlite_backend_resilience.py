@@ -905,3 +905,75 @@ async def test_stored_issue_keys_match_lookup_keys_for_notebook_jobs(
         assert stored_key == lookup_key
     finally:
         await backend.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# Issue #327: POLICY — execution errors are never cached.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_failed_job_is_never_cached_and_reexecutes(temp_db, temp_workspace, tmp_path):
+    """Policy pin (#327, decided 2026-06-11): a failed execution leaves NO
+    entry in any result cache, and the next build re-submits the job.
+
+    This is deliberate, not an accident to "fix" (#321 discussion):
+
+    - ``skip-errors`` is the sanctioned mechanism for decks that
+      deliberately fail — execution completes under ``allow_errors``, the
+      job becomes a cacheable SUCCESS, and its warning is replayed on
+      every cache hit. There is no need for a parallel error cache.
+    - Caching failures would reintroduce the stale-error class fixed in
+      #323 (a transient flake haunting every later build) and interacts
+      badly with cross-course cache sharing (all layers key on the
+      absolute input path) and flaky C++ kernels.
+
+    Worker-side, the same policy holds structurally: ``add_to_cache`` and
+    ``_cache_executed_notebook`` are only reachable on the success path
+    (``notebook_worker.process_job`` raises before them on failure).
+    This test pins the host-side half: no ``processed_files`` row, no
+    ``results_cache`` entry, and re-submission instead of a cache hit.
+    """
+    cache_db = tmp_path / "cache.db"
+    backend = _backend(temp_db, temp_workspace, build_reporter=_StubReporter())
+    backend.db_manager = DatabaseManager(cache_db)
+    backend.db_manager.__enter__()
+    try:
+        payload = _MockPayload()
+        await backend.execute_operation(_MockOp(), payload)
+        job_id = next(iter(backend.active_jobs))
+
+        # Fail with a user-type error (worst case for the policy: user
+        # errors ARE persisted to processing_issues for diagnostics, so
+        # this pins that even then no RESULT is cached).
+        jq = JobQueue(temp_db)
+        try:
+            jq.update_job_status(job_id, "failed", error="SyntaxError: invalid syntax")
+        finally:
+            jq.close()
+        assert await backend.wait_for_completion() is False
+
+        # No result in the database cache (any metadata key) ...
+        conn = sqlite3.connect(cache_db)
+        try:
+            row_count = conn.execute(
+                "SELECT COUNT(*) FROM processed_files WHERE file_path = ?",
+                (payload.input_file,),
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        assert row_count == 0
+
+        # ... and none in the job-level results cache.
+        assert backend.job_queue is not None
+        assert backend.job_queue.check_cache(payload.output_file, payload.content_hash()) is None
+
+        # A new build of the unchanged payload re-submits a job instead of
+        # serving anything from a cache.
+        await backend.execute_operation(_MockOp(), payload)
+        assert len(backend.active_jobs) == 1
+        assert backend.build_reporter.cache_hits == []
+    finally:
+        backend.active_jobs.clear()
+        backend.db_manager.__exit__(None, None, None)
+        await backend.shutdown()
