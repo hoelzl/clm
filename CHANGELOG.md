@@ -125,6 +125,32 @@ and folded into this file by `scripts/collect_changelog.py` at release time.
   one-screen answer to "why did this deck replay stale output?" that the
   #321 diagnosis lacked.
 
+- **Kernel execution telemetry + `clm kernel-triage`** (#330): notebook
+  executions that fail or pass only after a retry are now recorded
+  persistently in a per-deck telemetry database (`clm_telemetry.db` next to
+  the cache db; override with the global `--telemetry-db-path`), including
+  attempt count, failure type (`cell_execution_error` / `dead_kernel` /
+  `startup_timeout` / `cell_timeout`), failing cell index, and a
+  deterministic-vs-flaky classification. Decks that passed only after a
+  retry are surfaced as a "Flaky decks" list in the build summary (JSON:
+  `flaky_files`). The new `clm kernel-triage SPEC` command re-executes all
+  `evaluate="no"` workaround topics plus all recorded flaky decks against
+  the current kernel (real `clm build` in a throwaway environment) and
+  reports which workarounds can be lifted — run it after every
+  xeus-cpp/CppInterOp image bump.
+
+- New deterministic validation check `code_export` (#331): verifies the structural
+  invariants the planned compilable C++ project export (#333) relies on, for
+  `.cpp` decks only (no-op elsewhere). Errors on variable/function/type
+  redefinitions within one (language × completed) output view — which xeus-cpp
+  forbids at runtime anyway — and on `main()` definitions in decks without the
+  new `// clm: allow-main` header marker; warns on Jinja directives inside code
+  cells; reports cells mixing definitions and statements as info. Overloads
+  (parameter types + const-ness), template specializations, DE/EN-paired cells,
+  and `start`/`completed` pairs are correctly not flagged. Backed by the new
+  heuristic classifier `clm.slides.cpp_code_analysis`, validated against the
+  full CppCourses corpus (4,818 top-level items, 99.9% classified).
+
 ### Changed
 
 - `clm validate`: the `'completed' tag without a preceding 'start' cell`
@@ -255,6 +281,12 @@ and folded into this file by `scripts/collect_changelog.py` at release time.
   modes, so (1) companion narration reaches docker-built output and (2) the
   worker-side `execution_cache_hash` agrees with the host's again, restoring
   Stage-4 cache replay for voiceover decks built with docker workers.
+
+- **Quieter CLI startup.** The `Output targets: [...]` log line emitted by
+  `Course.from_spec` / `Course.process_all` was demoted from INFO to DEBUG, so
+  commands that don't reconfigure logging (e.g. `clm export …`, `clm calendar`)
+  no longer print it to the console. `clm build` now shows the target names as
+  a dimmed startup message instead.
 
 ## [1.11.0] - 2026-06-10
 
