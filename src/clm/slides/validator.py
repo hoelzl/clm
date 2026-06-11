@@ -146,6 +146,14 @@ _VOICEOVER_MARKER_RE = re.compile(r"^(?:#|//)\s*clm:\s*voiceover-coverage\s*$")
 ALLOW_MAIN_MARKER = "clm: allow-main"
 _ALLOW_MAIN_MARKER_RE = re.compile(r"^(?:#|//)\s*clm:\s*allow-main\s*$")
 
+# Header marker for decks whose code export legitimately cannot compile
+# outside the kernel (e.g. xeus-specific includes, deliberate error
+# demonstrations). The CMake generation (#333) marks such decks
+# EXCLUDE_FROM_ALL: still buildable explicitly, skipped by "build all" and
+# by the CI compile check.
+NO_COMPILE_MARKER = "clm: no-compile"
+_NO_COMPILE_MARKER_RE = re.compile(r"^(?:#|//)\s*clm:\s*no-compile\s*$")
+
 
 def _has_header_marker(text: str, comment_token: str, marker_re: re.Pattern[str]) -> bool:
     """Whether the deck's file header contains a ``clm:`` directive comment.
@@ -171,6 +179,11 @@ def has_voiceover_coverage_marker(text: str, comment_token: str = "#") -> bool:
 def has_allow_main_marker(text: str, comment_token: str = "#") -> bool:
     """Whether the deck whitelists its ``main()`` definition via its header (#331)."""
     return _has_header_marker(text, comment_token, _ALLOW_MAIN_MARKER_RE)
+
+
+def has_no_compile_marker(text: str, comment_token: str = "#") -> bool:
+    """Whether the deck opts out of the default code-export build (#333)."""
+    return _has_header_marker(text, comment_token, _NO_COMPILE_MARKER_RE)
 
 
 def _check_format(cells: list[Cell], file_path: str) -> list[Finding]:

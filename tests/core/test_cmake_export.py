@@ -141,6 +141,15 @@ class TestGenerateCmakelists:
     def test_msvc_utf8_flag(self):
         assert "/utf-8" in generate_cmakelists("p", ["01 A/01 X.cpp"])
 
+    def test_excluded_decks_are_exclude_from_all(self):
+        text = generate_cmakelists(
+            "p",
+            ["01 A/01 X.cpp", "01 A/02 Y.cpp"],
+            excluded={"01 A/02 Y.cpp"},
+        )
+        assert 'add_executable(s01_01_x "01 A/01 X.cpp")' in text
+        assert 'add_executable(s01_02_y EXCLUDE_FROM_ALL "01 A/02 Y.cpp")' in text
+
 
 # ---------------------------------------------------------------------------
 # Course integration
@@ -195,3 +204,31 @@ class TestWriteCmakeProjects:
         target = course_1.output_targets[0]
         target.output_root.mkdir(parents=True, exist_ok=True)
         assert write_cmake_projects(course_1) == []
+
+    def test_no_compile_marker_excludes_deck_from_all(self, tmp_path):
+        course = _make_cpp_course(tmp_path)
+        # Mark the "more" deck as not compilable outside the kernel.
+        deck_path = (
+            tmp_path
+            / "course"
+            / "slides"
+            / "module_100_test"
+            / "topic_110_more"
+            / "slides_more.cpp"
+        )
+        deck_path.write_text(
+            "// clm: no-compile\n" + deck_path.read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        target = course.output_targets[0]
+        _materialize_code_outputs(course, target)
+
+        written = write_cmake_projects(course)
+
+        assert written
+        for path in written:
+            text = path.read_text(encoding="utf-8")
+            more_line = next(line for line in text.splitlines() if "More" in line)
+            assert "EXCLUDE_FROM_ALL" in more_line
+            intro_line = next(line for line in text.splitlines() if "Intro" in line)
+            assert "EXCLUDE_FROM_ALL" not in intro_line
