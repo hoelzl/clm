@@ -66,6 +66,7 @@ _COMMANDS = "clm.cli.commands"
         # -------------------------------------------------------------
         # Infrastructure groups.
         # -------------------------------------------------------------
+        "cache": f"{_COMMANDS}.cache:cache_group",
         "cassette": f"{_COMMANDS}.cassette:cassette_group",
         "config": f"{_COMMANDS}.config:config",
         "db": f"{_COMMANDS}.db:db",

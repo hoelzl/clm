@@ -2547,6 +2547,46 @@ Manage CLM configuration files.
 | `config locate` | Show configuration file locations |
 | `config show` | Show current configuration values |
 
+### `clm cache` (CLM {version}+)
+
+Read-only build-cache inspection.
+
+#### `clm cache explain SOURCE_FILE --spec SPEC`
+
+Shows, for one slide source file, the exact cache-key components a build
+would compute (the deck text digest, every hashed topic sibling, the
+bundled-template fingerprint, the worker image identity, and the
+`evaluate=`/`skip-errors=` flags), the resulting `content_hash` /
+`execution_cache_hash` per output artifact, and the hit/miss state of every
+cache layer (`processed_files`, `executed_notebooks`, `results_cache`) with
+stored-at timestamps — ending in a per-artifact verdict: replays stored
+output, skips execution, or will execute (including the Recording-HTML
+producer-gate case where a stored result is bypassed to repopulate a cold
+execution cache).
+
+Use it to answer "why did this deck replay stale output?" / "why is
+everything re-executing?" in one screen. The HTTP-replay cassette entry is
+shown but marked excluded (its bytes are deliberately not part of the key).
+
+| Option | Description |
+|--------|-------------|
+| `--spec PATH` | Course spec XML that builds this file (required) |
+| `--data-dir PATH` | Course data directory (default: inferred from the spec) |
+| `--output-dir PATH` | Output root the build uses — must match the build's for `results_cache` lookups (default: same fallback as `clm build`) |
+| `-L, --lang LANG` | Limit to output language(s) |
+| `--kind KIND` | Limit to output kind(s) |
+| `--format FORMAT` | Limit to output format(s) |
+| `--json` | Output as JSON |
+
+Run it with the same global `--cache-db-path` / `--jobs-db-path` as your
+builds, or the lookups miss spuriously. Entirely read-only: databases are
+opened in read-only mode and no output directories are created.
+
+```bash
+clm cache explain slides/.../slides_shared_ptr.cpp --spec cpp-einsteiger.xml
+clm cache explain slides_intro.py --spec course.xml -L de --format html --json
+```
+
 ### `clm db`
 
 Database management commands.
