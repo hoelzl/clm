@@ -123,12 +123,15 @@ def _stub_translator(monkeypatch, *, default: str = "# ## Translated\n#\n# - poi
     )
 
 
-def _stub_verifier(monkeypatch, *, default: bool = True) -> None:
+def _stub_verifier(
+    monkeypatch, *, default: bool = True, verdicts: dict[int, bool] | None = None
+) -> None:
     """Make a provider look configured and stub the cold-start verifier (#216 §12).
 
     Patches ``has_openrouter_api_key`` to True (so ``provider_available`` is set and a
     cold pair becomes a pending mint candidate) and the ``OpenRouterCorrespondenceVerifier``
     factory to a deterministic static verifier, so the mint path runs offline.
+    ``verdicts`` overrides the verdict per pair index (#231 tests).
     """
     from clm.cli.commands.slides import sync as cmd
     from clm.slides.sync_recover import StaticCorrespondenceVerifier
@@ -137,7 +140,7 @@ def _stub_verifier(monkeypatch, *, default: bool = True) -> None:
     monkeypatch.setattr(
         cmd,
         "OpenRouterCorrespondenceVerifier",
-        lambda **_k: StaticCorrespondenceVerifier(default=default),
+        lambda **_k: StaticCorrespondenceVerifier(verdicts=verdicts or {}, default=default),
     )
 
 
@@ -1516,6 +1519,46 @@ class TestDryRunApplyParity:
         en_after = en_path.read_text(encoding="utf-8")
         assert 'slide_id="' in de_after  # both halves now carry minted ids
         assert 'slide_id="' in en_after
+
+    def test_denied_cold_pair_reports_which_pairs_failed(
+        self, cli_runner: CliRunner, tmp_path: Path, monkeypatch
+    ):
+        # #231: a deferral is not a bare count — the output names the rejected
+        # pair(s) with both headings and a hint, so the author can locate the
+        # DE/EN divergence the verifier caught.
+        de = _idless_slide("de", "# ## Einleitung") + _idless_slide("de", "# ## Variablen")
+        en = _idless_slide("en", "# ## Introduction") + _idless_slide("en", "# ## Variables")
+        de_path, en_path = _write_pair(tmp_path, de, en, stem="colddenied")
+        _stub_verifier(monkeypatch, verdicts={1: False}, default=True)
+
+        applied = cli_runner.invoke(slides_sync_cmd, [str(de_path), str(en_path), "--no-cache"])
+        assert applied.exit_code == 1, _combined(applied)  # deferred → review
+        assert "deferred mint" in applied.output
+        assert "pair 1" in applied.output
+        assert "Variablen" in applied.output
+        assert "Variables" in applied.output
+        assert "validate" in applied.output  # the next-step hint
+        # Nothing was written.
+        assert 'slide_id="' not in de_path.read_text(encoding="utf-8")
+
+    def test_denied_cold_pair_json_carries_deferral_detail(
+        self, cli_runner: CliRunner, tmp_path: Path, monkeypatch
+    ):
+        de = _idless_slide("de", "# ## Einleitung") + _idless_slide("de", "# ## Variablen")
+        en = _idless_slide("en", "# ## Introduction") + _idless_slide("en", "# ## Variables")
+        de_path, en_path = _write_pair(tmp_path, de, en, stem="coldjson")
+        _stub_verifier(monkeypatch, verdicts={0: False}, default=True)
+
+        r = cli_runner.invoke(slides_sync_cmd, [str(de_path), str(en_path), "--no-cache", "--json"])
+        data = json.loads(r.output[r.output.index("{") : r.output.rindex("}") + 1])
+        deferrals = data["apply"]["cold_deferrals"]
+        assert len(deferrals) == 1
+        assert deferrals[0]["kind"] == "mint"
+        assert deferrals[0]["reason"] == "rejected-pairs"
+        rejected = deferrals[0]["rejected_pairs"]
+        assert [p["index"] for p in rejected] == [0]
+        assert "Einleitung" in rejected[0]["de_heading"]
+        assert "Introduction" in rejected[0]["en_heading"]
 
     def test_half_idd_pair_adopts_when_verified(
         self, cli_runner: CliRunner, tmp_path: Path, monkeypatch

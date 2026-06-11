@@ -128,9 +128,48 @@ __all__ = [
     "DECISION_EN_WINS",
     "DECISION_SKIP",
     "ApplyResult",
+    "ColdDeferralDetail",
+    "RejectedPair",
     "apply_plan",
     "content_index",
 ]
+
+
+@dataclass(frozen=True)
+class RejectedPair:
+    """A DE/EN slide pair the correspondence verifier judged non-corresponding.
+
+    Carries exactly what the verifier saw — the pair index and both
+    headings — so the operator can locate the divergence (#231).
+    """
+
+    index: int
+    de_heading: str
+    en_heading: str
+
+
+@dataclass(frozen=True)
+class ColdDeferralDetail:
+    """Why a cold-start ``mint``/``adopt`` wrote nothing (#231).
+
+    ``reason`` is one of:
+
+    - ``"rejected-pairs"`` — the verifier returned "no" for
+      ``rejected_pairs`` (a genuine DE/EN content divergence is the usual
+      cause: crossed translations, a missing/merged cell shifting the
+      alignment);
+    - ``"safe-abort"`` — verification failed (transport/parse/validation),
+      so no verdict exists;
+    - ``"no-verifier"`` — no correspondence verifier was configured
+      (``--no-verify-cold-pairs`` or no API key);
+    - ``"plan-errors"`` — the plan carried classifier errors (the write
+      boundary's defense in depth);
+    - ``"race"`` — the files changed between candidacy and apply.
+    """
+
+    kind: str  # "mint" | "adopt"
+    reason: str
+    rejected_pairs: tuple[RejectedPair, ...] = ()
 
 
 @dataclass
@@ -155,6 +194,9 @@ class ApplyResult:
     deferred: int = 0  # conflict (or moves/adds declined this pass)
     watermark_recorded: bool = False
     errors: list[str] = field(default_factory=list)
+    # Per-deferral detail for cold-start mint/adopt (#231) — why the pair
+    # was refused, incl. the rejected SlidePair headings on a verifier "no".
+    cold_deferrals: list[ColdDeferralDetail] = field(default_factory=list)
 
     @property
     def applied(self) -> int:
@@ -1086,15 +1128,20 @@ def _apply_cold_mint(
     the guard keeps the short-circuit honest if one ever reaches here).
     """
     if plan.has_errors:
-        result.deferred += 1
+        _defer_cold(result, "mint", "plan-errors")
         return
     pairs = _build_slide_pairs(plan.de_path, plan.en_path)
     if verifier is None:
-        result.deferred += 1  # no verifier (e.g. --no-verify): pending → refuse
+        _defer_cold(result, "mint", "no-verifier")  # e.g. --no-verify: pending → refuse
         return
     verdicts = _resolve_correspondence(verifier, correspondence_cache, pairs)
-    if verdicts is None or not all(verdicts.get(i, False) for i in range(len(pairs))):
-        result.deferred += 1  # a "no" or a safe-abort → refuse the pair (never a wrong id)
+    if verdicts is None:
+        _defer_cold(result, "mint", "safe-abort")  # never a wrong id
+        return
+    if not all(verdicts.get(i, False) for i in range(len(pairs))):
+        # A "no" on specific pairs → refuse, and record which pairs failed
+        # so the operator can find the DE/EN divergence (#231).
+        _defer_cold(result, "mint", "rejected-pairs", _rejected_pairs(pairs, verdicts))
         return
 
     from clm.slides.assign_ids import AssignOptions, assign_ids_in_split_pair
@@ -1103,12 +1150,34 @@ def _apply_cold_mint(
         plan.de_path, plan.en_path, AssignOptions(accept_content_derived=True)
     )
     if minted is None:  # not unifiable after all (a race vs candidacy) → refuse
-        result.deferred += 1
+        _defer_cold(result, "mint", "race")
         return
     result.applied_mint += 1
     if watermark_cache is not None:
         _record_watermark(watermark_cache, plan.de_path, plan.en_path)
         result.watermark_recorded = True
+
+
+def _defer_cold(
+    result: ApplyResult,
+    kind: str,
+    reason: str,
+    rejected: tuple[RejectedPair, ...] = (),
+) -> None:
+    """Count a cold-start deferral and record its actionable detail (#231)."""
+    result.deferred += 1
+    result.cold_deferrals.append(
+        ColdDeferralDetail(kind=kind, reason=reason, rejected_pairs=rejected)
+    )
+
+
+def _rejected_pairs(pairs: list[SlidePair], verdicts: dict[int, bool]) -> tuple[RejectedPair, ...]:
+    """The pairs the verifier judged non-corresponding, with their headings."""
+    return tuple(
+        RejectedPair(index=i, de_heading=p.de_heading, en_heading=p.en_heading)
+        for i, p in enumerate(pairs)
+        if not verdicts.get(i, False)
+    )
 
 
 def _slide_cells(path: Path, lang: str) -> list[Cell]:
@@ -1224,21 +1293,24 @@ def _apply_cold_adopt(
     guard already declines such a plan; this defends the write boundary too.
     """
     if plan.has_errors:
-        result.deferred += 1
+        _defer_cold(result, "adopt", "plan-errors")
         return
     adopt = next(p for p in plan.proposals if p.kind == "adopt")
     authority = (adopt.direction or "en->de").split("->")[0]
     pairs = _build_slide_pairs(plan.de_path, plan.en_path)
     if verifier is None:
-        result.deferred += 1  # no verifier (e.g. --no-verify): pending → refuse
+        _defer_cold(result, "adopt", "no-verifier")  # e.g. --no-verify: pending → refuse
         return
     verdicts = _resolve_correspondence(verifier, correspondence_cache, pairs)
-    if verdicts is None or not all(verdicts.get(i, False) for i in range(len(pairs))):
-        result.deferred += 1  # a "no" or a safe-abort → refuse the pair (never a wrong id)
+    if verdicts is None:
+        _defer_cold(result, "adopt", "safe-abort")  # never a wrong id
+        return
+    if not all(verdicts.get(i, False) for i in range(len(pairs))):
+        _defer_cold(result, "adopt", "rejected-pairs", _rejected_pairs(pairs, verdicts))
         return
     stamped = _adopt_ids_in_split_pair(plan.de_path, plan.en_path, authority)
     if stamped == 0:  # the streams drifted since candidacy (a race) → refuse
-        result.deferred += 1
+        _defer_cold(result, "adopt", "race")
         return
     result.applied_adopt += 1
     if watermark_cache is not None:
