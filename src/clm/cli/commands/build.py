@@ -1837,6 +1837,22 @@ async def main_build(
         except Exception as e:
             logger.warning("Failed to write provenance manifest(s): %s", e, exc_info=True)
 
+    # CMake projects for the C++ code export (issue #333, phase 2): one
+    # CMakeLists.txt per built code-output directory, one executable target
+    # per deck. Regenerable convenience files — like the provenance manifest,
+    # this must never fail an otherwise successful build. Skipped for
+    # --snapshot / --verify-against builds via the same gate as the manifest
+    # so verification trees aren't polluted with extra files.
+    if summary is not None and _should_emit_provenance_manifest(summary, config):
+        from clm.core.cmake_export import write_cmake_projects
+
+        try:
+            written_cmake = write_cmake_projects(course)
+            if written_cmake:
+                logger.info("Wrote %d CMake project file(s)", len(written_cmake))
+        except Exception as e:
+            logger.warning("Failed to write CMake project file(s): %s", e, exc_info=True)
+
     return summary
 
 
