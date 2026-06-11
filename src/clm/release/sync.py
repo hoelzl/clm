@@ -125,18 +125,49 @@ def scan_skeleton(*, manifest: dict[str, Any], dest_root: Path) -> SkeletonScan:
     return SkeletonScan(missing=tuple(missing), present=tuple(present))
 
 
-def topic_path_overlap(manifest_a: dict[str, Any], manifest_b: dict[str, Any]) -> tuple[str, ...]:
-    """Destination-relative paths claimed by a topic in *both* manifests.
+@frozen
+class TopicOverlap:
+    """Topic-owned paths claimed by *both* manifests of a shared destination.
 
-    Streams sharing one destination (issue #325) must own disjoint topic
-    files — only skeleton paths may overlap (byte-identical builds of the
-    same source). Any topic-owned overlap means the streams' output targets
-    produce colliding kinds and a sync would clobber the other stream's
-    frozen content; the sync preflight refuses it.
+    ``conflicting`` paths carry **different** content in the two builds —
+    promoting either stream would clobber the other stream's released bytes,
+    so the sync preflight refuses them. ``identical`` paths are byte-equal in
+    both builds (a topic's *static* files — project scaffolding, data — are
+    copied verbatim into every target that builds the topic, so they
+    legitimately appear in both streams): copying them is idempotent
+    regardless of sync order, so they are allowed and only surfaced as a
+    note. Notebook outputs stay disjoint by kind (Code-Along/Partial vs
+    Completed), so a notebook path showing up here at all means colliding
+    target kinds — its content differs and it lands in ``conflicting``.
     """
-    a = {e["path"] for e in manifest_a.get("files", []) if e.get("topic_id") is not None}
-    b = {e["path"] for e in manifest_b.get("files", []) if e.get("topic_id") is not None}
-    return tuple(sorted(a & b))
+
+    conflicting: tuple[str, ...] = ()
+    identical: tuple[str, ...] = ()
+
+
+def topic_path_overlap(manifest_a: dict[str, Any], manifest_b: dict[str, Any]) -> TopicOverlap:
+    """Classify the topic-owned paths claimed by both manifests (issue #325).
+
+    A shared path counts as ``identical`` only when **both** entries carry a
+    ``content_hash`` and they match; an absent hash cannot prove anything, so
+    it is treated as ``conflicting``. Hash-different paths mean the streams'
+    builds disagree about the file's content — typically the two source
+    targets were built from different states; rebuild both and re-sync.
+    """
+    a = {
+        e["path"]: e.get("content_hash")
+        for e in manifest_a.get("files", [])
+        if e.get("topic_id") is not None
+    }
+    b = {
+        e["path"]: e.get("content_hash")
+        for e in manifest_b.get("files", [])
+        if e.get("topic_id") is not None
+    }
+    shared = sorted(set(a) & set(b))
+    identical = tuple(p for p in shared if a[p] and a[p] == b[p])
+    conflicting = tuple(p for p in shared if not (a[p] and a[p] == b[p]))
+    return TopicOverlap(conflicting=conflicting, identical=identical)
 
 
 @frozen

@@ -108,12 +108,12 @@ TOPIC_PATH = "Sec/01 Intro.ipynb"
 SKELETON_PATH = "shared/data.csv"
 
 
-def _manifest(*, topic_path=TOPIC_PATH, skeleton_text="skeleton v1"):
+def _manifest(*, topic_path=TOPIC_PATH, skeleton_text="skeleton v1", topic_hash="sha256:a"):
     return {
         "version": 1,
         "source_commit": "abc",
         "files": [
-            {"path": topic_path, "topic_id": "intro", "content_hash": "sha256:a"},
+            {"path": topic_path, "topic_id": "intro", "content_hash": topic_hash},
             {"path": SKELETON_PATH, "topic_id": None, "content_hash": _sha(skeleton_text)},
         ],
     }
@@ -258,13 +258,31 @@ class TestTopicPathOverlap:
     def test_disjoint_topic_paths_have_no_overlap(self):
         a = _manifest(topic_path="Sec/01 Intro-CodeAlong.ipynb")
         b = _manifest(topic_path="Sec/01 Intro-Completed.ipynb")
-        assert topic_path_overlap(a, b) == ()
+        overlap = topic_path_overlap(a, b)
+        assert overlap.conflicting == ()
+        assert overlap.identical == ()
 
-    def test_shared_topic_path_is_reported_and_skeleton_overlap_ignored(self):
-        a = _manifest()
-        b = _manifest()
-        # Both manifests claim TOPIC_PATH for a topic and share the skeleton.
-        assert topic_path_overlap(a, b) == (TOPIC_PATH,)
+    def test_hash_differing_shared_path_conflicts_and_skeleton_is_ignored(self):
+        a = _manifest(topic_hash="sha256:a")
+        b = _manifest(topic_hash="sha256:b")
+        overlap = topic_path_overlap(a, b)
+        assert overlap.conflicting == (TOPIC_PATH,)
+        assert overlap.identical == ()
+
+    def test_byte_identical_shared_path_is_allowed(self):
+        """A topic's static files (project scaffolding, data) are built
+        verbatim into every target — identical bytes may be claimed by both
+        streams; copy order does not matter."""
+        overlap = topic_path_overlap(_manifest(), _manifest())
+        assert overlap.conflicting == ()
+        assert overlap.identical == (TOPIC_PATH,)
+
+    def test_missing_hash_cannot_prove_identity_so_it_conflicts(self):
+        a = _manifest(topic_hash=None)
+        b = _manifest(topic_hash=None)
+        overlap = topic_path_overlap(a, b)
+        assert overlap.conflicting == (TOPIC_PATH,)
+        assert overlap.identical == ()
 
 
 # ---------------------------------------------------------------------------
@@ -312,9 +330,15 @@ def _write_spec(tmp_path: Path, body: str = SPEC_SHARED_DEST) -> Path:
     return spec_file
 
 
-def _write_built_source(root: Path, *, topic_path: str, skeleton_text: str = "skeleton v1"):
+def _write_built_source(
+    root: Path,
+    *,
+    topic_path: str,
+    skeleton_text: str = "skeleton v1",
+    topic_hash: str = "sha256:a",
+):
     root.mkdir(parents=True, exist_ok=True)
-    manifest = _manifest(topic_path=topic_path, skeleton_text=skeleton_text)
+    manifest = _manifest(topic_path=topic_path, skeleton_text=skeleton_text, topic_hash=topic_hash)
     (root / MANIFEST_FILENAME).write_text(json.dumps(manifest), encoding="utf-8")
     _materialize(root, manifest, skeleton_text=skeleton_text)
 
@@ -379,12 +403,19 @@ class TestSharedDestinationCli:
         solutions = FrozenManifest.load(dest / frozen_manifest_filename("solutions"), channel="?")
         assert solutions.skeleton_frozen is True
 
-    def test_overlapping_topic_outputs_are_refused(self, tmp_path):
+    def test_conflicting_topic_outputs_are_refused(self, tmp_path):
         runner = CliRunner()
         spec_file = _write_spec(tmp_path)
-        # Both targets (mis)build the same topic path -> would clobber.
-        _write_built_source(tmp_path / "output" / "shared", topic_path="Sec/01 Intro.ipynb")
-        _write_built_source(tmp_path / "output" / "completed", topic_path="Sec/01 Intro.ipynb")
+        # Both targets claim the same topic path with DIFFERENT content
+        # (e.g. colliding kinds, or targets built from different states).
+        _write_built_source(
+            tmp_path / "output" / "shared", topic_path="Sec/01 Intro.ipynb", topic_hash="sha256:a"
+        )
+        _write_built_source(
+            tmp_path / "output" / "completed",
+            topic_path="Sec/01 Intro.ipynb",
+            topic_hash="sha256:b",
+        )
 
         sync = _release_and_sync(runner, spec_file, "materials/2026-04")
         assert sync.exit_code != 0
@@ -392,6 +423,27 @@ class TestSharedDestinationCli:
         assert "Sec/01 Intro.ipynb" in sync.output
         # Nothing was promoted.
         assert not (tmp_path / "release" / "combined" / "2026-04").exists()
+
+    def test_byte_identical_shared_static_files_sync_with_a_note(self, tmp_path):
+        """A topic's static files (e.g. project scaffolding) are built
+        verbatim into both targets — identical bytes must not block the sync
+        (the real AZAV deployment shares 100+ such files)."""
+        runner = CliRunner()
+        spec_file = _write_spec(tmp_path)
+        _write_built_source(
+            tmp_path / "output" / "shared", topic_path="Projekte/scaffold.py", topic_hash="sha256:s"
+        )
+        _write_built_source(
+            tmp_path / "output" / "completed",
+            topic_path="Projekte/scaffold.py",
+            topic_hash="sha256:s",
+        )
+
+        sync = _release_and_sync(runner, spec_file, "materials/2026-04")
+        assert sync.exit_code == 0, sync.output
+        assert "byte-identically" in sync.output
+        dest = tmp_path / "release" / "combined" / "2026-04"
+        assert (dest / "Projekte/scaffold.py").is_file()
 
     def test_unbuilt_sharer_is_noted_and_skipped(self, tmp_path):
         runner = CliRunner()

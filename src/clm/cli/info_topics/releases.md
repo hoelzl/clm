@@ -191,12 +191,16 @@ How the pieces interact:
 - **Per-stream freeze records.** Each stream keeps its own
   `.clm-released.<stream>.json`, so materials releasing a topic never freezes
   it for solutions (and `--refreeze` stays scoped to one stream's files).
-- **Disjoint outputs required.** The streams' source targets must build
-  disjoint topic files (e.g. code-along/partial kinds vs completed kinds —
-  they land in different subtrees). `clm release sync` cross-checks the
-  source manifests of all streams sharing the destination and refuses to
-  promote if a topic-owned path is claimed twice. A sharer that is not built
-  yet is skipped with a note.
+- **No conflicting outputs.** The streams' notebook outputs must be disjoint
+  (e.g. code-along/partial kinds vs completed kinds — they land in different
+  subtrees). A topic's *static* files (project scaffolding, data) are built
+  verbatim into every target and may be claimed by both streams as long as
+  they are **byte-identical** — whichever stream releases the owning topic
+  first delivers them. `clm release sync` cross-checks the source manifests
+  of all streams sharing the destination and refuses to promote when a
+  shared topic-owned path has *differing* content (usually: the targets were
+  built from different source states — rebuild both). A sharer that is not
+  built yet is skipped with a note.
 - **Skeleton: presence-as-frozen.** A skeleton file already present in the
   destination is kept, never overwritten — the second stream's first sync
   copies only the skeleton files the first one didn't deliver. Evergreen

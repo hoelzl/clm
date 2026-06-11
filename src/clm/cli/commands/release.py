@@ -128,14 +128,18 @@ def _check_shared_destination_overlap(
 ) -> None:
     """Sync preflight for shared destinations (issue #325).
 
-    When another stream's channel releases into the same destination, its
-    source manifest and ours must claim **disjoint** topic files — skeleton
-    overlap is fine (presence-as-frozen keeps the first copy), but a
-    topic-owned path in both manifests means the streams' output targets
-    collide and a sync would clobber the other stream's frozen content. A
-    sharer whose source target has no manifest yet (not built) is skipped
-    with a note. *manifest* is this sync's already language-restricted
-    manifest, so paths compare in destination-relative form.
+    When another stream's channel releases into the same destination, the
+    topic-owned paths the two source manifests both claim must be
+    **byte-identical** (a topic's static files — project scaffolding, data —
+    are legitimately built into every target verbatim; copy order then does
+    not matter). A shared path whose content *differs* between the builds
+    would clobber the other stream's frozen content, so the sync is refused —
+    typically the targets were built from different source states; rebuild
+    both. Skeleton overlap is always fine (presence-as-frozen keeps the
+    first copy). A sharer whose source target has no manifest yet (not
+    built) is skipped with a note. *manifest* is this sync's already
+    language-restricted manifest, so paths compare in destination-relative
+    form.
     """
     spec = CourseSpec.from_file(spec_file)
     block, _ = spec.resolve_release_channel(channel_ref)
@@ -164,15 +168,25 @@ def _check_shared_destination_overlap(
                 other_manifest, other_channel.lang, lang_dir
             )
         overlap = topic_path_overlap(manifest, other_manifest)
-        if overlap:
-            examples = ", ".join(overlap[:5]) + (", …" if len(overlap) > 5 else "")
+        if overlap.identical:
+            click.echo(
+                f"Note: {len(overlap.identical)} topic-owned file(s) are built "
+                f"byte-identically by '{channel_ref}' and '{other_ref}' (shared "
+                f"static content, e.g. project scaffolding); whichever stream "
+                f"releases the owning topic first delivers them."
+            )
+        if overlap.conflicting:
+            paths = overlap.conflicting
+            examples = ", ".join(paths[:5]) + (", …" if len(paths) > 5 else "")
             raise click.ClickException(
-                f"Refusing to sync: {len(overlap)} topic-owned file(s) are claimed "
-                f"by both '{channel_ref}' and '{other_ref}', which share the "
-                f"destination {dest_path} — promoting would clobber the other "
-                f"stream's released content: {examples}. Streams sharing a "
-                f"destination must build disjoint outputs (e.g. code-along/partial "
-                f"vs completed kinds)."
+                f"Refusing to sync: {len(paths)} topic-owned file(s) are claimed "
+                f"by both '{channel_ref}' and '{other_ref}' with DIFFERENT "
+                f"content, which share the destination {dest_path} — promoting "
+                f"would clobber the other stream's released content: {examples}. "
+                f"Streams sharing a destination must build disjoint notebook "
+                f"outputs (e.g. code-along/partial vs completed kinds), and "
+                f"shared static files must come from the same build — rebuild "
+                f"both source targets and re-run."
             )
 
 
