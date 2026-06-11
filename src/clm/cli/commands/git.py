@@ -52,6 +52,10 @@ class OutputRepo:
         self.language = language
         self.remote_url = remote_url
         self.source = source
+        # Other channels releasing into this same destination (issue #325);
+        # filled in by _dedupe_shared_destinations so a shared repo is visited
+        # once but its display still names every stream it serves.
+        self.shared_refs: list[str] = []
 
     @property
     def git_dir(self) -> Path:
@@ -64,9 +68,10 @@ class OutputRepo:
     @property
     def display_name(self) -> str:
         # Channel repos carry no language, so drop the empty trailing segment.
-        if not self.language:
-            return self.target_name
-        return f"{self.target_name}/{self.language}"
+        name = self.target_name if not self.language else f"{self.target_name}/{self.language}"
+        if self.shared_refs:
+            name += " (+ " + ", ".join(self.shared_refs) + ")"
+        return name
 
     def has_remote(self) -> bool:
         """Check if this repo has a remote configured."""
@@ -454,10 +459,39 @@ def _select_repos(
                 f"--channel/--all-channels is not available for this course."
             )
         try:
-            return find_release_channel_repos(spec_file, channel or None)
+            repos = find_release_channel_repos(spec_file, channel or None)
         except CourseSpecError as e:
             raise click.ClickException(str(e)) from None
+        return _dedupe_shared_destinations(repos)
     return find_output_repos(spec_file, target)
+
+
+def _dedupe_shared_destinations(repos: list[OutputRepo]) -> list[OutputRepo]:
+    """Visit a destination shared by several streams only once (issue #325).
+
+    Git operations act on the repository, not the release stream, so channels
+    of different streams releasing into the same working tree collapse into a
+    single entry. The first channel (spec declaration order) keeps the entry
+    and the derived remote URL — only ``clm git init`` consumes the
+    derivation, and a shared repo can only have one origin; a differing
+    derivation from a collapsed channel is surfaced as a note.
+    """
+    by_path: dict[Path, OutputRepo] = {}
+    for repo in repos:
+        kept = by_path.get(repo.path.resolve())
+        if kept is None:
+            by_path[repo.path.resolve()] = repo
+            continue
+        kept.shared_refs.append(repo.target_name)
+        if repo.remote_url and repo.remote_url != kept.remote_url:
+            click.echo(
+                f"Note: channels {kept.target_name!r} and {repo.target_name!r} share "
+                f"the destination {kept.path} but derive different remote URLs; "
+                f"using the first ({kept.remote_url}). Set the repo's origin "
+                f"explicitly if another URL is intended.",
+                err=True,
+            )
+    return list(by_path.values())
 
 
 def _stage_all_excluding_sidecars(repo_path: Path) -> None:

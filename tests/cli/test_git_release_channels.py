@@ -280,6 +280,21 @@ class TestSelectReposGuards:
         # private build input — default enumeration skips it (issue #292).
         assert repos == []
 
+    def test_all_channels_visits_a_shared_destination_once(self, tmp_path: Path):
+        """Channels of different streams releasing into one working tree are
+        one repo to ``clm git`` (issue #325)."""
+        shared = SPEC_TWO_STREAMS.replace(
+            "./release/solutions/2026-04", "./release/materials/2026-04"
+        )
+        spec_file = _write_spec(tmp_path, shared)
+        repos = _select_repos(spec_file, target=None, channel=None, all_channels=True)
+        assert [r.target_name for r in repos] == ["materials/2026-04", "solutions/2026-10"]
+        merged = repos[0]
+        assert merged.shared_refs == ["solutions/2026-04"]
+        assert merged.display_name == "materials/2026-04 (+ solutions/2026-04)"
+        # The first stream's URL derivation wins for the shared repo.
+        assert merged.remote_url == "https://github.com/Org/ml-course-2026-04-materials"
+
 
 # ---------------------------------------------------------------------------
 # distribute="false" / release-source auto-exclusion (issue #292)

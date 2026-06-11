@@ -22,7 +22,7 @@ The workflow has four moving parts:
 | **Channel** | One student cohort = one git repository | declared in `<release-channels>` in the spec |
 | **Ledger** | Plain-text list of released topic ids (one per line) | a file in your **course source** repo (e.g. `release/jan.txt`) |
 | **Provenance manifest** | Maps each built output file → its owning topic | `.clm-manifest.json`, written by `clm build` (on by default) |
-| **Frozen manifest** | The per-cohort freeze record (what was promoted, and the bytes' hash) | `.clm-released.json`, committed inside the cohort repo |
+| **Frozen manifest** | The per-cohort, per-stream freeze record (what was promoted, and the bytes' hash) | `.clm-released.<stream>.json` (legacy `.clm-released.json` for a single unnamed stream), committed inside the cohort repo |
 
 The **ledger** is the volatile state — it grows every week as you release more
 topics — and it deliberately lives *outside* the spec so the spec stays
@@ -99,8 +99,8 @@ clm release sync course.xml --channel jan --push -m "Release functions, lists"
 ```
 
 `release sync` copies only the released topics' bytes (located via the
-provenance manifest) into the cohort working tree, records them in
-`.clm-released.json`, and — with `--push` — commits and pushes the cohort repo
+provenance manifest) into the cohort working tree, records them in the frozen
+manifest, and — with `--push` — commits and pushes the cohort repo
 using `clm git`'s machinery. A topic that is already frozen is **never**
 re-copied, so re-running `sync` is safe and only ever adds new releases.
 
@@ -178,6 +178,36 @@ warned about and ignored — released topic content still changes only via
 `--refreeze`. Syncing never deletes; removing an evergreen file from the
 source just stops refreshing it.
 
+## Several streams, one cohort repository
+
+A course can declare several `<release-channels>` blocks — one per release
+*stream* (e.g. `materials` fed by a code-along/partial target and `solutions`
+fed by a `completed` target). Channels of **different** streams may point at
+the **same `path`**: both streams then release into a single repository
+students pull from, each on its own ledger and timeline:
+
+```xml
+<release-channels name="materials" source-target="shared">
+    <channel name="2026-04-de" lang="de" path="cohorts/2026-04/combined-de"
+             ledger="release/materials-2026-04-de.txt"/>
+</release-channels>
+<release-channels name="solutions" source-target="solutions">
+    <channel name="2026-04-de" lang="de" path="cohorts/2026-04/combined-de"
+             ledger="release/solutions-2026-04-de.txt"/>
+</release-channels>
+```
+
+Each stream keeps its own frozen manifest (`.clm-released.<stream>.json`), so
+releasing a topic's materials never freezes its solutions and `--refreeze`
+stays scoped to one stream. The streams' source targets must build **disjoint**
+topic outputs (`clm release sync` cross-checks and refuses overlap), channels
+sharing a path must agree on `lang`, and skeleton files already present in the
+destination are kept rather than overwritten — sync both streams after the
+same `clm build` so evergreen files don't ping-pong between builds. See
+`clm info releases` ("Shared destination") for the full rules and the
+trade-offs vs separate repos, and `clm info migration` for merging the repos
+of a running cohort.
+
 ## How `clm git --channel` differs from ordinary `clm git`
 
 The regular `clm git` subcommands operate on your `<output-targets>` repos.
@@ -193,8 +223,10 @@ clm git sync course.xml --channel jan -m "..."  # commit + push one cohort
 `clm release sync` is what *populates* a cohort working tree; `clm git --channel`
 is what *versions and distributes* it. (`release sync --push` simply chains the
 two for convenience.) The private `.clm-manifest.json` is always kept out of the
-distributed repos; the per-cohort `.clm-released.json` freeze record is committed
-normally.
+distributed repos; the per-cohort freeze records (`.clm-released*.json`) are
+committed normally. A destination shared by several streams is one repo to
+`clm git`: `--all-channels` visits it once, and `clm git reset` on it discards
+the *other* stream's uncommitted promotions too.
 
 ## See also
 

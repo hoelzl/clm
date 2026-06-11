@@ -156,12 +156,44 @@ class TestMultiStreamValidation:
         errors = _spec(block, TWO_STREAM_TARGETS).validate()
         assert any("source-target" in e for e in errors)
 
-    def test_shared_dest_path_across_streams_rejected(self):
+    def test_shared_dest_path_across_streams_is_valid(self):
+        """Two streams may release into one destination repo (issue #325)."""
         shared_path = TWO_STREAMS.replace(
             "./release/solutions/2026-04", "./release/materials/2026-04"
         )
+        assert _spec(shared_path, TWO_STREAM_TARGETS).validate() == []
+
+    def test_shared_dest_detection_normalizes_paths(self):
+        """`./x` and `x` are the same destination — lang disagreement is caught."""
+        shared_path = TWO_STREAMS.replace(
+            'name="2026-04" path="./release/solutions/2026-04"',
+            'name="2026-04" lang="de" path="release/materials/2026-04"',
+        )
         errors = _spec(shared_path, TWO_STREAM_TARGETS).validate()
-        assert any("share the destination path" in e for e in errors)
+        assert any("must agree on lang" in e for e in errors)
+
+    def test_shared_dest_path_within_one_stream_rejected(self):
+        shared_path = TWO_STREAMS.replace(
+            "./release/materials/2026-10", "./release/materials/2026-04"
+        )
+        errors = _spec(shared_path, TWO_STREAM_TARGETS).validate()
+        assert any("within one release stream" in e for e in errors)
+
+    def test_shared_dest_with_different_lang_rejected(self):
+        shared_path = TWO_STREAMS.replace(
+            "./release/solutions/2026-04", "./release/materials/2026-04"
+        ).replace(
+            '<channel name="2026-04" path="./release/materials/2026-04" ledger="release/materials-2026-04.txt"/>',
+            '<channel name="2026-04" lang="de" path="./release/materials/2026-04" ledger="release/materials-2026-04.txt"/>',
+        )
+        errors = _spec(shared_path, TWO_STREAM_TARGETS).validate()
+        assert any("must agree on lang" in e for e in errors)
+
+    def test_shared_dest_with_same_lang_is_valid(self):
+        shared_path = TWO_STREAMS.replace(
+            "./release/solutions/2026-04", "./release/materials/2026-04"
+        ).replace('name="2026-04" path', 'name="2026-04" lang="de" path')
+        assert _spec(shared_path, TWO_STREAM_TARGETS).validate() == []
 
     def test_shared_ledger_across_streams_rejected(self):
         shared_ledger = TWO_STREAMS.replace(

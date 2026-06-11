@@ -11,7 +11,11 @@ from click.testing import CliRunner
 
 from clm.cli.commands.release import release_group
 from clm.core.provenance_manifest import MANIFEST_FILENAME
-from clm.release.frozen_manifest import FROZEN_FILENAME, FrozenManifest
+from clm.release.frozen_manifest import (
+    FROZEN_FILENAME,
+    FrozenManifest,
+    frozen_manifest_filename,
+)
 from clm.release.ledger import Ledger
 
 SPEC = Path(__file__).parent.parent / "test-data" / "course-specs" / "test-spec-1.xml"
@@ -270,9 +274,13 @@ def test_two_streams_release_independently_from_their_own_sources(tmp_path):
     solutions_dest = course_root / "release" / "solutions" / "2026-04"
     assert (solutions_dest / "Sec/01 Intro.ipynb").is_file()
 
-    # Each destination froze under its canonical stream/channel address.
-    frozen = FrozenManifest.load(solutions_dest / FROZEN_FILENAME, channel="?")
+    # Each destination froze under its canonical stream/channel address, in
+    # the stream's own frozen-manifest file (issue #325).
+    frozen = FrozenManifest.load(
+        solutions_dest / frozen_manifest_filename("solutions"), channel="?"
+    )
     assert frozen.channel == "solutions/2026-04"
+    assert not (solutions_dest / FROZEN_FILENAME).exists()
 
 
 def test_ambiguous_bare_channel_is_a_clear_error(tmp_path):

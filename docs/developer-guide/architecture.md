@@ -1149,7 +1149,9 @@ No optional extras — pure stdlib + `attrs`. Cohorts are declared in the spec's
 plain-text ledger, never in the spec.
 
 - `ledger` — read/append the per-channel released-topic ledger.
-- `frozen_manifest` — the per-cohort freeze record (`.clm-released.json`).
+- `frozen_manifest` — the per-cohort, per-stream freeze record
+  (`.clm-released.<stream>.json`; legacy `.clm-released.json` for a single
+  unnamed stream).
 - `sync` — promote released-but-not-frozen topics' bytes into a cohort repo
   (located via the build provenance manifest) and freeze them.
 
