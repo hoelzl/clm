@@ -102,12 +102,19 @@ def _wrap_display(expr: str) -> str:
     return f"CLM_DISPLAY({expr});"
 
 
-def emit_cpp_translation_unit(cell_sources: Sequence[str]) -> str:
+def emit_cpp_translation_unit(
+    cell_sources: Sequence[str], *, empty_cells_as_todo: bool = False
+) -> str:
     """Emit one compilable translation unit from C++ code-cell sources.
 
     ``cell_sources`` must already reflect the desired (language × kind) view —
     the notebook pipeline filters cells before this is called. Returns the TU
     text, ending in a newline.
+
+    With ``empty_cells_as_todo`` (code-along-style variants), empty cells —
+    which the pipeline blanked for live coding — become ``slide_NN()`` stubs
+    with a ``// TODO`` body, still called from the generated ``main()``, so
+    students have a compilable place to write each cell's code.
     """
     includes: list[str] = []
     include_keys: set[str] = set()
@@ -119,6 +126,11 @@ def emit_cpp_translation_unit(cell_sources: Sequence[str]) -> str:
 
     for source in cell_sources:
         if not source.strip():
+            if empty_cells_as_todo:
+                slide_number += 1
+                name = f"slide_{slide_number:02d}"
+                chunks.append(f"void {name}() {{\n    // TODO\n}}")
+                slide_calls.append(f"{name}();")
             continue
         defs: list[str] = []
         stmts: list[str] = []

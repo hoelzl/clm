@@ -239,6 +239,30 @@ class TestEmitBasicStructure:
         assert "int x = 1;" in tu
 
 
+class TestEmitCodeAlongTodos:
+    def test_empty_cells_become_todo_stubs(self):
+        # Code-along: the pipeline blanks non-keep cells before emission.
+        cells = ["#include <iostream>", "", "  \n "]
+        tu = emit_cpp_translation_unit(cells, empty_cells_as_todo=True)
+        assert "void slide_01() {\n    // TODO\n}" in tu
+        assert "void slide_02() {\n    // TODO\n}" in tu
+        assert "int main() {\n    slide_01();\n    slide_02();\n}" in tu
+
+    def test_kept_cells_emit_normally_between_todos(self):
+        cells = ["int x = 1;", "", "f(x);"]
+        tu = emit_cpp_translation_unit(cells, empty_cells_as_todo=True)
+        assert "int x = 1;" in tu
+        assert "    // TODO" in tu
+        assert "    f(x);" in tu
+        # The TODO stub comes before the kept statement cell.
+        assert tu.index("// TODO") < tu.index("f(x);")
+
+    def test_default_still_skips_empty_cells(self):
+        tu = emit_cpp_translation_unit(["", "int x = 1;"])
+        assert "TODO" not in tu
+        assert "slide_" not in tu
+
+
 class TestEmitMain:
     def test_deck_defined_main_suppresses_generated_main(self):
         cells = ["#include <iostream>", 'int main() {\n    std::cout << "hi";\n    return 0;\n}']

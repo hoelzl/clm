@@ -821,6 +821,29 @@ class TestOutputFormatCode:
         assert "// %%" not in result
 
     @pytest.mark.asyncio
+    async def test_cpp_code_along_blanked_cells_become_todo_stubs(self):
+        """Code-along C++ export: blanked cells turn into // TODO slide
+        stubs so students have a compilable place for each cell (#333
+        phase 4). The keep cell's content survives as usual."""
+        notebook = make_notebook_node(
+            [
+                make_cell("code", "#include <iostream>", tags=["keep"]),
+                make_cell("code", 'std::cout << "x";'),
+            ]
+        )
+
+        spec = CodeAlongOutput(format="code", prog_lang="cpp")
+        processor = NotebookProcessor(spec)
+        payload = make_payload("", format_="code", kind="code-along", prog_lang="cpp")
+
+        nb = await processor._process_notebook_node(notebook, payload)
+        result = await processor.create_contents(nb, payload)
+
+        assert "#include <iostream>" in result
+        assert "void slide_01() {\n    // TODO\n}" in result
+        assert 'std::cout << "x";' not in result
+
+    @pytest.mark.asyncio
     async def test_cpp_notebook_format_unaffected(self):
         """The TU emitter must only kick in for format='code'."""
         notebook = make_notebook_node(
