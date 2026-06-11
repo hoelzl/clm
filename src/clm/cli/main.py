@@ -47,6 +47,7 @@ _COMMANDS = "clm.cli.commands"
         # Top-level commands that stay flat: the everyday verbs.
         # -------------------------------------------------------------
         "build": f"{_COMMANDS}.build:build",
+        "kernel-triage": f"{_COMMANDS}.kernel_triage:kernel_triage_cmd",
         "validate": f"{_COMMANDS}.validate:validate_cmd",
         "status": f"{_COMMANDS}.status:status",
         "monitor": f"{_COMMANDS}.monitor:monitor",
@@ -99,16 +100,33 @@ _COMMANDS = "clm.cli.commands"
     default="clm_jobs.db",
     help="Path to the job queue database (stores jobs, workers, events)",
 )
+@click.option(
+    "--telemetry-db-path",
+    type=click.Path(),
+    default=None,
+    help=(
+        "Path to the execution-telemetry database (per-deck kernel "
+        "crash/flake history; issue #330). Default: clm_telemetry.db "
+        "next to the cache database."
+    ),
+)
 @click.pass_context
-def cli(ctx, cache_db_path, jobs_db_path):
+def cli(ctx, cache_db_path, jobs_db_path, telemetry_db_path):
     """CLM - Course content processing system.
 
     Build and manage educational course materials with support for
     Jupyter notebooks, PlantUML diagrams, and Draw.io diagrams.
     """
+    from clm.infrastructure.database.execution_telemetry import default_telemetry_db_path
+
     ctx.ensure_object(dict)
     ctx.obj["CACHE_DB_PATH"] = Path(cache_db_path)
     ctx.obj["JOBS_DB_PATH"] = Path(jobs_db_path)
+    ctx.obj["TELEMETRY_DB_PATH"] = (
+        Path(telemetry_db_path)
+        if telemetry_db_path is not None
+        else default_telemetry_db_path(Path(cache_db_path))
+    )
 
 
 @cli.command()

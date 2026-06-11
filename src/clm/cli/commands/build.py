@@ -360,6 +360,13 @@ class BuildConfig:
     # BuildConfig without breaking.
     max_workers: int | None = None
 
+    # Execution-telemetry database (issue #330). ``None`` resolves to
+    # ``clm_telemetry.db`` next to ``cache_db_path``. Kept separate from the
+    # cache db so clearing caches never erases the kernel crash/flake
+    # history; ``clm kernel-triage`` points this at the REAL telemetry db
+    # while building against throwaway cache/jobs dbs.
+    telemetry_db_path: Path | None = None
+
     # Watch mode configuration
     watch_mode: str = "fast"
     debounce: float = 0.3
@@ -1559,6 +1566,7 @@ async def main_build(
     inline_images,
     fail_on_missing_xref=False,
     provenance_manifest=True,
+    telemetry_db_path: Path | None = None,
 ) -> BuildSummary | None:
     """Main orchestration function for course building.
 
@@ -1683,6 +1691,7 @@ async def main_build(
         selected_sections=selected_sections,
         fail_on_missing_xref=fail_on_missing_xref,
         write_provenance_manifest=provenance_manifest,
+        telemetry_db_path=telemetry_db_path,
     )
 
     # Create output formatter early to show startup messages
@@ -1737,6 +1746,18 @@ async def main_build(
     if started_workers:
         output_formatter.show_startup_message(f"Started {len(started_workers)} worker(s)")
 
+    # Persistent kernel crash/flake telemetry (issue #330). Lives next to
+    # the cache db by default but is its own file so cache clears never
+    # erase the history; the store opens connections lazily per write.
+    from clm.infrastructure.database.execution_telemetry import (
+        ExecutionTelemetryStore,
+        default_telemetry_db_path,
+    )
+
+    telemetry_store = ExecutionTelemetryStore(
+        config.telemetry_db_path or default_telemetry_db_path(config.cache_db_path)
+    )
+
     summary: BuildSummary | None = None
     try:
         with DatabaseManager(config.cache_db_path, force_init=config.clear_cache) as db_manager:
@@ -1748,6 +1769,7 @@ async def main_build(
                 build_reporter=build_reporter,
                 incremental=config.incremental,
                 image_registry=course.image_registry,
+                telemetry_store=telemetry_store,
             )
 
             async with backend:
@@ -2318,6 +2340,7 @@ def build(
             inline_images,
             resolved_fail_on_missing_xref,
             effective_provenance_manifest,
+            telemetry_db_path=ctx.obj.get("TELEMETRY_DB_PATH") if ctx.obj else None,
         )
     )
 

@@ -11,6 +11,7 @@ clm [OPTIONS] COMMAND [ARGS]...
 | `--version` | Show version and exit |
 | `--cache-db-path PATH` | Path to cache database (default: `clm_cache.db`) |
 | `--jobs-db-path PATH` | Path to job queue database (default: `clm_jobs.db`) |
+| `--telemetry-db-path PATH` | Path to the execution-telemetry database recording per-deck kernel crash/flake history across builds (default: `clm_telemetry.db` next to the cache database). Deliberately a separate file: clearing the cache never erases the flake history. (CLM {version}+) |
 
 ## Commands
 
@@ -370,6 +371,70 @@ build. Fix the `for_slide` / `slide_id` mismatch (`clm voiceover inline`
 then re-extract, or `clm slides sync`), or pass `--no-fail-on-error` to
 tolerate it. `clm validate`'s #162 detectives catch the underlying
 divergence earlier (pre-commit), before it reaches a build.
+
+#### Kernel execution telemetry and the flake list (CLM {version}+)
+
+Notebook execution retries up to 6 times with a fresh kernel per attempt.
+Since CLM {version} every non-clean execution is recorded persistently in
+the execution-telemetry database (`--telemetry-db-path`, default
+`clm_telemetry.db` next to the cache db): the attempt count, the failure
+type per attempt (`cell_execution_error`, `dead_kernel`,
+`startup_timeout`, `cell_timeout`, `other`), the failing cell index, and a
+classification — `flaky` (passed on a retry), `deterministic` (every
+attempt failed identically at the same cell), or `mixed`. Decks that
+passed **only after a retry** additionally appear in the build summary as
+a "Flaky decks" list (JSON output: `flaky_files`), so kernel flakiness is
+observable instead of being silently absorbed by the retry loop. Clean
+first-attempt passes are not recorded. See `clm kernel-triage` for acting
+on this history.
+
+### `clm kernel-triage` (CLM {version}+)
+
+Re-test kernel-crash workarounds and known-flaky decks against the current
+kernel — run it after every kernel/worker-image bump (e.g. xeus-cpp /
+CppInterOp upgrades).
+
+```
+clm kernel-triage SPEC_FILE [OPTIONS]
+```
+
+Collects two candidate sets:
+
+1. **Workarounds** — every topic the spec marks `evaluate="no"` (decks
+   disabled because of deterministic kernel crashes).
+2. **Known-flaky decks** — every deck with a flake or crash recorded in
+   the execution-telemetry database within the lookback window.
+
+It then re-executes them via a real `clm build` subprocess against a
+generated triage spec (non-target topics removed, `evaluate="no"` stripped
+from the targets, `<output-targets>` dropped) using throwaway output,
+cache, and jobs databases — so each deck executes exactly once per
+language and no production cache or output tree is touched — while
+telemetry is recorded to the real telemetry database. The report states,
+per deck, whether the `evaluate="no"` workaround **can be lifted** (passed
+cleanly), must be kept (still failing or flaky), and whether known-flaky
+decks are still flaky.
+
+| Option | Description |
+|--------|-------------|
+| `--data-dir PATH` | Course data directory (default: inferred from the spec) |
+| `--report-only` | Only list candidates and their telemetry history; execute nothing |
+| `--since-days N` | Lookback window for known-flaky decks (default: 90) |
+| `--workers {direct,docker}` | Worker mode for the triage build |
+| `--notebook-workers N` | Notebook worker count for the triage build |
+| `--max-workers N` | Hard cap on effective worker count per type |
+| `--notebook-image IMAGE` | Docker image for notebook workers (the kernel under test) |
+| `--build-timeout SECONDS` | Timeout for the triage build subprocess (default: 3600) |
+| `--keep-build-dir` | Keep the throwaway build directory for inspection |
+| `--json` | Output as JSON |
+
+```bash
+# After bumping the xeus-cpp worker image:
+clm kernel-triage cpp-course.xml --workers docker --notebook-image full
+
+# Just inspect the recorded crash/flake history:
+clm kernel-triage cpp-course.xml --report-only
+```
 
 ### `clm course targets`
 

@@ -11,6 +11,7 @@ from clm.cli.build_data_classes import (
     BuildError,
     BuildSummary,
     BuildWarning,
+    FlakyFileInfo,
     OutputConflictInfo,
     ProgressUpdate,
 )
@@ -66,6 +67,10 @@ class BuildReporter:
         self._output_conflicts: list[OutputConflictInfo] = []
         self._output_large_file_collision_count: int = 0
 
+        # Decks that passed only after a retry (issue #330), aggregated per
+        # source file via :meth:`report_flaky_file`.
+        self._flaky_files: dict[str, FlakyFileInfo] = {}
+
     def start_build(
         self,
         course_name: str,
@@ -104,6 +109,9 @@ class BuildReporter:
         self._output_dedup_count = 0
         self._output_conflicts = []
         self._output_large_file_collision_count = 0
+
+        # Reset flake tracking
+        self._flaky_files = {}
 
         self.formatter.show_build_start(course_name, total_files, output_dirs)
 
@@ -257,6 +265,39 @@ class BuildReporter:
         if self.formatter.should_show_warning(warning):
             self.formatter.show_warning(warning)
 
+    def report_flaky_file(
+        self,
+        file_path: str,
+        attempts: int,
+        failure_types: list[str] | None = None,
+        language: str = "",
+    ) -> None:
+        """Record a deck that passed only after a retry (issue #330).
+
+        Aggregated per source file: a bilingual deck flaking in both
+        languages becomes one entry with both languages listed. The list is
+        carried into :class:`BuildSummary` as ``flaky_files``.
+
+        Args:
+            file_path: Source path of the deck.
+            attempts: Number of attempts the passing execution needed.
+            failure_types: Failure types of the preceding failed attempts.
+            language: Output language of the flaky execution.
+        """
+        if self._build_finished:
+            return
+        entry = self._flaky_files.get(file_path)
+        if entry is None:
+            entry = FlakyFileInfo(file_path=file_path, max_attempts=attempts, flake_count=0)
+            self._flaky_files[file_path] = entry
+        entry.max_attempts = max(entry.max_attempts, attempts)
+        entry.flake_count += 1
+        for failure_type in failure_types or []:
+            if failure_type and failure_type not in entry.failure_types:
+                entry.failure_types.append(failure_type)
+        if language and language not in entry.languages:
+            entry.languages.append(language)
+
     def _deduplicate_errors(self, errors: list[BuildError]) -> list[BuildError]:
         """Remove duplicate errors based on file_path + category + message prefix.
 
@@ -360,6 +401,7 @@ class BuildReporter:
             output_dedup_count=self._output_dedup_count,
             output_conflicts=list(self._output_conflicts),
             output_large_file_collision_count=self._output_large_file_collision_count,
+            flaky_files=sorted(self._flaky_files.values(), key=lambda f: f.file_path),
             timed_out=self._timed_out,
         )
 
