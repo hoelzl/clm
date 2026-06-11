@@ -21,6 +21,7 @@ course tree)::
 
 from __future__ import annotations
 
+import importlib.resources
 import logging
 import re
 import unicodedata
@@ -40,6 +41,18 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 CMAKELISTS_FILENAME = "CMakeLists.txt"
+
+SUPPORT_INCLUDE_DIRNAME = "include"
+"""Subdirectory of a kind root receiving vendored support headers."""
+
+# Vendored headers (clm/data/cpp_export/include/) copied into a kind root
+# when its exported code — or a deck-local header next to it — references
+# them. The xcpp display shim depends on the vendored nlohmann header (it
+# provides xeus's ``nl`` namespace alias), so referencing it pulls in both.
+_SUPPORT_HEADER_TOKENS: dict[str, tuple[str, ...]] = {
+    "nlohmann/json.hpp": ("nlohmann/json.hpp",),
+    "xcpp/xdisplay.hpp": ("xcpp/xdisplay.hpp", "nlohmann/json.hpp"),
+}
 
 
 def cmake_identifier(text: str) -> str:
@@ -79,6 +92,8 @@ def generate_cmakelists(
     project_name: str,
     deck_rel_paths: Sequence[str],
     excluded: frozenset[str] | set[str] = frozenset(),
+    *,
+    with_include_dir: bool = False,
 ) -> str:
     """Generate the ``CMakeLists.txt`` text for one code-output directory.
 
@@ -104,6 +119,12 @@ def generate_cmakelists(
         "endif()",
         "",
     ]
+    if with_include_dir:
+        lines += [
+            "# Vendored support headers (nlohmann/json, the xcpp display shim).",
+            f'include_directories("${{CMAKE_CURRENT_SOURCE_DIR}}/{SUPPORT_INCLUDE_DIRNAME}")',
+            "",
+        ]
     used: dict[str, int] = {}
     for rel in sorted(deck_rel_paths):
         name = deck_target_name(rel)
@@ -178,19 +199,65 @@ def collect_cpp_code_outputs(course: Course) -> dict[Path, CodeProject]:
     return groups
 
 
+def needed_support_headers(kind_root: Path) -> set[str]:
+    """Which vendored support headers the code under *kind_root* references.
+
+    Scans every C++ source/header in the tree — deck-local headers included,
+    since e.g. ``point.hpp`` pulls in nlohmann — but skips the vendored
+    ``include/`` directory itself so a regeneration doesn't self-trigger.
+    """
+    needed: set[str] = set()
+    for path in kind_root.rglob("*"):
+        if not path.is_file() or path.suffix not in {".cpp", ".h", ".hpp"}:
+            continue
+        if path.relative_to(kind_root).parts[0] == SUPPORT_INCLUDE_DIRNAME:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        for token, headers in _SUPPORT_HEADER_TOKENS.items():
+            if token in text:
+                needed.update(headers)
+    return needed
+
+
+def _copy_support_headers(kind_root: Path, headers: set[str]) -> None:
+    data_root = importlib.resources.files("clm") / "data" / "cpp_export" / "include"
+    for header in sorted(headers):
+        target = kind_root / SUPPORT_INCLUDE_DIRNAME / PurePosixPath(header)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data_root.joinpath(header).read_bytes())
+
+
 def write_cmake_projects(course: Course) -> list[Path]:
     """Write one ``CMakeLists.txt`` per built C++ code-output directory.
 
     No-op for non-C++ courses. Only directories that actually contain code
-    outputs get a project file. Returns the list of paths written.
+    outputs get a project file. Vendored support headers (nlohmann/json, the
+    xcpp display shim) are copied into ``include/`` where the exported code
+    references them. Returns the list of ``CMakeLists.txt`` paths written.
     """
     if course.prog_lang != "cpp":
         return []
     written: list[Path] = []
     for kind_root, project in sorted(collect_cpp_code_outputs(course).items()):
-        content = generate_cmakelists(project.project_name, sorted(project.decks), project.excluded)
+        support = needed_support_headers(kind_root)
+        if support:
+            _copy_support_headers(kind_root, support)
+        content = generate_cmakelists(
+            project.project_name,
+            sorted(project.decks),
+            project.excluded,
+            with_include_dir=bool(support),
+        )
         path = kind_root / CMAKELISTS_FILENAME
         path.write_text(content, encoding="utf-8")
         written.append(path)
-        logger.info("Wrote %s (%d deck targets)", path, len(project.decks))
+        logger.info(
+            "Wrote %s (%d deck targets, %d support headers)",
+            path,
+            len(project.decks),
+            len(support),
+        )
     return written

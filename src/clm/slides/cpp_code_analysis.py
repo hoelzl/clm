@@ -371,6 +371,11 @@ def classify_item(item: str) -> CppItem:
         if spec:
             name += re.sub(r"\s+", "", spec.group(1))
         return CppItem(cat, name, text=text)
+    if re.match(r"^(?:class|struct|union|enum(?:\s+(?:class|struct))?)\s*\{", text):
+        # Anonymous type definition (e.g. `enum { RED, GREEN };`): no name to
+        # track for redefinitions, but it must stay at namespace scope so its
+        # members remain visible to later cells.
+        return CppItem("type_def", text=text)
     if text.startswith("namespace"):
         return CppItem("namespace_def", text=text)
     if re.match(r"^using\s+namespace\b", text):

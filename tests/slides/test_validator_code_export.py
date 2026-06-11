@@ -141,6 +141,12 @@ class TestClassifyItem:
         item = classify_item("struct Point { int x; int y; };")
         assert (item.category, item.name) == ("type_def", "Point")
 
+    def test_anonymous_enum_is_a_type_definition(self):
+        # Must stay at namespace scope in the export so the enumerators
+        # remain visible to later cells (#333).
+        item = classify_item("enum { COMPUTER_TYPE_PC, COMPUTER_TYPE_MAC };")
+        assert (item.category, item.name) == ("type_def", None)
+
     def test_template_specialization_name_includes_args(self):
         primary = classify_item("template <typename T> struct TypeName { };")
         spec = classify_item("template <> struct TypeName<int> { };")

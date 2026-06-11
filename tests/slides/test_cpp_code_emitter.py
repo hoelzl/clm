@@ -225,6 +225,12 @@ class TestEmitBasicStructure:
         assert "void slide_01() {" in tu
         assert "    for (int i = 0; i < 3; ++i)" in tu
 
+    def test_anonymous_enum_at_namespace_scope(self):
+        cells = ["enum { RED, GREEN };", "int color = RED;"]
+        tu = emit_cpp_translation_unit(cells)
+        assert "slide_" not in tu
+        assert tu.index("enum { RED, GREEN };") < tu.index("int color = RED;")
+
     def test_using_directive_at_namespace_scope(self):
         tu = emit_cpp_translation_unit(["using namespace std::literals;"])
         assert "using namespace std::literals;" in tu

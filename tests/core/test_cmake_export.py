@@ -10,10 +10,12 @@ import io
 
 from clm.core.cmake_export import (
     CMAKELISTS_FILENAME,
+    SUPPORT_INCLUDE_DIRNAME,
     cmake_identifier,
     collect_cpp_code_outputs,
     deck_target_name,
     generate_cmakelists,
+    needed_support_headers,
     write_cmake_projects,
 )
 from clm.core.course import Course
@@ -204,6 +206,59 @@ class TestWriteCmakeProjects:
         target = course_1.output_targets[0]
         target.output_root.mkdir(parents=True, exist_ok=True)
         assert write_cmake_projects(course_1) == []
+
+    def test_vendored_headers_copied_when_referenced(self, tmp_path):
+        course = _make_cpp_course(tmp_path)
+        target = course.output_targets[0]
+        outputs = _materialize_code_outputs(course, target)
+        # One TU references the xcpp display shim (e.g. via xcpp::display).
+        outputs[0].write_text("#include <xcpp/xdisplay.hpp>\nint main() {}\n", encoding="utf-8")
+
+        written = write_cmake_projects(course)
+
+        kind_root = outputs[0].parent.parent
+        include_dir = kind_root / SUPPORT_INCLUDE_DIRNAME
+        # The shim pulls in the vendored nlohmann header as well.
+        assert (include_dir / "xcpp" / "xdisplay.hpp").is_file()
+        assert (include_dir / "nlohmann" / "json.hpp").is_file()
+        cmake = (kind_root / CMAKELISTS_FILENAME).read_text(encoding="utf-8")
+        assert (
+            f'include_directories("${{CMAKE_CURRENT_SOURCE_DIR}}/{SUPPORT_INCLUDE_DIRNAME}")'
+            in cmake
+        )
+        # Other kind roots don't reference the headers: no include dir there.
+        other_roots = {w.parent for w in written} - {kind_root}
+        for root in other_roots:
+            assert not (root / SUPPORT_INCLUDE_DIRNAME).exists()
+            assert "include_directories" not in (root / CMAKELISTS_FILENAME).read_text(
+                encoding="utf-8"
+            )
+
+    def test_deck_local_header_triggers_vendoring(self, tmp_path):
+        course = _make_cpp_course(tmp_path)
+        target = course.output_targets[0]
+        outputs = _materialize_code_outputs(course, target)
+        # nlohmann referenced from a header next to the TU, not the TU itself.
+        section_dir = outputs[0].parent
+        (section_dir / "point.hpp").write_text(
+            "#pragma once\n#include <nlohmann/json.hpp>\n", encoding="utf-8"
+        )
+
+        write_cmake_projects(course)
+
+        kind_root = section_dir.parent
+        assert (kind_root / SUPPORT_INCLUDE_DIRNAME / "nlohmann" / "json.hpp").is_file()
+        assert not (kind_root / SUPPORT_INCLUDE_DIRNAME / "xcpp").exists()
+
+    def test_vendored_headers_do_not_self_trigger_on_regeneration(self, tmp_path):
+        kind_root = tmp_path / "Completed"
+        include_dir = kind_root / SUPPORT_INCLUDE_DIRNAME / "xcpp"
+        include_dir.mkdir(parents=True)
+        # Only the vendored copy mentions the tokens.
+        (include_dir / "xdisplay.hpp").write_text(
+            "#include <nlohmann/json.hpp>\n", encoding="utf-8"
+        )
+        assert needed_support_headers(kind_root) == set()
 
     def test_no_compile_marker_excludes_deck_from_all(self, tmp_path):
         course = _make_cpp_course(tmp_path)
