@@ -24,7 +24,11 @@ from pathlib import Path
 
 from clm.core.spec_decks import shipping_set
 from clm.core.topic_resolver import TopicMatch, build_topic_map
-from clm.infrastructure.utils.path_utils import is_slides_file, split_lang_suffix
+from clm.infrastructure.utils.path_utils import (
+    is_private_dir_name,
+    is_slides_file,
+    split_lang_suffix,
+)
 
 __all__ = [
     "CHECKPOINT_DIR_NAME",
@@ -143,12 +147,18 @@ def _all_decks(slides_dir: Path) -> set[Path]:
     every supported program-language extension via :func:`is_slides_file`, so a
     ``.cs`` / ``.cpp`` orphan is not silently missed. Files inside a
     ``.ipynb_checkpoints/`` dir are excluded — they are reported as cruft, not
-    as orphan decks.
+    as orphan decks. Decks inside underscore-prefixed dirs (``_archive``, …)
+    are excluded too: discovery ignores them (issue #318), so they are
+    *deliberately* parked, not forgotten — reporting them as orphans would
+    drown the real signal.
     """
     return {
         p.resolve()
         for p in slides_dir.rglob("*")
-        if p.is_file() and is_slides_file(p) and not _is_checkpoint(p)
+        if p.is_file()
+        and is_slides_file(p)
+        and not _is_checkpoint(p)
+        and not any(is_private_dir_name(part) for part in p.relative_to(slides_dir).parts[:-1])
     }
 
 

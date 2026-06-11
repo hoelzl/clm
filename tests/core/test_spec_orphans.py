@@ -120,6 +120,18 @@ class TestFindOrphans:
         assert all(".ipynb_checkpoints" not in p.parts for p in (o.path for o in report.orphans))
         assert len(report.checkpoints) == 1
 
+    def test_archived_decks_are_not_orphans(self, tmp_path):
+        # Decks under underscore-prefixed dirs are deliberately parked
+        # (discovery ignores them per issue #318), not forgotten — they
+        # must not appear in the orphan report.
+        specs = _course(tmp_path, ["a"], {})
+        parked = tmp_path / "slides" / "_archive" / "module_900_old" / "topic_010_b"
+        parked.mkdir(parents=True)
+        (parked / "slides_b.py").write_text(DECK, encoding="utf-8")
+        report = find_orphans(sorted(specs.glob("*.xml")), tmp_path / "slides")
+        assert report.orphans == []
+        assert report.total_decks == 1
+
     def test_non_py_orphan_detected(self, tmp_path):
         # A .cpp orphan must be found — the report walk is extension-complete.
         specs = _course(tmp_path, ["a"], {})

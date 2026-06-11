@@ -94,6 +94,12 @@ Contains one or more `<section>` elements:
 Each `<topic>` references a topic by directory name (without numeric prefix).
 For `slides/module_001/topic_100_introduction/`, the ID is `introduction`.
 
+Underscore-prefixed directories under `slides/` (e.g. `slides/_archive/`,
+`slides/_drafts/`) are **invisible to topic discovery** at both the module
+and the topic level (since CLM {version}): content parked there never
+resolves, never shadows a live topic ID, and cannot be bound via `module=`.
+Use such a directory to retire decks in place without affecting builds.
+
 Optional `<section>` attributes:
 
 | Attribute | Description |

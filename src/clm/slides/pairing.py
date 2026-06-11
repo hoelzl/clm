@@ -19,6 +19,7 @@ from typing import Protocol
 from clm.infrastructure.utils.path_utils import (
     SUPPORTED_PROG_LANG_EXTENSIONS,
     is_ignored_dir_for_course,
+    is_private_dir_name,
     split_lang_suffix,
 )
 from clm.notebooks.slide_parser import CellMetadata
@@ -316,12 +317,14 @@ def find_split_slide_files_recursive(path: Path) -> list[Path]:
     ``(de_path, en_path)`` strings) is stable regardless of how ``path`` was spelled.
 
     Directories the course scan ignores (``.git``, ``.venv``, ``build``, ``dist``,
-    ``__pycache__`` …) are pruned, so a vendored or archived ``.de``/``.en`` copy
-    under one of them is never enumerated — and thus never **written** on a writing
-    batch. The ignored-dir test is applied to each file's path *relative to*
-    ``path``, so an ignored component in ``path``'s own prefix (e.g. a tree that
-    itself lives under ``build/``) cannot falsely exclude everything. The
-    single-file branch is exempt: an explicitly named file is always honoured.
+    ``__pycache__`` …) are pruned, as are underscore-prefixed dirs (``_archive``,
+    ``_drafts``, … — invisible to discovery per issue #318), so a vendored or
+    archived ``.de``/``.en`` copy under one of them is never enumerated — and thus
+    never **written** on a writing batch. Both tests are applied to each file's
+    path *relative to* ``path``, so an ignored component in ``path``'s own prefix
+    (e.g. a tree that itself lives under ``build/``, or an explicitly named
+    ``_archive/`` root) cannot falsely exclude everything. The single-file branch
+    is exempt: an explicitly named file is always honoured.
     """
     if path.is_file():
         return [path.resolve()] if _is_split_slide_file(path) else []
@@ -333,6 +336,7 @@ def find_split_slide_files_recursive(path: Path) -> list[Path]:
         if f.is_file()
         and _is_split_slide_file(f)
         and not is_ignored_dir_for_course(f.parent.relative_to(path))
+        and not any(is_private_dir_name(part) for part in f.parent.relative_to(path).parts)
     )
 
 

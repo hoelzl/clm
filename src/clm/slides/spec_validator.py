@@ -28,6 +28,7 @@ from clm.core.topic_resolver import (
     find_slide_files,
     matches_for_binding,
 )
+from clm.infrastructure.utils.path_utils import is_private_dir_name
 
 
 @dataclass
@@ -107,9 +108,13 @@ def validate_spec(
 
     # Set of module directory names (the immediate children of slides/).
     # Used to validate ``module=`` attributes on sections and topics.
+    # Underscore-prefixed dirs (``_archive``, …) are excluded: discovery
+    # ignores them (issue #318), so binding to one can never resolve.
     available_modules: set[str] = set()
     if slides_dir.is_dir():
-        available_modules = {p.name for p in slides_dir.iterdir() if p.is_dir()}
+        available_modules = {
+            p.name for p in slides_dir.iterdir() if p.is_dir() and not is_private_dir_name(p.name)
+        }
 
     findings: list[SpecFinding] = []
     topics_total = sum(len(s.topics) for s in spec.sections)

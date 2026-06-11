@@ -812,7 +812,9 @@ clm course orphans [OPTIONS] SPECS_DIR
 `SPECS_DIR` is the directory of course spec `*.xml` files. Orphans are computed
 against the **union** of every spec (a deck unreferenced by one spec may be
 pulled in by another). The on-disk walk is extension-complete (`.py` / `.cpp` /
-`.cs` / …), so a non-Python orphan is not silently missed.
+`.cs` / …), so a non-Python orphan is not silently missed. Decks parked under
+underscore-prefixed dirs (`slides/_archive/`, …) are excluded — they are
+deliberately retired (invisible to discovery, issue #318), not forgotten.
 
 | Option | Description |
 |--------|-------------|
@@ -1212,7 +1214,7 @@ clm slides normalize [OPTIONS] PATH
 | `--json` | Output as JSON |
 | `--data-dir DIR` | Course data directory (contains slides/) |
 | `--only bilingual\|split` | (since CLM {version}) Scope a **directory** run to only bilingual decks (no `.de`/`.en` tag) or only split halves — e.g. normalize the bilingual decks while leaving `.de`/`.en` pairs for `clm slides sync`. |
-| `--exclude GLOB` | (since CLM {version}) Skip decks matching `GLOB`, matched against the full path **and** each path component (so `--exclude _archive` skips an `_archive/` directory). Repeatable. |
+| `--exclude GLOB` | (since CLM {version}) Skip decks matching `GLOB`, matched against the full path **and** each path component (so `--exclude old_decks` skips an `old_decks/` directory). Repeatable. Underscore-prefixed dirs (`_archive/`, `_drafts/`, …) are skipped automatically (issue #318) and need no `--exclude`. |
 | `--shipping-only` | (since CLM {version}) Scope a directory run to decks reachable from course specs (the shipping set), skipping archived / unreferenced decks. |
 | `--specs-dir DIR` | For `--shipping-only`: directory of `*.xml` specs. Default: `<course-root>/course-specs/`. |
 
@@ -1236,8 +1238,8 @@ clm slides normalize slides/module_010/ --operations preamble_code
 clm slides normalize slides/module_010/ --operations placeholder_start
 # Pre-conversion: canonicalize start/completed order so the split round-trips exactly
 clm slides normalize slides/module_010/topic_100_intro/ --operations interleaving --canonicalize-start-completed
-# Scope: mint ids on bilingual decks only, skipping an _archive/ dir
-clm slides normalize slides/ --operations slide_ids --only bilingual --exclude _archive
+# Scope: mint ids on bilingual decks only
+clm slides normalize slides/ --operations slide_ids --only bilingual
 # Scope: only the decks that actually ship
 clm slides normalize slides/ --shipping-only
 ```
@@ -1350,7 +1352,7 @@ clm slides assign-ids [OPTIONS] PATH
 | `--llm-timeout SECONDS` | Per-call timeout (default: 120s — cold-load on a 30B model can exceed 60s). |
 | `--cache-dir PATH` | Directory for the LLM cache. Lookup order: flag → `$CLM_CACHE_DIR` → `tool.clm.cache_dir` in `pyproject.toml` → `<cwd>/.clm-cache/`. |
 | `--only bilingual\|split` | (since CLM {version}) Scope a **directory** run to only bilingual decks (no `.de`/`.en` tag) or only split halves — e.g. `--only bilingual` mints bilingual decks while leaving `.de`/`.en` pairs for `clm slides sync`. |
-| `--exclude GLOB` | (since CLM {version}) Skip decks matching `GLOB`, matched against the full path **and** each path component (so `--exclude _archive` skips an `_archive/` dir). Repeatable. |
+| `--exclude GLOB` | (since CLM {version}) Skip decks matching `GLOB`, matched against the full path **and** each path component (so `--exclude old_decks` skips an `old_decks/` dir). Repeatable. Underscore-prefixed dirs (`_archive/`, …) are skipped automatically (issue #318). |
 | `--shipping-only` | (since CLM {version}) Scope a directory run to decks reachable from course specs (the shipping set). |
 | `--specs-dir DIR` | For `--shipping-only`: directory of `*.xml` specs. Default: `<course-root>/course-specs/`. |
 | `--data-dir DIR` | Course data directory (contains `slides/`); used to resolve the `--shipping-only` scope. |
@@ -1388,7 +1390,7 @@ clm slides assign-ids slides/module_110_basics/ --accept-content-derived --accep
 clm slides assign-ids slides/module_010/topic_100/slides_intro.py --llm-suggest
 clm slides assign-ids slides/module_010/ --force        # regenerate all derivable ids
 # Scope: mint only the bilingual decks, leaving split pairs for `clm slides sync`
-clm slides assign-ids slides/ --accept-content-derived --only bilingual --exclude _archive
+clm slides assign-ids slides/ --accept-content-derived --only bilingual
 # Scope: only the decks that actually ship
 clm slides assign-ids slides/ --accept-content-derived --shipping-only
 # Worklist of cells that still need a hand-authored id, with body + context
@@ -1417,7 +1419,7 @@ the decks it pulls in, via the same build-faithful logic as `clm course decks`).
 |--------|-------------|
 | `--min-severity low\|medium\|high` | Only show findings at or above this confidence (default `low` = all). `high` = very-short / generic only. |
 | `--only bilingual\|split` | Scope a **directory** scan to only bilingual decks (no `.de`/`.en` tag) or only split halves. |
-| `--exclude GLOB` | Skip decks matching `GLOB` (matched against the full path **and** each path component, so `--exclude _archive` skips an `_archive/` dir). Repeatable. |
+| `--exclude GLOB` | Skip decks matching `GLOB` (matched against the full path **and** each path component, so `--exclude old_decks` skips an `old_decks/` dir). Repeatable. Underscore-prefixed dirs (`_archive/`, …) are skipped automatically (issue #318). |
 | `--shipping-only` | Scope a directory scan to decks reachable from course specs (the shipping set). |
 | `--specs-dir DIR` | For `--shipping-only`: directory of `*.xml` specs. Default: `<course-root>/course-specs/`. |
 | `--data-dir DIR` | Course data directory (contains `slides/`); used for a spec `PATH` or `--shipping-only`. |
@@ -1443,7 +1445,7 @@ Examples:
 clm slides slug-report slides/module_010/                       # everything flagged
 clm slides slug-report slides/ --min-severity high              # just the high-confidence ids
 clm slides slug-report course-specs/python-course.xml --json    # only the decks that ship
-clm slides slug-report slides/ --exclude _archive --shipping-only
+clm slides slug-report slides/ --shipping-only
 ```
 
 ### `clm slides coverage-report`
@@ -1491,7 +1493,7 @@ The exit code is always `0` — this is a report. Examples:
 clm slides coverage-report slides/module_010/                   # everything not balanced
 clm slides coverage-report slides/ --status de_only             # just the untranslated decks
 clm slides coverage-report course-specs/python-course.xml --json
-clm slides coverage-report slides/ --exclude _archive --shipping-only
+clm slides coverage-report slides/ --shipping-only
 ```
 
 ### `clm slides sync`

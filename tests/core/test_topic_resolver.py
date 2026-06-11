@@ -146,6 +146,39 @@ class TestBuildTopicMap:
         for tid in topic_map:
             assert "__pycache__" not in tid
 
+    def test_underscore_module_dir_does_not_shadow_live_topic(self, slides_dir):
+        """Issue #318: ``slides/_archive`` must be invisible to discovery.
+
+        An archived module dir like ``_archive/module_240_functions``
+        simplifies to topic ID ``functions`` at the topic level, and
+        ``_archive`` sorts before ``module_*`` — so before the fix it won
+        first-occurrence resolution over the live topic.
+        """
+        live = slides_dir / "module_100_basics" / "topic_030_functions"
+        live.mkdir()
+        (live / "slides_functions.py").write_text("# live", encoding="utf-8")
+
+        archived = slides_dir / "_archive" / "module_240_functions" / "topic_010_overloading"
+        archived.mkdir(parents=True)
+        (archived / "slides_overloading.py").write_text("# retired", encoding="utf-8")
+
+        topic_map = build_topic_map(slides_dir)
+        matches = topic_map["functions"]
+        assert len(matches) == 1
+        assert matches[0].module == "module_100_basics"
+        assert "overloading" not in topic_map
+
+    def test_underscore_topic_dir_is_invisible(self, slides_dir):
+        """A parked topic-level dir (``_old_intro``) must not shadow the live ID."""
+        parked = slides_dir / "module_100_basics" / "_old_intro"
+        parked.mkdir()
+        (parked / "slides_intro.py").write_text("# parked", encoding="utf-8")
+
+        topic_map = build_topic_map(slides_dir)
+        matches = topic_map["intro"]
+        assert len(matches) == 1
+        assert matches[0].path.name == "topic_010_intro"
+
 
 class TestFindSlideFiles:
     def test_directory_topic(self, slides_dir):
@@ -325,6 +358,29 @@ class TestFindSlideFilesRecursive:
         from clm.core.topic_resolver import find_slide_files_recursive
 
         assert find_slide_files_recursive(tmp_path / "nope") == []
+
+    def test_prunes_underscore_dirs_below_root(self, slides_dir):
+        from clm.core.topic_resolver import find_slide_files_recursive
+
+        archived = slides_dir / "_archive" / "module_240_functions" / "topic_010_overloading"
+        archived.mkdir(parents=True)
+        (archived / "slides_overloading.py").write_text("# retired", encoding="utf-8")
+
+        files = find_slide_files_recursive(slides_dir)
+        assert files
+        assert all("_archive" not in f.parts for f in files)
+
+    def test_explicit_underscore_root_is_honoured(self, slides_dir):
+        # The prune applies to components BELOW the walk root only, so an
+        # explicitly named _archive/ root still enumerates its decks.
+        from clm.core.topic_resolver import find_slide_files_recursive
+
+        archived = slides_dir / "_archive" / "module_240_functions" / "topic_010_overloading"
+        archived.mkdir(parents=True)
+        (archived / "slides_overloading.py").write_text("# retired", encoding="utf-8")
+
+        files = find_slide_files_recursive(slides_dir / "_archive")
+        assert [f.name for f in files] == ["slides_overloading.py"]
 
 
 class TestResolveTopic:
