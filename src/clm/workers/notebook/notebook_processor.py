@@ -76,6 +76,7 @@ if TYPE_CHECKING:
 
 
 from clm.infrastructure.messaging.base_classes import ProcessingWarning
+from clm.slides.cpp_code_emitter import emit_cpp_translation_unit
 
 from .utils.jupyter_utils import (
     Cell,
@@ -1952,6 +1953,8 @@ class NotebookProcessor:
                 result = await self._create_using_nbconvert(
                     processed_nb, payload, source_dir=source_dir
                 )
+            elif self.output_spec.format == "code" and payload.prog_lang == "cpp":
+                result = self._create_cpp_code_export(processed_nb)
             else:
                 result = await self._create_using_jupytext(processed_nb)
             return result
@@ -2797,6 +2800,19 @@ class NotebookProcessor:
             file_path.write_bytes(contents)
         if hasattr(os, "sync"):
             os.sync()
+
+    @staticmethod
+    def _create_cpp_code_export(processed_nb) -> str:
+        """Emit a compilable C++ translation unit for ``format="code"``.
+
+        Replaces the jupytext concatenation for C++ decks (issue #333): the
+        concatenation yields top-level statements and mid-file includes,
+        which is not valid C++. ``processed_nb`` has already been filtered
+        for this output spec, so the emitter sees exactly the cells of this
+        (language × kind) view.
+        """
+        sources = [cell.source for cell in processed_nb.cells if is_code_cell(cell)]
+        return emit_cpp_translation_unit(sources)
 
     async def _create_using_jupytext(self, processed_nb) -> str:
         config = jupytext_config.JupytextConfiguration(
