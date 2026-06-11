@@ -118,9 +118,34 @@ class TestClassifyItem:
         item = classify_item("MyVector::MyVector(int n) { resize(n); }")
         assert item.category == "member_fn_def"
 
+    def test_qualified_call_is_not_a_declaration(self):
+        # Looks like the out-of-class ctor pattern, but a `;` tail means a
+        # call: member-function declarations without return type are illegal
+        # at namespace scope (#333 — these must not be hoisted by the export).
+        assert classify_item("std::sort(xs.begin(), xs.end());").category == "call_stmt"
+        assert classify_item("std::getline(iss, line);").category == "call_stmt"
+
+    def test_qualified_function_declaration_with_return_type(self):
+        item = classify_item("int MyVector::at(int i) const;")
+        assert item.category == "fn_decl"
+
+    def test_function_pointer_variable(self):
+        item = classify_item("bool (*pf)(double, double){&is_less};")
+        assert (item.category, item.name) == ("var_decl", "pf")
+
+    def test_function_returning_function_pointer_is_not_a_variable(self):
+        item = classify_item("bool (*get_pf())(double, double) { return &is_less; }")
+        assert item.category != "var_decl"
+
     def test_type_definition(self):
         item = classify_item("struct Point { int x; int y; };")
         assert (item.category, item.name) == ("type_def", "Point")
+
+    def test_anonymous_enum_is_a_type_definition(self):
+        # Must stay at namespace scope in the export so the enumerators
+        # remain visible to later cells (#333).
+        item = classify_item("enum { COMPUTER_TYPE_PC, COMPUTER_TYPE_MAC };")
+        assert (item.category, item.name) == ("type_def", None)
 
     def test_template_specialization_name_includes_args(self):
         primary = classify_item("template <typename T> struct TypeName { };")

@@ -793,6 +793,75 @@ class TestOutputFormatCode:
         # Should end with newline
         assert result.endswith("\n")
 
+    @pytest.mark.asyncio
+    async def test_cpp_code_format_produces_translation_unit(self):
+        """C++ code format should emit a compilable TU, not a jupytext
+        concatenation (issue #333)."""
+        notebook = make_notebook_node(
+            [
+                make_cell("markdown", "# A C++ Deck"),
+                make_cell("code", "#include <iostream>"),
+                make_cell("code", "int x = 42;"),
+                make_cell("code", 'std::cout << x << "\\n";'),
+            ]
+        )
+
+        spec = CompletedOutput(format="code", prog_lang="cpp")
+        processor = NotebookProcessor(spec)
+        payload = make_payload("", format_="code", prog_lang="cpp")
+
+        result = await processor.create_contents(notebook, payload)
+
+        # Includes hoisted to the top, statements wrapped, main generated.
+        assert result.startswith("#include <iostream>")
+        assert "int x = 42;" in result
+        assert "void slide_01() {" in result
+        assert "int main() {" in result
+        # No jupytext percent-format cell markers in the output.
+        assert "// %%" not in result
+
+    @pytest.mark.asyncio
+    async def test_cpp_code_along_blanked_cells_become_todo_stubs(self):
+        """Code-along C++ export: blanked cells turn into // TODO slide
+        stubs so students have a compilable place for each cell (#333
+        phase 4). The keep cell's content survives as usual."""
+        notebook = make_notebook_node(
+            [
+                make_cell("code", "#include <iostream>", tags=["keep"]),
+                make_cell("code", 'std::cout << "x";'),
+            ]
+        )
+
+        spec = CodeAlongOutput(format="code", prog_lang="cpp")
+        processor = NotebookProcessor(spec)
+        payload = make_payload("", format_="code", kind="code-along", prog_lang="cpp")
+
+        nb = await processor._process_notebook_node(notebook, payload)
+        result = await processor.create_contents(nb, payload)
+
+        assert "#include <iostream>" in result
+        assert "void slide_01() {\n    // TODO\n}" in result
+        assert 'std::cout << "x";' not in result
+
+    @pytest.mark.asyncio
+    async def test_cpp_notebook_format_unaffected(self):
+        """The TU emitter must only kick in for format='code'."""
+        notebook = make_notebook_node(
+            [
+                make_cell("code", "int x = 42;"),
+            ]
+        )
+
+        spec = CompletedOutput(format="notebook", prog_lang="cpp")
+        processor = NotebookProcessor(spec)
+        payload = make_payload("", format_="notebook", prog_lang="cpp")
+
+        result = await processor.create_contents(notebook, payload)
+
+        parsed = json.loads(result)
+        assert "cells" in parsed
+        assert "int main()" not in result
+
 
 class TestOutputFormatHtml:
     """Test HTML format output."""

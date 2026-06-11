@@ -248,6 +248,15 @@ class OutputSpec(ABC):
             return False
         return is_cell_included_for_language(cell, self.language)
 
+    @property
+    def blanks_code_cells(self) -> bool:
+        """Whether this spec can clear code-cell contents (code-along style).
+
+        The C++ code export uses this to emit blanked cells as ``// TODO``
+        slide stubs instead of dropping them (issue #333, phase 4).
+        """
+        return self.delete_any_cell_contents
+
     def is_cell_contents_included(self, cell: Cell) -> bool:
         """Return whether the cell contents should be included or cleared.
 
@@ -463,6 +472,12 @@ class PartialOutput(OutputSpec):
                 if POST_WORKSHOP_TAG not in tags:
                     tags.append(POST_WORKSHOP_TAG)
                     set_tags(cell, tags)
+
+    @property
+    def blanks_code_cells(self) -> bool:
+        """Partial blanks post-workshop code cells despite
+        ``delete_any_cell_contents`` being False (it filters per cell)."""
+        return True
 
     @staticmethod
     def _is_post_workshop(cell: Cell) -> bool:

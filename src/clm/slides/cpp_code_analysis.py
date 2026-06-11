@@ -39,12 +39,18 @@ class CppItem:
     ``signature`` is set for functions: ``name(normalized-param-types)`` with
     a trailing `` const`` marker for const member functions, so that legal
     overloads compare unequal while true redefinitions compare equal.
+
+    ``text`` is the comment/string-stripped item text used for
+    classification. ``original`` (only filled by :func:`classify_source_spans`)
+    is the corresponding slice of the original source — comments and literal
+    contents intact — for re-emission by the code export.
     """
 
     category: str
     name: str | None = None
     signature: str | None = None
     text: str = ""
+    original: str = ""
 
 
 # Categories that introduce a named entity at namespace scope.
@@ -113,6 +119,69 @@ def strip_comments_and_strings(src: str) -> str:
     return "".join(out)
 
 
+def mask_comments_and_strings(src: str) -> str:
+    """Length-preserving variant of :func:`strip_comments_and_strings`.
+
+    Replaces comment text and string/char literal *contents* with spaces
+    while keeping every character position — in particular every newline —
+    intact, and keeping the quote/delimiter characters themselves. The result
+    lines up 1:1 with the original source, so item spans computed on the
+    masked text can slice the original. Raw-string delimiters (``R"d(`` /
+    ``)d"``) are kept, so parens stay balanced for the splitter.
+    """
+    out = list(src)
+
+    def blank(a: int, b: int) -> None:
+        for k in range(a, min(b, len(out))):
+            if out[k] != "\n":
+                out[k] = " "
+
+    i, n = 0, len(src)
+    while i < n:
+        c = src[i]
+        nxt = src[i + 1] if i + 1 < n else ""
+        if c == "/" and nxt == "/":
+            j = src.find("\n", i)
+            j = n if j < 0 else j
+            blank(i, j)
+            i = j
+            continue
+        if c == "/" and nxt == "*":
+            j = src.find("*/", i + 2)
+            j = n if j < 0 else j + 2
+            blank(i, j)
+            i = j
+            continue
+        if c == "R" and nxt == '"':
+            m = re.match(r'R"([^(\s]*)\(', src[i:])
+            if m:
+                closer = ")" + m.group(1) + '"'
+                j = src.find(closer, i + m.end())
+                if j < 0:
+                    blank(i + m.end(), n)
+                    i = n
+                else:
+                    blank(i + m.end(), j)
+                    i = j + len(closer)
+                continue
+        if c == '"':
+            j = i + 1
+            while j < n and src[j] != '"':
+                j += 2 if src[j] == "\\" else 1
+            blank(i + 1, j)
+            i = j + 1
+            continue
+        if c == "'":
+            j = i + 1
+            while j < n and src[j] != "'":
+                j += 2 if src[j] == "\\" else 1
+            blank(i + 1, j)
+            i = j + 1
+            continue
+        i += 1
+    return "".join(out)
+
+
 # ---------------------------------------------------------------------------
 # Preprocessor extraction / top-level splitting
 # ---------------------------------------------------------------------------
@@ -138,24 +207,24 @@ def extract_preprocessor(src: str) -> tuple[list[str], str]:
     return pp, "\n".join(rest)
 
 
-def split_top_level(src: str) -> list[str]:
-    """Split comment/string-stripped C++ into top-level items.
+def split_top_level_spans(src: str) -> list[tuple[int, int]]:
+    """Like :func:`split_top_level`, but return ``(start, end)`` char spans.
 
-    Splits on ``;`` at depth 0 and on a ``}`` that closes back to depth 0 —
-    except when the closing brace is followed by ``;`` (the ``;`` ends the
-    item) or by ``else``/``while``/``catch`` (an ``if {} else {}``,
-    ``do {} while``, or ``try {} catch`` continuation of the same item).
+    Spans whose text is pure whitespace are dropped; the remaining spans may
+    carry leading/trailing whitespace (callers strip as needed). Computed on
+    masked (length-preserving) text, the spans are valid in the original
+    source — this is how the code export recovers items with their comments
+    and string contents intact.
     """
-    items: list[str] = []
+    spans: list[tuple[int, int]] = []
     brace = paren = bracket = 0
     start = 0
     i, n = 0, len(src)
 
     def emit(end: int) -> None:
         nonlocal start
-        item = src[start:end].strip()
-        if item:
-            items.append(item)
+        if src[start:end].strip():
+            spans.append((start, end))
         start = end
 
     while i < n:
@@ -187,7 +256,18 @@ def split_top_level(src: str) -> list[str]:
             emit(i + 1)
         i += 1
     emit(n)
-    return items
+    return spans
+
+
+def split_top_level(src: str) -> list[str]:
+    """Split comment/string-stripped C++ into top-level items.
+
+    Splits on ``;`` at depth 0 and on a ``}`` that closes back to depth 0 —
+    except when the closing brace is followed by ``;`` (the ``;`` ends the
+    item) or by ``else``/``while``/``catch`` (an ``if {} else {}``,
+    ``do {} while``, or ``try {} catch`` continuation of the same item).
+    """
+    return [src[a:b].strip() for a, b in split_top_level_spans(src)]
 
 
 # ---------------------------------------------------------------------------
@@ -223,6 +303,10 @@ _CTOR_RE = re.compile(r"^((?:\w+(?:<[^;{}()]*>)?\s*::\s*)+~?\w+)\s*\(")
 _VAR_RE = re.compile(
     rf"^{_SPECIFIERS}{_TYPE_TOKEN}(?:\s+const\b|\s*[&*]+|\s+)+(\w+)\s*"
     rf"((?:\[[^\]]*\]\s*)*)(\{{|=|;|\(|,)",
+)
+# Function-pointer variables: bool (*pf)(double, double){&is_less};
+_FNPTR_VAR_RE = re.compile(
+    rf"^{_SPECIFIERS}{_TYPE_TOKEN}(?:\s+const\b|\s*[&*]+|\s+)*\(\s*\*+\s*(\w+)\s*\)\s*\(",
 )
 # Out-of-class static member definitions: std::allocator<T> MyVector<T>::allocator{};
 _MEMBER_VAR_RE = re.compile(
@@ -287,6 +371,11 @@ def classify_item(item: str) -> CppItem:
         if spec:
             name += re.sub(r"\s+", "", spec.group(1))
         return CppItem(cat, name, text=text)
+    if re.match(r"^(?:class|struct|union|enum(?:\s+(?:class|struct))?)\s*\{", text):
+        # Anonymous type definition (e.g. `enum { RED, GREEN };`): no name to
+        # track for redefinitions, but it must stay at namespace scope so its
+        # members remain visible to later cells.
+        return CppItem("type_def", text=text)
     if text.startswith("namespace"):
         return CppItem("namespace_def", text=text)
     if re.match(r"^using\s+namespace\b", text):
@@ -305,7 +394,11 @@ def classify_item(item: str) -> CppItem:
         # Continuation declarator from `int i{},\n j{};` style splits.
         nm = re.match(r"^,\s*(\w+)", text)
         return CppItem("var_decl", nm.group(1) if nm else None, text=text)
-    fm = _FN_RE.match(text) or _CTOR_RE.match(text)
+    fm = _FN_RE.match(text)
+    is_ctor_like = False
+    if not fm:
+        fm = _CTOR_RE.match(text)
+        is_ctor_like = fm is not None
     if fm:
         # Find the closing paren of the arg list; then `{` => def, `;` => decl.
         open_idx = text.find("(", fm.start(1))
@@ -332,7 +425,16 @@ def classify_item(item: str) -> CppItem:
                     return CppItem("member_fn_def", name, sig, text=text)
                 return CppItem("fn_def", name, sig, text=text)
             if tail.startswith(";") or tail.rstrip(";") in ("const", "noexcept", "override"):
+                if is_ctor_like and tail.startswith(";"):
+                    # `std::sort(xs.begin(), xs.end());` — a qualified call,
+                    # not a declaration: a member-function declaration without
+                    # return type is illegal at namespace scope, so a `;` tail
+                    # after the ctor-like pattern always means a call.
+                    return CppItem("call_stmt", text=text)
                 return CppItem("fn_decl", name, sig, text=text)
+    fp = _FNPTR_VAR_RE.match(text)
+    if fp:
+        return CppItem("var_decl", fp.group(1), text=text)
     vm = _VAR_RE.match(text)
     if vm:
         return CppItem("var_decl", vm.group(1), text=text)
@@ -383,5 +485,49 @@ def classify_source(source: str) -> list[CppItem]:
     for raw in split_top_level(rest):
         item = classify_item(raw)
         if item.category != "empty":
+            items.append(item)
+    return items
+
+
+def classify_source_spans(source: str) -> list[CppItem]:
+    """Like :func:`classify_source`, but with :attr:`CppItem.original` filled.
+
+    Classification still happens on comment/string-stripped text (the form
+    the heuristics were validated against); ``original`` carries the
+    corresponding slice of the original source — comments and literal
+    contents intact — for re-emission by the code export. Comments between
+    items attach to the *following* item; comments after the last item are
+    dropped. Preprocessor lines are extracted line-wise (mirroring
+    :func:`extract_preprocessor`) and removed from the code items' originals.
+    """
+    masked = mask_comments_and_strings(source)
+    masked_lines = masked.split("\n")
+    source_lines = source.split("\n")
+    items: list[CppItem] = []
+    i = 0
+    while i < len(masked_lines):
+        if masked_lines[i].lstrip().startswith("#"):
+            start_line = i
+            while masked_lines[i].rstrip().endswith("\\") and i + 1 < len(masked_lines):
+                i += 1
+            original = "\n".join(source_lines[start_line : i + 1])
+            merged = masked_lines[start_line]
+            for k in range(start_line + 1, i + 1):
+                merged = merged.rstrip()[:-1] + " " + masked_lines[k]
+            cat = "include" if merged.strip().startswith("#include") else "preproc_other"
+            items.append(CppItem(cat, text=merged.strip(), original=original))
+            # Blank the pp lines in both copies so char offsets stay aligned
+            # for the top-level split below.
+            for k in range(start_line, i + 1):
+                masked_lines[k] = ""
+                source_lines[k] = ""
+        i += 1
+    split_masked = "\n".join(masked_lines)
+    split_source = "\n".join(source_lines)
+    for a, b in split_top_level_spans(split_masked):
+        original = split_source[a:b].strip()
+        item = classify_item(strip_comments_and_strings(original))
+        if item.category != "empty":
+            item.original = original
             items.append(item)
     return items
