@@ -189,7 +189,7 @@ class _StubReporter:
     def on_progress_update(self, update):
         self.progress_updates.append(update)
 
-    def report_cache_hit(self, file_path, job_type):
+    def report_cache_hit(self, file_path, job_type, detail=None):
         self.cache_hits.append((file_path, job_type))
 
     def report_file_started(self, file_path, job_type, job_id=None):
@@ -564,15 +564,20 @@ async def test_get_available_workers_no_queue(temp_db, temp_workspace):
 async def test_get_output_metadata_all_types(temp_db, temp_workspace):
     backend = _backend(temp_db, temp_workspace)
     try:
-        assert backend._get_output_metadata(
-            "notebook",
-            {
-                "kind": "completed",
-                "prog_lang": "python",
-                "language": "en",
-                "format": "notebook",
-            },
-        ) == str(("completed", "python", "en", "notebook"))
+        # Colon-joined form, matching NotebookPayload.output_metadata() —
+        # store and lookup must agree or cached-issue replay is dead (#321).
+        assert (
+            backend._get_output_metadata(
+                "notebook",
+                {
+                    "kind": "completed",
+                    "prog_lang": "python",
+                    "language": "en",
+                    "format": "notebook",
+                },
+            )
+            == "completed:python:en:notebook"
+        )
 
         assert backend._get_output_metadata("plantuml", {"output_format": "svg"}) == "svg"
         assert backend._get_output_metadata("drawio", {"output_format": "png"}) == "png"
@@ -750,5 +755,153 @@ async def test_incremental_copy_skips_existing_output(temp_db, temp_workspace, t
         await backend.copy_file_to_output(data)
         # File content unchanged — incremental skipped the copy.
         assert dest.read_text() == "already here"
+    finally:
+        await backend.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# Issue #321: cached-result replay must be observationally equivalent to
+# execution (stored issues replayed on EVERY cache layer), and a successful
+# run must supersede issues stored by earlier runs under the same key.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_results_cache_hit_replays_stored_issues(temp_db, temp_workspace, tmp_path):
+    """A results_cache (job-level) hit must replay stored warnings/errors.
+
+    Previously only the processed_files path replayed issues; a results_cache
+    hit (e.g. after retention pruned the processed_files entry) returned
+    early and the build went silently green.
+    """
+    from clm.cli.build_data_classes import BuildWarning
+
+    cache_db = tmp_path / "cache.db"
+    backend = _backend(temp_db, temp_workspace, build_reporter=_StubReporter())
+    backend.db_manager = DatabaseManager(cache_db)
+    backend.db_manager.__enter__()
+    try:
+        payload = _MockPayload()
+
+        # The job-level cache requires the output to already exist on disk.
+        (temp_workspace / payload.output_file).write_text("output from prior build")
+
+        # Seed a job-level cache entry, but NO processed_files entry — the
+        # database-cache path must miss so the results_cache path is taken.
+        # Metadata must be non-empty: execute_operation treats the returned
+        # metadata dict itself as the hit indicator (`if cached:`), and real
+        # workers always store non-empty metadata.
+        assert backend.job_queue is not None
+        backend.job_queue.add_to_cache(
+            payload.output_file, payload.content_hash(), {"format": "notebook"}
+        )
+
+        # A warning recorded by the run that produced the cached output.
+        backend.db_manager.store_warning(
+            file_path=payload.input_file,
+            content_hash=payload.content_hash(),
+            output_metadata=payload.output_metadata(),
+            warning=BuildWarning(category="skip_errors_cell_failed", message="w", severity="low"),
+        )
+
+        await backend.execute_operation(_MockOp(), payload)
+
+        # Served from cache: no job submitted, hit reported, warning replayed.
+        assert backend.active_jobs == {}
+        assert backend.build_reporter.cache_hits == [(payload.input_file, "notebook")]
+        assert len(backend.build_reporter.warnings) == 1
+        assert backend.build_reporter.warnings[0].category == "skip_errors_cell_failed"
+    finally:
+        backend.db_manager.__exit__(None, None, None)
+        await backend.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_completed_job_clears_stale_stored_errors(temp_db, temp_workspace, tmp_path):
+    """A successful run clears errors stored by an earlier failed run.
+
+    Without this, a transient failure's stored error replays on every later
+    cache hit for the same (file, content, metadata) key even though the
+    content now builds cleanly.
+    """
+    cache_db = tmp_path / "cache.db"
+    backend = _backend(temp_db, temp_workspace, build_reporter=_StubReporter())
+    backend.db_manager = DatabaseManager(cache_db)
+    backend.db_manager.__enter__()
+    try:
+        payload = _MockPayload()
+        await backend.execute_operation(_MockOp(), payload)
+        job_id = next(iter(backend.active_jobs))
+
+        # The key a failed run of this exact job would have stored under.
+        output_metadata = backend._get_output_metadata("notebook", payload.model_dump(mode="json"))
+        backend.db_manager.store_error(
+            file_path=payload.input_file,
+            content_hash=payload.content_hash(),
+            output_metadata=output_metadata,
+            error=BuildError(
+                error_type="user",
+                category="execution",
+                severity="error",
+                file_path=payload.input_file,
+                message="transient kernel failure from a previous build",
+                actionable_guidance="none",
+            ),
+        )
+
+        # Mark the job completed and run the wait loop (integration path:
+        # the clearing must happen inside wait_for_completion's completed
+        # branch, before fresh warnings are extracted).
+        jq = JobQueue(temp_db)
+        try:
+            jq.update_job_status(job_id, "completed")
+        finally:
+            jq.close()
+        result = await backend.wait_for_completion()
+        assert result is True
+
+        errors, warnings = backend.db_manager.get_issues(
+            payload.input_file, payload.content_hash(), output_metadata
+        )
+        assert errors == []
+        assert warnings == []
+        # The stale error must not have been (re-)reported either.
+        assert backend.build_reporter.errors == []
+    finally:
+        backend.active_jobs.clear()
+        backend.db_manager.__exit__(None, None, None)
+        await backend.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_stored_issue_keys_match_lookup_keys_for_notebook_jobs(
+    temp_db, temp_workspace, tmp_path
+):
+    """End-to-end key agreement for notebook jobs (issue #321).
+
+    Issues are stored under ``_get_output_metadata(job_type, payload_dict)``
+    (failed-job and warning-extraction paths) but looked up under
+    ``payload.output_metadata()`` (cache-hit replay). These were silently
+    different for notebook jobs (str(tuple) vs colon-joined), which disabled
+    cached-issue replay entirely. Pin their agreement.
+    """
+    from clm.infrastructure.messaging.notebook_classes import NotebookPayload
+
+    backend = _backend(temp_db, temp_workspace)
+    try:
+        payload = NotebookPayload(
+            correlation_id="cid",
+            input_file="slides.py",
+            input_file_name="slides.py",
+            output_file="slides.html",
+            data="content",
+            kind="completed",
+            prog_lang="python",
+            language="en",
+            format="html",
+        )
+        stored_key = backend._get_output_metadata("notebook", payload.model_dump(mode="json"))
+        lookup_key = payload.output_metadata()
+        assert stored_key == lookup_key
     finally:
         await backend.shutdown()

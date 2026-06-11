@@ -2,6 +2,29 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## Execution cache keys now cover dependencies (issue #321, after 1.11)
+
+`clm build` previously keyed its notebook execution caches on the deck text
+alone, so editing a sibling file the deck depends on (a C++ header it
+`#include`s, a Jinja `{% include %}` target, a CSV it reads) silently
+replayed stale execution output with a fresh timestamp, and only
+`--ignore-cache` recovered. The cache keys now also cover every non-image
+topic sibling, a fingerprint of CLM's bundled Jinja templates, and the
+per-topic `evaluate=` / `skip-errors=` attributes.
+
+Consequences for course repos:
+
+- **The first build after upgrading re-executes every deck once** (the key
+  schema changed). Subsequent builds cache normally.
+- Editing any non-image file in a topic directory re-executes the decks in
+  that topic — you no longer need `--ignore-cache` after changing a shared
+  header or data file.
+- Editing the HTTP-replay cassette still does **not** invalidate (deliberate;
+  record-capable modes rewrite cassettes after execution). Use
+  `--ignore-cache` after a manual cassette edit.
+- `clm build --output-mode verbose` now prints `↻ Replayed from cache` for
+  every file served from a cache instead of executed.
+
 ## Command-tree regrouping (issue #310, after 1.11)
 
 The single-command groups `topic`, `spec`, and `authoring` were merged into

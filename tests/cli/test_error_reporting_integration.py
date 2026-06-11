@@ -75,8 +75,12 @@ class TestSqliteBackendErrorStorage:
             "format": "notebook",
         }
 
+        # Must be the colon-joined NotebookPayload.output_metadata() form so
+        # stored issues are found again by _report_cached_issues (issue #321:
+        # the old str(tuple) form keyed stored notebook issues under a string
+        # the lookup never used, silently disabling cached-issue replay).
         result = backend._get_output_metadata("notebook", payload_dict)
-        assert result == "('participant', 'python', 'en', 'notebook')"
+        assert result == "participant:python:en:notebook"
 
     def test_get_output_metadata_plantuml(self, backend_setup):
         """Test that _get_output_metadata correctly generates metadata for plantuml."""

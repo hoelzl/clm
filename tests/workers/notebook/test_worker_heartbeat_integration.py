@@ -323,7 +323,6 @@ def test_three_cell_notebook_emits_heartbeats(db_path: Path, tmp_path: Path) -> 
         prog_lang="python",
         language="en",
         format="html",
-        template_dir="",
         other_files={},
         correlation_id=f"hb-test-{uuid.uuid4().hex[:8]}",
     )

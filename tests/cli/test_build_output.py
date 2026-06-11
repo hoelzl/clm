@@ -801,6 +801,30 @@ class TestVerboseOutputFormatter:
         # Check that the file is being tracked
         assert "test.ipynb" in formatter._files_started
 
+    def test_verbose_formatter_shows_cache_replays(self, capsys):
+        """Verbose mode must say explicitly when a file was served from cache
+        (issue #321: replayed output is freshly timestamped and otherwise
+        indistinguishable from executed output)."""
+        formatter = VerboseOutputFormatter(show_progress=False, use_color=False)
+
+        formatter.show_cache_hit("test.ipynb", "notebook", detail="stored result replayed")
+
+        # The rich console writes to stderr.
+        captured = capsys.readouterr()
+        assert "Replayed from cache" in captured.err
+        assert "test.ipynb" in captured.err
+        assert "stored result replayed" in captured.err
+
+    def test_default_formatter_cache_hit_is_silent(self, capsys):
+        """The default formatter keeps cache hits to the progress counter."""
+        formatter = DefaultOutputFormatter(show_progress=False, use_color=False)
+
+        formatter.show_cache_hit("test.ipynb", "notebook", detail="stored result replayed")
+
+        captured = capsys.readouterr()
+        assert "Replayed from cache" not in captured.out
+        assert "Replayed from cache" not in captured.err
+
     def test_verbose_formatter_file_completed_success(self):
         """Test verbose formatter tracks file processing completion (success)."""
         formatter = VerboseOutputFormatter()

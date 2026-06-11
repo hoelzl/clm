@@ -167,6 +167,26 @@ class OutputFormatter(ABC):
             success: Whether processing succeeded
         """
 
+    def show_cache_hit(  # noqa: B027
+        self, file_path: str, job_type: str, detail: str | None = None
+    ) -> None:
+        """Show when a file is served from cache instead of executed (optional).
+
+        Replayed results are observationally indistinguishable from executed
+        ones in the output tree (freshly timestamped files), which made the
+        stale-replay class of issue #321 hard to even notice. Verbose mode
+        overrides this to say explicitly that no execution happened.
+
+        This method is intentionally not abstract - it's an optional hook that
+        subclasses may override for verbose output. The default implementation
+        is a no-op.
+
+        Args:
+            file_path: Path to the source file served from cache
+            job_type: Type of job (notebook, plantuml, drawio)
+            detail: Optional human-readable cache-layer description
+        """
+
     def show_startup_message(self, message: str) -> None:  # noqa: B027
         """Show a startup progress message (optional).
 
@@ -531,6 +551,20 @@ class VerboseOutputFormatter(DefaultOutputFormatter):
 
         job_info = f" (job #{job_id})" if job_id else ""
         self.console.print(f"  [dim]▶ Processing {job_type}:{job_info} {display_path}[/dim]")
+
+    def show_cache_hit(self, file_path: str, job_type: str, detail: str | None = None) -> None:
+        """Show when a file is served from cache instead of executed.
+
+        Args:
+            file_path: Path to the source file served from cache
+            job_type: Type of job (notebook, plantuml, drawio)
+            detail: Optional human-readable cache-layer description
+        """
+        display_path = format_error_path(file_path)
+        detail_info = f" ({detail})" if detail else ""
+        self.console.print(
+            f"  [cyan]↻[/cyan] [dim]Replayed from cache {job_type}: {display_path}{detail_info}[/dim]"
+        )
 
     def show_file_completed(
         self, file_path: str, job_type: str, job_id: int | None = None, success: bool = True
