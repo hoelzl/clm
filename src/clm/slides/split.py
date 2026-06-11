@@ -363,6 +363,7 @@ def split_in_file(
     de_text, en_text = split_text(text, comment_token)
 
     warnings = _preamble_code_warnings(text, source, comment_token)
+    warnings += _missing_slide_id_warnings(text, source, comment_token)
 
     companion = _plan_companion_split(source, de_path, en_path, comment_token)
 
@@ -426,6 +427,35 @@ def _preamble_code_warnings(text: str, source: Path, comment_token: str = "#") -
             f"cell, then re-split."
         )
     return warnings
+
+
+def _missing_slide_id_warnings(text: str, source: Path, comment_token: str = "#") -> list[str]:
+    """Warn (without rewriting) when slide/subslide cells lack a ``slide_id``.
+
+    The split itself tolerates id-less cells — they still route by ``lang``
+    and ``unify`` pairs them by adjacency — but the emitted halves fail
+    ``clm slides validate`` (missing slide_id is an error since 1.8) and
+    cannot pair by id during ``sync``. Minting ids belongs to ``assign-ids``
+    on the bilingual source, never to ``split``, which must stay a
+    byte-faithful structural transform (issue #255). Same rule as the
+    validator: only ``slide``/``subslide`` cells require an id.
+    """
+    _preamble, cells = split_cells(text, comment_token)
+    lines = [
+        cell.line_number
+        for cell in cells
+        if cell.metadata.is_slide_start and cell.metadata.slide_id is None
+    ]
+    if not lines:
+        return []
+    listed = ", ".join(str(n) for n in lines[:5]) + (", ..." if len(lines) > 5 else "")
+    return [
+        f"{source}: {len(lines)} slide/subslide cell(s) lack slide_id "
+        f"(line(s) {listed}). The split halves will fail `clm slides validate` "
+        f"and can pair only by adjacency. Run `clm slides assign-ids` on the "
+        f"bilingual source (EN-authority pair minting) first, then re-split "
+        f"(issue #255)."
+    ]
 
 
 def _split_target(source: Path, lang: str) -> Path:
