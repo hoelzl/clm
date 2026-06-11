@@ -91,6 +91,7 @@ class TestNotebookPayload:
             "language": "de",
             "format": "html",
             "template_fingerprint": "tfp-distinctive",
+            "worker_image_identity": "docker:mhoelzl/clm-notebook-processor:9.9.9",
             "other_files": {"helper.py": b"x = 1"},
             "fallback_execute": True,
             "skip_evaluation": True,
@@ -383,6 +384,23 @@ class TestDependencyFoldingIntoHashes:
         v2 = self._payload(template_fingerprint="fingerprint-2")
         assert v1.content_hash() != v2.content_hash()
         assert v1.execution_cache_hash() != v2.execution_cache_hash()
+
+    def test_worker_image_identity_invalidates_both_hashes(self):
+        """A cache populated under one worker image must not be replayed
+        under another (xeus-cling → xeus-cpp class of breakage): the image
+        carries its own clm version, templates, and kernel."""
+        old_image = self._payload(worker_image_identity="docker:clm-notebook-processor:1.10.0")
+        new_image = self._payload(worker_image_identity="docker:clm-notebook-processor:1.11.0")
+        assert old_image.content_hash() != new_image.content_hash()
+        assert old_image.execution_cache_hash() != new_image.execution_cache_hash()
+
+    def test_direct_vs_docker_identity_invalidates_both_hashes(self):
+        """Switching execution mode changes the environment that produced
+        the outputs, so it must invalidate too."""
+        direct = self._payload(worker_image_identity="direct")
+        docker = self._payload(worker_image_identity="docker:clm-notebook-processor:1.11.0")
+        assert direct.content_hash() != docker.content_hash()
+        assert direct.execution_cache_hash() != docker.execution_cache_hash()
 
     def test_skip_evaluation_flip_invalidates_both_hashes(self):
         """Flipping ``evaluate="no"`` on a topic changes the output for
