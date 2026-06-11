@@ -1167,8 +1167,21 @@ clm validate slides/module_010/topic_100_intro/ --quick
 
 Normalize slide files by applying mechanical fixes: tag migration (`alt`→`completed`),
 workshop tag insertion, DE/EN interleaving, slide ID auto-generation, **cell spacing**
-(`cell_spacing`), and — since CLM {version} — **preamble-code wrapping**
-(`preamble_code`).
+(`cell_spacing`), **preamble-code wrapping** (`preamble_code`), and — since CLM
+{version} — **placeholder-start demotion** (`placeholder_start`).
+
+The `placeholder_start` operation (since CLM {version}) fixes a recurring
+workshop mis-tag (issue #233): a code cell tagged `start` whose entire body is
+a solution placeholder (`# Your solution here`, `pass`, `...`) followed by a
+**markdown** cell tagged `completed` (or `alt`). Workshop solutions authored as
+markdown/`alt` runs need no `start`/`completed` pairing — the workshop range
+mechanism blanks them in code-along output — and the bogus `start` tag causes
+`tag_migration` to wrongly promote the adjacent markdown `alt` to `completed`.
+The op removes the `start` tag (the cell becomes a plain `# %%` cell) and
+renames an already-promoted markdown `completed` partner back to `alt`.
+Placeholder `start` cells paired with a **code** `completed` cell are left
+untouched (that is a valid live-coding pair). Runs before `tag_migration`,
+is default-on (part of `all`), and idempotent.
 
 The `cell_spacing` operation fixes the two formatting issues the `format`
 validator now warns about: it inserts a blank line before every cell that lacks
@@ -1193,7 +1206,7 @@ clm slides normalize [OPTIONS] PATH
 
 | Option | Description |
 |--------|-------------|
-| `--operations TEXT` | Comma-separated operations: `preamble_code`, `tag_migration`, `workshop_tags`, `interleaving`, `slide_ids`, `cell_spacing`, `all` (default: `all`) |
+| `--operations TEXT` | Comma-separated operations: `preamble_code`, `placeholder_start`, `tag_migration`, `workshop_tags`, `interleaving`, `slide_ids`, `cell_spacing`, `all` (default: `all`) |
 | `--dry-run` | Preview changes without modifying files |
 | `--canonicalize-start-completed` | Force `start`/`completed` cohesion pairs into the canonical DE/EN interleave, even when DE/EN code differs (e.g. localized identifiers). Run before `clm slides split` so `unify(split(deck)) == deck` holds byte-for-byte. Only affects the `interleaving` operation. |
 | `--json` | Output as JSON |
@@ -1219,6 +1232,8 @@ clm slides normalize slides/module_010/ --operations slide_ids --json
 clm slides normalize slides/module_010/ --operations cell_spacing
 # Fix only preamble code (wrap code before the first cell into its own `# %%` cell)
 clm slides normalize slides/module_010/ --operations preamble_code
+# Fix only mis-tagged placeholder start cells (untag + markdown completed->alt)
+clm slides normalize slides/module_010/ --operations placeholder_start
 # Pre-conversion: canonicalize start/completed order so the split round-trips exactly
 clm slides normalize slides/module_010/topic_100_intro/ --operations interleaving --canonicalize-start-completed
 # Scope: mint ids on bilingual decks only, skipping an _archive/ dir
