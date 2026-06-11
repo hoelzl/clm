@@ -1,5 +1,8 @@
+import hashlib
 import logging
 from base64 import b64encode
+from functools import cache
+from importlib.resources import files as package_files
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +24,40 @@ from clm.infrastructure.utils.path_utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@cache
+def compute_template_fingerprint(prog_lang: str) -> str:
+    """Digest of the bundled Jinja templates for *prog_lang* plus the CLM version.
+
+    Computed HOST-side at payload construction and shipped to the worker via
+    ``NotebookPayload.template_fingerprint``, where it is folded into the
+    cache keys. Templates (``macros.j2`` etc.) live inside the clm package
+    and are resolved worker-side, so they are otherwise invisible to the
+    cache: without this fingerprint a template change shipped with a clm
+    upgrade silently replays stale HTML from a warm cache (issue #321).
+
+    The CLM version is folded in as well, as a coarse proxy for everything
+    else the package ships that can affect output (worker code, bootstrap
+    templates). The fingerprint must be computed on ONE side only — host and
+    worker may run different clm versions (Docker images), and the cache key
+    must be computed identically by every layer, so the worker reuses the
+    host's value from the payload instead of recomputing.
+
+    ``lru_cache`` makes this a one-time cost per prog_lang per process; the
+    template directories are a handful of small files.
+    """
+    from clm import __version__
+
+    hasher = hashlib.sha256()
+    hasher.update(f"{__version__}:{prog_lang}".encode())
+    template_dir = package_files("clm") / "workers" / "notebook" / f"templates_{prog_lang}"
+    if template_dir.is_dir():
+        entries = sorted((entry.name, entry) for entry in template_dir.iterdir() if entry.is_file())
+        for name, entry in entries:
+            hasher.update(f"\n{name}:".encode())
+            hasher.update(entry.read_bytes())
+    return hasher.hexdigest()
 
 
 def _resolve_trace_dir_for_payload() -> str:
@@ -367,6 +404,7 @@ class ProcessNotebookOperation(Operation):
             prog_lang=self.prog_lang,
             language=self.language,
             format=self.format,
+            template_fingerprint=compute_template_fingerprint(self.prog_lang),
             other_files=self.compute_other_files(),
             fallback_execute=self.fallback_execute,
             skip_evaluation=self.skip_evaluation,

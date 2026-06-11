@@ -199,7 +199,11 @@ class SqliteBackend(LocalOpsBackend):
 
                 # Report cache hit to build reporter for progress tracking
                 if self.build_reporter:
-                    self.build_reporter.report_cache_hit(str(payload.input_file), job_type)
+                    self.build_reporter.report_cache_hit(
+                        str(payload.input_file),
+                        job_type,
+                        detail="stored result replayed, no execution",
+                    )
 
                 return
 
@@ -217,9 +221,26 @@ class SqliteBackend(LocalOpsBackend):
                 if not output_path.is_absolute():
                     output_path = self.workspace_path / output_path
                 if output_path.exists():
+                    # Replay stored errors/warnings for this result, exactly
+                    # like the database-cache path above. Without this, a
+                    # results_cache hit (e.g. after retention pruned the
+                    # processed_files entry) silently dropped the issues a
+                    # worker recorded for this content — the build went
+                    # green while the output still contained the flagged
+                    # content (issue #321: replay must be observationally
+                    # equivalent to execution).
+                    self._report_cached_issues(
+                        payload.input_file,
+                        payload.content_hash(),
+                        payload.output_metadata(),
+                    )
                     # Report cache hit to build reporter for progress tracking
                     if self.build_reporter:
-                        self.build_reporter.report_cache_hit(str(payload.input_file), job_type)
+                        self.build_reporter.report_cache_hit(
+                            str(payload.input_file),
+                            job_type,
+                            detail="output already on disk, no execution",
+                        )
                     return
                 else:
                     logger.warning(f"Cache indicated file exists but not found: {output_path}")
@@ -472,6 +493,16 @@ class SqliteBackend(LocalOpsBackend):
                         f"Job {job_id} completed: {job_info['input_file']} -> {job_info['output_file']}"
                     )
                     completed_jobs.append(job_id)
+
+                    # A successful run supersedes whatever issues earlier runs
+                    # stored under the same (file, content, metadata) key.
+                    # Without this, a transient failure's stored error is
+                    # replayed on every later cache hit even though the
+                    # content now builds cleanly — and re-runs of the same
+                    # content (--ignore-cache) accumulate duplicate warnings.
+                    # Must happen BEFORE the warning extraction below so the
+                    # fresh run's warnings survive.
+                    self._clear_stored_issues_for_job(job_id, job_info)
 
                     # Extract and report any warnings from the job result
                     self._extract_and_report_job_warnings(job_id, job_info)
@@ -1018,12 +1049,21 @@ class SqliteBackend(LocalOpsBackend):
             Output metadata string matching the format used in payload.output_metadata()
         """
         if job_type == "notebook":
-            # NotebookPayload.output_metadata() returns tuple of (kind, prog_lang, language, format)
+            # MUST match NotebookPayload.output_metadata() / NotebookResult
+            # .output_metadata() exactly — the colon-joined form, NOT
+            # ``str()`` of the tags tuple. Issues are *stored* under the key
+            # this function returns but *looked up* (``_report_cached_issues``)
+            # under ``payload.output_metadata()``; a previous ``str(tuple)``
+            # here keyed every stored notebook error/warning under
+            # ``"('completed', 'python', ...)"`` while lookups used
+            # ``"completed:python:..."``, silently disabling cached-issue
+            # replay for ALL notebook jobs (issue #321).
             from clm.infrastructure.messaging.notebook_classes import (
+                notebook_metadata,
                 notebook_metadata_tags_from_payload,
             )
 
-            return str(notebook_metadata_tags_from_payload(payload_dict))
+            return notebook_metadata(*notebook_metadata_tags_from_payload(payload_dict))
         elif job_type in ("plantuml", "drawio"):
             # ImagePayload.output_metadata() returns output_format
             output_format = payload_dict.get("output_format", "png")
@@ -1037,6 +1077,36 @@ class SqliteBackend(LocalOpsBackend):
             return f"jupyterlite:{target_name}:{language}:{kinds_str}:{kernel}"
         else:
             return ""
+
+    def _clear_stored_issues_for_job(self, job_id: int, job_info: dict) -> None:
+        """Drop stored errors/warnings superseded by a successful run.
+
+        ``processing_issues`` rows are keyed ``(file_path, content_hash,
+        output_metadata)`` and are replayed by ``_report_cached_issues`` on
+        every cache hit for that key. When a job for the exact same key
+        completes successfully, those stored issues describe a run that the
+        success just superseded (e.g. a transient kernel failure), so they
+        must not haunt future cache hits. Called before
+        ``_extract_and_report_job_warnings`` stores the fresh run's warnings.
+        """
+        if self.db_manager is None or self.job_queue is None:
+            return
+        try:
+            conn = self.job_queue._get_conn()
+            cursor = conn.execute("SELECT payload, content_hash FROM jobs WHERE id = ?", (job_id,))
+            row = cursor.fetchone()
+            if not row:
+                return
+            payload_dict = json.loads(row[0]) if row[0] else {}
+            content_hash = row[1]
+            output_metadata = self._get_output_metadata(job_info["job_type"], payload_dict)
+            self.db_manager.clear_issues(
+                file_path=job_info["input_file"],
+                content_hash=content_hash,
+                output_metadata=output_metadata,
+            )
+        except Exception as e:
+            logger.warning(f"Could not clear stored issues for job {job_id}: {e}")
 
     def _extract_and_report_job_warnings(self, job_id: int, job_info: dict) -> None:
         """Extract warnings from completed job and report/store them.

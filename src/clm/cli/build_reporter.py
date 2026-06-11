@@ -164,7 +164,7 @@ class BuildReporter:
             cached=self._stage_cached_count,
         )
 
-    def report_cache_hit(self, file_path: str, job_type: str) -> None:
+    def report_cache_hit(self, file_path: str, job_type: str, detail: str | None = None) -> None:
         """Report that a file was served from cache without worker execution.
 
         This method should be called when a cache hit occurs and the file
@@ -173,9 +173,15 @@ class BuildReporter:
         Args:
             file_path: Path to the cached file
             job_type: Type of job (notebook, plantuml, drawio)
+            detail: Optional cache-layer description shown in verbose mode
+                (issue #321: replayed output is freshly timestamped and
+                otherwise indistinguishable from executed output)
         """
         self._stage_cached_count += 1
         self._global_cached_count += 1
+
+        # Per-file replay line in verbose modes (no-op in other formatters)
+        self.formatter.show_cache_hit(file_path, job_type, detail)
 
         # Trigger a progress update to reflect the cache hit
         self.update_progress(

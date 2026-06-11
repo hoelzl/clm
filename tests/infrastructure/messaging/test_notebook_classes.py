@@ -57,7 +57,7 @@ class TestNotebookPayload:
 
     def test_payload_default_values(self, sample_payload):
         """Should have default values for optional fields."""
-        assert sample_payload.template_dir == ""
+        assert sample_payload.template_fingerprint == ""
         assert sample_payload.other_files == {}
         assert sample_payload.fallback_execute is False
 
@@ -90,7 +90,7 @@ class TestNotebookPayload:
             "prog_lang": "cpp",
             "language": "de",
             "format": "html",
-            "template_dir": "tmpl",
+            "template_fingerprint": "tfp-distinctive",
             "other_files": {"helper.py": b"x = 1"},
             "fallback_execute": True,
             "skip_evaluation": True,
@@ -263,7 +263,7 @@ class TestExecutionCacheHash:
 
     def test_hash_invariant_across_replay_mode(self):
         """The hash must not depend on whether replay is on, since the
-        cache key is over source data only."""
+        cache key is over source data and non-cassette dependencies only."""
         p_plain = self._payload()
         p_replay = self._payload(
             http_replay_mode="replay",
@@ -271,6 +271,148 @@ class TestExecutionCacheHash:
             other_files={"slides.http-cassette.yaml": b"cassette"},
         )
         assert p_plain.execution_cache_hash() == p_replay.execution_cache_hash()
+
+    def test_content_hash_invariant_under_cassette_bytes_change(self):
+        """The cassette exclusion must hold for ``content_hash`` too — the
+        host-side caches key on it, and a cassette rewritten post-execution
+        would otherwise reproduce the record-mode miss loop there."""
+        p_old = self._payload(
+            http_replay_mode="new-episodes",
+            http_replay_cassette_name="slides.http-cassette.yaml",
+            other_files={"slides.http-cassette.yaml": b"old-cassette-bytes"},
+        )
+        p_new = self._payload(
+            http_replay_mode="new-episodes",
+            http_replay_cassette_name="slides.http-cassette.yaml",
+            other_files={"slides.http-cassette.yaml": b"new-cassette-bytes"},
+        )
+        assert p_old.content_hash() == p_new.content_hash()
+
+
+class TestDependencyFoldingIntoHashes:
+    """Issue #321: the cache keys must cover the full dependency set.
+
+    ``other_files`` carries the byte content of every non-image topic
+    sibling — C++ headers a deck ``#include``s, Jinja ``{% include %}``
+    targets, runtime data files. A change to any of them must invalidate
+    both the host-side ``content_hash`` and the worker-side
+    ``execution_cache_hash``, otherwise freshly timestamped output ships
+    stale execution results.
+    """
+
+    def _payload(self, **overrides):
+        defaults = {
+            "correlation_id": "cid",
+            "input_file": "/slides.cpp",
+            "input_file_name": "slides.cpp",
+            "output_file": "/slides.html",
+            "data": "cell contents",
+            "kind": "speaker",
+            "prog_lang": "cpp",
+            "language": "en",
+            "format": "html",
+            "other_files": {"lifetime_observer.hpp": b"struct Obs { int id; };"},
+        }
+        defaults.update(overrides)
+        return NotebookPayload(**defaults)
+
+    def _both_hashes(self, payload):
+        return payload.content_hash(), payload.execution_cache_hash()
+
+    def test_sibling_content_change_invalidates_both_hashes(self):
+        """The observed #321 case: editing an ``#include``d sibling header
+        with unchanged deck text must change both cache keys."""
+        before = self._payload()
+        after = self._payload(
+            other_files={"lifetime_observer.hpp": b"struct Obs { int id; int generation; };"}
+        )
+        assert before.content_hash() != after.content_hash()
+        assert before.execution_cache_hash() != after.execution_cache_hash()
+
+    def test_sibling_added_or_removed_invalidates_both_hashes(self):
+        with_one = self._payload()
+        with_two = self._payload(
+            other_files={
+                "lifetime_observer.hpp": b"struct Obs { int id; };",
+                "data.csv": b"a,b\n1,2\n",
+            }
+        )
+        assert with_one.content_hash() != with_two.content_hash()
+        assert with_one.execution_cache_hash() != with_two.execution_cache_hash()
+
+    def test_sibling_rename_invalidates_both_hashes(self):
+        """Same bytes under a different name is a different include target."""
+        original = self._payload()
+        renamed = self._payload(other_files={"observer.hpp": b"struct Obs { int id; };"})
+        assert original.content_hash() != renamed.content_hash()
+        assert original.execution_cache_hash() != renamed.execution_cache_hash()
+
+    def test_sibling_order_is_irrelevant(self):
+        """dict insertion order must not leak into the key (the digest sorts)."""
+        ab = self._payload(other_files={"a.h": b"A", "b.h": b"B"})
+        ba = self._payload(other_files={"b.h": b"B", "a.h": b"A"})
+        assert ab.content_hash() == ba.content_hash()
+        assert ab.execution_cache_hash() == ba.execution_cache_hash()
+
+    def test_non_cassette_sibling_still_folded_when_replay_active(self):
+        """Only the cassette entry is excluded — a real sibling shipped
+        alongside an active cassette must still invalidate."""
+        before = self._payload(
+            http_replay_mode="replay",
+            http_replay_cassette_name="slides.http-cassette.yaml",
+            other_files={
+                "slides.http-cassette.yaml": b"cassette",
+                "lifetime_observer.hpp": b"v1",
+            },
+        )
+        after = self._payload(
+            http_replay_mode="replay",
+            http_replay_cassette_name="slides.http-cassette.yaml",
+            other_files={
+                "slides.http-cassette.yaml": b"cassette",
+                "lifetime_observer.hpp": b"v2",
+            },
+        )
+        assert before.content_hash() != after.content_hash()
+        assert before.execution_cache_hash() != after.execution_cache_hash()
+
+    def test_template_fingerprint_invalidates_both_hashes(self):
+        """A clm upgrade that changes bundled templates (``macros.j2``) must
+        invalidate, even though templates resolve worker-side."""
+        v1 = self._payload(template_fingerprint="fingerprint-1")
+        v2 = self._payload(template_fingerprint="fingerprint-2")
+        assert v1.content_hash() != v2.content_hash()
+        assert v1.execution_cache_hash() != v2.execution_cache_hash()
+
+    def test_skip_evaluation_flip_invalidates_both_hashes(self):
+        """Flipping ``evaluate="no"`` on a topic changes the output for
+        identical deck text; the old executed HTML must not replay."""
+        evaluated = self._payload(skip_evaluation=False)
+        unevaluated = self._payload(skip_evaluation=True)
+        assert evaluated.content_hash() != unevaluated.content_hash()
+        assert evaluated.execution_cache_hash() != unevaluated.execution_cache_hash()
+
+    def test_skip_errors_flip_invalidates_both_hashes(self):
+        strict = self._payload(skip_errors=False)
+        tolerant = self._payload(skip_errors=True)
+        assert strict.content_hash() != tolerant.content_hash()
+        assert strict.execution_cache_hash() != tolerant.execution_cache_hash()
+
+    def test_round_trip_preserves_hashes(self):
+        """Host and worker must compute identical keys from the same job:
+        the hash inputs have to survive the model_dump(mode="json") →
+        from_job_payload round trip exactly (bytes ↔ str coercion included)."""
+        original = self._payload(template_fingerprint="tfp")
+        dumped = original.model_dump(mode="json")
+        restored = NotebookPayload.from_job_payload(
+            dumped,
+            content=original.data,
+            input_file=original.input_file,
+            output_file=original.output_file,
+            fallback_correlation_id="cid-fallback",
+        )
+        assert restored.content_hash() == original.content_hash()
+        assert restored.execution_cache_hash() == original.execution_cache_hash()
 
 
 class TestNotebookResult:

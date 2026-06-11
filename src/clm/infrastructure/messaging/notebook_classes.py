@@ -4,6 +4,14 @@ from typing import Any, Literal
 
 from clm.infrastructure.messaging.base_classes import Payload, ProcessingError, Result
 
+# Version tag folded into every notebook cache hash. Bump whenever the
+# *composition* of ``content_hash()`` / ``execution_cache_hash()`` changes so
+# that stale cache entries produced under the old key schema can never be
+# replayed as hits under the new one. Bumping invalidates all existing
+# notebook caches (one full re-execution on the next build) — deliberate and
+# visible, instead of an accidental partial overlap between key schemas.
+CACHE_HASH_SCHEMA_VERSION = 2
+
 
 def notebook_metadata(kind, prog_lang, language, output_format) -> str:
     return f"{kind}:{prog_lang}:{language}:{output_format}"
@@ -40,7 +48,15 @@ class NotebookPayload(Payload):
     prog_lang: str
     language: str
     format: str
-    template_dir: str = ""
+    # Digest of the bundled Jinja template directory for this payload's
+    # prog_lang plus the CLM version, computed HOST-side at payload
+    # construction (``compute_template_fingerprint``). Templates are
+    # resolved worker-side from the installed clm package, so without this
+    # field a ``macros.j2`` change (shipped with a new clm version) would
+    # invalidate nothing and every deck would replay stale title slides
+    # from a warm cache (issue #321 class 4). Folded into both cache
+    # hashes below.
+    template_fingerprint: str = ""
     other_files: dict[str, bytes] = {}
     fallback_execute: bool = False
     # If True, the notebook is rendered to all configured output formats
@@ -101,8 +117,52 @@ class NotebookPayload(Payload):
     def notebook_text(self) -> str:
         return self.data
 
+    def _dependency_digest(self) -> str:
+        """Digest of every dependency this payload carries besides ``data``.
+
+        Folds in ``other_files`` (the complete byte content of every
+        non-image topic sibling — C++ headers a deck ``#include``s, files
+        pulled in via Jinja ``{% include %}``, runtime data files), the
+        template fingerprint, and the ``skip_evaluation`` / ``skip_errors``
+        execution flags. Editing any topic sibling re-executes the deck:
+        that over-invalidates slightly (a sibling the deck never reads also
+        triggers re-execution), but over-invalidation is safe and cheap
+        relative to silently shipping stale teaching material (issue #321).
+
+        The HTTP-replay cassette entry (``other_files[http_replay_cassette_name]``)
+        is intentionally EXCLUDED. Folding cassette bytes into the key was
+        tried earlier and produced an unfixable cache-miss loop:
+        ``compute_other_files`` reads the cassette at payload construction
+        (before the kernel runs), while record-capable modes
+        (``once``/``new-episodes``/``refresh``) write the cassette after the
+        kernel runs. So the next build's lookup hash uses the post-execution
+        cassette and never matches the prior build's stored hash. The same
+        issue surfaces the first time a cassette is created (missing →
+        populated) and whenever ``.gitattributes`` normalizes CRLF↔LF
+        between builds. Users who want to invalidate cached execution after
+        a manual cassette edit should use ``--ignore-cache``. Do NOT "fix"
+        this exclusion when extending the digest.
+        """
+        hasher = hashlib.sha256()
+        hasher.update(
+            f"{self.template_fingerprint}:{self.skip_evaluation}:{self.skip_errors}".encode()
+        )
+        cassette_key = self.http_replay_cassette_name
+        for name in sorted(self.other_files):
+            if cassette_key is not None and name == cassette_key:
+                continue
+            content = self.other_files[name]
+            # Length-prefix name and content so (name, content) boundaries
+            # are unambiguous regardless of the bytes they contain.
+            hasher.update(f"\n{len(name)}:{name}:{len(content)}:".encode())
+            hasher.update(content)
+        return hasher.hexdigest()
+
     def content_hash(self) -> str:
-        hash_data = f"{self.output_metadata()}:{self.data}".encode()
+        hash_data = (
+            f"{CACHE_HASH_SCHEMA_VERSION}:{self.output_metadata()}:"
+            f"{self._dependency_digest()}:{self.data}"
+        ).encode()
         return hashlib.sha256(hash_data).hexdigest()
 
     def execution_cache_hash(self) -> str:
@@ -111,23 +171,20 @@ class NotebookPayload(Payload):
         This hash excludes 'kind' (speaker/completed/code_along) because
         Speaker and Completed HTML share the same executed notebook.
         Completed HTML is just Speaker HTML with "notes" cells filtered out.
+        Format is excluded because we only cache HTML execution results.
 
-        The cassette contents are intentionally NOT folded into the hash.
-        Doing so was tried earlier but produced an unfixable cache-miss
-        loop: ``compute_other_files`` reads the cassette at payload
-        construction (before the kernel runs), while record-capable
-        modes (``once``/``new-episodes``/``refresh``) write the cassette
-        after the kernel runs. So the next build's lookup hash uses the
-        post-execution cassette and never matches the prior build's
-        stored hash. The same issue surfaces the first time a cassette
-        is created (missing → populated) and whenever ``.gitattributes``
-        normalizes CRLF↔LF between builds. Users who want to invalidate
-        cached execution after a manual cassette edit should use
-        ``--ignore-cache``.
+        Besides the notebook text itself, the key covers the full dependency
+        set via :meth:`_dependency_digest` — sibling files, template
+        fingerprint, and execution flags — so editing a ``#include``d header
+        or upgrading clm's bundled templates re-executes the deck instead of
+        silently replaying stale outputs (issue #321). The cassette entry is
+        deliberately excluded from that digest; see ``_dependency_digest``
+        for the rationale.
         """
-        # Use prog_lang:language:data (without kind or format).
-        # Format is excluded because we only cache HTML execution results.
-        hash_data = f"{self.prog_lang}:{self.language}:{self.data}".encode()
+        hash_data = (
+            f"{CACHE_HASH_SCHEMA_VERSION}:{self.prog_lang}:{self.language}:"
+            f"{self._dependency_digest()}:{self.data}"
+        ).encode()
         return hashlib.sha256(hash_data).hexdigest()
 
     def output_metadata(self) -> str:
