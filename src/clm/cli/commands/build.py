@@ -1703,6 +1703,10 @@ async def main_build(
     output_formatter.show_startup_message(
         f"Loaded {len(course.files)} files from {len(course.sections)} sections"
     )
+    if course.output_targets:
+        output_formatter.show_startup_message(
+            f"Output targets: {', '.join(t.name for t in course.output_targets)}"
+        )
 
     build_reporter = BuildReporter(output_formatter)
 
