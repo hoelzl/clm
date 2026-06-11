@@ -62,11 +62,15 @@ class Payload(TransferModel):
         exactly this way (issue #17), leaving every ``clm:`` link unrewritten.
 
         Only the file-bound fields are overridden, because at consume time they
-        do not come from the payload: the canonical input/output paths are
-        columns on the job row, and in Docker source-mount mode the ``content``
-        (notebook / diagram source) is read from the mounted filesystem rather
-        than carried inline. **Do not "simplify" these overrides away** — both
-        direct and Docker modes depend on them.
+        do not come from the payload verbatim: the canonical input/output paths
+        are columns on the job row (converted to container ``/source`` paths in
+        Docker source-mount mode), and ``content`` is whatever the worker
+        resolved as the notebook/diagram source — normally the payload's own
+        ``data``, which for notebooks already carries the host-merged voiceover
+        companion (re-reading the raw mounted file here used to drop that
+        narration, issue #324), with a filesystem read only as a fallback for
+        payloads that carry no data. **Do not "simplify" these overrides
+        away** — both direct and Docker modes depend on them.
 
         A required descriptor field missing from ``payload_data`` raises a
         ``ValidationError`` rather than being silently defaulted: the host

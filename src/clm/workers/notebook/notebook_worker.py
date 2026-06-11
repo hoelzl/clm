@@ -143,28 +143,32 @@ class NotebookWorker(Worker):
             logger.debug(f"Processing job {job.id} with payload: {payload_data.keys()}")
 
             # Determine if we're in Docker mode with source mount
-            # If CLM_HOST_DATA_DIR is set, we can read input files from /source
+            # If CLM_HOST_DATA_DIR is set, input paths live under /source
             host_data_dir = os.environ.get("CLM_HOST_DATA_DIR")
 
-            notebook_text: str
             if host_data_dir:
-                # Docker mode with source mount: read from filesystem
                 from clm.infrastructure.workers.worker_base import convert_input_path_to_container
 
                 input_path = convert_input_path_to_container(job.input_file, host_data_dir)
-                logger.debug(f"Docker mode: reading from {input_path}")
-                notebook_text = input_path.read_text(encoding="utf-8")
             else:
-                # Direct mode or legacy Docker mode: use payload data
-                notebook_text = payload_data.get("data", "")
-                if not notebook_text:
-                    # Fallback: try reading from filesystem (direct mode)
-                    input_path = Path(job.input_file)
-                    if input_path.exists():
-                        notebook_text = input_path.read_text(encoding="utf-8")
-                    else:
-                        raise FileNotFoundError(f"Input file not found: {input_path}")
-                input_path = Path(job.input_file)  # Keep for logging/error messages
+                input_path = Path(job.input_file)
+
+            # The payload's ``data`` is the canonical notebook source in BOTH
+            # modes: the host builds it as slide text plus the merged voiceover
+            # companion (``ProcessNotebookOperation.payload``). Docker mode
+            # used to re-read the raw slide file from the mount instead, which
+            # silently dropped the merged narration from the output and made
+            # the worker's ``execution_cache_hash`` disagree with the host's,
+            # permanently defeating the Stage-4 replay gate for voiceover
+            # decks (issue #324). The filesystem read is only a fallback for
+            # jobs whose payload carries no data.
+            notebook_text: str = payload_data.get("data", "")
+            if not notebook_text:
+                if input_path.exists():
+                    logger.debug(f"Empty payload data: reading from {input_path}")
+                    notebook_text = input_path.read_text(encoding="utf-8")
+                else:
+                    raise FileNotFoundError(f"Input file not found: {input_path}")
 
             logger.debug(f"Processing notebook: {input_path.name}")
 

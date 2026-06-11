@@ -925,6 +925,153 @@ class TestNotebookWorkerConfiguration:
         assert isinstance(notebook_worker.CACHE_DB_PATH, Path)
 
 
+class TestNotebookWorkerDockerPayloadData:
+    """Docker source-mount mode must process the payload's ``data`` (#324).
+
+    The host builds ``NotebookPayload.data`` as slide text plus the merged
+    voiceover companion. The worker used to discard that in Docker mode and
+    re-read the raw slide file from the mount, which (1) silently dropped the
+    narration from the built output and (2) made the worker-side
+    ``execution_cache_hash`` disagree with the host's, so the Stage-4 replay
+    gate (``_can_replay_from_cache``) never matched for voiceover decks.
+    """
+
+    RAW_SLIDE = "# %% [markdown]\n# <!-- slide_id: intro -->\n# Intro\n"
+    MERGED_SLIDE = (
+        "# %% [markdown]\n# <!-- slide_id: intro -->\n# Intro\n"
+        '# %% [markdown] tags=["notes"]\n# Narration from the companion.\n'
+    )
+
+    def _host_payload(self, input_file: Path, output_file: Path):
+        from clm.infrastructure.messaging.notebook_classes import NotebookPayload
+
+        return NotebookPayload(
+            data=self.MERGED_SLIDE,
+            input_file=str(input_file),
+            input_file_name=input_file.name,
+            output_file=str(output_file),
+            kind="recording",
+            prog_lang="python",
+            language="en",
+            format="html",
+            correlation_id="cid-324",
+        )
+
+    @pytest.mark.asyncio
+    async def test_docker_mode_processes_host_merged_data(
+        self, worker_id, db_path, tmp_path, monkeypatch
+    ):
+        """With CLM_HOST_DATA_DIR set, the processed payload must carry the
+        host-merged data — not a re-read of the raw mounted slide file — and
+        its execution_cache_hash must equal the host payload's."""
+        from clm.workers.notebook.notebook_worker import NotebookWorker
+
+        host_data_dir = tmp_path / "course"
+        host_data_dir.mkdir()
+        input_file = host_data_dir / "slides" / "topic_100" / "slides_intro.py"
+        input_file.parent.mkdir(parents=True)
+        # The file on the (simulated) mount holds the RAW slide text.
+        input_file.write_text(self.RAW_SLIDE, encoding="utf-8")
+        output_file = tmp_path / "output" / "slides_intro.html"
+
+        monkeypatch.setenv("CLM_HOST_DATA_DIR", str(host_data_dir))
+
+        host_payload = self._host_payload(input_file, output_file)
+
+        job = Job(
+            id=1,
+            job_type="notebook",
+            input_file=str(input_file),
+            output_file=str(output_file),
+            content_hash=host_payload.content_hash(),
+            payload=host_payload.model_dump(mode="json"),
+            status="processing",
+            created_at=datetime.now(),
+        )
+
+        worker = NotebookWorker(worker_id, db_path)
+
+        captured_payload = None
+
+        async def mock_process_notebook(payload, source_dir=None):
+            nonlocal captured_payload
+            captured_payload = payload
+            return "<html>output</html>"
+
+        with patch.object(worker, "_ensure_cache_initialized", return_value=None):
+            with patch("clm.workers.notebook.notebook_worker.NotebookProcessor") as MockProcessor:
+                mock_processor = MagicMock()
+                mock_processor.process_notebook = mock_process_notebook
+                MockProcessor.return_value = mock_processor
+
+                await worker._process_job_async(job)
+
+        assert captured_payload is not None
+        # The merged narration survives the worker boundary ...
+        assert captured_payload.data == self.MERGED_SLIDE
+        assert "Narration from the companion." in captured_payload.data
+        # ... so the worker stores executions under the key the host's
+        # Stage-4 gate looks up.
+        assert captured_payload.execution_cache_hash() == host_payload.execution_cache_hash()
+        # The input path is still converted to the container mount point.
+        assert captured_payload.input_file.replace("\\", "/").startswith("/source/")
+
+    @pytest.mark.asyncio
+    async def test_docker_mode_falls_back_to_mount_read_for_empty_payload_data(
+        self, worker_id, db_path, tmp_path, monkeypatch
+    ):
+        """A payload without data still reads the mounted file (fallback)."""
+        from clm.workers.notebook.notebook_worker import NotebookWorker
+
+        # Stand in for /source: the converted container path must exist, so
+        # redirect the conversion to a real file.
+        mounted_file = tmp_path / "mounted" / "slides_intro.py"
+        mounted_file.parent.mkdir()
+        mounted_file.write_text(self.RAW_SLIDE, encoding="utf-8")
+
+        monkeypatch.setenv("CLM_HOST_DATA_DIR", str(tmp_path))
+        monkeypatch.setattr(
+            "clm.infrastructure.workers.worker_base.convert_input_path_to_container",
+            lambda host_path, host_data_dir: mounted_file,
+        )
+
+        job = Job(
+            id=1,
+            job_type="notebook",
+            input_file=str(tmp_path / "slides_intro.py"),
+            output_file=str(tmp_path / "output.html"),
+            content_hash="test-hash",
+            payload={
+                "kind": "completed",
+                "prog_lang": "python",
+                "language": "en",
+                "format": "html",
+            },
+            status="processing",
+            created_at=datetime.now(),
+        )
+
+        worker = NotebookWorker(worker_id, db_path)
+
+        captured_payload = None
+
+        async def mock_process_notebook(payload, source_dir=None):
+            nonlocal captured_payload
+            captured_payload = payload
+            return "<html>output</html>"
+
+        with patch.object(worker, "_ensure_cache_initialized", return_value=None):
+            with patch("clm.workers.notebook.notebook_worker.NotebookProcessor") as MockProcessor:
+                mock_processor = MagicMock()
+                mock_processor.process_notebook = mock_process_notebook
+                MockProcessor.return_value = mock_processor
+
+                await worker._process_job_async(job)
+
+        assert captured_payload is not None
+        assert captured_payload.data == self.RAW_SLIDE
+
+
 class TestNotebookWorkerSourceDirectory:
     """Test source directory handling for Docker mode with source mount.
 
