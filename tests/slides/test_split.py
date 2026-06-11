@@ -316,6 +316,42 @@ class TestSplitInFile:
         result = split_in_file(source)
         assert result.warnings == []
 
+    def test_missing_slide_id_emits_warning(self, tmp_path: Path) -> None:
+        source = tmp_path / "deck.py"
+        idless_pair = (
+            '# %% [markdown] lang="de" tags=["slide"]\n#\n# ## Eins\n\n'
+            '# %% [markdown] lang="en" tags=["slide"]\n#\n# ## One\n\n'
+        )
+        source.write_text(HEADER_PREAMBLE + idless_pair, encoding="utf-8")
+        result = split_in_file(source)
+        assert any("#255" in w for w in result.warnings)
+        assert any("assign-ids" in w for w in result.warnings)
+        # The warning never blocks — the split is still written.
+        assert result.wrote is True
+        assert (tmp_path / "deck.de.py").is_file()
+
+    def test_missing_slide_id_warning_in_dry_run(self, tmp_path: Path) -> None:
+        source = tmp_path / "deck.py"
+        idless = '# %% [markdown] lang="de" tags=["subslide"]\n#\n# ## Eins\n\n'
+        source.write_text(
+            HEADER_PREAMBLE + _slide_pair("a", "Eins", "One") + idless, encoding="utf-8"
+        )
+        result = split_in_file(source, dry_run=True)
+        assert result.wrote is False
+        assert any("#255" in w for w in result.warnings)
+
+    def test_no_warning_for_idless_code_cells(self, tmp_path: Path) -> None:
+        # Bare lang-tagged code cells legitimately carry no slide_id (the
+        # validator's rule covers slide/subslide cells only) — no warning.
+        source = tmp_path / "deck.py"
+        idless_code = '# %% lang="de"\nx = 1\n\n# %% lang="en"\nx = 1\n\n'
+        source.write_text(
+            HEADER_PREAMBLE + _slide_pair("a", "Eins", "One") + idless_code,
+            encoding="utf-8",
+        )
+        result = split_in_file(source)
+        assert result.warnings == []
+
 
 class TestUnifyInFile:
     def test_writes_target(self, tmp_path: Path) -> None:

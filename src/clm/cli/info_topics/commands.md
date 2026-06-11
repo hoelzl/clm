@@ -2002,6 +2002,15 @@ own comment token (`# %%` for Python/Rust, `// %%` for C#/C++/Java/TS),
 so split/unify and the rest of the authoring tooling work on every
 supported prog_lang — the token is derived from the file extension.
 
+**Missing slide_id (issue #255).** Since CLM {version}, `split` emits a
+`warning:` (to stderr; does not fail) when SOURCE contains `slide`/`subslide`
+cells without a `slide_id` — the same cells the validator's missing-slide_id
+error covers. The split halves would fail `clm slides validate` and could pair
+only by adjacency in `unify`/`sync`. `split` never mints ids itself (it is a
+byte-faithful structural transform) — run
+`clm slides assign-ids <dir> --accept-content-derived --accept-code-derived`
+on the bilingual source first, then re-split.
+
 **Preamble code (issue #253).** Since CLM {version}, `split` emits a `warning:`
 (to stderr; does not fail) when SOURCE has executable code between the
 `# {{ header(…) }}` macro call and the first `# %%` cell. The split itself stays
