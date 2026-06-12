@@ -15,11 +15,13 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from nbformat.v4 import new_code_cell, new_notebook
 
 from clm.workers.notebook.notebook_processor import (
     _HTTP_REPLAY_BOOTSTRAP_MARKER,
     _HTTP_REPLAY_SOCKET_TRACE_TEMPLATE,
+    _HTTP_REPLAY_TAG_BOOTSTRAP_TEMPLATE,
     NotebookProcessor,
     _inject_http_replay_tag_bootstrap,
     _strip_injected_cells,
@@ -57,6 +59,34 @@ def test_inject_tag_bootstrap_inserts_marked_cell():
     assert "httpcore" not in cell0["source"]
     assert "import vcr" not in cell0["source"]
     assert "httpx" in cell0["source"]
+
+
+def test_tag_bootstrap_patches_requests_and_aiohttp():
+    """All three kernel client stacks must be tag-routed (not just httpx).
+
+    The legacy vcrpy transport covered requests/aiohttp decks; the tag
+    bootstrap initially patched only httpx, so simple ``requests.get`` decks
+    recorded into the build catch-all instead of their canonical cassette.
+    Pin that requests/aiohttp patching (with import guards — both libraries
+    are optional in the kernel env) is part of the injected source.
+    """
+    src = _HTTP_REPLAY_TAG_BOOTSTRAP_TEMPLATE.format(tag="/x/foo.http-cassette.yaml")
+    assert "import requests as _clm_requests" in src
+    assert "_clm_requests.Session.send = _clm_tagged_rsend" in src
+    assert "import aiohttp as _clm_aiohttp" in src
+    assert "_clm_aiohttp.ClientSession._request = _clm_tagged_aio_request" in src
+    # Optional imports must be guarded so a kernel without them still boots.
+    assert src.count("except ImportError:") >= 2
+
+
+def test_tag_bootstrap_template_contains_no_unsubstituted_braces():
+    """The template is rendered with ``str.format``, so any literal curly
+    brace in the body (e.g. a ``dict`` literal in a newly added patch) would
+    raise ``KeyError``/``IndexError`` at injection time. Rendering succeeding
+    plus the tag landing verbatim pins that invariant."""
+    tag = "/some/dir/foo.http-cassette.yaml"
+    src = _HTTP_REPLAY_TAG_BOOTSTRAP_TEMPLATE.format(tag=tag)
+    assert repr(tag) in src
 
 
 def test_strip_removes_tag_bootstrap_cell():
@@ -113,6 +143,111 @@ def test_socket_trace_template_execs_standalone_and_emits(tmp_path):
     streams_events = {(r["stream"], r["event"]) for r in records}
     assert ("socket", "bootstrap.complete") in streams_events
     assert all(r["stream"] == "socket" for r in records)
+
+
+def test_tag_bootstrap_tags_requests_traffic_in_subprocess():
+    """End-to-end pin for the requests patch: exec the rendered bootstrap in a
+    clean interpreter, issue a plain ``requests.get`` against a local HTTP
+    server, and assert the ``x-clm-cassette`` header arrived. This is exactly
+    the deck pattern that regressed when only httpx was patched. Run in a
+    subprocess so the class-level ``requests.Session.send`` patch can never
+    leak into other tests in this process."""
+    pytest.importorskip("requests")
+    tag = "/src/topic/_cassettes/slides.http-cassette.yaml"
+    rendered = _HTTP_REPLAY_TAG_BOOTSTRAP_TEMPLATE.format(tag=tag)
+    script = rendered + (
+        "\n"
+        "import json, threading\n"
+        "from http.server import BaseHTTPRequestHandler, HTTPServer\n"
+        "import requests\n"
+        "seen = dict()\n"
+        "class _Handler(BaseHTTPRequestHandler):\n"
+        "    def do_GET(self):\n"
+        "        seen['tag'] = self.headers.get('x-clm-cassette')\n"
+        "        self.send_response(200)\n"
+        "        self.send_header('Content-Length', '2')\n"
+        "        self.end_headers()\n"
+        "        self.wfile.write(b'ok')\n"
+        "    def log_message(self, *args):\n"
+        "        pass\n"
+        "server = HTTPServer(('127.0.0.1', 0), _Handler)\n"
+        "thread = threading.Thread(target=server.serve_forever, daemon=True)\n"
+        "thread.start()\n"
+        "response = requests.get(f'http://127.0.0.1:{server.server_address[1]}/x')\n"
+        "server.shutdown()\n"
+        "print(json.dumps(dict(status=response.status_code, tag=seen['tag'])))\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, check=False
+    )
+    assert proc.returncode == 0, proc.stderr
+    result = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert result["status"] == 200
+    assert result["tag"] == tag
+
+
+def test_tag_bootstrap_tags_aiohttp_traffic_in_subprocess():
+    """Same end-to-end pin as the requests test, for the aiohttp patch — it
+    wraps the private ``ClientSession._request``, so a behavioral check (not
+    just a source assert) is what catches an aiohttp-version signature drift."""
+    pytest.importorskip("aiohttp")
+    tag = "/src/topic/_cassettes/slides.http-cassette.yaml"
+    rendered = _HTTP_REPLAY_TAG_BOOTSTRAP_TEMPLATE.format(tag=tag)
+    script = rendered + (
+        "\n"
+        "import asyncio, json, threading\n"
+        "from http.server import BaseHTTPRequestHandler, HTTPServer\n"
+        "import aiohttp\n"
+        "seen = dict()\n"
+        "class _Handler(BaseHTTPRequestHandler):\n"
+        "    def do_GET(self):\n"
+        "        seen['tag'] = self.headers.get('x-clm-cassette')\n"
+        "        self.send_response(200)\n"
+        "        self.send_header('Content-Length', '2')\n"
+        "        self.end_headers()\n"
+        "        self.wfile.write(b'ok')\n"
+        "    def log_message(self, *args):\n"
+        "        pass\n"
+        "server = HTTPServer(('127.0.0.1', 0), _Handler)\n"
+        "thread = threading.Thread(target=server.serve_forever, daemon=True)\n"
+        "thread.start()\n"
+        "async def _main():\n"
+        "    url = f'http://127.0.0.1:{server.server_address[1]}/x'\n"
+        "    async with aiohttp.ClientSession() as session:\n"
+        "        async with session.get(url, headers=dict(accept='*/*')) as response:\n"
+        "            return response.status\n"
+        "status = asyncio.run(_main())\n"
+        "server.shutdown()\n"
+        "print(json.dumps(dict(status=status, tag=seen['tag'])))\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, check=False
+    )
+    assert proc.returncode == 0, proc.stderr
+    result = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert result["status"] == 200
+    assert result["tag"] == tag
+
+
+def test_tag_bootstrap_execs_when_optional_libraries_are_missing():
+    """The requests/aiohttp patches are import-guarded: a kernel env without
+    them must still run the bootstrap. Simulate absence by poisoning both
+    imports in a clean subprocess (works whether or not they are actually
+    installed) and confirm httpx tagging is still applied."""
+    rendered = _HTTP_REPLAY_TAG_BOOTSTRAP_TEMPLATE.format(tag="/x/foo.http-cassette.yaml")
+    script = (
+        "import sys\n"
+        "sys.modules['requests'] = None\n"
+        "sys.modules['aiohttp'] = None\n"
+        + rendered
+        + "assert getattr(__import__('httpx').Client.send, '_clm_tagged', False)\n"
+        "print('bootstrap-ok')\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, check=False
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "bootstrap-ok" in proc.stdout
 
 
 def test_maybe_inject_under_transport_injects_socket_trace_when_traced(monkeypatch, tmp_path):

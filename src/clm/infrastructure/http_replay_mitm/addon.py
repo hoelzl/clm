@@ -21,9 +21,13 @@ a ``.completed`` marker on clean shutdown, and the host folds each staging
 file into its canonical via the existing ``merge_staging_into_canonical``.
 The tag header is stripped before recording or forwarding upstream.
 
-Untagged traffic (a kernel that somehow bypassed the tag bootstrap) falls
-back to the single ``clm_cassette_path`` catch-all so strict ``replay``
-mode still returns a non-retryable 404 instead of escaping to the network.
+Untagged traffic (a client stack the tag bootstrap does not patch, or a
+kernel that somehow bypassed it) falls back to the single
+``clm_cassette_path`` catch-all so strict ``replay`` mode still returns a
+non-retryable 404 instead of escaping to the network — and triggers a
+once-per-build :data:`UNTAGGED_FLOW_SENTINEL` warning that the manager
+relays into the build log, because catch-all routing means the topic's
+canonical cassette is silently out of the loop.
 """
 
 from __future__ import annotations
@@ -105,6 +109,14 @@ _STAGING_INFIX = ".staging-mitm-"
 # decoded body in memory, so the recorded content-length / transfer
 # framing no longer applies — let mitmproxy recompute them from the body.
 _SERVE_DROP_HEADERS = frozenset({"content-length", "transfer-encoding"})
+
+# Marker prefixing the once-per-build warning for untagged non-ignored
+# traffic. The addon runs inside mitmdump, so its log lines land in the
+# manager's stdout ring buffer; the manager greps drained lines for this
+# sentinel and re-logs them through CLM's own logger so the warning reaches
+# the build log (see ``MitmproxyManager._handle_output_line``). Keep the two
+# in lockstep.
+UNTAGGED_FLOW_SENTINEL = "CLM-HTTP-REPLAY-UNTAGGED"
 
 # Status synthesized for a strict-replay miss. It MUST be a status the LLM
 # SDKs do NOT retry, so a stale-cassette miss fails on the first attempt — the
@@ -236,6 +248,8 @@ class ClmReplayAddon:
         self._request_filter: Callable[..., object] | None = None
         # Keyed by canonical-path string; "" is the untagged catch-all.
         self._targets: dict[str, _Target] = {}
+        # Once-per-build latch for the untagged-flow warning (see request()).
+        self._warned_untagged = False
         # Forensic per-flow trace (issue #165 P5). Disabled until running()
         # reads ``clm_trace_dir``; off entirely unless the build sets
         # CLM_HTTP_REPLAY_TRACE=1 and the manager forwards the directory.
@@ -365,6 +379,29 @@ class ClmReplayAddon:
             flow.metadata[_FLOW_IGNORED_KEY] = True
             self._trace_request(flow, tag, "ignored")
             return
+
+        if tag is None and not self._warned_untagged:
+            # A kernel client stack the tag bootstrap does not patch (anything
+            # other than httpx/requests/aiohttp — e.g. urllib.request, raw
+            # urllib3/http.client, or a subprocess honouring HTTP(S)_PROXY)
+            # reached the proxy untagged. Its traffic is matched/recorded
+            # against the build's catch-all cassette, NOT the topic's canonical
+            # cassette, so record/replay is silently broken for it — exactly
+            # the failure mode that hid the missing ``requests`` patch. Warn
+            # loudly, once per build (the first flow names the culprit; a
+            # per-flow warning would flood the log on a chatty deck).
+            self._warned_untagged = True
+            logger.warning(
+                "%s: %s %s reached the replay proxy without an X-CLM-Cassette "
+                "routing tag; it is matched/recorded against the build's "
+                "catch-all cassette instead of the topic's canonical cassette. "
+                "Only httpx, requests and aiohttp clients are tag-routed by "
+                "the kernel bootstrap. Further untagged flows this build are "
+                "not logged.",
+                UNTAGGED_FLOW_SENTINEL,
+                flow.request.method,
+                flow.request.pretty_url,
+            )
 
         target = self._target_for(tag)
         if target is None:

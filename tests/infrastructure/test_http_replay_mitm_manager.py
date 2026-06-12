@@ -8,9 +8,12 @@ plain Python subprocess that emits far more output than a pipe buffer holds.
 
 from __future__ import annotations
 
+import logging
+import re
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 import pytest
 
@@ -73,6 +76,45 @@ def test_reader_thread_joined_and_output_available_after_exit(tmp_path) -> None:
         time.sleep(0.02)
 
     assert "hello from child" in mgr._drain_output()
+
+
+class TestUntaggedFlowWarningRelay:
+    """The addon's once-per-build untagged-flow warning is emitted inside the
+    mitmdump subprocess; the manager must relay sentinel-marked stdout lines
+    into CLM's own log, or the warning only ever shows up in the ring-buffer
+    dump of a startup *failure* — i.e. never for the builds that have the
+    problem."""
+
+    def test_sentinel_line_is_relogged_as_warning(self, caplog) -> None:
+        mgr = _manager()
+        line = (
+            "[10:00:00.000][warn] CLM-HTTP-REPLAY-UNTAGGED: GET http://example.com/x "
+            "reached the replay proxy without an X-CLM-Cassette routing tag"
+        )
+        with caplog.at_level(logging.WARNING, logger=proxy_manager.__name__):
+            mgr._handle_output_line(line)
+        # Buffered for diagnostics AND surfaced through the host logger.
+        assert line in mgr._output
+        assert any(line in record.getMessage() for record in caplog.records)
+
+    def test_ordinary_lines_are_buffered_silently(self, caplog) -> None:
+        mgr = _manager()
+        with caplog.at_level(logging.WARNING, logger=proxy_manager.__name__):
+            mgr._handle_output_line("[10:00:00.000][info] client connect")
+        assert "[10:00:00.000][info] client connect" in mgr._output
+        assert not caplog.records
+
+    def test_sentinel_constant_matches_addon_source(self) -> None:
+        """Drift guard: the manager greps for a literal because the addon is
+        also loaded standalone inside the mitmdump interpreter (importing it
+        here would require mitmproxy, which CI does not install). Parse the
+        addon source instead so the two constants cannot drift apart."""
+        addon_source = (Path(proxy_manager.__file__).parent / "addon.py").read_text(
+            encoding="utf-8"
+        )
+        match = re.search(r'^UNTAGGED_FLOW_SENTINEL = "([^"]+)"', addon_source, re.MULTILINE)
+        assert match is not None, "UNTAGGED_FLOW_SENTINEL not found in addon.py"
+        assert match.group(1) == proxy_manager._UNTAGGED_FLOW_SENTINEL
 
 
 class TestClientHostAndProxyUrl:

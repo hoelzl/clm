@@ -20,7 +20,9 @@ guard below) or ``requests`` isn't installed.
 from __future__ import annotations
 
 import json
+import logging
 import threading
+import time
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -288,6 +290,41 @@ def test_strict_replay_miss_returns_nonretryable_404(
     assert _CountingHandler.upstream_hits == 1, (
         "strict-replay miss must not fall through to upstream"
     )
+
+
+def test_untagged_flow_warning_reaches_host_log(
+    upstream_server: str, cassette_path: Path, tmp_path: Path, caplog
+) -> None:
+    """An untagged flow (a client stack the tag bootstrap does not patch) must
+    produce a loud, host-visible warning: the addon logs it once per build
+    inside mitmdump, and the manager's stdout pump relays sentinel-marked
+    lines through CLM's own logger. Without this, untagged traffic silently
+    records into the catch-all instead of the topic cassette — the failure
+    mode that hid the missing ``requests`` patch."""
+    confdir = tmp_path / "mitm-confdir"
+    sentinel = "CLM-HTTP-REPLAY-UNTAGGED"
+    with caplog.at_level(logging.WARNING, logger="clm.infrastructure.http_replay_mitm"):
+        with MitmproxyManager(
+            cassette_path=cassette_path, mode="new-episodes", confdir=confdir
+        ) as proxy:
+            response = _get_via_proxy(f"{upstream_server}/untagged", proxy.proxy_url)
+            assert response.status_code == 200
+            # The warning travels addon -> mitmdump stdout -> pump thread, so
+            # poll (generous deadline, no fixed sleep) until it is drained.
+            deadline = time.monotonic() + 15.0
+            while time.monotonic() < deadline:
+                if any(sentinel in line for line in list(proxy._output)):
+                    break
+                time.sleep(0.05)
+            else:
+                pytest.fail(
+                    "untagged-flow sentinel never appeared in mitmdump output:\n"
+                    + "\n".join(proxy._output)
+                )
+    relayed = [r.getMessage() for r in caplog.records if sentinel in r.getMessage()]
+    assert relayed, "manager did not relay the addon's untagged-flow warning to the host log"
+    # The warning names the offending request so the culprit deck is findable.
+    assert any("/untagged" in message for message in relayed)
 
 
 def test_routing_demuxes_tagged_requests_to_per_cassette_staging(
