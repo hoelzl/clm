@@ -61,6 +61,18 @@ class TestClassifyExecutionFailure:
             "TimeoutError",
         )
 
+    def test_no_such_kernel_by_class_name(self):
+        from jupyter_client.kernelspec import NoSuchKernel
+
+        failure_type, error_class = classify_execution_failure(NoSuchKernel("xcpp20"))
+        assert failure_type == "missing_kernel"
+        assert error_class == "NoSuchKernel"
+
+    def test_no_such_kernel_by_message(self):
+        # Wrapped/re-raised forms keep only the message.
+        error = RuntimeError("NoSuchKernel: No such kernel named xcpp20")
+        assert classify_execution_failure(error) == ("missing_kernel", "RuntimeError")
+
     def test_other(self):
         assert classify_execution_failure(ValueError("boom")) == ("other", "ValueError")
 
@@ -276,6 +288,26 @@ class TestRetryLoopTelemetry:
         assert telemetry["failure_type"] == "startup_timeout"
         assert telemetry["failing_cell_index"] is None
         assert telemetry["classification"] == "deterministic"
+
+    def test_missing_kernel_fails_fast_without_retries(self, scripted_execution, tmp_path):
+        """Issue #348: a missing kernelspec is permanent for the build —
+        retrying it only wastes kernel-startup and backoff time per job."""
+        from jupyter_client.kernelspec import NoSuchKernel
+
+        scripted_execution.reset([NoSuchKernel("xcpp20"), None])
+        processor = self._processor()
+
+        with pytest.raises(RuntimeError) as exc_info:
+            _run_execution(processor, _make_payload(), tmp_path)
+
+        # Only one attempt was made; the scripted success on attempt 2 was
+        # never reached.
+        assert scripted_execution.calls == 1
+        telemetry = exc_info.value.execution_telemetry
+        assert telemetry["attempts"] == 1
+        assert telemetry["failure_type"] == "missing_kernel"
+        # The enhanced error points at the remedy.
+        assert "--no-html" in str(exc_info.value)
 
     def test_skip_errors_suppression_emits_suppressed_failure(self, scripted_execution, tmp_path):
         error = CellExecutionError("tb", "ValueError", "boom")
