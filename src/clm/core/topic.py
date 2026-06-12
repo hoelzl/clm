@@ -10,6 +10,7 @@ from clm.core.include_ledger import LEDGER_NAME, Ledger
 from clm.core.utils.notebook_mixin import NotebookMixin
 from clm.core.utils.notebook_utils import find_images, find_imports
 from clm.infrastructure.utils.path_utils import (
+    is_diagram_source,
     is_ignored_dir_for_course,
     is_ignored_file_for_course,
     is_in_dir,
@@ -116,6 +117,9 @@ class Topic(NotebookMixin, ABC):
         if not self.matches_path(path, False):
             logger.debug(f"Path not within topic: {path}")
             return
+        if self.course.no_diagrams and is_diagram_source(path):
+            logger.debug(f"--no-diagrams: skipping diagram source {path}")
+            return
         if self.file_for_path(path):
             logger.debug(f"Duplicate path when adding file: {path}")
             return
@@ -174,6 +178,9 @@ class Topic(NotebookMixin, ABC):
         Returns True when the virtual file was added; False when it was
         shadowed by a real file or otherwise rejected.
         """
+        if self.course.no_diagrams and is_diagram_source(virtual_path):
+            logger.debug(f"--no-diagrams: skipping included diagram source {virtual_path}")
+            return False
         if self.file_for_path(virtual_path):
             if not ledger_authorized:
                 self.course.loading_warnings.append(

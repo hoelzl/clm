@@ -62,6 +62,8 @@ Key options:
 | `-O, --output-mode [default\|verbose\|quiet\|json]` | Progress output mode |
 | `-L, --language [de\|en]` | Generate only one language |
 | `--speaker-only` | Generate only the private (notes-bearing) outputs — both `trainer` and `recording` kinds. Skips public outputs (`code-along`, `completed`, `partial`). |
+| `--no-html` | Skip HTML generation for every topic, as if each carried `html="no"` in the spec. HTML is the only output format whose generation executes notebooks, so a `--no-html` build needs no Jupyter kernel — intended for the code-export compile CI and other kernel-free environments (CLM {version}). |
+| `--no-diagrams` | Skip DrawIO and PlantUML processing entirely: diagram sources are excluded from the build, so no conversion jobs are scheduled and no plantuml/drawio workers are started. Rendered images committed next to the sources (`slides/**/img/`) still ship as ordinary image files. Intended for machines without the diagram binaries, e.g. the code-export compile CI (CLM {version}). |
 | `-T, --targets TEXT` | Comma-separated target names from spec |
 | `--image-mode [duplicated\|shared]` | Image storage strategy |
 | `--image-format [png\|svg]` | Image output format |
