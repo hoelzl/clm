@@ -9,6 +9,189 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 Unreleased changes are collected as fragment files in [`changelog.d/`](changelog.d/)
 and folded into this file by `scripts/collect_changelog.py` at release time.
 
+## [1.13.0] - 2026-06-12
+
+### Added
+
+Release channels with non-derived repo names are now fully declarative
+(#322): a `<channel repo="...">` attribute overrides the derived repo name
+verbatim (remote path and URL template still apply), so lang-scoped
+channels whose name already carries the language no longer derive a
+duplicated `-{lang}` segment. `clm release provision` additionally prefers
+the channel working tree's actual `origin` over the derived URL when one
+is configured — matching the `clm git` philosophy that push/commit operate
+on whatever origin the repo actually has — so group shares target the real
+project without manual GitLab API calls.
+
+C++ courses now get a generated `CMakeLists.txt` in every code-output
+directory (#333, phase 2): one executable target per deck, C++20, grouped
+per language × kind. Students can open `Slides/Cpp/Completed` (or
+`Code-Along`) as a CMake project in VS Code, CLion, or Visual Studio and
+build any deck with real compiler diagnostics — a kernel-free way to work
+with the course code. Deck-local headers are already copied next to the
+translation units, so no include-path configuration is needed.
+
+Code-along C++ code exports now emit blanked cells as `slide_NN()` stubs
+with a `// TODO` body, called in order from the generated `main()` (#333,
+phase 4). The exported project compiles as-is and gives students one
+function per blanked notebook cell to live-code into. Applies to all
+code-along-style variants, including the post-workshop part of `partial`.
+
+The `format="code"` output for C++ decks is now a compilable translation
+unit instead of a jupytext concatenation (#333, phase 1). Each top-level
+item of each code cell is routed to its proper place: `#include` lines are
+hoisted to the top and deduplicated, definitions and global variables stay
+at namespace scope in cell order, statements are wrapped in per-cell
+`void slide_NN()` functions called in order from a generated `main()`, and
+bare display expressions are wrapped in a `CLM_DISPLAY` helper that prints
+the value when an `operator<<` exists. Decks that define their own `main()`
+suppress the generated one. Outputs for other programming languages and
+formats are unchanged.
+
+New per-deck header marker `clm: no-compile` (#333): C++ decks whose code
+export legitimately cannot compile outside the notebook kernel (e.g.
+xeus-specific includes, deliberate error demonstrations) become
+`EXCLUDE_FROM_ALL` targets in the generated CMake projects — still
+buildable explicitly, but skipped by "build all" and by the CI compile
+check.
+
+`clm build --no-html` skips HTML generation for every topic (#333), as if
+each carried `html="no"` in the spec. HTML is the only output format whose
+generation executes notebooks, so a `--no-html` build needs no Jupyter
+kernel — intended for the code-export compile CI and other kernel-free
+environments, where the HTML jobs would otherwise fail with `NoSuchKernel`
+and could wedge the worker pool until the job timeout.
+
+C++ code exports now vendor support headers (#333): when exported code —
+or a deck-local header next to it — references `nlohmann/json.hpp` or the
+xeus display header `xcpp/xdisplay.hpp`, the generated CMake project gets
+an `include/` directory with the vendored nlohmann single header (v3.12.0)
+and a CLM shim for `xcpp::display` that replicates the kernel's display
+dispatch (`mime_bundle_repr` via ADL, then `operator<<`, then a
+placeholder). Decks that use the kernel's display API therefore compile
+and run unchanged outside Jupyter.
+
+`clm git` and `clm release sync --push` can now authenticate HTTPS git
+operations with the GitLab token (#341): set `CLM_GIT_TOKEN_AUTH=1`
+together with `CLM_GITLAB_TOKEN` (or `GITLAB_TOKEN`) and every git network
+operation (push, fetch, ls-remote, clone) uses an ephemeral credential
+helper with `oauth2:<token>` basic auth — enabling unattended pushes from
+CI, cron, and containers where no credential helper exists. The token
+never appears in the URL, in `.git/config`, or on the command line, and
+the switch is opt-in so workstations keep using their stored credentials
+by default.
+
+`clm run` now accepts extra arguments after the spec file and exposes them
+to task steps as `{args}` (all of them, expanded to one argv token per
+argument as a standalone token) and `{1}`, `{2}`, … (individually,
+embeddable in larger tokens) — `clm run release-week course.xml
+"name:Week 09"` (#342). A task whose steps reference these placeholders
+fails before any step runs when invoked without the corresponding
+arguments, and arguments a task never references are an error rather than
+silently dropped. `clm validate` accepts the new placeholders in `<tasks>`
+blocks.
+
+- `clm query affected-specs` — map changed file paths (arguments and/or
+  `--stdin`) to the course specs whose builds they can influence, using the
+  same topic/include/dir-group resolution as the build (single-file topics
+  also claim the sibling files their content references). Fails open
+  (`"all": true`) for build-relevant paths no spec claims, so a CI matrix
+  built from the `--json` output never silently skips a course; clearly
+  build-irrelevant paths (`.github/`, top-level docs) and content invisible
+  to every build (unreferenced topics, `_archive` dirs) affect nothing.
+  First member of the new **`clm query`** group for read-only,
+  scripting-oriented introspection commands (issue #350).
+
+`clm build --no-diagrams` skips DrawIO and PlantUML processing entirely
+(#353), mirroring `--no-html`: diagram sources are excluded from the build,
+so no conversion jobs are scheduled and no plantuml/drawio workers are
+started. Rendered images committed next to the sources (`slides/**/img/`)
+still ship as ordinary image files, so output stays complete. Intended for
+machines without the diagram binaries — e.g. the code-export compile CI,
+where every diagram job previously failed and forced a blanket
+`--no-fail-on-error`.
+
+### Removed
+
+- **The `vcrpy` dependency is gone** (issue #355 stage 2). The cassette
+  format (vcrpy v1 YAML — unchanged on disk, byte-for-byte) is now
+  implemented by CLM itself in `http_replay_mitm/vcr_format.py` (vendored
+  from vcrpy 8.1.1, MIT) and needs only PyYAML. **No cassette re-recording is
+  required**: the new serializer was validated byte-identical to vcrpy via a
+  differential check (`scripts/differential_check_vcr_format.py`) and a
+  round-trip of all 2,072 committed course cassettes, and the bytes are
+  pinned permanently by a golden-fixture test. The `[replay]` extra now
+  pulls `mitmproxy`, `pyyaml`, and `filelock`; an isolated `mitmdump` tool
+  environment needs `uv tool install mitmproxy --with pyyaml` (environments
+  installed with the old `--with vcrpy` keep working, since vcrpy depended
+  on PyYAML).
+
+- **BREAKING: the legacy in-process `vcrpy` HTTP-replay transport was
+  removed** (issue #355). mitmproxy has been the default transport since 1.10;
+  the `CLM_HTTP_REPLAY_TRANSPORT=vcrpy` escape hatch is gone and now **fails
+  the build** with a migration pointer instead of being silently ignored.
+  Courses still building against vcrpy-recorded cassettes must re-record once
+  (`clm build … --http-replay=refresh`) — cassettes recorded under mitmproxy
+  are unaffected. This deletes the ~540-line in-kernel vcrpy bootstrap with
+  its eight workarounds for upstream vcrpy bugs (forked vcrpy internals,
+  scoped `force_reset`, eager-append, deep-copy persister, …), the per-worker
+  cassette staging/seed/merge path (recording is proxy-side only), and the
+  vcrpy pin guard. The `vcrpy` dependency itself remains in the `[replay]`
+  extra as a cassette serialization library, but its restrictive `<8.2` upper
+  bound — which existed only to protect the forked internals — is lifted.
+  Stage 2 of issue #355 will replace the dependency with owned code while
+  keeping the on-disk cassette format unchanged.
+
+### Fixed
+
+- **`requests`/`aiohttp` decks work under the mitmproxy replay transport
+  again.** The kernel's cassette-routing tag bootstrap only patched `httpx`,
+  so traffic from `requests` (and `aiohttp`) reached the shared replay proxy
+  *untagged* and was matched/recorded against the per-build catch-all cassette
+  instead of the topic's canonical cassette — record/replay was silently
+  broken for any deck using plain `requests.get` (the original motivating
+  use case for HTTP replay). The bootstrap now also tags
+  `requests.Session.send` and `aiohttp.ClientSession._request` (both
+  import-guarded — the libraries stay optional in kernel environments).
+  Affected topics need a one-time re-record (`--http-replay=refresh`): their
+  untagged interactions never made it into the committed cassette.
+- **Untagged replay-proxy traffic now triggers a loud build-log warning.**
+  When a request reaches the replay proxy without an `X-CLM-Cassette` routing
+  tag (an HTTP stack the tag bootstrap does not patch, e.g. `urllib.request`),
+  the mitmproxy addon logs a once-per-build `CLM-HTTP-REPLAY-UNTAGGED` warning
+  naming the first offending request, and the proxy manager relays it into the
+  CLM build log. Previously such traffic silently fell through to the
+  catch-all cassette — the failure mode that hid the missing `requests` patch.
+  Client-library coverage is now documented in
+  `docs/user-guide/http-replay.md` → "Client-library coverage".
+
+The C++ code export no longer splits an expression after a brace-init
+temporary (#333): `RequestBuilder{}.setTimeout(10).send();` or
+`auto n = std::vector<int>{1, 2}.size();` previously broke apart at the
+closing `}`, leaving a stray `.setTimeout(...)` item that cannot compile.
+A `}` at depth 0 now only ends an item when the next token cannot
+continue an expression.
+
+Validation and normalization walks no longer descend into dot-directories
+such as `.ipynb_checkpoints` (#339). Jupyter's checkpoint copies of decks
+previously showed up as duplicate — or stale, contradictory — findings in
+`clm validate` and related discovery walks. Dot-dirs are now pruned in the
+same place as the `_`-prefixed author-parked directories from #318, so the
+rule applies uniformly to topic discovery, recursive slide-file walks,
+spec-orphan and pairing scans.
+
+Builds on machines without the required Jupyter kernel no longer stall
+into long timeout cascades (#348). A `NoSuchKernel` failure is now
+classified as `missing_kernel` — a permanent condition for the lifetime of
+the build — so the notebook worker fails the job on the first attempt
+instead of burning six kernel-startup/backoff cycles, and the error
+carries an actionable hint (install the kernelspec, or build with
+`--no-html`). Separately, a pre-registered worker whose subprocess dies
+before activation (e.g. an import crash from missing `clm[all-workers]`
+extras) is marked dead after the first activation-wait timeout, so
+subsequent job submissions fail fast with a pointer to the worker log
+instead of silently repeating a 30-second wait per job.
+
 ## [1.12.0] - 2026-06-11
 
 ### Added
