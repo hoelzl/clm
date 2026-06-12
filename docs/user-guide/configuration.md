@@ -215,7 +215,8 @@ in bulk.
 |----------|-------------|---------|
 | `CLM_GIT__REMOTE_TEMPLATE` | URL template for git remotes | `{repository_base}/{repo}` |
 | `CLM_GIT__REMOTE_PATH` | Path segment between base URL and repo name (e.g., GitLab group). Per-target `<remote-path>` overrides still win. | (unset) |
-| `CLM_GITLAB_TOKEN` | GitLab API token (`api` scope) used by `clm release provision` to share channel repos into access groups (issue #294). `GITLAB_TOKEN` is accepted as a fallback. | (unset) |
+| `CLM_GITLAB_TOKEN` | GitLab API token (`api` scope) used by `clm release provision` to share channel repos into access groups (issue #294), and — with `CLM_GIT_TOKEN_AUTH=1` — for git HTTPS transport. `GITLAB_TOKEN` is accepted as a fallback. | (unset) |
+| `CLM_GIT_TOKEN_AUTH` | Set to `1` to authenticate the git operations run by `clm git` / `clm release sync --push` against HTTPS remotes with `CLM_GITLAB_TOKEN`, via an ephemeral credential helper (issue #341 — headless/CI pushes where no credential helper exists). The token never appears in URLs, `.git/config`, or the command line. Opt-in: without it, git's own credential machinery (e.g. Git Credential Manager) is used. | (unset) |
 
 The remote template supports placeholders: `{repository_base}`, `{remote_path}`, `{repo}`, `{slug}`, `{lang}`, `{suffix}` — plus, for release-channel repos, `{stream}` (the release stream name, issue #291).
 This is useful for SSH access with custom host aliases:

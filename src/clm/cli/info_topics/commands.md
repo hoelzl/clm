@@ -2812,6 +2812,16 @@ as a `<release-channels source-target>` (a private build input for `clm
 release`). Pass `--target NAME` explicitly to act on such a target anyway, or
 set `distribute="true"` on it to restore wholesale distribution.
 
+**Headless/CI authentication (issue #341, CLM {version}+).** Git network
+operations normally rely on git's own credential machinery, which fails with
+`could not read Username` where no credential helper exists (CI jobs, cron,
+containers). Set `CLM_GIT_TOKEN_AUTH=1` together with `CLM_GITLAB_TOKEN` (or
+`GITLAB_TOKEN`) and every git operation `clm git` / `clm release sync --push`
+performs authenticates HTTPS remotes via an ephemeral credential helper
+(`oauth2:<token>` basic auth). The token never appears in the URL, in
+`.git/config`, or on the command line. Opt-in by design: without the switch, a
+workstation keeps using its stored credentials (e.g. Git Credential Manager).
+
 Examples:
 
 ```bash
