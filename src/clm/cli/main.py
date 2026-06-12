@@ -64,6 +64,7 @@ _COMMANDS = "clm.cli.commands"
         "course": f"{_COMMANDS}.course:course_group",
         "export": f"{_COMMANDS}.export:export_group",
         "calendar": f"{_COMMANDS}.calendar:calendar_group",
+        "query": f"{_COMMANDS}.query:query_group",
         # -------------------------------------------------------------
         # Infrastructure groups.
         # -------------------------------------------------------------
@@ -172,6 +173,7 @@ _COMPAT_EXPORTS: dict[str, tuple[str, str]] = {
     "course_group": (f"{_COMMANDS}.course", "course_group"),
     "export_group": (f"{_COMMANDS}.export", "export_group"),
     "calendar_group": (f"{_COMMANDS}.calendar", "calendar_group"),
+    "query_group": (f"{_COMMANDS}.query", "query_group"),
     "cassette_group": (f"{_COMMANDS}.cassette", "cassette_group"),
     "config": (f"{_COMMANDS}.config", "config"),
     "db": (f"{_COMMANDS}.db", "db"),
