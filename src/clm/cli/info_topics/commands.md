@@ -453,9 +453,15 @@ Run a named task sequence declared in the spec's `<tasks>` block (see
 so nothing is forgotten when promoting materials.
 
 ```
-clm run TASK SPEC_FILE [OPTIONS]   # run a task
-clm run SPEC_FILE                  # list the spec's tasks
+clm run TASK SPEC_FILE [ARGS]... [OPTIONS]   # run a task
+clm run SPEC_FILE                            # list the spec's tasks
 ```
+
+Extra arguments after the spec file are exposed to the task's steps as
+`{args}` (all of them, one argv token each) and `{1}`, `{2}`, …
+(individually) — see `clm info spec-files`. A task whose steps reference
+these placeholders fails fast when invoked without the corresponding
+arguments; arguments a task never references are likewise an error.
 
 | Option | Description |
 |--------|-------------|
@@ -482,6 +488,10 @@ clm run pre-release course.xml
 
 # Preview what would run:
 clm run pre-release course.xml --dry-run
+
+# A task whose steps use {args} / {1}, {2}, ... takes its arguments
+# after the spec file:
+clm run release-week course.xml "name:Week 09"
 ```
 
 ### `clm export`

@@ -6,7 +6,12 @@ from pathlib import Path
 import pytest
 
 from clm.core.course_spec import CourseSpec
-from clm.core.tasks import TaskStepError, resolve_step, substitute_placeholders
+from clm.core.tasks import (
+    TaskStepError,
+    resolve_step,
+    step_argument_usage,
+    substitute_placeholders,
+)
 
 
 def _spec(tasks_block: str) -> CourseSpec:
@@ -168,3 +173,91 @@ def test_unbalanced_quote_raises(tmp_path: Path):
 def test_escaped_braces_become_literal_braces():
     assert substitute_placeholders("a{{b}}c", {"spec": "X"}) == "a{b}c"
     assert substitute_placeholders("{spec}{{spec}}", {"spec": "X"}) == "X{spec}"
+
+
+# ---------------------------------------------------------------------------
+# Argument placeholders — {args} / {1}, {2}, … (issue #342)
+# ---------------------------------------------------------------------------
+
+
+def test_bare_args_token_expands_to_one_token_per_argument(tmp_path: Path):
+    spec_path = tmp_path / "c.xml"
+    tokens = resolve_step(
+        "release week {spec} {args} --channel materials/2026-04-de",
+        spec_path=spec_path,
+        args=["name:Week 09", "--push"],
+    )
+    assert tokens == [
+        "release",
+        "week",
+        str(spec_path.resolve()),
+        "name:Week 09",
+        "--push",
+        "--channel",
+        "materials/2026-04-de",
+    ]
+
+
+def test_args_values_are_never_requoted_or_reparsed(tmp_path: Path):
+    # An argument containing spaces or quote characters stays one argv token.
+    tokens = resolve_step(
+        "release week {spec} {args}",
+        spec_path=tmp_path / "c.xml",
+        args=['name:"Week 09" extra'],
+    )
+    assert tokens[-1] == 'name:"Week 09" extra'
+
+
+def test_positional_placeholders_place_individual_arguments(tmp_path: Path):
+    tokens = resolve_step(
+        "release week {spec} {2} --channel {1}",
+        spec_path=tmp_path / "c.xml",
+        args=["materials/2026-04-de", "name:Week 09"],
+    )
+    assert tokens[3:] == ["name:Week 09", "--channel", "materials/2026-04-de"]
+
+
+def test_positional_placeholder_embedded_in_larger_token(tmp_path: Path):
+    tokens = resolve_step(
+        "build {spec} --channel=materials/{1}",
+        spec_path=tmp_path / "c.xml",
+        args=["2026-04"],
+    )
+    assert tokens[-1] == "--channel=materials/2026-04"
+
+
+def test_embedded_args_placeholder_is_an_error(tmp_path: Path):
+    with pytest.raises(TaskStepError, match=r"\{args\} must be a standalone token"):
+        resolve_step("build prefix-{args}", spec_path=tmp_path / "c.xml", args=["x"])
+
+
+def test_out_of_range_positional_is_an_error(tmp_path: Path):
+    with pytest.raises(TaskStepError, match=r"references argument \{2\} but only 1"):
+        resolve_step("build {2}", spec_path=tmp_path / "c.xml", args=["only-one"])
+
+
+def test_validation_mode_accepts_argument_placeholders(tmp_path: Path):
+    # args=None (the spec validator's call shape) must accept {args}/{n}
+    # references — the actual values only exist at `clm run` time.
+    tokens = resolve_step(
+        "release week {spec} {args} --channel {1}", spec_path=tmp_path / "c.xml"
+    )
+    assert tokens[0] == "release"
+    assert "<args>" in tokens
+    assert "<1>" in tokens
+
+
+def test_zero_positional_is_unknown(tmp_path: Path):
+    with pytest.raises(TaskStepError, match=r"unknown placeholder \{0\}"):
+        resolve_step("build {0}", spec_path=tmp_path / "c.xml", args=["x"])
+
+
+def test_step_argument_usage_reports_args_and_max_positional():
+    assert step_argument_usage("build {spec}") == (False, 0)
+    assert step_argument_usage("release week {spec} {args}") == (True, 0)
+    assert step_argument_usage("release week {1} --channel {3}") == (False, 3)
+    assert step_argument_usage("release week {args} {2}") == (True, 2)
+    # Escaped braces are literal, not references; unparseable steps report
+    # no usage (resolution surfaces the parse error).
+    assert step_argument_usage("build {{args}}") == (False, 0)
+    assert step_argument_usage('build "unclosed') == (False, 0)

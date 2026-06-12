@@ -850,8 +850,31 @@ error):
 | Placeholder | Expands to |
 |---|---|
 | `{spec}` | Absolute path of the spec file passed to `clm run` |
+| `{args}` | All extra arguments passed after the spec file (`clm run TASK SPEC [ARGS]...`), one argv token per argument |
+| `{1}`, `{2}`, … | Individual extra arguments (1-based) |
 
 Literal braces are written `{{` / `}}`.
+
+Argument rules (CLM {version}+):
+
+- `{args}` must be a **standalone token** — it expands to one argv token per
+  argument, never re-quoted or re-parsed (an argument containing spaces stays
+  one token). To place an argument inside a larger token, use `{1}`, `{2}`, …
+  (`--channel=materials/{1}` works).
+- A task whose steps reference `{args}` or `{n}` fails **before any step
+  runs** when invoked without the corresponding arguments; extra arguments
+  passed to a task that references none are likewise an error.
+
+```xml
+<task name="release-week">
+    <step>release week {spec} {args} --channel materials/2026-04-de</step>
+    <step>release week {spec} {args} --channel materials/2026-04-en</step>
+</task>
+```
+
+```bash
+clm run release-week course.xml "name:Week 09"
+```
 
 **Rules**:
 

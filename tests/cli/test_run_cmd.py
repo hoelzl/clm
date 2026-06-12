@@ -207,6 +207,62 @@ def test_unknown_cli_command_error_resolves_real_commands():
 
 
 # ---------------------------------------------------------------------------
+# Argument placeholders — {args} / {1}, {2}, … (issue #342)
+# ---------------------------------------------------------------------------
+
+ARGS_TASKS = """<tasks>
+  <task name="release-week">
+    <step>export outline {spec} -o {args}</step>
+    <step>export outline {spec} -o weekly/{1}</step>
+  </task>
+  <task name="no-args">
+    <step>build {spec}</step>
+  </task>
+</tasks>"""
+
+
+def test_extra_arguments_expand_args_and_positionals(tmp_path: Path, recorded_runs: list):
+    spec = _write_spec(tmp_path, ARGS_TASKS)
+    result = _RUNNER.invoke(run_cmd, ["release-week", str(spec), "Week 09"])
+    assert result.exit_code == 0, _out(result)
+    spec_abs = str(spec.resolve())
+    assert recorded_runs[0] == [
+        sys.executable,
+        "-m",
+        "clm",
+        "export",
+        "outline",
+        spec_abs,
+        "-o",
+        "Week 09",
+    ]
+    assert recorded_runs[1][-1] == "weekly/Week 09"
+
+
+def test_missing_arguments_fail_before_any_step_runs(tmp_path: Path, recorded_runs: list):
+    spec = _write_spec(tmp_path, ARGS_TASKS)
+    result = _RUNNER.invoke(run_cmd, ["release-week", str(spec)])
+    assert result.exit_code == 1
+    assert "needs at least 1 argument(s)" in _out(result)
+    assert recorded_runs == []
+
+
+def test_unused_arguments_are_an_error(tmp_path: Path, recorded_runs: list):
+    spec = _write_spec(tmp_path, ARGS_TASKS)
+    result = _RUNNER.invoke(run_cmd, ["no-args", str(spec), "stray"])
+    assert result.exit_code == 1
+    assert "no extra arguments" in _out(result)
+    assert "stray" in _out(result)
+    assert recorded_runs == []
+
+
+def test_list_mode_rejects_extra_arguments(spec_file: Path):
+    result = _RUNNER.invoke(run_cmd, ["--list", "pre-release", str(spec_file), "stray"])
+    assert result.exit_code == 2
+    assert "only valid when running a task" in _out(result)
+
+
+# ---------------------------------------------------------------------------
 # Execution
 # ---------------------------------------------------------------------------
 
