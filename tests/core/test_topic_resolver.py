@@ -179,6 +179,17 @@ class TestBuildTopicMap:
         assert len(matches) == 1
         assert matches[0].path.name == "topic_010_intro"
 
+    def test_dot_dirs_are_invisible(self, slides_dir):
+        """Issue #339: dot-dirs (``.ipynb_checkpoints``) are never course content."""
+        checkpoints = slides_dir / ".ipynb_checkpoints" / "module_900_old" / "topic_010_intro"
+        checkpoints.mkdir(parents=True)
+        (checkpoints / "slides_intro-checkpoint.py").write_text("# stale", encoding="utf-8")
+
+        topic_map = build_topic_map(slides_dir)
+        matches = topic_map["intro"]
+        assert len(matches) == 1
+        assert matches[0].path.name == "topic_010_intro"
+
 
 class TestFindSlideFiles:
     def test_directory_topic(self, slides_dir):
@@ -369,6 +380,21 @@ class TestFindSlideFilesRecursive:
         files = find_slide_files_recursive(slides_dir)
         assert files
         assert all("_archive" not in f.parts for f in files)
+
+    def test_prunes_dot_dirs_below_root(self, slides_dir):
+        # Issue #339: Jupyter checkpoint copies must not be walked — they
+        # duplicate (or worse, contradict) findings from the real decks.
+        from clm.core.topic_resolver import find_slide_files_recursive
+
+        checkpoints = (
+            slides_dir / "module_100_basics" / "topic_020_variables" / ".ipynb_checkpoints"
+        )
+        checkpoints.mkdir(parents=True)
+        (checkpoints / "slides_variables-checkpoint.py").write_text("# stale", encoding="utf-8")
+
+        files = find_slide_files_recursive(slides_dir)
+        assert files
+        assert all(".ipynb_checkpoints" not in f.parts for f in files)
 
     def test_explicit_underscore_root_is_honoured(self, slides_dir):
         # The prune applies to components BELOW the walk root only, so an
