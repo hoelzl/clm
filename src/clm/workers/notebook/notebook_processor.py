@@ -732,16 +732,31 @@ if _clm_trace_dir:
 # Out-of-process transport (issue #165, P2). Injected into the kernel
 # *instead of* the heavy vcrpy bootstrap when
 # ``CLM_HTTP_REPLAY_TRANSPORT=mitmproxy``. It does not patch httpcore or
-# enter any cassette context — it only tags every outgoing httpx request
-# with the destination cassette path so the single shared mitmproxy can
-# demux flows to the correct per-(topic,language,kind) cassette. The proxy
+# enter any cassette context — it only tags every outgoing request with
+# the destination cassette path so the single shared mitmproxy can demux
+# flows to the correct per-(topic,language,kind) cassette. The proxy
 # strips the ``X-CLM-Cassette`` header before recording or forwarding.
-# The patch is on the httpx ``Client``/``AsyncClient`` *classes*, so it
-# covers clients created before or after this cell (openai/langchain both
-# route through ``Client.send``). One tag per kernel (fresh kernel per
+# Three client stacks are tagged (the same ones decks actually use; the
+# legacy in-kernel vcrpy transport covered them all, so the tag bootstrap
+# must too — an untagged client records into the build's catch-all
+# cassette instead of the topic's canonical one and replay silently
+# breaks):
+#
+# * ``httpx`` — ``Client.send``/``AsyncClient.send`` (openai/langchain
+#   route through these);
+# * ``requests`` — ``Session.send`` (the module-level ``requests.get``
+#   helpers create a ``Session`` and funnel through it, so one class
+#   patch covers everything);
+# * ``aiohttp`` — ``ClientSession._request`` (every verb helper funnels
+#   through it; a plain-def wrapper returning the coroutine keeps the
+#   ``_RequestContextManager`` protocol intact).
+#
+# requests/aiohttp are optional in the kernel env, hence the import
+# guards. All patches are on the *classes*, so clients created before or
+# after this cell are covered. One tag per kernel (fresh kernel per
 # notebook), captured in the closure — the same lifetime the vcrpy
-# bootstrap relies on. No literal ``{}`` in the body so ``str.format`` only
-# substitutes ``{tag!r}``.
+# bootstrap relies on. No literal curly braces in the body so
+# ``str.format`` only substitutes ``{tag!r}``.
 _HTTP_REPLAY_TAG_BOOTSTRAP_TEMPLATE = """\
 # CLM HTTP REPLAY TAG BOOTSTRAP - DO NOT EDIT
 import httpx as _clm_httpx
@@ -760,6 +775,35 @@ if not getattr(_clm_httpx.AsyncClient.send, "_clm_tagged", False):
         return await _clm_orig_asend(self, request, *args, **kwargs)
     _clm_tagged_asend._clm_tagged = True
     _clm_httpx.AsyncClient.send = _clm_tagged_asend
+try:
+    import requests as _clm_requests
+except ImportError:
+    _clm_requests = None
+if _clm_requests is not None and not getattr(
+    _clm_requests.Session.send, "_clm_tagged", False
+):
+    _clm_orig_rsend = _clm_requests.Session.send
+    def _clm_tagged_rsend(self, request, *args, **kwargs):
+        request.headers["x-clm-cassette"] = _CLM_CASSETTE_TAG
+        return _clm_orig_rsend(self, request, *args, **kwargs)
+    _clm_tagged_rsend._clm_tagged = True
+    _clm_requests.Session.send = _clm_tagged_rsend
+try:
+    import aiohttp as _clm_aiohttp
+    from multidict import CIMultiDict as _clm_CIMultiDict
+except ImportError:
+    _clm_aiohttp = None
+if _clm_aiohttp is not None and not getattr(
+    _clm_aiohttp.ClientSession._request, "_clm_tagged", False
+):
+    _clm_orig_aio_request = _clm_aiohttp.ClientSession._request
+    def _clm_tagged_aio_request(self, method, str_or_url, **kwargs):
+        _headers = kwargs.pop("headers", None)
+        _merged = _clm_CIMultiDict(_headers) if _headers else _clm_CIMultiDict()
+        _merged["x-clm-cassette"] = _CLM_CASSETTE_TAG
+        return _clm_orig_aio_request(self, method, str_or_url, headers=_merged, **kwargs)
+    _clm_tagged_aio_request._clm_tagged = True
+    _clm_aiohttp.ClientSession._request = _clm_tagged_aio_request
 """
 
 
@@ -2525,9 +2569,9 @@ class NotebookProcessor:
 
         Under the out-of-process transport (``CLM_HTTP_REPLAY_TRANSPORT=
         mitmproxy``) this injects the lightweight cassette-routing *tag*
-        bootstrap (which patches httpx to tag each request with its
-        destination cassette so the shared proxy demuxes correctly); the
-        kernel's httpcore is never patched. Otherwise it injects the
+        bootstrap (which patches httpx/requests/aiohttp to tag each request
+        with its destination cassette so the shared proxy demuxes
+        correctly); the kernel's httpcore is never patched. Otherwise it injects the
         in-kernel vcrpy bootstrap using ``paths`` (the resolved
         canonical/staging pair from :meth:`_resolve_cassette_paths`).
         Returns ``True`` when a cell was injected so the caller runs the

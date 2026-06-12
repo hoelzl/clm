@@ -87,6 +87,15 @@ _SHUTDOWN_GRACE_SECONDS = 5.0
 # tail, which is all startup-failure / shutdown diagnostics need.
 _OUTPUT_RING_LINES = 1000
 
+# Addon log lines carrying this sentinel are re-logged through CLM's own
+# logger as they are drained, so the addon's once-per-build untagged-flow
+# warning reaches the build log instead of dying in the ring buffer (which is
+# only ever shown on a startup failure). Must match
+# ``addon.UNTAGGED_FLOW_SENTINEL`` — duplicated as a literal because the addon
+# module is also loaded standalone inside the mitmdump interpreter; a
+# drift-guard test pins the two together.
+_UNTAGGED_FLOW_SENTINEL = "CLM-HTTP-REPLAY-UNTAGGED"
+
 
 class MitmproxyError(RuntimeError):
     """Raised when the proxy subprocess fails to start or exits unexpectedly."""
@@ -329,7 +338,7 @@ class MitmproxyManager:
         def _pump() -> None:
             try:
                 for raw in iter(stream.readline, b""):
-                    self._output.append(raw.decode("utf-8", errors="replace").rstrip("\r\n"))
+                    self._handle_output_line(raw.decode("utf-8", errors="replace").rstrip("\r\n"))
             except (ValueError, OSError):
                 # Stream closed underneath us during shutdown — expected.
                 return
@@ -338,6 +347,20 @@ class MitmproxyManager:
             target=_pump, name="mitmdump-stdout-reader", daemon=True
         )
         self._reader_thread.start()
+
+    def _handle_output_line(self, line: str) -> None:
+        """Buffer one drained mitmdump stdout line; surface flagged addon warnings.
+
+        Every line goes into the diagnostic ring buffer. Lines the addon marked
+        with the untagged-flow sentinel are additionally re-logged at WARNING
+        through CLM's logger immediately — the addon runs inside mitmdump, so
+        without this relay its warning would only ever be visible in the ring
+        buffer dump of a startup *failure*, i.e. never for the builds that
+        actually have the problem.
+        """
+        self._output.append(line)
+        if _UNTAGGED_FLOW_SENTINEL in line:
+            logger.warning("mitmproxy replay: %s", line)
 
     def _wait_for_ready(self) -> None:
         """Poll the listen port until it accepts a TCP connection or we time out."""

@@ -156,6 +156,17 @@ proxy is gated on the course actually containing an `http-replay` topic, so a
 replay-free build never spawns `mitmdump` and pays no cost. See
 `docs/user-guide/http-replay.md` → "Transports".
 
+**Client-library coverage (as of {version}):** under the mitmproxy transport
+the kernel tags traffic from **httpx**, **requests**, and **aiohttp** so the
+shared proxy routes it to the topic's cassette. (CLM releases between the
+transport switch and {version} tagged only httpx — `requests`-based decks
+recorded into a non-committed catch-all and could not strict-replay; upgrade
+and re-record those topics with `--http-replay=refresh`.) Other HTTP stacks
+(`urllib.request`, raw `urllib3`/`http.client`, subprocesses) are still
+proxied but untagged: they hit the per-build catch-all cassette, and the build
+log carries a `CLM-HTTP-REPLAY-UNTAGGED` warning. Use a covered client library
+in such decks, or pin `CLM_HTTP_REPLAY_TRANSPORT=vcrpy` for that course.
+
 ### 2. Python 3.11 support dropped
 
 `requires-python` is now `>=3.12` — mitmproxy, the new default replay transport,

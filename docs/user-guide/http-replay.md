@@ -53,6 +53,33 @@ CLM_HTTP_REPLAY_TRANSPORT=vcrpy clm build course.xml   # opt back into the old p
 > passes. During the transition you can keep building against existing cassettes
 > by pinning `CLM_HTTP_REPLAY_TRANSPORT=vcrpy`.
 
+### Client-library coverage (mitmproxy transport)
+
+Under the mitmproxy transport, one shared proxy serves the whole build, so each
+notebook kernel tags its outgoing requests with the destination cassette
+(an `X-CLM-Cassette` header the proxy strips before recording or forwarding).
+The tagging is done by patching the HTTP client libraries inside the kernel.
+Covered:
+
+- **httpx** (`Client`/`AsyncClient`) — the stack the OpenAI/Anthropic/LangChain
+  SDKs use;
+- **requests** (`Session.send`, which the module-level `requests.get`/`post`
+  helpers funnel through);
+- **aiohttp** (`ClientSession`).
+
+Traffic from any *other* HTTP stack — `urllib.request`, raw
+`urllib3`/`http.client`, or a subprocess that honors `HTTP(S)_PROXY` — still
+flows through the proxy (the proxy env vars and CA bundle are set
+process-wide), but arrives **untagged**: it is matched and recorded against a
+per-build *catch-all* cassette in the build scratch directory, **not** the
+topic's canonical cassette, so its recordings are never committed and strict
+`replay` will miss. CLM logs a warning in the build log
+(`CLM-HTTP-REPLAY-UNTAGGED: …`, once per build, naming the first offending
+request) when this happens. If you hit it, either switch the deck to a covered
+client library or pin the build to the `vcrpy` transport
+(`CLM_HTTP_REPLAY_TRANSPORT=vcrpy`), which patches at the `http.client` level
+and covers `urllib` too.
+
 ## Opting a topic in
 
 Mark the topic in your course spec:
