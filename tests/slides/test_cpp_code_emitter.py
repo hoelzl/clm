@@ -81,6 +81,27 @@ class TestSplitTopLevelSpans:
         assert items == split_top_level(src)
         assert len(items) == 4
 
+    def test_brace_init_temporary_in_fluent_chain_is_one_item(self):
+        src = "RequestBuilder{}.setTimeout(10).send();"
+        assert split_top_level(src) == [src]
+
+    def test_brace_init_temporary_with_chain_on_next_line(self):
+        src = "RequestBuilder{}\n    .setTimeout(10)\n    .send();"
+        assert split_top_level(src) == [src.strip()]
+
+    def test_brace_init_mid_declaration_is_one_item(self):
+        src = "auto n = std::vector<int>{1, 2}.size();"
+        assert split_top_level(src) == [src]
+
+    def test_brace_init_followed_by_comma_continues_declaration(self):
+        src = "int a[] = {1, 2}, b[] = {3};"
+        assert split_top_level(src) == [src]
+
+    def test_adjacent_definitions_still_split(self):
+        src = "void f() {}\nint g() { return 1; }"
+        items = split_top_level(src)
+        assert items == ["void f() {}", "int g() { return 1; }"]
+
 
 # ---------------------------------------------------------------------------
 # classify_source_spans
@@ -181,6 +202,15 @@ class TestEmitBasicStructure:
         assert tu.count("#include <string>") == 1
         # Hoisted above all code.
         assert tu.index("#include <string>") < tu.index("std::vector<int> v{1};")
+
+    def test_brace_init_fluent_chain_stays_one_statement(self):
+        # Regression: the builder deck's `RequestBuilder{}.setTimeout(10)...`
+        # was split after the brace-init `}`, leaving a stray `.setTimeout`
+        # item that cannot compile.
+        cells = ["// Change only the timeout....\nRequestBuilder{}.setTimeout(10).send();"]
+        tu = emit_cpp_translation_unit(cells)
+        assert "    RequestBuilder{}.setTimeout(10).send();" in tu
+        assert "\n    .setTimeout" not in tu
 
     def test_statement_cells_become_numbered_slides_called_in_order(self):
         cells = ["f();", "g();", "h();"]
