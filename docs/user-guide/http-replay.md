@@ -16,10 +16,15 @@ Install CLM with the `[replay]` extra:
 pip install "coding-academy-lecture-manager[replay]"
 ```
 
-This pulls in `mitmproxy` (the replay proxy) and `vcrpy` (used as a cassette
-serialization library). The extra is also included in `[all]`. Topics that do
-not opt in pay zero runtime cost — no imports, no proxy, no cassette lookup.
-The extra requires **Python 3.12+** (mitmproxy's floor).
+This pulls in `mitmproxy` (the replay proxy), `pyyaml` (cassette
+serialization — the vcrpy v1 YAML format is implemented by CLM itself), and
+`filelock`. The extra is also included in `[all]`. Topics that do not opt in
+pay zero runtime cost — no imports, no proxy, no cassette lookup. The extra
+requires **Python 3.12+** (mitmproxy's floor).
+
+If `mitmdump` runs from an isolated tool environment, it needs PyYAML there
+too: `uv tool install mitmproxy --with pyyaml`. Point CLM at the executable
+with `CLM_MITMDUMP` if it is not on `PATH`.
 
 ## How it works
 
@@ -258,7 +263,7 @@ up the strict default from the `CI` environment variable.
 
 ## Redaction
 
-`vcrpy` filters are applied at record time before the cassette is
+Secret filters are applied at record time before the cassette is
 written:
 
 - Request headers: `authorization`, `cookie`, `x-api-key`, `set-cookie`

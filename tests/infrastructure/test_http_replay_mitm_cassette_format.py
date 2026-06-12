@@ -1,15 +1,15 @@
-"""P1 gate (issue #165): byte-identity of the mitmproxy cassette bridge.
+"""Behavior of the mitmproxy cassette bridge (issue #165 P1, #355 stage 2).
 
-These tests pin ``clm.infrastructure.http_replay_mitm.cassette_format`` to
-vcrpy's *own* serialization path. The transport may only flip the cassette
-storage from vcrpy's in-kernel patching to an out-of-process proxy if the
-bytes on disk are indistinguishable — committed course cassettes, ``clm
-cassette doctor`` and ``strip_cassette_hosts.py`` must not be able to tell
-which producer wrote a cassette.
-
-Strategy: feed the *same* HTTP parts to (a) vcrpy's real httpcore-stub
-helpers and (b) our bridge, then assert the serialized YAML is identical.
-vcr is a hard dependency of these tests (the ``[replay]`` extra).
+These tests pin ``clm.infrastructure.http_replay_mitm.cassette_format``: the
+flow-to-interaction conversion, the secret filters, the replay matchers, and
+the read/write round-trip. The serialization itself was originally a bridge
+onto vcrpy and is now CLM-owned (``vcr_format``, issue #355); byte-identity
+with vcrpy was proven by a one-time differential check + a round-trip of all
+committed course cassettes (recorded in the stage-2 PR) and is pinned
+permanently by the golden fixture in ``test_http_replay_vcr_format.py``.
+The expected-value assertions here encode vcrpy's conversion conventions
+(header joining, dict-of-lists response headers, message: None, utf-8
+body decoding) that committed cassettes rely on.
 """
 
 from __future__ import annotations
@@ -18,30 +18,7 @@ import gzip
 
 import pytest
 
-# The whole module needs vcrpy; skip cleanly where the extra is absent.
-pytest.importorskip("vcr")
-
-import httpcore  # noqa: E402  (after importorskip)
-from vcr.filters import decode_response  # noqa: E402
-from vcr.request import Request  # noqa: E402
-from vcr.serialize import serialize as vcr_serialize  # noqa: E402
-from vcr.serializers import yamlserializer  # noqa: E402
-from vcr.stubs.httpcore_stubs import (  # noqa: E402
-    _make_vcr_request,
-    _serialize_response,
-)
-
-from clm.infrastructure.http_replay_mitm import cassette_format as cf  # noqa: E402
-
-
-def _httpcore_request(method: str, url: str, fields, body: bytes) -> httpcore.Request:
-    return httpcore.Request(method, url, headers=list(fields), content=body)
-
-
-def _httpcore_response(status: int, reason: str | None, fields, body: bytes) -> httpcore.Response:
-    extensions = {"reason_phrase": reason.encode("ascii")} if reason is not None else {}
-    return httpcore.Response(status, headers=list(fields), content=body, extensions=extensions)
-
+from clm.infrastructure.http_replay_mitm import cassette_format as cf
 
 # (method, url, request fields, request body, status, reason, response fields, raw body)
 _POST_JSON = (
@@ -56,17 +33,6 @@ _POST_JSON = (
 )
 
 
-def _vcrpy_reference_yaml(case, *, decode_compressed=True) -> str:
-    method, url, req_fields, req_body, status, reason, resp_fields, raw_body = case
-    real_request = _httpcore_request(method, url, req_fields, req_body)
-    real_response = _httpcore_response(status, reason, resp_fields, raw_body)
-    vcr_request = _make_vcr_request(real_request, req_body)
-    response_dict = _serialize_response(real_response, raw_body)
-    if decode_compressed:
-        response_dict = decode_response(response_dict)
-    return vcr_serialize({"requests": [vcr_request], "responses": [response_dict]}, yamlserializer)
-
-
 def _bridge_yaml(case, *, decode_compressed=True) -> str:
     method, url, req_fields, req_body, status, reason, resp_fields, raw_body = case
     request = cf.vcr_request_from_parts(method, url, req_fields, req_body)
@@ -76,20 +42,36 @@ def _bridge_yaml(case, *, decode_compressed=True) -> str:
     return cf.serialize_interactions([(request, response)])
 
 
-def test_request_dict_matches_vcrpy():
+def test_request_dict_shape():
+    # The exact request shape vcrpy serialized (validated against vcrpy's
+    # httpcore stub at migration time): headers as dict-of-single-item-lists,
+    # body as bytes.
     method, url, req_fields, req_body, *_ = _POST_JSON
-    real_request = _httpcore_request(method, url, req_fields, req_body)
-    expected = _make_vcr_request(real_request, req_body)._to_dict()
     actual = cf.vcr_request_from_parts(method, url, req_fields, req_body)._to_dict()
-    assert actual == expected
+    assert actual == {
+        "method": "POST",
+        "uri": url,
+        "body": req_body,
+        "headers": {
+            "content-type": ["application/json"],
+            "accept": ["application/json"],
+        },
+    }
 
 
-def test_response_dict_matches_vcrpy():
+def test_response_dict_shape():
+    # The exact response shape vcrpy serialized: status code + message,
+    # headers as dict-of-lists, raw body bytes under body.string.
     _, _, _, _, status, reason, resp_fields, raw_body = _POST_JSON
-    real_response = _httpcore_response(status, reason, resp_fields, raw_body)
-    expected = decode_response(_serialize_response(real_response, raw_body))
     actual = cf.vcr_response_dict_from_parts(status, reason, resp_fields, raw_body)
-    assert actual == expected
+    assert actual == {
+        "status": {"code": 200, "message": "OK"},
+        "headers": {
+            "content-type": ["application/json"],
+            "x-request-id": ["abc123"],
+        },
+        "body": {"string": raw_body},
+    }
 
 
 def test_response_fingerprint_distinguishes_distinct_bodies():
@@ -152,12 +134,19 @@ def test_select_serve_index_replays_response_sequence_then_repeats_last():
     assert ClmReplayAddon._select_serve_index(single, incoming, seen) == 0
 
 
-def test_serialized_yaml_byte_identical_plain():
-    assert _bridge_yaml(_POST_JSON) == _vcrpy_reference_yaml(_POST_JSON)
+def test_serialized_yaml_round_trips(tmp_path):
+    # Serialization bytes are pinned by the golden fixture
+    # (test_http_replay_vcr_format.py); here pin that a serialized
+    # interaction reloads to the identical in-memory shape.
+    text = _bridge_yaml(_POST_JSON)
+    path = tmp_path / "rt.http-cassette.yaml"
+    path.write_text(text, encoding="utf-8", newline="\n")
+    ((req, resp),) = cf.load_interactions(path)
+    assert cf.serialize_interactions([(req, resp)]) == text
 
 
-def test_serialized_yaml_byte_identical_gzip():
-    """A gzip-compressed response must decode to the same bytes vcrpy stores."""
+def test_serialized_yaml_decodes_gzip():
+    """A gzip-compressed response is stored decompressed (vcrpy convention)."""
     payload = b'{"id":"chatcmpl-2","choices":[{"message":{"content":"gzipped"}}]}'
     compressed = gzip.compress(payload)
     case = (
@@ -175,26 +164,22 @@ def test_serialized_yaml_byte_identical_gzip():
         compressed,
     )
     bridge = _bridge_yaml(case)
-    reference = _vcrpy_reference_yaml(case)
-    assert bridge == reference
-    # And the decoded payload is actually present (content-encoding stripped).
+    # The decoded payload is present and the encoding header stripped.
     assert "gzipped" in bridge
     assert "content-encoding" not in bridge
+    assert f"content-length:\n      - '{len(payload)}'" in bridge
 
 
 def test_multivalue_request_headers_comma_joined():
     """Repeated request headers join with ', ' like HTTPX/vcrpy."""
-    case = (
+    request = cf.vcr_request_from_parts(
         "GET",
         "https://example.com/x",
         [(b"accept", b"text/html"), (b"accept", b"application/json")],
         b"",
-        200,
-        "OK",
-        [(b"content-type", b"text/plain")],
-        b"ok",
     )
-    assert _bridge_yaml(case) == _vcrpy_reference_yaml(case)
+    assert request.headers["accept"] == "text/html, application/json"
+    assert request._to_dict()["headers"] == {"accept": ["text/html, application/json"]}
 
 
 def test_multivalue_response_headers_preserved_as_list():
@@ -205,21 +190,15 @@ def test_multivalue_response_headers_preserved_as_list():
         (b"set-cookie", b"b=2"),
         (b"content-type", b"text/plain"),
     ]
-    real_response = _httpcore_response(status, reason, resp_fields, raw_body)
-    expected = decode_response(_serialize_response(real_response, raw_body))
     actual = cf.vcr_response_dict_from_parts(status, reason, resp_fields, raw_body)
-    assert actual == expected
     assert actual["headers"]["set-cookie"] == ["a=1", "b=2"]
+    assert actual["headers"]["content-type"] == ["text/plain"]
 
 
 def test_no_reason_phrase_normalises_to_none():
-    """HTTP/2-style responses (no reason phrase) match vcrpy's message: None."""
+    """HTTP/2-style responses (no reason phrase) store message: None."""
     _, _, _, _, status, _, resp_fields, raw_body = _POST_JSON
-    # httpcore with empty extensions -> _serialize_response yields message=None.
-    real_response = _httpcore_response(status, None, resp_fields, raw_body)
-    expected = decode_response(_serialize_response(real_response, raw_body))
     actual = cf.vcr_response_dict_from_parts(status, "", resp_fields, raw_body)
-    assert actual == expected
     assert actual["status"]["message"] is None
 
 
@@ -280,24 +259,16 @@ def test_round_trip_load(tmp_path):
     assert loaded_resp["body"]["string"] == _POST_JSON[7]
 
 
-def test_filter_byte_identical_to_vcrpy_before_record_request():
-    """Our request filter must drop exactly what vcrpy's own
-    ``before_record_request`` drops, byte-for-byte — so a mitmproxy-recorded
-    cassette is indistinguishable from a vcrpy-recorded one after filtering."""
-    import vcr
+def test_filter_pins_vcrpy_before_record_request_behavior():
+    """The filter's exact output, including two vcrpy conventions committed
+    cassettes depend on: a matched JSON body is re-dumped with default
+    separators, while a ``charset``-suffixed content-type skips the JSON
+    rewrite entirely (vcrpy's exact-match gate). Validated byte-identical to
+    ``vcr.VCR._build_before_record_request`` at migration time (#355)."""
+    ours = cf.build_request_filter(ignore_hosts=("api.smith.langchain.com",))
 
-    ignore = ("api.smith.langchain.com",)
-    vcrpy_filter = vcr.VCR(
-        filter_headers=cf.FILTER_HEADERS,
-        filter_query_parameters=cf.FILTER_QUERY_PARAMETERS,
-        filter_post_data_parameters=cf.FILTER_POST_DATA_PARAMETERS,
-        ignore_hosts=ignore,
-        decode_compressed_response=True,
-    )._build_before_record_request({})
-    ours = cf.build_request_filter(ignore_hosts=ignore)
-
-    cases = [
-        (
+    filtered = ours(
+        cf.vcr_request_from_parts(
             "POST",
             "https://openrouter.ai/api/v1/chat?api_key=S&model=x&token=T",
             [
@@ -307,19 +278,30 @@ def test_filter_byte_identical_to_vcrpy_before_record_request():
                 (b"accept", b"application/json"),
             ],
             b'{"model":"x","api_key":"S","password":"p","messages":[{"role":"user","content":"hi"}]}',
-        ),
-        ("GET", "https://example.com/x?token=T&q=1", [(b"cookie", b"sid=abc")], b""),
-        (
+        )
+    )
+    assert filtered._to_dict() == {
+        "method": "POST",
+        "uri": "https://openrouter.ai/api/v1/chat?model=x",
+        # JSON body re-dumped with (", ", ": ") separators, secrets gone.
+        "body": b'{"model": "x", "messages": [{"role": "user", "content": "hi"}]}',
+        "headers": {
+            "content-type": ["application/json"],
+            "accept": ["application/json"],
+        },
+    }
+
+    # charset-suffixed content-type: vcrpy's exact-string gate skips the JSON
+    # rewrite, so the body stays byte-identical.
+    charset = ours(
+        cf.vcr_request_from_parts(
             "POST",
             "https://o.ai/v1",
             [(b"content-type", b"application/json; charset=utf-8")],
             b'{"k":1}',
-        ),
-    ]
-    for method, url, fields, body in cases:
-        ref = vcrpy_filter(cf.vcr_request_from_parts(method, url, fields, body))
-        got = ours(cf.vcr_request_from_parts(method, url, fields, body))
-        assert ref._to_dict() == got._to_dict(), url
+        )
+    )
+    assert charset.body == b'{"k":1}'
 
 
 def test_filter_removes_secrets():

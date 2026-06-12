@@ -198,7 +198,7 @@ as a backstop. (For a timer-*expiring* transient state, widen the state's own
 lifetime past the wait ceiling rather than the ceiling itself — see the
 `retake_window_seconds` note in `test_session.py`.)
 
-> The HTTP-replay / cassette tests need the `replay` extra (`vcrpy`,
+> The HTTP-replay / cassette tests need the `replay` extra (`pyyaml`,
 > `filelock`). It is included in the auto-synced `dev` dependency group, so
 > `uv sync` / `uv run pytest` always has it; without it those tests
 > `importorskip`-skip rather than run.

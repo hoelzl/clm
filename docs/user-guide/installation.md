@@ -166,9 +166,9 @@ CLM has several optional dependency groups for different features:
   - Install: `pip install -e ".[jupyterlite]"`
 
 **HTTP Replay**:
-- **[replay]**: mitmproxy, vcrpy, filelock
+- **[replay]**: mitmproxy, pyyaml, filelock
   - HTTP request/response replay for notebooks that call live services
-    (mitmproxy is the replay proxy; vcrpy is used as a cassette serialization library)
+    (mitmproxy is the replay proxy; cassette serialization is CLM-owned and needs only PyYAML)
   - Install: `pip install -e ".[replay]"`
 
 **Development Tools**:

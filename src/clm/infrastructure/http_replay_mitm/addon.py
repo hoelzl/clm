@@ -44,11 +44,11 @@ from mitmproxy import ctx, http
 
 logger = logging.getLogger("clm.http_replay_mitm.addon")
 
-# The cassette format bridge is pure (vcr + stdlib only). Inside CLM's own
-# venv it imports as a package submodule; inside the isolated mitmdump
-# interpreter (``uv tool install mitmproxy --with vcrpy``) the ``clm``
+# The cassette format bridge is pure (PyYAML + stdlib only). Inside CLM's
+# own venv it imports as a package submodule; inside the isolated mitmdump
+# interpreter (``uv tool install mitmproxy --with pyyaml``) the ``clm``
 # package is absent, so we fall back to a bare path import of the sibling
-# module. If vcrpy itself is missing from the mitmdump environment, both
+# module. If PyYAML itself is missing from the mitmdump environment, both
 # imports fail and we surface a loud, actionable error at startup.
 _CF_IMPORT_ERROR: Exception | None = None
 try:  # CLM venv
@@ -57,7 +57,7 @@ except ImportError:  # mitmdump interpreter — import the sibling by path
     sys.path.insert(0, str(Path(__file__).parent))
     try:
         import cassette_format as cf  # type: ignore[import-not-found,no-redef]
-    except ImportError as exc:  # vcrpy missing from the mitmdump env
+    except ImportError as exc:  # PyYAML missing from the mitmdump env
         cf = None  # type: ignore[assignment]
         _CF_IMPORT_ERROR = exc
 
@@ -295,8 +295,8 @@ class ClmReplayAddon:
     def running(self) -> None:
         if cf is None:
             logger.error(
-                "CLM mitmproxy addon requires vcrpy in the mitmdump environment "
-                "(install with: uv tool install mitmproxy --with vcrpy). "
+                "CLM mitmproxy addon requires PyYAML in the mitmdump environment "
+                "(install with: uv tool install mitmproxy --with pyyaml). "
                 "Import failed: %s",
                 _CF_IMPORT_ERROR,
             )

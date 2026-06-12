@@ -446,8 +446,8 @@ def _locate_mitmdump() -> str:
 
     raise MitmproxyError(
         "Could not locate mitmdump executable. Install the out-of-process proxy with: "
-        "uv tool install mitmproxy --with vcrpy "
-        "(the addon needs vcrpy in the mitmdump environment to read/write cassettes), "
+        "uv tool install mitmproxy --with pyyaml "
+        "(the addon needs PyYAML in the mitmdump environment to read/write cassettes), "
         "then point CLM at it via the CLM_MITMDUMP env var if it is not on PATH."
     )
 

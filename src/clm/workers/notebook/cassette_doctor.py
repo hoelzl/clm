@@ -341,17 +341,18 @@ def diagnose_cassette(
 ) -> CassetteReport:
     """Diagnose (and optionally repair) a single cassette.
 
-    Loads the cassette via vcr's persister, finds chain-orphans, and — when
+    Loads the cassette, finds chain-orphans, and — when
     ``fix`` is set and orphans exist — rewrites the cassette without the
     orphan interactions via the shared atomic-write helper. A cassette that
     fails to load is reported with ``error`` set and skipped (never rewritten).
     """
-    from vcr.persisters.filesystem import FilesystemPersister
-    from vcr.serialize import serialize as vcr_serialize
-    from vcr.serializers import yamlserializer
+    from clm.infrastructure.http_replay_mitm.vcr_format import (
+        load_cassette,
+        serialize_cassette,
+    )
 
     try:
-        requests, responses = FilesystemPersister.load_cassette(path, serializer=yamlserializer)
+        requests, responses = load_cassette(path)
     except Exception as exc:  # noqa: BLE001 — defensive: one bad file must not abort the walk
         logger.warning(f"Could not load cassette '{path}' ({type(exc).__name__}: {exc}); skipping.")
         return CassetteReport(path=path, error=f"{type(exc).__name__}: {exc}")
@@ -369,10 +370,7 @@ def diagnose_cassette(
         orphan_indexes = {o.index for o in orphans}
         keep_requests = [r for i, r in enumerate(requests) if i not in orphan_indexes]
         keep_responses = [r for i, r in enumerate(responses) if i not in orphan_indexes]
-        payload = vcr_serialize(
-            {"requests": keep_requests, "responses": keep_responses},
-            yamlserializer,
-        )
+        payload = serialize_cassette({"requests": keep_requests, "responses": keep_responses})
         _atomic_write_text(path, payload)
         report.fixed = True
         logger.info(

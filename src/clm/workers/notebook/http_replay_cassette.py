@@ -143,13 +143,15 @@ def merge_staging_into_canonical(
         caller can detect "had work to do but it was all orphan" by
         observing remaining files on disk.
     """
-    # vcrpy is an optional extra; importing here keeps the module
-    # importable for tests that exercise pure path resolution without
-    # requiring the [replay] install.
+    # filelock/pyyaml come with the [replay] extra; importing here keeps
+    # the module importable for tests that exercise pure path resolution
+    # without requiring the [replay] install.
     from filelock import FileLock, Timeout
-    from vcr.persisters.filesystem import FilesystemPersister
-    from vcr.serialize import serialize as vcr_serialize
-    from vcr.serializers import yamlserializer
+
+    from clm.infrastructure.http_replay_mitm.vcr_format import (
+        load_cassette,
+        serialize_cassette,
+    )
 
     canonical = paths.canonical
     lock_path = canonical.parent / f"{canonical.name}{_LOCK_SUFFIX}"
@@ -206,9 +208,7 @@ def merge_staging_into_canonical(
             canonical_responses: list = []
             if canonical.exists():
                 try:
-                    canonical_requests, canonical_responses = FilesystemPersister.load_cassette(
-                        canonical, serializer=yamlserializer
-                    )
+                    canonical_requests, canonical_responses = load_cassette(canonical)
                 except Exception as exc:  # noqa: BLE001 — defensive
                     logger.warning(
                         f"Could not load existing canonical cassette '{canonical}' "
@@ -234,9 +234,7 @@ def merge_staging_into_canonical(
                     }
                 for staging_path in markered:
                     try:
-                        staging_requests, staging_responses = FilesystemPersister.load_cassette(
-                            staging_path, serializer=yamlserializer
-                        )
+                        staging_requests, staging_responses = load_cassette(staging_path)
                     except Exception as exc:  # noqa: BLE001 — defensive
                         logger.warning(
                             f"Could not load staging cassette '{staging_path}' "
@@ -286,9 +284,7 @@ def merge_staging_into_canonical(
                 staging_order: list[tuple] = []
                 for staging_path in markered:
                     try:
-                        staging_requests, staging_responses = FilesystemPersister.load_cassette(
-                            staging_path, serializer=yamlserializer
-                        )
+                        staging_requests, staging_responses = load_cassette(staging_path)
                     except Exception as exc:  # noqa: BLE001 — defensive
                         logger.warning(
                             f"Could not load staging cassette '{staging_path}' "
@@ -349,9 +345,7 @@ def merge_staging_into_canonical(
 
                 for staging_path in markered:
                     try:
-                        staging_requests, staging_responses = FilesystemPersister.load_cassette(
-                            staging_path, serializer=yamlserializer
-                        )
+                        staging_requests, staging_responses = load_cassette(staging_path)
                     except Exception as exc:  # noqa: BLE001 — defensive
                         logger.warning(
                             f"Could not load staging cassette '{staging_path}' "
@@ -394,9 +388,8 @@ def merge_staging_into_canonical(
             # orphans must not touch canonical — discarding does not
             # change its content.
             if markered:
-                payload = vcr_serialize(
-                    {"requests": merged_requests, "responses": merged_responses},
-                    yamlserializer,
+                payload = serialize_cassette(
+                    {"requests": merged_requests, "responses": merged_responses}
                 )
                 _atomic_write_text(canonical, payload)
 

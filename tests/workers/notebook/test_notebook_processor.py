@@ -2286,7 +2286,7 @@ class TestCassetteMerge:
     """Locked merge of per-worker staging files into the canonical cassette."""
 
     def test_merge_creates_canonical_when_only_staging_exists(self, tmp_path):
-        pytest.importorskip("vcr")
+        pytest.importorskip("filelock")  # merge path needs the [replay] extra
         pytest.importorskip("filelock")
         from clm.workers.notebook.http_replay_cassette import (
             CassettePaths,
@@ -2308,7 +2308,7 @@ class TestCassetteMerge:
         assert "http://example/a" in content
 
     def test_merge_is_noop_with_no_staging_files(self, tmp_path):
-        pytest.importorskip("vcr")
+        pytest.importorskip("filelock")  # merge path needs the [replay] extra
         pytest.importorskip("filelock")
         from clm.workers.notebook.http_replay_cassette import (
             CassettePaths,
@@ -2327,7 +2327,7 @@ class TestCassetteMerge:
 
     def test_merge_sweeps_orphan_staging_files(self, tmp_path):
         """Staging files from previously-killed workers must be absorbed too."""
-        pytest.importorskip("vcr")
+        pytest.importorskip("filelock")  # merge path needs the [replay] extra
         pytest.importorskip("filelock")
         from clm.workers.notebook.http_replay_cassette import (
             CassettePaths,
@@ -2360,7 +2360,7 @@ class TestCassetteMerge:
 
     def test_merge_deduplicates_against_canonical(self, tmp_path):
         """An interaction already present in canonical must not be appended twice."""
-        pytest.importorskip("vcr")
+        pytest.importorskip("filelock")  # merge path needs the [replay] extra
         pytest.importorskip("filelock")
         from clm.workers.notebook.http_replay_cassette import (
             CassettePaths,
@@ -2382,7 +2382,7 @@ class TestCassetteMerge:
         assert content.count("http://example/same") == 1
 
     def test_merge_appends_new_interactions_to_existing_canonical(self, tmp_path):
-        pytest.importorskip("vcr")
+        pytest.importorskip("filelock")  # merge path needs the [replay] extra
         pytest.importorskip("filelock")
         from clm.workers.notebook.http_replay_cassette import (
             CassettePaths,
@@ -2411,7 +2411,7 @@ class TestCassetteMerge:
         flip-flop: builds write CRLF, ``git checkout`` writes LF, next
         build writes CRLF again, and so on.
         """
-        pytest.importorskip("vcr")
+        pytest.importorskip("filelock")  # merge path needs the [replay] extra
         pytest.importorskip("filelock")
         from clm.workers.notebook.http_replay_cassette import (
             CassettePaths,
@@ -2435,7 +2435,7 @@ class TestCassetteMerge:
 
     def test_concurrent_merges_do_not_lose_interactions(self, tmp_path):
         """Two workers merging different recordings must produce a union, not a last-writer-wins."""
-        pytest.importorskip("vcr")
+        pytest.importorskip("filelock")  # merge path needs the [replay] extra
         pytest.importorskip("filelock")
         import threading
 
@@ -2623,7 +2623,7 @@ class TestDiscriminatingMerge:
 
     def test_merge_folds_entries_when_marker_present(self, tmp_path):
         """Default per-worker merge folds markered staging into canonical."""
-        pytest.importorskip("vcr")
+        pytest.importorskip("filelock")  # merge path needs the [replay] extra
         pytest.importorskip("filelock")
         from clm.workers.notebook.http_replay_cassette import (
             CassettePaths,
@@ -2656,7 +2656,7 @@ class TestDiscriminatingMerge:
         delete." The next build's pre-build sweep (single-threaded)
         decides their fate.
         """
-        pytest.importorskip("vcr")
+        pytest.importorskip("filelock")  # merge path needs the [replay] extra
         pytest.importorskip("filelock")
         from clm.workers.notebook.http_replay_cassette import (
             CassettePaths,
@@ -2688,7 +2688,7 @@ class TestDiscriminatingMerge:
         would poison canonical (this is the issue #115 mechanism);
         discarding restores the invariant.
         """
-        pytest.importorskip("vcr")
+        pytest.importorskip("filelock")  # merge path needs the [replay] extra
         pytest.importorskip("filelock")
         from clm.workers.notebook.http_replay_cassette import (
             CassettePaths,
@@ -2715,7 +2715,7 @@ class TestDiscriminatingMerge:
 
     def test_merge_deletes_marker_after_successful_fold(self, tmp_path):
         """Folded markered staging cleans up both the staging file and the marker."""
-        pytest.importorskip("vcr")
+        pytest.importorskip("filelock")  # merge path needs the [replay] extra
         pytest.importorskip("filelock")
         from clm.workers.notebook.http_replay_cassette import (
             CassettePaths,
@@ -2752,7 +2752,7 @@ class TestDiscriminatingMerge:
         seed/merge race the marker design addresses (the visible
         symptom in issue #115 is the chain-poisoning).
         """
-        pytest.importorskip("vcr")
+        pytest.importorskip("filelock")  # merge path needs the [replay] extra
         pytest.importorskip("filelock")
         from clm.workers.notebook.http_replay_cassette import (
             CassettePaths,
@@ -2874,7 +2874,7 @@ class TestIssue115PartialChainRegression:
         the response paired with the opener — the chain is internally
         consistent and a future replay can walk it.
         """
-        pytest.importorskip("vcr")
+        pytest.importorskip("filelock")  # merge path needs the [replay] extra
         pytest.importorskip("filelock")
         from clm.workers.notebook.http_replay_cassette import (
             CassettePaths,
@@ -2963,7 +2963,7 @@ class TestIssue115PartialChainRegression:
         consistent chain. A's staging stays on disk for the next
         single-threaded pre-build sweep to discard.
         """
-        pytest.importorskip("vcr")
+        pytest.importorskip("filelock")  # merge path needs the [replay] extra
         pytest.importorskip("filelock")
         from clm.workers.notebook.http_replay_cassette import (
             CassettePaths,

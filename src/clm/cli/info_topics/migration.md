@@ -139,8 +139,11 @@ entirely (issue #355). mitmproxy had been the default since 1.10;
 
 - Cassettes already recorded under mitmproxy (the default since 1.10) are
   unaffected — the on-disk format is unchanged.
-- The `vcrpy` package itself remains a dependency of the `[replay]` extra for
-  now (CLM uses it as a cassette serialization library, not as a transport).
+- The `vcrpy` *package* is gone from CLM's dependencies entirely: the
+  cassette format (vcrpy v1 YAML — unchanged on disk) is now implemented by
+  CLM itself and needs only PyYAML. An isolated `mitmdump` tool environment
+  now needs `uv tool install mitmproxy --with pyyaml` (an env installed with
+  the old `--with vcrpy` keeps working — vcrpy depended on PyYAML).
 
 ## Breaking changes in CLM 1.10
 
