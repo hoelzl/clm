@@ -285,6 +285,56 @@ class TestProvisionCli:
         assert "collapsed" in result.output
         assert result.output.count("-> trainers") == 1
 
+    def test_channel_repo_attribute_overrides_derived_name(self, tmp_path, monkeypatch):
+        """`<channel repo="...">` makes provision target the real project (#322)."""
+        for var in ("CLM_GITLAB_TOKEN", "GITLAB_TOKEN"):
+            monkeypatch.delenv(var, raising=False)
+        spec = SPEC_WITH_SHARES.replace(
+            '<channel name="2026-04" ',
+            '<channel name="2026-04" repo="ml-azav-2026-04-solutions" ',
+        )
+        specs_dir = tmp_path / "course-specs"
+        specs_dir.mkdir()
+        spec_file = specs_dir / "course.xml"
+        spec_file.write_text(spec, encoding="utf-8")
+
+        result = CliRunner().invoke(release_group, ["provision", str(spec_file), "--dry-run"])
+        assert result.exit_code == 0, result.output
+        assert "ca/ml-azav-2026-04-solutions -> trainers (maintainer)" in result.output
+        assert "ca/ml-2026-04-solutions ->" not in result.output
+        # The channel without an override keeps the derived name.
+        assert "ca/ml-2026-10-solutions -> trainers (guest)" in result.output
+
+    def test_working_tree_origin_wins_over_derived_url(self, tmp_path, monkeypatch):
+        """Provision targets the repo's actual origin when one is set (#322)."""
+        import subprocess
+
+        for var in ("CLM_GITLAB_TOKEN", "GITLAB_TOKEN"):
+            monkeypatch.delenv(var, raising=False)
+        spec_file = _write_spec(tmp_path)
+        dest = tmp_path / "release" / "2026-04"
+        dest.mkdir(parents=True)
+        subprocess.run(["git", "-C", str(dest), "init", "-q"], check=True)
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(dest),
+                "remote",
+                "add",
+                "origin",
+                "https://gitlab.example.com/ca/the-actual-repo.git",
+            ],
+            check=True,
+        )
+
+        result = CliRunner().invoke(release_group, ["provision", str(spec_file), "--dry-run"])
+        assert result.exit_code == 0, result.output
+        assert "ca/the-actual-repo -> trainers (maintainer)" in result.output
+        assert "ca/ml-2026-04-solutions ->" not in result.output
+        # 2026-10 has no working tree; the derived URL remains its fallback.
+        assert "ca/ml-2026-10-solutions -> trainers (guest)" in result.output
+
     def test_api_error_exits_nonzero_but_continues(self, tmp_path, monkeypatch):
         monkeypatch.setenv("CLM_GITLAB_TOKEN", "tok")
         spec_file = _write_spec(tmp_path)

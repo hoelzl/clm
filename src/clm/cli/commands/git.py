@@ -459,6 +459,7 @@ def find_release_channel_repos(
             remote_path=effective_remote_path,
             stream=block.name,
             language=channel.lang,
+            repo_override=channel.repo,
         )
 
         repos.append(

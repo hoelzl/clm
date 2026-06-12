@@ -352,3 +352,55 @@ class TestLanguageScopedChannels:
         # Lang without stream (single unnamed block).
         url = gh.derive_channel_remote_url("jan", language="en")
         assert url == "https://gitlab.example.com/ca/ml-jan-en"
+
+
+class TestChannelRepoOverride:
+    """Channel `repo` attribute (issue #322): verbatim repo-name override."""
+
+    REPO_BLOCK = """
+    <release-channels name="solutions" source-target="shared">
+      <channel name="2026-04-de" lang="de" repo="ml-azav-2026-04-solutions-de"
+               path="./solutions/2026-04-de" ledger="release/2026-04-de.txt"/>
+      <channel name="2026-04-en" lang="en"
+               path="./solutions/2026-04-en" ledger="release/2026-04-en.txt"/>
+    </release-channels>
+    """
+
+    def test_repo_parses_and_defaults_to_empty(self):
+        block = _spec(self.REPO_BLOCK, TWO_STREAM_TARGETS).release_channel_blocks[0]
+        assert block.channel("2026-04-de").repo == "ml-azav-2026-04-solutions-de"
+        assert block.channel("2026-04-en").repo == ""
+
+    def test_repo_override_replaces_derived_name_verbatim(self):
+        from clm.core.course_spec import GitHubSpec
+
+        gh = GitHubSpec(project_slug="ml", repository_base="https://gitlab.example.com/ca")
+        # Without the override, the lang-scoped channel name duplicates the
+        # language: ml-2026-04-de-solutions-de.
+        url = gh.derive_channel_remote_url(
+            "2026-04-de",
+            stream="solutions",
+            language="de",
+            repo_override="ml-azav-2026-04-solutions-de",
+        )
+        assert url == "https://gitlab.example.com/ca/ml-azav-2026-04-solutions-de"
+
+    def test_repo_override_keeps_remote_path_and_template(self):
+        from clm.core.course_spec import GitHubSpec
+
+        gh = GitHubSpec(project_slug="ml", repository_base="https://gitlab.example.com/ca")
+        url = gh.derive_channel_remote_url(
+            "2026-04-de",
+            remote_path="cohorts",
+            repo_override="custom-name",
+        )
+        assert url == "https://gitlab.example.com/ca/cohorts/custom-name"
+        url = gh.derive_channel_remote_url(
+            "2026-04-de",
+            remote_template="git@host:{slug}/{repo}.git",
+            repo_override="custom-name",
+        )
+        assert url == "git@host:ml/custom-name.git"
+
+    def test_repo_override_validates_clean(self):
+        assert _spec(self.REPO_BLOCK, TWO_STREAM_TARGETS).validate() == []

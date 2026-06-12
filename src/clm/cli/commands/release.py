@@ -23,6 +23,7 @@ from clm.cli.commands.git import (
     OutputRepo,
     commit_and_push_repo,
     find_release_channel_repos,
+    run_git,
 )
 from clm.core.course_paths import resolve_course_paths
 from clm.core.course_spec import (
@@ -277,6 +278,16 @@ def _push_channel_repo(
         raise SystemExit(1)
 
 
+def _actual_origin_url(repo: OutputRepo) -> str | None:
+    """The ``origin`` URL the channel working tree actually has, if any."""
+    if not repo.has_git:
+        return None
+    result = run_git(repo.path, "remote", "get-url", "origin")
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
 @release_group.command("provision")
 @_SPEC_ARG
 @click.option(
@@ -336,11 +347,19 @@ def provision_cmd(spec_file: Path, channel: str, dry_run: bool) -> None:
         repo = repos.get(ref)
         if repo is not None:
             repo = canonical_by_dest.get(repo.path.resolve(), repo)
-        remote = parse_gitlab_remote(repo.remote_url or "") if repo else None
+        # The working tree's actual origin wins over the derived URL (issue
+        # #322): push/commit already operate on whatever origin the repo has,
+        # and a repo whose name does not follow the derived convention would
+        # otherwise be provisioned against a nonexistent project. The derived
+        # URL remains the fallback for repos not yet initialized/pushed.
+        remote = None
+        if repo is not None:
+            remote = parse_gitlab_remote(_actual_origin_url(repo) or repo.remote_url or "")
         if remote is None:
             click.echo(
                 f"[{ref}] skipped: no GitLab remote URL could be derived "
-                f"(configure <github> repository-base / remote-path)."
+                f"(configure <github> repository-base / remote-path, set the "
+                f"channel's repo attribute, or set the repo's origin)."
             )
             continue
         base_url, project_path = remote
