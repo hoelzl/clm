@@ -345,6 +345,21 @@ class TestProvisionCli:
         # 2026-10 has no working tree; the derived URL remains its fallback.
         assert "ca/ml-2026-10-solutions -> trainers (guest)" in result.output
 
+    def test_working_tree_without_origin_falls_back_to_derived_url(self, tmp_path, monkeypatch):
+        """An initialized repo with no origin yet keeps the derived URL (#322)."""
+        import subprocess
+
+        for var in ("CLM_GITLAB_TOKEN", "GITLAB_TOKEN"):
+            monkeypatch.delenv(var, raising=False)
+        spec_file = _write_spec(tmp_path)
+        dest = tmp_path / "release" / "2026-04"
+        dest.mkdir(parents=True)
+        subprocess.run(["git", "-C", str(dest), "init", "-q"], check=True)
+
+        result = CliRunner().invoke(release_group, ["provision", str(spec_file), "--dry-run"])
+        assert result.exit_code == 0, result.output
+        assert "ca/ml-2026-04-solutions -> trainers (maintainer)" in result.output
+
     def test_api_error_exits_nonzero_but_continues(self, tmp_path, monkeypatch):
         monkeypatch.setenv("CLM_GITLAB_TOKEN", "tok")
         spec_file = _write_spec(tmp_path)
