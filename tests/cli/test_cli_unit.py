@@ -624,3 +624,26 @@ class TestOutputFiltering:
         # both private kinds so trainer and recording are both built.
         assert course.output_languages == ["de"]
         assert course.output_kinds == ["trainer", "recording"]
+
+    def test_no_html_skips_html_for_all_topics(self):
+        """--no-html flips skip_html on every topic before course creation"""
+        from clm.cli.main import initialize_paths_and_course
+
+        config = self._create_config()
+        config.no_html = True
+        course, root_dirs, data_dir = initialize_paths_and_course(config)
+
+        notebook_files = [f for f in course.files if hasattr(f, "skip_html")]
+        assert notebook_files, "test spec should contain notebook files"
+        assert all(f.skip_html for f in notebook_files)
+
+    def test_default_does_not_skip_html(self):
+        """Without --no-html, notebook files keep their spec-level skip_html"""
+        from clm.cli.main import initialize_paths_and_course
+
+        config = self._create_config()
+        course, root_dirs, data_dir = initialize_paths_and_course(config)
+
+        notebook_files = [f for f in course.files if hasattr(f, "skip_html")]
+        assert notebook_files, "test spec should contain notebook files"
+        assert not any(f.skip_html for f in notebook_files)

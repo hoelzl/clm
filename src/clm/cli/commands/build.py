@@ -382,6 +382,13 @@ class BuildConfig:
     speaker_only: bool = False
     selected_targets: list[str] | None = None
 
+    # Skip HTML generation for every topic (``--no-html``), as if each
+    # carried ``html="no"`` in the spec. HTML is the only output format
+    # whose generation executes notebooks, so a ``--no-html`` build needs
+    # no Jupyter kernel — the mode the code-export compile CI uses
+    # (issue #333).
+    no_html: bool = False
+
     # Notebook execution mode
     force_execute: bool = False
 
@@ -769,6 +776,17 @@ def initialize_paths_and_course(config: BuildConfig) -> tuple[Course, list[Path]
             f"Unselected sections' output directories will be left "
             f"untouched and dir-group processing will be skipped."
         )
+
+    # ``--no-html``: drop the HTML format from every topic before the
+    # course is constructed, so every downstream derivation (course
+    # files, output specs, the CMake export, provenance) agrees that
+    # HTML does not exist in this build. Same mechanism watch fast mode
+    # applies per-rebuild, but spec-level so the initial build sees it.
+    if config.no_html:
+        logger.info("--no-html: skipping HTML generation for all topics")
+        for section_spec in spec.sections:
+            for i, topic_spec in enumerate(section_spec.topics):
+                section_spec.topics[i] = evolve(topic_spec, skip_html=True)
 
     # Create course object
     course = Course.from_spec(
@@ -1567,6 +1585,7 @@ async def main_build(
     fail_on_missing_xref=False,
     provenance_manifest=True,
     telemetry_db_path: Path | None = None,
+    no_html: bool = False,
 ) -> BuildSummary | None:
     """Main orchestration function for course building.
 
@@ -1680,6 +1699,7 @@ async def main_build(
         language=language,
         speaker_only=speaker_only,
         selected_targets=selected_targets,
+        no_html=no_html,
         force_execute=force_execute,
         http_replay_mode=resolved_http_replay_mode,
         image_mode=image_mode,
@@ -2097,6 +2117,17 @@ async def main_build(
     help="Generate only speaker notes (skip public outputs like code-along and completed).",
 )
 @click.option(
+    "--no-html",
+    is_flag=True,
+    help=(
+        "Skip HTML generation for every topic (as if each carried "
+        'html="no" in the spec). HTML is the only output format whose '
+        "generation executes notebooks, so a --no-html build needs no "
+        "Jupyter kernel — intended for the code-export compile CI and "
+        "other kernel-free environments."
+    ),
+)
+@click.option(
     "--targets",
     "-T",
     type=str,
@@ -2218,6 +2249,7 @@ def build(
     verbose_logging,
     language,
     speaker_only,
+    no_html,
     targets,
     force_execute,
     http_replay,
@@ -2361,6 +2393,7 @@ def build(
             resolved_fail_on_missing_xref,
             effective_provenance_manifest,
             telemetry_db_path=ctx.obj.get("TELEMETRY_DB_PATH") if ctx.obj else None,
+            no_html=no_html,
         )
     )
 
