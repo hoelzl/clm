@@ -239,9 +239,7 @@ def test_out_of_range_positional_is_an_error(tmp_path: Path):
 def test_validation_mode_accepts_argument_placeholders(tmp_path: Path):
     # args=None (the spec validator's call shape) must accept {args}/{n}
     # references — the actual values only exist at `clm run` time.
-    tokens = resolve_step(
-        "release week {spec} {args} --channel {1}", spec_path=tmp_path / "c.xml"
-    )
+    tokens = resolve_step("release week {spec} {args} --channel {1}", spec_path=tmp_path / "c.xml")
     assert tokens[0] == "release"
     assert "<args>" in tokens
     assert "<1>" in tokens
