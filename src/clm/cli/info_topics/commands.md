@@ -18,7 +18,8 @@ clm [OPTIONS] COMMAND [ARGS]...
 The CLI is organised into a small top-level surface (the everyday verbs:
 `build`, `validate`, `run`, ...) plus domain groups: `slides` (deck-level
 authoring tools), `course` (course/spec structure: decks, targets, topics,
-includes, readiness gate), `export` (rendered course documents), `calendar`
+includes, readiness gate), `query` (read-only introspection for scripting),
+`export` (rendered course documents), `calendar`
 (cohort viewing calendars), `voiceover`, and the infrastructure groups
 (`db`, `docker`, `git`, `jobs`, `workers`, `zip`, ...). The reference below
 uses the canonical (group-qualified) names. Older flat names were removed
@@ -1090,6 +1091,75 @@ clm course sync-includes course-specs/ml-azav.xml --remove
 clm course sync-includes course-specs/ml-azav.xml --print-gitignore >> .gitignore
 clm course sync-includes course-specs/ml-azav.xml --dry-run
 clm course sync-includes course-specs/ml-azav.xml --data-dir /path/to/course
+```
+
+### `clm query affected-specs` (CLM {version}+)
+
+Map changed file paths to the course specs whose builds they can influence.
+First member of the **`clm query`** group: read-only introspection commands
+for scripting — queries never modify anything and are always safe to call
+from CI. Built for change-driven CI matrices: feed it
+`git diff --name-only` output and build only the affected courses.
+
+```
+clm query affected-specs [OPTIONS] [PATHS]...
+```
+
+Every spec in `--spec-dir` is resolved once with the same rules the build
+uses; each input path is attributed to the specs that claim it:
+
+- **Topic directories** (resolved by suffix match + section/topic `module=`
+  bindings) claim their whole subtree — slides, `img/`, loose data files.
+- **Single-file topics** additionally claim the sibling files their content
+  references (images, imported module files), mirroring the build's file
+  map — this is how a shared header next to several decks is owned by every
+  course that builds one of them.
+- **`<include source=...>`** and **`<dir-group path=...>`** claim their
+  course-root-relative sources; JupyterLite wheels/environment files,
+  output-target paths, and release-channel paths/ledgers map to their
+  owning spec.
+- Each spec file claims itself, so editing one spec affects only that course.
+
+The mapping **fails open**: a build-relevant path that no spec claims (Jinja
+macros, shared toplevel dirs, unattributable content in the spec dir, ...)
+sets `"all": true` and lists **every** spec, so a CI matrix built from the
+output never silently skips a course. Only clearly build-irrelevant paths
+(`.github/`, `.git*`, top-level `*.md` docs, `LICENSE`) and content invisible
+to every build (topics no spec references, underscore-prefixed `_archive`
+dirs under `slides/`) affect nothing. A spec that fails to parse is reported
+on stderr and conservatively marked affected by every build-relevant change.
+
+The exit code is always 0 — an empty result is data, not an error.
+
+| Option | Description |
+|--------|-------------|
+| `--spec-dir DIR` | Directory containing the course spec `*.xml` files (default: `course-specs`). |
+| `--course-root DIR` | Course root that input paths are relative to (default: parent of `--spec-dir`). |
+| `--stdin` | Read additional newline-separated paths from stdin (combinable with `PATHS` arguments). |
+| `--json` | Emit a JSON report for scripting. |
+
+JSON shape (`specs` lists every spec when `all` is true, so a consumer can
+feed it into a build matrix without branching; `paths` carries the per-path
+verdict with status `claimed` / `ignored` / `unreferenced` / `unknown`):
+
+```json
+{
+  "specs": ["cpp-for-programmers", "cpp-hs"],
+  "all": false,
+  "paths": [
+    {"path": "slides/module_240_generics/type_name.hpp",
+     "status": "claimed",
+     "specs": ["cpp-for-programmers", "cpp-hs"]}
+  ]
+}
+```
+
+Examples:
+
+```bash
+clm query affected-specs slides/module_240_generics/type_name.hpp
+git diff --name-only $BEFORE $HEAD | clm query affected-specs --spec-dir course-specs --stdin --json
+clm query affected-specs --stdin --json < changed-files.txt
 ```
 
 ### `clm validate` (slides mode)
