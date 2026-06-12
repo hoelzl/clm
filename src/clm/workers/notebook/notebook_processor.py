@@ -46,8 +46,6 @@ from .output_spec import (
 if TYPE_CHECKING:
     from typing import Protocol
 
-    from .http_replay_cassette import CassettePaths
-
     class ExecutedNotebookCacheLike(Protocol):
         """Structural interface for the executed_notebooks cache.
 
@@ -136,21 +134,23 @@ try:
 except ValueError:
     CELL_EXECUTION_TIMEOUT = None
 
-# Defense-in-depth (issue #143): when HTTP replay is engaged, the kernel runs the
-# vcrpy bootstrap, which historically could deadlock a cell silently until the
-# build-level job timeout fired. The root-cause leak is fixed in the bootstrap,
-# but to keep any *future* replay-layer hang from stalling a whole build we default
-# a generous per-cell timeout for replay-engaged jobs only. Real cells in the
-# LLM/RAG decks that use replay finish in seconds, so only a genuine hang reaches
-# this ceiling. An explicit CLM_CELL_TIMEOUT_SECONDS always wins; set
+# Defense-in-depth (issues #143/#165): when HTTP replay is engaged, default a
+# generous per-cell timeout for replay-engaged jobs only, so any replay-layer
+# hang surfaces as a clean CellTimeoutError instead of stalling silently until
+# the build-level job timeout fires (the legacy in-kernel vcrpy transport
+# deadlocked exactly that way). Real cells in the LLM/RAG decks that use replay
+# finish in seconds, so only a genuine hang reaches this ceiling. An explicit
+# CLM_CELL_TIMEOUT_SECONDS always wins; set
 # CLM_HTTP_REPLAY_CELL_TIMEOUT_SECONDS=0 to opt out of the default.
 #
-# Under the out-of-process mitmproxy transport (issue #165) a strict-replay miss
-# is engineered to fail FAST on its own: the addon returns a non-retryable 4xx
-# (404), so the SDK raises on the first attempt rather than retrying it as a 5xx
-# (an earlier 599 was retried, amplifying a miss across a deck's ``.batch()``
-# calls until this ceiling fired — measured at ~1200s). This timeout now only
-# backstops a genuine unexpected hang, not the expected miss path.
+# A strict-replay miss is engineered to fail FAST on its own: the proxy addon
+# returns a non-retryable 4xx (404), so the SDK raises on the first attempt
+# rather than retrying it as a 5xx (an earlier 599 was retried, amplifying a
+# miss across a deck's ``.batch()`` calls until this ceiling fired — measured
+# at ~1200s). NOTE: langchain's agent/retry layer ABOVE the SDK may still
+# re-issue a missed request, so this timeout remains the load-bearing backstop
+# for stale-cassette misses in such decks — keep it even though the transport
+# itself never hangs.
 try:
     _raw_replay_cell_timeout = float(os.environ.get("CLM_HTTP_REPLAY_CELL_TIMEOUT_SECONDS", "600"))
     _HTTP_REPLAY_DEFAULT_CELL_TIMEOUT: int | None = (
@@ -177,19 +177,15 @@ def _effective_cell_timeout(payload: "NotebookPayload") -> int | None:
     return None
 
 
-# Mapping from CLM HTTP replay modes to vcrpy record_mode values.
-# "disabled" is intentionally absent — in that mode the bootstrap cell
-# is not injected at all.
-_HTTP_REPLAY_MODE_TO_VCR_MODE = {
-    "replay": "none",
-    "once": "once",
-    "new-episodes": "new_episodes",
-    "refresh": "all",
-}
+# Replay modes for which the cassette-routing tag bootstrap is injected.
+# "disabled" is intentionally absent — in that mode the bootstrap cell is
+# not injected at all. The proxy-side semantics of each mode live in
+# clm.infrastructure.http_replay_mitm.addon (MODE_* constants).
+_HTTP_REPLAY_VALID_MODES = frozenset({"replay", "once", "new-episodes", "refresh"})
 
 _HTTP_REPLAY_BOOTSTRAP_MARKER = "http_replay"
 
-# Hosts whose traffic vcrpy should not record into the cassette. Defaults
+# Hosts whose traffic the replay proxy should not record into the cassette. Defaults
 # cover LangSmith's telemetry upload endpoint (request bodies contain
 # per-build timestamps + UUIDs, defeating the body matcher and causing
 # stale-source builds to grow cassettes indefinitely). Add more here as
@@ -204,9 +200,8 @@ def resolve_http_replay_ignore_hosts() -> tuple[str, ...]:
     Unset ``CLM_HTTP_REPLAY_IGNORE_HOSTS`` → the default
     (:data:`_DEFAULT_HTTP_REPLAY_IGNORE_HOSTS`); set (even to the empty string)
     → the comma-separated override, where an empty string means "record every
-    host". Shared by the in-kernel vcrpy bootstrap injection and the
-    out-of-process mitmproxy transport (build.py) so both honour the same
-    telemetry-suppression policy.
+    host". Consumed by ``build._maybe_start_mitmproxy_transport``, which passes
+    it to the replay proxy addon as ``clm_ignore_hosts``.
     """
     raw = os.environ.get("CLM_HTTP_REPLAY_IGNORE_HOSTS")
     if raw is None:
@@ -214,533 +209,15 @@ def resolve_http_replay_ignore_hosts() -> tuple[str, ...]:
     return tuple(host.strip() for host in raw.split(",") if host.strip())
 
 
-_HTTP_REPLAY_BOOTSTRAP_TEMPLATE = """\
-# CLM HTTP REPLAY BOOTSTRAP - DO NOT EDIT
-import atexit as _clm_atexit
-import copy as _clm_copy
-import json as _clm_json
-import vcr as _clm_vcr
-import vcr.patch as _clm_vcr_patch
-from vcr.persisters.filesystem import FilesystemPersister as _ClmFsPersister
-
-
-# CLM workaround for vcrpy issue (clm#129).
-#
-# vcrpy's urllib3 stub opens ``vcr.patch.force_reset()`` on every
-# urllib3 connection construction and socket connect (see
-# ``vcr/stubs/__init__.py`` __init__/connect). ``force_reset()`` is a
-# context manager that globally un-patches *every* vcr stub for the
-# duration of its body -- including ``httpcore.ConnectionPool.handle_request``
-# (see ``vcr/patch.py::reset_patchers``). The recursion guard
-# ``force_reset()`` exists for is only relevant to urllib3 (so that the
-# real connection's ``super().__init__()`` doesn't re-enter vcr's
-# patched ``HTTPConnection``); un-patching httpcore is collateral damage.
-#
-# The race: when a foreground thread makes an httpcore call (e.g.
-# httpx-based LLM SDK) while a background thread is constructing a
-# urllib3 connection (e.g. LangSmith trace upload via ``requests``),
-# the foreground call resolves ``pool.handle_request`` during the
-# unpatched window, bypasses vcr entirely, hits the real upstream API,
-# and never gets recorded -- silently invalidating the cassette.
-#
-# Fix: replace ``reset_patchers`` with a filtered generator that yields
-# all the patchers *except* the httpcore ones. ``force_reset()`` itself
-# looks up ``reset_patchers`` via the module globals at call time, so
-# this swap takes effect immediately and propagates to every stub that
-# uses ``force_reset()``.
-#
-# REMOVE THIS BLOCK once vcrpy ships a scoped ``force_reset`` upstream
-# (track ``kevin1024/vcrpy``). Investigation:
-# ``docs/claude/issue-129-vcrpy-force-reset-investigation.md``.
-#
-# Idempotent: the kernel normally executes the bootstrap once per
-# notebook, but tests exec the template repeatedly in the same
-# interpreter. Marking our replacement and short-circuiting on re-exec
-# keeps ``_clm_original_reset_patchers`` pointing at the *true* upstream
-# generator across repeated bootstraps.
-if not getattr(_clm_vcr_patch.reset_patchers, "_clm_scoped", False):
-    _clm_original_reset_patchers = _clm_vcr_patch.reset_patchers
-    try:
-        import httpcore as _clm_httpcore
-        _clm_force_reset_skip = (
-            (_clm_httpcore.ConnectionPool, "handle_request"),
-            (_clm_httpcore.AsyncConnectionPool, "handle_async_request"),
-        )
-    except ImportError:  # pragma: no cover -- httpcore required when vcr active
-        _clm_force_reset_skip = ()
-    def _clm_scoped_reset_patchers():
-        for _p in _clm_original_reset_patchers():
-            if (_p.getter(), _p.attribute) in _clm_force_reset_skip:
-                continue
-            yield _p
-    _clm_scoped_reset_patchers._clm_scoped = True
-    _clm_vcr_patch.reset_patchers = _clm_scoped_reset_patchers
-
-
-# vcrpy's ``vcr.serialize.serialize`` (called from
-# ``Cassette._save`` via the persister) runs
-# ``compat.convert_to_unicode`` on every response, which mutates
-# ``response["body"]["string"]`` from ``bytes`` to ``str`` in place.
-# Combined with our eager-append patch below, that mutation
-# corrupts the in-memory cassette after the first ``append``:
-# subsequent replays then hand ``str`` chunks to consumers that
-# expect ``bytes`` (e.g. the OpenRouter SDK's ``iter_bytes()``
-# loop, which does ``bytearray += chunk`` and raises
-# ``TypeError: can't concat str to bytearray``). Inserting a
-# deep-copy at the persister boundary keeps the on-disk format
-# identical while preserving the in-memory ``bytes`` payload.
-class _ClmDeepCopyPersister(_ClmFsPersister):
-    @classmethod
-    def save_cassette(cls, cassette_path, cassette_dict, serializer):
-        return _ClmFsPersister.save_cassette(
-            cassette_path, _clm_copy.deepcopy(cassette_dict), serializer
-        )
-
-
-def _clm_json_body_matcher(r1, r2):
-    \"\"\"Match request bodies with JSON semantics when both are JSON.
-
-    vcrpy ships two issues that make its default ``body`` matcher
-    unreliable for the LangChain/OpenAI stack:
-
-    * ``filter_post_data_parameters`` rewrites JSON request bodies
-      via ``json.dumps()`` whenever it is configured, even when no
-      replacement key actually matches. ``json.dumps()`` defaults to
-      ``(", ", ": ")`` separators, so the cassette ends up with
-      pretty-printed JSON. The live ``httpx`` request body uses the
-      compact ``(",", ":")`` separators, so a byte comparison fails.
-    * The matcher's automatic JSON transform is gated on
-      ``headers.get("Content-Type")`` (case-sensitive). Real-world
-      clients send the header as lowercase ``content-type``, so the
-      transform never kicks in and the byte comparison runs anyway.
-
-    Together those issues mean every JSON POST fails to match on
-    replay even when nothing changed between recording and replay.
-    This matcher parses both bodies as JSON when their content-type
-    is JSON (case-insensitive) and compares parsed dicts; anything
-    non-JSON falls back to byte comparison so non-JSON requests
-    (multipart, form-encoded, etc.) still get strict matching.
-    \"\"\"
-    def _body_bytes(req):
-        body = req.body
-        if body is None:
-            return b\"\"
-        if isinstance(body, (bytes, bytearray)):
-            return bytes(body)
-        if isinstance(body, str):
-            return body.encode(\"utf-8\", errors=\"replace\")
-        # vcrpy hands BytesIO/stream objects in some code paths
-        read = getattr(body, \"read\", None)
-        if callable(read):
-            data = read()
-            seek = getattr(body, \"seek\", None)
-            if callable(seek):
-                try:
-                    seek(0)
-                except Exception:  # noqa: BLE001 — best-effort rewind
-                    pass
-            return data if isinstance(data, bytes) else str(data).encode(\"utf-8\", errors=\"replace\")
-        return str(body).encode(\"utf-8\", errors=\"replace\")
-
-    def _is_json(req):
-        headers = getattr(req, \"headers\", {{}}) or {{}}
-        for k, v in headers.items():
-            if str(k).lower() == \"content-type\":
-                val = v[0] if isinstance(v, (list, tuple)) and v else v
-                return \"application/json\" in str(val).lower()
-        return False
-
-    b1 = _body_bytes(r1)
-    b2 = _body_bytes(r2)
-    if _is_json(r1) and _is_json(r2):
-        try:
-            p1 = _clm_json.loads(b1) if b1 else None
-            p2 = _clm_json.loads(b2) if b2 else None
-            if p1 != p2:
-                raise AssertionError
-            return
-        except (ValueError, TypeError):
-            pass  # fall through to byte comparison
-    if b1 != b2:
-        raise AssertionError
-
-
-_clm_vcr_instance = _clm_vcr.VCR(
-    record_mode={record_mode!r},
-    filter_headers=["authorization", "cookie", "x-api-key", "set-cookie"],
-    filter_post_data_parameters=["password", "token", "api_key"],
-    filter_query_parameters=["api_key", "token"],
-    decode_compressed_response=True,
-    # Observability/telemetry endpoints whose request bodies contain
-    # per-build non-determinism (timestamps, UUIDs, multipart boundaries)
-    # that defeat the body matcher and cause a fresh cassette entry on
-    # every build even when the slide source is unchanged. LangSmith's
-    # ``/runs/multipart`` upload is the canonical example. ``ignore_hosts``
-    # lets vcr's stubs pass these straight through to the real network,
-    # so telemetry still reaches the user's dashboard but never enters
-    # the cassette. Override or extend at build time via
-    # ``CLM_HTTP_REPLAY_IGNORE_HOSTS`` (comma-separated). Set to empty
-    # string to record everything.
-    ignore_hosts={ignore_hosts!r},
-    # vcrpy's default ``match_on`` is
-    # ``("method", "scheme", "host", "port", "path", "query")`` -- the
-    # request body is *not* part of the match key.  All POSTs to the same
-    # chat-completion endpoint then look identical to vcrpy and recorded
-    # interactions are served in on-disk order.  When the call sequence
-    # at replay time differs from the recording sequence (e.g. because
-    # the source has been edited since the cassette was recorded, or
-    # because the output kind being built filters out some cells), vcrpy
-    # serves the wrong interaction -- typically a non-streaming JSON
-    # response to a ``stream=True`` request -- and downstream LangChain
-    # adapters crash with confusing errors like
-    # ``'tuple' object has no attribute 'model_dump'``.  Including the
-    # body in the match key turns silent mis-matching into a clear
-    # CannotOverwriteExistingCassetteException at the first divergent
-    # request, which is the desired CI behaviour: stale cassettes fail
-    # loudly rather than producing bogus responses.
-    match_on=("method", "scheme", "host", "port", "path", "query", "clm_json_body"),
-)
-_clm_vcr_instance.register_matcher("clm_json_body", _clm_json_body_matcher)
-_clm_vcr_instance.register_persister(_ClmDeepCopyPersister)
-# The cassette path is the worker's per-invocation *staging* file (an
-# absolute path resolved on the host before the cell was injected). Each
-# concurrent worker writes to its own staging file so the German and
-# English builds of the same notebook never write to the same path; the
-# host code merges staging into the canonical cassette under a file lock
-# after execution completes.
-#
-# ``allow_playback_repeats=True`` is essential because the host-side
-# merge in
-# :func:`clm.workers.notebook.http_replay_cassette.merge_staging_into_canonical`
-# deduplicates by ``(method, uri, body)`` so the canonical cassette
-# carries exactly one entry per unique request fingerprint -- a deck
-# that issues the same request N times (e.g. ``get_post(1)`` repeated
-# in a workshop cell, the same LangChain prompt formatting used by
-# several cells) would otherwise see vcrpy serve the entry once and
-# raise ``CannotOverwriteExistingCassetteException`` on calls 2..N
-# even though every matcher succeeded. The flag does not weaken the
-# "stale cassette fails loudly" guarantee for genuinely *new* requests
-# not present in the cassette.
-_clm_ctx = _clm_vcr_instance.use_cassette(
-    {cassette_path!r}, allow_playback_repeats=True,
-)
-# ``__enter__`` returns the underlying ``Cassette`` (vcrpy's
-# CassetteContextDecorator name-mangles its private ``__cassette``
-# attribute, so this is the only stable way to reach the cassette).
-_clm_cassette = _clm_ctx.__enter__()
-# vcrpy buffers recorded interactions in memory and only flushes to
-# disk in ``__exit__`` (or via the atexit fallback below). When the
-# kernel is killed forcibly — typically because the build-level
-# wait-for-completion timeout fired and the parent worker was
-# ``TerminateProcess``'d — neither path runs and every interaction
-# recorded so far is lost. Patch the cassette so each successful
-# ``append`` immediately persists to disk; the staging file then always
-# reflects every interaction recorded up to the moment the kernel died.
-_clm_orig_append = _clm_cassette.append
-def _clm_eager_append(request, response):
-    _clm_orig_append(request, response)
-    try:
-        _clm_cassette._save(force=True)
-    except Exception:
-        pass
-_clm_cassette.append = _clm_eager_append
-# Belt-and-suspenders: graceful kernel shutdown still flushes via ``__exit__``.
-_clm_atexit.register(_clm_ctx.__exit__, None, None, None)
-
-# --- CLM fix for issue #143: vcrpy httpcore connection-pool leak ---
-# vcrpy 8.1.x's httpcore stubs read the response body and swap ``.stream`` for a
-# buffered ByteStream but never ``close()`` the original httpcore ``Response``, so
-# the pooled connection is never returned. httpx later closes vcrpy's *replacement*
-# ByteStream (a no-op), not the original, so every recorded request leaks one
-# pooled connection. A langchain ``.batch()`` burst then exhausts the pool and the
-# worker threads block forever in ``httpcore.connection_pool.wait_for_connection``
-# (the silent Stage-3 deadlock). Reinstall the two stub functions with an explicit
-# close before the stream swap. vcrpy's installed wrappers resolve these names from
-# the ``httpcore_stubs`` module globals at call time, so reassigning them here takes
-# effect even though the cassette is already entered.
-import vcr.stubs.httpcore_stubs as _clm_hcs
-# Pin-guard (issue #143): the two functions reinstalled below are a verbatim
-# fork of vcrpy 8.1.x's stubs (plus an explicit close()), and they call upstream
-# internals -- ``_vcr_request``, ``_record_responses``, ``ByteStream`` -- by name.
-# If a future vcrpy renames or refactors these, the fork would silently stop
-# closing the leaked httpcore connection and the Stage-3 pool-exhaustion deadlock
-# would return with no error. The ``pyproject.toml`` ``[replay]`` pin
-# (``vcrpy>=8.1.1,<8.2``) is the primary defense; this guard is defense-in-depth
-# for kernels that resolve vcrpy outside that pin. It turns silent rot into a
-# loud, early bootstrap failure. Re-validate the fork + the pin-guard test
-# (``tests/workers/notebook/test_http_replay_vcr_pin_guard.py``) before widening
-# the pin.
-_clm_vcr_version = getattr(_clm_vcr, "__version__", "0")
-_clm_vcr_major_minor = ".".join(str(_clm_vcr_version).split(".")[:2])
-_clm_missing_hcs = [
-    _n for _n in (
-        "_vcr_handle_request", "_vcr_handle_async_request",
-        "_vcr_request", "_record_responses", "ByteStream",
-    ) if not hasattr(_clm_hcs, _n)
-]
-if _clm_vcr_major_minor != "8.1" or _clm_missing_hcs:
-    raise RuntimeError(
-        "CLM HTTP-replay bootstrap (issue #143): the forked vcrpy httpcore stubs "
-        "are validated only against vcrpy 8.1.x, but this kernel has vcrpy "
-        + str(_clm_vcr_version)
-        + (("; missing httpcore_stubs symbols: " + ", ".join(_clm_missing_hcs)) if _clm_missing_hcs else "")
-        + ". The connection-leak fix would silently no-op. Re-validate the forked "
-        "_vcr_handle_request/_vcr_handle_async_request and the pin-guard test, then "
-        "update the pyproject.toml [replay] pin (currently >=8.1.1,<8.2)."
-    )
-def _clm_vcr_handle_request(cassette, real_handle_request, self, real_request):
-    real_request_body = b"".join(real_request.stream)
-    real_request.stream = _clm_hcs.ByteStream(real_request_body)
-    vcr_request, vcr_response = _clm_hcs._vcr_request(cassette, real_request, real_request_body)
-    if vcr_response:
-        return vcr_response
-    real_response = real_handle_request(self, real_request)
-    real_response_content = b"".join(real_response.stream)
-    try:
-        real_response.close()
-    except Exception:
-        pass
-    real_response.stream = _clm_hcs.ByteStream(real_response_content)
-    _clm_hcs._record_responses(cassette, vcr_request, real_response, real_response_content)
-    return real_response
-_clm_hcs._vcr_handle_request = _clm_vcr_handle_request
-async def _clm_vcr_handle_async_request(cassette, real_handle_async_request, self, real_request):
-    real_request_body = b"".join([_p async for _p in real_request.stream])
-    real_request.stream = _clm_hcs.ByteStream(real_request_body)
-    vcr_request, vcr_response = _clm_hcs._vcr_request(cassette, real_request, real_request_body)
-    if vcr_response:
-        return vcr_response
-    real_response = await real_handle_async_request(self, real_request)
-    real_response_content = b"".join([_p async for _p in real_response.stream])
-    try:
-        await real_response.aclose()
-    except Exception:
-        pass
-    real_response.stream = _clm_hcs.ByteStream(real_response_content)
-    _clm_hcs._record_responses(cassette, vcr_request, real_response, real_response_content)
-    return real_response
-_clm_hcs._vcr_handle_async_request = _clm_vcr_handle_async_request
-"""
-
-
-# Appended to the bootstrap when ``CLM_HTTP_REPLAY_TRACE=1`` is set on the
-# host. Installs three telemetry streams (socket audit hook, vcr method
-# wrappers, atexit close) into the kernel; emits JSONL events to a
-# per-worker file in ``trace_dir``. Wraps the post-bootstrap state — so
-# ``force_reset`` events reflect the scoped (issue-129) variant and
-# ``cassette.append`` events reflect the eager-save variant. The trace
-# captures execution; it does not capture the final cassette save at
-# atexit time (registered after the bootstrap's ``__exit__``, so trace
-# close runs LIFO first). Design: ``docs/claude/design/http-replay-trace.md``.
-_HTTP_REPLAY_TRACE_TEMPLATE = """\
-# CLM HTTP REPLAY TRACE - DO NOT EDIT
-_clm_trace_dir = {trace_dir!r}
-_clm_trace_verbose = {trace_verbose!r}
-_clm_trace_max_body = {trace_max_body!r}
-
-if _clm_trace_dir:
-    import hashlib as _clm_t_hashlib
-    import os as _clm_t_os
-    import socket as _clm_t_socket  # noqa: F401
-    import sys as _clm_t_sys
-    import threading as _clm_t_threading
-    import time as _clm_t_time
-    import contextlib as _clm_t_contextlib
-    from datetime import datetime as _clm_t_datetime, timezone as _clm_t_timezone
-
-    _clm_t_os.makedirs(_clm_trace_dir, exist_ok=True)
-    _clm_trace_path = _clm_t_os.path.join(
-        _clm_trace_dir, "worker-" + str(_clm_t_os.getpid()) + ".jsonl"
-    )
-    _clm_trace_fh = open(_clm_trace_path, "a", encoding="utf-8", newline="\\n")
-    _clm_trace_lock = _clm_t_threading.Lock()
-    _clm_trace_start = _clm_t_time.monotonic()
-
-    def _clm_redact_body(body, max_per_side=_clm_trace_max_body):
-        if body is None:
-            raw = b""
-        elif isinstance(body, (bytes, bytearray)):
-            raw = bytes(body)
-        elif isinstance(body, str):
-            raw = body.encode("utf-8", errors="replace")
-        else:
-            read = getattr(body, "read", None)
-            if callable(read):
-                try:
-                    data = read()
-                except Exception:
-                    raw = str(body).encode("utf-8", errors="replace")
-                else:
-                    if isinstance(data, (bytes, bytearray)):
-                        raw = bytes(data)
-                    else:
-                        raw = str(data).encode("utf-8", errors="replace")
-            else:
-                raw = str(body).encode("utf-8", errors="replace")
-        length = len(raw)
-        sha = _clm_t_hashlib.sha256(raw).hexdigest()[:16] if length > 0 else ""
-        if length <= 2 * max_per_side:
-            return {{"length": length, "sha256": sha, "head": repr(raw)}}
-        return {{
-            "length": length,
-            "sha256": sha,
-            "head": repr(raw[:max_per_side]),
-            "tail": repr(raw[-max_per_side:]),
-            "truncated": length - 2 * max_per_side,
-        }}
-
-    def _clm_trace_emit(stream, event, data=None):
-        record = {{
-            "ts_mono": _clm_t_time.monotonic() - _clm_trace_start,
-            "ts_wall": _clm_t_datetime.now(_clm_t_timezone.utc).isoformat(),
-            "pid": _clm_t_os.getpid(),
-            "tid": _clm_t_threading.get_ident(),
-            "stream": stream,
-            "event": event,
-            "data": data or {{}},
-        }}
-        try:
-            line = _clm_json.dumps(record) + "\\n"
-        except (TypeError, ValueError):
-            line = _clm_json.dumps({{
-                "ts_mono": record["ts_mono"],
-                "ts_wall": record["ts_wall"],
-                "pid": record["pid"],
-                "tid": record["tid"],
-                "stream": stream,
-                "event": event,
-                "data": {{"_unserializable": True}},
-            }}) + "\\n"
-        with _clm_trace_lock:
-            _clm_trace_fh.write(line)
-            _clm_trace_fh.flush()
-
-    def _clm_audit_hook(event, args):
-        try:
-            if event == "socket.connect" and len(args) >= 2:
-                address = args[1]
-                if isinstance(address, tuple) and len(address) >= 2:
-                    host, port = address[0], address[1]
-                else:
-                    host, port = repr(address), None
-                _clm_trace_emit("socket", "connect", {{"host": host, "port": port}})
-        except Exception:
-            pass
-
-    _clm_t_sys.addaudithook(_clm_audit_hook)
-
-    _clm_orig_force_reset = _clm_vcr_patch.force_reset
-
-    @_clm_t_contextlib.contextmanager
-    def _clm_logged_force_reset():
-        _clm_trace_emit("vcr", "force_reset.enter")
-        try:
-            with _clm_orig_force_reset():
-                yield
-        finally:
-            _clm_trace_emit("vcr", "force_reset.exit")
-
-    _clm_vcr_patch.force_reset = _clm_logged_force_reset
-
-    _clm_orig_traced_append = _clm_cassette.append
-
-    def _clm_traced_append(request, response):
-        try:
-            result = _clm_orig_traced_append(request, response)
-        except Exception as exc:
-            _clm_trace_emit("vcr", "cassette.append.error", {{
-                "method": getattr(request, "method", ""),
-                "uri": getattr(request, "uri", ""),
-                "exc_type": type(exc).__name__,
-                "exc_msg": str(exc),
-            }})
-            raise
-        try:
-            status = None
-            if isinstance(response, dict):
-                s = response.get("status")
-                if isinstance(s, dict):
-                    status = s.get("code")
-                else:
-                    status = s
-            _clm_trace_emit("vcr", "cassette.append", {{
-                "method": getattr(request, "method", ""),
-                "uri": getattr(request, "uri", ""),
-                "body": _clm_redact_body(getattr(request, "body", None)),
-                "status": status,
-            }})
-        except Exception:
-            pass
-        return result
-
-    _clm_cassette.append = _clm_traced_append
-
-    _clm_orig_play = _clm_cassette.play_response
-
-    def _clm_traced_play(request):
-        response = _clm_orig_play(request)
-        try:
-            _clm_trace_emit("vcr", "cassette.play", {{
-                "method": getattr(request, "method", ""),
-                "uri": getattr(request, "uri", ""),
-                "body": _clm_redact_body(getattr(request, "body", None)),
-            }})
-        except Exception:
-            pass
-        return response
-
-    _clm_cassette.play_response = _clm_traced_play
-
-    _clm_orig_can_play = _clm_cassette.can_play_response_for
-
-    def _clm_traced_can_play(request):
-        result = _clm_orig_can_play(request)
-        try:
-            _clm_trace_emit("vcr", "cassette.can_play", {{
-                "method": getattr(request, "method", ""),
-                "uri": getattr(request, "uri", ""),
-                "body": _clm_redact_body(getattr(request, "body", None)),
-                "result": bool(result),
-            }})
-        except Exception:
-            pass
-        return result
-
-    _clm_cassette.can_play_response_for = _clm_traced_can_play
-
-    _clm_trace_emit("vcr", "bootstrap.complete", {{
-        "vcr_version": getattr(_clm_vcr, "__version__", "unknown"),
-        "scoped_force_reset": getattr(_clm_vcr_patch.reset_patchers, "_clm_scoped", False),
-        "verbose": _clm_trace_verbose,
-    }})
-
-    def _clm_trace_close():
-        try:
-            _clm_trace_emit("vcr", "trace.close")
-        except Exception:
-            pass
-        try:
-            _clm_trace_fh.flush()
-            _clm_trace_fh.close()
-        except Exception:
-            pass
-
-    _clm_atexit.register(_clm_trace_close)
-"""
-
-
-# Out-of-process transport (issue #165, P2). Injected into the kernel
-# *instead of* the heavy vcrpy bootstrap when
-# ``CLM_HTTP_REPLAY_TRANSPORT=mitmproxy``. It does not patch httpcore or
+# The cassette-routing tag bootstrap (issue #165, P2), injected into the
+# kernel when a topic opts into HTTP replay. It does not patch httpcore or
 # enter any cassette context — it only tags every outgoing request with
 # the destination cassette path so the single shared mitmproxy can demux
 # flows to the correct per-(topic,language,kind) cassette. The proxy
 # strips the ``X-CLM-Cassette`` header before recording or forwarding.
-# Three client stacks are tagged (the same ones decks actually use; the
-# legacy in-kernel vcrpy transport covered them all, so the tag bootstrap
-# must too — an untagged client records into the build's catch-all
-# cassette instead of the topic's canonical one and replay silently
-# breaks):
+# Three client stacks are tagged (the same ones decks actually use; an
+# untagged client records into the build's catch-all cassette instead of
+# the topic's canonical one and replay silently breaks):
 #
 # * ``httpx`` — ``Client.send``/``AsyncClient.send`` (openai/langchain
 #   route through these);
@@ -754,9 +231,8 @@ if _clm_trace_dir:
 # requests/aiohttp are optional in the kernel env, hence the import
 # guards. All patches are on the *classes*, so clients created before or
 # after this cell are covered. One tag per kernel (fresh kernel per
-# notebook), captured in the closure — the same lifetime the vcrpy
-# bootstrap relies on. No literal curly braces in the body so
-# ``str.format`` only substitutes ``{tag!r}``.
+# notebook), captured in the closure. No literal curly braces in the body
+# so ``str.format`` only substitutes ``{tag!r}``.
 _HTTP_REPLAY_TAG_BOOTSTRAP_TEMPLATE = """\
 # CLM HTTP REPLAY TAG BOOTSTRAP - DO NOT EDIT
 import httpx as _clm_httpx
@@ -807,19 +283,14 @@ if _clm_aiohttp is not None and not getattr(
 """
 
 
-# Socket-only forensic trace for the mitmproxy transport (issue #165 P5).
-# Appended to the tag bootstrap when CLM_HTTP_REPLAY_TRACE=1. Under the
-# transport the kernel never imports vcr or patches httpcore, so the heavy
-# ``_HTTP_REPLAY_TRACE_TEMPLATE`` (which wraps vcr internals and references
-# ``_clm_vcr_patch``/``_clm_cassette``/``_clm_json``/``_clm_atexit`` from the
-# vcrpy bootstrap) cannot run here. This template is fully self-contained — it
-# imports its own json/atexit and only installs the ``socket.connect`` audit
-# hook (Stream 1, the ground truth). The proxy-side ``proxy`` stream
-# (Stream 2′, written by the addon) supplies the interception evidence the
-# now-dark ``vcr`` stream used to. It writes the SAME ``worker-<pid>.jsonl``
-# file the vcr trace uses (only one of the two ever runs per kernel) so
-# ``analyze_http_replay_trace.py`` reads it identically. No literal ``{}`` in
-# the body except the doubled ``{{}}`` so ``str.format`` only fills ``{trace_dir!r}``.
+# Socket-only forensic trace for the replay proxy (issue #165 P5). Appended
+# to the tag bootstrap when CLM_HTTP_REPLAY_TRACE=1. Fully self-contained —
+# it imports its own json/atexit and only installs the ``socket.connect``
+# audit hook (Stream 1, the ground truth). The proxy-side ``proxy`` stream
+# (Stream 2′, written by the addon) supplies the interception evidence.
+# It writes ``worker-<pid>.jsonl`` in the layout
+# ``analyze_http_replay_trace.py`` expects. No literal ``{}`` in the body
+# except the doubled ``{{}}`` so ``str.format`` only fills ``{trace_dir!r}``.
 _HTTP_REPLAY_SOCKET_TRACE_TEMPLATE = """\
 # CLM HTTP REPLAY SOCKET TRACE - DO NOT EDIT
 _clm_strace_dir = {trace_dir!r}
@@ -889,9 +360,9 @@ def _inject_http_replay_tag_bootstrap(nb: NotebookNode, tag: str, *, trace_dir: 
     """Prepend the mitmproxy cassette-routing tag cell to ``nb``.
 
     ``tag`` is the absolute canonical cassette path the host-side merge
-    will fold into. The cell carries the same ``clm_injected`` marker as
-    the vcrpy bootstrap so :func:`_strip_injected_cells` removes it before
-    the notebook reaches HTML / the execution cache.
+    will fold into. The cell carries the ``clm_injected`` marker so
+    :func:`_strip_injected_cells` removes it before the notebook reaches
+    HTML / the execution cache.
 
     When ``trace_dir`` is non-empty (CLM_HTTP_REPLAY_TRACE=1), the
     self-contained socket-only forensic trace is appended so the kernel emits
@@ -914,56 +385,8 @@ def _inject_http_replay_tag_bootstrap(nb: NotebookNode, tag: str, *, trace_dir: 
     nb["cells"].insert(0, cell)
 
 
-def _inject_http_replay_bootstrap(
-    nb: NotebookNode,
-    cassette_path: str,
-    mode: str,
-    *,
-    trace_dir: str = "",
-    trace_verbose: bool = False,
-    trace_max_body: int = 2048,
-    ignore_hosts: tuple[str, ...] | list[str] = _DEFAULT_HTTP_REPLAY_IGNORE_HOSTS,
-) -> None:
-    """Prepend a vcrpy-activation cell to ``nb``.
-
-    ``cassette_path`` must be an absolute path to the worker's staging
-    cassette file (see :mod:`clm.workers.notebook.http_replay_cassette`),
-    so the kernel does not depend on its working directory to locate the
-    file. The cell is tagged ``del`` and marked with
-    ``metadata.clm_injected = "http_replay"`` so the post-execution pass
-    can remove it by metadata rather than by string-matching the source.
-
-    When ``trace_dir`` is non-empty, the forensic trace template is
-    appended to the bootstrap so the kernel emits socket/vcr/cassette
-    events to ``<trace_dir>/worker-<pid>.jsonl``. Empty string (the
-    common case) leaves the bootstrap unchanged.
-    """
-    vcr_mode = _HTTP_REPLAY_MODE_TO_VCR_MODE[mode]
-    from nbformat.v4 import new_code_cell
-
-    source = _HTTP_REPLAY_BOOTSTRAP_TEMPLATE.format(
-        record_mode=vcr_mode,
-        cassette_path=cassette_path,
-        ignore_hosts=list(ignore_hosts),
-    )
-    if trace_dir:
-        source += "\n" + _HTTP_REPLAY_TRACE_TEMPLATE.format(
-            trace_dir=trace_dir,
-            trace_verbose=trace_verbose,
-            trace_max_body=trace_max_body,
-        )
-    cell = new_code_cell(
-        source=source,
-        metadata={
-            "tags": ["del"],
-            "clm_injected": _HTTP_REPLAY_BOOTSTRAP_MARKER,
-        },
-    )
-    nb["cells"].insert(0, cell)
-
-
 def _strip_injected_cells(nb: NotebookNode) -> None:
-    """Remove any cell previously added by ``_inject_http_replay_bootstrap``."""
+    """Remove any cell previously added by ``_inject_http_replay_tag_bootstrap``."""
     cells = nb.get("cells", [])
     nb["cells"] = [
         c
@@ -2369,90 +1792,29 @@ class NotebookProcessor:
             },
         )
 
-    def _resolve_cassette_paths(
-        self, payload: NotebookPayload, source_dir: Path | None
-    ) -> "CassettePaths | None":
-        """Determine where this worker will stage the cassette and the canonical target.
-
-        Returns ``None`` when the topic did not opt into replay, when the
-        mode is ``disabled``/``replay`` (no recording, so nothing to
-        stage), or when we cannot resolve a writable target directory.
-
-        ``target_dir`` is the worker-side directory that maps to the
-        source tree: in direct mode this is ``payload.source_topic_dir``
-        (a host path readable from the same process), in Docker mode it
-        is ``source_dir`` (the container-mapped path under the source
-        mount). vcrpy inside the kernel writes to an absolute path under
-        this directory; the host code merges staging into canonical via
-        the same view of the filesystem.
-        """
-        if os.environ.get("CLM_HTTP_REPLAY_TRANSPORT") == "mitmproxy":
-            # Out-of-process transport (issue #165): the mitmproxy proxy records
-            # and replays at the network layer, so the kernel needs no vcrpy
-            # bootstrap, no per-worker staging file, and no canonical merge.
-            # Returning None makes the seed / inject / merge calls all no-op, and
-            # the kernel's real httpx/httpcore is never patched (the structural
-            # fix for the issue #143 connection-pool deadlock).
-            return None
-
-        from .http_replay_cassette import CassettePaths, resolve_paths
-
-        mode = payload.http_replay_mode
-        if not mode or mode == "disabled":
-            return None
-        if mode not in _HTTP_REPLAY_MODE_TO_VCR_MODE:
-            logger.warning(
-                f"{payload.correlation_id}: Unknown http_replay_mode {mode!r} "
-                f"for '{payload.input_file_name}'; skipping cassette resolution."
-            )
-            return None
-        cassette_name = payload.http_replay_cassette_name
-        if not cassette_name:
-            logger.warning(
-                f"{payload.correlation_id}: http_replay_mode={mode!r} but no "
-                f"cassette was resolved for '{payload.input_file_name}'; "
-                f"skipping cassette resolution."
-            )
-            return None
-        if source_dir is not None:
-            target_dir: Path = source_dir
-        elif payload.source_topic_dir:
-            target_dir = Path(payload.source_topic_dir)
-        else:
-            logger.warning(
-                f"{payload.correlation_id}: cannot resolve cassette target dir "
-                f"for '{payload.input_file_name}': source_topic_dir is empty and "
-                f"no source mount was provided; skipping bootstrap injection."
-            )
-            return None
-        paths: CassettePaths = resolve_paths(target_dir, cassette_name)
-        return paths
-
     def _resolve_mitmproxy_tag(
         self, payload: NotebookPayload, source_dir: Path | None
     ) -> str | None:
-        """Resolve the ``X-CLM-Cassette`` routing tag for the mitmproxy transport.
+        """Resolve the ``X-CLM-Cassette`` routing tag for the replay proxy.
 
         The tag is the absolute canonical cassette path this notebook's
-        traffic belongs to. It uses the same ``payload.http_replay_cassette_name``
-        as the vcrpy path's :meth:`_resolve_cassette_paths` (which already
+        traffic belongs to. ``payload.http_replay_cassette_name`` already
         carries the split-deck base-cassette fallback for ``replay`` and the
-        strict language-specific name for record modes, issue #159) and the
-        same ``resolve_paths`` canonical computation.
+        strict language-specific name for record modes (issue #159); the
+        canonical path comes from the shared ``resolve_paths`` computation.
 
-        **Host namespace (issue #165 P4):** unlike the vcrpy path — where the
-        in-container *kernel* writes the staging cassette and therefore needs
-        the container-mapped ``source_dir`` (``/source/...``) — the mitmproxy
-        proxy and the ``merge_mitmproxy_cassette_staging`` host step run on the
-        **host**. The tag must therefore name a **host** path so the proxy
-        writes ``<tag>.staging-mitm-<build_id>`` beside the real canonical
-        cassette the host-side merge folds it into. We resolve against
-        ``payload.source_topic_dir`` (the host topic dir in both Direct and
-        Docker modes — Docker workers derive their container ``source_dir``
-        *from* it) and fall back to the container ``source_dir`` only if no
-        host path is available. In Direct mode the two are identical, so this
-        is a no-op there. Returns ``None`` when the topic did not opt into a
-        replay-capable mode or no cassette / target dir resolves.
+        **Host namespace (issue #165 P4):** the mitmproxy proxy and the
+        ``merge_mitmproxy_cassette_staging`` host step run on the **host**,
+        even when the kernel runs in a container. The tag must therefore name
+        a **host** path so the proxy writes ``<tag>.staging-mitm-<build_id>``
+        beside the real canonical cassette the host-side merge folds it into.
+        We resolve against ``payload.source_topic_dir`` (the host topic dir in
+        both Direct and Docker modes — Docker workers derive their container
+        ``source_dir`` *from* it) and fall back to the container ``source_dir``
+        only if no host path is available. In Direct mode the two are
+        identical, so this is a no-op there. Returns ``None`` when the topic
+        did not opt into a replay-capable mode or no cassette / target dir
+        resolves.
 
         **Invariant:** an http-replay notebook must keep its cassette beside the
         notebook at the topic root (the ``_cassettes/`` dir under
@@ -2462,12 +1824,11 @@ class NotebookProcessor:
         topic the two diverge, so the proxy would write staging to a dir the
         host-side merge (``Course.merge_mitmproxy_cassette_staging``) does not
         scan and a record-mode recording would be misplaced (replay is
-        unaffected — it reads the committed canonical). This mirrors the
-        existing vcrpy direct path's topic-dir-based resolution; converging
-        nested layouts is a separate follow-up touching both transports.
+        unaffected — it reads the committed canonical). Converging nested
+        layouts onto per-notebook cassette dirs is a separate follow-up.
         """
         mode = payload.http_replay_mode
-        if not mode or mode == "disabled" or mode not in _HTTP_REPLAY_MODE_TO_VCR_MODE:
+        if not mode or mode == "disabled" or mode not in _HTTP_REPLAY_VALID_MODES:
             return None
         cassette_name = payload.http_replay_cassette_name
         if not cassette_name:
@@ -2482,155 +1843,38 @@ class NotebookProcessor:
 
         return str(resolve_paths(target_dir, cassette_name).canonical)
 
-    def _persist_recorded_cassette(
-        self,
-        cid: str,
-        payload: NotebookPayload,
-        paths: "CassettePaths | None",
-        *,
-        execution_succeeded: bool,
-    ) -> None:
-        """Merge this worker's staging cassette into the canonical cassette.
-
-        For ``replay``/``disabled`` modes (or when no paths were resolved)
-        this is a no-op. Otherwise the merge runs under a cross-process
-        file lock, folds entries from the staging file (and any
-        previously-completed sibling stagings whose marker is on disk)
-        into the canonical cassette, deduplicates by request
-        fingerprint, atomically writes the result, and deletes the
-        merged staging files plus their markers.
-
-        Called from a ``finally`` block so it executes even when the
-        notebook raised. The behaviour split for issue #115:
-
-        - **Success path** (``execution_succeeded=True``): write the
-          completion marker first, then merge. The marker tells the
-          merge (and any later pre-build sweep) that this staging file
-          holds a complete recording session whose entries are safe to
-          fold into canonical.
-        - **Failure path** (``execution_succeeded=False``): skip the
-          marker write and run the merge anyway. Markerless staging is
-          treated as a partial chain (kernel died / cell raised
-          mid-chain) and is *not* folded into canonical — the next
-          build's pre-build sweep will discard it. Merged in this
-          state only completes sibling stagings (other workers) that
-          already have their markers in place.
-        """
-        if paths is None:
-            return
-        mode = payload.http_replay_mode
-        if not mode or mode in ("disabled", "replay"):
-            return
-        from .http_replay_cassette import (
-            merge_staging_into_canonical,
-            write_completion_marker,
-        )
-
-        if execution_succeeded:
-            write_completion_marker(paths)
-        else:
-            logger.info(
-                f"{cid}: notebook execution failed for '{payload.input_file_name}'; "
-                f"leaving staging '{paths.staging}' without a completion marker so "
-                f"the next pre-build sweep can discard any partial-chain recordings."
-            )
-
-        try:
-            # ``refresh`` (vcrpy ``all``) re-records every interaction, so a
-            # freshly recorded response must supersede the stale canonical entry
-            # rather than being dropped by first-seen dedup (issue #165 P3).
-            merged = merge_staging_into_canonical(paths, overwrite_existing=(mode == "refresh"))
-        except Exception as exc:  # noqa: BLE001 — defensive: never let merge mask
-            #  the original notebook execution error.
-            logger.exception(
-                f"{cid}: cassette merge failed for '{payload.input_file_name}' "
-                f"(canonical='{paths.canonical}'): {exc}"
-            )
-            return
-        if merged == 0:
-            logger.info(
-                f"{cid}: no cassette recorded for '{payload.input_file_name}' "
-                f"(staging='{paths.staging}'); nothing to persist."
-            )
-        else:
-            logger.info(
-                f"{cid}: merged {merged} staging cassette(s) for "
-                f"'{payload.input_file_name}' into '{paths.canonical}'"
-            )
-
     def _maybe_inject_http_replay(
         self,
         processed_nb: NotebookNode,
         payload: NotebookPayload,
-        paths: "CassettePaths | None",
         source_dir: Path | None = None,
     ) -> bool:
-        """Inject the http-replay bootstrap cell when the topic opted in.
+        """Inject the http-replay tag bootstrap cell when the topic opted in.
 
-        Under the out-of-process transport (``CLM_HTTP_REPLAY_TRANSPORT=
-        mitmproxy``) this injects the lightweight cassette-routing *tag*
-        bootstrap (which patches httpx/requests/aiohttp to tag each request
-        with its destination cassette so the shared proxy demuxes
-        correctly); the kernel's httpcore is never patched. Otherwise it injects the
-        in-kernel vcrpy bootstrap using ``paths`` (the resolved
-        canonical/staging pair from :meth:`_resolve_cassette_paths`).
-        Returns ``True`` when a cell was injected so the caller runs the
-        strip pass.
+        The cassette-routing *tag* bootstrap patches httpx/requests/aiohttp to
+        tag each request with its destination cassette so the shared replay
+        proxy demuxes correctly; the kernel's httpcore is never patched (the
+        structural fix for the issue #143 connection-pool deadlock). Returns
+        ``True`` when a cell was injected so the caller runs the strip pass.
         """
-        if os.environ.get("CLM_HTTP_REPLAY_TRANSPORT") == "mitmproxy":
-            tag = self._resolve_mitmproxy_tag(payload, source_dir)
-            if tag is None:
-                return False
-            # Forensic socket trace (issue #165 P5): the kernel emits its
-            # ground-truth ``socket`` stream so the analyzer can confirm every
-            # connect goes to the proxy (none escapes). Prefer the payload field
-            # (same source the vcrpy path uses); fall back to the host-pinned env
-            # the Direct worker inherits, so the socket stream is reliably written
-            # whenever CLM_HTTP_REPLAY_TRACE=1 even if the field was not threaded.
-            trace_dir = (
-                getattr(payload, "http_replay_trace_dir", "")
-                or os.environ.get("CLM_HTTP_REPLAY_TRACE_INVOCATION_DIR", "")
-                or ""
-            )
-            _inject_http_replay_tag_bootstrap(processed_nb, tag, trace_dir=trace_dir)
-            logger.debug(
-                f"{payload.correlation_id}: Injected http-replay tag bootstrap "
-                f"(mitmproxy transport, cassette='{tag}') for "
-                f"'{payload.input_file_name}'"
-            )
-            return True
-
-        if paths is None:
+        tag = self._resolve_mitmproxy_tag(payload, source_dir)
+        if tag is None:
             return False
-        mode = payload.http_replay_mode
-        if not mode or mode == "disabled" or mode not in _HTTP_REPLAY_MODE_TO_VCR_MODE:
-            return False
-        trace_dir = getattr(payload, "http_replay_trace_dir", "") or ""
-        trace_verbose = os.environ.get("CLM_HTTP_REPLAY_TRACE_VERBOSE", "").strip().lower() in (
-            "1",
-            "true",
-            "yes",
-            "on",
+        # Forensic socket trace (issue #165 P5): the kernel emits its
+        # ground-truth ``socket`` stream so the analyzer can confirm every
+        # connect goes to the proxy (none escapes). Prefer the payload field;
+        # fall back to the host-pinned env the Direct worker inherits, so the
+        # socket stream is reliably written whenever CLM_HTTP_REPLAY_TRACE=1
+        # even if the field was not threaded.
+        trace_dir = (
+            getattr(payload, "http_replay_trace_dir", "")
+            or os.environ.get("CLM_HTTP_REPLAY_TRACE_INVOCATION_DIR", "")
+            or ""
         )
-        trace_max_body_raw = os.environ.get("CLM_HTTP_REPLAY_TRACE_MAX_BODY_BYTES", "").strip()
-        try:
-            trace_max_body = int(trace_max_body_raw) if trace_max_body_raw else 2048
-        except ValueError:
-            trace_max_body = 2048
-        ignore_hosts = resolve_http_replay_ignore_hosts()
-        _inject_http_replay_bootstrap(
-            processed_nb,
-            str(paths.staging),
-            mode,
-            trace_dir=trace_dir,
-            trace_verbose=trace_verbose,
-            trace_max_body=trace_max_body,
-            ignore_hosts=ignore_hosts,
-        )
+        _inject_http_replay_tag_bootstrap(processed_nb, tag, trace_dir=trace_dir)
         logger.debug(
-            f"{payload.correlation_id}: Injected http-replay bootstrap "
-            f"(mode={mode}, staging='{paths.staging}', canonical='{paths.canonical}') "
-            f"for '{payload.input_file_name}'"
+            f"{payload.correlation_id}: Injected http-replay tag bootstrap "
+            f"(cassette='{tag}') for '{payload.input_file_name}'"
         )
         return True
 
@@ -2648,23 +1892,13 @@ class NotebookProcessor:
         if self.output_spec.evaluate_for_html and not payload.skip_evaluation:
             if any(is_code_cell(cell) for cell in processed_nb.get("cells", [])):
                 logger.debug(f"Evaluating and writing notebook '{payload.input_file_name}'")
-                # Resolve cassette paths up-front so the bootstrap can be
-                # injected with an absolute staging path and the finally
-                # block has the same paths to merge into canonical even
-                # when execution raised.
-                cassette_paths = self._resolve_cassette_paths(payload, source_dir)
-                if cassette_paths is not None:
-                    # Seed the worker's staging file from the canonical
-                    # cassette so already-recorded interactions can be
-                    # replayed (and so concurrent workers do not all
-                    # re-record the same traffic).
-                    from .http_replay_cassette import seed_staging_from_canonical
-
-                    seed_staging_from_canonical(cassette_paths)
-                replay_injected = self._maybe_inject_http_replay(
-                    processed_nb, payload, cassette_paths, source_dir
-                )
-                execution_succeeded = False
+                # HTTP replay (issue #165): inject the cassette-routing tag
+                # bootstrap when the topic opted in. Recording and merging
+                # happen entirely outside the worker — the shared replay
+                # proxy writes per-cassette staging files on the host and
+                # the host build merges them after the proxy stops
+                # (Course.merge_mitmproxy_cassette_staging).
+                replay_injected = self._maybe_inject_http_replay(processed_nb, payload, source_dir)
                 try:
                     # To silence warnings about frozen modules...
                     os.environ["PYDEVD_DISABLE_FILE_VALIDATION"] = "1"
@@ -2697,7 +1931,6 @@ class NotebookProcessor:
                                 await self._execute_notebook_with_path(
                                     cid, path, processed_nb, payload, loop, None
                                 )
-                    execution_succeeded = True
                 except Exception as e:
                     file_name = payload.input_file_name
                     logger.error(
@@ -2709,23 +1942,12 @@ class NotebookProcessor:
                 finally:
                     # Always strip injected cells so they never reach HTML,
                     # the execution cache, or any downstream consumer — even
-                    # when execution raised above.
+                    # when execution raised above. Cassette persistence is
+                    # host-side (the build writes completion markers and
+                    # merges proxy staging files after the proxy stops), so
+                    # there is nothing to persist here.
                     if replay_injected:
                         _strip_injected_cells(processed_nb)
-                    # Persist the cassette. On the success path the host
-                    # writes the per-staging completion marker (issue
-                    # #115) so the merge folds this worker's recordings
-                    # into canonical. On the failure path the marker is
-                    # *not* written — the staging file is left on disk
-                    # for the next build's pre-build sweep to discard,
-                    # which keeps a partial chain (chain-opener recorded
-                    # but chain-closer missing) from poisoning canonical.
-                    self._persist_recorded_cassette(
-                        cid,
-                        payload,
-                        cassette_paths,
-                        execution_succeeded=execution_succeeded,
-                    )
 
                 # Cache the executed notebook for later reuse by Completed HTML
                 if self.output_spec.should_cache_execution and self.cache is not None:

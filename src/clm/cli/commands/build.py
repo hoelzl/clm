@@ -77,18 +77,16 @@ def _resolve_http_replay_mode(cli_value: str | None) -> str:
 
 
 def _resolve_http_replay_transport(cli_value: str | None = None) -> str:
-    """Resolve the effective HTTP-replay transport.
+    """Resolve the effective HTTP-replay transport: always ``mitmproxy``.
 
-    ``mitmproxy`` is the default (issue #165): the out-of-process proxy
-    matches repeated and concurrent identical requests that vcrpy's
-    in-kernel, consume-once model mishandles (e.g. a chain invoked many
-    times with the same body, or ``RunnableParallel`` fan-out). Opt back
-    into the legacy in-process vcrpy transport with
-    ``CLM_HTTP_REPLAY_TRANSPORT=vcrpy``.
-
-    Precedence: explicit ``cli_value`` > ``CLM_HTTP_REPLAY_TRANSPORT`` env
-    var > default (``mitmproxy``). Any value other than ``vcrpy``
-    (case-insensitive) resolves to ``mitmproxy``.
+    The legacy in-process vcrpy transport was removed (issue #355) after
+    mitmproxy had been the default since 1.10 (issue #165). A leftover
+    ``CLM_HTTP_REPLAY_TRANSPORT=vcrpy`` (CI config, shell profile, course
+    Makefile) must fail **loudly** here rather than be silently ignored:
+    whoever set it was relying on the in-kernel transport and their
+    vcrpy-recorded cassettes will not strict-replay through the proxy — the
+    actionable fix is to re-record, not to discover cassette misses
+    mid-build. Any other value (including unset) resolves to ``mitmproxy``.
     """
     import os
 
@@ -97,7 +95,15 @@ def _resolve_http_replay_transport(cli_value: str | None = None) -> str:
         .strip()
         .lower()
     )
-    return "vcrpy" if value == "vcrpy" else "mitmproxy"
+    if value == "vcrpy":
+        raise click.UsageError(
+            "The vcrpy HTTP-replay transport was removed (issue #355); "
+            "CLM_HTTP_REPLAY_TRANSPORT=vcrpy is no longer supported. Unset the "
+            "variable to use the mitmproxy transport, and re-record any "
+            "cassettes still recorded under vcrpy with --http-replay=refresh "
+            "(see 'clm info migration')."
+        )
+    return "mitmproxy"
 
 
 def _resolve_fail_on_error(cli_value: bool | None, resolved_http_replay_mode: str) -> bool:
@@ -200,24 +206,21 @@ def _build_has_docker_notebook_worker(worker_config: object | None) -> bool:
 def _maybe_start_mitmproxy_transport(
     mode: str | None, jobs_db_path: Path, worker_config: object | None = None
 ):
-    """Start an out-of-process mitmproxy HTTP-replay transport.
+    """Start the out-of-process mitmproxy HTTP-replay proxy.
 
-    mitmproxy is the **default** transport (issue #165): it matches repeated
-    and concurrent identical requests that the legacy in-process vcrpy path
-    mishandles. Opt back into vcrpy with ``CLM_HTTP_REPLAY_TRANSPORT=vcrpy``.
-    This helper is a no-op (returns ``None``) when the resolved transport is
-    not mitmproxy or the replay mode is disabled; the caller additionally
+    mitmproxy is the **only** transport (issue #165; the legacy in-process
+    vcrpy transport was removed in #355): it matches repeated and concurrent
+    identical requests that the in-kernel vcrpy path mishandled, and the
+    kernel's real httpx/httpcore is never patched — the structural fix for
+    the issue #143 connection-pool deadlock. This helper is a no-op (returns
+    ``None``) when the replay mode is disabled; the caller additionally
     skips it entirely when the course has no http-replay notebook, so a
     replay-free build never starts ``mitmdump``. Returns the running
     :class:`MitmproxyManager` (so the caller can stop it) or ``None``.
 
-    When active it (1) starts one ``mitmdump`` for the whole build, (2) sets
-    ``HTTP(S)_PROXY`` + a ``certifi`` + proxy-CA bundle in ``os.environ`` so
-    Direct workers inherit them via ``os.environ.copy()``, and (3) leaves
-    ``CLM_HTTP_REPLAY_TRANSPORT`` set so each kernel skips the vcrpy bootstrap
-    (``_resolve_cassette_paths`` returns ``None``). The kernel's real
-    httpx/httpcore is therefore never patched — the structural fix for the
-    issue #143 connection-pool deadlock.
+    When active it (1) starts one ``mitmdump`` for the whole build, and
+    (2) sets ``HTTP(S)_PROXY`` + a ``certifi`` + proxy-CA bundle in
+    ``os.environ`` so Direct workers inherit them via ``os.environ.copy()``.
 
     One shared proxy serves the whole build; each worker tags its requests
     with the destination cassette (P2), so the addon demuxes them into
@@ -233,15 +236,10 @@ def _maybe_start_mitmproxy_transport(
     readiness poll, while the Docker executor rewrites the host and mounts the
     CA per container. Direct-only builds keep binding ``127.0.0.1`` unchanged.
     """
-    import os as _os
-
-    if (
-        _os.environ.get("CLM_HTTP_REPLAY_TRANSPORT") != "mitmproxy"
-        or not mode
-        or mode == "disabled"
-    ):
+    if not mode or mode == "disabled":
         return None
 
+    import os as _os
     import time as _time
 
     import certifi
@@ -263,9 +261,9 @@ def _maybe_start_mitmproxy_transport(
     # future hardening should bind the docker-bridge gateway IP or add
     # mitmdump --proxyauth with a per-build credential.
     listen_host = "0.0.0.0" if _build_has_docker_notebook_worker(worker_config) else "127.0.0.1"
-    # Same telemetry-suppression policy as the in-kernel vcrpy path: LangSmith
-    # by default, overridable via CLM_HTTP_REPLAY_IGNORE_HOSTS. The addon
-    # forwards these hosts but never records them into a cassette.
+    # Telemetry-suppression policy: LangSmith by default, overridable via
+    # CLM_HTTP_REPLAY_IGNORE_HOSTS. The addon forwards these hosts but never
+    # records them into a cassette.
     ignore_hosts = resolve_http_replay_ignore_hosts()
     # Forward the forensic trace dir (issue #165 P5) so the addon can write the
     # per-flow ``proxy`` stream alongside the worker ``socket`` stream. The host
@@ -1655,14 +1653,15 @@ async def main_build(
 
     _os.environ["CLM_HTTP_REPLAY_MODE"] = resolved_http_replay_mode
 
-    # Resolve and pin the effective HTTP-replay transport. mitmproxy is the
-    # default (issue #165); opt out with CLM_HTTP_REPLAY_TRANSPORT=vcrpy. Pin
-    # the resolved value into os.environ here, before workers spawn, so the
-    # proxy-start gate below, Direct-worker kernels (os.environ.copy()), the
-    # Docker env builder, and the trace label all read one explicit value
-    # instead of re-deriving the default independently. (Starting the proxy is
-    # still gated on the course actually using http-replay — see below — so a
-    # course with no replay topics never spawns mitmdump.)
+    # Validate and pin the HTTP-replay transport (always "mitmproxy"; a
+    # leftover CLM_HTTP_REPLAY_TRANSPORT=vcrpy fails loudly — issue #355).
+    # The env var is still pinned before workers spawn: an in-container CLM
+    # older than the vcrpy-transport removal selects its injection path by
+    # this value, so passing it keeps mixed-version Docker images on the tag
+    # bootstrap instead of silently reviving their bundled vcrpy bootstrap.
+    # (Starting the proxy is still gated on the course actually using
+    # http-replay — see below — so a course with no replay topics never
+    # spawns mitmdump.)
     _os.environ["CLM_HTTP_REPLAY_TRANSPORT"] = _resolve_http_replay_transport()
 
     # Forensic HTTP-replay trace harness. When CLM_HTTP_REPLAY_TRACE=1 is
@@ -1689,17 +1688,14 @@ async def main_build(
     if _trace_is_enabled():
         _trace_invocation_dir = _trace_make_invocation_dir()
         _trace_set_invocation_dir(_trace_invocation_dir)
-        # Record which transport produced this trace bundle so the analyzer
-        # picks the right bypass model: under "mitmproxy" the ``vcr`` stream is
-        # dark and the ``proxy`` stream is the interception evidence; under
-        # "vcrpy" the in-kernel ``vcr`` stream is used (issue #165 P5).
-        _trace_transport = (
-            "mitmproxy" if _os.environ.get("CLM_HTTP_REPLAY_TRANSPORT") == "mitmproxy" else "vcrpy"
-        )
+        # Record the transport in the manifest so the analyzer picks the
+        # proxy-stream bypass model (issue #165 P5). Always "mitmproxy" now;
+        # the analyzer keeps its legacy "vcrpy"/missing-key branch only to
+        # read trace bundles produced by older CLM versions.
         _trace_write_manifest(
             _trace_invocation_dir,
             http_replay_mode=resolved_http_replay_mode,
-            extra={"transport": _trace_transport},
+            extra={"transport": "mitmproxy"},
         )
         _os.environ["CLM_HTTP_REPLAY_TRACE_INVOCATION_DIR"] = str(_trace_invocation_dir)
         click.echo(f"HTTP-replay trace active: {_trace_invocation_dir}")
@@ -1787,14 +1783,13 @@ async def main_build(
         data_dir=data_dir,
     )
 
-    # Out-of-process HTTP-replay transport (issue #165), the default since the
-    # transport flip. Must run BEFORE workers spawn so they inherit HTTP(S)_PROXY
-    # + the CA bundle via os.environ.copy() (Direct) or the per-container
-    # injection (Docker, P4). No-op unless the resolved transport is mitmproxy
-    # AND this course actually has an http-replay notebook — a course with no
-    # replay topics never needs the proxy (and so never requires mitmdump), even
-    # though mitmproxy is the global default. ``worker_config`` lets it bind
-    # 0.0.0.0 when Docker workers will reach it via host.docker.internal.
+    # Out-of-process HTTP-replay proxy (issue #165). Must run BEFORE workers
+    # spawn so they inherit HTTP(S)_PROXY + the CA bundle via
+    # os.environ.copy() (Direct) or the per-container injection (Docker, P4).
+    # No-op unless this course actually has an http-replay notebook — a course
+    # with no replay topics never needs the proxy (and so never requires
+    # mitmdump). ``worker_config`` lets it bind 0.0.0.0 when Docker workers
+    # will reach it via host.docker.internal.
     course_uses_http_replay = any(getattr(f, "http_replay", False) for f in course.files)
     mitm_manager = (
         _maybe_start_mitmproxy_transport(

@@ -61,11 +61,11 @@ from vcr.serializers import yamlserializer
 # ---------------------------------------------------------------------------
 # Secret/telemetry filtering + matching parity (issue #165, P3)
 # ---------------------------------------------------------------------------
-# These MUST mirror the values baked into the in-kernel vcrpy bootstrap
-# (``notebook_processor._HTTP_REPLAY_BOOTSTRAP_TEMPLATE``'s
-# ``_clm_vcr_instance``) so a mitmproxy-recorded cassette is filtered and
-# matched byte-identically to a vcrpy-recorded one. A drift-guard test
-# (``test_http_replay_mitm_cassette_format.py``) asserts they stay in lockstep.
+# The single source of truth for cassette secret-filtering (the in-kernel
+# vcrpy bootstrap these once mirrored was removed in #355). Committed course
+# cassettes were recorded with exactly these filters, so narrowing or
+# reordering them silently changes what gets recorded/matched — a pin test
+# (``test_http_replay_mitm_cassette_format.py``) locks the literals.
 #
 # ``filter_headers`` removes secret-bearing *request* headers (vcrpy filters
 # request headers only; response ``set-cookie`` is left as vcrpy leaves it).
@@ -301,17 +301,17 @@ def build_request_filter(
 def clm_json_body_matcher(r1: Request, r2: Request) -> None:
     """JSON-semantic request-body matcher (vcr matcher protocol).
 
-    A verbatim mirror of the in-kernel ``_clm_json_body_matcher`` in
-    ``notebook_processor._HTTP_REPLAY_BOOTSTRAP_TEMPLATE``: when both requests
-    carry a JSON content-type (case-insensitive), parse both bodies as JSON and
-    compare the parsed values; otherwise byte-compare. Raises
-    ``AssertionError`` on mismatch (the convention vcr's matcher chain expects).
+    When both requests carry a JSON content-type (case-insensitive), parse
+    both bodies as JSON and compare the parsed values; otherwise
+    byte-compare. Raises ``AssertionError`` on mismatch (the convention
+    vcr's matcher chain expects).
 
     This is why a real LLM JSON ``POST`` replay-hits instead of missing: a
     byte-exact body key would diverge whenever vcrpy's
     ``filter_post_data_parameters`` re-dumped the JSON with default separators
-    at record time but the live body uses compact separators. **Keep this in
-    lockstep with the bootstrap's matcher** (drift-guard test asserts it).
+    at record time but the live body uses compact separators — committed
+    cassettes contain such re-dumped bodies, so JSON-semantic matching must
+    stay (a pin test asserts the matcher chain).
     """
 
     def _body_bytes(req: Request) -> bytes:
@@ -357,9 +357,9 @@ def clm_json_body_matcher(r1: Request, r2: Request) -> None:
         raise AssertionError
 
 
-# The match key mirrors the bootstrap's
-# ``match_on=("method","scheme","host","port","path","query","clm_json_body")``
-# exactly — the request *body* (JSON-semantic) is part of the key so a stale
+# The replay match key:
+# ``("method","scheme","host","port","path","query","clm_json_body")`` —
+# the request *body* (JSON-semantic) is part of the key so a stale
 # cassette fails loudly rather than serving the wrong recorded interaction.
 REPLAY_MATCHERS = (
     _vcr_matchers.method,
@@ -388,8 +388,7 @@ def serialize_interactions(interactions: Iterable[Interaction]) -> str:
     output is byte-identical to a vcrpy-written cassette. vcrpy's
     ``convert_to_unicode`` mutates ``response["body"]["string"]`` from
     ``bytes`` to ``str`` **in place** during serialization; we deep-copy
-    first (exactly as CLM's ``_ClmDeepCopyPersister`` does in the kernel
-    bootstrap) so the caller's in-memory interactions keep their ``bytes``
+    first so the caller's in-memory interactions keep their ``bytes``
     bodies and stay valid for subsequent replays/writes.
     """
     requests = []

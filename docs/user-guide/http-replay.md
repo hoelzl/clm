@@ -16,46 +16,33 @@ Install CLM with the `[replay]` extra:
 pip install "coding-academy-lecture-manager[replay]"
 ```
 
-This pulls in `mitmproxy` (the default transport, see below) and `vcrpy`. The
-extra is also included in `[all]`. Topics that do not opt in pay zero runtime
-cost — no imports, no proxy, no cassette lookup. The extra requires **Python
-3.12+** (mitmproxy's floor).
+This pulls in `mitmproxy` (the replay proxy) and `vcrpy` (used as a cassette
+serialization library). The extra is also included in `[all]`. Topics that do
+not opt in pay zero runtime cost — no imports, no proxy, no cassette lookup.
+The extra requires **Python 3.12+** (mitmproxy's floor).
 
-## Transports
+## How it works
 
-The replay engine records and replays a topic's HTTP traffic through one of two
-interchangeable **transports**:
+The replay engine records and replays a topic's HTTP traffic through an
+**out-of-process proxy** (`mitmdump`) that all notebook traffic is routed
+through. It matches **repeated and concurrent identical requests** correctly —
+a LangChain chain invoked many times with the same request body, or a
+`RunnableParallel` fan-out. The proxy is started only when a build actually
+contains an `http-replay` topic, so a replay-free build never spawns it.
 
-- **`mitmproxy` (default).** An out-of-process proxy (`mitmdump`) that all
-  notebook traffic is routed through. It matches **repeated and concurrent
-  identical requests** correctly — a LangChain chain invoked many times with the
-  same request body, or a `RunnableParallel` fan-out — which the in-process
-  transport could not. The proxy is started only when a build actually contains
-  an `http-replay` topic, so a replay-free build never spawns it.
-- **`vcrpy`.** The original in-process transport. It patches the HTTP libraries
-  inside the kernel and serves each recorded interaction at most once
-  (consume-once), so a deck that replays the same request multiple times cannot
-  be strict-replayed under it.
+> **Historical note.** CLM ≤1.12 also shipped the original in-process `vcrpy`
+> transport (patching HTTP libraries inside the kernel), selectable with
+> `CLM_HTTP_REPLAY_TRANSPORT=vcrpy`. It was removed in issue #355: setting
+> that variable to `vcrpy` now fails the build with a migration pointer.
+> Cassettes recorded under it are **not byte-compatible** with the proxy (the
+> on-disk YAML layout is the same, but the recorded bytes differ enough that
+> strict `replay` misses) — a course upgrading from a pre-1.10 CLM must
+> **re-record its cassettes** once (`--http-replay=refresh`, review the diff,
+> commit) before CI's strict `replay` passes.
 
-Select the transport with the `CLM_HTTP_REPLAY_TRANSPORT` environment variable
-(`mitmproxy` or `vcrpy`); it defaults to `mitmproxy`.
+### Client-library coverage
 
-```bash
-CLM_HTTP_REPLAY_TRANSPORT=vcrpy clm build course.xml   # opt back into the old path
-```
-
-> **Cassettes are not byte-compatible between the two transports.** The on-disk
-> format is the same vcrpy YAML layout (the mitmproxy addon serializes to it),
-> but the recorded bytes differ enough that a cassette recorded under one
-> transport will fail strict `replay` under the other. A course upgrading from a
-> pre-1.10 CLM must **re-record its cassettes under mitmproxy** once
-> (`--http-replay=refresh`, review the diff, commit) before CI's strict `replay`
-> passes. During the transition you can keep building against existing cassettes
-> by pinning `CLM_HTTP_REPLAY_TRANSPORT=vcrpy`.
-
-### Client-library coverage (mitmproxy transport)
-
-Under the mitmproxy transport, one shared proxy serves the whole build, so each
+One shared proxy serves the whole build, so each
 notebook kernel tags its outgoing requests with the destination cassette
 (an `X-CLM-Cassette` header the proxy strips before recording or forwarding).
 The tagging is done by patching the HTTP client libraries inside the kernel.
@@ -75,10 +62,9 @@ per-build *catch-all* cassette in the build scratch directory, **not** the
 topic's canonical cassette, so its recordings are never committed and strict
 `replay` will miss. CLM logs a warning in the build log
 (`CLM-HTTP-REPLAY-UNTAGGED: …`, once per build, naming the first offending
-request) when this happens. If you hit it, either switch the deck to a covered
-client library or pin the build to the `vcrpy` transport
-(`CLM_HTTP_REPLAY_TRANSPORT=vcrpy`), which patches at the `http.client` level
-and covers `urllib` too.
+request) when this happens. If you hit it, switch the deck to a covered
+client library (or file an issue to extend the tag bootstrap to the stack
+you need).
 
 ## Opting a topic in
 

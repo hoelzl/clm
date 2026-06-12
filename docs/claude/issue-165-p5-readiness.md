@@ -1,5 +1,12 @@
 # Issue #165 P5 — cutover readiness report
 
+> **HISTORICAL (issue #355, executed).** The cutover this document prepared
+> is complete: mitmproxy became the default in 1.10 and the in-kernel vcrpy
+> transport (bootstrap, workarounds, pin guard) was deleted in #355 stage 1.
+> The deletion inventory and gate checklist below are kept as the record of
+> what was removed and why.
+
+
 **Status:** prep (2026-05-31). P5 step 1 (trace-harness re-port) is **done**; the
 default-flip and workaround deletion remain **deferred to a post-merge release**
 per the plan invariant.

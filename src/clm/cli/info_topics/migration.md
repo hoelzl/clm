@@ -119,6 +119,29 @@ The three commands also gained a **consistent option vocabulary**:
 - `clm export schedule` gained `-d/--output-dir`; `-L/--language` is the
   canonical spelling everywhere (`schedule` keeps `--lang` as an alias).
 
+## The vcrpy HTTP-replay transport was removed ({version})
+
+CLM {version} **removes the legacy in-process `vcrpy` replay transport**
+entirely (issue #355). mitmproxy had been the default since 1.10;
+`CLM_HTTP_REPLAY_TRANSPORT=vcrpy` was the temporary escape hatch and is gone:
+
+- `CLM_HTTP_REPLAY_TRANSPORT=vcrpy` now makes `clm build` **fail immediately**
+  with a usage error. Remove the variable from CI configs, shell profiles, and
+  course Makefiles.
+- Cassettes recorded under the vcrpy transport (pre-1.10, or any course that
+  kept building with the opt-out) do **not** strict-replay through the proxy.
+  Re-record them once and commit the result:
+
+  ```bash
+  clm build course.xml --http-replay=refresh
+  git add <topic>/**/*.http-cassette.yaml
+  ```
+
+- Cassettes already recorded under mitmproxy (the default since 1.10) are
+  unaffected — the on-disk format is unchanged.
+- The `vcrpy` package itself remains a dependency of the `[replay]` extra for
+  now (CLM uses it as a cassette serialization library, not as a transport).
+
 ## Breaking changes in CLM 1.10
 
 CLM 1.10 carries **two intentional breaking changes** around HTTP replay —
@@ -143,18 +166,13 @@ clm build course.xml --http-replay=refresh   # re-record from scratch, review th
 git add <topic>/**/*.http-cassette.yaml
 ```
 
-The on-disk format is still vcrpy's YAML layout (the mitmproxy addon serializes
-to it), and `vcrpy` stays installed — so you can **opt back into the old
-transport** during the transition:
-
-```bash
-CLM_HTTP_REPLAY_TRANSPORT=vcrpy clm build course.xml
-```
-
-Set `CLM_HTTP_REPLAY_TRANSPORT=mitmproxy` (the default) to go back. Starting the
-proxy is gated on the course actually containing an `http-replay` topic, so a
-replay-free build never spawns `mitmdump` and pays no cost. See
-`docs/user-guide/http-replay.md` → "Transports".
+The on-disk format is still vcrpy's YAML layout (the mitmproxy addon
+serializes to it). In 1.10–1.12, `CLM_HTTP_REPLAY_TRANSPORT=vcrpy` opted back
+into the old in-process transport during the transition; **that opt-out was
+removed in {version}** (see the section above) — re-recording is now the only
+path. Starting the proxy is gated on the course actually containing an
+`http-replay` topic, so a replay-free build never spawns `mitmdump` and pays
+no cost. See `docs/user-guide/http-replay.md`.
 
 **Client-library coverage (as of {version}):** under the mitmproxy transport
 the kernel tags traffic from **httpx**, **requests**, and **aiohttp** so the
@@ -165,7 +183,7 @@ and re-record those topics with `--http-replay=refresh`.) Other HTTP stacks
 (`urllib.request`, raw `urllib3`/`http.client`, subprocesses) are still
 proxied but untagged: they hit the per-build catch-all cassette, and the build
 log carries a `CLM-HTTP-REPLAY-UNTAGGED` warning. Use a covered client library
-in such decks, or pin `CLM_HTTP_REPLAY_TRANSPORT=vcrpy` for that course.
+in such decks.
 
 ### 2. Python 3.11 support dropped
 

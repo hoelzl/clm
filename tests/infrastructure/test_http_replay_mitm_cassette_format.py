@@ -376,21 +376,16 @@ def test_requests_match_query_order_insensitive_and_path_sensitive():
     assert not cf.requests_match(a, other_path)
 
 
-def test_filter_constants_and_matchers_match_bootstrap():
-    """Drift guard: cassette_format's filter constants + match_on must stay in
-    lockstep with the in-kernel vcrpy bootstrap, or a mitmproxy cassette would
-    filter/match differently from a vcrpy one."""
-    from clm.workers.notebook import notebook_processor as nbp
+def test_filter_constants_and_matchers_are_pinned():
+    """Pin the secret-filter constants and the replay matcher chain.
 
-    template = nbp._HTTP_REPLAY_BOOTSTRAP_TEMPLATE
-    assert 'filter_headers=["authorization", "cookie", "x-api-key", "set-cookie"]' in template
-    assert 'filter_post_data_parameters=["password", "token", "api_key"]' in template
-    assert 'filter_query_parameters=["api_key", "token"]' in template
-    assert (
-        'match_on=("method", "scheme", "host", "port", "path", "query", "clm_json_body")'
-        in template
-    )
-
+    These used to be drift-guarded against the in-kernel vcrpy bootstrap
+    (removed in #355); cassette_format is now the single source of truth, so
+    pin the literals directly — committed course cassettes were recorded with
+    exactly these filters, and replay matching must keep treating them the
+    same. Widening the filters is fine; narrowing or reordering silently
+    changes what gets recorded/matched and needs a deliberate decision.
+    """
     assert cf.FILTER_HEADERS == ["authorization", "cookie", "x-api-key", "set-cookie"]
     assert cf.FILTER_POST_DATA_PARAMETERS == ["password", "token", "api_key"]
     assert cf.FILTER_QUERY_PARAMETERS == ["api_key", "token"]

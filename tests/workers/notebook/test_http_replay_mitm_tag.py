@@ -1,10 +1,9 @@
 """P2 (issue #165): the mitmproxy cassette-routing tag bootstrap.
 
-Under ``CLM_HTTP_REPLAY_TRANSPORT=mitmproxy`` the worker injects a tiny
-cell that tags every outgoing httpx request with its destination cassette
-(so the single shared proxy demuxes correctly) instead of the heavy
-in-kernel vcrpy bootstrap. These tests pin that injection + the tag
-resolution and confirm the kernel's httpcore is never patched.
+For an http-replay topic the worker injects a tiny cell that tags every
+outgoing httpx/requests/aiohttp request with its destination cassette so
+the single shared proxy demuxes correctly. These tests pin that injection
++ the tag resolution and confirm the kernel's httpcore is never patched.
 """
 
 from __future__ import annotations
@@ -250,13 +249,12 @@ def test_tag_bootstrap_execs_when_optional_libraries_are_missing():
     assert "bootstrap-ok" in proc.stdout
 
 
-def test_maybe_inject_under_transport_injects_socket_trace_when_traced(monkeypatch, tmp_path):
-    monkeypatch.setenv("CLM_HTTP_REPLAY_TRANSPORT", "mitmproxy")
+def test_maybe_inject_injects_socket_trace_when_traced(tmp_path):
     proc = NotebookProcessor(CompletedOutput(format="code"))
     nb = new_notebook(cells=[new_code_cell("print(1)")])
     payload = _payload(source_topic_dir=str(tmp_path), http_replay_trace_dir=str(tmp_path))
 
-    injected = proc._maybe_inject_http_replay(nb, payload, None, tmp_path)
+    injected = proc._maybe_inject_http_replay(nb, payload, tmp_path)
 
     assert injected is True
     src = nb["cells"][0]["source"]
@@ -265,8 +263,7 @@ def test_maybe_inject_under_transport_injects_socket_trace_when_traced(monkeypat
     assert "import vcr" not in src
 
 
-def test_resolve_mitmproxy_tag_uses_payload_cassette_name(monkeypatch, tmp_path):
-    monkeypatch.setenv("CLM_HTTP_REPLAY_TRANSPORT", "mitmproxy")
+def test_resolve_mitmproxy_tag_uses_payload_cassette_name(tmp_path):
     proc = NotebookProcessor(CompletedOutput(format="code"))
     payload = _payload(source_topic_dir=str(tmp_path))
 
@@ -275,7 +272,7 @@ def test_resolve_mitmproxy_tag_uses_payload_cassette_name(monkeypatch, tmp_path)
     assert tag == str(tmp_path / "_cassettes" / "slides.http-cassette.yaml")
 
 
-def test_resolve_mitmproxy_tag_uses_host_topic_dir_not_container_source_dir(monkeypatch, tmp_path):
+def test_resolve_mitmproxy_tag_uses_host_topic_dir_not_container_source_dir(tmp_path):
     """The tag must name a HOST path even in Docker mode (issue #165 P4).
 
     The proxy and the host-side merge run on the host, so a container-mapped
@@ -283,7 +280,6 @@ def test_resolve_mitmproxy_tag_uses_host_topic_dir_not_container_source_dir(monk
     bogus host path and the merge would never find it. The host
     ``source_topic_dir`` therefore wins over the container ``source_dir``.
     """
-    monkeypatch.setenv("CLM_HTTP_REPLAY_TRANSPORT", "mitmproxy")
     proc = NotebookProcessor(CompletedOutput(format="code"))
     host_dir = tmp_path / "host_topic"
     container_dir = Path("/source/topic")  # what a Docker worker would pass
@@ -295,9 +291,8 @@ def test_resolve_mitmproxy_tag_uses_host_topic_dir_not_container_source_dir(monk
     assert tag == str(host_dir / "_cassettes" / "slides.http-cassette.yaml")
 
 
-def test_resolve_mitmproxy_tag_falls_back_to_source_dir_when_no_host_dir(monkeypatch, tmp_path):
+def test_resolve_mitmproxy_tag_falls_back_to_source_dir_when_no_host_dir(tmp_path):
     """If no host ``source_topic_dir`` is available, fall back to ``source_dir``."""
-    monkeypatch.setenv("CLM_HTTP_REPLAY_TRANSPORT", "mitmproxy")
     proc = NotebookProcessor(CompletedOutput(format="code"))
     payload = _payload(source_topic_dir=None)
 
@@ -306,30 +301,27 @@ def test_resolve_mitmproxy_tag_falls_back_to_source_dir_when_no_host_dir(monkeyp
     assert tag == str(tmp_path / "_cassettes" / "slides.http-cassette.yaml")
 
 
-def test_resolve_mitmproxy_tag_none_when_disabled(monkeypatch, tmp_path):
-    monkeypatch.setenv("CLM_HTTP_REPLAY_TRANSPORT", "mitmproxy")
+def test_resolve_mitmproxy_tag_none_when_disabled(tmp_path):
     proc = NotebookProcessor(CompletedOutput(format="code"))
     assert proc._resolve_mitmproxy_tag(_payload(http_replay_mode="disabled"), tmp_path) is None
     assert proc._resolve_mitmproxy_tag(_payload(http_replay_mode=None), tmp_path) is None
     assert proc._resolve_mitmproxy_tag(_payload(http_replay_cassette_name=None), tmp_path) is None
 
 
-def test_resolve_mitmproxy_tag_none_when_no_dir_available(monkeypatch):
+def test_resolve_mitmproxy_tag_none_when_no_dir_available():
     """No host source_topic_dir and no container source_dir -> no tag."""
-    monkeypatch.setenv("CLM_HTTP_REPLAY_TRANSPORT", "mitmproxy")
     proc = NotebookProcessor(CompletedOutput(format="code"))
     assert proc._resolve_mitmproxy_tag(_payload(source_topic_dir=None), None) is None
 
 
-def test_maybe_inject_chooses_tag_bootstrap_under_transport(monkeypatch, tmp_path):
-    monkeypatch.setenv("CLM_HTTP_REPLAY_TRANSPORT", "mitmproxy")
+def test_maybe_inject_injects_tag_bootstrap(tmp_path):
     proc = NotebookProcessor(CompletedOutput(format="code"))
     nb = new_notebook(cells=[new_code_cell("print(1)")])
     payload = _payload(source_topic_dir=str(tmp_path))
 
     # ``paths`` is None under the transport (vcrpy staging is skipped), but
     # the tag bootstrap still gets injected.
-    injected = proc._maybe_inject_http_replay(nb, payload, None, tmp_path)
+    injected = proc._maybe_inject_http_replay(nb, payload, tmp_path)
 
     assert injected is True
     assert len(nb["cells"]) == 2
@@ -337,12 +329,30 @@ def test_maybe_inject_chooses_tag_bootstrap_under_transport(monkeypatch, tmp_pat
     assert "import vcr" not in nb["cells"][0]["source"]
 
 
-def test_maybe_inject_noop_without_transport_and_no_paths(monkeypatch):
-    monkeypatch.delenv("CLM_HTTP_REPLAY_TRANSPORT", raising=False)
+def test_maybe_inject_noop_when_no_target_dir_resolves():
+    """No host topic dir and no container source dir -> no tag, no injection."""
     proc = NotebookProcessor(CompletedOutput(format="code"))
     nb = new_notebook(cells=[new_code_cell("print(1)")])
 
-    injected = proc._maybe_inject_http_replay(nb, _payload(), None, None)
+    injected = proc._maybe_inject_http_replay(nb, _payload(source_topic_dir=None), None)
 
     assert injected is False
     assert len(nb["cells"]) == 1
+
+
+def test_maybe_inject_noop_when_mode_disabled(tmp_path):
+    proc = NotebookProcessor(CompletedOutput(format="code"))
+    nb = new_notebook(cells=[new_code_cell("print(1)")])
+    payload = _payload(http_replay_mode="disabled", source_topic_dir=str(tmp_path))
+
+    injected = proc._maybe_inject_http_replay(nb, payload, tmp_path)
+
+    assert injected is False
+    assert len(nb["cells"]) == 1
+
+
+def test_strip_is_noop_when_no_injection():
+    nb = new_notebook(cells=[new_code_cell("x = 1")])
+    _strip_injected_cells(nb)
+    assert len(nb["cells"]) == 1
+    assert nb["cells"][0]["source"] == "x = 1"

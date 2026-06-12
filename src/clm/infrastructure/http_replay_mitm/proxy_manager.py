@@ -5,9 +5,9 @@ a child of the ``clm build`` parent process: locating the executable,
 picking a free port, loading our addon, waiting for the proxy to accept
 TCP connections before workers spawn, and graceful shutdown.
 
-Integrated into ``clm build`` as the default HTTP-replay transport (issue
-#165; opt out with ``CLM_HTTP_REPLAY_TRANSPORT=vcrpy``): the build starts one
-manager for the whole run and stops it in its ``finally``. The bind host is ``127.0.0.1`` for Direct-only builds and
+Integrated into ``clm build`` as the HTTP-replay transport (issue #165): the
+build starts one manager for the whole run and stops it in its ``finally``.
+The bind host is ``127.0.0.1`` for Direct-only builds and
 ``0.0.0.0`` when Docker workers must reach the proxy via ``host.docker.internal``
 (P4); same-host clients and the readiness poll always connect via loopback
 (:meth:`_client_host`).

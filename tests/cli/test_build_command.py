@@ -156,32 +156,44 @@ class TestResolveHttpReplayMode:
 
 
 class TestResolveHttpReplayTransport:
-    """mitmproxy is the default transport (issue #165); vcrpy is the opt-out."""
+    """mitmproxy is the only transport (issue #355 removed vcrpy).
 
-    def test_unset_defaults_to_mitmproxy(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    A leftover ``CLM_HTTP_REPLAY_TRANSPORT=vcrpy`` (CI config, shell profile)
+    must fail loudly with a migration pointer instead of being silently
+    resolved to mitmproxy — whoever set it depends on cassettes that will not
+    strict-replay through the proxy.
+    """
+
+    def test_unset_resolves_to_mitmproxy(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("CLM_HTTP_REPLAY_TRANSPORT", raising=False)
         assert _resolve_http_replay_transport() == "mitmproxy"
 
-    def test_explicit_vcrpy_opts_out(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_explicit_vcrpy_fails_loudly(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("CLM_HTTP_REPLAY_TRANSPORT", "vcrpy")
-        assert _resolve_http_replay_transport() == "vcrpy"
+        with pytest.raises(click.UsageError, match="issue #355"):
+            _resolve_http_replay_transport()
+
+    def test_vcrpy_detection_is_case_insensitive_and_trimmed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # "  VCRPY " must be recognized as the removed transport, not fall
+        # through to mitmproxy as an unknown value.
+        monkeypatch.setenv("CLM_HTTP_REPLAY_TRANSPORT", "  VCRPY ")
+        with pytest.raises(click.UsageError):
+            _resolve_http_replay_transport()
 
     def test_explicit_mitmproxy(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("CLM_HTTP_REPLAY_TRANSPORT", "mitmproxy")
         assert _resolve_http_replay_transport() == "mitmproxy"
 
-    def test_value_is_case_insensitive_and_trimmed(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("CLM_HTTP_REPLAY_TRANSPORT", "  VCRPY ")
-        assert _resolve_http_replay_transport() == "vcrpy"
-
     def test_unknown_value_falls_back_to_mitmproxy(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # Any value other than ``vcrpy`` resolves to the default, mitmproxy.
         monkeypatch.setenv("CLM_HTTP_REPLAY_TRANSPORT", "tcpdump")
         assert _resolve_http_replay_transport() == "mitmproxy"
 
-    def test_explicit_cli_value_wins_over_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("CLM_HTTP_REPLAY_TRANSPORT", "mitmproxy")
-        assert _resolve_http_replay_transport("vcrpy") == "vcrpy"
+    def test_explicit_cli_vcrpy_fails_loudly(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("CLM_HTTP_REPLAY_TRANSPORT", raising=False)
+        with pytest.raises(click.UsageError):
+            _resolve_http_replay_transport("vcrpy")
 
     def test_ci_false_defaults_to_new_episodes(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("CLM_HTTP_REPLAY_MODE", raising=False)
@@ -1863,30 +1875,18 @@ class TestProcessCourseInvokesCassetteSweep:
 
 
 class TestMaybeStartMitmproxyTransport:
-    """``_maybe_start_mitmproxy_transport`` acts only on an *explicit*
-    ``CLM_HTTP_REPLAY_TRANSPORT`` value. mitmproxy is the build default now
-    (issue #165), but the default is resolved and pinned upstream by
-    ``main_build`` (via ``_resolve_http_replay_transport``) *before* this
-    helper is called — so the helper itself stays a strict no-op unless the
-    env already says ``mitmproxy``."""
+    """``_maybe_start_mitmproxy_transport`` is gated only on the replay mode
+    (and, at the call site, on the course actually containing an http-replay
+    topic) — the transport env var no longer participates (issue #355)."""
 
-    def test_returns_none_when_transport_not_explicit(self, monkeypatch, tmp_path) -> None:
-        # With the env unset (the default is applied upstream, not here) the
-        # helper no-ops. Returns before locating mitmdump, so no external
-        # dependency is needed.
-        monkeypatch.delenv("CLM_HTTP_REPLAY_TRANSPORT", raising=False)
-        result = build_module._maybe_start_mitmproxy_transport("replay", tmp_path / "jobs.db")
-        assert result is None
-
-    def test_returns_none_when_other_transport_value(self, monkeypatch, tmp_path) -> None:
-        monkeypatch.setenv("CLM_HTTP_REPLAY_TRANSPORT", "vcrpy")
-        result = build_module._maybe_start_mitmproxy_transport("replay", tmp_path / "jobs.db")
-        assert result is None
-
-    def test_returns_none_when_mode_disabled(self, monkeypatch, tmp_path) -> None:
-        # Even opted in, a disabled replay mode means no proxy is needed.
-        monkeypatch.setenv("CLM_HTTP_REPLAY_TRANSPORT", "mitmproxy")
+    def test_returns_none_when_mode_disabled(self, tmp_path) -> None:
+        # A disabled replay mode means no proxy is needed. Returns before
+        # locating mitmdump, so no external dependency is needed.
         result = build_module._maybe_start_mitmproxy_transport("disabled", tmp_path / "jobs.db")
+        assert result is None
+
+    def test_returns_none_when_mode_missing(self, tmp_path) -> None:
+        result = build_module._maybe_start_mitmproxy_transport(None, tmp_path / "jobs.db")
         assert result is None
 
 
@@ -1972,7 +1972,6 @@ class TestMitmproxyTransportBindHost:
     def _run(self, monkeypatch, tmp_path, worker_config):
         import os
 
-        monkeypatch.setenv("CLM_HTTP_REPLAY_TRANSPORT", "mitmproxy")
         monkeypatch.setattr(
             "clm.infrastructure.http_replay_mitm.MitmproxyManager", _FakeMitmManager
         )
