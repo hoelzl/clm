@@ -281,7 +281,7 @@ def atomic_write_all(writes: list[tuple[Path, str]]) -> None:
 
 
 def is_private_dir_name(name: str) -> bool:
-    """True for underscore-prefixed directory names (``_archive``, ``_drafts``, …).
+    """True for underscore- or dot-prefixed directory names.
 
     Underscore-prefixed directories under ``slides/`` hold author-parked
     content (retired decks, drafts). They are excluded from module/topic
@@ -290,8 +290,13 @@ def is_private_dir_name(name: str) -> bool:
     not a course-file-map rule: the legacy ``_cassettes/`` sidecar inside a
     topic stays in the course file map because the kernel reads it at
     runtime (see ``SKIP_DIRS_FOR_OUTPUT``).
+
+    Dot-prefixed directories (``.ipynb_checkpoints``, ``.git``, ``.vscode``,
+    …) are tool sidecars, never course content; Jupyter's checkpoint copies
+    of decks otherwise surface as duplicate — possibly stale — findings in
+    validation and normalization walks (issue #339).
     """
-    return name.startswith("_")
+    return name.startswith(("_", "."))
 
 
 def is_ignored_dir_for_course(dir_path: Path) -> bool:

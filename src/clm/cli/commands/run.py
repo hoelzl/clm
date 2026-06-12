@@ -23,7 +23,7 @@ from pathlib import Path
 import click
 
 from clm.core.course_spec import CourseSpec, CourseSpecError, TaskSpec
-from clm.core.tasks import TaskStepError, resolve_step
+from clm.core.tasks import TaskStepError, resolve_step, step_argument_usage
 
 
 def unknown_cli_command_error(tokens: list[str]) -> str | None:
@@ -60,12 +60,46 @@ def unknown_cli_command_error(tokens: list[str]) -> str | None:
     return None
 
 
-def _resolve_task_steps(task: TaskSpec, spec_file: Path) -> list[list[str]]:
+def _check_argument_count(task: TaskSpec, args: tuple[str, ...]) -> None:
+    """Fail fast when *args* does not match the task's placeholder usage.
+
+    A task whose steps reference ``{args}``/``{n}`` must receive the
+    corresponding arguments, and arguments a task never references are an
+    error rather than silently dropped (issue #342). ``{args}`` consumes
+    every argument, so it lifts the upper bound entirely (and requires at
+    least one argument — a varying-argument task invoked without its
+    argument is a mistake, not an empty expansion).
+    """
+    uses_args = False
+    needed = 0
+    for step in task.steps:
+        step_uses_args, max_positional = step_argument_usage(step)
+        uses_args = uses_args or step_uses_args
+        needed = max(needed, max_positional)
+    if uses_args:
+        needed = max(needed, 1)
+
+    if len(args) < needed:
+        references = "{args}" if uses_args else f"{{{needed}}}"
+        raise click.ClickException(
+            f"Task '{task.name}' needs at least {needed} argument(s) after the "
+            f"spec file (its steps reference {references}), but {len(args)} "
+            f"were given. Usage: clm run {task.name} SPEC_FILE ARGS..."
+        )
+    if len(args) > needed and not uses_args:
+        extras = " ".join(args[needed:])
+        takes = f"at most {needed} argument(s)" if needed else "no extra arguments"
+        raise click.ClickException(
+            f"Task '{task.name}' takes {takes} — its steps reference no placeholder for: {extras}"
+        )
+
+
+def _resolve_task_steps(task: TaskSpec, spec_file: Path, args: tuple[str, ...]) -> list[list[str]]:
     """Resolve and validate every step of *task*; raise on the first problem."""
     resolved: list[list[str]] = []
     for i, step in enumerate(task.steps, start=1):
         try:
-            tokens = resolve_step(step, spec_path=spec_file)
+            tokens = resolve_step(step, spec_path=spec_file, args=args)
         except TaskStepError as e:
             raise click.ClickException(f"Task '{task.name}', step {i}: {e}") from None
         error = unknown_cli_command_error(tokens)
@@ -108,6 +142,7 @@ def _list_tasks(spec: CourseSpec, spec_file: Path) -> None:
     required=False,
     type=click.Path(file_okay=True, dir_okay=False, path_type=Path),
 )
+@click.argument("task_args", metavar="[ARGS]...", nargs=-1)
 @click.option(
     "--list",
     "list_tasks",
@@ -119,18 +154,28 @@ def _list_tasks(spec: CourseSpec, spec_file: Path) -> None:
     is_flag=True,
     help="Print the fully resolved commands without executing anything.",
 )
-def run_cmd(task_name: str | None, spec_file: Path | None, list_tasks: bool, dry_run: bool) -> None:
+def run_cmd(
+    task_name: str | None,
+    spec_file: Path | None,
+    task_args: tuple[str, ...],
+    list_tasks: bool,
+    dry_run: bool,
+) -> None:
     """Run a named task sequence declared in the course spec.
 
     Tasks are sequences of clm commands declared in a <tasks> block of the
     spec file (see `clm info spec-files`). Steps run in order; the first
     failing step aborts the task and its exit code becomes clm's exit code.
 
+    Extra arguments after the spec file are exposed to steps as {args}
+    (all of them) and {1}, {2}, ... (individually).
+
     \b
     Examples:
         clm run pre-release course.xml            # run task 'pre-release'
         clm run course.xml                        # list available tasks
         clm run pre-release course.xml --dry-run  # show resolved commands
+        clm run release-week course.xml "name:Week 09"  # task with arguments
     """
     # `clm run course.xml` — a single argument naming an existing file is the
     # spec, and listing is implied.
@@ -147,6 +192,11 @@ def run_cmd(task_name: str | None, spec_file: Path | None, list_tasks: bool, dry
     spec = _load_spec(spec_file)
 
     if task_name is None or list_tasks:
+        if task_args:
+            raise click.UsageError(
+                "Extra arguments are only valid when running a task: "
+                f"clm run TASK SPEC_FILE {' '.join(task_args)}"
+            )
         _list_tasks(spec, spec_file)
         return
 
@@ -157,7 +207,8 @@ def run_cmd(task_name: str | None, spec_file: Path | None, list_tasks: bool, dry
             f"No task named {task_name!r} in {spec_file} (available: {available})."
         )
 
-    resolved = _resolve_task_steps(task, spec_file)
+    _check_argument_count(task, task_args)
+    resolved = _resolve_task_steps(task, spec_file, task_args)
 
     total = len(resolved)
     for i, tokens in enumerate(resolved, start=1):

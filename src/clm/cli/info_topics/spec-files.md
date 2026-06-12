@@ -675,6 +675,7 @@ addressing unchanged.
 | `path` (attr) | `<channel>` | Yes | The cohort repo's working tree (relative to the course root, or absolute). Unique within a stream. Channels of **different** streams may share a path — they then release into the same repository (issue #325, see below) and must agree on `lang`. |
 | `ledger` (attr) | `<channel>` | Yes | Path to the channel's release ledger — a plain-text file, **one released topic id per line**, created/appended by `clm release add`. Keep it in the course source repo. Unique across all streams. |
 | `lang` (attr) | `<channel>` | No | Scope the channel to one language (`de`/`en`, issue #293). `clm release sync` then promotes only that language's files, **re-rooted** so the repo root is the language directory (matching per-language repos like `…-azav-de`), and the derived repo name appends `-{lang}`. **Unset**: the channel receives every built language root. |
+| `repo` (attr) | `<channel>` | No | Override the **derived repo name** verbatim (issue #322, CLM {version}+) — for channels whose actual repository does not follow the derived convention, e.g. a lang-scoped channel whose name already carries the language (`name="2026-04-de" lang="de"` would otherwise derive `…-2026-04-de-solutions-de`). `<remote-path>` and the URL template still apply; only the repo-name segment changes. |
 | `<remote-path>` | `<channel>` | No | Override the block-level `<remote-path>` for this one cohort. |
 | `<share-with>` | `<channel>` | No | GitLab group(s) to share the channel repo into (issue #294, see below). |
 | `<evergreen>` | `<channel>` | No | Additional evergreen pattern(s) for this one cohort (additive to the block's). |
@@ -683,7 +684,11 @@ The remote URL is derived as
 `{repository-base}/{remote-path}/{project-slug}-{channel}[-{stream}][-{lang}]`
 (the `<remote-path>` segment is omitted when unset; the stream/lang segments
 appear only for named streams / language-scoped channels) — see `<github>`
-and `<project-slug>` above.
+and `<project-slug>` above. A `repo` attribute replaces the
+`{project-slug}-{channel}[-{stream}][-{lang}]` part verbatim. `clm release
+provision` additionally prefers the working tree's **actual `origin`** over
+the derived URL when one is configured (issue #322), matching how
+`clm git push`/`commit` already operate on whatever origin the repo has.
 
 #### `<share-with>` — cohort access groups (issue #294)
 
@@ -850,8 +855,31 @@ error):
 | Placeholder | Expands to |
 |---|---|
 | `{spec}` | Absolute path of the spec file passed to `clm run` |
+| `{args}` | All extra arguments passed after the spec file (`clm run TASK SPEC [ARGS]...`), one argv token per argument |
+| `{1}`, `{2}`, … | Individual extra arguments (1-based) |
 
 Literal braces are written `{{` / `}}`.
+
+Argument rules (CLM {version}+):
+
+- `{args}` must be a **standalone token** — it expands to one argv token per
+  argument, never re-quoted or re-parsed (an argument containing spaces stays
+  one token). To place an argument inside a larger token, use `{1}`, `{2}`, …
+  (`--channel=materials/{1}` works).
+- A task whose steps reference `{args}` or `{n}` fails **before any step
+  runs** when invoked without the corresponding arguments; extra arguments
+  passed to a task that references none are likewise an error.
+
+```xml
+<task name="release-week">
+    <step>release week {spec} {args} --channel materials/2026-04-de</step>
+    <step>release week {spec} {args} --channel materials/2026-04-en</step>
+</task>
+```
+
+```bash
+clm run release-week course.xml "name:Week 09"
+```
 
 **Rules**:
 

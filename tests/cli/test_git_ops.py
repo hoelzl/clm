@@ -631,6 +631,55 @@ class TestGitHelpers:
             assert result.returncode == 0
             mock_run.assert_called_once()
 
+    def test_token_auth_disabled_by_default(self, monkeypatch, tmp_path: Path):
+        """Without CLM_GIT_TOKEN_AUTH the command line is unchanged (#341)."""
+        monkeypatch.delenv("CLM_GIT_TOKEN_AUTH", raising=False)
+        monkeypatch.setenv("CLM_GITLAB_TOKEN", "secret-token")
+        with patch("clm.cli.commands.git.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess([], 0, "", "")
+            run_git(tmp_path, "push", "-u", "origin", "master")
+            cmd = mock_run.call_args[0][0]
+        assert cmd == ["git", "-C", str(tmp_path), "push", "-u", "origin", "master"]
+
+    def test_token_auth_injects_credential_helper(self, monkeypatch, tmp_path: Path):
+        """CLM_GIT_TOKEN_AUTH=1 + token injects the ephemeral helper (#341)."""
+        monkeypatch.setenv("CLM_GIT_TOKEN_AUTH", "1")
+        monkeypatch.setenv("CLM_GITLAB_TOKEN", "secret-token")
+        with patch("clm.cli.commands.git.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess([], 0, "", "")
+            run_git(tmp_path, "push", "-u", "origin", "master")
+            cmd = mock_run.call_args[0][0]
+        # Empty first helper clears configured helpers (GCM); the second one
+        # reads the token from the environment — never from the command line.
+        assert cmd[1:5] == [
+            "-c",
+            "credential.helper=",
+            "-c",
+            'credential.helper=!f() { echo username=oauth2; echo "password=$CLM_GITLAB_TOKEN"; }; f',
+        ]
+        assert "secret-token" not in " ".join(cmd)
+
+    def test_token_auth_applies_to_global_git_commands(self, monkeypatch):
+        monkeypatch.setenv("CLM_GIT_TOKEN_AUTH", "true")
+        monkeypatch.delenv("CLM_GITLAB_TOKEN", raising=False)
+        monkeypatch.setenv("GITLAB_TOKEN", "secret-token")
+        with patch("clm.cli.commands.git.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess([], 0, "", "")
+            run_git_global("ls-remote", "https://gitlab.example.com/g/repo.git")
+            cmd = mock_run.call_args[0][0]
+        assert cmd[1:3] == ["-c", "credential.helper="]
+        assert "$GITLAB_TOKEN" in cmd[4]
+
+    def test_token_auth_without_token_is_a_no_op(self, monkeypatch, tmp_path: Path):
+        monkeypatch.setenv("CLM_GIT_TOKEN_AUTH", "1")
+        monkeypatch.delenv("CLM_GITLAB_TOKEN", raising=False)
+        monkeypatch.delenv("GITLAB_TOKEN", raising=False)
+        with patch("clm.cli.commands.git.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess([], 0, "", "")
+            run_git(tmp_path, "fetch", "origin")
+            cmd = mock_run.call_args[0][0]
+        assert cmd == ["git", "-C", str(tmp_path), "fetch", "origin"]
+
     def test_remote_exists_true(self):
         """Test remote_exists returns True for existing remote."""
         with patch("clm.cli.commands.git.run_git_global") as mock_run:

@@ -1241,3 +1241,26 @@ class TestValidateTasks:
         errors = [f for f in result.errors if f.type == "invalid_task_step"]
         assert len(errors) == 1
         assert "{sepc}" in errors[0].message
+
+    def test_argument_placeholders_validate_clean(self, tmp_path):
+        # {args} / {n} (issue #342) get their values only at `clm run` time;
+        # validation must accept them as known placeholders.
+        result = self._validate(
+            tmp_path,
+            """<tasks>
+              <task name="release-week">
+                <step>export outline {spec} -o {1}</step>
+                <step>export outline {spec} -o outline/ {args}</step>
+              </task>
+            </tasks>""",
+        )
+        assert result.findings == []
+
+    def test_embedded_args_placeholder_is_reported(self, tmp_path):
+        result = self._validate(
+            tmp_path,
+            '<tasks><task name="bad"><step>build {spec} -o prefix-{args}</step></task></tasks>',
+        )
+        errors = [f for f in result.errors if f.type == "invalid_task_step"]
+        assert len(errors) == 1
+        assert "standalone token" in errors[0].message

@@ -546,6 +546,97 @@ async def test_get_available_workers_waits_for_pre_registered(temp_db, temp_work
 
 
 @pytest.mark.asyncio
+async def test_activation_timeout_marks_stuck_created_workers_dead(temp_db, temp_workspace):
+    """Issue #348: a 'created' worker whose subprocess died at startup never
+    activates. After the activation wait times out it is marked dead, so
+    subsequent submissions fail fast instead of repeating the full wait per
+    job (which stalled builds for many minutes)."""
+    worker_id = _seed_created_worker(temp_db, "notebook")
+    # Old enough for the stuck check (> 30s) — as it would be after the
+    # real 30s activation wait.
+    conn = sqlite3.connect(temp_db)
+    try:
+        conn.execute(
+            "UPDATE workers SET started_at = datetime('now', '-120 seconds') WHERE id = ?",
+            (worker_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    backend = _backend(temp_db, temp_workspace)
+    try:
+        # Drive the wait loop with a fake clock so the 30s timeout elapses
+        # instantly.
+        fake_now = [time.time()]
+
+        def fast_sleep(seconds):
+            fake_now[0] += seconds
+
+        with (
+            patch(
+                "clm.infrastructure.backends.sqlite_backend.time.sleep",
+                side_effect=fast_sleep,
+            ),
+            patch(
+                "clm.infrastructure.backends.sqlite_backend.time.time",
+                side_effect=lambda: fake_now[0],
+            ),
+        ):
+            assert backend._get_available_workers("notebook") == 0
+
+        conn = sqlite3.connect(temp_db)
+        try:
+            row = conn.execute("SELECT status FROM workers WHERE id = ?", (worker_id,)).fetchone()
+        finally:
+            conn.close()
+        assert row[0] == "dead"
+
+        # No 'created' workers remain — the next check returns immediately
+        # (no activation wait), which is the fail-fast property.
+        start = time.time()
+        assert backend._get_available_workers("notebook") == 0
+        assert time.time() - start < 5
+    finally:
+        await backend.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_activation_timeout_spares_freshly_created_workers(temp_db, temp_workspace):
+    """A worker pre-registered moments ago (e.g. mid-wait by another process)
+    is not condemned by someone else's timeout."""
+    worker_id = _seed_created_worker(temp_db, "notebook")  # started_at = now
+
+    backend = _backend(temp_db, temp_workspace)
+    try:
+        fake_now = [time.time()]
+
+        def fast_sleep(seconds):
+            fake_now[0] += seconds
+
+        with (
+            patch(
+                "clm.infrastructure.backends.sqlite_backend.time.sleep",
+                side_effect=fast_sleep,
+            ),
+            patch(
+                "clm.infrastructure.backends.sqlite_backend.time.time",
+                side_effect=lambda: fake_now[0],
+            ),
+        ):
+            assert backend._get_available_workers("notebook") == 0
+
+        conn = sqlite3.connect(temp_db)
+        try:
+            row = conn.execute("SELECT status FROM workers WHERE id = ?", (worker_id,)).fetchone()
+        finally:
+            conn.close()
+        assert row[0] == "created"
+    finally:
+        await backend.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_get_available_workers_no_queue(temp_db, temp_workspace):
     backend = _backend(temp_db, temp_workspace)
     try:

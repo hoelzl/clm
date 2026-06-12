@@ -5,6 +5,7 @@ directories, enabling trainers to commit and push generated course content.
 """
 
 import logging
+import os
 import shlex
 import shutil
 import subprocess
@@ -23,6 +24,47 @@ logger = logging.getLogger(__name__)
 
 # Context variable for dry-run mode
 _dry_run_mode: ContextVar[bool] = ContextVar("dry_run_mode", default=False)
+
+#: Opt-in switch for token-authenticated HTTPS git transport (issue #341).
+TOKEN_AUTH_ENV_VAR = "CLM_GIT_TOKEN_AUTH"
+_TRUTHY = ("1", "true", "yes", "on")
+
+
+def _token_auth_config_args() -> list[str]:
+    """``git -c`` options that authenticate HTTPS transport with the GitLab token.
+
+    Headless environments (CI, cron, containers) have no credential helper,
+    so ``clm git push``/``sync --push`` fail with ``could not read Username``
+    (issue #341). With ``CLM_GIT_TOKEN_AUTH=1`` and a token in
+    ``CLM_GITLAB_TOKEN``/``GITLAB_TOKEN``, an ephemeral credential helper is
+    injected instead: the token never appears in the URL, in ``.git/config``,
+    or on the command line — the helper reads it from the environment when
+    git asks for credentials. GitLab accepts ``oauth2:<token>`` basic auth
+    for PAT/OAuth tokens (an ``Authorization: Bearer`` header would be
+    rejected, so a credential helper — not ``http.extraHeader`` — is the
+    right mechanism).
+
+    Opt-in by design: a workstation with stored credentials (e.g. Git
+    Credential Manager) keeps using them unless this is explicitly enabled.
+    The empty first helper clears configured helpers so the token takes
+    precedence and no credential dialog can pop up in CI. The options are
+    only consulted when a command needs authentication, so they are passed
+    to every git invocation. Returns ``[]`` when disabled or no token is set.
+    """
+    if os.environ.get(TOKEN_AUTH_ENV_VAR, "").strip().lower() not in _TRUTHY:
+        return []
+    from clm.infrastructure.gitlab_api import TOKEN_ENV_VARS
+
+    token_var = next((v for v in TOKEN_ENV_VARS if os.environ.get(v, "").strip()), None)
+    if token_var is None:
+        logger.warning(
+            "%s is enabled but no token is set in %s; git will use its default credentials.",
+            TOKEN_AUTH_ENV_VAR,
+            "/".join(TOKEN_ENV_VARS),
+        )
+        return []
+    helper = f'!f() {{ echo username=oauth2; echo "password=${token_var}"; }}; f'
+    return ["-c", "credential.helper=", "-c", f"credential.helper={helper}"]
 
 
 # =============================================================================
@@ -106,7 +148,7 @@ def run_git(repo_path: Path, *args: str) -> subprocess.CompletedProcess[str]:
         CompletedProcess with stdout/stderr captured.
         In dry-run mode, returns a mock result with returncode=0.
     """
-    cmd = ["git", "-C", str(repo_path), *args]
+    cmd = ["git", *_token_auth_config_args(), "-C", str(repo_path), *args]
     logger.debug(f"Running: {_format_command(cmd)}")
 
     if _dry_run_mode.get():
@@ -136,7 +178,7 @@ def run_git_global(*args: str) -> subprocess.CompletedProcess[str]:
         CompletedProcess with stdout/stderr captured.
         In dry-run mode, returns a mock result with returncode=0.
     """
-    cmd = ["git", *args]
+    cmd = ["git", *_token_auth_config_args(), *args]
     logger.debug(f"Running: {_format_command(cmd)}")
 
     if _dry_run_mode.get():
@@ -417,6 +459,7 @@ def find_release_channel_repos(
             remote_path=effective_remote_path,
             stream=block.name,
             language=channel.lang,
+            repo_override=channel.repo,
         )
 
         repos.append(

@@ -1052,10 +1052,39 @@ class SqliteBackend(LocalOpsBackend):
 
                     time.sleep(poll_interval)
 
-                # Timeout waiting for activation
+                # Timeout waiting for activation. A pre-registered worker
+                # activates within seconds of its subprocess starting; one
+                # still 'created' after this wait (on top of its own age)
+                # is a startup casualty — typically an import crash in the
+                # worker subprocess (missing extras, broken env), visible
+                # only in the worker's own log file (issue #348). Mark these
+                # workers dead so every *subsequent* submission fails fast
+                # instead of repeating this full wait per job, which is what
+                # stalled builds for many minutes.
                 logger.warning(
                     f"Timeout waiting for {job_type} workers to activate after {timeout}s"
                 )
+                cursor = conn.execute(
+                    """
+                    UPDATE workers SET status = 'dead'
+                    WHERE worker_type = ?
+                    AND status = 'created'
+                    AND started_at < datetime('now', '-30 seconds')
+                    """,
+                    (job_type,),
+                )
+                if cursor.rowcount:
+                    conn.commit()
+                    from clm.infrastructure.logging.log_paths import get_worker_log_path
+
+                    log_dir = get_worker_log_path(job_type, 0).parent
+                    logger.error(
+                        f"Marked {cursor.rowcount} pre-registered {job_type} worker(s) "
+                        f"as dead: the worker process(es) never activated and likely "
+                        f"crashed at startup (e.g. missing worker dependencies — "
+                        f"install clm[all-workers]). Check the worker logs in "
+                        f"{log_dir} for the crash traceback."
+                    )
 
         return 0
 

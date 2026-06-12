@@ -724,6 +724,7 @@ class GitHubSpec:
         remote_path: str = "",
         stream: str = "",
         language: str = "",
+        repo_override: str = "",
     ) -> str | None:
         """Derive the remote URL for a release channel (issues #208, #291, #293).
 
@@ -738,6 +739,14 @@ class GitHubSpec:
         stray ``--`` in the repo name; this method avoids that while sharing
         the same base/remote-path/template handling.
 
+        ``repo_override`` (the ``<channel repo="…">`` attribute, issue #322)
+        replaces the joined name verbatim — for channels whose actual repo
+        does not follow the derived convention, e.g. a lang-scoped channel
+        whose name already carries the language (``2026-04-de`` would
+        otherwise derive ``…-2026-04-de-solutions-de`` with a duplicated
+        lang segment). Base, remote-path, and template handling are
+        unchanged.
+
         The ``{suffix}`` template placeholder is bound to the empty string for
         channels; ``{stream}`` carries the stream name and ``{lang}`` the
         channel language (each empty when unset). Returns ``None`` when git
@@ -748,7 +757,9 @@ class GitHubSpec:
             return None
 
         effective_remote_path = remote_path or self.remote_path
-        repo = "-".join(part for part in (slug, channel_name, stream, language) if part)
+        repo = repo_override or "-".join(
+            part for part in (slug, channel_name, stream, language) if part
+        )
         template = remote_template or self.remote_template
         if not template:
             if effective_remote_path:
@@ -1200,6 +1211,12 @@ class ReleaseChannelSpec:
     sync`` re-promotes a matching file whenever the built content differs from
     the cohort's copy (e.g. a NEWS file). Block-level ``<evergreen>`` entries
     are inherited by every channel; channel-level entries are additive.
+
+    ``repo`` (issue #322) overrides the *derived* repo name verbatim for
+    channels whose actual repository does not follow the
+    ``{slug}-{channel}-{stream}-{lang}`` convention — the standing case for
+    lang-scoped channels whose name already carries the language. Remote
+    path and URL template still apply; only the ``{repo}`` segment changes.
     """
 
     name: str
@@ -1209,6 +1226,7 @@ class ReleaseChannelSpec:
     lang: str = ""
     share_with: tuple[ShareWithSpec, ...] = ()
     evergreen: tuple[str, ...] = ()
+    repo: str = ""
 
     @classmethod
     def from_element(
@@ -1236,6 +1254,7 @@ class ReleaseChannelSpec:
             lang=element.get("lang", ""),
             share_with=shares,
             evergreen=evergreen,
+            repo=element.get("repo", ""),
         )
 
 

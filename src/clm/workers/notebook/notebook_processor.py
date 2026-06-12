@@ -1008,8 +1008,10 @@ def classify_execution_failure(error: BaseException) -> tuple[str, str]:
     Distinguishes the failure classes the xeus-cpp crash triage cares
     about: a cell raising (``cell_execution_error``), the kernel process
     dying (``dead_kernel``), the kernel never becoming ready
-    (``startup_timeout``), and a cell exceeding its timeout
-    (``cell_timeout``). Everything else is ``other``.
+    (``startup_timeout``), a cell exceeding its timeout (``cell_timeout``),
+    and the kernelspec not being installed at all (``missing_kernel`` —
+    permanent for the lifetime of the build, so the retry loop fails fast
+    on it, issue #348). Everything else is ``other``.
 
     Returns:
         ``(failure_type, error_class_name)``.
@@ -1024,6 +1026,10 @@ def classify_execution_failure(error: BaseException) -> tuple[str, str]:
     if isinstance(error, CellTimeoutError):
         return "cell_timeout", error_class
     message = str(error)
+    # Matched by class name (jupyter_client.kernelspec.NoSuchKernel) and
+    # message so wrapped/re-raised forms classify too.
+    if error_class == "NoSuchKernel" or "No such kernel" in message:
+        return "missing_kernel", error_class
     # jupyter_client raises plain RuntimeErrors for these kernel-level
     # failures, so the message is the only classification signal.
     if "Kernel died" in message:
@@ -2187,6 +2193,15 @@ class NotebookProcessor:
                 # ALWAYS cleanup kernel resources to prevent ZMQ leaks
                 await self._cleanup_kernel_resources(ep, cid)
 
+            # A missing kernelspec is a permanent condition for the lifetime
+            # of the build — every retry would fail identically while paying
+            # the kernel-startup and backoff cost each time (issue #348).
+            if failed_attempts and failed_attempts[-1]["failure_type"] == "missing_kernel":
+                logger.error(
+                    f"{cid}: kernel is not installed — failing fast without retries: {last_error}"
+                )
+                break
+
             # Exponential backoff before next retry
             if attempt < NUM_RETRIES_FOR_HTML:
                 await asyncio.sleep(1.0 * attempt)
@@ -2823,6 +2838,15 @@ class NotebookProcessor:
                 parts.append(f"  Cell content:\n    {snippet}")
 
         parts.append(f"  Error: {error_class}: {error_message}")
+
+        # A missing kernelspec has a known remedy — point at it instead of
+        # leaving the user to decode the jupyter_client error (issue #348).
+        if error_class == "NoSuchKernel" or "No such kernel" in error_str:
+            parts.append(
+                "  Hint: the Jupyter kernel is not installed on this machine; "
+                "HTML generation needs it. Install the kernelspec, or use "
+                "'clm build --no-html' for a kernel-free build."
+            )
 
         # Include line/column number if found (especially useful for C++)
         if cpp_error_info:

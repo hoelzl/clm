@@ -453,9 +453,15 @@ Run a named task sequence declared in the spec's `<tasks>` block (see
 so nothing is forgotten when promoting materials.
 
 ```
-clm run TASK SPEC_FILE [OPTIONS]   # run a task
-clm run SPEC_FILE                  # list the spec's tasks
+clm run TASK SPEC_FILE [ARGS]... [OPTIONS]   # run a task
+clm run SPEC_FILE                            # list the spec's tasks
 ```
+
+Extra arguments after the spec file are exposed to the task's steps as
+`{args}` (all of them, one argv token each) and `{1}`, `{2}`, …
+(individually) — see `clm info spec-files`. A task whose steps reference
+these placeholders fails fast when invoked without the corresponding
+arguments; arguments a task never references are likewise an error.
 
 | Option | Description |
 |--------|-------------|
@@ -482,6 +488,10 @@ clm run pre-release course.xml
 
 # Preview what would run:
 clm run pre-release course.xml --dry-run
+
+# A task whose steps use {args} / {1}, {2}, ... takes its arguments
+# after the spec file:
+clm run release-week course.xml "name:Week 09"
 ```
 
 ### `clm export`
@@ -2801,6 +2811,16 @@ any output target with `distribute="false"` — and, by default, any target name
 as a `<release-channels source-target>` (a private build input for `clm
 release`). Pass `--target NAME` explicitly to act on such a target anyway, or
 set `distribute="true"` on it to restore wholesale distribution.
+
+**Headless/CI authentication (issue #341, CLM {version}+).** Git network
+operations normally rely on git's own credential machinery, which fails with
+`could not read Username` where no credential helper exists (CI jobs, cron,
+containers). Set `CLM_GIT_TOKEN_AUTH=1` together with `CLM_GITLAB_TOKEN` (or
+`GITLAB_TOKEN`) and every git operation `clm git` / `clm release sync --push`
+performs authenticates HTTPS remotes via an ephemeral credential helper
+(`oauth2:<token>` basic auth). The token never appears in the URL, in
+`.git/config`, or on the command line. Opt-in by design: without the switch, a
+workstation keeps using its stored credentials (e.g. Git Credential Manager).
 
 Examples:
 
