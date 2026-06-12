@@ -76,7 +76,7 @@ def _resolve_http_replay_mode(cli_value: str | None) -> str:
     return "new-episodes"
 
 
-def _resolve_http_replay_transport(cli_value: str | None = None) -> str:
+def _resolve_http_replay_transport() -> str:
     """Resolve the effective HTTP-replay transport: always ``mitmproxy``.
 
     The legacy in-process vcrpy transport was removed (issue #355) after
@@ -90,11 +90,7 @@ def _resolve_http_replay_transport(cli_value: str | None = None) -> str:
     """
     import os
 
-    value = (
-        (cli_value if cli_value is not None else os.environ.get("CLM_HTTP_REPLAY_TRANSPORT", ""))
-        .strip()
-        .lower()
-    )
+    value = os.environ.get("CLM_HTTP_REPLAY_TRANSPORT", "").strip().lower()
     if value == "vcrpy":
         raise click.UsageError(
             "The vcrpy HTTP-replay transport was removed (issue #355); "

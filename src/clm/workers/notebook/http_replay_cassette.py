@@ -48,34 +48,30 @@ _MERGE_LOCK_TIMEOUT_SECONDS = 300.0
 
 @dataclass(frozen=True)
 class CassettePaths:
-    """Resolved locations for the canonical cassette and this worker's staging file.
+    """Resolved locations for a canonical cassette and one staging file.
 
     ``canonical`` is the path the cassette ends up at after a successful
     merge — this is what authors commit and what subsequent builds replay
-    from. ``staging`` is unique per worker invocation so that concurrent
-    workers (e.g., German and English builds of the same notebook) do not
-    write to the same file.
+    from. ``staging`` names one of the per-build staging files the replay
+    proxy writes beside it (``<name>.staging-mitm-<build_id>``); the merge
+    machinery in this module folds it into ``canonical``.
     """
 
     canonical: Path
     staging: Path
 
 
-def resolve_paths(target_dir: Path, cassette_name: str) -> CassettePaths:
-    """Compute the canonical and staging paths for a topic.
+def resolve_canonical_path(target_dir: Path, cassette_name: str) -> Path:
+    """Compute the canonical cassette path for a topic.
 
     Args:
-        target_dir: Directory the kernel can write to that maps to the
-            source tree (host source-topic dir in direct mode, container
-            source mount in Docker mode).
+        target_dir: The topic directory in the namespace of whoever needs
+            the path (host source-topic dir for the proxy routing tag).
         cassette_name: Cassette name relative to ``target_dir``, possibly
-            including a ``_cassettes/`` prefix (e.g.,
+            including a ``cassettes/``/``_cassettes/`` prefix (e.g.,
             ``_cassettes/slides.http-cassette.yaml``).
     """
-    canonical = target_dir / cassette_name
-    unique = f"{os.getpid()}-{uuid.uuid4().hex}"
-    staging = canonical.parent / f"{canonical.name}{_STAGING_SUFFIX}{unique}"
-    return CassettePaths(canonical=canonical, staging=staging)
+    return target_dir / cassette_name
 
 
 def merge_staging_into_canonical(
@@ -115,10 +111,10 @@ def merge_staging_into_canonical(
             :meth:`clm.core.course.Course._sweep_orphan_cassette_staging_files`),
             markerless staging files are treated as confirmed orphans from
             aborted previous builds: their entries are discarded and the
-            staging files are deleted. When ``False`` (default,
-            per-worker post-execution invocation), markerless staging
-            files are left untouched — they may belong to a concurrent
-            worker that hasn't completed yet.
+            staging files are deleted. When ``False`` (default — the
+            post-build host merge, ``Course.merge_mitmproxy_cassette_staging``),
+            markerless staging files are left untouched — they may belong
+            to a concurrent build that hasn't completed yet.
         overwrite_existing: Mode-aware merge for ``refresh`` (vcrpy ``all``).
             When ``True`` a staging interaction **wins** over a canonical
             interaction with the same fingerprint (last-seen within staging
@@ -128,9 +124,9 @@ def merge_staging_into_canonical(
             every pre-build sweep) the long-standing first-seen-wins behavior
             is used, byte-identical to before this parameter existed. This is
             the producer-agnostic fix for the refresh-overwrite gap (issue
-            #165 P3) and benefits both the vcrpy and mitmproxy transports.
-        preserve_sequence: Sequence-aware fold for the **mitmproxy** transport
-            only (the in-kernel vcrpy path leaves this ``False``). When ``True``
+            #165 P3).
+        preserve_sequence: Sequence-aware fold used by the post-build host
+            merge (the pre-build orphan sweep leaves this ``False``). When ``True``
             the fold keeps every distinct ``(request, response)`` interaction in
             recorded order — deduping only an exact ``(request, response)`` pair,
             never by request alone — so a per-request *response sequence* (the
@@ -147,13 +143,15 @@ def merge_staging_into_canonical(
         caller can detect "had work to do but it was all orphan" by
         observing remaining files on disk.
     """
-    # vcrpy is an optional extra; importing here keeps the module
-    # importable for tests that exercise pure path resolution without
-    # requiring the [replay] install.
+    # filelock/pyyaml come with the [replay] extra; importing here keeps
+    # the module importable for tests that exercise pure path resolution
+    # without requiring the [replay] install.
     from filelock import FileLock, Timeout
-    from vcr.persisters.filesystem import FilesystemPersister
-    from vcr.serialize import serialize as vcr_serialize
-    from vcr.serializers import yamlserializer
+
+    from clm.infrastructure.http_replay_mitm.vcr_format import (
+        load_cassette,
+        serialize_cassette,
+    )
 
     canonical = paths.canonical
     lock_path = canonical.parent / f"{canonical.name}{_LOCK_SUFFIX}"
@@ -210,9 +208,7 @@ def merge_staging_into_canonical(
             canonical_responses: list = []
             if canonical.exists():
                 try:
-                    canonical_requests, canonical_responses = FilesystemPersister.load_cassette(
-                        canonical, serializer=yamlserializer
-                    )
+                    canonical_requests, canonical_responses = load_cassette(canonical)
                 except Exception as exc:  # noqa: BLE001 — defensive
                     logger.warning(
                         f"Could not load existing canonical cassette '{canonical}' "
@@ -238,9 +234,7 @@ def merge_staging_into_canonical(
                     }
                 for staging_path in markered:
                     try:
-                        staging_requests, staging_responses = FilesystemPersister.load_cassette(
-                            staging_path, serializer=yamlserializer
-                        )
+                        staging_requests, staging_responses = load_cassette(staging_path)
                     except Exception as exc:  # noqa: BLE001 — defensive
                         logger.warning(
                             f"Could not load staging cassette '{staging_path}' "
@@ -290,9 +284,7 @@ def merge_staging_into_canonical(
                 staging_order: list[tuple] = []
                 for staging_path in markered:
                     try:
-                        staging_requests, staging_responses = FilesystemPersister.load_cassette(
-                            staging_path, serializer=yamlserializer
-                        )
+                        staging_requests, staging_responses = load_cassette(staging_path)
                     except Exception as exc:  # noqa: BLE001 — defensive
                         logger.warning(
                             f"Could not load staging cassette '{staging_path}' "
@@ -353,9 +345,7 @@ def merge_staging_into_canonical(
 
                 for staging_path in markered:
                     try:
-                        staging_requests, staging_responses = FilesystemPersister.load_cassette(
-                            staging_path, serializer=yamlserializer
-                        )
+                        staging_requests, staging_responses = load_cassette(staging_path)
                     except Exception as exc:  # noqa: BLE001 — defensive
                         logger.warning(
                             f"Could not load staging cassette '{staging_path}' "
@@ -398,9 +388,8 @@ def merge_staging_into_canonical(
             # orphans must not touch canonical — discarding does not
             # change its content.
             if markered:
-                payload = vcr_serialize(
-                    {"requests": merged_requests, "responses": merged_responses},
-                    yamlserializer,
+                payload = serialize_cassette(
+                    {"requests": merged_requests, "responses": merged_responses}
                 )
                 _atomic_write_text(canonical, payload)
 
@@ -475,13 +464,13 @@ def _delete_quietly(path: Path) -> None:
 def marker_path(staging: Path) -> Path:
     """Return the completion-marker path that sits beside ``staging``.
 
-    The marker is a small JSON file written by the host process *after*
-    a worker's notebook execution returned cleanly and *before* the
-    post-execution merge runs (see issue #115). Its existence — not its
+    The marker is a small JSON file written by the host *after* the
+    build completed and the replay proxy stopped, *before* the post-build
+    merge folds the staging file (see issue #115). Its existence — not its
     content — is the signal that the staging file holds a complete
     recording session whose entries are safe to fold into the canonical
-    cassette. Markerless staging files belong to aborted sessions or
-    still-running concurrent workers and are handled differently by
+    cassette. Markerless staging files belong to aborted builds (or a
+    concurrent build still recording) and are handled differently by
     :func:`merge_staging_into_canonical`.
     """
     return staging.parent / f"{staging.name}{_COMPLETION_MARKER_SUFFIX}"
@@ -493,16 +482,15 @@ def has_completion_marker(staging: Path) -> bool:
 
 
 def write_completion_marker(paths: CassettePaths) -> None:
-    """Atomically write the completion marker for this worker's staging file.
+    """Atomically write the completion marker for one staging file.
 
-    Called by the host process from the success path of
-    :meth:`NotebookProcessor._create_using_nbconvert` — after the
-    kernel returned cleanly, before the finally-block triggers the
-    merge. The marker tells the merge that this staging file is safe
-    to fold into the canonical cassette; without it, the staging file
-    is treated as a partial recording (kernel killed, build aborted,
-    chain-closer cell never ran) and its entries are discarded by
-    the pre-build sweep on the next build.
+    Called by the host from :meth:`Course.merge_mitmproxy_cassette_staging`
+    in the build's ``finally`` — reaching that step is the signal that the
+    build (and the proxy's recording session) completed. The marker tells
+    the merge that this staging file is safe to fold into the canonical
+    cassette; without it, the staging file is treated as a partial
+    recording (build killed mid-run, chain-closer request never made) and
+    its entries are discarded by the pre-build sweep on the next build.
 
     Idempotent: re-writing the marker on a retry path is safe. Atomic:
     written via :func:`_atomic_write_text` so a partially-written

@@ -60,9 +60,11 @@ def _mitmproxy_docker_env(
     - points the three cert-bundle env vars at the proxy CA bundle, bind-mounted
       read-only at :data:`_MITM_CA_CONTAINER_PATH`, so the container's TLS
       trusts the proxy-forged certificates;
-    - passes ``CLM_HTTP_REPLAY_TRANSPORT`` through so the in-container notebook
-      processor injects the cassette-routing tag bootstrap (P2) and skips the
-      in-kernel vcrpy bootstrap.
+    - passes ``CLM_HTTP_REPLAY_TRANSPORT`` through for mixed-version image
+      compat: an in-container CLM older than the vcrpy-transport removal
+      (#355) selects its injection path by this value, so passing it keeps
+      such images on the cassette-routing tag bootstrap. Current images
+      ignore it (the tag bootstrap is the only injection path).
 
     The second return value is ``(host_ca_path, container_ca_path)`` for the
     read-only bind mount, or ``None`` when no usable host CA bundle is found.

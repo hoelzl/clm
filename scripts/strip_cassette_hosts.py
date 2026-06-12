@@ -64,15 +64,16 @@ def strip_cassette(
 ) -> tuple[int, int]:
     """Return (entries_before, entries_after). Writes only if non-dry-run.
 
-    Skips cassettes that vcrpy can't load (logged + returned as (0, 0))
+    Skips cassettes that can't be loaded (logged + returned as (0, 0))
     so a corrupt file doesn't abort a course-wide cleanup.
     """
-    from vcr.persisters.filesystem import FilesystemPersister
-    from vcr.serialize import serialize as vcr_serialize
-    from vcr.serializers import yamlserializer
+    from clm.infrastructure.http_replay_mitm.vcr_format import (
+        load_cassette,
+        serialize_cassette,
+    )
 
     try:
-        requests, responses = FilesystemPersister.load_cassette(path, serializer=yamlserializer)
+        requests, responses = load_cassette(path)
     except Exception as exc:  # noqa: BLE001 — defensive
         print(
             f"  ! skipping {path.name}: load failed ({type(exc).__name__}: {exc})", file=sys.stderr
@@ -96,10 +97,7 @@ def strip_cassette(
     if dry_run:
         return (before, after)
 
-    payload = vcr_serialize(
-        {"requests": keep_requests, "responses": keep_responses},
-        yamlserializer,
-    )
+    payload = serialize_cassette({"requests": keep_requests, "responses": keep_responses})
     tmp = path.parent / f"{path.name}.tmp-strip"
     try:
         tmp.write_text(payload, encoding="utf-8", newline="\n")

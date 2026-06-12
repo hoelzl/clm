@@ -209,16 +209,15 @@ replay = [
     # mitmproxy 11.1+/12.x require Python >=3.12 (which is why clm's floor
     # is 3.12).
     "mitmproxy>=12,<13",
-    # vcrpy is used purely as a cassette *serialization/filter/matcher*
-    # library (``http_replay_mitm/cassette_format.py``, the host-side merge,
-    # ``cassette doctor``, ``scripts/strip_cassette_hosts.py``) — only public
-    # APIs, no patching, no forked internals. The historical ``<8.2`` cap
-    # protected verbatim forks of vcrpy internals in the (now removed)
-    # in-kernel transport and is gone with them. Stage 2 of issue #355
-    # replaces this dependency with owned code.
-    "vcrpy>=8.1.1",
-    # Used to serialize cassette merges across concurrent workers that
-    # process the same notebook in different languages.
+    # Cassette (de)serialization. The vcrpy v1 YAML format is implemented by
+    # CLM itself (``http_replay_mitm/vcr_format.py``, vendored from vcrpy in
+    # issue #355 stage 2 — the vcrpy dependency is gone); it needs only
+    # PyYAML. Declared explicitly even though the jupyter stack pulls it in
+    # transitively, because the isolated mitmdump tool env mirrors this:
+    # ``uv tool install mitmproxy --with pyyaml``.
+    "pyyaml>=6",
+    # Used to serialize cassette merges across concurrent builds that
+    # touch the same canonical cassette.
     "filelock>=3.12.0",
 ]
 # MCP server for AI-assisted slide authoring
@@ -371,10 +370,13 @@ module = [
     "torch.*",
     "transformers",
     "transformers.*",
-    "vcr",
-    "vcr.*",
     "filelock",
     "filelock.*",
+    "yaml",
+    "yaml.*",
+    "brotli",
+    "brotli.*",
+    "brotlicffi",
     # The [gcal] extra's packages ship without (complete) type stubs; they are
     # also only imported lazily inside functions.
     "googleapiclient",
@@ -485,12 +487,11 @@ version = "{new_version}\""""
 #      from the [notebook] extra), so without them `uv sync` would
 #      leave the fast suite broken. `ml` is deliberately excluded
 #      because it's huge and blocked on Python 3.14.
-#      `replay` (vcrpy + filelock) is included so the HTTP-replay /
-#      cassette tests actually *run* in the fast suite instead of
-#      silently `pytest.importorskip`-skipping: without it, `uv sync`
-#      leaves vcr absent and the whole http-replay surface goes
-#      untested in the pre-commit gate (and a fresh sync surprises with
-#      "No module named 'vcr'").
+#      `replay` (mitmproxy + pyyaml + filelock) is included so the
+#      HTTP-replay / cassette tests actually *run* in the fast suite
+#      instead of silently `pytest.importorskip`-skipping: without it,
+#      `uv sync` would leave the http-replay surface untested in the
+#      pre-commit gate.
 # See docs/proposals/PRE_COMMIT_HOOK_HARDENING.md (Fix 1) for rationale.
 dev = [
     "coding-academy-lecture-manager[notebook,plantuml,drawio,recordings,slides,mcp,summarize,voiceover,jupyterlite,replay,tui,web]",

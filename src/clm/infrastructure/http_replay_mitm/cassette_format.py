@@ -1,28 +1,32 @@
 """vcrpy-YAML cassette bridge for the mitmproxy transport (issue #165, P1).
 
 The mitmproxy addon records and replays at the network layer, but the
-*on-disk* format must stay byte-compatible with the existing vcrpy v1
-YAML cassette schema so that committed course cassettes, ``clm cassette
+*on-disk* format must stay byte-compatible with the vcrpy v1 YAML
+cassette schema so that committed course cassettes, ``clm cassette
 doctor``, ``strip_cassette_hosts.py`` and
 :func:`clm.workers.notebook.http_replay_cassette.merge_staging_into_canonical`
 keep working unchanged.
 
-This module is **pure**: it imports only :mod:`vcr` (used purely as a
-serializer — importing the serializer surface does *not* activate any
-httpcore/urllib3 patching) and the standard library. It has **no**
-``clm`` package imports, so it can be imported two ways:
+The format itself (Request model, YAML (de)serialization, secret filters,
+matchers) lives in :mod:`vcr_format` — CLM-owned code vendored from vcrpy
+(issue #355 stage 2); the vcrpy package is no longer used. This module
+adds the mitmproxy-flow conversion, the CLM filter/matcher policy, and
+the cassette read/write helpers on top.
 
-* as ``clm.infrastructure.http_replay_mitm.cassette_format`` inside CLM's
-  own virtualenv (unit tests, host code), and
+Both modules are **pure** (PyYAML + stdlib, no ``clm`` package imports),
+so they can be imported two ways:
+
+* as ``clm.infrastructure.http_replay_mitm.*`` inside CLM's own
+  virtualenv (unit tests, host code), and
 * by bare path import inside the isolated ``mitmdump`` interpreter
-  (``uv tool install mitmproxy --with vcrpy``), where the ``clm`` package
-  is not installed but ``vcr`` is.
+  (``uv tool install mitmproxy --with pyyaml``), where the ``clm``
+  package is not installed.
 
 The conversion functions deliberately mirror vcrpy's own
-``vcr.stubs.httpcore_stubs._make_vcr_request`` /
-``_serialize_response`` and ``vcr.filters.decode_response`` so a
-mitmproxy-recorded interaction serializes to bytes identical to what
-vcrpy would have written for the same HTTP exchange.
+``vcr.stubs.httpcore_stubs._make_vcr_request`` / ``_serialize_response``
+and ``vcr.filters.decode_response`` so a mitmproxy-recorded interaction
+serializes to bytes identical to what vcrpy would have written for the
+same HTTP exchange.
 """
 
 from __future__ import annotations
@@ -31,32 +35,26 @@ import copy
 import functools
 import json
 import os
+import sys
 import uuid
 from collections import defaultdict
 from collections.abc import Iterable
 from pathlib import Path
 
-# vcr is used purely as a serializer + filter/matcher library here. Importing
-# these names does not patch httpcore/urllib3 (verified: patching only
-# activates when a VCR cassette context is entered). The isolated mitmdump
-# environment must therefore have vcrpy installed alongside mitmproxy.
-from vcr import matchers as _vcr_matchers
-from vcr.filters import (
-    decode_response,
-)
-from vcr.filters import (
-    replace_headers as _vcr_replace_headers,
-)
-from vcr.filters import (
-    replace_post_data_parameters as _vcr_replace_post_data_parameters,
-)
-from vcr.filters import (
-    replace_query_parameters as _vcr_replace_query_parameters,
-)
-from vcr.persisters.filesystem import FilesystemPersister
-from vcr.request import Request
-from vcr.serialize import serialize as _vcr_serialize
-from vcr.serializers import yamlserializer
+# The format core: CLM-owned, vendored from vcrpy (issue #355 stage 2).
+# Same dual-import dance the addon does for this module: package import in
+# the CLM venv, bare path import inside the mitmdump interpreter (the addon
+# already put this directory on sys.path in that case, but be self-reliant).
+try:  # CLM venv
+    from clm.infrastructure.http_replay_mitm import vcr_format as vf
+except ImportError:  # mitmdump interpreter — import the sibling by path
+    sys.path.insert(0, str(Path(__file__).parent))
+    import vcr_format as vf  # type: ignore[import-not-found, no-redef]
+
+# Re-exported names: consumers (the addon, merge, doctor, strip script,
+# tests) treat cassette_format as the format's facade.
+Request = vf.Request
+decode_response = vf.decode_response
 
 # ---------------------------------------------------------------------------
 # Secret/telemetry filtering + matching parity (issue #165, P3)
@@ -272,17 +270,15 @@ def build_request_filter(
     funcs = []
     if filter_headers:
         replacements = [h if isinstance(h, tuple) else (h, None) for h in filter_headers]
-        funcs.append(functools.partial(_vcr_replace_headers, replacements=replacements))
+        funcs.append(functools.partial(vf.replace_headers, replacements=replacements))
     if filter_query_parameters:
         replacements = [p if isinstance(p, tuple) else (p, None) for p in filter_query_parameters]
-        funcs.append(functools.partial(_vcr_replace_query_parameters, replacements=replacements))
+        funcs.append(functools.partial(vf.replace_query_parameters, replacements=replacements))
     if filter_post_data_parameters:
         replacements = [
             p if isinstance(p, tuple) else (p, None) for p in filter_post_data_parameters
         ]
-        funcs.append(
-            functools.partial(_vcr_replace_post_data_parameters, replacements=replacements)
-        )
+        funcs.append(functools.partial(vf.replace_post_data_parameters, replacements=replacements))
     hosts_to_ignore = set(ignore_hosts)
 
     def before_record_request(request: Request) -> Request | None:
@@ -362,34 +358,33 @@ def clm_json_body_matcher(r1: Request, r2: Request) -> None:
 # the request *body* (JSON-semantic) is part of the key so a stale
 # cassette fails loudly rather than serving the wrong recorded interaction.
 REPLAY_MATCHERS = (
-    _vcr_matchers.method,
-    _vcr_matchers.scheme,
-    _vcr_matchers.host,
-    _vcr_matchers.port,
-    _vcr_matchers.path,
-    _vcr_matchers.query,
+    vf.method,
+    vf.scheme,
+    vf.host,
+    vf.port,
+    vf.path,
+    vf.query,
     clm_json_body_matcher,
 )
 
 
 def requests_match(incoming: Request, recorded: Request) -> bool:
     """Return ``True`` iff ``incoming`` matches ``recorded`` under CLM's
-    match_on — the exact matcher set the in-kernel vcrpy uses. Reusing
-    ``vcr.matchers.requests_match`` keeps the replay equivalence classes
-    identical to vcrpy's (e.g. ``query`` is order-insensitive, JSON bodies
-    compare by value)."""
-    return bool(_vcr_matchers.requests_match(incoming, recorded, list(REPLAY_MATCHERS)))
+    match_on. The matcher set keeps vcrpy's replay equivalence classes
+    (e.g. ``query`` is order-insensitive, JSON bodies compare by value) so
+    committed cassettes keep matching exactly as they always did."""
+    return bool(vf.requests_match(incoming, recorded, list(REPLAY_MATCHERS)))
 
 
 def serialize_interactions(interactions: Iterable[Interaction]) -> str:
     """Serialize interactions to vcrpy v1 YAML.
 
-    Routes through ``vcr.serialize.serialize`` + the YAML serializer so the
-    output is byte-identical to a vcrpy-written cassette. vcrpy's
-    ``convert_to_unicode`` mutates ``response["body"]["string"]`` from
-    ``bytes`` to ``str`` **in place** during serialization; we deep-copy
-    first so the caller's in-memory interactions keep their ``bytes``
-    bodies and stay valid for subsequent replays/writes.
+    Routes through :func:`vcr_format.serialize_cassette` so the output is
+    byte-identical to a vcrpy-written cassette. The serializer mutates
+    ``response["body"]["string"]`` from ``bytes`` to ``str`` **in place**
+    (the inherited vcrpy quirk); we deep-copy first so the caller's
+    in-memory interactions keep their ``bytes`` bodies and stay valid for
+    subsequent replays/writes.
     """
     requests = []
     responses = []
@@ -397,21 +392,19 @@ def serialize_interactions(interactions: Iterable[Interaction]) -> str:
         requests.append(request)
         responses.append(response)
     cassette_dict = copy.deepcopy({"requests": requests, "responses": responses})
-    payload: str = _vcr_serialize(cassette_dict, yamlserializer)
+    payload: str = vf.serialize_cassette(cassette_dict)
     return payload
 
 
 def load_interactions(path: Path) -> list[Interaction]:
     """Load a vcrpy YAML cassette into ``(Request, response-dict)`` pairs.
 
-    Uses vcrpy's ``FilesystemPersister`` so the in-memory shape matches
-    what the merge helper and the kernel produce. Returns an empty list
-    when the cassette does not exist.
+    Returns an empty list when the cassette does not exist.
     """
     path = Path(path)
     if not path.exists():
         return []
-    requests, responses = FilesystemPersister.load_cassette(path, serializer=yamlserializer)
+    requests, responses = vf.load_cassette(path)
     return list(zip(requests, responses, strict=False))
 
 

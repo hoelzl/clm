@@ -446,17 +446,17 @@ class Course(NotebookMixin):
     ) -> int:
         """Fold per-target staging files written by the mitmproxy transport.
 
-        The out-of-process transport (issue #165) records into per-(topic,
+        The replay proxy (issue #165) records into per-(topic,
         language,kind) ``<cassette>.staging-mitm-<build_id>`` files beside
         each canonical cassette. This runs **after** the proxy stops (from
         the build's ``finally``) to fold them into their canonicals via the
-        same dedup/merge path the vcrpy workers use.
+        shared dedup/merge path.
 
         Reaching this method *is* the build-completion signal (the build's
         ``finally`` ran), so for each canonical we write the ``.completed``
-        marker for **this build's** staging file (``build_id``), exactly as
-        the vcrpy path's host writes a completion marker on clean notebook
-        completion. mitmproxy's ``done`` hook is unreliable on a Windows
+        marker for **this build's** staging file (``build_id``) — the marker
+        is what tells the merge a staging file holds a complete recording
+        session. mitmproxy's ``done`` hook is unreliable on a Windows
         ``CTRL_BREAK`` shutdown, so the host owns this signal. A force-killed
         build never reaches here, so its staging stays markerless and is
         discarded by the next build's pre-build sweep (issue #115).
@@ -499,12 +499,13 @@ class Course(NotebookMixin):
                     CassettePaths(canonical=canonical, staging=synthetic),
                     sweep_orphans=False,
                     overwrite_existing=overwrite_existing,
-                    # The mitmproxy transport records a per-request response
+                    # The replay proxy records a per-request response
                     # *sequence* (a non-deterministic endpoint answers an
                     # identical request differently on successive calls); fold it
                     # order-preserving so a downstream request that embedded the
-                    # later response still replay-matches. The vcrpy path keeps
-                    # the deduped fold (preserve_sequence defaults to False).
+                    # later response still replay-matches. Only the pre-build
+                    # orphan sweep keeps the deduped fold (preserve_sequence
+                    # defaults to False there).
                     preserve_sequence=True,
                 )
             except Exception as exc:  # noqa: BLE001 — never mask the build result

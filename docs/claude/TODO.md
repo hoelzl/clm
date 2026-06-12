@@ -221,10 +221,12 @@ environment={
   concurrent foreground httpcore calls (e.g. LLM via httpx) escaped vcr
   when a background thread (e.g. LangSmith trace upload via
   `requests`) was constructing a urllib3 connection. Workaround for an
-  upstream vcrpy issue. **TODO: remove the workaround once vcrpy ships
-  a scoped `force_reset` upstream** — track `kevin1024/vcrpy`,
-  removal checklist in
-  `docs/claude/issue-129-vcrpy-force-reset-investigation.md`.
+  upstream vcrpy issue. **Resolved differently:** the entire in-kernel
+  vcrpy transport (including this workaround) was removed in #355 once
+  the out-of-process mitmproxy transport became the sole transport —
+  nothing patches vcr in a kernel anymore. The investigation record
+  lives in `docs/claude/issue-129-vcrpy-force-reset-investigation.md`
+  (historical).
 
 - **Worker Process Leaks on Windows (Kernel Teardown + Pool Sizing)** —
   shipped 2026-04-12 via PR hoelzl/clm#32 (commits `ebf9f1e`, `80228aa`,

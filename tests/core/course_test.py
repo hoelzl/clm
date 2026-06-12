@@ -776,7 +776,7 @@ def test_sweep_orphan_staging_files_merges_and_deletes(tmp_path):
     """
     import asyncio
 
-    pytest.importorskip("vcr")
+    pytest.importorskip("filelock")  # merge path needs the [replay] extra
     pytest.importorskip("filelock")
 
     topic_dir = _make_topic_dir(tmp_path, "module_100_live", "topic_010_intro")
@@ -859,7 +859,7 @@ def test_sweep_orphan_staging_files_no_replay_topics(tmp_path):
 
 def test_sweep_orphan_staging_files_no_orphans_present(tmp_path):
     """http-replay opt-in but no orphans → sweep is a no-op merge."""
-    pytest.importorskip("vcr")
+    pytest.importorskip("filelock")  # merge path needs the [replay] extra
     pytest.importorskip("filelock")
 
     _make_topic_dir(tmp_path, "module_100_live", "topic_010_intro")
@@ -887,7 +887,7 @@ def test_merge_mitmproxy_cassette_staging_folds_markered_leaves_markerless(tmp_p
     ones (mitmdump force-killed) for the next pre-build sweep to discard —
     the same partial-recording protection the vcrpy workers get.
     """
-    pytest.importorskip("vcr")
+    pytest.importorskip("filelock")  # merge path needs the [replay] extra
     pytest.importorskip("filelock")
 
     topic_dir = _make_topic_dir(tmp_path, "module_100_live", "topic_010_intro")

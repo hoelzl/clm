@@ -1801,7 +1801,7 @@ class NotebookProcessor:
         traffic belongs to. ``payload.http_replay_cassette_name`` already
         carries the split-deck base-cassette fallback for ``replay`` and the
         strict language-specific name for record modes (issue #159); the
-        canonical path comes from the shared ``resolve_paths`` computation.
+        canonical path comes from the shared ``resolve_canonical_path`` computation.
 
         **Host namespace (issue #165 P4):** the mitmproxy proxy and the
         ``merge_mitmproxy_cassette_staging`` host step run on the **host**,
@@ -1839,9 +1839,9 @@ class NotebookProcessor:
             target_dir = source_dir
         else:
             return None
-        from .http_replay_cassette import resolve_paths
+        from .http_replay_cassette import resolve_canonical_path
 
-        return str(resolve_paths(target_dir, cassette_name).canonical)
+        return str(resolve_canonical_path(target_dir, cassette_name))
 
     def _maybe_inject_http_replay(
         self,
@@ -1921,10 +1921,9 @@ class NotebookProcessor:
                             )
                         else:
                             # Standard mode: write other_files to temp directory.
-                            # The kernel cwd is this temp dir but the http-replay
-                            # bootstrap writes its cassette to an absolute path
-                            # under the source tree, so the cassette survives
-                            # destruction of the temp dir.
+                            # (HTTP-replay recordings are unaffected by the temp
+                            # dir's destruction — the replay proxy writes staging
+                            # cassettes on the host, never the kernel.)
                             with TemporaryDirectory() as temp_dir:
                                 path = Path(temp_dir)
                                 await self.write_other_files(cid, path, payload)

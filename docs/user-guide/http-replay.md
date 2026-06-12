@@ -16,10 +16,15 @@ Install CLM with the `[replay]` extra:
 pip install "coding-academy-lecture-manager[replay]"
 ```
 
-This pulls in `mitmproxy` (the replay proxy) and `vcrpy` (used as a cassette
-serialization library). The extra is also included in `[all]`. Topics that do
-not opt in pay zero runtime cost — no imports, no proxy, no cassette lookup.
-The extra requires **Python 3.12+** (mitmproxy's floor).
+This pulls in `mitmproxy` (the replay proxy), `pyyaml` (cassette
+serialization — the vcrpy v1 YAML format is implemented by CLM itself), and
+`filelock`. The extra is also included in `[all]`. Topics that do not opt in
+pay zero runtime cost — no imports, no proxy, no cassette lookup. The extra
+requires **Python 3.12+** (mitmproxy's floor).
+
+If `mitmdump` runs from an isolated tool environment, it needs PyYAML there
+too: `uv tool install mitmproxy --with pyyaml`. Point CLM at the executable
+with `CLM_MITMDUMP` if it is not on `PATH`.
 
 ## How it works
 
@@ -149,27 +154,29 @@ Cassettes are never copied to public or speaker output. They travel with
 the notebook into worker payloads and Docker source mounts so execution
 can find them, but the student-facing build tree does not contain them.
 
-### Per-worker staging files
+### Staging files
 
-While a build is running, each worker writes its recordings to a
-*staging* file next to the canonical cassette
-(`<stem>.http-cassette.yaml.staging-<unique>`). The kernel saves to
-this file after every recorded interaction, so a worker that is killed
-mid-execution (for example by the build-level wait-for-completion
-timeout) leaves its partial recordings on disk. The next build merges
-every staging file in the directory into the canonical cassette under a
-file lock and then deletes them.
+While a build is running, the replay proxy writes its recordings to a
+*staging* file next to each canonical cassette
+(`<stem>.http-cassette.yaml.staging-mitm-<build-id>`). The staging file
+is rewritten after every recorded interaction, so even a build that is
+killed mid-run leaves the recordings captured so far on disk. Notebook
+kernels never write cassette files themselves — they only tag their
+outgoing requests so the proxy routes them to the right cassette.
 
-Staging files are normally invisible — the merge step runs in the
-build's `finally` block on success and on failure. If you see lingering
-`*.staging-*` files in a course repo after a build, the worker was
-killed *before* the merge could acquire the lock; running any subsequent
-build for that topic will pick them up. You can also delete them by
+At the end of the build the host writes a `.completed` marker for each
+of this build's staging files and folds them into their canonical
+cassettes under a file lock, then deletes them. If you see lingering
+`*.staging-*` files in a course repo, the build was killed before that
+step: marker-bearing staging files are folded in by the next build's
+pre-build sweep, while *markerless* ones (an interrupted recording
+session that may hold a partial request chain) are discarded by it —
+re-run the build to re-record. You can also delete staging files by
 hand if you do not want their contents.
 
-Concurrent builds of the same notebook in different languages (German
-and English on the same topic) write to distinct staging files and are
-merged together — neither overwrites the other.
+Different cassettes (German and English decks of the same topic) get
+distinct staging files and are merged independently — neither
+overwrites the other.
 
 ## Record modes
 
@@ -200,8 +207,10 @@ command → `CLM_HTTP_REPLAY_MODE` env var → CI-aware default.
 ## Extending a cassette with new requests
 
 When a notebook has been edited and now issues additional requests that
-the existing cassette does not cover, the strict `once` default fails
-with `CannotOverwriteExistingCassetteException`. Run with
+the existing cassette does not cover, the strict modes (`replay`, and
+`once` with an existing cassette) fail with a cell error containing
+`clm_replay_miss: no recorded interaction for METHOD URL in cassette
+<path>`. Run with
 `--http-replay=new-episodes` to replay every request that *is* in the
 cassette and record only the genuinely new ones into the same file:
 
@@ -254,7 +263,7 @@ up the strict default from the `CI` environment variable.
 
 ## Redaction
 
-`vcrpy` filters are applied at record time before the cassette is
+Secret filters are applied at record time before the cassette is
 written:
 
 - Request headers: `authorization`, `cookie`, `x-api-key`, `set-cookie`
@@ -289,16 +298,18 @@ not substitutes — a topic that has a cassette should rely on replay and
 
 ## Troubleshooting
 
-- **`Cannot find cassette file ... and mode is replay`** — the topic opts
-  in but no cassette has been recorded. Run locally to record the
-  cassette (the default `new-episodes` mode replays existing recordings
-  and appends new ones), commit it, and re-run CI.
-- **`Can't overwrite existing cassette in 'none' mode`** — a cell issued
-  a request that is not recorded. If the notebook now makes additional
-  requests but the existing recordings are still valid, run
-  `--http-replay=new-episodes` to append the new traffic. If the request
-  shape drifted (same URL, different parameters), use
-  `--http-replay=refresh` to re-record from scratch and review the diff.
+- **Cell error containing `clm_replay_miss: no recorded interaction for
+  METHOD URL in cassette <path>`** — a request is not in the cassette
+  under a strict mode (`replay`, or `once` with an existing cassette).
+  The proxy synthesizes a deliberately non-retryable 404 so the SDK
+  raises immediately (it typically surfaces as a `NotFoundError`). If
+  the topic has no cassette at all, run locally to record one (the
+  default `new-episodes` mode records and appends), commit it, and
+  re-run CI. If the notebook now makes *additional* requests but the
+  existing recordings are still valid, run `--http-replay=new-episodes`
+  to append the new traffic. If the request shape drifted (same URL,
+  different parameters), use `--http-replay=refresh` to re-record from
+  scratch and review the diff.
 - **Build hangs waiting for network** — the topic is not opted in. Add
   `http-replay="yes"` to the topic element.
 - **Need to run offline without replay** — set

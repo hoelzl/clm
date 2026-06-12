@@ -21,7 +21,7 @@ from clm.workers.notebook.cassette_doctor import (
 )
 
 # vcr is an optional extra; skip the whole module when it isn't installed.
-pytest.importorskip("vcr")
+pytest.importorskip("yaml")  # cassette I/O needs PyYAML ([replay] extra)
 
 
 def _chat_completion_body(content: str) -> str:
@@ -65,14 +65,12 @@ def _chat_request_body(prompt: str) -> str:
 
 
 def _write_cassette(path: Path, interactions: list[tuple[str, str]]) -> None:
-    """Write a cassette from (request_body, response_body) pairs via vcr.
+    """Write a cassette from (request_body, response_body) pairs.
 
     Each interaction is a POST to the chat-completions endpoint with the given
     request and response bodies, serialized with the same persister CLM uses.
     """
-    from vcr.request import Request
-    from vcr.serialize import serialize as vcr_serialize
-    from vcr.serializers import yamlserializer
+    from clm.infrastructure.http_replay_mitm.vcr_format import Request, serialize_cassette
 
     requests = []
     responses = []
@@ -92,7 +90,7 @@ def _write_cassette(path: Path, interactions: list[tuple[str, str]]) -> None:
                 "body": {"string": resp_body},
             }
         )
-    payload = vcr_serialize({"requests": requests, "responses": responses}, yamlserializer)
+    payload = serialize_cassette({"requests": requests, "responses": responses})
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(payload, encoding="utf-8", newline="\n")
 
@@ -136,7 +134,7 @@ class TestFindOrphans:
             (_chat_request_body("vague A"), _chat_completion_body(_LONG_A)),
             (_chat_request_body(f"answer this: {_LONG_A}"), _chat_completion_body("done")),
         ]
-        from vcr.request import Request
+        from clm.infrastructure.http_replay_mitm.vcr_format import Request
 
         reqs = [
             Request(method="POST", uri="u", body=rb, headers={}) for rb, _ in requests_responses
@@ -146,7 +144,7 @@ class TestFindOrphans:
 
     def test_orphan_opener_is_flagged(self):
         # Opener's response text appears in NO other request body.
-        from vcr.request import Request
+        from clm.infrastructure.http_replay_mitm.vcr_format import Request
 
         reqs = [
             Request(method="POST", uri="open", body=_chat_request_body("vague A"), headers={}),
@@ -163,7 +161,7 @@ class TestFindOrphans:
         assert orphans[0].text_len == len(_LONG_A)
 
     def test_min_text_len_boundary(self):
-        from vcr.request import Request
+        from clm.infrastructure.http_replay_mitm.vcr_format import Request
 
         content = "z" * DEFAULT_MIN_TEXT_LEN  # exactly the default threshold
         reqs = [Request(method="POST", uri="u", body="{}", headers={})]
@@ -216,8 +214,7 @@ class TestDiagnoseCassette:
         assert path.read_text(encoding="utf-8") == before
 
     def test_fix_removes_only_the_orphan(self, tmp_path):
-        from vcr.persisters.filesystem import FilesystemPersister
-        from vcr.serializers import yamlserializer
+        from clm.infrastructure.http_replay_mitm.vcr_format import load_cassette
 
         path = tmp_path / "slides.http-cassette.yaml"
         _write_cassette(
@@ -234,7 +231,7 @@ class TestDiagnoseCassette:
         assert report.orphans[0].index == 0
 
         # The complete B-chain survives; only the orphan A interaction is gone.
-        reqs, _ = FilesystemPersister.load_cassette(path, serializer=yamlserializer)
+        reqs, _ = load_cassette(path)
         bodies = [r.body.decode("utf-8") if isinstance(r.body, bytes) else r.body for r in reqs]
         assert len(reqs) == 2
         assert _chat_request_body("vague A") not in bodies

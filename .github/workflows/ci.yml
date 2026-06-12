@@ -66,9 +66,9 @@ jobs:
     - name: Install dependencies
       run: |
         # Install all dependencies except ML (PyTorch, FastAI, etc.) which aren't needed for tests.
-        # ``replay`` (vcrpy + filelock) is included so the HTTP-replay tests -- including the
-        # issue #143 pin-guard / upstream-drift detector -- actually run in CI instead of being
-        # skipped by ``pytest.importorskip("vcr")``.
+        # ``replay`` is included so the HTTP-replay cassette tests (merge, format,
+        # doctor) actually run in CI instead of being skipped by their importorskip
+        # guards.
         uv pip install --system -e ".[all-workers,summarize,recordings,slides,mcp,replay,dev,tui,web]"
 
     - name: Start Xvfb
