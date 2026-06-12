@@ -180,8 +180,9 @@ that spawns a real OS subprocess (a Jupyter kernel, a mitmdump proxy) is slow
 `integration` so it runs in CI's dedicated integration step but is excluded from
 the per-commit fast suite (both the default `addopts` filter and the pre-commit
 hook exclude `integration`). Current residents:
-`tests/infrastructure/test_http_replay_mitm.py` (the parked mitmproxy prototype
-smoke tests) and the two `test_reaping_kernel_manager_kills_grandchild_*` tests
+`tests/infrastructure/test_http_replay_mitm.py` (the mitmproxy replay-transport
+integration smoke tests — real `mitmdump` subprocess; the sole transport's
+integration coverage) and the two `test_reaping_kernel_manager_kills_grandchild_*` tests
 (real `ipykernel`). Note `slow` is the *wrong* marker for this — CI excludes
 `slow` everywhere, so a `slow` test runs nowhere automatically.
 

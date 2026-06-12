@@ -1,5 +1,10 @@
 # Issue #129 Investigation: vcrpy `force_reset()` race
 
+> **HISTORICAL (issue #355).** The in-kernel vcrpy transport that carried
+> the scoped force_reset workaround described here was removed; CLM no
+> longer patches vcr in any kernel. Kept as the investigation record and
+> for upstreaming the fix to vcrpy.
+
 Investigation date: **2026-05-25**
 Issue: <https://github.com/hoelzl/clm/issues/129>
 Reproducers: `C:\Users\tc\Programming\Python\Tests\clm-bug-repros\issue-129-vcrpy-force-reset-race\`

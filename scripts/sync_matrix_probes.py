@@ -228,9 +228,7 @@ def p8(name, tmp):
         _idless_code("en", 'print("hello")'),
     )
     plan, result, de_after, en_after = _sync(tmp, "git-head", de, en, de, en)
-    doubled = de_after.count("# %%") > de.count("# %%") or en_after.count("# %%") > en.count(
-        "# %%"
-    )
+    doubled = de_after.count("# %%") > de.count("# %%") or en_after.count("# %%") > en.count("# %%")
     propagated = False
     print(f"    doubled: {doubled}")
     verdict(name, plan, result, propagated, extra=f"doubled={doubled}")

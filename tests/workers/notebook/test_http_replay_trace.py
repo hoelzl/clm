@@ -4,9 +4,11 @@ Covers:
 
 * The host-side helpers (``redact_body``, ``TraceWriter``,
   ``make_invocation_dir``, ``write_manifest``, env-var sensing).
-* The bootstrap template's trace block (formats, parses, includes the
-  expected wrappers).
-* The analysis script's ability to digest a synthetic trace bundle.
+* The analysis script's ability to digest a synthetic trace bundle
+  (including legacy bundles from the removed vcrpy transport).
+
+The kernel-side socket-trace block of the tag bootstrap is covered in
+``test_http_replay_mitm_tag.py``.
 """
 
 from __future__ import annotations

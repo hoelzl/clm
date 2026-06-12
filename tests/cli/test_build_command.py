@@ -190,10 +190,30 @@ class TestResolveHttpReplayTransport:
         monkeypatch.setenv("CLM_HTTP_REPLAY_TRANSPORT", "tcpdump")
         assert _resolve_http_replay_transport() == "mitmproxy"
 
-    def test_explicit_cli_vcrpy_fails_loudly(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("CLM_HTTP_REPLAY_TRANSPORT", raising=False)
-        with pytest.raises(click.UsageError):
-            _resolve_http_replay_transport("vcrpy")
+    def test_ignore_hosts_default_includes_langsmith(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # The LangSmith default exists because trace-upload bodies carry
+        # per-build timestamps/UUIDs: recorded into a cassette they defeat
+        # the body matcher and make cassettes grow on every rebuild.
+        from clm.workers.notebook.notebook_processor import resolve_http_replay_ignore_hosts
+
+        monkeypatch.delenv("CLM_HTTP_REPLAY_IGNORE_HOSTS", raising=False)
+        assert "api.smith.langchain.com" in resolve_http_replay_ignore_hosts()
+
+    def test_ignore_hosts_env_override_replaces_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from clm.workers.notebook.notebook_processor import resolve_http_replay_ignore_hosts
+
+        monkeypatch.setenv("CLM_HTTP_REPLAY_IGNORE_HOSTS", "foo.example.com, bar.example.com")
+        assert resolve_http_replay_ignore_hosts() == ("foo.example.com", "bar.example.com")
+
+    def test_ignore_hosts_empty_env_means_record_every_host(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from clm.workers.notebook.notebook_processor import resolve_http_replay_ignore_hosts
+
+        monkeypatch.setenv("CLM_HTTP_REPLAY_IGNORE_HOSTS", "")
+        assert resolve_http_replay_ignore_hosts() == ()
 
     def test_ci_false_defaults_to_new_episodes(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("CLM_HTTP_REPLAY_MODE", raising=False)

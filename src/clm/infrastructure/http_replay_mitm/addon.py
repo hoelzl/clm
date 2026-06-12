@@ -314,8 +314,8 @@ class ClmReplayAddon:
         # The before_record_request closure: removes secret headers
         # (authorization/cookie/x-api-key), strips api_key/token query params and
         # password/token/api_key body params, and returns None for ignore_hosts.
-        # filter_* default to cassette_format's constants (kept in lockstep with
-        # the in-kernel vcrpy bootstrap by a drift-guard test).
+        # filter_* default to cassette_format's constants — the single source
+        # of truth for cassette secret-filtering (pinned by a constants test).
         self._request_filter = cf.build_request_filter(ignore_hosts=ignore_hosts)
 
         # ``once``/``refresh`` strictness is resolved per target in

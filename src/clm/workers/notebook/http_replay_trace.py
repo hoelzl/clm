@@ -1,19 +1,19 @@
 """Forensic trace harness for HTTP-replay debugging.
 
-The harness emits three independent telemetry streams to per-process
-JSONL files so the analysis script can cross-reference them:
+The harness emits independent telemetry streams to per-process JSONL
+files so the analysis script can cross-reference them:
 
 * ``socket`` events from a ``sys.addaudithook`` in the worker kernel
-  (ground truth — anything intercepted by vcrpy never reaches this hook).
-* ``vcr`` events from wrapped vcrpy internals (cassette hit/miss, append,
-  ``force_reset`` enter/exit with thread id).
-* ``cassette`` events from host-side lifecycle calls (seed, merge
-  decisions, dedup outcomes, completion-marker writes, orphan sweeps).
+  (ground truth — installed by the tag bootstrap's socket-trace block,
+  every connect should target the replay proxy).
+* ``proxy`` events written by the mitmproxy addon (per-flow interception
+  decisions: served / miss / forward / ignored / passthrough).
+* ``cassette`` events from host-side lifecycle calls (merge decisions,
+  dedup outcomes, completion-marker writes, orphan sweeps).
 
-This module owns the host side and exposes the body-redaction primitives
-used both here and (duplicated) in the worker bootstrap template. See
-:mod:`clm.workers.notebook.notebook_processor` for the worker-side
-inlined version.
+This module owns the host side. (Older trace bundles also contain a
+``vcr`` stream from the removed in-kernel vcrpy transport; the analyzer
+still reads those.)
 
 Activate with ``CLM_HTTP_REPLAY_TRACE=1``; trace files land under
 ``$CLM_HTTP_REPLAY_TRACE_DIR`` (default ``./clm-http-replay-traces``) in a

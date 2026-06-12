@@ -216,7 +216,8 @@ class ProcessNotebookOperation(Operation):
     skip_errors: bool = False
     # HTTP replay mode ("replay"/"once"/"refresh"/"disabled") or None.
     # Only set when the topic opted in via ``http-replay="yes"``; the
-    # worker activates a ``vcrpy`` cassette when this is non-None.
+    # worker injects the cassette-routing tag bootstrap when this is
+    # non-None (traffic is recorded/replayed by the shared replay proxy).
     http_replay_mode: str | None = None
     # If True, this operation is for implicit cache population only.
     # The output is still generated (to populate the cache), but this
@@ -244,8 +245,8 @@ class ProcessNotebookOperation(Operation):
           (or, in CI, fail).
         - ``once``, ``new-episodes``, and ``refresh`` modes are
           record-capable: return the *expected* cassette path even when the
-          file does not yet exist, so the bootstrap can activate vcrpy with
-          a write target.
+          file does not yet exist, so the worker can resolve the proxy
+          routing tag for the recording target.
         - Any other mode (incl. ``disabled``/None) returns None.
         """
         mode = self.http_replay_mode
@@ -290,26 +291,13 @@ class ProcessNotebookOperation(Operation):
             and (companion is None or file.path != companion)
         }
 
-        # Ensure the HTTP-replay cassette is available to the kernel when
-        # the topic opted in. For FileTopic the cassette is not part of
-        # ``topic.files`` automatically; for DirectoryTopic it may already
-        # be present under a possibly-different key — overwrite with the
-        # canonical kernel-cwd-relative key so bootstrap resolution is
-        # deterministic.
-        if self.http_replay_mode and self.http_replay_mode != "disabled":
-            # Ship the same cassette the worker will look up. In ``replay``
-            # mode that may be the base (bilingual) cassette via the language
-            # fallback (Issue #159); record modes keep the strict,
-            # language-specific cassette so the base is never seeded from or
-            # written to on behalf of one language.
-            if self.http_replay_mode == "replay":
-                cassette = self.input_file.replay_cassette_path
-                cassette_name = self.input_file.replay_cassette_relative_name
-            else:
-                cassette = self.input_file.cassette_path
-                cassette_name = self.input_file.cassette_relative_name
-            if cassette is not None and cassette_name is not None:
-                other_files[cassette_name] = b64encode(cassette.read_bytes())
+        # Cassette bytes are deliberately NOT shipped to the worker: since
+        # the in-kernel vcrpy transport was removed (#355) nothing in the
+        # worker or kernel reads the cassette file — the replay proxy reads
+        # and writes the canonical on the HOST, and the worker only needs
+        # ``http_replay_cassette_name`` (a payload field, not a file) to
+        # resolve the routing tag. (Cassette entries were already excluded
+        # from cache fingerprints, so dropping them is digest-neutral.)
 
         return other_files
 

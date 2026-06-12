@@ -545,13 +545,13 @@ class TestProcessNotebookOperationHttpReplay:
         _ = b64decode  # silence unused in this helper
         return op, nb
 
-    def test_other_files_includes_cassette_when_mode_set(self, course_1, tmp_path):
+    def test_other_files_excludes_cassette_even_when_mode_set(self, course_1, tmp_path):
+        # Since #355 nothing in the worker or kernel reads the cassette file
+        # (the replay proxy reads/writes the canonical on the host), so the
+        # bytes are no longer shipped in the payload - for any mode.
         op, _ = self._make_operation(course_1, tmp_path, mode="replay", with_cassette=True)
-        from base64 import b64decode
-
         other = op.compute_other_files()
-        assert "slides_replay.http-cassette.yaml" in other
-        assert b64decode(other["slides_replay.http-cassette.yaml"]) == b"interactions: []\n"
+        assert "slides_replay.http-cassette.yaml" not in other
 
     def test_other_files_excludes_cassette_when_mode_none(self, course_1, tmp_path):
         op, _ = self._make_operation(course_1, tmp_path, mode=None, with_cassette=True)
@@ -674,9 +674,9 @@ class TestProcessNotebookOperationHttpReplay:
                 f"orphan staging file leaked into other_files under key {key!r}"
             )
 
-        # Canonical cassette is still present under its kernel-cwd-relative key
-        # because the explicit assignment in compute_other_files re-adds it.
-        assert "slides_replay.http-cassette.yaml" in other
+        # The canonical cassette is not shipped either (since #355 nothing
+        # in the worker reads it; the proxy handles it host-side).
+        assert "slides_replay.http-cassette.yaml" not in other
 
     # --- Issue #159: split-deck language fallback through the operation ---
 
@@ -745,10 +745,13 @@ class TestProcessNotebookOperationHttpReplay:
                 f"mode={mode!r} must keep the language-specific record target"
             )
 
-    def test_other_files_ships_base_on_replay_for_split(self, tmp_path):
+    def test_other_files_ships_no_cassette_on_replay_for_split(self, tmp_path):
+        # The base-cassette language fallback (issue #159) lives in
+        # ``_resolve_cassette_name``/the routing tag; the bytes themselves
+        # are never shipped (#355).
         op, _ = self._make_split_operation(tmp_path, lang="de", mode="replay", base=True)
         other = op.compute_other_files()
-        assert "slides_replay.http-cassette.yaml" in other
+        assert "slides_replay.http-cassette.yaml" not in other
         assert "slides_replay.de.http-cassette.yaml" not in other
 
     def test_other_files_ignores_base_on_record_for_split(self, tmp_path):
