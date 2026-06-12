@@ -128,12 +128,10 @@ def _isolate_http_replay_env():
     ``main_build`` pins the resolved HTTP-replay *mode* and *transport* into
     ``os.environ`` (so Direct-worker kernels inherit them via
     ``os.environ.copy()``). A test that runs the real build pipeline therefore
-    leaks those values to later tests in the same process, and a test that
-    reads the transport from ``os.environ`` (e.g. the vcrpy-bootstrap tests in
-    ``test_notebook_processor``) would then observe a stale ``mitmproxy`` —
-    a cross-test pollution flake under xdist. Snapshotting and restoring here
-    keeps each test's ambient transport/mode deterministic regardless of
-    execution order; tests that set these via ``monkeypatch`` are unaffected.
+    leaks those values to later tests in the same process — a cross-test
+    pollution flake under xdist. Snapshotting and restoring here keeps each
+    test's ambient transport/mode deterministic regardless of execution
+    order; tests that set these via ``monkeypatch`` are unaffected.
     """
     keys = ("CLM_HTTP_REPLAY_TRANSPORT", "CLM_HTTP_REPLAY_MODE")
     saved = {k: os.environ.get(k) for k in keys}

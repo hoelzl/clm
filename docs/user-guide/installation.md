@@ -168,7 +168,7 @@ CLM has several optional dependency groups for different features:
 **HTTP Replay**:
 - **[replay]**: mitmproxy, vcrpy, filelock
   - HTTP request/response replay for notebooks that call live services
-    (mitmproxy is the default transport since CLM 1.10; vcrpy is the opt-out)
+    (mitmproxy is the replay proxy; vcrpy is used as a cassette serialization library)
   - Install: `pip install -e ".[replay]"`
 
 **Development Tools**:

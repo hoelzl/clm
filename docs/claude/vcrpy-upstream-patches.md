@@ -1,5 +1,11 @@
 # Upstream vcrpy patches (retire the CLM forks)
 
+> **HISTORICAL (issue #355).** The in-kernel vcrpy transport that carried
+> these forked patches was removed; CLM no longer patches or forks vcrpy
+> internals (vcrpy remains only as a cassette serialization library). Kept
+> for the record and for upstreaming the fixes to vcrpy.
+
+
 CLM's HTTP-replay bootstrap (`src/clm/workers/notebook/notebook_processor.py`)
 carries two forks of vcrpy *internals*. Both are tactical workarounds for
 genuine upstream bugs. Landing them upstream lets us delete the forks and the

@@ -1,20 +1,22 @@
 """HTTP-replay cassette persistence helpers.
 
-The notebook kernel records HTTP interactions into a per-worker *staging*
-file that lives in the same directory as the topic's canonical cassette.
-This module owns the logic that
+The replay proxy records HTTP interactions into per-cassette *staging*
+files that live in the same directory as the topic's canonical cassette
+(``<name>.staging-mitm-<build_id>``, written eagerly by the mitmproxy
+addon). This module owns the host-side logic that
 
-1. resolves the canonical and per-worker staging paths,
-2. seeds the staging file from the canonical cassette so already-recorded
-   interactions can be replayed without hitting the network,
-3. merges the staging file (plus any orphan staging files left behind by
-   previously-killed workers) into the canonical cassette under a
+1. resolves the canonical and staging paths,
+2. merges staging files (plus any orphan staging files left behind by
+   previously-killed builds) into the canonical cassette under a
    cross-process file lock, deduplicating by request fingerprint,
-4. writes the merged cassette atomically.
+3. writes the merged cassette atomically,
+4. manages the per-staging ``.completed`` markers that distinguish a
+   finished recording session from a partial chain (issue #115).
 
-The merge step runs in a ``finally`` block so it executes even when the
-notebook raised — vcrpy's eager-save patch in the bootstrap means partial
-recordings are already on disk by the time the failure propagates.
+The merge runs after the proxy stops (``Course.merge_mitmproxy_cassette_staging``,
+called from the build's ``finally``), so it executes even when the build
+raised — the addon's eager per-response writes mean recordings are already
+on disk by the time a failure propagates.
 """
 
 from __future__ import annotations
@@ -22,7 +24,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import shutil
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -75,45 +76,6 @@ def resolve_paths(target_dir: Path, cassette_name: str) -> CassettePaths:
     unique = f"{os.getpid()}-{uuid.uuid4().hex}"
     staging = canonical.parent / f"{canonical.name}{_STAGING_SUFFIX}{unique}"
     return CassettePaths(canonical=canonical, staging=staging)
-
-
-def seed_staging_from_canonical(paths: CassettePaths) -> None:
-    """Seed this worker's staging file from the canonical cassette.
-
-    Orphan staging files from previously-killed builds are swept once
-    per build in :meth:`clm.core.course.Course.process_all` (and
-    :meth:`clm.core.course.Course.process_file`) via
-    ``_sweep_orphan_cassette_staging_files``, *before* any worker
-    starts — so by the time this function runs, the canonical cassette
-    already includes any recoverable orphan interactions. We just need
-    to give vcrpy a starting point: copy canonical (if it exists) into
-    this worker's per-invocation staging file so the kernel can replay
-    recorded interactions offline.
-
-    An earlier version of this function also ran the merge sweep
-    here, but that raced with concurrent workers — Worker B's seed
-    would unlink Worker A's still-active staging file before A's
-    kernel had loaded it, causing
-    ``CannotOverwriteExistingCassetteException`` on the first
-    request in replay mode (issue #86).
-    """
-    paths.staging.parent.mkdir(parents=True, exist_ok=True)
-    seeded_bytes = 0
-    if paths.canonical.exists():
-        shutil.copy2(paths.canonical, paths.staging)
-        try:
-            seeded_bytes = paths.staging.stat().st_size
-        except OSError:
-            seeded_bytes = 0
-    _trace(
-        "cassette.seed",
-        {
-            "canonical": str(paths.canonical),
-            "staging": str(paths.staging),
-            "canonical_existed": paths.canonical.exists() or seeded_bytes > 0,
-            "seeded_bytes": seeded_bytes,
-        },
-    )
 
 
 def merge_staging_into_canonical(
