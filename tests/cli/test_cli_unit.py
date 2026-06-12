@@ -647,3 +647,62 @@ class TestOutputFiltering:
         notebook_files = [f for f in course.files if hasattr(f, "skip_html")]
         assert notebook_files, "test spec should contain notebook files"
         assert not any(f.skip_html for f in notebook_files)
+
+    def test_no_diagrams_excludes_diagram_sources(self):
+        """--no-diagrams keeps DrawIO/PlantUML sources out of the file map"""
+        from clm.cli.main import initialize_paths_and_course
+        from clm.core.course_files.drawio_file import DrawIoFile
+        from clm.core.course_files.plantuml_file import PlantUmlFile
+
+        config = self._create_config()
+        config.no_diagrams = True
+        course, root_dirs, data_dir = initialize_paths_and_course(config)
+
+        diagram_files = [f for f in course.files if isinstance(f, (PlantUmlFile, DrawIoFile))]
+        assert diagram_files == []
+        # Committed rendered images are ordinary image files and still ship.
+        assert any(f.path.name == "my_diag.png" for f in course.files)
+        assert any(f.path.name == "my_drawing.png" for f in course.files)
+
+    def test_default_includes_diagram_sources(self):
+        """Without --no-diagrams, DrawIO/PlantUML sources schedule conversions"""
+        from clm.cli.main import initialize_paths_and_course
+        from clm.core.course_files.drawio_file import DrawIoFile
+        from clm.core.course_files.plantuml_file import PlantUmlFile
+
+        config = self._create_config()
+        course, root_dirs, data_dir = initialize_paths_and_course(config)
+
+        assert any(isinstance(f, PlantUmlFile) for f in course.files)
+        assert any(isinstance(f, DrawIoFile) for f in course.files)
+
+    def test_no_diagrams_disables_diagram_workers(self):
+        """--no-diagrams zeroes the plantuml/drawio worker counts"""
+        from clm.cli.commands.build import disable_diagram_workers_if_requested
+        from clm.infrastructure.config import WorkersManagementConfig
+
+        config = self._create_config()
+        config.no_diagrams = True
+        worker_config = WorkersManagementConfig()
+        disable_diagram_workers_if_requested(config, worker_config)
+
+        assert worker_config.plantuml.count == 0
+        assert worker_config.drawio.count == 0
+        # Zero must survive the effective-config merge (0 means "disabled",
+        # not "fall back to the default count").
+        assert worker_config.get_worker_config("plantuml").count == 0
+        assert worker_config.get_worker_config("drawio").count == 0
+        # Notebook workers are unaffected.
+        assert worker_config.get_worker_config("notebook").count >= 1
+
+    def test_default_does_not_disable_diagram_workers(self):
+        """Without --no-diagrams the worker counts are left alone"""
+        from clm.cli.commands.build import disable_diagram_workers_if_requested
+        from clm.infrastructure.config import WorkersManagementConfig
+
+        config = self._create_config()
+        worker_config = WorkersManagementConfig()
+        disable_diagram_workers_if_requested(config, worker_config)
+
+        assert worker_config.plantuml.count is None
+        assert worker_config.drawio.count is None

@@ -389,6 +389,15 @@ class BuildConfig:
     # (issue #333).
     no_html: bool = False
 
+    # Skip DrawIO and PlantUML processing entirely (``--no-diagrams``,
+    # issue #353): diagram sources never enter the course file map, so
+    # zero conversion jobs are scheduled and the plantuml/drawio workers
+    # are not started. Rendered images committed next to the sources
+    # (``slides/**/img/``) still ship as ordinary image files — the mode
+    # the code-export compile CI uses on runners without the diagram
+    # binaries.
+    no_diagrams: bool = False
+
     # Notebook execution mode
     force_execute: bool = False
 
@@ -788,6 +797,13 @@ def initialize_paths_and_course(config: BuildConfig) -> tuple[Course, list[Path]
             for i, topic_spec in enumerate(section_spec.topics):
                 section_spec.topics[i] = evolve(topic_spec, skip_html=True)
 
+    # ``--no-diagrams``: exclude DrawIO/PlantUML sources from every
+    # topic's file map at course-construction time, so no conversion
+    # jobs are ever scheduled (issue #353). Committed rendered images
+    # are ordinary image files and still ship.
+    if config.no_diagrams:
+        logger.info("--no-diagrams: skipping DrawIO/PlantUML processing for all topics")
+
     # Create course object
     course = Course.from_spec(
         spec,
@@ -802,6 +818,7 @@ def initialize_paths_and_course(config: BuildConfig) -> tuple[Course, list[Path]
         inline_images=effective_inline_images,
         section_selection=section_selection,
         http_replay_mode=config.http_replay_mode,
+        no_diagrams=config.no_diagrams,
     )
     # Cross-reference policy (Issue #17): propagate the resolved fail-on-missing
     # decision so payload-time rewrite and build-time validation agree.
@@ -897,6 +914,25 @@ def enable_jupyterlite_workers_if_needed(course, worker_config) -> None:
             "Enabling 1 jupyterlite worker: course has at least one target "
             "that requests 'jupyterlite' output."
         )
+
+
+def disable_diagram_workers_if_requested(config: BuildConfig, worker_config) -> None:
+    """Zero out the plantuml/drawio worker counts under ``--no-diagrams``.
+
+    With diagram sources excluded from the course file map (issue #353),
+    no conversion job can ever be scheduled, so starting the diagram
+    workers would only waste startup time — or fail noisily on machines
+    without the binaries (the code-export compile CI). ``count=0``
+    passes through ``compute_pool_size_cap`` unchanged: zero means "do
+    not run any workers of this type". This deliberately overrides an
+    explicit ``--plantuml-workers``/``--drawio-workers`` value — a
+    diagram worker can do nothing in a build with no diagram jobs.
+    """
+    if not config.no_diagrams:
+        return
+    worker_config.plantuml.count = 0
+    worker_config.drawio.count = 0
+    logger.info("--no-diagrams: not starting plantuml/drawio workers.")
 
 
 def start_managed_workers(lifecycle_manager, worker_config) -> list:
@@ -1586,6 +1622,7 @@ async def main_build(
     provenance_manifest=True,
     telemetry_db_path: Path | None = None,
     no_html: bool = False,
+    no_diagrams: bool = False,
 ) -> BuildSummary | None:
     """Main orchestration function for course building.
 
@@ -1700,6 +1737,7 @@ async def main_build(
         speaker_only=speaker_only,
         selected_targets=selected_targets,
         no_html=no_html,
+        no_diagrams=no_diagrams,
         force_execute=force_execute,
         http_replay_mode=resolved_http_replay_mode,
         image_mode=image_mode,
@@ -1732,6 +1770,7 @@ async def main_build(
 
     worker_config = configure_workers(config)
     enable_jupyterlite_workers_if_needed(course, worker_config)
+    disable_diagram_workers_if_requested(config, worker_config)
 
     from clm.infrastructure.database.schema import init_database
     from clm.infrastructure.workers.lifecycle_manager import WorkerLifecycleManager
@@ -2128,6 +2167,18 @@ async def main_build(
     ),
 )
 @click.option(
+    "--no-diagrams",
+    is_flag=True,
+    help=(
+        "Skip DrawIO and PlantUML processing entirely: diagram sources "
+        "are excluded from the build, so no conversion jobs are "
+        "scheduled and no plantuml/drawio workers are started. Rendered "
+        "images committed next to the sources (slides/**/img/) still "
+        "ship as ordinary image files. Intended for machines without "
+        "the diagram binaries, e.g. the code-export compile CI."
+    ),
+)
+@click.option(
     "--targets",
     "-T",
     type=str,
@@ -2250,6 +2301,7 @@ def build(
     language,
     speaker_only,
     no_html,
+    no_diagrams,
     targets,
     force_execute,
     http_replay,
@@ -2394,6 +2446,7 @@ def build(
             effective_provenance_manifest,
             telemetry_db_path=ctx.obj.get("TELEMETRY_DB_PATH") if ctx.obj else None,
             no_html=no_html,
+            no_diagrams=no_diagrams,
         )
     )
 

@@ -133,6 +133,11 @@ SKIP_OUTPUT_FILE_GLOBS = [
 
 PLANTUML_EXTENSIONS = frozenset({".pu", ".puml", ".plantuml"})
 
+# Diagram sources that a build converts via the plantuml/drawio workers.
+# Narrower than IMG_SOURCE_FILE_EXTENSIONS, which also covers formats CLM
+# never converts (.psd, .xfc).
+DIAGRAM_SOURCE_EXTENSIONS = PLANTUML_EXTENSIONS | frozenset({".drawio"})
+
 IMG_FILE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".gif", ".svg"})
 
 IMG_DATA_FOLDERS = frozenset({"imgdata"})
@@ -190,6 +195,11 @@ def is_image_file(input_path: Path) -> bool:
 
 def is_image_source_file(input_path: Path) -> bool:
     return input_path.suffix in IMG_SOURCE_FILE_EXTENSIONS
+
+
+def is_diagram_source(input_path: Path) -> bool:
+    """True for DrawIO/PlantUML sources that the build converts to images."""
+    return input_path.suffix in DIAGRAM_SOURCE_EXTENSIONS
 
 
 def is_slides_file(input_path: Path) -> bool:

@@ -106,6 +106,13 @@ class Course(NotebookMixin):
     # warning and the link is dropped (text kept). Wired from the build CLI
     # ``--fail-on-missing-xref`` flag / ``CLM_FAIL_ON_MISSING_XREF`` env var.
     fail_on_missing_xref: bool = False
+    # Skip DrawIO/PlantUML processing entirely (``clm build --no-diagrams``,
+    # issue #353): diagram source files never enter the topic file maps, so
+    # no conversion job is ever scheduled. Rendered images committed next to
+    # the sources (``slides/**/img/``) are ordinary image files and still
+    # ship, so output stays complete on machines without the diagram
+    # binaries (e.g. the code-export compile CI).
+    no_diagrams: bool = False
     # Lazily-built, course-scoped cross-reference resolver. Built once after
     # sections and notebook numbers are assigned (see ``cross_reference_resolver``).
     _cross_reference_resolver: "CrossReferenceResolver | None" = field(
@@ -127,6 +134,7 @@ class Course(NotebookMixin):
         inline_images: bool = False,
         section_selection: SectionSelection | None = None,
         http_replay_mode: str | None = None,
+        no_diagrams: bool = False,
     ) -> "Course":
         """Create a Course from a CourseSpec.
 
@@ -163,6 +171,10 @@ class Course(NotebookMixin):
                 whose topic has
                 ``http_replay="yes"`` honor this; other notebooks are
                 unaffected. When ``None``, HTTP replay is off.
+            no_diagrams: When True, exclude DrawIO/PlantUML diagram
+                sources from every topic's file map so no conversion
+                jobs are scheduled (``clm build --no-diagrams``, issue
+                #353). Committed rendered images still ship.
 
         Returns:
             Configured Course instance
@@ -247,6 +259,7 @@ class Course(NotebookMixin):
             inline_images=inline_images,
             section_selection=section_selection,
             http_replay_mode=http_replay_mode,
+            no_diagrams=no_diagrams,
         )
         course._build_sections()
         course._build_dir_groups()
