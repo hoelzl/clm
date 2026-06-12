@@ -23,7 +23,6 @@ from clm.cli.commands.git import (
     OutputRepo,
     commit_and_push_repo,
     find_release_channel_repos,
-    run_git,
 )
 from clm.core.course_paths import resolve_course_paths
 from clm.core.course_spec import (
@@ -279,10 +278,24 @@ def _push_channel_repo(
 
 
 def _actual_origin_url(repo: OutputRepo) -> str | None:
-    """The ``origin`` URL the channel working tree actually has, if any."""
+    """The ``origin`` URL the channel working tree actually has, if any.
+
+    Deliberately not :func:`clm.cli.commands.git.run_git`: that helper mocks
+    out commands under the ``clm git`` dry-run ContextVar, but this read-only
+    lookup must run even in (someone else's, or provision's own) dry-run mode
+    — the dry-run *output* has to name the project that would really be
+    shared.
+    """
     if not repo.has_git:
         return None
-    result = run_git(repo.path, "remote", "get-url", "origin")
+    import subprocess
+
+    result = subprocess.run(
+        ["git", "-C", str(repo.path), "remote", "get-url", "origin"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
     if result.returncode != 0:
         return None
     return result.stdout.strip() or None

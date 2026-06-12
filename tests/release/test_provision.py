@@ -309,6 +309,8 @@ class TestProvisionCli:
         """Provision targets the repo's actual origin when one is set (#322)."""
         import subprocess
 
+        from clm.cli.commands.git import _dry_run_mode
+
         for var in ("CLM_GITLAB_TOKEN", "GITLAB_TOKEN"):
             monkeypatch.delenv(var, raising=False)
         spec_file = _write_spec(tmp_path)
@@ -328,7 +330,15 @@ class TestProvisionCli:
             check=True,
         )
 
-        result = CliRunner().invoke(release_group, ["provision", str(spec_file), "--dry-run"])
+        # The origin lookup must really run even when the `clm git` dry-run
+        # ContextVar is set (it leaks across CliRunner invocations in one
+        # test process, and provision's own --dry-run must still name the
+        # project that would actually be shared).
+        token = _dry_run_mode.set(True)
+        try:
+            result = CliRunner().invoke(release_group, ["provision", str(spec_file), "--dry-run"])
+        finally:
+            _dry_run_mode.reset(token)
         assert result.exit_code == 0, result.output
         assert "ca/the-actual-repo -> trainers (maintainer)" in result.output
         assert "ca/ml-2026-04-solutions ->" not in result.output
