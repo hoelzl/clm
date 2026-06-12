@@ -207,6 +207,14 @@ def extract_preprocessor(src: str) -> tuple[list[str], str]:
     return pp, "\n".join(rest)
 
 
+# Characters that continue an expression after a closing ``}`` at depth 0.
+# A brace-init temporary can sit mid-expression
+# (``RequestBuilder{}.setTimeout(10).send();``,
+# ``auto n = std::vector<int>{1, 2}.size();``) — a ``}`` followed by one of
+# these must not end the item.
+_EXPR_CONTINUATION_CHARS = frozenset(".,)]([<>+-*/%&|^?:!~=")
+
+
 def split_top_level_spans(src: str) -> list[tuple[int, int]]:
     """Like :func:`split_top_level`, but return ``(start, end)`` char spans.
 
@@ -242,7 +250,8 @@ def split_top_level_spans(src: str) -> list[tuple[int, int]]:
                     emit(i + 1)
                 else:
                     word = re.match(r"(else|while|catch)\b", src[j : j + 8])
-                    if not word:
+                    expr_continues = j < n and src[j] in _EXPR_CONTINUATION_CHARS
+                    if not word and not expr_continues:
                         emit(i + 1)
         elif c == "(":
             paren += 1
