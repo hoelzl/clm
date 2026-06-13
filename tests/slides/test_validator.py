@@ -2366,6 +2366,74 @@ class TestVoiceoverGapsExtraction:
         assert langs == {"de", "en"}
 
 
+class TestVoiceoverGapsWithSeparatedCompanion:
+    def test_no_gaps_when_voiceover_in_subdir_companion(self, tmp_path):
+        # Regression test for issue #360: a separated voiceover companion in
+        # the voiceover/ subdirectory must count as coverage, not produce
+        # false-positive gaps for every slide.
+        p = _write_slide(
+            tmp_path,
+            "slides_vo_companion.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"] slide_id="intro"
+            # ## Titel
+
+            # %% [markdown] lang="en" tags=["slide"] slide_id="intro"
+            # ## Title
+            """,
+        )
+        companion_dir = tmp_path / "voiceover"
+        companion_dir.mkdir()
+        _write_slide(
+            companion_dir,
+            "voiceover_vo_companion.py",
+            """\
+            # %% [markdown] lang="de" tags=["voiceover"] for_slide="intro"
+            # Voiceover DE
+
+            # %% [markdown] lang="en" tags=["voiceover"] for_slide="intro"
+            # Voiceover EN
+            """,
+        )
+        result = validate_file(p, checks=["voiceover"])
+        assert result.review_material is not None
+        gaps = result.review_material.voiceover_gaps or []
+        assert gaps == []
+
+    def test_notes_in_companion_do_not_count_as_voiceover(self, tmp_path):
+        # Secondary issue #360: only the "voiceover" tag should count as
+        # coverage, not the broader "notes" tag.
+        p = _write_slide(
+            tmp_path,
+            "slides_notes_companion.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"] slide_id="intro"
+            # ## Titel
+
+            # %% [markdown] lang="en" tags=["slide"] slide_id="intro"
+            # ## Title
+            """,
+        )
+        companion_dir = tmp_path / "voiceover"
+        companion_dir.mkdir()
+        _write_slide(
+            companion_dir,
+            "voiceover_notes_companion.py",
+            """\
+            # %% [markdown] lang="de" tags=["notes"] for_slide="intro"
+            # Notes DE
+
+            # %% [markdown] lang="en" tags=["notes"] for_slide="intro"
+            # Notes EN
+            """,
+        )
+        result = validate_file(p, checks=["voiceover"])
+        assert result.review_material is not None
+        gaps = result.review_material.voiceover_gaps or []
+        assert len(gaps) == 2
+        assert {g["lang"] for g in gaps} == {"de", "en"}
+
+
 class TestVoiceoverGapsInsideWorkshop:
     def test_workshop_internal_cells_are_suppressed(self, tmp_path):
         # Workshop heading has voiceover; subslides and code cells inside
