@@ -1593,7 +1593,10 @@ def _extract_voiceover_gaps(cells: list[Cell], file_path: str) -> list[dict]:
         if meta.is_j2:
             continue
 
-        if meta.is_narrative:
+        if "voiceover" in meta.tags:
+            # Only real voiceover cells count as coverage. ``notes`` cells are
+            # also ``is_narrative`` but must not satisfy the voiceover
+            # requirement (issue #360).
             lang = meta.lang
             if lang == "de":
                 if last_de is not None:
@@ -1991,7 +1994,20 @@ def validate_file(
         if "code_quality" in review_checks:
             review_material.code_quality = _extract_code_quality(cells, file_str)
         if "voiceover" in review_checks:
-            review_material.voiceover_gaps = _extract_voiceover_gaps(cells, file_str)
+            # Merge a separated voiceover companion (if any) into the cell
+            # stream before checking coverage. Without this, the default 1.8
+            # layout (voiceover cells in voiceover/*.py) produces a false
+            # positive for every slide (issue #360).
+            voiceover_cells = cells
+            from clm.slides.voiceover_tools import merge_voiceover_text, resolve_companion
+
+            companion = resolve_companion(path)
+            if companion is not None:
+                merged_text, _unmatched = merge_voiceover_text(
+                    text, companion.read_text(encoding="utf-8"), comment_token
+                )
+                voiceover_cells = parse_cells(merged_text, comment_token)
+            review_material.voiceover_gaps = _extract_voiceover_gaps(voiceover_cells, file_str)
         if "completeness" in review_checks:
             review_material.completeness = _extract_completeness(cells, file_str)
 

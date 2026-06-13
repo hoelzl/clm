@@ -1,0 +1,1 @@
+Fixed `clm validate --checks voiceover` so it consults separated voiceover companions (the 1.8 `voiceover/` layout). Previously the gap check only scanned inline narrative cells and reported a false positive for every slide. Coverage is now based on the `voiceover` tag only, so `notes` cells no longer count as voiceover coverage.
