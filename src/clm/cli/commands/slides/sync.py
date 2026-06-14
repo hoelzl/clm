@@ -405,6 +405,21 @@ def _resolve_single_path(de_path: Path, en_path: Path | None) -> tuple[Path, Pat
     ),
 )
 @click.option(
+    "--rebaseline",
+    is_flag=True,
+    default=False,
+    help=(
+        "Reset a STALE watermark. When the recorded watermark errors/conflicts but "
+        "the pair's halves are already consistent against git HEAD (the usual cause: "
+        "both halves edited + committed without an intervening sync), clear the "
+        "watermark and re-record it from the current state — the safe fix for the "
+        "'id-less localized cells edited on both decks' error. REFUSES if git HEAD "
+        "shows real changes/divergence, so it cannot silently mask an un-synced edit. "
+        "Writes the watermark; single-pair only; mutually exclusive with "
+        "--dry-run / --explain / --no-cache."
+    ),
+)
+@click.option(
     "--no-env-file",
     is_flag=True,
     default=False,
@@ -447,6 +462,7 @@ def slides_sync_cmd(
     verify_cold_pairs: bool | None,
     cache_dir: Path | None,
     no_cache: bool,
+    rebaseline: bool,
     no_env_file: bool,
     yes: bool,
     as_json: bool,
@@ -501,6 +517,15 @@ def slides_sync_cmd(
             "--explain and --json are mutually exclusive "
             "(--explain is a human-readable diagnostic; use --dry-run --json for the structured plan)"
         )
+    if rebaseline and (dry_run or explain):
+        raise click.UsageError(
+            "--rebaseline writes the watermark; it is mutually exclusive with "
+            "--dry-run / --explain (which write nothing)."
+        )
+    if rebaseline and no_cache:
+        raise click.UsageError(
+            "--rebaseline manages the watermark, so it cannot be combined with --no-cache."
+        )
 
     # Cold-start minting (#216 §12): a verifier is on by default when a provider is
     # configured; --no-verify-cold-pairs forces it off (cold pairs then refuse).
@@ -523,6 +548,11 @@ def slides_sync_cmd(
                 "--interactive cannot be combined with a directory (it walks one "
                 "pair's proposals). Sync a single deck/half interactively, or use "
                 "--dry-run / --explain over the directory."
+            )
+        if rebaseline:
+            raise click.UsageError(
+                "--rebaseline operates on a single deck pair; run it per deck "
+                "(e.g. `clm slides sync --rebaseline <deck>.de.py`), not over a directory."
             )
         batch_mode = "explain" if explain else ("dry-run" if dry_run else "apply")
         # One glossary resolution for the whole sweep (the translator is shared across
@@ -572,6 +602,20 @@ def slides_sync_cmd(
     # (a relative single-path run vs. a resolved batch run) and the second silently
     # misses the first's watermark and re-baselines off git HEAD.
     de_path, en_path = de_path.resolve(), en_path.resolve()
+
+    # --rebaseline: reset a stale watermark when the halves are already consistent
+    # against git HEAD. Self-contained (own cache lifetime); always sys.exit()s. No
+    # LLM is needed (a consistent pair has no proposals to reconcile), so this runs
+    # before the env load / judge resolution below.
+    if rebaseline:
+        _run_rebaseline(
+            de_path,
+            en_path,
+            cache_dir=cache_dir,
+            provider_available=provider_available,
+            as_json=as_json,
+        )
+        return  # _run_rebaseline always sys.exit()s; this is just for the type-checker.
 
     # Load the project .env before resolving the judge/translator, so keys kept
     # only in .env (the usual course-repo layout) are found. Without this, every
@@ -679,12 +723,30 @@ def slides_sync_cmd(
         _plan_exit_code(plan) if apply_result is None else _apply_exit_code(plan, apply_result)
     )
 
+    # Stale-watermark hint: the run did not come out clean against the recorded
+    # watermark, yet the halves are consistent against git HEAD — the signature of a
+    # baseline that fell behind (both halves edited + committed without a sync). Point
+    # the user at the one-command fix rather than leaving them to diagnose it.
+    rebaseline_hint = not no_cache and _is_stale_but_consistent(
+        de_path, en_path, plan, provider_available=provider_available
+    )
+
     if mode == "explain":
         click.echo(explain_text)
     elif as_json:
-        click.echo(json.dumps(_to_dict(plan, apply_result, walk, mode, exit_code), indent=2))
+        click.echo(
+            json.dumps(
+                _to_dict(
+                    plan, apply_result, walk, mode, exit_code, rebaseline_hint=rebaseline_hint
+                ),
+                indent=2,
+            )
+        )
     else:
         _print_human(plan, apply_result, walk, mode=mode)
+
+    if rebaseline_hint and not as_json:
+        click.echo(_rebaseline_hint_text(de_path), err=True)
 
     sys.exit(exit_code)
 
@@ -1185,6 +1247,139 @@ def _resolve_verifier(verify_enabled: bool) -> CorrespondenceVerifier | None:
 
 
 # ---------------------------------------------------------------------------
+# Rebaseline (reset a stale watermark) — Issue #364
+# ---------------------------------------------------------------------------
+
+
+def _githead_plan(de_path: Path, en_path: Path, *, provider_available: bool) -> SyncPlan:
+    """Classify the pair against the git-HEAD baseline (ignoring any watermark).
+
+    Passing ``watermark_cache=None`` forces ``build_sync_plan`` down its git-HEAD
+    fallback, so the result reflects only what changed since each half's commit — the
+    same baseline a cold ``sync`` (or ``--no-cache``) uses.
+    """
+    return build_sync_plan(
+        de_path, en_path, watermark_cache=None, provider_available=provider_available
+    )
+
+
+def _is_stale_but_consistent(
+    de_path: Path, en_path: Path, plan: SyncPlan, *, provider_available: bool
+) -> bool:
+    """True when the watermark run was non-trivial but git HEAD shows the pair clean.
+
+    That combination — a watermark baseline that errors/conflicts, while the halves
+    are consistent against git HEAD — is the signature of a stale watermark (the
+    baseline fell behind a both-halves edit committed without a sync). Only the
+    watermark baseline is interrogated (``baseline_source == "watermark"``); a run
+    that already fell back to git HEAD has no watermark to be stale.
+    """
+    if plan.baseline_source != "watermark" or plan.is_noop:
+        return False
+    return _githead_plan(de_path, en_path, provider_available=provider_available).is_noop
+
+
+def _rebaseline_hint_text(de_path: Path) -> str:
+    return (
+        "note: this deck's halves are consistent against git HEAD, but its recorded "
+        "watermark is stale (the usual cause: both halves edited + committed without an "
+        "intervening sync). Reset it with "
+        f"`clm slides sync --rebaseline {de_path.name}` (refuses if HEAD shows real "
+        "changes), or `clm slides watermark clear`."
+    )
+
+
+def _run_rebaseline(
+    de_path: Path,
+    en_path: Path,
+    *,
+    cache_dir: Path | None,
+    provider_available: bool,
+    as_json: bool,
+) -> None:
+    """Reset a stale watermark, or refuse when git HEAD shows real changes.
+
+    Safe by construction: the watermark is re-recorded only when the git-HEAD plan is
+    a no-op (the halves are mutually consistent at their committed state), so nothing
+    that still needs syncing is masked. A non-no-op git-HEAD plan is refused with the
+    pending changes named — the divergence must be resolved (a normal ``sync``) first.
+    Always ``sys.exit``s.
+    """
+    cache_root = resolve_cache_dir(cli_override=cache_dir)
+    watermark_cache = SyncWatermarkCache(cache_root / CACHE_DB_NAME)
+    try:
+        githead = _githead_plan(de_path, en_path, provider_available=provider_available)
+        if not githead.is_noop:
+            _emit_rebaseline_refused(de_path, githead, as_json=as_json)
+            sys.exit(2)
+        had = watermark_cache.has_pair(str(de_path), str(en_path))
+        removed = watermark_cache.clear_pair(str(de_path), str(en_path)) if had else 0
+        # Re-record the watermark from the current (consistent) state. A no-op plan has
+        # no proposals, so no judge/translator is needed; apply still writes the fresh
+        # whole-deck watermark.
+        result = apply_plan(githead, judge=None, watermark_cache=watermark_cache)
+    finally:
+        watermark_cache.close()
+    _emit_rebaseline_done(de_path, removed, result, as_json=as_json)
+    sys.exit(0)
+
+
+def _emit_rebaseline_refused(de_path: Path, githead: SyncPlan, *, as_json: bool) -> None:
+    reason = (
+        "git HEAD carries classifier errors"
+        if githead.has_errors
+        else f"git HEAD shows pending changes ({_counts_str(githead)})"
+    )
+    if as_json:
+        click.echo(
+            json.dumps(
+                {
+                    "de_path": str(de_path),
+                    "mode": "rebaseline",
+                    "exit_code": 2,
+                    "rebaselined": False,
+                    "reason": reason,
+                },
+                indent=2,
+            )
+        )
+        return
+    click.echo(
+        f"refusing to --rebaseline {de_path.name}: {reason}. The halves are not "
+        "consistent at their committed state, so re-baselining could mask an un-synced "
+        "edit — resolve it with a normal `clm slides sync` first."
+    )
+
+
+def _emit_rebaseline_done(
+    de_path: Path, removed: int, result: ApplyResult, *, as_json: bool
+) -> None:
+    if as_json:
+        click.echo(
+            json.dumps(
+                {
+                    "de_path": str(de_path),
+                    "mode": "rebaseline",
+                    "exit_code": 0,
+                    "rebaselined": True,
+                    "rows_cleared": removed,
+                    "watermark_recorded": result.watermark_recorded,
+                },
+                indent=2,
+            )
+        )
+        return
+    if removed:
+        click.echo(f"cleared {removed} stale watermark row(s) for {de_path.name}.")
+    else:
+        click.echo(f"{de_path.name} had no recorded watermark.")
+    click.echo(
+        "re-baselined off git HEAD (halves consistent); "
+        f"watermark {'recorded' if result.watermark_recorded else 'not recorded'}."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Exit codes
 # ---------------------------------------------------------------------------
 
@@ -1323,6 +1518,8 @@ def _to_dict(
     walk: PlanWalkResult | None,
     mode: str,
     exit_code: int,
+    *,
+    rebaseline_hint: bool = False,
 ) -> dict:
     return {
         "de_path": str(plan.de_path),
@@ -1332,6 +1529,7 @@ def _to_dict(
         "plan": _plan_dict(plan),
         "apply": _apply_dict(apply_result) if apply_result is not None else None,
         "walker": _walker_dict(walk) if walk is not None else None,
+        "rebaseline_hint": rebaseline_hint,
     }
 
 
