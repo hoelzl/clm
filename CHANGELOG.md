@@ -9,6 +9,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 Unreleased changes are collected as fragment files in [`changelog.d/`](changelog.d/)
 and folded into this file by `scripts/collect_changelog.py` at release time.
 
+## [1.14.0] - 2026-06-15
+
+### Added
+
+Added a `clm slides watermark` subcommand group to inspect and reset the
+per-language structural watermarks that `clm slides sync` records in the shared
+`clm-llm.sqlite` (#363). Previously a stale watermark (a deck edited and
+committed on both halves without an intervening sync) or an orphan row (files
+renamed or renumbered away) surfaced only as a confusing sync error with no
+recovery path short of hand-written SQL. `watermark list` shows every
+watermarked pair with row count, languages, last sync time, and on-disk status
+(OK / ORPHAN), with optional `PATH` scoping, `--orphans`, and `--json`;
+`watermark clear` deletes the watermark for a deck/half/stem/directory so the
+next sync re-baselines off git HEAD (`--dry-run`, directory-wide writes gated
+behind `--yes`); and `watermark prune` drops watermarks whose files no longer
+exist on disk. `clear` resolves and keys the deck through the same single-path
+and pairing guards `sync` uses, so a cleared pair is exactly the pair a
+subsequent sync looks up.
+
+Added `clm slides sync --rebaseline` to recover from a stale structural
+watermark (#364). A watermark goes stale when both halves of a split deck are
+edited and committed without an intervening sync: the baseline falls behind, so
+a later sync errors or conflicts against it ("id-less localized cells edited on
+both decks") even though the halves are mutually consistent. `--rebaseline`
+clears the stale watermark and re-records it from the current state, but only
+when the halves are consistent against git HEAD — it refuses when git HEAD shows
+real changes or divergence, so it cannot silently mask an un-synced edit
+(strictly safer than a blind `watermark clear`). It is single-pair only and
+mutually exclusive with `--dry-run`, `--explain`, and `--no-cache`. A normal
+sync run that is non-trivial against the watermark but clean against git HEAD now
+prints an actionable stale-watermark hint pointing at `--rebaseline` (and sets
+`rebaseline_hint` in `--json` output).
+
+Added an `--all` flag to every `clm git` subcommand (`init`/`status`/`commit`/`push`/`sync`/`reset`). It acts on every distributed output target **and** every release-channel repo in one pass, restoring a single push-everything command now that release channels live alongside the directly-generated output targets. Each destination is visited once (a path shared by several streams collapses to one repo), it degrades to the plain output-target set on a course with no `<release-channels>`, and it is mutually exclusive with `--target`/`--channel`/`--all-channels`. `clm git sync course.xml --all -m "…"` is now the one commit-and-push-everything command.
+
+### Fixed
+
+Fixed `clm validate --checks voiceover` so it consults separated voiceover companions (the 1.8 `voiceover/` layout). Previously the gap check only scanned inline narrative cells and reported a false positive for every slide. Coverage is now based on the `voiceover` tag only, so `notes` cells no longer count as voiceover coverage.
+
 ## [1.13.0] - 2026-06-12
 
 ### Added

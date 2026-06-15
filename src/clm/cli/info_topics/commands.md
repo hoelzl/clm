@@ -1874,6 +1874,7 @@ clm slides sync [OPTIONS] DIR          # batch: sync every pair under DIR
 | `--recovery-model TEXT` | OpenRouter model for `--llm-recover` alignment (default: `anthropic/claude-opus-4`). |
 | `--cache-dir PATH` | Directory holding the structural watermark. Lookup order: flag → `$CLM_CACHE_DIR` → `tool.clm.cache_dir` in `pyproject.toml` → `<cwd>/.clm-cache/`. |
 | `--no-cache` | Do not read or write the watermark. Every run then re-derives its baseline from git `HEAD` and no synced state is persisted. |
+| `--rebaseline` | **Recover from a stale watermark (since CLM {version}, issue #364).** A watermark goes stale when both halves are edited and committed without an intervening sync, so a later run errors/conflicts against the lagging baseline even though the halves are mutually consistent. `--rebaseline` clears the stale watermark and re-records it from the current state — but **only** when the halves are consistent against git `HEAD`; it **refuses** when git `HEAD` shows real changes or divergence, so it cannot silently mask an un-synced edit (strictly safer than a blind `watermark clear`). Single-pair only; mutually exclusive with `--dry-run`, `--explain`, and `--no-cache`. |
 | `--no-env-file` | Do not auto-load a `.env` file. By default sync loads the first `.env` found above each deck (without overriding already-set variables), so keys kept in the project `.env` reach the judge/translator. |
 | `--yes`, `-y` | **Batch (`DIR`) only.** Confirm a writing directory run without the interactive prompt. A directory apply writes to every pair under the tree, so it is gated; `--dry-run` / `--explain` directory runs are unprompted. Ignored for a single pair. |
 | `--json` | Emit a JSON report instead of human-readable lines. |
@@ -1888,6 +1889,14 @@ a proposal — for example a duplicate `slide_id` whose original cannot be
 identified (`error`), or cell order that drifted on both decks
 (`warning`, order not propagated). Any issue holds the whole watermark
 so the signal is never silently baselined.
+
+A run that is non-trivial against the watermark but **clean against git
+`HEAD`** (the stale-watermark case) now prints an actionable hint pointing
+at `--rebaseline` (since CLM {version}, issue #364), and sets
+`rebaseline_hint` in the `--json` report. Sync deliberately does **not**
+auto-heal: erroring loud on a stale watermark is what surfaces the
+underlying drift, and `--rebaseline` makes the cheap "halves agree against
+git HEAD" proof explicit before clearing.
 
 A **cold-start mint/adopt deferral** is reported with actionable detail
 (since CLM {version}, issue #231), not just a count: when the
@@ -1951,6 +1960,61 @@ clm slides sync intro.de.py intro.en.py --dry-run --json
 
 # Stateless run: ignore/leave the watermark, baseline off git HEAD.
 clm slides sync intro.de.py intro.en.py --no-cache
+
+# Recover a stale watermark after both halves were edited+committed.
+clm slides sync intro.de.py intro.en.py --rebaseline
+```
+
+### `clm slides watermark`
+
+*Added in CLM {version} (issue #363).*
+
+Inspect and reset the per-language **structural watermarks** that `clm slides
+sync` records in the shared `clm-llm.sqlite`. A watermark can go **stale** (a
+deck edited and committed on both halves without an intervening sync) or become
+an **orphan** (the underlying files were renamed or renumbered away); before
+this command the only fix was hand-written SQL against the cache. Each
+subcommand resolves and keys a deck through the same single-path and pairing
+guards `sync` uses, so a pair you clear here is exactly the pair a subsequent
+`sync` looks up.
+
+```
+clm slides watermark list  [OPTIONS] [PATH]
+clm slides watermark clear [OPTIONS] DECK
+clm slides watermark prune [OPTIONS]
+```
+
+All three accept `--cache-dir PATH` (same lookup as `clm slides sync
+--cache-dir`) to point at a non-default watermark store.
+
+| Subcommand | Description |
+|--------|-------------|
+| `list` | List every watermarked pair: row count, languages, last sync time, and on-disk status (`OK` / `ORPHAN`). An optional `PATH` scopes the listing to one deck/half/stem/directory. `--orphans` shows only pairs whose files no longer exist; `--json` emits a machine-readable report. |
+| `clear` | Delete the watermark for the resolved `DECK` (deck/half/stem/directory) so the **next** `sync` re-baselines off git `HEAD`. `--dry-run` previews without deleting. A directory-wide clear is gated behind `--yes` (it can drop many pairs at once); a single pair is unprompted. `--json` emits a report. |
+| `prune` | Drop **all** watermarks whose files no longer exist on disk (orphans from rename/renumber). `--dry-run` reports without deleting; `--json` emits a report. |
+
+For the **stale** (not orphan) case where the halves are mutually consistent,
+prefer `clm slides sync --rebaseline` over `watermark clear`: it proves the
+halves agree against git `HEAD` before resetting the baseline, whereas `clear`
+unconditionally discards it.
+
+Examples:
+
+```bash
+# Inspect every watermarked pair and its on-disk status.
+clm slides watermark list
+
+# Scope to one tree, machine-readable.
+clm slides watermark list slides/ --json
+
+# Show only orphaned watermarks (files renamed/removed).
+clm slides watermark list --orphans
+
+# Reset one pair so the next sync re-baselines off git HEAD.
+clm slides watermark clear slides/topic/intro.de.py
+
+# Drop all orphaned watermarks (files renamed/removed away).
+clm slides watermark prune
 ```
 
 ### `clm slides translate`
