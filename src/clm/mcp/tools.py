@@ -275,6 +275,137 @@ async def handle_course_outline(
 
 
 # ---------------------------------------------------------------------------
+# course_context
+# ---------------------------------------------------------------------------
+
+
+async def handle_course_context(
+    spec_file: str,
+    data_dir: Path,
+    *,
+    language: str = "en",
+    level: str = "titles",
+    through: str | None = None,
+    from_section: str | None = None,
+    before: str | None = None,
+    upto: str | None = None,
+    include_disabled: bool = False,
+    model: str | None = None,
+    no_cache: bool = False,
+) -> str:
+    """Generate an agent-audience course context, scoped to a cut point.
+
+    Args:
+        spec_file: Path to the course spec file (absolute or relative to data_dir).
+        data_dir: Root data directory.
+        language: Language code (``"en"`` or ``"de"``).
+        level: ``"titles"`` (structure only, no LLM), ``"summary"`` (per-topic
+            LLM summaries, cached), or ``"full"`` (raw extracted markdown+code).
+        through / from_section: Section selectors (1-based number or section id).
+        before / upto: Topic-anchor selectors (mutually exclusive with the
+            section selectors).
+        include_disabled: Include sections marked ``enabled="false"``, tagged.
+        model: Override the LLM model (``summary`` level only).
+        no_cache: Skip the summary cache (``summary`` level only).
+
+    Returns:
+        JSON string with the scoped course context, or an ``{"error": …}``
+        object when a selector cannot be resolved.
+    """
+    from clm.cli.commands.export.context import (
+        ScopeError,
+        load_scoped_units,
+        render_json,
+    )
+
+    if (through is not None or from_section is not None) and (
+        before is not None or upto is not None
+    ):
+        return json.dumps(
+            {
+                "error": "section selectors (through/from_section) and topic "
+                "selectors (before/upto) are mutually exclusive"
+            },
+            indent=2,
+        )
+    if before is not None and upto is not None:
+        return json.dumps({"error": "before and upto are mutually exclusive"}, indent=2)
+    if level not in ("titles", "summary", "full"):
+        return json.dumps(
+            {"error": f"unknown level {level!r}; use titles, summary, or full"}, indent=2
+        )
+
+    spec_path = Path(spec_file)
+    if not spec_path.is_absolute():
+        spec_path = data_dir / spec_path
+
+    course = _get_cached_course(spec_path)
+
+    try:
+        units = load_scoped_units(
+            course,
+            spec_path,
+            language,
+            include_optional=True,
+            include_disabled=include_disabled,
+            through=through,
+            from_section=from_section,
+            before=before,
+            upto=upto,
+        )
+    except (ScopeError, CourseSpecError) as exc:
+        return json.dumps({"error": str(exc)}, indent=2)
+
+    scope = {"through": through, "from": from_section, "before": before, "upto": upto}
+    summaries = None
+    if level == "summary":
+        summaries = await _course_context_summaries(
+            units, course, language, model=model, no_cache=no_cache, data_dir=data_dir
+        )
+
+    return json.dumps(
+        render_json(course, units, language, level=level, scope=scope, summaries=summaries),
+        indent=2,
+    )
+
+
+async def _course_context_summaries(
+    units,
+    course,
+    language: str,
+    *,
+    model: str | None,
+    no_cache: bool,
+    data_dir: Path,
+) -> dict[str, str]:
+    """Run (cache-or-LLM) agent summaries for the MCP context tool."""
+    from clm.cli.commands.export.context import _summaries_by_hash
+    from clm.infrastructure.config import get_config
+    from clm.infrastructure.llm.cache import SummaryCache
+
+    llm_config = get_config().llm
+    cache = None if no_cache else SummaryCache(data_dir / "clm_summaries.db")
+    try:
+        return await _summaries_by_hash(
+            units,
+            course,
+            language,
+            style="bullets",
+            model=model or llm_config.model,
+            temperature=llm_config.temperature,
+            api_base=llm_config.api_base or None,
+            api_key=llm_config.api_key or None,
+            max_concurrent=llm_config.max_concurrent,
+            cache=cache,
+            no_cache=no_cache,
+            progress=None,
+        )
+    finally:
+        if cache:
+            cache.close()
+
+
+# ---------------------------------------------------------------------------
 # validate_spec
 # ---------------------------------------------------------------------------
 

@@ -58,7 +58,18 @@ logger = logging.getLogger(__name__)
 # Tags indicating cells that should be excluded from summarization
 SKIP_TAGS = {"del", "private", "notes"}
 
-# Patterns indicating a notebook contains a workshop
+# Audiences whose extracted content includes code cells (not just markdown).
+# "client" gets prose-only material; "trainer" and "agent" also see the code.
+_CODE_AUDIENCES = {"trainer", "agent"}
+
+# Jupytext percent-format source suffixes (the format every CLM source deck is
+# authored in — .ipynb only ever appears as build *output*). Workshop detection
+# and content extraction both branch on this set.
+_PERCENT_SUFFIXES = (".py", ".cs", ".cpp", ".cxx", ".cc", ".java", ".ts", ".rs")
+
+# Patterns indicating a notebook contains a workshop. Only used for the .ipynb
+# fallback heuristic; percent-format decks use the canonical tag-based detector
+# (see ``notebook_contains_workshop``).
 WORKSHOP_PATTERNS = re.compile(
     r"(?i)\b(workshop|exercise|hands[- ]on|[uü]bung)\b",
 )
@@ -67,8 +78,42 @@ WORKSHOP_PATTERNS = re.compile(
 MAX_CONTENT_CHARS = 48_000
 
 
+def notebook_contains_workshop(notebook_path: Path) -> bool:
+    """Whether a deck contains a workshop, for any supported source format.
+
+    Source decks are jupytext percent-format (``.py``/``.cs``/``.cpp``/…); for
+    those this uses the **canonical** workshop-range detection — the
+    ``workshop`` / ``end-workshop`` tag and ``workshop-…`` slide_id convention
+    shared with the validator (:func:`clm.slides.workshop_scope.find_workshop_ranges`)
+    — rather than a heading regex, so it agrees with the rest of the toolchain.
+
+    ``.ipynb`` (build output, not a source format in practice) falls back to the
+    heading/tag heuristic in :func:`detect_workshop`. Unknown formats and
+    unreadable files return ``False``.
+    """
+    suffix = notebook_path.suffix.lower()
+    if suffix in _PERCENT_SUFFIXES:
+        try:
+            text = notebook_path.read_text(encoding="utf-8")
+        except OSError:
+            return False
+        from clm.notebooks.slide_parser import comment_token_for_path, parse_cells
+        from clm.slides.workshop_scope import find_workshop_ranges
+
+        cells = parse_cells(text, comment_token_for_path(notebook_path))
+        return bool(find_workshop_ranges(cells))
+    if suffix == ".ipynb":
+        return detect_workshop(get_notebook_cells(notebook_path))
+    return False
+
+
 def detect_workshop(cells: list[dict]) -> bool:
-    """Check if any cell indicates a workshop/exercise."""
+    """Heading/tag workshop heuristic for ``.ipynb`` cells (dict form).
+
+    Used only for the ``.ipynb`` fallback in :func:`notebook_contains_workshop`;
+    percent-format source decks use the canonical tag-based range detector
+    instead.
+    """
     for cell in cells:
         if cell.get("cell_type") != "markdown":
             continue
@@ -102,7 +147,7 @@ def extract_notebook_content(
 
     Args:
         notebook_path: Path to the notebook file
-        audience: "client" or "trainer"
+        audience: "client" (markdown only) or "trainer"/"agent" (markdown + code)
         language: Language code ("en" or "de") — cells tagged for a
             different language are excluded.
 
@@ -119,7 +164,7 @@ def extract_notebook_content(
 
     if suffix == ".ipynb":
         return _extract_from_ipynb(text, audience, language)
-    elif suffix in (".py", ".cs", ".cpp", ".cxx", ".cc", ".java", ".ts", ".rs"):
+    elif suffix in _PERCENT_SUFFIXES:
         from clm.notebooks.slide_parser import comment_token_for_path
 
         return _extract_from_py(text, audience, comment_token_for_path(notebook_path))
@@ -150,7 +195,7 @@ def _extract_from_ipynb(text: str, audience: str, language: str = "en") -> str:
 
         if cell_type == "markdown":
             parts.append(source)
-        elif cell_type == "code" and audience == "trainer":
+        elif cell_type == "code" and audience in _CODE_AUDIENCES:
             parts.append(f"```\n{source}\n```")
 
     content = "\n\n".join(parts)
@@ -190,7 +235,7 @@ def _extract_from_py(text: str, audience: str, comment_token: str = "#") -> str:
                 current_block.append("")
             else:
                 current_block.append(line)
-        elif audience == "trainer":
+        elif audience in _CODE_AUDIENCES:
             current_block.append(line)
 
     if current_block:
@@ -506,10 +551,7 @@ async def generate_summaries(
                     for nb in notebooks:
                         progress.on_cached(nb.title[language])
             else:
-                cells = []
-                for nb in notebooks:
-                    cells.extend(get_notebook_cells(nb.path))
-                has_ws = detect_workshop(cells)
+                has_ws = any(notebook_contains_workshop(nb.path) for nb in notebooks)
 
                 try:
                     summary = await summarize_notebook(
@@ -581,8 +623,7 @@ async def generate_summaries(
                     if audience == "client":
                         lines.append(_format_client_entry(title, cached_result, style))
                     else:
-                        cells = get_notebook_cells(nb.path)
-                        has_ws = detect_workshop(cells)
+                        has_ws = notebook_contains_workshop(nb.path)
                         ws_marker = " **[Workshop]**" if has_ws else ""
                         lines.append(f"### {title}{ws_marker}")
                         lines.append(cached_result)
@@ -594,8 +635,7 @@ async def generate_summaries(
                 # Run LLM calls concurrently
                 async_tasks = []
                 for nb, title, content, h in pending_tasks:
-                    cells = get_notebook_cells(nb.path)
-                    has_ws = detect_workshop(cells)
+                    has_ws = notebook_contains_workshop(nb.path)
                     async_tasks.append(
                         (
                             title,

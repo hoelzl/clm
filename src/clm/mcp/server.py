@@ -16,6 +16,7 @@ from mcp.server.fastmcp import FastMCP
 
 from clm.mcp.tools import (
     handle_course_authoring_rules,
+    handle_course_context,
     handle_course_outline,
     handle_extract_voiceover,
     handle_get_language_view,
@@ -118,6 +119,57 @@ def create_server(data_dir: Path) -> FastMCP:
             data_dir,
             language=language,
             include_disabled=include_disabled,
+        )
+
+    @mcp.tool()
+    async def course_context(
+        spec_file: str,
+        language: str = "en",
+        level: str = "titles",
+        through: str | None = None,
+        from_section: str | None = None,
+        before: str | None = None,
+        upto: str | None = None,
+        include_disabled: bool = False,
+        model: str | None = None,
+        no_cache: bool = False,
+    ) -> str:
+        """Course context for an LLM authoring or revising material.
+
+        Returns a "what has been taught up to here" view scoped to a cut
+        point, so an assistant writing later material can reference prior
+        topics and avoid re-teaching them. Three depths via ``level``.
+
+        Args:
+            spec_file: Path to the course spec file (absolute, or relative
+                to the data directory).
+            language: Language code ("en" or "de").
+            level: "titles" (structure only, no LLM — the default, so a
+                call never silently triggers a paid LLM request),
+                "summary" (per-topic LLM summaries, cached), or "full"
+                (raw extracted markdown+code, no LLM).
+            through: Include sections up to and including this one (1-based
+                number or section id). Mutually exclusive with before/upto.
+            from_section: Start the section window here (pairs with through).
+            before: Include everything authored strictly before this topic id.
+            upto: Include everything up to and including this topic id.
+            include_disabled: Include sections marked enabled="false", tagged
+                with "disabled": true.
+            model: Override the LLM model identifier (level="summary" only).
+            no_cache: Skip the summary cache (level="summary" only).
+        """
+        return await handle_course_context(
+            spec_file,
+            data_dir,
+            language=language,
+            level=level,
+            through=through,
+            from_section=from_section,
+            before=before,
+            upto=upto,
+            include_disabled=include_disabled,
+            model=model,
+            no_cache=no_cache,
         )
 
     @mcp.tool()

@@ -26,6 +26,7 @@ EXPECTED_TOOLS = {
     "topic_resolve",
     "slides_search",
     "course_outline",
+    "course_context",
     "validate",
     "slides_normalize",
     "slides_language_view",

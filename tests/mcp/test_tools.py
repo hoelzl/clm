@@ -12,6 +12,7 @@ import pytest
 
 from clm.mcp.tools import (
     handle_course_authoring_rules,
+    handle_course_context,
     handle_course_outline,
     handle_extract_voiceover,
     handle_get_language_view,
@@ -261,6 +262,89 @@ class TestHandleCourseOutline:
         disabled = next(s for s in data["sections"] if s["disabled"])
         assert disabled["name"] == "Disabled Section"
         assert disabled["id"] == "w99"
+
+
+# ---------------------------------------------------------------------------
+# course_context
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def real_spec(tmp_path):
+    """The repo's test-spec-1 (absolute), with topics that actually resolve.
+
+    data_dir is only used for the summary cache here (spec path is absolute),
+    so a throwaway tmp_path is fine.
+    """
+    spec_path = Path("tests/test-data/course-specs/test-spec-1.xml").resolve()
+    return tmp_path, spec_path
+
+
+class TestHandleCourseContext:
+    async def test_titles_default(self, real_spec):
+        data_dir, spec_path = real_spec
+        result = await handle_course_context(str(spec_path), data_dir, language="en")
+        data = json.loads(result)
+        assert data["level"] == "titles"
+        assert data["course_name"] == "My Course"
+        # titles level: no LLM, no per-slide summary/content
+        slide = data["sections"][0]["topics"][0]["slides"][0]
+        assert "summary" not in slide and "content" not in slide
+
+    async def test_section_scope_through(self, real_spec):
+        data_dir, spec_path = real_spec
+        result = await handle_course_context(str(spec_path), data_dir, through="1")
+        data = json.loads(result)
+        assert [s["number"] for s in data["sections"]] == [1]
+
+    async def test_topic_scope_upto(self, real_spec):
+        data_dir, spec_path = real_spec
+        full = json.loads(await handle_course_context(str(spec_path), data_dir))
+        topic_ids = [t["topic_id"] for s in full["sections"] for t in s["topics"]]
+        assert len(topic_ids) >= 2
+        scoped = json.loads(
+            await handle_course_context(str(spec_path), data_dir, upto=topic_ids[0])
+        )
+        kept = [t["topic_id"] for s in scoped["sections"] for t in s["topics"]]
+        assert kept == [topic_ids[0]]
+
+    async def test_full_level_has_content(self, real_spec):
+        data_dir, spec_path = real_spec
+        result = await handle_course_context(str(spec_path), data_dir, level="full", through="1")
+        data = json.loads(result)
+        assert data["level"] == "full"
+        slide = data["sections"][0]["topics"][0]["slides"][0]
+        assert "content" in slide and slide["content"]
+
+    async def test_mutually_exclusive_selectors_error(self, real_spec):
+        data_dir, spec_path = real_spec
+        result = await handle_course_context(str(spec_path), data_dir, through="1", before="x")
+        assert "error" in json.loads(result)
+
+    async def test_unknown_level_error(self, real_spec):
+        data_dir, spec_path = real_spec
+        result = await handle_course_context(str(spec_path), data_dir, level="bogus")
+        assert "error" in json.loads(result)
+
+    async def test_unknown_topic_error(self, real_spec):
+        data_dir, spec_path = real_spec
+        result = await handle_course_context(str(spec_path), data_dir, upto="ghost")
+        assert "error" in json.loads(result)
+
+    async def test_summary_level_mocked_llm(self, real_spec):
+        from unittest.mock import AsyncMock, patch
+
+        data_dir, spec_path = real_spec
+        mock = AsyncMock(return_value="AGENT SUMMARY")
+        with patch("clm.infrastructure.llm.client.summarize_notebook", mock):
+            result = await handle_course_context(
+                str(spec_path), data_dir, level="summary", through="1", no_cache=True
+            )
+        data = json.loads(result)
+        assert data["level"] == "summary"
+        slide = data["sections"][0]["topics"][0]["slides"][0]
+        assert slide["summary"] == "AGENT SUMMARY"
+        assert all(c.kwargs["audience"] == "agent" for c in mock.await_args_list)
 
 
 # ---------------------------------------------------------------------------

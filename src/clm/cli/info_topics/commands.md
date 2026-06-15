@@ -499,8 +499,8 @@ clm run release-week course.xml "name:Week 09"
 ### `clm export`
 
 Group for the **course-document exports** — commands that turn a course spec
-into a human-readable document: `outline`, `schedule`, and `summary`. (These
-replace the former flat `clm outline` / `clm schedule` / `clm summarize`
+into a document: `outline`, `schedule`, `summary`, and `context`. (The first
+three replace the former flat `clm outline` / `clm schedule` / `clm summarize`
 top-level commands, which were removed.)
 
 All three share a common option vocabulary:
@@ -3106,6 +3106,56 @@ clm export summary course.xml --audience trainer --model openai/gpt-4o
 clm export summary course.xml --audience client --style bullets
 clm export summary course.xml --audience client --include-disabled=merge
 ```
+
+#### `clm export context` (CLM {version}+)
+
+Export an **agent-audience** view of a course, scoped to a cut point — a "what
+has been taught up to here" reference for an **LLM that is authoring or revising
+course material**. An assistant writing section 11 can pull the context for
+sections 1–10 so it can reference prior workshops and avoid re-teaching concepts
+the participants already know. This is distinct from `export summary` (whose
+`client`/`trainer` audiences write human-facing prose) and `export outline`
+(titles only): `context` adds **scope selection** and an **`agent` audience**
+tuned for an LLM consumer (dense, factual notes on the concepts, terms and APIs
+introduced).
+
+```
+clm export context [OPTIONS] SPEC_FILE
+```
+
+| Option | Description |
+|--------|-------------|
+| `--level [titles\|summary\|full]` | Depth (default: `summary`). `titles`: section/topic/slide structure only, deterministic, **no LLM**. `summary`: per-topic LLM summaries under the `agent` audience, **cached** (reuses `export summary`'s `clm_summaries.db`). `full`: raw extracted markdown **+ code** per topic, deterministic, **no LLM** (complete but large). |
+| `--through SECTION` | Include sections up to and including `SECTION` — a 1-based section number or a section id. |
+| `--from SECTION` | Start the window at `SECTION` (pairs with `--through`; without it, runs to the end). |
+| `--before TOPIC_ID` | Include everything authored **strictly before** `TOPIC_ID`. |
+| `--upto TOPIC_ID` | Include everything **up to and including** `TOPIC_ID`. |
+| `-f, --format [markdown\|json]` | Output format (default: `markdown`). |
+| `--style [prose\|bullets]` | Summary style for `--level summary` (default: `bullets`). |
+| `-L/-o/-d/--include-optional/--include-disabled` | Shared options (see `clm export`; `--include-disabled=merge` is **not** supported here — use a bare `--include-disabled` to tag disabled sections). |
+| `--model TEXT` / `--api-base TEXT` / `--no-cache` / `--no-progress` | LLM controls, used only at `--level summary`. |
+
+The two scope families are **mutually exclusive**: section selectors
+(`--through`/`--from`) work at section granularity; topic selectors
+(`--before`/`--upto`) cut at a topic anchor, keeping earlier sections whole and
+truncating the anchor's section. Section **numbers are preserved** under
+scoping — `--from 5 --through 10` yields sections still numbered 5..10. An
+unresolvable selector (unknown section number/id or topic id) is an error.
+
+Examples:
+
+```bash
+clm export context course.xml --through 10                 # sections 1-10, agent summaries
+clm export context course.xml --through 10 --level titles  # cheap structure, no LLM
+clm export context course.xml --from 5 --through 10        # a window
+clm export context course.xml --before rag_intro           # everything before a topic
+clm export context course.xml --upto rag_intro --level full
+clm export context course.xml --through 10 -f json -o ctx.json
+```
+
+The same capability is available to MCP clients as the `course_context` tool
+(start the server with `clm mcp`); there it defaults to `level=titles` so a tool
+call never silently triggers a paid LLM request.
 
 ### `clm voiceover`
 
