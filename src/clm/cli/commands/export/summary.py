@@ -58,6 +58,10 @@ logger = logging.getLogger(__name__)
 # Tags indicating cells that should be excluded from summarization
 SKIP_TAGS = {"del", "private", "notes"}
 
+# Audiences whose extracted content includes code cells (not just markdown).
+# "client" gets prose-only material; "trainer" and "agent" also see the code.
+_CODE_AUDIENCES = {"trainer", "agent"}
+
 # Patterns indicating a notebook contains a workshop
 WORKSHOP_PATTERNS = re.compile(
     r"(?i)\b(workshop|exercise|hands[- ]on|[uü]bung)\b",
@@ -102,7 +106,7 @@ def extract_notebook_content(
 
     Args:
         notebook_path: Path to the notebook file
-        audience: "client" or "trainer"
+        audience: "client" (markdown only) or "trainer"/"agent" (markdown + code)
         language: Language code ("en" or "de") — cells tagged for a
             different language are excluded.
 
@@ -150,7 +154,7 @@ def _extract_from_ipynb(text: str, audience: str, language: str = "en") -> str:
 
         if cell_type == "markdown":
             parts.append(source)
-        elif cell_type == "code" and audience == "trainer":
+        elif cell_type == "code" and audience in _CODE_AUDIENCES:
             parts.append(f"```\n{source}\n```")
 
     content = "\n\n".join(parts)
@@ -190,7 +194,7 @@ def _extract_from_py(text: str, audience: str, comment_token: str = "#") -> str:
                 current_block.append("")
             else:
                 current_block.append(line)
-        elif audience == "trainer":
+        elif audience in _CODE_AUDIENCES:
             current_block.append(line)
 
     if current_block:
