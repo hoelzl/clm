@@ -344,3 +344,70 @@ class TestAgentAudience:
         client = extract_notebook_content(path, "client", "en")
         assert "secret_api_call()" in agent
         assert "secret_api_call()" not in client
+
+
+# ---------------------------------------------------------------------------
+# Workshop detection on percent-format (.py) source decks
+# ---------------------------------------------------------------------------
+class TestWorkshopDetection:
+    """Source decks are jupytext .py — detection must work on those, not just
+    .ipynb (which only ever appears as build output)."""
+
+    def _deck(self, tmp_path, body: str) -> Path:
+        path = tmp_path / "slides_x.py"
+        path.write_text(body, encoding="utf-8")
+        return path
+
+    def test_workshop_tag_detected(self, tmp_path):
+        from clm.cli.commands.export.summary import notebook_contains_workshop
+
+        deck = self._deck(
+            tmp_path,
+            "# %% [markdown]\n# # Intro\n\n"
+            '# %% [markdown] tags=["workshop"]\n# ## Build a parser\n\n# %%\ndef solve(): ...\n',
+        )
+        assert notebook_contains_workshop(deck) is True
+
+    def test_workshop_slide_id_detected(self, tmp_path):
+        from clm.cli.commands.export.summary import notebook_contains_workshop
+
+        deck = self._deck(
+            tmp_path,
+            '# %% [markdown] tags=["slide"] slide_id="workshop-persona"\n# ## Persona\n\n# %%\ny = 2\n',
+        )
+        assert notebook_contains_workshop(deck) is True
+
+    def test_no_workshop(self, tmp_path):
+        from clm.cli.commands.export.summary import notebook_contains_workshop
+
+        deck = self._deck(tmp_path, "# %% [markdown]\n# # Topic\n# Plain text.\n\n# %%\nx = 1\n")
+        assert notebook_contains_workshop(deck) is False
+
+    def test_prose_mention_is_not_a_false_positive(self, tmp_path):
+        """The canonical tag-based detector ignores the word 'exercise' in prose,
+        unlike the old .ipynb heading-regex heuristic."""
+        from clm.cli.commands.export.summary import notebook_contains_workshop
+
+        deck = self._deck(
+            tmp_path,
+            "# %% [markdown]\n# # Topic\n# We will do an exercise about this later.\n",
+        )
+        assert notebook_contains_workshop(deck) is False
+
+    def test_unreadable_file_is_false(self, tmp_path):
+        from clm.cli.commands.export.summary import notebook_contains_workshop
+
+        assert notebook_contains_workshop(tmp_path / "missing.py") is False
+
+    def test_ipynb_fallback_still_works(self, tmp_path):
+        from clm.cli.commands.export.summary import notebook_contains_workshop
+
+        nb = {
+            "cells": [{"cell_type": "markdown", "metadata": {}, "source": ["# Workshop: x"]}],
+            "metadata": {},
+            "nbformat": 4,
+            "nbformat_minor": 5,
+        }
+        path = tmp_path / "n.ipynb"
+        path.write_text(json.dumps(nb), encoding="utf-8")
+        assert notebook_contains_workshop(path) is True

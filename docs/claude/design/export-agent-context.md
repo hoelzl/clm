@@ -34,6 +34,15 @@ A new command `clm export context SPEC_FILE` (module
    (`clm_summaries.db`) is already keyed by audience, so `agent` partitions
    automatically — **no schema change**.
 
+   *Workshop hint.* The `has_workshop` signal feeding the prompt comes from
+   `notebook_contains_workshop()` (in `export/summary.py`), which detects
+   workshops on the jupytext percent-format `.py` source decks via the canonical
+   `workshop`/`end-workshop` tag + `workshop-…` slide_id convention
+   (`clm.slides.workshop_scope.find_workshop_ranges`). The previous `.ipynb`-only
+   JSON parse was dead for real courses (decks are `.py`; `.ipynb` is build
+   output) — it is kept only as a fallback. This fix also restores the
+   `[Workshop]` marker in `export summary --audience trainer`.
+
 2. **Scope** (the novel part). Two mutually-exclusive selector families over the
    ordered (section, topic) walk:
    - Section: `--through SECTION` (+ optional `--from SECTION`); `SECTION` is a

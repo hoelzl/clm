@@ -49,9 +49,8 @@ from clm.cli.commands._export_shared import (
 from clm.cli.commands.export.summary import (
     SummarizeProgress,
     content_hash,
-    detect_workshop,
     extract_notebook_content,
-    get_notebook_cells,
+    notebook_contains_workshop,
 )
 from clm.core.course import Course
 from clm.core.course_files.notebook_file import NotebookFile
@@ -399,7 +398,7 @@ async def _summaries_by_hash(
                     if progress:
                         progress.on_cached(nb.title)
                     continue
-                has_ws = detect_workshop(get_notebook_cells(nb.path))
+                has_ws = notebook_contains_workshop(nb.path)
                 pending.append((h, nb.title, content, has_ws, unit.name))
 
     if not pending:
