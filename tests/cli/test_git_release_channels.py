@@ -280,6 +280,41 @@ class TestSelectReposGuards:
         # private build input — default enumeration skips it (issue #292).
         assert repos == []
 
+    def test_all_unions_output_targets_and_channels(self, tmp_path: Path):
+        """``--all`` returns every distributed output target *plus* every channel."""
+        spec_file = _write_spec(tmp_path, SPEC_DISTRIBUTE)
+        repos = _select_repos(
+            spec_file, target=None, channel=None, all_channels=False, all_repos=True
+        )
+        # trainer + legacy are the distributed targets (completed is the release
+        # source, auto-excluded); jan is the sole release channel.
+        assert {r.target_name for r in repos} == {"trainer", "legacy", "jan"}
+
+    def test_all_degrades_to_output_targets_without_channels(self, tmp_path: Path):
+        """A course with no <release-channels> falls back to the plain target set."""
+        spec_file = _write_spec(tmp_path, SPEC_NO_CHANNELS)
+        repos = _select_repos(
+            spec_file, target=None, channel=None, all_channels=False, all_repos=True
+        )
+        # Default output structure: public × de/en (speaker is opt-in), no
+        # channels to add.
+        assert {r.target_name for r in repos} == {"public"}
+        assert all(r.source == "output" for r in repos)
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"target": "trainer"},
+            {"channel": "jan"},
+            {"all_channels": True},
+        ],
+    )
+    def test_all_is_mutually_exclusive(self, tmp_path: Path, kwargs):
+        spec_file = _write_spec(tmp_path, SPEC_DISTRIBUTE)
+        base = {"target": None, "channel": None, "all_channels": False}
+        with pytest.raises(click.UsageError, match="--all cannot be combined"):
+            _select_repos(spec_file, **{**base, **kwargs}, all_repos=True)
+
     def test_all_channels_visits_a_shared_destination_once(self, tmp_path: Path):
         """Channels of different streams releasing into one working tree are
         one repo to ``clm git`` (issue #325)."""
@@ -502,6 +537,28 @@ class TestChannelGitEndToEnd:
         )
         assert result.exit_code != 0
         assert "cannot be combined" in result.output
+
+    def test_all_flag_reports_targets_and_channels_together(self, tmp_path: Path, git_identity):
+        """``status --all`` visits distributed output targets *and* every channel."""
+        spec_file = _write_spec(tmp_path, SPEC_DISTRIBUTE)
+        for rel in ("output/trainer", "output/legacy", "solutions/jan"):
+            (tmp_path / rel).mkdir(parents=True, exist_ok=True)
+        runner = CliRunner()
+        runner.invoke(git_group, ["init", str(spec_file), "--all"])
+
+        result = runner.invoke(git_group, ["status", str(spec_file), "--all"])
+        assert result.exit_code == 0, result.output
+        assert "[trainer/de]" in result.output
+        assert "[legacy/de]" in result.output
+        assert "[jan]" in result.output
+
+    def test_all_flag_conflicts_with_channel_at_cli(self, tmp_path: Path):
+        spec_file = _write_spec(tmp_path, SPEC_DISTRIBUTE)
+        result = CliRunner().invoke(
+            git_group, ["status", str(spec_file), "--all", "--all-channels"]
+        )
+        assert result.exit_code != 0
+        assert "--all cannot be combined" in result.output
 
     def test_nested_manifest_is_also_excluded(self, tmp_path: Path, git_identity):
         """A manifest at any depth — not just the root — must never be tracked."""

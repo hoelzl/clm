@@ -2806,6 +2806,7 @@ Key options for `git commit`, `git push`, and `git sync`:
 | `--target` | all | Filter to specific output target. Also the only way to act on a non-distributed target (see below). |
 | `--channel NAME` | all | Act on the named release-channel (cohort) repo instead of output targets (issues #208, #291). With several release streams, address a channel as `STREAM/CHANNEL` (e.g. `materials/2026-04`); a bare name works when unique. Mutually exclusive with `--target`. |
 | `--all-channels` | all | Act on every release-channel (cohort) repo of every stream instead of output targets. Mutually exclusive with `--target`. |
+| `--all` | all | Act on every distributed output target **and** every release-channel repo in one pass (CLM {version}+) — the single push-everything workflow. Each destination is visited once (a path shared by several streams collapses to one repo). On a course with no `<release-channels>`, it degrades to the plain output-target set. Mutually exclusive with `--target`/`--channel`/`--all-channels`. |
 | `--dry-run` | all | Show what would be done |
 
 **Non-distributed targets (issue #292).** Without `--target`, `clm git` skips
@@ -2837,6 +2838,8 @@ clm git sync course.xml --force-with-lease -m "msg"  # commit + force push
 clm git init course.xml --channel jan          # create one cohort repo
 clm git sync course.xml --channel jan -m "Release functions"  # push a cohort
 clm git status course.xml --all-channels       # status of every cohort repo
+clm git push course.xml --all                  # push targets + every cohort in one go
+clm git sync course.xml --all -m "Weekly update"  # commit + push everything
 ```
 
 `git init` is idempotent — re-running it after creating remote repositories will
@@ -2862,6 +2865,16 @@ Channels of different streams sharing one destination path (issue #325) are one
 repo to `clm git`: `--all-channels` visits the shared working tree once, and
 `clm git reset` on it is repo-wide — it discards the other stream's uncommitted
 promotions too.
+
+**Push everything in one command (`--all`).** `--channel`/`--all-channels` act
+*instead of* the output targets, so before this flag pushing a fully-built course
+meant two passes (`clm git push course.xml` then `clm git push course.xml
+--all-channels`). `--all` unions both worlds in a single invocation — every
+distributed output target plus every release-channel repo, each destination
+visited once — so `clm git sync course.xml --all -m "…"` is the one
+commit-and-push-everything command. It degrades cleanly to the plain
+output-target set on a course that declares no `<release-channels>`, and is
+mutually exclusive with `--target`/`--channel`/`--all-channels`.
 
 ### `clm release`
 

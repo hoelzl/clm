@@ -484,6 +484,7 @@ def _select_repos(
     target: str | None,
     channel: str | None,
     all_channels: bool,
+    all_repos: bool = False,
 ) -> list[OutputRepo]:
     """Resolve the repo set a ``clm git`` subcommand should act on.
 
@@ -491,7 +492,24 @@ def _select_repos(
     ``--target``). ``--channel NAME`` or ``--all-channels`` switches to the
     per-cohort release-channel repos instead; the two modes are mutually
     exclusive with ``--target``.
+
+    ``--all`` unions both worlds: every distributed output target *plus* every
+    release-channel repo, visited once each (issue: single push-everything
+    command). A destination shared by several streams collapses to one entry
+    via :func:`_dedupe_shared_destinations`, which also folds in the (rare)
+    case of a channel path that coincides with an output target. It is mutually
+    exclusive with ``--target``/``--channel``/``--all-channels`` and degrades to
+    the plain output-target set on a course that declares no
+    ``<release-channels>``.
     """
+    if all_repos:
+        if target or channel or all_channels:
+            raise click.UsageError(
+                "--all cannot be combined with --target/--channel/--all-channels."
+            )
+        output_repos = find_output_repos(spec_file)
+        channel_repos = find_release_channel_repos(spec_file)
+        return _dedupe_shared_destinations([*output_repos, *channel_repos])
     if channel or all_channels:
         if target:
             raise click.UsageError("--target cannot be combined with --channel/--all-channels.")
@@ -849,6 +867,13 @@ _all_channels_option = click.option(
     is_flag=True,
     help="Act on every release-channel (cohort) repo of every stream instead of output targets.",
 )
+_all_option = click.option(
+    "--all",
+    "all_repos",
+    is_flag=True,
+    help="Act on every distributed output target AND every release-channel repo in one pass. "
+    "Mutually exclusive with --target/--channel/--all-channels.",
+)
 
 
 @click.group(name="git")
@@ -871,6 +896,7 @@ def git_group():
 @click.option("--target", help="Specific output target name")
 @_channel_option
 @_all_channels_option
+@_all_option
 @click.option("--branch", default="master", help="Default branch name")
 @click.option("--dry-run", is_flag=True, help="Show what would be done without executing")
 def init(
@@ -878,6 +904,7 @@ def init(
     target: str | None,
     channel: str | None,
     all_channels: bool,
+    all_repos: bool,
     branch: str,
     dry_run: bool,
 ):
@@ -890,13 +917,15 @@ def init(
     - Local repo exists, remote exists: add remote origin if not yet configured
 
     Use --channel NAME / --all-channels to initialize per-cohort release
-    repositories instead of output targets (issue #208).
+    repositories instead of output targets (issue #208). Use --all to
+    initialize output targets and every release channel in one pass.
 
     \b
     Examples:
         clm git init course.xml                # Initialize all targets
         clm git init course.xml --target students  # Initialize specific target
         clm git init course.xml --channel jan      # Initialize a cohort repo
+        clm git init course.xml --all          # Targets + every release channel
         clm git init course.xml --dry-run      # Show what would be done
     """
     _dry_run_mode.set(dry_run)
@@ -904,7 +933,9 @@ def init(
         click.echo("[DRY RUN MODE - No changes will be made]")
         click.echo()
 
-    repos = _select_repos(spec_file, target=target, channel=channel, all_channels=all_channels)
+    repos = _select_repos(
+        spec_file, target=target, channel=channel, all_channels=all_channels, all_repos=all_repos
+    )
 
     if not repos:
         click.echo("No output directories found.")
@@ -937,25 +968,29 @@ def init(
 @click.option("--target", help="Specific output target name")
 @_channel_option
 @_all_channels_option
+@_all_option
 @click.option("--dry-run", is_flag=True, help="Show paths that would be checked")
 def status(
     spec_file: Path,
     target: str | None,
     channel: str | None,
     all_channels: bool,
+    all_repos: bool,
     dry_run: bool,
 ):
     """Show git status of output directories.
 
     Displays the git status for each output target that has a repository.
     Use --channel NAME / --all-channels to report on per-cohort release
-    repositories instead of output targets (issue #208).
+    repositories instead of output targets (issue #208). Use --all to report
+    on output targets and every release channel in one pass.
 
     \b
     Examples:
         clm git status course.xml
         clm git status course.xml --target students
         clm git status course.xml --all-channels
+        clm git status course.xml --all
         clm git status course.xml --dry-run
     """
     _dry_run_mode.set(dry_run)
@@ -963,7 +998,9 @@ def status(
         click.echo("[DRY RUN MODE - Showing paths that would be checked]")
         click.echo()
 
-    repos = _select_repos(spec_file, target=target, channel=channel, all_channels=all_channels)
+    repos = _select_repos(
+        spec_file, target=target, channel=channel, all_channels=all_channels, all_repos=all_repos
+    )
 
     if not repos:
         click.echo("No output directories found.")
@@ -1025,6 +1062,7 @@ def status(
 @click.option("--target", help="Specific output target name")
 @_channel_option
 @_all_channels_option
+@_all_option
 @click.option("--dry-run", is_flag=True, help="Show what would be done without executing")
 def commit(
     spec_file: Path,
@@ -1033,6 +1071,7 @@ def commit(
     target: str | None,
     channel: str | None,
     all_channels: bool,
+    all_repos: bool,
     dry_run: bool,
 ):
     """Stage all changes and commit.
@@ -1040,7 +1079,8 @@ def commit(
     Stages all files (except the private ``.clm-manifest.json``) and creates a
     commit with the given message. Skips repositories with no changes. Use
     --channel NAME / --all-channels to commit per-cohort release repositories
-    instead of output targets (issue #208).
+    instead of output targets (issue #208). Use --all to commit output targets
+    and every release channel in one pass.
 
     \b
     Examples:
@@ -1049,6 +1089,7 @@ def commit(
         clm git commit course.xml --amend -m "New message"
         clm git commit course.xml -m "Fix typos" --target students
         clm git commit course.xml -m "Release functions" --channel jan
+        clm git commit course.xml -m "Weekly update" --all
     """
     if not message and not amend:
         raise click.UsageError("Either -m/--message or --amend must be provided.")
@@ -1058,7 +1099,9 @@ def commit(
         click.echo("[DRY RUN MODE - No changes will be made]")
         click.echo()
 
-    repos = _select_repos(spec_file, target=target, channel=channel, all_channels=all_channels)
+    repos = _select_repos(
+        spec_file, target=target, channel=channel, all_channels=all_channels, all_repos=all_repos
+    )
 
     if not repos:
         click.echo("No output directories found.")
@@ -1111,6 +1154,7 @@ def commit(
 @click.option("--target", help="Specific output target name")
 @_channel_option
 @_all_channels_option
+@_all_option
 @click.option("--dry-run", is_flag=True, help="Show what would be done without executing")
 def push(
     spec_file: Path,
@@ -1118,13 +1162,16 @@ def push(
     target: str | None,
     channel: str | None,
     all_channels: bool,
+    all_repos: bool,
     dry_run: bool,
 ):
     """Push commits to remote.
 
     Pushes commits to the configured remote. Skips repositories without remotes.
     Use --channel NAME / --all-channels to push per-cohort release repositories
-    instead of output targets (issue #208).
+    instead of output targets (issue #208). Use --all to push every distributed
+    output target AND every release channel in one command — the single
+    push-everything workflow.
 
     \b
     Examples:
@@ -1132,6 +1179,7 @@ def push(
         clm git push course.xml --force-with-lease
         clm git push course.xml --target students
         clm git push course.xml --channel jan
+        clm git push course.xml --all
         clm git push course.xml --dry-run
     """
     _dry_run_mode.set(dry_run)
@@ -1139,7 +1187,9 @@ def push(
         click.echo("[DRY RUN MODE - No changes will be made]")
         click.echo()
 
-    repos = _select_repos(spec_file, target=target, channel=channel, all_channels=all_channels)
+    repos = _select_repos(
+        spec_file, target=target, channel=channel, all_channels=all_channels, all_repos=all_repos
+    )
 
     if not repos:
         click.echo("No output directories found.")
@@ -1189,6 +1239,7 @@ def push(
 @click.option("--target", help="Specific output target name")
 @_channel_option
 @_all_channels_option
+@_all_option
 @click.option("--dry-run", is_flag=True, help="Show what would be done without executing")
 def sync(
     spec_file: Path,
@@ -1198,6 +1249,7 @@ def sync(
     target: str | None,
     channel: str | None,
     all_channels: bool,
+    all_repos: bool,
     dry_run: bool,
 ):
     """Commit and push in one operation.
@@ -1208,7 +1260,8 @@ def sync(
     Use --amend to amend the previous commit and force-push. Use
     --force-with-lease for a safe force push without amending. Use
     --channel NAME / --all-channels to sync per-cohort release repositories
-    instead of output targets (issue #208).
+    instead of output targets (issue #208). Use --all to commit-and-push every
+    distributed output target AND every release channel in one command.
 
     \b
     Examples:
@@ -1217,6 +1270,7 @@ def sync(
         clm git sync course.xml --amend -m "New message"
         clm git sync course.xml --force-with-lease -m "Update"
         clm git sync course.xml --channel jan -m "Release functions"
+        clm git sync course.xml --all -m "Weekly update"
     """
     if not message and not amend:
         raise click.UsageError("Either -m/--message or --amend must be provided.")
@@ -1230,7 +1284,9 @@ def sync(
         click.echo("[DRY RUN MODE - No changes will be made]")
         click.echo()
 
-    repos = _select_repos(spec_file, target=target, channel=channel, all_channels=all_channels)
+    repos = _select_repos(
+        spec_file, target=target, channel=channel, all_channels=all_channels, all_repos=all_repos
+    )
 
     if not repos:
         click.echo("No output directories found.")
@@ -1273,12 +1329,14 @@ def sync(
 @click.option("--target", help="Specific output target name")
 @_channel_option
 @_all_channels_option
+@_all_option
 @click.option("--dry-run", is_flag=True, help="Show what would be done without executing")
 def reset(
     spec_file: Path,
     target: str | None,
     channel: str | None,
     all_channels: bool,
+    all_repos: bool,
     dry_run: bool,
 ):
     """Reset local repos to remote tracking branch.
@@ -1286,7 +1344,8 @@ def reset(
     Fetches from remote and performs a hard reset to origin/<branch>.
     Use this to recover when remote is ahead of local. Use --channel NAME /
     --all-channels to reset per-cohort release repositories instead of output
-    targets (issue #208).
+    targets (issue #208). Use --all to reset output targets and every release
+    channel in one pass.
 
     WARNING: This will discard all local changes!
 
@@ -1298,6 +1357,7 @@ def reset(
         clm git reset course.xml
         clm git reset course.xml --target students
         clm git reset course.xml --channel jan
+        clm git reset course.xml --all
         clm git reset course.xml --dry-run
     """
     _dry_run_mode.set(dry_run)
@@ -1305,7 +1365,9 @@ def reset(
         click.echo("[DRY RUN MODE - No changes will be made]")
         click.echo()
 
-    repos = _select_repos(spec_file, target=target, channel=channel, all_channels=all_channels)
+    repos = _select_repos(
+        spec_file, target=target, channel=channel, all_channels=all_channels, all_repos=all_repos
+    )
 
     if not repos:
         click.echo("No output directories found.")
