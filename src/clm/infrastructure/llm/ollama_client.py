@@ -20,7 +20,7 @@ import os
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Any, Protocol
 
 logger = logging.getLogger(__name__)
 
@@ -668,12 +668,69 @@ class OllamaSyncJudge:
         return parse_sync_response(text)
 
 
+# The only top-level keys the judge contract defines (mirrors the
+# ``additionalProperties: False`` of :data:`sync_prompts.SYNC_RESPONSE_SCHEMA`).
+# Enforced in :func:`parse_sync_response` as a *truncation guard*: see its
+# docstring for why an unexpected key means silent data loss, not just noise.
+_SYNC_RESPONSE_KEYS = frozenset({"verdict", "proposed_text", "reason"})
+
+
+def _decode_sync_object(cleaned: str, raw: str) -> dict[str, Any]:
+    """Decode the judge reply to a JSON object, strict-first (Issue #377).
+
+    A faithful reply is a JSON object that parses *whole*, so try that first —
+    this keeps a clean body that legitimately contains ``{`` / ``}`` (markdown,
+    fenced code) from being re-carved. Only when the strict parse fails do we
+    fall back to the lenient ``find("{")`` / ``rfind("}")`` span, for models that
+    wrap the object in a prose preamble. Either way the result must be an object;
+    a parse failure or a non-object raises :class:`OllamaError` (a surfaced hard
+    error, not a silent recovery).
+    """
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError:
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            raise OllamaError(
+                f"could not locate JSON object in sync response: {raw[:200]!r}"
+            ) from None
+        try:
+            parsed = json.loads(cleaned[start : end + 1])
+        except json.JSONDecodeError as exc:
+            raise OllamaError(f"sync response is not valid JSON: {exc}") from exc
+
+    if not isinstance(parsed, dict):
+        raise OllamaError(f"sync response is not a JSON object: {raw[:200]!r}")
+    return parsed
+
+
 def parse_sync_response(text: str) -> SyncProposal:
     """Parse the judge's raw response into a :class:`SyncProposal`.
 
-    Tolerates leading/trailing prose around the JSON body (some local
-    models tack on a one-line preamble despite the system prompt) by
-    locating the first ``{`` and the last ``}``.
+    Hardened against **silent truncation / data loss** (Issue #377). The judge
+    returns the reconciled cell body as a JSON string; when a hosted model emits
+    an *unescaped* inner ``"`` (e.g. wrapping an English term inside German
+    ``„ … "`` quotes), the string value terminates early. The old parser carved
+    the body with ``find("{")`` / ``rfind("}")`` and ran a tolerant
+    ``json.loads`` — which could turn that malformed reply into a *parseable but
+    truncated* object (the dropped lines swallowed as extra keys, or a smaller
+    balanced span carved out). The truncated prefix was then written to disk with
+    ``0 error(s)`` reported. Two defenses, both turning that into a surfaced hard
+    error (``OllamaError`` → the apply engine blocks the edit and rolls back
+    atomically, the safe path other cells already got):
+
+    1. **Strict-first parse.** A well-formed reply parses whole, so the lenient
+       ``find/rfind`` carve only runs as a fallback for models that wrap the
+       object in prose — never on a clean (or clean-looking-but-truncated) reply.
+    2. **No unexpected top-level keys.** Mirroring the structured-output schema's
+       ``additionalProperties: False``: when truncation swallows the dropped
+       content into bogus keys, the object now *fails* instead of yielding a
+       short ``proposed_text``.
+
+    Still tolerates the benign cases it always did: a code-fenced object, a
+    leading prose preamble, and an omitted ``verdict`` (inferred from
+    ``proposed_text``).
     """
     cleaned = text.strip()
     if cleaned.startswith("```"):
@@ -681,15 +738,19 @@ def parse_sync_response(text: str) -> SyncProposal:
         if cleaned.lower().startswith("json"):
             cleaned = cleaned[4:]
         cleaned = cleaned.strip()
-    start = cleaned.find("{")
-    end = cleaned.rfind("}")
-    if start == -1 or end == -1 or end <= start:
-        raise OllamaError(f"could not locate JSON object in sync response: {text[:200]!r}")
-    body = cleaned[start : end + 1]
-    try:
-        data = json.loads(body)
-    except json.JSONDecodeError as exc:
-        raise OllamaError(f"sync response is not valid JSON: {exc}") from exc
+
+    data = _decode_sync_object(cleaned, text)
+
+    # Truncation guard: a faithful reply carries exactly the contract's keys, so
+    # any extra one means the value boundaries shifted (an unescaped inner quote
+    # closed a string early and the remainder re-parsed as spurious keys). Refuse
+    # rather than write a possibly-truncated body. See this function's docstring.
+    extra = set(data) - _SYNC_RESPONSE_KEYS
+    if extra:
+        raise OllamaError(
+            "sync response has unexpected top-level keys "
+            f"{sorted(extra)!r} — refusing to write a possibly-truncated cell"
+        )
 
     proposed_text = data.get("proposed_text")
     if not isinstance(proposed_text, str):
