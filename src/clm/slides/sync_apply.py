@@ -2995,6 +2995,13 @@ def _record_watermark(
         lang="en-header",
         cells=_header_rows(en_cells),
     )
+    # Record the repo HEAD at sync time (Fix D): lets a later run name the exact
+    # `--baseline <ref>` when the watermark has fallen behind committed edits.
+    # Best-effort — git provenance must never fail a sync.
+    from clm.core.git_info import get_git_info
+
+    commit = get_git_info(de_path.parent).get("commit")
+    cache.set_synced_commit(str(de_path), str(en_path), commit if isinstance(commit, str) else None)
 
 
 def _eligible_for_partial_advance(plan: SyncPlan, result: ApplyResult) -> bool:

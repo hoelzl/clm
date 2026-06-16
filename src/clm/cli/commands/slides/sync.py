@@ -420,6 +420,20 @@ def _resolve_single_path(de_path: Path, en_path: Path | None) -> tuple[Path, Pat
     ),
 )
 @click.option(
+    "--baseline",
+    "baseline_ref",
+    default=None,
+    metavar="REF",
+    help=(
+        "Diff against an explicit git ref (e.g. HEAD~1, a commit SHA, origin/master) "
+        "instead of the watermark or HEAD. Use after you committed single-language "
+        "edits before syncing: --baseline HEAD~1 diffs against the pre-edit commit so "
+        "the edits are detected (the watermark/HEAD baseline would see the committed "
+        "edits as already consistent). The watermark still advances on apply (unless "
+        "--no-cache). Single-pair only; mutually exclusive with --rebaseline."
+    ),
+)
+@click.option(
     "--no-env-file",
     is_flag=True,
     default=False,
@@ -463,6 +477,7 @@ def slides_sync_cmd(
     cache_dir: Path | None,
     no_cache: bool,
     rebaseline: bool,
+    baseline_ref: str | None,
     no_env_file: bool,
     yes: bool,
     as_json: bool,
@@ -526,6 +541,11 @@ def slides_sync_cmd(
         raise click.UsageError(
             "--rebaseline manages the watermark, so it cannot be combined with --no-cache."
         )
+    if baseline_ref is not None and rebaseline:
+        raise click.UsageError(
+            "--baseline and --rebaseline are mutually exclusive: --rebaseline resets the "
+            "watermark from git HEAD, while --baseline pins the diff to a specific ref."
+        )
 
     # Cold-start minting (#216 §12): a verifier is on by default when a provider is
     # configured; --no-verify-cold-pairs forces it off (cold pairs then refuse).
@@ -553,6 +573,11 @@ def slides_sync_cmd(
             raise click.UsageError(
                 "--rebaseline operates on a single deck pair; run it per deck "
                 "(e.g. `clm slides sync --rebaseline <deck>.de.py`), not over a directory."
+            )
+        if baseline_ref is not None:
+            raise click.UsageError(
+                "--baseline operates on a single deck pair; run it per deck "
+                "(e.g. `clm slides sync --baseline HEAD~1 <deck>.de.py`), not over a directory."
             )
         batch_mode = "explain" if explain else ("dry-run" if dry_run else "apply")
         # One glossary resolution for the whole sweep (the translator is shared across
@@ -651,10 +676,19 @@ def slides_sync_cmd(
     apply_result: ApplyResult | None = None
     walk: PlanWalkResult | None = None
     explain_text: str | None = None
+    recorded_commit: str | None = None
     try:
         plan = build_sync_plan(
-            de_path, en_path, watermark_cache=watermark_cache, provider_available=provider_available
+            de_path,
+            en_path,
+            watermark_cache=watermark_cache,
+            provider_available=provider_available,
+            baseline_ref=baseline_ref,
         )
+        # Read the commit the watermark was recorded at (Fix D) while the cache is
+        # still open, so the stale-watermark hint can name the exact --baseline ref.
+        if watermark_cache is not None:
+            recorded_commit = watermark_cache.get_synced_commit(str(de_path), str(en_path))
 
         if explain:
             mode = "explain"
@@ -730,6 +764,14 @@ def slides_sync_cmd(
     rebaseline_hint = not no_cache and _is_stale_but_consistent(
         de_path, en_path, plan, provider_available=provider_available
     )
+    # Cold-baseline hint (Fix D): no watermark for this pair, so the baseline was
+    # the implicit git HEAD — and nothing changed. If the user committed
+    # single-language edits before syncing, those edits already match HEAD and look
+    # consistent. Point at --baseline so they can diff against the pre-edit commit.
+    # Suppressed when the user explicitly chose a baseline (they already know how).
+    cold_baseline_hint = (
+        baseline_ref is None and plan.baseline_source == "git-head" and plan.is_noop
+    )
 
     if mode == "explain":
         click.echo(explain_text)
@@ -737,7 +779,13 @@ def slides_sync_cmd(
         click.echo(
             json.dumps(
                 _to_dict(
-                    plan, apply_result, walk, mode, exit_code, rebaseline_hint=rebaseline_hint
+                    plan,
+                    apply_result,
+                    walk,
+                    mode,
+                    exit_code,
+                    rebaseline_hint=rebaseline_hint,
+                    cold_baseline_hint=cold_baseline_hint,
                 ),
                 indent=2,
             )
@@ -746,7 +794,10 @@ def slides_sync_cmd(
         _print_human(plan, apply_result, walk, mode=mode)
 
     if rebaseline_hint and not as_json:
-        click.echo(_rebaseline_hint_text(de_path), err=True)
+        click.echo(_rebaseline_hint_text(de_path, recorded_commit), err=True)
+
+    if cold_baseline_hint and not as_json:
+        click.echo(_cold_baseline_hint_text(de_path), err=True)
 
     sys.exit(exit_code)
 
@@ -1279,13 +1330,27 @@ def _is_stale_but_consistent(
     return _githead_plan(de_path, en_path, provider_available=provider_available).is_noop
 
 
-def _rebaseline_hint_text(de_path: Path) -> str:
+def _rebaseline_hint_text(de_path: Path, recorded_commit: str | None = None) -> str:
+    # When we know the commit the watermark was recorded at, name it as a precise
+    # --baseline target (diff against the last synced point) alongside --rebaseline.
+    baseline_ref = recorded_commit[:12] if recorded_commit else "<last-synced-commit>"
     return (
         "note: this deck's halves are consistent against git HEAD, but its recorded "
         "watermark is stale (the usual cause: both halves edited + committed without an "
         "intervening sync). Reset it with "
         f"`clm slides sync --rebaseline {de_path.name}` (refuses if HEAD shows real "
-        "changes), or `clm slides watermark clear`."
+        "changes), diff against the last sync with "
+        f"`clm slides sync --baseline {baseline_ref} {de_path.name}`, "
+        "or `clm slides watermark clear`."
+    )
+
+
+def _cold_baseline_hint_text(de_path: Path) -> str:
+    return (
+        "note: no watermark recorded for this deck, so the baseline was git HEAD and "
+        "nothing changed against it. If you committed single-language edits before "
+        "syncing, they already match HEAD and read as consistent — diff against the "
+        f"pre-edit commit with `clm slides sync --baseline HEAD~1 {de_path.name}`."
     )
 
 
@@ -1520,6 +1585,7 @@ def _to_dict(
     exit_code: int,
     *,
     rebaseline_hint: bool = False,
+    cold_baseline_hint: bool = False,
 ) -> dict:
     return {
         "de_path": str(plan.de_path),
@@ -1530,6 +1596,7 @@ def _to_dict(
         "apply": _apply_dict(apply_result) if apply_result is not None else None,
         "walker": _walker_dict(walk) if walk is not None else None,
         "rebaseline_hint": rebaseline_hint,
+        "cold_baseline_hint": cold_baseline_hint,
     }
 
 
