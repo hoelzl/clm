@@ -337,3 +337,49 @@ class TestParseSyncResponse:
 
         with pytest.raises(OllamaError):
             parse_sync_response('{"verdict":"update"}')
+
+    def test_unescaped_inner_quote_truncation_raises_not_silent(self):
+        """Issue #377: an unescaped inner ``"`` must not silently truncate.
+
+        The model wraps an English term in German ``„ … "`` quotes but emits a
+        literal ASCII ``"`` as the close. That stray quote ends ``proposed_text``
+        early; the dropped lines re-parse as a spurious extra key. The parser
+        must surface this as a hard error (→ atomic rollback) rather than write
+        the truncated prefix with ``0 error(s)``.
+        """
+        from clm.infrastructure.llm.ollama_client import parse_sync_response
+
+        # Valid JSON, but proposed_text closed early at the stray quote after
+        # `Agents`; everything after became the bogus key "confuse them".
+        truncated = (
+            '{"verdict": "update", '
+            '"proposed_text": "# **Drei verschiedene „Agents", '
+            '"confuse them": "** \\n# - **Agent mode**", '
+            '"reason": "translated"}'
+        )
+        with pytest.raises(OllamaError, match="unexpected top-level keys"):
+            parse_sync_response(truncated)
+
+    def test_unexpected_key_rejected(self):
+        from clm.infrastructure.llm.ollama_client import parse_sync_response
+
+        with pytest.raises(OllamaError, match="unexpected top-level keys"):
+            parse_sync_response('{"verdict":"update","proposed_text":"# Hi","notes":"extra"}')
+
+    def test_clean_body_with_braces_parses_whole(self):
+        """Strict-first parse: a clean body containing ``{``/``}`` is not re-carved.
+
+        Without strict-first the ``find/rfind`` carve could mis-bracket a body
+        that legitimately contains braces (markdown, fenced code).
+        """
+        from clm.infrastructure.llm.ollama_client import parse_sync_response
+
+        text = '{"verdict":"update","proposed_text":"code: if (x) { y(); }","reason":"r"}'
+        p = parse_sync_response(text)
+        assert p.proposed_text == "code: if (x) { y(); }"
+
+    def test_non_object_json_raises(self):
+        from clm.infrastructure.llm.ollama_client import parse_sync_response
+
+        with pytest.raises(OllamaError, match="not a JSON object"):
+            parse_sync_response('["just", "a", "list"]')
