@@ -1,25 +1,34 @@
 """Resolve the course-wide *default* for the authoring-sidecar layout.
 
 This is a **write-time** convenience only: it chooses where a *newly created*
-voiceover companion lands (``clm voiceover extract`` / ``sync``) when neither an
-explicit ``--layout`` flag nor a per-topic ``voiceover/`` directory has already
-decided. The build never consults this — it always reads both layouts via
+sidecar lands when neither an explicit ``--layout`` flag nor a per-topic sidecar
+directory has already decided. It has two consumers:
+
+* authoring tools (``clm voiceover extract`` / ``sync``) choosing where a new
+  voiceover companion goes, and
+* the build choosing where the *first* HTTP-replay cassette for a topic is
+  recorded (``NotebookFile.expected_cassette_path``).
+
+Either way it never changes *output* — the build always reads both layouts via
 ``resolve_companion`` / ``NotebookFile`` cassette resolution — so a course can
-flip its default freely without changing any build output.
+flip its default freely; only the on-disk location of a newly written sidecar
+moves.
 
 The full precedence for a new companion (highest first) is:
 
 1. an explicit ``--layout {subdir,sibling}`` flag,
-2. a per-topic ``voiceover/`` directory that already exists,
+2. a per-topic sidecar directory that already exists,
 3. the course default this module resolves,
 4. the built-in fallback, ``sibling``.
 
-This module owns only step 3, which is itself:
+This module owns only step 3, which is itself (see :func:`resolve_layout`):
 
 1. the ``CLM_SIDECAR_LAYOUT`` environment variable, else
-2. ``[tool.clm] sidecar-layout`` in the nearest ancestor ``pyproject.toml``,
+2. the per-course ``<sidecar-layout>`` value from the course spec (when the
+   caller threads one in), else
+3. ``[tool.clm] sidecar-layout`` in the nearest ancestor ``pyproject.toml``,
    else
-3. ``None`` (the caller falls back to step 4 above).
+4. ``None`` (the caller falls back to step 4 above).
 """
 
 from __future__ import annotations
@@ -71,9 +80,27 @@ def resolve_course_sidecar_default(path: Path) -> str | None:
     unrecognised value falls through. Returns ``None`` when no course default is
     configured, leaving the caller's per-topic auto-detection in charge.
     """
+    return resolve_layout(None, path)
+
+
+def resolve_layout(spec_default: str | None, path: Path) -> str | None:
+    """Resolve the effective sidecar-layout default, highest precedence first.
+
+    1. the ``CLM_SIDECAR_LAYOUT`` environment variable,
+    2. ``spec_default`` — the per-course ``<sidecar-layout>`` from the course
+       spec (pass ``None`` when there is no spec context),
+    3. ``[tool.clm] sidecar-layout`` in the nearest ancestor ``pyproject.toml``.
+
+    Each source is coerced to ``"subdir"`` / ``"sibling"``; an unset or
+    unrecognised value falls through to the next. Returns ``None`` when nothing
+    is configured, leaving the caller's per-topic auto-detection in charge.
+    """
     env = _coerce(os.environ.get("CLM_SIDECAR_LAYOUT"))
     if env is not None:
         return env
+    spec = _coerce(spec_default)
+    if spec is not None:
+        return spec
     return _read_pyproject_layout(path)
 
 

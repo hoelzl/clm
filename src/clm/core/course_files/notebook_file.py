@@ -160,6 +160,12 @@ class NotebookFile(CourseFile):
 
         - If a sidecar subdirectory (``cassettes/``, then legacy ``_cassettes/``)
           exists, write inside it.
+        - Otherwise, if the course opts into the ``subdir`` sidecar layout
+          (``<sidecar-layout>`` / ``CLM_SIDECAR_LAYOUT`` / ``[tool.clm]
+          sidecar-layout``), write into ``cassettes/`` even though it does not
+          exist yet — the atomic cassette write ``mkdir``s it. This is what
+          keeps a first-ever recording in the topic's cassette folder instead
+          of landing next to the slides.
         - Otherwise write next to the source ``.py``.
         """
         cassette_name = f"{self.path.stem}.http-cassette.yaml"
@@ -167,6 +173,8 @@ class NotebookFile(CourseFile):
         for sub in _CASSETTE_SUBDIRS:
             if (topic_dir / sub).is_dir():
                 return topic_dir / sub / cassette_name
+        if self.course.sidecar_layout == "subdir":
+            return topic_dir / _CASSETTE_SUBDIRS[0] / cassette_name
         return topic_dir / cassette_name
 
     @property

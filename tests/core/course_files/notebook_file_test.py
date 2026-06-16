@@ -251,7 +251,13 @@ class TestCassetteResolution:
     """NotebookFile.cassette_path / cassette_relative_name."""
 
     def _make_nb_file(
-        self, course_1, tmp_path: Path, *, with_cassette: bool = False, nested: bool = False
+        self,
+        course_1,
+        tmp_path: Path,
+        *,
+        with_cassette: bool = False,
+        nested: bool = False,
+        sidecar_layout: str | None = None,
     ) -> NotebookFile:
         from clm.core.course import Course
         from clm.core.course_spec import CourseSpec
@@ -262,6 +268,7 @@ class TestCassetteResolution:
             description=Text(de="", en=""),
             certificate=Text(de="", en=""),
             sections=[],
+            sidecar_layout=sidecar_layout,
         )
         course = Course(spec=spec, course_root=tmp_path, output_root=tmp_path)
         section = Section(name=Text(de="S", en="S"), course=course)
@@ -350,6 +357,37 @@ class TestCassetteResolution:
         (tmp_path / "_cassettes").mkdir()
         (tmp_path / "cassettes").mkdir()
         nb = self._make_nb_file(course_1, tmp_path, with_cassette=False)
+        assert (
+            nb.expected_cassette_path == tmp_path / "cassettes" / "slides_replay.http-cassette.yaml"
+        )
+
+    def test_expected_cassette_path_uses_subdir_when_course_opts_in(
+        self, course_1, tmp_path, monkeypatch
+    ):
+        # No cassettes/ dir exists yet, but the course spec asks for the
+        # ``subdir`` layout, so a first-ever recording targets cassettes/.
+        monkeypatch.delenv("CLM_SIDECAR_LAYOUT", raising=False)
+        nb = self._make_nb_file(course_1, tmp_path, with_cassette=False, sidecar_layout="subdir")
+        assert not (tmp_path / "cassettes").exists()  # not pre-created
+        assert (
+            nb.expected_cassette_path == tmp_path / "cassettes" / "slides_replay.http-cassette.yaml"
+        )
+        assert nb.expected_cassette_relative_name == "cassettes/slides_replay.http-cassette.yaml"
+
+    def test_expected_cassette_path_sibling_when_course_opts_sibling(
+        self, course_1, tmp_path, monkeypatch
+    ):
+        # An explicit ``sibling`` course default keeps the historical behavior.
+        monkeypatch.delenv("CLM_SIDECAR_LAYOUT", raising=False)
+        nb = self._make_nb_file(course_1, tmp_path, with_cassette=False, sidecar_layout="sibling")
+        assert nb.expected_cassette_path == tmp_path / "slides_replay.http-cassette.yaml"
+
+    def test_expected_cassette_path_env_overrides_course_sibling(
+        self, course_1, tmp_path, monkeypatch
+    ):
+        # CLM_SIDECAR_LAYOUT wins over the spec value (precedence check).
+        monkeypatch.setenv("CLM_SIDECAR_LAYOUT", "subdir")
+        nb = self._make_nb_file(course_1, tmp_path, with_cassette=False, sidecar_layout="sibling")
         assert (
             nb.expected_cassette_path == tmp_path / "cassettes" / "slides_replay.http-cassette.yaml"
         )
