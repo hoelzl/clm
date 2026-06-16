@@ -2369,7 +2369,12 @@ def build(
         if env_file is not None:
             loaded = load_dotenv(env_file, override=False)
             if loaded:
-                logger.info(f"Loaded environment from {env_file}")
+                # Emitted at DEBUG, not INFO: this runs before ``setup_logging``
+                # has replaced the bootstrap ``basicConfig`` console handler
+                # (installed in ``cli/main.py``) with the real, file-routed
+                # handler set. An INFO call here leaks to the terminal in the
+                # bootstrap format even when console logging is off.
+                logger.debug(f"Loaded environment from {env_file}")
             else:
                 logger.warning(f"Could not load environment from {env_file}")
         else:
@@ -2379,7 +2384,7 @@ def build(
             dotenv_path = _find_env_file(spec_file.resolve().parent)
             if dotenv_path:
                 load_dotenv(dotenv_path, override=False)
-                logger.info(f"Loaded environment from {dotenv_path}")
+                logger.debug(f"Loaded environment from {dotenv_path}")
 
     # Resolve the effective HTTP replay mode once at the entry point so
     # the exit-policy resolver below can see it without re-implementing
