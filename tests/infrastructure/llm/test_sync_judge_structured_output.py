@@ -31,12 +31,12 @@ def _fake_client(captured: dict, content: str):
 def test_judge_requests_json_schema_response_format(monkeypatch):
     captured: dict = {}
     content = '{"verdict": "update", "proposed_text": "# Hallo Welt", "reason": "translated"}'
-    monkeypatch.setattr(orc, "build_openrouter_client", lambda **kw: _fake_client(captured, content))
+    monkeypatch.setattr(
+        orc, "build_openrouter_client", lambda **kw: _fake_client(captured, content)
+    )
 
     judge = OpenRouterSyncJudge(api_key="test-key")
-    proposal = judge.propose(
-        "# Hello World", "# Hallo", source_lang="en", target_lang="de"
-    )
+    proposal = judge.propose("# Hello World", "# Hallo", source_lang="en", target_lang="de")
 
     # The proposal parses cleanly...
     assert proposal.verdict == "update"
