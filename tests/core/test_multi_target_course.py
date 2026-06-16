@@ -143,12 +143,11 @@ class TestCourseFromSpecWithTargets:
         assert by_name["solutions"].kinds == frozenset({"completed"})
         assert by_name["instructor"].languages == frozenset({"en"})
 
-    def test_from_spec_cli_output_dir_no_spec_targets_uses_default(
+    def test_from_spec_cli_output_dir_no_spec_targets_uses_default_structure(
         self, course_spec_no_targets, course_root
     ):
-        """``--output-dir DIR`` on a spec without ``<output-targets>``
-        collapses into a single default target at ``DIR`` (there's
-        nothing per-target to re-root)."""
+        """``--output-dir DIR`` on a spec without ``<output-targets>`` re-roots
+        the default shared/trainer/speaker structure under ``DIR/<tier>/`` (#383)."""
         output_dir = course_root / "cli_output"
 
         course = Course.from_spec(
@@ -157,25 +156,30 @@ class TestCourseFromSpecWithTargets:
             output_root=output_dir,
         )
 
-        assert len(course.output_targets) == 1
-        assert course.output_targets[0].name == "default"
-        assert course.output_targets[0].output_root == output_dir.resolve()
-        assert course.output_targets[0].kinds == ALL_KINDS
-        assert course.output_targets[0].formats == DEFAULT_FORMATS
-        assert course.output_targets[0].languages == ALL_LANGUAGES
+        assert [t.name for t in course.output_targets] == ["shared", "trainer", "speaker"]
+        by_name = {t.name: t for t in course.output_targets}
+        assert by_name["shared"].output_root == (output_dir / "shared").resolve()
+        assert by_name["trainer"].output_root == (output_dir / "trainer").resolve()
+        assert by_name["shared"].kinds == frozenset({"code-along", "completed"})
+        assert by_name["trainer"].kinds == frozenset({"code-along", "completed", "trainer"})
+        assert by_name["speaker"].kinds == frozenset({"recording"})
+        # Default formats/languages still apply when a tier doesn't narrow them.
+        assert by_name["shared"].formats == DEFAULT_FORMATS
+        assert by_name["shared"].languages == ALL_LANGUAGES
 
-    def test_from_spec_no_targets_uses_default(self, course_spec_no_targets, course_root):
-        """Test that spec without targets uses default output directory."""
+    def test_from_spec_no_targets_uses_default_structure(self, course_spec_no_targets, course_root):
+        """A spec without targets defaults to shared/trainer/speaker (#383)."""
         course = Course.from_spec(
             spec=course_spec_no_targets,
             course_root=course_root,
             output_root=None,
         )
 
-        # Should have single default target
-        assert len(course.output_targets) == 1
-        assert course.output_targets[0].name == "default"
-        assert course.output_targets[0].output_root == (course_root / "output").resolve()
+        assert [t.name for t in course.output_targets] == ["shared", "trainer", "speaker"]
+        by_name = {t.name: t for t in course.output_targets}
+        # Each tier roots at its own ``output/<tier>`` under the course root.
+        assert by_name["shared"].output_root == (course_root / "output" / "shared").resolve()
+        assert by_name["speaker"].output_root == (course_root / "output" / "speaker").resolve()
 
     def test_from_spec_selected_targets_filter(self, course_spec_with_targets, course_root):
         """Test selecting specific targets."""

@@ -16,7 +16,12 @@ from pathlib import Path
 import click
 
 from clm.core.course_paths import resolve_course_paths
-from clm.core.course_spec import CourseSpec, CourseSpecError, release_channel_ref
+from clm.core.course_spec import (
+    DEFAULT_OUTPUT_TARGET_SPECS,
+    CourseSpec,
+    CourseSpecError,
+    release_channel_ref,
+)
 from clm.core.provenance_manifest import MANIFEST_FILENAME
 from clm.infrastructure.config import get_config
 
@@ -319,7 +324,7 @@ def find_output_repos(
         List of OutputRepo objects for directories with or needing git repos
     """
     spec = CourseSpec.from_file(spec_file)
-    course_root, default_output = resolve_course_paths(spec_file)
+    course_root, _default_output = resolve_course_paths(spec_file)
     github_config = spec.github
     config = get_config()
     remote_template = config.git.remote_template
@@ -373,31 +378,39 @@ def find_output_repos(
                     )
                 )
     else:
-        # Course uses default output structure (public/speaker)
-        for target_name in ["public", "speaker"]:
-            if target_filter and target_name != target_filter:
+        # Course uses the default output structure: shared/trainer/speaker
+        # (issue #383). ``clm build`` writes all three tiers, so ``clm git``
+        # manages all three rather than the old hardcoded ``public``/``speaker``
+        # pair — closing the build/git asymmetry of issue #381. The ``speaker``
+        # tier is always *listed* (so it is never silently invisible), but its
+        # remote is derived only when ``<include-speaker>`` opts in; otherwise it
+        # stays a local-only repo and recording material is not pushed by default.
+        for i, target_spec in enumerate(DEFAULT_OUTPUT_TARGET_SPECS):
+            if target_filter and target_spec.name != target_filter:
                 continue
 
-            # Skip speaker if not configured
-            if target_name == "speaker" and not github_config.include_speaker:
-                continue
+            target_path = course_root / target_spec.path
+            effective_remote_path = target_spec.remote_path or config_remote_path
 
             for lang in ["de", "en"]:
-                # Default targets use: output / public|speaker / dir_name
-                output_path = default_output / target_name / spec.output_dir_name[lang]
+                output_path = target_path / spec.output_dir_name[lang]
 
-                remote_url = github_config.derive_remote_url(
-                    target_name,
-                    lang,
-                    project_slug=spec.project_slug,
-                    remote_template=remote_template,
-                    remote_path=config_remote_path,
-                )
+                if target_spec.name == "speaker" and not github_config.include_speaker:
+                    remote_url = None
+                else:
+                    remote_url = github_config.derive_remote_url(
+                        target_spec.name,
+                        lang,
+                        is_first_target=(i == 0),
+                        project_slug=spec.project_slug,
+                        remote_template=remote_template,
+                        remote_path=effective_remote_path,
+                    )
 
                 repos.append(
                     OutputRepo(
                         path=output_path,
-                        target_name=target_name,
+                        target_name=target_spec.name,
                         language=lang,
                         remote_url=remote_url,
                     )

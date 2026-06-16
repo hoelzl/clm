@@ -447,6 +447,11 @@ List output targets defined in a course spec file.
 clm course targets SPEC_FILE
 ```
 
+When a spec declares no `<output-targets>`, this shows the **default
+shared/trainer/speaker structure** that `clm build` would write (see
+`clm info spec-files`), not a "no targets" placeholder. The `--format=json`
+output flags each entry with `"is_default": true` in that case.
+
 ### `clm run` (CLM {version}+)
 
 Run a named task sequence declared in the spec's `<tasks>` block (see

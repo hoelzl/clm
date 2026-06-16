@@ -3,6 +3,7 @@ import logging
 from collections.abc import Iterator
 from enum import Enum
 from pathlib import Path
+from typing import ClassVar
 from xml.etree import ElementTree as ETree
 
 from attr import Factory, field, frozen
@@ -593,11 +594,26 @@ class GitHubSpec:
     remote_template: str = ""
     include_speaker: bool = False
 
+    # Children of ``<github>`` the current parser understands. Anything else
+    # (notably the pre-1.x ``<de>``/``<en>`` per-language remote URLs from the
+    # ``clx`` era) is silently dropped — issue #382 — so we warn on it.
+    _RECOGNIZED_CHILDREN: ClassVar[frozenset[str]] = frozenset(
+        {
+            "project-slug",
+            "repository-base",
+            "remote-path",
+            "remote-template",
+            "include-speaker",
+        }
+    )
+
     @classmethod
     def from_element(cls, element: ETree.Element | None) -> "GitHubSpec":
         """Parse a <github> XML element."""
         if element is None:
             return cls()
+
+        cls._warn_on_unrecognized_children(element)
 
         project_slug = element_text(element, "project-slug") or None
         repository_base = element_text(element, "repository-base") or None
@@ -615,6 +631,42 @@ class GitHubSpec:
             remote_path=remote_path,
             remote_template=remote_template,
             include_speaker=include_speaker,
+        )
+
+    @classmethod
+    def _warn_on_unrecognized_children(cls, element: ETree.Element) -> None:
+        """Warn about ``<github>`` children this parser ignores (issue #382).
+
+        The most common case is the pre-1.x ``clx`` form
+        ``<github><de>URL</de><en>URL</en></github>``: those per-language remote
+        URLs are dropped silently, leaving ``derive_remote_url`` with nothing to
+        work from, so every output repo becomes local-only with no connection to
+        the already-published student repos. Surfacing a warning makes that
+        migration gap visible and points at the supported configuration.
+        """
+        unrecognized = sorted(
+            {
+                child.tag
+                for child in element
+                if isinstance(child.tag, str) and child.tag not in cls._RECOGNIZED_CHILDREN
+            }
+        )
+        if not unrecognized:
+            return
+
+        tags = ", ".join(f"<{tag}>" for tag in unrecognized)
+        legacy_hint = ""
+        if {"de", "en"} & set(unrecognized):
+            legacy_hint = (
+                " The per-language <de>/<en> remote-URL form (pre-1.x clx) is no "
+                "longer supported and is being ignored."
+            )
+        logger.warning(
+            "Ignoring unrecognized <github> child element(s): %s.%s Configure "
+            "remotes with <project-slug> + <repository-base> (optionally "
+            "<remote-path> and/or <remote-template>) instead.",
+            tags,
+            legacy_hint,
         )
 
     @property
@@ -680,7 +732,7 @@ class GitHubSpec:
         is requested but include_speaker is False.
         """
         slug = project_slug or self.project_slug
-        if not (slug and self.repository_base):
+        if not slug:
             return None
 
         # A target with its own remote_path (different from course-level) gets no suffix
@@ -706,6 +758,12 @@ class GitHubSpec:
                 template = "{repository_base}/{remote_path}/{repo}"
             else:
                 template = "{repository_base}/{repo}"
+        # ``repository_base`` is only mandatory when the active template actually
+        # references it (issue #383): a custom template such as
+        # ``git@host:{remote_path}/{repo}.git`` is self-contained and must not be
+        # forced to also carry a placeholder ``<repository-base>``.
+        if "{repository_base}" in template and not self.repository_base:
+            return None
         return template.format(
             repository_base=self.repository_base,
             remote_path=effective_remote_path,
@@ -976,6 +1034,49 @@ class OutputTargetSpec:
             )
 
         return errors
+
+
+# Default output structure used when a course spec declares no
+# ``<output-targets>`` (issue #383). Three access-control-by-path tiers — one
+# repository per tier, the GitLab/GitHub *group path* (``<remote-path>``)
+# enforcing who may read it:
+#
+# - ``shared``   participant material: ``code-along`` + ``completed`` only.
+#                ``partial`` is deliberately *not* a default kind — it ships
+#                only when a spec opts into it via explicit ``<output-targets>``
+#                (issue #380).
+# - ``trainer``  full trainer material: ``code-along`` + ``completed`` plus the
+#                trainer-note (``trainer``) deck.
+# - ``speaker``  recording material (``recording``). ``clm build`` always emits
+#                it; ``clm git`` lists it but only derives a remote when
+#                ``<include-speaker>`` opts in, so recording material is not
+#                pushed by default (issue #381).
+#
+# Because each tier carries its own ``<remote-path>``, the group-path remote
+# layout (``{repository_base}/{remote_path}/{repo}``) works out of the box for
+# the default structure — no per-machine ``CLM_GIT__REMOTE_TEMPLATE`` required
+# (issue #383). The instances are frozen and their kind lists are only ever
+# read (never mutated), so sharing a single module-level tuple is safe.
+DEFAULT_OUTPUT_TARGET_SPECS: tuple[OutputTargetSpec, ...] = (
+    OutputTargetSpec(
+        name="shared",
+        path="output/shared",
+        remote_path="shared",
+        kinds=["code-along", "completed"],
+    ),
+    OutputTargetSpec(
+        name="trainer",
+        path="output/trainer",
+        remote_path="trainer",
+        kinds=["code-along", "completed", "trainer"],
+    ),
+    OutputTargetSpec(
+        name="speaker",
+        path="output/speaker",
+        remote_path="speaker",
+        kinds=["recording"],
+    ),
+)
 
 
 @frozen
@@ -1833,6 +1934,23 @@ class CourseSpec:
         for block in self.release_channel_blocks:
             for channel in block.channels:
                 yield block, channel
+
+    @property
+    def effective_output_targets(self) -> list[OutputTargetSpec]:
+        """The output targets to build, applying the default structure (#383).
+
+        Returns the spec's explicit ``<output-targets>`` when it declares any,
+        otherwise the default ``shared``/``trainer``/``speaker`` structure
+        (:data:`DEFAULT_OUTPUT_TARGET_SPECS`). Use this — not the raw
+        ``output_targets`` list — wherever you need the targets a build will
+        actually write, so the implicit default and the explicit case go down a
+        single code path. ``output_targets`` itself stays the *raw* parse (empty
+        when none declared) so callers that need to distinguish "declared vs
+        defaulted" still can.
+        """
+        return (
+            list(self.output_targets) if self.output_targets else list(DEFAULT_OUTPUT_TARGET_SPECS)
+        )
 
     def is_distributed_target(self, target: OutputTargetSpec) -> bool:
         """Whether ``clm git`` (without ``--target``) manages a repo for *target*.

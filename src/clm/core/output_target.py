@@ -113,10 +113,14 @@ class OutputTarget:
 
     @classmethod
     def default_target(cls, output_root: Path) -> "OutputTarget":
-        """Create a default target that generates all outputs.
+        """Create a single non-explicit target generating all kinds at *output_root*.
 
-        Used when no output-targets are specified in the course spec
-        or when --output-dir CLI flag is used.
+        Note: this is **no longer** how a course with no ``<output-targets>``
+        is built — that now defaults to the ``shared``/``trainer``/``speaker``
+        structure (:data:`clm.core.course_spec.DEFAULT_OUTPUT_TARGET_SPECS`,
+        issue #383). This factory remains as a convenience for building a flat,
+        all-kinds target (``is_explicit=False`` → ``public``/``speaker``
+        toplevel routing) where that is genuinely what is wanted.
 
         Args:
             output_root: Root directory for output

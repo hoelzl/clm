@@ -4,6 +4,7 @@ import logging
 import pytest
 
 from clm.core.course_spec import (
+    DEFAULT_OUTPUT_TARGET_SPECS,
     CourseSpec,
     CourseSpecError,
     GitHubSpec,
@@ -1390,6 +1391,48 @@ class TestCourseSpecOutputDirName:
             de="Mein Kurs (AZAV)-de",
             en="My Course (AZAV)-en",
         )
+
+
+class TestEffectiveOutputTargets:
+    """CourseSpec.effective_output_targets + the default structure (#383)."""
+
+    def test_default_structure_when_no_targets(self):
+        xml = """<?xml version="1.0"?>
+<course>
+    <name><de>Test</de><en>Test</en></name>
+    <prog-lang>python</prog-lang>
+</course>"""
+        spec = CourseSpec.from_file(io.StringIO(xml))
+        # Raw parse stays empty so callers can tell "declared vs defaulted".
+        assert spec.output_targets == []
+        targets = spec.effective_output_targets
+        assert [t.name for t in targets] == ["shared", "trainer", "speaker"]
+        by_name = {t.name: t for t in targets}
+        assert by_name["shared"].kinds == ["code-along", "completed"]
+        assert by_name["trainer"].kinds == ["code-along", "completed", "trainer"]
+        assert by_name["speaker"].kinds == ["recording"]
+        # Each tier carries its own group-path remote-path + output path.
+        assert by_name["shared"].remote_path == "shared"
+        assert by_name["shared"].path == "output/shared"
+        # ``partial`` is opt-in only — never a default kind (subsumes #380).
+        all_default_kinds = {k for t in targets for k in (t.kinds or [])}
+        assert "partial" not in all_default_kinds
+
+    def test_explicit_targets_take_precedence(self):
+        xml = """<?xml version="1.0"?>
+<course>
+    <name><de>Test</de><en>Test</en></name>
+    <prog-lang>python</prog-lang>
+    <output-targets>
+        <output-target name="only"><path>output/only</path></output-target>
+    </output-targets>
+</course>"""
+        spec = CourseSpec.from_file(io.StringIO(xml))
+        assert [t.name for t in spec.effective_output_targets] == ["only"]
+
+    def test_default_specs_are_valid(self):
+        for target in DEFAULT_OUTPUT_TARGET_SPECS:
+            assert target.validate() == []
 
 
 class TestSidecarLayout:

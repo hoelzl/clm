@@ -107,7 +107,9 @@ def test_normal_build_writes_provenance_manifest(tmp_path: Path) -> None:
     result = _invoke_build([str(spec), "--data-dir", str(data), "--output-dir", str(out)], tmp_path)
 
     assert result.exit_code == 0, result.output
-    assert (out / MANIFEST_FILENAME).is_file()
+    # One manifest is written per built tier (out/<tier>/.clm-manifest.json under
+    # the default shared/trainer/speaker structure, #383).
+    assert _manifests_under(out), "a provenance manifest should be written under the output dir"
 
 
 def test_verify_against_writes_no_provenance_manifest(tmp_path: Path) -> None:

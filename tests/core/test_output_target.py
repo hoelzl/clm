@@ -94,21 +94,6 @@ class TestOutputTargetFromSpec:
         assert target.output_root == abs_path.resolve()
 
 
-class TestOutputTargetDefaultTarget:
-    """Tests for OutputTarget.default_target() factory method."""
-
-    def test_default_target(self, tmp_path):
-        """Test creating default target."""
-        output_root = tmp_path / "output"
-        target = OutputTarget.default_target(output_root)
-
-        assert target.name == "default"
-        assert target.output_root == output_root.resolve()
-        assert target.kinds == ALL_KINDS
-        assert target.formats == DEFAULT_FORMATS
-        assert target.languages == ALL_LANGUAGES
-
-
 class TestOutputTargetFiltering:
     """Tests for OutputTarget filtering methods."""
 
@@ -248,11 +233,6 @@ class TestOutputTargetWithCliFilters:
 class TestOutputTargetExplicitFlag:
     """Tests for OutputTarget.is_explicit flag."""
 
-    def test_default_target_is_not_explicit(self, tmp_path):
-        """Test that default targets have is_explicit=False."""
-        target = OutputTarget.default_target(tmp_path / "output")
-        assert target.is_explicit is False
-
     def test_from_spec_target_is_explicit(self, tmp_path):
         """Test that targets from spec have is_explicit=True."""
         spec = OutputTargetSpec(name="test", path="./output")
@@ -274,7 +254,7 @@ class TestOutputTargetExplicitFlag:
 
     def test_with_cli_filters_preserves_non_explicit_flag(self, tmp_path):
         """Test that with_cli_filters preserves is_explicit=False."""
-        target = OutputTarget.default_target(tmp_path / "output")
+        target = OutputTarget(name="default", output_root=tmp_path / "output")
         filtered = target.with_cli_filters(languages=["en"], kinds=None)
 
         assert filtered.is_explicit is False

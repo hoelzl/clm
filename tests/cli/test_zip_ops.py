@@ -15,6 +15,7 @@ from clm.cli.commands.zip import (
     zip_directory,
     zip_group,
 )
+from clm.core.course_spec import DEFAULT_OUTPUT_TARGET_SPECS
 
 
 @pytest.fixture
@@ -197,7 +198,11 @@ class TestArchiveName:
 def _make_spec(output_targets=None):
     """Build a MagicMock that quacks like a CourseSpec."""
     spec = MagicMock()
-    spec.output_targets = output_targets or []
+    targets = output_targets or []
+    spec.output_targets = targets
+    # Mirror CourseSpec.effective_output_targets: explicit targets when
+    # declared, else the default shared/trainer/speaker structure (#383).
+    spec.effective_output_targets = targets or list(DEFAULT_OUTPUT_TARGET_SPECS)
     spec.output_dir_name = {"de": "course-de", "en": "course-en"}
     return spec
 
@@ -286,9 +291,7 @@ class TestFindOutputDirectoriesWithTargets:
 
 
 class TestFindOutputDirectoriesNoTargets:
-    def test_falls_back_to_public_and_speaker(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
+    def test_falls_back_to_default_structure(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         spec = _make_spec(output_targets=[])
 
         monkeypatch.setattr(zip_ops_module.CourseSpec, "from_file", lambda _: spec)
@@ -302,8 +305,10 @@ class TestFindOutputDirectoriesNoTargets:
 
         names = {(d.target_name, d.language) for d in result}
         assert names == {
-            ("public", "de"),
-            ("public", "en"),
+            ("shared", "de"),
+            ("shared", "en"),
+            ("trainer", "de"),
+            ("trainer", "en"),
             ("speaker", "de"),
             ("speaker", "en"),
         }

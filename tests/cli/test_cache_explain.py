@@ -85,11 +85,25 @@ class TestCacheExplainCold:
 
     def test_execution_hash_is_kind_agnostic_content_hash_is_not(self, tmp_path):
         """Speaker/Completed share the executed notebook, so their
-        execution key must agree while their content keys differ."""
+        execution key must agree while their content keys differ.
+
+        Under the default shared/trainer/speaker structure (#383) the same kind
+        can be emitted by more than one tier (code-along and completed appear in
+        both ``shared`` and ``trainer``), so the content key is distinct *per
+        kind*, not per artifact — the same kind in two tiers shares its key.
+        """
         data = _explain_json(tmp_path)
         artifacts = data["artifacts"]
         assert len({a["execution_cache_hash"] for a in artifacts}) == 1
-        assert len({a["content_hash"] for a in artifacts}) == len(artifacts)
+        # One distinct content hash per kind, regardless of how many tiers
+        # re-emit that kind.
+        kinds = {a["kind"] for a in artifacts}
+        assert len({a["content_hash"] for a in artifacts}) == len(kinds)
+        # Sanity: the same kind in different tiers really does collide.
+        by_kind: dict[str, set[str]] = {}
+        for a in artifacts:
+            by_kind.setdefault(a["kind"], set()).add(a["content_hash"])
+        assert all(len(hashes) == 1 for hashes in by_kind.values())
 
     def test_human_output_shows_components_and_verdicts(self, tmp_path):
         result = _explain(tmp_path)
