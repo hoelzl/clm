@@ -500,3 +500,59 @@ class TestSyncAlignmentCache:
         finally:
             wm.close()
             align.close()
+
+
+class TestSyncWatermarkSyncedCommit:
+    """The pair-level ``synced_commit`` metadata (Fix D)."""
+
+    def _wm(self, tmp_path: Path) -> SyncWatermarkCache:
+        return SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+
+    def test_get_is_none_when_unset(self, tmp_path: Path):
+        wm = self._wm(tmp_path)
+        try:
+            assert wm.get_synced_commit("a.de.py", "a.en.py") is None
+        finally:
+            wm.close()
+
+    def test_set_then_get_round_trip(self, tmp_path: Path):
+        wm = self._wm(tmp_path)
+        try:
+            wm.set_synced_commit("a.de.py", "a.en.py", "abc123")
+            assert wm.get_synced_commit("a.de.py", "a.en.py") == "abc123"
+        finally:
+            wm.close()
+
+    def test_set_overwrites(self, tmp_path: Path):
+        wm = self._wm(tmp_path)
+        try:
+            wm.set_synced_commit("a.de.py", "a.en.py", "first")
+            wm.set_synced_commit("a.de.py", "a.en.py", "second")
+            assert wm.get_synced_commit("a.de.py", "a.en.py") == "second"
+        finally:
+            wm.close()
+
+    def test_clear_pair_removes_commit(self, tmp_path: Path):
+        wm = self._wm(tmp_path)
+        try:
+            wm.put_deck(
+                de_path="a.de.py",
+                en_path="a.en.py",
+                lang="de",
+                cells=[(0, "x", "slide", "h", None)],
+            )
+            wm.set_synced_commit("a.de.py", "a.en.py", "abc123")
+            wm.clear_pair("a.de.py", "a.en.py")
+            assert wm.get_synced_commit("a.de.py", "a.en.py") is None
+        finally:
+            wm.close()
+
+    def test_persists_across_reopen(self, tmp_path: Path):
+        first = self._wm(tmp_path)
+        first.set_synced_commit("a.de.py", "a.en.py", "deadbeef")
+        first.close()
+        second = self._wm(tmp_path)
+        try:
+            assert second.get_synced_commit("a.de.py", "a.en.py") == "deadbeef"
+        finally:
+            second.close()

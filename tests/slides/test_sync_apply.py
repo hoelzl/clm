@@ -2415,3 +2415,42 @@ class TestReconcileMismatchedTwins:
             # EN-authority would rewrite DE's d1 → e1, but DE already has an `e1` cell.
             assert _reconcile_twin(de_cell, en_cell, de_state, en_state) is False
             assert _slide_order(dp) == ["d1", "e1"]  # nothing rewritten
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not available")
+class TestWatermarkRecordsCommit:
+    """Fix D: a watermark write records the repo HEAD commit (pair-level metadata)."""
+
+    def test_apply_records_head_commit(self, tmp_path: Path):
+        de_path, en_path = _write_pair(
+            tmp_path, _slide("de", "intro", "# de"), _slide("en", "intro", "# en")
+        )
+
+        def _git(*args: str) -> None:
+            subprocess.run(
+                ["git", *args], cwd=str(tmp_path), check=True, capture_output=True, text=True
+            )
+
+        _git("init", "-q")
+        _git("config", "user.email", "t@example.com")
+        _git("config", "user.name", "Test")
+        _git("add", "-A")
+        _git("-c", "commit.gpgsign=false", "commit", "-q", "-m", "baseline")
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(tmp_path),
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            # No watermark yet → git-HEAD baseline → no-op (halves consistent at HEAD);
+            # a successful apply still records the whole-deck watermark + the commit.
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            result = apply_plan(plan, judge=None, watermark_cache=cache)
+            assert not result.errors
+            assert cache.get_synced_commit(str(de_path), str(en_path)) == head
+        finally:
+            cache.close()

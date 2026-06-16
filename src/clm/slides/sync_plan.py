@@ -971,16 +971,17 @@ def _lang_for_path(path: Path) -> str | None:
     return None
 
 
-def _git_head_text(path: Path) -> str | None:
-    """The committed (HEAD) text of ``path``, or ``None`` if unavailable.
+def _git_ref_text(path: Path, ref: str = "HEAD") -> str | None:
+    """The text of ``path`` at git ``ref`` (default ``HEAD``), or ``None``.
 
-    ``None`` when git is unavailable, the file is untracked, or ``git show``
-    fails. Shared by the per-cell baseline (:func:`_baseline_from_git_head`) and
-    the shared/header baselines so they all read the *same* committed snapshot.
+    ``None`` when git is unavailable, the file is untracked at ``ref``, the ref
+    does not resolve, or ``git show`` fails. ``ref`` may be any revision spec
+    (``HEAD~1``, a commit SHA, ``origin/master``, …) — this powers both the
+    git-HEAD baseline fallback and the explicit ``--baseline <ref>`` flag.
     """
     try:
         completed = subprocess.run(
-            ["git", "show", f"HEAD:./{path.name}"],
+            ["git", "show", f"{ref}:./{path.name}"],
             cwd=str(path.parent),
             capture_output=True,
             text=True,
@@ -992,6 +993,15 @@ def _git_head_text(path: Path) -> str | None:
     if completed.returncode != 0:
         return None
     return completed.stdout
+
+
+def _git_head_text(path: Path) -> str | None:
+    """The committed (HEAD) text of ``path`` — thin wrapper over :func:`_git_ref_text`.
+
+    Shared by the per-cell baseline (:func:`_baseline_from_git_head`) and the
+    shared/header baselines so they all read the *same* committed snapshot.
+    """
+    return _git_ref_text(path, "HEAD")
 
 
 def _bundle_from_watermark(
@@ -1027,23 +1037,27 @@ def _bundle_from_watermark(
     )
 
 
-def _bundle_from_git_head(de_path: Path, en_path: Path) -> BaselineBundle | None:
-    """The committed (HEAD) pair re-derived as a :class:`BaselineBundle`, or ``None``.
+def _bundle_from_git_ref(de_path: Path, en_path: Path, ref: str = "HEAD") -> BaselineBundle | None:
+    """The pair at git ``ref`` re-derived as a :class:`BaselineBundle`, or ``None``.
 
-    Derives **exactly** the rows a watermark recording of the HEAD text would
+    Derives **exactly** the rows a watermark recording of the ``ref`` text would
     store — the same :func:`watermark_rows` / :func:`watermark_tag_map` /
     :func:`_header_hashes` chokepoints ``_record_watermark`` uses — so every
     consumer downstream is source-agnostic by construction. The ``shared``
     partition is taken from the DE half (neutral cells are byte-identical across
     the halves — the ``unify`` invariant — exactly as ``_record_watermark``
-    records it). ``None`` when git/the committed text is unavailable or a deck's
+    records it). ``None`` when git/the ``ref`` text is unavailable or a deck's
     language cannot be inferred from its name (the caller then runs with no
     baseline).
+
+    ``source`` is ``"git-head"`` for the default HEAD fallback (unchanged) and
+    ``"git:<ref>"`` for an explicit ``--baseline`` ref, so the plan headline
+    names the baseline that was used.
     """
     if _lang_for_path(de_path) is None or _lang_for_path(en_path) is None:
         return None
-    de_text = _git_head_text(de_path)
-    en_text = _git_head_text(en_path)
+    de_text = _git_ref_text(de_path, ref)
+    en_text = _git_ref_text(en_path, ref)
     if de_text is None or en_text is None:
         return None
     de_head = parse_cells(de_text, comment_token_for_path(de_path))
@@ -1053,11 +1067,17 @@ def _bundle_from_git_head(de_path: Path, en_path: Path) -> BaselineBundle | None
     de_tags = watermark_tag_map(de_head)
     en_tags = watermark_tag_map(en_head)
     return BaselineBundle(
-        source="git-head",
+        source="git-head" if ref == "HEAD" else f"git:{ref}",
         rows={"de": de_rows["de"], "en": en_rows["en"], "shared": de_rows["shared"]},
         tags={"de": de_tags["de"], "en": en_tags["en"], "shared": de_tags["shared"]},
         header_hashes={"de": _header_hashes(de_head), "en": _header_hashes(en_head)},
     )
+
+
+def _bundle_from_git_head(de_path: Path, en_path: Path) -> BaselineBundle | None:
+    """The committed (HEAD) pair as a :class:`BaselineBundle` — wrapper over
+    :func:`_bundle_from_git_ref`."""
+    return _bundle_from_git_ref(de_path, en_path, "HEAD")
 
 
 # ---------------------------------------------------------------------------
@@ -2403,11 +2423,19 @@ def build_sync_plan(
     watermark_cache: SyncWatermarkCache | None = None,
     allow_git_fallback: bool = True,
     provider_available: bool = False,
+    baseline_ref: str | None = None,
 ) -> SyncPlan:
     """Resolve the baseline and classify the pair into a :class:`SyncPlan`.
 
-    Baseline priority: watermark → git HEAD → none (see module docstring).
-    Reads the two files; writes nothing.
+    Baseline priority: ``baseline_ref`` (when given) → watermark → git HEAD →
+    none (see module docstring). Reads the two files; writes nothing.
+
+    ``baseline_ref`` (the ``--baseline`` flag) pins the baseline to an explicit
+    git ref (``HEAD~1``, a SHA, …), bypassing the watermark and the HEAD
+    fallback — the deterministic escape hatch for "I committed single-language
+    edits before syncing": ``baseline_ref="HEAD~1"`` diffs against the pre-edit
+    commit so the edits are seen. When the ref text is unavailable the plan has
+    no baseline (it does NOT silently fall back to HEAD).
 
     ``provider_available`` (#216 Phase 3, design §12) is the plan-time fact "a
     correspondence verifier will be available at apply time" (an LLM provider is
@@ -2447,14 +2475,20 @@ def build_sync_plan(
     # (the parallel per-aspect git-HEAD plumbing this replaces is how the #269
     # baseline gaps and the #289 git-HEAD tag drop shipped).
     bundle: BaselineBundle | None = None
-    if watermark_cache is not None:
-        bundle = _bundle_from_watermark(watermark_cache, de_path, en_path)
-    if (
-        bundle is None
-        and allow_git_fallback
-        and not _pair_is_unbootstrapped(de_current, en_current)
-    ):
-        bundle = _bundle_from_git_head(de_path, en_path)
+    if baseline_ref is not None:
+        # Explicit --baseline ref: diff against this git ref, ignoring the
+        # watermark, and do NOT fall back to HEAD if it is unavailable.
+        if not _pair_is_unbootstrapped(de_current, en_current):
+            bundle = _bundle_from_git_ref(de_path, en_path, baseline_ref)
+    else:
+        if watermark_cache is not None:
+            bundle = _bundle_from_watermark(watermark_cache, de_path, en_path)
+        if (
+            bundle is None
+            and allow_git_fallback
+            and not _pair_is_unbootstrapped(de_current, en_current)
+        ):
+            bundle = _bundle_from_git_head(de_path, en_path)
 
     if bundle is not None:
         source = bundle.source

@@ -795,6 +795,20 @@ class SyncWatermarkCache:
             if "tags" not in columns:
                 self._conn.execute("ALTER TABLE sync_watermarks ADD COLUMN tags TEXT")
             self._conn.commit()
+        # Pair-level metadata, one row per (de_path, en_path): the repo HEAD commit
+        # at the time the watermark was recorded. Lets a later run detect that the
+        # watermark predates committed edits and name the exact `--baseline <ref>`
+        # to diff against (the stale-watermark hint).
+        self._conn.execute(
+            """CREATE TABLE IF NOT EXISTS sync_watermark_meta (
+                de_path       TEXT NOT NULL,
+                en_path       TEXT NOT NULL,
+                synced_commit TEXT,
+                synced_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (de_path, en_path)
+            )"""
+        )
+        self._conn.commit()
 
     def get_deck(
         self,
@@ -896,10 +910,33 @@ class SyncWatermarkCache:
         ).fetchone()
         return row is not None
 
+    def set_synced_commit(self, de_path: str, en_path: str, commit: str | None) -> None:
+        """Record the repo HEAD commit the pair was last synced at (pair-level)."""
+        with self._conn:
+            self._conn.execute(
+                "INSERT INTO sync_watermark_meta (de_path, en_path, synced_commit) "
+                "VALUES (?, ?, ?) "
+                "ON CONFLICT(de_path, en_path) DO UPDATE SET "
+                "synced_commit=excluded.synced_commit, synced_at=CURRENT_TIMESTAMP",
+                (de_path, en_path, commit),
+            )
+
+    def get_synced_commit(self, de_path: str, en_path: str) -> str | None:
+        """Return the commit recorded by :meth:`set_synced_commit`, or ``None``."""
+        row = self._conn.execute(
+            "SELECT synced_commit FROM sync_watermark_meta WHERE de_path=? AND en_path=?",
+            (de_path, en_path),
+        ).fetchone()
+        return row[0] if row else None
+
     def clear_pair(self, de_path: str, en_path: str) -> int:
-        """Delete all watermark rows for the pair; return rows removed."""
+        """Delete all watermark rows + metadata for the pair; return rows removed."""
         cursor = self._conn.execute(
             "DELETE FROM sync_watermarks WHERE de_path=? AND en_path=?",
+            (de_path, en_path),
+        )
+        self._conn.execute(
+            "DELETE FROM sync_watermark_meta WHERE de_path=? AND en_path=?",
             (de_path, en_path),
         )
         self._conn.commit()

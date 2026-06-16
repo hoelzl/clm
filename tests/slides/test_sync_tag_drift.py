@@ -483,6 +483,10 @@ class _RecordingCache:
         if tags is not None:
             self.channels.add((lang, "tags"))
 
+    def set_synced_commit(self, de_path, en_path, commit):  # noqa: ANN001
+        # Pair-level metadata (Fix D), not a per-cell channel — nothing to record here.
+        pass
+
 
 class TestChannelCoverage:
     def test_every_recorded_channel_has_a_named_check(self, tmp_path: Path):
