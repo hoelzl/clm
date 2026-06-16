@@ -329,6 +329,33 @@ Defaults to `Coding-Akademie München` (de) / `Coding-Academy Munich` (en).
 
 ## Optional Elements
 
+### `<sidecar-layout>` (Optional, CLM {version}+)
+
+Per-course default for where a build records a topic's **first** HTTP-replay
+cassette. Value is `subdir` or `sibling`:
+
+- `subdir` — new cassettes are recorded into the topic's `cassettes/` folder
+  (created on demand), keeping the topic directory focused on editable sources.
+- `sibling` — new cassettes land next to the slides (the historical default).
+
+```xml
+<sidecar-layout>subdir</sidecar-layout>
+```
+
+This only changes the *write* location of a new cassette. Reads always
+auto-detect both layouts, so a course can flip this freely without changing any
+build output. Per-topic directory presence still wins: if a topic already has a
+`cassettes/` (or legacy `_cassettes/`) folder, recordings go there regardless of
+this setting.
+
+Precedence (highest first): the `CLM_SIDECAR_LAYOUT` environment variable, then
+this `<sidecar-layout>`, then `[tool.clm] sidecar-layout` in the nearest
+ancestor `pyproject.toml`. An unset or unrecognised value falls through. The env
+var and `pyproject.toml` key additionally govern where `clm voiceover
+extract`/`sync` place new voiceover companions (those tools run without a loaded
+spec, so they do not read `<sidecar-layout>`). Use `clm slides tidy` to move
+existing sidecars between the two layouts in bulk.
+
 ### `<github>`
 
 Git repository configuration for output directories. Used by `clm git` commands
@@ -978,9 +1005,11 @@ topic_070_rag_introduction/
 
 Both layouts work everywhere (build, `extract`/`inline`/`sync`, `split`/`unify`,
 `validate`); they are auto-detected by directory presence, so no spec change is
-needed. `clm slides tidy` moves sidecars between the two layouts in bulk, and a
-course-wide write default can be set via `[tool.clm] sidecar-layout` /
-`CLM_SIDECAR_LAYOUT` (see `clm info commands` and the configuration guide).
+needed to *read* either. `clm slides tidy` moves sidecars between the two
+layouts in bulk, and a course-wide *write* default — where a first-ever cassette
+is recorded during a build — can be set via the `<sidecar-layout>` spec element
+(see Optional Elements above), the `[tool.clm] sidecar-layout` pyproject key, or
+the `CLM_SIDECAR_LAYOUT` environment variable.
 
 ## Cross-references between notebooks (CLM {version}+)
 

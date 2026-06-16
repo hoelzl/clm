@@ -1388,6 +1388,14 @@ class CourseSpec:
     tasks: list[TaskSpec] = field(factory=list)
     image_options: ImageOptionsSpec = field(factory=ImageOptionsSpec)
     jupyterlite: JupyterLiteConfig | None = None
+    # Per-course default for where newly written authoring sidecars land:
+    # ``"subdir"`` (a per-type ``cassettes/`` / ``voiceover/`` folder) or
+    # ``"sibling"`` (next to the slides). ``None`` leaves the choice to the
+    # ``CLM_SIDECAR_LAYOUT`` env var / ``[tool.clm] sidecar-layout`` pyproject
+    # key and otherwise to per-topic directory presence. Only affects the
+    # *write* location of new files (e.g. a first-recorded cassette during a
+    # build); reads always auto-detect both layouts. From ``<sidecar-layout>``.
+    sidecar_layout: str | None = None
     author: str = "Dr. Matthias Hölzl"
     organization: Text = field(
         factory=lambda: Text(de="Coding-Akademie München", en="Coding-Academy Munich")
@@ -2366,6 +2374,26 @@ class CourseSpec:
         else:
             effective_slug = None
 
+        # Parse the per-course sidecar-layout default (write location for new
+        # cassettes / voiceover companions). Coerce + validate here so an
+        # unrecognised value is a loud no-op rather than a silent miss at
+        # resolve time.
+        from clm.slides.sidecar_layout import SIDECAR_LAYOUTS
+
+        sidecar_layout_raw = element_text(root, "sidecar-layout").strip()
+        sidecar_layout: str | None = None
+        if sidecar_layout_raw:
+            normalized_layout = sidecar_layout_raw.lower()
+            if normalized_layout in SIDECAR_LAYOUTS:
+                sidecar_layout = normalized_layout
+            else:
+                logger.warning(
+                    "Ignoring <sidecar-layout>%s</sidecar-layout> in '%s': expected one of %s.",
+                    sidecar_layout_raw,
+                    file_name,
+                    ", ".join(SIDECAR_LAYOUTS),
+                )
+
         # Parse author (simple text element, defaults handled by attrs)
         author = element_text(root, "author") or "Dr. Matthias Hölzl"
 
@@ -2390,6 +2418,7 @@ class CourseSpec:
             tasks=cls.parse_tasks(root),
             image_options=ImageOptionsSpec.from_element(root.find("image-options")),
             jupyterlite=JupyterLiteConfig.from_element(root.find("jupyterlite")),
+            sidecar_layout=sidecar_layout,
             author=author,
             organization=organization,
         )

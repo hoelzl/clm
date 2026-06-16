@@ -1392,6 +1392,49 @@ class TestCourseSpecOutputDirName:
         )
 
 
+class TestSidecarLayout:
+    """Parsing of the per-course <sidecar-layout> element."""
+
+    @staticmethod
+    def _spec(layout_element: str) -> str:
+        return f"""<?xml version="1.0"?>
+<course>
+    <name><de>Kurs</de><en>Course</en></name>
+    <prog-lang>python</prog-lang>
+    {layout_element}
+</course>"""
+
+    def test_absent_defaults_to_none(self):
+        spec = CourseSpec.from_file(io.StringIO(self._spec("")))
+        assert spec.sidecar_layout is None
+
+    def test_subdir_parsed(self):
+        spec = CourseSpec.from_file(
+            io.StringIO(self._spec("<sidecar-layout>subdir</sidecar-layout>"))
+        )
+        assert spec.sidecar_layout == "subdir"
+
+    def test_sibling_parsed(self):
+        spec = CourseSpec.from_file(
+            io.StringIO(self._spec("<sidecar-layout>sibling</sidecar-layout>"))
+        )
+        assert spec.sidecar_layout == "sibling"
+
+    def test_case_insensitive_and_trimmed(self):
+        spec = CourseSpec.from_file(
+            io.StringIO(self._spec("<sidecar-layout>  SubDir  </sidecar-layout>"))
+        )
+        assert spec.sidecar_layout == "subdir"
+
+    def test_unknown_value_ignored_with_warning(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="clm.core.course_spec"):
+            spec = CourseSpec.from_file(
+                io.StringIO(self._spec("<sidecar-layout>nope</sidecar-layout>"))
+            )
+        assert spec.sidecar_layout is None
+        assert any("sidecar-layout" in record.message for record in caplog.records)
+
+
 class TestProjectSlugResolution:
     """Tests for project-slug resolution from top-level vs github section."""
 

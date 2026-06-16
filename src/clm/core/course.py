@@ -280,6 +280,21 @@ class Course(NotebookMixin):
         return self.spec.prog_lang
 
     @property
+    def sidecar_layout(self) -> str | None:
+        """Effective course-wide sidecar-layout default, or ``None``.
+
+        Folds the ``CLM_SIDECAR_LAYOUT`` env var, the spec's
+        ``<sidecar-layout>``, and ``[tool.clm] sidecar-layout`` (in that
+        precedence) into ``"subdir"`` / ``"sibling"`` / ``None``. Consulted by
+        ``NotebookFile.expected_cassette_path`` to decide where a first-ever
+        cassette is recorded when no per-topic ``cassettes/`` directory exists
+        yet. ``None`` leaves per-topic directory presence in charge (sibling).
+        """
+        from clm.slides.sidecar_layout import resolve_layout
+
+        return resolve_layout(self.spec.sidecar_layout, self.course_root)
+
+    @property
     def topics(self) -> list[Topic]:
         return [topic for section in self.sections for topic in section.topics]
 

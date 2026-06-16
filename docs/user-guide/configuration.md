@@ -180,26 +180,31 @@ set DRAWIO_EXECUTABLE="C:\Program Files\draw.io\draw.io.exe"
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `CLM_SIDECAR_LAYOUT` | Course-wide default for where **newly created** voiceover companions land: `subdir` (a `voiceover/` folder) or `sibling` (next to the slide). | (unset → sibling) |
+| `CLM_SIDECAR_LAYOUT` | Course-wide default for where **newly created** authoring sidecars land: `subdir` (a per-type `voiceover/` / `cassettes/` folder) or `sibling` (next to the slide). | (unset → sibling) |
 
 This is a **write-time** default only — it affects where `clm voiceover extract`
-/ `sync` create a *new* companion. It does **not** change the build, which always
-reads a companion (and cassettes) from either layout. The precedence for a new
-companion is: an explicit `--layout` flag → a `voiceover/` directory that already
-exists in the topic → this course default → `sibling`. A value of `sibling` is a
-no-op (it equals the built-in fallback).
+/ `sync` create a *new* companion, and where a build records a topic's *first*
+HTTP-replay cassette. It does **not** change build *output*, which always reads a
+companion (and cassettes) from either layout. The precedence for a new sidecar
+is: an explicit `--layout` flag → a per-type directory that already exists in the
+topic → this course default → `sibling`. A value of `sibling` is a no-op (it
+equals the built-in fallback).
 
-The same default can be set per course repository in `pyproject.toml`, which the
-environment variable overrides:
+The course-wide default resolves highest precedence first: the
+`CLM_SIDECAR_LAYOUT` environment variable, then the `<sidecar-layout>` element in
+the course spec (`clm info spec-files`), then `[tool.clm] sidecar-layout` in
+`pyproject.toml`:
 
 ```toml
 [tool.clm]
 sidecar-layout = "subdir"   # or "sibling"
 ```
 
-The setting is read from the nearest ancestor `pyproject.toml` of the slide
-being written. Use `clm slides tidy` to move *existing* sidecars between layouts
-in bulk.
+The spec's `<sidecar-layout>` is consulted by the build for cassette placement;
+the env var and `pyproject.toml` key additionally drive `clm voiceover
+extract`/`sync` (which run without a loaded spec). The `pyproject.toml` setting
+is read from the nearest ancestor of the slide being written. Use `clm slides
+tidy` to move *existing* sidecars between layouts in bulk.
 
 ### Logging
 
