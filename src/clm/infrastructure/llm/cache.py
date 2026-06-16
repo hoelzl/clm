@@ -2,9 +2,16 @@
 
 import logging
 import sqlite3
+from dataclasses import dataclass
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# Filename of the shared LLM SQLite cache (summaries, titles, translations,
+# sync watermarks, …) inside the resolved cache directory. The CLI commands
+# under ``clm slides`` each keep a local copy of this literal; this is the
+# canonical home.
+CACHE_DB_NAME = "clm-llm.sqlite"
 
 
 class SummaryCache:
@@ -918,12 +925,31 @@ class SyncWatermarkCache:
         self._conn.close()
 
 
-def resolve_cache_dir(
+@dataclass(frozen=True)
+class CacheDirResolution:
+    """Where the LLM cache directory resolves to, and *why*.
+
+    The provenance fields exist so a read-only diagnostic (``clm config
+    locate``) can explain the resolution without re-deriving it — and so the
+    git-worktree anchoring is observable. ``path`` is NOT created here; call
+    :func:`resolve_cache_dir` (or ``_ensure_dir``) when you need the directory
+    to exist.
+    """
+
+    path: Path
+    source: str  # "cli" | "env" | "pyproject" | "default"
+    configured_value: str | None = None  # raw [tool.clm] cache_dir value, if used
+    pyproject_path: Path | None = None
+    relative_anchor: Path | None = None  # dir a relative configured_value was joined to
+    main_worktree_root: Path | None = None  # set iff resolved from a LINKED git worktree
+
+
+def describe_cache_dir(
     *,
     cli_override: Path | None = None,
     repo_root: Path | None = None,
-) -> Path:
-    """Resolve the LLM cache directory per §2.5 of the redesign handover.
+) -> CacheDirResolution:
+    """Resolve the LLM cache directory and report its provenance (pure).
 
     Lookup order:
 
@@ -932,17 +958,28 @@ def resolve_cache_dir(
     3. ``tool.clm.cache_dir`` in ``<repo_root>/pyproject.toml``
     4. ``<repo_root>/.clm-cache/`` (default, gitignored)
 
-    The returned path is created if it does not exist. ``repo_root``
-    defaults to the current working directory.
+    ``repo_root`` defaults to the current working directory. This function has
+    **no side effects** — it does not create the directory.
+
+    Git-worktree anchoring: a *relative* ``[tool.clm] cache_dir`` (e.g.
+    ``../shared-cache``) is normally joined to ``repo_root``. But in a git
+    **worktree**, ``repo_root`` is the per-worktree checkout — so the relative
+    value would resolve *under* the worktree instead of beside the main
+    checkout, silently giving each worktree its own cache (the cause of
+    sync watermarks "disappearing" in a worktree). When ``repo_root`` is not
+    given explicitly (the real-CLI path, resolving from cwd) and cwd is inside a
+    linked worktree, the relative value is anchored to the **main worktree
+    root** instead, so every worktree shares the one cache. Passing an explicit
+    ``repo_root`` opts out of this detection and anchors to that root verbatim.
     """
     import os
 
     if cli_override is not None:
-        return _ensure_dir(Path(cli_override))
+        return CacheDirResolution(path=Path(cli_override), source="cli")
 
     env = os.environ.get("CLM_CACHE_DIR")
     if env:
-        return _ensure_dir(Path(env))
+        return CacheDirResolution(path=Path(env), source="env")
 
     root = repo_root or Path.cwd()
     pyproject = root / "pyproject.toml"
@@ -950,11 +987,77 @@ def resolve_cache_dir(
         configured = _read_pyproject_cache_dir(pyproject)
         if configured:
             path = Path(configured)
-            if not path.is_absolute():
-                path = root / path
-            return _ensure_dir(path)
+            if path.is_absolute():
+                return CacheDirResolution(
+                    path=path,
+                    source="pyproject",
+                    configured_value=configured,
+                    pyproject_path=pyproject,
+                )
+            # Anchor a relative value to the main worktree root when resolving
+            # from cwd inside a linked worktree (see docstring).
+            main_root = _main_worktree_root(root) if repo_root is None else None
+            anchor = main_root or root
+            return CacheDirResolution(
+                path=anchor / path,
+                source="pyproject",
+                configured_value=configured,
+                pyproject_path=pyproject,
+                relative_anchor=anchor,
+                main_worktree_root=main_root,
+            )
 
-    return _ensure_dir(root / ".clm-cache")
+    return CacheDirResolution(path=root / ".clm-cache", source="default")
+
+
+def resolve_cache_dir(
+    *,
+    cli_override: Path | None = None,
+    repo_root: Path | None = None,
+) -> Path:
+    """Resolve the LLM cache directory and ensure it exists.
+
+    Thin wrapper over :func:`describe_cache_dir` (which holds the resolution
+    logic, including git-worktree anchoring of a relative ``[tool.clm]
+    cache_dir``). The returned path is created if it does not exist.
+    """
+    return _ensure_dir(describe_cache_dir(cli_override=cli_override, repo_root=repo_root).path)
+
+
+def _main_worktree_root(start: Path) -> Path | None:
+    """The main worktree root if ``start`` is inside a LINKED git worktree.
+
+    Returns ``None`` for the main worktree, outside any repo, or when git is
+    unavailable — callers then fall back to ``start``. The main worktree's
+    ``--git-common-dir`` is the repo's own ``.git`` (so the parent equals
+    ``start``'s root and there is nothing to re-anchor); a linked worktree's
+    common dir points at the *main* checkout's ``.git``, whose parent is the
+    shared root we want.
+    """
+    import subprocess
+
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            cwd=str(start),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        return None
+    out = completed.stdout.strip()
+    if not out:
+        return None
+    common = Path(out)
+    if not common.is_absolute():
+        # In the MAIN worktree, --git-common-dir is the relative ".git"; its
+        # parent is `start`'s root, so there is no separate main root to use.
+        return None
+    common = common.resolve()
+    if common.name != ".git":
+        return None
+    return common.parent
 
 
 def _ensure_dir(path: Path) -> Path:

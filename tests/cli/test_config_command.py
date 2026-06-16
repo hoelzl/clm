@@ -139,6 +139,14 @@ class TestConfigShow:
         assert "DEBUG" in result.output
         assert "custom_cache.db" in result.output
 
+    def test_show_includes_llm_cache_section(self, isolated_config_dirs):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["config", "show"])
+        assert result.exit_code == 0, result.output
+        assert "[LLM Cache]" in result.output
+        assert "llm_cache_dir:" in result.output
+        assert "clm-llm.sqlite" in result.output
+
 
 class TestConfigLocate:
     def test_locate_shows_all_locations(self, isolated_config_dirs):
@@ -165,6 +173,29 @@ class TestConfigLocate:
         project_idx = output.index("Project config")
         assert "Exists" in output[user_idx:project_idx]
         assert "Not found" in output[project_idx:]
+
+    def test_locate_shows_llm_cache_directory(self, isolated_config_dirs):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["config", "locate"])
+        assert result.exit_code == 0, result.output
+        assert "LLM cache directory" in result.output
+        assert "clm-llm.sqlite" in result.output
+        # No DB exists in an isolated tmp project.
+        section = result.output.split("LLM cache directory")[1]
+        assert "Not found" in section
+
+    def test_locate_reports_pyproject_cache_dir_source(self, isolated_config_dirs):
+        # A project pyproject.toml [tool.clm] cache_dir is reported as the source.
+        project_dir = isolated_config_dirs["project_dir"]
+        (project_dir / "pyproject.toml").write_text(
+            '[tool.clm]\ncache_dir = "my-llm-cache"\n', encoding="utf-8"
+        )
+        runner = CliRunner()
+        result = runner.invoke(cli, ["config", "locate"])
+        assert result.exit_code == 0, result.output
+        section = result.output.split("LLM cache directory")[1]
+        assert "pyproject.toml [tool.clm] cache_dir" in section
+        assert "my-llm-cache" in section
 
 
 class TestConfigHelp:

@@ -18,6 +18,32 @@ from __future__ import annotations
 # Embedded in the SyncCache key. Bump on prompt-shape changes.
 SYNC_PROMPT_VERSION = "v1"
 
+# JSON Schema for the judge's reply. Passed to the model as a structured-output
+# constraint so the response is guaranteed valid JSON even when proposed_text
+# carries markdown tables, fenced code, escaped newlines, or characters like
+# ``&lt;`` / ``⌃⌘`` that previously broke ``json.loads`` (the "sync response is
+# not valid JSON" failure). The shape matches what :func:`parse_sync_response`
+# expects. ``strict`` mode requires every property in ``required`` and forbids
+# extras, so all three keys are listed.
+SYNC_RESPONSE_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "verdict": {"type": "string", "enum": ["in_sync", "update"]},
+        "proposed_text": {"type": "string"},
+        "reason": {"type": "string"},
+    },
+    "required": ["verdict", "proposed_text", "reason"],
+}
+
+# OpenAI/OpenRouter ``response_format`` wrapper around the bare schema above.
+# (Ollama takes the bare schema as its ``format`` value instead.)
+SYNC_RESPONSE_JSON_SCHEMA = {
+    "name": "sync_proposal",
+    "strict": True,
+    "schema": SYNC_RESPONSE_SCHEMA,
+}
+
 SYNC_SYSTEM_PROMPT = (
     "You help instructors keep bilingual course slides in sync. The DE "
     "(German) and EN (English) versions of one slide cell have "
