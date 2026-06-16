@@ -28,7 +28,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 from clm.infrastructure.llm.ollama_client import (
     DEFAULT_TIMEOUT_SECONDS,
@@ -39,6 +39,7 @@ from clm.infrastructure.llm.ollama_client import (
 from clm.infrastructure.llm.retry import call_with_retries
 from clm.infrastructure.llm.sync_prompts import (
     SYNC_PROMPT_VERSION,
+    SYNC_RESPONSE_JSON_SCHEMA,
     SYNC_SYSTEM_PROMPT,
     build_sync_user_prompt,
 )
@@ -152,6 +153,16 @@ class OpenRouterSyncJudge:
                 ],
                 temperature=self.temperature,
                 max_tokens=self.max_tokens,
+                # Structured output: force valid JSON so cells with markdown
+                # tables / fenced code / escaped newlines / ``&lt;`` / ``⌃⌘``
+                # cannot produce an unparseable reply (see SYNC_RESPONSE_JSON_SCHEMA).
+                # Sibling calls in sync_recover.py already constrain output this way.
+                # cast: the OpenAI SDK types response_format as a set of TypedDicts;
+                # our schema dict is structurally valid but not statically inferable.
+                response_format=cast(
+                    Any,
+                    {"type": "json_schema", "json_schema": SYNC_RESPONSE_JSON_SCHEMA},
+                ),
             )
 
         # Retry transient failures (rate-limit / connection blip / 5xx) so one

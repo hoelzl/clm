@@ -83,6 +83,13 @@ def config_show():
     click.echo(f"  jobs_db_path: {cfg.paths.jobs_db_path}")
     click.echo(f"  workspace_path: {cfg.paths.workspace_path or '(not set)'}")
 
+    from clm.infrastructure.llm.cache import CACHE_DB_NAME, describe_cache_dir
+
+    llm = describe_cache_dir()
+    click.echo("\n[LLM Cache]  (summaries, titles, translations, sync watermarks)")
+    click.echo(f"  llm_cache_dir: {llm.path}  (from {llm.source})")
+    click.echo(f"  llm_cache_db: {llm.path / CACHE_DB_NAME}")
+
     click.echo("\n[External Tools]")
     click.echo(f"  plantuml_jar: {cfg.external_tools.plantuml_jar or '(not set)'}")
     click.echo(f"  drawio_executable: {cfg.external_tools.drawio_executable or '(not set)'}")
@@ -147,3 +154,29 @@ def config_locate():
     click.echo("  3. User config (~/.config/clm/config.toml)")
     click.echo("  4. System config (/etc/clm/config.toml)")
     click.echo("  5. Default values")
+
+    # LLM cache directory (separate from the config files above): holds the
+    # SQLite DB with summaries, title/translation suggestions, and the sync
+    # WATERMARKS. Surfaced here because it is resolved independently and, in a
+    # git worktree, a relative `cache_dir` is easy to mis-locate.
+    from clm.infrastructure.llm.cache import CACHE_DB_NAME, describe_cache_dir
+
+    llm = describe_cache_dir()
+    db_path = llm.path / CACHE_DB_NAME
+    click.echo("\nLLM cache directory (watermarks, summaries, translations):")
+    click.echo(f"  Path: {llm.path}")
+    _source_labels = {
+        "cli": "--cache-dir flag",
+        "env": "$CLM_CACHE_DIR",
+        "pyproject": "pyproject.toml [tool.clm] cache_dir",
+        "default": "default (<repo>/.clm-cache)",
+    }
+    click.echo(f"  Source: {_source_labels.get(llm.source, llm.source)}")
+    if llm.configured_value is not None:
+        click.echo(f"  Configured value: {llm.configured_value!r}")
+    if llm.main_worktree_root is not None:
+        click.echo("  Git worktree: linked worktree detected")
+        click.echo(f"    Relative cache_dir anchored to main worktree root: {llm.relative_anchor}")
+    click.echo(f"  SQLite DB: {db_path}")
+    click.echo(f"  Status: {'Exists' if db_path.exists() else 'Not found'}")
+    click.echo("\n  Override with --cache-dir <path> or $CLM_CACHE_DIR.")
