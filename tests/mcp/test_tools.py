@@ -903,13 +903,15 @@ class TestExtractVoiceover:
         return de, en
 
     async def test_extract_auto_pairs_split_half(self, course_tree):
-        de, _en = self._split_pair(course_tree)
+        from clm.slides.voiceover_tools import resolve_companion
+
+        de, en = self._split_pair(course_tree)
         result = await handle_extract_voiceover(str(de), course_tree)
         data = json.loads(result)
         assert data["paired"] is True
         assert len(data["companions"]) == 2
-        assert (de.parent / "voiceover_pair.de.py").exists()
-        assert (de.parent / "voiceover_pair.en.py").exists()
+        assert resolve_companion(de) is not None
+        assert resolve_companion(en) is not None
 
     async def test_extract_single_opts_out(self, course_tree):
         de, _en = self._split_pair(course_tree)

@@ -143,7 +143,7 @@ def _write_split_pair(tmp_path: Path) -> tuple[Path, Path]:
 class TestExtractPaired:
     def test_auto_pairs_on_split_half(self, tmp_path: Path):
         de, _en = _write_split_pair(tmp_path)
-        result = CliRunner().invoke(extract_voiceover_cmd, [str(de)])
+        result = CliRunner().invoke(extract_voiceover_cmd, [str(de), "--layout", "sibling"])
         assert result.exit_code == 0, result.output
         assert "paired extract" in result.output
         assert (tmp_path / "voiceover_x.de.py").exists()
@@ -151,7 +151,9 @@ class TestExtractPaired:
 
     def test_single_opts_out(self, tmp_path: Path):
         de, _en = _write_split_pair(tmp_path)
-        result = CliRunner().invoke(extract_voiceover_cmd, [str(de), "--single"])
+        result = CliRunner().invoke(
+            extract_voiceover_cmd, [str(de), "--single", "--layout", "sibling"]
+        )
         assert result.exit_code == 0, result.output
         assert "paired extract" not in result.output
         assert (tmp_path / "voiceover_x.de.py").exists()

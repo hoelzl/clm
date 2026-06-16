@@ -310,8 +310,23 @@ class TestCassetteResolution:
         (tmp_path / "slides_replay.http-cassette.yaml").write_text("# sibling\n", encoding="utf-8")
         assert nb.cassette_relative_name == "_cassettes/slides_replay.http-cassette.yaml"
 
-    def test_expected_cassette_path_defaults_to_sibling(self, course_1, tmp_path):
+    def test_expected_cassette_path_defaults_to_subdir_when_empty(
+        self, course_1, tmp_path, monkeypatch
+    ):
+        # New default: a first-ever cassette (no dir, no sibling) targets cassettes/.
+        monkeypatch.delenv("CLM_SIDECAR_LAYOUT", raising=False)
         nb = self._make_nb_file(course_1, tmp_path, with_cassette=False)
+        assert not (tmp_path / "cassettes").exists()  # not pre-created
+        assert (
+            nb.expected_cassette_path == tmp_path / "cassettes" / "slides_replay.http-cassette.yaml"
+        )
+        assert nb.expected_cassette_relative_name == "cassettes/slides_replay.http-cassette.yaml"
+
+    def test_expected_cassette_path_keeps_existing_sibling(self, course_1, tmp_path, monkeypatch):
+        # A deck that already records to a sibling cassette stays a sibling so a
+        # single deck is never split across layouts.
+        monkeypatch.delenv("CLM_SIDECAR_LAYOUT", raising=False)
+        nb = self._make_nb_file(course_1, tmp_path, with_cassette=True)  # sibling cassette
         assert nb.expected_cassette_path == tmp_path / "slides_replay.http-cassette.yaml"
         assert nb.expected_cassette_relative_name == "slides_replay.http-cassette.yaml"
 
@@ -506,15 +521,18 @@ class TestReplayCassetteLanguageFallback:
         assert nb.replay_cassette_path is None
         assert nb.replay_cassette_relative_name is None
 
-    def test_strict_properties_do_not_fall_back(self, tmp_path):
+    def test_strict_properties_do_not_fall_back(self, tmp_path, monkeypatch):
         """Record/seed/sweep rely on the strict, language-specific names."""
+        monkeypatch.delenv("CLM_SIDECAR_LAYOUT", raising=False)
         nb = self._make_split_nb_file(tmp_path, "de")
         (tmp_path / "slides_replay.http-cassette.yaml").write_text(
             "interactions: []\n", encoding="utf-8"
         )
         assert nb.cassette_path is None
         assert nb.cassette_relative_name is None
-        assert nb.expected_cassette_relative_name == "slides_replay.de.http-cassette.yaml"
+        # Only the base (bilingual) sibling exists; the strict ``.de`` name has no
+        # sibling, so a first-ever record targets the new ``cassettes/`` default.
+        assert nb.expected_cassette_relative_name == "cassettes/slides_replay.de.http-cassette.yaml"
 
     def test_no_fallback_for_non_split_deck(self, tmp_path):
         """A non-split deck has no language token → replay == strict lookup."""
@@ -615,13 +633,17 @@ class TestProcessNotebookOperationHttpReplay:
         op_present, _ = self._make_operation(course_1, tmp_path, mode="replay", with_cassette=True)
         assert op_present._resolve_cassette_name() == "slides_replay.http-cassette.yaml"
 
-    def test_resolve_cassette_name_record_modes_use_expected_when_missing(self, course_1, tmp_path):
+    def test_resolve_cassette_name_record_modes_use_expected_when_missing(
+        self, course_1, tmp_path, monkeypatch
+    ):
         # ``once`` and ``refresh`` need a write target on first run, even
         # before any cassette exists. Otherwise the bootstrap is never
-        # injected and recording can never bootstrap itself.
+        # injected and recording can never bootstrap itself. With no existing
+        # cassette/dir the new default write target is the ``cassettes/`` subdir.
+        monkeypatch.delenv("CLM_SIDECAR_LAYOUT", raising=False)
         for mode in ("once", "refresh"):
             op, _ = self._make_operation(course_1, tmp_path, mode=mode, with_cassette=False)
-            assert op._resolve_cassette_name() == "slides_replay.http-cassette.yaml", (
+            assert op._resolve_cassette_name() == "cassettes/slides_replay.http-cassette.yaml", (
                 f"mode={mode!r} must return the expected cassette path on first run"
             )
 
@@ -773,13 +795,16 @@ class TestProcessNotebookOperationHttpReplay:
         )
         assert op._resolve_cassette_name() == "slides_replay.de.http-cassette.yaml"
 
-    def test_resolve_record_modes_ignore_base_fallback_for_split(self, tmp_path):
+    def test_resolve_record_modes_ignore_base_fallback_for_split(self, tmp_path, monkeypatch):
         # ``once``/``refresh`` must target the language-specific name even
         # when only the base cassette exists — never the shared base (which a
-        # full re-record would overwrite / seed the other language from).
+        # full re-record would overwrite / seed the other language from). The
+        # strict ``.de`` name has no sibling here, so the new default puts the
+        # record target under ``cassettes/``.
+        monkeypatch.delenv("CLM_SIDECAR_LAYOUT", raising=False)
         for mode in ("once", "refresh"):
             op, _ = self._make_split_operation(tmp_path, lang="de", mode=mode, base=True)
-            assert op._resolve_cassette_name() == "slides_replay.de.http-cassette.yaml", (
+            assert op._resolve_cassette_name() == "cassettes/slides_replay.de.http-cassette.yaml", (
                 f"mode={mode!r} must keep the language-specific record target"
             )
 

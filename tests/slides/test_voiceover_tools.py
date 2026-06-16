@@ -19,6 +19,7 @@ from clm.slides.voiceover_tools import (
     merge_voiceover_text,
     read_companion_baselines,
     render_companion_update,
+    resolve_companion,
     update_companion_narrative,
 )
 
@@ -127,8 +128,8 @@ def test_inline_reads_and_deletes_voiceover_subdir_companion(tmp_path: Path):
     slide = tmp_path / "slides_intro.py"
     slide.write_text(SLIDE_WITH_SLIDE_IDS, encoding="utf-8")
 
-    # Extract to the default sibling, then relocate the companion into voiceover/.
-    extract_voiceover(slide)
+    # Extract to a sibling (forced), then relocate the companion into voiceover/.
+    extract_voiceover(slide, layout="sibling")
     sibling = tmp_path / "voiceover_intro.py"
     assert sibling.exists()
     subdir = tmp_path / COMPANION_SUBDIR
@@ -155,16 +156,22 @@ def test_expected_companion_layouts(tmp_path: Path):
     from clm.slides.voiceover_tools import expected_companion
 
     slide = tmp_path / "slides_intro.py"
-    # auto, no dir -> sibling
-    assert expected_companion(slide) == tmp_path / "voiceover_intro.py"
+    # auto, nothing present -> subdir (new default for a brand-new companion)
+    assert expected_companion(slide) == tmp_path / "voiceover" / "voiceover_intro.py"
     # explicit subdir -> nested even without the dir present
     assert (
         expected_companion(slide, layout="subdir") == tmp_path / "voiceover" / "voiceover_intro.py"
     )
-    (tmp_path / "voiceover").mkdir()
-    # explicit sibling -> sibling even with the dir present
+    # explicit sibling -> sibling
     assert expected_companion(slide, layout="sibling") == tmp_path / "voiceover_intro.py"
-    # auto, dir present -> nested
+    # auto, an existing sibling companion for THIS deck -> keep it a sibling
+    sibling = tmp_path / "voiceover_intro.py"
+    sibling.write_text("# companion\n", encoding="utf-8")
+    assert expected_companion(slide) == sibling
+    sibling.unlink()
+    # auto, voiceover/ dir present -> nested (dir presence still wins)
+    (tmp_path / "voiceover").mkdir()
+    assert expected_companion(slide, layout="sibling") == tmp_path / "voiceover_intro.py"
     assert expected_companion(slide) == tmp_path / "voiceover" / "voiceover_intro.py"
 
 
@@ -338,7 +345,7 @@ class TestExtractVoiceover:
         slide_file = tmp_path / "slides_intro.py"
         slide_file.write_text(SLIDE_WITH_VOICEOVER, encoding="utf-8")
 
-        result = extract_voiceover(slide_file)
+        result = extract_voiceover(slide_file, layout="sibling")
 
         assert result.cells_extracted == 4  # 2 voiceover + 2 notes
         assert result.ids_generated > 0
@@ -377,13 +384,13 @@ class TestExtractVoiceover:
         assert result.dry_run is True
         # Files should not be modified
         assert slide_file.read_text(encoding="utf-8") == original_text
-        assert not (tmp_path / "voiceover_intro.py").exists()
+        assert resolve_companion(slide_file) is None
 
     def test_preserves_existing_slide_ids(self, tmp_path: Path):
         slide_file = tmp_path / "slides_intro.py"
         slide_file.write_text(SLIDE_WITH_SLIDE_IDS, encoding="utf-8")
 
-        result = extract_voiceover(slide_file)
+        result = extract_voiceover(slide_file, layout="sibling")
 
         assert result.cells_extracted == 2
 
@@ -396,7 +403,7 @@ class TestExtractVoiceover:
         slide_file = tmp_path / "slides_intro.py"
         slide_file.write_text(SLIDE_WITH_VOICEOVER, encoding="utf-8")
 
-        extract_voiceover(slide_file)
+        extract_voiceover(slide_file, layout="sibling")
 
         comp = tmp_path / "voiceover_intro.py"
         comp_text = comp.read_text(encoding="utf-8")
@@ -416,7 +423,7 @@ class TestExtractVoiceover:
         lives only in the companion — refuse without ``force`` (Tier-1 fix)."""
         slide_file = tmp_path / "slides_intro.py"
         slide_file.write_text(SLIDE_WITH_VOICEOVER, encoding="utf-8")
-        extract_voiceover(slide_file)
+        extract_voiceover(slide_file, layout="sibling")
         comp = tmp_path / "voiceover_intro.py"
         # A hand-edit that lives ONLY in the companion (not in the slide).
         comp.write_text(
@@ -432,14 +439,14 @@ class TestExtractVoiceover:
             encoding="utf-8",
         )
         with pytest.raises(VoiceoverError, match="refusing to overwrite"):
-            extract_voiceover(slide_file)
+            extract_voiceover(slide_file, layout="sibling")
         # The companion (and its hand-edit) survives untouched.
         assert comp.read_text(encoding="utf-8") == before
 
     def test_force_rebuilds_existing_companion(self, tmp_path: Path):
         slide_file = tmp_path / "slides_intro.py"
         slide_file.write_text(SLIDE_WITH_VOICEOVER, encoding="utf-8")
-        extract_voiceover(slide_file)
+        extract_voiceover(slide_file, layout="sibling")
         comp = tmp_path / "voiceover_intro.py"
         comp.write_text("# stale placeholder\n", encoding="utf-8")
         # Re-add a voiceover cell so there is something to extract.
@@ -448,7 +455,7 @@ class TestExtractVoiceover:
             + '# %% [markdown] lang="de" tags=["voiceover"] slide_id="thema"\n# fresh vo\n',
             encoding="utf-8",
         )
-        result = extract_voiceover(slide_file, force=True)
+        result = extract_voiceover(slide_file, force=True, layout="sibling")
         assert result.cells_extracted >= 1
         rebuilt = comp.read_text(encoding="utf-8")
         assert "stale placeholder" not in rebuilt
@@ -466,7 +473,7 @@ class TestInlineVoiceover:
         slide_file.write_text(SLIDE_WITH_VOICEOVER, encoding="utf-8")
 
         # Extract first
-        extract_voiceover(slide_file)
+        extract_voiceover(slide_file, layout="sibling")
         comp = tmp_path / "voiceover_intro.py"
         assert comp.exists()
 
@@ -494,7 +501,7 @@ class TestInlineVoiceover:
         slide_file = tmp_path / "slides_intro.py"
         slide_file.write_text(SLIDE_WITH_VOICEOVER, encoding="utf-8")
 
-        extract_voiceover(slide_file)
+        extract_voiceover(slide_file, layout="sibling")
         comp = tmp_path / "voiceover_intro.py"
         slide_text_after_extract = slide_file.read_text(encoding="utf-8")
         comp_text = comp.read_text(encoding="utf-8")
@@ -529,7 +536,7 @@ class TestInlineVoiceover:
             '# %% [markdown] lang="de" tags=["voiceover"] slide_id="two"\n# VO two\n',
             encoding="utf-8",
         )
-        extract_voiceover(slide_file)
+        extract_voiceover(slide_file, layout="sibling")
         comp = tmp_path / "voiceover_intro.py"
         # Rename slide "two" so its companion cell can no longer match.
         slide_file.write_text(
@@ -625,7 +632,7 @@ class TestEdgeCases:
         slide_file = tmp_path / "slides_test.py"
         slide_file.write_text(text, encoding="utf-8")
 
-        result = extract_voiceover(slide_file)
+        result = extract_voiceover(slide_file, layout="sibling")
         assert result.cells_extracted == 1
 
         comp = tmp_path / "voiceover_test.py"
@@ -959,7 +966,7 @@ class TestTitleGreetingVoiceover:
         de = tmp_path / "slides_intro.de.py"
         de.write_text(TITLE_SLIDE_SPLIT_DE, encoding="utf-8")
 
-        extract_voiceover(de, force=True)
+        extract_voiceover(de, force=True, layout="sibling")
 
         comp = tmp_path / "voiceover_intro.de.py"
         assert comp.exists()
@@ -969,7 +976,7 @@ class TestTitleGreetingVoiceover:
         slide = tmp_path / "slides_intro.py"
         slide.write_text(TITLE_SLIDE_BILINGUAL, encoding="utf-8")
 
-        extract_voiceover(slide, force=True)
+        extract_voiceover(slide, force=True, layout="sibling")
 
         comp = tmp_path / "voiceover_intro.py"
         cells = [
@@ -991,7 +998,7 @@ class TestTitleGreetingVoiceover:
             encoding="utf-8",
         )
 
-        extract_voiceover_pair(de, en, force=True)
+        extract_voiceover_pair(de, en, force=True, layout="sibling")
 
         de_comp = tmp_path / "voiceover_intro.de.py"
         en_comp = tmp_path / "voiceover_intro.en.py"
@@ -1068,7 +1075,7 @@ class TestTitleGreetingVoiceover:
         ):
             slide = tmp_path / name
             slide.write_text(inline, encoding="utf-8")
-            extract_voiceover(slide, force=True)
+            extract_voiceover(slide, force=True, layout="sibling")
             comp = slide.with_name(slide.name.replace("slides_", "voiceover_"))
             merged, unmatched = merge_voiceover_text(
                 slide.read_text(encoding="utf-8"), comp.read_text(encoding="utf-8")
@@ -1120,7 +1127,7 @@ agenda = 1
         slide = tmp_path / "slides_015.en.py"
         slide.write_text(TITLE_BEFORE_KEEP_EN, encoding="utf-8")
 
-        extract_voiceover(slide, force=True)
+        extract_voiceover(slide, force=True, layout="sibling")
 
         comp = slide.with_name("voiceover_015.en.py")
         assert _vo_anchor_of(comp) == "tm:title#0"
@@ -1131,7 +1138,7 @@ agenda = 1
         *before* the trailing keep cells — byte-identically."""
         slide = tmp_path / "slides_015.en.py"
         slide.write_text(TITLE_BEFORE_KEEP_EN, encoding="utf-8")
-        extract_voiceover(slide, force=True)
+        extract_voiceover(slide, force=True, layout="sibling")
         comp = slide.with_name("voiceover_015.en.py")
 
         merged, unmatched = merge_voiceover_text(
@@ -1165,7 +1172,7 @@ agenda = 1
         slide = tmp_path / "slides_015.en.py"
         slide.write_text(TITLE_AFTER_KEEP_EN, encoding="utf-8")
 
-        extract_voiceover(slide, force=True)
+        extract_voiceover(slide, force=True, layout="sibling")
         comp = slide.with_name("voiceover_015.en.py")
         anchor = _vo_anchor_of(comp)
         assert anchor is not None and anchor.startswith("fp:")
@@ -1227,7 +1234,7 @@ import os
         slide = tmp_path / "slides_015.en.py"
         slide.write_text(deck, encoding="utf-8")
 
-        extract_voiceover(slide, force=True)
+        extract_voiceover(slide, force=True, layout="sibling")
         comp = slide.with_name("voiceover_015.en.py")
         assert _vo_anchor_of(comp) == "tm:title#0"
 
@@ -1437,8 +1444,8 @@ class TestSplitDeckVoiceover:
     def test_extract_writes_per_language_companions(self, tmp_path: Path):
         de_file, en_file = _split_pair(tmp_path)
 
-        de_res = extract_voiceover(de_file)
-        en_res = extract_voiceover(en_file)
+        de_res = extract_voiceover(de_file, layout="sibling")
+        en_res = extract_voiceover(en_file, layout="sibling")
 
         de_comp = tmp_path / "voiceover_intro.de.py"
         en_comp = tmp_path / "voiceover_intro.en.py"
@@ -1452,8 +1459,8 @@ class TestSplitDeckVoiceover:
     def test_extract_keeps_languages_isolated(self, tmp_path: Path):
         de_file, en_file = _split_pair(tmp_path)
 
-        extract_voiceover(de_file)
-        extract_voiceover(en_file)
+        extract_voiceover(de_file, layout="sibling")
+        extract_voiceover(en_file, layout="sibling")
 
         de_comp_text = (tmp_path / "voiceover_intro.de.py").read_text(encoding="utf-8")
         en_comp_text = (tmp_path / "voiceover_intro.en.py").read_text(encoding="utf-8")
@@ -1471,8 +1478,8 @@ class TestSplitDeckVoiceover:
     def test_build_merge_matches_per_language(self, tmp_path: Path):
         """The build path (``merge_voiceover_text``) re-inserts cleanly."""
         de_file, en_file = _split_pair(tmp_path)
-        extract_voiceover(de_file)
-        extract_voiceover(en_file)
+        extract_voiceover(de_file, layout="sibling")
+        extract_voiceover(en_file, layout="sibling")
 
         de_slide = de_file.read_text(encoding="utf-8")
         en_slide = en_file.read_text(encoding="utf-8")
@@ -1545,8 +1552,10 @@ class TestExtractTwinAware:
 
     def test_per_language_extract_converges_to_parity(self, tmp_path: Path):
         de, en = self._born_split_with_vo(tmp_path)
-        extract_voiceover(de)
-        extract_voiceover(en)  # twin-aware: adopts the DE half's freshly-minted id
+        extract_voiceover(de, layout="sibling")
+        extract_voiceover(
+            en, layout="sibling"
+        )  # twin-aware: adopts the DE half's freshly-minted id
 
         de_after = de.read_text(encoding="utf-8")
         en_after = en.read_text(encoding="utf-8")
@@ -1577,7 +1586,7 @@ class TestExtractTwinAware:
             encoding="utf-8",
             newline="\n",
         )
-        extract_voiceover(de)
+        extract_voiceover(de, layout="sibling")
 
         assert 'slide_id="custom-id"' in de.read_text(encoding="utf-8")
         de_comp = (tmp_path / "voiceover_x.de.py").read_text(encoding="utf-8")
@@ -1649,7 +1658,7 @@ class TestPairedExtract:
 
     def test_writes_both_companions_with_for_slide_parity(self, tmp_path: Path):
         de, en = self._born_split_with_vo(tmp_path)
-        result = extract_voiceover_pair(de, en)
+        result = extract_voiceover_pair(de, en, layout="sibling")
 
         assert isinstance(result, PairedExtractionResult)
         de_comp = tmp_path / "voiceover_x.de.py"
@@ -1680,10 +1689,10 @@ class TestPairedExtract:
         assert not (tmp_path / "voiceover_x.en.py").exists()
 
         with pytest.raises(VoiceoverError):
-            extract_voiceover_pair(de, en)
+            extract_voiceover_pair(de, en, layout="sibling")
 
         # --force rebuilds both from the current slide voiceover cells.
-        result = extract_voiceover_pair(de, en, force=True)
+        result = extract_voiceover_pair(de, en, force=True, layout="sibling")
         assert (tmp_path / "voiceover_x.de.py").exists()
         assert (tmp_path / "voiceover_x.en.py").exists()
         assert result.de.cells_extracted >= 1 and result.en.cells_extracted >= 1
@@ -1804,7 +1813,7 @@ class TestPairedExtract:
         from clm.slides.assign_ids import AssignOptions, assign_ids_in_split_pair
 
         assign_ids_in_split_pair(de, en, AssignOptions())
-        result = extract_voiceover_pair(de, en, force=True, mint_ids=False)
+        result = extract_voiceover_pair(de, en, force=True, mint_ids=False, layout="sibling")
 
         assert result.ids_minted == 0
         assert _for_slide_set(tmp_path / "voiceover_x.de.py") == _for_slide_set(
@@ -2092,7 +2101,7 @@ x = 1
         """The build path (merge_voiceover_text) also restores mid-group order."""
         slide_file = tmp_path / "slides_pos.py"
         slide_file.write_text(DECK_POSITIONAL, encoding="utf-8", newline="\n")
-        extract_voiceover(slide_file)
+        extract_voiceover(slide_file, layout="sibling")
 
         slide_after = slide_file.read_text(encoding="utf-8")
         comp = (tmp_path / "voiceover_pos.py").read_text(encoding="utf-8")
@@ -2166,7 +2175,7 @@ class TestAnchorAmbiguityAndScoping:
         )
         f = tmp_path / "slides_demo.py"
         f.write_text(deck, encoding="utf-8", newline="\n")
-        extract_voiceover(f)
+        extract_voiceover(f, layout="sibling")
         slide_after = f.read_text(encoding="utf-8")
         comp = (tmp_path / "voiceover_demo.py").read_text(encoding="utf-8")
 
@@ -2206,7 +2215,7 @@ class TestAnchorAmbiguityAndScoping:
         )
         f = tmp_path / "slides_x.py"
         f.write_text(deck, encoding="utf-8", newline="\n")
-        extract_voiceover(f)
+        extract_voiceover(f, layout="sibling")
         comp = companion_path(f)
         # Rename the owning slide between extract and inline.
         t = f.read_text(encoding="utf-8").replace('slide_id="two"', 'slide_id="two-renamed"')
@@ -2317,7 +2326,7 @@ class TestMidGroupJ2Anchor:
         f = tmp_path / "slides_w.py"
         f.write_text(J2_MID_GROUP_DECK, encoding="utf-8", newline="\n")
 
-        extract_voiceover(f)
+        extract_voiceover(f, layout="sibling")
 
         anchor = _anchor_for_body(companion_path(f), "VO after the widget.")
         assert anchor is not None and anchor.startswith("fp:")
@@ -2327,7 +2336,7 @@ class TestMidGroupJ2Anchor:
         byte-identically, with no anchor leak."""
         f = tmp_path / "slides_w.py"
         f.write_text(J2_MID_GROUP_DECK, encoding="utf-8", newline="\n")
-        extract_voiceover(f)
+        extract_voiceover(f, layout="sibling")
 
         merged, unmatched = merge_voiceover_text(
             f.read_text(encoding="utf-8"), companion_path(f).read_text(encoding="utf-8")
@@ -2421,7 +2430,7 @@ class TestMidGroupJ2Anchor:
         slide = tmp_path / "slides_015.en.py"
         slide.write_text(TITLE_BEFORE_KEEP_EN, encoding="utf-8")
 
-        extract_voiceover(slide, force=True)
+        extract_voiceover(slide, force=True, layout="sibling")
 
         comp = slide.with_name("voiceover_015.en.py")
         assert _vo_anchor_of(comp) == "tm:title#0"
@@ -2446,7 +2455,7 @@ class TestMidGroupJ2Anchor:
         slide = tmp_path / "slides_015.en.py"
         slide.write_text(deck, encoding="utf-8")
 
-        extract_voiceover(slide, force=True)
+        extract_voiceover(slide, force=True, layout="sibling")
         comp = slide.with_name("voiceover_015.en.py")
         anchor = _vo_anchor_of(comp)
         assert anchor is not None and anchor.startswith("fp:")
@@ -2478,7 +2487,7 @@ class TestMidGroupJ2Anchor:
         )
         f = tmp_path / "slides_e.py"
         f.write_text(deck, encoding="utf-8", newline="\n")
-        extract_voiceover(f)
+        extract_voiceover(f, layout="sibling")
         comp = companion_path(f).read_text(encoding="utf-8")
 
         # Author inserts an unrelated j2 widget ABOVE the anchored one.

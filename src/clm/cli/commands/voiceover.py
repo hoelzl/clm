@@ -210,9 +210,9 @@ def voiceover_group(ctx, cache_root, no_cache, refresh_cache):
     type=click.Choice(["subdir", "sibling"]),
     default=None,
     help="Where to create a NEW companion: 'subdir' (voiceover/ folder) or "
-    "'sibling' (next to SLIDES). Default: auto-detect an existing voiceover/ "
-    "folder, else sibling. Ignored when a companion already exists — it is "
-    "updated in place.",
+    "'sibling' (next to SLIDES). Default: the voiceover/ subdir, unless the deck "
+    "already has a sibling companion (kept a sibling) or a course default is set. "
+    "Ignored when a companion already exists — it is updated in place.",
 )
 @click.pass_context
 def sync(
@@ -3321,8 +3321,9 @@ def voiceover_commits_cmd(slide_file, since, limit, threshold, floor, as_json):
     type=click.Choice(["subdir", "sibling"]),
     default=None,
     help="Where to write the companion: 'subdir' creates/uses a voiceover/ "
-    "folder; 'sibling' writes next to the slide. Default: auto-detect an "
-    "existing voiceover/ folder, else sibling.",
+    "folder; 'sibling' writes next to the slide. Default: the voiceover/ subdir, "
+    "unless the deck already has a sibling companion (kept a sibling) or a course "
+    "default is set.",
 )
 @click.option(
     "--json",

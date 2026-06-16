@@ -67,11 +67,14 @@ class TestEffectiveWriteLayout:
         monkeypatch.setenv("CLM_SIDECAR_LAYOUT", "subdir")
         assert effective_write_layout(tmp_path / "slides_x.py", None) == "subdir"
 
-    def test_course_sibling_is_auto(self, tmp_path, monkeypatch):
+    def test_course_sibling_forces_sibling(self, tmp_path, monkeypatch):
+        # An explicit ``sibling`` course default is now forced: the auto path
+        # leans subdir for a new companion, so ``sibling`` must be honoured.
         monkeypatch.setenv("CLM_SIDECAR_LAYOUT", "sibling")
-        assert effective_write_layout(tmp_path / "slides_x.py", None) is None
+        assert effective_write_layout(tmp_path / "slides_x.py", None) == "sibling"
 
-    def test_no_config_is_auto(self, tmp_path):
+    def test_no_config_is_auto(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CLM_SIDECAR_LAYOUT", raising=False)
         assert effective_write_layout(tmp_path / "slides_x.py", None) is None
 
 

@@ -180,15 +180,19 @@ set DRAWIO_EXECUTABLE="C:\Program Files\draw.io\draw.io.exe"
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `CLM_SIDECAR_LAYOUT` | Course-wide default for where **newly created** authoring sidecars land: `subdir` (a per-type `voiceover/` / `cassettes/` folder) or `sibling` (next to the slide). | (unset → sibling) |
+| `CLM_SIDECAR_LAYOUT` | Course-wide override for where **newly created** authoring sidecars land: `subdir` (a per-type `voiceover/` / `cassettes/` folder) or `sibling` (next to the slide). | (unset → per-deck default below) |
 
-This is a **write-time** default only — it affects where `clm voiceover extract`
+This is a **write-time** override only — it affects where `clm voiceover extract`
 / `sync` create a *new* companion, and where a build records a topic's *first*
 HTTP-replay cassette. It does **not** change build *output*, which always reads a
 companion (and cassettes) from either layout. The precedence for a new sidecar
 is: an explicit `--layout` flag → a per-type directory that already exists in the
-topic → this course default → `sibling`. A value of `sibling` is a no-op (it
-equals the built-in fallback).
+topic → this course override → the **per-deck default**. As of CLM 1.14 that
+default prefers the subdir: a brand-new sidecar goes into the `voiceover/` /
+`cassettes/` folder *unless* the deck already has a sibling sidecar, which stays
+a sibling so a deck is never split across layouts. Set `sibling` to force the old
+flat layout; set `subdir` to force the folder even for decks that still have
+siblings.
 
 The course-wide default resolves highest precedence first: the
 `CLM_SIDECAR_LAYOUT` environment variable, then the `<sidecar-layout>` element in

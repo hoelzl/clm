@@ -111,18 +111,15 @@ def effective_write_layout(path: Path, flag: str | None) -> str | None:
     ``extract_voiceover``:
 
     - the explicit ``flag`` if given (step 1);
-    - ``"subdir"`` if the course default is ``subdir`` (step 3) — this still lets
-      ``expected_companion``'s ``None``-auto pick the subdir when a ``voiceover/``
-      directory already exists (step 2), since both resolve to the subdir;
-    - otherwise ``None``, so ``expected_companion`` auto-detects (``voiceover/``
-      directory present → subdir, else sibling).
-
-    A course default of ``sibling`` is intentionally *not* forced: it is
-    behaviourally identical to the ``None``-auto fallback (no dir → sibling; dir
-    present → subdir, because per-topic presence outranks the course default).
+    - else the course default (``"subdir"`` or ``"sibling"``) when one is
+      configured — including an explicit ``"sibling"``, which **is** forced:
+      the auto fallback now leans *subdir* for a new companion, so a course that
+      deliberately asks for ``sibling`` must be honoured rather than collapsing
+      into the auto path;
+    - otherwise ``None``, so ``expected_companion`` auto-detects (existing
+      ``voiceover/`` dir → subdir; else existing sibling for the deck → sibling;
+      else → subdir).
     """
     if flag is not None:
         return flag
-    if resolve_course_sidecar_default(path) == "subdir":
-        return "subdir"
-    return None
+    return resolve_course_sidecar_default(path)

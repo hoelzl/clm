@@ -482,7 +482,7 @@ class TestTitleVoiceoverRenderParity:
         )
         slide = tmp_path / "slides_intro.de.py"
         slide.write_text(inline, encoding="utf-8")
-        extract_voiceover(slide, force=True)
+        extract_voiceover(slide, force=True, layout="sibling")
         companion = tmp_path / "voiceover_intro.de.py"
         merged, unmatched = merge_voiceover_text(
             slide.read_text(encoding="utf-8"), companion.read_text(encoding="utf-8")

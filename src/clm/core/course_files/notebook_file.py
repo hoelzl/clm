@@ -156,26 +156,32 @@ class NotebookFile(CourseFile):
 
         Used by record-capable modes (``once``, ``refresh``) so the bootstrap
         can activate vcrpy with a target path even on first-run when no
-        cassette has been recorded yet. Resolution rule:
+        cassette has been recorded yet. Resolution rule (mirrors
+        ``voiceover_tools.expected_companion`` so cassettes and voiceover
+        companions land consistently):
 
         - If a sidecar subdirectory (``cassettes/``, then legacy ``_cassettes/``)
           exists, write inside it.
-        - Otherwise, if the course opts into the ``subdir`` sidecar layout
+        - Else if the course default forces a layout
           (``<sidecar-layout>`` / ``CLM_SIDECAR_LAYOUT`` / ``[tool.clm]
-          sidecar-layout``), write into ``cassettes/`` even though it does not
-          exist yet — the atomic cassette write ``mkdir``s it. This is what
-          keeps a first-ever recording in the topic's cassette folder instead
-          of landing next to the slides.
-        - Otherwise write next to the source ``.py``.
+          sidecar-layout``): ``sibling`` → next to the slide; ``subdir`` →
+          ``cassettes/``.
+        - Else (no course default): keep an existing sibling cassette a sibling
+          so a deck is never split across layouts; otherwise default a
+          first-ever recording to ``cassettes/``. The folder need not exist —
+          the atomic cassette write ``mkdir``s it.
         """
         cassette_name = f"{self.path.stem}.http-cassette.yaml"
         topic_dir = self.path.parent
         for sub in _CASSETTE_SUBDIRS:
             if (topic_dir / sub).is_dir():
                 return topic_dir / sub / cassette_name
-        if self.course.sidecar_layout == "subdir":
-            return topic_dir / _CASSETTE_SUBDIRS[0] / cassette_name
-        return topic_dir / cassette_name
+        layout = self.course.sidecar_layout
+        if layout == "sibling":
+            return topic_dir / cassette_name
+        if layout is None and (topic_dir / cassette_name).exists():
+            return topic_dir / cassette_name
+        return topic_dir / _CASSETTE_SUBDIRS[0] / cassette_name
 
     @property
     def cassette_relative_name(self) -> str | None:

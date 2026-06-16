@@ -757,7 +757,7 @@ def _write_orphan_cassette(path: Path, *, uri: str, body: str) -> None:
     path.write_text(_ORPHAN_CASSETTE_YAML.format(uri=uri, body=body), encoding="utf-8")
 
 
-def test_sweep_orphan_staging_files_merges_and_deletes(tmp_path):
+def test_sweep_orphan_staging_files_merges_and_deletes(tmp_path, monkeypatch):
     """Pre-build sweep folds completed orphan ``.staging-*`` cassettes into canonical.
 
     Regression: a notebook whose host process completed cleanly but
@@ -778,6 +778,11 @@ def test_sweep_orphan_staging_files_merges_and_deletes(tmp_path):
 
     pytest.importorskip("filelock")  # merge path needs the [replay] extra
     pytest.importorskip("filelock")
+
+    # This course uses the flat (sibling) cassette layout: the orphan staging
+    # files sit next to the slide, so pin the sibling write target (the default
+    # would steer a first-ever cassette into cassettes/).
+    monkeypatch.setenv("CLM_SIDECAR_LAYOUT", "sibling")
 
     topic_dir = _make_topic_dir(tmp_path, "module_100_live", "topic_010_intro")
     # The fixture writes slides_intro.py; rename to a stem that matches
@@ -877,7 +882,7 @@ def test_sweep_orphan_staging_files_no_orphans_present(tmp_path):
     assert swept == 0
 
 
-def test_merge_mitmproxy_cassette_staging_folds_markered_leaves_markerless(tmp_path):
+def test_merge_mitmproxy_cassette_staging_folds_markered_leaves_markerless(tmp_path, monkeypatch):
     """Post-build mitmproxy merge folds markered staging, leaves markerless.
 
     The out-of-process transport (issue #165 P2) writes per-cassette
@@ -889,6 +894,9 @@ def test_merge_mitmproxy_cassette_staging_folds_markered_leaves_markerless(tmp_p
     """
     pytest.importorskip("filelock")  # merge path needs the [replay] extra
     pytest.importorskip("filelock")
+
+    # Flat (sibling) cassette layout: staging files sit next to the slide.
+    monkeypatch.setenv("CLM_SIDECAR_LAYOUT", "sibling")
 
     topic_dir = _make_topic_dir(tmp_path, "module_100_live", "topic_010_intro")
     canonical = topic_dir / "slides_intro.http-cassette.yaml"
