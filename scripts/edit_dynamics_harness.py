@@ -646,7 +646,7 @@ def m_extract_inline_round_trip(workdir: Path) -> _RetTuple:
     de, _ = split_text(baseline_bilingual(with_voiceover=("intro", "setup")))
     slide = workdir / "slides_demo.de.py"
     slide.write_text(de, encoding="utf-8", newline="\n")
-    extract_voiceover(slide)
+    extract_voiceover(slide, layout="sibling")
     ires = inline_voiceover(slide)
     after = slide.read_text(encoding="utf-8")
     restored = after == de and not companion_path(slide).exists()
@@ -685,7 +685,7 @@ def m_extract_then_split(workdir: Path) -> _RetTuple:
     bil = baseline_bilingual(with_voiceover=("intro", "setup"))
     slide = workdir / "slides_demo.py"
     slide.write_text(bil, encoding="utf-8", newline="\n")
-    extract_voiceover(slide)  # bilingual voiceover_demo.py
+    extract_voiceover(slide, layout="sibling")  # bilingual voiceover_demo.py
     bilingual_comp = companion_path(slide)
     comp_before = bilingual_comp.read_text(encoding="utf-8")
     split_in_file(slide)  # slides_demo.de.py / .en.py + companion split
@@ -729,8 +729,8 @@ def m_extract_per_language_twin_aware(workdir: Path) -> _RetTuple:
     # instead of minting divergent DE/EN slugs.
     pair = born_split_with_voiceover()
     de_path, en_path = pair.write(workdir)
-    extract_voiceover(de_path)
-    extract_voiceover(en_path)
+    extract_voiceover(de_path, layout="sibling")
+    extract_voiceover(en_path, layout="sibling")
     de_comp = companion_path(de_path)
     en_comp = companion_path(en_path)
     if not (de_comp.exists() and en_comp.exists()):
@@ -760,7 +760,7 @@ def m_extract_pair_both_companions(workdir: Path) -> _RetTuple:
     # per-language path's twin-adoption parity.
     pair = born_split_with_voiceover()
     de_path, en_path = pair.write(workdir)
-    extract_voiceover_pair(de_path, en_path)
+    extract_voiceover_pair(de_path, en_path, layout="sibling")
     de_comp = companion_path(de_path)
     en_comp = companion_path(en_path)
     if not (de_comp.exists() and en_comp.exists()):
@@ -786,7 +786,7 @@ def m_inline_after_rename(workdir: Path) -> _RetTuple:
     de, _ = split_text(baseline_bilingual(with_voiceover=("intro",)))
     slide = workdir / "slides_demo.de.py"
     slide.write_text(de, encoding="utf-8", newline="\n")
-    extract_voiceover(slide)
+    extract_voiceover(slide, layout="sibling")
     comp = companion_path(slide)
     txt = slide.read_text(encoding="utf-8").replace('slide_id="intro"', 'slide_id="introduction"')
     slide.write_text(txt, encoding="utf-8", newline="\n")
@@ -810,7 +810,7 @@ def m_re_extract_over_edited_companion(workdir: Path) -> _RetTuple:
     de, _ = split_text(baseline_bilingual(with_voiceover=("intro",)))
     slide = workdir / "slides_demo.de.py"
     slide.write_text(de, encoding="utf-8", newline="\n")
-    extract_voiceover(slide)
+    extract_voiceover(slide, layout="sibling")
     comp = companion_path(slide)
     comp.write_text(
         comp.read_text(encoding="utf-8").replace("Voiceover DE for intro", "HAND EDITED narration"),
@@ -826,7 +826,7 @@ def m_re_extract_over_edited_companion(workdir: Path) -> _RetTuple:
     # Fixed: re-extract refuses without force rather than clobbering the
     # hand-edited companion.
     try:
-        extract_voiceover(slide)
+        extract_voiceover(slide, layout="sibling")
         refused = False
     except VoiceoverError:
         refused = True
@@ -848,7 +848,7 @@ def m_build_merge_unmatched(workdir: Path) -> _RetTuple:
     de, _ = split_text(baseline_bilingual(with_voiceover=("intro",)))
     slide = workdir / "slides_demo.de.py"
     slide.write_text(de, encoding="utf-8", newline="\n")
-    extract_voiceover(slide)
+    extract_voiceover(slide, layout="sibling")
     comp = companion_path(slide)
     slide_renamed = slide.read_text(encoding="utf-8").replace(
         'slide_id="intro"', 'slide_id="introduction"'

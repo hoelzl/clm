@@ -256,9 +256,14 @@ def expected_companion(slide_path: Path, *, layout: str | None = None) -> Path:
     - ``layout="subdir"``: ``<topic>/voiceover/<name>`` (the dir is created by
       the caller on write).
     - ``layout="sibling"``: ``<topic>/<name>`` (next to the slide).
-    - ``layout=None`` (auto): ``<topic>/voiceover/<name>`` when that directory
-      already exists, else the sibling — the same directory-presence
-      auto-detection ``NotebookFile.expected_cassette_path`` uses for cassettes.
+    - ``layout=None`` (auto): prefer the ``voiceover/`` subdir — when that
+      directory already exists, **or** for a brand-new companion. The one
+      exception is a deck that *already* has a sibling companion: that one stays
+      a sibling so a single deck is never split across both layouts. So the auto
+      precedence is: existing ``voiceover/`` dir → subdir; else existing sibling
+      companion for *this* deck → sibling; else → subdir (the default for new
+      companions). ``NotebookFile.expected_cassette_path`` uses the same rule for
+      cassettes.
 
     Reads do not consult this — they use :func:`resolve_companion`, which finds
     the companion in either layout regardless of the write target.
@@ -271,7 +276,9 @@ def expected_companion(slide_path: Path, *, layout: str | None = None) -> Path:
         return parent / name
     if (parent / COMPANION_SUBDIR).is_dir():
         return parent / COMPANION_SUBDIR / name
-    return parent / name
+    if (parent / name).exists():
+        return parent / name
+    return parent / COMPANION_SUBDIR / name
 
 
 def _prune_other_companions(slide_path: Path, keep: Path) -> list[Path]:

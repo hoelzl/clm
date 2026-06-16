@@ -331,30 +331,38 @@ Defaults to `Coding-Akademie München` (de) / `Coding-Academy Munich` (en).
 
 ### `<sidecar-layout>` (Optional, CLM {version}+)
 
-Per-course default for where a build records a topic's **first** HTTP-replay
+Per-course override for where a build records a topic's **first** HTTP-replay
 cassette. Value is `subdir` or `sibling`:
 
-- `subdir` — new cassettes are recorded into the topic's `cassettes/` folder
-  (created on demand), keeping the topic directory focused on editable sources.
-- `sibling` — new cassettes land next to the slides (the historical default).
+- `subdir` — force the topic's `cassettes/` folder even when a sibling cassette
+  already exists for the deck.
+- `sibling` — force cassettes next to the slides (the pre-{version} behavior).
 
 ```xml
-<sidecar-layout>subdir</sidecar-layout>
+<sidecar-layout>sibling</sidecar-layout>
 ```
+
+You usually do **not** need this. As of CLM {version} the default already prefers
+the `cassettes/` subdir for a *new* cassette: a build records a topic's first
+cassette into `cassettes/` (created on demand) unless that deck already has a
+sibling cassette, in which case it stays a sibling so a deck is never split
+across layouts. Set `<sidecar-layout>sibling</sidecar-layout>` only to opt a
+course back into the old flat layout; set `subdir` only to force the folder even
+for decks that still have sibling cassettes.
 
 This only changes the *write* location of a new cassette. Reads always
 auto-detect both layouts, so a course can flip this freely without changing any
-build output. Per-topic directory presence still wins: if a topic already has a
-`cassettes/` (or legacy `_cassettes/`) folder, recordings go there regardless of
-this setting.
+build output. A topic's existing `cassettes/` (or legacy `_cassettes/`) folder
+always wins regardless of this setting.
 
 Precedence (highest first): the `CLM_SIDECAR_LAYOUT` environment variable, then
 this `<sidecar-layout>`, then `[tool.clm] sidecar-layout` in the nearest
-ancestor `pyproject.toml`. An unset or unrecognised value falls through. The env
-var and `pyproject.toml` key additionally govern where `clm voiceover
+ancestor `pyproject.toml`; when none is set the per-deck default above applies.
+The env var and `pyproject.toml` key additionally govern where `clm voiceover
 extract`/`sync` place new voiceover companions (those tools run without a loaded
-spec, so they do not read `<sidecar-layout>`). Use `clm slides tidy` to move
-existing sidecars between the two layouts in bulk.
+spec, so they do not read `<sidecar-layout>`), which follow the same
+subdir-unless-a-sibling-exists default. Use `clm slides tidy` to move existing
+sidecars between the two layouts in bulk.
 
 ### `<github>`
 
@@ -990,9 +998,9 @@ layouts). Within it, CLM distinguishes three kinds of file:
 | **Output companions** | `img/`, `drawio/`, loose data files | **yes**, verbatim |
 | **Authoring sidecars** | `voiceover_*.<ext>`, `*.http-cassette.yaml` | **no** |
 
-The authoring sidecars may live either next to the slides (the default) or
-collected into per-type subdirectories so the topic directory stays focused on
-the editable sources:
+The authoring sidecars may live either next to the slides or collected into
+per-type subdirectories so the topic directory stays focused on the editable
+sources. As of CLM {version} a *new* sidecar prefers the subdir:
 
 ```
 topic_070_rag_introduction/
@@ -1005,11 +1013,15 @@ topic_070_rag_introduction/
 
 Both layouts work everywhere (build, `extract`/`inline`/`sync`, `split`/`unify`,
 `validate`); they are auto-detected by directory presence, so no spec change is
-needed to *read* either. `clm slides tidy` moves sidecars between the two
-layouts in bulk, and a course-wide *write* default — where a first-ever cassette
-is recorded during a build — can be set via the `<sidecar-layout>` spec element
-(see Optional Elements above), the `[tool.clm] sidecar-layout` pyproject key, or
-the `CLM_SIDECAR_LAYOUT` environment variable.
+needed to *read* either. The *write* default for a brand-new sidecar (a build's
+first cassette for a topic, or `clm voiceover extract`/`sync` creating a new
+companion) is the per-type subdir — **unless** that deck already has a sibling
+sidecar, which is kept a sibling so a deck is never split across layouts. Force
+the choice with the `<sidecar-layout>` spec element (cassettes; see Optional
+Elements above), the `[tool.clm] sidecar-layout` pyproject key / the
+`CLM_SIDECAR_LAYOUT` environment variable (cassettes + voiceover), or
+`--layout subdir|sibling` on `extract`/`sync`. `clm slides tidy` moves existing
+sidecars between the two layouts in bulk.
 
 ## Cross-references between notebooks (CLM {version}+)
 

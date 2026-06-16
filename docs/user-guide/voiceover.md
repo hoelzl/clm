@@ -215,9 +215,12 @@ entirely and keep the raw transcript.
 ### Companion file placement
 
 Voiceover companion files (`voiceover_*.py`) can live either in a `voiceover/`
-subdirectory next to the topic or as siblings of the slide file. Control the
-location for new companions with `--layout subdir|sibling` on `clm voiceover
-sync`. The course-wide default is set via the `CLM_SIDECAR_LAYOUT` environment
-variable or the `[tool.clm] sidecar-layout` setting in `pyproject.toml`. To
-reorganize existing companions in bulk, use `clm slides tidy PATH --layout
-subdir` (or `--layout sibling` to flatten them back).
+subdirectory next to the topic or as siblings of the slide file. As of CLM 1.14
+a *new* companion is written into the `voiceover/` subdirectory by default —
+**unless** that deck already has a sibling companion, which is kept a sibling so
+a deck is never split across layouts. Override the location for new companions
+with `--layout subdir|sibling` on `clm voiceover extract` / `sync`, or set a
+course-wide default via the `CLM_SIDECAR_LAYOUT` environment variable or the
+`[tool.clm] sidecar-layout` setting in `pyproject.toml`. To reorganize existing
+companions in bulk, use `clm slides tidy PATH --layout subdir` (or `--layout
+sibling` to flatten them back).

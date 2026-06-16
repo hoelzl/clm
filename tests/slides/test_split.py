@@ -409,7 +409,7 @@ class TestCompanionSplit:
     def test_splits_sibling_companion(self, tmp_path: Path) -> None:
         deck = tmp_path / "slides_demo.py"
         deck.write_text(_deck_with_voiceover(), encoding="utf-8")
-        extract_voiceover(deck)  # -> voiceover_demo.py (bilingual)
+        extract_voiceover(deck, layout="sibling")  # -> voiceover_demo.py (bilingual)
         assert (tmp_path / "voiceover_demo.py").is_file()
 
         result = split_in_file(deck)
@@ -435,7 +435,7 @@ class TestCompanionSplit:
     def test_companion_round_trips_via_unify_texts(self, tmp_path: Path) -> None:
         deck = tmp_path / "slides_demo.py"
         deck.write_text(_deck_with_voiceover(), encoding="utf-8")
-        extract_voiceover(deck)
+        extract_voiceover(deck, layout="sibling")
         comp_before = (tmp_path / "voiceover_demo.py").read_text(encoding="utf-8")
 
         split_in_file(deck)
@@ -458,7 +458,7 @@ class TestCompanionSplit:
         # still refuse without --force (atomic — nothing is written).
         deck = tmp_path / "slides_demo.py"
         deck.write_text(_deck_with_voiceover(), encoding="utf-8")
-        extract_voiceover(deck)
+        extract_voiceover(deck, layout="sibling")
         de_comp = tmp_path / "voiceover_demo.de.py"
         de_comp.write_text("placeholder", encoding="utf-8")
         with pytest.raises(SplitError, match="voiceover_demo.de.py"):
@@ -470,7 +470,7 @@ class TestCompanionSplit:
     def test_force_overwrites_companion_half(self, tmp_path: Path) -> None:
         deck = tmp_path / "slides_demo.py"
         deck.write_text(_deck_with_voiceover(), encoding="utf-8")
-        extract_voiceover(deck)
+        extract_voiceover(deck, layout="sibling")
         (tmp_path / "voiceover_demo.de.py").write_text("placeholder", encoding="utf-8")
         split_in_file(deck, force=True)
         assert (tmp_path / "voiceover_demo.de.py").read_text(encoding="utf-8") != "placeholder"
@@ -478,7 +478,7 @@ class TestCompanionSplit:
     def test_dry_run_writes_no_companion(self, tmp_path: Path) -> None:
         deck = tmp_path / "slides_demo.py"
         deck.write_text(_deck_with_voiceover(), encoding="utf-8")
-        extract_voiceover(deck)
+        extract_voiceover(deck, layout="sibling")
         result = split_in_file(deck, dry_run=True)
         assert result.de_companion == str(tmp_path / "voiceover_demo.de.py")
         assert not (tmp_path / "voiceover_demo.de.py").exists()
@@ -487,7 +487,7 @@ class TestCompanionSplit:
     def test_companion_halves_use_lf(self, tmp_path: Path) -> None:
         deck = tmp_path / "slides_demo.py"
         deck.write_text(_deck_with_voiceover(), encoding="utf-8")
-        extract_voiceover(deck)
+        extract_voiceover(deck, layout="sibling")
         split_in_file(deck)
         assert b"\r\n" not in (tmp_path / "voiceover_demo.de.py").read_bytes()
         assert b"\r\n" not in (tmp_path / "voiceover_demo.en.py").read_bytes()
@@ -531,7 +531,7 @@ class TestCompanionUnify:
     def test_recombines_companions(self, tmp_path: Path) -> None:
         deck = tmp_path / "slides_demo.py"
         deck.write_text(_deck_with_voiceover(), encoding="utf-8")
-        extract_voiceover(deck)
+        extract_voiceover(deck, layout="sibling")
         comp_before = (tmp_path / "voiceover_demo.py").read_text(encoding="utf-8")
         deck_extracted = deck.read_text(encoding="utf-8")
         split_in_file(deck)
@@ -554,7 +554,7 @@ class TestCompanionUnify:
         # narration lands in the bilingual companion.
         deck = tmp_path / "slides_demo.py"
         deck.write_text(_deck_with_voiceover(), encoding="utf-8")
-        extract_voiceover(deck)
+        extract_voiceover(deck, layout="sibling")
         split_in_file(deck)
         (tmp_path / "voiceover_demo.en.py").unlink()  # drop the EN half
 
@@ -584,7 +584,7 @@ class TestCompanionUnify:
     def test_refuses_existing_companion_target(self, tmp_path: Path) -> None:
         deck = tmp_path / "slides_demo.py"
         deck.write_text(_deck_with_voiceover(), encoding="utf-8")
-        extract_voiceover(deck)
+        extract_voiceover(deck, layout="sibling")
         split_in_file(deck)
         # Aim unify at a fresh deck target (does NOT exist) whose companion
         # target DOES exist — proving the refusal is driven by the companion
@@ -611,7 +611,7 @@ class TestCompanionUnify:
         deck = tmp_path / "slides_demo.py"
         deck.write_text(_deck_with_voiceover(), encoding="utf-8")
 
-        extract_voiceover(deck)
+        extract_voiceover(deck, layout="sibling")
         deck_extracted = deck.read_text(encoding="utf-8")
         comp_before = (tmp_path / "voiceover_demo.py").read_text(encoding="utf-8")
 
