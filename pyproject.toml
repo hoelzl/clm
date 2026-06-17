@@ -42,6 +42,7 @@ dependencies = [
     "tabulate>=0.9.0",
     "uvicorn>=0.24.0",
     "watchdog>=6.0.0",
+    "deepeval>=4.0.5",
 ]
 
 [project.optional-dependencies]
@@ -133,7 +134,6 @@ ml = [
     "tiktoken>=0.9.0",
     "langfuse>=4.0.0",
     # Evaluation
-    "ragas",
     # Document processing (used with RAG)
     "pypdf>=6.3.2",
     "pymediawiki>=0.7.5",
