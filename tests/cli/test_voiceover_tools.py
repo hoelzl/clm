@@ -6,7 +6,11 @@ from pathlib import Path
 
 from click.testing import CliRunner
 
-from clm.cli.commands.voiceover import extract_voiceover_cmd, inline_voiceover_cmd
+from clm.cli.commands.voiceover import (
+    extract_voiceover_cmd,
+    inline_notes_cmd,
+    inline_voiceover_cmd,
+)
 
 SLIDE_WITH_VOICEOVER = """\
 # j2 from 'macros.j2' import header
@@ -35,6 +39,83 @@ def test_extract_voiceover(tmp_path: Path):
 
     assert result.exit_code == 0
     assert "2 voiceover cell(s) extracted" in result.output
+
+
+SLIDE_WITH_VOICEOVER_AND_NOTES = (
+    SLIDE_WITH_VOICEOVER
+    + """
+# %% [markdown] lang="de" tags=["notes"]
+# Notizen auf Deutsch.
+
+# %% [markdown] lang="en" tags=["notes"]
+# Notes in English.
+"""
+)
+
+
+def test_extract_voiceover_only_by_default(tmp_path: Path):
+    slide_file = tmp_path / "slides_intro.py"
+    slide_file.write_text(SLIDE_WITH_VOICEOVER_AND_NOTES, encoding="utf-8")
+
+    result = CliRunner().invoke(extract_voiceover_cmd, [str(slide_file), "--layout", "sibling"])
+
+    assert result.exit_code == 0
+    assert "2 voiceover cell(s) extracted" in result.output
+    slide_text = slide_file.read_text(encoding="utf-8")
+    assert 'tags=["voiceover"]' not in slide_text
+    assert 'tags=["notes"]' in slide_text  # notes stay inline
+    comp_text = (tmp_path / "voiceover_intro.py").read_text(encoding="utf-8")
+    assert 'tags=["notes"]' not in comp_text
+
+
+def test_extract_include_notes(tmp_path: Path):
+    slide_file = tmp_path / "slides_intro.py"
+    slide_file.write_text(SLIDE_WITH_VOICEOVER_AND_NOTES, encoding="utf-8")
+
+    result = CliRunner().invoke(
+        extract_voiceover_cmd, [str(slide_file), "--layout", "sibling", "--include-notes"]
+    )
+
+    assert result.exit_code == 0
+    assert "4 voiceover cell(s) extracted" in result.output
+    slide_text = slide_file.read_text(encoding="utf-8")
+    assert 'tags=["notes"]' not in slide_text  # notes extracted too
+    comp_text = (tmp_path / "voiceover_intro.py").read_text(encoding="utf-8")
+    assert 'tags=["notes"]' in comp_text
+
+
+def test_inline_notes_directory(tmp_path: Path):
+    # Two decks with old-style companions (voiceover + notes); one plain deck.
+    topic = tmp_path / "topic_010"
+    topic.mkdir()
+    for stem in ("slides_a", "slides_b"):
+        deck = topic / f"{stem}.py"
+        deck.write_text(SLIDE_WITH_VOICEOVER_AND_NOTES, encoding="utf-8")
+        CliRunner().invoke(
+            extract_voiceover_cmd, [str(deck), "--layout", "sibling", "--include-notes"]
+        )
+
+    result = CliRunner().invoke(inline_notes_cmd, [str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert "across 2 deck(s)" in result.output
+    for stem in ("slides_a", "slides_b"):
+        deck_text = (topic / f"{stem}.py").read_text(encoding="utf-8")
+        comp_text = (topic / f"voiceover_{stem[len('slides_') :]}.py").read_text(encoding="utf-8")
+        assert 'tags=["notes"]' in deck_text  # notes back inline
+        assert 'tags=["notes"]' not in comp_text  # companion now voiceover-only
+        assert 'tags=["voiceover"]' in comp_text
+
+
+def test_inline_notes_nothing_to_migrate(tmp_path: Path):
+    deck = tmp_path / "slides_intro.py"
+    deck.write_text(SLIDE_WITH_VOICEOVER, encoding="utf-8")  # voiceover only, no notes
+    CliRunner().invoke(extract_voiceover_cmd, [str(deck), "--layout", "sibling"])
+
+    result = CliRunner().invoke(inline_notes_cmd, [str(deck)])
+
+    assert result.exit_code == 0
+    assert "nothing to migrate" in result.output.lower()
 
 
 def test_extract_voiceover_dry_run(tmp_path: Path):

@@ -2427,9 +2427,20 @@ clm slides suggest-sync slides_intro.py --source-language de --json
 
 *Removed in CLM 1.8: the flat alias `clm extract-voiceover` no longer exists — use this group-qualified form.*
 
-Extract voiceover and notes cells from a slide file to a companion
-`voiceover_*.<ext>` file, linked via `slide_id`/`for_slide` metadata.
-Content cells without `slide_id` get auto-generated IDs before extraction.
+Extract voiceover cells from a slide file to a companion `voiceover_*.<ext>`
+file, linked via `slide_id`/`for_slide` metadata. Content cells without
+`slide_id` get auto-generated IDs before extraction.
+
+Since CLM {version}, **only `voiceover`-tagged cells are extracted by default**;
+`notes` (speaker-notes) cells stay inline in the deck. Speaker notes are short
+and belong with the slide they annotate, and keeping them out of the companion
+makes `voiceover_*` a pure narration file (the old behavior — bundling notes
+into a file named "voiceover" — confused authors and tooling alike). Notes still
+reach the **trainer** and **recording** outputs from their inline position; the
+build filters by tag regardless of where a cell lives. Pass `--include-notes` to
+restore the old behavior and extract both `voiceover` and `notes` cells. The
+build merge always reads both tags back, so companions that still contain notes
+(from before this change, or via `--include-notes`) keep working unchanged.
 
 Since CLM {version}, that ID generation is **twin-aware** on a split half
 (`*.de.py` / `*.en.py`): when the sibling exists on disk with a matching slide
@@ -2505,7 +2516,8 @@ clm voiceover extract [OPTIONS] FILE
 | `--force` | Overwrite an existing companion (rebuilds it from the slide's voiceover cells, discarding companion-only content). Without it, an existing companion is left untouched and the command errors. For a paired extract this is **all-or-nothing**: it refuses if *either* companion exists. |
 | `--both` | Force the paired extract (both companions of a split deck). Auto-detected on a split half whose twin exists; passing `--both` errors if there is no twin. |
 | `--single` | Extract only `FILE`'s own companion, even on a split half whose twin exists — opt out of the default auto-pairing. |
-| `--layout [subdir\|sibling]` | Where to write the companion: `subdir` creates/uses a `voiceover/` folder; `sibling` writes next to the slide. Default: auto-detect an existing `voiceover/` folder, else sibling. See `clm slides tidy`. |
+| `--include-notes` | Also extract `notes` (speaker-notes) cells. By default only `voiceover` cells move and notes stay inline in the deck. |
+| `--layout [subdir\|sibling]` | Where to write the companion: `subdir` creates/uses a `voiceover/` folder; `sibling` writes next to the slide. Default (since CLM {version}): the `voiceover/` subdir, unless the deck already has a sibling companion (kept a sibling) or a course default is set. See `clm slides tidy`. |
 | `--dry-run` | Preview changes without modifying files |
 | `--json` | Output as JSON |
 
@@ -2570,6 +2582,41 @@ Examples:
 ```bash
 clm voiceover inline slides_intro.py
 clm voiceover inline slides_intro.py --dry-run
+```
+
+### `clm voiceover inline-notes`
+
+Migration helper (CLM {version}): move **speaker-notes** cells from companions
+back inline into their decks, leaving the `voiceover` cells in the companion.
+Use it to convert companions written before voiceover-only extraction (or via
+`--include-notes`) into pure-voiceover files, so a `voiceover_*` companion no
+longer carries notes.
+
+Only `notes` cells are inlined — `voiceover` cells are never moved. Each note is
+re-placed exactly like `clm voiceover inline` (anchored within its owning slide
+group; relocated / unmatched are reported the same way, and an unmatched note is
+kept in the companion and exits non-zero). A companion is deleted only if it ends
+up empty (it was notes-only and every note was placed); a companion with no
+notes is skipped.
+
+`PATH` may be a single slide file **or a directory** — a directory is walked for
+every slide deck (`slides_*` / `topic_*` / `project_*`) that has a companion, so
+a whole course migrates in one command.
+
+```
+clm voiceover inline-notes [OPTIONS] PATH
+```
+
+| Option | Description |
+|--------|-------------|
+| `--dry-run` | Preview which notes would move, without modifying files |
+| `--json` | Output as JSON (`decks_scanned`, `decks_changed`, `cells_inlined`, `unmatched_cells`, per-deck `results`) |
+
+Examples:
+
+```bash
+clm voiceover inline-notes slides/topic/slides_intro.py --dry-run
+clm voiceover inline-notes slides            # migrate a whole course
 ```
 
 ### `clm slides rules`

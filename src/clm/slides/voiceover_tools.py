@@ -302,9 +302,26 @@ def _prune_other_companions(slide_path: Path, keep: Path) -> list[Path]:
 # ---------------------------------------------------------------------------
 
 
-def _is_voiceover_cell(cell: _RawCell) -> bool:
-    """Check if a cell is a voiceover or notes cell."""
-    return cell.metadata.is_narrative
+def _is_extractable_cell(cell: _RawCell, *, include_notes: bool) -> bool:
+    """Cells that ``extract`` pulls into the voiceover companion.
+
+    By default only ``voiceover``-tagged cells are extracted; ``notes``
+    (speaker-notes) cells stay inline in the deck. Speaker notes are short and
+    belong with the slide they annotate, and leaving them inline keeps the
+    companion a *pure voiceover* file (the historical "voiceover companion also
+    holds notes" behavior confused both authors and tooling). They still reach
+    the trainer/recording outputs from their inline position — the build filters
+    by tag regardless of where a cell lives.
+
+    Set ``include_notes`` to restore the pre-split behavior and extract both
+    ``voiceover`` and ``notes`` cells (e.g. a course that deliberately keeps
+    speaker notes externalized alongside narration). The build merge always
+    reads both tags back, so a companion that still contains notes keeps working.
+    """
+    tags = cell.metadata.tags
+    if "voiceover" in tags:
+        return True
+    return include_notes and "notes" in tags
 
 
 def _ensure_slide_ids(cells: list[_RawCell], path: Path, text: str) -> int:
@@ -580,12 +597,16 @@ def _find_owning_slide_id(cells: list[_RawCell], voiceover_idx: int) -> str | No
     return None
 
 
-def _has_voiceover_cells(path: Path) -> bool:
-    """True iff ``path`` contains at least one voiceover/notes cell."""
+def _has_voiceover_cells(path: Path, *, include_notes: bool = False) -> bool:
+    """True iff ``path`` has at least one cell ``extract`` would pull out.
+
+    By default that means a ``voiceover``-tagged cell; with ``include_notes``
+    a ``notes`` cell also counts (see :func:`_is_extractable_cell`).
+    """
     _preamble, cells = _split_raw_cells(
         path.read_text(encoding="utf-8"), comment_token_for_path(path)
     )
-    return any(_is_voiceover_cell(c) for c in cells)
+    return any(_is_extractable_cell(c, include_notes=include_notes) for c in cells)
 
 
 def _slide_start_ids_of(path: Path) -> list[str | None]:
@@ -609,7 +630,7 @@ def _slide_ids_in_parity(de_path: Path, en_path: Path) -> bool:
 
 
 def _plan_extraction(
-    path: Path, *, dry_run: bool, layout: str | None = None
+    path: Path, *, dry_run: bool, layout: str | None = None, include_notes: bool = False
 ) -> tuple[ExtractionResult, list[tuple[Path, str]]]:
     """Compute the extraction result and the ``(path, text)`` writes WITHOUT
     writing anything.
@@ -635,8 +656,12 @@ def _plan_extraction(
     text = path.read_text(encoding="utf-8")
     preamble, cells = _split_raw_cells(text, comment_token_for_path(path))
 
-    # Check if there are any voiceover cells at all
-    vo_indices = [i for i, c in enumerate(cells) if _is_voiceover_cell(c)]
+    # Indices of the cells we will pull into the companion (voiceover by
+    # default; notes too when include_notes is set). Notes left behind stay
+    # inline in the slide and are reconstructed below with the survivors.
+    vo_indices = [
+        i for i, c in enumerate(cells) if _is_extractable_cell(c, include_notes=include_notes)
+    ]
     if not vo_indices:
         return result, []
 
@@ -702,6 +727,7 @@ def extract_voiceover(
     force: bool = False,
     dry_run: bool = False,
     layout: str | None = None,
+    include_notes: bool = False,
 ) -> ExtractionResult:
     """Extract voiceover cells from a slide file to a companion file.
 
@@ -729,6 +755,9 @@ def extract_voiceover(
         layout: Where to write the companion — ``"subdir"`` (``voiceover/``),
             ``"sibling"``, or ``None`` to auto-detect an existing ``voiceover/``
             directory (see :func:`expected_companion`).
+        include_notes: Also extract ``notes`` (speaker-notes) cells. By default
+            only ``voiceover`` cells are extracted and notes stay inline in the
+            deck (see :func:`_is_extractable_cell`).
 
     Returns:
         An :class:`ExtractionResult` describing what was done.
@@ -736,7 +765,9 @@ def extract_voiceover(
     Raises:
         VoiceoverError: a companion already exists and ``force`` is not set.
     """
-    result, writes = _plan_extraction(path, dry_run=dry_run, layout=layout)
+    result, writes = _plan_extraction(
+        path, dry_run=dry_run, layout=layout, include_notes=include_notes
+    )
     if writes:
         # Refuse to clobber an existing companion *before* any write — otherwise
         # the slide rewrite would strip voiceover and leave no companion (data
@@ -767,6 +798,7 @@ def extract_voiceover_pair(
     dry_run: bool = False,
     mint_ids: bool = True,
     layout: str | None = None,
+    include_notes: bool = False,
 ) -> PairedExtractionResult:
     """Extract voiceover from *both* halves of a split deck in one op.
 
@@ -793,6 +825,8 @@ def extract_voiceover_pair(
         mint_ids: run the EN-authority pre-mint (default on). Set ``False`` only
             when the pair is already known to be in ``slide_id`` parity — chiefly
             for tests isolating the extraction from the minting.
+        include_notes: also extract ``notes`` cells from both halves (default
+            off — notes stay inline; see :func:`_is_extractable_cell`).
 
     Raises:
         VoiceoverError: the paths are not a valid same-deck ``.de``/``.en`` pair;
@@ -812,7 +846,9 @@ def extract_voiceover_pair(
     # guard): if neither half has any voiceover cells there is nothing to
     # extract, so do nothing — don't refuse on a stale companion and don't
     # id-stamp a deck with nothing to extract (a per-half extract no-ops here).
-    if not _has_voiceover_cells(de_path) and not _has_voiceover_cells(en_path):
+    if not _has_voiceover_cells(de_path, include_notes=include_notes) and not _has_voiceover_cells(
+        en_path, include_notes=include_notes
+    ):
         return PairedExtractionResult(
             results=[
                 ExtractionResult(
@@ -869,8 +905,12 @@ def extract_voiceover_pair(
             f"mint_ids=True (the default) to mint EN-authority ids."
         )
 
-    de_result, de_writes = _plan_extraction(de_path, dry_run=dry_run, layout=layout)
-    en_result, en_writes = _plan_extraction(en_path, dry_run=dry_run, layout=layout)
+    de_result, de_writes = _plan_extraction(
+        de_path, dry_run=dry_run, layout=layout, include_notes=include_notes
+    )
+    en_result, en_writes = _plan_extraction(
+        en_path, dry_run=dry_run, layout=layout, include_notes=include_notes
+    )
     writes = [*de_writes, *en_writes]
     if writes:
         de_target = expected_companion(de_path, layout=layout)
@@ -1426,6 +1466,94 @@ def inline_voiceover(
             result.companion_deleted = True
             # If the companion lived in a now-empty ``voiceover/`` subdir, remove
             # the directory too so a fully-inlined topic returns to a clean tree.
+            parent = comp.parent
+            if parent.name == COMPANION_SUBDIR and not any(parent.iterdir()):
+                parent.rmdir()
+
+    return result
+
+
+def inline_notes(path: Path, *, dry_run: bool = False) -> InlineResult:
+    """Move ``notes`` cells from a companion back inline into the slide.
+
+    Migration helper for companions written before voiceover-only extraction
+    (or via ``--include-notes``): it inlines just the companion's ``notes``
+    (speaker-notes) cells at their anchored positions — exactly as
+    :func:`inline_voiceover` does for every cell — and rewrites the companion
+    keeping the ``voiceover`` cells (plus any notes that could not be placed) in
+    place. ``voiceover`` cells are never moved.
+
+    The companion is deleted only when nothing is left in it (it was notes-only
+    and every note was placed). A companion with no ``notes`` cells is a no-op
+    (``cells_inlined == 0``, companion untouched).
+    """
+    comp = resolve_companion(path)
+    result = InlineResult(
+        slide_file=str(path),
+        companion_file=str(comp if comp is not None else companion_path(path)),
+        dry_run=dry_run,
+    )
+    if comp is None:
+        return result
+
+    comment_token = comment_token_for_path(path)
+    preamble, slide_cells = _split_raw_cells(path.read_text(encoding="utf-8"), comment_token)
+    _, companion_cells = _split_raw_cells(comp.read_text(encoding="utf-8"), comment_token)
+    if not companion_cells:
+        return result
+
+    id_map = _build_slide_id_to_cell_map(slide_cells)
+    insertions: list[tuple[int, _RawCell]] = []
+    # ``retained`` keeps companion order: voiceover (and other non-notes) cells
+    # are passed through untouched; unplaceable notes are kept for a retry.
+    retained: list[_RawCell] = []
+
+    for cell in companion_cells:
+        if "notes" not in cell.metadata.tags:
+            retained.append(cell)
+            continue
+        anchor = _parse_vo_anchor(cell.header)
+        for_slide = cell.metadata.for_slide
+        insert_after, status = _plan_insertion(slide_cells, cell, id_map)
+        if insert_after is None:
+            result.unmatched_cells += 1
+            result.placements.append(Placement(for_slide, anchor, "unmatched"))
+            retained.append(cell)
+            continue
+        if status == "relocated":
+            result.relocated_cells += 1
+        anchor_cell = slide_cells[insert_after]
+        result.placements.append(
+            Placement(
+                for_slide,
+                anchor,
+                status,
+                after_line=anchor_cell.line_number,
+                after_header=anchor_cell.header,
+            )
+        )
+        insertions.append((insert_after, cell))
+
+    # Strip the author-only attributes from the notes about to land back inline.
+    for _, note_cell in insertions:
+        clean_header = _strip_author_attrs(note_cell.header)
+        note_cell.lines[0] = clean_header
+        note_cell.metadata = parse_cell_header(clean_header)
+
+    result.cells_inlined = len(insertions)
+    if not insertions:
+        # No notes (or none placeable) — leave both files untouched.
+        return result
+
+    if not dry_run:
+        new_cells = _apply_insertions(slide_cells, insertions, [])
+        path.write_text(_reconstruct(preamble, new_cells), encoding="utf-8", newline="\n")
+        if retained:
+            comp.write_text(_reconstruct("", retained), encoding="utf-8", newline="\n")
+            result.companion_retained = True
+        else:
+            comp.unlink()
+            result.companion_deleted = True
             parent = comp.parent
             if parent.name == COMPANION_SUBDIR and not any(parent.iterdir()):
                 parent.rmdir()

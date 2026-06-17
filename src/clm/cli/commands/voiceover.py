@@ -28,6 +28,7 @@ from clm.slides.voiceover_tools import (
     VoiceoverError,
     extract_voiceover,
     extract_voiceover_pair,
+    inline_notes,
     inline_voiceover,
     resolve_companion,
 )
@@ -3326,6 +3327,14 @@ def voiceover_commits_cmd(slide_file, since, limit, threshold, floor, as_json):
     "default is set.",
 )
 @click.option(
+    "--include-notes",
+    is_flag=True,
+    help="Also extract 'notes' (speaker-notes) cells. By default only "
+    "'voiceover' cells move to the companion and notes stay inline in the deck, "
+    "so the companion is a pure voiceover file. Notes still reach the "
+    "trainer/recording outputs from their inline position.",
+)
+@click.option(
     "--json",
     "as_json",
     is_flag=True,
@@ -3338,14 +3347,16 @@ def extract_voiceover_cmd(
     single: bool,
     dry_run: bool,
     layout: str | None,
+    include_notes: bool,
     as_json: bool,
 ):
     """Extract voiceover cells from a slide file to a companion file.
 
-    Moves voiceover and notes cells to a companion voiceover_*.<ext> file,
-    linked via slide_id/for_slide metadata.  Content cells without
-    slide_id get auto-generated IDs before extraction.  Refuses to
-    overwrite an existing companion unless --force is given.
+    Moves voiceover cells to a companion voiceover_*.<ext> file, linked via
+    slide_id/for_slide metadata.  Content cells without slide_id get
+    auto-generated IDs before extraction.  Speaker-notes ('notes') cells stay
+    inline in the deck unless --include-notes is given.  Refuses to overwrite an
+    existing companion unless --force is given.
 
     On a split half (``<deck>.de.<ext>`` / ``<deck>.en.<ext>``) whose twin exists on
     disk, both companions are extracted in one op by default: the two halves are
@@ -3383,12 +3394,19 @@ def extract_voiceover_cmd(
     try:
         if pair is not None:
             paired = extract_voiceover_pair(
-                pair[0], pair[1], force=force, dry_run=dry_run, layout=layout
+                pair[0],
+                pair[1],
+                force=force,
+                dry_run=dry_run,
+                layout=layout,
+                include_notes=include_notes,
             )
             payload = _paired_extraction_to_dict(paired)
             summary = paired.summary
         else:
-            result = extract_voiceover(path, force=force, dry_run=dry_run, layout=layout)
+            result = extract_voiceover(
+                path, force=force, dry_run=dry_run, layout=layout, include_notes=include_notes
+            )
             payload = _extraction_to_dict(result)
             summary = result.summary
     except VoiceoverError as e:
@@ -3464,6 +3482,96 @@ def inline_voiceover_cmd(
             f"{result.unmatched_cells} voiceover cell(s) had no matching slide; "
             f"companion '{comp.name}' was kept with them. "
             f"Fix the slide_id(s) and re-run inline."
+        )
+
+
+@voiceover_group.command("inline-notes")
+@click.argument(
+    "path",
+    type=click.Path(exists=True, path_type=Path),
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Preview changes without modifying files.",
+)
+@click.option(
+    "--json",
+    "as_json",
+    is_flag=True,
+    help="Output as JSON.",
+)
+def inline_notes_cmd(
+    path: Path,
+    dry_run: bool,
+    as_json: bool,
+):
+    """Move speaker-notes cells from companions back inline into their decks.
+
+    Migration helper for the voiceover-only extract default (CLM 1.14): it
+    inlines just the ``notes`` cells from each companion at their anchored
+    positions and leaves the ``voiceover`` cells in the companion, so a
+    companion written before the change (or with ``--include-notes``) becomes a
+    pure voiceover file. Voiceover cells are never moved; a companion with no
+    notes is skipped.
+
+    PATH may be a single slide file or a directory; a directory is walked for
+    every slide deck (``slides_*`` / ``topic_*`` / ``project_*``) that has a
+    companion.
+
+    \b
+    Examples:
+        clm voiceover inline-notes slides/topic/slides_intro.py --dry-run
+        clm voiceover inline-notes slides            # migrate a whole course
+        clm voiceover inline-notes slides --json
+    """
+    from clm.infrastructure.utils.path_utils import is_slides_file
+
+    if path.is_dir():
+        targets = sorted(
+            p
+            for p in path.rglob("*")
+            if p.is_file() and is_slides_file(p) and resolve_companion(p) is not None
+        )
+    else:
+        targets = [path]
+
+    results = [inline_notes(t, dry_run=dry_run) for t in targets]
+    touched = [r for r in results if r.cells_inlined or r.unmatched_cells]
+    total_inlined = sum(r.cells_inlined for r in results)
+    total_unmatched = sum(r.unmatched_cells for r in results)
+
+    if as_json:
+        click.echo(
+            json.dumps(
+                {
+                    "decks_scanned": len(results),
+                    "decks_changed": len(touched),
+                    "cells_inlined": total_inlined,
+                    "unmatched_cells": total_unmatched,
+                    "dry_run": dry_run,
+                    "results": [_inline_to_dict(r) for r in touched],
+                },
+                indent=2,
+            )
+        )
+    else:
+        if not touched:
+            click.echo("No companions with notes found — nothing to migrate.")
+        else:
+            verb = "would inline" if dry_run else "inlined"
+            for r in touched:
+                click.echo(f"{Path(r.slide_file).name}: {verb} {r.cells_inlined} notes cell(s)")
+            click.echo(
+                f"{verb.capitalize()} {total_inlined} notes cell(s) across {len(touched)} deck(s)."
+            )
+
+    # An unmatched note is a partial failure (kept in the companion): exit
+    # non-zero so a migration script notices, mirroring `inline`.
+    if not dry_run and total_unmatched:
+        raise click.ClickException(
+            f"{total_unmatched} notes cell(s) had no matching slide and were kept "
+            f"in their companion. Fix the slide_id(s) and re-run."
         )
 
 

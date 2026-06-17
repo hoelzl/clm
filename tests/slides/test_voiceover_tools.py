@@ -347,22 +347,35 @@ class TestExtractVoiceover:
 
         result = extract_voiceover(slide_file, layout="sibling")
 
-        assert result.cells_extracted == 4  # 2 voiceover + 2 notes
+        # Default: only the 2 voiceover cells move; the 2 notes cells stay inline.
+        assert result.cells_extracted == 2
         assert result.ids_generated > 0
 
-        # Slide file should have no voiceover/notes cells
         slide_text = slide_file.read_text(encoding="utf-8")
-        assert "voiceover" not in slide_text.lower().split("tags=")[0] or True
-        # More precise: no cells tagged voiceover or notes
-        assert 'tags=["voiceover"]' not in slide_text
-        assert 'tags=["notes"]' not in slide_text
+        assert 'tags=["voiceover"]' not in slide_text  # voiceover extracted
+        assert 'tags=["notes"]' in slide_text  # notes left behind
 
-        # Companion file should exist
         comp = tmp_path / "voiceover_intro.py"
         assert comp.exists()
-
         comp_text = comp.read_text(encoding="utf-8")
-        assert 'tags=["voiceover"]' in comp_text or 'tags=["notes"]' in comp_text
+        assert 'tags=["voiceover"]' in comp_text
+        assert 'tags=["notes"]' not in comp_text
+
+    def test_include_notes_extracts_both(self, tmp_path: Path):
+        # --include-notes restores the pre-split behavior: voiceover + notes.
+        slide_file = tmp_path / "slides_intro.py"
+        slide_file.write_text(SLIDE_WITH_VOICEOVER, encoding="utf-8")
+
+        result = extract_voiceover(slide_file, layout="sibling", include_notes=True)
+
+        assert result.cells_extracted == 4  # 2 voiceover + 2 notes
+        slide_text = slide_file.read_text(encoding="utf-8")
+        assert 'tags=["voiceover"]' not in slide_text
+        assert 'tags=["notes"]' not in slide_text  # notes extracted too
+
+        comp_text = (tmp_path / "voiceover_intro.py").read_text(encoding="utf-8")
+        assert 'tags=["voiceover"]' in comp_text
+        assert 'tags=["notes"]' in comp_text
 
     def test_no_voiceover_cells(self, tmp_path: Path):
         slide_file = tmp_path / "slides_intro.py"
@@ -380,7 +393,7 @@ class TestExtractVoiceover:
 
         result = extract_voiceover(slide_file, dry_run=True)
 
-        assert result.cells_extracted == 4
+        assert result.cells_extracted == 2  # voiceover-only default
         assert result.dry_run is True
         # Files should not be modified
         assert slide_file.read_text(encoding="utf-8") == original_text
@@ -480,11 +493,13 @@ class TestInlineVoiceover:
         # Then inline
         result = inline_voiceover(slide_file)
 
-        assert result.cells_inlined == 4
+        # Only the 2 voiceover cells were extracted (notes stayed inline), so
+        # inline brings those 2 back; the 2 notes were never in the companion.
+        assert result.cells_inlined == 2
         assert result.companion_deleted is True
         assert not comp.exists()
 
-        # Slide file should have voiceover cells back
+        # Slide file should have voiceover cells back, notes still present.
         slide_text = slide_file.read_text(encoding="utf-8")
         assert 'tags=["voiceover"]' in slide_text
         assert 'tags=["notes"]' in slide_text
@@ -508,7 +523,7 @@ class TestInlineVoiceover:
 
         result = inline_voiceover(slide_file, dry_run=True)
 
-        assert result.cells_inlined == 4
+        assert result.cells_inlined == 2  # voiceover-only companion
         assert result.dry_run is True
         # Files should not be modified
         assert slide_file.read_text(encoding="utf-8") == slide_text_after_extract
@@ -727,7 +742,7 @@ x = 1
         slide_file.write_text(SLIDE_WITH_VOICEOVER, encoding="utf-8")
 
         result = extract_voiceover(slide_file)
-        assert "4 voiceover cell(s) extracted" in result.summary
+        assert "2 voiceover cell(s) extracted" in result.summary
 
     def test_inline_result_summary(self, tmp_path: Path):
         slide_file = tmp_path / "slides_intro.py"
@@ -735,8 +750,82 @@ x = 1
 
         extract_voiceover(slide_file)
         result = inline_voiceover(slide_file)
-        assert "4 voiceover cell(s) inlined" in result.summary
+        assert "2 voiceover cell(s) inlined" in result.summary
         assert "companion file deleted" in result.summary
+
+
+class TestInlineNotes:
+    """inline_notes migrates speaker notes out of a companion, keeping voiceover."""
+
+    def test_inlines_notes_keeps_voiceover(self, tmp_path: Path):
+        from clm.slides.voiceover_tools import inline_notes
+
+        slide_file = tmp_path / "slides_intro.py"
+        slide_file.write_text(SLIDE_WITH_VOICEOVER, encoding="utf-8")
+        # Old-style companion: both voiceover and notes extracted.
+        extract_voiceover(slide_file, layout="sibling", include_notes=True)
+        comp = tmp_path / "voiceover_intro.py"
+        assert 'tags=["notes"]' in comp.read_text(encoding="utf-8")
+
+        result = inline_notes(slide_file)
+
+        assert result.cells_inlined == 2  # the 2 notes cells
+        # Notes are back in the deck; voiceover is NOT (still in the companion).
+        slide_text = slide_file.read_text(encoding="utf-8")
+        assert 'tags=["notes"]' in slide_text
+        assert 'tags=["voiceover"]' not in slide_text
+        # Companion kept, now voiceover-only.
+        assert comp.exists()
+        comp_text = comp.read_text(encoding="utf-8")
+        assert 'tags=["voiceover"]' in comp_text
+        assert 'tags=["notes"]' not in comp_text
+        # for_slide / vo_anchor stripped from the inlined notes.
+        assert "for_slide=" not in slide_text.split('tags=["notes"]')[1]
+
+    def test_noop_when_companion_has_no_notes(self, tmp_path: Path):
+        from clm.slides.voiceover_tools import inline_notes
+
+        slide_file = tmp_path / "slides_intro.py"
+        slide_file.write_text(SLIDE_WITH_VOICEOVER, encoding="utf-8")
+        extract_voiceover(slide_file, layout="sibling")  # voiceover-only companion
+        comp = tmp_path / "voiceover_intro.py"
+        before = comp.read_text(encoding="utf-8")
+
+        result = inline_notes(slide_file)
+
+        assert result.cells_inlined == 0
+        assert comp.read_text(encoding="utf-8") == before  # untouched
+
+    def test_deletes_companion_when_notes_only(self, tmp_path: Path):
+        from clm.slides.voiceover_tools import inline_notes
+
+        # A deck whose only narrative is a notes cell.
+        slide_file = tmp_path / "slides_intro.py"
+        slide_file.write_text(
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="a"\n'
+            "# ## T\n"
+            '# %% [markdown] lang="de" tags=["notes"]\n'
+            "# Notiz.\n",
+            encoding="utf-8",
+        )
+        extract_voiceover(slide_file, layout="sibling", include_notes=True)
+        comp = tmp_path / "voiceover_intro.py"
+        assert comp.exists()
+
+        result = inline_notes(slide_file)
+
+        assert result.cells_inlined == 1
+        assert result.companion_deleted is True
+        assert not comp.exists()  # nothing left → removed
+        assert 'tags=["notes"]' in slide_file.read_text(encoding="utf-8")
+
+    def test_no_companion_is_noop(self, tmp_path: Path):
+        from clm.slides.voiceover_tools import inline_notes
+
+        slide_file = tmp_path / "slides_intro.py"
+        slide_file.write_text(SLIDE_WITHOUT_VOICEOVER, encoding="utf-8")
+        result = inline_notes(slide_file)
+        assert result.cells_inlined == 0
 
 
 # ---------------------------------------------------------------------------
@@ -1449,10 +1538,10 @@ class TestSplitDeckVoiceover:
 
         de_comp = tmp_path / "voiceover_intro.de.py"
         en_comp = tmp_path / "voiceover_intro.en.py"
-        # Each split deck carries one slide + one voiceover + one
-        # subslide + one notes cell for its own language.
-        assert de_res.cells_extracted == 2
-        assert en_res.cells_extracted == 2
+        # Each split half carries one voiceover + one notes cell for its own
+        # language; only the voiceover cell is extracted by default.
+        assert de_res.cells_extracted == 1
+        assert en_res.cells_extracted == 1
         assert de_comp.exists()
         assert en_comp.exists()
 

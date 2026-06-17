@@ -214,6 +214,12 @@ entirely and keep the raw transcript.
 
 ### Companion file placement
 
+As of CLM 1.14, `clm voiceover extract` moves **only `voiceover`-tagged cells**
+into the companion; `notes` (speaker-notes) cells stay inline in the deck, so a
+`voiceover_*` companion is a pure narration file. Notes still reach the
+trainer/recording outputs from their inline position. Pass `--include-notes` to
+also extract notes (the pre-1.14 behavior).
+
 Voiceover companion files (`voiceover_*.py`) can live either in a `voiceover/`
 subdirectory next to the topic or as siblings of the slide file. As of CLM 1.14
 a *new* companion is written into the `voiceover/` subdirectory by default —
