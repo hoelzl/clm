@@ -405,3 +405,44 @@ class TestConvertOutputPathToContainer:
 
         # Should fall back to data_dir since path is under test-data, not output
         assert result == Path("/source/slides/module_000/topic_100/img/my_diag.png")
+
+
+class TestMultiTargetWorkspace:
+    """Regression tests for issue #384.
+
+    A multi-target Docker build mounts the common ancestor of all target
+    roots at /workspace (``Course.workspace_root``). With that wider mount,
+    every target's writes — not just the first target's — must convert
+    cleanly. Before the fix, the workspace was the first target's root
+    (``output/shared``) and writes under ``output/speaker`` raised
+    "is not under ...".
+    """
+
+    def test_non_primary_target_path_converts_under_common_ancestor(self):
+        """An ``output/speaker`` write converts when the mount is ``output/``."""
+        host_workspace = r"C:\course\output"  # common ancestor of all targets
+        host_path = r"C:\course\output\speaker\cpp-tdd-de\Html\Recording\deck.html"
+
+        result = convert_host_path_to_container(host_path, host_workspace)
+
+        assert result == Path("/workspace/speaker/cpp-tdd-de/Html/Recording/deck.html")
+
+    def test_each_sibling_target_converts_under_common_ancestor(self):
+        """shared/trainer/speaker all resolve under a single ``output/`` mount."""
+        host_workspace = "/home/u/course/output"
+        for tier in ("shared", "trainer", "speaker"):
+            host_path = f"/home/u/course/output/{tier}/deck-de/Html/deck.html"
+            result = convert_host_path_to_container(host_path, host_workspace)
+            assert result == Path(f"/workspace/{tier}/deck-de/Html/deck.html")
+
+    def test_first_target_root_mount_drops_other_targets(self):
+        """The pre-fix mount (first target's root) fails on other targets.
+
+        This documents the exact #384 failure: with ``output/shared`` mounted,
+        an ``output/speaker`` path is not under the workspace.
+        """
+        host_workspace = "/home/u/course/output/shared"  # legacy primary
+        host_path = "/home/u/course/output/speaker/deck-de/Html/deck.html"
+
+        with pytest.raises(ValueError, match="is not under"):
+            convert_host_path_to_container(host_path, host_workspace)
