@@ -5,6 +5,7 @@ import io
 from pathlib import Path
 
 import pytest
+from attrs import evolve
 
 from clm.core.course import Course
 from clm.core.course_spec import (
@@ -791,3 +792,118 @@ class TestProcessJupyterLiteForTargets:
         # output_dir is the parent of the jupyterlite spec's output_dir
         # (i.e. not inside a per-kind subfolder).
         assert "completed" not in op.output_dir.parts  # type: ignore[attr-defined]
+
+
+class TestCourseWorkspaceRoot:
+    """Tests for ``Course.workspace_root`` — the Docker /workspace mount base.
+
+    Regression coverage for issue #384: a multi-target Docker build mounted
+    only the first target's root, so writes under other targets failed path
+    conversion. ``workspace_root`` must cover *every* target root.
+    """
+
+    @pytest.fixture
+    def course_root(self, tmp_path):
+        (tmp_path / "slides").mkdir()
+        return tmp_path
+
+    def _course(self, course_root, targets, *, output_root=None):
+        spec = CourseSpec(
+            name=Text(de="T", en="T"),
+            prog_lang="python",
+            description=Text(de="D", en="D"),
+            certificate=Text(de="C", en="C"),
+            sections=[],
+            github=GitHubSpec(),
+            output_targets=targets,
+        )
+        return Course.from_spec(spec, course_root, output_root=output_root)
+
+    def test_explicit_sibling_targets_use_common_ancestor(self, course_root):
+        """shared/trainer/speaker under ``output/`` → mount ``output/`` (#384).
+
+        ``output_root`` is the legacy primary (first target = ``output/shared``)
+        which does NOT contain the other targets — the bug. ``workspace_root``
+        must be their common parent so the Docker mount reaches all of them.
+        """
+        course = self._course(
+            course_root,
+            [
+                OutputTargetSpec(name="shared", path="./output/shared", kinds=["code-along"]),
+                OutputTargetSpec(name="trainer", path="./output/trainer", kinds=["completed"]),
+                OutputTargetSpec(name="speaker", path="./output/speaker", kinds=["speaker"]),
+            ],
+        )
+
+        # Precondition: the legacy primary is just the first target's root.
+        assert course.output_root == (course_root / "output" / "shared").resolve()
+
+        # The fix: cover all three targets.
+        assert course.workspace_root == (course_root / "output").resolve()
+        for target in course.output_targets:
+            # Every target root is reachable from the mounted workspace.
+            target.output_root.relative_to(course.workspace_root)
+
+    def test_single_target_workspace_is_sole_root(self, course_root):
+        """One target → ``workspace_root`` equals that root (no behavior change)."""
+        course = self._course(
+            course_root,
+            [OutputTargetSpec(name="only", path="./output/only", kinds=["completed"])],
+        )
+        assert course.workspace_root == course.output_root
+        assert course.workspace_root == (course_root / "output" / "only").resolve()
+
+    def test_default_structure_workspace_is_umbrella_output(self, course_root):
+        """No explicit targets → default shared/trainer/speaker under ``output/``.
+
+        Here ``output_root`` is already the umbrella ``output/`` so the build
+        was never broken, and ``workspace_root`` agrees with it.
+        """
+        spec = CourseSpec(
+            name=Text(de="T", en="T"),
+            prog_lang="python",
+            description=Text(de="D", en="D"),
+            certificate=Text(de="C", en="C"),
+            sections=[],
+            github=GitHubSpec(),
+        )
+        course = Course.from_spec(spec, course_root, output_root=None)
+        assert [t.name for t in course.output_targets] == ["shared", "trainer", "speaker"]
+        assert course.workspace_root == (course_root / "output").resolve()
+        assert course.workspace_root == course.output_root.resolve()
+
+    def test_cli_output_dir_targets_share_override_root(self, course_root):
+        """``--output-dir`` re-roots every target under ``DIR/<name>`` → common
+        ancestor is ``DIR`` (this case already worked; guard against regression)."""
+        output_dir = course_root / "cli_out"
+        course = self._course(
+            course_root,
+            [
+                OutputTargetSpec(name="a", path="./output/a", kinds=["completed"]),
+                OutputTargetSpec(name="b", path="./output/b", kinds=["speaker"]),
+            ],
+            output_root=output_dir,
+        )
+        assert course.workspace_root == output_dir.resolve()
+
+    def test_targets_with_no_common_parent_raise_actionable_error(self, course_root, monkeypatch):
+        """Targets that share only a drive/filesystem root must fail fast with
+        an actionable message, not silently mount a whole volume (#384)."""
+        # Two targets whose only common ancestor is the filesystem root.
+        course = self._course(
+            course_root,
+            [
+                OutputTargetSpec(name="a", path="./output/a", kinds=["completed"]),
+                OutputTargetSpec(name="b", path="./output/b", kinds=["speaker"]),
+            ],
+        )
+        # Force the resolved roots to be drive-root children so the common
+        # ancestor is the root itself, exercising the volume-mount guard.
+        root = Path(course_root.anchor or "/")
+        course.output_targets = [
+            evolve(course.output_targets[0], output_root=(root / "alpha")),
+            evolve(course.output_targets[1], output_root=(root / "beta")),
+        ]
+
+        with pytest.raises(ValueError, match="whole drive|common parent|--targets"):
+            _ = course.workspace_root

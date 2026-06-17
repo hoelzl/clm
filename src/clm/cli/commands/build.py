@@ -199,6 +199,27 @@ def _build_has_docker_notebook_worker(worker_config: object | None) -> bool:
         return False
 
 
+def _resolve_worker_workspace_path(course: Course, worker_config: object | None) -> Path:
+    """Host directory to mount at the worker /workspace, and the backend base.
+
+    Docker workers bind-mount a single host directory at ``/workspace`` and the
+    notebook worker converts absolute host output paths relative to it. With
+    multiple ``<output-targets>`` the mount must therefore cover **all** target
+    roots, not just the legacy "primary" ``output_root`` (= first target) — the
+    bug behind issue #384, where every non-primary target's container-written
+    output failed path conversion and was dropped.
+
+    Only Docker notebook workers write under ``/workspace`` (diagram workers
+    write into ``/source``), so the wider ``course.workspace_root`` — which may
+    raise if the targets share no mountable common parent — is required *only*
+    then. Direct-mode builds never translate paths, so they keep the historical
+    ``output_root`` and are unaffected by the multi-target validation.
+    """
+    if _build_has_docker_notebook_worker(worker_config):
+        return course.workspace_root
+    return course.output_root
+
+
 def _maybe_start_mitmproxy_transport(
     mode: str | None, jobs_db_path: Path, worker_config: object | None = None
 ):
@@ -1771,10 +1792,15 @@ async def main_build(
     logger.debug(f"Initializing job queue database: {config.jobs_db_path}")
     init_database(config.jobs_db_path)
 
+    # In Docker mode this is the common ancestor of all target roots so the
+    # /workspace bind-mount reaches every target's writes (issue #384); in
+    # Direct mode it stays the legacy primary ``output_root``.
+    worker_workspace_path = _resolve_worker_workspace_path(course, worker_config)
+
     lifecycle_manager = WorkerLifecycleManager(
         config=worker_config,
         db_path=config.jobs_db_path,
-        workspace_path=course.output_root,
+        workspace_path=worker_workspace_path,
         cache_db_path=config.cache_db_path,
         data_dir=data_dir,
     )
@@ -1817,7 +1843,9 @@ async def main_build(
         with DatabaseManager(config.cache_db_path, force_init=config.clear_cache) as db_manager:
             backend = SqliteBackend(
                 db_path=config.jobs_db_path,
-                workspace_path=course.output_root,
+                # Match the worker mount root so any relative output path the
+                # backend may resolve agrees with the container's view (#384).
+                workspace_path=worker_workspace_path,
                 db_manager=db_manager,
                 ignore_db=config.ignore_cache,
                 build_reporter=build_reporter,

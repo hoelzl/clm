@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import sys
 from collections import defaultdict
 
@@ -288,6 +289,58 @@ class Course(NotebookMixin):
         from clm.slides.sidecar_layout import resolve_layout
 
         return resolve_layout(self.spec.sidecar_layout, self.course_root)
+
+    @property
+    def workspace_root(self) -> Path:
+        """Lowest host directory that contains *every* output target root.
+
+        The Docker worker bind-mounts this at ``/workspace`` and exports it as
+        ``CLM_HOST_WORKSPACE``; the notebook worker converts absolute host
+        output paths relative to it. Unlike ``output_root`` (the legacy
+        "primary" = first target's root), this must cover **all** targets so
+        multi-target Docker builds don't silently drop the non-primary
+        targets' container-written outputs (issue #384).
+
+        Returns the sole target root for single-target / default builds (so
+        behavior is unchanged there), otherwise the common ancestor of all
+        target roots.
+
+        Raises:
+            ValueError: When the target roots share no usable common parent
+                (e.g. on different Windows drives, or the only common ancestor
+                is a filesystem/drive root). Docker mode cannot mount such a
+                set with a single bind; the caller should build each target
+                separately with ``--targets``.
+        """
+        roots = [t.output_root for t in self.output_targets] or [self.output_root]
+        resolved = {r.resolve() for r in roots}
+        if len(resolved) == 1:
+            return next(iter(resolved))
+
+        sorted_roots = sorted(str(r) for r in resolved)
+        try:
+            common = Path(os.path.commonpath(list(resolved)))
+        except ValueError as err:
+            # Different drives / mixed absolute-relative: no common ancestor.
+            raise ValueError(
+                "Docker-mode builds require all <output-targets> to share a "
+                "common parent directory so they can be mounted together at "
+                f"/workspace. Targets resolve to unrelated roots: {sorted_roots}. "
+                "Build each target separately with `--targets <name>`, or place "
+                "the target output roots under a shared parent."
+            ) from err
+
+        # Refuse to bind-mount an entire volume: if the only shared ancestor is
+        # a drive/filesystem root, the mount would expose far more than the
+        # build output. Treat it like the no-common-ancestor case.
+        if common == common.parent:
+            raise ValueError(
+                "Docker-mode builds would have to mount a whole drive to cover "
+                f"these <output-targets>: {sorted_roots}. Build each target "
+                "separately with `--targets <name>`, or place the target "
+                "output roots under a shared parent directory."
+            )
+        return common
 
     @property
     def topics(self) -> list[Topic]:
