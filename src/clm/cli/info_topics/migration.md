@@ -395,18 +395,43 @@ clm slides tidy slides --layout sibling
 
 `tidy` uses `git mv` for tracked files, deletes transient `*.staging-*` cassette
 markers, and **consolidates the historical `_cassettes/` directory into
-`cassettes/`** (the underscore name is still read as a fallback). To make new
-`clm voiceover extract` / `sync` companions default to the foldered layout
-without per-topic `mkdir`, set a course-wide default:
+`cassettes/`** (the underscore name is still read as a fallback).
+
+**Since CLM {version} the foldered layout is the default** for a *new* sidecar:
+a build records a topic's first cassette into `cassettes/`, and `clm voiceover
+extract` / `sync` create a new companion in `voiceover/` — **unless** that deck
+already has a sibling sidecar, which is kept a sibling so a deck is never split
+across layouts. This default is write-time only and never changes build output
+(both layouts are still read). Precedence for a new sidecar: explicit `--layout`
+flag → an existing per-type directory → a course default → **subdir** (the new
+fallback). Opt a course back into the flat layout with `sibling`:
 
 ```toml
 [tool.clm]
-sidecar-layout = "subdir"   # or override per-shell with CLM_SIDECAR_LAYOUT=subdir
+sidecar-layout = "sibling"   # or per-shell with CLM_SIDECAR_LAYOUT=sibling
 ```
 
-This default is write-time only and never changes build output. Precedence for a
-new companion: explicit `--layout` flag → an existing `voiceover/` directory →
-the course default → `sibling`.
+For cassettes the course override is the `<sidecar-layout>` element in the
+course spec (see `clm info spec-files`); the env var / pyproject key drive the
+voiceover authoring tools too.
+
+## `clm voiceover extract` no longer extracts speaker notes by default ({version} — backward-compatible)
+
+`clm voiceover extract` now moves **only `voiceover`-tagged cells** into the
+`voiceover_*` companion; `notes` (speaker-notes) cells **stay inline** in the
+deck. Previously both were extracted, so a file named "voiceover" also held
+speaker notes — confusing for authors and downstream agents. Speaker notes are
+short and belong with the slide they annotate; left inline they still reach the
+**trainer** and **recording** outputs (the build filters by tag regardless of a
+cell's location).
+
+**Nothing breaks.** Existing companions that already contain notes keep working
+unchanged — the build merge always reads both `voiceover` and `notes` back. Only
+*new* extractions differ.
+
+- To extract notes as before, pass `--include-notes` (or set it per call).
+- To pull notes **out** of existing companions and back into the deck, use the
+  migration helper `clm voiceover inline-notes PATH` (see `clm info commands`).
 
 ## Bootstrap a second language: `clm slides translate` ({version} — additive)
 
