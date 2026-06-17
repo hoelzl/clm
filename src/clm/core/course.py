@@ -204,8 +204,17 @@ class Course(NotebookMixin):
                 OutputTarget.from_spec(t, course_root, course_jupyterlite=spec.jupyterlite)
                 for t in effective_target_specs
             ]
-            # Use first target's root as the "primary" for legacy compatibility.
-            effective_output_root = targets[0].output_root if targets else course_root / "output"
+            if spec.output_targets:
+                # Explicit targets: keep the legacy "primary" = first target's
+                # root (targets may point anywhere, so there is no common base).
+                effective_output_root = (
+                    targets[0].output_root if targets else course_root / "output"
+                )
+            else:
+                # Default shared/trainer/speaker structure: the umbrella output
+                # dir is the base, not one tier (the tiers live under it). Keep
+                # ``output_root`` pointing at that base so it stays meaningful.
+                effective_output_root = course_root / "output"
 
         # Filter by selected targets if specified
         if selected_targets:
