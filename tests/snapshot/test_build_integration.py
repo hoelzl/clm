@@ -170,13 +170,16 @@ class TestVerifyAgainst:
         return spec, baseline
 
     def test_verify_passes_when_output_matches_snapshot(self, tmp_path: Path, fake_build) -> None:
+        # A no-<output-targets> spec now defaults to the shared/trainer/speaker
+        # structure (#383), so a real build writes per-tier — seed the stub the
+        # same way and verify compares per-tier.
         spec, baseline = self._build_baseline(
             tmp_path,
             fake_build,
-            {"x.ipynb": b"identical", "y.py": b"py-source"},
+            {"shared": {"x.ipynb": b"identical", "y.py": b"py-source"}},
         )
         # Second build produces the same output; verify must pass.
-        fake_build({"x.ipynb": b"identical", "y.py": b"py-source"})
+        fake_build({"shared": {"x.ipynb": b"identical", "y.py": b"py-source"}})
         out = tmp_path / "out2"
         result = _invoke_build(
             [
@@ -195,10 +198,10 @@ class TestVerifyAgainst:
         spec, baseline = self._build_baseline(
             tmp_path,
             fake_build,
-            {"x.ipynb": b"original"},
+            {"shared": {"x.ipynb": b"original"}},
         )
         # Second build produces different content; verify must fail.
-        fake_build({"x.ipynb": b"changed"})
+        fake_build({"shared": {"x.ipynb": b"changed"}})
         out = tmp_path / "out2"
         result = _invoke_build(
             [
@@ -220,9 +223,9 @@ class TestVerifyAgainst:
         spec, baseline = self._build_baseline(
             tmp_path,
             fake_build,
-            {"page.html": b"<p>0x1111aaaa</p>", "kept.ipynb": b"x"},
+            {"shared": {"page.html": b"<p>0x1111aaaa</p>", "kept.ipynb": b"x"}},
         )
-        fake_build({"page.html": b"<p>0x2222bbbb</p>", "kept.ipynb": b"x"})
+        fake_build({"shared": {"page.html": b"<p>0x2222bbbb</p>", "kept.ipynb": b"x"}})
         out = tmp_path / "out2"
         result = _invoke_build(
             [
@@ -241,9 +244,9 @@ class TestVerifyAgainst:
         spec, baseline = self._build_baseline(
             tmp_path,
             fake_build,
-            {"page.html": b"<p>obj at 0x1111aaaa</p>"},
+            {"shared": {"page.html": b"<p>obj at 0x1111aaaa</p>"}},
         )
-        fake_build({"page.html": b"<p>obj at 0x2222bbbb</p>"})
+        fake_build({"shared": {"page.html": b"<p>obj at 0x2222bbbb</p>"}})
         out = tmp_path / "out2"
         result = _invoke_build(
             [
@@ -262,9 +265,9 @@ class TestVerifyAgainst:
         spec, baseline = self._build_baseline(
             tmp_path,
             fake_build,
-            {"page.html": b"<p>obj at 0x1111aaaa</p>"},
+            {"shared": {"page.html": b"<p>obj at 0x1111aaaa</p>"}},
         )
-        fake_build({"page.html": b"<p>obj at 0x2222bbbb</p>"})
+        fake_build({"shared": {"page.html": b"<p>obj at 0x2222bbbb</p>"}})
         out = tmp_path / "out2"
         result = _invoke_build(
             [

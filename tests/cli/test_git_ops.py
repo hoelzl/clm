@@ -105,6 +105,76 @@ class TestGitHubSpec:
         url = spec.derive_remote_url("speaker", "de")
         assert url == "https://github.com/Org/ml-course-de-speaker"
 
+    def test_derive_remote_url_no_slug_returns_none(self):
+        """Without a project slug there is no repo name to derive."""
+        spec = GitHubSpec(repository_base="https://github.com/Org")
+        assert spec.derive_remote_url("public", "de") is None
+
+    def test_derive_remote_url_template_without_base_needs_no_base(self):
+        """A self-contained template (no {repository_base}) works without one (#383).
+
+        The old code returned ``None`` whenever ``repository_base`` was empty,
+        even for a template that never referenced it — forcing a placeholder
+        ``<repository-base>``. ``repository_base`` is now required only when the
+        active template actually contains ``{repository_base}``.
+        """
+        spec = GitHubSpec(
+            project_slug="ml-course",
+            remote_template="git@gitlab.example.com:{remote_path}/{repo}.git",
+        )
+        url = spec.derive_remote_url("shared", "de", remote_path="shared")
+        assert url == "git@gitlab.example.com:shared/ml-course-de.git"
+
+    def test_derive_remote_url_default_template_still_needs_base(self):
+        """The default template references {repository_base}, so it stays required."""
+        spec = GitHubSpec(project_slug="ml-course")
+        assert spec.derive_remote_url("public", "de") is None
+
+
+class TestGitHubSpecUnrecognizedChildren:
+    """Issue #382: warn (don't silently drop) unknown <github> children."""
+
+    def _parse(self, xml: str):
+        from xml.etree import ElementTree as ETree
+
+        return GitHubSpec.from_element(ETree.fromstring(xml))
+
+    def test_legacy_de_en_form_warns(self, caplog):
+        import logging
+
+        with caplog.at_level(logging.WARNING):
+            spec = self._parse(
+                "<github>"
+                "<de>git@gitlab.example.com:shared/course-de.git</de>"
+                "<en>git@gitlab.example.com:shared/course-en.git</en>"
+                "</github>"
+            )
+
+        # The legacy URLs are still dropped (not honored)...
+        assert spec.project_slug is None
+        assert spec.repository_base is None
+        # ...but a warning now makes the silent migration gap visible.
+        msg = caplog.text
+        assert "<de>" in msg and "<en>" in msg
+        assert "no longer supported" in msg
+        assert "<project-slug>" in msg
+
+    def test_recognized_children_do_not_warn(self, caplog):
+        import logging
+
+        with caplog.at_level(logging.WARNING):
+            self._parse(
+                "<github>"
+                "<project-slug>course</project-slug>"
+                "<repository-base>https://gitlab.example.com</repository-base>"
+                "<remote-path>shared</remote-path>"
+                "<remote-template>{repository_base}/{remote_path}/{repo}</remote-template>"
+                "<include-speaker>true</include-speaker>"
+                "</github>"
+            )
+
+        assert "unrecognized" not in caplog.text.lower()
+
 
 class TestGitHubSpecRemoteTemplate:
     """Tests for GitHubSpec remote_template support."""
@@ -521,8 +591,14 @@ class TestFindOutputReposRemotePath:
             "https://gitlab.example.com/azav-editors/python-basics-de-editors"
         )
 
-    def test_implicit_targets_with_course_level_remote_path(self, tmp_path: Path):
-        """Course-level remote_path applies to implicit targets."""
+    def test_default_tiers_carry_group_path_remotes(self, tmp_path: Path):
+        """Default tiers use their own shared/trainer/speaker group paths (#383).
+
+        Each default tier carries its own ``<remote-path>`` (shared/trainer/
+        speaker), so the group-path remote layout works out of the box and the
+        course-level ``<remote-path>`` is overridden per-tier — exactly like an
+        explicit per-target ``<remote-path>``.
+        """
         course_specs = tmp_path / "course-specs"
         course_specs.mkdir()
         spec_file = course_specs / "test.xml"
@@ -536,6 +612,7 @@ class TestFindOutputReposRemotePath:
     <github>
         <repository-base>https://gitlab.example.com</repository-base>
         <remote-path>my-org</remote-path>
+        <include-speaker>true</include-speaker>
     </github>
 </course>"""
         )
@@ -543,11 +620,14 @@ class TestFindOutputReposRemotePath:
         repos = find_output_repos(spec_file)
 
         by_key = {(r.target_name, r.language): r.remote_url for r in repos}
-        assert by_key[("public", "de")] == ("https://gitlab.example.com/my-org/python-basics-de")
-        assert by_key[("public", "en")] == ("https://gitlab.example.com/my-org/python-basics-en")
+        assert by_key[("shared", "de")] == "https://gitlab.example.com/shared/python-basics-de"
+        assert by_key[("shared", "en")] == "https://gitlab.example.com/shared/python-basics-en"
+        assert by_key[("trainer", "de")] == "https://gitlab.example.com/trainer/python-basics-de"
+        # include_speaker=true → speaker gets a real remote at its group path.
+        assert by_key[("speaker", "de")] == "https://gitlab.example.com/speaker/python-basics-de"
 
-    def test_no_remote_path_backward_compatible(self, tmp_path: Path):
-        """Without remote_path, URLs work as before."""
+    def test_default_speaker_local_only_without_include_speaker(self, tmp_path: Path):
+        """Speaker tier is listed but local-only unless include_speaker (#381)."""
         course_specs = tmp_path / "course-specs"
         course_specs.mkdir()
         spec_file = course_specs / "test.xml"
@@ -567,8 +647,11 @@ class TestFindOutputReposRemotePath:
         repos = find_output_repos(spec_file)
 
         by_key = {(r.target_name, r.language): r.remote_url for r in repos}
-        assert by_key[("public", "de")] == "https://github.com/Org/ml-course-de"
-        assert by_key[("public", "en")] == "https://github.com/Org/ml-course-en"
+        # shared/trainer get group-path remotes; speaker is local-only.
+        assert by_key[("shared", "de")] == "https://github.com/Org/shared/ml-course-de"
+        assert by_key[("trainer", "en")] == "https://github.com/Org/trainer/ml-course-en"
+        assert by_key[("speaker", "de")] is None
+        assert by_key[("speaker", "en")] is None
 
 
 class TestOutputRepo:
@@ -805,7 +888,7 @@ class TestFindOutputRepos:
             )
 
     def test_finds_default_output_structure(self, tmp_path: Path):
-        """Test that default output structure (public/speaker) is found."""
+        """Default structure is shared/trainer/speaker, all listed (#383)."""
         course_specs = tmp_path / "course-specs"
         course_specs.mkdir()
         spec_file = course_specs / "test.xml"
@@ -823,15 +906,21 @@ class TestFindOutputRepos:
 
         repos = find_output_repos(spec_file)
 
-        # Should find public/De, public/En, speaker/De, speaker/En
-        # (but speaker only if include_speaker is True, which defaults to False)
-        expected_output = tmp_path / "output"
+        # All three default tiers are managed for both languages — speaker is
+        # listed too (it is never silently skipped now), just local-only here
+        # because include_speaker defaults to False (#381).
         target_names = {repo.target_name for repo in repos}
-        assert "public" in target_names
+        assert target_names == {"shared", "trainer", "speaker"}
+        assert len(repos) == 6
 
-        # Verify paths are correct
+        # Each tier lives directly under output/<tier>/ (no public/speaker
+        # toplevel, no De/En language directory).
+        expected_output = tmp_path / "output"
         for repo in repos:
-            assert expected_output in repo.path.parents or repo.path.parent == expected_output
+            assert (expected_output / repo.target_name) in repo.path.parents
+
+        # No remotes are derivable without project-slug/repository-base.
+        assert all(repo.remote_url is None for repo in repos)
 
     def test_finds_explicit_output_targets(self, tmp_path: Path):
         """Test that explicit output targets from spec are found."""

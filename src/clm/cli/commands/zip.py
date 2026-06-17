@@ -108,45 +108,32 @@ def find_output_directories(
         List of OutputDirectory objects
     """
     spec = CourseSpec.from_file(spec_file)
-    course_root, default_output = resolve_course_paths(spec_file)
+    course_root, _default_output = resolve_course_paths(spec_file)
     directories: list[OutputDirectory] = []
 
-    if spec.output_targets:
-        for target_spec in spec.output_targets:
-            if target_filter and target_spec.name != target_filter:
-                continue
+    # Explicit ``<output-targets>`` or, when none are declared, the default
+    # shared/trainer/speaker structure (#383) — a single per-target loop so the
+    # archive layout matches what the build wrote.
+    for target_spec in spec.effective_output_targets:
+        if target_filter and target_spec.name != target_filter:
+            continue
 
-            path = Path(target_spec.path)
-            if not path.is_absolute():
-                path = course_root / path
+        path = Path(target_spec.path)
+        if not path.is_absolute():
+            path = course_root / path
 
-            languages = target_spec.languages or ["de", "en"]
+        languages = target_spec.languages or ["de", "en"]
 
-            for lang in languages:
-                output_path = path / spec.output_dir_name[lang]
+        for lang in languages:
+            output_path = path / spec.output_dir_name[lang]
 
-                directories.append(
-                    OutputDirectory(
-                        path=output_path,
-                        target_name=target_spec.name,
-                        language=lang,
-                    )
+            directories.append(
+                OutputDirectory(
+                    path=output_path,
+                    target_name=target_spec.name,
+                    language=lang,
                 )
-    else:
-        for target_name in ["public", "speaker"]:
-            if target_filter and target_name != target_filter:
-                continue
-
-            for lang in ["de", "en"]:
-                output_path = default_output / target_name / spec.output_dir_name[lang]
-
-                directories.append(
-                    OutputDirectory(
-                        path=output_path,
-                        target_name=target_name,
-                        language=lang,
-                    )
-                )
+            )
 
     return directories
 

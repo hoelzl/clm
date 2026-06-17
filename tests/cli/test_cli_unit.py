@@ -553,28 +553,38 @@ class TestOutputFiltering:
         )
 
     def test_default_generates_all_root_dirs(self):
-        """Test that default config generates 4 root dirs (2 languages x 2 speaker states)"""
+        """The default shared/trainer/speaker structure (#383) yields 8 root dirs.
+
+        Per language, each tier contributes a cleanup root for each side it
+        produces: shared (code-along/completed) → 1, trainer (also has the
+        trainer kind) → 2, speaker (recording) → 1. So 4 per language × 2
+        languages = 8.
+        """
         from clm.cli.main import initialize_paths_and_course
 
         config = self._create_config()
         course, root_dirs, data_dir = initialize_paths_and_course(config)
 
-        # Default: 2 languages (de, en) x 2 types (public, speaker) = 4 dirs
-        assert len(root_dirs) == 4
+        assert len(root_dirs) == 8
 
         # Course should have no filters set
         assert course.output_languages is None
         assert course.output_kinds is None
 
+        # Every default tier directory is represented.
+        joined = " ".join(str(d).lower() for d in root_dirs)
+        assert "shared" in joined
+        assert "trainer" in joined
+        assert "speaker" in joined
+
     def test_single_language_filter_reduces_root_dirs(self):
-        """Test that language filter reduces root dirs to 2 (1 language x 2 speaker states)"""
+        """Test that a language filter halves the root dirs (en only → 4)."""
         from clm.cli.main import initialize_paths_and_course
 
         config = self._create_config(language="en")
         course, root_dirs, data_dir = initialize_paths_and_course(config)
 
-        # 1 language x 2 types (public, speaker) = 2 dirs
-        assert len(root_dirs) == 2
+        assert len(root_dirs) == 4
 
         # All root dirs should be for English
         for root_dir in root_dirs:
@@ -585,40 +595,43 @@ class TestOutputFiltering:
         assert course.output_kinds is None
 
     def test_speaker_only_filter_reduces_root_dirs(self):
-        """Test that speaker_only filter reduces root dirs to 2 (2 languages × 1 private toplevel)"""
+        """``--speaker-only`` keeps only the private kinds (trainer + recording).
+
+        Those land in the ``trainer/`` and ``speaker/`` tiers; the ``shared``
+        tier (code-along/completed only) drops out entirely. With 2 languages
+        that leaves 4 cleanup roots.
+        """
         from clm.cli.main import initialize_paths_and_course
 
         config = self._create_config(speaker_only=True)
         course, root_dirs, data_dir = initialize_paths_and_course(config)
 
-        # 2 languages x 1 type (private toplevel) = 2 dirs.
-        # ``--speaker-only`` now selects both private kinds (trainer +
-        # recording), but they share the same private toplevel directory so
-        # cleanup still produces one root dir per language.
-        assert len(root_dirs) == 2
+        assert len(root_dirs) == 4
 
-        # All root dirs should land under the private (``speaker/``) toplevel.
+        # Only the trainer/ and speaker/ tiers survive — never shared/.
         for root_dir in root_dirs:
-            assert "speaker" in str(root_dir).lower()
+            text = str(root_dir).lower()
+            assert "trainer" in text or "speaker" in text
+            assert "shared" not in text
 
         # Course should have kinds filter set to both private kinds.
         assert course.output_languages is None
         assert course.output_kinds == ["trainer", "recording"]
 
-    def test_combined_filters_reduce_to_single_root_dir(self):
-        """Test that combined language+speaker_only filters result in 1 root dir"""
+    def test_combined_filters_reduce_root_dirs(self):
+        """language=de + ``--speaker-only`` → trainer/ and speaker/ tiers, de only."""
         from clm.cli.main import initialize_paths_and_course
 
         config = self._create_config(language="de", speaker_only=True)
         course, root_dirs, data_dir = initialize_paths_and_course(config)
 
-        # 1 language x 1 type = 1 dir
-        assert len(root_dirs) == 1
+        assert len(root_dirs) == 2
 
-        # Should be the German private toplevel directory.
-        root_dir_str = str(root_dirs[0]).lower()
-        assert "de" in root_dir_str
-        assert "speaker" in root_dir_str
+        for root_dir in root_dirs:
+            text = str(root_dir).lower()
+            assert "de" in text
+            assert "trainer" in text or "speaker" in text
+            assert "shared" not in text
 
         # Course should have both filters set; ``--speaker-only`` now selects
         # both private kinds so trainer and recording are both built.

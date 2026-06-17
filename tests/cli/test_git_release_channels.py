@@ -296,9 +296,10 @@ class TestSelectReposGuards:
         repos = _select_repos(
             spec_file, target=None, channel=None, all_channels=False, all_repos=True
         )
-        # Default output structure: public × de/en (speaker is opt-in), no
-        # channels to add.
-        assert {r.target_name for r in repos} == {"public"}
+        # Default output structure: shared/trainer/speaker × de/en (#383),
+        # no channels to add. Speaker is listed too (local-only without
+        # include_speaker), so it is part of the target set.
+        assert {r.target_name for r in repos} == {"shared", "trainer", "speaker"}
         assert all(r.source == "output" for r in repos)
 
     @pytest.mark.parametrize(

@@ -846,12 +846,28 @@ class TestListTargetsCli:
         assert isinstance(data, list)
         assert data[0]["name"] == "public"
 
-    def test_no_targets_prints_default_behavior_note(self, tmp_path: Path) -> None:
+    def test_no_targets_shows_default_structure(self, tmp_path: Path) -> None:
+        # With no <output-targets>, the command shows the default
+        # shared/trainer/speaker structure (#383) rather than a bare note.
         spec = _write_spec(tmp_path / "course.xml", with_targets=False)
         result = CliRunner().invoke(list_targets, [str(spec)])
 
         assert result.exit_code == 0
-        assert "No output targets" in result.output
+        assert "default structure" in result.output
+        assert "shared" in result.output
+        assert "trainer" in result.output
+        assert "speaker" in result.output
+
+    def test_no_targets_json_marks_default(self, tmp_path: Path) -> None:
+        spec = _write_spec(tmp_path / "course.xml", with_targets=False)
+        result = CliRunner().invoke(list_targets, [str(spec), "--format=json"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert isinstance(data, list)
+        assert [t["name"] for t in data] == ["shared", "trainer", "speaker"]
+        assert all(t["is_default"] for t in data)
+        assert data[0]["kinds"] == ["code-along", "completed"]
 
     def test_parse_error_table_format(self, tmp_path: Path) -> None:
         spec = tmp_path / "broken.xml"

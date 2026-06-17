@@ -1018,11 +1018,10 @@ def test_output_root_does_not_drop_trainer_target(tmp_path):
     )
 
 
-def test_output_root_without_spec_targets_collapses_to_dir(tmp_path):
-    """When the spec has no ``<output-targets>``, ``output_root``
-    produces a single default target rooted at the output dir. There's
-    nothing per-target to re-root, so the behavior is the same as
-    passing ``--output-dir`` to a minimal spec."""
+def test_output_root_without_spec_targets_uses_default_structure(tmp_path):
+    """When the spec has no ``<output-targets>``, the default
+    shared/trainer/speaker structure stands in for them (#383). With
+    ``--output-dir`` each tier is re-rooted under ``<out>/<tier>/``."""
     import io
 
     from clm.core.course_spec import CourseSpec
@@ -1046,5 +1045,8 @@ def test_output_root_without_spec_targets_collapses_to_dir(tmp_path):
     )
     out = tmp_path / "out"
     course = Course.from_spec(spec, tmp_path, out)
-    assert len(course.output_targets) == 1
-    assert course.output_targets[0].output_root == out.resolve()
+    assert [t.name for t in course.output_targets] == ["shared", "trainer", "speaker"]
+    by_name = {t.name: t for t in course.output_targets}
+    assert by_name["shared"].output_root == (out / "shared").resolve()
+    assert by_name["speaker"].output_root == (out / "speaker").resolve()
+    assert by_name["shared"].kinds == frozenset({"code-along", "completed"})

@@ -203,15 +203,19 @@ def validate_notebook_structure(notebook_path: Path) -> dict:
 def validate_course_output_structure(output_dir: Path, dir_name: str):
     """Validate the basic output directory structure for a language.
 
+    Under the default output structure (#383) participant material lives in the
+    ``shared/`` tier (``code-along`` + ``completed``); the old ``public/``
+    toplevel is gone. Returns the participant tier directory for the language.
+
     Args:
-        output_dir: Root output directory
+        output_dir: Root output directory (the umbrella ``output/`` base)
         dir_name: Output directory name (e.g., "Mein Kurs-de")
     """
-    public_dir = output_dir / "public" / dir_name
-    assert public_dir.exists(), f"Public course directory does not exist: {public_dir}"
+    shared_dir = output_dir / "shared" / dir_name
+    assert shared_dir.exists(), f"Shared course directory does not exist: {shared_dir}"
 
     logger.info(f"Validated output structure for {dir_name}")
-    return public_dir
+    return shared_dir
 
 
 def count_notebooks_in_dir(directory: Path) -> int:
@@ -897,8 +901,8 @@ async def test_course_dir_groups_copy_e2e(e2e_course_1, sqlite_backend_with_all_
 
     output_dir = course.output_root
 
-    # Validate German outputs
-    de_course_dir = output_dir / "public" / "Mein Kurs-de"
+    # Validate German outputs (participant tier under the default structure)
+    de_course_dir = output_dir / "shared" / "Mein Kurs-de"
 
     # Check Bonus directory group
     bonus_dir = de_course_dir / "Bonus"
@@ -915,7 +919,7 @@ async def test_course_dir_groups_copy_e2e(e2e_course_1, sqlite_backend_with_all_
     assert (de_course_dir / "root-file-2").exists(), "root-file-2 should be in course root"
 
     # Validate English outputs
-    en_course_dir = output_dir / "public" / "My Course-en"
+    en_course_dir = output_dir / "shared" / "My Course-en"
     assert en_course_dir.exists(), "English course directory should exist"
     assert (en_course_dir / "Bonus").exists(), "English Bonus directory should exist"
     assert (en_course_dir / "root-file-1.txt").exists(), "English root files should be copied"

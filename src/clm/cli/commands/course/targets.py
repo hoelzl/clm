@@ -49,10 +49,11 @@ def list_targets(spec_file, output_format):
             click.echo(f"Error: {e}", err=True)
             raise SystemExit(1) from None
 
-    if not spec.output_targets:
-        click.echo("No output targets defined in spec file.")
-        click.echo("Using default behavior (all outputs to --output-dir).")
-        return 0
+    # When the spec declares no <output-targets>, the build/git defaults fall
+    # back to the shared/trainer/speaker structure (#383). Show that structure
+    # so the listing matches what a build actually writes.
+    targets = spec.effective_output_targets
+    is_default = not spec.output_targets
 
     if output_format == "json":
         import json
@@ -61,19 +62,24 @@ def list_targets(spec_file, output_format):
             {
                 "name": t.name,
                 "path": t.path,
+                "remote_path": t.remote_path or None,
                 "kinds": t.kinds or ["all"],
                 "formats": t.formats or ["all"],
                 "languages": t.languages or ["all"],
+                "is_default": is_default,
             }
-            for t in spec.output_targets
+            for t in targets
         ]
         click.echo(json.dumps(data, indent=2))
     else:
-        click.echo("Output Targets:")
+        if is_default:
+            click.echo("No <output-targets> defined; using the default structure:")
+        else:
+            click.echo("Output Targets:")
         click.echo("=" * 80)
         click.echo("")
 
-        for target in spec.output_targets:
+        for target in targets:
             kinds_str = ", ".join(target.kinds) if target.kinds else "all"
             formats_str = ", ".join(target.formats) if target.formats else "all"
             languages_str = ", ".join(target.languages) if target.languages else "all"

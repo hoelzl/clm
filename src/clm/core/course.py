@@ -179,58 +179,53 @@ class Course(NotebookMixin):
         Returns:
             Configured Course instance
         """
-        # Determine output targets
-        if output_root is not None and spec.output_targets:
-            # Re-root each spec target under ``<output_root>/<target.name>/``
-            # so the output layout matches what the regular build writes —
-            # keyed by target name, not the legacy ``public/speaker``
-            # toplevel. This is the behavior the snapshot/verify flow
-            # depends on and what users expect for a multi-target override.
+        # Determine output targets. When the spec declares no ``<output-targets>``
+        # the default ``shared``/``trainer``/``speaker`` structure stands in for
+        # them (issue #383), so both the implicit and explicit cases go down a
+        # single per-target code path — no more ``public``/``speaker`` toplevel.
+        effective_target_specs = spec.effective_output_targets
+        if output_root is not None:
+            # CLI ``--output-dir`` override: re-root each target under
+            # ``<output_root>/<target.name>/`` so the output layout matches what
+            # the regular build writes — keyed by target name. This is the
+            # behavior the snapshot/verify flow depends on and what users expect
+            # for a multi-target override.
             from attrs import evolve
 
             targets = []
-            for t in spec.output_targets:
+            for t in effective_target_specs:
                 target = OutputTarget.from_spec(t, course_root, course_jupyterlite=spec.jupyterlite)
                 # ``is_explicit`` is preserved (set by ``OutputTarget.from_spec``)
                 # so paths under each re-rooted output_root stay flat.
                 targets.append(evolve(target, output_root=(output_root / t.name).resolve()))
-            if selected_targets:
-                targets = [t for t in targets if t.name in selected_targets]
-                if not targets:
-                    available = [t.name for t in spec.output_targets]
-                    raise ValueError(
-                        f"No matching targets found. "
-                        f"Requested: {selected_targets}, "
-                        f"Available: {available}"
-                    )
             effective_output_root = output_root
-        elif output_root is not None:
-            # CLI override on a spec with no ``<output-targets>``: a
-            # single default target rooted at ``output_root``.
-            targets = [OutputTarget.default_target(output_root)]
-            effective_output_root = output_root
-        elif spec.output_targets:
-            # Use targets from spec file
+        else:
             targets = [
                 OutputTarget.from_spec(t, course_root, course_jupyterlite=spec.jupyterlite)
-                for t in spec.output_targets
+                for t in effective_target_specs
             ]
-            # Filter by selected targets if specified
-            if selected_targets:
-                targets = [t for t in targets if t.name in selected_targets]
-                if not targets:
-                    available = [t.name for t in spec.output_targets]
-                    raise ValueError(
-                        f"No matching targets found. "
-                        f"Requested: {selected_targets}, "
-                        f"Available: {available}"
-                    )
-            # Use first target's root as the "primary" for legacy compatibility
-            effective_output_root = targets[0].output_root if targets else course_root / "output"
-        else:
-            # No targets in spec, no CLI override: use default
-            effective_output_root = course_root / "output"
-            targets = [OutputTarget.default_target(effective_output_root)]
+            if spec.output_targets:
+                # Explicit targets: keep the legacy "primary" = first target's
+                # root (targets may point anywhere, so there is no common base).
+                effective_output_root = (
+                    targets[0].output_root if targets else course_root / "output"
+                )
+            else:
+                # Default shared/trainer/speaker structure: the umbrella output
+                # dir is the base, not one tier (the tiers live under it). Keep
+                # ``output_root`` pointing at that base so it stays meaningful.
+                effective_output_root = course_root / "output"
+
+        # Filter by selected targets if specified
+        if selected_targets:
+            targets = [t for t in targets if t.name in selected_targets]
+            if not targets:
+                available = [t.name for t in effective_target_specs]
+                raise ValueError(
+                    f"No matching targets found. "
+                    f"Requested: {selected_targets}, "
+                    f"Available: {available}"
+                )
 
         # Apply CLI-level language/kind filters to all targets
         if output_languages or output_kinds:

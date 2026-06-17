@@ -392,10 +392,18 @@ This element configures repository URLs derived from the top-level
 > That location still works but is deprecated. Use the top-level `<project-slug>`
 > element instead.
 
-URL derivation (requires both `<project-slug>` and `<repository-base>`):
+> **Removed form (warns)**: The pre-1.x `clx` form with per-language remote URLs
+> — `<github><de>URL</de><en>URL</en></github>` — is **no longer supported**.
+> Those children are ignored and `clm` logs a warning at parse time. Configure
+> remotes with `<project-slug>` + `<repository-base>` (and, if needed,
+> `<remote-path>`/`<remote-template>`) instead.
+
+URL derivation (requires `<project-slug>`; `<repository-base>` is required only
+when the active template references `{repository_base}` — a self-contained
+`<remote-template>` such as `git@host:{remote_path}/{repo}.git` needs no base):
 - Without `<remote-path>`: `{repository-base}/{project-slug}-{lang}[-{suffix}]`
 - With `<remote-path>`: `{repository-base}/{remote-path}/{project-slug}-{lang}[-{suffix}]`
-- Public/first target: `https://github.com/Org/ml-course-de`
+- First target: `https://github.com/Org/ml-course-de`
 - Other targets: `https://github.com/Org/ml-course-de-completed`
 - Speaker targets (if enabled): `https://github.com/Org/ml-course-de-speaker`
 
@@ -642,12 +650,42 @@ only. `jupyterlite` is **never** included implicitly — a target must list
 
 Valid values: `de` (German), `en` (English).
 
-### Default behavior
+### Default output structure (CLM {version}+)
 
-If no `<output-targets>` element is present, all default kinds, default formats
-(`html`, `notebook`, `code`), and languages are generated to `--output-dir`
-(CLI) or `./output` (default). Opt-in formats like `jupyterlite` are **not**
-enabled by the default target.
+If no `<output-targets>` element is present, `clm` builds (and `clm git`/`clm zip`
+manage) a default **shared / trainer / speaker** structure — three
+access-control-by-path tiers, one repository per tier, with the hosting group
+path (`<remote-path>`) enforcing who may read each:
+
+| Tier | Path | `<remote-path>` | Kinds |
+|------|------|-----------------|-------|
+| `shared` | `output/shared` | `shared` | `code-along`, `completed` |
+| `trainer` | `output/trainer` | `trainer` | `code-along`, `completed`, `trainer` |
+| `speaker` | `output/speaker` | `speaker` | `recording` |
+
+Notes:
+
+- **`partial` is not a default kind.** It ships only when a spec opts into it via
+  an explicit `<output-targets>` block.
+- **Formats/languages**: each tier uses the default format set (`html`,
+  `notebook`, `code`) and both languages. Opt-in formats like `jupyterlite` are
+  never enabled by the default structure.
+- **Group-path remotes work out of the box.** Because each tier carries its own
+  `<remote-path>`, remote URLs derive as `{repository-base}/{tier}/{project-slug}-{lang}`
+  with no per-machine `CLM_GIT__REMOTE_TEMPLATE` needed. A course-level
+  `<remote-path>` is overridden per tier (exactly like an explicit per-target
+  `<remote-path>`).
+- **Speaker tier**: `clm build` always writes it and `clm git` always *lists* it,
+  but its remote is derived only when `<include-speaker>true</include-speaker>`
+  is set — otherwise the speaker repo stays local-only and recording material is
+  not pushed by default.
+
+With `--output-dir DIR`, each tier is re-rooted under `DIR/<tier>/`.
+
+> **Breaking change (CLM {version})**: earlier versions emitted a single
+> `public`/`speaker` toplevel containing all kinds (including `partial`). The
+> default is now the shared/trainer/speaker structure above. Add an explicit
+> `<output-targets>` block to reproduce the old layout if you need it.
 
 ### `<release-channels>` (CLM {version}+)
 

@@ -2,6 +2,56 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## Default output structure is now shared/trainer/speaker (issues #380/#381/#383, {version})
+
+A course spec with **no** `<output-targets>` previously built a single
+`public`/`speaker` toplevel containing *all* kinds — including `partial` in the
+public tree — and `clm git` managed only `public` (silently skipping speaker
+unless `<include-speaker>` was set). That default has been replaced with three
+access-control-by-path tiers:
+
+| Tier | Path | `<remote-path>` | Kinds |
+|------|------|-----------------|-------|
+| `shared` | `output/shared` | `shared` | `code-along`, `completed` |
+| `trainer` | `output/trainer` | `trainer` | `code-along`, `completed`, `trainer` |
+| `speaker` | `output/speaker` | `speaker` | `recording` |
+
+What changed, concretely:
+
+- **No more `partial` by default** (#380). `partial` ships only when an explicit
+  `<output-targets>` block opts into it. Participant material (`shared`) is
+  `code-along` + `completed` only.
+- **`output/public/` is gone**; participant output now lives under
+  `output/shared/`. Recording material stays under `output/speaker/`; full
+  trainer material is under `output/trainer/`.
+- **`clm build` and `clm git`/`clm zip` now agree** (#381). All three tiers are
+  built *and* managed. `clm git` lists the speaker tier too (no longer silently
+  skipped); its remote is still gated by `<include-speaker>` (local-only when
+  unset), so recording material is not pushed by default.
+- **Group-path remotes work without an env var** (#383). Each tier carries its
+  own `<remote-path>`, so remote URLs derive as
+  `{repository-base}/{tier}/{project-slug}-{lang}` out of the box.
+
+How to migrate a course repo:
+
+- If you relied on the old `public/`+all-kinds layout (e.g. published `partial`
+  to students, or pushed everything to one repo), add an explicit
+  `<output-targets>` block that reproduces it. See `clm info spec-files`
+  ("Default output structure") for the shape.
+- Otherwise no action is needed — re-running `clm build` writes the new tiers;
+  prune the stale `output/public/` tree.
+
+### `<github><de>`/`<en>` per-language URLs now warn (issue #382)
+
+The pre-1.x `clx` form `<github><de>URL</de><en>URL</en></github>` was being
+**silently ignored**, leaving every output repo local-only. `clm` now logs a
+warning when `<github>` contains unrecognized children such as `<de>`/`<en>`.
+Replace it with `<project-slug>` + `<repository-base>` (and optionally
+`<remote-path>`/`<remote-template>`). Relatedly, `<repository-base>` is now
+required only when the active remote template actually references
+`{repository_base}` — a self-contained `<remote-template>` no longer needs a
+placeholder base.
+
 ## Underscore-prefixed dirs under `slides/` are no longer discovered (issue #318, after 1.11)
 
 Directories whose name starts with `_` (e.g. `slides/_archive/`,

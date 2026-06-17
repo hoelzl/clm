@@ -2501,10 +2501,13 @@ def build(
         # pair, otherwise the entire snapshot looks "extra" because
         # the toplevel prefixes differ. Regression for issue #95 (B).
         verify_spec = CourseSpec.from_file(spec_file.absolute())
-        if verify_spec.output_targets:
+        # The build always writes per-target now — explicit ``<output-targets>``
+        # or the default shared/trainer/speaker structure (#383) — so verify
+        # per-target in both cases.
+        if verify_spec.effective_output_targets:
             verify_course_root, _ = resolve_course_paths(spec_file, data_dir)
             target_pairs = []
-            for t in verify_spec.output_targets:
+            for t in verify_spec.effective_output_targets:
                 if output_dir is not None:
                     # ``--output-dir DIR`` re-roots each target to
                     # ``<DIR>/<target.name>/`` (matching what
