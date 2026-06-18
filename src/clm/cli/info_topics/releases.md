@@ -109,12 +109,40 @@ exactly what they were given. Only `--refreeze` overrides this.
 
 ## `clm release` commands
 
+### Addressing one or many channels
+
+`add`, `week`, `status`, and `sync` all take the same channel selection. A
+single `--channel NAME` (an exact `STREAM/CHANNEL` or a unique bare name) keeps
+the original behavior. To hit several channels in one invocation (CLM
+{version}+, issue #390):
+
+- **Glob:** `--channel 'materials/*'` or `--channel '*/2026-04-*'` — matched
+  with `fnmatch` against each channel's `ADDRESS`.
+- **Repeat:** `--channel materials/2026-04-de --channel solutions/2026-04-de`.
+- **`--all-channels`:** every channel in every `<release-channels>` block.
+
+Matched channels are de-duplicated and processed in spec order. Explicit
+`--ledger`/`--source`/`--dest` address a single channel and cannot be combined
+with multi-channel selection.
+
+### `clm release channels`
+
+List the declared channels — the canonical source of the addresses the
+selectors above match.
+
+```
+clm release channels SPEC          # ADDRESS / LANG / SOURCE / LEDGER / DEST table
+clm release channels SPEC --json   # same rows as JSON, for scripting
+```
+
 ### `clm release add`
 
-Append topic ids to a channel's ledger (validates against spec).
+Append topic ids to one or more channel ledgers (validates against spec).
 
 ```
 clm release add SPEC TOPIC_ID... --channel NAME
+clm release add SPEC TOPIC_ID... --channel 'materials/*'   # glob → every match
+clm release add SPEC TOPIC_ID... --all-channels            # every channel
 clm release add SPEC TOPIC_ID... --ledger release/jan.txt
 ```
 
@@ -147,6 +175,7 @@ clm release sync SPEC --channel NAME [--dry-run] [--push] [-m MESSAGE]
 clm release sync SPEC --channel NAME --refreeze TOPIC_ID... [--push]
 clm release sync SPEC --channel NAME --refreeze-all [--push]
 clm release sync SPEC --channel NAME --evergreen PATTERN [--push]
+clm release sync SPEC --all-channels --push          # promote + push every channel
 ```
 
 Sync actions per topic:

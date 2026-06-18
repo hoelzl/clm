@@ -12,6 +12,7 @@ delegating to ``clm git``'s shared commit/push helper (issue #208).
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,6 +29,8 @@ from clm.core.course_paths import resolve_course_paths
 from clm.core.course_spec import (
     CourseSpec,
     CourseSpecError,
+    ReleaseChannelSpec,
+    ReleaseChannelsSpec,
     SectionSpec,
     release_channel_ref,
 )
@@ -56,11 +59,18 @@ _SPEC_ARG = click.argument(
 )
 _CHANNEL_OPT = click.option(
     "--channel",
-    default="",
+    "channels",
+    multiple=True,
     help="Channel address; resolves --ledger/--source/--dest from the spec's "
     "<release-channels>. Use STREAM/CHANNEL (e.g. materials/2026-04) when "
-    "several streams are declared; a bare name works when unique. Explicit "
-    "paths override resolution.",
+    "several streams are declared; a bare name works when unique. Repeatable, "
+    "and a glob (e.g. 'materials/*' or '*/2026-04-*') expands to every matching "
+    "channel. Explicit paths override resolution (single channel only).",
+)
+_ALL_CHANNELS_OPT = click.option(
+    "--all-channels",
+    is_flag=True,
+    help="Target every channel in every <release-channels> block.",
 )
 _LEDGER_OPT = click.option(
     "--ledger",
@@ -92,9 +102,70 @@ def release_group() -> None:
     """Release solutions to student cohorts, one topic at a time (issue #208)."""
 
 
+@release_group.command("channels")
+@_SPEC_ARG
+@click.option("--json", "as_json", is_flag=True, help="Emit the channel table as JSON.")
+def channels_cmd(spec_file: Path, as_json: bool) -> None:
+    """List the channels declared in SPEC_FILE's <release-channels> (issue #390).
+
+    The ADDRESS column is exactly what the other commands' ``--channel`` option
+    matches: pass one verbatim, or use it as a glob target (e.g. ``--channel
+    'materials/*'`` or ``--channel '*/2026-04-*'``). LEDGER and DEST are shown as
+    declared in the spec (relative to the course root).
+    """
+    spec = CourseSpec.from_file(spec_file)
+    if not spec.release_channel_blocks:
+        raise click.ClickException(f"{spec_file} has no <release-channels> block.")
+
+    rows = [
+        {
+            "address": release_channel_ref(block, channel),
+            "stream": block.name,
+            "channel": channel.name,
+            "lang": channel.lang,
+            "source_target": block.source_target,
+            "ledger": channel.ledger,
+            "dest": channel.path,
+        }
+        for block, channel in spec.iter_release_channels()
+    ]
+
+    if as_json:
+        click.echo(json.dumps(rows, indent=2))
+        return
+
+    headers = ("ADDRESS", "LANG", "SOURCE", "LEDGER", "DEST")
+    keys = ("address", "lang", "source_target", "ledger", "dest")
+    table = [headers] + [tuple(row[k] or "-" for k in keys) for row in rows]
+    widths = [max(len(cell) for cell in column) for column in zip(*table, strict=True)]
+    for line in table:
+        click.echo(
+            "  ".join(cell.ljust(width) for cell, width in zip(line, widths, strict=True)).rstrip()
+        )
+
+
 def _abs_under(course_root: Path, value: str) -> Path:
     path = Path(value)
     return path if path.is_absolute() else course_root / path
+
+
+def _build_resolved(
+    spec: CourseSpec,
+    course_root: Path,
+    block: ReleaseChannelsSpec,
+    channel: ReleaseChannelSpec,
+) -> _ResolvedChannel:
+    source_target = next((t for t in spec.output_targets if t.name == block.source_target), None)
+    source = _abs_under(course_root, source_target.path) if source_target else None
+    return _ResolvedChannel(
+        name=release_channel_ref(block, channel),
+        ledger=_abs_under(course_root, channel.ledger),
+        source=source,
+        dest=_abs_under(course_root, channel.path),
+        lang=channel.lang,
+        evergreen=channel.evergreen,
+        stream=block.name,
+    )
 
 
 def _resolve_channel(spec_file: Path, channel_name: str) -> _ResolvedChannel:
@@ -110,17 +181,32 @@ def _resolve_channel(spec_file: Path, channel_name: str) -> _ResolvedChannel:
     except CourseSpecError as e:
         raise click.ClickException(str(e)) from None
     course_root, _ = resolve_course_paths(spec_file)
-    source_target = next((t for t in spec.output_targets if t.name == block.source_target), None)
-    source = _abs_under(course_root, source_target.path) if source_target else None
-    return _ResolvedChannel(
-        name=release_channel_ref(block, channel),
-        ledger=_abs_under(course_root, channel.ledger),
-        source=source,
-        dest=_abs_under(course_root, channel.path),
-        lang=channel.lang,
-        evergreen=channel.evergreen,
-        stream=block.name,
-    )
+    return _build_resolved(spec, course_root, block, channel)
+
+
+def _resolve_channels(
+    spec_file: Path, channels: tuple[str, ...], all_channels: bool
+) -> list[_ResolvedChannel]:
+    """Expand ``--channel`` selectors / ``--all-channels`` to resolved channels.
+
+    Each ``--channel`` value is an exact address or a glob (``materials/*``);
+    ``--all-channels`` adds every declared channel. Returns one
+    :class:`_ResolvedChannel` per matched channel in spec order, de-duplicated
+    by address (issue #390). The single-channel path stays byte-for-byte the
+    pre-#390 behavior.
+    """
+    spec = CourseSpec.from_file(spec_file)
+    if not spec.release_channel_blocks:
+        raise click.ClickException(
+            f"{spec_file} has no <release-channels> block; pass explicit "
+            f"--ledger/--source/--dest instead of --channel."
+        )
+    try:
+        pairs = spec.select_release_channels(channels, all_channels=all_channels)
+    except CourseSpecError as e:
+        raise click.ClickException(str(e)) from None
+    course_root, _ = resolve_course_paths(spec_file)
+    return [_build_resolved(spec, course_root, block, channel) for block, channel in pairs]
 
 
 def _check_shared_destination_overlap(
@@ -426,34 +512,73 @@ def provision_cmd(spec_file: Path, channel: str, dry_run: bool) -> None:
         raise SystemExit(1)
 
 
+def _ledger_targets(
+    spec_file: Path,
+    channels: tuple[str, ...],
+    all_channels: bool,
+    ledger_path: Path | None,
+) -> list[tuple[str, Path]]:
+    """The ``(label, ledger_path)`` ledgers an add/week invocation appends to.
+
+    ``--ledger`` addresses one ledger directly (and is then mutually exclusive
+    with channel selection); ``--channel``/``--all-channels`` expand to one
+    target per resolved channel (issue #390). The label is the channel address
+    (empty for an explicit ``--ledger``) and prefixes per-channel output when
+    more than one channel is targeted.
+    """
+    if ledger_path is not None:
+        if channels or all_channels:
+            raise click.ClickException(
+                "--ledger addresses a single ledger; drop it when using --channel/--all-channels."
+            )
+        return [("", ledger_path)]
+    if channels or all_channels:
+        return [(r.name, r.ledger) for r in _resolve_channels(spec_file, channels, all_channels)]
+    raise click.ClickException("Pass --ledger PATH or --channel NAME (or --all-channels).")
+
+
+def _append_to_ledger(ledger_path: Path, topic_ids: list[str], prefix: str) -> None:
+    """Append *topic_ids* to one ledger and report what was added vs already there."""
+    ledger = Ledger.load(ledger_path)
+    added = ledger.add(topic_ids)
+    ledger.save(ledger_path)
+    if added:
+        click.echo(f"{prefix}Released {len(added)} topic(s): {', '.join(added)}")
+    already = [tid for tid in topic_ids if tid not in added]
+    if already:
+        click.echo(f"{prefix}Already released ({len(already)}): {', '.join(already)}")
+
+
 @release_group.command("add")
 @_SPEC_ARG
 @click.argument("topic_ids", nargs=-1, required=True)
 @_CHANNEL_OPT
+@_ALL_CHANNELS_OPT
 @_LEDGER_OPT
 def add_cmd(
-    spec_file: Path, topic_ids: tuple[str, ...], channel: str, ledger_path: Path | None
+    spec_file: Path,
+    topic_ids: tuple[str, ...],
+    channels: tuple[str, ...],
+    all_channels: bool,
+    ledger_path: Path | None,
 ) -> None:
-    """Append TOPIC_IDS to a channel ledger (validated against the spec)."""
-    if ledger_path is None and channel:
-        ledger_path = _resolve_channel(spec_file, channel).ledger
-    if ledger_path is None:
-        raise click.ClickException("Pass --ledger PATH or --channel NAME.")
+    """Append TOPIC_IDS to one or more channel ledgers (validated against the spec).
+
+    Target a single ledger with ``--ledger PATH`` or ``--channel NAME``, several
+    at once with repeated/glob ``--channel`` values (e.g. ``--channel
+    'materials/*'``) or ``--all-channels`` — the topics are appended to every
+    resolved channel's ledger (issue #390).
+    """
+    targets = _ledger_targets(spec_file, channels, all_channels, ledger_path)
 
     known, unknown = partition_known(topic_ids, _spec_topic_ids(spec_file))
     if unknown:
         raise click.ClickException(
             "Unknown topic id(s) not declared in the spec: " + ", ".join(unknown)
         )
-    ledger = Ledger.load(ledger_path)
-    added = ledger.add(known)
-    ledger.save(ledger_path)
-
-    if added:
-        click.echo(f"Released {len(added)} topic(s): {', '.join(added)}")
-    already = [tid for tid in known if tid not in added]
-    if already:
-        click.echo(f"Already released ({len(already)}): {', '.join(already)}")
+    for label, target_ledger in targets:
+        prefix = f"[{label}] " if label and len(targets) > 1 else ""
+        _append_to_ledger(target_ledger, known, prefix)
 
 
 def _section_label(section: SectionSpec) -> str:
@@ -467,9 +592,14 @@ def _section_label(section: SectionSpec) -> str:
 @_SPEC_ARG
 @click.argument("selectors", nargs=-1, required=True)
 @_CHANNEL_OPT
+@_ALL_CHANNELS_OPT
 @_LEDGER_OPT
 def week_cmd(
-    spec_file: Path, selectors: tuple[str, ...], channel: str, ledger_path: Path | None
+    spec_file: Path,
+    selectors: tuple[str, ...],
+    channels: tuple[str, ...],
+    all_channels: bool,
+    ledger_path: Path | None,
 ) -> None:
     """Release every topic in the selected section(s) — a "week" — to a channel.
 
@@ -477,17 +607,16 @@ def week_cmd(
     ``idx:`` / ``name:`` prefixes, or a bare 1-based index or
     case-insensitive name substring. A "week" is a course section; this
     resolves the matching section(s), expands them to their topic ids, and
-    appends those to the channel ledger — a section-scoped ``release add``.
+    appends those to the channel ledger(s) — a section-scoped ``release add``.
+    Like ``add``, the week can be released to several channels at once via
+    repeated/glob ``--channel`` or ``--all-channels`` (issue #390).
 
     Section indices are **disabled-inclusive** (an ``enabled="false"`` section
     still consumes its index), so the spec is parsed keeping disabled sections
     and any selected-but-disabled section is reported and skipped rather than
     silently shifting which topics get released.
     """
-    if ledger_path is None and channel:
-        ledger_path = _resolve_channel(spec_file, channel).ledger
-    if ledger_path is None:
-        raise click.ClickException("Pass --ledger PATH or --channel NAME.")
+    targets = _ledger_targets(spec_file, channels, all_channels, ledger_path)
 
     # Parse keeping disabled sections so the selector indices line up with the
     # authoring order (see CourseSpec.resolve_section_selectors). Disabled
@@ -522,43 +651,20 @@ def week_cmd(
         + ", ".join(selected_labels)
     )
 
-    ledger = Ledger.load(ledger_path)
-    added = ledger.add(topic_ids)
-    ledger.save(ledger_path)
-
-    if added:
-        click.echo(f"Released {len(added)} topic(s): {', '.join(added)}")
-    already = [tid for tid in topic_ids if tid not in added]
-    if already:
-        click.echo(f"Already released ({len(already)}): {', '.join(already)}")
+    for label, target_ledger in targets:
+        prefix = f"[{label}] " if label and len(targets) > 1 else ""
+        _append_to_ledger(target_ledger, topic_ids, prefix)
 
 
-@release_group.command("status")
-@_SPEC_ARG
-@_CHANNEL_OPT
-@_LEDGER_OPT
-@click.option(
-    "--dest",
-    "dest_path",
-    type=click.Path(path_type=Path),
-    default=None,
-    help="Channel destination repo; when given, also reports frozen state.",
-)
-def status_cmd(
-    spec_file: Path, channel: str, ledger_path: Path | None, dest_path: Path | None
+def _print_channel_status(
+    *,
+    all_ids: list[str],
+    ledger_path: Path,
+    dest_path: Path | None,
+    channel: str,
+    stream: str,
 ) -> None:
-    """Show released vs pending topics (and frozen state with --dest/--channel)."""
-    stream = ""
-    if channel:
-        resolved = _resolve_channel(spec_file, channel)
-        channel = resolved.name
-        ledger_path = ledger_path or resolved.ledger
-        dest_path = dest_path or resolved.dest
-        stream = resolved.stream
-    if ledger_path is None:
-        raise click.ClickException("Pass --ledger PATH or --channel NAME.")
-
-    all_ids = _spec_topic_ids(spec_file)
+    """One channel's released/pending (and, with *dest_path*, frozen) report."""
     ledger = Ledger.load(ledger_path)
     released = ledger.released_set
     pending = [tid for tid in all_ids if tid not in released]
@@ -580,6 +686,66 @@ def status_cmd(
             click.echo("  awaiting sync: " + ", ".join(awaiting))
 
 
+@release_group.command("status")
+@_SPEC_ARG
+@_CHANNEL_OPT
+@_ALL_CHANNELS_OPT
+@_LEDGER_OPT
+@click.option(
+    "--dest",
+    "dest_path",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Channel destination repo; when given, also reports frozen state.",
+)
+def status_cmd(
+    spec_file: Path,
+    channels: tuple[str, ...],
+    all_channels: bool,
+    ledger_path: Path | None,
+    dest_path: Path | None,
+) -> None:
+    """Show released vs pending topics (and frozen state with --dest/--channel).
+
+    Report several channels in one call with repeated/glob ``--channel`` or
+    ``--all-channels`` (issue #390); each channel's frozen state resolves from
+    its own ``--dest``. Explicit ``--ledger``/``--dest`` apply to a single
+    channel only.
+    """
+    all_ids = _spec_topic_ids(spec_file)
+
+    if channels or all_channels:
+        if ledger_path is not None or dest_path is not None:
+            raise click.ClickException(
+                "--ledger/--dest address a single channel; drop them when using "
+                "--channel/--all-channels."
+            )
+        resolved = _resolve_channels(spec_file, channels, all_channels)
+        for index, channel in enumerate(resolved):
+            if len(resolved) > 1:
+                if index:
+                    click.echo()
+                click.echo(f"[{channel.name}]")
+            _print_channel_status(
+                all_ids=all_ids,
+                ledger_path=channel.ledger,
+                dest_path=channel.dest,
+                channel=channel.name,
+                stream=channel.stream,
+            )
+        return
+
+    if ledger_path is None:
+        raise click.ClickException("Pass --ledger PATH or --channel NAME (or --all-channels).")
+    _print_channel_status(
+        all_ids=all_ids,
+        ledger_path=ledger_path,
+        dest_path=dest_path,
+        channel="",
+        stream="",
+    )
+
+
 @release_group.command("sync")
 @click.argument(
     "spec_file",
@@ -587,6 +753,7 @@ def status_cmd(
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
 )
 @_CHANNEL_OPT
+@_ALL_CHANNELS_OPT
 @_LEDGER_OPT
 @click.option(
     "--source",
@@ -642,7 +809,8 @@ def status_cmd(
 )
 def sync_cmd(
     spec_file: Path | None,
-    channel: str,
+    channels: tuple[str, ...],
+    all_channels: bool,
     ledger_path: Path | None,
     source_path: Path | None,
     dest_path: Path | None,
@@ -661,6 +829,11 @@ def sync_cmd(
     ``--ledger``/``--source``/``--dest`` paths. With ``--push`` the cohort repo
     is committed and pushed afterward, reusing ``clm git``'s machinery.
 
+    Sync several channels in one call with repeated/glob ``--channel`` or
+    ``--all-channels`` (issue #390) — each is promoted (and, with ``--push``,
+    pushed) in turn. Explicit ``--ledger``/``--source``/``--dest`` address a
+    single channel only.
+
     A channel with a ``lang`` attribute — or an explicit ``--language`` —
     promotes only that language's files, re-rooted so the cohort repo's root
     is the language directory (issue #293). Without either, the destination
@@ -671,23 +844,83 @@ def sync_cmd(
     skeleton freeze: each sync re-copies a matching file whose built content
     differs from the cohort's copy.
     """
-    channel_lang = ""
-    channel_evergreen: tuple[str, ...] = ()
-    stream = ""
-    if channel:
+    if channels or all_channels:
         if spec_file is None:
-            raise click.ClickException("--channel requires the SPEC_FILE argument.")
-        resolved = _resolve_channel(spec_file, channel)
-        # Use the canonical stream/channel address everywhere downstream
-        # (messages, the frozen manifest's channel field, push hints).
-        channel = resolved.name
-        ledger_path = ledger_path or resolved.ledger
-        source_path = source_path or resolved.source
-        dest_path = dest_path or resolved.dest
-        channel_lang = resolved.lang
-        channel_evergreen = resolved.evergreen
-        stream = resolved.stream
+            raise click.ClickException("--channel/--all-channels requires the SPEC_FILE argument.")
+        if ledger_path is not None or source_path is not None or dest_path is not None:
+            raise click.ClickException(
+                "--ledger/--source/--dest address a single channel; drop them "
+                "when using --channel/--all-channels."
+            )
+        resolved_channels = _resolve_channels(spec_file, channels, all_channels)
+        for index, resolved in enumerate(resolved_channels):
+            if len(resolved_channels) > 1:
+                if index:
+                    click.echo()
+                click.echo(f"=== {resolved.name} ===")
+            _sync_one_channel(
+                spec_file=spec_file,
+                channel=resolved.name,
+                ledger_path=resolved.ledger,
+                source_path=resolved.source,
+                dest_path=resolved.dest,
+                channel_lang=resolved.lang,
+                channel_evergreen=resolved.evergreen,
+                stream=resolved.stream,
+                refreeze_ids=refreeze_ids,
+                refreeze_all=refreeze_all,
+                language=language,
+                evergreen_patterns=evergreen_patterns,
+                dry_run=dry_run,
+                push=push,
+                commit_message=commit_message,
+            )
+        return
 
+    _sync_one_channel(
+        spec_file=spec_file,
+        channel="",
+        ledger_path=ledger_path,
+        source_path=source_path,
+        dest_path=dest_path,
+        channel_lang="",
+        channel_evergreen=(),
+        stream="",
+        refreeze_ids=refreeze_ids,
+        refreeze_all=refreeze_all,
+        language=language,
+        evergreen_patterns=evergreen_patterns,
+        dry_run=dry_run,
+        push=push,
+        commit_message=commit_message,
+    )
+
+
+def _sync_one_channel(
+    *,
+    spec_file: Path | None,
+    channel: str,
+    ledger_path: Path | None,
+    source_path: Path | None,
+    dest_path: Path | None,
+    channel_lang: str,
+    channel_evergreen: tuple[str, ...],
+    stream: str,
+    refreeze_ids: tuple[str, ...],
+    refreeze_all: bool,
+    language: str | None,
+    evergreen_patterns: tuple[str, ...],
+    dry_run: bool,
+    push: bool,
+    commit_message: str | None,
+) -> None:
+    """Promote one channel: the per-channel body of :func:`sync_cmd`.
+
+    *channel* is the already-canonicalized address (empty in explicit
+    ``--ledger``/``--source``/``--dest`` mode); the channel's resolved paths,
+    ``lang``, ``<evergreen>`` patterns and ``stream`` are passed in so the
+    multi-channel loop resolves each once.
+    """
     if ledger_path is None or source_path is None or dest_path is None:
         raise click.ClickException(
             "Specify --channel NAME, or all of --ledger, --source and --dest."

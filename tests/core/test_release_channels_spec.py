@@ -129,6 +129,74 @@ class TestMultiStream:
         assert release_channel_ref(b, c) == "jan"
 
 
+class TestSelectReleaseChannels:
+    """Multi-channel selectors: globs, repeats, --all-channels (issue #390)."""
+
+    def _refs(self, pairs):
+        return [release_channel_ref(b, c) for b, c in pairs]
+
+    def test_all_channels_yields_every_channel_in_order(self):
+        spec = _spec(TWO_STREAMS, TWO_STREAM_TARGETS)
+        pairs = spec.select_release_channels([], all_channels=True)
+        assert self._refs(pairs) == [
+            "materials/2026-04",
+            "materials/2026-10",
+            "solutions/2026-04",
+        ]
+
+    def test_glob_matches_against_the_ref(self):
+        spec = _spec(TWO_STREAMS, TWO_STREAM_TARGETS)
+        assert self._refs(spec.select_release_channels(["materials/*"])) == [
+            "materials/2026-04",
+            "materials/2026-10",
+        ]
+        assert self._refs(spec.select_release_channels(["*/2026-04"])) == [
+            "materials/2026-04",
+            "solutions/2026-04",
+        ]
+
+    def test_exact_address_still_resolves(self):
+        spec = _spec(TWO_STREAMS, TWO_STREAM_TARGETS)
+        assert self._refs(spec.select_release_channels(["solutions/2026-04"])) == [
+            "solutions/2026-04"
+        ]
+
+    def test_repeated_selectors_union_and_dedupe(self):
+        spec = _spec(TWO_STREAMS, TWO_STREAM_TARGETS)
+        # The glob and the exact ref both name materials/2026-04 — kept once,
+        # in spec order.
+        pairs = spec.select_release_channels(["materials/*", "materials/2026-04"])
+        assert self._refs(pairs) == ["materials/2026-04", "materials/2026-10"]
+
+    def test_all_channels_plus_glob_dedupes(self):
+        spec = _spec(TWO_STREAMS, TWO_STREAM_TARGETS)
+        pairs = spec.select_release_channels(["materials/*"], all_channels=True)
+        assert self._refs(pairs) == [
+            "materials/2026-04",
+            "materials/2026-10",
+            "solutions/2026-04",
+        ]
+
+    def test_glob_matching_nothing_is_an_error(self):
+        spec = _spec(TWO_STREAMS, TWO_STREAM_TARGETS)
+        with pytest.raises(CourseSpecError, match="No channel matches pattern"):
+            spec.select_release_channels(["nope/*"])
+
+    def test_unknown_exact_address_is_an_error(self):
+        spec = _spec(TWO_STREAMS, TWO_STREAM_TARGETS)
+        with pytest.raises(CourseSpecError, match="Unknown channel"):
+            spec.select_release_channels(["solutions/nope"])
+
+    def test_ambiguous_bare_name_still_errors(self):
+        spec = _spec(TWO_STREAMS, TWO_STREAM_TARGETS)
+        with pytest.raises(CourseSpecError, match="several streams"):
+            spec.select_release_channels(["2026-04"])
+
+    def test_no_blocks_is_an_error(self):
+        with pytest.raises(CourseSpecError, match="no <release-channels>"):
+            _spec("").select_release_channels([], all_channels=True)
+
+
 class TestMultiStreamValidation:
     def test_two_valid_streams_validate_clean(self):
         assert _spec(TWO_STREAMS, TWO_STREAM_TARGETS).validate() == []
