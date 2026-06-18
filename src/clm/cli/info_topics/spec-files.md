@@ -945,14 +945,19 @@ Argument rules (CLM {version}+):
 
 ```xml
 <task name="release-week">
-    <step>release week {spec} {args} --channel materials/2026-04-de</step>
-    <step>release week {spec} {args} --channel materials/2026-04-en</step>
+    <step>release week {spec} {args} --channel 'materials/*'</step>
 </task>
 ```
 
 ```bash
 clm run release-week course.xml "name:Week 09"
 ```
+
+The `--channel 'materials/*'` glob (CLM {version}+) releases the week to every
+`materials` channel — both language cohorts here — in one step, replacing the
+per-channel repetition (`--channel materials/2026-04-de` then `…-en`) the task
+would otherwise need. Use `--all-channels` to span every stream, or `{1}` to
+build the address from an argument (`--channel=materials/{1}`).
 
 **Rules**:
 

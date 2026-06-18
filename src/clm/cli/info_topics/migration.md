@@ -344,6 +344,12 @@ the cohort repo. A frozen topic is never re-propagated unless you pass
 `--refreeze`. Full command reference: `clm info commands` → `clm release` and
 `clm git`.
 
+When a cohort spans several channels (e.g. `materials`/`solutions` streams in
+two languages), `add`/`week`/`status`/`sync` take a glob or `--all-channels` so
+step 4 stays one command instead of one per channel (CLM {version}+):
+`clm release sync course.xml --all-channels --push`. List the addresses with
+`clm release channels course.xml`.
+
 ## Per-stream frozen manifests / shared destination repos (issue #325, {version} — auto-migrating)
 
 Channels of **different** release streams may now share one destination `path`,
