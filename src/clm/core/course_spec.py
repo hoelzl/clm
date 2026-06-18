@@ -1,7 +1,8 @@
 import io
 import logging
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from enum import Enum
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import ClassVar
 from xml.etree import ElementTree as ETree
@@ -2012,6 +2013,52 @@ class CourseSpec:
         raise CourseSpecError(
             f"Channel name {ref!r} exists in several streams; use a qualified address: {qualified}."
         )
+
+    def select_release_channels(
+        self, selectors: "Iterable[str]", *, all_channels: bool = False
+    ) -> "list[tuple[ReleaseChannelsSpec, ReleaseChannelSpec]]":
+        """Expand channel *selectors* (and ``--all-channels``) to channel pairs.
+
+        Each selector is either an exact address handled by
+        :meth:`resolve_release_channel` (``stream/channel`` or a unique bare
+        name) or a glob — any token containing ``*``, ``?`` or ``[`` — matched
+        with :func:`fnmatch.fnmatch` against the canonical
+        :func:`release_channel_ref` of every channel (e.g. ``materials/*`` or
+        ``*/2026-04-*``). With *all_channels* every declared channel is
+        included. Results keep declaration order and are de-duplicated by
+        address, so overlapping selectors (or ``--all-channels`` plus an extra
+        glob) never act on a channel twice. Raises :class:`CourseSpecError` on
+        an unknown exact address or a glob that matches nothing.
+        """
+        if not self.release_channel_blocks:
+            raise CourseSpecError("The spec declares no <release-channels> block.")
+        pairs = list(self.iter_release_channels())
+        selected: list[tuple[ReleaseChannelsSpec, ReleaseChannelSpec]] = []
+        seen: set[str] = set()
+
+        def add(block: ReleaseChannelsSpec, channel: ReleaseChannelSpec) -> None:
+            ref = release_channel_ref(block, channel)
+            if ref not in seen:
+                seen.add(ref)
+                selected.append((block, channel))
+
+        if all_channels:
+            for block, channel in pairs:
+                add(block, channel)
+        for selector in selectors:
+            if any(ch in selector for ch in "*?["):
+                matches = [(b, c) for b, c in pairs if fnmatch(release_channel_ref(b, c), selector)]
+                if not matches:
+                    available = ", ".join(self.release_channel_refs()) or "(none defined)"
+                    raise CourseSpecError(
+                        f"No channel matches pattern {selector!r}. Defined channels: {available}."
+                    )
+                for block, channel in matches:
+                    add(block, channel)
+            else:
+                block, channel = self.resolve_release_channel(selector)
+                add(block, channel)
+        return selected
 
     def resolve_section_selectors(self, tokens: list[str]) -> SectionSelection:
         """Resolve a list of ``--only-sections`` selector tokens.

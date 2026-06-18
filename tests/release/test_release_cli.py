@@ -1064,3 +1064,115 @@ def test_sync_promotes_green_topics_and_refuses_failed_ones(tmp_path):
     assert "skip-failed" in result.output
     assert "NOT promoted" in result.output
     assert "partial" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Multi-channel addressing + `clm release channels` (issue #390)
+# ---------------------------------------------------------------------------
+
+
+def test_channels_lists_addresses(tmp_path):
+    runner = CliRunner()
+    spec_file = _write_spec(tmp_path, SPEC_TWO_STREAMS)
+    result = runner.invoke(release_group, ["channels", str(spec_file)])
+    assert result.exit_code == 0, result.output
+    assert "ADDRESS" in result.output and "SOURCE" in result.output
+    assert "materials/2026-04" in result.output
+    assert "solutions/2026-04" in result.output
+    # The feeding output target is shown so the source is discoverable.
+    assert "shared" in result.output and "completed" in result.output
+
+
+def test_channels_json_is_machine_readable(tmp_path):
+    runner = CliRunner()
+    spec_file = _write_spec(tmp_path, SPEC_TWO_STREAMS)
+    result = runner.invoke(release_group, ["channels", str(spec_file), "--json"])
+    assert result.exit_code == 0, result.output
+    rows = json.loads(result.output)
+    assert [r["address"] for r in rows] == ["materials/2026-04", "solutions/2026-04"]
+    assert rows[0]["source_target"] == "shared"
+    assert rows[0]["ledger"] == "release/materials-2026-04.txt"
+
+
+def test_channels_without_block_errors(tmp_path):
+    runner = CliRunner()
+    no_channels = SPEC_TWO_STREAMS[: SPEC_TWO_STREAMS.index("<release-channels")] + "</course>"
+    spec_file = _write_spec(tmp_path, no_channels)
+    result = runner.invoke(release_group, ["channels", str(spec_file)])
+    assert result.exit_code != 0
+    assert "no <release-channels>" in result.output
+
+
+def test_add_glob_targets_every_matching_channel(tmp_path):
+    runner = CliRunner()
+    course_root = tmp_path
+    spec_file = _write_spec(tmp_path, SPEC_TWO_STREAMS)
+    result = runner.invoke(
+        release_group, ["add", str(spec_file), "intro", "--channel", "*/2026-04"]
+    )
+    assert result.exit_code == 0, result.output
+    # Both streams' ledgers receive the topic; the per-channel prefix appears.
+    assert "[materials/2026-04]" in result.output
+    assert "[solutions/2026-04]" in result.output
+    assert Ledger.load(course_root / "release" / "materials-2026-04.txt").released == ["intro"]
+    assert Ledger.load(course_root / "release" / "solutions-2026-04.txt").released == ["intro"]
+
+
+def test_add_all_channels(tmp_path):
+    runner = CliRunner()
+    course_root = tmp_path
+    spec_file = _write_spec(tmp_path, SPEC_TWO_STREAMS)
+    result = runner.invoke(release_group, ["add", str(spec_file), "intro", "--all-channels"])
+    assert result.exit_code == 0, result.output
+    assert Ledger.load(course_root / "release" / "materials-2026-04.txt").released == ["intro"]
+    assert Ledger.load(course_root / "release" / "solutions-2026-04.txt").released == ["intro"]
+
+
+def test_add_ledger_with_all_channels_is_an_error(tmp_path):
+    runner = CliRunner()
+    spec_file = _write_spec(tmp_path, SPEC_TWO_STREAMS)
+    result = runner.invoke(
+        release_group,
+        ["add", str(spec_file), "intro", "--all-channels", "--ledger", str(tmp_path / "x.txt")],
+    )
+    assert result.exit_code != 0
+    assert "--ledger" in result.output
+
+
+def test_status_all_channels_reports_each(tmp_path):
+    runner = CliRunner()
+    course_root = tmp_path
+    spec_file = _write_spec(tmp_path, SPEC_TWO_STREAMS)
+    Ledger(["intro"]).save(course_root / "release" / "materials-2026-04.txt")
+    result = runner.invoke(release_group, ["status", str(spec_file), "--all-channels"])
+    assert result.exit_code == 0, result.output
+    assert "[materials/2026-04]" in result.output
+    assert "[solutions/2026-04]" in result.output
+
+
+def test_sync_all_channels_promotes_each(tmp_path):
+    runner = CliRunner()
+    course_root = tmp_path
+    spec_file = _write_spec(tmp_path, SPEC_TWO_STREAMS)
+    _write_source(course_root / "output" / "shared")
+    _write_source(course_root / "output" / "completed")
+    runner.invoke(release_group, ["add", str(spec_file), "intro", "--all-channels"])
+
+    result = runner.invoke(release_group, ["sync", str(spec_file), "--all-channels"])
+    assert result.exit_code == 0, result.output
+    assert (course_root / "release" / "materials" / "2026-04" / "Sec/01 Intro.ipynb").is_file()
+    assert (course_root / "release" / "solutions" / "2026-04" / "Sec/01 Intro.ipynb").is_file()
+    # Both channels' headers are printed when more than one is synced.
+    assert "=== materials/2026-04 ===" in result.output
+    assert "=== solutions/2026-04 ===" in result.output
+
+
+def test_sync_explicit_path_with_channel_is_an_error(tmp_path):
+    runner = CliRunner()
+    spec_file = _write_spec(tmp_path, SPEC_TWO_STREAMS)
+    result = runner.invoke(
+        release_group,
+        ["sync", str(spec_file), "--all-channels", "--dest", str(tmp_path / "d")],
+    )
+    assert result.exit_code != 0
+    assert "single channel" in result.output

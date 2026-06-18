@@ -3010,6 +3010,7 @@ channel name keeps working when it is unique across streams.
 
 | Subcommand | Description |
 |------------|-------------|
+| `release channels SPEC_FILE` | **List** every declared channel: its `ADDRESS` (what `--channel` matches), `LANG`, feeding output target, ledger, and destination. `--json` emits the same rows for scripting (CLM {version}+). |
 | `release add SPEC_FILE TOPIC_IDS… --channel NAME` | Append topic ids to the channel's ledger (validated against the spec). |
 | `release week SPEC_FILE SELECTORS… --channel NAME` | Append **every topic in the selected section(s)** to the ledger — a section-scoped `release add`. `SELECTORS` use the `build --only-sections` grammar (`id:`/`idx:`/`name:` prefixes, or a bare 1-based index / name substring). Section indices are disabled-inclusive; a selected-but-`enabled="false"` section is reported and skipped. |
 | `release status SPEC_FILE --channel NAME` | Show released vs pending topics, and (with a resolvable `--dest`/`--channel`) frozen vs awaiting-sync. |
@@ -3021,12 +3022,28 @@ frozen `--source` build root, and the `--dest` cohort repo from the spec's
 `<release-channels>`), or by passing `--ledger` / `--source` / `--dest`
 explicitly (which override resolution).
 
+**Multiple channels at once (CLM {version}+, issue #390).** `add`, `week`,
+`status`, and `sync` accept more than one channel per invocation, so a topic
+added to a four-channel cohort no longer needs a shell loop:
+
+- `--channel` is **repeatable** and accepts a **glob** matched (via `fnmatch`)
+  against each channel's `ADDRESS`: `--channel 'materials/*'`,
+  `--channel '*/2026-04-*'`, or `--channel materials/2026-04-de --channel
+  solutions/2026-04-de`.
+- `--all-channels` targets every channel in every `<release-channels>` block.
+
+The per-channel body runs once per matched channel, de-duplicated and in spec
+order (`release channels` is the canonical list of what the globs match).
+Explicit `--ledger`/`--source`/`--dest` address a single channel and may not be
+combined with multi-channel selection.
+
 Key options for `release sync`:
 
 | Option | Description |
 |--------|-------------|
-| `--channel NAME` | Resolve ledger/source/dest from the spec's `<release-channels>` (use `STREAM/CHANNEL` with several streams). |
-| `--ledger PATH` | Channel release ledger (overrides `--channel` resolution). |
+| `--channel NAME` | Resolve ledger/source/dest from the spec's `<release-channels>` (use `STREAM/CHANNEL` with several streams). Repeatable, and a glob (`'materials/*'`) syncs every matching channel in turn (CLM {version}+). |
+| `--all-channels` | Sync every channel in every `<release-channels>` block (CLM {version}+). Mutually exclusive with explicit `--ledger`/`--source`/`--dest`. |
+| `--ledger PATH` | Channel release ledger (overrides `--channel` resolution; single channel only). |
 | `--source DIR` | Built frozen-source output root (must contain `.clm-manifest.json`). |
 | `--dest DIR` | Cohort destination repository (created if absent). |
 | `--language de\|en` | Promote only this language's files, re-rooted at the language directory (issue #293). Overrides the channel's `lang` attribute; requires `SPEC_FILE`; `--source` must point at the output-target root. |
@@ -3079,6 +3096,12 @@ clm release sync course.xml --channel materials/2026-04 --push
 clm release week course.xml idx:3 --channel solutions/2026-04   # after the workshop
 clm release sync course.xml --channel solutions/2026-04 --push
 clm release provision course.xml                                # apply <share-with> group shares
+
+# Multi-channel cohort (issue #390): one invocation hits every channel.
+clm release channels course.xml                            # list the channel addresses
+clm release add course.xml deep_dive --channel 'materials/*'    # both materials channels
+clm release add course.xml deep_dive --all-channels        # every channel, every stream
+clm release sync course.xml --all-channels --push          # promote + push them all
 ```
 
 ### `clm jobs`
