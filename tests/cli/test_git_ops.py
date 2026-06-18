@@ -847,6 +847,32 @@ class TestGitHelpers:
             assert behind is False
             assert count == 0
 
+    def test_is_behind_remote_empty_stdout(self, tmp_path: Path):
+        """Empty rev-list output must not raise (regression for dry-run crash).
+
+        In dry-run mode run_git returns a mock with returncode=0 and an empty
+        stdout; int("") previously raised ValueError. Treat empty output as
+        'not behind'.
+        """
+        with patch("clm.cli.commands.git.run_git") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0),  # fetch
+                MagicMock(returncode=0, stdout=""),  # rev-list (empty)
+            ]
+            behind, count = is_behind_remote(tmp_path, "main")
+            assert behind is False
+            assert count == 0
+
+    def test_is_behind_remote_in_dry_run_mode(self, tmp_path: Path):
+        """is_behind_remote must not crash under the real dry-run mock path."""
+        _dry_run_mode.set(True)
+        try:
+            behind, count = is_behind_remote(tmp_path, "")
+            assert behind is False
+            assert count == 0
+        finally:
+            _dry_run_mode.set(False)
+
 
 class TestFindOutputRepos:
     """Tests for find_output_repos function."""
