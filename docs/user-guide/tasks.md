@@ -36,6 +36,25 @@ what you would type at the prompt. `{spec}` expands to the absolute path of
 the spec file passed to `clm run`. See `clm info spec-files` for the full
 element reference (placeholders, quoting, path rules).
 
+### Releasing to every channel in one step
+
+Because `clm release` accepts a glob or `--all-channels` (see
+[Per-Topic Solution Release](solution-release.md#releasing-to-several-channels-at-once)),
+a release routine for a multi-channel cohort stays a fixed handful of steps
+instead of growing one `release sync` per channel:
+
+```xml
+<task name="weekly-release" description="Build, then release this week to every cohort channel">
+    <step>build {spec} --provenance-manifest</step>
+    <step>release sync {spec} --all-channels --push</step>
+</task>
+```
+
+The single `--all-channels` step promotes and pushes each channel in turn — a
+four-channel cohort no longer needs four near-identical steps. Use a glob
+(`release sync {spec} --channel 'materials/*' --push`) when a task should target
+just one stream.
+
 ## Running tasks
 
 ```bash

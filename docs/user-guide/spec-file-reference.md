@@ -979,8 +979,10 @@ recover. The manifest is private and is excluded from every distributed repo by
 `clm git`; the per-cohort, per-stream **frozen manifest**
 (`.clm-released.<stream>.json`; legacy `.clm-released.json` for a single
 unnamed block) *does* ship in the channel repo as the freeze record. Drive the workflow with `clm release`
-(`add` / `week` / `status` / `sync`) and `clm git --channel` (init/commit/push
-the cohort repos); run `clm info commands` for both.
+(`add` / `week` / `status` / `sync` — each takes a single `--channel`, a glob
+like `--channel 'materials/*'`, or `--all-channels` to hit many cohorts at once;
+`clm release channels` lists the addresses) and `clm git --channel`
+(init/commit/push the cohort repos); run `clm info commands` for both.
 
 ---
 

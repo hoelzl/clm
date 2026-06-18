@@ -127,6 +127,47 @@ are **disabled-inclusive** — an `enabled="false"` section still consumes its
 index, and a selected-but-disabled section is reported and skipped rather than
 silently shifting which topics get released.
 
+## Releasing to several channels at once
+
+A cohort often spans **several** channels — e.g. `materials` and `solutions`
+streams, each in German and English, is four channels feeding the same group.
+Rather than repeat a command once per channel, `add`, `week`, `status`, and
+`sync` all accept more than one channel per invocation:
+
+```bash
+clm release channels course.xml                 # list the channel addresses first
+```
+
+```
+ADDRESS               LANG  SOURCE     LEDGER                            DEST
+materials/2026-04-de  de    shared     release/materials-2026-04-de.txt  cohorts/2026-04/de
+materials/2026-04-en  en    shared     release/materials-2026-04-en.txt  cohorts/2026-04/en
+solutions/2026-04-de  de    completed  release/solutions-2026-04-de.txt  cohorts/2026-04/de
+solutions/2026-04-en  en    completed  release/solutions-2026-04-en.txt  cohorts/2026-04/en
+```
+
+The `ADDRESS` column is exactly what `--channel` matches. Select many at once
+three ways:
+
+```bash
+# Glob — fnmatch against the address (quote it so the shell doesn't expand it):
+clm release add course.xml deep_dive --channel 'materials/*'
+clm release add course.xml deep_dive --channel '*/2026-04-de'
+
+# Repeat --channel:
+clm release add course.xml deep_dive --channel materials/2026-04-de --channel solutions/2026-04-de
+
+# Or every channel of every stream:
+clm release add course.xml deep_dive --all-channels
+```
+
+Matched channels are de-duplicated and processed in spec order; each one prints
+under its own `[address]` header. A single exact `--channel NAME` behaves
+exactly as before, and explicit `--ledger`/`--source`/`--dest` remain
+single-channel (they cannot be combined with a glob or `--all-channels`).
+`clm release channels` is the canonical list of what a glob will match — `--json`
+emits the same rows for scripting.
+
 ## Checking what's released
 
 ```bash
@@ -208,6 +249,23 @@ same `clm build` so evergreen files don't ping-pong between builds. See
 `clm info releases` ("Shared destination") for the full rules and the
 trade-offs vs separate repos, and `clm info migration` for merging the repos
 of a running cohort.
+
+With both language channels per stream, the pre-session materials and the
+post-workshop solutions each become a one-line release across the whole cohort:
+
+```bash
+# Before the session: release this week's materials to both languages and push.
+clm release week course.xml idx:3 --channel 'materials/*'
+clm release sync course.xml --channel 'materials/*' --push
+
+# After the workshop: the matching solutions, both languages, in one shot.
+clm release week course.xml idx:3 --channel 'solutions/*'
+clm release sync course.xml --channel 'solutions/*' --push
+```
+
+`sync` already iterates internally for the shared-destination overlap check, so
+a glob/`--all-channels` sync promotes each channel in turn under its own
+`=== address ===` header.
 
 ## How `clm git --channel` differs from ordinary `clm git`
 
