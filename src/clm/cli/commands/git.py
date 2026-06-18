@@ -241,7 +241,14 @@ def is_behind_remote(repo_path: Path, branch: str = "master") -> tuple[bool, int
     if result.returncode != 0:
         return False, 0
 
-    count = int(result.stdout.strip())
+    # Guard against empty output: git can print nothing here (e.g. the mock
+    # result returned in dry-run mode, or an unusual git state), and int("")
+    # would raise ValueError. Mirror get_remote_status()'s defensive parse.
+    out = result.stdout.strip()
+    if not out:
+        return False, 0
+
+    count = int(out)
     return count > 0, count
 
 
