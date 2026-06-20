@@ -1,0 +1,27 @@
+{# Inline "add cell" form. Uses `after` (set by caller): -1 for head, else index.
+   Posts to /deck/cell, which re-renders the full list. #}
+<form hx-post="/deck/cell?path={{ rel_path }}&after={{ after | default(-1) }}"
+      hx-target="#cell-list" hx-swap="outerHTML"
+      class="edit-form" style="border:1px solid var(--border);border-radius:var(--radius);margin:6px 0;">
+    <div class="field">
+        <label>Header</label>
+        <input type="text" name="header" value='# %% [markdown] lang="de" tags=["slide"]'>
+        <div class="header-presets">
+            <button type="button" class="preset" onclick="this.closest('.field').querySelector('input').value='# %% [markdown] lang=\"de\" tags=[\"slide\"]'">DE slide</button>
+            <button type="button" class="preset" onclick="this.closest('.field').querySelector('input').value='# %% [markdown] lang=\"en\" tags=[\"slide\"]'">EN slide</button>
+            <button type="button" class="preset" onclick="this.closest('.field').querySelector('input').value='# %% [markdown] lang=\"de\" tags=[\"voiceover\"]'">DE voiceover</button>
+            <button type="button" class="preset" onclick="this.closest('.field').querySelector('input').value='# %% [markdown] lang=\"en\" tags=[\"notes\"]'">EN notes</button>
+            <button type="button" class="preset" onclick="this.closest('.field').querySelector('input').value='# %% lang=\"de\"'">DE code</button>
+            <button type="button" class="preset" onclick="this.closest('.field').querySelector('input').value='# %% lang=\"en\"'">EN code</button>
+        </div>
+    </div>
+    <div class="field">
+        <label>Body</label>
+        <textarea name="body" placeholder="Slide content or code…"></textarea>
+    </div>
+    <div class="edit-actions">
+        <button type="submit" class="btn btn-primary">Add cell</button>
+        <button type="button" class="btn btn-ghost"
+                onclick="this.closest('[id^=insert-]').style.display='none'">Cancel</button>
+    </div>
+</form>

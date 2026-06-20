@@ -1097,6 +1097,20 @@ drive slide authoring. Entry points: `server.create_server(data_dir)` /
 `run_server(data_dir)` and the `tools.handle_*` async handlers. Started with
 `clm mcp`. Requires `[mcp]`.
 
+### `clm.edit` (mobile deck editor)
+
+LAN-served, offline HTMX web editor for percent-format deck files
+(`.py`/`.cpp`/`.cs`/`.java`/`.ts`), designed for editing a course from a
+phone. Two layers: `deck_file.DeckFile` is a pure-library wrapper over the
+lossless `raw_cells` primitives (`split_cells`/`reconstruct`) exposing
+index-keyed edit operations (replace / insert / delete / move / header
+rewrite) that round-trip byte-identically for untouched cells; `app.create_app`
++ `routes.router` is the FastAPI + Jinja2 + HTMX shell (mirrors
+`clm.recordings.web`). Every mutating request re-parses from disk so
+concurrent edits never act on stale cell positions. Started with
+`clm edit`. Requires `[edit]` (Jinja2 + python-multipart; FastAPI/uvicorn are
+core deps).
+
 ### `clm.voiceover` (video → speaker notes)
 
 Video-to-speaker-notes pipeline used by `clm voiceover sync`/`transcribe`/

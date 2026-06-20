@@ -225,6 +225,14 @@ mcp = [
     "mcp>=1.0.0",
     "coding-academy-lecture-manager[slides]",
 ]
+# Mobile deck editor — HTMX web UI for editing deck files from a browser
+# (``clm edit``). jinja2/python-multipart are needed by the FastAPI app;
+# fastapi/uvicorn are already core dependencies.
+edit = [
+    "jinja2>=3.1",
+    "python-multipart>=0.0.6",
+    "coding-academy-lecture-manager[slides]",
+]
 # Development and testing
 dev = [
     "pytest>=7.0",
@@ -251,7 +259,7 @@ web = [
 ]
 # Everything
 all = [
-    "coding-academy-lecture-manager[all-workers,ml,summarize,voiceover,recordings,slides,gcal,mcp,jupyterlite,replay,dev,tui,web]",
+    "coding-academy-lecture-manager[all-workers,ml,summarize,voiceover,recordings,slides,gcal,mcp,edit,jupyterlite,replay,dev,tui,web]",
 ]
 
 [project.urls]
@@ -494,7 +502,7 @@ version = "{new_version}\""""
 #      pre-commit gate.
 # See docs/proposals/PRE_COMMIT_HOOK_HARDENING.md (Fix 1) for rationale.
 dev = [
-    "coding-academy-lecture-manager[notebook,plantuml,drawio,recordings,slides,mcp,summarize,voiceover,jupyterlite,replay,tui,web]",
+    "coding-academy-lecture-manager[notebook,plantuml,drawio,recordings,slides,mcp,edit,summarize,voiceover,jupyterlite,replay,tui,web]",
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
     "pytest-cov>=4.0",

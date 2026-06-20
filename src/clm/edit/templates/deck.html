@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}{{ name }} — CLM Deck Editor{% endblock %}
+{% block nav_title %}{{ rel_path }}{% endblock %}
+
+{% block content %}
+<h1 style="word-break:break-all">{{ name }}</h1>
+<p class="subtitle" style="word-break:break-all">{{ rel_path }} · {{ cell_count }} cell{{ '' if cell_count == 1 else 's' }}</p>
+
+{% include "partials/cell_list.html" %}
+{% endblock %}

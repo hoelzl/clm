@@ -1,0 +1,34 @@
+{# The full cell list for a deck — re-rendered after a move/delete/insert
+   because those shift cell indices. Variables: rel_path, cells, moved_index. #}
+<div id="cell-list">
+    {% if not cells %}
+    <div class="empty-state">
+        <p>This deck has no cells yet.</p>
+    </div>
+    {% endif %}
+
+    {# Insert-at-head affordance #}
+    <div class="add-cell">
+        <button class="btn btn-sm btn-ghost" type="button"
+                hx-get="/deck?path={{ rel_path }}&_=#cell-list"
+                onclick="document.getElementById('insert-head').style.display='block'">+ Add cell at top</button>
+    </div>
+    <div id="insert-head" style="display:none">
+        {% include "partials/insert_form.html" with context %}
+    </div>
+
+    {% for info in cells %}
+        {% with index=loop.index0 %}
+        {% include "partials/cell.html" %}
+        {% endwith %}
+        {# Insert-after affordance between cells #}
+        <div class="add-cell">
+            <button class="btn btn-sm btn-ghost" type="button"
+                    onclick="var f=document.getElementById('insert-{{ index }}'); if(f) f.style.display='block'">+ Add cell below</button>
+        </div>
+        <div id="insert-{{ index }}" style="display:none">
+            {% set after = index %}
+            {% include "partials/insert_form.html" with context %}
+        </div>
+    {% endfor %}
+</div>

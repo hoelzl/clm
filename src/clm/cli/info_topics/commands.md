@@ -2686,6 +2686,31 @@ CLI verb-group structure (group-first); the flat pre-1.8 names
 All tools accept paths relative to the data directory or as absolute paths.
 Most return JSON; `slides_language_view` returns annotated plain text.
 
+### `clm edit`
+
+Start the mobile deck editor — an offline, LAN-served web UI for editing
+percent-format deck files (`.py`, `.cpp`, `.cs`, `.java`, `.ts`) from a
+browser, primarily a phone. Requires the `clm[edit]` extra.
+
+```
+clm edit [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--data-dir DIR` | Course data directory containing `slides/` (default: `CLM_DATA_DIR` or cwd) |
+| `--host TEXT` | Bind host (default `127.0.0.1`; use `0.0.0.0` to expose on the LAN for a phone) |
+| `--port INTEGER` | Port (default `8080`) |
+| `--no-browser` | Do not auto-open a browser on the desktop |
+
+Browse modules → topics → deck files, then edit a deck cell-by-cell: read,
+edit, add, delete, and reorder cells. Header-preset chips fill common cell
+headers (DE/EN slide, voiceover, notes, code) so you rarely type one by hand.
+Every save writes straight to the source file on disk; untouched cells are
+preserved byte-for-byte (backed by the lossless `raw_cells` primitives), and
+git is the safety net. When binding to `0.0.0.0`, the command prints the LAN
+URLs to open on your phone; for remote access, tunnel via Tailscale.
+
 ### `clm status`
 
 Show CLM system status (workers, databases, configuration).

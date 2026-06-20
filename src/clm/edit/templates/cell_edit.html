@@ -1,0 +1,32 @@
+{# Inline cell edit form — swaps in place of the cell card on GET .../edit,
+   and the POST save returns the updated cell card. Variables: info, rel_path,
+   body_value. #}
+<form class="cell edit-form" id="cell-{{ info.index }}"
+      hx-post="/deck/cell/{{ info.index }}?path={{ rel_path }}"
+      hx-target="this" hx-swap="outerHTML">
+    <div class="cell-head">
+        <span class="cell-index">#{{ info.index }}</span>
+        <span class="chip">editing</span>
+    </div>
+    <div class="field">
+        <label>Header</label>
+        <input type="text" name="header" value="{{ info.header }}">
+        <div class="header-presets">
+            <button type="button" class="preset" onclick="this.closest('.field').querySelector('input').value='# %% [markdown] lang=\"de\" tags=[\"slide\"]'">DE slide</button>
+            <button type="button" class="preset" onclick="this.closest('.field').querySelector('input').value='# %% [markdown] lang=\"en\" tags=[\"slide\"]'">EN slide</button>
+            <button type="button" class="preset" onclick="this.closest('.field').querySelector('input').value='# %% [markdown] lang=\"de\" tags=[\"voiceover\"]'">DE voiceover</button>
+            <button type="button" class="preset" onclick="this.closest('.field').querySelector('input').value='# %% [markdown] lang=\"en\" tags=[\"notes\"]'">EN notes</button>
+            <button type="button" class="preset" onclick="this.closest('.field').querySelector('input').value='# %% lang=\"de\"'">DE code</button>
+            <button type="button" class="preset" onclick="this.closest('.field').querySelector('input').value='# %% lang=\"en\"'">EN code</button>
+        </div>
+    </div>
+    <div class="field">
+        <label>Body</label>
+        <textarea name="body">{{ body_value }}</textarea>
+    </div>
+    <div class="edit-actions">
+        <button type="submit" class="btn btn-primary">Save</button>
+        <a class="btn btn-ghost" href="/deck?path={{ rel_path }}"
+           onclick="history.back();return false">Cancel</a>
+    </div>
+</form>

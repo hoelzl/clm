@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Decks — CLM Deck Editor{% endblock %}
+{% block nav_title %}Browse{% endblock %}
+
+{% block content %}
+<h1>Decks</h1>
+<p class="subtitle">Pick a deck to edit. Files live under <code>slides/</code>.</p>
+
+{% if not has_slides %}
+<div class="empty-state">
+    <p>No slide files found under <code>slides/</code>.</p>
+    <p>Run <code>clm edit --data-dir /path/to/course</code> pointing at a directory that contains a <code>slides/</code> tree.</p>
+</div>
+{% endif %}
+
+{% for module in modules %}
+<section class="module">
+    <div class="module-name">{{ module.name }}</div>
+    {% for topic in module.topics %}
+    <div class="topic">
+        <div class="topic-id">{{ topic.topic_id }}</div>
+        <div class="topic-type">{{ topic.path_type }}{% if not topic.decks %} · no deck files{% endif %}</div>
+        {% for deck in topic.decks %}
+        <a class="deck-link" href="/deck?path={{ deck }}">{{ deck }}</a>
+        {% endfor %}
+    </div>
+    {% endfor %}
+</section>
+{% endfor %}
+{% endblock %}

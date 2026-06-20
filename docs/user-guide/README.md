@@ -29,6 +29,7 @@ CLM (Coding-Academy Lecture Manager) is a course content processing system that 
 - **[Configuration](configuration.md)** - Configure courses and options
 - **[Recording Management](recordings.md)** - Process and track video recordings
 - **[Voiceover Synchronization](voiceover.md)** - Transcribe videos and sync with slides
+- **[Mobile Deck Editing](editing.md)** - Edit deck files from your phone over the LAN (`clm edit`)
 - **[Solution Release](solution-release.md)** - Release solutions to student cohorts one topic at a time (frozen per cohort)
 - **[Task Sequences](tasks.md)** - Declare named clm-command sequences in the spec and run them with `clm run` (e.g. a `pre-release` routine)
 - **[HTTP Replay](http-replay.md)** - Deterministic builds for notebooks that call live HTTP services

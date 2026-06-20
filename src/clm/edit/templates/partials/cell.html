@@ -1,0 +1,36 @@
+{# Render one cell as a read-only card with edit/move/delete actions.
+   Variables: info (CellInfo), rel_path, index, flash (optional bool). #}
+<div class="cell{% if flash %} is-flash{% endif %}" id="cell-{{ index }}">
+    <div class="cell-head">
+        <span class="cell-index">#{{ index }}</span>
+        {% if info.is_j2 %}
+            <span class="chip chip-j2">j2</span>
+        {% else %}
+            <span class="chip chip-{{ 'code' if info.kind == 'code' else ('slide' if info.is_slide_start else (info.kind)) }}">{{ info.kind }}</span>
+        {% endif %}
+        {% for tag in info.tags %}
+            {% if tag in ("slide", "subslide", "notes", "voiceover", "keep", "alt", "completed", "start") %}
+            <span class="chip chip-{{ tag }}">{{ tag }}</span>
+            {% endif %}
+        {% endfor %}
+        {% if info.lang %}<span class="chip chip-lang">{{ info.lang }}</span>{% endif %}
+    </div>
+
+    <div class="cell-body{% if not info.body.strip() %} is-empty{% endif %}">{{ info.body.rstrip("\n") if info.body.strip() else "(empty)" }}</div>
+
+    <div class="cell-actions">
+        <a class="btn btn-sm" href="/deck/cell/{{ index }}/edit?path={{ rel_path }}"
+           hx-get="/deck/cell/{{ index }}/edit?path={{ rel_path }}"
+           hx-target="#cell-{{ index }}" hx-swap="outerHTML">Edit</a>
+        <button class="btn btn-sm btn-ghost" type="button"
+                hx-post="/deck/cell/{{ index }}/move?path={{ rel_path }}&dir=up"
+                hx-target="#cell-list" hx-swap="outerHTML">↑</button>
+        <button class="btn btn-sm btn-ghost" type="button"
+                hx-post="/deck/cell/{{ index }}/move?path={{ rel_path }}&dir=down"
+                hx-target="#cell-list" hx-swap="outerHTML">↓</button>
+        <button class="btn btn-sm btn-danger" type="button"
+                hx-post="/deck/cell/{{ index }}/delete?path={{ rel_path }}"
+                hx-target="#cell-list" hx-swap="outerHTML"
+                onclick="return confirm('Delete cell #{{ index }}?')">Del</button>
+    </div>
+</div>

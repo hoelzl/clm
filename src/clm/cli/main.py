@@ -85,8 +85,9 @@ _COMMANDS = "clm.cli.commands"
         "voiceover": f"{_COMMANDS}.voiceover:voiceover_group",
         "recordings": f"{_COMMANDS}.recordings:recordings_group",
         "mcp": f"{_COMMANDS}.mcp:mcp_cmd",
+        "edit": f"{_COMMANDS}.edit:edit_cmd",
     },
-    optional_subcommands=("voiceover", "recordings", "mcp"),
+    optional_subcommands=("voiceover", "recordings", "mcp", "edit"),
 )
 @click.version_option(version=__version__, prog_name="clm")
 @click.option(
@@ -190,6 +191,7 @@ _OPTIONAL_COMPAT_EXPORTS: dict[str, tuple[str, str]] = {
     "voiceover_group": (f"{_COMMANDS}.voiceover", "voiceover_group"),
     "recordings_group": (f"{_COMMANDS}.recordings", "recordings_group"),
     "mcp_cmd": (f"{_COMMANDS}.mcp", "mcp_cmd"),
+    "edit_cmd": (f"{_COMMANDS}.edit", "edit_cmd"),
 }
 
 
