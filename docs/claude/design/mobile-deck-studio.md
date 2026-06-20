@@ -1,8 +1,9 @@
 # Mobile Deck Studio — authoring a course from a phone
 
-> **Status:** plan of record (not yet implemented). Chosen over the
-> `clm edit` prototype (PR #394, closed as superseded). See §9 for the
-> decision record and implementation steering notes.
+> **Status:** plan of record. **P0 + P1 implemented** (read-only browse +
+> the cell-editing concurrency core); P2–P4 not yet implemented. Chosen over
+> the `clm edit` prototype (PR #394, closed as superseded). See §9 for the
+> decision record, implementation steering notes, and the P0/P1 build record.
 > **Date:** 2026-06-20.
 > **Author:** design draft, worked through interactively.
 > **Scope:** a new **Studio** view on the existing `clm serve` web app
@@ -225,8 +226,8 @@ structural op. No naïve whole-file re-emit.
 
 | Phase | Delivers |
 |---|---|
-| **P0** | `clm serve` **Studio view** + Tailscale-HTTPS / QR / token auth scaffold; navigation (Recents, search, tree with badges, "Not in spec"); open a deck; **read-only** cell render (client markdown + server-side `is_j2` render); full-text search. Reuses `parse_cells`, `course decks`/`orphans`, `slides search`. No writes. |
-| **P1** | **Cell body/tag editing** + the **concurrency core**: optimistic `deck_version` + `cell_hash` (409/423), atomic `FileState` write-back, `watchfiles` external-change watcher, autosave + 409/disk-change UX. The safety keystone — built and tested first. |
+| **P0** ✅ | `clm serve` **Studio view** + Tailscale-HTTPS / QR / token auth scaffold; navigation (Recents, search, tree with badges, "Not in spec"); open a deck; **read-only** cell render (client markdown + server-side `is_j2` render); full-text search. Reuses `parse_cells`, `course decks`/`orphans`, `slides search`. No writes. *(Implemented — `is_j2` server render scaffolded; see §9.6.)* |
+| **P1** ✅ | **Cell body/tag editing** + the **concurrency core**: optimistic `deck_version` + `cell_hash` (409/423), atomic `FileState` write-back, `watchfiles` external-change watcher, autosave + 409/disk-change UX. The safety keystone — built and tested first. *(Implemented; 423 language-lock deferred to P3 — see §9.6.)* |
 | **P2** | **Structural ops** (`insert` / `delete` / `move` / mint-id) via the byte-exact serializer; reorder mode in the UI; byte-exact untouched-cell tests. |
 | **P3** | **Bilingual**: language-view + watermark-derived lock + Discard/unlock + **Sync-to-other-language** (server-side `sync` / `translate` / `assign-ids`, streamed over WS); stale badges. |
 | **P4** | **Build-preview** (tier-2 no-exec deck render streamed over WS) + installable PWA + **read-only offline cache** of the last-opened deck. |
@@ -373,3 +374,52 @@ Extend the existing `clm serve` app (`clm.web`) rather than adding a standalone
 command: it already ships the WebSocket, lifespan, and `watchfiles` plumbing,
 and the watcher *is* the two-editor guard, so sharing it is the cheaper path.
 Record the decision explicitly at P0.
+
+### 9.6 P0/P1 build record (2026-06-20)
+
+P0 + P1 shipped together. Layout: backend in `src/clm/web/studio/`
+(`service.py` = the engine + concurrency core, `routes.py` = `/api/studio/*`,
+`auth.py` = persistent bearer token, `qr.py` = lifted segno helper,
+`watcher.py` = `watchfiles` guard, `models.py` = wire models); lightweight
+frontend in `src/clm/web/static/studio/`; tests in `tests/web/studio/`.
+Enabled by `clm serve --spec course.xml`, mounted at `/studio/`. Decisions
+taken while building, several resolving open calls left by §9.1–§9.5:
+
+- **Integration (§9.5):** confirmed — Studio is opt-in on `clm serve` via
+  `--spec`; the Monitor view is unaffected when `--spec` is absent. The
+  lifespan starts the `watchfiles` watcher only when a spec is configured.
+- **Frontend (§9.4):** took the lightening option — P0/P1 ship a **vanilla-JS**
+  mobile surface (`index.html` + `app.js`, no build, no CodeMirror/Preact). It
+  exercises the full backend contract (browse, search, open, edit with 409 +
+  disk-change banner). The no-build Preact + vendored CodeMirror 6 PWA is
+  **deferred to P2+**, where structural editing makes the editor investment pay
+  off. Migration path is unchanged (§3.1).
+- **Cell addressing — the safety refinement:** `FileState.find_cell` keys by
+  `(slide_id, role)` and **ignores language**, returning the first match. CLM
+  ships decks as per-language `.de.py` / `.en.py` files, so the key is unique
+  per file in practice; to stay safe against a *genuinely interleaved* deck
+  where de+en share a `slide_id`, a cell is marked `editable` **only when its
+  `(slide_id, role)` is unique in the file**. Colliding keys are read-only in
+  P1 (bilingual editing is P3). Id-less cells (language-neutral/structural code)
+  are also read-only until id-minting lands in P2.
+- **Concurrency guard:** `deck_version` = first 16 hex of the whole-file SHA-256;
+  `cell_hash` = `cell_content_hash` of the target body. Both are validated
+  before any write (deck first, then cell), and **recomputed from disk after
+  flush** so the values returned to the phone exactly match a subsequent open.
+  The `423` language-lock path is **deferred to P3** (it needs the watermark
+  derivation); the route layer is shaped for it.
+- **Self-write echo suppression:** after a Studio write the service records a
+  short (`SELF_WRITE_WINDOW_SECONDS`) window so the watcher does not report the
+  app's *own* save back to the phone as an external "changed on disk" event.
+- **Tier-2 render scaffolded:** the working preview is **tier-1 client-side
+  markdown**. `POST /api/studio/deck/render-cell` exists but echoes the body
+  with `rendered=false`; wiring the jupytext+Jinja no-exec expansion for
+  `is_j2` cells is a focused follow-up (still inside the P0 design scope).
+- **WS auth:** REST is fully token-gated; the shared `/ws` endpoint is not yet
+  token-checked (it carries only low-sensitivity `deck-changed-on-disk`
+  notifications, no deck content). Gating WS without disrupting the Monitor
+  channel is a follow-up.
+- **Reuse (§9.3):** only `qr.py` was lifted from the closed #394 branch (with
+  the `[edit]`→`[web]` adaptation); the byte-exact "untouched cells unchanged"
+  test pattern was re-authored against `FileState`. `DeckFile`, routes, and
+  templates were **not** reused.

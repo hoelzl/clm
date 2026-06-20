@@ -30,10 +30,27 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     # import asyncio
     # asyncio.create_task(ws_manager.send_periodic_updates(app.state.monitor_service))
 
+    # Start the Studio external-change watcher (the two-editor guard) when a
+    # course spec was configured (clm serve --spec).
+    import asyncio
+
+    watcher_task = None
+    studio_service = getattr(app.state, "studio_service", None)
+    if studio_service is not None:
+        from clm.web.studio.watcher import watch_slides_dir
+
+        watcher_task = asyncio.create_task(watch_slides_dir(studio_service))
+
     yield
 
     # Shutdown
     logger.info("Shutting down CLM Dashboard Server...")
+    if watcher_task is not None:
+        watcher_task.cancel()
+        try:
+            await watcher_task
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001 - best-effort stop
+            pass
 
 
 def create_app(
@@ -41,6 +58,8 @@ def create_app(
     host: str = "127.0.0.1",
     port: int = 8000,
     cors_origins: list[str] | None = None,
+    spec_path: Path | None = None,
+    studio_token: str | None = None,
 ) -> FastAPI:
     """Create and configure FastAPI application.
 
@@ -49,6 +68,10 @@ def create_app(
         host: Host to bind to
         port: Port to bind to
         cors_origins: CORS allowed origins
+        spec_path: When given, enable the Mobile Deck Studio view scoped to this
+            course spec (one course per server instance).
+        studio_token: Bearer token required by the Studio API/WS (ignored when
+            ``spec_path`` is None).
 
     Returns:
         Configured FastAPI application
@@ -67,6 +90,23 @@ def create_app(
 
     # Initialize monitor service
     app.state.monitor_service = MonitorService(db_path=db_path)
+
+    # Enable Mobile Deck Studio when a course spec was provided.
+    if spec_path is not None:
+        from clm.web.studio.routes import router as studio_router
+        from clm.web.studio.service import StudioService
+
+        app.state.studio_service = StudioService(spec_path)
+        app.state.studio_token = studio_token
+        app.include_router(studio_router)
+
+        studio_static = Path(__file__).parent / "static" / "studio"
+        if studio_static.exists():
+            app.mount(
+                "/studio",
+                StaticFiles(directory=studio_static, html=True),
+                name="studio",
+            )
 
     # Configure CORS
     if cors_origins is None:
