@@ -229,21 +229,22 @@ class SyncStartResult(BaseModel):
 
 
 class RenderCellRequest(BaseModel):
-    """Tier-2 (no-exec) render request for one cell."""
+    """Tier-2 (no-exec) render request for one ``is_j2`` cell (P4)."""
 
-    body: str
-    is_j2: bool = False
+    deck_id: str = Field(description="Slides-dir-relative deck path (for prog-lang + includes).")
+    body: str = Field(description="Raw cell body (comment-prefixed, with the j2 lines).")
+    is_j2: bool = Field(default=False, description="Only is_j2 cells are server-rendered.")
+    lang: str | None = Field(default=None, description='"de"/"en" Jinja global for the macros.')
 
 
 class RenderCellResult(BaseModel):
-    """Tier-2 render result.
+    """Tier-2 render result (P4).
 
-    P0/P1 ship tier-1 (client-side markdown) as the working preview; this
-    server endpoint is scaffolded and currently echoes the body with
-    ``rendered=False`` for ``is_j2`` cells. Wiring the jupytext+Jinja no-exec
-    expansion is a focused follow-up (still within the P0 design scope).
+    ``rendered`` True → ``body`` is the Jinja-expanded text (still markdown the
+    client renders); False → ``body`` is the original and ``error`` (if any) says
+    why, so the phone falls back to tier-1 client markdown.
     """
 
     rendered: bool
-    html: str | None = None
     body: str
+    error: str | None = None

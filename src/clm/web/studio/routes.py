@@ -251,10 +251,17 @@ async def sync_deck(request: Request, req: SyncRequest) -> SyncStartResult:
     dependencies=[Depends(require_token)],
 )
 async def render_cell(request: Request, req: RenderCellRequest) -> RenderCellResult:
-    """Tier-2 (no-exec) render of one cell.
+    """Tier-2 (no-exec) render of one ``is_j2`` cell (P4).
 
-    P0/P1 use client-side markdown (tier 1) as the working preview; this
-    endpoint is scaffolded and echoes the body with ``rendered=False`` until
-    the jupytext+Jinja no-exec expansion is wired (a focused follow-up).
+    Expands the cell's Jinja (header macros, ``{{ … }}``) server-side through the
+    build's bundled macros, no kernel. Plain cells (or any failure) return the
+    body unchanged with ``rendered=False`` so the phone falls back to tier-1.
     """
-    return RenderCellResult(rendered=False, html=None, body=req.body)
+    service = get_service(request)
+    try:
+        rendered, error, text = service.render_cell(
+            req.deck_id, req.body, is_j2=req.is_j2, lang=req.lang
+        )
+    except InvalidDeckIdError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid deck id: {e}") from e
+    return RenderCellResult(rendered=rendered, body=text, error=error)

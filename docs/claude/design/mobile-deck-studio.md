@@ -1,11 +1,12 @@
 # Mobile Deck Studio — authoring a course from a phone
 
-> **Status:** plan of record. **P0–P3 implemented** (browse, the cell-editing
-> concurrency core, structural ops, the bilingual lock, and streamed
-> Sync-to-other-language). **Discard** (deferred from P3b by decision) and **P4**
-> not yet implemented. Chosen over the `clm edit` prototype (PR #394, closed as
-> superseded). See §9 for the decision record, steering notes, and the
-> P0/P1–P3b build records.
+> **Status:** plan of record. **P0–P4 implemented** (browse, the cell-editing
+> concurrency core, structural ops, the bilingual lock, streamed
+> Sync-to-other-language, and the tier-2 preview + installable/offline PWA). The
+> initial phase plan is complete; the remaining items are **Discard** (deferred
+> from P3b) and the **editor de-prefix ergonomics** (deferred from P4) — both by
+> decision. Chosen over the `clm edit` prototype (PR #394, closed as superseded).
+> See §9 for the decision record, steering notes, and the P0/P1–P4 build records.
 > **Date:** 2026-06-20.
 > **Author:** design draft, worked through interactively.
 > **Scope:** a new **Studio** view on the existing `clm serve` web app
@@ -233,7 +234,7 @@ structural op. No naïve whole-file re-emit.
 | **P2** ✅ | **Structural ops** (`insert` / `delete` / `move` / mint-id) via the byte-exact serializer; reorder mode in the UI; byte-exact untouched-cell tests. *(Implemented — see §9.7.)* |
 | **P3a** ✅ | **Bilingual lock core**: language toggle (switch to the split twin) + watermark-derived lock (read-only `build_sync_plan`) + stale badges + **423** enforcement on every write. *(Implemented — see §9.8.)* |
 | **P3b** ✅ | **Sync-to-other-language**: a streamed server-side `clm slides sync` subprocess (LLM reconciliation) over WS; the lock releases when it completes. *(Implemented — see §9.9. **Discard & unlock deferred** by decision: its revert is git-coupled and risky — use the desktop.)* |
-| **P4** | **Build-preview** (tier-2 no-exec deck render streamed over WS) + installable PWA + **read-only offline cache** of the last-opened deck. |
+| **P4** ✅ | **Tier-2 preview** (no-exec Jinja macro/header expansion per cell) + tier-1 comment-prefix fix + **installable PWA** + **read-only offline cache** of opened decks. *(Implemented — see §9.10. Editor de-prefix ergonomics deferred.)* |
 | **Later / optional** | **Full executed single-deck build** (tier 3) for code outputs and rendered diagrams. |
 
 ---
@@ -572,3 +573,45 @@ Decisions / landmines:
   P3b: its only revert is git-coupled (restore the dirty half from HEAD), which
   would risk clobbering legitimate uncommitted desktop edits. The lock's in-app
   release is now **sync**; discard stays a desktop/git operation.
+
+### 9.10 P4 build record (2026-06-20)
+
+The preview + PWA phase — **completes the initial plan**. Three pieces:
+
+1. **Tier-1 preview correctness (the real bug).** CLM markdown is **comment-
+   prefixed** in the `.py` (`# Willkommen`, `#`, `# Schön…`). The P0 client fed
+   that raw to the markdown renderer, so *every* body line became an `<h1>`. The
+   client now strips the deck's comment token (`#` / `//`, inferred from the deck
+   id) per line before rendering — bodies render as prose. **The edit textarea
+   still shows the raw prefixed source** (it round-trips to the byte-exact write
+   path unchanged); only the *preview* de-prefixes. Closing that editor/preview
+   asymmetry — true de-prefix-on-read + re-prefix-on-write — stays the deferred
+   ergonomics item (it touches the write path; out of scope for a preview phase).
+2. **Tier-2 render (`render.py`).** `render_j2_cell` builds a Jinja `Environment`
+   with the **same** bundled `PackageLoader("clm.workers.notebook",
+   templates_<prog_lang>)` + `line_statement_prefix=jinja_prefix_for(...)` the
+   build uses, plus a `FileSystemLoader` on the deck dir for sibling
+   `{% include %}`s, and expands the cell **with no kernel**. The wired
+   `/api/studio/deck/render-cell` (now carrying `deck_id` + `lang`) returns the
+   expanded text; the frontend calls it only for `is_j2` cells and injects the
+   result. LANDMINES: (a) **lenient `Undefined`**, not the build's
+   `StrictUndefined` — a preview must not crash on build-only course context;
+   (b) any failure returns `rendered=false` + the original body so the phone
+   falls back to tier-1; (c) a header macro emits **HTML** (logo `<img>` +
+   centered title) wrapped in a `# %% [markdown]` boundary, so the client strips
+   prefixes, drops the `%%` remnant line, and injects as **HTML** (trusted — it's
+   the user's own deck from their own desktop over an authed channel).
+3. **PWA + offline (`manifest.json`, `icon.svg`, `sw.js`).** Installable
+   (standalone, SVG maskable icon, `theme-color`). The service worker caches the
+   `/studio/` app shell **cache-first** and `/api/studio/deck{,s}` **network-
+   first with a cache fallback** (read-only away-from-desk viewing; writes are
+   never cached, so the optimistic guards stay authoritative). LANDMINE: a SW at
+   `/studio/sw.js` defaults to `/studio/` scope and *cannot* see `/api/studio/`;
+   it is served by an **explicit route** (registered before the `StaticFiles`
+   mount) with **`Service-Worker-Allowed: /`** and registered with `{scope:"/"}`
+   so it can intercept the API. Secure-context only (Tailscale HTTPS / localhost);
+   registration fails silently on plain HTTP.
+
+Tests: 10 new (`tests/web/studio/test_render_pwa.py`) — j2 expansion, broken-jinja
+fallback, non-j2 passthrough, the render endpoint + auth, and that the manifest /
+icon / app shell are served and `sw.js` carries the root-scope header.

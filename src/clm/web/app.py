@@ -102,6 +102,21 @@ def create_app(
 
         studio_static = Path(__file__).parent / "static" / "studio"
         if studio_static.exists():
+            # The service worker must be served with `Service-Worker-Allowed: /`
+            # so it can register with root scope (intercepting both /studio/ and
+            # /api/studio/ for the P4 offline cache). This explicit route is added
+            # BEFORE the StaticFiles mount so it wins over the mount's handler.
+            sw_file = studio_static / "sw.js"
+            if sw_file.exists():
+
+                @app.get("/studio/sw.js", include_in_schema=False)
+                async def studio_service_worker() -> FileResponse:
+                    return FileResponse(
+                        sw_file,
+                        media_type="text/javascript",
+                        headers={"Service-Worker-Allowed": "/", "Cache-Control": "no-cache"},
+                    )
+
             app.mount(
                 "/studio",
                 StaticFiles(directory=studio_static, html=True),

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="CLM Deck Studio">
+  <rect width="512" height="512" rx="96" fill="#2563eb"/>
+  <text x="50%" y="52%" dominant-baseline="middle" text-anchor="middle"
+        font-family="-apple-system, Segoe UI, Roboto, sans-serif" font-weight="700"
+        font-size="180" fill="#ffffff">CLM</text>
+  <text x="50%" y="74%" dominant-baseline="middle" text-anchor="middle"
+        font-family="-apple-system, Segoe UI, Roboto, sans-serif" font-weight="500"
+        font-size="58" fill="#bfdbfe">studio</text>
+</svg>
