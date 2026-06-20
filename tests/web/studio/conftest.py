@@ -34,6 +34,24 @@ DECK_SOURCE = dedent(
 
 DECK_REL = "module_100_basics/topic_010_intro/slides_intro.de.py"
 
+# The EN twin of DECK_SOURCE: same slide_ids/roles, English bodies, shared code.
+DECK_SOURCE_EN = dedent(
+    """\
+    # %% [markdown] lang="en" tags=["slide"] slide_id="intro-welcome"
+    # Welcome
+    #
+    # Glad you're here.
+
+    # %% [markdown] lang="en" tags=["notes"] slide_id="intro-welcome"
+    # Speaker notes here.
+
+    # %%
+    print("hello")
+    """
+)
+
+DECK_REL_EN = "module_100_basics/topic_010_intro/slides_intro.en.py"
+
 
 @dataclass
 class Course:
@@ -76,3 +94,42 @@ def course(tmp_path: Path) -> Course:
 @pytest.fixture()
 def service(course: Course) -> StudioService:
     return StudioService(course.spec_path)
+
+
+@dataclass
+class Bilingual:
+    spec_path: Path
+    slides_dir: Path
+    de_id: str
+    en_id: str
+
+    @property
+    def de_path(self) -> Path:
+        return self.slides_dir / self.de_id
+
+    @property
+    def en_path(self) -> Path:
+        return self.slides_dir / self.en_id
+
+
+@pytest.fixture()
+def bilingual(course: Course, monkeypatch) -> Bilingual:
+    """A DE/EN split twin pair (reuses ``course`` for spec + the .de.py half).
+
+    Isolates the sync watermark cache to a tmp dir via ``CLM_CACHE_DIR`` so the
+    lock derivation never reads or writes a developer's real cache.
+    """
+    monkeypatch.setenv("CLM_CACHE_DIR", str(course.slides_dir.parent / ".clm-cache"))
+    en = course.slides_dir / DECK_REL_EN
+    en.write_text(DECK_SOURCE_EN, encoding="utf-8")
+    return Bilingual(
+        spec_path=course.spec_path,
+        slides_dir=course.slides_dir,
+        de_id=DECK_REL,
+        en_id=DECK_REL_EN,
+    )
+
+
+@pytest.fixture()
+def bilingual_service(bilingual: Bilingual) -> StudioService:
+    return StudioService(bilingual.spec_path)

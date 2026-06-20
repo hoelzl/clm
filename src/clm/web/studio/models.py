@@ -33,6 +33,38 @@ class CellView(BaseModel):
     )
 
 
+class LockState(BaseModel):
+    """The bilingual lock state of an opened deck (P3 — design §3.5).
+
+    Derived from the structural sync watermark, not invented session state: a
+    language is editable iff the *other* half is clean relative to the last
+    synced baseline. ``is_pair`` is False for a deck with no split twin on disk
+    (a single-language deck is always editable — no lock applies).
+    """
+
+    is_pair: bool = Field(description="True iff a split DE/EN twin exists on disk.")
+    lang: str | None = Field(default=None, description='This deck\'s language ("de"/"en").')
+    other_lang: str | None = Field(default=None, description="The twin's language.")
+    twin_deck_id: str | None = Field(
+        default=None, description="Slides-dir-relative id of the twin (for the language toggle)."
+    )
+    editable: bool = Field(
+        default=True, description="False when this language is locked (other half is dirty)."
+    )
+    locked_reason: str | None = Field(
+        default=None, description="Human-readable reason this language is locked, if it is."
+    )
+    other_stale: bool = Field(
+        default=False, description="True when this half is dirty so the twin needs a sync."
+    )
+    has_conflicts: bool = Field(
+        default=False, description="Both halves changed since the watermark (locks both)."
+    )
+    baseline: str = Field(
+        default="n/a", description='Baseline source: "watermark"/"git-head"/"none"/"n/a".'
+    )
+
+
 class DeckView(BaseModel):
     """A single deck opened for viewing/editing."""
 
@@ -40,6 +72,10 @@ class DeckView(BaseModel):
     deck_version: str = Field(description="Hash of the whole file (optimistic-concurrency guard).")
     lang: str | None = Field(default=None, description="Language filter applied, if any.")
     cells: list[CellView]
+    lock: LockState = Field(
+        default_factory=lambda: LockState(is_pair=False),
+        description="Bilingual lock state (P3).",
+    )
 
 
 class DeckSummary(BaseModel):

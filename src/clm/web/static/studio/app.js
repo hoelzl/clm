@@ -103,7 +103,9 @@ function handleWriteError(e, label) {
     toast("Changed elsewhere — reload.");
     renderDeck();
   } else if (e.status === 423) {
-    toast("Language locked — sync or discard first.");
+    const reason = (e.detail && e.detail.reason) || "Language locked — sync or discard first.";
+    toast(reason);
+    if (currentDeck) openDeck(currentDeck.deck_id); // refresh to surface the lock banner
   } else {
     toast(label + " failed: " + e.message);
   }
@@ -180,6 +182,7 @@ function deckRow(d) {
 
 async function openDeck(deckId) {
   appEl.innerHTML = '<p class="muted">Opening&hellip;</p>';
+  reorderMode = false;
   try {
     currentDeck = await api("/deck?id=" + encodeURIComponent(deckId));
     diskChanged = false;
@@ -189,11 +192,37 @@ async function openDeck(deckId) {
   }
 }
 
+// Language toggle + lock state (P3): DE ⚫ / EN 🔒, tap the twin to switch.
+function languageBar(lock) {
+  const bar = el(`<div class="lang-bar row"></div>`);
+  bar.appendChild(el(`<span class="lang-chip active">${esc((lock.lang || "").toUpperCase())} ${lock.editable ? "✎" : "🔒"}</span>`));
+  if (lock.twin_deck_id) {
+    const other = el(`<button class="lang-chip ghost">${esc((lock.other_lang || "").toUpperCase())} →</button>`);
+    other.addEventListener("click", () => openDeck(lock.twin_deck_id));
+    bar.appendChild(other);
+  }
+  if (lock.other_stale) {
+    bar.appendChild(el(`<span class="spacer"></span>`));
+    bar.appendChild(el(`<span class="chip stale-chip">${esc((lock.other_lang || "").toUpperCase())} stale</span>`));
+  }
+  return bar;
+}
+
 function renderDeck() {
   const deck = currentDeck;
+  const lock = deck.lock || { is_pair: false, editable: true };
+  const locked = lock.is_pair && !lock.editable;
   backEl.style.display = "";
   titleEl.textContent = deck.deck_id.split("/").pop();
   appEl.innerHTML = "";
+
+  if (lock.is_pair) appEl.appendChild(languageBar(lock));
+  if (locked) {
+    appEl.appendChild(el(`<div class="banner warn">🔒 ${esc(lock.locked_reason || "This language is locked.")}</div>`));
+  } else if (lock.other_stale) {
+    appEl.appendChild(el(`<div class="banner stale">${esc((lock.other_lang || "other").toUpperCase())} is stale — your edits aren't propagated yet. Sync from the desktop for now.</div>`));
+  }
+
   if (diskChanged) {
     const b = el(`<div class="banner warn row">Changed on disk — reload to avoid conflicts.
       <span class="spacer"></span></div>`);
@@ -203,26 +232,29 @@ function renderDeck() {
     appEl.appendChild(b);
   }
 
-  // Toolbar: reorder toggle + add-at-start.
-  const bar = el(`<div class="row toolbar"></div>`);
-  const reorderBtn = el(`<button class="ghost">${reorderMode ? "✓ Reordering" : "⇅ Reorder"}</button>`);
-  reorderBtn.addEventListener("click", () => { reorderMode = !reorderMode; renderDeck(); });
-  bar.appendChild(reorderBtn);
-  bar.appendChild(el(`<span class="spacer"></span>`));
-  if (!reorderMode) {
-    const addBtn = el(`<button>+ Add slide</button>`);
-    addBtn.addEventListener("click", () => openInsertForm(null));
-    bar.appendChild(addBtn);
+  // Toolbar: reorder toggle + add-at-start (hidden when the language is locked).
+  if (!locked) {
+    const bar = el(`<div class="row toolbar"></div>`);
+    const reorderBtn = el(`<button class="ghost">${reorderMode ? "✓ Reordering" : "⇅ Reorder"}</button>`);
+    reorderBtn.addEventListener("click", () => { reorderMode = !reorderMode; renderDeck(); });
+    bar.appendChild(reorderBtn);
+    bar.appendChild(el(`<span class="spacer"></span>`));
+    if (!reorderMode) {
+      const addBtn = el(`<button>+ Add slide</button>`);
+      addBtn.addEventListener("click", () => openInsertForm(null));
+      bar.appendChild(addBtn);
+    }
+    appEl.appendChild(bar);
   }
-  appEl.appendChild(bar);
 
-  deck.cells.forEach((cell, i) => appEl.appendChild(cellCard(cell, i)));
+  deck.cells.forEach((cell, i) => appEl.appendChild(cellCard(cell, i, locked)));
 }
 
-function cellCard(cell, idx) {
+function cellCard(cell, idx, locked) {
+  const canEdit = cell.editable && !locked;
   const langChip = cell.lang ? `<span class="chip">${cell.lang}</span>` : "";
   const tagChips = (cell.tags || []).map((t) => `<span class="chip">${esc(t)}</span>`).join("");
-  const card = el(`<div class="cell ${cell.editable && !reorderMode ? "editable" : ""}">
+  const card = el(`<div class="cell ${canEdit && !reorderMode ? "editable" : ""}">
       <div class="cell-head">
         <span class="chip">${cell.cell_type}</span>${langChip}${tagChips}
         <span class="spacer"></span>
@@ -235,8 +267,10 @@ function cellCard(cell, idx) {
   else body.innerHTML = `<pre><code>${esc(cell.body)}</code></pre>`;
 
   const controls = card.querySelector(".cell-controls");
-  if (reorderMode) {
-    if (cell.editable) {
+  if (locked) {
+    controls.appendChild(el(`<span class="muted">🔒 locked</span>`));
+  } else if (reorderMode) {
+    if (canEdit) {
       const up = el(`<button class="ghost icon" title="Move up">↑</button>`);
       const down = el(`<button class="ghost icon" title="Move down">↓</button>`);
       up.addEventListener("click", () => moveCell(cell, "up"));
@@ -245,7 +279,7 @@ function cellCard(cell, idx) {
     } else {
       controls.appendChild(el(`<span class="muted">read-only</span>`));
     }
-  } else if (cell.editable) {
+  } else if (canEdit) {
     const ins = el(`<button class="ghost icon" title="Insert after">＋</button>`);
     const del = el(`<button class="ghost icon" title="Delete">🗑</button>`);
     ins.addEventListener("click", (e) => { e.stopPropagation(); openInsertForm(cell); });
