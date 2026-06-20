@@ -360,12 +360,64 @@ class TestDeferredAndWatermark:
 
         assert result.applied_remove == 1  # processed in memory (loop not aborted)
         assert result.has_errors  # the edit had no judge
+        # The atomic temp-swap never fired, so NOTHING reached disk (Fix #5a).
+        assert result.flushed is False
         en_ids = [
             c.metadata.slide_id
             for c in parse_cells(en_path.read_text("utf-8"))
             if c.metadata.slide_id
         ]
         assert en_ids == ["a", "b"]  # erroring pass writes nothing — remove not persisted
+        # The human outcome line must NOT claim the remove was applied — it would
+        # contradict the file (which still has both slides) and mask the rollback.
+        from clm.cli.commands.slides.sync import _outcome_line
+
+        line = _outcome_line(result)
+        assert "rolled back" in line
+        assert "nothing written" in line
+        # Only "would have applied" on a rolled-back pass — never the bare lead.
+        assert not line.startswith("applied:")
+
+
+# ---------------------------------------------------------------------------
+# _outcome_line — truthful reporting on a rolled-back pass (Fix #5a)
+# ---------------------------------------------------------------------------
+
+
+class TestOutcomeLine:
+    def test_flushed_pass_reports_applied_counts(self):
+        from clm.cli.commands.slides.sync import _outcome_line
+        from clm.slides.sync_apply import ApplyResult
+
+        result = ApplyResult(applied_edit=3, applied_add=1, flushed=True, watermark_recorded=True)
+        line = _outcome_line(result)
+        assert line.startswith("applied: 3 edit")
+        assert "1 add" in line
+        assert "rolled back" not in line
+        assert "watermark advanced" in line
+
+    def test_rolled_back_pass_does_not_report_applied(self):
+        from clm.cli.commands.slides.sync import _outcome_line
+        from clm.slides.sync_apply import ApplyResult
+
+        # Counters incremented in-memory during the walk, but the pass errored so
+        # the atomic flush never fired: nothing was written.
+        result = ApplyResult(
+            applied_edit=10,
+            applied_remove=4,
+            flushed=False,
+            errors=["boom"],
+        )
+        line = _outcome_line(result)
+        assert "rolled back" in line
+        assert "nothing written" in line
+        assert "would have applied: 10 edit" in line
+        assert "4 remove" in line
+        # The line must NOT lead with the bare "applied:" form — that would mask
+        # the rollback. The only "applied:" present is inside "would have applied:".
+        assert not line.startswith("applied:")
+        assert line.count("applied:") == 1  # solely the "would have applied:" phrase
+        assert "watermark held" in line
 
 
 # ---------------------------------------------------------------------------

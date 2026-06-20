@@ -1482,16 +1482,31 @@ def _issue_line(issue: PlanIssue) -> str:
 
 
 def _outcome_line(result: ApplyResult) -> str:
-    return (
-        f"applied: {result.applied_edit} edit, {result.applied_retag} retag, "
+    counts = (
+        f"{result.applied_edit} edit, {result.applied_retag} retag, "
         f"{result.applied_remove} remove, "
         f"{result.applied_move} move, {result.applied_add} add, "
         f"{result.applied_rename} rename, {result.applied_mint} mint, "
         f"{result.applied_adopt} adopt, {result.applied_reconcile} reconcile, "
-        f"{result.applied_structural} structural; "
+        f"{result.applied_structural} structural"
+    )
+    watermark = "advanced" if result.watermark_recorded else "held"
+    if not result.flushed:
+        # The atomic temp-swap never fired (an apply-time or classifier error
+        # rolled the whole pass back), so NOTHING reached disk. Reporting the
+        # in-memory counters as "applied" would contradict the file, masking the
+        # rollback as success — so label them as the writes that did NOT happen.
+        return (
+            f"rolled back — nothing written (would have applied: {counts}); "
+            f"{result.in_sync} already in sync; "
+            f"{result.deferred} deferred; {len(result.errors)} error(s); "
+            f"watermark {watermark}."
+        )
+    return (
+        f"applied: {counts}; "
         f"{result.in_sync} already in sync; "
         f"{result.deferred} deferred; {len(result.errors)} error(s); "
-        f"watermark {'advanced' if result.watermark_recorded else 'held'}."
+        f"watermark {watermark}."
     )
 
 

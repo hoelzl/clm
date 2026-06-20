@@ -192,6 +192,7 @@ class ApplyResult:
     # propagated language-neutral / id-less-localized cells the per-cell walk cannot reach
     in_sync: int = 0  # an edit the judge decided needed no change
     deferred: int = 0  # conflict (or moves/adds declined this pass)
+    flushed: bool = False  # True iff the atomic temp-swap actually wrote both decks
     watermark_recorded: bool = False
     errors: list[str] = field(default_factory=list)
     # Per-deferral detail for cold-start mint/adopt (#231) — why the pair
@@ -458,6 +459,7 @@ def apply_plan(
     # "held the watermark" stay consistent.
     if not result.has_errors and not plan.has_errors:
         _flush_states_atomically(de_state, en_state)
+        result.flushed = True
 
     # Watermark advance. A fully clean pass advances the whole deck. A
     # *content-only* partial pass (edits/conflicts only, so structure is
@@ -1462,6 +1464,7 @@ def _apply_reconcile(
     # and the now-paired twins read as in-sync, so the partial progress never doubles.
     if not result.has_errors and not plan.has_errors:
         _flush_states_atomically(de_state, en_state)
+        result.flushed = True
     if (
         watermark_cache is not None
         and deferred == 0
