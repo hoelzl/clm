@@ -1064,6 +1064,7 @@ all = [
     { name = "scikit-learn" },
     { name = "scipy" },
     { name = "seaborn" },
+    { name = "segno" },
     { name = "sentencepiece" },
     { name = "skorch" },
     { name = "soundfile" },
@@ -1115,6 +1116,7 @@ edit = [
     { name = "jinja2" },
     { name = "python-multipart" },
     { name = "rapidfuzz" },
+    { name = "segno" },
 ]
 gcal = [
     { name = "google-api-python-client" },
@@ -1382,6 +1384,7 @@ requires-dist = [
     { name = "scikit-learn", marker = "extra == 'ml'", specifier = ">=1.5.1" },
     { name = "scipy", marker = "extra == 'ml'", specifier = ">=1.14.0" },
     { name = "seaborn", marker = "extra == 'ml'", specifier = ">=0.13.2" },
+    { name = "segno", marker = "extra == 'edit'", specifier = ">=1.6.6" },
     { name = "sentencepiece", marker = "extra == 'ml'", specifier = ">=0.2.1" },
     { name = "sentencepiece", marker = "extra == 'voiceover-cohere'", specifier = ">=0.1.99" },
     { name = "skorch", marker = "extra == 'ml'", git = "https://github.com/skorch-dev/skorch.git" },
@@ -7301,6 +7304,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/86/59/a451d7420a77ab0b98f7affa3a1d78a313d2f7281a57afb1a34bae8ab412/seaborn-0.13.2.tar.gz", hash = "sha256:93e60a40988f4d65e9f4885df477e2fdaff6b73a9ded434c1ab356dd57eefff7", size = 1457696, upload-time = "2024-01-25T13:21:52.551Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/83/11/00d3c3dfc25ad54e731d91449895a79e4bf2384dc3ac01809010ba88f6d5/seaborn-0.13.2-py3-none-any.whl", hash = "sha256:636f8336facf092165e27924f223d3c62ca560b1f2bb5dff7ab7fad265361987", size = 294914, upload-time = "2024-01-25T13:21:49.598Z" },
+]
+
+[[package]]
+name = "segno"
+version = "1.6.6"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/1c/2e/b396f750c53f570055bf5a9fc1ace09bed2dff013c73b7afec5702a581ba/segno-1.6.6.tar.gz", hash = "sha256:e60933afc4b52137d323a4434c8340e0ce1e58cec71439e46680d4db188f11b3", size = 1628586, upload-time = "2025-03-12T22:12:53.324Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d6/02/12c73fd423eb9577b97fc1924966b929eff7074ae6b2e15dd3d30cb9e4ae/segno-1.6.6-py3-none-any.whl", hash = "sha256:28c7d081ed0cf935e0411293a465efd4d500704072cdb039778a2ab8736190c7", size = 76503, upload-time = "2025-03-12T22:12:48.106Z" },
 ]
 
 [[package]]

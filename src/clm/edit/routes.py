@@ -22,10 +22,11 @@ from pathlib import Path
 from typing import cast
 
 from fastapi import APIRouter, Form, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 
 from clm.core.topic_resolver import build_topic_map
 from clm.edit.deck_file import DeckFile, DeckFileError
+from clm.edit.qr import svg_data_uri
 from clm.infrastructure.utils.path_utils import is_slides_file
 
 router = APIRouter()
@@ -72,6 +73,20 @@ def _relative_to_slides(request: Request, path: Path) -> str:
     """Path of ``path`` relative to the slides dir, using forward slashes."""
     rel = path.resolve().relative_to(_slides_dir(request).resolve())
     return rel.as_posix()
+
+
+def _public_url(request: Request) -> str:
+    """The URL a phone should open, derived from the request's Host header.
+
+    When the desktop browser hits ``http://192.168.1.42:8080`` (the LAN IP),
+    the ``Host`` header already carries that address — so a QR code encoding
+    it is scannable by a phone on the same network. Falls back to the app's
+    configured host:port if the header is missing.
+    """
+    host_header = request.headers.get("host")
+    if host_header:
+        return f"http://{host_header}"
+    return f"http://{request.app.state.host}:{request.app.state.port}"
 
 
 # ----------------------------------------------------------------------
@@ -305,3 +320,26 @@ async def cell_insert(
             "moved_index": insert_at,
         },
     )
+
+
+# ----------------------------------------------------------------------
+# QR code — scannable link for opening the editor on a phone
+# ----------------------------------------------------------------------
+
+
+@router.get("/qr")
+async def qr_svg(request: Request) -> Response:
+    """Return the editor's public URL as a standalone SVG QR code.
+
+    Embeddable directly via ``<img src="/qr">``. The URL is derived from the
+    request's ``Host`` header, so a desktop hitting the LAN IP produces a QR
+    code scannable by a phone on the same network.
+    """
+    uri = svg_data_uri(_public_url(request))
+    # ``svg_data_uri`` returns a ``data:`` URI; strip its prefix to get the
+    # raw SVG markup for a standalone image response.
+    prefix = "data:image/svg+xml;charset=utf-8,"
+    svg = uri[len(prefix) :] if uri.startswith(prefix) else uri
+    from urllib.parse import unquote
+
+    return Response(content=unquote(svg), media_type="image/svg+xml")

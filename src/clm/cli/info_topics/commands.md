@@ -2709,7 +2709,8 @@ headers (DE/EN slide, voiceover, notes, code) so you rarely type one by hand.
 Every save writes straight to the source file on disk; untouched cells are
 preserved byte-for-byte (backed by the lossless `raw_cells` primitives), and
 git is the safety net. When binding to `0.0.0.0`, the command prints the LAN
-URLs to open on your phone; for remote access, tunnel via Tailscale.
+URLs plus a scannable ASCII QR code for the phone; the editor's landing page
+(`/`) also shows the QR as an inline SVG. For remote access, tunnel via Tailscale.
 
 ### `clm status`
 

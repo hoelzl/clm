@@ -37,8 +37,11 @@ clm edit --host 0.0.0.0 --port 9000 --no-browser
 | `--no-browser` | off | Don't auto-open a desktop browser |
 
 When you bind to `0.0.0.0`, the command prints the LAN URLs (e.g.
-`http://192.168.1.42:8080`) to open on your phone. The desktop URL
-(`http://localhost:8080`) also works for previewing from the same machine.
+`http://192.168.1.42:8080`) **and a scannable ASCII QR code** — point your
+phone's camera at the terminal to open the editor without typing the address.
+The editor's landing page (`/`) also shows the QR as an inline SVG you can scan
+from the desktop browser. The desktop URL (`http://localhost:8080`) works for
+previewing from the same machine.
 
 ## Opening it on your phone
 

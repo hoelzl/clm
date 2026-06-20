@@ -5,4 +5,8 @@
   header-preset chips so you rarely type a cell header by hand. Every save writes
   straight to the real file — untouched cells are preserved byte-for-byte, and git
   is your safety net. Backed by the lossless `raw_cells` / `DeckFile` primitives;
-  ships as the `[edit]` extra (HTMX + Jinja2 + python-multipart).
+  ships as the `[edit]` extra (HTMX + Jinja2 + python-multipart + segno).
+- **QR code for mobile pairing.** `clm edit` prints a scannable ASCII QR code in
+  the desktop terminal and shows one on the editor's landing page, so you can open
+  the editor on your phone by scanning instead of typing a LAN URL. Generated
+  fully offline (server-side SVG via segno; no external API).

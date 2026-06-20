@@ -86,9 +86,20 @@ def edit_cmd(data_dir: Path | None, host: str, port: int, no_browser: bool):
     url = f"http://{display_host}:{port}"
     click.echo(f"Starting deck editor on {host}:{port}…")
     click.echo(f"Open: {url}")
-    if host in ("0.0.0.0", "::"):
-        for lan_url in _lan_urls(port):
-            click.echo(f"  Phone: {lan_url}")
+    lan_urls = _lan_urls(port) if host in ("0.0.0.0", "::") else []
+    if lan_urls:
+        click.echo("Open on your phone (or scan the QR code below):")
+        for lan_url in lan_urls:
+            click.echo(f"  {lan_url}")
+        # Print a scannable QR code for the first LAN URL so the phone can
+        # scan it straight off the desktop terminal.
+        try:
+            from clm.edit.qr import print_terminal
+
+            click.echo()  # blank line before the block
+            print_terminal(lan_urls[0])
+        except Exception:  # pragma: no cover - defensive; never block startup
+            pass
     click.echo("Press CTRL+C to stop")
 
     if not no_browser:

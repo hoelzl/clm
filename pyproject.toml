@@ -232,6 +232,7 @@ edit = [
     "jinja2>=3.1",
     "python-multipart>=0.0.6",
     "coding-academy-lecture-manager[slides]",
+    "segno>=1.6.6",
 ]
 # Development and testing
 dev = [

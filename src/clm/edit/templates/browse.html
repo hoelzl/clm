@@ -6,6 +6,14 @@
 <h1>Decks</h1>
 <p class="subtitle">Pick a deck to edit. Files live under <code>slides/</code>.</p>
 
+<div class="qr-card">
+    <img class="qr-img" src="/qr" alt="QR code linking to this editor" width="180" height="180">
+    <div>
+        <strong>Open on your phone</strong>
+        <p>Scan this code with your phone's camera (same Wi-Fi, or via Tailscale).</p>
+    </div>
+</div>
+
 {% if not has_slides %}
 <div class="empty-state">
     <p>No slide files found under <code>slides/</code>.</p>

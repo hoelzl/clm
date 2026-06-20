@@ -88,6 +88,27 @@ h1 { font-size: 22px; margin: 8px 0 4px; }
 h2 { font-size: 18px; margin: 16px 0 4px; color: var(--muted); }
 .subtitle { color: var(--muted); font-size: 14px; margin: 0 0 12px; }
 
+/* QR code card on the browse page — scan to open on a phone */
+.qr-card {
+    display: flex;
+    gap: 14px;
+    align-items: center;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px;
+    margin-bottom: 16px;
+}
+.qr-img {
+    background: #fff;
+    padding: 8px;
+    border-radius: 6px;
+    flex-shrink: 0;
+    width: 180px;
+    height: 180px;
+}
+.qr-card p { margin: 4px 0 0; color: var(--muted); font-size: 14px; }
+
 /* Module / topic cards */
 .module { margin-bottom: 16px; }
 .module-name {
