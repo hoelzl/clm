@@ -1,10 +1,11 @@
 # Mobile Deck Studio — authoring a course from a phone
 
-> **Status:** plan of record. **P0 + P1 + P2 implemented** (read-only browse,
-> the cell-editing concurrency core, and structural insert/delete/move with
-> id-minting); P3–P4 not yet implemented. Chosen over the `clm edit` prototype
-> (PR #394, closed as superseded). See §9 for the decision record, steering
-> notes, and the P0/P1 and P2 build records.
+> **Status:** plan of record. **P0 + P1 + P2 implemented**, **P3a implemented**
+> (the bilingual language toggle + watermark-derived lock + stale badges + 423
+> enforcement); **P3b** (in-app Sync-to-other-language + Discard) and **P4** not
+> yet implemented. Chosen over the `clm edit` prototype (PR #394, closed as
+> superseded). See §9 for the decision record, steering notes, and the P0/P1,
+> P2, and P3a build records.
 > **Date:** 2026-06-20.
 > **Author:** design draft, worked through interactively.
 > **Scope:** a new **Studio** view on the existing `clm serve` web app
@@ -230,7 +231,8 @@ structural op. No naïve whole-file re-emit.
 | **P0** ✅ | `clm serve` **Studio view** + Tailscale-HTTPS / QR / token auth scaffold; navigation (Recents, search, tree with badges, "Not in spec"); open a deck; **read-only** cell render (client markdown + server-side `is_j2` render); full-text search. Reuses `parse_cells`, `course decks`/`orphans`, `slides search`. No writes. *(Implemented — `is_j2` server render scaffolded; see §9.6.)* |
 | **P1** ✅ | **Cell body/tag editing** + the **concurrency core**: optimistic `deck_version` + `cell_hash` (409/423), atomic `FileState` write-back, `watchfiles` external-change watcher, autosave + 409/disk-change UX. The safety keystone — built and tested first. *(Implemented; 423 language-lock deferred to P3 — see §9.6.)* |
 | **P2** ✅ | **Structural ops** (`insert` / `delete` / `move` / mint-id) via the byte-exact serializer; reorder mode in the UI; byte-exact untouched-cell tests. *(Implemented — see §9.7.)* |
-| **P3** | **Bilingual**: language-view + watermark-derived lock + Discard/unlock + **Sync-to-other-language** (server-side `sync` / `translate` / `assign-ids`, streamed over WS); stale badges. |
+| **P3a** ✅ | **Bilingual lock core**: language toggle (switch to the split twin) + watermark-derived lock (read-only `build_sync_plan`) + stale badges + **423** enforcement on every write. *(Implemented — see §9.8.)* |
+| **P3b** | **Bilingual propagation**: in-app **Discard & unlock** + **Sync-to-other-language** (server-side `sync` / `translate` / `assign-ids`, streamed over WS). The LLM-backed half of P3. |
 | **P4** | **Build-preview** (tier-2 no-exec deck render streamed over WS) + installable PWA + **read-only offline cache** of the last-opened deck. |
 | **Later / optional** | **Full executed single-deck build** (tier 3) for code outputs and rendered diagrams. |
 
@@ -470,3 +472,56 @@ Decisions / landmines:
   insert form asks the author to type prefixed markdown. De-prefix-on-read /
   re-prefix-on-write is a P4 polish item, not a P2 blocker — kept uniform with
   P1 edit rather than introducing an insert-vs-edit inconsistency.
+
+### 9.8 P3a build record (2026-06-20)
+
+The **bilingual lock core** — the deterministic, LLM-free half of P3. A deck's
+two languages live in **separate split files** (`<deck>.de.py` / `<deck>.en.py`);
+the design's earlier "interleaved single `.py`" framing (§3.5) predates the
+split-format migration and is now the *legacy* path (`clm slides suggest-sync`,
+hidden). The lock is built on the **split-pair** model that `clm slides sync`
+uses (912 split decks vs 306 bare `.py` in the live course; the bare ones are
+test/workshop modules, not decks).
+
+What shipped: `LockState` on every `DeckView`; a `StudioService.compute_lock`
+that derives the lock read-only; `_enforce_lock` on **all five** write ops
+(edit-body, edit-tags, insert, delete, move) → `LanguageLockedError` → **423**;
+frontend language toggle (`DE ✎ / EN 🔒`, tap the twin to switch), lock banner,
+stale chip/banner, and controls disabled when locked. Tests: 10 new
+(`tests/web/studio/test_lock.py`).
+
+Decisions / landmines:
+
+- **Lock = watermark, not session state.** `compute_lock` calls
+  `build_sync_plan(de, en, watermark_cache=…)` (in `clm.slides.sync_plan`,
+  read-only, `provider_available=False` → **no LLM, no writes**) and reads
+  `Proposal.direction`: `de->en` ⇒ the **DE** half drifted (DE dirty), `en->de`
+  ⇒ EN dirty, a `conflict` (direction `None`) ⇒ both. **Rule:** a language is
+  editable iff the *other* half is clean → `editable = not other_dirty and not
+  has_conflicts`; the open half being dirty sets `other_stale` (the twin needs a
+  sync). This ties the lock to data-consistency state, so it survives reloads and
+  second devices (design §3.5).
+- **Cache must match the CLI.** `compute_lock` resolves the watermark DB with
+  `resolve_cache_dir()` (cwd-based, no `repo_root`) exactly as `clm slides sync`
+  does, so the lock reads the **same** `.clm-cache/clm-llm.sqlite` the user's
+  sync writes. `clm serve` is expected to run from the course root (same as the
+  CLI). Tests isolate it via `CLM_CACHE_DIR`.
+- **Cold-start = unlocked.** No watermark **and** no git baseline →
+  `baseline_source == "none"` → no drift detectable → both halves editable. Safe
+  because the 409 concurrency guard (P1) — not the lock — is the anti-clobber
+  keystone; the lock is an authoring-discipline aid. In a real git repo the
+  HEAD-fallback baseline makes a Studio edit show as drift immediately, so the
+  lock engages without an explicit sync.
+- **No twin ⇒ no lock.** `derive_split_twin` returns `None` for a deck with no
+  on-disk twin (or a voiceover companion) → `is_pair=False`, fully editable. This
+  is why the single-language P0–P2 fixtures and tests are unaffected — the lock
+  path returns before ever touching the watermark/plan.
+- **Escape hatches are P3b.** With the lock on, the only in-app release today is
+  switching to the editable (source) language; **Discard & unlock** and
+  **Sync-to-other-language** need care (Discard's revert is git-coupled; Sync is
+  the LLM-backed `apply_plan` streamed over WS) and are deferred to P3b. The lock
+  banner names the resolution (sync/discard the other half on the desktop).
+- **Cost.** `compute_lock` runs on every `open_deck` **and** every write (to
+  enforce), each parsing both halves + a sqlite read (+ a `git show` on
+  cold-start HEAD fallback). Fine at deck sizes / workstation use; a cache keyed
+  on `(deck_version_de, deck_version_en)` is an obvious later optimization.

@@ -37,6 +37,7 @@ from clm.web.studio.service import (
     DeckNotFoundError,
     InvalidDeckIdError,
     InvalidStructuralOpError,
+    LanguageLockedError,
     StaleWriteError,
     StudioService,
 )
@@ -69,6 +70,11 @@ def _handle_write(call: Callable[[], EditResult]) -> EditResult:
         raise HTTPException(
             status_code=409,
             detail={"error": "stale", "kind": e.kind, "current": e.current},
+        ) from e
+    except LanguageLockedError as e:
+        raise HTTPException(
+            status_code=423,
+            detail={"error": "locked", "reason": e.reason},
         ) from e
     except CellNotFoundError as e:
         raise HTTPException(status_code=404, detail=f"Cell not found: {e}") from e

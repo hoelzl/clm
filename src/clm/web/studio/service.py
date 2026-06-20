@@ -44,6 +44,7 @@ from clm.web.studio.models import (
     DeckTree,
     DeckView,
     EditResult,
+    LockState,
     SearchHit,
     SearchResults,
 )
@@ -76,6 +77,19 @@ class CellNotFoundError(StudioError):
 
 class InvalidStructuralOpError(StudioError):
     """A structural op (insert/delete/move) had invalid parameters (→ 400)."""
+
+
+class LanguageLockedError(StudioError):
+    """The deck's language is locked because the twin half is dirty (→ 423).
+
+    ``reason`` is a human-readable explanation the phone surfaces; the resolution
+    is to sync or discard the other half (on the desktop, until P3b lands those
+    in-app).
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
 
 
 class StaleWriteError(StudioError):
@@ -273,7 +287,7 @@ class StudioService:
         return views
 
     def open_deck(self, deck_id: str, *, lang: str | None = None) -> DeckView:
-        """Parse a deck for viewing/editing (read-only render)."""
+        """Parse a deck for viewing/editing (read-only render), with lock state."""
         path = self._resolve_deck_id(deck_id)
         if not path.exists():
             raise DeckNotFoundError(deck_id)
@@ -284,7 +298,84 @@ class StudioService:
             deck_version=self._deck_version(path),
             lang=lang,
             cells=self._cell_views(text, lang),
+            lock=self.compute_lock(deck_id, path),
         )
+
+    # ----------------------------------------------------- bilingual lock (P3)
+
+    def compute_lock(self, deck_id: str, path: Path) -> LockState:
+        """Derive the deck's bilingual lock from the structural sync watermark.
+
+        A language is editable iff the *other* split half is **clean** relative to
+        the last synced baseline (design §3.5): editing one half marks the other
+        stale and locks it until a sync (or discard) makes both clean again. The
+        plan build is **read-only and LLM-free** (``provider_available=False``).
+        Returns an unlocked state for any deck with no split twin on disk.
+        """
+        from clm.slides.pairing import derive_split_twin, order_split_pair, split_lang_tag
+
+        lang = split_lang_tag(path)
+        twin = derive_split_twin(path)
+        if lang is None or twin is None or not twin.exists():
+            return LockState(is_pair=False, lang=lang, editable=True, baseline="n/a")
+        ordered = order_split_pair(path, twin)
+        if ordered is None:
+            return LockState(is_pair=False, lang=lang, editable=True, baseline="n/a")
+        de_path, en_path = ordered
+        other_lang = "en" if lang == "de" else "de"
+
+        from clm.infrastructure.llm.cache import (
+            CACHE_DB_NAME,
+            SyncWatermarkCache,
+            resolve_cache_dir,
+        )
+        from clm.slides.sync_plan import build_sync_plan
+
+        cache = SyncWatermarkCache(resolve_cache_dir() / CACHE_DB_NAME)
+        try:
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+        finally:
+            cache.close()
+
+        # ``direction`` names the half that drifted (the source). de->en ⇒ DE is
+        # dirty; en->de ⇒ EN is dirty. A conflict (both drifted) locks both.
+        de_dirty = any(p.direction == "de->en" for p in plan.proposals)
+        en_dirty = any(p.direction == "en->de" for p in plan.proposals)
+        has_conflicts = plan.count("conflict") > 0
+        this_dirty = de_dirty if lang == "de" else en_dirty
+        other_dirty = en_dirty if lang == "de" else de_dirty
+
+        editable = not other_dirty and not has_conflicts
+        if has_conflicts:
+            reason: str | None = (
+                "Both languages changed since the last sync — resolve on the "
+                "desktop with `clm slides sync`."
+            )
+        elif other_dirty:
+            reason = (
+                f"{other_lang.upper()} has unsynced edits and is the active source; "
+                f"sync or discard it to edit {lang.upper()}."
+            )
+        else:
+            reason = None
+
+        return LockState(
+            is_pair=True,
+            lang=lang,
+            other_lang=other_lang,
+            twin_deck_id=self._rel(twin),
+            editable=editable,
+            locked_reason=reason,
+            other_stale=this_dirty,
+            has_conflicts=has_conflicts,
+            baseline=plan.baseline_source,
+        )
+
+    def _enforce_lock(self, deck_id: str, path: Path) -> None:
+        """Raise :class:`LanguageLockedError` (→ 423) if this language is locked."""
+        lock = self.compute_lock(deck_id, path)
+        if lock.is_pair and not lock.editable:
+            raise LanguageLockedError(lock.locked_reason or "This language is locked.")
 
     # ----------------------------------------------------- concurrency core
 
@@ -346,6 +437,7 @@ class StudioService:
         path, state = self._load_guarded(
             deck_id, slide_id, role, expected_deck_version, expected_cell_hash
         )
+        self._enforce_lock(deck_id, path)
         if not state.replace_cell_body(slide_id, role, new_body):
             raise CellNotFoundError(f"{slide_id!r}/{role!r}")
         return self._persist(deck_id, path, state, slide_id, role)
@@ -364,6 +456,7 @@ class StudioService:
         path, state = self._load_guarded(
             deck_id, slide_id, role, expected_deck_version, expected_cell_hash
         )
+        self._enforce_lock(deck_id, path)
         if not state.replace_cell_tags(slide_id, role, new_tags):
             raise CellNotFoundError(f"{slide_id!r}/{role!r}")
         return self._persist(deck_id, path, state, slide_id, role)
@@ -458,6 +551,7 @@ class StudioService:
             raise InvalidStructuralOpError('a code cell must use role "code"')
 
         path, state = self._load_for_structural(deck_id, expected_deck_version)
+        self._enforce_lock(deck_id, path)
         resolved_lang = lang or self._infer_lang(state, after_slide_id, after_role)
         new_id = self._resolve_or_mint_slide_id(state, slide_id, role, body)
         tags = [] if cell_type == "code" else [role]
@@ -491,6 +585,7 @@ class StudioService:
         path, state = self._load_guarded(
             deck_id, slide_id, role, expected_deck_version, expected_cell_hash
         )
+        self._enforce_lock(deck_id, path)
         if not state.delete_cell(slide_id, role):
             raise CellNotFoundError(f"{slide_id!r}/{role!r}")
         # The cell is gone, so _persist's post-flush lookup yields an empty hash.
@@ -509,6 +604,7 @@ class StudioService:
         if direction not in ("up", "down"):
             raise InvalidStructuralOpError(f"invalid direction: {direction!r}")
         path, state = self._load_for_structural(deck_id, expected_deck_version)
+        self._enforce_lock(deck_id, path)
         if state.find_cell(slide_id, role) is None:
             raise CellNotFoundError(f"{slide_id!r}/{role!r}")
         if not state.move_cell(slide_id, role, direction):
