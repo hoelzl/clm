@@ -6,18 +6,20 @@ rather than URL path segments (a greedy path converter would swallow them).
 
 Optimistic-concurrency failures surface as **409** (``deck_version`` or
 ``cell_hash`` no longer current); the response carries the fresh guard so the
-phone can re-fetch and retry. The language lock (**423**) is P3 and not yet
-wired.
+phone can re-fetch and retry. A write to a watermark-**locked** language is
+**423** (P3a). ``/deck/sync`` starts a streamed sync-to-other-language (P3b).
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable
 from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
+from clm.web.studio import sync_runner
 from clm.web.studio.auth import token_matches
 from clm.web.studio.models import (
     DeckTree,
@@ -31,6 +33,8 @@ from clm.web.studio.models import (
     RenderCellRequest,
     RenderCellResult,
     SearchResults,
+    SyncRequest,
+    SyncStartResult,
 )
 from clm.web.studio.service import (
     CellNotFoundError,
@@ -207,6 +211,38 @@ async def move_cell(request: Request, req: MoveCellRequest) -> EditResult:
             expected_deck_version=req.expected_deck_version,
         )
     )
+
+
+@router.post("/deck/sync", response_model=SyncStartResult, dependencies=[Depends(require_token)])
+async def sync_deck(request: Request, req: SyncRequest) -> SyncStartResult:
+    """Start a streamed sync-to-other-language for a split pair (P3b).
+
+    Validates the pair, then runs ``clm slides sync`` as a background subprocess
+    whose progress streams over the WS ``studio`` channel. Returns as soon as the
+    run is launched; the phone watches WS for ``sync-progress`` / ``sync-done``.
+    A second request while one is in flight for the same pair is a **409**.
+    """
+    service = get_service(request)
+    try:
+        _, de_id, _ = service.resolve_sync_command(req.deck_id)
+    except DeckNotFoundError as e:
+        raise HTTPException(status_code=404, detail=f"Deck not found: {e}") from e
+    except InvalidDeckIdError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid deck id: {e}") from e
+    except InvalidStructuralOpError as e:
+        raise HTTPException(status_code=400, detail=f"Cannot sync: {e}") from e
+
+    if not service.try_begin_sync(de_id):
+        raise HTTPException(status_code=409, detail="A sync is already running for this deck.")
+
+    async def _runner() -> None:
+        try:
+            await sync_runner.run_sync(service, req.deck_id)
+        finally:
+            service.end_sync(de_id)
+
+    asyncio.create_task(_runner())
+    return SyncStartResult(started=True, deck_id=req.deck_id)
 
 
 @router.post(

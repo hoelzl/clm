@@ -210,6 +210,24 @@ class EditResult(BaseModel):
     slide_id: str | None = None
 
 
+class SyncRequest(BaseModel):
+    """A sync-to-other-language request (P3b)."""
+
+    deck_id: str = Field(description="Slides-dir-relative deck path (either half of the pair).")
+
+
+class SyncStartResult(BaseModel):
+    """Acknowledgement that a streamed sync was started.
+
+    Progress and completion arrive over the WebSocket (``sync-started`` /
+    ``sync-progress`` / ``sync-done`` on the ``studio`` channel), not in this
+    response — the sync runs server-side and may take a while (LLM).
+    """
+
+    started: bool = True
+    deck_id: str
+
+
 class RenderCellRequest(BaseModel):
     """Tier-2 (no-exec) render request for one cell."""
 
