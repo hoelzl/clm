@@ -14,6 +14,7 @@ from clm.web.studio.service import (
     CellNotFoundError,
     DeckNotFoundError,
     InvalidDeckIdError,
+    InvalidStructuralOpError,
     StaleWriteError,
     StudioService,
 )
@@ -173,6 +174,198 @@ class TestConcurrencyCore:
         assert result.cell_hash == slide.content_hash
         assert result.deck_version != view.deck_version
         assert 'tags=["slide", "keep"]' in course.deck_path.read_text(encoding="utf-8")
+
+
+class TestStructuralInsert:
+    def _open_version(self, service: StudioService, course: Course) -> str:
+        return service.open_deck(course.deck_id).deck_version
+
+    def test_insert_at_start_mints_id_and_becomes_first_slide(
+        self, service: StudioService, course: Course
+    ):
+        version = self._open_version(service, course)
+        result = service.insert_cell(
+            course.deck_id,
+            role="slide",
+            cell_type="markdown",
+            body="# Neue Folie\n#\n# Inhalt hier.",
+            expected_deck_version=version,
+        )
+        assert result.slide_id == "neue-folie"
+        view = service.open_deck(course.deck_id)
+        # New slide is first, addressable, and editable.
+        first = next(c for c in view.cells if c.role == "slide")
+        assert first.slide_id == "neue-folie"
+        assert first.editable
+        assert view.cells[0].slide_id == "neue-folie"
+        assert len(view.cells) == 4
+
+    def test_insert_leaves_existing_cells_byte_exact(self, service: StudioService, course: Course):
+        before = course.deck_path.read_text(encoding="utf-8")
+        _, before_cells = split_cells(before)
+        version = self._open_version(service, course)
+        service.insert_cell(
+            course.deck_id,
+            role="slide",
+            body="# Brandneu\n#\n# Text.",
+            expected_deck_version=version,
+        )
+        _, after_cells = split_cells(course.deck_path.read_text(encoding="utf-8"))
+        # The three originals survive verbatim (the new cell is the only addition).
+        after_ids = ["\n".join(c.lines) for c in after_cells]
+        for b in before_cells:
+            assert "\n".join(b.lines) in after_ids
+
+    def test_insert_after_with_shared_id_groups_notes(self, service: StudioService, course: Course):
+        version = self._open_version(service, course)
+        # Add a *second* notes-style aux cell sharing the slide's id but a new role.
+        result = service.insert_cell(
+            course.deck_id,
+            role="voiceover",
+            body="# Sprechtext.",
+            after_slide_id="intro-welcome",
+            after_role="slide",
+            slide_id="intro-welcome",
+            expected_deck_version=version,
+        )
+        assert result.slide_id == "intro-welcome"
+        view = service.open_deck(course.deck_id)
+        vo = next(c for c in view.cells if c.role == "voiceover")
+        assert vo.slide_id == "intro-welcome" and vo.editable
+
+    def test_insert_duplicate_key_rejected(self, service: StudioService, course: Course):
+        version = self._open_version(service, course)
+        with pytest.raises(InvalidStructuralOpError):
+            service.insert_cell(
+                course.deck_id,
+                role="slide",
+                body="# x",
+                slide_id="intro-welcome",  # (intro-welcome, slide) already exists
+                expected_deck_version=version,
+            )
+
+    def test_insert_stale_deck_version_rejected(self, service: StudioService, course: Course):
+        with pytest.raises(StaleWriteError) as exc:
+            service.insert_cell(
+                course.deck_id,
+                role="slide",
+                body="# x",
+                expected_deck_version="deadbeefdeadbeef",
+            )
+        assert exc.value.kind == "deck_version"
+
+    def test_insert_unknown_anchor_raises(self, service: StudioService, course: Course):
+        version = self._open_version(service, course)
+        with pytest.raises(CellNotFoundError):
+            service.insert_cell(
+                course.deck_id,
+                role="notes",
+                body="# x",
+                after_slide_id="no-such-id",
+                after_role="slide",
+                expected_deck_version=version,
+            )
+
+
+class TestStructuralDelete:
+    def test_delete_removes_cell_and_keeps_others_byte_exact(
+        self, service: StudioService, course: Course
+    ):
+        before = course.deck_path.read_text(encoding="utf-8")
+        _, before_cells = split_cells(before)
+        view = service.open_deck(course.deck_id)
+        notes = next(c for c in view.cells if c.role == "notes")
+        service.delete(
+            course.deck_id,
+            notes.slide_id,
+            notes.role,
+            expected_deck_version=view.deck_version,
+            expected_cell_hash=notes.content_hash,
+        )
+        reopened = service.open_deck(course.deck_id)
+        assert all(c.role != "notes" for c in reopened.cells)
+        assert len(reopened.cells) == 2
+        # Surviving cells are byte-for-byte identical to their originals.
+        _, after_cells = split_cells(course.deck_path.read_text(encoding="utf-8"))
+        survivors = {"\n".join(c.lines) for c in after_cells}
+        kept = [c for c in before_cells if c.metadata.tags != ["notes"]]
+        for c in kept:
+            assert "\n".join(c.lines) in survivors
+
+    def test_delete_stale_cell_hash_rejected(self, service: StudioService, course: Course):
+        view = service.open_deck(course.deck_id)
+        slide = next(c for c in view.cells if c.role == "slide")
+        with pytest.raises(StaleWriteError) as exc:
+            service.delete(
+                course.deck_id,
+                slide.slide_id,
+                slide.role,
+                expected_deck_version=view.deck_version,
+                expected_cell_hash="0" * 64,
+            )
+        assert exc.value.kind == "cell_hash"
+
+
+class TestStructuralMove:
+    def test_move_down_reorders_and_preserves_bytes(self, service: StudioService, course: Course):
+        before = course.deck_path.read_text(encoding="utf-8")
+        _, before_cells = split_cells(before)
+        view = service.open_deck(course.deck_id)
+        slide = next(c for c in view.cells if c.role == "slide")
+        result = service.move(
+            course.deck_id,
+            slide.slide_id,
+            slide.role,
+            "down",
+            expected_deck_version=view.deck_version,
+        )
+        assert result.deck_version != view.deck_version
+        reopened = service.open_deck(course.deck_id)
+        # slide now sits after notes.
+        roles = [c.role for c in reopened.cells]
+        assert roles.index("notes") < roles.index("slide")
+        # Every original cell's bytes survive (only the order changed).
+        _, after_cells = split_cells(course.deck_path.read_text(encoding="utf-8"))
+        before_blocks = sorted("\n".join(c.lines) for c in before_cells)
+        after_blocks = sorted("\n".join(c.lines) for c in after_cells)
+        assert before_blocks == after_blocks
+
+    def test_move_up_at_boundary_rejected(self, service: StudioService, course: Course):
+        view = service.open_deck(course.deck_id)
+        slide = next(c for c in view.cells if c.role == "slide")  # already first
+        with pytest.raises(InvalidStructuralOpError):
+            service.move(
+                course.deck_id,
+                slide.slide_id,
+                slide.role,
+                "up",
+                expected_deck_version=view.deck_version,
+            )
+
+    def test_move_stale_deck_version_rejected(self, service: StudioService, course: Course):
+        view = service.open_deck(course.deck_id)
+        slide = next(c for c in view.cells if c.role == "slide")
+        with pytest.raises(StaleWriteError) as exc:
+            service.move(
+                course.deck_id,
+                slide.slide_id,
+                slide.role,
+                "down",
+                expected_deck_version="deadbeefdeadbeef",
+            )
+        assert exc.value.kind == "deck_version"
+
+    def test_move_bad_direction_rejected(self, service: StudioService, course: Course):
+        view = service.open_deck(course.deck_id)
+        slide = next(c for c in view.cells if c.role == "slide")
+        with pytest.raises(InvalidStructuralOpError):
+            service.move(
+                course.deck_id,
+                slide.slide_id,
+                slide.role,
+                "sideways",
+                expected_deck_version=view.deck_version,
+            )
 
 
 class TestSelfWriteHint:

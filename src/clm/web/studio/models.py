@@ -105,12 +105,73 @@ class EditTagsRequest(BaseModel):
     expected_cell_hash: str
 
 
+class InsertCellRequest(BaseModel):
+    """An ``insert`` write: add a new cell, minting (or inheriting) a slide_id.
+
+    Position is given by an anchor: the new cell lands immediately **after** the
+    ``(after_slide_id, after_role)`` cell, or — when ``after_slide_id`` is
+    omitted — ahead of the deck's first sync cell (it becomes the first slide).
+
+    ``slide_id`` is optional: omit it for a new slide (the server mints a unique
+    slug from the body title), or pass the anchor slide's id to add a companion
+    cell (e.g. ``notes``) that must share its slide's identity to group
+    correctly. Only ``expected_deck_version`` guards the write — there is no
+    prior cell hash for a cell that does not yet exist.
+    """
+
+    deck_id: str = Field(description="Slides-dir-relative deck path.")
+    after_slide_id: str | None = Field(
+        default=None, description="Anchor cell's slide_id; omit to insert at the deck start."
+    )
+    after_role: str | None = Field(default=None, description="Anchor cell's role.")
+    cell_type: str = Field(default="markdown", description='"markdown" or "code".')
+    role: str = Field(description="Sync role/tag for the new cell (slide/notes/voiceover/…).")
+    body: str = Field(default="", description="Body of the new cell (raw, comment-prefixed).")
+    slide_id: str | None = Field(
+        default=None, description="Explicit slide id; omitted → minted from the body title."
+    )
+    lang: str | None = Field(
+        default=None, description="Language; omitted → inherited from the anchor/deck."
+    )
+    expected_deck_version: str = Field(description="deck_version the phone last saw.")
+
+
+class DeleteCellRequest(BaseModel):
+    """A ``delete`` write, carrying the optimistic-concurrency expectations."""
+
+    deck_id: str
+    slide_id: str
+    role: str
+    expected_deck_version: str
+    expected_cell_hash: str = Field(description="content_hash the phone last saw for this cell.")
+
+
+class MoveCellRequest(BaseModel):
+    """A ``move`` (reorder) write: swap a cell with its neighbour.
+
+    The cell content does not change, so only ``expected_deck_version`` guards
+    the write — a mismatch (any concurrent edit) yields 409 so the phone
+    re-fetches before reordering a stale view.
+    """
+
+    deck_id: str
+    slide_id: str
+    role: str
+    direction: str = Field(description='"up" or "down".')
+    expected_deck_version: str
+
+
 class EditResult(BaseModel):
-    """Result of a successful write: the fresh guards for the next edit."""
+    """Result of a successful write: the fresh guards for the next edit.
+
+    ``slide_id`` is populated on an ``insert`` (the minted or inherited id the
+    phone must adopt to address the new cell); it is ``None`` for in-place edits.
+    """
 
     ok: bool = True
     deck_version: str
     cell_hash: str
+    slide_id: str | None = None
 
 
 class RenderCellRequest(BaseModel):
