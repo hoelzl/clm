@@ -407,6 +407,24 @@ class StudioService:
         cmd = [sys.executable, "-m", "clm", "slides", "sync", str(de_path), "--yes"]
         return cmd, self._rel(de_path), self._rel(en_path)
 
+    # ------------------------------------------------------- tier-2 render (P4)
+
+    def render_cell(
+        self, deck_id: str, body: str, *, is_j2: bool, lang: str | None = None
+    ) -> tuple[bool, str | None, str]:
+        """Tier-2 (no-exec) render of one cell. Returns ``(rendered, error, text)``.
+
+        Only ``is_j2`` cells are expanded server-side (through the build's bundled
+        macros); plain cells are returned unchanged for the client to render as
+        markdown (tier 1). Never raises — preview degrades to tier-1 on failure.
+        """
+        if not is_j2:
+            return False, None, body
+        from clm.web.studio.render import render_j2_cell
+
+        path = self._resolve_deck_id(deck_id)
+        return render_j2_cell(path, body, lang)
+
     def try_begin_sync(self, key: str) -> bool:
         """Claim the in-flight slot for ``key`` (the DE deck id). False if taken."""
         if key in self._sync_inflight:

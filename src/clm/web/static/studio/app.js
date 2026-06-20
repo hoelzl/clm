@@ -77,6 +77,36 @@ function inline(s) {
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
 }
 
+// --- comment-prefix handling (CLM markdown is `# `/`// ` prefixed in the .py) --
+function commentTokenFor(deckId) {
+  return /\.(cpp|cc|cxx|h|hpp|cs|java|ts|tsx)$/i.test(deckId || "") ? "//" : "#";
+}
+function stripCommentPrefix(text, token) {
+  return text.split("\n").map((line) => {
+    if (!line.startsWith(token)) return line;
+    let rest = line.slice(token.length);
+    if (rest.startsWith(" ")) rest = rest.slice(1);
+    return rest;
+  }).join("\n");
+}
+
+// Tier-2 (P4): ask the server to expand an is_j2 cell's Jinja, then inject the
+// expanded HTML (header macros emit trusted HTML from our own desktop). Falls
+// back silently to the tier-1 markdown already shown.
+function renderJ2(cell, bodyEl, token) {
+  api("/deck/render-cell", {
+    method: "POST",
+    body: JSON.stringify({ deck_id: currentDeck.deck_id, body: cell.body, is_j2: true, lang: cell.lang }),
+  }).then((res) => {
+    if (!res.rendered) return;
+    const html = stripCommentPrefix(res.body, token)
+      .split("\n")
+      .filter((l) => !l.trimStart().startsWith("%%")) // drop cell-boundary remnants
+      .join("\n");
+    bodyEl.innerHTML = html;
+  }).catch(() => {});
+}
+
 // --- UI helpers ---------------------------------------------------------------
 const appEl = document.getElementById("app");
 const titleEl = document.getElementById("title");
@@ -277,8 +307,15 @@ function cellCard(cell, idx, locked) {
       <div class="cell-body"></div>
     </div>`);
   const body = card.querySelector(".cell-body");
-  if (cell.cell_type === "markdown") body.innerHTML = renderMarkdown(cell.body);
-  else body.innerHTML = `<pre><code>${esc(cell.body)}</code></pre>`;
+  const token = commentTokenFor(currentDeck.deck_id);
+  if (cell.cell_type === "markdown") {
+    // CLM markdown is comment-prefixed in the .py; strip it so a body line
+    // renders as prose, not as a heading (tier-1 preview).
+    body.innerHTML = renderMarkdown(stripCommentPrefix(cell.body, token));
+    if (cell.is_j2) renderJ2(cell, body, token); // tier-2: expand macros server-side
+  } else {
+    body.innerHTML = `<pre><code>${esc(cell.body)}</code></pre>`;
+  }
 
   const controls = card.querySelector(".cell-controls");
   if (locked) {
@@ -508,6 +545,14 @@ function connectWs() {
     }
   });
   ws.addEventListener("close", () => setTimeout(connectWs, 3000));
+}
+
+// --- service worker (P4): installable PWA + offline read-only cache -----------
+// Registered with root scope (the sw is served with Service-Worker-Allowed: /)
+// so it can cache both the /studio/ app shell and /api/studio/deck reads. Only
+// works in a secure context (Tailscale HTTPS / localhost); fails silently else.
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("/studio/sw.js", { scope: "/" }).catch(() => {});
 }
 
 // --- wiring -------------------------------------------------------------------
