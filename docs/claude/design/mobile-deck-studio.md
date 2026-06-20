@@ -1,6 +1,8 @@
 # Mobile Deck Studio — authoring a course from a phone
 
-> **Status:** design proposal (not yet implemented).
+> **Status:** plan of record (not yet implemented). Chosen over the
+> `clm edit` prototype (PR #394, closed as superseded). See §9 for the
+> decision record and implementation steering notes.
 > **Date:** 2026-06-20.
 > **Author:** design draft, worked through interactively.
 > **Scope:** a new **Studio** view on the existing `clm serve` web app
@@ -304,3 +306,70 @@ Auth: bearer token on every REST + WS call; `423` when the language is locked.
 | Navigation / status | `clm course decks` / `orphans`, `clm slides search` |
 | Byte-exact serializer for structural ops | the `split` / `unify` writer path |
 | Export-style rendering patterns | `clm.cli.commands.export` + `_export_shared` |
+
+---
+
+## 9. Decision record & implementation steering (2026-06-20)
+
+This design was selected as the plan of record after evaluating it against a
+competing working prototype, **PR #394 (`clm edit`)** — a standalone HTMX app
+that edited decks at **cell-index** granularity with last-write-wins. That PR
+was **closed as superseded**: index-keyed, last-write-wins writes are unsafe
+against CLM's recurring failure mode (two editors on one `.py` — phone + VS
+Code), because an insert/delete/reorder on the desktop side shifts indices and
+the phone then silently clobbers the wrong cell. This design makes that race
+the keystone instead. The notes below are binding refinements for whoever
+implements it.
+
+### 9.1 Build order — concurrency core first
+
+Follow the §4 phasing literally: **P0 read-only → P1 concurrency core →** then
+the rest. P1 is `(slide_id, role)` identity on `FileState` + optimistic
+`deck_version` + `cell_hash` (409 / 423) + the `watchfiles` external-change
+guard, landed with the byte-exact untouched-cell tests. **Never ship
+index-keyed writes at any phase.** The safety spine is the first deliverable,
+not a later hardening pass.
+
+### 9.2 One write path
+
+Route every write through `clm.slides.sync_writeback.FileState`
+(`find_cell` / `replace_cell_body` / `replace_cell_tags` / `delete_cell` /
+`separator_blanks` / `render`). Do **not** stand up a second, parallel
+serializer — divergent byte-exact write paths have bitten this codebase before
+(the Stage-4 cache invariant). Structural `insert` / `move` go through the
+`split` / `unify` serializer (§3.7), with tests asserting untouched cells are
+byte-for-byte unchanged after every op.
+
+### 9.3 Reuse from the closed prototype — only clear wins
+
+Default to building fresh on the spine above. Lift code from the closed #394
+branch (`claude/mobile-deck-editing`) **only where a reimplementation would buy
+nothing**:
+
+- **Lift:** `src/clm/edit/qr.py` — pure-Python `segno` QR generation
+  (`svg_data_uri` / terminal / `best_url`). Self-contained, tested, no
+  architectural coupling; it's exactly the §3.2 pairing helper.
+- **Lift (as tests):** the byte-exact round-trip patterns in
+  `tests/edit/test_deck_file.py` ("untouched cells unchanged after every op"),
+  retargeted against the `FileState` / serializer path — these *are* the §3.7
+  tests.
+- **Reference only, rewrite:** the optional-extra packaging, `clm info
+  commands` entry, changelog fragment, and user-guide page — use as a
+  convention reference, re-author for the `clm serve` integration.
+- **Do not reuse:** `DeckFile`, `routes.py`, the templates — wrong identity
+  model; reimplement on the spine.
+
+### 9.4 Frontend sequencing — de-risk the toolchain
+
+§3.1 (no-build Preact + htm + vendored CodeMirror 6) is the target, but it is
+the heaviest and most rot-prone part in a Python/Windows-first repo. Consider
+proving P0/P1 (read-only browse + concurrency core) with lighter delivery
+first, and bringing CodeMirror in at P2+ where in-cell editing ergonomics
+actually pay off. Make this an explicit call when starting P1.
+
+### 9.5 Integration point
+
+Extend the existing `clm serve` app (`clm.web`) rather than adding a standalone
+command: it already ships the WebSocket, lifespan, and `watchfiles` plumbing,
+and the watcher *is* the two-editor guard, so sharing it is the cheaper path.
+Record the decision explicitly at P0.
