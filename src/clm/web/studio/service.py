@@ -262,6 +262,8 @@ class StudioService:
             c_role = role_of(c.metadata)
             if c.slide_id is not None and c_role is not None:
                 key_counts[(c.slide_id, c_role)] += 1
+        from clm.web.studio.prefix import deprefix, round_trips
+
         views: list[CellView] = []
         for index, cell in enumerate(parsed):
             if lang is not None and cell.lang is not None and cell.lang != lang:
@@ -272,6 +274,19 @@ class StudioService:
                 and role is not None
                 and key_counts[(cell.slide_id, role)] == 1
             )
+            # Offer clean (de-prefixed) markdown editing only for plain markdown
+            # cells whose prefixing round-trips exactly — code/j2 stay raw, and a
+            # non-canonical cell falls back to raw so the byte-exact write path is
+            # never weakened. The content_hash is always over the RAW content.
+            token = cell.comment_token
+            if (
+                cell.cell_type == "markdown"
+                and not cell.metadata.is_j2
+                and round_trips(cell.content, token)
+            ):
+                body, body_format = deprefix(cell.content, token), "clean"
+            else:
+                body, body_format = cell.content, "raw"
             views.append(
                 CellView(
                     index=index,
@@ -280,7 +295,8 @@ class StudioService:
                     cell_type=cell.cell_type,
                     lang=cell.lang,
                     tags=list(cell.tags),
-                    body=cell.content,
+                    body=body,
+                    body_format=body_format,
                     is_j2=cell.metadata.is_j2,
                     content_hash=cell_content_hash(cell.content),
                     anchor=anchor_of(cell.metadata, cell.content),
@@ -482,6 +498,20 @@ class StudioService:
         new_hash = cell_content_hash(fresh_cell.body) if fresh_cell is not None else ""
         return EditResult(deck_version=self._deck_version(path), cell_hash=new_hash)
 
+    def _for_write(self, path: Path, body: str, body_format: str) -> str:
+        """Canonically re-prefix a ``clean`` markdown body; pass ``raw`` through.
+
+        The phone edits de-prefixed markdown for ``body_format == "clean"`` cells
+        (see :meth:`_cell_views`); restore the comment prefix before the byte-exact
+        write so the stored form is unchanged for an unedited round-trip.
+        """
+        if body_format == "clean":
+            from clm.notebooks.slide_parser import comment_token_for_path
+            from clm.web.studio.prefix import reprefix
+
+            return reprefix(body, comment_token_for_path(path))
+        return body
+
     def edit_body(
         self,
         deck_id: str,
@@ -489,6 +519,7 @@ class StudioService:
         role: str,
         new_body: str,
         *,
+        body_format: str = "raw",
         expected_deck_version: str,
         expected_cell_hash: str,
     ) -> EditResult:
@@ -497,7 +528,9 @@ class StudioService:
             deck_id, slide_id, role, expected_deck_version, expected_cell_hash
         )
         self._enforce_lock(deck_id, path)
-        if not state.replace_cell_body(slide_id, role, new_body):
+        if not state.replace_cell_body(
+            slide_id, role, self._for_write(path, new_body, body_format)
+        ):
             raise CellNotFoundError(f"{slide_id!r}/{role!r}")
         return self._persist(deck_id, path, state, slide_id, role)
 
@@ -591,6 +624,7 @@ class StudioService:
         role: str,
         cell_type: str = "markdown",
         body: str = "",
+        body_format: str = "raw",
         after_slide_id: str | None = None,
         after_role: str | None = None,
         slide_id: str | None = None,
@@ -612,6 +646,8 @@ class StudioService:
         path, state = self._load_for_structural(deck_id, expected_deck_version)
         self._enforce_lock(deck_id, path)
         resolved_lang = lang or self._infer_lang(state, after_slide_id, after_role)
+        # Mint from the (clean) body so the title extractor sees plain markdown,
+        # then comment-prefix it for storage.
         new_id = self._resolve_or_mint_slide_id(state, slide_id, role, body)
         tags = [] if cell_type == "code" else [role]
         new_cell = build_cell(
@@ -620,7 +656,7 @@ class StudioService:
             lang=resolved_lang,
             tags=tags,
             slide_id=new_id,
-            body=body,
+            body=self._for_write(path, body, body_format),
         )
         if after_slide_id is None:
             state.insert_before_first_sync_cell(new_cell)

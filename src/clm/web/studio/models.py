@@ -26,6 +26,10 @@ class CellView(BaseModel):
     tags: list[str] = Field(default_factory=list)
     body: str = Field(description="Cell body text.")
     is_j2: bool = Field(default=False, description="Jinja header/macro cell.")
+    body_format: str = Field(
+        default="raw",
+        description='"clean" → body is de-prefixed markdown (re-prefix on write); "raw" → verbatim.',
+    )
     content_hash: str = Field(description="Hash of the cell body (optimistic-concurrency guard).")
     anchor: str = Field(description="Content-derived stable identity (id:/construct:/hash:).")
     editable: bool = Field(
@@ -126,6 +130,10 @@ class EditBodyRequest(BaseModel):
     slide_id: str = Field(description="Hand-assigned slide id of the target cell.")
     role: str = Field(description="Sync role of the target cell.")
     new_body: str = Field(description="Replacement cell body.")
+    body_format: str = Field(
+        default="raw",
+        description='"clean" → re-prefix before writing (echo the CellView\'s body_format).',
+    )
     expected_deck_version: str = Field(description="deck_version the phone last saw.")
     expected_cell_hash: str = Field(description="content_hash the phone last saw for this cell.")
 
@@ -162,7 +170,11 @@ class InsertCellRequest(BaseModel):
     after_role: str | None = Field(default=None, description="Anchor cell's role.")
     cell_type: str = Field(default="markdown", description='"markdown" or "code".')
     role: str = Field(description="Sync role/tag for the new cell (slide/notes/voiceover/…).")
-    body: str = Field(default="", description="Body of the new cell (raw, comment-prefixed).")
+    body: str = Field(default="", description="Body of the new cell.")
+    body_format: str = Field(
+        default="raw",
+        description='"clean" → re-prefix the markdown body before writing; "raw" → verbatim.',
+    )
     slide_id: str | None = Field(
         default=None, description="Explicit slide id; omitted → minted from the body title."
     )
