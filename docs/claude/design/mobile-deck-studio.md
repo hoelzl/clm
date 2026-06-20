@@ -1,9 +1,10 @@
 # Mobile Deck Studio — authoring a course from a phone
 
-> **Status:** plan of record. **P0 + P1 implemented** (read-only browse +
-> the cell-editing concurrency core); P2–P4 not yet implemented. Chosen over
-> the `clm edit` prototype (PR #394, closed as superseded). See §9 for the
-> decision record, implementation steering notes, and the P0/P1 build record.
+> **Status:** plan of record. **P0 + P1 + P2 implemented** (read-only browse,
+> the cell-editing concurrency core, and structural insert/delete/move with
+> id-minting); P3–P4 not yet implemented. Chosen over the `clm edit` prototype
+> (PR #394, closed as superseded). See §9 for the decision record, steering
+> notes, and the P0/P1 and P2 build records.
 > **Date:** 2026-06-20.
 > **Author:** design draft, worked through interactively.
 > **Scope:** a new **Studio** view on the existing `clm serve` web app
@@ -228,7 +229,7 @@ structural op. No naïve whole-file re-emit.
 |---|---|
 | **P0** ✅ | `clm serve` **Studio view** + Tailscale-HTTPS / QR / token auth scaffold; navigation (Recents, search, tree with badges, "Not in spec"); open a deck; **read-only** cell render (client markdown + server-side `is_j2` render); full-text search. Reuses `parse_cells`, `course decks`/`orphans`, `slides search`. No writes. *(Implemented — `is_j2` server render scaffolded; see §9.6.)* |
 | **P1** ✅ | **Cell body/tag editing** + the **concurrency core**: optimistic `deck_version` + `cell_hash` (409/423), atomic `FileState` write-back, `watchfiles` external-change watcher, autosave + 409/disk-change UX. The safety keystone — built and tested first. *(Implemented; 423 language-lock deferred to P3 — see §9.6.)* |
-| **P2** | **Structural ops** (`insert` / `delete` / `move` / mint-id) via the byte-exact serializer; reorder mode in the UI; byte-exact untouched-cell tests. |
+| **P2** ✅ | **Structural ops** (`insert` / `delete` / `move` / mint-id) via the byte-exact serializer; reorder mode in the UI; byte-exact untouched-cell tests. *(Implemented — see §9.7.)* |
 | **P3** | **Bilingual**: language-view + watermark-derived lock + Discard/unlock + **Sync-to-other-language** (server-side `sync` / `translate` / `assign-ids`, streamed over WS); stale badges. |
 | **P4** | **Build-preview** (tier-2 no-exec deck render streamed over WS) + installable PWA + **read-only offline cache** of the last-opened deck. |
 | **Later / optional** | **Full executed single-deck build** (tier 3) for code outputs and rendered diagrams. |
@@ -423,3 +424,49 @@ taken while building, several resolving open calls left by §9.1–§9.5:
   the `[edit]`→`[web]` adaptation); the byte-exact "untouched cells unchanged"
   test pattern was re-authored against `FileState`. `DeckFile`, routes, and
   templates were **not** reused.
+
+### 9.7 P2 build record (2026-06-20)
+
+Structural ops — `insert` / `delete` / `move` (reorder) with id-minting — all
+routed through the same byte-exact `FileState` serializer the cell edits use, so
+untouched cells never shift. New backend ops live on `StudioService`
+(`insert_cell` / `delete` / `move`); new endpoints are `POST
+/api/studio/deck/{insert,delete,move}` (JSON body, not path segments — same
+greedy-`:path` avoidance as P1). Frontend adds a deck **toolbar** (reorder
+toggle + "Add slide"), per-cell **insert (＋) / delete (🗑)** controls, and
+**up/down chevrons** in reorder mode. Tests: 19 new (`tests/web/studio/`) + 7
+unit (`tests/slides/test_sync_writeback_structural.py`).
+
+Decisions / landmines:
+
+- **Two new `FileState` primitives.** `move_cell(slide_id, role, direction)`
+  swaps a cell with its neighbour; `build_cell(comment_token, …)` mints a fresh
+  cell header in the normalizer's canonical attribute order
+  (`[markdown] lang=… tags=[…] slide_id=…`). `delete` reuses the existing
+  `delete_cell`; `insert` reuses `insert_after` /
+  `insert_before_first_sync_cell`. **The terminal-newline artifact** (`split_cells`
+  parks the file's final `\n` as a trailing `""` on the last cell) is the move
+  landmine: when a swap moves a cell into/out of the last slot, the new last cell
+  is reset to **0** trailing blanks (flush restores the `\n`) and the displaced
+  cell gets the deck separator — mirroring `_place_inserted`. Covered by a
+  dedicated "move into last position keeps a single terminal newline" test.
+- **Id-minting vs inheriting (the resolved P2 design question).** A *new slide*
+  mints a unique kebab slug from the body title (the same `slugify` +
+  `resolve_collision` + `classify` extractor `assign-ids` uses). But a companion
+  cell (`notes` / `voiceover`) **must share its slide's `slide_id`** to group
+  correctly in the build — so `insert` accepts an **explicit `slide_id`** (the
+  frontend's "Share id with anchor" checkbox passes the anchor's id). The guard:
+  an explicit `(slide_id, role)` that already exists is rejected (`400`) — it
+  would create a duplicate, un-addressable key, breaking the keystone invariant.
+- **Optimistic concurrency.** `insert` and `move` change the cell *set*, so they
+  guard on `deck_version` only (no prior cell hash for a cell that doesn't exist
+  yet / whose content isn't changing). `delete` guards on **both**
+  `deck_version` + `cell_hash` (you must be deleting the cell you saw). A
+  boundary move (already first/last) is a `400`, not a 409.
+- **`lang` inference.** A new cell inherits the anchor cell's `lang`, else the
+  deck's dominant `lang` — correct for the per-language-file reality.
+- **Editor ergonomics wart (carried over from P1, deferred to P4).** Cell bodies
+  cross the wire **raw** (markdown lines keep their `# ` comment prefix), so the
+  insert form asks the author to type prefixed markdown. De-prefix-on-read /
+  re-prefix-on-write is a P4 polish item, not a P2 blocker — kept uniform with
+  P1 edit rather than introducing an insert-vs-edit inconsistency.

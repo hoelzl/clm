@@ -17,8 +17,10 @@ Identity rules (the keystone — see design §3.6 / §9.1):
 * All writes go through :class:`FileState` (one write path — design §9.2);
   untouched cells are left byte-for-byte unchanged.
 
-P1 only edits cells already addressable by ``(slide_id, role)``; id-less
-cells are read-only until structural ops / id-minting land in P2.
+P1 edits cells already addressable by ``(slide_id, role)``. P2 adds the
+structural ops — ``insert_cell`` (minting or inheriting a slide_id),
+``delete``, and ``move`` (reorder) — all routed through the same byte-exact
+:class:`FileState` serializer so untouched cells never shift.
 """
 
 from __future__ import annotations
@@ -28,10 +30,11 @@ import logging
 import time
 from pathlib import Path
 
-from clm.notebooks.slide_parser import parse_cells
+from clm.notebooks.slide_parser import comment_token_for_path, parse_cells
 from clm.slides.sync_writeback import (
     FileState,
     anchor_of,
+    build_cell,
     cell_content_hash,
     role_of,
 )
@@ -69,6 +72,10 @@ class DeckNotFoundError(StudioError):
 
 class CellNotFoundError(StudioError):
     """No cell with the given ``(slide_id, role)`` exists in the deck."""
+
+
+class InvalidStructuralOpError(StudioError):
+    """A structural op (insert/delete/move) had invalid parameters (→ 400)."""
 
 
 class StaleWriteError(StudioError):
@@ -359,4 +366,151 @@ class StudioService:
         )
         if not state.replace_cell_tags(slide_id, role, new_tags):
             raise CellNotFoundError(f"{slide_id!r}/{role!r}")
+        return self._persist(deck_id, path, state, slide_id, role)
+
+    # ------------------------------------------------------- structural ops (P2)
+
+    def _load_for_structural(
+        self, deck_id: str, expected_deck_version: str
+    ) -> tuple[Path, FileState]:
+        """Resolve + deck-version-guard a deck for a structural op (no cell guard).
+
+        Insert/move change the cell set, so the only optimistic guard is the
+        whole-file ``deck_version`` — any concurrent change yields a 409 so the
+        phone re-fetches before mutating a stale view.
+        """
+        path = self._resolve_deck_id(deck_id)
+        if not path.exists():
+            raise DeckNotFoundError(deck_id)
+        current_version = self._deck_version(path)
+        if current_version != expected_deck_version:
+            raise StaleWriteError("deck_version", current_version)
+        return path, FileState.load(path)
+
+    @staticmethod
+    def _infer_lang(
+        state: FileState, after_slide_id: str | None, after_role: str | None
+    ) -> str | None:
+        """Language for a new cell: the anchor's, else the deck's dominant lang."""
+        if after_slide_id is not None and after_role is not None:
+            anchor = state.find_cell(after_slide_id, after_role)
+            if anchor is not None and anchor.metadata.lang is not None:
+                return anchor.metadata.lang
+        from collections import Counter
+
+        langs = [c.metadata.lang for c in state.cells if c.metadata.lang is not None]
+        if langs:
+            return Counter(langs).most_common(1)[0][0]
+        return None
+
+    @staticmethod
+    def _resolve_or_mint_slide_id(
+        state: FileState, slide_id: str | None, role: str, body: str
+    ) -> str:
+        """Validate an explicit slide_id, or mint a unique one from the body title.
+
+        An explicit id (used to attach e.g. ``notes`` to an existing slide, which
+        must share the slide's identity to group correctly) must be a valid slug
+        and must not already pair with ``role`` in this file — that would create a
+        duplicate ``(slide_id, role)`` key, which is un-addressable. With no id,
+        mint a kebab slug from the body title (the same extractor ``assign-ids``
+        uses), suffixed to stay unique among existing ids.
+        """
+        from clm.slides.headingless import classify
+        from clm.slides.slug import is_valid_slug, resolve_collision, slugify
+
+        existing = {c.metadata.slide_id for c in state.cells if c.metadata.slide_id is not None}
+        if slide_id is not None:
+            if not is_valid_slug(slide_id):
+                raise InvalidStructuralOpError(f"invalid slide_id: {slide_id!r}")
+            for c in state.cells:
+                if c.metadata.slide_id == slide_id and role_of(c.metadata) == role:
+                    raise InvalidStructuralOpError(
+                        f"duplicate (slide_id, role): {slide_id!r}/{role!r}"
+                    )
+            return slide_id
+        base = slugify(getattr(classify(body), "text", "") or "") or "cell"
+        return resolve_collision(base, existing)
+
+    def insert_cell(
+        self,
+        deck_id: str,
+        *,
+        role: str,
+        cell_type: str = "markdown",
+        body: str = "",
+        after_slide_id: str | None = None,
+        after_role: str | None = None,
+        slide_id: str | None = None,
+        lang: str | None = None,
+        expected_deck_version: str,
+    ) -> EditResult:
+        """Insert a new cell after an anchor (or at the deck start), minting its id.
+
+        Returns an :class:`EditResult` whose ``slide_id`` carries the minted (or
+        inherited) id the phone must adopt to address the new cell.
+        """
+        if cell_type not in ("markdown", "code"):
+            raise InvalidStructuralOpError(f"invalid cell_type: {cell_type!r}")
+        if not role:
+            raise InvalidStructuralOpError("role is required")
+        if cell_type == "code" and role != "code":
+            raise InvalidStructuralOpError('a code cell must use role "code"')
+
+        path, state = self._load_for_structural(deck_id, expected_deck_version)
+        resolved_lang = lang or self._infer_lang(state, after_slide_id, after_role)
+        new_id = self._resolve_or_mint_slide_id(state, slide_id, role, body)
+        tags = [] if cell_type == "code" else [role]
+        new_cell = build_cell(
+            comment_token_for_path(path),
+            cell_type=cell_type,
+            lang=resolved_lang,
+            tags=tags,
+            slide_id=new_id,
+            body=body,
+        )
+        if after_slide_id is None:
+            state.insert_before_first_sync_cell(new_cell)
+        elif not state.insert_after(after_slide_id, after_role or "", new_cell):
+            raise CellNotFoundError(f"{after_slide_id!r}/{after_role!r}")
+
+        result = self._persist(deck_id, path, state, new_id, role)
+        result.slide_id = new_id
+        return result
+
+    def delete(
+        self,
+        deck_id: str,
+        slide_id: str,
+        role: str,
+        *,
+        expected_deck_version: str,
+        expected_cell_hash: str,
+    ) -> EditResult:
+        """Remove the ``(slide_id, role)`` cell, guarded by optimistic concurrency."""
+        path, state = self._load_guarded(
+            deck_id, slide_id, role, expected_deck_version, expected_cell_hash
+        )
+        if not state.delete_cell(slide_id, role):
+            raise CellNotFoundError(f"{slide_id!r}/{role!r}")
+        # The cell is gone, so _persist's post-flush lookup yields an empty hash.
+        return self._persist(deck_id, path, state, slide_id, role)
+
+    def move(
+        self,
+        deck_id: str,
+        slide_id: str,
+        role: str,
+        direction: str,
+        *,
+        expected_deck_version: str,
+    ) -> EditResult:
+        """Swap the ``(slide_id, role)`` cell with its neighbour (``"up"``/``"down"``)."""
+        if direction not in ("up", "down"):
+            raise InvalidStructuralOpError(f"invalid direction: {direction!r}")
+        path, state = self._load_for_structural(deck_id, expected_deck_version)
+        if state.find_cell(slide_id, role) is None:
+            raise CellNotFoundError(f"{slide_id!r}/{role!r}")
+        if not state.move_cell(slide_id, role, direction):
+            raise InvalidStructuralOpError(f"cannot move {direction!r}: cell at boundary")
         return self._persist(deck_id, path, state, slide_id, role)

@@ -106,3 +106,117 @@ class TestWriteEndpoints:
         detail = r.json()["detail"]
         assert detail["kind"] == "deck_version"
         assert detail["current"]  # fresh guard handed back for retry
+
+
+class TestStructuralEndpoints:
+    def _version(self, client: TestClient, course: Course) -> str:
+        return client.get(f"/api/studio/deck?id={course.deck_id}", headers=AUTH).json()[
+            "deck_version"
+        ]
+
+    def test_insert_returns_minted_slide_id(self, client: TestClient, course: Course):
+        r = client.post(
+            "/api/studio/deck/insert",
+            headers=AUTH,
+            json={
+                "deck_id": course.deck_id,
+                "role": "slide",
+                "cell_type": "markdown",
+                "body": "# Frisch\n#\n# Inhalt.",
+                "expected_deck_version": self._version(client, course),
+            },
+        )
+        assert r.status_code == 200
+        assert r.json()["slide_id"] == "frisch"
+
+    def test_insert_bad_cell_type_is_400(self, client: TestClient, course: Course):
+        r = client.post(
+            "/api/studio/deck/insert",
+            headers=AUTH,
+            json={
+                "deck_id": course.deck_id,
+                "role": "slide",
+                "cell_type": "diagram",
+                "body": "# x",
+                "expected_deck_version": self._version(client, course),
+            },
+        )
+        assert r.status_code == 400
+
+    def test_delete_then_open_drops_cell(self, client: TestClient, course: Course):
+        body = client.get(f"/api/studio/deck?id={course.deck_id}", headers=AUTH).json()
+        notes = next(c for c in body["cells"] if c["role"] == "notes")
+        r = client.post(
+            "/api/studio/deck/delete",
+            headers=AUTH,
+            json={
+                "deck_id": course.deck_id,
+                "slide_id": notes["slide_id"],
+                "role": notes["role"],
+                "expected_deck_version": body["deck_version"],
+                "expected_cell_hash": notes["content_hash"],
+            },
+        )
+        assert r.status_code == 200
+        reopened = client.get(f"/api/studio/deck?id={course.deck_id}", headers=AUTH).json()
+        assert all(c["role"] != "notes" for c in reopened["cells"])
+
+    def test_move_down_is_200(self, client: TestClient, course: Course):
+        body = client.get(f"/api/studio/deck?id={course.deck_id}", headers=AUTH).json()
+        slide = next(c for c in body["cells"] if c["role"] == "slide")
+        r = client.post(
+            "/api/studio/deck/move",
+            headers=AUTH,
+            json={
+                "deck_id": course.deck_id,
+                "slide_id": slide["slide_id"],
+                "role": slide["role"],
+                "direction": "down",
+                "expected_deck_version": body["deck_version"],
+            },
+        )
+        assert r.status_code == 200
+        assert r.json()["deck_version"] != body["deck_version"]
+
+    def test_move_boundary_is_400(self, client: TestClient, course: Course):
+        body = client.get(f"/api/studio/deck?id={course.deck_id}", headers=AUTH).json()
+        slide = next(c for c in body["cells"] if c["role"] == "slide")  # first cell
+        r = client.post(
+            "/api/studio/deck/move",
+            headers=AUTH,
+            json={
+                "deck_id": course.deck_id,
+                "slide_id": slide["slide_id"],
+                "role": slide["role"],
+                "direction": "up",
+                "expected_deck_version": body["deck_version"],
+            },
+        )
+        assert r.status_code == 400
+
+    def test_insert_stale_is_409(self, client: TestClient, course: Course):
+        r = client.post(
+            "/api/studio/deck/insert",
+            headers=AUTH,
+            json={
+                "deck_id": course.deck_id,
+                "role": "slide",
+                "body": "# x",
+                "expected_deck_version": "staleversion00000",
+            },
+        )
+        assert r.status_code == 409
+        assert r.json()["detail"]["kind"] == "deck_version"
+
+    def test_structural_requires_token(self, client: TestClient, course: Course):
+        r = client.post(
+            "/api/studio/deck/move",
+            json={
+                "deck_id": course.deck_id,
+                "slide_id": "intro-welcome",
+                "role": "slide",
+                "direction": "down",
+                "expected_deck_version": "x",
+            },
+        )
+        assert r.status_code == 401

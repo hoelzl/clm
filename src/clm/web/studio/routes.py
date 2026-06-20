@@ -22,9 +22,12 @@ from clm.web.studio.auth import token_matches
 from clm.web.studio.models import (
     DeckTree,
     DeckView,
+    DeleteCellRequest,
     EditBodyRequest,
     EditResult,
     EditTagsRequest,
+    InsertCellRequest,
+    MoveCellRequest,
     RenderCellRequest,
     RenderCellResult,
     SearchResults,
@@ -33,6 +36,7 @@ from clm.web.studio.service import (
     CellNotFoundError,
     DeckNotFoundError,
     InvalidDeckIdError,
+    InvalidStructuralOpError,
     StaleWriteError,
     StudioService,
 )
@@ -70,6 +74,8 @@ def _handle_write(call: Callable[[], EditResult]) -> EditResult:
         raise HTTPException(status_code=404, detail=f"Cell not found: {e}") from e
     except DeckNotFoundError as e:
         raise HTTPException(status_code=404, detail=f"Deck not found: {e}") from e
+    except InvalidStructuralOpError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid structural op: {e}") from e
     except InvalidDeckIdError as e:
         raise HTTPException(status_code=400, detail=f"Invalid deck id: {e}") from e
 
@@ -144,6 +150,55 @@ async def edit_tags(request: Request, req: EditTagsRequest) -> EditResult:
             req.new_tags,
             expected_deck_version=req.expected_deck_version,
             expected_cell_hash=req.expected_cell_hash,
+        )
+    )
+
+
+@router.post("/deck/insert", response_model=EditResult, dependencies=[Depends(require_token)])
+async def insert_cell(request: Request, req: InsertCellRequest) -> EditResult:
+    """Insert a new cell, minting (or inheriting) its slide_id (optimistic concurrency)."""
+    service = get_service(request)
+    return _handle_write(
+        lambda: service.insert_cell(
+            req.deck_id,
+            role=req.role,
+            cell_type=req.cell_type,
+            body=req.body,
+            after_slide_id=req.after_slide_id,
+            after_role=req.after_role,
+            slide_id=req.slide_id,
+            lang=req.lang,
+            expected_deck_version=req.expected_deck_version,
+        )
+    )
+
+
+@router.post("/deck/delete", response_model=EditResult, dependencies=[Depends(require_token)])
+async def delete_cell(request: Request, req: DeleteCellRequest) -> EditResult:
+    """Delete a cell (optimistic concurrency)."""
+    service = get_service(request)
+    return _handle_write(
+        lambda: service.delete(
+            req.deck_id,
+            req.slide_id,
+            req.role,
+            expected_deck_version=req.expected_deck_version,
+            expected_cell_hash=req.expected_cell_hash,
+        )
+    )
+
+
+@router.post("/deck/move", response_model=EditResult, dependencies=[Depends(require_token)])
+async def move_cell(request: Request, req: MoveCellRequest) -> EditResult:
+    """Reorder a cell up/down by one (optimistic concurrency)."""
+    service = get_service(request)
+    return _handle_write(
+        lambda: service.move(
+            req.deck_id,
+            req.slide_id,
+            req.role,
+            req.direction,
+            expected_deck_version=req.expected_deck_version,
         )
     )
 

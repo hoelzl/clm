@@ -94,6 +94,20 @@ function el(html) { const t = document.createElement("template"); t.innerHTML = 
 // --- state --------------------------------------------------------------------
 let currentDeck = null; // { deck_id, deck_version, cells: [...] }
 let diskChanged = false;
+let reorderMode = false;
+
+// Shared write-error handling for every mutating call.
+function handleWriteError(e, label) {
+  if (e.status === 409) {
+    diskChanged = true;
+    toast("Changed elsewhere — reload.");
+    renderDeck();
+  } else if (e.status === 423) {
+    toast("Language locked — sync or discard first.");
+  } else {
+    toast(label + " failed: " + e.message);
+  }
+}
 
 // --- views --------------------------------------------------------------------
 async function showHome() {
@@ -188,27 +202,173 @@ function renderDeck() {
     b.appendChild(r);
     appEl.appendChild(b);
   }
+
+  // Toolbar: reorder toggle + add-at-start.
+  const bar = el(`<div class="row toolbar"></div>`);
+  const reorderBtn = el(`<button class="ghost">${reorderMode ? "✓ Reordering" : "⇅ Reorder"}</button>`);
+  reorderBtn.addEventListener("click", () => { reorderMode = !reorderMode; renderDeck(); });
+  bar.appendChild(reorderBtn);
+  bar.appendChild(el(`<span class="spacer"></span>`));
+  if (!reorderMode) {
+    const addBtn = el(`<button>+ Add slide</button>`);
+    addBtn.addEventListener("click", () => openInsertForm(null));
+    bar.appendChild(addBtn);
+  }
+  appEl.appendChild(bar);
+
   deck.cells.forEach((cell, i) => appEl.appendChild(cellCard(cell, i)));
 }
 
 function cellCard(cell, idx) {
   const langChip = cell.lang ? `<span class="chip">${cell.lang}</span>` : "";
   const tagChips = (cell.tags || []).map((t) => `<span class="chip">${esc(t)}</span>`).join("");
-  const card = el(`<div class="cell ${cell.editable ? "editable" : ""}">
+  const card = el(`<div class="cell ${cell.editable && !reorderMode ? "editable" : ""}">
       <div class="cell-head">
         <span class="chip">${cell.cell_type}</span>${langChip}${tagChips}
         <span class="spacer"></span>
-        ${cell.editable ? '<span class="muted">tap to edit</span>' : '<span class="muted">read-only</span>'}
+        <span class="cell-controls"></span>
       </div>
       <div class="cell-body"></div>
     </div>`);
   const body = card.querySelector(".cell-body");
   if (cell.cell_type === "markdown") body.innerHTML = renderMarkdown(cell.body);
   else body.innerHTML = `<pre><code>${esc(cell.body)}</code></pre>`;
-  if (cell.editable) {
+
+  const controls = card.querySelector(".cell-controls");
+  if (reorderMode) {
+    if (cell.editable) {
+      const up = el(`<button class="ghost icon" title="Move up">↑</button>`);
+      const down = el(`<button class="ghost icon" title="Move down">↓</button>`);
+      up.addEventListener("click", () => moveCell(cell, "up"));
+      down.addEventListener("click", () => moveCell(cell, "down"));
+      controls.appendChild(up); controls.appendChild(down);
+    } else {
+      controls.appendChild(el(`<span class="muted">read-only</span>`));
+    }
+  } else if (cell.editable) {
+    const ins = el(`<button class="ghost icon" title="Insert after">＋</button>`);
+    const del = el(`<button class="ghost icon" title="Delete">🗑</button>`);
+    ins.addEventListener("click", (e) => { e.stopPropagation(); openInsertForm(cell); });
+    del.addEventListener("click", (e) => { e.stopPropagation(); deleteCell(cell); });
+    controls.appendChild(el(`<span class="muted">tap to edit</span>`));
+    controls.appendChild(ins); controls.appendChild(del);
     card.querySelector(".cell-head").addEventListener("click", () => editCell(cell, idx));
+  } else {
+    controls.appendChild(el(`<span class="muted">read-only</span>`));
   }
   return card;
+}
+
+async function moveCell(cell, direction) {
+  if (diskChanged) { toast("Deck changed on disk — reload first."); return; }
+  try {
+    await api("/deck/move", {
+      method: "POST",
+      body: JSON.stringify({
+        deck_id: currentDeck.deck_id,
+        slide_id: cell.slide_id,
+        role: cell.role,
+        direction,
+        expected_deck_version: currentDeck.deck_version,
+      }),
+    });
+    await openDeck(currentDeck.deck_id); // reload: fresh order + guards
+    reorderMode = true; renderDeck();    // openDeck reset the view; stay in reorder
+  } catch (e) {
+    if (e.status === 400) { toast("Already at the " + (direction === "up" ? "top" : "bottom") + "."); }
+    else handleWriteError(e, "Move");
+  }
+}
+
+async function deleteCell(cell) {
+  if (diskChanged) { toast("Deck changed on disk — reload first."); return; }
+  if (!window.confirm(`Delete this ${cell.role || "cell"} (${cell.slide_id || ""})?`)) return;
+  try {
+    await api("/deck/delete", {
+      method: "POST",
+      body: JSON.stringify({
+        deck_id: currentDeck.deck_id,
+        slide_id: cell.slide_id,
+        role: cell.role,
+        expected_deck_version: currentDeck.deck_version,
+        expected_cell_hash: cell.content_hash,
+      }),
+    });
+    toast("Deleted");
+    await openDeck(currentDeck.deck_id);
+  } catch (e) {
+    handleWriteError(e, "Delete");
+  }
+}
+
+// Insert a new cell after `anchor` (or at the deck start when anchor is null).
+function openInsertForm(anchor) {
+  if (diskChanged) { toast("Deck changed on disk — reload first."); return; }
+  appEl.innerHTML = "";
+  titleEl.textContent = anchor ? "Insert after " + (anchor.slide_id || anchor.role) : "Add slide";
+
+  const typeSel = el(`<select><option value="markdown">markdown</option><option value="code">code</option></select>`);
+  const roleInput = el(`<input type="text" value="slide" />`);
+  // Markdown narrative roles are common; "code" is forced for code cells.
+  typeSel.addEventListener("change", () => {
+    if (typeSel.value === "code") { roleInput.value = "code"; roleInput.disabled = true; }
+    else { roleInput.disabled = false; if (roleInput.value === "code") roleInput.value = "slide"; }
+  });
+
+  let shareWrap = null, shareChk = null;
+  if (anchor && anchor.slide_id) {
+    shareChk = el(`<input type="checkbox" />`);
+    shareWrap = el(`<label class="row" style="gap:6px"></label>`);
+    shareWrap.appendChild(shareChk);
+    shareWrap.appendChild(el(`<span>Share id with anchor (e.g. notes for this slide)</span>`));
+  }
+
+  const ta = el(`<textarea placeholder="# Title&#10;#&#10;# Body (markdown lines start with &quot;# &quot;)"></textarea>`);
+
+  appEl.appendChild(el(`<div class="muted" style="margin-bottom:6px">New cell ${anchor ? "after " + esc(anchor.slide_id || anchor.role || "") : "at deck start"}</div>`));
+  const form = el(`<div class="insert-form"></div>`);
+  form.appendChild(labeled("Type", typeSel));
+  form.appendChild(labeled("Role / tag", roleInput));
+  if (shareWrap) form.appendChild(shareWrap);
+  appEl.appendChild(form);
+  appEl.appendChild(ta);
+
+  const actions = el(`<div class="edit-actions"></div>`);
+  const save = el(`<button>Insert</button>`);
+  const cancel = el(`<button class="ghost">Cancel</button>`);
+  actions.appendChild(save); actions.appendChild(cancel);
+  appEl.appendChild(actions);
+  ta.focus();
+
+  cancel.addEventListener("click", renderDeck);
+  save.addEventListener("click", async () => {
+    save.disabled = true; cancel.disabled = true;
+    const payload = {
+      deck_id: currentDeck.deck_id,
+      cell_type: typeSel.value,
+      role: roleInput.value.trim(),
+      body: ta.value,
+      after_slide_id: anchor ? anchor.slide_id : null,
+      after_role: anchor ? anchor.role : null,
+      expected_deck_version: currentDeck.deck_version,
+    };
+    if (shareChk && shareChk.checked) payload.slide_id = anchor.slide_id;
+    try {
+      await api("/deck/insert", { method: "POST", body: JSON.stringify(payload) });
+      toast("Inserted");
+      await openDeck(currentDeck.deck_id);
+    } catch (e) {
+      save.disabled = false; cancel.disabled = false;
+      handleWriteError(e, "Insert");
+    }
+  });
+}
+
+function labeled(label, control) {
+  const wrap = el(`<label class="field"></label>`);
+  wrap.appendChild(el(`<span class="muted">${esc(label)}</span>`));
+  wrap.appendChild(control);
+  return wrap;
 }
 
 function editCell(cell, idx) {
@@ -249,15 +409,7 @@ function editCell(cell, idx) {
       renderDeck();
     } catch (e) {
       save.disabled = false; cancel.disabled = false;
-      if (e.status === 409) {
-        diskChanged = true;
-        toast("Changed elsewhere — reload.");
-        renderDeck();
-      } else if (e.status === 423) {
-        toast("Language locked — sync or discard first.");
-      } else {
-        toast("Save failed: " + e.message);
-      }
+      handleWriteError(e, "Save");
     }
   });
 }

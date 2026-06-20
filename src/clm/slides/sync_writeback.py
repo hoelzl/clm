@@ -27,6 +27,7 @@ __all__ = [
     "CODE_ROLE",
     "FileState",
     "anchor_of",
+    "build_cell",
     "build_twin_cell",
     "cell_content_hash",
     "construct_of",
@@ -218,6 +219,47 @@ def swap_lang(header: str, lang: str) -> str:
     # either comment family.
     marker = "// %%" if header.startswith("// %%") else "# %%"
     return header.replace(marker, f'{marker} lang="{lang}"', 1)
+
+
+def build_cell(
+    comment_token: str,
+    *,
+    cell_type: str,
+    lang: str | None,
+    tags: Sequence[str],
+    slide_id: str,
+    body: str,
+) -> RawCell:
+    """Build a brand-new cell from scratch (the P2 structural-insert factory).
+
+    Unlike :func:`build_twin_cell`, which clones an existing header, this mints a
+    header in the canonical attribute order the normalizer emits
+    (``[markdown] lang=… tags=[…] slide_id=…``) for a fresh cell that has no
+    source to copy from. ``comment_token`` is the deck's line-comment token
+    (``"#"`` / ``"//"``) — the percent marker is ``"<token> %%"``. ``body`` is
+    used bare (leading/trailing blank lines stripped); the caller's insert
+    primitive grants the deck's separator based on final position.
+    """
+    marker = f"{comment_token} %%"
+    parts = [marker]
+    if cell_type == "markdown":
+        parts.append("[markdown]")
+    if lang is not None:
+        parts.append(f'lang="{lang}"')
+    if tags:
+        parts.append("tags=[" + ", ".join(f'"{t}"' for t in tags) + "]")
+    parts.append(f'slide_id="{slide_id}"')
+    header = " ".join(parts)
+    body_lines = body.split("\n")
+    while body_lines and body_lines[0] == "":
+        body_lines.pop(0)
+    while body_lines and body_lines[-1] == "":
+        body_lines.pop()
+    return RawCell(
+        lines=[header, *body_lines],
+        line_number=0,
+        metadata=parse_cell_header(header, comment_token),
+    )
 
 
 def build_twin_cell(source_cell: RawCell, target_lang: str, target_body: str) -> RawCell:
@@ -419,6 +461,34 @@ class FileState:
         self.cells.append(new_cell)
         self.dirty = True
         self._place_inserted(new_cell, original_last, sep)
+
+    def move_cell(self, slide_id: str, role: str, direction: str) -> bool:
+        """Swap the ``(slide_id, role)`` cell with its neighbour (``"up"``/``"down"``).
+
+        The reorder primitive behind the Studio P2 up/down chevrons. Returns
+        ``False`` when the cell is absent or already at the requested boundary.
+        Both swapped cells keep their bytes verbatim — only their order changes —
+        so untouched cells stay byte-for-byte identical. When the swap moves a
+        cell into or out of the last position, the terminal-newline artifact
+        ``split_cells`` parked on the last cell is normalised exactly as for an
+        insert (cell now last → no explicit trailing blank, restored by
+        :meth:`flush`; the displaced cell → the deck separator).
+        """
+        idx = next((i for i, c in enumerate(self.cells) if _cell_matches(c, slide_id, role)), None)
+        if idx is None:
+            return False
+        target = idx - 1 if direction == "up" else idx + 1
+        if target < 0 or target >= len(self.cells):
+            return False
+        sep = self.separator_blanks()
+        original_last = self.cells[-1] if self.cells else None
+        self.cells[idx], self.cells[target] = self.cells[target], self.cells[idx]
+        self.dirty = True
+        if self.cells and self.cells[-1] is not original_last:
+            _set_trailing_blanks(self.cells[-1], 0)
+            if original_last is not None:
+                self.normalize_displaced_last(original_last, sep)
+        return True
 
     def _place_inserted(self, new_cell: RawCell, original_last: RawCell | None, sep: int) -> None:
         """Give ``new_cell`` the deck's separator (or none, if it is now last).
