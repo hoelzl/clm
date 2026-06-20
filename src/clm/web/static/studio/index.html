@@ -64,6 +64,9 @@
     .banner.warn { background: var(--warn-bg); color: var(--warn-fg); }
     .banner.err { background: #fee2e2; color: var(--err); }
     .banner.stale { background: var(--chip); color: var(--chip-fg); }
+    .banner.sync { background: var(--chip); color: var(--chip-fg); gap: 8px; }
+    .banner.sync #syncline { overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .8rem; }
     .lang-bar { margin: 4px 0 8px; gap: 6px; }
     .lang-chip { font: inherit; font-size: .82rem; padding: 4px 10px; border-radius: 999px;
       border: 1px solid var(--line); background: var(--card); color: var(--fg); }

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import sys
 import time
 from pathlib import Path
 
@@ -118,6 +119,8 @@ class StudioService:
         self.slides_dir = (course_root / "slides").resolve()
         self._recents: list[str] = []
         self._self_writes: dict[str, float] = {}
+        #: Deck ids (the DE half, canonical) with a sync subprocess in flight.
+        self._sync_inflight: set[str] = set()
 
     # ------------------------------------------------------------------ paths
 
@@ -376,6 +379,44 @@ class StudioService:
         lock = self.compute_lock(deck_id, path)
         if lock.is_pair and not lock.editable:
             raise LanguageLockedError(lock.locked_reason or "This language is locked.")
+
+    # --------------------------------------------- sync-to-other-language (P3b)
+
+    def resolve_sync_command(self, deck_id: str) -> tuple[list[str], str, str]:
+        """Build the ``clm slides sync`` subprocess command for ``deck_id``'s pair.
+
+        Returns ``(cmd, de_deck_id, en_deck_id)``. The command reconciles the
+        split DE/EN pair (direction decided per cell) and **writes both halves +
+        advances the watermark**, so the lock releases afterward. Raises
+        :class:`InvalidStructuralOpError` for a deck with no split twin (nothing
+        to sync). The subprocess inherits the serve cwd so it shares the
+        watermark cache with :meth:`compute_lock` (see ``sync_runner``).
+        """
+        from clm.slides.pairing import derive_split_twin, order_split_pair, split_lang_tag
+
+        path = self._resolve_deck_id(deck_id)
+        if not path.exists():
+            raise DeckNotFoundError(deck_id)
+        twin = derive_split_twin(path)
+        if split_lang_tag(path) is None or twin is None or not twin.exists():
+            raise InvalidStructuralOpError("not a split DE/EN pair — nothing to sync")
+        ordered = order_split_pair(path, twin)
+        if ordered is None:
+            raise InvalidStructuralOpError("not a valid split DE/EN pair")
+        de_path, en_path = ordered
+        cmd = [sys.executable, "-m", "clm", "slides", "sync", str(de_path), "--yes"]
+        return cmd, self._rel(de_path), self._rel(en_path)
+
+    def try_begin_sync(self, key: str) -> bool:
+        """Claim the in-flight slot for ``key`` (the DE deck id). False if taken."""
+        if key in self._sync_inflight:
+            return False
+        self._sync_inflight.add(key)
+        return True
+
+    def end_sync(self, key: str) -> None:
+        """Release the in-flight slot for ``key``."""
+        self._sync_inflight.discard(key)
 
     # ----------------------------------------------------- concurrency core
 

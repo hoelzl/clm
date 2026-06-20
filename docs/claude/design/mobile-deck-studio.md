@@ -1,11 +1,11 @@
 # Mobile Deck Studio — authoring a course from a phone
 
-> **Status:** plan of record. **P0 + P1 + P2 implemented**, **P3a implemented**
-> (the bilingual language toggle + watermark-derived lock + stale badges + 423
-> enforcement); **P3b** (in-app Sync-to-other-language + Discard) and **P4** not
-> yet implemented. Chosen over the `clm edit` prototype (PR #394, closed as
-> superseded). See §9 for the decision record, steering notes, and the P0/P1,
-> P2, and P3a build records.
+> **Status:** plan of record. **P0–P3 implemented** (browse, the cell-editing
+> concurrency core, structural ops, the bilingual lock, and streamed
+> Sync-to-other-language). **Discard** (deferred from P3b by decision) and **P4**
+> not yet implemented. Chosen over the `clm edit` prototype (PR #394, closed as
+> superseded). See §9 for the decision record, steering notes, and the
+> P0/P1–P3b build records.
 > **Date:** 2026-06-20.
 > **Author:** design draft, worked through interactively.
 > **Scope:** a new **Studio** view on the existing `clm serve` web app
@@ -232,7 +232,7 @@ structural op. No naïve whole-file re-emit.
 | **P1** ✅ | **Cell body/tag editing** + the **concurrency core**: optimistic `deck_version` + `cell_hash` (409/423), atomic `FileState` write-back, `watchfiles` external-change watcher, autosave + 409/disk-change UX. The safety keystone — built and tested first. *(Implemented; 423 language-lock deferred to P3 — see §9.6.)* |
 | **P2** ✅ | **Structural ops** (`insert` / `delete` / `move` / mint-id) via the byte-exact serializer; reorder mode in the UI; byte-exact untouched-cell tests. *(Implemented — see §9.7.)* |
 | **P3a** ✅ | **Bilingual lock core**: language toggle (switch to the split twin) + watermark-derived lock (read-only `build_sync_plan`) + stale badges + **423** enforcement on every write. *(Implemented — see §9.8.)* |
-| **P3b** | **Bilingual propagation**: in-app **Discard & unlock** + **Sync-to-other-language** (server-side `sync` / `translate` / `assign-ids`, streamed over WS). The LLM-backed half of P3. |
+| **P3b** ✅ | **Sync-to-other-language**: a streamed server-side `clm slides sync` subprocess (LLM reconciliation) over WS; the lock releases when it completes. *(Implemented — see §9.9. **Discard & unlock deferred** by decision: its revert is git-coupled and risky — use the desktop.)* |
 | **P4** | **Build-preview** (tier-2 no-exec deck render streamed over WS) + installable PWA + **read-only offline cache** of the last-opened deck. |
 | **Later / optional** | **Full executed single-deck build** (tier 3) for code outputs and rendered diagrams. |
 
@@ -525,3 +525,50 @@ Decisions / landmines:
   enforce), each parsing both halves + a sqlite read (+ a `git show` on
   cold-start HEAD fallback). Fine at deck sizes / workstation use; a cache keyed
   on `(deck_version_de, deck_version_en)` is an obvious later optimization.
+
+### 9.9 P3b build record (2026-06-20)
+
+**Sync-to-other-language** as a **streamed subprocess** (user decision, over
+in-process `apply_plan`). `POST /api/studio/deck/sync` validates the split pair,
+claims an in-flight slot, and launches `clm.web.studio.sync_runner.run_sync` as a
+background task; the endpoint returns immediately (`SyncStartResult`) while the
+run streams `sync-started` → `sync-progress` (per stdout line) → `sync-done` over
+the WS `studio` channel. The frontend shows a "⟳ Sync languages" action when the
+pair is out of sync, a live progress banner, and reloads the deck on `sync-done`
+(picking up fresh content + the now-released lock). Tests: 11 new
+(`tests/web/studio/test_sync.py`).
+
+Decisions / landmines:
+
+- **Subprocess, not in-process.** `run_sync` spawns
+  `[sys.executable, "-m", "clm", "slides", "sync", <de_path>, "--yes"]` via
+  `asyncio.create_subprocess_exec`, merging stderr into stdout and feeding each
+  line to a WS broadcast. **Inherits the serve process cwd** (no `cwd=`), so the
+  child's `resolve_cache_dir()` resolves the **same** watermark DB that
+  `compute_lock` reads in-process — lock and sync agree by construction. The
+  heavy LLM/network imports stay out of the serve process; matches CLM's
+  `clm run` subprocess pattern.
+- **`--yes` always.** Passed so a single-pair *writing* run never blocks on a
+  confirm prompt (no TTY in the subprocess). The sync reconciles direction
+  per-cell and advances the watermark, so afterward both halves are clean and the
+  P3a lock releases on the phone's post-`sync-done` reload.
+- **Self-write suppression across a long run.** The sync writes both halves near
+  the end, and an LLM run easily outlives the 2 s self-write window, so `run_sync`
+  **re-marks both halves on every progress line** (and once more after the
+  process exits) — otherwise the watcher would surface the sync's own writes as a
+  spurious "changed on disk" while it ran.
+- **In-flight dedupe.** A second `POST /deck/sync` for the same pair while one is
+  running is a **409** (`StudioService.try_begin_sync` / `end_sync`, keyed on the
+  DE half so either-half requests collapse to one slot). The slot is released in
+  the task's `finally`.
+- **Failure is data, not an exception.** A non-zero exit (e.g. a `conflict` left
+  unresolved) and an exception while spawning both arrive as `sync-done` with
+  `ok=false` (+ `error`) — the phone toasts and reloads rather than hanging.
+- **`stream` is injectable.** `run_sync(..., stream=…)` lets tests drive the
+  event sequence / self-write marking without a real subprocess; the route test
+  monkeypatches `sync_runner.run_sync` so `clm slides sync` (LLM/network) never
+  runs under pytest.
+- **Discard deferred (decision).** In-app *Discard & unlock* was dropped from
+  P3b: its only revert is git-coupled (restore the dirty half from HEAD), which
+  would risk clobbering legitimate uncommitted desktop edits. The lock's in-app
+  release is now **sync**; discard stays a desktop/git operation.

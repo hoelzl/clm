@@ -95,6 +95,8 @@ function el(html) { const t = document.createElement("template"); t.innerHTML = 
 let currentDeck = null; // { deck_id, deck_version, cells: [...] }
 let diskChanged = false;
 let reorderMode = false;
+let syncing = false;    // a sync-to-other-language is in flight for this deck
+let syncLine = "";      // latest streamed progress line
 
 // Shared write-error handling for every mutating call.
 function handleWriteError(e, label) {
@@ -220,7 +222,19 @@ function renderDeck() {
   if (locked) {
     appEl.appendChild(el(`<div class="banner warn">🔒 ${esc(lock.locked_reason || "This language is locked.")}</div>`));
   } else if (lock.other_stale) {
-    appEl.appendChild(el(`<div class="banner stale">${esc((lock.other_lang || "other").toUpperCase())} is stale — your edits aren't propagated yet. Sync from the desktop for now.</div>`));
+    appEl.appendChild(el(`<div class="banner stale">${esc((lock.other_lang || "other").toUpperCase())} is stale — your edits aren't propagated yet.</div>`));
+  }
+
+  // Sync-to-other-language (P3b): a streamed `clm slides sync` over WS.
+  const outOfSync = lock.is_pair && (lock.other_stale || locked || lock.has_conflicts);
+  if (syncing) {
+    appEl.appendChild(el(`<div class="banner sync row">⟳ Syncing&hellip; <span class="muted spacer" id="syncline">${esc(syncLine)}</span></div>`));
+  } else if (outOfSync) {
+    const sb = el(`<div class="banner sync row"><span class="spacer">Languages out of sync.</span></div>`);
+    const btn = el(`<button>⟳ Sync languages</button>`);
+    btn.addEventListener("click", startSync);
+    sb.appendChild(btn);
+    appEl.appendChild(sb);
   }
 
   if (diskChanged) {
@@ -405,6 +419,27 @@ function labeled(label, control) {
   return wrap;
 }
 
+// --- sync to other language (P3b) ---------------------------------------------
+async function startSync() {
+  if (!currentDeck || syncing) return;
+  try {
+    await api("/deck/sync", {
+      method: "POST",
+      body: JSON.stringify({ deck_id: currentDeck.deck_id }),
+    });
+    syncing = true; syncLine = "starting…"; renderDeck();
+  } catch (e) {
+    if (e.status === 409) toast("A sync is already running.");
+    else toast("Sync failed to start: " + e.message);
+  }
+}
+
+function updateSyncLine() {
+  const node = document.getElementById("syncline");
+  if (node) node.textContent = syncLine;
+  else renderDeck();
+}
+
 function editCell(cell, idx) {
   if (diskChanged) { toast("Deck changed on disk — reload first."); return; }
   appEl.innerHTML = "";
@@ -457,9 +492,19 @@ function connectWs() {
   ws.addEventListener("open", () => ws.send(JSON.stringify({ action: "subscribe", channels: ["studio"] })));
   ws.addEventListener("message", (ev) => {
     let msg; try { msg = JSON.parse(ev.data); } catch { return; }
-    if (msg.type === "deck-changed-on-disk" && currentDeck && msg.deck_id === currentDeck.deck_id) {
+    if (!currentDeck || msg.deck_id !== currentDeck.deck_id) return;
+    if (msg.type === "deck-changed-on-disk") {
       diskChanged = true;
       renderDeck();
+    } else if (msg.type === "sync-started") {
+      syncing = true; syncLine = "starting…"; renderDeck();
+    } else if (msg.type === "sync-progress") {
+      syncLine = msg.line || "";
+      if (syncing) updateSyncLine();
+    } else if (msg.type === "sync-done") {
+      syncing = false;
+      toast(msg.ok ? "Synced ✓" : "Sync failed — check the desktop.");
+      openDeck(currentDeck.deck_id); // refresh content + lock state
     }
   });
   ws.addEventListener("close", () => setTimeout(connectWs, 3000));
