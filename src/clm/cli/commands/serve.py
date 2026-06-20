@@ -40,17 +40,33 @@ logger = logging.getLogger(__name__)
     multiple=True,
     help="CORS allowed origins (can specify multiple times, default: *)",
 )
-def serve(host, port, jobs_db_path, no_browser, reload, cors_origin):
+@click.option(
+    "--spec",
+    "spec_path",
+    type=click.Path(exists=True, path_type=Path),
+    help="Enable the Mobile Deck Studio scoped to this course spec (one course "
+    "per server instance).",
+)
+@click.option(
+    "--rotate-token",
+    is_flag=True,
+    help="Rotate the persistent Studio pairing token (invalidates old QR codes).",
+)
+def serve(host, port, jobs_db_path, no_browser, reload, cors_origin, spec_path, rotate_token):
     """Start web dashboard server.
 
     Launches FastAPI server with REST API and WebSocket support for
-    remote monitoring via web browser.
+    remote monitoring via web browser. With ``--spec`` it additionally serves
+    the Mobile Deck Studio — a phone-friendly authoring surface for the given
+    course's decks (browse, search, and edit cells with byte-exact write-back
+    and optimistic-concurrency guards against concurrent desktop edits).
 
     \b
     Examples:
         clm serve                           # Start on localhost:8000
         clm serve --host=0.0.0.0 --port=8080  # Bind to all interfaces
         clm serve --jobs-db-path=/data/clm_jobs.db  # Custom database
+        clm serve --spec course.xml         # Also enable Mobile Deck Studio
     """
     try:
         import uvicorn
@@ -76,6 +92,13 @@ def serve(host, port, jobs_db_path, no_browser, reload, cors_origin):
         click.echo("The server will start, but data will be unavailable.", err=True)
         click.echo("Run 'clm build course.xml' to initialize the system.", err=True)
 
+    # Studio pairing token (persistent across restarts so the QR stays valid).
+    studio_token: str | None = None
+    if spec_path is not None:
+        from clm.web.studio.auth import get_or_create_token
+
+        studio_token = get_or_create_token(rotate=rotate_token)
+
     # Create app
     cors_origins: list[str] | None = list(cors_origin) if cors_origin else None
     app = create_app(
@@ -83,7 +106,28 @@ def serve(host, port, jobs_db_path, no_browser, reload, cors_origin):
         host=host,
         port=port,
         cors_origins=cors_origins,
+        spec_path=spec_path,
+        studio_token=studio_token,
     )
+
+    # Mobile Deck Studio pairing: print the URL + a scannable QR code.
+    if spec_path is not None and studio_token is not None:
+        from clm.web.studio import qr
+
+        display_host = host if host != "0.0.0.0" else "localhost"
+        studio_url = f"http://{display_host}:{port}/studio/?token={studio_token}"
+        click.echo("")
+        click.echo(f"Mobile Deck Studio: {studio_url}")
+        if qr.is_available():
+            click.echo("Scan to pair a phone (or open the URL above):")
+            qr.print_terminal(studio_url)
+        else:
+            click.echo("(install the [web] extra's 'segno' for a scannable QR code)")
+        click.echo(
+            "Note: for phone access over Tailscale, run 'tailscale serve' so the "
+            "PWA gets a trusted HTTPS origin."
+        )
+        click.echo("")
 
     # Open browser
     if not no_browser:

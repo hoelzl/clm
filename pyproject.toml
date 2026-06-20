@@ -247,7 +247,8 @@ tui = [
 web = [
     "wsproto>=1.2.0",  # Use wsproto instead of websockets to avoid deprecation warnings
     "httptools>=0.6.2",  # HTTP protocol handling
-    "watchfiles>=0.18.0",  # For --reload support
+    "watchfiles>=0.18.0",  # For --reload support + the Studio external-change watcher
+    "segno>=1.6.0",  # Pure-Python QR codes for Mobile Deck Studio pairing
 ]
 # Everything
 all = [

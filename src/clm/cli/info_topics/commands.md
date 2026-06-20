@@ -3980,7 +3980,41 @@ publish a heartbeat and do not get the second line.
 
 ### `clm serve`
 
-Start web dashboard server. Requires `clm[web]` extra.
+Start the web dashboard server (jobs/workers Monitor). Requires the
+`clm[web]` extra.
+
+| Option | Description |
+|--------|-------------|
+| `--host HOST` | Host to bind to (default: `127.0.0.1`; `0.0.0.0` for all interfaces). |
+| `--port PORT` | Port to bind to (default: `8000`). |
+| `--jobs-db-path PATH` | Job-queue database (auto-detected if omitted). |
+| `--no-browser` | Do not auto-open a browser. |
+| `--reload` | Enable auto-reload for development. |
+| `--cors-origin ORIGIN` | CORS allowed origin (repeatable; default `*`). |
+| `--spec SPEC_FILE` | Also enable the **Mobile Deck Studio** scoped to this course spec. |
+| `--rotate-token` | Rotate the persistent Studio pairing token (invalidates old QR codes). |
+
+**Mobile Deck Studio** (`--spec`): a phone-friendly authoring surface for the
+given course's decks, served alongside the Monitor at `/studio/`. Browse the
+spec-resolved deck tree (plus recents and a "not in spec" bucket), search deck
+titles and cell text, open a deck, and edit cell bodies/tags. Edits are written
+through CLM's byte-exact write-back engine and guarded by **optimistic
+concurrency**: each write carries the deck and cell versions the phone last saw,
+and a concurrent desktop (e.g. VS Code) edit yields HTTP 409 "changed elsewhere"
+rather than a silent clobber. A filesystem watcher also pushes a
+"changed on disk — reload" signal over the WebSocket. On startup the command
+prints the Studio URL and a scannable QR code carrying a persistent bearer
+token; for phone access over Tailscale, run `tailscale serve` so the PWA gets a
+trusted HTTPS origin.
+
+This is the P0/P1 slice (read-only browse + the cell-editing concurrency core).
+Structural insert/delete/move, the bilingual language lock + sync-to-other-
+language, and the installable offline PWA are planned later phases.
+
+```bash
+clm serve                      # Monitor only, on localhost:8000
+clm serve --spec course.xml    # Monitor + Mobile Deck Studio at /studio/
+```
 
 ### `clm zip`
 
