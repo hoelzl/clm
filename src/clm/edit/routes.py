@@ -26,6 +26,7 @@ from fastapi.responses import HTMLResponse, Response
 
 from clm.core.topic_resolver import build_topic_map
 from clm.edit.deck_file import DeckFile, DeckFileError
+from clm.edit.qr import is_available as qr_is_available
 from clm.edit.qr import svg_data_uri
 from clm.infrastructure.utils.path_utils import is_slides_file
 
@@ -123,7 +124,12 @@ async def browse(request: Request):
     return _templates(request).TemplateResponse(
         request,
         "browse.html",
-        {"request": request, "modules": module_list, "has_slides": bool(module_list)},
+        {
+            "request": request,
+            "modules": module_list,
+            "has_slides": bool(module_list),
+            "qr_available": qr_is_available(),
+        },
     )
 
 
@@ -333,8 +339,14 @@ async def qr_svg(request: Request) -> Response:
 
     Embeddable directly via ``<img src="/qr">``. The URL is derived from the
     request's ``Host`` header, so a desktop hitting the LAN IP produces a QR
-    code scannable by a phone on the same network.
+    code scannable by a phone on the same network. Returns HTTP 503 when
+    segno (the ``[edit]`` extra) is not installed.
     """
+    if not qr_is_available():
+        raise HTTPException(
+            status_code=503,
+            detail="QR code generation requires segno — install with clm[edit]",
+        )
     uri = svg_data_uri(_public_url(request))
     # ``svg_data_uri`` returns a ``data:`` URI; strip its prefix to get the
     # raw SVG markup for a standalone image response.

@@ -83,10 +83,36 @@ class TestQrRoute:
             assert "<svg" in resp.text
             assert "</svg>" in resp.text
 
-    def test_browse_page_embeds_qr(self, data_dir: Path):
+    def test_browse_page_embeds_qr_when_available(self, data_dir: Path):
+        # segno is installed in the dev/test environment ([edit] extra).
         app = create_app(data_dir)
         with TestClient(app) as c:
             resp = c.get("/")
             assert resp.status_code == 200
             assert 'src="/qr"' in resp.text
             assert "qr-img" in resp.text
+
+
+class TestQrUnavailable:
+    """When segno is not installed, the editor still loads and degrades gracefully."""
+
+    def test_qr_route_returns_503(self, data_dir: Path, monkeypatch):
+        from clm.edit import routes as routes_mod
+
+        # Pretend segno is absent: the route short-circuits with HTTP 503
+        # instead of attempting to import segno.
+        monkeypatch.setattr(routes_mod, "qr_is_available", lambda: False)
+        app = create_app(data_dir)
+        with TestClient(app) as c:
+            resp = c.get("/qr")
+            assert resp.status_code == 503
+
+    def test_browse_page_hides_qr_when_unavailable(self, data_dir: Path, monkeypatch):
+        from clm.edit import routes as routes_mod
+
+        monkeypatch.setattr(routes_mod, "qr_is_available", lambda: False)
+        app = create_app(data_dir)
+        with TestClient(app) as c:
+            resp = c.get("/")
+            assert resp.status_code == 200
+            assert "qr-img" not in resp.text

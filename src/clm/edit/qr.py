@@ -4,7 +4,14 @@ Renders the editor URL as a QR code so a phone can scan it instead of
 typing a LAN address. Pure-Python (``segno``) — no Pillow, no external
 API — so it stays fully offline.
 
-Two surfaces:
+``segno`` is imported **lazily inside each function** (not at module top
+level) because :mod:`clm.edit.routes` imports this module, and
+:mod:`clm.edit.app` imports ``routes`` — so a top-level ``import segno``
+would make the whole editor unimportable when the ``[edit]`` extra (which
+provides segno) is not installed. Laziness lets the editor load and the QR
+route degrade gracefully (HTTP 503) instead.
+
+Surfaces:
 - :func:`svg_data_uri` — for embedding in a web page (``<img src=…>``).
 - :func:`print_terminal` — a desktop-console block rendering, shown by
   ``clm edit`` next to the URL.
@@ -15,7 +22,26 @@ from __future__ import annotations
 
 from typing import TextIO
 
-import segno
+#: Raised when segno is not installed; caught by callers to degrade gracefully.
+SEGNO_MISSING_MSG = "segno is not installed (needs the [edit] extra)"
+
+
+def _require_segno():
+    """Import and return segno, raising a clear error if it is absent."""
+    try:
+        import segno
+    except ImportError as exc:  # pragma: no cover - exercised via the routes guard
+        raise ImportError(SEGNO_MISSING_MSG) from exc
+    return segno
+
+
+def is_available() -> bool:
+    """Return True iff segno is importable (i.e. the ``[edit]`` extra is installed)."""
+    try:
+        import segno  # noqa: F401
+    except ImportError:
+        return False
+    return True
 
 
 def svg_data_uri(url: str, *, scale: int = 6) -> str:
@@ -23,8 +49,9 @@ def svg_data_uri(url: str, *, scale: int = 6) -> str:
 
     ``scale`` is pixels-per-module; 6 renders comfortably on a phone camera.
     """
+    segno = _require_segno()
     qr = segno.make(url, error="m")
-    return qr.svg_data_uri(scale=scale, svgns=False, omitsize=True)
+    return str(qr.svg_data_uri(scale=scale, svgns=False, omitsize=True))
 
 
 def print_terminal(url: str, *, file: TextIO | None = None) -> None:
@@ -35,6 +62,7 @@ def print_terminal(url: str, *, file: TextIO | None = None) -> None:
     any render error is swallowed so a QR glitch never blocks the server.
     """
     try:
+        segno = _require_segno()
         segno.make(url, error="m").terminal(out=file, compact=True)
     except Exception:  # pragma: no cover - defensive; terminal quirks across envs
         pass

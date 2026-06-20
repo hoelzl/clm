@@ -6,6 +6,7 @@
 <h1>Decks</h1>
 <p class="subtitle">Pick a deck to edit. Files live under <code>slides/</code>.</p>
 
+{% if qr_available %}
 <div class="qr-card">
     <img class="qr-img" src="/qr" alt="QR code linking to this editor" width="180" height="180">
     <div>
@@ -13,6 +14,7 @@
         <p>Scan this code with your phone's camera (same Wi-Fi, or via Tailscale).</p>
     </div>
 </div>
+{% endif %}
 
 {% if not has_slides %}
 <div class="empty-state">

@@ -386,6 +386,9 @@ module = [
     "brotli",
     "brotli.*",
     "brotlicffi",
+    # segno ([edit] extra) ships without type stubs and is imported lazily.
+    "segno",
+    "segno.*",
     # The [gcal] extra's packages ship without (complete) type stubs; they are
     # also only imported lazily inside functions.
     "googleapiclient",
