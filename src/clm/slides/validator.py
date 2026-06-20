@@ -186,6 +186,51 @@ def has_no_compile_marker(text: str, comment_token: str = "#") -> bool:
     return _has_header_marker(text, comment_token, _NO_COMPILE_MARKER_RE)
 
 
+def _check_malformed_markers(text: str, file_path: str, comment_token: str) -> list[Finding]:
+    """Flag a near-miss cell marker — an extra leading comment char before ``%%``.
+
+    The percent-format parser recognises a cell boundary via
+    ``line.startswith(token + " %%")``. A typo with one extra leading comment
+    char — ``## %% [markdown] …`` for the ``#`` token, ``/// %%`` for ``//`` — is
+    NOT a boundary, so the line is swallowed into the previous cell's body, two
+    cells merge, and the only downstream symptom is a misleading "unresolved
+    duplicate slide_id …". ``_check_format`` only inspects parsed cells, so it
+    never sees the swallowed line. Scan the RAW source for the typo signature at
+    column 0 and report it directly with the line number.
+    """
+    findings: list[Finding] = []
+    if comment_token == "#":
+        # Two or more '#' before %% — but NOT a legit '# %%' (one hash). The
+        # {2,} quantifier already excludes the single-hash boundary.
+        near_miss = re.compile(r"^#{2,}\s*%%")
+    elif comment_token == "//":
+        # Three or more '/' before %% — '// %%' (two slashes) is the boundary.
+        near_miss = re.compile(r"^/{3,}\s*%%")
+    else:
+        return findings
+
+    for idx, line in enumerate(text.splitlines(), start=1):
+        if near_miss.match(line):
+            marker = line.split("%%", 1)[0].rstrip() + " %%"
+            findings.append(
+                Finding(
+                    severity="error",
+                    category="format",
+                    file=file_path,
+                    line=idx,
+                    message=(
+                        f"malformed cell marker {marker!r} at line {idx} — "
+                        f"did you mean {comment_token + ' %%'!r}?"
+                    ),
+                    suggestion=(
+                        f"Cell markers begin with {comment_token + ' %%'!r} "
+                        "(a single comment token); remove the extra comment char."
+                    ),
+                )
+            )
+    return findings
+
+
 def _check_format(cells: list[Cell], file_path: str) -> list[Finding]:
     """Check cell header syntax and structure."""
     findings: list[Finding] = []
@@ -1944,6 +1989,9 @@ def validate_file(
 
     if "format" in check_set:
         findings.extend(_check_format(cells, file_str))
+        # A near-miss cell marker (`## %%`, `/// %%`) is swallowed as body before
+        # parsing, so it never reaches a parsed Cell — scan the raw source for it.
+        findings.extend(_check_malformed_markers(text, file_str, comment_token))
         # Cell spacing runs on the raw (whitespace-preserving) cells, since the
         # parsed Cell model strips the blank lines these checks inspect.
         _, raw_cells = split_raw_cells(text, comment_token)
@@ -2045,6 +2093,7 @@ def validate_quick(path: Path) -> ValidationResult:
 
     findings: list[Finding] = []
     findings.extend(_check_format(cells, file_str))
+    findings.extend(_check_malformed_markers(text, file_str, comment_token_for_path(path)))
     findings.extend(_check_tags(cells, file_str))
     findings.extend(_check_ordering(cells, file_str))
     findings.extend(_check_slide_ids(cells, file_str))
