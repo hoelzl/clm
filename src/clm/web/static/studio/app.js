@@ -309,9 +309,10 @@ function cellCard(cell, idx, locked) {
   const body = card.querySelector(".cell-body");
   const token = commentTokenFor(currentDeck.deck_id);
   if (cell.cell_type === "markdown") {
-    // CLM markdown is comment-prefixed in the .py; strip it so a body line
-    // renders as prose, not as a heading (tier-1 preview).
-    body.innerHTML = renderMarkdown(stripCommentPrefix(cell.body, token));
+    // "clean" cells arrive already de-prefixed; "raw" cells (non-canonical/j2)
+    // are comment-prefixed, so strip the token for the tier-1 preview.
+    const md = cell.body_format === "clean" ? cell.body : stripCommentPrefix(cell.body, token);
+    body.innerHTML = renderMarkdown(md);
     if (cell.is_j2) renderJ2(cell, body, token); // tier-2: expand macros server-side
   } else {
     body.innerHTML = `<pre><code>${esc(cell.body)}</code></pre>`;
@@ -408,7 +409,7 @@ function openInsertForm(anchor) {
     shareWrap.appendChild(el(`<span>Share id with anchor (e.g. notes for this slide)</span>`));
   }
 
-  const ta = el(`<textarea placeholder="# Title&#10;#&#10;# Body (markdown lines start with &quot;# &quot;)"></textarea>`);
+  const ta = el(`<textarea placeholder="# Title&#10;&#10;Body — plain markdown (code cells: raw code)"></textarea>`);
 
   appEl.appendChild(el(`<div class="muted" style="margin-bottom:6px">New cell ${anchor ? "after " + esc(anchor.slide_id || anchor.role || "") : "at deck start"}</div>`));
   const form = el(`<div class="insert-form"></div>`);
@@ -433,6 +434,8 @@ function openInsertForm(anchor) {
       cell_type: typeSel.value,
       role: roleInput.value.trim(),
       body: ta.value,
+      // Markdown is authored clean (server re-prefixes); code is raw.
+      body_format: typeSel.value === "markdown" ? "clean" : "raw",
       after_slide_id: anchor ? anchor.slide_id : null,
       after_role: anchor ? anchor.role : null,
       expected_deck_version: currentDeck.deck_version,
@@ -481,9 +484,12 @@ function editCell(cell, idx) {
   if (diskChanged) { toast("Deck changed on disk — reload first."); return; }
   appEl.innerHTML = "";
   titleEl.textContent = "Edit " + (cell.slide_id || cell.role);
+  const clean = cell.body_format === "clean";
   const ta = el(`<textarea></textarea>`);
   ta.value = cell.body;
-  appEl.appendChild(el(`<div class="muted" style="margin-bottom:6px">${cell.cell_type} · ${esc(cell.slide_id || "")} · ${esc(cell.role || "")}</div>`));
+  const originalBody = cell.body; // for skip-if-unchanged
+  const hint = clean ? "markdown" : (cell.cell_type === "code" ? "code" : "raw");
+  appEl.appendChild(el(`<div class="muted" style="margin-bottom:6px">${hint} · ${esc(cell.slide_id || "")} · ${esc(cell.role || "")}</div>`));
   appEl.appendChild(ta);
   const actions = el(`<div class="edit-actions"></div>`);
   const save = el(`<button>Save</button>`);
@@ -494,6 +500,7 @@ function editCell(cell, idx) {
 
   cancel.addEventListener("click", renderDeck);
   save.addEventListener("click", async () => {
+    if (ta.value === originalBody) { toast("No changes"); renderDeck(); return; }
     save.disabled = true; cancel.disabled = true;
     try {
       const result = await api("/deck/edit-body", {
@@ -503,6 +510,7 @@ function editCell(cell, idx) {
           slide_id: cell.slide_id,
           role: cell.role,
           new_body: ta.value,
+          body_format: cell.body_format || "raw",
           expected_deck_version: currentDeck.deck_version,
           expected_cell_hash: cell.content_hash,
         }),

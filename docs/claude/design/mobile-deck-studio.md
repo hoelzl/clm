@@ -2,11 +2,11 @@
 
 > **Status:** plan of record. **P0–P4 implemented** (browse, the cell-editing
 > concurrency core, structural ops, the bilingual lock, streamed
-> Sync-to-other-language, and the tier-2 preview + installable/offline PWA). The
-> initial phase plan is complete; the remaining items are **Discard** (deferred
-> from P3b) and the **editor de-prefix ergonomics** (deferred from P4) — both by
-> decision. Chosen over the `clm edit` prototype (PR #394, closed as superseded).
-> See §9 for the decision record, steering notes, and the P0/P1–P4 build records.
+> Sync-to-other-language, the tier-2 preview + installable/offline PWA) **plus
+> clean-markdown editor ergonomics** (§9.11). The initial phase plan is complete;
+> the only deliberately-deferred item left is in-app **Discard** (from P3b).
+> Chosen over the `clm edit` prototype (PR #394, closed as superseded). See §9
+> for the decision record, steering notes, and the P0/P1–P4 build records.
 > **Date:** 2026-06-20.
 > **Author:** design draft, worked through interactively.
 > **Scope:** a new **Studio** view on the existing `clm serve` web app
@@ -615,3 +615,43 @@ The preview + PWA phase — **completes the initial plan**. Three pieces:
 Tests: 10 new (`tests/web/studio/test_render_pwa.py`) — j2 expansion, broken-jinja
 fallback, non-j2 passthrough, the render endpoint + auth, and that the manifest /
 icon / app shell are served and `sw.js` carries the root-scope header.
+
+### 9.11 Editor de-prefix ergonomics (2026-06-20)
+
+The P4-deferred editor wart, picked up by decision (full design **with** the
+round-trip-safety fallback). The phone now edits **clean markdown** ("`# Title`",
+blank lines) instead of the comment-prefixed source ("`# # Title`", "`#`"); the
+server de-prefixes on read and canonically re-prefixes on write.
+
+`clm.web.studio.prefix.{deprefix,reprefix,round_trips}` are the conversion +
+safety primitives. `deprefix`/`reprefix` are **exact inverses for canonical
+content** (`# X` ↔ `X`, `#` ↔ blank). `CellView` gains `body_format`; `_cell_views`
+serves a markdown non-j2 cell as `"clean"` **only when `round_trips(content,
+token)`** holds, else `"raw"`. `edit_body` / `insert_cell` take `body_format` and
+re-prefix (`_for_write`) before the byte-exact `FileState` write; the request
+echoes the format. The frontend renders/edit-loads clean bodies directly (no
+client strip), sends the format back, and **skips a no-op save** (textarea ==
+loaded body). Tests: 12 new (`tests/web/studio/test_prefix.py`).
+
+Decisions / landmines:
+
+- **Byte-exact round-trip is the keystone.** Re-saving the exact clean body the
+  editor was given reproduces the file **byte-for-byte** (a dedicated test). This
+  holds because (a) `content` is stripped, so `_rewrite_cell_body` re-applies the
+  original trailing-blank separator regardless, and (b) deprefix∘reprefix is the
+  identity on canonical content.
+- **Non-canonical cells fall back to raw.** A cell whose prefixing does not
+  round-trip (a `"# "` trailing-space line, a missing prefix, `"#Tight"`) is
+  served `"raw"` and edits verbatim — so the de-prefix feature can **never**
+  introduce a spurious diff. Code and `j2` cells are always `"raw"` (code isn't
+  prefixed; j2 needs its `# j2` lines for the tier-2 render).
+- **The heading ambiguity is why `body_format` is explicit.** Clean `# Title`
+  (a real markdown heading) is indistinguishable from a raw comment line, so the
+  server cannot guess — it is told. With the flag, clean `# Title` re-prefixes to
+  `# # Title` (comment + heading), exactly CLM's convention, so headings finally
+  author naturally.
+- **`content_hash` / sync identity untouched.** The hash is still computed over
+  the **raw** content; `body_format` only changes the *displayed/edited* text.
+  The phone passes `content_hash` back opaquely, so the optimistic guard and the
+  sync watermark are unaffected.
+- **Still deferred:** closing this leaves only in-app **Discard** outstanding.

@@ -142,6 +142,7 @@ async def edit_body(request: Request, req: EditBodyRequest) -> EditResult:
             req.slide_id,
             req.role,
             req.new_body,
+            body_format=req.body_format,
             expected_deck_version=req.expected_deck_version,
             expected_cell_hash=req.expected_cell_hash,
         )
@@ -174,6 +175,7 @@ async def insert_cell(request: Request, req: InsertCellRequest) -> EditResult:
             role=req.role,
             cell_type=req.cell_type,
             body=req.body,
+            body_format=req.body_format,
             after_slide_id=req.after_slide_id,
             after_role=req.after_role,
             slide_id=req.slide_id,
