@@ -1098,6 +1098,8 @@ def test_explain_warns_when_watermark_baseline_errors(tmp_path: Path):
     # Issue #364 item 4: an error against a (possibly stale) watermark baseline can show
     # a clean-looking anchor diff yet still error. --explain must say so up front and
     # point at the git-HEAD / --rebaseline comparison, so the mismatch is not a mystery.
+    # Use an UNPAIRABLE structure (DE has an extra id-less cell EN lacks) so the drift
+    # keeps the deck-wide error path rather than degrading to a conflict (Issue #365).
     de = _slide("de", "a", "# ## A") + _code_localized_idless("de", "for q in test_queries:\n    p")
     en = _slide("en", "a", "# ## A") + _code_localized_idless(
         "en", "for q in comparison_queries:\n    p"
@@ -1106,10 +1108,11 @@ def test_explain_warns_when_watermark_baseline_errors(tmp_path: Path):
     cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
     try:
         _seed(cache, de_path, en_path)
-        # Both halves drift their hash-only id-less localized cell -> both-decks error.
+        # Both halves drift, and DE grows an extra id-less cell -> unpairable -> error.
         de_path.write_text(
             _slide("de", "a", "# ## A")
-            + _code_localized_idless("de", "for q in test_queries:\n    q"),
+            + _code_localized_idless("de", "for q in test_queries:\n    q")
+            + _code_localized_idless("de", "extra()"),
             encoding="utf-8",
         )
         en_path.write_text(
