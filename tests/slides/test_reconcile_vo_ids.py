@@ -8,8 +8,7 @@ id-less side — without ever deriving an id from per-file content (the `assign-
 
 from __future__ import annotations
 
-import shutil
-import subprocess
+import json
 from pathlib import Path
 
 import pytest
@@ -178,8 +177,6 @@ class TestCli:
         assert "slide_id" not in (tmp_path / "slides_a.en.py").read_text().split("voiceover")[1]
 
     def test_json_output(self, tmp_path: Path):
-        import json
-
         de_path, _en = _write_pair(
             tmp_path,
             _deck(_title("de"), _vo("de", "# Hallo")),
@@ -198,13 +195,75 @@ class TestCli:
         assert res.exit_code == 2
         assert "no EN twin" in res.output
 
+    def test_json_usage_error_emits_envelope(self, tmp_path: Path):
+        # A usage error under --json is reported as a JSON {"error": …} envelope, not
+        # click's plain text (the --json contract holds for failures too).
+        solo = tmp_path / "deck.de.py"
+        solo.write_text(_deck(_title("de"), _vo("de", "# Hallo")), encoding="utf-8")
+        res = CliRunner().invoke(reconcile_vo_ids_cmd, [str(solo), "--json"])
+        assert res.exit_code == 2
+        assert json.loads(res.output)["error"].startswith("no EN twin")
+
+    def test_directory_warns_on_solo_half(self, tmp_path: Path):
+        # A healthy pair plus a stranded .de.py half: the pair is reconciled and the
+        # solo is surfaced as a warning, not silently dropped.
+        (tmp_path / "slides_a.de.py").write_text(
+            _deck(_title("de"), _vo("de", "# Hallo")), encoding="utf-8"
+        )
+        (tmp_path / "slides_a.en.py").write_text(
+            _deck(_title("en"), _vo("en", "# Hello", sid="intro")), encoding="utf-8"
+        )
+        (tmp_path / "slides_b.de.py").write_text(
+            _deck(_title("de"), _vo("de", "# allein")), encoding="utf-8"
+        )
+        res = CliRunner().invoke(reconcile_vo_ids_cmd, [str(tmp_path)])
+        assert res.exit_code == 0, res.output
+        assert "skipping slides_b.de.py" in res.output
+        assert "no EN twin" in res.output
+
+    def test_mixed_absolute_relative_paths_accepted(self, tmp_path: Path, monkeypatch):
+        # The two halves spelled with different normalizations (one absolute, one
+        # relative) still resolve to the same split deck.
+        de_path, en_path = _write_pair(
+            tmp_path,
+            _deck(_title("de"), _vo("de", "# Hallo")),
+            _deck(_title("en"), _vo("en", "# Hello", sid="intro")),
+        )
+        monkeypatch.chdir(tmp_path)
+        res = CliRunner().invoke(reconcile_vo_ids_cmd, [str(de_path), en_path.name])
+        assert res.exit_code == 0, res.output
+        assert 'voiceover"] slide_id' not in en_path.read_text()
+
+    def test_dry_run_uses_future_tense(self, tmp_path: Path):
+        de_path, _en = _write_pair(
+            tmp_path,
+            _deck(_title("de"), _vo("de", "# Hallo")),
+            _deck(_title("en"), _vo("en", "# Hello", sid="intro")),
+        )
+        res = CliRunner().invoke(reconcile_vo_ids_cmd, [str(de_path), "--dry-run"])
+        assert res.exit_code == 0, res.output
+        assert "would strip id from" in res.output
+        assert "stripped id from it" not in res.output  # no past tense in a preview
+
+    def test_unpaired_reported_even_when_symmetric(self, tmp_path: Path):
+        # DE has two id-less voiceovers, EN one: the pair is "already symmetric" (both
+        # id-less) but the unpaired second DE voiceover must still be surfaced.
+        de_path, _en = _write_pair(
+            tmp_path,
+            _deck(_title("de"), _vo("de", "# eins"), _vo("de", "# zwei")),
+            _deck(_title("en"), _vo("en", "# one")),
+        )
+        res = CliRunner().invoke(reconcile_vo_ids_cmd, [str(de_path)])
+        assert res.exit_code == 0, res.output
+        assert "already symmetric" in res.output
+        assert "present on one half only" in res.output
+
 
 # ---------------------------------------------------------------------------
 # Integration: a reconciled deck syncs cleanly (the whole point of fix #3)
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(shutil.which("git") is None, reason="git not available")
 class TestUnblocksSync:
     def test_reconciled_pair_syncs_without_change(self, tmp_path: Path):
         from clm.infrastructure.llm.cache import SyncWatermarkCache
@@ -231,7 +290,3 @@ class TestUnblocksSync:
         assert plan.is_noop  # no spurious add/edit after reconciliation
         assert result.errors == []
         assert en_path.read_text().count('tags=["voiceover"]') == 1  # not doubled
-
-
-def _git(cwd: Path, *args: str) -> None:
-    subprocess.run(["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True)
