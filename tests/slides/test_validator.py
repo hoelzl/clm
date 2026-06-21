@@ -3335,3 +3335,64 @@ class TestMarkdownBlankLeadCheck:
         # No explicit --checks: the format bundle (and thus these) run by default.
         text = '# %% [markdown] lang="de" tags=["slide"] slide_id="a"\n# - Bullet\n'
         assert len(_lead(validate_file(_write_raw(tmp_path, text)))) == 1
+
+
+# ---------------------------------------------------------------------------
+# Companion for_slide resolution (a renamed/moved slide drops its narration)
+# ---------------------------------------------------------------------------
+
+
+class TestCompanionForSlideResolves:
+    """`clm slides validate` catches a companion for_slide that matches no slide_id
+    in its deck — the build would silently drop that narration."""
+
+    def _deck_and_companion(self, tmp_path: Path, for_slide: str, *, header: str = "") -> Path:
+        deck = tmp_path / "slides_x.de.py"
+        deck.write_text(
+            header + '# %% [markdown] lang="de" tags=["slide"] slide_id="s1"\n# ## Slide One\n',
+            encoding="utf-8",
+        )
+        (tmp_path / "voiceover_x.de.py").write_text(
+            f'# %% [markdown] lang="de" tags=["notes"] slide_id="{for_slide}" '
+            f'for_slide="{for_slide}" vo_anchor="id:{for_slide}#0"\n#\n# - Narration.\n',
+            encoding="utf-8",
+        )
+        return deck
+
+    def _orphans(self, result) -> list:
+        return [f for f in result.findings if "matches no slide_id" in f.message]
+
+    def test_aligned_companion_is_clean(self, tmp_path):
+        deck = self._deck_and_companion(tmp_path, "s1")
+        assert self._orphans(validate_file(deck, checks=["pairing"])) == []
+
+    def test_orphan_for_slide_is_error(self, tmp_path):
+        deck = self._deck_and_companion(tmp_path, "configuring-mcp-in-vs-code")
+        orphans = self._orphans(validate_file(deck, checks=["pairing"]))
+        assert len(orphans) == 1
+        assert orphans[0].severity == "error"
+        assert orphans[0].category == "pairing"
+        assert "configuring-mcp-in-vs-code" in orphans[0].message
+        # The companion file is named as the offending file.
+        assert orphans[0].file.endswith("voiceover_x.de.py")
+
+    def test_voiceover_less_deck_is_silent(self, tmp_path):
+        deck = tmp_path / "slides_x.de.py"
+        deck.write_text(
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="s1"\n# ## Slide One\n',
+            encoding="utf-8",
+        )
+        assert self._orphans(validate_file(deck, checks=["pairing"])) == []
+
+    def test_title_for_slide_is_not_a_false_positive(self, tmp_path):
+        # for_slide="title" resolves to the synthetic title slide (the j2 header
+        # macro), so it must not be reported — the check reuses the build matcher.
+        header = "# j2 from 'macros.j2' import header_de\n# {{ header_de(\"X\") }}\n\n"
+        deck = self._deck_and_companion(tmp_path, "title", header=header)
+        assert self._orphans(validate_file(deck, checks=["pairing"])) == []
+
+    def test_runs_under_default_checks(self, tmp_path):
+        # No explicit --checks: pairing is in the default bundle, so an orphaned
+        # companion fails a bare `clm slides validate`.
+        deck = self._deck_and_companion(tmp_path, "gone-slide")
+        assert len(self._orphans(validate_file(deck))) == 1

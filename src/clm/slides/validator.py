@@ -1491,6 +1491,59 @@ def _check_companion_location_ambiguity(path: Path) -> list[Finding]:
     ]
 
 
+def _check_companion_for_slide_resolves(path: Path) -> list[Finding]:
+    """Flag companion narration whose ``for_slide`` matches no slide in its deck.
+
+    The build's voiceover merge silently **drops** any companion cell whose
+    ``for_slide`` resolves to no ``slide_id`` in the slide it accompanies — a lost
+    speaker-notes / voiceover, usually because a ``slide_id`` was renamed or the
+    slide moved to another deck. The build escalates each drop to a ``voiceover``
+    error (failing under ``--fail-on-error``), so today the loss is only discovered
+    at build time. This is the static analogue, caught by ``clm slides validate``
+    before the (expensive) build.
+
+    The companion-vs-deck resolution reuses the build's own
+    :func:`~clm.slides.voiceover_tools.merge_voiceover_text`, so the match honors
+    every fallback the build applies — the ``for_slide="title"`` greeting convention
+    and the ``vo_anchor`` placement — and the validator can never disagree with the
+    build about what is dropped (in particular, ``for_slide="title"`` is not a false
+    positive). A deck with no companion (``resolve_companion`` ``None``) yields
+    nothing, so a voiceover-less deck stays silent.
+    """
+    from clm.slides.voiceover_tools import merge_voiceover_text, resolve_companion
+
+    companion = resolve_companion(path)
+    if companion is None:
+        return []
+    _, unmatched = merge_voiceover_text(
+        path.read_text(encoding="utf-8"),
+        companion.read_text(encoding="utf-8"),
+        comment_token_for_path(path),
+    )
+    findings: list[Finding] = []
+    for for_slide in unmatched:
+        target = "(cell has no for_slide)" if for_slide == "<no for_slide>" else repr(for_slide)
+        findings.append(
+            Finding(
+                severity="error",
+                category="pairing",
+                file=str(companion),
+                line=1,
+                message=(
+                    f"voiceover companion {companion.name}: for_slide {target} matches no "
+                    f"slide_id in {path.name} — the build drops this narration from output"
+                ),
+                suggestion=(
+                    "A slide_id was renamed, or its slide moved to another deck. Re-align "
+                    "the for_slide to an existing slide_id in this deck, or move the "
+                    "narration into the companion of the deck that now owns the slide. "
+                    "(`clm voiceover inline` then re-extract also re-aligns it.)"
+                ),
+            )
+        )
+    return findings
+
+
 def _slide_files_to_split_pairs(slide_files: list[Path]) -> list[tuple[Path, Path]]:
     """Return every detected ``(de_path, en_path)`` pair in ``slide_files``.
 
@@ -2010,6 +2063,10 @@ def validate_file(
         # A voiceover companion duplicated across both layouts (voiceover/ +
         # sibling) is ambiguous — the build silently prefers one. Flag it.
         findings.extend(_check_companion_location_ambiguity(path))
+        # A companion narration cell whose for_slide matches no slide_id in its
+        # deck is silently dropped by the build (a lost voiceover) — catch it here,
+        # statically, instead of only at (expensive) build time.
+        findings.extend(_check_companion_for_slide_resolves(path))
         # workshop/end-workshop tags must match across a DE/EN heading pair;
         # the asymmetry only manifests on the bilingual source (a split half
         # has no DE/EN pairs to compare).
