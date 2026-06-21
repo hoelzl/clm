@@ -405,6 +405,34 @@ class FileState:
                 return True
         return False
 
+    def replace_cell_body_obj(self, target: RawCell, new_text: str) -> bool:
+        """Rewrite a specific cell's body in place (located by object identity).
+
+        Issue #403 Phase B: a narrative cell is keyed by its positional *anchor*,
+        not ``(slide_id, role)``, so the caller resolves the exact cell instance and
+        hands it here. Header and trailing blank padding stay verbatim. Returns
+        ``False`` when the cell is no longer in the deck (it shifted/was removed).
+        """
+        for cell in self.cells:
+            if cell is target:
+                self._rewrite_cell_body(cell, new_text)
+                self.dirty = True
+                return True
+        return False
+
+    def delete_cell_obj(self, target: RawCell) -> bool:
+        """Remove a specific cell (located by object identity), lines and all.
+
+        The anchor-keyed (Issue #403) counterpart of :meth:`delete_cell`. Returns
+        ``False`` when the cell is not present.
+        """
+        for i, cell in enumerate(self.cells):
+            if cell is target:
+                del self.cells[i]
+                self.dirty = True
+                return True
+        return False
+
     def separator_blanks(self) -> int:
         """The deck's inter-cell blank-line gap (0 = tight, 1 = blank-separated).
 

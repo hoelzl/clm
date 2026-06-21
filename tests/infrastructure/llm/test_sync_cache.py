@@ -268,6 +268,36 @@ class TestSyncWatermarkCache:
         watermarks.put_deck(de_path="a.de.py", en_path="a.en.py", lang="de", cells=cells)
         assert watermarks.get_deck("a.de.py", "a.en.py", "de") == cells
 
+    def test_anchor_roundtrips_sparsely(self, watermarks):
+        # Issue #403 Phase B: the ``anchor`` column records a narrative cell's
+        # positional voiceover anchor. It is sparse — only narrative rows carry
+        # one — and is read back via ``get_deck_anchors``, which filters NULLs.
+        cells = [
+            (0, "intro", "slide", "h0", None),
+            (1, None, "voiceover", "h1", None),
+            (2, None, "voiceover", "h2", None),
+        ]
+        watermarks.put_deck(
+            de_path="a.de.py",
+            en_path="a.en.py",
+            lang="de",
+            cells=cells,
+            anchors={1: "id:intro#0", 2: "fp:abc123#1"},
+        )
+        # The cell rows round-trip unchanged (anchor is a sidecar map, not a row field).
+        assert watermarks.get_deck("a.de.py", "a.en.py", "de") == cells
+        # Only the narrative rows appear in the anchor map; the slide row (pos 0) does not.
+        assert watermarks.get_deck_anchors("a.de.py", "a.en.py", "de") == {
+            1: "id:intro#0",
+            2: "fp:abc123#1",
+        }
+
+    def test_anchors_absent_yields_empty_map(self, watermarks):
+        # A pre-Phase-B deck (no anchors passed) reads back an empty anchor map.
+        cells = [(0, None, "voiceover", "h0", None)]
+        watermarks.put_deck(de_path="a.de.py", en_path="a.en.py", lang="de", cells=cells)
+        assert watermarks.get_deck_anchors("a.de.py", "a.en.py", "de") == {}
+
     def test_shared_partition_accepted(self, watermarks):
         # Language-neutral cells are tracked once under the "shared" partition.
         cells = [(0, None, "neutral-code", "h0", "import-time")]

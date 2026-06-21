@@ -448,6 +448,17 @@ CHANNEL_COVERAGE: dict[tuple[str, str], list[tuple[object, str]]] = {
         (sync_plan_mod, "_classify_localized_idless_retags"),
         (sync_plan_mod, "_classify_idless_retags_under_move"),
     ],
+    # narrative anchors (#403 Phase B): the anchor classifier keys voiceover/notes by
+    # (owning_slide_id, role, anchor) and detects edit/add/remove/conflict, and the
+    # apply locates the twin by anchor — so the recorded anchor channel is consumed.
+    ("de", "anchor"): [
+        (sync_plan_mod, "_classify_narratives"),
+        (sync_apply_mod, "_find_narrative_cell"),
+    ],
+    ("en", "anchor"): [
+        (sync_plan_mod, "_classify_narratives"),
+        (sync_apply_mod, "_find_narrative_cell"),
+    ],
     ("shared", "tags"): [
         (sync_plan_mod, "_classify_neutral_tag_drift"),
         (sync_apply_mod, "_flag_shared_cell_divergence"),
@@ -472,7 +483,7 @@ class _RecordingCache:
     def __init__(self) -> None:
         self.channels: set[tuple[str, str]] = set()
 
-    def put_deck(self, *, de_path, en_path, lang, cells, tags=None):  # noqa: ANN001
+    def put_deck(self, *, de_path, en_path, lang, cells, tags=None, anchors=None):  # noqa: ANN001
         for row in cells:
             assert len(row) == len(_ROW_FIELDS), (
                 "watermark row widened — register the new field's detector/fail-safe "
@@ -482,6 +493,8 @@ class _RecordingCache:
                 self.channels.add((lang, field))
         if tags is not None:
             self.channels.add((lang, "tags"))
+        if anchors is not None:
+            self.channels.add((lang, "anchor"))
 
     def set_synced_commit(self, de_path, en_path, commit):  # noqa: ANN001
         # Pair-level metadata (Fix D), not a per-cell channel — nothing to record here.

@@ -43,6 +43,20 @@ import hashlib
 from clm.slides.pairing import TITLE_SLIDE_ID, is_title_macro_cell
 from clm.slides.raw_cells import RawCell
 
+__all__ = [
+    "TITLE_MACRO_ANCHOR",
+    "TITLE_MACRO_KIND",
+    "anchor_candidates",
+    "anchor_key",
+    "anchor_token",
+    "body_fingerprint",
+    "find_predecessor_index",
+    "group_end",
+    "narrative_anchor_token",
+    "owning_group",
+    "split_anchor",
+]
+
 # The title-macro anchor (#246): kind ``tm`` resolves to the j2 title macro cell
 # itself rather than a content cell within a slide group.
 TITLE_MACRO_KIND = "tm"
@@ -182,3 +196,70 @@ def find_predecessor_index(
             continue
         return i
     return None
+
+
+def group_end(cells: list[RawCell], start: int, lang: str | None) -> int:
+    """First language-matched slide-start after ``start`` (exclusive), or ``len``.
+
+    Language-aware so an interleaved bilingual deck (the other language's twin
+    carries the *same* ``slide_id``) is not truncated mid-group — the PR #199
+    invariant 3 (group bounds are language-aware).
+    """
+    for i in range(start + 1, len(cells)):
+        meta = cells[i].metadata
+        if not meta.is_slide_start:
+            continue
+        if lang is not None and meta.lang is not None and meta.lang != lang:
+            continue
+        return i
+    return len(cells)
+
+
+def owning_group(
+    cells: list[RawCell], idx: int, lang: str | None
+) -> tuple[str | None, tuple[int, int]]:
+    """The owning slide group of the cell at ``idx``: ``(owning_slide_id, (start, end))``.
+
+    ``start`` is the nearest preceding slide-start (language-matched where possible)
+    and ``owning_slide_id`` is its slide_id. A cell before any slide belongs to the
+    title group when a title macro exists (owning id :data:`TITLE_SLIDE_ID`), else to
+    a synthetic group from 0. ``end`` is the next language-matched slide-start
+    (exclusive) or ``len(cells)`` — so the group spans the slide and its companions
+    without being truncated by the other language's twin in an interleaved deck.
+
+    Shared by the apply placement (:mod:`clm.slides.sync_apply`) and the watermark
+    recording (:func:`narrative_anchor_token`), so a narrative's identity is computed
+    *identically* on both sides (drift here = silent misplacement, the PR #199
+    invariant).
+    """
+    start: int | None = None
+    for i in range(idx - 1, -1, -1):
+        meta = cells[i].metadata
+        if not meta.is_slide_start:
+            continue
+        if lang is None or meta.lang is None or meta.lang == lang:
+            start = i
+            break
+    if start is None:
+        title_idx = next((i for i, c in enumerate(cells) if is_title_macro_cell(c)), None)
+        if title_idx is not None:
+            return TITLE_SLIDE_ID, (title_idx, group_end(cells, title_idx, lang))
+        return None, (0, len(cells))
+    return cells[start].metadata.slide_id, (start, group_end(cells, start, lang))
+
+
+def narrative_anchor_token(cells: list[RawCell], idx: int, lang: str | None) -> str:
+    """The positional anchor token for the narrative cell at ``idx``.
+
+    Resolves the narrative's immediate predecessor content cell and builds its
+    occurrence-qualified anchor (:func:`anchor_token`), scoped to the narrative's
+    owning slide group. A leading greeting with no content predecessor gets the
+    title-macro anchor :data:`TITLE_MACRO_ANCHOR` (#246/#7). This is the single
+    identity both the watermark recorder and the sync narrative classifier use, so
+    recording and consuming a narrative's anchor can never drift.
+    """
+    pred_idx = find_predecessor_index(cells, idx, lang)
+    if pred_idx is None:
+        return TITLE_MACRO_ANCHOR
+    _owning, bounds = owning_group(cells, idx, lang)
+    return anchor_token(cells, pred_idx, bounds, lang)
