@@ -25,6 +25,7 @@ from clm.mcp.tools import (
     handle_resolve_topic,
     handle_search_slides,
     handle_suggest_sync,
+    handle_sync_report,
     handle_validate_slides,
     handle_validate_spec,
     handle_voiceover_backfill_dry,
@@ -298,6 +299,34 @@ def create_server(data_dir: Path) -> FastMCP:
                 If omitted, auto-detects which language has more changes.
         """
         return await handle_suggest_sync(file, data_dir, source_language=source_language)
+
+    @mcp.tool()
+    async def slides_sync_report(file: str) -> str:
+        """Tiered reconciliation report for a split DE/EN deck pair (the agent contract).
+
+        Runs the same deterministic engine as ``clm slides sync --dry-run`` on a
+        *split* pair (``<deck>.de.<ext>`` + ``<deck>.en.<ext>``) and returns its work
+        partitioned into the three tiers an agent acts on differently:
+
+        - ``mechanical`` — the engine applies these deterministically with no model
+          (move / remove / retag / a verbatim neutral-cell propagation); trust them.
+        - ``assisted`` — a scoped model task the engine has framed (translate a new
+          slide, reconcile an id'd-cell edit, confirm a cold-pair correspondence);
+          each item carries the source (and, for an edit, target) cell bytes so you
+          can act without re-reading the file.
+        - ``ambiguity`` — the engine refuses to guess (a both-sided conflict, a
+          structural issue); your judgement, stated as *what* is ambiguous.
+
+        The block also exposes ``is_clean`` / ``needs_model`` / ``needs_agent``.
+        Read-only: nothing is written and no model is called. This is the split-pair
+        analogue of ``slides_suggest_sync`` (which targets a single bilingual file).
+
+        Args:
+            file: A deck half (``<deck>.de.<ext>`` / ``<deck>.en.<ext>``) or the
+                bilingual deck stem (``<deck>.<ext>``), absolute or relative to the
+                data directory; the twin / both halves are derived from disk.
+        """
+        return await handle_sync_report(file, data_dir)
 
     @mcp.tool()
     async def voiceover_extract(

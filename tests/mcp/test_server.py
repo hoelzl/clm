@@ -31,6 +31,7 @@ EXPECTED_TOOLS = {
     "slides_normalize",
     "slides_language_view",
     "slides_suggest_sync",
+    "slides_sync_report",
     "voiceover_extract",
     "voiceover_inline",
     "authoring_rules",

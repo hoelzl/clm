@@ -2798,7 +2798,8 @@ CLI verb-group structure (group-first); the flat pre-1.8 names
 | `validate` | Validate a course spec (`.xml`) or slide files; dispatches on input type (override with the `kind` parameter). Replaces the former `validate_spec` + `validate_slides`. |
 | `slides_normalize` | Apply mechanical fixes (tag migration, interleaving, slide IDs) |
 | `slides_language_view` | Extract single-language view with line annotations |
-| `slides_suggest_sync` | Detect asymmetric bilingual edits vs git HEAD |
+| `slides_suggest_sync` | Detect asymmetric bilingual edits vs git HEAD (single bilingual file) |
+| `slides_sync_report` | Tiered reconciliation report for a split DE/EN pair — the same `mechanical`/`assisted`/`ambiguity` contract as `clm slides sync --dry-run`, with cell-text excerpts (read-only; the split-pair analogue of `slides_suggest_sync`) |
 | `voiceover_extract` | Move voiceover cells to a companion file; on a split half auto-pairs both companions (`both`/`single` params, `"paired"` JSON) |
 | `voiceover_inline` | Merge voiceover cells back from companion file |
 | `authoring_rules` | Look up merged authoring rules for a course |
