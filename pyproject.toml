@@ -446,7 +446,9 @@ replace = 'version = "{new_version}"'
 filename = "README.md"
 
 [[tool.bumpversion.files]]
-filename = "CLAUDE.md"
+# AGENTS.md is the single source of truth (CLAUDE.md is a thin @AGENTS.md
+# pointer), so the version line that bump-my-version updates lives here.
+filename = "AGENTS.md"
 search = "**Version**: {current_version}"
 replace = "**Version**: {new_version}"
 

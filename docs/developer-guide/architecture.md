@@ -1195,7 +1195,7 @@ Potential improvements (not currently planned):
 
 ## References
 
-- **CLAUDE.md** — lean session-start orientation for AI assistants
+- **AGENTS.md** (imported by `CLAUDE.md`) — lean session-start orientation for AI assistants
 - **`clm info commands`** — version-accurate CLI reference
 - **`clm info spec-files`** — version-accurate spec file format reference
 - **Migration History** — `docs/archive/migration-history/`
