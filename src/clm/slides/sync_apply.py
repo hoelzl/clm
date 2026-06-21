@@ -556,14 +556,16 @@ _IDLESS_LOCALIZED_ROLES = frozenset({LOCALIZED_CODE_ROLE, LOCALIZED_MARKDOWN_ROL
 
 
 def _is_idless_localized_conflict(proposal: Proposal) -> bool:
-    """An Issue #365 id-less localized both-decks conflict — resolved by deferral only.
+    """A genuine both-sided id-less localized conflict (Issue #365) — defer, or in_sync.
 
     Such a cell has no ``slide_id`` (the synthetic localized role + ``slide_id None``),
-    so the ``(slide_id, role)`` edit path cannot target it. The classifier degraded the
-    deck-wide error to this per-cell conflict so the rest of the run still applies and
-    the watermark holds; resolving *which side wins* (translating the winner onto the
-    positional twin) is a follow-up. Until then it always defers — never materialized as
-    an edit, so a stray ``de-wins`` / ``en-wins`` decision can never mis-target a cell.
+    so the ``(slide_id, role)`` edit path cannot target it. The classifier emits a
+    *conflict* only for the cell edited on **both** halves — a one-sided winner becomes a
+    resolvable id-less localized edit instead (increment 2). Resolving *which side wins*
+    of a genuine both-sided edit is out of scope, so it defers regardless of any
+    ``de-wins`` / ``en-wins`` decision (never mis-targeting a cell via the (slide_id,
+    role) path). The lone exception: a *markdown* false conflict the judge finds already
+    equivalent is downgraded to ``in_sync`` (no write, no defer) so the watermark advances.
     """
     return (
         proposal.kind == "conflict"
@@ -608,9 +610,16 @@ def _apply_conflict(
     pre-conflict baseline and the conflict re-surfaces next run.
     """
     if _is_idless_localized_conflict(proposal):
-        # Issue #365: id-less localized conflicts are defer-only for now (no positional
-        # resolver yet), so the watermark holds and both edits stay on disk regardless
-        # of any decision — never mis-targeting a cell via the (slide_id, role) path.
+        # Issue #365: a *genuine* both-sided id-less localized conflict defers — the
+        # watermark holds and both edits stay on disk regardless of any de/en-wins
+        # decision, never mis-targeting via the (slide_id, role) path (resolve-a-side
+        # of a both-sided edit is out of scope). Increment 2: a *markdown* false
+        # conflict whose halves the judge found already equivalent was materialized as
+        # in_sync up front — downgrade it (no write, no defer) so the watermark advances.
+        outcome = edit_outcomes.get(id(proposal))
+        if outcome is not None and outcome.verdict == "in_sync":
+            result.in_sync += 1
+            return
         result.deferred += 1
         _note_deferred(deferred_keys, proposal)
         return
@@ -1081,8 +1090,16 @@ def _materialize_edits(
             )
         elif proposal.kind == "conflict":
             if _is_idless_localized_conflict(proposal):
-                # Issue #365: defer-only — never materialized as a directed edit (it
-                # has no (slide_id, role) to target). Skip so the execute walk defers it.
+                # Issue #365: a both-sided id-less conflict is never materialized as a
+                # directed edit (no (slide_id, role) to target, and resolve-a-side of a
+                # genuine both-sided edit is out of scope). Increment 2: probe a
+                # *markdown* false conflict — if the judge finds the halves already
+                # equivalent, record in_sync so the execute walk downgrades it (no write,
+                # no defer); code stays defer-only (no judge for runnable code).
+                if proposal.role == LOCALIZED_MARKDOWN_ROLE and _idless_conflict_already_equivalent(
+                    proposal, de_state, en_state, judge
+                ):
+                    outcomes[id(proposal)] = _EditOutcome("in_sync")
                 continue
             decision = _conflict_decision(decisions, proposal)
             if decision in (DECISION_DE_WINS, DECISION_EN_WINS):
@@ -1211,6 +1228,78 @@ def _resolve_narrative_edit(
     return _EditOutcome("update", proposed_text=sync_proposal.proposed_text)
 
 
+def _resolve_idless_localized_edit(
+    proposal: Proposal,
+    de_state: FileState,
+    en_state: FileState,
+    judge: SyncJudge | None,
+    translator: SlideTranslator | None,
+) -> _EditOutcome:
+    """Resolve a one-sided id-less localized edit (Issue #365 increment 2).
+
+    The winning side drifted; re-translate its body — read by ``source_position``
+    among the source deck's non-j2 cells, the cell having no ``(slide_id, role)``
+    key — for the positional twin. A localized **code** cell is re-translated (the
+    markdown judge's prompt does not fit runnable code); a localized **markdown**
+    cell goes through the judge against the stale target body, so a no-op edit
+    records ``in_sync``. The writeback (:func:`_apply_edit`) targets the twin by
+    ``target_position``, refusing if that cell is no longer id-less localized.
+    """
+    if proposal.source_position is None or proposal.target_position is None:
+        return _EditOutcome("blocked", error=f"edit (id-less {proposal.role}): missing position")
+    if proposal.direction == "de->en":
+        source_state, source_lang, target_lang = de_state, "de", "en"
+        target_state = en_state
+    else:
+        source_state, source_lang, target_lang = en_state, "en", "de"
+        target_state = de_state
+    source_body = source_state.idless_localized_body_at(source_lang, proposal.source_position)
+    if source_body is None:
+        return _EditOutcome(
+            "blocked",
+            error=f"edit (id-less {proposal.role}) at {source_lang} #{proposal.source_position}: "
+            "source cell not found or not id-less localized",
+        )
+    if proposal.role == LOCALIZED_CODE_ROLE:
+        if translator is None:
+            return _EditOutcome(
+                "blocked", error=f"edit (id-less {proposal.role}): no translator (LLM unavailable)"
+            )
+        try:
+            new_body = translator.translate(
+                source_body=source_body.rstrip("\n"),
+                source_lang=source_lang,
+                target_lang=target_lang,
+                role=CODE_ROLE,
+            )
+        except TranslationError as exc:
+            return _EditOutcome(
+                "blocked", error=f"edit (id-less {proposal.role}): translation failed: {exc}"
+            )
+        return _EditOutcome("update", proposed_text=new_body)
+    if judge is None:
+        return _EditOutcome(
+            "blocked", error=f"edit (id-less {proposal.role}): no judge (LLM unavailable)"
+        )
+    target_body = target_state.idless_localized_body_at(target_lang, proposal.target_position)
+    if target_body is None:
+        return _EditOutcome(
+            "blocked",
+            error=f"edit (id-less {proposal.role}) at {target_lang} #{proposal.target_position}: "
+            "target cell not found or not id-less localized",
+        )
+    try:
+        sync_proposal = judge.propose(
+            source_body, target_body, source_lang=source_lang, target_lang=target_lang
+        )
+    except OllamaError as exc:
+        logger.info("id-less localized edit judge failed (%s): %s", proposal.role, exc)
+        return _EditOutcome("blocked", error=f"edit (id-less {proposal.role}): {exc}")
+    if sync_proposal.verdict != "update":
+        return _EditOutcome("in_sync")
+    return _EditOutcome("update", proposed_text=sync_proposal.proposed_text)
+
+
 def _resolve_edit(
     proposal: Proposal,
     de_state: FileState,
@@ -1230,6 +1319,8 @@ def _resolve_edit(
     """
     if proposal.role in NARRATIVE_ROLES and proposal.slide_id is None:
         return _resolve_narrative_edit(proposal, de_state, en_state, judge)
+    if proposal.role in _IDLESS_LOCALIZED_ROLES and proposal.slide_id is None:
+        return _resolve_idless_localized_edit(proposal, de_state, en_state, judge, translator)
     if proposal.slide_id is None:
         return _EditOutcome("blocked", error=f"edit {proposal.role}: proposal has no slide_id")
     sid = proposal.slide_id
@@ -1318,8 +1409,24 @@ def _apply_edit(
         else:
             result.errors.append(f"edit {proposal.role}: target narrative not found by anchor")
         return
+    if proposal.role in _IDLESS_LOCALIZED_ROLES and proposal.slide_id is None:
+        # Issue #365 increment 2: a one-sided id-less localized winner has no
+        # (slide_id, role) key, so write the re-translated body onto the positional
+        # twin by its non-j2 target position. The writeback refuses (→ error, no
+        # advance) if that cell drifted out of the id-less localized set since planning.
+        target_lang = "en" if proposal.direction == "de->en" else "de"
+        if proposal.target_position is not None and target_state.replace_idless_localized_body(
+            target_lang, proposal.target_position, outcome.proposed_text or ""
+        ):
+            result.applied_edit += 1
+        else:
+            result.errors.append(
+                f"edit (id-less {proposal.role}) at {target_lang} #{proposal.target_position}: "
+                "target cell not found or not id-less localized"
+            )
+        return
     sid = proposal.slide_id
-    if sid is None:  # unreachable: an id-less edit resolves to "blocked" above
+    if sid is None:  # unreachable: an id-less edit is narrative/localized (handled above)
         result.errors.append(f"edit {proposal.role}: proposal has no slide_id")
         return
     if target_state.replace_cell_body(sid, proposal.role, outcome.proposed_text or ""):
@@ -1353,6 +1460,40 @@ def _conflict_already_equivalent(
     key = (proposal.slide_id, proposal.role)
     de_body = de_content.get(key, "")
     en_body = en_content.get(key, "")
+    if not de_body or not en_body:
+        return False
+    try:
+        if judge.propose(de_body, en_body, source_lang="de", target_lang="en").verdict == "update":
+            return False
+        if judge.propose(en_body, de_body, source_lang="en", target_lang="de").verdict == "update":
+            return False
+    except OllamaError:
+        return False
+    return True
+
+
+def _idless_conflict_already_equivalent(
+    proposal: Proposal,
+    de_state: FileState,
+    en_state: FileState,
+    judge: SyncJudge | None,
+) -> bool:
+    """Whether a both-edited id-less localized **markdown** conflict's halves are equivalent.
+
+    The id-less positional counterpart of :func:`_conflict_already_equivalent`
+    (Issue #4 / #365 increment 2): a both-edited markdown cell is often a *false*
+    conflict (both halves independently reworded to the same meaning). The cell has no
+    ``(slide_id, role)`` key, so both bodies are read by their carried non-j2 positions
+    (``source_position`` on de, ``target_position`` on en — as the classifier emitted
+    them). The judge's ``in_sync`` verdict in **both** directions means each half
+    already reflects the other, so the conflict downgrades. Conservative by design: no
+    judge, a missing body, or a judge error keeps the conflict — never auto-resolving
+    on uncertainty.
+    """
+    if judge is None or proposal.source_position is None or proposal.target_position is None:
+        return False
+    de_body = de_state.idless_localized_body_at("de", proposal.source_position)
+    en_body = en_state.idless_localized_body_at("en", proposal.target_position)
     if not de_body or not en_body:
         return False
     try:

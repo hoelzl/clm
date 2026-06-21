@@ -391,6 +391,66 @@ class FileState:
             return True
         return False
 
+    def idless_localized_body_at(self, lang: str, position: int) -> str | None:
+        """The body of the ``position``-th ``lang`` cell, if it is id-less localized.
+
+        The read counterpart of :meth:`replace_idless_localized_body`: it locates
+        the cell by its **position** among the deck's non-j2 ``lang`` cells (the
+        per-language ordinal the watermark records — the same convention
+        :meth:`replace_idless_localized_tags` uses) and returns its body verbatim
+        (header and trailing blanks excluded), exactly as the parser produced it.
+
+        Returns ``None`` when ``position`` is out of range **or** the cell there is
+        *not* id-less localized (an id-carrying cell sits there — the stream drifted
+        since the plan was built), so the caller surfaces it rather than reading the
+        wrong cell's body. Issue #365 increment 2 reads a one-sided winner's source
+        body here to translate onto its positional twin.
+        """
+        idx = -1
+        for cell in self.cells:
+            meta = cell.metadata
+            if meta.is_j2 or meta.lang != lang:
+                continue
+            idx += 1
+            if idx != position:
+                continue
+            if role_of(meta) is not None:
+                return None  # an id-carrying cell sits here — stream drifted; refuse
+            return cell.body
+        return None
+
+    def replace_idless_localized_body(self, lang: str, position: int, new_text: str) -> bool:
+        """Rewrite the body of the ``position``-th ``lang`` cell, if id-less localized.
+
+        The body counterpart of :meth:`replace_idless_localized_tags` (Issue #365
+        increment 2): an id-less localized cell (a ``lang=`` cell with no
+        ``slide_id``, so :func:`role_of` is ``None``) has no ``(slide_id, role)``
+        key, so :meth:`replace_cell_body` cannot find it. The classifier instead
+        identifies it by its **position** among the deck's non-j2 ``lang`` cells —
+        the same per-language ordinal the watermark records — and this method
+        rewrites only that cell's body (header, ``lang``, cell type, and trailing
+        blanks verbatim), exactly like :meth:`replace_cell_body`.
+
+        Returns ``False`` (and dirties nothing) when ``position`` is out of range
+        **or** the cell there is *not* id-less localized — a mismatch means the
+        stream drifted since the plan was built, so the caller surfaces it as an
+        error rather than rewriting the wrong cell.
+        """
+        idx = -1
+        for cell in self.cells:
+            meta = cell.metadata
+            if meta.is_j2 or meta.lang != lang:
+                continue
+            idx += 1
+            if idx != position:
+                continue
+            if role_of(meta) is not None:
+                return False  # an id-carrying cell sits here — stream drifted; refuse
+            self._rewrite_cell_body(cell, new_text)
+            self.dirty = True
+            return True
+        return False
+
     def delete_cell(self, slide_id: str, role: str) -> bool:
         """Remove the ``(slide_id, role)`` cell, lines and all.
 
