@@ -253,15 +253,34 @@ schema-free; the keying/watermark change is the larger follow-on.
    (a real duplicate is now same `(slide_id, role, anchor)`). Also adjust
    `_resolve_duplicates` for the explicitly-stamped-id variant. This is the
    highest-value, lowest-risk unit and directly retires the field workarounds.
-3. **Phase B — narrative keying + watermark (edit-detection; overlaps #365).** Key
-   id-less narratives by `(owning_slide_id, role, anchor)` through a keyed path
-   (replacing the add-only `_append_idless_adds` route for narratives), add the
-   watermark `anchor` column + additive migration, and reconcile with the
-   id-less-localized drift path (#365). Larger and schema-touching — gate behind an
-   explicit go-ahead.
+3. **Phase B — narrative keying + watermark (edit-detection; report #10 fix). ✅ DONE.**
+   Shipped, but with a **refined identity** vs the original sketch. The pre-implementation
+   plan keyed narratives by `(owning_slide_id, role, anchor)` (the predecessor token).
+   Implementation showed that token is *unstable as an identity*: inserting a neutral/shared
+   cell before a voiceover changes its predecessor, which the diff then mis-reads as
+   remove+add (the `test_new_shared_code_cell_copied_verbatim` regression). Phase B
+   therefore keys by **occurrence-under-slide** — `(owning_slide_id, role, occ)`, the n-th
+   narrative of its role under its owning slide — which is invariant to a sibling insertion,
+   still separates several narratives per slide (#6), and pairs an id-less half with its
+   id'd twin (#10). The predecessor anchor is still **recorded** (the watermark `anchor`
+   column + additive migration) and **consumed** for placement (Phase A) and a within-slide
+   reorder check (`_narrative_reordered`). Scope decisions, matching §10.5's guidance:
+   - **Only id-less narratives are diverted** to the anchor pass; id-carrying narratives
+     stay on the keyed `(slide_id, role)` path (stable identity, native move/duplicate/
+     copy-companion detection). The id-less↔id'd report-#10 pairing is a dedicated
+     `_reconcile_idless_idd_narratives` post-pass that cancels the doubling add pair;
+     `_guard_narrative_mass_add` is fix #2 (refuse a mis-aligned mass of shadowed adds).
+   - The watermark **`anchor` channel is recorded + registered** in
+     `test_sync_tag_drift.py::CHANNEL_COVERAGE` (`("de"/"en","anchor")` →
+     `_classify_narratives` + `_find_narrative_cell`), landed in the **same** change as the
+     consumer (the record⟺consume gate).
+   - The #365 id-less-localized drift path is left intact (a different cell set —
+     `role_of is None` neutral cells, not narratives); cross-referenced, not merged.
 4. **Phase C — harness mutations + regressions + docs** (`clm info` unaffected; this
-   is engine-internal). Update `[[project-voiceover-positional-anchors]]` and the
-   `split-voiceover-hardening.md` roadmap to mark the deferred sync-core item DONE.
+   is engine-internal). Regression set landed in `tests/slides/test_sync_narrative_anchor.py`
+   (#10 pairing, both-sided id-less, edit/remove/conflict detection, occurrence ordinal,
+   mass-add refusal, anchor recording). Update `[[project-voiceover-positional-anchors]]`
+   and the `split-voiceover-hardening.md` roadmap to mark the deferred sync-core item DONE.
 
 ## 9. Open questions
 

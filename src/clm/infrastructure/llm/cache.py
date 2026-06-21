@@ -779,6 +779,7 @@ class SyncWatermarkCache:
                     content_hash TEXT NOT NULL,
                     construct    TEXT,
                     tags         TEXT,
+                    anchor       TEXT,
                     synced_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY (de_path, en_path, lang, position)
                 )"""
@@ -789,11 +790,17 @@ class SyncWatermarkCache:
             # NULL harmlessly. ``construct`` (Issue #190 §5) is the content-anchor
             # slug; ``tags`` (Issue #198) is the cell's tag set, recorded so a
             # later run can detect a tag-only edit (invisible to the content hash)
-            # and mirror it across the split halves.
+            # and mirror it across the split halves. ``anchor`` (Issue #403 Phase B)
+            # is the positional voiceover anchor of a narrative row (``id:``/``fp:``/
+            # ``tm:`` token), recorded only for narrative cells so a later run can
+            # detect an *edit* to a multiple-per-slide narrative — sparse, NULL on
+            # every non-narrative row.
             if "construct" not in columns:
                 self._conn.execute("ALTER TABLE sync_watermarks ADD COLUMN construct TEXT")
             if "tags" not in columns:
                 self._conn.execute("ALTER TABLE sync_watermarks ADD COLUMN tags TEXT")
+            if "anchor" not in columns:
+                self._conn.execute("ALTER TABLE sync_watermarks ADD COLUMN anchor TEXT")
             self._conn.commit()
         # Pair-level metadata, one row per (de_path, en_path): the repo HEAD commit
         # at the time the watermark was recorded. Lets a later run detect that the
@@ -837,6 +844,7 @@ class SyncWatermarkCache:
         lang: str,
         cells: list[tuple[int, str | None, str, str, str | None]],
         tags: dict[int, frozenset[str]] | None = None,
+        anchors: dict[int, str] | None = None,
     ) -> None:
         """Replace the watermark for one deck atomically.
 
@@ -857,12 +865,20 @@ class SyncWatermarkCache:
         cells (excluded from every other partition) so a one-sided header edit —
         which sync never auto-translates — can be detected and surfaced rather than
         silently reported as "consistent".
+
+        ``anchors`` (Issue #403 Phase B) optionally maps a *narrative* cell's
+        ``position`` to its positional voiceover anchor token (``id:``/``fp:``/``tm:``),
+        stored in the additive ``anchor`` column so a later run can key a narrative
+        by ``(owning_slide_id, role, anchor)`` and detect an edit to one of several
+        narratives under a single slide. Sparse — a position absent from ``anchors``
+        (or ``anchors=None``) stores NULL ("not a narrative / unknown").
         """
         if lang not in ("de", "en", "shared", "de-header", "en-header"):
             raise ValueError(
                 f"lang must be 'de', 'en', 'shared', 'de-header', or 'en-header', got {lang!r}"
             )
         tag_for = tags or {}
+        anchor_for = anchors or {}
         with self._conn:  # single transaction (BEGIN/COMMIT or ROLLBACK)
             self._conn.execute(
                 "DELETE FROM sync_watermarks WHERE de_path=? AND en_path=? AND lang=?",
@@ -870,8 +886,9 @@ class SyncWatermarkCache:
             )
             self._conn.executemany(
                 "INSERT INTO sync_watermarks "
-                "(de_path, en_path, lang, position, slide_id, role, content_hash, construct, tags) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "(de_path, en_path, lang, position, slide_id, role, content_hash, "
+                "construct, tags, anchor) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
                     (
                         de_path,
@@ -883,6 +900,7 @@ class SyncWatermarkCache:
                         content_hash,
                         construct,
                         _serialize_tags(tag_for[position]) if position in tag_for else None,
+                        anchor_for.get(position),
                     )
                     for (position, slide_id, role, content_hash, construct) in cells
                 ],
@@ -901,6 +919,22 @@ class SyncWatermarkCache:
             (de_path, en_path, lang),
         ).fetchall()
         return {r[0]: _deserialize_tags(r[1]) for r in rows}
+
+    def get_deck_anchors(self, de_path: str, en_path: str, lang: str) -> dict[int, str]:
+        """Return ``{position: anchor}`` for the narrative rows that recorded one.
+
+        Sparse: only rows whose ``anchor`` column is non-NULL appear — the
+        narrative cells (Issue #403 Phase B). A position absent from the map is
+        either a non-narrative cell or a pre-Phase-B watermark row, which the
+        narrative classifier reads as "anchor undeterminable" and skips, so an old
+        watermark degrades gracefully (no false edit).
+        """
+        rows = self._conn.execute(
+            "SELECT position, anchor FROM sync_watermarks "
+            "WHERE de_path=? AND en_path=? AND lang=? AND anchor IS NOT NULL ORDER BY position",
+            (de_path, en_path, lang),
+        ).fetchall()
+        return {r[0]: r[1] for r in rows}
 
     def has_pair(self, de_path: str, en_path: str) -> bool:
         """Return True when any watermark row exists for the pair."""

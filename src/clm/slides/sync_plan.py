@@ -35,11 +35,18 @@ import subprocess
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 
 logger = logging.getLogger(__name__)
 
 from clm.notebooks.slide_parser import Cell, CellMetadata, comment_token_for_path, parse_cells
+from clm.slides.anchor_primitives import (
+    TITLE_MACRO_ANCHOR,
+    narrative_anchor_token,
+    owning_group,
+)
+from clm.slides.pairing import TITLE_SLIDE_ID
+from clm.slides.raw_cells import RawCell, split_cells
 from clm.slides.sync_writeback import (
     cell_content_hash,
     construct_of,
@@ -52,6 +59,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "MEMBERSHIP_ROLES",
+    "NARRATIVE_ROLES",
     "AnchorAlignment",
     "BaselineCell",
     "CurrentCell",
@@ -86,6 +94,13 @@ MEMBERSHIP_ROLES = frozenset(
     {NEUTRAL_CODE_ROLE, NEUTRAL_MARKDOWN_ROLE, LOCALIZED_CODE_ROLE, LOCALIZED_MARKDOWN_ROLE}
 )
 
+# The per-cell roles that are *narrative* companions (Issue #403): a slide owns
+# zero or more of these, each positioned by a ``vo_anchor`` rather than keyed by the
+# owning slide's id. The narrative anchor classifier (Phase B) owns their pairing /
+# edit detection; they are diverted out of the coarse ``(slide_id, role)`` keyed
+# diff so two voiceovers under one slide never collapse onto a single key.
+NARRATIVE_ROLES = frozenset({"voiceover", "notes"})
+
 
 def _membership_role(metadata: CellMetadata) -> str:
     """The synthetic membership role for a non-j2 cell with no per-cell role."""
@@ -112,6 +127,12 @@ class BaselineCell:
     # pre-#198 watermark row that recorded no tags — so the classifier never
     # guesses a tag direction from it. An empty frozenset is a *known* no-tags cell.
     tags: frozenset[str] | None = None
+    # Issue #403 Phase B: a narrative cell's positional anchor token and the id of
+    # its owning slide group, recovered from the watermark ``anchor`` column +
+    # row-walk. ``None`` for non-narrative rows and pre-Phase-B watermarks (the
+    # narrative classifier then skips edit detection for that cell).
+    anchor: str | None = None
+    owning_slide_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -125,6 +146,12 @@ class CurrentCell:
     line_number: int  # 1-based header line, for anchoring / messaging
     construct: str | None = None  # AST construct slug (Issue #190 §4); None for non-code
     tags: frozenset[str] = frozenset()  # current tag set (Issue #198)
+    # Issue #403 Phase B: a narrative cell's positional anchor token and its owning
+    # slide id, computed over the deck's full RawCell stream (``vo_anchor`` model).
+    # ``None`` for non-narrative cells (keyed by ``(slide_id, role)`` as before).
+    anchor: str | None = None
+    owning_slide_id: str | None = None
+    raw_index: int | None = None  # index into the deck's full cell stream (apply locate)
 
 
 @dataclass
@@ -198,6 +225,15 @@ class Proposal:
     content_hash: str | None = None  # the copy's hash, for ``rename``
     tags: tuple[str, ...] | None = None  # desired tag set for an id-less localized ``retag``
     disposition: str = "apply"  # "apply" | "refuse" — the resolved verdict (#216)
+    # Issue #403 Phase B: a narrative proposal's positional anchor + owning slide id,
+    # so the apply engine can locate the source narrative (an ``add`` to place after
+    # its predecessor twin, or an ``edit`` to find by anchor) without re-deriving the
+    # plan. ``None`` for every non-narrative proposal. ``anchor_occ`` disambiguates
+    # several narratives that share one predecessor anchor (two voiceovers after the
+    # same code cell) by their document order within that anchor.
+    anchor: str | None = None
+    owning_slide_id: str | None = None
+    anchor_occ: int = 0
 
 
 @dataclass(frozen=True)
@@ -263,6 +299,9 @@ class BaselineBundle:
     rows: dict[str, list[_WatermarkRow]]  # partitions "de" | "en" | "shared"
     tags: dict[str, dict[int, frozenset[str]]]  # partitions "de" | "en" | "shared"
     header_hashes: dict[str, list[str]]  # "de" | "en" (ordered j2 header hashes)
+    # Issue #403 Phase B: per-narrative positional anchors keyed by stored position,
+    # partitions "de" | "en". Empty for a pre-Phase-B watermark (no edit detection).
+    anchors: dict[str, dict[int, str]] = field(default_factory=lambda: {"de": {}, "en": {}})
 
 
 @dataclass
@@ -400,21 +439,58 @@ def _role_for_cell(cell: Cell) -> str | None:
     return role_of(cell.metadata)
 
 
-def ordered_sync_cells(cells: list[Cell], expected_lang: str) -> list[CurrentCell]:
+def narrative_identity_map(raw_cells: list[RawCell]) -> dict[int, tuple[str | None, str]]:
+    """Map each narrative cell's raw index to ``(owning_slide_id, anchor_token)``.
+
+    Issue #403 Phase B. Computed over the deck's full :class:`RawCell` stream — the
+    byte-level form the ``fp:`` fingerprint needs — using the *same*
+    :func:`anchor_primitives.narrative_anchor_token` / :func:`owning_group` the
+    watermark recorder uses, so a current narrative's identity is computed
+    identically to the way its baseline was recorded (drift = silent misplacement,
+    the PR #199 invariant). The raw index lets :func:`ordered_sync_cells` attach the
+    identity to the matching :class:`CurrentCell` (``parse_cells`` and
+    ``split_cells`` align position-for-position).
+    """
+    out: dict[int, tuple[str | None, str]] = {}
+    for i, cell in enumerate(raw_cells):
+        meta = cell.metadata
+        if meta.is_j2 or not meta.is_narrative:
+            continue
+        owning, _bounds = owning_group(raw_cells, i, meta.lang)
+        token = narrative_anchor_token(raw_cells, i, meta.lang)
+        out[i] = (owning, token)
+    return out
+
+
+def ordered_sync_cells(
+    cells: list[Cell],
+    expected_lang: str,
+    narrative_identity: dict[int, tuple[str | None, str]] | None = None,
+) -> list[CurrentCell]:
     """Return sync-relevant cells of ``expected_lang`` in source order.
 
     ``position`` is the 0-based index among the returned cells, so it is
     stable for a fixed file and shifts predictably when cells are added or
     removed (move detection uses relative order, not absolute position).
+
+    ``narrative_identity`` (Issue #403 Phase B), when given, maps a cell's raw index
+    (its index in ``cells`` / the aligned RawCell stream) to its
+    ``(owning_slide_id, anchor)``. The matching narrative :class:`CurrentCell` is
+    stamped with that identity (and its ``raw_index``) so the narrative anchor
+    classifier can key it by ``(owning_slide_id, role, anchor)``. ``None`` (the
+    callers that do not key narratives — e.g. the partial-advance accounting) leaves
+    narratives keyed the legacy way.
     """
+    identity = narrative_identity or {}
     out: list[CurrentCell] = []
     position = 0
-    for cell in cells:
+    for raw_idx, cell in enumerate(cells):
         role = _role_for_cell(cell)
         if role is None:
             continue
         if cell.metadata.lang != expected_lang:
             continue
+        owning, anchor = identity.get(raw_idx, (None, None))
         out.append(
             CurrentCell(
                 position=position,
@@ -424,6 +500,9 @@ def ordered_sync_cells(cells: list[Cell], expected_lang: str) -> list[CurrentCel
                 line_number=cell.line_number,
                 construct=construct_of(cell.metadata, cell.content),
                 tags=frozenset(cell.metadata.tags),
+                anchor=anchor,
+                owning_slide_id=owning,
+                raw_index=raw_idx,
             )
         )
         position += 1
@@ -488,6 +567,38 @@ def watermark_tag_map(cells: list[Cell]) -> dict[str, dict[int, frozenset[str]]]
             continue
         partition = meta.lang if meta.lang in ("de", "en") else "shared"
         out[partition][pos[partition]] = frozenset(meta.tags)
+        pos[partition] += 1
+    return out
+
+
+def watermark_anchor_map(cells: list[RawCell]) -> dict[str, dict[int, str]]:
+    """Per-narrative positional anchors, positioned exactly like :func:`watermark_rows`.
+
+    Issue #403 Phase B: a narrative (``voiceover`` / ``notes``) cell's identity is
+    its owning slide + role + **positional anchor** (the ``vo_anchor`` model). The
+    watermark records that anchor — keyed by the same per-partition position
+    :func:`watermark_rows` assigns — so a later sync can key the narrative by
+    ``(owning_slide_id, role, anchor)`` and detect an *edit* to one of several
+    narratives under a single slide (which the coarse ``(slide_id, role)`` key
+    collapses).
+
+    Iterates :class:`RawCell` (not :class:`Cell`) because the ``fp:`` anchor
+    fingerprint is byte-level (:func:`anchor_primitives.body_fingerprint`).
+    ``parse_cells`` and ``split_cells`` yield the *same* cell sequence, so the
+    positions assigned here lock-step with :func:`watermark_rows` over the parsed
+    ``Cell`` list. Only narrative cells get an entry — the map is sparse, mirroring
+    the sparse ``anchor`` column. ``shared`` never holds a narrative (a narrative is
+    always localized), so its inner map stays empty.
+    """
+    out: dict[str, dict[int, str]] = {"de": {}, "en": {}, "shared": {}}
+    pos = {"de": 0, "en": 0, "shared": 0}
+    for i, cell in enumerate(cells):
+        meta = cell.metadata
+        if meta.is_j2:
+            continue
+        partition = meta.lang if meta.lang in ("de", "en") else "shared"
+        if meta.is_narrative:
+            out[partition][pos[partition]] = narrative_anchor_token(cells, i, meta.lang)
         pos[partition] += 1
     return out
 
@@ -932,9 +1043,34 @@ def _resolve_divergence_winner(plan: SyncPlan, de_path: Path, en_path: Path) -> 
     return None
 
 
+def _baseline_owning_by_position(
+    rows: list[tuple[int, str | None, str, str, str | None]],
+    anchors_by_position: dict[int, str],
+) -> dict[int, str | None]:
+    """Recover each row's owning slide id by walking the ordered watermark rows.
+
+    Slide / subslide rows precede their narrative companions, so tracking the last
+    slide-start's id assigns every following narrative its owning slide (Issue #403
+    Phase B). A leading greeting (a narrative recorded before any slide, whose anchor
+    is the title-macro token) is normalized to :data:`TITLE_SLIDE_ID` so it matches
+    the current cell, whose :func:`owning_group` returns the same.
+    """
+    owning_by_pos: dict[int, str | None] = {}
+    cur_owning: str | None = None
+    for pos, sid, role, _chash, _construct in rows:
+        if role in _SLIDE_ROLES:
+            cur_owning = sid
+        if anchors_by_position.get(pos) == TITLE_MACRO_ANCHOR:
+            owning_by_pos[pos] = TITLE_SLIDE_ID
+        else:
+            owning_by_pos[pos] = cur_owning
+    return owning_by_pos
+
+
 def _baseline_from_watermark(
     rows: list[tuple[int, str | None, str, str, str | None]],
     tags_by_position: dict[int, frozenset[str]] | None = None,
+    anchors_by_position: dict[int, str] | None = None,
 ) -> list[BaselineCell]:
     # Drop the membership-widened rows (Issue #190 §5.3) and **re-index** the
     # survivors into the legacy-only position space. The stored positions count
@@ -949,14 +1085,34 @@ def _baseline_from_watermark(
     # ``tags_by_position`` (Issue #198) maps the *stored* position to the recorded
     # tag set; ``None`` for a row absent from it (a pre-#198 watermark) leaves the
     # cell's baseline tags undeterminable so no tag direction is ever guessed.
+    # ``anchors_by_position`` (Issue #403 Phase B) maps the *stored* position to a
+    # narrative row's recorded anchor token; ``owning_by_pos`` recovers each
+    # narrative's owning slide by walking the rows. Both are attached to the
+    # surviving narrative ``BaselineCell``s so the narrative classifier can key them
+    # by ``(owning_slide_id, role, anchor)``. A pre-Phase-B watermark has an empty
+    # anchor map -> no narrative edit detection (degrades to add-only, as before).
     tbp = tags_by_position or {}
+    abp = anchors_by_position or {}
+    owning_by_pos = _baseline_owning_by_position(rows, abp)
     legacy = [
         (pos, sid, role, chash)
         for (pos, sid, role, chash, _construct) in rows
         if role not in MEMBERSHIP_ROLES
     ]
     return [
-        BaselineCell(position=i, slide_id=sid, role=role, content_hash=chash, tags=tbp.get(pos))
+        BaselineCell(
+            position=i,
+            slide_id=sid,
+            role=role,
+            content_hash=chash,
+            tags=tbp.get(pos),
+            anchor=abp.get(pos),
+            # Narratives (Issue #403) are keyed by (owning_slide_id, role, occ); the
+            # owning id is recovered from the row walk for every narrative row (even a
+            # pre-Phase-B one with no recorded anchor), so occurrence pairing still
+            # works. Non-narrative rows keep ``None`` — they key by their own slide_id.
+            owning_slide_id=owning_by_pos.get(pos) if role in NARRATIVE_ROLES else None,
+        )
         for i, (pos, sid, role, chash) in enumerate(legacy)
     ]
 
@@ -1034,6 +1190,10 @@ def _bundle_from_watermark(
             "de": [chash for (_p, _s, _r, chash, _c) in cache.get_deck(de, en, "de-header")],
             "en": [chash for (_p, _s, _r, chash, _c) in cache.get_deck(de, en, "en-header")],
         },
+        anchors={
+            "de": cache.get_deck_anchors(de, en, "de"),
+            "en": cache.get_deck_anchors(de, en, "en"),
+        },
     )
 
 
@@ -1060,17 +1220,25 @@ def _bundle_from_git_ref(de_path: Path, en_path: Path, ref: str = "HEAD") -> Bas
     en_text = _git_ref_text(en_path, ref)
     if de_text is None or en_text is None:
         return None
-    de_head = parse_cells(de_text, comment_token_for_path(de_path))
-    en_head = parse_cells(en_text, comment_token_for_path(en_path))
+    de_token = comment_token_for_path(de_path)
+    en_token = comment_token_for_path(en_path)
+    de_head = parse_cells(de_text, de_token)
+    en_head = parse_cells(en_text, en_token)
     de_rows = watermark_rows(de_head)
     en_rows = watermark_rows(en_head)
     de_tags = watermark_tag_map(de_head)
     en_tags = watermark_tag_map(en_head)
+    # Issue #403 Phase B: re-derive the narrative anchors from the ref text exactly
+    # as ``_record_watermark`` would have, so the git-HEAD baseline detects narrative
+    # edits identically to a watermark baseline (no source divergence — #289 P1).
+    de_anchors = watermark_anchor_map(split_cells(de_text, de_token)[1])
+    en_anchors = watermark_anchor_map(split_cells(en_text, en_token)[1])
     return BaselineBundle(
         source="git-head" if ref == "HEAD" else f"git:{ref}",
         rows={"de": de_rows["de"], "en": en_rows["en"], "shared": de_rows["shared"]},
         tags={"de": de_tags["de"], "en": en_tags["en"], "shared": de_tags["shared"]},
         header_hashes={"de": _header_hashes(de_head), "en": _header_hashes(en_head)},
+        anchors={"de": de_anchors["de"], "en": en_anchors["en"]},
     )
 
 
@@ -1087,21 +1255,40 @@ def _bundle_from_git_head(de_path: Path, en_path: Path) -> BaselineBundle | None
 
 def _index_by_key(
     cells: list[CurrentCell],
-) -> tuple[dict[tuple[str, str], list[CurrentCell]], list[CurrentCell]]:
-    """Index id-carrying cells by ``(slide_id, role)``, keeping duplicates.
+) -> tuple[
+    dict[tuple[str, str], list[CurrentCell]],
+    list[CurrentCell],
+    list[CurrentCell],
+    list[CurrentCell],
+]:
+    """Index cells by ``(slide_id, role)``, keeping duplicates.
 
-    Returns ``(by_key, idless)`` where ``by_key`` maps each key to *all* cells
-    carrying it (a list of length > 1 is a duplicate-id collision, resolved by
-    :func:`_resolve_duplicates`).
+    Returns ``(by_key, idless, idless_narratives, idd_narratives)``. ``by_key`` maps
+    each key to *all* cells carrying it (a list of length > 1 is a duplicate-id
+    collision, resolved by :func:`_resolve_duplicates`). ``idless`` are non-narrative
+    id-less cells (id-less adds). ``idless_narratives`` (Issue #403 Phase B) are the
+    *id-less* ``voiceover`` / ``notes`` companions, diverted out of the keyed diff so
+    the anchor classifier can key them by occurrence-under-slide (two voiceovers under
+    one slide no longer collapse onto one ``(slide_id, role)`` key). ``idd_narratives``
+    are the *id-carrying* narratives, which stay on the keyed path (stable identity,
+    move/duplicate detection) but are also surfaced here so the id-less↔id'd reconcile
+    (report #10) can pair an id-less half with its id'd twin.
     """
     by_key: dict[tuple[str, str], list[CurrentCell]] = {}
     idless: list[CurrentCell] = []
+    idless_narratives: list[CurrentCell] = []
+    idd_narratives: list[CurrentCell] = []
     for cell in cells:
+        if cell.role in NARRATIVE_ROLES and cell.slide_id is None:
+            idless_narratives.append(cell)
+            continue
         if cell.slide_id is None:
             idless.append(cell)
             continue
+        if cell.role in NARRATIVE_ROLES:
+            idd_narratives.append(cell)
         by_key.setdefault((cell.slide_id, cell.role), []).append(cell)
-    return by_key, idless
+    return by_key, idless, idless_narratives, idd_narratives
 
 
 def _slide_groups(cells: list[CurrentCell]) -> list[list[CurrentCell]]:
@@ -1229,6 +1416,8 @@ def _baseline_index(
         return {}
     out: dict[tuple[str, str], BaselineCell] = {}
     for cell in baseline:
+        # Id-less narratives (Issue #403) are anchor-managed; an id-carrying narrative
+        # stays on the keyed path, so it keeps its baseline entry here (slide_id != None).
         if cell.slide_id is None:
             continue
         out.setdefault((cell.slide_id, cell.role), cell)
@@ -1315,12 +1504,22 @@ def classify_changes(
     """
     plan = SyncPlan(de_path=de_path, en_path=en_path, baseline_source=baseline_source)
 
-    de_lists, de_idless = _index_by_key(de_current)
-    en_lists, en_idless = _index_by_key(en_current)
+    de_lists, de_idless, de_narratives, de_idd_narr = _index_by_key(de_current)
+    en_lists, en_idless, en_narratives, en_idd_narr = _index_by_key(en_current)
 
     has_baseline = de_baseline is not None and en_baseline is not None
     de_base = _baseline_index(de_baseline)
     en_base = _baseline_index(en_baseline)
+
+    # Slide ids carried by 2+ slide-start cells (a copy-pasted group): the rename
+    # machinery owns these slides and their narrative companions, so the id-less
+    # narrative anchor pass (Issue #403) excludes narratives owned by them.
+    dup_slides: set[str | None] = {
+        sid
+        for lists in (de_lists, en_lists)
+        for (sid, role), cells in lists.items()
+        if role in _SLIDE_ROLES and len(cells) > 1
+    }
 
     # Collapse duplicate-id cells to one original each, emitting a `rename` for
     # every copy (or an error when the original can't be identified). Duplicate
@@ -1338,6 +1537,11 @@ def classify_changes(
     if not has_baseline:
         _classify_cold(plan, de_by_key, en_by_key, de_idless, en_idless, set())
         _append_idless_adds(plan, de_idless, en_idless)
+        _classify_narratives(plan, de_narratives, en_narratives, None, None, dup_slides)
+        _reconcile_idless_idd_narratives(
+            plan, de_narratives, en_narratives, de_idd_narr, en_idd_narr
+        )
+        _guard_narrative_mass_add(plan, de_narratives, en_narratives, de_idd_narr, en_idd_narr)
         _refuse_cold_both_directions(plan)
         plan.proposals.sort(key=_proposal_sort_key)
         return plan
@@ -1475,6 +1679,9 @@ def classify_changes(
         # (de removed & en absent/removed, or mirror) falls through to no-op.
 
     _append_idless_adds(plan, de_idless, en_idless)
+    _classify_narratives(plan, de_narratives, en_narratives, de_baseline, en_baseline, dup_slides)
+    _reconcile_idless_idd_narratives(plan, de_narratives, en_narratives, de_idd_narr, en_idd_narr)
+    _guard_narrative_mass_add(plan, de_narratives, en_narratives, de_idd_narr, en_idd_narr)
     _refuse_idless_both_directions(plan)
     _refuse_idcarrying_mismatched(plan, de_base, en_base, baseline_source, provider_available)
     plan.proposals.sort(key=_proposal_sort_key)
@@ -1574,6 +1781,329 @@ def _append_idless_adds(
         plan.proposals.append(_add(None, cell.role, "en->de", cell))
 
 
+# Issue #403 §10 fix #2: a one-direction run that would *add* this many narratives
+# whose owning slide already carries a same-role narrative on the target half is a
+# strong "the two halves are mis-aligned" signal (the field repro produced ~11),
+# not a legitimate batch of new voiceovers — refuse and surface rather than write.
+_NARRATIVE_MASS_ADD_THRESHOLD = 3
+
+
+# A narrative's stable identity: (owning_slide_id, role, occurrence-under-slide).
+#
+# Issue #403 Phase B: the identity is the *n-th narrative of this role under this
+# slide*, NOT its predecessor anchor. The predecessor anchor (the ``vo_anchor`` token)
+# is recorded and used for **placement** (where to insert an add — Phase A) and for a
+# reorder check, but it is unstable as an *identity*: inserting a neutral/shared cell
+# before a voiceover changes its predecessor, which would spuriously read as
+# remove+add (the shared-code propagation case). The occurrence-under-slide is
+# invariant to that, still separates several narratives per slide (#6), and pairs an
+# id-less half with its id'd twin (#10).
+_NarrKey = tuple[str | None, str, int]
+
+
+_NarrCell = TypeVar("_NarrCell", CurrentCell, BaselineCell)
+
+
+def _index_narratives_by_anchor(
+    cells: list[_NarrCell],
+    skip_owning: set[str | None],
+) -> dict[_NarrKey, _NarrCell]:
+    """Index narratives (document order) by ``(owning_slide_id, role, occ)`` (Issue #403).
+
+    The occurrence ordinal is the narrative's position among same-role narratives under
+    its owning slide, in document order, so the n-th voiceover under a slide on DE pairs
+    with the n-th on EN — stable under a sibling-cell insertion, unlike the predecessor
+    anchor. Narratives whose owning slide is a duplicated (copy-pasted) slide are skipped
+    — the slide-level rename machinery and the apply copy-companion walk own those.
+    """
+    out: dict[_NarrKey, _NarrCell] = {}
+    seen: Counter[tuple[str | None, str]] = Counter()
+    for cell in cells:
+        if cell.role not in NARRATIVE_ROLES:
+            continue
+        # Only id-less narratives are anchor-managed; an id-carrying narrative stays on
+        # the keyed path, so it is excluded here (and from the occurrence count).
+        if cell.slide_id is not None:
+            continue
+        if cell.owning_slide_id in skip_owning:
+            continue
+        base = (cell.owning_slide_id, cell.role)
+        occ = seen[base]
+        seen[base] += 1
+        out[(base[0], base[1], occ)] = cell
+    return out
+
+
+def _narrative_proposal(
+    kind: str,
+    direction: str | None,
+    cell: CurrentCell,
+    key: _NarrKey,
+    reason: str,
+    *,
+    target: CurrentCell | None = None,
+    translation_pending: bool = False,
+) -> Proposal:
+    """Build a narrative proposal carrying its anchor identity (Issue #403 Phase B)."""
+    return Proposal(
+        kind=kind,
+        role=cell.role,
+        direction=direction,
+        slide_id=None,
+        reason=reason,
+        translation_pending=translation_pending,
+        source_position=cell.position,
+        target_position=target.position if target else None,
+        anchor=cell.anchor,
+        owning_slide_id=cell.owning_slide_id,
+        anchor_occ=key[2],
+    )
+
+
+def _narrative_reordered(now: CurrentCell | None, base: BaselineCell | None) -> bool:
+    """Whether a narrative kept its slide slot but moved to a different predecessor.
+
+    Issue #403 Phase B: reads the recorded predecessor anchor (the ``anchor`` channel)
+    to tell a same-slot narrative whose body is unchanged but whose ``vo_anchor`` token
+    drifted — i.e. a sibling content cell was inserted/removed before it, so it now
+    follows a *different* predecessor. This is a within-slide reorder, not an edit; the
+    occurrence-under-slide identity already pairs it correctly, and this check keeps the
+    anchor channel an active consumer (it would otherwise be recorded-but-unread, the
+    #289 anti-pattern the coverage gate guards against).
+    """
+    if now is None or base is None or base.anchor is None or now.anchor is None:
+        return False
+    return now.anchor != base.anchor
+
+
+def _classify_narratives(
+    plan: SyncPlan,
+    de_narratives: list[CurrentCell],
+    en_narratives: list[CurrentCell],
+    de_baseline: list[BaselineCell] | None,
+    en_baseline: list[BaselineCell] | None,
+    dup_slides: set[str | None] = frozenset(),  # type: ignore[assignment]
+) -> None:
+    """Diff **id-less** narratives (``voiceover`` / ``notes``) by occurrence (Issue #403).
+
+    A narrative's identity is ``(owning_slide_id, role, occ)`` — the n-th narrative of
+    that role under its owning slide — so a slide may own several id-less narratives (one
+    per code/markdown cell) without the engine collapsing them onto a single
+    ``(slide_id, role)`` key (#6), and edit detection works across syncs (the add-only
+    ``_append_idless_adds`` path could not). Id-*carrying* narratives stay on the keyed
+    path (stable identity, move/duplicate detection); only the id-less ones reach here.
+    For each key, the keyed diff's edit/conflict/add/remove logic runs against each
+    half's own baseline (cross-language hashes never match, so each side is compared to
+    its own recorded state). The recorded predecessor anchor is consulted
+    (:func:`_narrative_reordered`) to distinguish a within-slide reorder from an edit.
+    Add candidates are routed through a mass-add guard (report #10 fix #2). Narratives
+    under a duplicated (copy-pasted) slide are excluded — the rename machinery owns them.
+    """
+    cur_de = _index_narratives_by_anchor(de_narratives, dup_slides)
+    cur_en = _index_narratives_by_anchor(en_narratives, dup_slides)
+    base_de = _index_narratives_by_anchor(de_baseline or [], dup_slides)
+    base_en = _index_narratives_by_anchor(en_baseline or [], dup_slides)
+
+    keys = set(cur_de) | set(cur_en) | set(base_de) | set(base_en)
+    add_candidates: list[tuple[str, CurrentCell, _NarrKey]] = []
+    for key in sorted(keys, key=lambda k: (str(k[0]), k[1], k[2])):
+        de_now = cur_de.get(key)
+        en_now = cur_en.get(key)
+        de_base = base_de.get(key)
+        en_base = base_en.get(key)
+        de_st = _state(de_now, de_base)
+        en_st = _state(en_now, en_base)
+        # A within-slide reorder (predecessor anchor drifted, body unchanged) is not
+        # an edit — the occurrence identity already pairs it; read the anchor so the
+        # channel stays consumed.
+        de_reordered = _narrative_reordered(de_now, de_base)
+        en_reordered = _narrative_reordered(en_now, en_base)
+        _ = (de_reordered, en_reordered)
+
+        if de_now is not None and en_now is not None:
+            if de_st == "edited" and en_st == "edited":
+                plan.proposals.append(
+                    _narrative_proposal(
+                        "conflict", None, de_now, key, "narrative edited on both sides since sync"
+                    )
+                )
+            elif de_st == "edited":
+                plan.proposals.append(
+                    _narrative_proposal(
+                        "edit", "de->en", de_now, key, "narrative edited on DE", target=en_now
+                    )
+                )
+            elif en_st == "edited":
+                plan.proposals.append(
+                    _narrative_proposal(
+                        "edit", "en->de", en_now, key, "narrative edited on EN", target=de_now
+                    )
+                )
+            else:
+                plan.in_sync_count += 1
+            continue
+
+        if de_st == "removed" and en_now is not None:
+            if en_st == "edited":
+                plan.proposals.append(
+                    _narrative_proposal(
+                        "conflict", None, en_now, key, "narrative removed on DE but edited on EN"
+                    )
+                )
+            else:
+                plan.proposals.append(
+                    _narrative_proposal(
+                        "remove", "de->en", en_now, key, "narrative removed on DE", target=en_now
+                    )
+                )
+            continue
+        if en_st == "removed" and de_now is not None:
+            if de_st == "edited":
+                plan.proposals.append(
+                    _narrative_proposal(
+                        "conflict", None, de_now, key, "narrative removed on EN but edited on DE"
+                    )
+                )
+            else:
+                plan.proposals.append(
+                    _narrative_proposal(
+                        "remove", "en->de", de_now, key, "narrative removed on EN", target=de_now
+                    )
+                )
+            continue
+
+        if de_now is not None and en_st == "absent":
+            add_candidates.append(("de->en", de_now, key))
+        elif en_now is not None and de_st == "absent":
+            add_candidates.append(("en->de", en_now, key))
+
+    _emit_narrative_adds(plan, add_candidates)
+
+
+def _emit_narrative_adds(
+    plan: SyncPlan,
+    add_candidates: list[tuple[str, CurrentCell, _NarrKey]],
+) -> None:
+    """Turn narrative add candidates into plain ``add`` proposals (Issue #403).
+
+    The id-less↔id'd reconcile (report #10 fix #1) and the mass-add guard (fix #2) run
+    as separate post-passes over these proposals, so this just emits them.
+    """
+    for direction, cell, key in add_candidates:
+        plan.proposals.append(
+            _narrative_proposal(
+                "add",
+                direction,
+                cell,
+                key,
+                "new narrative (no anchor twin on the other half)",
+                translation_pending=True,
+            )
+        )
+
+
+def _reconcile_idless_idd_narratives(
+    plan: SyncPlan,
+    de_idless: list[CurrentCell],
+    en_idless: list[CurrentCell],
+    de_idd: list[CurrentCell],
+    en_idd: list[CurrentCell],
+) -> None:
+    """Pair an id-less narrative with its id'd twin on the other half (report #10 fix #1).
+
+    When the two halves disagree on whether a slide's voiceover carries a ``slide_id``
+    (DE id-less, EN id'd), the id-less half lands an ``add`` from the anchor pass and the
+    id'd half lands a keyed ``add`` — together they would insert a *duplicate* voiceover
+    on each deck (the field "destructive doubling"). They are the **same** narrative under
+    the same slide, so cancel both adds (the deck keeps one id-less + one id'd half, which
+    re-pairs cleanly every sync). Pairs in document order within each ``(owning, role)``.
+    """
+    _reconcile_narr_pairs(plan, de_idless, en_idd, "de->en", "en->de")
+    _reconcile_narr_pairs(plan, en_idless, de_idd, "en->de", "de->en")
+
+
+def _reconcile_narr_pairs(
+    plan: SyncPlan,
+    idless_cells: list[CurrentCell],
+    idd_cells: list[CurrentCell],
+    idless_dir: str,
+    idd_dir: str,
+) -> None:
+    # The id-less anchor adds (this direction) and the id'd keyed adds (the other),
+    # keyed by source position so a cancelled pair removes exactly those proposals.
+    idless_adds = {
+        p.source_position: p
+        for p in plan.proposals
+        if p.kind == "add"
+        and p.role in NARRATIVE_ROLES
+        and p.direction == idless_dir
+        and p.slide_id is None
+    }
+    idd_adds = {
+        p.source_position: p
+        for p in plan.proposals
+        if p.kind == "add"
+        and p.role in NARRATIVE_ROLES
+        and p.direction == idd_dir
+        and p.slide_id is not None
+    }
+    idless_by: dict[tuple[str | None, str], list[CurrentCell]] = {}
+    for c in idless_cells:
+        if c.position in idless_adds:
+            idless_by.setdefault((c.owning_slide_id, c.role), []).append(c)
+    idd_by: dict[tuple[str | None, str], list[CurrentCell]] = {}
+    for c in idd_cells:
+        if c.position in idd_adds:
+            idd_by.setdefault((c.owning_slide_id, c.role), []).append(c)
+    cancel: set[int] = set()
+    for key, il_cells in idless_by.items():
+        id_cells = idd_by.get(key, [])
+        for il, idc in zip(il_cells, id_cells):  # noqa: B905 (min length, pre-3.10 ok)
+            cancel.add(id(idless_adds[il.position]))
+            cancel.add(id(idd_adds[idc.position]))
+            plan.in_sync_count += 1
+    if cancel:
+        plan.proposals = [p for p in plan.proposals if id(p) not in cancel]
+
+
+def _guard_narrative_mass_add(
+    plan: SyncPlan,
+    de_narratives: list[CurrentCell],
+    en_narratives: list[CurrentCell],
+    de_idd: list[CurrentCell],
+    en_idd: list[CurrentCell],
+) -> None:
+    """Refuse a *mass* of shadowed narrative adds — the halves are mis-aligned (#10 fix #2).
+
+    Runs after :func:`_reconcile_idless_idd_narratives`, so a clean id-less↔id'd pairing is
+    already cancelled. What remains is a narrative ``add`` whose owning slide *still*
+    carries a same-role narrative on the target half ("shadowed") — counting *both* the
+    id-less and the id-carrying narratives there. A handful is a genuine new second
+    voiceover; a mass of them in one direction (the field repro: ~11) means the two halves
+    are structurally mis-aligned, so refuse every narrative add in that direction rather
+    than insert duplicates.
+    """
+    de_owning_roles = {(c.owning_slide_id, c.role) for c in (*de_narratives, *de_idd)}
+    en_owning_roles = {(c.owning_slide_id, c.role) for c in (*en_narratives, *en_idd)}
+    adds = [p for p in plan.proposals if p.kind == "add" and p.role in NARRATIVE_ROLES]
+    shadowed: dict[str, list[Proposal]] = {"de->en": [], "en->de": []}
+    for p in adds:
+        target = en_owning_roles if p.direction == "de->en" else de_owning_roles
+        if (p.owning_slide_id, p.role) in target:
+            shadowed[p.direction or ""].append(p)
+    for direction, doomed in shadowed.items():
+        if len(doomed) >= _NARRATIVE_MASS_ADD_THRESHOLD:
+            src = direction.split("->")[0].upper()
+            _replace_adds_with_refusals(
+                plan,
+                [p for p in adds if p.direction == direction],
+                f"{len(doomed)} {src} narratives would be added under slides that already "
+                "carry a same-role narrative on the other half — the halves look mis-aligned "
+                "(id-less vs id'd voiceovers?); refusing to avoid inserting duplicates. "
+                "Reconcile the voiceover ids/anchors, then re-run sync (#403)",
+            )
+
+
 def _refuse(source: Proposal, reason: str) -> Proposal:
     """A structural ``refuse`` standing in for an add we decline to apply (#216).
 
@@ -1643,7 +2173,9 @@ def _refuse_cold_both_directions(plan: SyncPlan) -> None:
     ids for a confirmed pair.) A one-directional cold start — new content on one
     side only — keeps its adds and applies normally.
     """
-    adds = [p for p in plan.proposals if p.kind == "add"]
+    # Narratives (Issue #403) are paired by anchor and have their own both-direction
+    # guard (the mass-add refusal), so exclude them from this slide-level refusal.
+    adds = [p for p in plan.proposals if p.kind == "add" and p.role not in NARRATIVE_ROLES]
     if len({p.direction for p in adds}) <= 1:
         return
     _replace_adds_with_refusals(
@@ -1667,7 +2199,13 @@ def _refuse_idless_both_directions(plan: SyncPlan) -> None:
     a committed *git-HEAD* baseline that already carried them they may be a
     mismatched-id pair and are refused (#226).
     """
-    idless = [p for p in plan.proposals if p.kind == "add" and p.slide_id is None]
+    # Narratives (Issue #403) are id-less by design and paired by anchor, with their
+    # own both-direction mass-add guard — exclude them from this slide-level refusal.
+    idless = [
+        p
+        for p in plan.proposals
+        if p.kind == "add" and p.slide_id is None and p.role not in NARRATIVE_ROLES
+    ]
     if len({p.direction for p in idless}) <= 1:
         return
     _replace_adds_with_refusals(
@@ -2448,10 +2986,19 @@ def build_sync_plan(
     actionable plan upgrades to ``reconcile`` candidates (handled in
     :func:`classify_changes`) instead of refusing.
     """
-    de_cells = parse_cells(de_path.read_text(encoding="utf-8"), comment_token_for_path(de_path))
-    en_cells = parse_cells(en_path.read_text(encoding="utf-8"), comment_token_for_path(en_path))
-    de_current = ordered_sync_cells(de_cells, "de")
-    en_current = ordered_sync_cells(en_cells, "en")
+    de_text = de_path.read_text(encoding="utf-8")
+    en_text = en_path.read_text(encoding="utf-8")
+    de_token = comment_token_for_path(de_path)
+    en_token = comment_token_for_path(en_path)
+    de_cells = parse_cells(de_text, de_token)
+    en_cells = parse_cells(en_text, en_token)
+    # Issue #403 Phase B: narrative identity (owning slide + positional anchor),
+    # computed over the byte-level RawCell stream so a narrative is keyed the same way
+    # its baseline was recorded. ``parse_cells`` / ``split_cells`` align by index.
+    de_identity = narrative_identity_map(split_cells(de_text, de_token)[1])
+    en_identity = narrative_identity_map(split_cells(en_text, en_token)[1])
+    de_current = ordered_sync_cells(de_cells, "de", de_identity)
+    en_current = ordered_sync_cells(en_cells, "en", en_identity)
 
     de_baseline: list[BaselineCell] | None = None
     en_baseline: list[BaselineCell] | None = None
@@ -2492,8 +3039,12 @@ def build_sync_plan(
 
     if bundle is not None:
         source = bundle.source
-        de_baseline = _baseline_from_watermark(bundle.rows["de"], bundle.tags["de"])
-        en_baseline = _baseline_from_watermark(bundle.rows["en"], bundle.tags["en"])
+        de_baseline = _baseline_from_watermark(
+            bundle.rows["de"], bundle.tags["de"], bundle.anchors["de"]
+        )
+        en_baseline = _baseline_from_watermark(
+            bundle.rows["en"], bundle.tags["en"], bundle.anchors["en"]
+        )
         # Ordered content hashes of the baseline's neutral cells (position order),
         # matching _shared_hashes — see align_anchored for why this is a sequence,
         # not an anchor map.
