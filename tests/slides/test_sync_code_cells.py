@@ -278,6 +278,45 @@ class TestSharedCode:
         assert "VALUE = 2" in de_text
         assert "VALUE = 1" not in de_text
 
+    def test_added_shared_cell_keeps_source_inter_cell_spacing(self, tmp_path: Path):
+        # Issue #9: an added language-neutral cell must be copied byte-identical —
+        # *including* its surrounding blank-line spacing — from the source half, not
+        # re-gapped to the target deck's modal separator. Otherwise the added shared
+        # cell diverges from its source twin and fails `validate`'s split-pair
+        # byte-identity check (the ``unify`` invariant).
+        from clm.slides.raw_cells import split_cells
+
+        de = _slide("de", "s", "# ## Folie") + _vo("de", "s", "# Sprechertext")
+        en = _slide("en", "s", "# ## Slide") + _vo("en", "s", "# Narration")
+        # EN gains a shared code cell spaced with TWO blank lines (the source
+        # author's gap), while the DE deck's modal separator is ONE blank line.
+        shared_two_blank = '# %% tags=["keep"]\nimport os\nx = os.getcwd()\n\n\n'
+        en2 = (
+            _slide("en", "s", "# ## Slide")
+            + shared_two_blank
+            + _vo("en", "s", "# Narration extended")
+        )
+        judge = StaticSyncJudge(
+            default_proposal=SyncProposal(
+                verdict="update", proposed_text="# Sprechertext erweitert"
+            )
+        )
+        de_path, en_path, result = _apply(
+            tmp_path, de, en, mutate_en=en2, judge=judge, translator=_DictTranslator({})
+        )
+        assert not result.has_errors, result.errors
+
+        def shared_cell(path: Path):
+            _, cells = split_cells(path.read_text("utf-8"))
+            return next(c for c in cells if "import os" in c.body)
+
+        de_shared = shared_cell(de_path)
+        en_shared = shared_cell(en_path)
+        # Byte-identical across halves (what validate's split-pair check enforces).
+        assert de_shared.lines == en_shared.lines
+        # And it kept the SOURCE's two-blank gap, not the DE deck's one-blank sep.
+        assert de_shared.lines[-2:] == ["", ""]
+
 
 # ---------------------------------------------------------------------------
 # id-less localized code — translated

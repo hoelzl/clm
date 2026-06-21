@@ -524,22 +524,35 @@ def _find(cells: list[RawCell], slide_id: str | None, role: str) -> RawCell | No
 def _normalize_separators(
     cells: list[RawCell], sep: int, rebuilt_ids: set[int], *, ends_with_newline: bool
 ) -> None:
-    """Give every rebuilt non-last cell the deck's separator; clear the last's.
+    """Give every rebuilt non-last localized cell the deck's separator; clear the last's.
 
     Only the cells the structural pass produced or reordered (``rebuilt_ids``)
     are touched, so an untouched group keeps its exact bytes. Built twins arrive
-    with no trailing blanks and copied/pulled cells carry their own; normalising
-    the rebuilt cells to the deck's gap keeps them byte-consistent with the rest.
-    ``j2`` header cells are skipped — a header macro often sits tight against its
-    sibling (gap 0) while the deck is otherwise blank-separated. The final cell's
-    trailing blank is the terminal-newline artifact, restored by
-    :meth:`FileState.flush`.
+    with no trailing blanks; normalising the rebuilt *localized* cells to the
+    deck's gap keeps them byte-consistent with the rest. ``j2`` header cells are
+    skipped — a header macro often sits tight against its sibling (gap 0) while
+    the deck is otherwise blank-separated. The final cell's trailing blank is the
+    terminal-newline artifact, restored by :meth:`FileState.flush`.
+
+    **Language-neutral (shared) cells are NOT re-gapped** (Issue #9): a shared
+    cell is copied verbatim from the source half (:func:`_copy_cell`), so its
+    trailing blanks *are* the source's inter-cell spacing and must survive
+    byte-for-byte, or the added shared cell diverges from its source twin and
+    fails ``validate``'s split-pair byte-identity check (the ``unify`` invariant
+    requires shared cells to match across halves, even when the two halves use a
+    different modal gap). The only exception is a shared cell that lands **last**:
+    its source-side trailing blanks would become a spurious gap before EOF, so it
+    is still cleared to the terminal-newline artifact.
     """
     last = len(cells) - 1
     for i, cell in enumerate(cells):
         if cell.metadata.is_j2 or id(cell) not in rebuilt_ids:
             continue
-        want = 0 if (i == last and ends_with_newline) else sep
+        is_last = i == last and ends_with_newline
+        if cell.metadata.lang is None and not is_last:
+            # Shared cell, not last: keep its verbatim (source) spacing.
+            continue
+        want = 0 if is_last else sep
         _set_trailing_blanks(cell, want)
 
 

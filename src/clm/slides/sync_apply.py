@@ -575,6 +575,13 @@ def _apply_conflict(
             result,
         )
     else:
+        outcome = edit_outcomes.get(id(proposal))
+        if outcome is not None and outcome.verdict == "in_sync":
+            # Issue #4: the judge found the two halves already equivalent — a false
+            # conflict. Count it as in-sync (no write, no defer) so the watermark
+            # can advance instead of resurfacing the cell every run.
+            result.in_sync += 1
+            return
         result.deferred += 1
         _note_deferred(deferred_keys, proposal)
 
@@ -1008,6 +1015,15 @@ def _materialize_edits(
                     judge,
                     translator,
                 )
+            elif proposal.role != CODE_ROLE and _conflict_already_equivalent(
+                proposal, de_content, en_content, judge
+            ):
+                # Issue #4: an undecided both-edited markdown conflict whose halves
+                # the judge finds already equivalent — record an in_sync outcome so
+                # the apply downgrades this false conflict (no write) instead of
+                # deferring it, letting the watermark advance. A genuine divergence
+                # makes the probe return False → no outcome → deferred as before.
+                outcomes[id(proposal)] = _EditOutcome("in_sync")
     return outcomes
 
 
@@ -1108,6 +1124,43 @@ def _apply_edit(
         result.applied_edit += 1
     else:
         result.errors.append(f"edit {sid}/{proposal.role}: target cell not found")
+
+
+def _conflict_already_equivalent(
+    proposal: Proposal,
+    de_content: dict[tuple[str, str], str],
+    en_content: dict[tuple[str, str], str],
+    judge: SyncJudge | None,
+) -> bool:
+    """Whether a both-edited conflict's two halves are already equivalent (Issue #4).
+
+    A both-edited markdown cell is often a *false* conflict: both halves were edited
+    to already-translation-equivalent states (an identical figure corrected on both
+    sides, or independently reworded to the same meaning), so no action is needed.
+    The edit judge's ``in_sync`` verdict means exactly "the target already reflects
+    the source", so we reuse it as an equivalence oracle: the halves are equivalent
+    iff **neither** direction proposes a change. That is conservative by design — a
+    genuine one-sided divergence makes at least one direction propose an update, and
+    we keep the conflict (a wrong downgrade would silently accept a real divergence).
+
+    Returns ``False`` (keep the conflict) when there is no judge, either body is
+    empty, or the judge errors — never auto-resolving on uncertainty.
+    """
+    if judge is None or proposal.slide_id is None:
+        return False
+    key = (proposal.slide_id, proposal.role)
+    de_body = de_content.get(key, "")
+    en_body = en_content.get(key, "")
+    if not de_body or not en_body:
+        return False
+    try:
+        if judge.propose(de_body, en_body, source_lang="de", target_lang="en").verdict == "update":
+            return False
+        if judge.propose(en_body, de_body, source_lang="en", target_lang="de").verdict == "update":
+            return False
+    except OllamaError:
+        return False
+    return True
 
 
 # ---------------------------------------------------------------------------

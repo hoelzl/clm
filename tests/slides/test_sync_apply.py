@@ -2155,7 +2155,10 @@ class TestPartialWatermarkAdvance:
             plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
             assert plan.count("edit") == 2 and plan.count("conflict") == 1
             # 'a' -> update (applied); 'b' -> in_sync (judge reconciles, no write).
-            judge = _MarkerJudge({"A-de2"}, "# ## A-en2")
+            # 'c' is a GENUINE conflict: the marker "C-de2" makes the judge flag a
+            # real divergence, so the #4 equivalence probe keeps it deferred (does
+            # not downgrade it to in_sync).
+            judge = _MarkerJudge({"A-de2", "C-de2"}, "# ## A-en2")
             result = apply_plan(plan, judge=judge, watermark_cache=cache)
             plan2 = build_sync_plan(de_path, en_path, watermark_cache=cache)
         finally:
@@ -2639,3 +2642,81 @@ class TestWatermarkRecordsCommit:
             assert cache.get_synced_commit(str(de_path), str(en_path)) == head
         finally:
             cache.close()
+
+
+class TestConflictEquivalenceDowngrade:
+    """Issue #4: a both-edited cell whose halves are already translation-equivalent
+    is a *false* conflict — the judge's in_sync verdict downgrades it instead of
+    deferring, so the watermark advances and it does not resurface."""
+
+    def test_judge_equivalent_conflict_downgrades_to_in_sync(self, tmp_path: Path):
+        de = _slide("de", "b", "# ## B")
+        en = _slide("en", "b", "# ## B")
+        de_path, en_path = _write_pair(tmp_path, de, en)
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_watermark(cache, de_path, en_path)
+            # Both halves edited since baseline, but to equivalent states (no
+            # divergence marker in either body → the judge says in_sync both ways).
+            de_path.write_text(_slide("de", "b", "# ## B umformuliert"), encoding="utf-8")
+            en_path.write_text(_slide("en", "b", "# ## B reworded"), encoding="utf-8")
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            assert plan.count("conflict") == 1
+
+            judge = _MarkerJudge(update_markers={"DIVERGE"}, proposed="x")
+            de_before = de_path.read_text("utf-8")
+            en_before = en_path.read_text("utf-8")
+            result = apply_plan(plan, judge=judge, watermark_cache=cache)
+            plan2 = build_sync_plan(de_path, en_path, watermark_cache=cache)
+        finally:
+            cache.close()
+
+        assert result.in_sync == 1
+        assert result.deferred == 0
+        # No write — both halves keep their (equivalent) edited bodies verbatim.
+        assert de_path.read_text("utf-8") == de_before
+        assert en_path.read_text("utf-8") == en_before
+        # Watermark advanced: the false conflict does not resurface.
+        assert plan2.count("conflict") == 0
+
+    def test_genuinely_divergent_conflict_stays_deferred(self, tmp_path: Path):
+        de = _slide("de", "b", "# ## B")
+        en = _slide("en", "b", "# ## B")
+        de_path, en_path = _write_pair(tmp_path, de, en)
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_watermark(cache, de_path, en_path)
+            # DE carries a real divergence the judge flags ("DIVERGE") → keep conflict.
+            de_path.write_text(_slide("de", "b", "# ## B DIVERGE neu"), encoding="utf-8")
+            en_path.write_text(_slide("en", "b", "# ## B other"), encoding="utf-8")
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            assert plan.count("conflict") == 1
+
+            judge = _MarkerJudge(update_markers={"DIVERGE"}, proposed="x")
+            result = apply_plan(plan, judge=judge, watermark_cache=cache)
+            plan2 = build_sync_plan(de_path, en_path, watermark_cache=cache)
+        finally:
+            cache.close()
+
+        assert result.in_sync == 0
+        assert result.deferred == 1
+        assert plan2.count("conflict") == 1
+
+    def test_no_judge_keeps_conflict_deferred(self, tmp_path: Path):
+        # Without an LLM the equivalence cannot be verified → defer, never guess.
+        de = _slide("de", "b", "# ## B")
+        en = _slide("en", "b", "# ## B")
+        de_path, en_path = _write_pair(tmp_path, de, en)
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_watermark(cache, de_path, en_path)
+            de_path.write_text(_slide("de", "b", "# ## B neu"), encoding="utf-8")
+            en_path.write_text(_slide("en", "b", "# ## B new"), encoding="utf-8")
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            assert plan.count("conflict") == 1
+            result = apply_plan(plan, judge=None, watermark_cache=cache)
+        finally:
+            cache.close()
+
+        assert result.in_sync == 0
+        assert result.deferred == 1
