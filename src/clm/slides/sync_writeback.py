@@ -442,6 +442,26 @@ class FileState:
                 return True
         return False
 
+    def insert_after_cell(self, anchor_cell: RawCell, new_cell: RawCell) -> bool:
+        """Insert ``new_cell`` immediately after ``anchor_cell`` (matched by identity).
+
+        Unlike :meth:`insert_after` (keyed by ``(slide_id, role)``), this places a
+        cell after an arbitrary, possibly id-less anchor — the primitive behind the
+        Issue #403 positional narrative placement, where a voiceover lands after its
+        resolved predecessor content cell (a code cell, an id-less markdown cell, …)
+        rather than after a keyed slide. Returns ``False`` when ``anchor_cell`` is
+        not in this deck.
+        """
+        sep = self.separator_blanks()
+        original_last = self.cells[-1] if self.cells else None
+        for i, cell in enumerate(self.cells):
+            if cell is anchor_cell:
+                self.cells.insert(i + 1, new_cell)
+                self.dirty = True
+                self._place_inserted(new_cell, original_last, sep)
+                return True
+        return False
+
     def insert_before_first_sync_cell(self, new_cell: RawCell) -> None:
         """Insert ``new_cell`` ahead of the first sync cell (after the head).
 

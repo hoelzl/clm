@@ -54,6 +54,14 @@ from typing import TYPE_CHECKING
 
 from clm.infrastructure.llm.ollama_client import OllamaError
 from clm.notebooks.slide_parser import Cell, comment_token_for_path, parse_cell_header, parse_cells
+from clm.slides.anchor_primitives import (
+    TITLE_MACRO_KIND,
+    anchor_candidates,
+    anchor_token,
+    find_predecessor_index,
+    split_anchor,
+)
+from clm.slides.pairing import TITLE_SLIDE_ID, is_title_macro_cell
 from clm.slides.raw_cells import RawCell
 from clm.slides.slug import resolve_collision, slugify
 from clm.slides.sync_code import TranslationOutcome, apply_code_structure
@@ -1718,11 +1726,33 @@ def _apply_adds(
         for cell in state.cells
         if cell.metadata.slide_id
     }
+    # Shared across both directions: cells the de->en walk inserts into EN are
+    # skipped when EN is walked as the source (en->de), so an id-less narrative is
+    # not re-added back (it carries no minted id to act as that guard) — #403.
+    added_target_ids: set[int] = set()
     _add_one_direction(
-        de_state, en_state, "de", "en", translator, used_ids, result, de_copy_ids, translations
+        de_state,
+        en_state,
+        "de",
+        "en",
+        translator,
+        used_ids,
+        result,
+        de_copy_ids,
+        translations,
+        added_target_ids,
     )
     _add_one_direction(
-        en_state, de_state, "en", "de", translator, used_ids, result, en_copy_ids, translations
+        en_state,
+        de_state,
+        "en",
+        "de",
+        translator,
+        used_ids,
+        result,
+        en_copy_ids,
+        translations,
+        added_target_ids,
     )
 
 
@@ -1791,7 +1821,6 @@ def _materialize_idless(
     misses the cache; the surplus entries are simply never read.
     """
     renaming_from: str | None = None
-    has_slide = False
     for cell in list(source_state.cells):
         role = role_of(cell.metadata)
         if role is None or cell.metadata.lang != source_lang:
@@ -1799,7 +1828,6 @@ def _materialize_idless(
         sid = cell.metadata.slide_id
         if role in _SLIDE_ROLES:
             is_copy = id(cell) in copy_slide_ids
-            has_slide = True
             if sid is not None and not is_copy:
                 renaming_from = None  # existing slide — anchors, not translated
                 continue
@@ -1810,8 +1838,9 @@ def _materialize_idless(
         is_copy_companion = renaming_from is not None and sid is not None and sid == renaming_from
         if sid is not None and not is_copy_companion:
             continue  # existing companion — anchors, not translated
-        if not has_slide:
-            continue  # orphan companion — errors before translate, never translated
+        # An id-less narrative is always translated now, even with no preceding
+        # slide — a leading title greeting anchors to the title macro (#403/#7)
+        # rather than erroring, so the materialize superset must include it.
         _cache_translation(cell, source_lang, target_lang, role, translator, cache)
 
 
@@ -1954,6 +1983,7 @@ def _add_one_direction(
     result: ApplyResult,
     copy_slide_ids: set[int],
     translations: dict[int, TranslationOutcome],
+    added_target_ids: set[int],
 ) -> None:
     """Walk the source deck, minting ids for new and copy-pasted slides.
 
@@ -1964,19 +1994,33 @@ def _add_one_direction(
     minted id — rather than by a per-companion hash match (which identical
     companions defeat).
 
+    ``added_target_ids`` accumulates the ``id()`` of every cell this walk inserts
+    into ``target_state``; the opposite-direction call passes the same set and skips
+    those cells, so an id-less narrative this walk added is not re-added back when
+    the other deck is walked as the source (Issue #403 — id-less narratives carry no
+    minted id to act as that guard, unlike slides).
+
     Every id-less cell here is a single-direction add (the both-directions case is
     refused at plan time, #216), so it always mints and places — no gating.
     """
     current_slide_id: str | None = None
     renaming_from: str | None = None  # old id of a copy slide whose companions follow
     anchor: tuple[str, str] | None = None
-    for cell in list(source_state.cells):
+    # In-order chaining for consecutive id-less narratives that share a predecessor
+    # (two voiceovers after the same code cell): the second lands after the first,
+    # not before it. Reset whenever a non-(id-less-narrative) cell intervenes.
+    last_pred_target: RawCell | None = None
+    last_inserted: RawCell | None = None
+    for idx, cell in enumerate(list(source_state.cells)):
+        if id(cell) in added_target_ids:
+            continue  # a cell the opposite-direction walk just inserted — not a new add
         role = role_of(cell.metadata)
         if role is None or cell.metadata.lang != source_lang:
             continue
         sid = cell.metadata.slide_id
 
         if role in _SLIDE_ROLES:
+            last_pred_target = last_inserted = None
             is_copy = id(cell) in copy_slide_ids
             if sid is not None and not is_copy:
                 current_slide_id = sid  # existing slide; anchors what follows
@@ -1993,9 +2037,10 @@ def _add_one_direction(
             en_body = target_body if target_lang == "en" else cell.body.rstrip("\n")
             new_id = resolve_collision(_slug_or_default(en_body), used_ids)
             used_ids.add(new_id)
-            _place_new_cell(
+            placed_cell = _place_new_cell(
                 cell, new_id, target_lang, target_body, source_state, target_state, anchor
             )
+            added_target_ids.add(id(placed_cell))
             anchor = (new_id, role)
             current_slide_id = new_id
             renaming_from = sid if is_copy else None  # for a copy, sid is the old dup id
@@ -2005,29 +2050,54 @@ def _add_one_direction(
                 result.applied_add += 1
             continue
 
-        # narrative role
+        # narrative role (voiceover / notes companion)
         is_copy_companion = renaming_from is not None and sid is not None and sid == renaming_from
         if sid is not None and not is_copy_companion:
-            anchor = (sid, role)  # existing companion (of a non-copied slide)
-            continue
-        if current_slide_id is None:
-            result.deferred += 1
-            result.errors.append(f"add {role}: narrative with no preceding slide — deferred")
+            anchor = (sid, role)  # id-carrying companion — handled by the id-carrying path
+            last_pred_target = last_inserted = None
             continue
         target_body = _translate(
             cell, source_lang, target_lang, translator, role, result, translations
         )
         if target_body is None:
             continue
-        # Companions inherit the slide's id (the freshly minted one for a copy).
-        _place_new_cell(
-            cell, current_slide_id, target_lang, target_body, source_state, target_state, anchor
-        )
-        anchor = (current_slide_id, role)
-        if is_copy_companion:
+        if is_copy_companion and current_slide_id is not None:
+            # A copied slide group's companion inherits the freshly minted id.
+            placed_cell = _place_new_cell(
+                cell, current_slide_id, target_lang, target_body, source_state, target_state, anchor
+            )
+            added_target_ids.add(id(placed_cell))
+            anchor = (current_slide_id, role)
+            last_pred_target = last_inserted = None
             result.applied_rename += 1
+            continue
+        # Id-less narrative (#403): keep it id-less and place it after its resolved
+        # predecessor twin, so multiple narratives under one slide (one per code
+        # cell) never collapse onto a single (slide_id, role) key — the duplicate
+        # error that rolled back whole decks. A leading title greeting with no
+        # content predecessor anchors to the title macro (#7) instead of erroring.
+        new_cell = _build_narrative_cell(
+            cell, target_lang, target_body, comment_token_for_path(target_state.path)
+        )
+        pred_target = _resolve_narrative_anchor(
+            source_state.cells, idx, source_lang, target_state, target_lang
+        )
+        if (
+            pred_target is not None
+            and pred_target is last_pred_target
+            and last_inserted is not None
+        ):
+            placed = target_state.insert_after_cell(last_inserted, new_cell)
+        elif pred_target is not None:
+            placed = target_state.insert_after_cell(pred_target, new_cell)
         else:
-            result.applied_add += 1
+            placed = False
+        if not placed:
+            _insert_at_anchor(target_state, anchor, new_cell)  # fallback: keyed position
+        added_target_ids.add(id(new_cell))
+        last_pred_target = pred_target
+        last_inserted = new_cell
+        result.applied_add += 1
 
 
 def _translate(
@@ -2076,8 +2146,13 @@ def _place_new_cell(
     source_state: FileState,
     target_state: FileState,
     anchor: tuple[str, str] | None,
-) -> None:
-    """Stamp the source cell's id and insert the translated counterpart."""
+) -> RawCell:
+    """Stamp the source cell's id and insert the translated counterpart.
+
+    Returns the inserted target cell so the caller can register it as
+    just-added (Issue #403): the opposite-direction add walk skips cells the
+    first walk inserted, so an id-less narrative is not re-added back.
+    """
     _stamp_slide_id(cell, new_id)
     source_state.dirty = True
     new_cell = _build_cell(
@@ -2088,6 +2163,124 @@ def _place_new_cell(
         comment_token_for_path(target_state.path),
     )
     _insert_at_anchor(target_state, anchor, new_cell)
+    return new_cell
+
+
+def _owning_group(cells: list[RawCell], idx: int, lang: str) -> tuple[str | None, tuple[int, int]]:
+    """The owning slide group of the cell at ``idx``: ``(owning_slide_id, (start, end))``.
+
+    ``start`` is the nearest preceding slide-start (language-matched where possible)
+    and ``owning_slide_id`` is its slide_id. A cell before any slide belongs to the
+    title group when a title macro exists (owning id :data:`TITLE_SLIDE_ID`), else to
+    a synthetic group from 0. ``end`` is the next language-matched slide-start
+    (exclusive) or ``len(cells)`` — so the group spans the slide and its companions
+    without being truncated by the other language's twin in an interleaved deck.
+    """
+    start: int | None = None
+    for i in range(idx - 1, -1, -1):
+        meta = cells[i].metadata
+        if not meta.is_slide_start:
+            continue
+        if lang is None or meta.lang is None or meta.lang == lang:
+            start = i
+            break
+    if start is None:
+        title_idx = next((i for i, c in enumerate(cells) if is_title_macro_cell(c)), None)
+        if title_idx is not None:
+            return TITLE_SLIDE_ID, (title_idx, _group_end(cells, title_idx, lang))
+        return None, (0, len(cells))
+    return cells[start].metadata.slide_id, (start, _group_end(cells, start, lang))
+
+
+def _group_end(cells: list[RawCell], start: int, lang: str) -> int:
+    """First language-matched slide-start after ``start`` (exclusive), or ``len``."""
+    for i in range(start + 1, len(cells)):
+        meta = cells[i].metadata
+        if not meta.is_slide_start:
+            continue
+        if lang is not None and meta.lang is not None and meta.lang != lang:
+            continue
+        return i
+    return len(cells)
+
+
+def _target_group_bounds(cells: list[RawCell], owning: str | None, lang: str) -> tuple[int, int]:
+    """Bounds of the target group owning ``owning`` (a slide_id / title / None)."""
+    if owning is None:
+        return (0, len(cells))
+    start: int | None = None
+    if owning == TITLE_SLIDE_ID:
+        start = next((i for i, c in enumerate(cells) if is_title_macro_cell(c)), None)
+    if start is None:
+        start = next(
+            (
+                i
+                for i, c in enumerate(cells)
+                if c.metadata.is_slide_start
+                and c.metadata.slide_id == owning
+                and (lang is None or c.metadata.lang is None or c.metadata.lang == lang)
+            ),
+            None,
+        )
+    if start is None:
+        return (0, len(cells))
+    return (start, _group_end(cells, start, lang))
+
+
+def _resolve_narrative_anchor(
+    source_cells: list[RawCell],
+    nidx: int,
+    source_lang: str,
+    target_state: FileState,
+    target_lang: str,
+) -> RawCell | None:
+    """The target cell a source narrative at ``nidx`` should be inserted *after*.
+
+    Mirrors the ``voiceover_tools`` inline resolution (Issue #403): the narrative's
+    immediate predecessor in the source deck is identified by an occurrence-qualified
+    anchor token, then the same token is resolved within the *target's* owning slide
+    group. A leading title greeting (no content predecessor) resolves to the target's
+    title macro cell. Returns ``None`` when nothing resolves (the caller falls back to
+    a keyed position).
+    """
+    target_cells = target_state.cells
+    pred_idx = find_predecessor_index(source_cells, nidx, source_lang)
+    if pred_idx is None:
+        return next((c for c in target_cells if is_title_macro_cell(c)), None)
+    owning, sbounds = _owning_group(source_cells, nidx, source_lang)
+    token = anchor_token(source_cells, pred_idx, sbounds, source_lang)
+    kind, value, occ = split_anchor(token)
+    if kind == TITLE_MACRO_KIND:
+        return next((c for c in target_cells if is_title_macro_cell(c)), None)
+    tbounds = _target_group_bounds(target_cells, owning, target_lang)
+    cands = anchor_candidates(target_cells, tbounds, kind, value, target_lang)
+    if not cands:
+        return None
+    ti = cands[occ] if occ < len(cands) else cands[-1]
+    return target_cells[ti]
+
+
+def _build_narrative_cell(
+    source_cell: RawCell, target_lang: str, target_body: str, comment_token: str
+) -> RawCell:
+    """Build the translated narrative twin, preserving the source's id-less-ness.
+
+    Unlike :func:`_build_cell`, this does NOT force a ``slide_id`` — an inline
+    narrative is positioned by anchor, not keyed by id, so two narratives under one
+    slide never collide on ``(slide_id, role)``. The source cell's tags and any
+    explicit ``slide_id`` are preserved.
+    """
+    meta = source_cell.metadata
+    tag_repr = ", ".join(f'"{t}"' for t in meta.tags) if meta.tags else '"voiceover"'
+    header = f'{comment_token} %% [markdown] lang="{target_lang}" tags=[{tag_repr}]'
+    if meta.slide_id:
+        header += f' slide_id="{meta.slide_id}"'
+    body_lines = target_body.split("\n")
+    while body_lines and body_lines[0] == "":
+        body_lines.pop(0)
+    while body_lines and body_lines[-1] == "":
+        body_lines.pop()
+    return RawCell(lines=[header, *body_lines], line_number=0, metadata=parse_cell_header(header))
 
 
 def _slug_or_default(en_body: str) -> str:
