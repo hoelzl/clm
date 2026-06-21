@@ -1092,3 +1092,36 @@ def test_explain_without_watermark_reads_everything_as_new(tmp_path: Path):
 
     assert "no watermark for this pair" in text
     assert "+  " in text  # at least one cell marked new
+
+
+def test_explain_warns_when_watermark_baseline_errors(tmp_path: Path):
+    # Issue #364 item 4: an error against a (possibly stale) watermark baseline can show
+    # a clean-looking anchor diff yet still error. --explain must say so up front and
+    # point at the git-HEAD / --rebaseline comparison, so the mismatch is not a mystery.
+    de = _slide("de", "a", "# ## A") + _code_localized_idless("de", "for q in test_queries:\n    p")
+    en = _slide("en", "a", "# ## A") + _code_localized_idless(
+        "en", "for q in comparison_queries:\n    p"
+    )
+    de_path, en_path = _write_pair(tmp_path, de, en)
+    cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+    try:
+        _seed(cache, de_path, en_path)
+        # Both halves drift their hash-only id-less localized cell -> both-decks error.
+        de_path.write_text(
+            _slide("de", "a", "# ## A")
+            + _code_localized_idless("de", "for q in test_queries:\n    q"),
+            encoding="utf-8",
+        )
+        en_path.write_text(
+            _slide("en", "a", "# ## A")
+            + _code_localized_idless("en", "for q in comparison_queries:\n    q"),
+            encoding="utf-8",
+        )
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+        text = render_explain(de_path, en_path, plan=plan, watermark_cache=cache)
+    finally:
+        cache.close()
+
+    assert plan.has_errors
+    assert "may be stale" in text
+    assert "--rebaseline" in text

@@ -742,6 +742,64 @@ def _idless_localized_hashes(cells: list[Cell], lang: str) -> list[str]:
     ]
 
 
+def _idless_localized_cells(cells: list[Cell], lang: str) -> list[tuple[Cell, str | None]]:
+    """Each id-less localized cell of ``lang`` paired with its owning slide-group id.
+
+    Mirrors :func:`_idless_localized_hashes` exactly (same predicate, same document
+    order) but keeps the :class:`Cell` and the slide group it falls under, so a drift
+    alert can name the offending cell and point at its group (Issue #364 item 4) —
+    the hashes alone localize nothing.
+    """
+    out: list[tuple[Cell, str | None]] = []
+    group_sid: str | None = None
+    for c in cells:
+        if c.metadata.is_slide_start:
+            group_sid = c.metadata.slide_id
+        if not c.metadata.is_j2 and c.metadata.lang == lang and role_of(c.metadata) is None:
+            out.append((c, group_sid))
+    return out
+
+
+def _drifted_idless_cells(
+    cells: list[Cell], lang: str, baseline: list[str]
+) -> tuple[str | None, list[str]]:
+    """Locate the id-less localized cells of ``lang`` that drifted from ``baseline``.
+
+    Multiset-diffs the current id-less localized hashes against the ordered baseline
+    hashes (a cell whose hash the baseline can no longer account for is a drift),
+    returning ``(owning_slide_id_of_the_first_drift, [first-line snippets])``. Used to
+    turn the opaque ``slide_id=None`` both-decks error into a located one (Issue #364
+    item 4). Robust to add/remove: it reports the cells present now but unmatched in
+    the baseline, which is exactly what the author edited.
+    """
+    remaining: Counter[str] = Counter(baseline)
+    owner: str | None = None
+    snippets: list[str] = []
+    for cell, group_sid in _idless_localized_cells(cells, lang):
+        chash = cell_content_hash(cell.content)
+        if remaining.get(chash, 0) > 0:
+            remaining[chash] -= 1
+            continue
+        if owner is None:
+            owner = group_sid
+        snippets.append(_cell_first_line(cell.content))
+    return owner, snippets
+
+
+def _drift_cells_clause(de_snippets: list[str], en_snippets: list[str]) -> str:
+    """A `` (DE 'x'; EN 'y')`` clause naming the drifted cells, or ``""`` if none.
+
+    De-duplicates byte-identical snippets per side (two cells that drifted to the same
+    text are named once) so the clause stays a locator, not a wall of repeats.
+    """
+    parts: list[str] = []
+    for label, snippets in (("DE", de_snippets), ("EN", en_snippets)):
+        if snippets:
+            uniq = list(dict.fromkeys(snippets))
+            parts.append(f"{label} " + ", ".join(repr(s) for s in uniq))
+    return f" ({'; '.join(parts)})" if parts else ""
+
+
 def _idless_localized_baseline_from_rows(
     rows: list[tuple[int, str | None, str, str, str | None]],
 ) -> list[str]:
@@ -793,13 +851,20 @@ def _classify_idless_localized_drift(
         # each half. Only when there is NO direction signal at all is this a genuine
         # both-sides edit a single-direction sync cannot reconcile -> alert.
         if established is None:
+            de_owner, de_snips = _drifted_idless_cells(de_cells, "de", de_baseline)
+            en_owner, en_snips = _drifted_idless_cells(en_cells, "en", en_baseline)
             plan.issues.append(
                 PlanIssue(
                     severity="error",
-                    slide_id=None,
+                    # Locate the alert at the first drifted cell's slide group (was
+                    # always None — Issue #364 item 4) so it is no longer placeless.
+                    slide_id=de_owner or en_owner,
                     reason="id-less localized cells (lang= cells with no slide_id) were "
-                    "edited on both decks; sync cannot determine a single direction — "
-                    "resolve manually or assign slide_ids so the cells can be paired",
+                    f"edited on both decks{_drift_cells_clause(de_snips, en_snips)}; sync "
+                    "cannot determine a single direction. If the halves are already "
+                    "consistent the watermark is likely stale — reset it with "
+                    "`clm slides sync --rebaseline`; otherwise resolve the divergence "
+                    "manually (or give the cells slide_ids so they pair per-cell)",
                 )
             )
         return
@@ -808,12 +873,16 @@ def _classify_idless_localized_drift(
     # different cell classes in opposite directions — not safely applicable in one
     # pass, so alert rather than overwrite one side's edit.
     if established is not None and established != direction:
+        drift_cells, drift_lang = (de_cells, "de") if de_drifted else (en_cells, "en")
+        drift_base = de_baseline if de_drifted else en_baseline
+        owner, snips = _drifted_idless_cells(drift_cells, drift_lang, drift_base)
+        clause = _drift_cells_clause(snips, []) if de_drifted else _drift_cells_clause([], snips)
         plan.issues.append(
             PlanIssue(
                 severity="error",
-                slide_id=None,
-                reason=f"an id-less localized cell drifted {direction} but other cells "
-                f"drifted {established}; sync cannot apply both directions at once — "
+                slide_id=owner,
+                reason=f"an id-less localized cell drifted {direction}{clause} but other "
+                f"cells drifted {established}; sync cannot apply both directions at once — "
                 "resolve manually",
             )
         )
@@ -3650,6 +3719,17 @@ def render_explain(
         f"anchor diff — {de_path.name} / {en_path.name}",
         f"baseline: {plan.baseline_source}",
     ]
+    # Issue #364 item 4: the anchor diff below is computed against the *watermark*
+    # baseline. When that baseline is stale (both halves edited + committed without an
+    # intervening sync) the diff can look clean yet the plan still carries an error —
+    # the classifier compares against the same stale baseline. Say so up front, and
+    # point at the git-HEAD diff, so a clean-looking diff that errors is not a mystery.
+    if plan.has_errors and plan.baseline_source == "watermark":
+        lines.append(
+            "  note: errors below are against the recorded watermark, which may be stale; "
+            "compare against committed state with `--baseline HEAD` "
+            "(or `--rebaseline` if the halves are already consistent)."
+        )
     has_baseline = watermark_cache is not None and watermark_cache.has_pair(
         str(de_path), str(en_path)
     )
