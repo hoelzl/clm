@@ -1856,6 +1856,18 @@ written into the file, so a deck stays id-light yet syncs precisely:
   `CLM_SYNC__SHARED_DIVERGENCE=error` to surface it as an error and write nothing
   instead. A neutral cell edited *incompatibly* on both decks (different cells) is
   an error — never silently reverted.
+- **An id-less localized cell edited on *both* decks degrades to a per-cell
+  `conflict` instead of a deck-wide error (since CLM {version}, issue #365).** A
+  `lang=` cell with no `slide_id` is anchored only by content hash, so a both-sided
+  edit with no propagation direction used to hard-error and roll the whole deck back.
+  When the two halves' id-less localized cells share the same structure (so they pair
+  positionally within their slide group), each both-sided edit is now surfaced as a
+  **conflict**: it defers (the watermark holds and both edits stay on disk, exactly as
+  before), but unrelated clean changes in the same run still apply, and the divergence
+  is a located per-cell item rather than an opaque stop. Resolve it by editing the
+  deck, or give the cell a `slide_id` so it pairs precisely. When the halves' id-less
+  localized structure is *not* parallel (a move/add/remove is in play), the located
+  deck-wide error (issue #364) is kept, since positional pairing would be unsound.
 - **Genuinely ambiguous id realignment** (a function renamed *while* a cell was
   split, an unresolvable tie) is left untouched and re-surfaces next run, unless
   you opt in with `--llm-recover` (above).

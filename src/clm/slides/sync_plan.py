@@ -800,6 +800,109 @@ def _drift_cells_clause(de_snippets: list[str], en_snippets: list[str]) -> str:
     return f" ({'; '.join(parts)})" if parts else ""
 
 
+def _idless_localized_kind(cell: Cell) -> str:
+    return "code" if cell.metadata.cell_type == "code" else "markdown"
+
+
+def _idless_localized_pairing(cells: list[Cell], lang: str) -> list[tuple[Cell, str | None, int]]:
+    """Each id-less localized cell of ``lang`` with ``(cell, owning_slide_id, group_index)``.
+
+    The pairing view of :func:`_idless_localized_cells`: it additionally carries the
+    0-based slide-group index, so the ``(group_index, kind)`` *signature* of the two
+    halves can be compared (the cross-half structure check of #269 /
+    :func:`_idless_localized_group_kinds`) before pairing the n-th DE id-less cell with
+    the n-th EN one (Issue #365). ``group_index`` is ``-1`` for a cell before the first
+    slide start.
+    """
+    out: list[tuple[Cell, str | None, int]] = []
+    group_sid: str | None = None
+    group_index = -1
+    for c in cells:
+        if c.metadata.is_slide_start:
+            group_sid = c.metadata.slide_id
+            group_index += 1
+        if not c.metadata.is_j2 and c.metadata.lang == lang and role_of(c.metadata) is None:
+            out.append((c, group_sid, group_index))
+    return out
+
+
+def _idless_localized_signature(
+    pairing: list[tuple[Cell, str | None, int]],
+) -> list[tuple[int, str]]:
+    """The content-free ``(group_index, kind)`` structure of an id-less localized pairing."""
+    return [(group_index, _idless_localized_kind(cell)) for cell, _sid, group_index in pairing]
+
+
+def _classify_idless_localized_conflicts(
+    plan: SyncPlan,
+    de_cells: list[Cell],
+    en_cells: list[Cell],
+    de_baseline: list[str],
+    en_baseline: list[str],
+) -> bool:
+    """Degrade a both-sided id-less localized drift to per-cell conflicts (Issue #365).
+
+    A ``lang=`` cell with no ``slide_id`` is anchored only by content hash, so a
+    both-sided edit with no propagation direction established elsewhere is unpairable
+    and historically hard-errored (the whole deck rolled back). When the two halves'
+    id-less localized cells share the same content-free ``(group_index, kind)``
+    structure — and neither half added or removed one since the baseline — they pair
+    positionally within their slide group: the n-th DE cell corresponds to the n-th EN
+    cell. Each positionally-paired cell that drifted on either side becomes a
+    **conflict** proposal (``slide_id`` ``None``, the synthetic localized role,
+    positionally identified) instead of a deck-wide error. A conflict defers — the
+    watermark holds and both edits stay on disk, exactly like the error did — but it no
+    longer sets ``has_errors``, so unrelated clean changes in the same run still apply,
+    and the divergence is a resolvable per-cell item rather than an opaque deck-wide
+    stop.
+
+    Returns ``True`` when it took ownership (emitted conflicts, or found the drift
+    already in sync), so the caller skips the legacy error. Returns ``False`` when the
+    structure is not pairable (a move/add/remove happened) — the caller keeps the
+    located error, since positional pairing would be unsound.
+    """
+    de_pairing = _idless_localized_pairing(de_cells, "de")
+    en_pairing = _idless_localized_pairing(en_cells, "en")
+    # Positional pairing is only sound when the halves share one structure AND neither
+    # half added/removed an id-less cell since the baseline (so position i still maps to
+    # baseline hash i). Otherwise a move/add/remove is in play -> not pairable here.
+    if _idless_localized_signature(de_pairing) != _idless_localized_signature(en_pairing):
+        return False
+    if len(de_pairing) != len(de_baseline) or len(en_pairing) != len(en_baseline):
+        return False
+
+    emitted = False
+    for i, ((de_cell, owner, _gi), (en_cell, _en_owner, _en_gi)) in enumerate(
+        zip(de_pairing, en_pairing, strict=True)  # equal length: signatures matched above
+    ):
+        de_drift = cell_content_hash(de_cell.content) != de_baseline[i]
+        en_drift = cell_content_hash(en_cell.content) != en_baseline[i]
+        if not de_drift and not en_drift:
+            continue
+        kind = _idless_localized_kind(de_cell)
+        role = LOCALIZED_CODE_ROLE if kind == "code" else LOCALIZED_MARKDOWN_ROLE
+        snippet = _cell_first_line(de_cell.content if de_drift else en_cell.content)
+        plan.proposals.append(
+            Proposal(
+                kind="conflict",
+                role=role,
+                direction=None,
+                slide_id=None,
+                # ``anchor_occ`` carries the cell's index among the deck's id-less
+                # localized cells — the positional identity a resolver targets by (the
+                # n-th such cell of the losing language), mirroring _apply_retag_idless.
+                owning_slide_id=owner,
+                anchor_occ=i,
+                reason=(
+                    f"id-less localized {kind} cell {snippet!r} edited on both decks since "
+                    "last sync — resolve which side wins, or give it a slide_id to pair it"
+                ),
+            )
+        )
+        emitted = True
+    return emitted
+
+
 def _idless_localized_baseline_from_rows(
     rows: list[tuple[int, str | None, str, str, str | None]],
 ) -> list[str]:
@@ -851,6 +954,14 @@ def _classify_idless_localized_drift(
         # each half. Only when there is NO direction signal at all is this a genuine
         # both-sides edit a single-direction sync cannot reconcile -> alert.
         if established is None:
+            # Issue #365: when the halves' id-less localized cells pair positionally
+            # (same content-free structure, no add/remove since baseline), degrade the
+            # deck-wide error to per-cell conflicts the author can resolve. Only fall
+            # back to the (now-localized — #364 item 4) error when pairing is unsound.
+            if _classify_idless_localized_conflicts(
+                plan, de_cells, en_cells, de_baseline, en_baseline
+            ):
+                return
             de_owner, de_snips = _drifted_idless_cells(de_cells, "de", de_baseline)
             en_owner, en_snips = _drifted_idless_cells(en_cells, "en", en_baseline)
             plan.issues.append(

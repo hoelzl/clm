@@ -8,14 +8,15 @@ even though the halves were mutually consistent at git HEAD.
 
 This module pins down what master does for each issue, so we can see which concerns
 recent work (the #363 watermark CLI, the ``--baseline`` / ``--rebaseline`` /
-``synced_commit`` staleness work) has already addressed and which remain open:
+``synced_commit`` staleness work) addressed and what these PRs add:
 
-- ``TestBothSidedIdlessDriftStillHardErrors`` (#365) — a both-sided edit to a hash-only
-  id-less localized cell still hard-errors with no single direction; NOT yet degraded to
-  a per-cell / positional conflict (the strict-xfail records that gap).
-- ``TestIdlessDriftErrorIsLocalized`` (#364 item 4, FIXED) — that error now pins to the
-  drifted cell's owning slide group and echoes the offending cell, and steers to
-  ``--rebaseline`` rather than only "assign slide_ids".
+- ``TestBothSidedIdlessDriftDegradesToConflict`` (#365, FIXED increment 1) — a both-sided
+  edit to a hash-only id-less localized cell that pairs positionally degrades to a
+  per-cell, deferred conflict (the deck no longer rolls back); resolution-by-side is a
+  documented follow-up, so the conflict is defer-only for now.
+- ``TestIdlessDriftErrorIsLocalized`` (#364 item 4, FIXED) — when the structure is
+  UNPAIRABLE (so #365 cannot degrade), the deck-wide error now pins to the drifted
+  cell's owning slide group, echoes the offending cell, and steers to ``--rebaseline``.
 
 The reproduction harness mirrors ``tests/slides/test_sync_issue_269.py``.
 """
@@ -29,7 +30,7 @@ from pathlib import Path
 import pytest
 
 from clm.infrastructure.llm.cache import SyncWatermarkCache
-from clm.slides.sync_apply import _record_watermark, apply_plan
+from clm.slides.sync_apply import DECISION_DE_WINS, _record_watermark, apply_plan
 from clm.slides.sync_plan import build_sync_plan
 from clm.slides.sync_translate import StaticSlideTranslator
 
@@ -102,50 +103,116 @@ EN1 = _deck(_title("en"), _idless_code("en", "for q in comparison_queries:\n    
 
 
 # ---------------------------------------------------------------------------
-# #365 — both-sided id-less-localized drift still hard-errors (NOT yet degraded)
+# #365 — both-sided id-less-localized drift degrades to a deferred conflict
+# (when the cells pair positionally) instead of a whole-deck error.
 # ---------------------------------------------------------------------------
 
 
-class TestBothSidedIdlessDriftStillHardErrors:
+class TestBothSidedIdlessDriftDegradesToConflict:
     @pytest.mark.parametrize("baseline", ["git-head", "watermark"])
-    def test_both_sided_idless_edit_errors_with_no_single_direction(
+    def test_both_sided_idless_edit_becomes_a_positional_conflict(
         self, tmp_path: Path, baseline: str
     ):
+        # Issue #365: when the halves' id-less localized cells pair positionally, a
+        # both-sided edit degrades to a per-cell conflict — NOT a whole-deck error.
         plan, result, de_after, en_after = _sync(tmp_path, baseline, DE0, EN0, DE1, EN1)
-        errors = _error_issues(plan)
-        assert errors, "expected the both-sided id-less drift to surface an error"
-        assert any("both decks" in e.reason for e in errors)
-        # The cardinal #269 safety still holds: nothing written, watermark held, both
-        # edits survive on disk (the error is loud, not a silent drop or destructive heal).
+        assert any(p.kind == "conflict" for p in plan.proposals)
+        assert not _error_issues(plan)
+        # The conflict is deferred: watermark held, both edits survive on disk, and
+        # the run did not roll the whole deck back (no error).
         assert not result.watermark_recorded
+        assert result.deferred >= 1
         assert "# DE-edit" in de_after
         assert "# EN-edit" in en_after
 
-    @pytest.mark.xfail(
-        reason="#365: both-sided id-less-localized drift should degrade to a per-cell / "
-        "positional conflict the author can resolve, not a whole-deck hard error.",
-        strict=True,
-    )
-    @pytest.mark.parametrize("baseline", ["git-head", "watermark"])
-    def test_both_sided_idless_edit_degrades_to_positional_conflict(
-        self, tmp_path: Path, baseline: str
-    ):
-        plan, _result, _de_after, _en_after = _sync(tmp_path, baseline, DE0, EN0, DE1, EN1)
-        # Desired (#365): the drift is paired positionally within its slide group and
-        # surfaced as a resolvable conflict proposal, not an irreconcilable error.
-        assert any(p.kind == "conflict" for p in plan.proposals)
-        assert not _error_issues(plan)
+    def test_conflict_is_positionally_identified(self, tmp_path: Path):
+        plan, _result, _de_after, _en_after = _sync(tmp_path, "watermark", DE0, EN0, DE1, EN1)
+        conflicts = [p for p in plan.proposals if p.kind == "conflict"]
+        assert conflicts
+        c = conflicts[0]
+        # id-less: no slide_id, the synthetic localized role, owning group recorded,
+        # and the offending cell named in the reason.
+        assert c.slide_id is None
+        assert c.role in ("localized-code", "localized-markdown")
+        assert c.owning_slide_id == "title"
+        assert "test_queries" in c.reason or "comparison_queries" in c.reason
+
+    def test_conflict_is_defer_only_even_under_a_decision(self, tmp_path: Path):
+        # Issue #365 increment 1: positional resolution is not implemented yet, so an
+        # id-less localized conflict defers regardless of a de-wins decision — it must
+        # never mis-target a cell via the (slide_id, role) path, and both edits stay.
+        db = tmp_path / "clm-llm.sqlite"
+        de_path, en_path = tmp_path / "deck.de.py", tmp_path / "deck.en.py"
+        de_path.write_text(DE0, encoding="utf-8")
+        en_path.write_text(EN0, encoding="utf-8")
+        wm = SyncWatermarkCache(db)
+        _record_watermark(wm, de_path, en_path)
+        wm.close()
+        de_path.write_text(DE1, encoding="utf-8")
+        en_path.write_text(EN1, encoding="utf-8")
+        wm = SyncWatermarkCache(db)
+        try:
+            plan = build_sync_plan(de_path, en_path, watermark_cache=wm)
+            conflicts = [p for p in plan.proposals if p.kind == "conflict"]
+            assert conflicts
+            decisions = {id(p): DECISION_DE_WINS for p in conflicts}
+            result = apply_plan(
+                plan,
+                judge=None,
+                translator=StaticSlideTranslator(default="<<XL>>"),
+                watermark_cache=wm,
+                decisions=decisions,
+            )
+        finally:
+            wm.close()
+        assert not result.errors
+        assert result.deferred >= 1
+        assert not result.watermark_recorded
+        assert "# DE-edit" in de_path.read_text(encoding="utf-8")
+        assert "# EN-edit" in en_path.read_text(encoding="utf-8")
+
+    def test_unpairable_structure_still_errors(self, tmp_path: Path):
+        # When the halves' id-less localized structure is NOT parallel (here DE has an
+        # extra id-less cell EN lacks), positional pairing is unsound, so the located
+        # error (Issue #364 item 4) is kept rather than a mispaired conflict.
+        de0 = _deck(_title("de"), _idless_code("de", "for q in test_queries:\n    run(q)"))
+        en0 = _deck(_title("en"), _idless_code("en", "for q in comparison_queries:\n    run(q)"))
+        de1 = _deck(
+            _title("de"),
+            _idless_code("de", "for q in test_queries:\n    run(q)  # DE-edit"),
+            _idless_code("de", "extra_de()"),
+        )
+        en1 = _deck(
+            _title("en"), _idless_code("en", "for q in comparison_queries:\n    run(q)  # EN")
+        )
+        plan, result, _de_after, _en_after = _sync(tmp_path, "watermark", de0, en0, de1, en1)
+        assert _error_issues(plan) or result.errors
+        assert not result.watermark_recorded
 
 
 # ---------------------------------------------------------------------------
-# #364 item 4 — the id-less-localized error is now localized to a cell (FIXED)
+# #364 item 4 — when the structure is UNPAIRABLE (so #365 cannot degrade to a
+# conflict), the deck-wide error is still localized to a cell (FIXED in #417).
 # ---------------------------------------------------------------------------
+
+# DE grew an extra id-less cell EN lacks: the (group, kind) structure diverges, so
+# positional pairing is unsound and the located error path stays in force.
+DE0_U = _deck(_title("de"), _idless_code("de", "for q in test_queries:\n    run(q)"))
+EN0_U = _deck(_title("en"), _idless_code("en", "for q in comparison_queries:\n    run(q)"))
+DE1_U = _deck(
+    _title("de"),
+    _idless_code("de", "for q in test_queries:\n    run(q)  # DE-edit"),
+    _idless_code("de", "extra_de()"),
+)
+EN1_U = _deck(
+    _title("en"), _idless_code("en", "for q in comparison_queries:\n    run(q)  # EN-edit")
+)
 
 
 class TestIdlessDriftErrorIsLocalized:
     @pytest.mark.parametrize("baseline", ["git-head", "watermark"])
     def test_error_names_owning_group_and_offending_cell(self, tmp_path: Path, baseline: str):
-        plan, _result, _de_after, _en_after = _sync(tmp_path, baseline, DE0, EN0, DE1, EN1)
+        plan, _result, _de_after, _en_after = _sync(tmp_path, baseline, DE0_U, EN0_U, DE1_U, EN1_U)
         errors = _error_issues(plan)
         assert errors
         # Located: the error pins to the drifted cell's owning slide group (was always
@@ -156,6 +223,8 @@ class TestIdlessDriftErrorIsLocalized:
     def test_error_steers_to_rebaseline_not_just_assign_ids(self, tmp_path: Path):
         # #364 item 3: the old message only said "assign slide_ids" (which does not help
         # the stale-watermark case). The new message leads with the actual common fix.
-        plan, _result, _de_after, _en_after = _sync(tmp_path, "watermark", DE0, EN0, DE1, EN1)
+        plan, _result, _de_after, _en_after = _sync(
+            tmp_path, "watermark", DE0_U, EN0_U, DE1_U, EN1_U
+        )
         reason = "\n".join(e.reason for e in _error_issues(plan))
         assert "--rebaseline" in reason

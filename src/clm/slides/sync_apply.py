@@ -68,6 +68,8 @@ from clm.slides.raw_cells import RawCell, split_cells
 from clm.slides.slug import resolve_collision, slugify
 from clm.slides.sync_code import TranslationOutcome, apply_code_structure
 from clm.slides.sync_plan import (
+    LOCALIZED_CODE_ROLE,
+    LOCALIZED_MARKDOWN_ROLE,
     MEMBERSHIP_ROLES,
     NARRATIVE_ROLES,
     NEUTRAL_CODE_ROLE,
@@ -550,6 +552,26 @@ def _accepted(decisions: dict[int, str] | None, proposal: Proposal) -> bool:
     return decisions.get(id(proposal)) == DECISION_APPLY
 
 
+_IDLESS_LOCALIZED_ROLES = frozenset({LOCALIZED_CODE_ROLE, LOCALIZED_MARKDOWN_ROLE})
+
+
+def _is_idless_localized_conflict(proposal: Proposal) -> bool:
+    """An Issue #365 id-less localized both-decks conflict — resolved by deferral only.
+
+    Such a cell has no ``slide_id`` (the synthetic localized role + ``slide_id None``),
+    so the ``(slide_id, role)`` edit path cannot target it. The classifier degraded the
+    deck-wide error to this per-cell conflict so the rest of the run still applies and
+    the watermark holds; resolving *which side wins* (translating the winner onto the
+    positional twin) is a follow-up. Until then it always defers — never materialized as
+    an edit, so a stray ``de-wins`` / ``en-wins`` decision can never mis-target a cell.
+    """
+    return (
+        proposal.kind == "conflict"
+        and proposal.slide_id is None
+        and proposal.role in _IDLESS_LOCALIZED_ROLES
+    )
+
+
 def _conflict_decision(decisions: dict[int, str] | None, proposal: Proposal) -> str:
     """The resolution for a conflict proposal (defaults to skip/defer)."""
     if decisions is None:
@@ -585,6 +607,13 @@ def _apply_conflict(
     decision defers, recording the key so the per-cell advance keeps its
     pre-conflict baseline and the conflict re-surfaces next run.
     """
+    if _is_idless_localized_conflict(proposal):
+        # Issue #365: id-less localized conflicts are defer-only for now (no positional
+        # resolver yet), so the watermark holds and both edits stay on disk regardless
+        # of any decision — never mis-targeting a cell via the (slide_id, role) path.
+        result.deferred += 1
+        _note_deferred(deferred_keys, proposal)
+        return
     decision = _conflict_decision(decisions, proposal)
     if decision == DECISION_DE_WINS:
         _apply_edit(
@@ -1051,6 +1080,10 @@ def _materialize_edits(
                 proposal, de_state, en_state, de_content, en_content, judge, translator
             )
         elif proposal.kind == "conflict":
+            if _is_idless_localized_conflict(proposal):
+                # Issue #365: defer-only — never materialized as a directed edit (it
+                # has no (slide_id, role) to target). Skip so the execute walk defers it.
+                continue
             decision = _conflict_decision(decisions, proposal)
             if decision in (DECISION_DE_WINS, DECISION_EN_WINS):
                 direction = "de->en" if decision == DECISION_DE_WINS else "en->de"
