@@ -40,12 +40,8 @@ from typing import TYPE_CHECKING, TypeVar
 logger = logging.getLogger(__name__)
 
 from clm.notebooks.slide_parser import Cell, CellMetadata, comment_token_for_path, parse_cells
-from clm.slides.anchor_primitives import (
-    TITLE_MACRO_ANCHOR,
-    narrative_anchor_token,
-    owning_group,
-)
-from clm.slides.pairing import TITLE_SLIDE_ID
+from clm.slides.anchor_primitives import narrative_anchor_token, owning_group
+from clm.slides.pairing import TITLE_SLIDE_ID, is_title_macro_cell
 from clm.slides.raw_cells import RawCell, split_cells
 from clm.slides.sync_writeback import (
     cell_content_hash,
@@ -1045,25 +1041,29 @@ def _resolve_divergence_winner(plan: SyncPlan, de_path: Path, en_path: Path) -> 
 
 def _baseline_owning_by_position(
     rows: list[tuple[int, str | None, str, str, str | None]],
-    anchors_by_position: dict[int, str],
+    has_title_macro: bool,
 ) -> dict[int, str | None]:
     """Recover each row's owning slide id by walking the ordered watermark rows.
 
     Slide / subslide rows precede their narrative companions, so tracking the last
     slide-start's id assigns every following narrative its owning slide (Issue #403
-    Phase B). A leading greeting (a narrative recorded before any slide, whose anchor
-    is the title-macro token) is normalized to :data:`TITLE_SLIDE_ID` so it matches
-    the current cell, whose :func:`owning_group` returns the same.
+    Phase B). This must mirror :func:`anchor_primitives.owning_group` *exactly*, or a
+    narrative's baseline key won't pair with its current key and a one-sided edit is
+    silently dropped: before the first slide-start, ``owning_group`` returns
+    :data:`TITLE_SLIDE_ID` when the deck has a j2 title macro (the title group),
+    regardless of the narrative's predecessor — so the walk seeds ``cur_owning`` with
+    it. The seed covers a leading greeting (no content predecessor) *and* a narrative
+    whose predecessor is a non-slide content cell still under the title group (bug:
+    that case has an ``id:``/``fp:`` anchor, not the title-macro token, so keying on
+    the anchor alone left it ``None`` and unpaired). j2 cells are excluded from the
+    watermark, so the title-macro presence is passed in from the current deck.
     """
     owning_by_pos: dict[int, str | None] = {}
-    cur_owning: str | None = None
+    cur_owning: str | None = TITLE_SLIDE_ID if has_title_macro else None
     for pos, sid, role, _chash, _construct in rows:
         if role in _SLIDE_ROLES:
             cur_owning = sid
-        if anchors_by_position.get(pos) == TITLE_MACRO_ANCHOR:
-            owning_by_pos[pos] = TITLE_SLIDE_ID
-        else:
-            owning_by_pos[pos] = cur_owning
+        owning_by_pos[pos] = cur_owning
     return owning_by_pos
 
 
@@ -1071,6 +1071,7 @@ def _baseline_from_watermark(
     rows: list[tuple[int, str | None, str, str, str | None]],
     tags_by_position: dict[int, frozenset[str]] | None = None,
     anchors_by_position: dict[int, str] | None = None,
+    has_title_macro: bool = False,
 ) -> list[BaselineCell]:
     # Drop the membership-widened rows (Issue #190 §5.3) and **re-index** the
     # survivors into the legacy-only position space. The stored positions count
@@ -1093,7 +1094,7 @@ def _baseline_from_watermark(
     # anchor map -> no narrative edit detection (degrades to add-only, as before).
     tbp = tags_by_position or {}
     abp = anchors_by_position or {}
-    owning_by_pos = _baseline_owning_by_position(rows, abp)
+    owning_by_pos = _baseline_owning_by_position(rows, has_title_macro)
     legacy = [
         (pos, sid, role, chash)
         for (pos, sid, role, chash, _construct) in rows
@@ -3091,10 +3092,17 @@ def build_sync_plan(
     # Issue #403 Phase B: narrative identity (owning slide + positional anchor),
     # computed over the byte-level RawCell stream so a narrative is keyed the same way
     # its baseline was recorded. ``parse_cells`` / ``split_cells`` align by index.
-    de_identity = narrative_identity_map(split_cells(de_text, de_token)[1])
-    en_identity = narrative_identity_map(split_cells(en_text, en_token)[1])
+    de_raw = split_cells(de_text, de_token)[1]
+    en_raw = split_cells(en_text, en_token)[1]
+    de_identity = narrative_identity_map(de_raw)
+    en_identity = narrative_identity_map(en_raw)
     de_current = ordered_sync_cells(de_cells, "de", de_identity)
     en_current = ordered_sync_cells(en_cells, "en", en_identity)
+    # Whether each half has a j2 title macro (excluded from the watermark, so the
+    # baseline owning-slide recovery must be told from the current deck — Issue #403,
+    # so a narrative under the title group keys identically on both baseline + current).
+    de_has_title = any(is_title_macro_cell(c) for c in de_raw)
+    en_has_title = any(is_title_macro_cell(c) for c in en_raw)
 
     de_baseline: list[BaselineCell] | None = None
     en_baseline: list[BaselineCell] | None = None
@@ -3136,10 +3144,10 @@ def build_sync_plan(
     if bundle is not None:
         source = bundle.source
         de_baseline = _baseline_from_watermark(
-            bundle.rows["de"], bundle.tags["de"], bundle.anchors["de"]
+            bundle.rows["de"], bundle.tags["de"], bundle.anchors["de"], de_has_title
         )
         en_baseline = _baseline_from_watermark(
-            bundle.rows["en"], bundle.tags["en"], bundle.anchors["en"]
+            bundle.rows["en"], bundle.tags["en"], bundle.anchors["en"], en_has_title
         )
         # Ordered content hashes of the baseline's neutral cells (position order),
         # matching _shared_hashes — see align_anchored for why this is a sequence,
