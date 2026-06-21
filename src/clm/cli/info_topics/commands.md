@@ -1978,14 +1978,37 @@ Verifier-unavailable, safe-abort, plan-error, and race deferrals state
 their reason too. Nothing is written in any of these cases.
 
 The JSON report carries `mode` (`dry-run` / `apply` / `interactive`),
-`exit_code`, a `plan` block (`baseline_source`, per-kind `counts`,
-`in_sync`, the `proposals`, and `issues`), an `apply` block (per-kind
-`applied` counts, `in_sync`, `deferred`, `cold_deferrals` — each with
-`kind`, `reason`, and the `rejected_pairs` (`index` / `de_heading` /
-`en_heading`) on a verifier rejection —, `watermark_recorded`, and
-`errors`) — `null` under `--dry-run` — and a `walker` block of
-accept/skip/defer counters under `--interactive`. These counters are the
-pilot accept-rate instrumentation.
+`exit_code`, a `report` block (the agent contract, below), a `plan` block
+(`baseline_source`, per-kind `counts`, `in_sync`, the `proposals`, and
+`issues`), an `apply` block (per-kind `applied` counts, `in_sync`,
+`deferred`, `cold_deferrals` — each with `kind`, `reason`, and the
+`rejected_pairs` (`index` / `de_heading` / `en_heading`) on a verifier
+rejection —, `watermark_recorded`, and `errors`) — `null` under
+`--dry-run` — and a `walker` block of accept/skip/defer counters under
+`--interactive`. These counters are the pilot accept-rate instrumentation.
+
+**The `report` block — the tiered agent contract (since CLM {version}).** A
+coding agent both *invokes* `clm slides sync` and *consumes* its output, so
+`--dry-run --json` (and every `--json` mode) carries a `report` block that
+partitions the engine's work into the **three tiers an agent acts on
+differently**: `mechanical` (the engine applies these deterministically with
+**no model** — move / remove / retag / a verbatim neutral-cell propagation —
+trust and ignore them), `assisted` (a **scoped model task** the engine has
+already framed — translate a new slide, reconcile an id'd-cell edit, confirm a
+cold-pair correspondence — delegate to a cheap model or do it yourself), and
+`ambiguity` (the engine **refuses to guess** — a both-sided conflict or a
+structural issue — *your* judgement, stated as *what* is ambiguous, never a
+fabricated fix). Each item carries `kind`, `role`, `direction`, `slide_id`,
+`reason`, optional `severity` (for an `ambiguity` item from a structural
+issue), and 0-based `source_position` / `target_position` (the cell's index
+among each language's sync-relevant cells, so you can locate it). The block
+also exposes `baseline_source`, `in_sync`, and three booleans — `is_clean`
+(no work in any tier), `needs_model` (a tier-2 task or tier-3 item exists),
+`needs_agent` (a tier-3 item needs *you*). An un-categorised future kind
+defaults to `ambiguity`, never silently to `mechanical`. The flat `plan` block
+above is retained for existing consumers; `report` is the blessed surface for
+an agent. (The cell *text* is not yet inlined — the positions + ids locate
+each cell in the source you already hold; a follow-up will add excerpts.)
 
 In **batch (`DIR`) mode** the `--json` report is instead an envelope
 `{ "mode", "root", "exit_code", "pairs": [ … ] }`, where each entry of
