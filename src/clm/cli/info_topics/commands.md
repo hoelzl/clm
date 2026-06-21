@@ -1929,6 +1929,7 @@ clm slides sync [OPTIONS] DIR          # batch: sync every pair under DIR
 |--------|-------------|
 | `--dry-run` | Classify only: print the plan and write nothing. (The default, without this flag, writes the agreed changes to the working tree.) |
 | `--explain` | Diagnostic: print the **content-anchor diff** — each cell's anchor (`id:` / `construct:` / `hash:`) and whether it is unchanged / edited / new / removed vs the watermark, the neutral-cell propagation direction, and any drifted `slide_id`s (id-migration candidates) — then the plan, and write nothing. A read-only superset of `--dry-run` for understanding *why* a cell did or did not sync. Mutually exclusive with `--interactive` and `--json`. |
+| `--verify` | **Structural safety check (since CLM {version}): confirm an edit did not *corrupt* the split pair — no LLM, no watermark, writes nothing.** Reuses `unify` to require byte-identical shared cells, header parity, and clean alignment; adds an explicit `de_id == en_id` set-symmetry + no-duplicate-id check (which `unify` does not enforce); and **warns** on any id'd cell dropped vs git `HEAD` (a deliberate removal is fine, so it never fails). Answers *"did this edit break the pair?"* — **not** *"is it in sync?"* (`--dry-run`) or *"is the translation good?"* (a semantic call this never makes). Exit `0` = structurally valid (warnings allowed), `2` = corruption. Works on a single pair or a directory; pairs with `--json`; mutually exclusive with `--dry-run` / `--explain` / `--interactive` / `--rebaseline` / `--baseline`. Designed as the deterministic gate after an agent reconciles a deck — run it in CI (it needs no model). |
 | `--interactive` | Walk each proposal and choose `[a]pply / [s]kip / [q]uit` (`[d]e-wins / [e]n-wins` for a conflict) before a single atomic apply. Mutually exclusive with `--dry-run` and `--json`. |
 | `--provider [openrouter\|local]` | Backend for the edit-reconciliation judge: `openrouter` (Claude Sonnet via OpenRouter, the default — needs `$OPENROUTER_API_KEY` / `$OPENAI_API_KEY`) or `local` (the Ollama daemon — offline, slower). Overridable with `$CLM_SYNC_PROVIDER`. |
 | `--llm-model TEXT` | Model for the edit-reconciliation judge. Default depends on `--provider`: `anthropic/claude-sonnet-4-6` (openrouter) or `qwen3:30b` (local). |
@@ -1992,6 +1993,13 @@ In **batch (`DIR`) mode** the `--json` report is instead an envelope
 `pairs[i]` like an individual `clm slides sync --json`); a pair that errored
 appears as `{ "de_path", "en_path", "mode", "exit_code", "error" }`. A writing
 batch with `--json` requires `--yes` (there is no prompt to fall back to).
+
+The **`--verify` report** is a distinct, smaller envelope:
+`{ "mode": "verify", "exit_code", "pairs": [ … ] }` (plus `"root"` in directory
+mode). Each pair carries `de_path`, `en_path`, `ok` (false iff any *error*-severity
+violation), `git_baseline` (false when the no-drop check was skipped — the pair is
+untracked), and `violations`, each a `{ "severity" (`error`/`warning`), "kind"
+(`unify` / `id-asymmetry` / `duplicate-id` / `dropped-id`), "message", "slide_id" }`.
 
 Examples:
 

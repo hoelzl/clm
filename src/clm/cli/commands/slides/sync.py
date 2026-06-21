@@ -91,6 +91,7 @@ from clm.slides.sync_recover import (
     OpenRouterCorrespondenceVerifier,
 )
 from clm.slides.sync_translate import DEFAULT_TRANSLATION_MODEL, OpenRouterSlideTranslator
+from clm.slides.sync_verify import VerifyResult, verify_pair
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -288,6 +289,20 @@ def _resolve_single_path(de_path: Path, en_path: Path | None) -> tuple[Path, Pat
     ),
 )
 @click.option(
+    "--verify",
+    is_flag=True,
+    default=False,
+    help=(
+        "Structural safety check (no LLM, no watermark, writes nothing): confirm the "
+        "DE/EN halves are a structurally valid split pair — byte-identical shared "
+        "cells, matching slide_ids, header parity, clean alignment (it reuses unify) "
+        "— and warn on any id'd cell dropped vs git HEAD. Answers 'did an edit corrupt "
+        "the deck?', NOT 'is it in sync?' (use --dry-run) or 'is the translation "
+        "good?' (a semantic call). Exit 0 = valid (warnings allowed), 2 = corrupt. "
+        "Works on a single pair or a directory; pairs with --json."
+    ),
+)
+@click.option(
     "--provider",
     type=click.Choice(["openrouter", "local"]),
     default=lambda: os.environ.get("CLM_SYNC_PROVIDER") or "openrouter",
@@ -464,6 +479,7 @@ def slides_sync_cmd(
     dry_run: bool,
     interactive: bool,
     explain: bool,
+    verify: bool,
     provider: str,
     llm_model: str | None,
     ollama_url: str | None,
@@ -532,6 +548,13 @@ def slides_sync_cmd(
             "--explain and --json are mutually exclusive "
             "(--explain is a human-readable diagnostic; use --dry-run --json for the structured plan)"
         )
+    if verify and (dry_run or explain or interactive or rebaseline or baseline_ref is not None):
+        raise click.UsageError(
+            "--verify is a standalone read-only structural check; it is mutually "
+            "exclusive with --dry-run / --explain / --interactive / --rebaseline / "
+            "--baseline (it uses no watermark, no baseline, and no LLM). Combine it "
+            "only with --json."
+        )
     if rebaseline and (dry_run or explain):
         raise click.UsageError(
             "--rebaseline writes the watermark; it is mutually exclusive with "
@@ -546,6 +569,13 @@ def slides_sync_cmd(
             "--baseline and --rebaseline are mutually exclusive: --rebaseline resets the "
             "watermark from git HEAD, while --baseline pins the diff to a specific ref."
         )
+
+    # --verify: a standalone, read-only structural check (no watermark, no LLM, no
+    # env load). Handle it before any cache/provider/judge machinery — it shares
+    # only the path-resolution surface with the sync modes. Always sys.exit()s.
+    if verify:
+        _run_verify(de_path, en_path, as_json=as_json)
+        return  # _run_verify always sys.exit()s; this is just for the type-checker.
 
     # Cold-start minting (#216 §12): a verifier is on by default when a provider is
     # configured; --no-verify-cold-pairs forces it off (cold pairs then refuse).
@@ -1442,6 +1472,113 @@ def _emit_rebaseline_done(
         "re-baselined off git HEAD (halves consistent); "
         f"watermark {'recorded' if result.watermark_recorded else 'not recorded'}."
     )
+
+
+# ---------------------------------------------------------------------------
+# Verify mode (`clm slides sync --verify`)
+#
+# A read-only structural check: confirm a pair is a valid split (reuses unify)
+# and warn on id'd cells dropped vs git HEAD. No watermark, no LLM, no write.
+# Exit 0 = all pairs valid (warnings allowed), 2 = any structural corruption.
+# ---------------------------------------------------------------------------
+
+
+def _run_verify(de_path: Path, en_path: Path | None, *, as_json: bool) -> None:
+    """Structurally verify a pair or a directory tree, then ``sys.exit``.
+
+    Single pair: resolve the twin / pairing exactly as the sync modes do, then
+    verify. Directory: sweep every split pair under the tree (a half with no twin
+    is skipped with a warning). Exit is the worst per-pair code (0 valid < 2
+    corrupt); warnings never fail the gate. Always ``sys.exit``s.
+    """
+    root: Path | None
+    if de_path.is_dir():
+        if en_path is not None:
+            raise click.UsageError(
+                f"{de_path} is a directory (batch verify), which takes a single "
+                "directory argument; do not pass a second path."
+            )
+        pairs, solos = iter_split_pairs(find_split_slide_files_recursive(de_path))
+        for solo in solos:
+            tag = split_lang_tag(solo)
+            other = "EN" if tag == "de" else "DE"
+            click.echo(
+                f"warning: skipping {solo.name} — no {other} twin found under {de_path}.",
+                err=True,
+            )
+        results = [verify_pair(de_p.resolve(), en_p.resolve()) for de_p, en_p in pairs]
+        root = de_path
+    else:
+        de_resolved, en_resolved = _resolve_single_path(de_path, en_path)
+        de_resolved, en_resolved = _resolve_sync_pair(de_resolved, en_resolved)
+        de_resolved, en_resolved = de_resolved.resolve(), en_resolved.resolve()
+        results = [verify_pair(de_resolved, en_resolved)]
+        root = None
+
+    exit_code = 2 if any(not r.ok for r in results) else 0
+    if as_json:
+        click.echo(json.dumps(_verify_to_dict(results, root, exit_code), indent=2))
+    else:
+        _print_verify_human(results, root)
+    sys.exit(exit_code)
+
+
+def _verify_to_dict(
+    results: list[VerifyResult], root: Path | None, exit_code: int
+) -> dict[str, object]:
+    payload: dict[str, object] = {"mode": "verify", "exit_code": exit_code}
+    if root is not None:
+        payload["root"] = str(root)
+    payload["pairs"] = [
+        {
+            "de_path": str(r.de_path),
+            "en_path": str(r.en_path),
+            "ok": r.ok,
+            "git_baseline": r.git_baseline,
+            "violations": [
+                {
+                    "severity": v.severity,
+                    "kind": v.kind,
+                    "message": v.message,
+                    "slide_id": v.slide_id,
+                }
+                for v in r.violations
+            ],
+        }
+        for r in results
+    ]
+    return payload
+
+
+def _print_verify_human(results: list[VerifyResult], root: Path | None) -> None:
+    if not results:
+        click.echo(
+            f"no split-format deck pairs found under {root}."
+            if root is not None
+            else "nothing to verify."
+        )
+        return
+    for r in results:
+        mark = "PASS" if r.ok else "FAIL"
+        bits = []
+        if r.errors:
+            bits.append(f"{len(r.errors)} error{'s' if len(r.errors) != 1 else ''}")
+        if r.warnings:
+            bits.append(f"{len(r.warnings)} warning{'s' if len(r.warnings) != 1 else ''}")
+        if not r.git_baseline:
+            bits.append("no-drop check skipped (untracked)")
+        summary = f" ({', '.join(bits)})" if bits else " (structurally valid)"
+        click.echo(f"{mark} {r.de_path.name}{summary}")
+        for v in r.violations:
+            click.echo(f"    {v.severity} [{v.kind}]: {v.message}")
+    if len(results) > 1:
+        valid = sum(1 for r in results if r.ok)
+        total_warn = sum(len(r.warnings) for r in results)
+        tail = f", {total_warn} warning(s)" if total_warn else ""
+        click.echo(
+            f"\nverified {len(results)} pair(s): {valid} valid, "
+            f"{len(results) - valid} with errors{tail}."
+        )
 
 
 # ---------------------------------------------------------------------------
