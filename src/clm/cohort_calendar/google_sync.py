@@ -32,6 +32,7 @@ import datetime as dt
 import importlib
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +50,13 @@ UID_KEY = "clm_uid"
 
 #: Events-only scope — pushing needs event CRUD, never calendar-list management.
 SCOPES = ["https://www.googleapis.com/auth/calendar.events"]
+
+#: Transient HTTP statuses worth retrying: rate-limit + the 5xx backend errors
+#: Google routinely returns mid-push for a 100+ event sync.
+_TRANSIENT_STATUS = frozenset({429, 500, 502, 503, 504})
+#: Retries *after* the first attempt, and the base (doubling) backoff delay.
+MAX_RETRIES = 5
+_RETRY_BASE_DELAY = 1.0  # seconds; attempt n waits _RETRY_BASE_DELAY * 2**n
 
 _INSTALL_HINT = (
     "Google Calendar push requires the [gcal] extra: "
@@ -237,13 +245,51 @@ def build_service(credentials: Any) -> Any:
     return discovery.build("calendar", "v3", credentials=credentials, cache_discovery=False)
 
 
-def _execute(request: Any) -> Any:
+def _transient_status(exc: Exception) -> int | None:
+    """The HTTP status of *exc* if it is a retryable transient error, else None.
+
+    Duck-typed so this module needs no ``googleapiclient`` import: an
+    ``HttpError`` exposes the status as ``exc.resp.status`` (and newer versions
+    as ``exc.status_code``).
+    """
+    status = getattr(getattr(exc, "resp", None), "status", None)
+    if status is None:
+        status = getattr(exc, "status_code", None)
     try:
-        return request.execute()
-    except GoogleSyncError:
-        raise
-    except Exception as exc:
-        raise GoogleSyncError(f"Google Calendar API request failed: {exc}") from exc
+        status = int(status)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return status if status in _TRANSIENT_STATUS else None
+
+
+def _execute(request: Any) -> Any:
+    """Execute a Google API request, retrying transient 429/5xx with backoff.
+
+    A single push can issue 100+ event mutations; Google intermittently returns
+    a ``503 backendError`` on one of them. Without retry that aborts the whole
+    push mid-run (leaving a partial calendar that the next run reconciles, but
+    still a failure). Retries are bounded (:data:`MAX_RETRIES`) with exponential
+    backoff; non-transient errors (e.g. 404/403) raise immediately.
+    """
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            return request.execute()
+        except GoogleSyncError:
+            raise
+        except Exception as exc:
+            status = _transient_status(exc)
+            if status is None or attempt == MAX_RETRIES:
+                raise GoogleSyncError(f"Google Calendar API request failed: {exc}") from exc
+            delay = _RETRY_BASE_DELAY * (2**attempt)
+            logger.warning(
+                "Google Calendar API %s (attempt %d/%d); retrying in %.1fs.",
+                status,
+                attempt + 1,
+                MAX_RETRIES + 1,
+                delay,
+            )
+            time.sleep(delay)
+    raise AssertionError("unreachable")  # pragma: no cover
 
 
 def fetch_managed_events(service: Any, calendar_id: str, namespace: str) -> list[dict[str, Any]]:

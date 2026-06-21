@@ -244,6 +244,65 @@ class FakeService:
         return self._events
 
 
+class _FakeResp:
+    def __init__(self, status):
+        self.status = status
+
+
+class _HttpErrorLike(Exception):
+    """Mimics googleapiclient.errors.HttpError's status surface (``.resp.status``)."""
+
+    def __init__(self, status):
+        super().__init__(f"HTTP {status}")
+        self.resp = _FakeResp(status)
+
+
+class _FlakyRequest:
+    """A request that raises a transient/permanent error N times, then succeeds."""
+
+    def __init__(self, *, fail_times, status=503, result=None):
+        self.calls = 0
+        self._fail_times = fail_times
+        self._status = status
+        self._result = result if result is not None else {"ok": True}
+
+    def execute(self):
+        self.calls += 1
+        if self.calls <= self._fail_times:
+            raise _HttpErrorLike(self._status)
+        return self._result
+
+
+class TestExecuteRetry:
+    def test_retries_transient_then_succeeds(self, monkeypatch):
+        monkeypatch.setattr(gs.time, "sleep", lambda _s: None)
+        req = _FlakyRequest(fail_times=2, status=503)
+        assert gs._execute(req) == {"ok": True}
+        assert req.calls == 3  # two 503s, third try wins
+
+    def test_gives_up_after_max_retries(self, monkeypatch):
+        monkeypatch.setattr(gs.time, "sleep", lambda _s: None)
+        req = _FlakyRequest(fail_times=99, status=503)
+        with pytest.raises(gs.GoogleSyncError, match="HTTP 503"):
+            gs._execute(req)
+        assert req.calls == gs.MAX_RETRIES + 1  # first attempt + MAX_RETRIES
+
+    def test_non_transient_raises_immediately_without_sleeping(self, monkeypatch):
+        slept: list[float] = []
+        monkeypatch.setattr(gs.time, "sleep", slept.append)
+        req = _FlakyRequest(fail_times=99, status=404)
+        with pytest.raises(gs.GoogleSyncError, match="HTTP 404"):
+            gs._execute(req)
+        assert req.calls == 1
+        assert slept == []
+
+    def test_rate_limit_is_retried(self, monkeypatch):
+        monkeypatch.setattr(gs.time, "sleep", lambda _s: None)
+        req = _FlakyRequest(fail_times=1, status=429)
+        assert gs._execute(req) == {"ok": True}
+        assert req.calls == 2
+
+
 class TestFetchManagedEvents:
     def test_filters_by_managed_tag_and_paginates(self):
         pages = [
