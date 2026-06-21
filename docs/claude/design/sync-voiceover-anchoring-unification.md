@@ -245,20 +245,20 @@ schema-free; the keying/watermark change is the larger follow-on.
    (`anchor_primitives.py`), used by `voiceover_tools` unchanged (pure refactor,
    byte-identical; locked by the existing `voiceover_tools` tests). ✅ **DONE**
    (commit on `claude/issue-403-sync-voiceover-anchoring`).
-2. **Phase A — apply-path anchoring (fixes #6 + #7; no schema change).**
-   `_add_one_direction` places each added narrative after its **resolved predecessor**
-   (computed over the full `RawCell` stream via `anchor_primitives`), routes a leading
-   greeting to `tm:title#0` instead of erroring, and `_flag_residual_duplicates`
-   becomes **anchor-aware** so multiple narratives under one owning slide are allowed
-   (a real duplicate is now same `(slide_id, role, anchor)`). Also adjust
-   `_resolve_duplicates` for the explicitly-stamped-id variant. This is the
-   highest-value, lowest-risk unit and directly retires the field workarounds.
-3. **Phase B — narrative keying + watermark (edit-detection; overlaps #365).** Key
-   id-less narratives by `(owning_slide_id, role, anchor)` through a keyed path
-   (replacing the add-only `_append_idless_adds` route for narratives), add the
-   watermark `anchor` column + additive migration, and reconcile with the
-   id-less-localized drift path (#365). Larger and schema-touching — gate behind an
-   explicit go-ahead.
+2. **Phase A — apply-path anchoring (fixes #6 + #7; no schema change). ✅ MERGED
+   (PR #405).** `_add_one_direction` keeps an added narrative **id-less** and places
+   it after its **resolved predecessor** (`_resolve_narrative_anchor`, over the full
+   `RawCell` stream via `anchor_primitives`), with in-order chaining for narratives
+   sharing a predecessor and a `tm:title#0` greeting fallback (#7). Id-less narratives
+   are skipped by `_flag_residual_duplicates`, so the collision is gone. An
+   `added_target_ids` set threaded across both directions stops an id-less narrative
+   added one way being re-added the other (it has no minted id to act as that guard).
+   New `FileState.insert_after_cell`. Note vs the original §4: narratives are kept
+   **id-less**, not stamped — that's why §5's watermark migration is needed for edit
+   detection (a stamped id would have keyed them).
+3. **Phase B — narrative keying + watermark (edit-detection; overlaps #365). ← NEXT.**
+   See the validated handover in §10. Larger, all-or-nothing (record⟺consume coupling),
+   touches the shared `clm-llm.sqlite` schema.
 4. **Phase C — harness mutations + regressions + docs** (`clm info` unaffected; this
    is engine-internal). Update `[[project-voiceover-positional-anchors]]` and the
    `split-voiceover-hardening.md` roadmap to mark the deferred sync-core item DONE.
@@ -275,3 +275,81 @@ schema-free; the keying/watermark change is the larger follow-on.
    attributes; confirm the sync path for companion files (if any) reuses the stamped
    anchor rather than recomputing. (Today `sync` runs on the slide deck; companions
    are handled by `split`/`unify`/`extract` — verify no overlap before Phase 2.)
+
+## 10. Phase B implementation handover (validated against current master)
+
+Phase B was prototyped end-to-end and reverted to keep `master` clean (it cannot land
+half-built — see the **record⟺consume** gate below). Everything here compiled, passed
+its own unit tests, and left the full `tests/slides` + cache suites green **except**
+the channel-coverage gate, which is the signal that recording and consuming must land
+together. Pick this up on a fresh branch off `master`.
+
+### 10.1 The two hard constraints (discovered during prototyping)
+
+- **record⟺consume coupling (`tests/slides/test_sync_tag_drift.py`).** `_RecordingCache`
+  + `CHANNEL_COVERAGE` assert that **every watermark channel written by
+  `_record_watermark` names a real consumer function** ("register the new field's
+  detector/fail-safe before recording it"). So you cannot land "record the anchor
+  column" without the narrative-edit classifier that reads it. Register
+  `("de","anchor")` / `("en","anchor")` → the new classifier once it exists.
+- **`Cell` vs `RawCell` impedance.** The plan diff is built on `slide_parser.Cell`
+  (`ordered_sync_cells`, `watermark_rows`, `_baseline_*` all take `Cell`). The anchor's
+  `fp:` fingerprint must be the **byte-level** `anchor_primitives.body_fingerprint`,
+  which needs `raw_cells.RawCell`. `parse_cells` and `split_cells` yield the *same* cell
+  sequence, so positions align — but the consumer must thread RawCells (or a
+  precomputed `{position: anchor}` map) into both the current-cell keying and the
+  baseline reconstruction. This bridge is the main design work.
+
+### 10.2 Storage (mirror the `tags` column precedent exactly)
+
+In `cache.py` `SyncWatermarkCache`: add `anchor TEXT` **to both** the `CREATE TABLE`
+(fresh DB) **and** an additive `ALTER TABLE … ADD COLUMN anchor TEXT` (the prototype
+forgot the CREATE-TABLE side first — every test failed with "no column named anchor").
+Add `put_deck(…, anchors: dict[int,str] | None=None)` writing `anchor_for.get(position)`,
+and `get_deck_anchors(de,en,lang) -> {position: str}` filtering `anchor IS NOT NULL`
+(sparse — only narrative rows). Cache round-trip test mirrors `test_construct_roundtrips`.
+
+### 10.3 Recording
+
+Add `watermark_anchor_map(cells: list[RawCell]) -> {partition: {position: token}}` to
+`sync_plan.py`, mirroring `watermark_tag_map` but iterating RawCells and recording
+`narrative_anchor_token(cells, i, meta.lang)` only for `meta.is_narrative` cells (skip
+j2, partition by lang). In `_record_watermark` read the text once, build RawCells via
+`split_cells`, and pass `anchors=…["de"/"en"]` to the de/en `put_deck` calls (shared /
+header partitions have no narratives). Mirror in `_record_watermark_partial`.
+
+### 10.4 Shared anchor helpers (move to `anchor_primitives`, dedup Phase A)
+
+Add to `anchor_primitives.py`: `group_end(cells,start,lang)`, `owning_group(cells,idx,
+lang) -> (owning_slide_id,(start,end))`, and `narrative_anchor_token(cells,idx,lang)`
+(`find_predecessor_index` → `anchor_token`, or `TITLE_MACRO_ANCHOR` when no predecessor).
+Phase A left private `_owning_group`/`_group_end` in `sync_apply`; replace them with the
+shared versions (import + delete the privates) so the apply placement and the watermark
+recording compute a narrative's identity **identically** (drift here = silent
+misplacement, the PR-#199 invariant).
+
+### 10.5 Consumer (the actual edit-detection — the risky core)
+
+- **Current keys:** give each current narrative `CurrentCell` an `anchor` and key it
+  `(owning_slide_id, role, anchor)` (synthetic key; `owning_slide_id` from
+  `owning_group`). Encode non-narrative keys as the existing 2-tuple (e.g. append `""`).
+- **Baseline keys:** in `_baseline_from_watermark`, walk the ordered rows tracking the
+  current slide_id (slide rows precede their narratives) to recover each narrative row's
+  `owning_slide_id`, and read its `anchor` from `get_deck_anchors`; build the same
+  synthetic key.
+- **Route narratives through the keyed diff** (`_index_by_key`/`_baseline_index`/`_state`/
+  the main loop) instead of `_append_idless_adds`, so edit/conflict/move are produced.
+  Keep id-carrying narratives on their current path.
+- **Apply:** `_apply_edit` for a narrative must locate the cell by anchor (the current
+  edit path is `(slide_id, role)`-keyed); a body-only edit reuses Phase A's id-less
+  placement to find the cell. Conflicts defer as today.
+- **Register** the anchor channel in `CHANNEL_COVERAGE` pointing at the new classifier.
+
+### 10.6 #365 reconciliation + tests
+
+`#365` (both-sided id-less *localized* drift on `role_of is None` neutral cells) is a
+**different** cell set than narratives but shares the "id-less, hash-only identity"
+fragility; once narratives are anchor-keyed, evaluate giving the same treatment to
+id-less localized cells, or at least cross-reference. Tests: extend the edit-dynamics
+harness with `edit-voiceover-one-side` (now propagates), plus the §7 unit/regression
+set. Whole-program: `pytest tests/slides tests/infrastructure/llm/test_sync_cache.py`.
