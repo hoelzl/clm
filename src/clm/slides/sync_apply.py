@@ -348,18 +348,34 @@ def apply_plan(
     # is a reconciliation decision — "the target already reflects the source",
     # per SyncProposal — so it advances, the same as on a fully clean pass; were
     # it preserved it would re-surface every run forever (the judge re-declines).
+    # Issue #403 Phase B (bugfix): snapshot the id-less narrative cells by their
+    # occurrence key BEFORE the dispatch loop mutates anything. The edit/remove
+    # appliers resolve their narrative target from here and mutate it by object
+    # identity, so deleting the first of several narratives under one slide does not
+    # shift the (recomputed) ordinal of the next one onto the wrong cell.
+    narrative_targets = {
+        "de": narrative_cells_by_key(de_state.cells),
+        "en": narrative_cells_by_key(en_state.cells),
+    }
     deferred_keys: set[tuple[str, str]] = set()
     for proposal in plan.proposals:
         kind = proposal.kind
         if kind == "remove":
             if _accepted(decisions, proposal):
-                _apply_remove(proposal, de_state, en_state, result)
+                _apply_remove(proposal, de_state, en_state, result, narrative_targets)
             else:
                 result.deferred += 1
                 _note_deferred(deferred_keys, proposal)
         elif kind == "edit":
             if _accepted(decisions, proposal):
-                _apply_edit(proposal, de_state, en_state, edit_outcomes[id(proposal)], result)
+                _apply_edit(
+                    proposal,
+                    de_state,
+                    en_state,
+                    edit_outcomes[id(proposal)],
+                    result,
+                    narrative_targets,
+                )
             else:
                 result.deferred += 1
                 _note_deferred(deferred_keys, proposal)
@@ -377,7 +393,14 @@ def apply_plan(
                 _note_deferred(deferred_keys, proposal)
         elif kind == "conflict":
             _apply_conflict(
-                proposal, decisions, de_state, en_state, edit_outcomes, result, deferred_keys
+                proposal,
+                decisions,
+                de_state,
+                en_state,
+                edit_outcomes,
+                result,
+                deferred_keys,
+                narrative_targets,
             )
         elif kind == "refuse":
             # A structural refusal the resolver decided at plan time (#216): the
@@ -552,6 +575,7 @@ def _apply_conflict(
     edit_outcomes: dict[int, _EditOutcome],
     result: ApplyResult,
     deferred_keys: set[tuple[str, str]],
+    narrative_targets: dict[str, dict[tuple[str | None, str, int], RawCell]],
 ) -> None:
     """Resolve a conflict per its decision, or defer it.
 
@@ -569,6 +593,7 @@ def _apply_conflict(
             en_state,
             edit_outcomes[id(proposal)],
             result,
+            narrative_targets,
         )
     elif decision == DECISION_EN_WINS:
         _apply_edit(
@@ -577,6 +602,7 @@ def _apply_conflict(
             en_state,
             edit_outcomes[id(proposal)],
             result,
+            narrative_targets,
         )
     else:
         outcome = edit_outcomes.get(id(proposal))
@@ -904,14 +930,16 @@ def _apply_remove(
     de_state: FileState,
     en_state: FileState,
     result: ApplyResult,
+    narrative_targets: dict[str, dict[tuple[str | None, str, int], RawCell]],
 ) -> None:
     target_state = en_state if proposal.direction == "de->en" else de_state
     if proposal.role in NARRATIVE_ROLES and proposal.slide_id is None:
         # Issue #403 Phase B: an id-less narrative removal targets its positional twin,
-        # located by identity rather than (slide_id, role).
+        # resolved from the pre-mutation snapshot (so several removes under one slide do
+        # not shift each other's occurrence) and deleted by object identity.
         target_lang = "en" if proposal.direction == "de->en" else "de"
         key = (proposal.owning_slide_id, proposal.role, proposal.anchor_occ)
-        target_cell = _find_narrative_cell(target_state, key, target_lang)
+        target_cell = narrative_targets[target_lang].get(key)
         if target_cell is not None and target_state.delete_cell_obj(target_cell):
             result.applied_remove += 1
         else:
@@ -1082,6 +1110,9 @@ def _find_narrative_cell(
     counterpart of the plan's occurrence pairing (Issue #403 Phase B). Because a plan
     edit/remove is emitted only for a *paired* narrative (the twins share the same key,
     or they would not have paired), the same key locates the twin here.
+
+    Used during *materialization* (pre-mutation). The execute-time appliers must NOT
+    recompute occurrence over a half-mutated deck — see :func:`narrative_cells_by_key`.
     """
     keys = _narrative_keys_by_index(state.cells)
     for idx, cell_key in keys.items():
@@ -1090,6 +1121,21 @@ def _find_narrative_cell(
         if cell_key == key:
             return state.cells[idx]
     return None
+
+
+def narrative_cells_by_key(
+    cells: list[RawCell],
+) -> dict[tuple[str | None, str, int], RawCell]:
+    """Snapshot ``(owning_slide_id, role, occ) -> RawCell`` for a deck's id-less narratives.
+
+    Issue #403 Phase B (bugfix): the occurrence ordinal is a *position* among same-slide
+    narratives, so it shifts the moment one is deleted. The execute-time edit/remove
+    appliers must therefore resolve their target from a snapshot taken **before** any
+    mutation — looking up the stable :class:`RawCell` object once and mutating it by
+    identity — rather than recomputing the ordinal over the partially-mutated deck (which
+    silently mis-targets the second of several removes/edits under one slide).
+    """
+    return {key: cells[idx] for idx, key in _narrative_keys_by_index(cells).items()}
 
 
 def _resolve_narrative_edit(
@@ -1207,6 +1253,7 @@ def _apply_edit(
     en_state: FileState,
     outcome: _EditOutcome,
     result: ApplyResult,
+    narrative_targets: dict[str, dict[tuple[str | None, str, int], RawCell]],
 ) -> None:
     """Write a pre-materialized edit (mechanical — no judge/translator here).
 
@@ -1224,11 +1271,13 @@ def _apply_edit(
         return
     target_state = en_state if proposal.direction == "de->en" else de_state
     if proposal.role in NARRATIVE_ROLES and proposal.slide_id is None:
-        # Issue #403 Phase B: an id-less narrative edit's target is located by its
-        # positional identity (the twin shares the key), not by (slide_id, role).
+        # Issue #403 Phase B: an id-less narrative edit's target is resolved from the
+        # pre-mutation snapshot by its positional identity (the twin shares the key) and
+        # rewritten by object identity — so a co-applied remove under the same slide
+        # cannot shift the occurrence onto the wrong cell.
         target_lang = "en" if proposal.direction == "de->en" else "de"
         key = (proposal.owning_slide_id, proposal.role, proposal.anchor_occ)
-        target_cell = _find_narrative_cell(target_state, key, target_lang)
+        target_cell = narrative_targets[target_lang].get(key)
         if target_cell is not None and target_state.replace_cell_body_obj(
             target_cell, outcome.proposed_text or ""
         ):

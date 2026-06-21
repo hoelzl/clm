@@ -251,5 +251,96 @@ class TestAnchorRecording:
         assert de_anchors == {2: "id:c1#0"}
 
 
+def _j2_title(lang: str) -> str:
+    return f'# %% [markdown]\n# {{{{ header_{lang}("T") }}}}\n'
+
+
+def _md(lang: str, body: str, sid: str) -> str:
+    return f'# %% [markdown] lang="{lang}" tags=["markdown"] slide_id="{sid}"\n{body}\n'
+
+
+# ---------------------------------------------------------------------------
+# Cloud-review regressions (bugs found in the Phase B PR)
+# ---------------------------------------------------------------------------
+
+
+class TestStaleOccurrenceOrdinal:
+    """Removing several narratives under one slide must not mis-target later ones.
+
+    The apply-time `_find_narrative_cell` used to recompute the occurrence ordinal over
+    the half-mutated deck, so after deleting occ=0 the surviving cells renumbered and the
+    next remove (occ=1) hit the wrong cell — one narrative survived plus a spurious error,
+    and (error → watermark held) the stale cell re-surfaced every run. Fixed by resolving
+    targets from a pre-mutation snapshot and mutating by object identity.
+    """
+
+    def test_remove_all_voiceovers_under_one_slide(self, tmp_path: Path):
+        de0 = _deck(
+            _slide("de", "s", "S"),
+            _code("de", "print(1)", "c1"),
+            _vo("de", "# a"),
+            _code("de", "print(2)", "c2"),
+            _vo("de", "# b"),
+            _code("de", "print(3)", "c3"),
+            _vo("de", "# c"),
+        )
+        en0 = de0.replace('lang="de"', 'lang="en"')
+        # DE removes all three voiceovers; the removal must propagate cleanly to EN.
+        de1 = _deck(
+            _slide("de", "s", "S"),
+            _code("de", "print(1)", "c1"),
+            _code("de", "print(2)", "c2"),
+            _code("de", "print(3)", "c3"),
+        )
+        plan, result, _de, en_after = _sync(tmp_path, de0, en0, de1, en0)
+        assert result.errors == []
+        assert result.applied_remove == 3
+        assert _vo_count(en_after) == 0  # all three removed, none mis-targeted/survived
+
+    def test_remove_a_middle_voiceover_targets_correctly(self, tmp_path: Path):
+        # Remove only the *middle* of three voiceovers: occurrence-keyed, the engine
+        # decomposes it as edit/edit/remove, but every target must be located correctly
+        # (no error, no stale-ordinal mis-hit) and the EN track ends with two cells.
+        de0 = _deck(
+            _slide("de", "s", "S"),
+            _code("de", "print(1)", "c1"),
+            _vo("de", "# a"),
+            _vo("de", "# b"),
+            _vo("de", "# c"),
+        )
+        en0 = de0.replace('lang="de"', 'lang="en"')
+        de1 = _deck(
+            _slide("de", "s", "S"),
+            _code("de", "print(1)", "c1"),
+            _vo("de", "# a"),
+            _vo("de", "# c"),
+        )
+        _plan, result, _de, en_after = _sync(tmp_path, de0, en0, de1, en0, update_to="# x")
+        assert result.errors == []
+        assert _vo_count(en_after) == 2  # one fewer, correctly targeted (no error)
+
+
+class TestTitleGroupBaselineOwning:
+    """A voiceover under the title group must key identically on baseline + current.
+
+    `owning_group` returns `TITLE_SLIDE_ID` for any narrative before the first slide-start
+    when the deck has a j2 title macro. The baseline owning-slide recovery used to return
+    `None` unless the recorded anchor was the title-macro token, so a voiceover whose
+    predecessor is a non-slide content cell (with an `id:` anchor) under the title group
+    never paired — a one-sided edit was silently dropped. Fixed by seeding the baseline
+    walk with `TITLE_SLIDE_ID` when the deck has a title macro.
+    """
+
+    def test_edit_voiceover_under_title_group_with_idd_predecessor(self, tmp_path: Path):
+        de0 = _deck(_j2_title("de"), _md("de", "# Intro", "intro"), _vo("de", "# Hallo"))
+        en0 = _deck(_j2_title("en"), _md("en", "# Intro", "intro"), _vo("en", "# Hello"))
+        de1 = _deck(_j2_title("de"), _md("de", "# Intro", "intro"), _vo("de", "# Hallo EDIT"))
+        plan, result, _de, en_after = _sync(tmp_path, de0, en0, de1, en0, update_to="# Hello EDIT")
+        assert [p.kind for p in plan.proposals] == ["edit"]
+        assert plan.proposals[0].owning_slide_id == "title"
+        assert result.applied_edit == 1
+        assert "# Hello EDIT" in en_after  # not silently dropped
+
+
 def _git(cwd: Path, *args: str) -> None:
     subprocess.run(["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True)
