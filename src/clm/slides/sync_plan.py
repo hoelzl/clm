@@ -971,18 +971,12 @@ def _lang_for_path(path: Path) -> str | None:
     return None
 
 
-def _git_ref_text(path: Path, ref: str = "HEAD") -> str | None:
-    """The text of ``path`` at git ``ref`` (default ``HEAD``), or ``None``.
-
-    ``None`` when git is unavailable, the file is untracked at ``ref``, the ref
-    does not resolve, or ``git show`` fails. ``ref`` may be any revision spec
-    (``HEAD~1``, a commit SHA, ``origin/master``, …) — this powers both the
-    git-HEAD baseline fallback and the explicit ``--baseline <ref>`` flag.
-    """
+def _git_show(cwd: Path, spec: str) -> str | None:
+    """``git show <spec>`` run in ``cwd``, or ``None`` on any failure."""
     try:
         completed = subprocess.run(
-            ["git", "show", f"{ref}:./{path.name}"],
-            cwd=str(path.parent),
+            ["git", "show", spec],
+            cwd=str(cwd),
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -993,6 +987,66 @@ def _git_ref_text(path: Path, ref: str = "HEAD") -> str | None:
     if completed.returncode != 0:
         return None
     return completed.stdout
+
+
+def _git_historical_paths(path: Path, ref: str) -> list[str]:
+    """Repo-root-relative names ``path`` has had through history, newest first.
+
+    Follows git rename detection (``git log --follow -M``) so a deck that was
+    renamed (or whose content git tracks across a rename) can be located at an
+    arbitrary ``ref`` even though its *current* name did not exist there. Each
+    returned name is repo-root-relative (``git show <ref>:<name>`` addresses it
+    directly). Empty when git is unavailable or the file has no tracked history.
+    ``ref`` is accepted for symmetry but does not constrain the walk — the caller
+    tries every historical name at ``ref`` and keeps the one that resolves (at any
+    given commit the file exists under exactly one of them).
+    """
+    try:
+        completed = subprocess.run(
+            ["git", "log", "--follow", "-M", "--name-only", "--format=", "--", path.name],
+            cwd=str(path.parent),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+        )
+    except (FileNotFoundError, OSError):
+        return []
+    if completed.returncode != 0:
+        return []
+    names: list[str] = []
+    for line in completed.stdout.splitlines():
+        name = line.strip()
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def _git_ref_text(path: Path, ref: str = "HEAD") -> str | None:
+    """The text of ``path`` at git ``ref`` (default ``HEAD``), or ``None``.
+
+    ``None`` when git is unavailable, the file is untracked at ``ref`` (even after
+    following renames), the ref does not resolve, or ``git show`` fails. ``ref`` may
+    be any revision spec (``HEAD~1``, a commit SHA, ``origin/master``, …) — this
+    powers both the git-HEAD baseline fallback and the explicit ``--baseline <ref>``
+    flag.
+
+    Issue #2: a deck renamed since ``ref`` does not exist there under its *current*
+    name, which used to degrade silently to ``baseline=none``. We first try the
+    current name (the fast, common path), then fall back to each name the file has
+    had through history (rename-following), so a rename no longer hides the
+    baseline. A topic *split* (one file becoming several) is not a git rename and is
+    not recovered here — the caller surfaces an explicit diagnostic instead of
+    degrading silently.
+    """
+    text = _git_show(path.parent, f"{ref}:./{path.name}")
+    if text is not None:
+        return text
+    for root_rel in _git_historical_paths(path, ref):
+        text = _git_show(path.parent, f"{ref}:{root_rel}")
+        if text is not None:
+            return text
+    return None
 
 
 def _git_head_text(path: Path) -> str | None:
@@ -1078,6 +1132,39 @@ def _bundle_from_git_head(de_path: Path, en_path: Path) -> BaselineBundle | None
     """The committed (HEAD) pair as a :class:`BaselineBundle` — wrapper over
     :func:`_bundle_from_git_ref`."""
     return _bundle_from_git_ref(de_path, en_path, "HEAD")
+
+
+def _baseline_ref_unresolved_reason(de_path: Path, en_path: Path, ref: str) -> str | None:
+    """Why an explicit ``--baseline <ref>`` could not be resolved, or ``None``.
+
+    Issue #2: an explicit baseline ref that does not yield a usable bundle used to
+    degrade silently to ``baseline=none`` (no edit detection), leaving the user to
+    hand-derive a per-deck baseline. This names the concrete cause so the run says
+    *why* edits could not be detected:
+
+    - a deck's language cannot be inferred from its name (not a ``*.de.*`` /
+      ``*.en.*`` split half), or
+    - a deck is absent at ``ref`` even after following renames — typically because
+      it was created or **split** out of another file after ``ref`` (a split is not
+      a git rename, so it cannot be auto-followed; pass a ref where the current name
+      exists, or sync with the recorded watermark).
+
+    ``None`` when the ref resolves for both halves (the bundle would be usable).
+    """
+    if _lang_for_path(de_path) is None or _lang_for_path(en_path) is None:
+        return (
+            f"--baseline {ref}: cannot infer a language from the deck name(s) "
+            "(expected a *.de.* / *.en.* split half) — baseline skipped"
+        )
+    missing = [p.name for p in (de_path, en_path) if _git_ref_text(p, ref) is None]
+    if missing:
+        return (
+            f"--baseline {ref}: {', '.join(missing)} not found at that ref even after "
+            "following renames (likely created or split out of another file since "
+            f"{ref}) — edits cannot be detected against it. Pass a ref where the "
+            "current name exists, or sync against the recorded watermark"
+        )
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -1368,15 +1455,24 @@ def classify_changes(
         # --- both present now -------------------------------------------------
         if de_now is not None and en_now is not None:
             if de_st == "edited" and en_st == "edited":
-                plan.proposals.append(
-                    Proposal(
-                        kind="conflict",
-                        role=role,
-                        direction=None,
-                        slide_id=sid,
-                        reason="edited on both sides since last sync",
+                # Issue #4: a both-edited cell is NOT a conflict when the two halves
+                # now hash identically — both were corrected to the same value (a
+                # shared/identically-edited cell), so they are already in sync and
+                # need no action. (Localized cells differ by language and so never
+                # hit this exact-equality path; their translation-equivalence is
+                # checked at apply time via the judge's in_sync verdict.)
+                if de_now.content_hash == en_now.content_hash:
+                    plan.in_sync_count += 1
+                else:
+                    plan.proposals.append(
+                        Proposal(
+                            kind="conflict",
+                            role=role,
+                            direction=None,
+                            slide_id=sid,
+                            reason="edited on both sides since last sync",
+                        )
                     )
-                )
             elif de_st == "edited" and en_st == "same":
                 plan.proposals.append(_edit(sid, role, "de->en", de_now, en_now))
             elif en_st == "edited" and de_st == "same":
@@ -2523,6 +2619,20 @@ def build_sync_plan(
     plan.idless_baseline_de = de_idless_baseline
     plan.idless_baseline_en = en_idless_baseline
     plan.baseline_bundle = bundle
+
+    # Issue #2: an explicit --baseline ref that yielded no bundle used to degrade
+    # silently to baseline=none. Surface the concrete reason (rename not followable,
+    # split, un-inferrable language) so the user knows WHY edits went undetected
+    # rather than discovering it by hand. Only for a bootstrapped pair (an
+    # unbootstrapped pair legitimately has no baseline).
+    if (
+        baseline_ref is not None
+        and bundle is None
+        and not _pair_is_unbootstrapped(de_current, en_current)
+    ):
+        reason = _baseline_ref_unresolved_reason(de_path, en_path, baseline_ref)
+        if reason is not None:
+            plan.issues.append(PlanIssue(severity="warning", slide_id=None, reason=reason))
 
     # Item-2 (Phase 3a): detect a language-neutral code-only change the keyed
     # classifier cannot see, and hand its direction to the structural pass. Only

@@ -164,6 +164,19 @@ class TestConflict:
         assert plan.count("conflict") == 1
         assert "removed on DE but edited on EN" in plan.proposals[0].reason
 
+    def test_both_edited_to_identical_content_is_in_sync_not_conflict(self):
+        # Issue #4: both halves edited since baseline BUT now hash identically (a
+        # shared figure / value corrected the same way on both sides). They are
+        # already in sync — no conflict, no action, no LLM needed.
+        plan = classify(
+            [cur(0, "intro", "SAME")],
+            [cur(0, "intro", "SAME")],
+            [base(0, "intro", "dOLD")],
+            [base(0, "intro", "eOLD")],
+        )
+        assert plan.count("conflict") == 0
+        assert plan.in_sync_count == 1
+
 
 class TestRemove:
     def test_remove_de_propagates_to_en(self):
@@ -912,6 +925,73 @@ class TestBuildSyncPlanGitFallback:
         assert plan.count("edit") == 1
         assert plan.count("mint") == 0
         assert plan.count("adopt") == 0
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not available")
+class TestBaselineRefRenameAndSplit:
+    """Issue #2: ``--baseline <ref>`` follows renames, and reports (does not
+    silently degrade) when a deck is absent at the ref."""
+
+    def _git(self, cwd: Path, *args: str) -> None:
+        subprocess.run(["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True)
+
+    def _init(self, tmp_path: Path) -> None:
+        self._git(tmp_path, "init", "-q")
+        self._git(tmp_path, "config", "user.email", "t@example.com")
+        self._git(tmp_path, "config", "user.name", "Test")
+
+    def _commit(self, tmp_path: Path, msg: str) -> None:
+        self._git(tmp_path, "add", "-A")
+        self._git(tmp_path, "-c", "commit.gpgsign=false", "commit", "-q", "-m", msg)
+
+    def test_baseline_follows_a_rename(self, tmp_path: Path):
+        # A deck renamed since the baseline ref does not exist under its CURRENT
+        # name there; rename-following locates it so edits are still detected
+        # (was: baseline=none, edits invisible).
+        old_de = tmp_path / "slides_old.de.py"
+        old_en = tmp_path / "slides_old.en.py"
+        old_de.write_text(_slide("de", "intro", "# ## Einleitung"), encoding="utf-8")
+        old_en.write_text(_slide("en", "intro", "# ## Introduction"), encoding="utf-8")
+        self._init(tmp_path)
+        self._commit(tmp_path, "baseline")  # HEAD~1: files under the OLD name
+
+        # Pure rename (git mv) in its own commit so rename detection is reliable.
+        self._git(tmp_path, "mv", "slides_old.de.py", "slides_new.de.py")
+        self._git(tmp_path, "mv", "slides_old.en.py", "slides_new.en.py")
+        self._commit(tmp_path, "rename deck")
+
+        new_de = tmp_path / "slides_new.de.py"
+        new_en = tmp_path / "slides_new.en.py"
+        # Edit DE in the working tree — invisible vs HEAD, visible vs HEAD~1.
+        new_de.write_text(
+            _slide("de", "intro", "# ## Einleitung\n# - Punkt zwei"), encoding="utf-8"
+        )
+
+        plan = build_sync_plan(new_de, new_en, baseline_ref="HEAD~1")
+        assert plan.baseline_source == "git:HEAD~1"  # resolved via the rename
+        assert plan.count("edit") == 1
+        assert plan.proposals[0].direction == "de->en"
+
+    def test_baseline_absent_at_ref_reports_instead_of_degrading(self, tmp_path: Path):
+        # A deck created (or split out of another file) AFTER the ref does not
+        # exist there under ANY historical name — surface a warning, not a silent
+        # baseline=none with no explanation.
+        (tmp_path / "placeholder.txt").write_text("seed\n", encoding="utf-8")
+        self._init(tmp_path)
+        self._commit(tmp_path, "seed")  # HEAD~1: no deck at all
+
+        de_path = tmp_path / "slides_pe_04a.de.py"
+        en_path = tmp_path / "slides_pe_04a.en.py"
+        de_path.write_text(_slide("de", "intro", "# ## Einleitung"), encoding="utf-8")
+        en_path.write_text(_slide("en", "intro", "# ## Introduction"), encoding="utf-8")
+        self._commit(tmp_path, "add deck")
+
+        plan = build_sync_plan(de_path, en_path, baseline_ref="HEAD~1")
+        assert plan.baseline_source == "none"  # no usable baseline
+        warnings = [i for i in plan.issues if i.severity == "warning"]
+        assert any("not found at that ref" in i.reason for i in warnings), [
+            i.reason for i in plan.issues
+        ]
 
 
 # ---------------------------------------------------------------------------
