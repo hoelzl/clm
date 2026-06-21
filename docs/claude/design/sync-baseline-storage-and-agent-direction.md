@@ -1,8 +1,9 @@
 # Sync Baseline Storage & the Agent-First Question — Design Note
 
-**Status**: Design exploration / strategy (no code change)
+**Status**: Strategy note — direction **settled** (§11); no code change yet.
+Next concrete step: a deterministic `clm slides sync --verify` mode (§10 4(i)).
 **Author**: Claude (Opus 4.8)
-**Date**: 2026-06-21
+**Date**: 2026-06-21 (decisions recorded same day)
 **Issue**: [#366](https://github.com/hoelzl/clm/issues/366). Companion to
 [#419](https://github.com/hoelzl/clm/pull/419) (the abstract git-as-baseline
 note), and to the #363–#365 batch (watermark CLI / stale-watermark auto-heal /
@@ -319,6 +320,36 @@ Pitched in one line: **`clm slides sync` stops trying to be the thing that solve
 de/en correspondence and becomes the thing that lets an agent solve it safely and
 verifiably.**
 
+### The hard line: scoped residue, not the whole deck (decided)
+The single discipline that keeps this pivot from becoming *worse* than the status
+quo is **what the engine hands the agent.** If it hands the agent the whole deck,
+"agent-first" silently degrades into "every sync is an Opus call" — slow, expensive,
+and non-reproducible, including for the easy 90 % the engine already nails for free.
+So the rule is: **the deterministic engine resolves everything it can and hands the
+agent only the scoped, unresolved residue** — "here are the 3 cells I could not
+disambiguate, with their de/en text and why I am stuck" — never the whole deck. The
+90 % stays deterministic, free, and reproducible; the agent does minimal, focused,
+cheap work on the genuine ambiguity. This is the difference between *agent-assisted*
+sync (the goal) and *agent-does-everything* sync (a regression). It also shapes the
+report schema (§11 Q5/Q6): the report must partition cells into
+**resolved-deterministically** vs **needs-judgment** so the agent knows the exact
+small surface it owns.
+
+### Verify is *structural safety*, not *semantic correctness* (be precise)
+The deterministic verifier (§10 4(ii)) checks that an agent's edit did not *corrupt*
+the deck — unify byte-identity for neutral cells, `de_id == en_id`, no-drop,
+header/anchor parity. It does **not**, and cannot deterministically, check that a
+translation is *good*: a semantically wrong cell passes every structural invariant.
+The only check that catches a bad translation is itself a semantic (LLM) judgment —
+which CI forbids (§11 Q3). So verify makes agent edits **safe** (no silent
+corruption), not **correct** (faithful translation). That is still the guardrail that
+makes handing sync to an agent tolerable — but we name it honestly so we never read a
+green verify as "the translation is right." A useful corollary: the structural
+invariants are checkable from the two files alone, and the one check that needs a
+"before" (no-drop / reorder) reads the **git pre-edit version**, not a watermark — so
+verify-only needs *none* of the A/B/C storage machinery, which is itself more evidence
+the storage question is second-order.
+
 ### Why this is the more *honest* framing
 We have spent the #166 → #190 → #269 → #364/#365/#403 arc approximating semantic
 judgment with escalating deterministic heuristics, and the residue has *not*
@@ -355,6 +386,19 @@ syncing — can be done by the agent from the files + git, without a stored
 last-synced memory at all.** The agent does not ask "what changed since the
 watermark"; it reads both halves and `git log`/`git diff` and reasons about present
 consistency and edit direction directly.
+
+**Stronger than that: agent-first dissolves the entire stale-watermark *bug class*,
+not merely makes it recoverable.** Re-trace the original incident — you edit *both*
+halves, commit, *don't* sync; the halves are now mutually consistent, but the
+watermark is stale, so the deterministic engine does unnecessary, error-prone
+reclassification against old memory and trips on the id-less localized cells (the
+whole #363–#366 batch). An agent asks a *different* question — "are these two files
+currently consistent modulo translation?" — answers "yes," and does nothing. The bug
+*cannot occur*, because checking **present consistency** beats **diffing-from-stale-
+memory**. Concrete design consequence: when the engine detects a stale watermark, the
+agent path should **defer to a consistency check**, never error. The watermark thereby
+stops being load-bearing for *correctness* even locally; it survives only as a cache
+that keeps the deterministic fast-path cheap.
 
 That has a sharp consequence for the storage question:
 
@@ -395,23 +439,28 @@ That has a sharp consequence for the storage question:
 3. **Keep B as the cheap deterministic fast-path baseline.** It is good at what it is
    good at; its failure mode is now backstopped by the agent rather than by an
    ever-growing pile of deterministic rules.
-4. **Invest the next increment in the agent pivot, not in storage.** Concretely and in
-   low-regret order:
-   - **(i)** Make `--dry-run --json` / `--explain` / MCP `slides_suggest_sync` the
-     *blessed* agent interface: a complete, stable, machine-readable reconciliation
-     report (keyed / drifted / ambiguous cells, with source text, ids, and a
-     direction hypothesis). Most of this exists; harden and document it as the
-     contract.
-   - **(ii)** Add a **verify-only** mode: given the two halves *after* an agent has
-     edited them, run the deterministic invariants (unify byte-identity, `de_id ==
-     en_id`, no-drop, header/anchor parity) and report pass/fail with precise
-     locations. This is the safety net that makes agent-driven sync trustworthy, and
-     it is *pure determinism reused* — the highest-leverage, lowest-risk piece.
+4. **Invest the next increment in the agent pivot, not in storage.** Decided
+   low-regret order (see §11 for the settled rationale):
+   - **(i) FIRST — a deterministic `clm slides sync --verify` mode.** Given the two
+     halves *after* an agent has edited them, run the structural invariants (unify
+     byte-identity, `de_id == en_id`, no-drop vs the **git pre-edit version**,
+     header/anchor parity) and report pass/fail with precise locations. *Pure
+     determinism reused* — highest-leverage, lowest-risk, **storage-independent**, and
+     the deterministic CI gate that makes "no live LLM in CI" (§11 Q3) free to hold.
+     It is a **structural** safety net (no corruption), not a **semantic** one (it does
+     not judge translation quality — §8).
+   - **(ii)** Make `--dry-run --json` (the **blessed coding-agent surface** — see §11
+     Q5) the complete, stable reconciliation report, partitioning cells into
+     **resolved-deterministically** vs **needs-judgment** (the scoped residue — §8) with
+     source text, ids, and a direction hypothesis. MCP `slides_suggest_sync` wraps the
+     **same Pydantic schema** for non-shell agents. Most of this exists; harden and
+     document it as the contract.
    - **(iii)** Reposition `--llm-recover` from a narrow last-resort tier to the
-     documented path for the ambiguous residue, with the verifier from (ii) gating
-     every write.
-   - **(iv)** *Then* revisit whether a shared baseline (A) is still wanted. By that
-     point we will know from real use whether the agent needs it.
+     documented path for the ambiguous residue, **scoped to the needs-judgment cells
+     only**, with the verifier from (i) gating every write.
+   - **(iv)** *Then* revisit whether a shared baseline (A) is still wanted. Per §11 Q2
+     the current call is **no** — but real use of (i)–(iii) is what would reopen it
+     (e.g. if verify's no-drop matching proves fragile — §11 Q4).
 
 The honest bottom line: **the storage debate (A vs B vs C) is a second-order question
 once you accept that the first-order problem is partly semantic and we have been
@@ -425,19 +474,59 @@ an agent workflow still wants it.
 
 ---
 
-## 11. Open questions to decide before any build
+## 11. Decisions (settled 2026-06-21)
 
-1. **Verify-only mode first?** Is item 4(ii) — the deterministic verifier as a
-   stand-alone `clm slides sync --verify` — the right first increment? (My strong
-   lean: yes; it is low-risk, pure-reuse, and unblocks trusting an agent.)
-2. **Do we still want a *shared* baseline at all** once the agent recovers from source
-   + git? If no, A is dropped and B stays as the local fast-path. If yes (multi-author
-   / CI parity), A is the right shape — but build it after (ii)/(iii).
-3. **CI contract.** Sync-in-CI must stay deterministic or fail loud. Do we forbid the
-   LLM tier in CI entirely, or allow it behind an explicit, logged flag?
-4. **Is C ever on the table?** Only worth reopening once the agent maintains id
-   discipline mechanically. Park it as "the long-term stateless option, affordable
-   only after the agent workflow exists."
-5. **MCP vs CLI as the primary agent contract.** `slides_suggest_sync` (MCP) and
-   `--dry-run --json` (CLI) overlap. Which is the blessed surface, and do they share
-   one report schema?
+The questions below were hashed out and **settled**. They are recorded as decisions,
+each with the rationale, so a future session does not re-litigate them. Q6 was added
+during the discussion and is decided in principle (one implementation detail remains).
+
+1. **Verify-only mode is the first increment. — YES.** A deterministic
+   `clm slides sync --verify` is the lowest-risk, highest-leverage, storage-independent
+   first build. **Caveat banked:** it is *structural safety, not semantic correctness*
+   (§8) — it proves the agent did not corrupt the deck, not that the translation is
+   good. Its no-drop check reads the **git pre-edit version**, so it needs no watermark.
+2. **Do we want a *shared* baseline (sidecar A) at all? — NO, for now.** It does not
+   buy the agent anything: an agent recovering from source + git does not lean on a
+   shared, travelling, reviewable baseline. The steelman "yes" (multi-author / CI
+   parity) evaporates under agent-first, because the agent re-derives correspondence
+   semantically. A stays parked; B remains the cheap *local* fast-path cache. Reopen
+   only if real use shows the agent wants it (see Q4).
+3. **LLM in CI? — FORBID, for now.** Live-model-in-CI is the next pain point waiting to
+   happen (non-determinism, cost, network flakiness — CLM already carries the whole
+   mitmproxy replay system *because* live LLM in tests is miserable). **Sharpening:**
+   "forbid LLM in CI" means *no live model as a build/pipeline dependency* — running the
+   agent-integration code against **replayed** fixtures to *test* it is fine and is
+   already how CLM does LLM-in-CI. Verify-only (Q1) is what lets us hold this line: it is
+   the deterministic gate that asserts "decks are in sync" without ever calling a model,
+   removing the temptation to run `sync` (and thus an LLM) in CI.
+4. **Ids on every cell (option C)? — OFF THE TABLE, for now.** Agent-first does its
+   matching semantically and does not need per-cell ids; the ~6,600 existing ids are the
+   genuinely load-bearing ones. **Two refinements that make deferral strictly better than
+   deciding now:** (a) the churn calculus *inverts* under agent-first — an agent stamps an
+   id as a near-zero-cost side effect of an edit it is already making ("id-on-touch"), so
+   C becomes *cheap to adopt incrementally* rather than a 13k-line big-bang migration;
+   (b) the concrete **reopen trigger is the verifier's pain** — if `--verify`'s
+   no-drop/reorder matching proves fragile across agent edits (unstable content-hash /
+   occurrence anchors — the #403 problem), that is the signal to add ids *selectively,
+   where matching is fragile*, never universally.
+5. **MCP vs CLI as the primary agent contract. — CLI is blessed; one shared schema.**
+   For the workflow we are optimizing (a coding agent / Claude Code), the **CLI
+   (`--dry-run --json`) is the easier, more robust surface**: it is the agent's native
+   shell idiom, needs no running MCP server (which our own notes warn can be *absent* in
+   headless/cron runs), and composes with git/grep. MCP `slides_suggest_sync` stays as
+   the surface for **non-shell** agents (chat assistant, Studio, IDE). Both serialize
+   **one Pydantic model** (CLM's "Pydantic for cross-boundary messages" convention) — a
+   single schema to version.
+6. **What does the engine hand the agent — the whole deck or the residue? — THE SCOPED
+   RESIDUE (decided in principle).** The deterministic engine resolves everything it can
+   and hands the agent only the unresolved, ambiguous cells (§8), keeping the easy 90 %
+   deterministic, free, and reproducible. This is the line between *agent-assisted* sync
+   (the goal) and *agent-does-everything* sync (a cost/reproducibility regression).
+   **Open implementation detail:** the exact report partitioning and how a residue cell
+   carries its de/en text + "why I am stuck" context — to be pinned down when the §10
+   4(ii) report schema is designed (shared with the verify output of 4(i)).
+
+### Next concrete step
+Build §10 4(i): the deterministic `clm slides sync --verify` mode. It is decided,
+storage-independent, pure-reuse, and unblocks trusting an agent — and it is the
+gate that makes the no-LLM-in-CI rule (Q3) free to hold.
