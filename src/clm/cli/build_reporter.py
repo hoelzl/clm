@@ -56,6 +56,14 @@ class BuildReporter:
         # This prevents spurious errors from being displayed during worker shutdown
         self._build_finished: bool = False
 
+        # Fingerprints of errors/warnings already shown in the live stream.
+        # A source slide is processed once per output target and language, so
+        # the same finding (e.g. a dropped voiceover narration) is reported
+        # several times; we display each unique message once as it occurs and
+        # let the final summary report the aggregate count.
+        self._shown_error_fingerprints: set[tuple[str, str, str]] = set()
+        self._shown_warning_fingerprints: set[tuple[str, str, str]] = set()
+
         # Set when a worker-job timeout aborts the build (issue #143). Carried
         # into BuildSummary.timed_out so the entry point can force a non-zero
         # exit independent of the --fail-on-error policy.
@@ -104,6 +112,10 @@ class BuildReporter:
 
         # Reset build finished flag
         self._build_finished = False
+
+        # Reset live-stream dedup tracking
+        self._shown_error_fingerprints = set()
+        self._shown_warning_fingerprints = set()
 
         # Reset output-write registry summary
         self._output_dedup_count = 0
@@ -235,6 +247,15 @@ class BuildReporter:
 
         self.errors.append(error)
 
+        # Display each unique error once. The same source slide is processed
+        # once per output target and language, so an identical finding is
+        # reported several times; showing every copy floods the stream (the
+        # full count is reported in the summary).
+        fingerprint = self._error_fingerprint(error)
+        if fingerprint in self._shown_error_fingerprints:
+            return
+        self._shown_error_fingerprints.add(fingerprint)
+
         # Display error if appropriate for current output mode
         if self.formatter.should_show_error(error):
             self.formatter.show_error(error)
@@ -260,6 +281,12 @@ class BuildReporter:
             return
 
         self.warnings.append(warning)
+
+        # Display each unique warning once (see :meth:`report_error`).
+        fingerprint = self._warning_fingerprint(warning)
+        if fingerprint in self._shown_warning_fingerprints:
+            return
+        self._shown_warning_fingerprints.add(fingerprint)
 
         # Display warning if appropriate for current output mode
         if self.formatter.should_show_warning(warning):
@@ -298,57 +325,73 @@ class BuildReporter:
         if language and language not in entry.languages:
             entry.languages.append(language)
 
-    def _deduplicate_errors(self, errors: list[BuildError]) -> list[BuildError]:
-        """Remove duplicate errors based on file_path + category + message prefix.
+    @staticmethod
+    def _error_fingerprint(error: BuildError) -> tuple[str, str, str]:
+        """Identity used to collapse duplicate errors (file + category + message).
 
-        When multiple workers process the same file for different output targets,
-        they may report the same error multiple times. This deduplicates them
-        to avoid cluttering the summary.
+        The message is truncated to its first 200 characters so minor tail
+        variations (e.g. a trailing job id) still fold together.
+        """
+        message_prefix = error.message[:200] if error.message else ""
+        return (error.file_path or "", error.category, message_prefix)
+
+    @staticmethod
+    def _warning_fingerprint(warning: BuildWarning) -> tuple[str, str, str]:
+        """Identity used to collapse duplicate warnings (see _error_fingerprint)."""
+        message_prefix = warning.message[:200] if warning.message else ""
+        return (warning.file_path or "", warning.category, message_prefix)
+
+    def _deduplicate_errors(self, errors: list[BuildError]) -> list[BuildError]:
+        """Collapse duplicate errors, recording how often each one occurred.
+
+        When the same file is processed for several output targets, the same
+        error is reported multiple times. Each unique error is kept once with
+        its ``occurrence_count`` set to the number of times it was reported.
 
         Args:
             errors: List of errors (may contain duplicates)
 
         Returns:
-            List of unique errors
+            List of unique errors, each with ``occurrence_count`` populated
         """
-        seen: set[tuple[str, str, str]] = set()
         unique: list[BuildError] = []
+        by_fingerprint: dict[tuple[str, str, str], BuildError] = {}
 
         for error in errors:
-            # Use first 200 chars of message for fingerprint to handle minor variations
-            message_prefix = error.message[:200] if error.message else ""
-            fingerprint = (error.file_path or "", error.category, message_prefix)
-
-            if fingerprint not in seen:
-                seen.add(fingerprint)
+            fingerprint = self._error_fingerprint(error)
+            representative = by_fingerprint.get(fingerprint)
+            if representative is None:
+                error.occurrence_count = 1
+                by_fingerprint[fingerprint] = error
                 unique.append(error)
+            else:
+                representative.occurrence_count += 1
 
         return unique
 
     def _deduplicate_warnings(self, warnings: list[BuildWarning]) -> list[BuildWarning]:
-        """Remove duplicate warnings based on file_path + category + message prefix.
+        """Collapse duplicate warnings, recording how often each one occurred.
 
-        When multiple workers process the same file for different output targets,
-        they may report the same warning multiple times. This deduplicates them
-        to avoid cluttering the summary.
+        See :meth:`_deduplicate_errors`; warnings are aggregated the same way.
 
         Args:
             warnings: List of warnings (may contain duplicates)
 
         Returns:
-            List of unique warnings
+            List of unique warnings, each with ``occurrence_count`` populated
         """
-        seen: set[tuple[str, str, str]] = set()
         unique: list[BuildWarning] = []
+        by_fingerprint: dict[tuple[str, str, str], BuildWarning] = {}
 
         for warning in warnings:
-            # Use first 200 chars of message for fingerprint to handle minor variations
-            message_prefix = warning.message[:200] if warning.message else ""
-            fingerprint = (warning.file_path or "", warning.category, message_prefix)
-
-            if fingerprint not in seen:
-                seen.add(fingerprint)
+            fingerprint = self._warning_fingerprint(warning)
+            representative = by_fingerprint.get(fingerprint)
+            if representative is None:
+                warning.occurrence_count = 1
+                by_fingerprint[fingerprint] = warning
                 unique.append(warning)
+            else:
+                representative.occurrence_count += 1
 
         return unique
 

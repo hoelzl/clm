@@ -375,6 +375,13 @@ then re-extract, or `clm slides sync`), or pass `--no-fail-on-error` to
 tolerate it. `clm validate`'s #162 detectives catch the underlying
 divergence earlier (pre-commit), before it reaches a build.
 
+Because a slide is processed once per output target and language, a single
+dropped narration would otherwise be reported several times. Since CLM
+{version} the build prints each unique error (and warning) **once** in the
+live stream and collapses the duplicates in the final summary into one entry
+with a `(N times)` suffix; JSON output carries the same multiplicity as an
+`occurrence_count` field per error/warning.
+
 #### Kernel execution telemetry and the flake list (CLM {version}+)
 
 Notebook execution retries up to 6 times with a fresh kernel per attempt.

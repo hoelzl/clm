@@ -227,6 +227,129 @@ class TestBuildReporter:
         assert reporter.warnings[0] == warning
 
 
+class _RecordingFormatter(QuietOutputFormatter):
+    """Formatter that records how often the live show hooks fire.
+
+    Used to assert the live-stream deduplication in :class:`BuildReporter`
+    (a source slide is processed once per output target and language, so the
+    same finding is reported several times — each must be shown only once).
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.shown_errors: list[BuildError] = []
+        self.shown_warnings: list[BuildWarning] = []
+
+    def should_show_warning(self, warning: BuildWarning) -> bool:
+        return True
+
+    def show_error(self, error: BuildError) -> None:
+        self.shown_errors.append(error)
+
+    def show_warning(self, warning: BuildWarning) -> None:
+        self.shown_warnings.append(warning)
+
+
+class TestBuildReporterDeduplication:
+    """Live-stream dedup + summary occurrence counts (repeated-error spam)."""
+
+    def test_identical_errors_shown_once_in_live_stream(self):
+        formatter = _RecordingFormatter()
+        reporter = BuildReporter(output_formatter=formatter)
+
+        for _ in range(5):
+            reporter.report_error(
+                _make_error(file_path="slides/mcp.de.py", message="narration dropped")
+            )
+
+        # Shown once live, but every occurrence is still collected.
+        assert len(formatter.shown_errors) == 1
+        assert len(reporter.errors) == 5
+
+    def test_distinct_errors_each_shown(self):
+        formatter = _RecordingFormatter()
+        reporter = BuildReporter(output_formatter=formatter)
+
+        reporter.report_error(_make_error(message="first problem"))
+        reporter.report_error(_make_error(message="second problem"))
+        reporter.report_error(_make_error(message="first problem"))  # dup of #1
+
+        assert len(formatter.shown_errors) == 2
+
+    def test_summary_collapses_duplicates_with_occurrence_count(self):
+        formatter = _RecordingFormatter()
+        reporter = BuildReporter(output_formatter=formatter)
+        reporter.start_build("course", total_files=1)
+
+        for _ in range(5):
+            reporter.report_error(
+                _make_error(file_path="slides/mcp.de.py", message="narration dropped")
+            )
+
+        summary = reporter.finish_build()
+        assert len(summary.errors) == 1
+        assert summary.errors[0].occurrence_count == 5
+
+    def test_identical_warnings_shown_once_and_counted(self):
+        formatter = _RecordingFormatter()
+        reporter = BuildReporter(output_formatter=formatter)
+        reporter.start_build("course", total_files=1)
+
+        for _ in range(3):
+            reporter.report_warning(
+                BuildWarning(category="voiceover", message="same warning", severity="high")
+            )
+
+        summary = reporter.finish_build()
+        assert len(formatter.shown_warnings) == 1
+        assert len(summary.warnings) == 1
+        assert summary.warnings[0].occurrence_count == 3
+
+    def test_start_build_resets_live_dedup_state(self):
+        formatter = _RecordingFormatter()
+        reporter = BuildReporter(output_formatter=formatter)
+
+        reporter.start_build("course", total_files=1)
+        reporter.report_error(_make_error(message="boom"))
+        reporter.finish_build()
+
+        # A fresh build must show the same error again, not suppress it.
+        reporter.start_build("course", total_files=1)
+        reporter.report_error(_make_error(message="boom"))
+        assert len(formatter.shown_errors) == 2
+
+
+class TestOccurrenceCountInSummaries:
+    """The '(N times)' suffix surfaces in the human-readable summaries."""
+
+    def test_default_summary_shows_times_suffix(self, capsys):
+        err = _make_error()
+        err.occurrence_count = 4
+        summary = BuildSummary(duration=1.0, total_files=1, errors=[err])
+        DefaultOutputFormatter(show_progress=False, use_color=False).show_summary(summary)
+        assert "(4 times)" in capsys.readouterr().err
+
+    def test_default_summary_omits_suffix_for_single_occurrence(self, capsys):
+        summary = BuildSummary(duration=1.0, total_files=1, errors=[_make_error()])
+        DefaultOutputFormatter(show_progress=False, use_color=False).show_summary(summary)
+        assert "times)" not in capsys.readouterr().err
+
+    def test_verbose_summary_shows_times_suffix(self, capsys):
+        err = _make_error()
+        err.occurrence_count = 7
+        summary = BuildSummary(duration=1.0, total_files=1, errors=[err])
+        VerboseOutputFormatter(show_progress=False, use_color=False).show_summary(summary)
+        assert "(7 times)" in capsys.readouterr().err
+
+    def test_json_summary_includes_occurrence_count(self, capsys):
+        err = _make_error()
+        err.occurrence_count = 6
+        summary = BuildSummary(duration=1.0, total_files=1, errors=[err])
+        JSONOutputFormatter().show_summary(summary)
+        data = json.loads(capsys.readouterr().out)
+        assert data["errors"][0]["occurrence_count"] == 6
+
+
 class TestEnhancedErrorParsing:
     """Test enhanced error parsing capabilities."""
 
