@@ -84,6 +84,77 @@ class TestCheckFormat:
         assert result.findings[0].category == "format"
         assert "Malformed lang" in result.findings[0].message
 
+    def test_malformed_marker_double_hash(self, tmp_path):
+        # `## %%` (an extra leading hash) is NOT a cell boundary, so the parser
+        # swallows it into the previous cell's body. The raw-source scan must
+        # surface it directly rather than leave the misleading "duplicate
+        # slide_id" downstream symptom (Fix #8).
+        p = _write_slide(
+            tmp_path,
+            "slides_double_hash.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"]
+            #
+            # ## Titel
+
+            ## %% [markdown] lang="en" tags=["slide"]
+            #
+            # ## Title
+            """,
+        )
+        result = validate_file(p, checks=["format"])
+        malformed = [f for f in result.findings if "malformed cell marker" in f.message]
+        assert len(malformed) == 1
+        assert malformed[0].severity == "error"
+        assert malformed[0].category == "format"
+        assert malformed[0].line == 5
+        assert "did you mean '# %%'" in malformed[0].message
+        # The message must classify into the reserved malformed-marker kind.
+        from clm.slides.validation_summary import classify_kind
+
+        assert classify_kind(malformed[0].message) == "malformed-marker"
+
+    def test_malformed_marker_clean_deck_none(self, tmp_path):
+        # A legit `# %%` deck — including a body line that merely mentions `## %%`
+        # NOT at column 0 — yields no malformed-marker finding.
+        p = _write_slide(
+            tmp_path,
+            "slides_clean.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"]
+            #
+            # ## Titel
+
+            # %% [markdown] lang="en" tags=["slide"]
+            #
+            # ## Title
+            """,
+        )
+        result = validate_file(p, checks=["format"])
+        assert [f for f in result.findings if "malformed cell marker" in f.message] == []
+
+    def test_malformed_marker_cpp_triple_slash(self, tmp_path):
+        # The `//`-token languages (e.g. `.cpp`) use `// %%`; `/// %%` is the
+        # near-miss typo and must be caught too.
+        p = _write_slide(
+            tmp_path,
+            "slides.cpp",
+            """\
+            // %% [markdown] lang="de" tags=["slide"]
+            //
+            // ## Titel
+
+            /// %% [markdown] lang="en" tags=["slide"]
+            //
+            // ## Title
+            """,
+        )
+        result = validate_file(p, checks=["format"])
+        malformed = [f for f in result.findings if "malformed cell marker" in f.message]
+        assert len(malformed) == 1
+        assert malformed[0].line == 5
+        assert "did you mean '// %%'" in malformed[0].message
+
     def test_j2_cells_skipped(self, tmp_path):
         p = _write_slide(
             tmp_path,
