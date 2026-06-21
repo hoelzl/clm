@@ -85,10 +85,13 @@ def reconcile_vo_ids_cmd(
     """
     try:
         pairs = _resolve_pairs(path, en_path)
-    except click.UsageError:
+    except click.UsageError as exc:
+        # Honor the --json contract for usage errors too: emit the {"error": …}
+        # envelope (exit 2) instead of click's plain-text rendering; otherwise
+        # re-raise so click prints the usual message.
+        if as_json:
+            _fail(exc.format_message(), as_json)
         raise
-    except ValueError as exc:
-        _fail(str(exc), as_json)
 
     results: list[tuple[Path, Path, ReconcileResult]] = []
     for de, en in pairs:
@@ -111,12 +114,23 @@ def _resolve_pairs(path: Path, en_path: Path | None) -> list[tuple[Path, Path]]:
             raise click.UsageError(
                 f"{path} is a directory (batch mode); do not pass a second path."
             )
-        pairs, _solos = iter_split_pairs(find_split_slide_files_recursive(path))
+        pairs, solos = iter_split_pairs(find_split_slide_files_recursive(path))
+        # A stranded half (no twin under the tree) is itself an asymmetry this command
+        # exists to surface — warn and skip it, the same as `clm slides sync`, rather
+        # than silently reporting only the healthy pairs.
+        for solo in solos:
+            other = "EN" if split_lang_tag(solo) == "de" else "DE"
+            click.echo(
+                f"warning: skipping {solo.name} — no {other} twin found under {path}.", err=True
+            )
         if not pairs:
             raise click.UsageError(f"no split deck pairs found under {path}")
         return pairs
 
     if en_path is not None:
+        # Resolve both halves so a mixed absolute/relative spelling of the same two
+        # files compares equal (Path compares by string form, not by target).
+        path, en_path = path.resolve(), en_path.resolve()
         pair = derive_split_pair(path) or derive_split_pair(en_path)
         if pair is None or {pair[0], pair[1]} != {path, en_path}:
             raise click.UsageError(
@@ -173,15 +187,21 @@ def _print_human(results: list[tuple[Path, Path, ReconcileResult]], *, report_on
         if result.is_noop:
             note = "already symmetric" if result.already_symmetric else "no paired narratives"
             click.echo(f"{de.name}: {note}")
-            continue
-        total += len(result.changes)
-        click.echo(f"{prefix}{de.name}: {verb} {len(result.changes)} voiceover id(s)")
-        for c in result.changes:
-            verbed = "stripped id from" if c.action == "strip" else f"stamped id={c.new_id!r} onto"
-            click.echo(
-                f"    {c.lang} L{c.line_number} {c.role} under "
-                f"{c.owning_slide_id!r}#{c.occurrence}: {verbed} it"
-            )
+        else:
+            total += len(result.changes)
+            click.echo(f"{prefix}{de.name}: {verb} {len(result.changes)} voiceover id(s)")
+            for c in result.changes:
+                if c.action == "strip":
+                    verbed = "would strip id from" if report_only else "stripped id from"
+                else:
+                    did = "would stamp" if report_only else "stamped"
+                    verbed = f"{did} id={c.new_id!r} onto"
+                click.echo(
+                    f"    {c.lang} L{c.line_number} {c.role} under "
+                    f"{c.owning_slide_id!r}#{c.occurrence}: {verbed} it"
+                )
+        # Reported for every pair (including a no-op one), so an unpaired narrative —
+        # which `sync` must handle — is never hidden, matching the --json output.
         if result.unpaired:
             click.echo(
                 f"    ({result.unpaired} narrative(s) present on one half only — "
