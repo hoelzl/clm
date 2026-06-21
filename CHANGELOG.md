@@ -9,6 +9,253 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 Unreleased changes are collected as fragment files in [`changelog.d/`](changelog.d/)
 and folded into this file by `scripts/collect_changelog.py` at release time.
 
+## [1.15.0] - 2026-06-21
+
+### Added
+
+Added `clm export context` and the matching MCP `course_context` tool — an **agent-audience** course view scoped to a cut point, for an LLM that is authoring or revising course material ("what has been taught up to here", so it can reference prior topics and avoid re-teaching them). Scope by section (`--through`/`--from`, by 1-based number or section id) or by topic anchor (`--before`/`--upto`); the two families are mutually exclusive and section numbers are preserved under scoping. Three depths via `--level`: `titles` (deterministic structure, no LLM), `summary` (per-topic LLM summaries under the new `agent` audience, cached in the existing `clm_summaries.db`), and `full` (raw extracted markdown+code, deterministic). Markdown or `--format json`. The MCP tool defaults to `level=titles` so a tool call never silently triggers a paid LLM request. The reusable `agent` audience was also added to `export summary`'s prompt/extraction infrastructure (it includes code like `trainer` and is keyed separately in the summary cache).
+
+- **Multi-channel `clm release` addressing.** `release add`, `week`, `status`, and `sync` now target more than one channel per invocation, so releasing to a multi-stream cohort (e.g. four `materials`/`solutions` × `de`/`en` channels) no longer needs a shell loop. `--channel` is repeatable and accepts a glob matched against each channel's address (`--channel 'materials/*'`, `--channel '*/2026-04-*'`), and the new `--all-channels` flag hits every channel in every `<release-channels>` block. Matched channels are de-duplicated and processed in spec order; explicit `--ledger`/`--source`/`--dest` still address a single channel. A single exact `--channel NAME` is unchanged (issue #390).
+- **`clm release channels`.** A read-only command that lists every declared channel — its address (what `--channel`/globs match), language, feeding output target, ledger, and destination — as a table or, with `--json`, machine-readable rows (issue #390).
+
+- **Mobile Deck Studio — clean-markdown editing.** The phone editor now works in
+  plain markdown (type `# Title`, blank lines) instead of CLM's comment-prefixed
+  source (`# # Title`, `#`); the desktop de-prefixes on read and canonically
+  re-prefixes on write. The conversion is byte-exact for canonical cells (an
+  unedited re-save reproduces the file unchanged), and any cell whose prefixing
+  would not round-trip cleanly falls back to raw editing — so the byte-exact
+  write path is never weakened. (#395)
+
+- **Mobile Deck Studio (P0/P1).** `clm serve --spec course.xml` now serves a
+  phone-friendly authoring surface at `/studio/` alongside the jobs Monitor:
+  browse the spec-resolved deck tree (with recents and a "not in spec" bucket),
+  full-text search deck titles and cell text, open a deck, and edit cell
+  bodies/tags. Writes go through CLM's byte-exact write-back engine and are
+  guarded by **optimistic concurrency** — each carries the deck and cell
+  versions the phone last saw, so a concurrent desktop edit (e.g. VS Code)
+  returns HTTP 409 "changed elsewhere" instead of silently clobbering; a
+  filesystem watcher additionally pushes a "changed on disk — reload" signal
+  over the WebSocket. Startup prints the Studio URL plus a scannable QR code
+  carrying a persistent bearer token (`--rotate-token` cycles it). Cells are
+  addressed by stable `(slide_id, role)` identity, never by index. Structural
+  ops, the bilingual language lock + sync-to-other-language, and the installable
+  offline PWA are planned later phases. Design of record:
+  `docs/claude/design/mobile-deck-studio.md`.
+
+- **Mobile Deck Studio P2 — structural editing.** The phone authoring surface
+  (`clm serve --spec`) gained **insert**, **delete**, and **move/reorder** of
+  cells, with automatic `slide_id` minting (or inheriting an anchor slide's id
+  for companion `notes`/`voiceover` cells). All structural writes route through
+  the same byte-exact serializer as cell edits, so untouched cells never shift,
+  and stay guarded by optimistic concurrency (`409` on a stale `deck_version`).
+  The UI adds a reorder mode (up/down chevrons) plus per-cell insert/delete
+  controls. (#395)
+
+- **Mobile Deck Studio P3a — bilingual lock.** The phone authoring surface
+  (`clm serve --spec`) now shows a **language toggle** for split DE/EN deck
+  pairs and derives a **watermark-based lock**: a language is editable only when
+  its twin half is clean relative to the last `clm slides sync` baseline, so
+  edits on one side mark the other stale and lock it (surfaced as a banner +
+  stale badge) until a sync reconciles them. Locked writes return **423**. The
+  lock is read-only and LLM-free; in-app *Discard* and *Sync-to-other-language*
+  follow in P3b. (#395)
+
+- **Mobile Deck Studio P3b — sync-to-other-language.** The phone authoring
+  surface (`clm serve --spec`) can now propagate edits between a split DE/EN
+  pair: a "Sync languages" action runs `clm slides sync` as a server-side
+  subprocess and streams its progress to the phone over the WebSocket, then
+  reloads the deck with the freshly reconciled content and the released language
+  lock. Concurrent syncs of the same pair are rejected (409). (#395)
+
+- **Mobile Deck Studio P4 — preview + installable PWA.** The phone authoring
+  surface (`clm serve --spec`) now renders cell previews correctly (markdown
+  bodies no longer show every line as a heading) and **expands Jinja header
+  macros** server-side (no kernel) so `is_j2` cells preview as the real header
+  instead of raw `{{ … }}`. The Studio is now an **installable PWA** with a
+  read-only **offline cache** of opened decks (view the last decks you opened
+  when the desktop is briefly unreachable; editing still requires the desktop).
+  (#395)
+
+- **`clm slides reconcile-vo-ids`** — a new command that symmetrizes the voiceover /
+  notes `slide_id` convention across the two halves of a split deck (Issue #403 fix #3).
+  When a deck drifts into an asymmetric state — one half's paired voiceovers id-less, the
+  other's id'd — this makes them agree, either stripping the id'd side (`--to id-less`,
+  the default) or copying the id'd side's *existing* id onto the id-less side
+  (`--to ids`). It is the safe alternative to `assign-ids` on a split half: it pairs the
+  halves' voiceovers by the same occurrence-under-slide identity `clm slides sync` uses
+  and never derives an id from per-file content, so the two halves can never diverge (the
+  #162 hazard `assign-ids` carries). Accepts a single half, both halves, or a directory;
+  supports `--dry-run` / `--json`.
+
+- **`clm config locate` and `clm config show` now report the LLM cache directory.** Both commands print the resolved LLM cache dir (summaries, titles, translations, **sync watermarks**), where it came from (`--cache-dir` / `$CLM_CACHE_DIR` / `pyproject.toml [tool.clm] cache_dir` / default), the `clm-llm.sqlite` path and whether it exists, and — when run from a linked git worktree — the main worktree root a relative `cache_dir` was anchored to. This makes the watermark database easy to locate (previously the commands only covered the config files, not the cache). New public helper `clm.infrastructure.llm.cache.describe_cache_dir()` exposes the resolution + provenance without side effects.
+
+- Course specs may now set a per-course `<sidecar-layout>` (`subdir` / `sibling`) to override where a build records a topic's first HTTP-replay cassette. Precedence: `CLM_SIDECAR_LAYOUT` env var, then `<sidecar-layout>`, then `[tool.clm] sidecar-layout`; when none is set the per-deck default applies (see the "changed" entry). Reads still auto-detect both layouts, so this never changes build output.
+
+- **`clm slides split` now records a sync watermark for the split pair.** The two halves are in-sync by construction, so recording a baseline at split time means the next default `clm slides sync` (no `--baseline`) sees a single-language edit as an edit to propagate, rather than reading the whole freshly-split deck as new. The watermark is keyed by the same cache directory `sync` resolves (`--cache-dir` > `$CLM_CACHE_DIR` > `tool.clm.cache_dir` > `<cwd>/.clm-cache/`). Recording is best-effort (a cache failure warns and the split still succeeds); pass `--no-watermark` to skip it.
+
+- **`clm slides sync --baseline <ref>`.** Diff a split deck against an explicit git ref (e.g. `HEAD~1`, a commit SHA, `origin/master`) instead of the watermark or HEAD. This is the deterministic escape hatch for "I committed single-language edits before syncing": against HEAD (or the watermark) those edits read as already consistent, but `--baseline HEAD~1` diffs against the pre-edit commit so they are detected. The plan headline names the baseline (`baseline=git:<ref>`); the watermark still advances on apply (unless `--no-cache`). Single-pair only; mutually exclusive with `--rebaseline`.
+
+- **`clm slides sync` now records the synced commit and warns when the baseline is behind committed edits.** The watermark write stores the repo HEAD at sync time (pair-level `sync_watermark_meta`). Two proactive notes use it: when no watermark exists and the git-HEAD baseline finds nothing, sync points at `--baseline HEAD~1` (the committed-single-language-edits trap); and the stale-watermark hint now names the exact `--baseline <last-synced-commit>` alongside `--rebaseline`. The JSON report gains a `cold_baseline_hint` flag.
+
+- **`clm validate` now detects a malformed cell marker (`## %%`, `/// %%`).** An extra leading comment char before `%%` is not recognised as a cell boundary, so the line was silently swallowed into the previous cell's body — the only downstream symptom was a misleading "unresolved duplicate slide_id …". The validator now scans the raw source and reports the typo directly with its line number and the intended marker.
+
+- New `clm voiceover inline-notes PATH` migrates speaker notes out of voiceover companions back inline into their decks (leaving the `voiceover` cells in the companion), turning pre-1.14 companions into pure-voiceover files. `PATH` may be a file or a directory (walked for every deck with a companion). Notes are re-placed at their anchored positions; unmatched notes are kept in the companion and the command exits non-zero, mirroring `clm voiceover inline`.
+
+### Changed
+
+- **`clm slides sync` degrades a both-sided id-less-localized drift to a per-cell
+  conflict instead of a deck-wide error (Issue #365).** A `lang=` cell with no
+  `slide_id` is anchored only by content hash, so an edit to it on *both* halves
+  with no propagation direction established elsewhere used to hard-error and roll
+  the whole deck back. When the two halves' id-less localized cells share the same
+  content-free `(group, kind)` structure — so they pair positionally within their
+  slide group — each both-sided edit is now surfaced as a deferred `conflict`: the
+  watermark still holds and both edits stay on disk, but the run no longer rolls
+  back, so unrelated clean changes still apply, and the divergence is a located
+  per-cell item. (Resolution by side is a follow-up; for now resolve by editing the
+  deck or giving the cell a `slide_id`.) When the structure is *not* parallel, the
+  located deck-wide error (Issue #364) is kept, since positional pairing would be
+  unsound.
+
+- **`clm slides sync` now *resolves* an id-less-localized drift when a side clearly
+  wins, instead of always deferring it (Issue #365, increment 2).** Building on the
+  positional pairing from increment 1: when the two halves' id-less localized cells
+  pair positionally and a paired cell drifted on **exactly one** side since the last
+  sync, sync translates that winning edit onto its positional twin (located by
+  per-language position, since the cell has no `slide_id`) rather than leaving a
+  deferred conflict — so a pass in which every drifted id-less cell has a clear winner
+  reconciles cleanly and advances the watermark. A cell genuinely edited on **both**
+  sides still defers (resolution by side of a true both-sided edit is out of scope),
+  except that a both-edited **markdown** cell the judge finds already equivalent is
+  downgraded to *in-sync* (no write, no defer) so a false conflict no longer holds the
+  watermark. A mixed pass — some cells resolved, some still deferred — flushes the
+  resolved edits but holds the whole watermark until the remaining conflicts are
+  resolved.
+
+**Breaking:** a course spec with no `<output-targets>` now defaults to a **shared/trainer/speaker** structure instead of the old `public`/`speaker` toplevel (issues #380, #381, #383). The three access-control-by-path tiers — `shared` (`code-along`+`completed`), `trainer` (`code-along`+`completed`+`trainer`), and `speaker` (`recording`) — each write to `output/<tier>/` and carry their own `<remote-path>`, so the group-path remote layout (`{repository_base}/{tier}/{repo}`) works out of the box with no `CLM_GIT__REMOTE_TEMPLATE`. Participant material no longer includes `partial` (it is opt-in via explicit `<output-targets>`), and `output/public/` is gone (participant output lives under `output/shared/`). `clm build`, `clm git`, and `clm zip` now consume the same effective target list: the speaker tier is built and *listed* by `clm git` (no longer silently skipped), with its remote still gated by `<include-speaker>` so recording material is not pushed by default. `clm course targets` shows this default structure (flagged `"is_default": true` in JSON). To keep the old layout, declare an explicit `<output-targets>` block. See `clm info migration` / `clm info spec-files`.
+
+- `clm calendar push` and the `.ics` feed (`clm calendar generate -f ics`) now give each calendar entry a **scannable title plus a detailed body** instead of one long title. The event title (`SUMMARY`) is the day's first deck plus a `(+N more)` / `(+N weitere)` count; the body (`DESCRIPTION`) lists the section name and every slide on that day, each prefixed with its section number (the `01`, `02`, … students see in the output filenames) so a slide is easy to locate in a large course. Single-deck days keep the plain deck title; inserts are unchanged. Re-pushing once after upgrading rewrites existing managed events to the new format.
+
+- New authoring sidecars now default to a per-type subdirectory instead of landing next to the slides. A build records a topic's *first* HTTP-replay cassette into the topic's `cassettes/` folder, and `clm voiceover extract` / `sync` create a new companion in `voiceover/` — **unless** that deck already has a sibling sidecar, which is kept a sibling so a deck is never split across layouts. An existing `cassettes/` / `voiceover/` (or legacy `_cassettes/`) folder still wins. Reads are unchanged (both layouts auto-detected), so build output is identical. Opt back into the flat layout per-course with `<sidecar-layout>sibling</sidecar-layout>` (cassettes), `CLM_SIDECAR_LAYOUT=sibling` / `[tool.clm] sidecar-layout = "sibling"` (cassettes + voiceover), or `--layout sibling` on `extract`/`sync`.
+
+- `clm voiceover extract` now moves **only `voiceover`-tagged cells** into the `voiceover_*` companion by default; `notes` (speaker-notes) cells stay inline in the deck, so a companion is a pure narration file. Notes still reach the trainer/recording outputs from their inline position. Existing companions that already contain notes keep working (the build merge always reads both tags back) — only new extractions differ. Pass `--include-notes` to extract notes as before.
+
+### Fixed
+
+- **`clm slides sync` now localizes the "id-less localized cells edited on both
+  decks" error (Issue #364).** The error previously carried `slide_id=None` and
+  named no cell; it now pins to the drifted cell's owning slide group and echoes
+  the offending cell's first line (per half), so the author can find it. The
+  message also leads with the actual common cause — a stale watermark — pointing
+  at `clm slides sync --rebaseline` rather than only the unhelpful "assign
+  slide_ids" steer. `--explain` adds a note when the watermark-baseline diff
+  errors, flagging that the baseline may be stale and to compare against
+  `--baseline HEAD` / `--rebaseline` (a clean-looking diff that still errors is
+  no longer a mystery).
+
+Workshop detection in `clm export summary` (`--audience trainer`, the `[Workshop]` marker) and `clm export context` now works on the jupytext **percent-format `.py` source decks** that CLM courses are actually authored in. It previously parsed only `.ipynb` JSON — which is build *output*, never a source format — so the `trainer` summary's workshop marker (and the `agent` summary's workshop hint) never fired for any real course file. Detection now uses the canonical `workshop` / `end-workshop` tag and `workshop-…` slide_id convention shared with the validator (`clm.slides.workshop_scope`), so it agrees with the rest of the toolchain and no longer false-positives on the word "exercise" appearing in prose. The `.ipynb` heading/tag heuristic is retained as a fallback.
+
+- **`clm slides sync` no longer silently truncates a reconciled cell.** When the
+  edit judge returned a body with an unescaped inner `"` (e.g. an English term
+  wrapped in German `„ … "` quotes), the lenient response parser could turn the
+  malformed reply into a *parseable but truncated* value and write it to disk with
+  `0 error(s)` reported (Issue #377). The parser now does a strict-first parse and
+  rejects any response with unexpected top-level keys, so such a reply is surfaced
+  as a hard error and the edit is rolled back atomically — the safe behavior other
+  affected cells already got — instead of shipping a corrupted cell.
+
+`<github>` now warns about unrecognized child elements instead of silently dropping them (issue #382). The pre-1.x `clx` form `<github><de>URL</de><en>URL</en></github>` (per-language remote URLs) was parsed into nothing, leaving every output repo local-only with no connection to the published student repos; `clm` now logs a warning at parse time pointing at `<project-slug>` + `<repository-base>` (+ optional `<remote-path>`/`<remote-template>`). Relatedly, `<repository-base>` is now required only when the active remote template actually references `{repository_base}`, so a self-contained `<remote-template>` (e.g. `git@host:{remote_path}/{repo}.git`) no longer needs a placeholder base (issue #383).
+
+- **Docker-mode multi-target builds no longer drop every target but the first.**
+  A `--workers docker` build of a spec with multiple `<output-targets>` (e.g. the
+  `shared`/`trainer`/`speaker` convention) mounted only the *first* target's root
+  at the worker `/workspace`, so notebook-worker writes under any other target
+  failed path conversion with `Path '…\output\speaker\…' is not under '…\output\shared'`
+  and were silently lost (Issue #384). The Docker worker now mounts the common
+  ancestor of all target roots (`Course.workspace_root`) so every target's
+  container-written output resolves. Single-target and default-structure builds
+  are unchanged. When the targets share no mountable common parent (e.g. different
+  Windows drives), the build now fails fast with an actionable message pointing to
+  the `--targets <name>` per-target workaround instead of mounting a whole volume.
+
+- **`clm slides sync`: fixed two silent narrative-handling bugs in the Phase B
+  voiceover edit-detection (Issue #403).** (1) Removing (or editing) several voiceovers
+  under one slide in a single sync could mis-target the second and later cells: the
+  apply step recomputed each narrative's occurrence ordinal over the *already-mutated*
+  deck, so after deleting the first the survivors renumbered and the next operation hit
+  the wrong cell — leaving one narrative behind plus an error that held the watermark, so
+  the stale state recurred every run. Apply now resolves narrative targets from a
+  pre-mutation snapshot and edits/deletes by object identity. (2) A voiceover sitting
+  under the macro-generated title slide whose nearest predecessor is a non-slide content
+  cell (e.g. a leading intro cell carrying a `slide_id`) failed to pair against its
+  baseline — its owning slide was recovered as "none" on the baseline side but "title" on
+  the current side — so a one-sided edit to it was silently dropped. The baseline
+  owning-slide recovery now mirrors the live computation for the title group.
+
+- **`clm slides reconcile-vo-ids` polish (Issue #403).** Directory mode now warns about
+  stranded `.de`/`.en` halves with no twin (instead of silently reporting only the
+  healthy pairs), matching `clm slides sync`; a usage error under `--json` is now emitted
+  as a `{"error": …}` envelope rather than plain text; two explicit halves spelled with a
+  mix of absolute and relative paths are now accepted (they are resolved before the
+  same-deck check); and the `--dry-run` report uses future-tense wording and always
+  surfaces the unpaired-narrative count, even for an already-symmetric pair.
+
+`clm slides sync --baseline <ref>` now **follows git renames** when locating each split half at the ref, so a deck renamed since the baseline is diffed correctly instead of degrading to `baseline=none` with its edits invisible. When a half genuinely does not exist at the ref under any historical name — typically because it was created or **split** out of another file after the ref (a split is not a git rename) — the run now surfaces an explicit warning naming the file and the ref, rather than silently producing no edit detection (report item #2 from the AI-dev DE→EN propagation run).
+
+`clm slides sync` no longer false-positives a **conflict** when both halves were edited since the last sync but are already consistent. A both-edited cell whose two halves now hash identically (e.g. a shared figure corrected the same way on both sides) is recognized as in-sync with no LLM. For localized cells edited to translation-equivalent states, an undecided both-edited markdown conflict is probed with the edit judge's existing `in_sync` verdict (both directions must agree) and downgraded to in-sync — nothing is written, the watermark advances, and the cell stops resurfacing every run. A genuine one-sided divergence still defers as a conflict, and with no LLM available conflicts defer as before (report item #4).
+
+- **`clm slides sync` no longer collapses or drops voiceovers when a slide owns
+  more than one.** A narrative cell (voiceover / notes) added by sync is now kept
+  id-less and anchored immediately after its real predecessor content cell — a code
+  cell, a code subslide, or the heading — reusing the `vo_anchor` positional-anchor
+  algorithm (Issue #403). Previously every narrative under a slide was stamped with
+  that slide's `slide_id`, so two voiceovers after two different code cells collided
+  on `(slide_id, voiceover)` → `unresolved duplicate slide_id …/voiceover`, which
+  (being an apply error) rolled back the **whole deck** and shipped none of the
+  run's good translations. A leading voiceover greeting before the first slide
+  (e.g. a title-slide narration) is also placed instead of erroring with "narrative
+  with no preceding slide — deferred" (Issue #7 of the AI-dev DE/EN sync report).
+  This retires the field workarounds of hand-stamping `slide_id`s on voiceover cells
+  and temporarily deleting leading greetings.
+
+- **`clm slides sync` now detects *edits* to per-slide voiceovers, and no longer
+  doubles them when the two halves disagree on a `slide_id`.** Building on the
+  positional placement from PR #405, an id-less narrative cell (voiceover / notes) is
+  now given a stable identity — the n-th narrative of its role under its owning slide —
+  recorded in an additive `anchor` column on the sync watermark. This lets sync (a)
+  propagate a one-sided **edit** to a voiceover (the previous engine could only *add*
+  id-less narratives, never reconcile them), (b) recognize an already-paired voiceover
+  as in-sync instead of re-adding it every run, and (c) pair an id-less voiceover on one
+  half with its id-carrying twin on the other under the same slide — the report-#10
+  "destructive doubling" where a default (writing) sync would insert ~11 duplicate
+  German voiceovers into a deck that already had them. As a safety net, a *mass* of
+  narrative adds whose slide already carries a same-role narrative on the other half is
+  refused loudly (the halves are structurally mis-aligned) rather than written
+  (Issue #403).
+
+`clm slides sync` now copies an added **language-neutral (shared) cell** byte-identical — including its surrounding blank-line spacing — from the source half, instead of re-gapping it to the target deck's modal inter-cell separator. Previously a shared cell added to the other half could end up with different blank-line spacing than its source twin, making the pair fail `clm validate` with `split pair shared cell diverges` errors (the `unify` byte-identity invariant). Only localized twins still take the target deck's separator (report item #9; distinct from issue #269, which is about shared-cell *edits* not propagating).
+
+- Cohort-calendar days that carry only an `<activity>` (project work, exam, …) and no deck are no longer **blank** calendar entries. `clm calendar push`, the `.ics` feed, and the Markdown/CSV views now title such a day with its activity label (e.g. "Projektarbeit (kein Video)") and give the event body the section name for context. An activity on a day that *also* has decks is appended after the numbered slide list.
+
+- `clm calendar push` now retries transient Google API errors (HTTP 429 and 5xx) with bounded exponential backoff instead of aborting the whole push on the first hiccup. A sync of 100+ events would otherwise die mid-run on a stray `503 backendError`, leaving a partial calendar; non-transient errors (e.g. 403/404) still fail fast.
+
+- Fixed a crash (`ValueError: invalid literal for int()`) in `clm git sync`
+  (and `clm release sync --push`) when the remote-ahead check ran against
+  empty `git rev-list` output — most visibly under `--dry-run`, where the
+  mocked git call returns no stdout. The behind-remote count now treats empty
+  output as "not behind" instead of parsing it as an integer.
+
+- **Quiet stray "Loaded environment from …" line at the start of `clm build`.** The
+  dotenv-loading step ran before `setup_logging` replaced the bootstrap
+  `basicConfig` console handler, so its `INFO` log leaked to the terminal even
+  with console logging off. Demoted to `DEBUG` so the build starts cleanly.
+
+- **`clm slides sync` now finds the shared cache from a git worktree.** A relative `[tool.clm] cache_dir` (e.g. `../shared-cache`) was resolved against the current working directory, so running from a linked git worktree pointed at a per-worktree path instead of the main checkout's cache — the sync **watermark was silently missed and the baseline fell back to git HEAD** (committing single-language edits before syncing then looked like "0 changes"). A relative `cache_dir` is now anchored to the **main worktree root** when resolving from a worktree, so all worktrees share one cache. Passing an explicit `repo_root` (library callers) opts out and anchors verbatim, as before.
+
+- **`clm slides sync` no longer fails to parse the edit judge on tricky cells.** The OpenRouter sync judge now requests a strict `json_schema` structured output, so cells containing markdown tables, fenced code, escaped newlines, or characters like `&lt;` / `⌃⌘` can no longer produce a reply that breaks `json.loads` ("sync response is not valid JSON"). Previously such cells failed deterministically on OpenRouter and needed the `--provider local` fallback.
+
+- **`clm slides sync` no longer reports applied counts on a rolled-back pass.** The apply is atomic — a pass that errors writes neither deck — but the summary line still printed `applied: N edit …` from in-memory counters incremented before the rollback gate, contradicting the file and masking the rollback as success. The outcome line now distinguishes a flushed pass from a rolled-back one (`rolled back — nothing written (would have applied: …)`).
+
 ## [1.14.0] - 2026-06-15
 
 ### Added
