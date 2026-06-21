@@ -335,6 +335,44 @@ report schema (§11 Q5/Q6): the report must partition cells into
 **resolved-deterministically** vs **needs-judgment** so the agent knows the exact
 small surface it owns.
 
+### The residue is three tiers, not two — and only the middle goes to a cheap model
+The engine already computes this partition internally: `SyncPlan.proposals`
+(`Proposal` — "one cross-language change the sync would make," with `kind`,
+`direction`, `disposition`, `translation_pending`) plus `SyncPlan.issues`
+(`PlanIssue` — "a structural situation the classifier will *not* turn into a
+proposal"). Surfacing it as the agent contract splits three ways:
+
+1. **Mechanical ops** (`disposition="apply"`, `translation_pending=False`:
+   move/remove/retag/adopt…). The engine knows the exact bytes — **no model
+   needed**; apply deterministically.
+2. **Scoped-but-needs-content ops** (`translation_pending=True`: an `add`/`edit` of
+   a localized cell). The engine resolved the *hard* part — which cell, which
+   direction, where it goes — leaving only "translate this text faithfully, here is
+   the context." **This is the tier a cheaper model can execute safely.**
+3. **Genuine ambiguity** (`disposition="refuse"` + `PlanIssue`: both-sided drift,
+   no safe direction). The engine *cannot* specify the change — that is the
+   definition of residue. It must emit the **ambiguity and candidate
+   interpretations, never a fabricated resolution** (fabricating one is the fragile
+   heuristic we are escaping, relocated into the output format). **This tier needs
+   the strong supervising agent, not a cheap model** — sending a both-sided
+   divergence to a small model just moves the fragility up a layer.
+
+So "specify exactly the changes needed" is true for tiers 1–2 and *honestly false*
+for tier 3. The output design must resist making the engine guess tier 3.
+
+### Consequence: the engine can become 100 % LLM-free (the prize)
+Once the agent is both driver and consumer, **the engine never has to call a model.**
+Today it fills tier-2 translations itself and `--llm-recover` embeds an OpenRouter
+client for tier-3 recovery. In the agent-orchestrated model the engine instead
+*emits* tier 2 as scoped tasks and tier 3 as characterized ambiguity, and the
+**agent** decides whether to spawn a cheap model (Haiku) for tier 2 or handle tier 3
+itself. Model *choice* moves up to the agent, where it belongs. The engine collapses
+to a **purely deterministic** core — fast-path apply (tier 1) + residue-emit (tiers
+2/3) + verify — which is trivially CI-safe (no live model, no recovery cassettes,
+no `--recovery-model` plumbing) and makes the no-LLM-in-CI rule (§11 Q3)
+*structural* rather than a discipline we must police. `--llm-recover` survives only
+as the **standalone-human-without-an-agent** convenience, not the agent path.
+
 ### Verify is *structural safety*, not *semantic correctness* (be precise)
 The deterministic verifier (§10 4(ii)) checks that an agent's edit did not *corrupt*
 the deck — unify byte-identity for neutral cells, `de_id == en_id`, no-drop,
@@ -455,9 +493,12 @@ That has a sharp consequence for the storage question:
      source text, ids, and a direction hypothesis. MCP `slides_suggest_sync` wraps the
      **same Pydantic schema** for non-shell agents. Most of this exists; harden and
      document it as the contract.
-   - **(iii)** Reposition `--llm-recover` from a narrow last-resort tier to the
-     documented path for the ambiguous residue, **scoped to the needs-judgment cells
-     only**, with the verifier from (i) gating every write.
+   - **(iii)** Move model invocation **up to the agent**: the engine *emits* tier-2
+     scoped translation tasks and tier-3 ambiguity (§8) and calls no model itself, so
+     the agent spawns a cheap model for tier 2 or handles tier 3 directly, with the
+     verifier from (i) gating every write. This collapses the engine to a purely
+     deterministic core; `--llm-recover`/`--recovery-model` survive only as the
+     standalone-human path, not the agent path.
    - **(iv)** *Then* revisit whether a shared baseline (A) is still wanted. Per §11 Q2
      the current call is **no** — but real use of (i)–(iii) is what would reopen it
      (e.g. if verify's no-drop matching proves fragile — §11 Q4).
@@ -518,13 +559,23 @@ during the discussion and is decided in principle (one implementation detail rem
    **one Pydantic model** (CLM's "Pydantic for cross-boundary messages" convention) — a
    single schema to version.
 6. **What does the engine hand the agent — the whole deck or the residue? — THE SCOPED
-   RESIDUE (decided in principle).** The deterministic engine resolves everything it can
-   and hands the agent only the unresolved, ambiguous cells (§8), keeping the easy 90 %
-   deterministic, free, and reproducible. This is the line between *agent-assisted* sync
-   (the goal) and *agent-does-everything* sync (a cost/reproducibility regression).
-   **Open implementation detail:** the exact report partitioning and how a residue cell
-   carries its de/en text + "why I am stuck" context — to be pinned down when the §10
-   4(ii) report schema is designed (shared with the verify output of 4(i)).
+   RESIDUE, partitioned into THREE TIERS (decided).** The deterministic engine resolves
+   everything it can and hands the agent only the unresolved cells (§8), keeping the easy
+   90 % deterministic, free, and reproducible — the line between *agent-assisted* sync
+   (the goal) and *agent-does-everything* sync (a cost/reproducibility regression). The
+   structure already exists internally as `SyncPlan.proposals` + `SyncPlan.issues`;
+   surfacing it via `--dry-run --json` splits three ways (§8): **(1) mechanical ops** the
+   engine applies deterministically (no model); **(2) scoped translation tasks**
+   (`translation_pending`) a *cheap* model can execute safely; **(3) genuine ambiguity**
+   (`disposition="refuse"` + `PlanIssue`) the *strong* agent must judge — emitted as
+   characterized ambiguity, **never a fabricated resolution**. "Specify the exact change"
+   holds for tiers 1–2 and is honestly false for tier 3. **Decided consequence:** because
+   the agent owns the model handoff (cheap for tier 2, itself for tier 3), the engine
+   never calls a model — it collapses to a purely deterministic core (apply + residue-emit
+   + verify), retiring embedded recovery in the agent path (`--llm-recover` stays only for
+   standalone-human use). **Open implementation detail:** the exact JSON shape — how a
+   tier-2/3 cell carries its de/en text, direction hypothesis, and "why I am stuck" — to
+   be pinned down with the §10 4(ii) report schema (shared with the 4(i) verify output).
 
 ### Next concrete step
 Build §10 4(i): the deterministic `clm slides sync --verify` mode. It is decided,
