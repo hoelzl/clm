@@ -686,6 +686,125 @@ def _cell_for(path: Path, slide_id: str, role: str = "slide"):
     return None
 
 
+def _code(body: str) -> str:
+    """A language-neutral (shared) code cell — byte-identical in both halves."""
+    return f'# %% tags=["keep"]\n{body}\n'
+
+
+def _cellseq(path: Path) -> list[tuple[str | None, str | None, str]]:
+    """``(tag0, slide_id, first-body-line)`` for each cell, in document order."""
+    out: list[tuple[str | None, str | None, str]] = []
+    for c in parse_cells(path.read_text(encoding="utf-8")):
+        tag = c.tags[0] if c.tags else None
+        lines = [ln for ln in c.content.splitlines() if ln.strip()]
+        out.append((tag, c.metadata.slide_id, lines[0] if lines else ""))
+    return out
+
+
+class TestNarrativeAnchoring:
+    """Issue #403: id-less narratives are placed positionally, never collapsed."""
+
+    def test_voiceovers_after_distinct_code_cells_do_not_collide(self, tmp_path: Path):
+        # The field #6 shape (generalized): one markdown slide, two code cells,
+        # a voiceover after EACH. The old engine stamped both voiceovers with the
+        # owning slide's id -> "unresolved duplicate slide_id" -> whole-deck
+        # rollback. Now each stays id-less and is anchored after its own code cell.
+        base = _slide("{lang}", "intro", "# ## Intro") + _code('print("A")') + _code('print("B")')
+        de_path, en_path = _write_pair(
+            tmp_path, base.replace("{lang}", "de"), base.replace("{lang}", "en")
+        )
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_watermark(cache, de_path, en_path)
+            de_path.write_text(
+                _slide("de", "intro", "# ## Intro")
+                + _code('print("A")')
+                + _vo_idless("de", "# VO eins")
+                + _code('print("B")')
+                + _vo_idless("de", "# VO zwei"),
+                encoding="utf-8",
+            )
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            translator = StaticSlideTranslator(
+                mapping={"# VO eins": "# VO one", "# VO zwei": "# VO two"}
+            )
+            result = apply_plan(plan, judge=None, translator=translator, watermark_cache=cache)
+        finally:
+            cache.close()
+
+        assert result.errors == []  # no duplicate-id error, no rollback
+        assert result.applied_add == 2
+        seq = _cellseq(en_path)
+        # Both voiceovers present, id-less, each right after its own code cell.
+        a = next(i for i, (_t, _s, b) in enumerate(seq) if b == 'print("A")')
+        b = next(i for i, (_t, _s, b) in enumerate(seq) if b == 'print("B")')
+        assert seq[a + 1] == ("voiceover", None, "# VO one")
+        assert seq[b + 1] == ("voiceover", None, "# VO two")
+
+    def test_two_voiceovers_after_same_code_cell_keep_order(self, tmp_path: Path):
+        # Occurrence chaining: two narratives sharing one predecessor must keep
+        # source order (the second lands after the first, not before it).
+        base = _slide("{lang}", "intro", "# ## Intro") + _code('print("X")')
+        de_path, en_path = _write_pair(
+            tmp_path, base.replace("{lang}", "de"), base.replace("{lang}", "en")
+        )
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_watermark(cache, de_path, en_path)
+            de_path.write_text(
+                _slide("de", "intro", "# ## Intro")
+                + _code('print("X")')
+                + _vo_idless("de", "# erste")
+                + _vo_idless("de", "# zweite"),
+                encoding="utf-8",
+            )
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            translator = StaticSlideTranslator(
+                mapping={"# erste": "# first", "# zweite": "# second"}
+            )
+            result = apply_plan(plan, judge=None, translator=translator, watermark_cache=cache)
+        finally:
+            cache.close()
+
+        assert result.errors == []
+        seq = _cellseq(en_path)
+        x = next(i for i, (_t, _s, b) in enumerate(seq) if b == 'print("X")')
+        assert seq[x + 1] == ("voiceover", None, "# first")
+        assert seq[x + 2] == ("voiceover", None, "# second")
+
+    def test_leading_greeting_is_not_deferred(self, tmp_path: Path):
+        # Issue #7: a voiceover BEFORE the first slide used to error with
+        # "narrative with no preceding slide — deferred" and roll back the deck.
+        # With no title macro it now anchors at the front; either way: no error.
+        de_path, en_path = _write_pair(
+            tmp_path, _slide("de", "intro", "# ## Intro"), _slide("en", "intro", "# ## Intro")
+        )
+        cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+        try:
+            _seed_watermark(cache, de_path, en_path)
+            de_path.write_text(
+                _vo_idless("de", "# Hallo und willkommen") + _slide("de", "intro", "# ## Intro"),
+                encoding="utf-8",
+            )
+            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
+            translator = StaticSlideTranslator(
+                mapping={"# Hallo und willkommen": "# Hello and welcome"}
+            )
+            result = apply_plan(plan, judge=None, translator=translator, watermark_cache=cache)
+        finally:
+            cache.close()
+
+        assert not any("no preceding slide" in e for e in result.errors)
+        assert result.applied_add == 1
+        greetings = [
+            c
+            for c in parse_cells(en_path.read_text(encoding="utf-8"))
+            if c.tags and c.tags[0] == "voiceover"
+        ]
+        assert len(greetings) == 1
+        assert greetings[0].metadata.slide_id is None
+
+
 class TestApplyAdd:
     def test_idless_slide_add_mints_en_id_on_both_decks(self, tmp_path: Path):
         de_path, en_path = _write_pair(
@@ -742,7 +861,10 @@ class TestApplyAdd:
         assert "Neues Thema" in de_new.content  # DE counterpart translated
         assert _slide_order(de_path) == ["a", "new-topic"]
 
-    def test_narrative_companion_inherits_slide_id(self, tmp_path: Path):
+    def test_narrative_companion_stays_idless_and_anchored(self, tmp_path: Path):
+        # #403: a synced voiceover companion is NOT stamped with the owning slide's
+        # id (which collapsed multiple narratives per slide onto one key). It stays
+        # id-less and is anchored immediately after its slide, on both halves.
         de_path, en_path = _write_pair(
             tmp_path, _slide("de", "a", "# ## A"), _slide("en", "a", "# ## A")
         )
@@ -765,10 +887,21 @@ class TestApplyAdd:
 
         assert result.applied_add == 2
         en_cells = parse_cells(en_path.read_text(encoding="utf-8"))
-        sync_ids = [(c.metadata.slide_id, c.tags[0]) for c in en_cells if c.metadata.slide_id]
-        assert sync_ids == [("a", "slide"), ("new", "slide"), ("new", "voiceover")]
-        # The DE voiceover inherited the slide's minted id too.
-        assert _cell_for(de_path, "new", "voiceover") is not None
+        # Slides keep their ids; the voiceover stays id-less (excluded here).
+        slide_ids = [(c.metadata.slide_id, c.tags[0]) for c in en_cells if c.metadata.slide_id]
+        assert slide_ids == [("a", "slide"), ("new", "slide")]
+        # The voiceover sits immediately after the 'new' slide, id-less.
+        seq = [(c.metadata.slide_id, c.tags[0] if c.tags else None) for c in en_cells]
+        new_idx = next(i for i, (sid, _tag) in enumerate(seq) if sid == "new")
+        assert seq[new_idx + 1] == (None, "voiceover")
+        # The DE voiceover likewise stays id-less (not stamped with the owning id).
+        de_vos = [
+            c
+            for c in parse_cells(de_path.read_text(encoding="utf-8"))
+            if c.tags and c.tags[0] == "voiceover"
+        ]
+        assert len(de_vos) == 1
+        assert de_vos[0].metadata.slide_id is None
 
     def test_translator_called_once_per_cell_in_materialize(self, tmp_path: Path):
         # The add path's translations are materialized up front (#216 2b); the
