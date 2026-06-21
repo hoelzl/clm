@@ -72,7 +72,7 @@ clm --help
 - [Contributing Guide](CONTRIBUTING.md) - How to contribute
 - [Developer Guide](docs/developer-guide/README.md) - Development documentation
 - [Architecture](docs/developer-guide/architecture.md) - System design
-- [CLAUDE.md](CLAUDE.md) - AI assistant reference
+- [AGENTS.md](AGENTS.md) - AI assistant reference (imported by `CLAUDE.md` for Claude Code)
 
 ## Development Setup
 

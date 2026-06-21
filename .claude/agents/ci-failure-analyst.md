@@ -154,6 +154,6 @@ For the CLM project specifically:
 
 Before finalizing your report:
 1. Verify all file paths mentioned actually exist in the codebase
-2. Ensure proposed fixes align with project conventions (CLAUDE.md)
+2. Ensure proposed fixes align with project conventions (AGENTS.md, imported by CLAUDE.md)
 3. Confirm root causes explain ALL observed symptoms
 4. Check that agent tasks are specific enough to be actionable

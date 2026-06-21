@@ -2,8 +2,10 @@
 
 Session-start orientation for **any** AI coding agent (zcode/GLM, Claude Code,
 or others) working on the CLM (Coding-Academy Lecture Manager eXperimental)
-codebase. This is the agent-neutral counterpart of `CLAUDE.md`; both are kept
-in sync and carry the same guidance. Read it at the start of a session.
+codebase. This is the single source of truth for agent session-start guidance:
+other agents read it natively, and Claude Code reads it via a one-line
+`@AGENTS.md` import in `CLAUDE.md`. Edit here, never in `CLAUDE.md`. Read it at
+the start of a session.
 
 This file holds only the information you cannot discover cheaply from the
 code, a single doc lookup, or `clm info`. Everything else is in its canonical

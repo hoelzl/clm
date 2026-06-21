@@ -1,8 +1,8 @@
 # Releasing CLM
 
 This document describes the CLM release procedure. It is the canonical
-reference — `CLAUDE.md` only keeps the load-bearing guardrails (the
-"Rules" section at the bottom of this file).
+reference — `AGENTS.md` (imported by `CLAUDE.md`) only keeps the load-bearing
+guardrails (the "Rules" section at the bottom of this file).
 
 **IMPORTANT**: Before publishing a release, you **MUST** update documentation,
 run the local test suite, and verify CI passes. These steps are ordered — do
@@ -34,16 +34,16 @@ state of the code:
    manual.
 2. **README.md** — Update if there are new features, changed commands, or
    altered setup instructions.
-3. **CLAUDE.md** — Update only if there are new **guardrails** or
-   **behavioral conventions** that session-start instructions need to carry.
-   Do NOT re-add reference material (commands, env vars, class lists, feature
-   notes) — those belong in their canonical homes listed in the CLAUDE.md
-   documentation map.
+3. **AGENTS.md** (imported by `CLAUDE.md`) — Update only if there are new
+   **guardrails** or **behavioral conventions** that session-start
+   instructions need to carry. Do NOT re-add reference material (commands, env
+   vars, class lists, feature notes) — those belong in their canonical homes
+   listed in the AGENTS.md documentation map.
 4. **`clm info` topics** (`src/clm/cli/info_topics/*.md`) — Update if the spec
    file format, CLI commands, or migration steps have changed. Downstream
    agents in course repositories rely on these being current; stale info
    topics produce incorrect output. See the "Info topics" section of
-   `CLAUDE.md` for the hard requirement.
+   `AGENTS.md` (imported by `CLAUDE.md`) for the hard requirement.
 5. **`docs/user-guide/`** / **`docs/developer-guide/`** — Update the relevant
    pages for any user-facing or developer-facing changes. Env var additions
    go in `docs/user-guide/configuration.md`. New modules or architectural
@@ -179,8 +179,8 @@ gh release create vX.Y.Z --title "CLM X.Y.Z" --notes-file notes.md --verify-tag
 
 ## Rules for Claude Code
 
-These rules are mirrored verbatim in `CLAUDE.md` because they are
-guardrails, not procedures:
+These rules are mirrored verbatim in `AGENTS.md` (imported by `CLAUDE.md`)
+because they are guardrails, not procedures:
 
 - **Never publish a release without updating documentation first.**
 - **Never publish a release if any local test fails.**

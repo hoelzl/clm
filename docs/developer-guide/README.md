@@ -218,7 +218,7 @@ bump-my-version bump patch --dry-run --verbose
 ```
 
 This automatically:
-- Updates the version in `src/clm/__version__.py`, `pyproject.toml`, `README.md`, `CLAUDE.md`, `docs/developer-guide/architecture.md`, `docker/BUILDING.md`, and `tests/workers/notebook/test_notebook_error_context.py`
+- Updates the version in `src/clm/__version__.py`, `pyproject.toml`, `README.md`, `AGENTS.md` (the source of truth imported by `CLAUDE.md`), `docs/developer-guide/architecture.md`, `docker/BUILDING.md`, and `tests/workers/notebook/test_notebook_error_context.py`
 - Creates a git commit with the message "Bump version X.Y.Z → A.B.C"
 
 It does **not** create a local `vA.B.C` tag (`tag = false`): the Release
@@ -262,7 +262,7 @@ workflow tags the commit on the server after CI passes. See
 - **Issues**: https://github.com/hoelzl/clm/issues
 - **Discussions**: GitHub Discussions (if enabled)
 - **[Known Issues](../claude/TODO.md)**: Current bugs and planned improvements
-- **CLAUDE.md**: Session-start orientation for AI assistants (guardrails + documentation map)
+- **AGENTS.md** (imported by `CLAUDE.md`): Session-start orientation for AI assistants (guardrails + documentation map)
 
 ## Contributing
 

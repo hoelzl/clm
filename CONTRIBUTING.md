@@ -349,7 +349,7 @@ When changing architecture or adding developer-relevant features:
 
 1. Update **[Architecture](docs/developer-guide/architecture.md)**
 2. Add to **[Developer Guide](docs/developer-guide/README.md)**
-3. Update **CLAUDE.md** for AI assistant context
+3. Update **AGENTS.md** (imported by `CLAUDE.md`) for AI assistant context
 
 ## Pull Request Process
 
@@ -460,7 +460,7 @@ Workers are now integrated into the main package under `clm.workers/`.
 5. **Add tests** with `@pytest.mark.integration`
 
 6. **Update documentation**:
-   - Add to `CLAUDE.md` worker implementations section
+   - Add to `AGENTS.md` (imported by `CLAUDE.md`) worker implementations section
    - Update installation guides
    - Add to architecture documentation
 
