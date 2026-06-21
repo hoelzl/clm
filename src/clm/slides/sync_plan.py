@@ -833,6 +833,64 @@ def _idless_localized_signature(
     return [(group_index, _idless_localized_kind(cell)) for cell, _sid, group_index in pairing]
 
 
+def _idless_localized_lang_positions(cells: list[Cell], lang: str) -> list[int]:
+    """For each id-less localized cell of ``lang`` (document order), its non-j2 index.
+
+    The watermark, :func:`_localized_lang_cells`, and the writeback primitives
+    (:meth:`FileState.replace_idless_localized_body` /
+    :meth:`FileState.replace_idless_localized_tags`) all locate an id-less localized
+    cell by its position among the deck's **non-j2 ``lang`` cells** — which differs
+    from its index among *id-less* cells when id-carrying localized cells are
+    interleaved. This yields, in lock-step with :func:`_idless_localized_pairing`
+    (same predicate, same order), the position a resolver must target on that half
+    (Issue #365 increment 2).
+    """
+    out: list[int] = []
+    pos = -1
+    for c in cells:
+        if c.metadata.is_j2 or c.metadata.lang != lang:
+            continue
+        pos += 1
+        if role_of(c.metadata) is None:
+            out.append(pos)
+    return out
+
+
+def _idless_localized_edit(
+    role: str,
+    direction: str,
+    owner: str | None,
+    occ: int,
+    source_position: int,
+    target_position: int,
+    snippet: str,
+    kind: str,
+) -> Proposal:
+    """A resolvable id-less localized one-sided edit (Issue #365 increment 2).
+
+    Only one half drifted since the baseline, so there is a clear winner: the apply
+    re-translates the winning side's body (by ``source_position``) onto its positional
+    twin (by ``target_position``) — both per-language non-j2 indices, since the cell
+    has no ``(slide_id, role)`` key. ``slide_id`` stays ``None``; the localized role +
+    positions are the whole identity.
+    """
+    winner = direction.split("->")[0].upper()
+    return Proposal(
+        kind="edit",
+        role=role,
+        direction=direction,
+        slide_id=None,
+        owning_slide_id=owner,
+        anchor_occ=occ,
+        source_position=source_position,
+        target_position=target_position,
+        reason=(
+            f"id-less localized {kind} cell {snippet!r} edited only on {winner} since "
+            f"last sync — translating the {winner} edit onto its positional twin"
+        ),
+    )
+
+
 def _classify_idless_localized_conflicts(
     plan: SyncPlan,
     de_cells: list[Cell],
@@ -840,7 +898,7 @@ def _classify_idless_localized_conflicts(
     de_baseline: list[str],
     en_baseline: list[str],
 ) -> bool:
-    """Degrade a both-sided id-less localized drift to per-cell conflicts (Issue #365).
+    """Reconcile a both-sided id-less localized drift per-cell (Issue #365).
 
     A ``lang=`` cell with no ``slide_id`` is anchored only by content hash, so a
     both-sided edit with no propagation direction established elsewhere is unpairable
@@ -848,18 +906,28 @@ def _classify_idless_localized_conflicts(
     id-less localized cells share the same content-free ``(group_index, kind)``
     structure — and neither half added or removed one since the baseline — they pair
     positionally within their slide group: the n-th DE cell corresponds to the n-th EN
-    cell. Each positionally-paired cell that drifted on either side becomes a
-    **conflict** proposal (``slide_id`` ``None``, the synthetic localized role,
-    positionally identified) instead of a deck-wide error. A conflict defers — the
-    watermark holds and both edits stay on disk, exactly like the error did — but it no
-    longer sets ``has_errors``, so unrelated clean changes in the same run still apply,
-    and the divergence is a resolvable per-cell item rather than an opaque deck-wide
-    stop.
+    cell. Each positionally-paired cell that drifted is then classified per-cell:
 
-    Returns ``True`` when it took ownership (emitted conflicts, or found the drift
-    already in sync), so the caller skips the legacy error. Returns ``False`` when the
-    structure is not pairable (a move/add/remove happened) — the caller keeps the
-    located error, since positional pairing would be unsound.
+    - **one-sided** drift (only DE *or* only EN changed since baseline) has a clear
+      winner, so it becomes a resolvable **edit** (increment 2): the apply
+      re-translates the winning side's body onto its positional twin. Each side's
+      non-j2 ``lang`` index is carried as ``source_position`` / ``target_position``.
+    - **both-sided** drift (the same cell edited on each half) has no winner, so it
+      stays a defer-only **conflict** (increment 1) — the watermark holds and both
+      edits stay on disk. ``source_position`` / ``target_position`` are carried so the
+      apply can probe the judge for a false-conflict ``in_sync`` downgrade (markdown).
+
+    Neither sets ``has_errors``, so unrelated clean changes in the same run still
+    apply, and the divergence is resolvable/located per cell rather than an opaque
+    deck-wide stop. A pass that resolves *every* drifted cell (no conflict deferred)
+    is clean and advances the whole watermark; a mixed pass holds the watermark via
+    the completeness invariant (an id-less deferral carries no ``(slide_id, role)``
+    key) while still flushing the resolved edits.
+
+    Returns ``True`` when it took ownership (emitted edits/conflicts, or found the
+    drift already in sync), so the caller skips the legacy error. Returns ``False``
+    when the structure is not pairable (a move/add/remove happened) — the caller keeps
+    the located error, since positional pairing would be unsound.
     """
     de_pairing = _idless_localized_pairing(de_cells, "de")
     en_pairing = _idless_localized_pairing(en_cells, "en")
@@ -870,6 +938,11 @@ def _classify_idless_localized_conflicts(
         return False
     if len(de_pairing) != len(de_baseline) or len(en_pairing) != len(en_baseline):
         return False
+    # Per-language non-j2 indices (in lock-step with the pairings): the position a
+    # resolver targets on each half, which differs from the id-less index ``i`` when
+    # id-carrying localized cells are interleaved.
+    de_lang_pos = _idless_localized_lang_positions(de_cells, "de")
+    en_lang_pos = _idless_localized_lang_positions(en_cells, "en")
 
     emitted = False
     for i, ((de_cell, owner, _gi), (en_cell, _en_owner, _en_gi)) in enumerate(
@@ -881,24 +954,56 @@ def _classify_idless_localized_conflicts(
             continue
         kind = _idless_localized_kind(de_cell)
         role = LOCALIZED_CODE_ROLE if kind == "code" else LOCALIZED_MARKDOWN_ROLE
-        snippet = _cell_first_line(de_cell.content if de_drift else en_cell.content)
-        plan.proposals.append(
-            Proposal(
-                kind="conflict",
-                role=role,
-                direction=None,
-                slide_id=None,
-                # ``anchor_occ`` carries the cell's index among the deck's id-less
-                # localized cells — the positional identity a resolver targets by (the
-                # n-th such cell of the losing language), mirroring _apply_retag_idless.
-                owning_slide_id=owner,
-                anchor_occ=i,
-                reason=(
-                    f"id-less localized {kind} cell {snippet!r} edited on both decks since "
-                    "last sync — resolve which side wins, or give it a slide_id to pair it"
-                ),
+        if de_drift and not en_drift:
+            plan.proposals.append(
+                _idless_localized_edit(
+                    role,
+                    "de->en",
+                    owner,
+                    i,
+                    de_lang_pos[i],
+                    en_lang_pos[i],
+                    _cell_first_line(de_cell.content),
+                    kind,
+                )
             )
-        )
+        elif en_drift and not de_drift:
+            plan.proposals.append(
+                _idless_localized_edit(
+                    role,
+                    "en->de",
+                    owner,
+                    i,
+                    en_lang_pos[i],
+                    de_lang_pos[i],
+                    _cell_first_line(en_cell.content),
+                    kind,
+                )
+            )
+        else:
+            # Both halves edited the *same* cell — no winner. Defer-only (increment 1),
+            # carrying both positions so the apply can probe the judge for a false
+            # conflict ``in_sync`` downgrade (markdown only; code stays deferred).
+            snippet = _cell_first_line(de_cell.content)
+            plan.proposals.append(
+                Proposal(
+                    kind="conflict",
+                    role=role,
+                    direction=None,
+                    slide_id=None,
+                    # ``anchor_occ`` carries the cell's index among the deck's id-less
+                    # localized cells; the positions carry each half's non-j2 index.
+                    owning_slide_id=owner,
+                    anchor_occ=i,
+                    source_position=de_lang_pos[i],
+                    target_position=en_lang_pos[i],
+                    reason=(
+                        f"id-less localized {kind} cell {snippet!r} edited on both decks "
+                        "since last sync — resolve which side wins, or give it a slide_id "
+                        "to pair it"
+                    ),
+                )
+            )
         emitted = True
     return emitted
 
