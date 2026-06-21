@@ -24,6 +24,11 @@ class BuildError:
         job_id: Optional job ID for tracking
         correlation_id: Optional correlation ID for end-to-end tracing
         details: Additional error details (e.g., cell_number, code_snippet)
+        occurrence_count: How many times an identical error was reported
+            during the build. A single source slide is processed once per
+            output target and language, so the same drop/failure is reported
+            several times; the live stream shows it once and the summary
+            collapses the duplicates into one entry carrying this count.
     """
 
     error_type: Literal["user", "configuration", "infrastructure"]
@@ -35,6 +40,7 @@ class BuildError:
     job_id: int | None = None
     correlation_id: str | None = None
     details: dict[str, Any] = field(default_factory=dict)
+    occurrence_count: int = 1
 
     def __str__(self) -> str:
         """Human-readable error representation."""
@@ -67,12 +73,15 @@ class BuildWarning:
         message: Warning message
         severity: Warning priority level
         file_path: Optional path to the file that caused the warning
+        occurrence_count: How many times an identical warning was reported
+            during the build (see :attr:`BuildError.occurrence_count`).
     """
 
     category: str
     message: str
     severity: Literal["high", "medium", "low"]
     file_path: str | None = None
+    occurrence_count: int = 1
 
     def __str__(self) -> str:
         """Human-readable warning representation."""

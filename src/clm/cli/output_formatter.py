@@ -26,6 +26,17 @@ from clm.cli.build_data_classes import BuildError, BuildSummary, BuildWarning
 from clm.cli.text_utils import format_error_path, strip_ansi
 
 
+def _occurrence_note(count: int) -> str:
+    """Return a ``" (N times)"`` suffix for findings reported more than once.
+
+    A source slide is processed once per output target and language, so an
+    identical error/warning is collapsed into a single summary entry whose
+    ``occurrence_count`` records the multiplicity. Returns ``""`` for a single
+    occurrence so the common case stays clean.
+    """
+    return f" ({count} times)" if count > 1 else ""
+
+
 class OutputMode(Enum):
     """Output mode for build reporting."""
 
@@ -451,7 +462,7 @@ class DefaultOutputFormatter(OutputFormatter):
 
                 self.console.print(
                     f"  [{error_type_color}]{i}. [{error.error_type.title()}][/{error_type_color}] "
-                    f"{location_info}"
+                    f"{location_info}[dim]{_occurrence_note(error.occurrence_count)}[/dim]"
                 )
                 self.console.print(f"     {error_msg}")
 
@@ -486,13 +497,16 @@ class DefaultOutputFormatter(OutputFormatter):
                     display_path = format_error_path(warning.file_path)
                     location = f" ({display_path})"
 
-                # Format the message with severity and location
+                # Format the message with severity, location, and repeat count
+                note = _occurrence_note(warning.occurrence_count)
                 if severity_label:
                     self.console.print(
-                        f"  [{color}]{i}. {severity_label} {warning.message}{location}[/{color}]"
+                        f"  [{color}]{i}. {severity_label} {warning.message}{location}{note}[/{color}]"
                     )
                 else:
-                    self.console.print(f"  [{color}]{i}. {warning.message}{location}[/{color}]")
+                    self.console.print(
+                        f"  [{color}]{i}. {warning.message}{location}{note}[/{color}]"
+                    )
 
             if len(summary.warnings) > max_warnings_to_show:
                 self.console.print(
@@ -683,8 +697,9 @@ class VerboseOutputFormatter(DefaultOutputFormatter):
             for i, warning in enumerate(summary.warnings, 1):
                 display_path = format_error_path(warning.file_path) if warning.file_path else ""
                 location = f" ({display_path})" if display_path else ""
+                note = _occurrence_note(warning.occurrence_count)
                 self.console.print(
-                    f"  [yellow]{i}. [{warning.severity}] {warning.message}{location}[/yellow]"
+                    f"  [yellow]{i}. [{warning.severity}] {warning.message}{location}{note}[/yellow]"
                 )
 
         self._show_flaky_files(summary)
@@ -721,7 +736,8 @@ class VerboseOutputFormatter(DefaultOutputFormatter):
             location_info += ")"
 
         self.console.print(
-            f"\n  [{error_type_color}]{index}. [{error.error_type.title()} Error - {error.category}][/{error_type_color}]"
+            f"\n  [{error_type_color}]{index}. [{error.error_type.title()} Error - {error.category}]"
+            f"[/{error_type_color}][dim]{_occurrence_note(error.occurrence_count)}[/dim]"
         )
         self.console.print(f"     File: {location_info}")
 
@@ -985,6 +1001,7 @@ class JSONOutputFormatter(OutputFormatter):
             "job_id": error.job_id,
             "correlation_id": error.correlation_id,
             "details": clean_details,
+            "occurrence_count": error.occurrence_count,
         }
 
     def _warning_to_dict(self, warning: BuildWarning) -> dict[str, Any]:
@@ -994,6 +1011,7 @@ class JSONOutputFormatter(OutputFormatter):
             "message": strip_ansi(warning.message),
             "severity": warning.severity,
             "file_path": warning.file_path,
+            "occurrence_count": warning.occurrence_count,
         }
 
     def cleanup(self) -> None:
