@@ -145,6 +145,9 @@ class Bucket:
     weekday_label: str  # localized plan-relative label (e.g. "Montag")
     weekdays: tuple[str, ...] = ()  # language-neutral tokens, e.g. ("mon", "tue")
     section_title: str = ""  # localized section name (e.g. "Woche 03: LLM-APIs ...")
+    # Non-deck entries on the day (project work, exam, …) from <activity>; carried
+    # so a deck-less day still produces a titled calendar event, not a blank one.
+    activities: list[ScheduleActivity] = field(default_factory=list)
 
     @property
     def ref_ids(self) -> set[str]:
@@ -416,6 +419,7 @@ def build_buckets(weeks: list[ScheduleWeek]) -> list[Bucket]:
             weekday_label=day.label,
             weekdays=tuple(day.weekdays),
             section_title=week.title,
+            activities=day.activities,
         )
         for week in weeks
         for day in week.days
