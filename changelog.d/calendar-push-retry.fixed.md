@@ -1,0 +1,1 @@
+- `clm calendar push` now retries transient Google API errors (HTTP 429 and 5xx) with bounded exponential backoff instead of aborting the whole push on the first hiccup. A sync of 100+ events would otherwise die mid-run on a stray `503 backendError`, leaving a partial calendar; non-transient errors (e.g. 403/404) still fail fast.
