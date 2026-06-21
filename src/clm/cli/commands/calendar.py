@@ -204,7 +204,7 @@ def calendar(
         content = render_csv(proj, language)
         ext = "csv"
     elif output_format == "ics":
-        content = render_ics(course.name[language], proj, namespace=namespace)
+        content = render_ics(course.name[language], proj, namespace=namespace, language=language)
         ext = "ics"
     else:
         content = render_markdown(course.name[language], proj, language)
@@ -342,7 +342,7 @@ def push_cmd(
     namespace = channel or resolve_calendar_path(spec_file, channel, calendar_path).stem.replace(
         ".calendar", ""
     )
-    desired = google_sync.build_desired_events(proj, namespace=namespace)
+    desired = google_sync.build_desired_events(proj, namespace=namespace, language=language)
 
     try:
         creds = google_sync.load_credentials(credentials_path)
