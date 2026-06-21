@@ -317,9 +317,82 @@ passing `--calendar-id` on every push:
 calendar_id = "abc123…@group.calendar.google.com"
 ```
 
-One-time Google-side setup: create a Google Cloud project, enable the
-**Google Calendar API**, and create either an OAuth client (type "Desktop app")
-or a service account; download the JSON. Requires the `[gcal]` extra.
+#### One-time setup
+
+1. **Install the extra:** `pip install "coding-academy-lecture-manager[gcal]"`
+   (from a source checkout: `uv sync --extra gcal`).
+
+2. **Create (or pick) the target calendar.** A dedicated calendar is cleanest —
+   in [Google Calendar](https://calendar.google.com), *Other calendars* → **+**
+   → *Create new calendar*. Open its **Settings → Integrate calendar** and copy
+   the **Calendar ID** (looks like `…@group.calendar.google.com`).
+
+3. **Create credentials** in a Google Cloud project
+   ([console.cloud.google.com](https://console.cloud.google.com)) with the
+   **Google Calendar API** enabled (*APIs & Services → Library*). Choose one:
+
+   - **OAuth client, type "Desktop app" (recommended).** *APIs & Services →
+     Credentials → Create credentials → OAuth client ID → Desktop app*; download
+     the client JSON (add yourself as a test user on the consent screen if
+     prompted). The first push opens a browser for a one-time consent, then the
+     refresh token is cached in the user config dir
+     (`google-calendar-token.json`). Because OAuth acts **as you**, you can push
+     to any calendar **you** own (e.g. the one from step 2) with **no sharing
+     step**.
+   - **Service-account key (only if your org permits it).** *Credentials →
+     Create credentials → Service account*, then *Keys → Add key → JSON*. Share
+     the target calendar with the service account's `client_email` granting
+     **"Make changes to events"**. Note: many organizations disable
+     service-account key creation
+     (`constraints/iam.disableServiceAccountKeyCreation`); if you see that, use
+     the OAuth Desktop client above — it is **not** affected by that policy.
+
+   > **API keys do not work here.** A Google API key authorizes only *public*
+   > data and carries no identity, so it cannot read a private calendar or
+   > create/update/delete events. CLM's credential loader accepts **only** a
+   > service-account key (`"type": "service_account"`) or an OAuth client
+   > (`"installed"`/`"web"`) — not an API key.
+
+4. **Point CLM at it.** Set the calendar id (in the calendar TOML's `[google]`
+   table above, or `--calendar-id`) and the credentials path (`--credentials`
+   or `CLM_GOOGLE_CREDENTIALS`).
+
+#### A permanent test calendar
+
+To eyeball calendar changes (event titles/bodies, projection tweaks) without
+touching a live cohort, keep a dedicated test calendar and give it its **own**
+calendar file — e.g. `release/test.calendar.toml`. The push namespace is derived
+from the file's stem (`test`), so CLM-managed events there can never collide with
+a real cohort's push. Mirror a real cohort calendar (same `start`/`holidays`/
+`adjustments`, so the projection exercises real multi-deck/split/insert/merge
+cases) and just swap in the test calendar id:
+
+```toml
+# release/test.calendar.toml — copy of a real cohort calendar, different target
+start = 2026-04-13
+# … holidays / adjustments copied from the real cohort …
+[google]
+calendar_id = "c_…test…@group.calendar.google.com"
+```
+
+Then:
+
+```bash
+# Credential-free preview of the exact titles/bodies (no Google access):
+clm calendar generate <spec> --calendar release/test.calendar.toml -f ics
+
+# Dry run — authenticates and READS the calendar to diff, but writes nothing:
+clm calendar push <spec> --calendar release/test.calendar.toml \
+    --credentials <oauth-client.json> --dry-run
+
+# Real push:
+clm calendar push <spec> --calendar release/test.calendar.toml \
+    --credentials <oauth-client.json>
+```
+
+Note that `--dry-run` still requires credentials (it reads the existing managed
+events to compute the plan); for a fully offline look at the entry text, use
+`clm calendar generate -f ics`.
 
 ### Recording Management (`clm recordings`)
 
