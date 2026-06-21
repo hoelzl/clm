@@ -90,6 +90,7 @@ from clm.slides.sync_recover import (
     OpenRouterAlignmentRecoverer,
     OpenRouterCorrespondenceVerifier,
 )
+from clm.slides.sync_report import build_report
 from clm.slides.sync_translate import DEFAULT_TRANSLATION_MODEL, OpenRouterSlideTranslator
 
 if TYPE_CHECKING:
@@ -1607,6 +1608,11 @@ def _to_dict(
         "en_path": str(plan.en_path),
         "mode": mode,
         "exit_code": exit_code,
+        # The blessed agent contract (PR #422 step ii): the engine's work projected
+        # into the three tiers an agent acts on differently — mechanical (trust),
+        # assisted (a scoped model task), ambiguity (your judgement). The flat
+        # ``plan`` block below is kept for existing consumers.
+        "report": build_report(plan).model_dump(mode="json"),
         "plan": _plan_dict(plan),
         "apply": _apply_dict(apply_result) if apply_result is not None else None,
         "walker": _walker_dict(walk) if walk is not None else None,
