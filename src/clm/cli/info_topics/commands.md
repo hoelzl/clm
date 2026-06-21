@@ -1549,6 +1549,57 @@ clm slides assign-ids slides/ --accept-content-derived --shipping-only
 clm slides assign-ids slides/ --report-only --report-refusals --context
 ```
 
+### `clm slides reconcile-vo-ids`
+
+*Added in CLM {version}.*
+
+Make the two halves of a split deck **agree** on whether their paired voiceover /
+notes cells carry a `slide_id`. A deck can drift into an asymmetric state — the DE
+half's voiceovers are id-less (`# %% [markdown] lang="de" tags=["voiceover"]`) while
+the EN half's are id'd (`… slide_id="…"`), or vice versa. `clm slides sync` is no
+longer *destructive* in that state (it pairs the two by position rather than
+duplicating the track), but the asymmetry is still confusing; this command cleans it
+up.
+
+It is the **safe** alternative to `clm slides assign-ids` on a split half: `assign-ids`
+slugs each id from that file's own heading, so running it on the DE and EN halves
+independently mints **divergent** ids for the same cell (the #162 hazard). This command
+instead pairs the halves' voiceovers by the *same* occurrence-under-slide identity sync
+uses — the n-th voiceover under its owning slide — and then either strips the id'd side
+or copies the id'd side's **existing** id onto the id-less side. It never derives an id
+from content, so the two halves can never diverge.
+
+```bash
+clm slides reconcile-vo-ids [OPTIONS] PATH [EN_PATH]
+```
+
+`PATH` is one half of a split pair (`<deck>.de.<ext>` / `<deck>.en.<ext>` — the twin is
+found on disk), both halves passed explicitly, or a directory (every split pair under it
+is reconciled).
+
+| Option | Effect |
+|---|---|
+| `--to id-less\|ids` | Which convention to resolve an asymmetric pair toward. `id-less` (default) strips the id'd side — the engine's canonical, collision-proof form; `ids` stamps the id'd side's existing id onto the id-less side. |
+| `--report-only`, `--dry-run` | Report what would change without modifying files. |
+| `--json` | Emit a JSON report. |
+
+Only **paired** narratives that *disagree* on id-ness are touched. A pair that already
+agrees (both id-less, or both id'd) is left alone, and a voiceover present on one half
+only is left to `clm slides sync` (it is a structural difference, not an id-symmetry
+one). Edits rewrite only the narrative cell's header line — slides, code, and all bodies
+are byte-preserved.
+
+```bash
+# Preview: which voiceover ids would change to make the halves agree
+clm slides reconcile-vo-ids slides_pe_03a_chain_of_thought.de.py --dry-run
+# Apply (default: strip the id'd side to id-less)
+clm slides reconcile-vo-ids slides_pe_03a_chain_of_thought.de.py
+# Keep ids instead — stamp the id'd half's id onto the id-less half
+clm slides reconcile-vo-ids slides_pe_03b_few_shot.de.py --to ids
+# Reconcile every split pair under a tree
+clm slides reconcile-vo-ids slides/module_410_ai_dev/
+```
+
 ### `clm slides slug-report`
 
 *Added in CLM {version}.*
