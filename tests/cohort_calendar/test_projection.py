@@ -2,7 +2,7 @@
 
 import datetime as dt
 
-from clm.cli.commands.export.schedule import Bucket, ScheduleDeck
+from clm.cli.commands.export.schedule import Bucket, ScheduleActivity, ScheduleDeck
 from clm.cohort_calendar.config import CohortCalendarConfig, Holiday, Insert, Merge, Pin, Split
 from clm.cohort_calendar.projection import project
 
@@ -227,3 +227,44 @@ class TestDegenerate:
         proj = project([], cfg(pattern=("mon",)))
         assert proj.assignments == ()
         assert proj.ok
+
+
+class TestActivityDays:
+    def test_activity_only_bucket_carries_labels(self):
+        b = Bucket(
+            decks=[],
+            span=1,
+            week=20,
+            weekday_label="Montag",
+            weekdays=("mon",),
+            section_title="Woche 20: Abschlussprojekt",
+            activities=[ScheduleActivity(text="Projektarbeit (kein Video)")],
+        )
+        proj = project([b], cfg(pattern=("mon",)))
+        (a,) = proj.assignments
+        assert a.decks == ()
+        assert a.activity_labels == ("Projektarbeit (kein Video)",)
+        assert a.section_title == "Woche 20: Abschlussprojekt"
+
+    def test_merge_combines_activity_labels(self):
+        b0 = Bucket(
+            decks=[],
+            span=1,
+            week=20,
+            weekday_label="Mo",
+            weekdays=("mon",),
+            activities=[ScheduleActivity(text="Projekt A")],
+        )
+        b1 = Bucket(
+            decks=[],
+            span=1,
+            week=20,
+            weekday_label="Di",
+            weekdays=("tue",),
+            activities=[ScheduleActivity(text="Projekt B")],
+        )
+        adj = [Merge(date=dt.date(2026, 3, 2), count=2)]
+        proj = project([b0, b1], cfg(pattern=("mon", "tue"), adjustments=adj))
+        (a,) = proj.assignments
+        assert a.kind == "merged"
+        assert a.activity_labels == ("Projekt A", "Projekt B")

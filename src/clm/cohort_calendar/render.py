@@ -57,21 +57,24 @@ _MORE_SUFFIX = {"de": "+{n} weitere", "en": "+{n} more"}
 
 
 def _content_text(a: Assignment) -> str:
-    """Plain (un-escaped) content of an assignment: titles, or the insert label."""
+    """Plain (un-escaped) content: deck titles + any activity labels, or the insert label."""
     if a.kind == "insert":
         return a.label or ""
-    return "; ".join(d.video_title for d in a.decks)
+    parts = [d.video_title for d in a.decks]
+    parts.extend(a.activity_labels)
+    return "; ".join(parts)
 
 
 def _summary_text(a: Assignment, language: str) -> str:
     """A short event title: the first deck's title, plus a "+N more" count.
 
     A single-deck day reads as just that deck's title; a multi-deck day appends
-    "(+N weitere)" / "(+N more)" so the day cell stays scannable. Inserts use
-    their label. The full numbered list lives in the body (:func:`_body_text`).
+    "(+N weitere)" / "(+N more)" so the day cell stays scannable. A deck-less day
+    uses its insert label or, for an activity day (project work, exam, …), its
+    activity label(s). The full numbered list lives in the body (:func:`_body_text`).
     """
     if a.kind == "insert" or not a.decks:
-        return a.label or ""
+        return a.label or "; ".join(a.activity_labels)
     first = a.decks[0].video_title
     extra = len(a.decks) - 1
     if extra <= 0:
@@ -90,17 +93,22 @@ def _deck_line(deck: ScheduleDeck) -> str:
 def _body_text(a: Assignment) -> str:
     """The event description: the section title, then the numbered slide list.
 
-    Empty for inserts (which carry no decks). The number is the deck's
-    ``number_in_section`` — the same value students see in the output filenames
-    — so a slide is easy to locate in a large course.
+    The number is the deck's ``number_in_section`` — the same value students see
+    in the output filenames — so a slide is easy to locate in a large course.
+    Empty for inserts and for days with neither decks nor activities. An
+    activity-only day (project work, exam, …) shows just the section title for
+    context (the activity itself is already the event title).
     """
-    if a.kind == "insert" or not a.decks:
+    if a.kind == "insert" or (not a.decks and not a.activity_labels):
         return ""
     lines: list[str] = []
     if a.section_title:
         lines.append(a.section_title)
-        lines.append("")
-    lines.extend(_deck_line(d) for d in a.decks)
+    if a.decks:
+        if a.section_title:
+            lines.append("")
+        lines.extend(_deck_line(d) for d in a.decks)
+        lines.extend(a.activity_labels)  # extra non-deck items after the slides
     return "\n".join(lines)
 
 
@@ -155,7 +163,8 @@ def render_csv(projection: Projection, language: str) -> str:
         weekday = _weekday_token(a.start_date)
         base = [a.start_date.isoformat(), a.end_date.isoformat(), weekday, a.kind]
         if a.kind == "insert" or not a.decks:
-            writer.writerow([*base, a.label or "", "", "", ""])
+            label = a.label or "; ".join(a.activity_labels)
+            writer.writerow([*base, label, "", "", ""])
             continue
         for deck in a.decks:
             writer.writerow([*base, "", deck.video_title, deck.topic_id, deck.deck_file])

@@ -71,6 +71,7 @@ class Assignment:
     bucket_refs: tuple[str, ...]  # stable id seeds (deck-file stems) for .ics UIDs
     plan_label: str = ""  # plan-relative coordinate, e.g. "W4 Tuesday" (drift/status)
     section_title: str = ""  # localized section name of the (first) bucket; "" for inserts
+    activity_labels: tuple[str, ...] = ()  # non-deck day items (project work, exam, …)
 
 
 @frozen
@@ -165,6 +166,11 @@ def _resolve_ref(ref: str, buckets) -> tuple[int | None, str | None]:
 
 def _bucket_refs(decks: tuple[ScheduleDeck, ...]) -> tuple[str, ...]:
     return tuple(d.deck_file for d in decks)
+
+
+def _activity_labels(buckets_slice) -> tuple[str, ...]:
+    """The activity texts across one or more buckets, in order (for merges)."""
+    return tuple(act.text for b in buckets_slice for act in b.activities)
 
 
 def _plan_label(bucket) -> str:
@@ -403,6 +409,7 @@ def _emit_segment(
                     _bucket_refs(decks),
                     _plan_label(buckets[group[0]]),
                     buckets[group[0]].section_title,
+                    _activity_labels([buckets[gi] for gi in group]),
                 )
             )
             di += 1
@@ -422,6 +429,7 @@ def _emit_segment(
                 _bucket_refs(decks),
                 _plan_label(bucket),
                 bucket.section_title,
+                _activity_labels([bucket]),
             )
         )
         di += span

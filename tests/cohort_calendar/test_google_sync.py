@@ -115,6 +115,26 @@ class TestBuildDesiredEvents:
         assert event["summary"] == "Funktionen (+1 more)"
         assert event["description"] == "Woche 01: Python-Setup\n\n19  Funktionen\n20  Imports"
 
+    def test_activity_only_day_is_titled_not_blank(self):
+        proj = Projection(
+            (
+                Assignment(
+                    dt.date(2026, 9, 15),
+                    dt.date(2026, 9, 15),
+                    (),
+                    None,
+                    "video",
+                    (),
+                    section_title="Woche 20: Abschlussprojekt",
+                    activity_labels=("Projektarbeit (kein Video)",),
+                ),
+            ),
+            (),
+        )
+        event = next(iter(gs.build_desired_events(proj, namespace="jan").values()))
+        assert event["summary"] == "Projektarbeit (kein Video)"
+        assert event["description"] == "Woche 20: Abschlussprojekt"
+
     def test_insert_uses_label_and_has_no_description(self):
         body = gs.build_desired_events(sample(), namespace="jan")[UID_INSERT]
         assert body["summary"] == "Review & Q&A"

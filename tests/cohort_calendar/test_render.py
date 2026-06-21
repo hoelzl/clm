@@ -187,3 +187,51 @@ class TestSummaryAndBody:
             section_title="Sec",
         )
         assert assignment_body(a, "de") == "Sec\n\nNo Number"
+
+
+def activity_only() -> Assignment:
+    """A deck-less project-work day carrying only an activity label."""
+    return Assignment(
+        dt.date(2026, 9, 15),
+        dt.date(2026, 9, 15),
+        (),
+        None,
+        "video",
+        (),
+        section_title="Woche 20: Abschlussprojekt",
+        activity_labels=("Projektarbeit (kein Video)",),
+    )
+
+
+class TestActivityDays:
+    def test_activity_only_summary_is_the_label(self):
+        # Was a blank event before; now titled by the activity.
+        assert assignment_summary(activity_only(), "de") == "Projektarbeit (kein Video)"
+
+    def test_activity_only_body_is_section_only(self):
+        # The activity is already the title; the body just gives section context.
+        assert assignment_body(activity_only(), "de") == "Woche 20: Abschlussprojekt"
+
+    def test_deck_day_appends_activities_after_slides(self):
+        a = Assignment(
+            dt.date(2026, 3, 2),
+            dt.date(2026, 3, 2),
+            (deck("Intro", "x", "slides_x", 1),),
+            None,
+            "video",
+            ("slides_x",),
+            section_title="Sec",
+            activity_labels=("Klausur",),
+        )
+        assert assignment_summary(a, "de") == "Intro"  # deck still drives the title
+        assert assignment_body(a, "de") == "Sec\n\n01  Intro\nKlausur"
+
+    def test_activity_label_appears_in_ics(self):
+        out = render_ics("C", Projection((activity_only(),), ()), namespace="jan", language="de")
+        assert "SUMMARY:Projektarbeit (kein Video)" in out
+        assert "DESCRIPTION:Woche 20: Abschlussprojekt" in out
+
+    def test_activity_label_in_markdown_and_csv(self):
+        proj = Projection((activity_only(),), ())
+        assert "Projektarbeit (kein Video)" in render_markdown("C", proj, "de")
+        assert "Projektarbeit (kein Video)" in render_csv(proj, "de")
