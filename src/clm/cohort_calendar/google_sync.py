@@ -39,7 +39,7 @@ import platformdirs
 from attrs import frozen
 
 from clm.cohort_calendar.projection import Projection
-from clm.cohort_calendar.render import assignment_content, assignment_uid
+from clm.cohort_calendar.render import assignment_body, assignment_summary, assignment_uid
 
 logger = logging.getLogger(__name__)
 
@@ -77,12 +77,16 @@ class SyncPlan:
         return not (self.inserts or self.updates or self.deletes)
 
 
-def build_desired_events(projection: Projection, *, namespace: str) -> dict[str, dict[str, Any]]:
+def build_desired_events(
+    projection: Projection, *, namespace: str, language: str = "de"
+) -> dict[str, dict[str, Any]]:
     """Map each assignment to a Google event body, keyed by its stable UID.
 
     Events are all-day (``start.date`` / exclusive ``end.date``, mirroring the
     ``.ics`` DTEND convention) and marked ``transparent`` so they never block
-    students' free/busy time.
+    students' free/busy time. The ``summary`` is the short event title (first
+    deck + "+N more"); the ``description`` carries the section title and the
+    numbered slide list — the same text the ``.ics`` export emits.
     """
     desired: dict[str, dict[str, Any]] = {}
     for a in projection.assignments:
@@ -90,14 +94,15 @@ def build_desired_events(projection: Projection, *, namespace: str) -> dict[str,
         if uid in desired:
             logger.warning("duplicate event UID %s; keeping the later assignment.", uid)
         body: dict[str, Any] = {
-            "summary": assignment_content(a) or (a.label or ""),
+            "summary": assignment_summary(a, language) or (a.label or ""),
             "start": {"date": a.start_date.isoformat()},
             "end": {"date": (a.end_date + dt.timedelta(days=1)).isoformat()},
             "transparency": "transparent",
             "extendedProperties": {"private": {MANAGED_KEY: namespace, UID_KEY: uid}},
         }
-        if a.kind != "insert" and a.decks:
-            body["description"] = "Topics: " + ", ".join(d.topic_id for d in a.decks)
+        description = assignment_body(a, language)
+        if description:
+            body["description"] = description
         desired[uid] = body
     return desired
 

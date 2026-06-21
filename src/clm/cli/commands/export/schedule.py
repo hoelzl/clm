@@ -76,6 +76,10 @@ class ScheduleDeck:
     topic_id: str
     deck_file: str  # source stem, e.g. "slides_010_introduction_ml_course_azav"
     disabled: bool = False
+    # 1-based slot within its section — the number students see in the output
+    # filename ("02 Linear Regression.html"); 0 when unknown (e.g. a disabled
+    # deck read from the filesystem, which is never built/numbered).
+    number_in_section: int = 0
 
 
 @dataclass
@@ -140,6 +144,7 @@ class Bucket:
     week: int  # plan-relative week number (from the originating ScheduleWeek)
     weekday_label: str  # localized plan-relative label (e.g. "Montag")
     weekdays: tuple[str, ...] = ()  # language-neutral tokens, e.g. ("mon", "tue")
+    section_title: str = ""  # localized section name (e.g. "Woche 03: LLM-APIs ...")
 
     @property
     def ref_ids(self) -> set[str]:
@@ -194,6 +199,7 @@ def _topic_decks(topic, language: str) -> list[ScheduleDeck]:
                 video_title=title,
                 topic_id=topic.id,
                 deck_file=notebook.path.stem,
+                number_in_section=getattr(notebook, "number_in_section", 0) or 0,
             )
         )
     return decks
@@ -409,6 +415,7 @@ def build_buckets(weeks: list[ScheduleWeek]) -> list[Bucket]:
             week=week.number,
             weekday_label=day.label,
             weekdays=tuple(day.weekdays),
+            section_title=week.title,
         )
         for week in weeks
         for day in week.days

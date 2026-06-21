@@ -56,7 +56,9 @@ extended properties) with the cohort namespace and the same stable
 per-assignment UID the ICS output uses, so re-pushing updates events in place,
 deletes events whose assignment disappeared, and never disturbs other events
 in the same calendar. Events are all-day and marked free (transparent).
-Projection errors (see `clm calendar check`) block the push.
+Each event uses the same title/body format as the `.ics` feed (see
+[Event format](#event-format) below). Projection errors (see
+`clm calendar check`) block the push.
 
 ## Calendar file format
 
@@ -147,6 +149,24 @@ Each assignment becomes an all-day VEVENT. UIDs are derived from stable
 bucket-ref seeds so re-exporting the same calendar produces the same UIDs.
 Multi-day assignments (e.g. a bucket spanning Mon–Tue) are emitted as a single
 multi-day event. The `DTSTAMP` is fixed to the start date for determinism.
+
+## Event format
+
+Both the `.ics` feed and the Google Calendar push (`clm calendar push`) format
+each day's entry the same way, so a day with several decks stays readable:
+
+- **Title** (`SUMMARY`): the day's first deck title, plus a `(+N more)` /
+  `(+N weitere)` count when the day carries more than one deck. A single-deck
+  day is just that deck's title; an `insert` is its label.
+- **Body** (`DESCRIPTION`): the section name (e.g. `Woche 03: LLM-APIs in der
+  Praxis`), then one line per slide. Each slide is prefixed with its **section
+  number** — the same `01`, `02`, … that appears in the built output filenames
+  — so students can find the slide quickly in a large course. Inserts have no
+  body.
+
+The wording (`more` vs `weitere`, etc.) follows `-L`. Because the body changed,
+the first `clm calendar push` after upgrading updates every managed event once;
+subsequent pushes are no-ops until the schedule changes.
 
 ## Examples
 

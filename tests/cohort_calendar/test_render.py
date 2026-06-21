@@ -4,11 +4,17 @@ import datetime as dt
 
 from clm.cli.commands.export.schedule import ScheduleDeck
 from clm.cohort_calendar.projection import Assignment, Projection
-from clm.cohort_calendar.render import render_csv, render_ics, render_markdown
+from clm.cohort_calendar.render import (
+    assignment_body,
+    assignment_summary,
+    render_csv,
+    render_ics,
+    render_markdown,
+)
 
 
-def deck(title, topic, file):
-    return ScheduleDeck(video_title=title, topic_id=topic, deck_file=file)
+def deck(title, topic, file, number=0):
+    return ScheduleDeck(video_title=title, topic_id=topic, deck_file=file, number_in_section=number)
 
 
 def sample() -> Projection:
@@ -17,10 +23,11 @@ def sample() -> Projection:
             Assignment(
                 dt.date(2026, 3, 2),
                 dt.date(2026, 3, 2),
-                (deck("Intro", "intro", "slides_010_intro"),),
+                (deck("Intro", "intro", "slides_010_intro", 1),),
                 None,
                 "video",
                 ("slides_010_intro",),
+                section_title="Week 01: Foundations",
             ),
             Assignment(
                 dt.date(2026, 3, 3),
@@ -33,13 +40,31 @@ def sample() -> Projection:
             Assignment(
                 dt.date(2026, 3, 4),
                 dt.date(2026, 3, 5),
-                (deck("Spanned", "span", "slides_020_span"),),
+                (deck("Spanned", "span", "slides_020_span", 2),),
                 None,
                 "video",
                 ("slides_020_span",),
+                section_title="Week 02: More",
             ),
         ),
         diagnostics=(),
+    )
+
+
+def multi_deck() -> Assignment:
+    """A single day carrying several decks (the readability pain point)."""
+    return Assignment(
+        dt.date(2026, 3, 6),
+        dt.date(2026, 3, 6),
+        (
+            deck("Video - Funktionen", "py", "slides_040v_functions", 19),
+            deck("Video - f-strings", "py", "slides_042v_fstrings", 20),
+            deck("Video - Imports", "py", "slides_044v_imports", 21),
+        ),
+        None,
+        "video",
+        ("slides_040v_functions",),
+        section_title="Woche 01: Python-Setup",
     )
 
 
@@ -96,6 +121,18 @@ class TestIcs:
         assert "SUMMARY:Intro" in out
         assert "UID:jan-slides_010_intro@clm.cohort-calendar" in out
 
+    def test_description_carries_section_and_numbered_slides(self):
+        out = render_ics("C", sample(), namespace="jan")
+        # Section title, blank line, then "NN  Title" — newlines escaped to \n.
+        assert "DESCRIPTION:Week 01: Foundations\\n\\n01  Intro" in out
+
+    def test_multi_deck_summary_and_body(self):
+        proj = Projection((multi_deck(),), ())
+        out = render_ics("C", proj, namespace="jan", language="de")
+        assert "SUMMARY:Video - Funktionen (+2 weitere)" in out
+        assert "DESCRIPTION:Woche 01: Python-Setup\\n\\n19  Video - Funktionen" in out
+        assert "20  Video - f-strings" in out
+
     def test_span_uses_exclusive_dtend(self):
         out = render_ics("C", sample(), namespace="jan")
         # End date 5 Mar -> exclusive DTEND 6 Mar.
@@ -112,3 +149,41 @@ class TestIcs:
         assert "\r\n" in out
         # No lone LFs.
         assert "\n" not in out.replace("\r\n", "")
+
+
+class TestSummaryAndBody:
+    def test_single_deck_summary_is_just_the_title(self):
+        a = sample().assignments[0]
+        assert assignment_summary(a, "de") == "Intro"
+
+    def test_multi_deck_summary_counts_the_rest(self):
+        assert assignment_summary(multi_deck(), "de") == "Video - Funktionen (+2 weitere)"
+        assert assignment_summary(multi_deck(), "en") == "Video - Funktionen (+2 more)"
+
+    def test_insert_summary_is_the_label(self):
+        insert = sample().assignments[1]
+        assert assignment_summary(insert, "de") == "Review & Q&A"
+
+    def test_body_has_section_then_numbered_slides(self):
+        assert assignment_body(multi_deck(), "de") == (
+            "Woche 01: Python-Setup\n\n"
+            "19  Video - Funktionen\n"
+            "20  Video - f-strings\n"
+            "21  Video - Imports"
+        )
+
+    def test_insert_has_no_body(self):
+        insert = sample().assignments[1]
+        assert assignment_body(insert, "de") == ""
+
+    def test_unnumbered_deck_omits_the_number_prefix(self):
+        a = Assignment(
+            dt.date(2026, 3, 2),
+            dt.date(2026, 3, 2),
+            (deck("No Number", "x", "slides_x"),),  # number_in_section defaults to 0
+            None,
+            "video",
+            ("slides_x",),
+            section_title="Sec",
+        )
+        assert assignment_body(a, "de") == "Sec\n\nNo Number"

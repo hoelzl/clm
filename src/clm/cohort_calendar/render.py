@@ -13,7 +13,7 @@ import csv
 import datetime as dt
 import io
 
-from clm.cli.commands.export.schedule import WEEKDAY_LABELS
+from clm.cli.commands.export.schedule import WEEKDAY_LABELS, ScheduleDeck
 from clm.cohort_calendar.projection import Assignment, Projection
 from clm.core.course_spec import WEEKDAY_ORDER
 
@@ -52,11 +52,56 @@ def _md_cell(text: str) -> str:
     return text.replace("\\", "\\\\").replace("|", "\\|").replace("\n", " ").strip()
 
 
+#: "+N more" suffix wording for the multi-deck event title, per language.
+_MORE_SUFFIX = {"de": "+{n} weitere", "en": "+{n} more"}
+
+
 def _content_text(a: Assignment) -> str:
     """Plain (un-escaped) content of an assignment: titles, or the insert label."""
     if a.kind == "insert":
         return a.label or ""
     return "; ".join(d.video_title for d in a.decks)
+
+
+def _summary_text(a: Assignment, language: str) -> str:
+    """A short event title: the first deck's title, plus a "+N more" count.
+
+    A single-deck day reads as just that deck's title; a multi-deck day appends
+    "(+N weitere)" / "(+N more)" so the day cell stays scannable. Inserts use
+    their label. The full numbered list lives in the body (:func:`_body_text`).
+    """
+    if a.kind == "insert" or not a.decks:
+        return a.label or ""
+    first = a.decks[0].video_title
+    extra = len(a.decks) - 1
+    if extra <= 0:
+        return first
+    suffix = _MORE_SUFFIX.get(language, _MORE_SUFFIX["en"]).format(n=extra)
+    return f"{first} ({suffix})"
+
+
+def _deck_line(deck: ScheduleDeck) -> str:
+    """One body line for a deck: its section number (if known) then its title."""
+    if deck.number_in_section:
+        return f"{deck.number_in_section:02d}  {deck.video_title}"
+    return deck.video_title
+
+
+def _body_text(a: Assignment) -> str:
+    """The event description: the section title, then the numbered slide list.
+
+    Empty for inserts (which carry no decks). The number is the deck's
+    ``number_in_section`` — the same value students see in the output filenames
+    — so a slide is easy to locate in a large course.
+    """
+    if a.kind == "insert" or not a.decks:
+        return ""
+    lines: list[str] = []
+    if a.section_title:
+        lines.append(a.section_title)
+        lines.append("")
+    lines.extend(_deck_line(d) for d in a.decks)
+    return "\n".join(lines)
 
 
 def assignment_date_label(a: Assignment, language: str) -> str:
@@ -67,6 +112,16 @@ def assignment_date_label(a: Assignment, language: str) -> str:
 def assignment_content(a: Assignment) -> str:
     """Public: an assignment's display content (deck titles, or the insert label)."""
     return _content_text(a)
+
+
+def assignment_summary(a: Assignment, language: str) -> str:
+    """Public: the short calendar-event title (first deck + "+N more")."""
+    return _summary_text(a, language)
+
+
+def assignment_body(a: Assignment, language: str) -> str:
+    """Public: the calendar-event description (section title + numbered slides)."""
+    return _body_text(a)
 
 
 def render_markdown(course_title: str, projection: Projection, language: str) -> str:
@@ -127,12 +182,17 @@ def assignment_uid(a: Assignment, namespace: str) -> str:
     return f"{namespace}-{key}@clm.cohort-calendar"
 
 
-def render_ics(course_title: str, projection: Projection, *, namespace: str) -> str:
+def render_ics(
+    course_title: str, projection: Projection, *, namespace: str, language: str = "de"
+) -> str:
     """Render an all-day iCalendar feed (RFC 5545, CRLF line endings).
 
     Each assignment is one all-day VEVENT; a multi-date span uses the
     exclusive-end ``DTEND`` convention (end date + 1 day). ``DTSTAMP`` is fixed
     to each event's start date (no wall-clock read) to keep output deterministic.
+
+    The ``SUMMARY`` is the short event title (first deck + "+N more"); the
+    ``DESCRIPTION`` carries the section title and the numbered slide list.
     """
     cal_name = f"{course_title}" + (f" ({namespace})" if namespace else "")
     lines = [
@@ -143,7 +203,7 @@ def render_ics(course_title: str, projection: Projection, *, namespace: str) -> 
         f"X-WR-CALNAME:{_ics_escape(cal_name)}",
     ]
     for a in projection.assignments:
-        summary = _content_text(a) or (a.label or "")
+        summary = _summary_text(a, language) or (a.label or "")
         dtend = a.end_date + dt.timedelta(days=1)  # DTEND is exclusive
         stamp = a.start_date.strftime("%Y%m%dT000000Z")
         lines += [
@@ -154,9 +214,9 @@ def render_ics(course_title: str, projection: Projection, *, namespace: str) -> 
             f"DTEND;VALUE=DATE:{dtend.strftime('%Y%m%d')}",
             f"SUMMARY:{_ics_escape(summary)}",
         ]
-        if a.kind != "insert" and a.decks:
-            topics = ", ".join(d.topic_id for d in a.decks)
-            lines.append(f"DESCRIPTION:{_ics_escape('Topics: ' + topics)}")
+        body = _body_text(a)
+        if body:
+            lines.append(f"DESCRIPTION:{_ics_escape(body)}")
         lines.append("END:VEVENT")
     lines.append("END:VCALENDAR")
     return "\r\n".join(lines) + "\r\n"

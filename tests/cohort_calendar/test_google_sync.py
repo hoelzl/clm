@@ -13,8 +13,8 @@ from clm.cohort_calendar import google_sync as gs
 from clm.cohort_calendar.projection import Assignment, Projection
 
 
-def deck(title, topic, file):
-    return ScheduleDeck(video_title=title, topic_id=topic, deck_file=file)
+def deck(title, topic, file, number=0):
+    return ScheduleDeck(video_title=title, topic_id=topic, deck_file=file, number_in_section=number)
 
 
 def sample() -> Projection:
@@ -23,10 +23,11 @@ def sample() -> Projection:
             Assignment(
                 dt.date(2026, 3, 2),
                 dt.date(2026, 3, 2),
-                (deck("Intro", "intro", "slides_010_intro"),),
+                (deck("Intro", "intro", "slides_010_intro", 1),),
                 None,
                 "video",
                 ("slides_010_intro",),
+                section_title="Week 01: Foundations",
             ),
             Assignment(
                 dt.date(2026, 3, 3),
@@ -39,10 +40,11 @@ def sample() -> Projection:
             Assignment(
                 dt.date(2026, 3, 4),
                 dt.date(2026, 3, 5),
-                (deck("Spanned", "span", "slides_020_span"),),
+                (deck("Spanned", "span", "slides_020_span", 2),),
                 None,
                 "video",
                 ("slides_020_span",),
+                section_title="Week 02: More",
             ),
         ),
         diagnostics=(),
@@ -61,7 +63,7 @@ def existing_event(
     summary="Intro",
     start="2026-03-02",
     end="2026-03-03",
-    description="Topics: intro",
+    description="Week 01: Foundations\n\n01  Intro",
 ):
     event = {
         "id": eid,
@@ -85,10 +87,33 @@ class TestBuildDesiredEvents:
         assert body["summary"] == "Intro"
         assert body["start"] == {"date": "2026-03-02"}
         assert body["end"] == {"date": "2026-03-03"}  # exclusive end, like DTEND
-        assert body["description"] == "Topics: intro"
+        assert body["description"] == "Week 01: Foundations\n\n01  Intro"
         assert body["transparency"] == "transparent"
         private = body["extendedProperties"]["private"]
         assert private == {gs.MANAGED_KEY: "jan", gs.UID_KEY: UID_INTRO}
+
+    def test_multi_deck_summary_and_numbered_body(self):
+        proj = Projection(
+            (
+                Assignment(
+                    dt.date(2026, 3, 6),
+                    dt.date(2026, 3, 6),
+                    (
+                        deck("Funktionen", "py", "slides_040v_functions", 19),
+                        deck("Imports", "py", "slides_044v_imports", 20),
+                    ),
+                    None,
+                    "video",
+                    ("slides_040v_functions",),
+                    section_title="Woche 01: Python-Setup",
+                ),
+            ),
+            (),
+        )
+        body = gs.build_desired_events(proj, namespace="jan", language="en")
+        event = next(iter(body.values()))
+        assert event["summary"] == "Funktionen (+1 more)"
+        assert event["description"] == "Woche 01: Python-Setup\n\n19  Funktionen\n20  Imports"
 
     def test_insert_uses_label_and_has_no_description(self):
         body = gs.build_desired_events(sample(), namespace="jan")[UID_INSERT]

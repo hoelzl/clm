@@ -70,6 +70,7 @@ class Assignment:
     kind: str  # "video" | "merged" | "insert"
     bucket_refs: tuple[str, ...]  # stable id seeds (deck-file stems) for .ics UIDs
     plan_label: str = ""  # plan-relative coordinate, e.g. "W4 Tuesday" (drift/status)
+    section_title: str = ""  # localized section name of the (first) bucket; "" for inserts
 
 
 @frozen
@@ -394,7 +395,14 @@ def _emit_segment(
             )
             assignments.append(
                 Assignment(
-                    d, d, decks, None, "merged", _bucket_refs(decks), _plan_label(buckets[group[0]])
+                    d,
+                    d,
+                    decks,
+                    None,
+                    "merged",
+                    _bucket_refs(decks),
+                    _plan_label(buckets[group[0]]),
+                    buckets[group[0]].section_title,
                 )
             )
             di += 1
@@ -405,7 +413,16 @@ def _emit_segment(
         last = dates.at(di + span - 1) or d
         decks = tuple(bucket.decks)
         assignments.append(
-            Assignment(d, last, decks, None, "video", _bucket_refs(decks), _plan_label(bucket))
+            Assignment(
+                d,
+                last,
+                decks,
+                None,
+                "video",
+                _bucket_refs(decks),
+                _plan_label(bucket),
+                bucket.section_title,
+            )
         )
         di += span
         bi += 1
