@@ -2216,6 +2216,8 @@ clm slides split [OPTIONS] SOURCE
 |--------|-------------|
 | `--force` | Overwrite existing `.de.py` / `.en.py` companions if present |
 | `--report-only`, `--dry-run` | Compute the split and report what would be written without modifying files |
+| `--cache-dir PATH` | Directory for the sync watermark recorded for the split pair (default: `--cache-dir` > `$CLM_CACHE_DIR` > `tool.clm.cache_dir` in pyproject > `<cwd>/.clm-cache/`). Must match what `clm slides sync` resolves so the watermark is found. |
+| `--no-watermark` | Do not record a sync watermark for the freshly-split pair |
 | `--json` | Emit a JSON report |
 
 Examples:
@@ -2252,6 +2254,17 @@ byte-identical (the code is copied to both halves), but such code folds into the
 bilingual and split forms. `split` never rewrites the source — run
 `clm slides normalize` (the `preamble_code` op) first to wrap the code in its own
 `# %%` cell, then re-split.
+
+**Sync watermark (since CLM {version}).** After writing both halves, `split`
+records a `clm slides sync` watermark (baseline) for the pair. The two halves are
+in-sync **by construction**, so this is safe — and it means the next default
+`clm slides sync` (no `--baseline`) sees a single-language edit as an *edit* to
+propagate, rather than reading the whole deck as new (no baseline). The watermark
+is keyed by the same cache directory `sync` resolves (`--cache-dir` >
+`$CLM_CACHE_DIR` > `tool.clm.cache_dir` > `<cwd>/.clm-cache/`), so pass the same
+`--cache-dir` to both if you override it. Recording is best-effort: if the cache
+cannot be opened the split still succeeds and emits a `warning:`. Pass
+`--no-watermark` to skip it; a `--report-only` run records nothing.
 
 **Voiceover companion.** If SOURCE has a sibling voiceover companion
 (`slides_<name>.py` → `voiceover_<name>.<ext>`), `split` splits it in

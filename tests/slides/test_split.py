@@ -659,3 +659,130 @@ class TestLineEndingsAreLF:
         target = tmp_path / "unified.py"
         unify_in_file(tmp_path / "deck.de.py", tmp_path / "deck.en.py", target=target)
         assert b"\r\n" not in target.read_bytes()
+
+
+# ---------------------------------------------------------------------------
+# Watermark-at-split (Fix #3.1)
+# ---------------------------------------------------------------------------
+
+
+class TestSplitRecordsWatermark:
+    """``clm slides split`` records a sync baseline for the in-sync pair.
+
+    The two halves are in-sync by construction, so recording a watermark there
+    means the next default ``clm slides sync`` sees a single-language edit as an
+    edit — not the whole deck as new (no baseline).
+    """
+
+    def _run_split(self, source: Path, cache_dir: Path, *extra: str):
+        from click.testing import CliRunner
+
+        from clm.cli.commands.slides.split import split_cmd
+
+        runner = CliRunner()
+        return runner.invoke(
+            split_cmd,
+            [str(source), "--cache-dir", str(cache_dir), *extra],
+            catch_exceptions=False,
+        )
+
+    def test_split_records_watermark_for_pair(self, tmp_path: Path) -> None:
+        from clm.infrastructure.llm.cache import SyncWatermarkCache
+
+        source = tmp_path / "deck.py"
+        source.write_text(
+            HEADER_PREAMBLE + _slide_pair("intro", "Einleitung", "Introduction"),
+            encoding="utf-8",
+        )
+        cache_dir = tmp_path / "cache"
+        result = self._run_split(source, cache_dir)
+        assert result.exit_code == 0, result.output
+
+        de_path = tmp_path / "deck.de.py"
+        en_path = tmp_path / "deck.en.py"
+        cache = SyncWatermarkCache(cache_dir / "clm-llm.sqlite")
+        try:
+            de_rows = cache.get_deck(str(de_path), str(en_path), "de")
+            en_rows = cache.get_deck(str(de_path), str(en_path), "en")
+        finally:
+            cache.close()
+        # A watermark row exists for each half's slide cell.
+        assert any(r[1] == "intro" for r in de_rows)
+        assert any(r[1] == "intro" for r in en_rows)
+
+    def test_watermark_lets_sync_see_single_language_edit(self, tmp_path: Path) -> None:
+        from clm.infrastructure.llm.cache import SyncWatermarkCache
+        from clm.slides.sync_plan import build_sync_plan
+
+        source = tmp_path / "deck.py"
+        source.write_text(
+            HEADER_PREAMBLE + _slide_pair("intro", "Einleitung", "Introduction"),
+            encoding="utf-8",
+        )
+        cache_dir = tmp_path / "cache"
+        assert self._run_split(source, cache_dir).exit_code == 0
+
+        de_path = tmp_path / "deck.de.py"
+        en_path = tmp_path / "deck.en.py"
+        # Edit only the DE half AFTER the split recorded the baseline.
+        de_text = de_path.read_text(encoding="utf-8")
+        de_path.write_text(de_text.replace("# - DE Bullet", "# - DE Bullet geändert"), "utf-8")
+
+        cache = SyncWatermarkCache(cache_dir / "clm-llm.sqlite")
+        try:
+            plan = build_sync_plan(
+                de_path, en_path, watermark_cache=cache, allow_git_fallback=False
+            )
+        finally:
+            cache.close()
+        # With the split-recorded baseline, the changed DE cell is an EDIT to
+        # propagate — NOT the whole deck read as new (which is the no-baseline
+        # symptom this fix removes).
+        kinds = {p.kind for p in plan.proposals}
+        assert "edit" in kinds
+        assert "add" not in kinds  # nothing read as a brand-new id-less cell
+
+    def test_no_watermark_flag_skips_recording(self, tmp_path: Path) -> None:
+        from clm.infrastructure.llm.cache import SyncWatermarkCache
+
+        source = tmp_path / "deck.py"
+        source.write_text(
+            HEADER_PREAMBLE + _slide_pair("intro", "Einleitung", "Introduction"),
+            encoding="utf-8",
+        )
+        cache_dir = tmp_path / "cache"
+        assert self._run_split(source, cache_dir, "--no-watermark").exit_code == 0
+
+        de_path = tmp_path / "deck.de.py"
+        en_path = tmp_path / "deck.en.py"
+        # --no-watermark never opens/creates the cache, so either the db is
+        # absent or (if some other path created it) it holds no rows for the pair.
+        db = cache_dir / "clm-llm.sqlite"
+        if db.exists():
+            cache = SyncWatermarkCache(db)
+            try:
+                assert cache.get_deck(str(de_path), str(en_path), "de") == []
+            finally:
+                cache.close()
+
+    def test_dry_run_records_no_watermark(self, tmp_path: Path) -> None:
+        from clm.infrastructure.llm.cache import SyncWatermarkCache
+
+        source = tmp_path / "deck.py"
+        source.write_text(
+            HEADER_PREAMBLE + _slide_pair("intro", "Einleitung", "Introduction"),
+            encoding="utf-8",
+        )
+        cache_dir = tmp_path / "cache"
+        assert self._run_split(source, cache_dir, "--report-only").exit_code == 0
+
+        de_path = tmp_path / "deck.de.py"
+        en_path = tmp_path / "deck.en.py"
+        # A report-only run writes nothing — including no watermark.
+        assert not de_path.exists()
+        if (cache_dir / "clm-llm.sqlite").exists():
+            cache = SyncWatermarkCache(cache_dir / "clm-llm.sqlite")
+            try:
+                assert cache.get_deck(str(de_path), str(en_path), "de") == []
+            finally:
+                cache.close()
