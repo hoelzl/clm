@@ -1748,8 +1748,10 @@ def _to_dict(
         # The blessed agent contract (PR #422 step ii): the engine's work projected
         # into the three tiers an agent acts on differently — mechanical (trust),
         # assisted (a scoped model task), ambiguity (your judgement). The flat
-        # ``plan`` block below is kept for existing consumers.
-        "report": build_report(plan).model_dump(mode="json"),
+        # ``plan`` block below is kept for existing consumers. Cell-text excerpts are
+        # resolved only on a dry-run: they index the working-tree files, which match
+        # the plan's positions only before an apply mutates them.
+        "report": build_report(plan, with_excerpts=mode == "dry-run").model_dump(mode="json"),
         "plan": _plan_dict(plan),
         "apply": _apply_dict(apply_result) if apply_result is not None else None,
         "walker": _walker_dict(walk) if walk is not None else None,

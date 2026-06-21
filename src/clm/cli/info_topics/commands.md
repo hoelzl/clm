@@ -2015,8 +2015,19 @@ also exposes `baseline_source`, `in_sync`, and three booleans — `is_clean`
 `needs_agent` (a tier-3 item needs *you*). An un-categorised future kind
 defaults to `ambiguity`, never silently to `mechanical`. The flat `plan` block
 above is retained for existing consumers; `report` is the blessed surface for
-an agent. (The cell *text* is not yet inlined — the positions + ids locate
-each cell in the source you already hold; a follow-up will add excerpts.)
+an agent.
+
+Under **`--dry-run`**, each `assisted` / `ambiguity` item is additionally
+enriched with the **cell bytes** the work concerns, so a delegated model can act
+without re-deriving the engine's positions: `source_lang` + `source_excerpt` +
+`source_line` (the drifted/winning side to reconcile *from*) and the matching
+`target_*` triple (the existing counterpart, for an edit/conflict; absent for an
+`add`, whose translation does not exist yet). Resolution is **fail-closed** — a
+position it cannot resolve with certainty (an out-of-range index, an unreadable
+file) yields no excerpt rather than a wrong one. Excerpts are omitted outside
+`--dry-run` (after an apply the files no longer match the plan's positions) and
+for `mechanical` items (you apply those without reading them); the `*_position`
+indices and `slide_id` still locate every cell in the source you hold.
 
 In **batch (`DIR`) mode** the `--json` report is instead an envelope
 `{ "mode", "root", "exit_code", "pairs": [ … ] }`, where each entry of
