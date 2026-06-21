@@ -64,6 +64,33 @@ inherit it), so **every voiceover under one slide hashes to the same key**
 positional component. So the coarse identity is baked into the watermark schema, the
 baseline diff, the duplicate logic, and the apply placement — not one spot.
 
+### 2a. Data-flow correction (verified against current master)
+
+The first draft of this doc assumed narratives travel the keyed `(slide_id, role)`
+diff. The verified reality is more split, and it changes the sequencing:
+
+- An **inline narrative cell is usually id-less** (`# %% [markdown] lang=… tags=["voiceover"]`,
+  no `slide_id`) but **role-bearing** (`role_of → "voiceover"`). In `_index_by_key` it
+  therefore lands in the **`idless` bucket** (`sync_plan.py:1100`), not `by_key`.
+- Id-less narratives are emitted as **add-only** proposals by `_append_idless_adds`
+  (`sync_plan.py:1566`, both warm and cold) — there is **no edit detection** for them.
+  The apply (`_add_one_direction`) then translates and **places** each one, stamping
+  the *owning* `current_slide_id` onto it.
+- The field incidents **#6 and #7 are in that add/placement path**: the collision is
+  produced when two placed narratives stamp the *same* owning `slide_id`
+  (`_flag_residual_duplicates` keys `(slide_id, role)` → duplicate). When narratives
+  already carry an explicit `slide_id` (the field deck after the hand-stamp workaround),
+  they go through `by_key`/`_resolve_duplicates` and hit the **same** `(slide_id, role)`
+  collision there.
+
+**Consequence for sequencing:** fixing the reported #6/#7 needs the **apply-path /
+duplicate-check** change (anchor-aware placement), which requires **no watermark
+schema migration and no plan re-keying**. The plan re-keying + watermark `anchor`
+column is only needed to *detect edits* to multiple-per-slide narratives across syncs
+(a capability the field run did not exercise — its narratives were adds) and to clean
+up the id-less-localized drift path that issue **#365** also targets. So the phases
+below are re-ordered: **apply-path first (A), keying/watermark second (B).**
+
 ## 3. The model that already works — `vo_anchor` (PR #199)
 
 `voiceover_tools.py` solved this exact "multiple narratives per slide group, each at
@@ -211,14 +238,28 @@ nullable column), consistent with prior `sync_watermarks` migrations.
 
 ## 8. Sequencing
 
-1. **Phase 0 — extract the shared anchor primitives** into a common module
-   (`sync_writeback`-importable), used by `voiceover_tools` unchanged (pure refactor,
-   byte-identical behavior; lock it with the existing `voiceover_tools` tests).
-2. **Phase 1 — narrative keying** in the plan (`_index_by_key` / `_baseline_index` /
-   `_state` / duplicate logic) behind the 3-tuple; watermark column + migration.
-3. **Phase 2 — apply placement** (`_add_one_direction` predecessor insertion) + #7
-   title anchor + `_flag_residual_duplicates` anchor-awareness.
-4. **Phase 3 — harness mutations + regressions + docs** (`clm info` unaffected; this
+Re-ordered per §2a: the apply-path change fixes the reported incidents and is
+schema-free; the keying/watermark change is the larger follow-on.
+
+1. **Phase 0 — extract the shared anchor primitives** into a common leaf module
+   (`anchor_primitives.py`), used by `voiceover_tools` unchanged (pure refactor,
+   byte-identical; locked by the existing `voiceover_tools` tests). ✅ **DONE**
+   (commit on `claude/issue-403-sync-voiceover-anchoring`).
+2. **Phase A — apply-path anchoring (fixes #6 + #7; no schema change).**
+   `_add_one_direction` places each added narrative after its **resolved predecessor**
+   (computed over the full `RawCell` stream via `anchor_primitives`), routes a leading
+   greeting to `tm:title#0` instead of erroring, and `_flag_residual_duplicates`
+   becomes **anchor-aware** so multiple narratives under one owning slide are allowed
+   (a real duplicate is now same `(slide_id, role, anchor)`). Also adjust
+   `_resolve_duplicates` for the explicitly-stamped-id variant. This is the
+   highest-value, lowest-risk unit and directly retires the field workarounds.
+3. **Phase B — narrative keying + watermark (edit-detection; overlaps #365).** Key
+   id-less narratives by `(owning_slide_id, role, anchor)` through a keyed path
+   (replacing the add-only `_append_idless_adds` route for narratives), add the
+   watermark `anchor` column + additive migration, and reconcile with the
+   id-less-localized drift path (#365). Larger and schema-touching — gate behind an
+   explicit go-ahead.
+4. **Phase C — harness mutations + regressions + docs** (`clm info` unaffected; this
    is engine-internal). Update `[[project-voiceover-positional-anchors]]` and the
    `split-voiceover-hardening.md` roadmap to mark the deferred sync-core item DONE.
 
