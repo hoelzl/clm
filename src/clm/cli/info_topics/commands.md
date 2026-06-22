@@ -511,11 +511,14 @@ clm run release-week course.xml "name:Week 09"
 ### `clm export`
 
 Group for the **course-document exports** — commands that turn a course spec
-into a document: `outline`, `schedule`, `summary`, and `context`. (The first
-three replace the former flat `clm outline` / `clm schedule` / `clm summarize`
-top-level commands, which were removed.)
+into a document: `outline`, `schedule`, `summary`, `context`, and `agent-guide`.
+(The first three replace the former flat `clm outline` / `clm schedule` /
+`clm summarize` top-level commands, which were removed.) `agent-guide` is the
+odd one out — it documents *CLM itself* for agents rather than a course's
+content, and does not share the option vocabulary below.
 
-All three share a common option vocabulary:
+`outline`, `schedule`, `summary`, and `context` share a common option
+vocabulary:
 
 | Option | Description |
 |--------|-------------|
@@ -3374,6 +3377,56 @@ clm export context course.xml --through 10 -f json -o ctx.json
 The same capability is available to MCP clients as the `course_context` tool
 (start the server with `clm mcp`); there it defaults to `level=titles` so a tool
 call never silently triggers a paid LLM request.
+
+#### `clm export agent-guide` (CLM {version}+)
+
+Emit a **version-stamped, self-staleness-checking agent cheat-sheet** — a
+committed Markdown file (default `AGENTS.generated.md`) assembled **entirely from
+live `clm` sources**, so the agent-orientation docs in a course repo stop
+restating facts that a live command already answers (and silently rotting). Where
+`export context` summarizes *course content*, `agent-guide` summarizes *CLM
+itself*. Its sections:
+
+- **Version stamp** — `Generated from clm {version}.` in the header.
+- **Documentation index** — the `clm info` topics (the authoritative pointers).
+- **Key commands** — a curated high-frequency subset, each description pulled
+  live from the command's own short help; authority stays `clm info commands`.
+- **MCP tools** — the live, complete MCP surface (from the running tool registry).
+- **Repo layout** — the specs under `course-specs/`, each with its enabled /
+  disabled sections and shipping-deck count (mirrors `clm course decks`).
+- **Key paths** — the portable cache/config rules (resolved machine-specific
+  paths stay behind `clm config locate`, so the committed file stays portable).
+
+```
+clm export agent-guide [OPTIONS] [REPO_DIR]
+```
+
+`REPO_DIR` defaults to the current directory (its `course-specs/` is scanned for
+the repo-layout section; absent, that section says so and the rest still emits).
+
+| Option | Description |
+|--------|-------------|
+| `-o, --output FILE` | Output file. Default: `<REPO_DIR>/AGENTS.generated.md`. |
+| `--stdout` | Print to stdout instead of writing the file (ignored with `--check`). |
+| `--check` | Don't write: regenerate the deterministic core in memory and **exit non-zero** if the existing file is missing, stamped from a different `clm` version, or would otherwise change. Wire into validate / pre-commit / CI so a `clm` bump forces a regen. |
+| `--with-issues` | Embed open issues (via `gh`) as a fenced, date-stamped block — for tools that don't run `gh`. **Excluded from `--check`** (it is inherently volatile). |
+| `--issues-repo OWNER/REPO` | Repository for `--with-issues` (default: `hoelzl/clm`). |
+| `--issues-label TEXT` | Issue label for `--with-issues` (default: `agent-impact`). |
+
+The **staleness gate** is the point: `clm export agent-guide --check` turns the
+doc from *silently lying* into *refusing to be stale*. The enabled downstream
+rule is that version numbers, issue numbers, and dates never appear in
+hand-maintained durable agent prose — they live only in this generated file
+(stamped) or behind `clm` / `gh`.
+
+Examples:
+
+```bash
+clm export agent-guide                      # write <repo>/AGENTS.generated.md
+clm export agent-guide --stdout             # preview without writing
+clm export agent-guide --with-issues        # also embed open agent-impact issues
+clm export agent-guide --check              # staleness gate (CI / pre-commit)
+```
 
 ### `clm voiceover`
 

@@ -17,6 +17,7 @@ def export_group() -> None:
     """Export course documents: outline, schedule, context, and LLM summary."""
 
 
+from clm.cli.commands.export.agent_guide import agent_guide  # noqa: E402
 from clm.cli.commands.export.context import context  # noqa: E402
 from clm.cli.commands.export.outline import outline  # noqa: E402
 from clm.cli.commands.export.schedule import schedule  # noqa: E402
@@ -27,3 +28,4 @@ export_group.add_command(schedule, name="schedule")
 export_group.add_command(summary, name="summary")
 export_group.add_command(hidden_alias(summary, "summarize"))  # noun-vs-verb
 export_group.add_command(context, name="context")
+export_group.add_command(agent_guide, name="agent-guide")
