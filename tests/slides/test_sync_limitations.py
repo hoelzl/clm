@@ -23,13 +23,14 @@ from pathlib import Path
 from clm.infrastructure.llm.cache import SyncAlignmentCache, SyncWatermarkCache
 from clm.infrastructure.llm.ollama_client import SyncProposal
 from clm.notebooks.slide_parser import parse_cells
-from clm.slides.sync_apply import _resolve_alignment, apply_plan
+from clm.slides.sync_apply import _resolve_alignment, apply_plan, detect_idmigration_residue
 from clm.slides.sync_plan import build_sync_plan, render_explain, watermark_rows
 from clm.slides.sync_recover import (
     NEW,
     RegionCell,
     StaticAlignmentRecoverer,
 )
+from clm.slides.sync_report import build_report
 
 # ---------------------------------------------------------------------------
 # Deck builders + no-LLM spies
@@ -774,6 +775,122 @@ def test_phase5_alignment_is_cached_and_reused(tmp_path: Path):
         assert r2.calls == 0  # served from cache, recoverer never called
     finally:
         align_cache.close()
+
+
+# ---------------------------------------------------------------------------
+# #366 — agent-facing residue: the report surfaces the stuck region so the
+# AGENT can recover it (no embedded --llm-recover model). detect_idmigration_residue
+# mirrors the apply trigger exactly, so it can never disagree with what recovery does.
+# ---------------------------------------------------------------------------
+
+
+def _deterministic_split_both_decks(tmp_path: Path):
+    """Seed a watermark, then split the def WITHOUT renaming it on both decks.
+
+    The def keeps its name, so the §9 construct match succeeds — the deterministic
+    migration resolves it and no residue remains. Mirror of ``_split_renamed_both_decks``
+    minus the rename (cf. ``test_phase5_deterministic_case_does_not_call_recoverer``).
+    """
+    base_def = 'def my_fun():\n    print("foo")'
+    de0 = _slide("de", "g", "# ## G") + _code_idd_neutral("def-my-fun", base_def)
+    en0 = _slide("en", "g", "# ## G") + _code_idd_neutral("def-my-fun", base_def)
+    de_path, en_path = _write_pair(tmp_path, de0, en0)
+    cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+    _seed(cache, de_path, en_path)
+    kept = 'def my_fun():\n    time.sleep(1)\n    print("foo")'  # SAME name
+    de_path.write_text(
+        _slide("de", "g", "# ## G erweitert")
+        + _code_idd_neutral("def-my-fun", "import time")
+        + _code_shared(kept),
+        encoding="utf-8",
+    )
+    en_path.write_text(
+        _slide("en", "g", "# ## G")
+        + _code_idd_neutral("def-my-fun", "import time")
+        + _code_shared(kept),
+        encoding="utf-8",
+    )
+    return de_path, en_path, cache
+
+
+def test_detect_residue_surfaces_stuck_renamed_split(tmp_path: Path):
+    # The exact region test_phase5_no_recover_leaves_region_untouched defers silently:
+    # the detector now names it for the agent (slide_id, base vs current construct, the
+    # drifted cell's bytes). The rename broke the construct link, so there is no
+    # deterministic continuation -> no target excerpt (fail-closed).
+    de_path, en_path, cache = _split_renamed_both_decks(tmp_path)
+    try:
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+    finally:
+        cache.close()
+
+    residues = detect_idmigration_residue(plan)
+    assert [r.slide_id for r in residues] == ["def-my-fun"]
+    r = residues[0]
+    assert r.base_construct == "function-my-fun"
+    assert r.current_construct != r.base_construct  # drifted onto the import
+    assert "import time" in r.drifted_excerpt
+    assert r.target_excerpt is None  # rename -> no single new cell carries the base construct
+    assert "clm slides sync --verify" in r.reason
+
+
+def test_detect_residue_empty_when_deterministic_resolves(tmp_path: Path):
+    # The def keeps its name, so the §9 migration would resolve the split this run —
+    # not residue (it must not be double-surfaced to the agent as ambiguity).
+    de_path, en_path, cache = _deterministic_split_both_decks(tmp_path)
+    try:
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+    finally:
+        cache.close()
+    assert detect_idmigration_residue(plan) == []
+
+
+def test_detect_residue_empty_for_pure_rename(tmp_path: Path):
+    # A pure in-place rename (no split, no new id-less cell) keeps its stable id — the
+    # detector must not flag it (it would mislead the agent into churning a stable id).
+    base = 'def my_fun():\n    print("foo")'
+    de0 = _slide("de", "g", "# ## G") + _code_idd_neutral("def-my-fun", base)
+    en0 = _slide("en", "g", "# ## G") + _code_idd_neutral("def-my-fun", base)
+    de_path, en_path = _write_pair(tmp_path, de0, en0)
+    cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+    try:
+        _seed(cache, de_path, en_path)
+        renamed = 'def my_function():\n    print("foo")'  # renamed IN PLACE, no split
+        de_path.write_text(
+            _slide("de", "g", "# ## G erweitert") + _code_idd_neutral("def-my-fun", renamed),
+            encoding="utf-8",
+        )
+        en_path.write_text(
+            _slide("en", "g", "# ## G") + _code_idd_neutral("def-my-fun", renamed),
+            encoding="utf-8",
+        )
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+    finally:
+        cache.close()
+    assert detect_idmigration_residue(plan) == []
+
+
+def test_report_surfaces_realign_residue_only_with_excerpts(tmp_path: Path):
+    # The agent contract: a --dry-run report (with_excerpts=True) carries a tier-3
+    # 'realign' item with the drifted cell's bytes, so the agent recovers it itself;
+    # the apply-mode report (with_excerpts=False) omits it (the files no longer match).
+    de_path, en_path, cache = _split_renamed_both_decks(tmp_path)
+    try:
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+    finally:
+        cache.close()
+
+    report = build_report(plan, with_excerpts=True)
+    realign = [i for i in report.ambiguity if i.kind == "realign"]
+    assert [i.slide_id for i in realign] == ["def-my-fun"]
+    item = realign[0]
+    assert item.tier == "ambiguity"
+    assert item.source_lang == "de"
+    assert "import time" in item.source_excerpt
+    assert report.needs_agent is True
+
+    plain = build_report(plan)  # default with_excerpts=False == apply-mode report
+    assert [i for i in plain.ambiguity if i.kind == "realign"] == []
 
 
 # ---------------------------------------------------------------------------

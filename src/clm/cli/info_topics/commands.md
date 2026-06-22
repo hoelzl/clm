@@ -2029,6 +2029,19 @@ file) yields no excerpt rather than a wrong one. Excerpts are omitted outside
 for `mechanical` items (you apply those without reading them); the `*_position`
 indices and `slide_id` still locate every cell in the source you hold.
 
+A `--dry-run` report also surfaces a **`realign` ambiguity item** (`kind:
+"realign"`) for each drifted-`slide_id` region the deterministic id-migration
+**cannot** resolve — a function renamed *while* a cell split, or a non-unique
+construct. This is the agent-facing form of the `--llm-recover` trigger (since
+CLM {version}): rather than spending the embedded Opus model, the engine names
+the residue and hands it to *you* (you already hold the deck source). The item
+carries the drifted `slide_id`, a `reason` (the baseline construct it no longer
+names vs. the one it now wears), and the drifted cell's bytes in `source_excerpt`
+/ `source_line` (a likely continuation in `target_*` when there is an unambiguous
+one). Re-identify the cells, move the `slide_id` onto its true continuation, then
+run `clm slides sync --verify` to confirm the result is structurally sound.
+`--llm-recover` remains for a standalone, agent-less run.
+
 In **batch (`DIR`) mode** the `--json` report is instead an envelope
 `{ "mode", "root", "exit_code", "pairs": [ … ] }`, where each entry of
 `pairs` is exactly one single-pair object as above (so a tool can treat
