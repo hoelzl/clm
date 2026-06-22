@@ -45,6 +45,8 @@ async def test_copy_dir_group(tmp_path):
         # ignored files
         "dir_1/build/foo.txt",
         "dir_2/.git/data.bin",
+        # CLM's own voiceover scratch must never reach output (issue #431).
+        "dir_1/.clm/voiceover-cache/transcripts/abc.json",
     ]
     copy_data, output_dir = build_copy_data(tmp_path, input_files)
 
@@ -59,6 +61,7 @@ async def test_copy_dir_group(tmp_path):
     assert (output_dir / "dir_2/subdir/file_4.txt").exists()
     assert not (output_dir / "dir_1/build/foo.txt").exists()
     assert not (output_dir / "dir_1/.git/data.bin").exists()
+    assert not (output_dir / "dir_1/.clm").exists()
 
 
 def build_copy_data(tmp_dir, input_files):
@@ -66,7 +69,7 @@ def build_copy_data(tmp_dir, input_files):
     input_dir.mkdir(parents=True)
     input_paths: list[Path] = [input_dir / file for file in input_files]
     for file in input_paths:
-        file.parent.mkdir(exist_ok=True)
+        file.parent.mkdir(parents=True, exist_ok=True)
         file.write_text(f"File {file.name}")
     input_dirs = tuple(input_dir.glob("*/"))
     relative_paths = tuple(in_dir.relative_to(input_dir) for in_dir in input_dirs)

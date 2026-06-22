@@ -1040,6 +1040,7 @@ layouts). Within it, CLM distinguishes three kinds of file:
 | **Core source** | `slides_*.<ext>` (incl. split `slides_*.de.<ext>` / `slides_*.en.<ext>`) | processed into notebooks/HTML |
 | **Output companions** | `img/`, `drawio/`, loose data files | **yes**, verbatim |
 | **Authoring sidecars** | `voiceover_*.<ext>`, `*.http-cassette.yaml` | **no** |
+| **Build-internal scratch** | `.clm/` (voiceover cache, backfill, traces) | **no** — fully ignored everywhere |
 
 The authoring sidecars may live either next to the slides or collected into
 per-type subdirectories so the topic directory stays focused on the editable

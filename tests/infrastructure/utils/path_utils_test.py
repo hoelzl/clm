@@ -441,6 +441,30 @@ class TestSidecarSubdirSkips:
         assert "cassettes" not in SKIP_DIRS_FOR_COURSE
         assert "_cassettes" not in SKIP_DIRS_FOR_COURSE
 
+    def test_clm_dir_in_skip_dirs_for_course(self):
+        # ``.clm/`` is CLM's own build-internal voiceover scratch (cache,
+        # backfill, traces) — never a runtime input, so fully walk-excluded
+        # (and therefore kept out of output too). Issue #431.
+        assert ".clm" in SKIP_DIRS_FOR_COURSE
+        assert ".clm" in SKIP_DIRS_FOR_OUTPUT  # superset
+
+    def test_is_ignored_dir_for_course_clm(self, tmp_path):
+        assert is_ignored_dir_for_course(tmp_path / "topic_x" / ".clm")
+
+    def test_is_ignored_dir_for_output_clm(self, tmp_path):
+        # The dir-group copy to output must skip ``.clm/`` and everything in it.
+        assert is_ignored_dir_for_output(tmp_path / "topic_x" / ".clm")
+        assert is_ignored_dir_for_output(
+            tmp_path / "topic_x" / ".clm" / "voiceover-cache" / "transcripts"
+        )
+
+    def test_is_ignored_file_for_output_file_in_clm_dir(self, tmp_path):
+        nested = tmp_path / ".clm" / "voiceover-cache" / "transcripts"
+        nested.mkdir(parents=True)
+        cached = nested / "abc123.json"
+        cached.write_text("{}")
+        assert is_ignored_file_for_output(cached)
+
     def test_is_ignored_dir_for_course_voiceover(self, tmp_path):
         assert is_ignored_dir_for_course(tmp_path / "topic_x" / "voiceover")
 
@@ -476,6 +500,14 @@ class TestIsIgnoredPathInOutputTree:
     def test_rejects_other_vcs_and_cache_dirs(self):
         assert is_ignored_path_in_output_tree(Path(".idea/workspace.xml"))
         assert is_ignored_path_in_output_tree(Path("examples/__pycache__/mod.pyc"))
+
+    def test_rejects_clm_sidecar_dir(self):
+        # A ``.clm/`` found inside an output tree was never put there by the
+        # build (the dir-group copy skips it), so it must not be recorded as
+        # build provenance. Issue #431.
+        assert is_ignored_path_in_output_tree(
+            Path("topic/.clm/voiceover-cache/transcripts/abc.json")
+        )
 
     def test_rejects_output_suppressed_file_names(self):
         assert is_ignored_path_in_output_tree(Path("topic/slides_010v.http-cassette.yaml"))
