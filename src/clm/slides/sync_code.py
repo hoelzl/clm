@@ -89,6 +89,8 @@ def apply_code_structure(
     result: ApplyResult,
     baseline_anchors: dict[str, dict[str, str]] | None = None,
     translations: dict[int, TranslationOutcome] | None = None,
+    *,
+    deterministic_only: bool = False,
 ) -> None:
     """Propagate language-neutral / id-less-localized cells and fix group order.
 
@@ -108,6 +110,11 @@ def apply_code_structure(
     e.g. a reuse-eligible cell whose target twin turned out absent/ambiguous —
     falls back to translating inline, the same documented safety net as the add
     path.
+
+    ``deterministic_only`` (the model-free ``apply`` verb, epic #440) forbids any
+    translation: a region that needs one is left at its current target bytes and
+    its cells are deferred as residue (no error) — neutral-cell propagation still
+    runs, since that is verbatim and needs no model.
     """
     direction = _single_direction(plan)
     if direction is None:
@@ -167,6 +174,7 @@ def apply_code_structure(
             result,
             src_anchors,
             translations,
+            deterministic_only=deterministic_only,
         )
         if rebuilt is None:
             # A translation needed for the rebuild failed (no translator, or it
@@ -349,6 +357,8 @@ def _rebuild_region(
     result: ApplyResult,
     src_anchors: dict[str, str] | None = None,
     translations: dict[int, TranslationOutcome] | None = None,
+    *,
+    deterministic_only: bool = False,
 ) -> list[RawCell] | None:
     """Rebuild a target region to mirror the source region's cell order.
 
@@ -399,7 +409,14 @@ def _rebuild_region(
                 # the shared cache already carries a deferred add's outcome — and
                 # on failure, abort the whole region rather than drop the cell.
                 body = _translate(
-                    cell, source_lang, target_lang, role, translator, result, translations
+                    cell,
+                    source_lang,
+                    target_lang,
+                    role,
+                    translator,
+                    result,
+                    translations,
+                    deterministic_only=deterministic_only,
                 )
                 if body is None:
                     return None
@@ -416,7 +433,14 @@ def _rebuild_region(
                 continue
             kind = CODE_ROLE if meta.cell_type == "code" else "markdown"
             body = _translate(
-                cell, source_lang, target_lang, kind, translator, result, translations
+                cell,
+                source_lang,
+                target_lang,
+                kind,
+                translator,
+                result,
+                translations,
+                deterministic_only=deterministic_only,
             )
             if body is None:
                 return None
@@ -471,6 +495,8 @@ def _translate(
     translator: SlideTranslator | None,
     result: ApplyResult,
     translations: dict[int, TranslationOutcome] | None = None,
+    *,
+    deterministic_only: bool = False,
 ) -> str | None:
     """Resolve a cell's translation for the structural pass, recording failures.
 
@@ -479,7 +505,18 @@ def _translate(
     translating inline, the documented safety net for a cell the materializer
     could not foresee needing (e.g. a reuse-eligible cell whose target twin
     turned out absent or ambiguous).
+
+    ``deterministic_only`` (the model-free ``apply`` verb, epic #440 decision B)
+    means "a translation is needed here but you must not call a model": defer the
+    cell as residue — increment ``deferred`` so the watermark holds and the pass
+    exits non-zero — **without** recording an error. The default (``autopilot`` /
+    the human one-shot) keeps the old contract: a missing translator is an error.
     """
+    if deterministic_only:
+        # The agent path never translates; a localized cell needing translation is
+        # residue for `task`/`accept`, not a failure. Defer it silently.
+        result.deferred += 1
+        return None
     cached = translations.get(id(cell)) if translations is not None else None
     if cached is not None:
         if cached.error is not None:

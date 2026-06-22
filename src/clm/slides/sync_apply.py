@@ -266,6 +266,7 @@ def apply_plan(
     alignment_cache: SyncAlignmentCache | None = None,
     verifier: CorrespondenceVerifier | None = None,
     correspondence_cache: SyncCorrespondenceCache | None = None,
+    deterministic_only: bool = False,
 ) -> ApplyResult:
     """Apply ``plan``'s proposals to the decks and advance the watermark.
 
@@ -293,6 +294,17 @@ def apply_plan(
     while a cell was split, an unresolvable tie — the recoverer re-identifies the
     neutral code region with a validated, cached, body-free alignment map. ``None``
     (the default) leaves the ambiguous region untouched to re-surface next run.
+
+    ``deterministic_only`` is the model-free ``apply`` verb (epic #440 decision B):
+    the engine applies only the deterministic tier-1 work — ``move`` / ``remove`` /
+    ``retag``, language-neutral verbatim propagation, and the unambiguous
+    id-migration — and treats every model-requiring item (``edit`` / ``add`` /
+    ``rename``, a localized-cell rebuild, a cold-start ``mint`` / ``adopt`` /
+    ``reconcile``, an ambiguous ``realign``) as **residue**: it is *deferred*, not
+    errored, so the watermark holds and the pass exits non-zero (the caller points
+    the agent at ``report`` / ``task``). The caller must pass every model argument
+    (``judge`` / ``translator`` / ``recoverer`` / ``verifier``) as ``None``; this
+    flag only flips the engine's reaction to their absence from "error" to "defer".
     """
     result = ApplyResult()
 
@@ -369,7 +381,13 @@ def apply_plan(
                 result.deferred += 1
                 _note_deferred(deferred_keys, proposal)
         elif kind == "edit":
-            if _accepted(decisions, proposal):
+            if deterministic_only:
+                # Model-free apply (epic #440): an edit needs the judge/translator —
+                # defer it as residue (no model call, no error), so the watermark
+                # holds and the caller routes it to `task`/`accept`.
+                result.deferred += 1
+                _note_deferred(deferred_keys, proposal)
+            elif _accepted(decisions, proposal):
                 _apply_edit(
                     proposal,
                     de_state,
@@ -426,7 +444,7 @@ def apply_plan(
     # id-less cell), so unlike moves they apply even on a *deferred* (non-clean)
     # pass — but, like every cell, the stamped id only reaches disk on an
     # error-free pass (the end-of-pass flush is gated on no errors).
-    _apply_adds(de_state, en_state, result, plan, translator, translations)
+    _apply_adds(de_state, en_state, result, plan, translator, translations, deterministic_only)
 
     # Moves are applied last, and only if the rest of the pass is clean (so the
     # watermark will advance and the reorder stays idempotent).
@@ -453,7 +471,14 @@ def apply_plan(
     baseline_anchors = _baseline_anchor_hashes(plan)
     _materialize_structural(plan, de_state, en_state, translator, baseline_anchors, translations)
     apply_code_structure(
-        plan, de_state, en_state, translator, result, baseline_anchors, translations
+        plan,
+        de_state,
+        en_state,
+        translator,
+        result,
+        baseline_anchors,
+        translations,
+        deterministic_only=deterministic_only,
     )
 
     # Place a newly-added slide group at its source position. The per-cell add path
@@ -2034,6 +2059,7 @@ def _apply_adds(
     plan: SyncPlan,
     translator: SlideTranslator | None,
     translations: dict[int, TranslationOutcome],
+    deterministic_only: bool = False,
 ) -> None:
     """Translate and insert counterparts for new and copy-pasted cells.
 
@@ -2066,7 +2092,11 @@ def _apply_adds(
 
     if translator is None:
         result.deferred += len(idd) + len(idless) + len(rename_props)
-        result.errors.append("add/rename present but no translator available")
+        # Model-free apply (epic #440): a new slide needs translation — defer it as
+        # residue for `task`/`accept`, no error. The autopilot/human path keeps the
+        # old contract (a missing translator when one was wanted IS an error).
+        if not deterministic_only:
+            result.errors.append("add/rename present but no translator available")
         return
 
     # Stage 2b for the add path (#216 resolve-then-apply): every translation is

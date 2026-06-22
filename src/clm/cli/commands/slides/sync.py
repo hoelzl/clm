@@ -106,6 +106,7 @@ if TYPE_CHECKING:
 
     from clm.infrastructure.llm.ollama_client import SyncJudge, SyncProposal
     from clm.slides.sync_recover import AlignmentRecoverer, CorrespondenceVerifier
+    from clm.slides.sync_report import ReconciliationItem
     from clm.slides.sync_translate import SlideTranslator
 
 CACHE_DB_NAME = "clm-llm.sqlite"
@@ -1937,16 +1938,21 @@ def _walker_dict(walk: PlanWalkResult) -> dict:
 # Agent-toolkit verb surface (Issue #366 / epic #440)
 #
 # `clm slides sync` is a *group* of single-purpose verbs an agent drives. Bare
-# `clm slides sync DECK` defaults to the read-only `report`. The verbs delegate to
-# the legacy all-in-one implementation (``slides_sync_cmd``, registered as
-# ``autopilot``) via ``ctx.invoke``, so this prototype re-cuts the *surface*
-# without touching the engine. Two redesign decisions are already reflected:
+# `clm slides sync DECK` defaults to the read-only `report`. The model-free agent
+# verbs — ``report`` / ``verify`` / ``task`` / ``accept`` / ``apply`` — never call a
+# model; ``report`` / ``verify`` still delegate to the legacy body (``slides_sync_cmd``,
+# registered as ``autopilot``) via ``ctx.invoke`` for their read paths, while ``apply``
+# now has its own deterministic tier-1 implementation (no models constructed). Redesign
+# decisions reflected:
 #   * read-by-default — bare ``sync DECK`` returns the report, never writes.
 #   * watermark demoted — ``report``/``verify`` baseline off git HEAD by default;
 #     ``report --use-watermark`` (or ``--baseline REF``) opts back in.
-# Still TODO (phases 2-3, see docs/claude/design/sync-agent-toolkit-redesign.md):
-# ``apply`` becoming deterministic-tier-1-only / model-free, ``task`` + ``accept``,
-# and ``baseline bless`` replacing ``--rebaseline``.
+#   * model-free engine path — ``apply`` applies only tier-1 and defers (not errors)
+#     the model-requiring residue (decision B; ``apply_plan(deterministic_only=True)``).
+# Still TODO (phase 3-4, see docs/claude/design/sync-agent-toolkit-redesign.md): lift the
+# four OpenRouter clients into a separate ``autopilot`` module so the agent verbs are
+# import-clean of OpenRouter; ``edit`` accept + cold-pair ``task``/``accept``; ``baseline
+# bless`` replacing ``--rebaseline``; the §9 agent-guide info topic + skill migration.
 # ---------------------------------------------------------------------------
 
 
@@ -2108,14 +2114,14 @@ def sync_verify_cmd(ctx: click.Context, de_path: Path, en_path: Path | None, as_
     "baseline_ref",
     default=None,
     metavar="REF",
-    help="Diff against an explicit git ref.",
+    help="Diff against an explicit git ref (single pair only).",
 )
 @click.option(
     "--baseline-from",
     "baseline_from_spec",
     default=None,
     metavar="PATH[@REF]",
-    help="Diff a renamed deck against its pre-rename half PATH (the old folder/stem).",
+    help="Diff a renamed deck against its pre-rename half PATH (single pair only).",
 )
 @click.option(
     "--cache-dir",
@@ -2123,10 +2129,8 @@ def sync_verify_cmd(ctx: click.Context, de_path: Path, en_path: Path | None, as_
     default=None,
     help="Directory holding the watermark.",
 )
-@click.option("--no-env-file", is_flag=True, help="Do not auto-load a .env file.")
-@click.pass_context
+@click.option("--json", "as_json", is_flag=True, help="Emit the apply result as JSON.")
 def sync_apply_cmd(
-    ctx: click.Context,
     de_path: Path,
     en_path: Path | None,
     yes: bool,
@@ -2134,27 +2138,239 @@ def sync_apply_cmd(
     baseline_ref: str | None,
     baseline_from_spec: str | None,
     cache_dir: Path | None,
-    no_env_file: bool,
+    as_json: bool,
 ) -> None:
-    """Apply the reconciliation to the working tree.
+    """Apply the deterministic tier-1 reconciliation — writes, but never calls a model.
 
-    PROTOTYPE: this currently delegates to the full engine, which still calls a model
-    for tier-2 (translation / edit reconciliation) when a key is present. Decision (B)
-    — making ``apply`` deterministic-tier-1-only and emitting tier-2/3 as ``task``s —
-    is phase 3 of the redesign; until then this is ``autopilot`` semantics under the
-    ``apply`` name. Use ``clm slides sync report`` first to see what it will do.
+    Applies only the **mechanical** tier: ``move`` / ``remove`` / ``retag``, the
+    language-neutral verbatim propagation, and the unambiguous id-migration. Every
+    item that needs a model — a ``add`` / ``edit`` / cold-start / ambiguous
+    ``realign`` — is left as **residue**: nothing is written for it, it is reported,
+    and the command exits non-zero pointing you at ``report`` / ``task`` / ``accept``.
+    (Contrast ``autopilot``, which calls the embedded models for those tiers.)
+
+    \b
+    Needs no API key. Uses the watermark as a baseline accelerator and advances it on a
+    fully clean pass (``--no-watermark`` ignores it, falling back to git HEAD). A
+    directory is a batch sweep (gated by ``--yes``). Review writes with ``git diff`` and
+    confirm soundness with ``clm slides sync verify``.
     """
-    ctx.invoke(
-        slides_sync_cmd,
-        de_path=de_path,
-        en_path=en_path,
-        yes=yes,
-        no_cache=not use_watermark,
+    if de_path.is_dir():
+        if en_path is not None:
+            raise click.UsageError(
+                f"{de_path} is a directory (batch apply), which takes a single directory "
+                "argument; do not pass a second path."
+            )
+        if baseline_ref is not None or baseline_from_spec is not None:
+            raise click.UsageError(
+                "--baseline / --baseline-from operate on a single deck pair; run apply "
+                "per deck, not over a directory."
+            )
+        _run_apply_batch(
+            de_path,
+            yes=yes,
+            use_watermark=use_watermark,
+            cache_dir=cache_dir,
+            as_json=as_json,
+        )
+        return  # _run_apply_batch always sys.exit()s; this is just for the type-checker.
+
+    de_path, en_path = _resolve_single_path(de_path, en_path)
+    de_path, en_path = _resolve_sync_pair(de_path, en_path)
+    de_path, en_path = de_path.resolve(), en_path.resolve()
+    baseline_from = _parse_baseline_from(baseline_from_spec) if baseline_from_spec else None
+    if baseline_ref is not None and baseline_from is not None:
+        raise click.UsageError(
+            "--baseline and --baseline-from are mutually exclusive (one pins a ref, the "
+            "other pins the deck's pre-rename location)."
+        )
+
+    watermark_cache: SyncWatermarkCache | None = None
+    if use_watermark:
+        cache_root = resolve_cache_dir(cli_override=cache_dir)
+        watermark_cache = SyncWatermarkCache(cache_root / CACHE_DB_NAME)
+    try:
+        plan, result = _apply_deterministic(
+            de_path,
+            en_path,
+            watermark_cache=watermark_cache,
+            baseline_ref=baseline_ref,
+            baseline_from=baseline_from,
+        )
+    finally:
+        if watermark_cache is not None:
+            watermark_cache.close()
+
+    exit_code = _apply_exit_code(plan, result)
+    _emit_apply(plan, result, de_path, as_json=as_json)
+    sys.exit(exit_code)
+
+
+def _apply_deterministic(
+    de_path: Path,
+    en_path: Path,
+    *,
+    watermark_cache: SyncWatermarkCache | None,
+    baseline_ref: str | None = None,
+    baseline_from: tuple[Path, Path, str] | None = None,
+) -> tuple[SyncPlan, ApplyResult]:
+    """Build the plan and apply only its deterministic tier-1 work (no model, epic #440).
+
+    ``provider_available=False`` is deliberate: this verb has no model, so a cold pair
+    is classified as residue (a ``refuse``) rather than a mint candidate — apply never
+    mints. ``apply_plan(deterministic_only=True)`` then applies move/remove/retag, the
+    neutral propagation, and the unambiguous id-migration, and *defers* (does not error
+    on) every model-requiring item. The watermark advances only on a fully clean pass.
+    """
+    plan = build_sync_plan(
+        de_path,
+        en_path,
+        watermark_cache=watermark_cache,
+        provider_available=False,
         baseline_ref=baseline_ref,
-        baseline_from_spec=baseline_from_spec,
-        cache_dir=cache_dir,
-        no_env_file=no_env_file,
+        baseline_from=baseline_from,
+        detect_rename=True,
     )
+    result = apply_plan(
+        plan,
+        judge=None,
+        translator=None,
+        recoverer=None,
+        verifier=None,
+        watermark_cache=watermark_cache,
+        deterministic_only=True,
+    )
+    return plan, result
+
+
+def _apply_residue(plan: SyncPlan) -> list[ReconciliationItem]:
+    """The tier-2/3 report items model-free apply left untouched (the residue)."""
+    report = build_report(plan, with_excerpts=False)
+    return [*report.assisted, *report.ambiguity]
+
+
+def _emit_apply(plan: SyncPlan, result: ApplyResult, de_path: Path, *, as_json: bool) -> None:
+    """Print what a single-pair model-free apply wrote and what residue remains."""
+    residue = _apply_residue(plan)
+    if as_json:
+        click.echo(
+            json.dumps(
+                {
+                    "de_path": str(plan.de_path),
+                    "en_path": str(plan.en_path),
+                    "mode": "apply",
+                    "exit_code": _apply_exit_code(plan, result),
+                    "apply": _apply_dict(result),
+                    "residue": [
+                        {
+                            "item": it.item,
+                            "kind": it.kind,
+                            "tier": it.tier,
+                            "slide_id": it.slide_id,
+                            "reason": it.reason,
+                        }
+                        for it in residue
+                    ],
+                },
+                indent=2,
+            )
+        )
+        return
+    click.echo(_outcome_line(result))
+    for line in _cold_deferral_lines(result):
+        click.echo(line)
+    for err in result.errors:
+        click.echo(f"  error: {err}")
+    if residue:
+        click.echo("")
+        click.echo(f"residue — {len(residue)} item(s) need a model or your judgement:")
+        for it in residue:
+            sid = f" {it.slide_id}" if it.slide_id else ""
+            click.echo(f"  {it.item}  [{it.tier}/{it.kind}]{sid}: {it.reason or '(see report)'}")
+        click.echo(
+            f"Resolve them with `clm slides sync task {de_path.name} --item ID` → a model → "
+            "`accept` (or `autopilot`)."
+        )
+    if result.applied > 0:
+        click.echo(
+            f"Review the propagated changes with `git diff` and confirm with "
+            f"`clm slides sync verify {de_path.name}`."
+        )
+
+
+def _run_apply_batch(
+    root: Path,
+    *,
+    yes: bool,
+    use_watermark: bool,
+    cache_dir: Path | None,
+    as_json: bool,
+) -> None:
+    """Model-free tier-1 apply over every split pair under ``root`` (no model, epic #440).
+
+    The agent-path twin of the autopilot batch (:func:`_run_batch`) — no judge /
+    translator / verifier / recoverer is ever constructed, so it needs no API key and
+    no env load. Continue-on-error: a pair that raises is recorded (exit 2) and the
+    sweep proceeds; the process exit is the worst per-pair code. A writing sweep is
+    gated behind ``--yes`` (or, without ``--json``, an interactive confirm).
+    """
+    pairs, solos = iter_split_pairs(find_split_slide_files_recursive(root))
+    for solo in solos:
+        tag = split_lang_tag(solo)
+        other = "EN" if tag == "de" else "DE"
+        click.echo(f"warning: skipping {solo.name} — no {other} twin found under {root}.", err=True)
+    if not pairs:
+        if as_json:
+            click.echo(
+                json.dumps(
+                    {"mode": "apply", "root": str(root), "exit_code": 0, "pairs": []}, indent=2
+                )
+            )
+        else:
+            click.echo(f"no split-format deck pairs found under {root}.")
+        sys.exit(0)
+
+    if not yes:
+        if as_json:
+            raise click.UsageError(
+                f"a writing batch over {len(pairs)} pair(s) needs --yes (cannot prompt "
+                "with --json); add --yes, or preview with `clm slides sync report`."
+            )
+        click.confirm(
+            f"About to apply the deterministic tier-1 sync to {len(pairs)} deck pair(s) "
+            f"under {root} — this writes to the working tree. Continue?",
+            abort=True,
+        )
+
+    watermark_cache: SyncWatermarkCache | None = None
+    if use_watermark:
+        cache_root = resolve_cache_dir(cli_override=cache_dir)
+        watermark_cache = SyncWatermarkCache(cache_root / CACHE_DB_NAME)
+
+    results: list[_PairResult] = []
+    try:
+        for i, (de_path, en_path) in enumerate(pairs, 1):
+            if not as_json:
+                click.echo(f"[{i}/{len(pairs)}] {_deck_label(de_path, root)} …", err=True)
+            try:
+                plan, result = _apply_deterministic(
+                    de_path, en_path, watermark_cache=watermark_cache
+                )
+                exit_code = _apply_exit_code(plan, result)
+                results.append(_PairResult(de_path, en_path, plan, result, None, exit_code, None))
+            except Exception as exc:  # continue-on-error: one bad pair must not abort the sweep
+                results.append(
+                    _PairResult(
+                        de_path, en_path, None, None, None, 2, f"{type(exc).__name__}: {exc}"
+                    )
+                )
+    finally:
+        if watermark_cache is not None:
+            watermark_cache.close()
+
+    exit_code = max((r.exit_code for r in results), default=0)
+    _emit_batch(root, "apply", results, exit_code, as_json=as_json)
+    sys.exit(exit_code)
 
 
 @slides_sync_group.command("task")
