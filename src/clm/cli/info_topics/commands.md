@@ -1954,6 +1954,8 @@ clm slides sync [OPTIONS] DIR          # batch: sync every pair under DIR
 | `--recovery-model TEXT` | OpenRouter model for `--llm-recover` alignment (default: `anthropic/claude-opus-4`). |
 | `--cache-dir PATH` | Directory holding the structural watermark. Lookup order: flag → `$CLM_CACHE_DIR` → `tool.clm.cache_dir` in `pyproject.toml` → `<cwd>/.clm-cache/`. |
 | `--no-cache` | Do not read or write the watermark. Every run then re-derives its baseline from git `HEAD` and no synced state is persisted. |
+| `--baseline REF` | Diff against an explicit git ref (`HEAD~1`, a SHA, `origin/master`) instead of the watermark or `HEAD`. Use after you committed single-language edits before syncing: `--baseline HEAD~1` diffs against the pre-edit commit so the edits are detected (the watermark/`HEAD` baseline would see the committed edits as already consistent). Single-pair only; mutually exclusive with `--rebaseline` / `--baseline-from`. |
+| `--baseline-from PATH[@REF]` | **Diff a RENAMED deck against where its content used to live (since CLM {version}, epic #440).** `PATH` is the deck's *pre-rename* DE or EN half (the old folder/stem; the sibling old half is derived by swapping the `.de`/`.en` tag); `@REF` defaults to `HEAD`. Use when you renamed a topic folder / deck stem and the old location is gone from disk, so neither the watermark nor the `HEAD` baseline can find the pre-edit content — and the **automatic** rename recovery (below) could not. Single-pair only; mutually exclusive with `--baseline` / `--rebaseline`. |
 | `--rebaseline` | **Recover from a stale watermark (since CLM {version}, issue #364).** A watermark goes stale when both halves are edited and committed without an intervening sync, so a later run errors/conflicts against the lagging baseline even though the halves are mutually consistent. `--rebaseline` clears the stale watermark and re-records it from the current state — but **only** when the halves are consistent against git `HEAD`; it **refuses** when git `HEAD` shows real changes or divergence, so it cannot silently mask an un-synced edit (strictly safer than a blind `watermark clear`). Single-pair only; mutually exclusive with `--dry-run`, `--explain`, and `--no-cache`. |
 | `--no-env-file` | Do not auto-load a `.env` file. By default sync loads the first `.env` found above each deck (without overriding already-set variables), so keys kept in the project `.env` reach the judge/translator. |
 | `--yes`, `-y` | **Batch (`DIR`) only.** Confirm a writing directory run without the interactive prompt. A directory apply writes to every pair under the tree, so it is gated; `--dry-run` / `--explain` directory runs are unprompted. Ignored for a single pair. |
@@ -1977,6 +1979,19 @@ at `--rebaseline` (since CLM {version}, issue #364), and sets
 auto-heal: erroring loud on a stale watermark is what surfaces the
 underlying drift, and `--rebaseline` makes the cheap "halves agree against
 git HEAD" proof explicit before clearing.
+
+**Renaming a deck (folder or stem) is safe (since CLM {version}, epic
+#440).** Deck identity is path-derived (the watermark key and the git
+baseline are both addressed by path), so renaming a topic folder / deck
+stem used to break the baseline and a one-sided revision made in the same
+breath read as *clean*. The read path now recovers the baseline across a
+rename automatically: a **committed** rename (rename + edits in one commit,
+work tree fully committed) is followed to the pre-rename ancestor
+(`HEAD^`); an **uncommitted** rename (old half deleted, new half untracked)
+is matched to its deleted predecessor by `slide_id` set. When a rename also
+adds/removes slides — so the auto-match is ambiguous — pin it explicitly
+with `--baseline-from <old-half>[@REF]`. You may rename freely; you do not
+need a dedicated "move" command.
 
 A **cold-start mint/adopt deferral** is reported with actionable detail
 (since CLM {version}, issue #231), not just a count: when the

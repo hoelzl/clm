@@ -1431,6 +1431,53 @@ def _git_show(cwd: Path, spec: str) -> str | None:
     return completed.stdout
 
 
+def _git_repo_root(cwd: Path) -> Path | None:
+    """The repo root containing ``cwd`` (``git rev-parse --show-toplevel``), or ``None``.
+
+    ``cwd`` must exist and lie inside a git work tree. Used by the rename-recovery
+    paths (epic #440) to address an old (possibly deleted) deck location
+    repo-root-relative while running git from the deck's current directory.
+    """
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+        )
+    except (FileNotFoundError, OSError):
+        return None
+    if completed.returncode != 0:
+        return None
+    out = completed.stdout.strip()
+    return Path(out) if out else None
+
+
+def _git_deleted_files(root: Path) -> list[str]:
+    """Repo-root-relative paths tracked at HEAD but missing from the work tree.
+
+    ``git ls-files --deleted`` run at ``root`` — the signature of an *uncommitted*
+    rename (the old half shows as deleted, the new half as untracked). Empty when git
+    is unavailable or nothing is deleted.
+    """
+    try:
+        completed = subprocess.run(
+            ["git", "ls-files", "--deleted"],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+        )
+    except (FileNotFoundError, OSError):
+        return []
+    if completed.returncode != 0:
+        return []
+    return [ln.strip() for ln in completed.stdout.splitlines() if ln.strip()]
+
+
 def _git_historical_paths(path: Path, ref: str) -> list[str]:
     """Repo-root-relative names ``path`` has had through history, newest first.
 
@@ -1537,22 +1584,55 @@ def _bundle_from_watermark(
     )
 
 
+def _bundle_from_texts(
+    de_text: str,
+    en_text: str,
+    de_token: str,
+    en_token: str,
+    *,
+    source: str,
+) -> BaselineBundle:
+    """Derive a :class:`BaselineBundle` from the two halves' baseline TEXT.
+
+    The single chokepoint both git-baseline derivations share: derives **exactly**
+    the rows a watermark recording of this text would store — the same
+    :func:`watermark_rows` / :func:`watermark_tag_map` / :func:`_header_hashes`
+    paths ``_record_watermark`` uses — so every downstream consumer is
+    source-agnostic by construction. The ``shared`` partition is taken from the DE
+    half (neutral cells are byte-identical across halves — the ``unify`` invariant).
+    """
+    de_head = parse_cells(de_text, de_token)
+    en_head = parse_cells(en_text, en_token)
+    de_rows = watermark_rows(de_head)
+    en_rows = watermark_rows(en_head)
+    de_tags = watermark_tag_map(de_head)
+    en_tags = watermark_tag_map(en_head)
+    # Issue #403 Phase B: re-derive the narrative anchors from the baseline text
+    # exactly as ``_record_watermark`` would have, so the git baseline detects
+    # narrative edits identically to a watermark baseline (no source divergence —
+    # #289 P1).
+    de_anchors = watermark_anchor_map(split_cells(de_text, de_token)[1])
+    en_anchors = watermark_anchor_map(split_cells(en_text, en_token)[1])
+    return BaselineBundle(
+        source=source,
+        rows={"de": de_rows["de"], "en": en_rows["en"], "shared": de_rows["shared"]},
+        tags={"de": de_tags["de"], "en": en_tags["en"], "shared": de_tags["shared"]},
+        header_hashes={"de": _header_hashes(de_head), "en": _header_hashes(en_head)},
+        anchors={"de": de_anchors["de"], "en": en_anchors["en"]},
+    )
+
+
 def _bundle_from_git_ref(de_path: Path, en_path: Path, ref: str = "HEAD") -> BaselineBundle | None:
     """The pair at git ``ref`` re-derived as a :class:`BaselineBundle`, or ``None``.
 
-    Derives **exactly** the rows a watermark recording of the ``ref`` text would
-    store — the same :func:`watermark_rows` / :func:`watermark_tag_map` /
-    :func:`_header_hashes` chokepoints ``_record_watermark`` uses — so every
-    consumer downstream is source-agnostic by construction. The ``shared``
-    partition is taken from the DE half (neutral cells are byte-identical across
-    the halves — the ``unify`` invariant — exactly as ``_record_watermark``
-    records it). ``None`` when git/the ``ref`` text is unavailable or a deck's
-    language cannot be inferred from its name (the caller then runs with no
-    baseline).
+    Reads each half's text at ``ref`` (rename-following, via :func:`_git_ref_text`)
+    and funnels it through :func:`_bundle_from_texts`. ``None`` when git/the ``ref``
+    text is unavailable or a deck's language cannot be inferred from its name (the
+    caller then runs with no baseline).
 
     ``source`` is ``"git-head"`` for the default HEAD fallback (unchanged) and
-    ``"git:<ref>"`` for an explicit ``--baseline`` ref, so the plan headline
-    names the baseline that was used.
+    ``"git:<ref>"`` for an explicit ``--baseline`` ref (e.g. ``git:HEAD^`` for the
+    committed-rename auto-follow), so the plan headline names the baseline used.
     """
     if _lang_for_path(de_path) is None or _lang_for_path(en_path) is None:
         return None
@@ -1560,25 +1640,56 @@ def _bundle_from_git_ref(de_path: Path, en_path: Path, ref: str = "HEAD") -> Bas
     en_text = _git_ref_text(en_path, ref)
     if de_text is None or en_text is None:
         return None
-    de_token = comment_token_for_path(de_path)
-    en_token = comment_token_for_path(en_path)
-    de_head = parse_cells(de_text, de_token)
-    en_head = parse_cells(en_text, en_token)
-    de_rows = watermark_rows(de_head)
-    en_rows = watermark_rows(en_head)
-    de_tags = watermark_tag_map(de_head)
-    en_tags = watermark_tag_map(en_head)
-    # Issue #403 Phase B: re-derive the narrative anchors from the ref text exactly
-    # as ``_record_watermark`` would have, so the git-HEAD baseline detects narrative
-    # edits identically to a watermark baseline (no source divergence — #289 P1).
-    de_anchors = watermark_anchor_map(split_cells(de_text, de_token)[1])
-    en_anchors = watermark_anchor_map(split_cells(en_text, en_token)[1])
-    return BaselineBundle(
+    return _bundle_from_texts(
+        de_text,
+        en_text,
+        comment_token_for_path(de_path),
+        comment_token_for_path(en_path),
         source="git-head" if ref == "HEAD" else f"git:{ref}",
-        rows={"de": de_rows["de"], "en": en_rows["en"], "shared": de_rows["shared"]},
-        tags={"de": de_tags["de"], "en": en_tags["en"], "shared": de_tags["shared"]},
-        header_hashes={"de": _header_hashes(de_head), "en": _header_hashes(en_head)},
-        anchors={"de": de_anchors["de"], "en": en_anchors["en"]},
+    )
+
+
+def _bundle_from_explicit_paths(
+    de_path: Path,
+    en_path: Path,
+    old_de: Path,
+    old_en: Path,
+    ref: str,
+) -> BaselineBundle | None:
+    """Baseline bundle read from explicit *old* paths at ``ref`` (rename recovery).
+
+    ``de_path`` / ``en_path`` are the deck's **current** halves — used only for the
+    comment token + language inference; the baseline TEXT is read from ``old_de`` /
+    ``old_en`` (the deck's pre-rename location) at ``ref``, addressed
+    repo-root-relative so it resolves even though the old directory no longer exists
+    on disk. This powers ``--baseline-from PATH[@REF]`` and the auto-detected
+    untracked-rename recovery (epic #440). ``None`` when git is unavailable, a deck's
+    language cannot be inferred, the old paths lie outside the repo, or the old text
+    is absent at ``ref``.
+    """
+    if _lang_for_path(de_path) is None or _lang_for_path(en_path) is None:
+        return None
+    # Run git from the deck's CURRENT (existing) directory — the old directory may be
+    # gone — and address the old halves repo-root-relative.
+    cwd = de_path.parent
+    root = _git_repo_root(cwd)
+    if root is None:
+        return None
+    try:
+        de_rel = old_de.resolve().relative_to(root).as_posix()
+        en_rel = old_en.resolve().relative_to(root).as_posix()
+    except ValueError:
+        return None
+    de_text = _git_show(cwd, f"{ref}:{de_rel}")
+    en_text = _git_show(cwd, f"{ref}:{en_rel}")
+    if de_text is None or en_text is None:
+        return None
+    return _bundle_from_texts(
+        de_text,
+        en_text,
+        comment_token_for_path(de_path),
+        comment_token_for_path(en_path),
+        source=f"git-from:{ref}",
     )
 
 
@@ -1618,6 +1729,119 @@ def _baseline_ref_unresolved_reason(de_path: Path, en_path: Path, ref: str) -> s
             f"{ref}) — edits cannot be detected against it. Pass a ref where the "
             "current name exists, or sync against the recorded watermark"
         )
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Rename-identity recovery (epic #440)
+#
+# Deck identity is path-derived (topic id = folder slug, watermark key = path, git
+# baseline = HEAD:<path>), so renaming a topic folder / deck stem breaks the engine's
+# handle on the baseline and a one-sided revision made in the same breath reads as
+# "clean". These helpers recover the baseline across a rename so the author is not
+# constrained in the edits they may make:
+#   * a *committed* rename (rename + edits in one commit) is followed to HEAD^;
+#   * an *uncommitted* rename (old half deleted, new half untracked) is matched to its
+#     deleted predecessor by slide_id set;
+#   * either can be pinned explicitly with --baseline-from PATH[@REF].
+# All three converge on the existing bundle machinery — they only change *where* the
+# baseline text is read from, never how the diff is computed.
+# ---------------------------------------------------------------------------
+
+
+def _swap_lang_in_name(name: str, to: str) -> str | None:
+    """Swap a split half's language tag in its *filename* (``x.de.py`` ↔ ``x.en.py``).
+
+    Lexical only (no disk access) — the sibling old half may no longer exist on disk.
+    ``None`` when ``name`` carries no ``.de``/``.en`` tag.
+    """
+    parts = name.split(".")
+    if len(parts) >= 3 and parts[-2] in ("de", "en"):
+        parts[-2] = to
+        return ".".join(parts)
+    return None
+
+
+def _path_introduced_in_head(path: Path) -> bool:
+    """True when ``path``'s current name exists at HEAD but **not** at HEAD^.
+
+    The signature of a deck introduced into its current name by the most recent
+    commit (a rename or a create), for which plain ``HEAD:<path>`` is a useless
+    baseline (it equals the working tree for the committed bytes). The fast common
+    case — a deck that has existed for many commits — resolves at HEAD^ and returns
+    ``False`` after a single ``git show``.
+    """
+    if _git_show(path.parent, f"HEAD:./{path.name}") is None:
+        return False
+    return _git_show(path.parent, f"HEAD^:./{path.name}") is None
+
+
+def _detect_committed_rename(de_path: Path, en_path: Path) -> bool:
+    """True when both halves were *renamed* into their current names by HEAD.
+
+    Distinguishes a rename (old content recoverable at HEAD^ under a prior name) from
+    a fresh create (no HEAD^ ancestor). When true, the deck's real baseline is its
+    pre-rename content at HEAD^ — reachable via :func:`_bundle_from_git_ref` with
+    ``ref="HEAD^"`` (which rename-follows). The caller additionally gates on the work
+    tree matching HEAD, so this only fires for a fully-committed rename.
+    """
+    if not (_path_introduced_in_head(de_path) and _path_introduced_in_head(en_path)):
+        return False
+    # Confirm it is a rename, not a create: the old content must exist at HEAD^.
+    return (
+        _git_ref_text(de_path, "HEAD^") is not None and _git_ref_text(en_path, "HEAD^") is not None
+    )
+
+
+def _working_tree_matches_head(path: Path, current_text: str) -> bool:
+    """True when ``path``'s committed (HEAD) bytes equal its current ``current_text``.
+
+    Used to confirm a rename's edits are fully committed before re-baselining against
+    HEAD^ — if the work tree carries uncommitted edits, the plain HEAD baseline still
+    catches them and must not be overridden.
+    """
+    head = _git_show(path.parent, f"HEAD:./{path.name}")
+    return head is not None and head == current_text
+
+
+def _detect_untracked_rename(
+    de_path: Path,
+    en_path: Path,
+    de_cells: list[Cell],
+) -> tuple[Path, Path, str] | None:
+    """Recover the baseline for an *uncommitted* rename, or ``None``.
+
+    When the new deck is untracked (no git-HEAD bundle under its current name), match
+    its DE half's ``slide_id`` set **exactly** against each deleted committed DE half
+    (``git ls-files --deleted``); the first match is the pre-rename predecessor.
+    Returns ``(old_de, old_en, "HEAD")`` for :func:`_bundle_from_explicit_paths`.
+
+    Exact set equality is a deliberately strict signal — a rename that also adds or
+    removes a slide will not match and falls back to git-none (the author can pin it
+    with ``--baseline-from``), rather than risk binding the wrong predecessor.
+    """
+    current_ids = {c.metadata.slide_id for c in de_cells if c.metadata.slide_id}
+    if not current_ids:
+        return None
+    root = _git_repo_root(de_path.parent)
+    if root is None:
+        return None
+    de_token = comment_token_for_path(de_path)
+    for rel in _git_deleted_files(root):
+        name = rel.rsplit("/", 1)[-1]
+        if _lang_for_path(Path(name)) != "de":
+            continue
+        text = _git_show(de_path.parent, f"HEAD:{rel}")
+        if text is None:
+            continue
+        ids = {c.metadata.slide_id for c in parse_cells(text, de_token) if c.metadata.slide_id}
+        if ids != current_ids:
+            continue
+        en_name = _swap_lang_in_name(name, "en")
+        if en_name is None:
+            continue
+        en_rel = rel[: len(rel) - len(name)] + en_name
+        return root / rel, root / en_rel, "HEAD"
     return None
 
 
@@ -3344,10 +3568,12 @@ def build_sync_plan(
     allow_git_fallback: bool = True,
     provider_available: bool = False,
     baseline_ref: str | None = None,
+    baseline_from: tuple[Path, Path, str] | None = None,
+    detect_rename: bool = False,
 ) -> SyncPlan:
     """Resolve the baseline and classify the pair into a :class:`SyncPlan`.
 
-    Baseline priority: ``baseline_ref`` (when given) → watermark → git HEAD →
+    Baseline priority: ``baseline_from`` → ``baseline_ref`` → watermark → git HEAD →
     none (see module docstring). Reads the two files; writes nothing.
 
     ``baseline_ref`` (the ``--baseline`` flag) pins the baseline to an explicit
@@ -3356,6 +3582,19 @@ def build_sync_plan(
     edits before syncing": ``baseline_ref="HEAD~1"`` diffs against the pre-edit
     commit so the edits are seen. When the ref text is unavailable the plan has
     no baseline (it does NOT silently fall back to HEAD).
+
+    ``baseline_from`` (the ``--baseline-from PATH[@REF]`` flag, epic #440) reads the
+    baseline from the deck's **pre-rename** halves ``(old_de, old_en, ref)`` —
+    addressed repo-root-relative so it resolves even though the old directory is gone.
+    The deterministic escape hatch for a folder/stem rename: the engine diffs the
+    renamed deck against where its content used to live.
+
+    ``detect_rename`` (the read path) turns on automatic rename recovery on the *pure
+    git* baseline path (no watermark, no explicit ref/from): an **uncommitted** rename
+    is matched to its deleted predecessor by ``slide_id`` set, and a **committed**
+    rename (rename + edits in one commit, work tree == HEAD) is followed to HEAD^.
+    Both keep the author free to rename without telling the tool. Off for the
+    watermark/explicit paths (where the baseline is already pinned).
 
     ``provider_available`` (#216 Phase 3, design §12) is the plan-time fact "a
     correspondence verifier will be available at apply time" (an LLM provider is
@@ -3411,20 +3650,49 @@ def build_sync_plan(
     # (the parallel per-aspect git-HEAD plumbing this replaces is how the #269
     # baseline gaps and the #289 git-HEAD tag drop shipped).
     bundle: BaselineBundle | None = None
-    if baseline_ref is not None:
+    bootstrapped = not _pair_is_unbootstrapped(de_current, en_current)
+    if baseline_from is not None:
+        # Explicit --baseline-from: diff against the deck's pre-rename halves at the
+        # given ref, ignoring the watermark and the HEAD fallback (epic #440).
+        if bootstrapped:
+            old_de, old_en, from_ref = baseline_from
+            bundle = _bundle_from_explicit_paths(de_path, en_path, old_de, old_en, from_ref)
+    elif baseline_ref is not None:
         # Explicit --baseline ref: diff against this git ref, ignoring the
         # watermark, and do NOT fall back to HEAD if it is unavailable.
-        if not _pair_is_unbootstrapped(de_current, en_current):
+        if bootstrapped:
             bundle = _bundle_from_git_ref(de_path, en_path, baseline_ref)
     else:
         if watermark_cache is not None:
             bundle = _bundle_from_watermark(watermark_cache, de_path, en_path)
-        if (
-            bundle is None
-            and allow_git_fallback
-            and not _pair_is_unbootstrapped(de_current, en_current)
-        ):
-            bundle = _bundle_from_git_head(de_path, en_path)
+        if bundle is None and allow_git_fallback and bootstrapped:
+            # Rename recovery (epic #440), only on the pure-git read path. An
+            # uncommitted rename leaves no HEAD bundle under the current name; match
+            # the new deck to its deleted predecessor by slide_id set before falling
+            # back to the (empty) git-HEAD baseline.
+            if detect_rename:
+                detected = _detect_untracked_rename(de_path, en_path, de_cells)
+                if detected is not None:
+                    od, oe, dref = detected
+                    bundle = _bundle_from_explicit_paths(de_path, en_path, od, oe, dref)
+            if bundle is None:
+                bundle = _bundle_from_git_head(de_path, en_path)
+                # A *committed* rename (rename + edits in one commit) leaves HEAD ==
+                # the work tree, so the HEAD baseline reads "clean" and hides the
+                # one-sided revision. When the deck was renamed into its current name
+                # by HEAD and the work tree is fully committed, follow the rename to
+                # HEAD^ (the pre-rename ancestor) so the drift surfaces.
+                if (
+                    detect_rename
+                    and bundle is not None
+                    and bundle.source == "git-head"
+                    and _working_tree_matches_head(de_path, de_text)
+                    and _working_tree_matches_head(en_path, en_text)
+                    and _detect_committed_rename(de_path, en_path)
+                ):
+                    caret = _bundle_from_git_ref(de_path, en_path, "HEAD^")
+                    if caret is not None:
+                        bundle = caret
 
     if bundle is not None:
         source = bundle.source
@@ -3469,14 +3737,27 @@ def build_sync_plan(
     # split, un-inferrable language) so the user knows WHY edits went undetected
     # rather than discovering it by hand. Only for a bootstrapped pair (an
     # unbootstrapped pair legitimately has no baseline).
-    if (
-        baseline_ref is not None
-        and bundle is None
-        and not _pair_is_unbootstrapped(de_current, en_current)
-    ):
+    if baseline_ref is not None and bundle is None and bootstrapped:
         reason = _baseline_ref_unresolved_reason(de_path, en_path, baseline_ref)
         if reason is not None:
             plan.issues.append(PlanIssue(severity="warning", slide_id=None, reason=reason))
+
+    # Epic #440: an explicit --baseline-from whose old paths did not resolve at the
+    # ref degrades to baseline=none; name the cause so the user knows the rename
+    # recovery found nothing rather than discovering it by hand.
+    if baseline_from is not None and bundle is None and bootstrapped:
+        old_de, old_en, from_ref = baseline_from
+        plan.issues.append(
+            PlanIssue(
+                severity="warning",
+                slide_id=None,
+                reason=(
+                    f"--baseline-from {old_de.name}@{from_ref}: could not read the deck's "
+                    f"pre-rename halves at that ref (not committed there, outside the repo, "
+                    f"or git unavailable) — edits cannot be detected against it"
+                ),
+            )
+        )
 
     # Item-2 (Phase 3a): detect a language-neutral code-only change the keyed
     # classifier cannot see, and hand its direction to the structural pass. Only

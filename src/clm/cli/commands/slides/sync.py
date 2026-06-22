@@ -246,6 +246,42 @@ def _resolve_single_path(de_path: Path, en_path: Path | None) -> tuple[Path, Pat
     return pair
 
 
+def _swap_split_lang(name: str, to: str) -> str | None:
+    """Swap a split half's language tag in its filename (``x.de.py`` ↔ ``x.en.py``).
+
+    Lexical only — the sibling old half may no longer exist on disk. ``None`` when
+    ``name`` carries no ``.de``/``.en`` tag.
+    """
+    parts = name.split(".")
+    if len(parts) >= 3 and parts[-2] in ("de", "en"):
+        parts[-2] = to
+        return ".".join(parts)
+    return None
+
+
+def _parse_baseline_from(spec: str) -> tuple[Path, Path, str]:
+    """Parse ``--baseline-from PATH[@REF]`` into ``(old_de, old_en, ref)`` (epic #440).
+
+    PATH is the deck's pre-rename DE **or** EN half (the old folder/stem); the sibling
+    old half is derived by swapping the ``.de``/``.en`` tag lexically — the old
+    directory may be gone, so no disk access. ``@REF`` is optional and defaults to
+    ``HEAD``. Raises :class:`click.UsageError` when PATH carries no ``.de``/``.en`` tag.
+    """
+    raw, sep, ref = spec.rpartition("@")
+    old_str, ref = (raw, ref or "HEAD") if sep else (spec, "HEAD")
+    old = Path(old_str)
+    tag = split_lang_tag(old)
+    if tag is None:
+        raise click.UsageError(
+            f"--baseline-from {old_str}: expected the deck's pre-rename .de/.en half "
+            "(e.g. old_folder/slides_x.de.py), optionally @REF."
+        )
+    sibling_name = _swap_split_lang(old.name, "en" if tag == "de" else "de")
+    assert sibling_name is not None  # split_lang_tag guarantees a swappable tag
+    sibling = old.with_name(sibling_name)
+    return (old, sibling, ref) if tag == "de" else (sibling, old, ref)
+
+
 @click.command("sync")
 @click.argument(
     "de_path",
@@ -450,6 +486,20 @@ def _resolve_single_path(de_path: Path, en_path: Path | None) -> tuple[Path, Pat
     ),
 )
 @click.option(
+    "--baseline-from",
+    "baseline_from_spec",
+    default=None,
+    metavar="PATH[@REF]",
+    help=(
+        "Diff a RENAMED deck against where its content used to live (epic #440). PATH "
+        "is the deck's pre-rename DE or EN half (the old folder/stem); its sibling old "
+        "half is derived by swapping the .de/.en tag. REF defaults to HEAD. Use when you "
+        "renamed a topic folder / deck stem and the old location no longer exists on "
+        "disk, so neither the watermark nor the HEAD baseline can find the pre-edit "
+        "content. Single-pair only; mutually exclusive with --baseline / --rebaseline."
+    ),
+)
+@click.option(
     "--no-env-file",
     is_flag=True,
     default=False,
@@ -495,6 +545,7 @@ def slides_sync_cmd(
     no_cache: bool,
     rebaseline: bool,
     baseline_ref: str | None,
+    baseline_from_spec: str | None,
     no_env_file: bool,
     yes: bool,
     as_json: bool,
@@ -549,12 +600,19 @@ def slides_sync_cmd(
             "--explain and --json are mutually exclusive "
             "(--explain is a human-readable diagnostic; use --dry-run --json for the structured plan)"
         )
-    if verify and (dry_run or explain or interactive or rebaseline or baseline_ref is not None):
+    if verify and (
+        dry_run
+        or explain
+        or interactive
+        or rebaseline
+        or baseline_ref is not None
+        or baseline_from_spec is not None
+    ):
         raise click.UsageError(
             "--verify is a standalone read-only structural check; it is mutually "
             "exclusive with --dry-run / --explain / --interactive / --rebaseline / "
-            "--baseline (it uses no watermark, no baseline, and no LLM). Combine it "
-            "only with --json."
+            "--baseline / --baseline-from (it uses no watermark, no baseline, and no "
+            "LLM). Combine it only with --json."
         )
     if rebaseline and (dry_run or explain):
         raise click.UsageError(
@@ -569,6 +627,12 @@ def slides_sync_cmd(
         raise click.UsageError(
             "--baseline and --rebaseline are mutually exclusive: --rebaseline resets the "
             "watermark from git HEAD, while --baseline pins the diff to a specific ref."
+        )
+    if baseline_from_spec is not None and (rebaseline or baseline_ref is not None):
+        raise click.UsageError(
+            "--baseline-from is mutually exclusive with --baseline / --rebaseline: it "
+            "pins the baseline to the deck's pre-rename location, while --baseline pins a "
+            "ref and --rebaseline resets the watermark."
         )
 
     # --verify: a standalone, read-only structural check (no watermark, no LLM, no
@@ -609,6 +673,12 @@ def slides_sync_cmd(
             raise click.UsageError(
                 "--baseline operates on a single deck pair; run it per deck "
                 "(e.g. `clm slides sync --baseline HEAD~1 <deck>.de.py`), not over a directory."
+            )
+        if baseline_from_spec is not None:
+            raise click.UsageError(
+                "--baseline-from operates on a single deck pair; run it per deck "
+                "(e.g. `clm slides sync --baseline-from <old>.de.py <new>.de.py`), not over "
+                "a directory."
             )
         batch_mode = "explain" if explain else ("dry-run" if dry_run else "apply")
         # One glossary resolution for the whole sweep (the translator is shared across
@@ -658,6 +728,11 @@ def slides_sync_cmd(
     # (a relative single-path run vs. a resolved batch run) and the second silently
     # misses the first's watermark and re-baselines off git HEAD.
     de_path, en_path = de_path.resolve(), en_path.resolve()
+
+    # --baseline-from: parse the deck's pre-rename half spec into the (old_de, old_en,
+    # ref) the engine reads its baseline from (epic #440). Done after the pairing guard
+    # so a UsageError surfaces the same way a bad pair does.
+    baseline_from = _parse_baseline_from(baseline_from_spec) if baseline_from_spec else None
 
     # --rebaseline: reset a stale watermark when the halves are already consistent
     # against git HEAD. Self-contained (own cache lifetime); always sys.exit()s. No
@@ -715,6 +790,11 @@ def slides_sync_cmd(
             watermark_cache=watermark_cache,
             provider_available=provider_available,
             baseline_ref=baseline_ref,
+            baseline_from=baseline_from,
+            # Auto-recover a rename on the pure-git read path (epic #440). The engine
+            # gates this to the no-watermark / no-explicit-baseline case, so a normal
+            # watermarked apply is unaffected.
+            detect_rename=True,
         )
         # Read the commit the watermark was recorded at (Fix D) while the cache is
         # still open, so the stale-watermark hint can name the exact --baseline ref.
@@ -1926,6 +2006,16 @@ _EN_ARG = click.argument(
     help="Diff against an explicit git ref (e.g. HEAD~1) instead of git HEAD.",
 )
 @click.option(
+    "--baseline-from",
+    "baseline_from_spec",
+    default=None,
+    metavar="PATH[@REF]",
+    help=(
+        "Diff a RENAMED deck against its pre-rename half PATH (the old folder/stem; "
+        "@REF defaults to HEAD). For a rename the auto-detection can't recover."
+    ),
+)
+@click.option(
     "--use-watermark",
     is_flag=True,
     help="Opt back into the structural watermark as the baseline (default: git HEAD).",
@@ -1945,6 +2035,7 @@ def sync_report_cmd(
     as_json: bool,
     explain: bool,
     baseline_ref: str | None,
+    baseline_from_spec: str | None,
     use_watermark: bool,
     cache_dir: Path | None,
     no_env_file: bool,
@@ -1955,7 +2046,9 @@ def sync_report_cmd(
     into mechanical / assisted / ambiguity tiers (with ``is_clean`` / ``needs_model``
     / ``needs_agent``), and never calls a model or needs an API key. The default
     baseline is git ``HEAD``; the watermark is a demoted, opt-in accelerator
-    (``--use-watermark`` or ``--baseline REF``).
+    (``--use-watermark`` or ``--baseline REF``). A renamed deck recovers its baseline
+    automatically (committed rename → HEAD^, uncommitted rename → matched predecessor);
+    ``--baseline-from PATH[@REF]`` pins it explicitly when the rename can't be detected.
     """
     use_wm = use_watermark or baseline_ref is not None
     ctx.invoke(
@@ -1966,6 +2059,7 @@ def sync_report_cmd(
         explain=explain,
         as_json=as_json,
         baseline_ref=baseline_ref,
+        baseline_from_spec=baseline_from_spec,
         no_cache=not use_wm,
         cache_dir=cache_dir,
         no_env_file=no_env_file,
@@ -2008,6 +2102,13 @@ def sync_verify_cmd(ctx: click.Context, de_path: Path, en_path: Path | None, as_
     help="Diff against an explicit git ref.",
 )
 @click.option(
+    "--baseline-from",
+    "baseline_from_spec",
+    default=None,
+    metavar="PATH[@REF]",
+    help="Diff a renamed deck against its pre-rename half PATH (the old folder/stem).",
+)
+@click.option(
     "--cache-dir",
     type=click.Path(path_type=Path),
     default=None,
@@ -2022,6 +2123,7 @@ def sync_apply_cmd(
     yes: bool,
     use_watermark: bool,
     baseline_ref: str | None,
+    baseline_from_spec: str | None,
     cache_dir: Path | None,
     no_env_file: bool,
 ) -> None:
@@ -2040,6 +2142,7 @@ def sync_apply_cmd(
         yes=yes,
         no_cache=not use_watermark,
         baseline_ref=baseline_ref,
+        baseline_from_spec=baseline_from_spec,
         cache_dir=cache_dir,
         no_env_file=no_env_file,
     )

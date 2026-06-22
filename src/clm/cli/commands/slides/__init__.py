@@ -32,7 +32,7 @@ from clm.cli.commands.slides.sync import slides_sync_group  # noqa: E402
 from clm.cli.commands.slides.tidy import tidy_cmd  # noqa: E402
 from clm.cli.commands.slides.translate import slides_translate_cmd  # noqa: E402
 from clm.cli.commands.slides.unify import unify_cmd  # noqa: E402
-from clm.cli.commands.slides.watermark import watermark_group  # noqa: E402
+from clm.cli.commands.slides.watermark import baseline_group, watermark_group  # noqa: E402
 
 slides_group.add_command(normalize_slides_cmd, name="normalize")
 slides_group.add_command(assign_ids_cmd, name="assign-ids")
@@ -54,10 +54,11 @@ slides_group.add_command(slug_report_cmd, name="slug-report")
 slides_group.add_command(coverage_report_cmd, name="coverage-report")
 slides_group.add_command(authoring_rules_cmd, name="rules")
 slides_group.add_command(watermark_group, name="watermark")
-# The watermark is demoted to a baseline accelerator (epic #440); expose it under
-# `clm slides sync baseline` as its new home. The legacy `clm slides watermark`
-# registration above is kept for back-compat during the prototype.
-slides_sync_group.add_command(watermark_group, name="baseline")
+# The watermark is demoted to a baseline accelerator (epic #440); its new home is
+# `clm slides sync baseline` (show/clear/prune + the commit-free `bless` that replaces
+# `--rebaseline`, #430). The legacy `clm slides watermark` registration above is kept
+# as a back-compat alias during the prototype.
+slides_sync_group.add_command(baseline_group, name="baseline")
 
 # `polish` needs the [summarize] extra (LLM client); skip when absent.
 try:

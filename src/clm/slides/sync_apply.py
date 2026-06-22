@@ -3831,6 +3831,20 @@ def _record_watermark(
     cache.set_synced_commit(str(de_path), str(en_path), commit if isinstance(commit, str) else None)
 
 
+def record_baseline(cache: SyncWatermarkCache, de_path: Path, en_path: Path) -> None:
+    """Snapshot a split pair's current working-tree state as the sync baseline.
+
+    The ``baseline bless`` primitive (epic #440). Unlike :func:`apply_plan`, it
+    propagates **nothing** — it records both halves' current bytes as the new
+    watermark and advances ``synced_commit``, so a hand-reconciled (or
+    ``--no-cache``-synced) working tree can be blessed as the baseline **without a
+    throwaway commit** (#430). The caller must first assert the pair is a
+    structurally valid split (``clm slides sync verify``); ``bless`` trusts the
+    author's assertion that the localized halves are semantically in sync.
+    """
+    _record_watermark(cache, de_path, en_path)
+
+
 def _eligible_for_partial_advance(plan: SyncPlan, result: ApplyResult) -> bool:
     """Whether a per-cell partial watermark advance is safe for this pass.
 

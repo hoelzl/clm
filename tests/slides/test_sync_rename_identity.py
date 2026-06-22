@@ -7,26 +7,27 @@ watermark key = path, git baseline = ``HEAD:<path>``), so a single rename breaks
 handle at once and the engine loses the baseline it needs to tell "edited" from
 "always was".
 
-These tests pin the behavior the redesigned toolkit must deliver. There are three
-real situations, observed live on PythonCourses
+These tests pin the rename-recovery behavior the toolkit delivers (epic #440 phase 2).
+There are three real situations, observed live on PythonCourses
 (``topic_036_ai_coding_tools_comparison`` → ``topic_036_using_ai_for_coding``, German
 revised, English stale):
 
-* **Committed *pure* rename, then revise** — already works today: ``HEAD:<newpath>``
-  carries the old content, so the git baseline sees the one-sided revision. (positive
-  control — must not regress)
-* **Committed rename + edits in ONE commit** — today the default ``HEAD`` baseline sees
-  current == HEAD and reports *clean* (silently hiding the stale half). The redesign
-  must make the git baseline **follow the rename** (to the pre-rename ancestor) and
-  surface the drift. (``xfail(strict)`` until phase 2)
-* **Uncommitted rename** (old = deleted, new = untracked) — today ``report`` gives up
-  with ``baseline_source == "none"``. The redesign must **detect the rename candidate**
-  by matching ``slide_id`` sets against recently-deleted paths (and/or accept an explicit
-  ``--baseline-from <oldpath>``) and recover the drift. (``xfail(strict)`` until phase 2)
+* **Committed *pure* rename, then revise** — ``HEAD:<newpath>`` carries the old content,
+  so the default git baseline sees the one-sided revision unaided.
+* **Committed rename + edits in ONE commit** — the default ``HEAD`` baseline would see
+  current == HEAD and report *clean* (hiding the stale half), so the engine **follows
+  the rename to HEAD^** (the pre-rename ancestor) when the deck was introduced into its
+  current name by HEAD and the work tree is fully committed.
+* **Uncommitted rename** (old = deleted, new = untracked) — ``HEAD:<newpath>`` does not
+  exist, so the engine **detects the rename candidate** by matching the new deck's
+  ``slide_id`` set against each recently-deleted committed half and recovers the
+  baseline from the match. ``--baseline-from PATH[@REF]`` pins it explicitly when the
+  rename can't be auto-detected.
 
-The ``xfail(strict=True)`` markers make each acceptance test flip to a hard failure the
-moment phase 2 makes it pass, forcing the marker (and this comment) to be removed — the
-established "living checklist" pattern in this suite (cf. the #364/#365 strict-xfail).
+All three converge on the same bundle machinery (``build_sync_plan(detect_rename=True)``
+/ ``baseline_from=...``) — they only change *where* the baseline text is read from, never
+how the diff is computed. The author may rename folders/stems freely; the tools recognize
+the situation and behave correctly.
 """
 
 from __future__ import annotations
@@ -161,19 +162,14 @@ def test_committed_pure_rename_then_revise_detects_de_to_en(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# Acceptance tests — the phase-2 mechanisms (strict-xfail until built).
+# Acceptance tests — the phase-2 rename-recovery mechanisms.
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="phase 2 (#440): git baseline must FOLLOW the rename to the pre-rename ancestor "
-    "instead of reading HEAD:<newpath> (== current) and reporting clean.",
-)
 def test_committed_rename_with_edits_follows_rename(tmp_path: Path):
-    """Rename + revision in ONE commit. The default HEAD baseline sees current == HEAD
-    and (wrongly) reports clean; the redesign must follow the rename to HEAD~1 and
-    surface the de->en drift."""
+    """Rename + revision in ONE commit. The default HEAD baseline sees current == HEAD;
+    the engine follows the rename to HEAD^ (work tree fully committed) and surfaces the
+    de->en drift."""
     repo = _init_repo(tmp_path)
     _write_pair(repo / "topic_010_old", "slides_x", DE_V1, EN_V1)
     _git(repo, "add", "-A")
@@ -189,15 +185,11 @@ def test_committed_rename_with_edits_follows_rename(tmp_path: Path):
     assert _has_de_to_en_edit(report)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="phase 2 (#440): untracked-rename detection — match the new deck to a "
-    "recently-deleted path by slide_id set and recover the drift (instead of baseline=none).",
-)
 def test_uncommitted_rename_recovers_via_candidate(tmp_path: Path):
     """The live situation: folder renamed in the editor (old=deleted, new=untracked),
-    DE revised. Today ``report`` gives up with baseline=none; the redesign must detect
-    the rename candidate (matching slide_ids) and recover the de->en drift."""
+    DE revised. ``report`` detects the rename candidate (matching slide_ids against the
+    deleted predecessor) and recovers the de->en drift instead of giving up at
+    baseline=none."""
     repo = _init_repo(tmp_path)
     _write_pair(repo / "topic_010_old", "slides_x", DE_V1, EN_V1)
     _git(repo, "add", "-A")
@@ -211,11 +203,6 @@ def test_uncommitted_rename_recovers_via_candidate(tmp_path: Path):
     assert _has_de_to_en_edit(report)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="phase 2 (#440): `--baseline-from PATH[@REF]` — point the baseline at the deck's "
-    "pre-rename location (a different PATH, not just a different ref).",
-)
 def test_baseline_from_explicit_old_path(tmp_path: Path):
     """The explicit recovery primitive: ``--baseline-from <oldpath>@HEAD`` diffs the
     renamed/untracked deck against its committed pre-rename content."""
@@ -229,3 +216,61 @@ def test_baseline_from_explicit_old_path(tmp_path: Path):
     report = _report(new_de, "--baseline-from", f"{old_de}@HEAD")
     assert report["is_clean"] is False
     assert _has_de_to_en_edit(report)
+
+
+# ---------------------------------------------------------------------------
+# Precision — the recovery must NOT fire when there is no rename-with-edits to
+# recover (else every clean deck would false-drift against an ancient ancestor).
+# ---------------------------------------------------------------------------
+
+
+def test_committed_pure_rename_no_edits_stays_clean(tmp_path: Path):
+    """A committed rename with NO edits: following it to HEAD^ is harmless — both halves
+    equal their pre-rename content, so the report is clean (no phantom drift)."""
+    repo = _init_repo(tmp_path)
+    _write_pair(repo / "topic_010_old", "slides_x", DE_V1, EN_V1)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "init")
+    _git(repo, "mv", "topic_010_old", "topic_010_new")
+    _git(repo, "commit", "-qm", "rename")  # rename only, no content change
+    report = _report(repo / "topic_010_new" / "slides_x.de.py")
+    assert report["is_clean"] is True
+
+
+def test_fresh_create_not_treated_as_rename(tmp_path: Path):
+    """A brand-new deck added on top of an unrelated commit is a create, not a rename:
+    it has no pre-rename ancestor at HEAD^, so the baseline stays git-HEAD (clean)."""
+    repo = _init_repo(tmp_path)
+    (repo / "seed.txt").write_text("seed\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "seed")
+    _write_pair(repo / "topic_010_intro", "slides_x", DE_V1, EN_V1)  # new, consistent
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "add deck")
+    report = _report(repo / "topic_010_intro" / "slides_x.de.py")
+    assert report["baseline_source"] == "git-head"
+    assert report["is_clean"] is True
+
+
+def test_uncommitted_rename_no_match_when_ids_differ(tmp_path: Path):
+    """The untracked-rename match is strict (exact slide_id set): a deleted predecessor
+    with a DIFFERENT id set is not bound, so the engine does not silently diff against
+    the wrong deck — it falls back to no baseline rather than a wrong one."""
+    repo = _init_repo(tmp_path)
+    # Old deck carries an EXTRA slide, so its committed id set differs from the new one.
+    de_extra = (
+        DE_V1 + '\n# %% [markdown] lang="de" tags=["slide"] slide_id="extra"\n#\n# ## Extra\n'
+    )
+    en_extra = (
+        EN_V1 + '\n# %% [markdown] lang="en" tags=["slide"] slide_id="extra"\n#\n# ## Extra\n'
+    )
+    _write_pair(repo / "topic_010_old", "slides_x", de_extra, en_extra)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "init")
+    shutil.move(str(repo / "topic_010_old"), str(repo / "topic_010_new"))
+    new_de = repo / "topic_010_new" / "slides_x.de.py"
+    new_de.write_text(
+        DE_V2, encoding="utf-8"
+    )  # V2 has the {intro, ende} set, != {intro, ende, extra}
+    report = _report(new_de)
+    assert report["baseline_source"] == "none"
