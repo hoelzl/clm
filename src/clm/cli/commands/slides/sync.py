@@ -960,12 +960,16 @@ def _run_batch(
     cache_dir: Path | None,
     provider_available: bool,
     make_judge: Callable[[], SyncJudge | None],
-    make_translator: Callable[[], SlideTranslator],
+    make_translator: Callable[[], SlideTranslator | None],
     make_recoverer: Callable[[], AlignmentRecoverer | None],
     make_verifier: Callable[[], CorrespondenceVerifier | None],
 ) -> None:
     """Sync every split deck pair under ``root`` in one pass, then ``sys.exit`` the
-    worst per-pair exit code (0 clean < 1 review < 2 error)."""
+    worst per-pair exit code (0 clean < 1 review < 2 error).
+
+    A read-only sweep (``mode`` ``dry-run`` / ``explain``) never constructs a model, so
+    the ``make_*`` factories are only called on a writing (``apply``) sweep — the
+    read-only ``report`` path passes ``lambda: None`` for all four."""
     pairs, solos = iter_split_pairs(find_split_slide_files_recursive(root))
     for solo in solos:
         tag = split_lang_tag(solo)
@@ -2004,6 +2008,130 @@ _EN_ARG = click.argument(
 )
 
 
+def _run_report(
+    de_path: Path,
+    en_path: Path | None,
+    *,
+    as_json: bool,
+    explain: bool,
+    baseline_ref: str | None,
+    baseline_from_spec: str | None,
+    use_watermark: bool,
+    cache_dir: Path | None,
+) -> None:
+    """Build the plan and render the read-only report / anchor-diff — never a model.
+
+    The promoted, model-free ``--dry-run``/``--explain`` path of the legacy command,
+    lifted out so ``report`` no longer routes through the model-driven ``autopilot``
+    body (epic #440 decision B): it constructs NO model client. Default baseline is git
+    HEAD; ``--use-watermark`` / ``--baseline`` opt the accelerator back in. Handles a
+    single pair or a directory sweep (the read-only batch passes no model factories).
+    Always ``sys.exit``s.
+    """
+    use_wm = use_watermark or baseline_ref is not None
+    # The cold-pair mint-vs-refuse classification still folds in key presence (the #438
+    # refinement is separate); has_openrouter_api_key is an env check, not a model call.
+    provider_available = has_openrouter_api_key()
+    mode = "explain" if explain else "dry-run"
+
+    if de_path.is_dir():
+        if en_path is not None:
+            raise click.UsageError(
+                f"{de_path} is a directory (batch report), which takes a single directory "
+                "argument; do not pass a second path."
+            )
+        if baseline_ref is not None or baseline_from_spec is not None:
+            raise click.UsageError(
+                "--baseline / --baseline-from operate on a single deck pair; run report per "
+                "deck, not over a directory."
+            )
+        _run_batch(
+            de_path,
+            mode=mode,
+            as_json=as_json,
+            yes=True,  # a read-only sweep has no write to gate
+            no_cache=not use_wm,
+            no_env_file=True,
+            cache_dir=cache_dir,
+            provider_available=provider_available,
+            make_judge=lambda: None,
+            make_translator=lambda: None,
+            make_recoverer=lambda: None,
+            make_verifier=lambda: None,
+        )
+        return  # _run_batch always sys.exit()s; this is just for the type-checker.
+
+    de_path, en_path = _resolve_single_path(de_path, en_path)
+    de_path, en_path = _resolve_sync_pair(de_path, en_path)
+    de_path, en_path = de_path.resolve(), en_path.resolve()
+    baseline_from = _parse_baseline_from(baseline_from_spec) if baseline_from_spec else None
+    if baseline_ref is not None and baseline_from is not None:
+        raise click.UsageError(
+            "--baseline and --baseline-from are mutually exclusive (one pins a ref, the "
+            "other pins the deck's pre-rename location)."
+        )
+
+    watermark_cache: SyncWatermarkCache | None = None
+    if use_wm:
+        cache_root = resolve_cache_dir(cli_override=cache_dir)
+        watermark_cache = SyncWatermarkCache(cache_root / CACHE_DB_NAME)
+    explain_text: str | None = None
+    recorded_commit: str | None = None
+    try:
+        plan = build_sync_plan(
+            de_path,
+            en_path,
+            watermark_cache=watermark_cache,
+            provider_available=provider_available,
+            baseline_ref=baseline_ref,
+            baseline_from=baseline_from,
+            detect_rename=True,
+        )
+        if watermark_cache is not None:
+            recorded_commit = watermark_cache.get_synced_commit(str(de_path), str(en_path))
+        if explain:
+            explain_text = render_explain(
+                de_path, en_path, plan=plan, watermark_cache=watermark_cache
+            )
+    finally:
+        if watermark_cache is not None:
+            watermark_cache.close()
+
+    exit_code = _plan_exit_code(plan)
+    rebaseline_hint = use_wm and _is_stale_but_consistent(
+        de_path, en_path, plan, provider_available=provider_available
+    )
+    cold_baseline_hint = (
+        baseline_ref is None and plan.baseline_source == "git-head" and plan.is_noop
+    )
+
+    if explain:
+        click.echo(explain_text)
+    elif as_json:
+        click.echo(
+            json.dumps(
+                _to_dict(
+                    plan,
+                    None,
+                    None,
+                    mode,
+                    exit_code,
+                    rebaseline_hint=rebaseline_hint,
+                    cold_baseline_hint=cold_baseline_hint,
+                ),
+                indent=2,
+            )
+        )
+    else:
+        _print_human(plan, None, None, mode="dry-run")
+
+    if rebaseline_hint and not as_json:
+        click.echo(_rebaseline_hint_text(de_path, recorded_commit), err=True)
+    if cold_baseline_hint and not as_json:
+        click.echo(_cold_baseline_hint_text(de_path), err=True)
+    sys.exit(exit_code)
+
+
 @slides_sync_group.command("report")
 @_DECK_ARG
 @_EN_ARG
@@ -2041,10 +2169,12 @@ _EN_ARG = click.argument(
     default=None,
     help="Directory holding the watermark (only with --use-watermark).",
 )
-@click.option("--no-env-file", is_flag=True, help="Do not auto-load a .env file.")
-@click.pass_context
+@click.option(
+    "--no-env-file",
+    is_flag=True,
+    help="Accepted for symmetry; report reads no .env (it never calls a model).",
+)
 def sync_report_cmd(
-    ctx: click.Context,
     de_path: Path,
     en_path: Path | None,
     as_json: bool,
@@ -2065,19 +2195,15 @@ def sync_report_cmd(
     automatically (committed rename → HEAD^, uncommitted rename → matched predecessor);
     ``--baseline-from PATH[@REF]`` pins it explicitly when the rename can't be detected.
     """
-    use_wm = use_watermark or baseline_ref is not None
-    ctx.invoke(
-        slides_sync_cmd,
-        de_path=de_path,
-        en_path=en_path,
-        dry_run=not explain,
-        explain=explain,
+    _run_report(
+        de_path,
+        en_path,
         as_json=as_json,
+        explain=explain,
         baseline_ref=baseline_ref,
         baseline_from_spec=baseline_from_spec,
-        no_cache=not use_wm,
+        use_watermark=use_watermark,
         cache_dir=cache_dir,
-        no_env_file=no_env_file,
     )
 
 
@@ -2085,8 +2211,7 @@ def sync_report_cmd(
 @_DECK_ARG
 @_EN_ARG
 @click.option("--json", "as_json", is_flag=True, help="Emit the verify result as JSON.")
-@click.pass_context
-def sync_verify_cmd(ctx: click.Context, de_path: Path, en_path: Path | None, as_json: bool) -> None:
+def sync_verify_cmd(de_path: Path, en_path: Path | None, as_json: bool) -> None:
     """Structural integrity check (no model, no watermark, writes nothing).
 
     Confirms the pair is a valid split — byte-identical shared cells, header parity,
@@ -2094,7 +2219,7 @@ def sync_verify_cmd(ctx: click.Context, de_path: Path, en_path: Path | None, as_
     id'd cell dropped vs git ``HEAD``. Exit ``0`` = sound (warnings allowed), ``2`` =
     corrupt. Answers "did this edit corrupt the pair?", not "is it in sync?".
     """
-    ctx.invoke(slides_sync_cmd, de_path=de_path, en_path=en_path, verify=True, as_json=as_json)
+    _run_verify(de_path, en_path, as_json=as_json)
 
 
 @slides_sync_group.command("apply")
