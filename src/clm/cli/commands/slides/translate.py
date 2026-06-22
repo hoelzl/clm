@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING
 
 import click
 
-from clm.cli.commands.slides.sync import CACHE_DB_NAME, _resolve_judge
+from clm.cli.commands.slides.sync import CACHE_DB_NAME
 from clm.infrastructure.llm.cache import (
     SyncWatermarkCache,
     TranslationCache,
@@ -281,8 +281,16 @@ def slides_translate_cmd(
             guidance,
             guidance_by_lang,
         )
-        # A judge is only consulted on the delegated-sync path (twin present).
-        judge = _resolve_judge(provider, llm_model, None, None) if will_sync else None
+        # A judge is only consulted on the delegated-sync path (twin present). The judge
+        # factory lives with the other model-client construction in sync_autopilot (epic
+        # #440 decision B); import it lazily so loading this command does not pull the
+        # autopilot module (and the sync agent-path module stays import-clean of it).
+        if will_sync:
+            from clm.cli.commands.slides.sync_autopilot import _resolve_judge
+
+            judge = _resolve_judge(provider, llm_model, None, None)
+        else:
+            judge = None
         result = bootstrap_deck(
             source,
             target_lang=to_lang,
