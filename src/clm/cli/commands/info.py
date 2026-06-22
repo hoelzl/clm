@@ -54,6 +54,11 @@ TOPICS: dict[str, TopicInfo] = {
         "Per-topic solution release: channels, ledger, sync, clm git",
         "releases.md",
     ),
+    "sync-agents": TopicInfo(
+        "sync-agents",
+        "Agent workflow for `clm slides sync`: dry-run report tiers, realign residue, --verify",
+        "sync-agents.md",
+    ),
 }
 
 
@@ -88,6 +93,7 @@ def info(topic: str | None) -> None:
         clm info calendar       # Cohort calendar reference
         clm info slide-format   # Slide file format reference
         clm info releases       # Per-topic solution release reference
+        clm info sync-agents    # Agent workflow for clm slides sync
     """
     if topic is None:
         click.echo(f"CLM {__version__} — Available documentation topics:\n")
