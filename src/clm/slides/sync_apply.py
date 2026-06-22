@@ -3142,17 +3142,24 @@ def _migrate_drifted_ids(
         )
 
 
-def _migrate_one_deck(
-    state: FileState,
-    baseline_constructs: dict[str, str],
-    baseline_hashes: set[str],
-    result: ApplyResult,
-) -> None:
-    """Apply the §9 id-migration to one deck's neutral code cells (see caller)."""
-    used_ids = {cell.metadata.slide_id for cell in state.cells if cell.metadata.slide_id}
+def _build_construct_index(
+    cells: list[RawCell],
+) -> tuple[dict[str, list[RawCell]], Counter]:
+    """Group new-id-less neutral code cells by construct + count every construct.
+
+    The shared index the §9 migration (:func:`_migrate_one_deck`) and its read-only
+    residue detector (:func:`detect_idmigration_residue`) both build: each cell with a
+    nameable construct bumps ``construct_count`` (the uniqueness guard), and an id-less
+    one is grouped under its construct as a migration-target candidate. ``construct_of``
+    is ``None`` for markdown / j2 / unparsable cells, so the index covers exactly the
+    neutral **code** cells even though the filter only excludes j2 + localized cells
+    (matching the original inline loop). One index, two readers, so the apply tier and
+    the report can never key cells differently (cf. the validator reusing the build's
+    matcher, #428).
+    """
     idless_by_construct: dict[str, list[RawCell]] = {}
     construct_count: Counter = Counter()
-    for cell in state.cells:
+    for cell in cells:
         meta = cell.metadata
         if meta.is_j2 or meta.lang is not None:
             continue  # neutral cells only
@@ -3162,38 +3169,97 @@ def _migrate_one_deck(
         construct_count[construct] += 1
         if meta.slide_id is None:
             idless_by_construct.setdefault(construct, []).append(cell)
+    return idless_by_construct, construct_count
 
+
+def _migration_target(
+    cell: RawCell,
+    baseline_constructs: dict[str, str],
+    idless_by_construct: dict[str, list[RawCell]],
+    construct_count: Counter,
+    baseline_hashes: set[str],
+) -> RawCell | None:
+    """The unique new id-less cell ``cell``'s drifted id should migrate onto, or ``None``.
+
+    The single per-cell decision the §9 migration turns on, extracted so the apply
+    pass (which *stamps* the move) and the residue detector (which only asks *whether*
+    a move is possible) share one definition and can never diverge. Returns ``None``
+    unless ``cell`` carries an id that drifted off its baseline construct, that
+    construct is unique in the deck, and exactly one *new* (hash absent from the
+    baseline) id-less cell now carries it — any ambiguity (a co-occurring rename, a
+    non-unique construct, no or several split-products) is left for §10 recovery.
+    """
+    meta = cell.metadata
+    if meta.is_j2 or meta.lang is not None or meta.slide_id is None:
+        return None
+    base_construct = baseline_constructs.get(meta.slide_id)
+    current_construct = construct_of(meta, cell.body)
+    if base_construct is None or current_construct is None or current_construct == base_construct:
+        return None  # the id still names its content (or there is nothing to key on)
+    if construct_count[base_construct] != 1:
+        return None  # the construct is not unique in this deck -> ambiguous, defer
+    # The target must be a NEW cell (a split-product), not a pre-existing one that
+    # merely shares the construct name (the review's false-move finding).
+    targets = [
+        c
+        for c in idless_by_construct.get(base_construct, [])
+        if cell_content_hash(c.body) not in baseline_hashes
+    ]
+    if len(targets) != 1:
+        return None
+    return targets[0]
+
+
+def _migrate_one_deck(
+    state: FileState,
+    baseline_constructs: dict[str, str],
+    baseline_hashes: set[str],
+    result: ApplyResult,
+) -> None:
+    """Apply the §9 id-migration to one deck's neutral code cells (see caller)."""
+    used_ids = {cell.metadata.slide_id for cell in state.cells if cell.metadata.slide_id}
+    idless_by_construct, construct_count = _build_construct_index(state.cells)
     for cell in list(state.cells):
-        meta = cell.metadata
-        if meta.is_j2 or meta.lang is not None or meta.slide_id is None:
+        target = _migration_target(
+            cell, baseline_constructs, idless_by_construct, construct_count, baseline_hashes
+        )
+        if target is None:
             continue
-        base_construct = baseline_constructs.get(meta.slide_id)
-        current_construct = construct_of(meta, cell.body)
-        if (
-            base_construct is None
-            or current_construct is None
-            or current_construct == base_construct
-        ):
-            continue  # the id still names its content (or there is nothing to key on)
-        if construct_count[base_construct] != 1:
-            continue  # the construct is not unique in this deck -> ambiguous, defer
-        # The target must be a NEW cell (a split-product), not a pre-existing one
-        # that merely shares the construct name (the review's false-move finding).
-        targets = [
-            c
-            for c in idless_by_construct.get(base_construct, [])
-            if cell_content_hash(c.body) not in baseline_hashes
-        ]
-        if len(targets) != 1:
-            continue
-        sid = meta.slide_id
-        _stamp_slide_id(targets[0], sid)  # the id follows its construct
+        sid = cell.metadata.slide_id
+        current_construct = construct_of(cell.metadata, cell.body)
+        assert sid is not None and current_construct is not None  # guaranteed by _migration_target
+        base_construct = baseline_constructs[sid]
+        _stamp_slide_id(target, sid)  # the id follows its construct
         new_slug = resolve_collision(current_construct, used_ids)
         used_ids.add(new_slug)
         _stamp_slide_id(cell, new_slug)  # the orphan gets a fresh content slug
         state.dirty = True
         result.applied_migrate += 1
         idless_by_construct.pop(base_construct, None)  # at most one migration per construct
+
+
+def _any_resolvable_migration(
+    cells: list[RawCell],
+    baseline_constructs: dict[str, str],
+    baseline_hashes: set[str],
+) -> bool:
+    """Whether the deterministic §9 migration would move at least one id in ``cells``.
+
+    The read-only predicate behind the residue detector: it asks the SAME per-cell
+    question :func:`_migrate_one_deck` does (via :func:`_migration_target`) but stamps
+    nothing. Because the first resolvable cell in document order always moves (nothing
+    is popped before it) and a pop can only *remove* targets, "some cell is resolvable
+    against the full index" is exactly "``_migrate_one_deck`` makes ≥1 move" — so a
+    ``False`` here means the deterministic pass is stuck (recovery territory).
+    """
+    idless_by_construct, construct_count = _build_construct_index(cells)
+    return any(
+        _migration_target(
+            cell, baseline_constructs, idless_by_construct, construct_count, baseline_hashes
+        )
+        is not None
+        for cell in cells
+    )
 
 
 def _baseline_localized(plan: SyncPlan) -> tuple[dict[str, str], set[str], set[str]]:
@@ -3311,6 +3377,23 @@ def _migrate_localized_paired(
         en_idless.pop(base_construct, None)
 
 
+def _neutral_code_filter(cells: list[RawCell]) -> list[RawCell]:
+    """The language-neutral code cells of ``cells`` in document order.
+
+    Includes unparsable (``construct is None``) code cells so the region matches the
+    watermark's ``neutral-code`` rows one-to-one. Shared by :func:`_neutral_code_cells`
+    (the apply path, over a :class:`FileState`) and :func:`detect_idmigration_residue`
+    (the report path, over freshly-split file cells), so both index the same set.
+    """
+    return [
+        cell
+        for cell in cells
+        if not cell.metadata.is_j2
+        and cell.metadata.lang is None
+        and cell.metadata.cell_type == "code"
+    ]
+
+
 def _neutral_code_cells(state: FileState) -> list[RawCell]:
     """The deck's language-neutral code cells in document order (the §9/§10 region).
 
@@ -3318,13 +3401,7 @@ def _neutral_code_cells(state: FileState) -> list[RawCell]:
     the watermark's ``neutral-code`` rows one-to-one — both index by the same cell
     set, so a recovery map's indices line up on either side.
     """
-    return [
-        cell
-        for cell in state.cells
-        if not cell.metadata.is_j2
-        and cell.metadata.lang is None
-        and cell.metadata.cell_type == "code"
-    ]
+    return _neutral_code_filter(state.cells)
 
 
 def _region_of(cells: list[RawCell]) -> list[RegionCell]:
@@ -3465,6 +3542,150 @@ def _resolve_alignment(
     if alignment_cache is not None:
         alignment_cache.put(fp_base, fp_cur, pv, encode_mapping(mapping))
     return mapping
+
+
+# ---------------------------------------------------------------------------
+# Agent-facing residue detection (#366) — the read-only `--llm-recover` trigger.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class DriftResidue:
+    """One drifted ``slide_id`` the deterministic id-migration cannot resolve.
+
+    The agent-facing description of a §10 recovery region (Issue #366, the
+    agent-first direction): the deterministic §9 migration is stuck (a co-occurring
+    rename or a non-unique construct), so the id stays on the wrong cell and
+    re-surfaces every run. An agent driving ``clm slides sync --dry-run --json`` gets
+    this in the report's ``ambiguity`` tier and re-identifies the cells itself — it
+    already holds the deck source — instead of the engine spending the embedded
+    ``--llm-recover`` model (which now stays only for a standalone, agent-less run).
+
+    ``base_construct`` is the construct the id named in the baseline; ``current_construct``
+    is the construct the cell now wearing the id carries. ``drifted_excerpt`` /
+    ``drifted_line`` locate that mis-identified cell; ``target_excerpt`` / ``target_line``
+    name the *likely* continuation (a lone new id-less cell that now carries
+    ``base_construct``) when there is an unambiguous one, else ``None`` (fail-closed — a
+    wrong continuation misleads worse than none). Neutral cells are byte-identical
+    across the two halves, so the excerpts are the same on either side.
+    """
+
+    slide_id: str
+    base_construct: str
+    current_construct: str
+    drifted_excerpt: str
+    drifted_line: int
+    target_excerpt: str | None
+    target_line: int | None
+    reason: str
+
+
+def _raw_cells(path: Path) -> list[RawCell]:
+    """Split one file into its verbatim :class:`RawCell` list (the apply-side parse)."""
+    return split_cells(path.read_text(encoding="utf-8"), comment_token_for_path(path))[1]
+
+
+def detect_idmigration_residue(plan: SyncPlan) -> list[DriftResidue]:
+    """Read-only: the drifted-id regions the deterministic §9 migration cannot resolve.
+
+    The agent-facing projection of the §10 ``--llm-recover`` trigger (Issue #366). The
+    detection mirrors :func:`_recover_drifted_ids`'s gating **exactly** — same baseline
+    (``plan.baseline_bundle``), same active-direction requirement, same neutral-region
+    byte-identity guard, the same genuine-drift and new-split-product preconditions, and
+    the same "deterministic pass is stuck" predicate (:func:`_any_resolvable_migration`)
+    — so the report can never disagree with what the apply tier would escalate. Returns
+    ``[]`` whenever recovery would not fire (no active direction, the halves' neutral
+    regions diverge, no genuine drift, no baseline, no split-product, or the
+    deterministic pass would resolve it this run). Reads ``plan.de_path`` /
+    ``plan.en_path``; writes nothing. The caller surfaces each entry as a tier-3
+    ``ambiguity`` item and gates the agent's write-back on ``clm slides sync --verify``.
+    """
+    if _effective_direction(plan) is None:
+        return []
+    baseline_constructs, baseline_hashes = _baseline_shared(plan)
+    if not baseline_constructs:
+        return []
+    try:
+        de_cells = _neutral_code_filter(_raw_cells(plan.de_path))
+        en_cells = _neutral_code_filter(_raw_cells(plan.en_path))
+    except OSError:
+        return []
+    current_region = _region_of(de_cells)
+    # The migration map is symmetric across the byte-identical halves; a divergence is
+    # the alignment pass's concern, not the migration's (cf. _recover_drifted_ids).
+    if current_region != _region_of(en_cells):
+        return []
+    if not _has_drifted_id(baseline_constructs, current_region):
+        return []
+    base_region = _shared_region(plan)
+    if not base_region:
+        return []
+    region_hashes = {c.content_hash for c in base_region}
+    if not any(
+        rc.slide_id is None and rc.content_hash not in region_hashes for rc in current_region
+    ):
+        return []  # no split-product -> a pure rename keeps its stable id (not residue)
+    if _any_resolvable_migration(de_cells, baseline_constructs, baseline_hashes):
+        return []  # the deterministic pass would resolve it this run -> not residue
+    return _describe_residue(de_cells, current_region, baseline_constructs, region_hashes)
+
+
+def _describe_residue(
+    de_cells: list[RawCell],
+    current_region: list[RegionCell],
+    baseline_constructs: dict[str, str],
+    region_hashes: set[str],
+) -> list[DriftResidue]:
+    """One :class:`DriftResidue` per drifted id in a confirmed-stuck region.
+
+    ``de_cells`` and ``current_region`` are index-aligned (``_region_of`` preserves
+    order). The likely continuation of a drifted id is a *lone* new id-less cell whose
+    *current* construct equals the id's baseline construct; when zero or several match
+    (the genuinely ambiguous case the agent must judge) no target excerpt is set.
+    """
+    new_idless_by_construct: dict[str, list[RawCell]] = {}
+    for cell, rc in zip(de_cells, current_region, strict=True):
+        if rc.slide_id is None and rc.content_hash not in region_hashes:
+            construct = construct_of(cell.metadata, cell.body)
+            if construct is not None:
+                new_idless_by_construct.setdefault(construct, []).append(cell)
+
+    residues: list[DriftResidue] = []
+    for cell, rc in zip(de_cells, current_region, strict=True):
+        sid = rc.slide_id
+        if sid is None:
+            continue
+        base = baseline_constructs.get(sid)
+        cur = rc.construct
+        if base is None or cur is None or cur == base:
+            continue  # not drifted (mirrors _has_drifted_id's per-cell test)
+        candidates = new_idless_by_construct.get(base, [])
+        target = candidates[0] if len(candidates) == 1 else None
+        hint = (
+            f" A new id-less cell now carries {base!r} (the likely continuation)."
+            if target is not None
+            else " No single new cell carries that construct (a co-occurring rename)."
+        )
+        residues.append(
+            DriftResidue(
+                slide_id=sid,
+                base_construct=base,
+                current_construct=cur,
+                drifted_excerpt=cell.body,
+                drifted_line=cell.line_number,
+                target_excerpt=target.body if target is not None else None,
+                target_line=target.line_number if target is not None else None,
+                reason=(
+                    f"slide_id {sid!r} drifted off its baseline construct {base!r} — the "
+                    f"cell now wearing it is {cur!r}.{hint} The deterministic id-migration "
+                    "cannot resolve the correspondence, so the engine leaves the region "
+                    "untouched and it re-surfaces every run. Re-identify the cells, move "
+                    "the slide_id onto its true continuation, then run "
+                    "`clm slides sync --verify` to confirm."
+                ),
+            )
+        )
+    return residues
 
 
 def _apply_alignment(

@@ -16,9 +16,13 @@ differently (the design note in PR #422, §8 / §11 Q6):
   agent can let the engine's own LLM do it, delegate it to a *cheap* model, or do
   it itself.
 * **ambiguity** (tier 3) — the engine *refuses* to guess (a both-sided conflict, a
-  structural issue the classifier will not turn into a proposal). These need the
+  structural issue the classifier will not turn into a proposal, or a drifted-id
+  region the deterministic id-migration cannot realign — a ``realign`` item, the
+  agent-facing form of the ``--llm-recover`` trigger, Issue #366). These need the
   strong agent's judgement; the report states *what* is ambiguous, never a
-  fabricated resolution.
+  fabricated resolution. For a ``realign`` item the agent re-identifies the cells
+  itself (it holds the deck source) and gates its write-back on ``clm slides sync
+  --verify`` — the embedded LLM stays only for a standalone, agent-less run.
 
 This is the difference between *agent-assisted* sync (the engine does the
 unambiguous bulk, the agent spends attention only on the residue) and
@@ -231,6 +235,13 @@ class _SourceIndex:
         return cell.content, cell.line_number
 
 
+#: The role marker on a tier-3 ``realign`` item. Its excerpts are language-neutral
+#: code cells (byte-identical across halves) carried inline by the detector, distinct
+#: from the keyed / localized position schemes — so it is *not* in
+#: :data:`_LOCALIZED_POSITION_ROLES` and the position resolver never touches it.
+_REALIGN_ROLE = "neutral-code"
+
+
 def _scheme_for(role: str | None) -> str:
     """``"localized"`` if ``role`` indexes non-j2 ``lang`` cells, else ``"sync"``."""
     return "localized" if role in _LOCALIZED_POSITION_ROLES else "sync"
@@ -290,6 +301,41 @@ def _enrich_report(report: ReconciliationReport, de_path: Path, en_path: Path) -
         _enrich(item, index)
 
 
+def _append_idmigration_residue(report: ReconciliationReport, plan: SyncPlan) -> None:
+    """Append a tier-3 ``realign`` item per drifted-id region the §9 migration can't resolve.
+
+    The agent-first counterpart of ``--llm-recover`` (Issue #366): the engine *emits*
+    the residue an embedded-LLM run would have escalated, and the agent — which holds
+    the deck source — re-identifies the cells itself and writes the corrected ids back
+    (gating on ``clm slides sync --verify``). Detection lives in the apply module so it
+    mirrors the apply tier's trigger exactly and can never disagree; imported lazily to
+    keep ``sync_report`` light and sidestep an import cycle. Called only with excerpts
+    (a ``--dry-run``): the detector reads the working-tree files, sound only before an
+    apply mutates them — the same constraint as the cell-text enrichment. Runs after
+    :func:`_enrich_report`, so the position resolver never sees these inline-byte items.
+    """
+    from clm.slides.sync_apply import detect_idmigration_residue
+
+    for residue in detect_idmigration_residue(plan):
+        report.ambiguity.append(
+            ReconciliationItem(
+                tier="ambiguity",
+                kind="realign",
+                role=_REALIGN_ROLE,
+                slide_id=residue.slide_id,
+                direction=None,
+                reason=residue.reason,
+                # Neutral cells are byte-identical on both halves; report the DE side.
+                source_lang="de",
+                source_excerpt=residue.drifted_excerpt,
+                source_line=residue.drifted_line,
+                target_lang="de" if residue.target_excerpt is not None else None,
+                target_excerpt=residue.target_excerpt,
+                target_line=residue.target_line,
+            )
+        )
+
+
 def build_report(plan: SyncPlan, *, with_excerpts: bool = False) -> ReconciliationReport:
     """Project a :class:`SyncPlan` into the tiered agent contract.
 
@@ -300,8 +346,9 @@ def build_report(plan: SyncPlan, *, with_excerpts: bool = False) -> Reconciliati
     only the keyed proposals.
 
     ``with_excerpts`` resolves each assisted / ambiguity item's positions back to the
-    concrete cell bytes (see :func:`_enrich_report`). The caller must pass it **only**
-    for a ``--dry-run`` plan — the resolver reads the working-tree files, which match
+    concrete cell bytes (see :func:`_enrich_report`) **and** surfaces the drifted-id
+    realign residue (:func:`_append_idmigration_residue`). The caller must pass it
+    **only** for a ``--dry-run`` plan — both read the working-tree files, which match
     the plan's positions only before an apply mutates them.
     """
     mechanical: list[ReconciliationItem] = []
@@ -340,4 +387,5 @@ def build_report(plan: SyncPlan, *, with_excerpts: bool = False) -> Reconciliati
     )
     if with_excerpts:
         _enrich_report(report, plan.de_path, plan.en_path)
+        _append_idmigration_residue(report, plan)
     return report
