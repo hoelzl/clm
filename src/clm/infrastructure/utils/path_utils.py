@@ -27,6 +27,18 @@ SKIP_DIRS_FOR_COURSE = frozenset(
     (
         "__pycache__",
         ".cargo",
+        # CLM's own build-internal sidecar tree. A topic-local ``.clm/`` holds
+        # voiceover scratch only — ``voiceover-cache/`` (transcripts,
+        # alignments, timelines, transitions), ``voiceover-backfill/``, and
+        # ``voiceover-traces/`` — written by ``clm voiceover`` commands. None of
+        # it is a runtime build input (HTTP-replay cassettes live in
+        # ``cassettes/``, not here), so it is fully walk-excluded: it reaches
+        # neither the course file map, worker payloads, source mounts, nor
+        # output. The project-wide ``.gitignore`` already drops it from git, but
+        # that does not cover the dir-group copy to output (issue #431). Also
+        # makes ``is_private_dir_name``'s dot-prefix rule consistent — ``.clm``
+        # already matches that shape, it just wasn't enumerated.
+        ".clm",
         ".git",
         ".idea",
         ".idea",
