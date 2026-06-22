@@ -1844,3 +1844,208 @@ def _walker_dict(walk: PlanWalkResult) -> dict:
         "auto_applied": walk.auto_applied,
         "unvisited": walk.unvisited,
     }
+
+
+# ---------------------------------------------------------------------------
+# Agent-toolkit verb surface (Issue #366 / epic #440)
+#
+# `clm slides sync` is a *group* of single-purpose verbs an agent drives. Bare
+# `clm slides sync DECK` defaults to the read-only `report`. The verbs delegate to
+# the legacy all-in-one implementation (``slides_sync_cmd``, registered as
+# ``autopilot``) via ``ctx.invoke``, so this prototype re-cuts the *surface*
+# without touching the engine. Two redesign decisions are already reflected:
+#   * read-by-default — bare ``sync DECK`` returns the report, never writes.
+#   * watermark demoted — ``report``/``verify`` baseline off git HEAD by default;
+#     ``report --use-watermark`` (or ``--baseline REF``) opts back in.
+# Still TODO (phases 2-3, see docs/claude/design/sync-agent-toolkit-redesign.md):
+# ``apply`` becoming deterministic-tier-1-only / model-free, ``task`` + ``accept``,
+# and ``baseline bless`` replacing ``--rebaseline``.
+# ---------------------------------------------------------------------------
+
+
+class _DefaultVerbGroup(click.Group):
+    """A ``sync`` group whose bare ``clm slides sync DECK`` runs ``report``.
+
+    Click groups have no native default subcommand. When the first token is not a
+    known verb (and not a help flag), prepend ``report`` so a bare deck path is
+    treated as ``report DECK`` — the read-only default the redesign mandates.
+    """
+
+    _DEFAULT_VERB = "report"
+
+    def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
+        if args and args[0] not in self.commands and args[0] not in ("--help", "-h"):
+            args = [self._DEFAULT_VERB, *args]
+        return super().parse_args(ctx, args)
+
+
+@click.group("sync", cls=_DefaultVerbGroup)
+def slides_sync_group() -> None:
+    """Agent toolkit for syncing split DE/EN deck pairs.
+
+    \b
+    Bare `clm slides sync DECK` == `clm slides sync report DECK` (read-only).
+    Verbs:
+      report     what is necessary? tiered report (read-only, no model, no key)
+      verify     structural integrity check (no model, no watermark)
+      apply      apply the reconciliation (writes; see `apply --help` re: models)
+      autopilot  legacy all-in-one WITH embedded models (agent-less human)
+      baseline   inspect/maintain the watermark accelerator
+    """
+
+
+#: Shared deck arguments for the read/apply verbs (the same surface the legacy
+#: command exposes), so every verb takes ``DECK [EN_PATH]`` consistently.
+_DECK_ARG = click.argument(
+    "de_path",
+    metavar="DECK",
+    type=click.Path(exists=True, dir_okay=True, path_type=Path),
+)
+_EN_ARG = click.argument(
+    "en_path",
+    required=False,
+    default=None,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+
+
+@slides_sync_group.command("report")
+@_DECK_ARG
+@_EN_ARG
+@click.option("--json", "as_json", is_flag=True, help="Emit the ReconciliationReport as JSON.")
+@click.option(
+    "--explain",
+    is_flag=True,
+    help="Human-readable content-anchor diagnostic (a read-only superset of the report).",
+)
+@click.option(
+    "--baseline",
+    "baseline_ref",
+    default=None,
+    metavar="REF",
+    help="Diff against an explicit git ref (e.g. HEAD~1) instead of git HEAD.",
+)
+@click.option(
+    "--use-watermark",
+    is_flag=True,
+    help="Opt back into the structural watermark as the baseline (default: git HEAD).",
+)
+@click.option(
+    "--cache-dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Directory holding the watermark (only with --use-watermark).",
+)
+@click.option("--no-env-file", is_flag=True, help="Do not auto-load a .env file.")
+@click.pass_context
+def sync_report_cmd(
+    ctx: click.Context,
+    de_path: Path,
+    en_path: Path | None,
+    as_json: bool,
+    explain: bool,
+    baseline_ref: str | None,
+    use_watermark: bool,
+    cache_dir: Path | None,
+    no_env_file: bool,
+) -> None:
+    """Return the read-only tiered reconciliation report (writes nothing, no model).
+
+    The primary agent verb: it states *what reconciliation is necessary*, partitioned
+    into mechanical / assisted / ambiguity tiers (with ``is_clean`` / ``needs_model``
+    / ``needs_agent``), and never calls a model or needs an API key. The default
+    baseline is git ``HEAD``; the watermark is a demoted, opt-in accelerator
+    (``--use-watermark`` or ``--baseline REF``).
+    """
+    use_wm = use_watermark or baseline_ref is not None
+    ctx.invoke(
+        slides_sync_cmd,
+        de_path=de_path,
+        en_path=en_path,
+        dry_run=not explain,
+        explain=explain,
+        as_json=as_json,
+        baseline_ref=baseline_ref,
+        no_cache=not use_wm,
+        cache_dir=cache_dir,
+        no_env_file=no_env_file,
+    )
+
+
+@slides_sync_group.command("verify")
+@_DECK_ARG
+@_EN_ARG
+@click.option("--json", "as_json", is_flag=True, help="Emit the verify result as JSON.")
+@click.pass_context
+def sync_verify_cmd(ctx: click.Context, de_path: Path, en_path: Path | None, as_json: bool) -> None:
+    """Structural integrity check (no model, no watermark, writes nothing).
+
+    Confirms the pair is a valid split — byte-identical shared cells, header parity,
+    clean alignment, ``de_id == en_id`` symmetry, no duplicate ids — and warns on an
+    id'd cell dropped vs git ``HEAD``. Exit ``0`` = sound (warnings allowed), ``2`` =
+    corrupt. Answers "did this edit corrupt the pair?", not "is it in sync?".
+    """
+    ctx.invoke(slides_sync_cmd, de_path=de_path, en_path=en_path, verify=True, as_json=as_json)
+
+
+@slides_sync_group.command("apply")
+@_DECK_ARG
+@_EN_ARG
+@click.option(
+    "--yes", "-y", "yes", is_flag=True, help="Confirm a writing run over a directory (batch)."
+)
+@click.option(
+    "--use-watermark/--no-watermark",
+    "use_watermark",
+    default=True,
+    help="Use the watermark as the baseline accelerator (default on for apply).",
+)
+@click.option(
+    "--baseline",
+    "baseline_ref",
+    default=None,
+    metavar="REF",
+    help="Diff against an explicit git ref.",
+)
+@click.option(
+    "--cache-dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Directory holding the watermark.",
+)
+@click.option("--no-env-file", is_flag=True, help="Do not auto-load a .env file.")
+@click.pass_context
+def sync_apply_cmd(
+    ctx: click.Context,
+    de_path: Path,
+    en_path: Path | None,
+    yes: bool,
+    use_watermark: bool,
+    baseline_ref: str | None,
+    cache_dir: Path | None,
+    no_env_file: bool,
+) -> None:
+    """Apply the reconciliation to the working tree.
+
+    PROTOTYPE: this currently delegates to the full engine, which still calls a model
+    for tier-2 (translation / edit reconciliation) when a key is present. Decision (B)
+    — making ``apply`` deterministic-tier-1-only and emitting tier-2/3 as ``task``s —
+    is phase 3 of the redesign; until then this is ``autopilot`` semantics under the
+    ``apply`` name. Use ``clm slides sync report`` first to see what it will do.
+    """
+    ctx.invoke(
+        slides_sync_cmd,
+        de_path=de_path,
+        en_path=en_path,
+        yes=yes,
+        no_cache=not use_watermark,
+        baseline_ref=baseline_ref,
+        cache_dir=cache_dir,
+        no_env_file=no_env_file,
+    )
+
+
+# The legacy all-in-one command is the agent-less human's escape hatch — the only
+# verb that drives the embedded models. It IS ``slides_sync_cmd`` (unchanged), just
+# re-homed under the new name; the read/apply verbs above ``ctx.invoke`` it.
+slides_sync_group.add_command(slides_sync_cmd, name="autopilot")
