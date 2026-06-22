@@ -90,6 +90,14 @@ class TestInfoTopicDisplay:
         assert result.exit_code == 0
         assert "Migration Guide" in result.output
 
+    def test_info_sync_agents(self):
+        """Test displaying the sync-agents agent workflow topic."""
+        runner = CliRunner()
+        result = runner.invoke(cli, ["info", "sync-agents"])
+        assert result.exit_code == 0
+        assert "clm slides sync" in result.output
+        assert "realign" in result.output
+
     def test_info_topic_contains_version(self):
         """Test that displayed topics have version substituted."""
         runner = CliRunner()
@@ -144,4 +152,5 @@ class TestLoadTopicContent:
         assert "calendar" in TOPICS
         assert "slide-format" in TOPICS
         assert "releases" in TOPICS
-        assert len(TOPICS) == 7
+        assert "sync-agents" in TOPICS
+        assert len(TOPICS) == 8

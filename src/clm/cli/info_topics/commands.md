@@ -1877,8 +1877,11 @@ written into the file, so a deck stays id-light yet syncs precisely:
   localized structure is *not* parallel (a move/add/remove is in play), the located
   deck-wide error (issue #364) is kept, since positional pairing would be unsound.
 - **Genuinely ambiguous id realignment** (a function renamed *while* a cell was
-  split, an unresolvable tie) is left untouched and re-surfaces next run, unless
-  you opt in with `--llm-recover` (above).
+  split, an unresolvable tie) is left untouched on disk and re-surfaces next run.
+  A `--dry-run --json` run now **names** it as a tier-3 `realign` item in the
+  `report` block (since CLM {version}) so a driving agent can re-identify the cells
+  itself and confirm with `--verify` — see `clm info sync-agents`. A standalone,
+  agent-less run can instead opt into `--llm-recover` (above) to have Opus resolve it.
 - **The deck header is never silently dropped (Issue #269).** Sync does **not**
   auto-translate the j2 deck header (`{{ header_xx(…) }}`) — it is language-specific
   and each half keeps its own. But a header edited on **one** half only is now an
