@@ -3630,6 +3630,29 @@ def detect_idmigration_residue(plan: SyncPlan) -> list[DriftResidue]:
     return _describe_residue(de_cells, current_region, baseline_constructs, region_hashes)
 
 
+def idmigration_regions(plan: SyncPlan) -> tuple[list[RegionCell], list[RegionCell]] | None:
+    """The ``(base_region, current_region)`` of a stuck drifted-id region, or ``None``.
+
+    The body-free region pair the agent-facing ``clm slides sync task`` builds its
+    ``realign`` prompt from — exactly the two regions :func:`_recover_drifted_ids`
+    would feed the embedded recoverer. Gated on :func:`detect_idmigration_residue`
+    finding residue, so the ``task`` surface and the report's ``realign`` items can
+    never disagree about whether a region is stuck. Returns ``None`` whenever there is
+    no stuck region (the same conditions that make ``detect_idmigration_residue``
+    return ``[]``). Reads ``plan.de_path``; writes nothing.
+    """
+    if not detect_idmigration_residue(plan):
+        return None
+    # Residue exists, so the gating in detect_idmigration_residue already confirmed
+    # the halves' neutral regions are byte-identical and the baseline bundle is
+    # present — recompute the two regions from the same derivation it used.
+    try:
+        de_cells = _neutral_code_filter(_raw_cells(plan.de_path))
+    except OSError:
+        return None
+    return _shared_region(plan), _region_of(de_cells)
+
+
 def _describe_residue(
     de_cells: list[RawCell],
     current_region: list[RegionCell],

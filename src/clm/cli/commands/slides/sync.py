@@ -91,6 +91,7 @@ from clm.slides.sync_recover import (
     OpenRouterCorrespondenceVerifier,
 )
 from clm.slides.sync_report import build_report
+from clm.slides.sync_task import SyncTask, TaskUnavailable, build_task, build_tasks
 from clm.slides.sync_translate import DEFAULT_TRANSLATION_MODEL, OpenRouterSlideTranslator
 from clm.slides.sync_verify import VerifyResult, verify_pair
 
@@ -1968,6 +1969,7 @@ def slides_sync_group() -> None:
     Verbs:
       report     what is necessary? tiered report (read-only, no model, no key)
       verify     structural integrity check (no model, no watermark)
+      task       emit a framed model task for a tier-2/3 item (read-only, no model)
       apply      apply the reconciliation (writes; see `apply --help` re: models)
       autopilot  legacy all-in-one WITH embedded models (agent-less human)
       baseline   inspect/maintain the watermark accelerator
@@ -2146,6 +2148,180 @@ def sync_apply_cmd(
         cache_dir=cache_dir,
         no_env_file=no_env_file,
     )
+
+
+@slides_sync_group.command("task")
+@_DECK_ARG
+@_EN_ARG
+@click.option(
+    "--item",
+    "item_id",
+    default=None,
+    metavar="ID",
+    help=(
+        "Frame a single report item by its stable id (from `report --json`). "
+        "Default: every frameable tier-2/3 item."
+    ),
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit the SyncTask(s) as JSON.")
+@click.option(
+    "--baseline",
+    "baseline_ref",
+    default=None,
+    metavar="REF",
+    help="Diff against an explicit git ref (e.g. HEAD~1) instead of git HEAD.",
+)
+@click.option(
+    "--baseline-from",
+    "baseline_from_spec",
+    default=None,
+    metavar="PATH[@REF]",
+    help="Diff a RENAMED deck against its pre-rename half PATH (the old folder/stem).",
+)
+@click.option(
+    "--use-watermark",
+    is_flag=True,
+    help="Opt back into the structural watermark as the baseline (default: git HEAD).",
+)
+@click.option(
+    "--cache-dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Directory holding the watermark (only with --use-watermark).",
+)
+def sync_task_cmd(
+    de_path: Path,
+    en_path: Path | None,
+    item_id: str | None,
+    as_json: bool,
+    baseline_ref: str | None,
+    baseline_from_spec: str | None,
+    use_watermark: bool,
+    cache_dir: Path | None,
+) -> None:
+    """Emit a framed model task for a tier-2/3 item (read-only, no model, no key).
+
+    For an ``assisted`` (edit / new-slide) or ``ambiguity`` (``realign``) item from the
+    report, ``task`` emits everything a model needs to do the job and nothing more: the
+    ``instructions`` (system prompt), the ready-to-send ``prompt``, the ``inputs``, the
+    ``answer_schema`` the answer must match, and the ``validator`` ``clm slides sync
+    accept`` will run on it. **The engine never calls a model** — you run the prompt
+    through whatever model you choose (or do it by hand), then pipe the answer to
+    ``accept``. ``--item ID`` selects one item (ids come from ``report --json``);
+    omitting it frames every frameable item. Single pair only.
+    """
+    if de_path.is_dir():
+        raise click.UsageError(
+            "`task` operates on a single deck pair, not a directory; pass one half "
+            "(or the deck stem). Use `report` over a directory for a read-only sweep."
+        )
+    de_path, en_path = _resolve_single_path(de_path, en_path)
+    de_path, en_path = _resolve_sync_pair(de_path, en_path)
+    de_path, en_path = de_path.resolve(), en_path.resolve()
+    baseline_from = _parse_baseline_from(baseline_from_spec) if baseline_from_spec else None
+    if baseline_ref is not None and baseline_from is not None:
+        raise click.UsageError(
+            "--baseline and --baseline-from are mutually exclusive (one pins a ref, the "
+            "other pins the deck's pre-rename location)."
+        )
+
+    prog_lang = _resolve_prog_lang(de_path)
+    guidance_by_lang, _used = resolve_guidance_by_lang(
+        de_path.parent, explicit={"de": None, "en": None}
+    )
+    # Default baseline is git HEAD (the demoted-watermark read surface); --use-watermark
+    # opts the accelerator back in, and --baseline REF dominates either way.
+    watermark_cache: SyncWatermarkCache | None = None
+    if use_watermark:
+        cache_root = resolve_cache_dir(cli_override=cache_dir)
+        watermark_cache = SyncWatermarkCache(cache_root / CACHE_DB_NAME)
+    try:
+        plan = build_sync_plan(
+            de_path,
+            en_path,
+            watermark_cache=watermark_cache,
+            provider_available=has_openrouter_api_key(),
+            baseline_ref=baseline_ref,
+            baseline_from=baseline_from,
+            detect_rename=True,
+        )
+    finally:
+        if watermark_cache is not None:
+            watermark_cache.close()
+
+    if item_id is not None:
+        try:
+            task = build_task(plan, item_id, prog_lang=prog_lang, guidance_by_lang=guidance_by_lang)
+        except KeyError:
+            raise click.UsageError(
+                f"no report item with id {item_id!r}. List the ids with "
+                f"`clm slides sync report {de_path.name} --json`."
+            ) from None
+        except TaskUnavailable as exc:
+            # There IS such an item, but it has no framed model task (a cold-start pair
+            # or a hand-judged ambiguity). Be honest: exit non-zero with the next step.
+            if as_json:
+                click.echo(
+                    json.dumps({"item": item_id, "available": False, "reason": str(exc)}, indent=2)
+                )
+            else:
+                click.echo(f"no framed model task for {item_id!r}: {exc}", err=True)
+            sys.exit(2)
+        _emit_tasks([task], unframed=[], as_json=as_json)
+        sys.exit(0)
+
+    tasks, unframed = build_tasks(plan, prog_lang=prog_lang, guidance_by_lang=guidance_by_lang)
+    _emit_tasks(tasks, unframed=unframed, as_json=as_json)
+    sys.exit(0)
+
+
+def _emit_tasks(tasks: list[SyncTask], *, unframed: list, as_json: bool) -> None:
+    """Print the framed tasks (and any unframed tier-2/3 items) for ``task``."""
+    if as_json:
+        click.echo(
+            json.dumps(
+                {
+                    "tasks": [t.model_dump(mode="json") for t in tasks],
+                    "unframed": [
+                        {
+                            "item": it.item,
+                            "kind": it.kind,
+                            "tier": it.tier,
+                            "slide_id": it.slide_id,
+                            "reason": it.reason,
+                        }
+                        for it in unframed
+                    ],
+                },
+                indent=2,
+            )
+        )
+        return
+    if not tasks and not unframed:
+        click.echo(
+            "no model tasks: every tier-2/3 item is clean or mechanical "
+            "(run `clm slides sync report` to confirm)."
+        )
+        return
+    for t in tasks:
+        click.echo(f"=== {t.item}  [{t.tier}/{t.kind}]  validator={t.validator} ===")
+        if t.slide_id:
+            click.echo(f"slide_id: {t.slide_id}")
+        if t.direction:
+            click.echo(f"direction: {t.direction}")
+        click.echo("\n# instructions (system prompt)")
+        click.echo(t.instructions)
+        click.echo("\n# prompt (send to a model of your choice)")
+        click.echo(t.prompt)
+        click.echo(
+            f"\n# the answer must match validator={t.validator}; then run "
+            f"`clm slides sync accept --item {t.item} --answer -`\n"
+        )
+    for it in unframed:
+        click.echo(
+            f"--- {it.item}  [{it.tier}/{it.kind}] needs your judgement: "
+            f"{it.reason or '(see `clm slides sync report`)'}"
+        )
 
 
 # The legacy all-in-one command is the agent-less human's escape hatch — the only

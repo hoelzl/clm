@@ -45,11 +45,13 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "CORRESPONDENCE_PROMPT_VERSION",
+    "CORRESPONDENCE_SYSTEM_PROMPT",
     "DEFAULT_CORRESPONDENCE_MODEL",
     "DEFAULT_RECOVERY_MODEL",
     "NEW",
     "NONE",
     "RECOVERY_PROMPT_VERSION",
+    "RECOVERY_SYSTEM_PROMPT",
     "AlignmentInvalid",
     "AlignmentRecoverer",
     "CorrespondenceError",
@@ -350,6 +352,11 @@ _SYSTEM_PROMPT = (
     "Return only the JSON object, no commentary, no code fences."
 )
 
+#: Public alias of the alignment-recovery system prompt, so the agent-facing
+#: ``clm slides sync task`` surface frames a ``realign`` item with the *same*
+#: instructions the embedded recoverer uses (epic #440, decision B).
+RECOVERY_SYSTEM_PROMPT = _SYSTEM_PROMPT
+
 
 def _serialize_region(label: str, region: list[RegionCell]) -> str:
     """Render one region as a compact, indexed, body-free list for the prompt."""
@@ -623,6 +630,10 @@ _CORRESPONDENCE_SYSTEM_PROMPT = (
     "Map EVERY pair index exactly once. Return only the JSON object, no commentary, "
     "no code fences."
 )
+
+#: Public alias of the cold-pair correspondence system prompt (cf.
+#: :data:`RECOVERY_SYSTEM_PROMPT`) for the agent-facing ``task`` surface.
+CORRESPONDENCE_SYSTEM_PROMPT = _CORRESPONDENCE_SYSTEM_PROMPT
 
 
 def _serialize_pairs(pairs: list[SlidePair]) -> str:

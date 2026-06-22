@@ -89,6 +89,12 @@ _LOCALIZED_POSITION_ROLES = frozenset(
 class ReconciliationItem(BaseModel):
     """One cell-level unit of work, assigned to a tier."""
 
+    # A stable, readable handle assigned by :func:`_assign_item_ids` — the address
+    # ``clm slides sync task --item ID`` / ``accept --item ID`` use to select this
+    # unit. Deterministic from the item's own identity (kind + slide_id / direction /
+    # positions), so two ``report`` runs over the same deck state mint the same id;
+    # collisions within one report are disambiguated with a ``-2`` / ``-3`` suffix.
+    item: str = ""
     tier: Tier
     kind: str
     role: str | None = None
@@ -336,6 +342,58 @@ def _append_idmigration_residue(report: ReconciliationReport, plan: SyncPlan) ->
         )
 
 
+def _slugify(text: str) -> str:
+    """A compact ``[a-z0-9_-]`` token for an item-id component.
+
+    slide_ids are already identifier-shaped; this only normalises stray
+    punctuation/whitespace so the composite id stays a single readable token.
+    """
+    out = "".join(ch if (ch.isalnum() or ch in "_-") else "-" for ch in text.lower())
+    # Collapse runs of '-' and trim, so a messy reason fragment never yields '--'.
+    while "--" in out:
+        out = out.replace("--", "-")
+    return out.strip("-") or "x"
+
+
+def _base_item_id(item: ReconciliationItem) -> str:
+    """The pre-dedup id for an item, from its most-identifying fields.
+
+    Prefers the ``slide_id`` (the natural cell handle); falls back to the
+    ``direction`` + source/target positions for the id-less localized items (an
+    ``add`` / ``conflict`` carries no id yet); finally to the bare kind. Stable
+    across runs because every component is a property of the item itself, not of
+    its position in the list.
+    """
+    parts: list[str] = [item.kind]
+    if item.slide_id:
+        parts.append(_slugify(item.slide_id))
+    else:
+        if item.direction:
+            parts.append(item.direction.replace("->", "-"))
+        if item.source_position is not None:
+            parts.append(f"s{item.source_position}")
+        if item.target_position is not None:
+            parts.append(f"t{item.target_position}")
+    return "-".join(parts)
+
+
+def _assign_item_ids(report: ReconciliationReport) -> None:
+    """Mint a stable, unique ``item`` handle on every item (mutates in place).
+
+    Walks the tiers in a fixed order (mechanical → assisted → ambiguity, list order
+    within each) so the dedup suffix is deterministic for a given deck state. The
+    first item with a base slug keeps it bare; later collisions get ``-2`` / ``-3``.
+    Called once, after :func:`_append_idmigration_residue`, so the realign residue
+    items are numbered too.
+    """
+    seen: dict[str, int] = {}
+    for item in (*report.mechanical, *report.assisted, *report.ambiguity):
+        base = _base_item_id(item)
+        count = seen.get(base, 0) + 1
+        seen[base] = count
+        item.item = base if count == 1 else f"{base}-{count}"
+
+
 def build_report(plan: SyncPlan, *, with_excerpts: bool = False) -> ReconciliationReport:
     """Project a :class:`SyncPlan` into the tiered agent contract.
 
@@ -388,4 +446,7 @@ def build_report(plan: SyncPlan, *, with_excerpts: bool = False) -> Reconciliati
     if with_excerpts:
         _enrich_report(report, plan.de_path, plan.en_path)
         _append_idmigration_residue(report, plan)
+    # Assign item ids last, so the realign residue items (appended above) are
+    # numbered too and the dedup order is stable for this deck state.
+    _assign_item_ids(report)
     return report
