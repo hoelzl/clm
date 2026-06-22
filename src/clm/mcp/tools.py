@@ -19,6 +19,11 @@ from clm.core.topic_resolver import (
 from clm.core.topic_resolver import (
     resolve_topic as _resolve_topic,
 )
+from clm.infrastructure.llm.cache import SyncWatermarkCache as _SyncWatermarkCache
+from clm.infrastructure.llm.cache import describe_cache_dir as _describe_cache_dir
+from clm.infrastructure.llm.openrouter_client import (
+    has_openrouter_api_key as _has_openrouter_api_key,
+)
 from clm.slides.authoring_rules import AuthoringRulesResult
 from clm.slides.authoring_rules import get_authoring_rules as _get_authoring_rules
 from clm.slides.language_tools import SyncResult
@@ -29,10 +34,13 @@ from clm.slides.normalizer import normalize_course as _normalize_course
 from clm.slides.normalizer import normalize_directory as _normalize_directory
 from clm.slides.normalizer import normalize_file as _normalize_file
 from clm.slides.pairing import derive_split_pair as _derive_split_pair
+from clm.slides.pairing import derive_split_pair_from_stem as _derive_split_pair_from_stem
 from clm.slides.search import SearchResult
 from clm.slides.search import search_slides as _search_slides
 from clm.slides.spec_validator import SpecValidationResult
 from clm.slides.spec_validator import validate_spec as _validate_spec
+from clm.slides.sync_plan import build_sync_plan as _build_sync_plan
+from clm.slides.sync_report import build_report as _build_report
 from clm.slides.validator import ValidationResult
 from clm.slides.validator import validate_course as _validate_course
 from clm.slides.validator import validate_directory as _validate_directory
@@ -724,6 +732,91 @@ async def handle_suggest_sync(
 
     result = _suggest_sync(target, source_language=source_language)
     return json.dumps(_sync_result_to_dict(result), indent=2)
+
+
+# ---------------------------------------------------------------------------
+# sync_report (split-pair reconciliation report — the agent contract)
+# ---------------------------------------------------------------------------
+
+_SYNC_CACHE_DB_NAME = "clm-llm.sqlite"
+
+
+def _resolve_split_pair(target: Path) -> tuple[Path, Path] | None:
+    """A deck half OR a bilingual stem -> ordered ``(de_path, en_path)``, or ``None``.
+
+    Mirrors the ``clm slides sync`` single-path contract: try the split-half form
+    first (the twin is derived from disk), then the deck-stem form (both halves
+    derived). ``None`` when ``target`` is neither.
+    """
+    pair = _derive_split_pair(target)
+    if pair is not None:
+        return pair
+    return _derive_split_pair_from_stem(target)
+
+
+async def handle_sync_report(file: str, data_dir: Path) -> str:
+    """Produce the tiered reconciliation report for a split DE/EN deck pair.
+
+    Runs the *same* deterministic engine as ``clm slides sync --dry-run`` and returns
+    its :class:`~clm.slides.sync_report.ReconciliationReport` — the engine's work
+    partitioned into the three tiers an agent acts on differently (``mechanical`` /
+    ``assisted`` / ``ambiguity``), each assisted/ambiguity item enriched with the
+    source/target cell bytes. This is the blessed agent contract for non-shell agents
+    (the split-pair analogue of the legacy single-file ``slides_suggest_sync``).
+    Read-only: no file is written and no model is called.
+
+    The baseline is the structural watermark when one already exists for this pair
+    (matching the CLI), else each half's git ``HEAD`` — never creating a cache.
+
+    Args:
+        file: A deck half (``<deck>.de.<ext>`` / ``<deck>.en.<ext>``) or the bilingual
+            deck stem (``<deck>.<ext>``); the twin / both halves are derived from disk.
+        data_dir: Root data directory (a relative ``file`` resolves against it).
+
+    Returns:
+        JSON: the ``ReconciliationReport`` (``de_path`` / ``en_path`` /
+        ``baseline_source``, the three tier lists, and ``is_clean`` / ``needs_model`` /
+        ``needs_agent``), or an ``{"error": …}`` object.
+    """
+    target = Path(file)
+    if not target.is_absolute():
+        target = data_dir / target
+
+    pair = _resolve_split_pair(target)
+    if pair is None:
+        return json.dumps(
+            {
+                "error": (
+                    f"{target.name} is not a split-format deck half "
+                    "(<deck>.de.<ext> / <deck>.en.<ext>) nor a deck stem with both "
+                    "halves on disk; this tool reconciles a split DE/EN pair. For a "
+                    "single bilingual file, use slides_suggest_sync."
+                )
+            },
+            indent=2,
+        )
+    de_path, en_path = pair
+
+    # Use the structural watermark only if one already exists — never create a cache
+    # (this tool is read-only). Absent a watermark, build_sync_plan falls back to git
+    # HEAD, exactly like a fresh `clm slides sync`.
+    db_path = _describe_cache_dir().path / _SYNC_CACHE_DB_NAME
+    watermark_cache = _SyncWatermarkCache(db_path) if db_path.exists() else None
+    try:
+        plan = _build_sync_plan(
+            de_path,
+            en_path,
+            watermark_cache=watermark_cache,
+            provider_available=_has_openrouter_api_key(),
+        )
+    finally:
+        if watermark_cache is not None:
+            watermark_cache.close()
+
+    # Read-only / pre-apply, so excerpt resolution is sound (the files match the plan's
+    # positions). build_report mirrors the CLI's `--dry-run` report exactly.
+    report = _build_report(plan, with_excerpts=True)
+    return json.dumps(report.model_dump(mode="json"), indent=2)
 
 
 # ---------------------------------------------------------------------------
