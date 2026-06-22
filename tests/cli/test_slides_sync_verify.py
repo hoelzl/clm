@@ -35,6 +35,11 @@ def _md(lang: str, sid: str, body: str) -> str:
     return f'# %% [markdown] lang="{lang}" tags=["slide"] slide_id="{sid}"\n{body}\n'
 
 
+def _vo(lang: str, sid: str, body: str) -> str:
+    """An inline voiceover companion — shares its slide's ``slide_id`` under role ``voiceover``."""
+    return f'# %% [markdown] lang="{lang}" tags=["voiceover"] slide_id="{sid}"\n{body}\n'
+
+
 def _shared(body: str) -> str:
     return f'# %% tags=["keep"]\n{body}\n'
 
@@ -101,6 +106,7 @@ class TestStructuralViolations:
         assert [(v.kind, v.slide_id) for v in vs] == [("id-asymmetry", "s2")]
 
     def test_duplicate_id_within_half(self):
+        # Two cells with the same id AND the same role are a true (slide_id, role) collision.
         de = _half(_md("de", "s1", "Hallo"), _md("de", "s1", "Wieder"))
         en = _half(_md("en", "s1", "Hello"), _md("en", "s1", "Again"))
         vs = structural_violations(de, en, "#")
@@ -108,6 +114,15 @@ class TestStructuralViolations:
         assert {v.slide_id for v in dups} == {"s1"}
         assert any("DE" in v.message for v in dups)
         assert any("EN" in v.message for v in dups)
+
+    def test_companion_roles_share_id_not_duplicate(self):
+        # A slide and its inline voiceover companion legitimately share a slide_id under
+        # different roles (the engine keys on (slide_id, role)); that is NOT a duplicate.
+        # Regression: keying the check on the bare id wrongly flagged every voiceover deck.
+        de = _half(_md("de", "s1", "Hallo"), _vo("de", "s1", "# Sprechtext"))
+        en = _half(_md("en", "s1", "Hello"), _vo("en", "s1", "# Voiceover"))
+        dups = [v for v in structural_violations(de, en, "#") if v.kind == "duplicate-id"]
+        assert dups == []
 
     def test_idless_cells_excluded_from_symmetry(self):
         # An id-less localized code cell on each side: no id, so no asymmetry.
