@@ -76,6 +76,12 @@ from clm.slides.pairing import (
     order_split_pair,
     split_lang_tag,
 )
+from clm.slides.sync_accept import (
+    AcceptRejected,
+    AcceptResult,
+    AcceptUnavailable,
+    accept_answer,
+)
 from clm.slides.sync_apply import ApplyResult, apply_plan
 from clm.slides.sync_plan import (
     PlanIssue,
@@ -1970,6 +1976,7 @@ def slides_sync_group() -> None:
       report     what is necessary? tiered report (read-only, no model, no key)
       verify     structural integrity check (no model, no watermark)
       task       emit a framed model task for a tier-2/3 item (read-only, no model)
+      accept     validate a model answer + write it to both halves (writes, no model)
       apply      apply the reconciliation (writes; see `apply --help` re: models)
       autopilot  legacy all-in-one WITH embedded models (agent-less human)
       baseline   inspect/maintain the watermark accelerator
@@ -2321,6 +2328,158 @@ def _emit_tasks(tasks: list[SyncTask], *, unframed: list, as_json: bool) -> None
         click.echo(
             f"--- {it.item}  [{it.tier}/{it.kind}] needs your judgement: "
             f"{it.reason or '(see `clm slides sync report`)'}"
+        )
+
+
+@slides_sync_group.command("accept")
+@_DECK_ARG
+@_EN_ARG
+@click.option(
+    "--item",
+    "item_id",
+    required=True,
+    metavar="ID",
+    help="The report item the answer is for (the same id `task --item ID` framed).",
+)
+@click.option(
+    "--answer",
+    "answer_path",
+    required=True,
+    metavar="FILE",
+    help="Path to the model's answer (JSON matching the task's answer_schema), or '-' for stdin.",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit the accept result as JSON.")
+@click.option(
+    "--baseline",
+    "baseline_ref",
+    default=None,
+    metavar="REF",
+    help="Diff against an explicit git ref (e.g. HEAD~1) instead of git HEAD.",
+)
+@click.option(
+    "--baseline-from",
+    "baseline_from_spec",
+    default=None,
+    metavar="PATH[@REF]",
+    help="Diff a RENAMED deck against its pre-rename half PATH (the old folder/stem).",
+)
+@click.option(
+    "--use-watermark",
+    is_flag=True,
+    help="Opt back into the structural watermark as the baseline (default: git HEAD).",
+)
+@click.option(
+    "--cache-dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Directory holding the watermark (only with --use-watermark).",
+)
+def sync_accept_cmd(
+    de_path: Path,
+    en_path: Path | None,
+    item_id: str,
+    answer_path: str,
+    as_json: bool,
+    baseline_ref: str | None,
+    baseline_from_spec: str | None,
+    use_watermark: bool,
+    cache_dir: Path | None,
+) -> None:
+    """Validate a model's answer for one item and write it to **both** halves (no model).
+
+    Takes the answer the agent produced for the framed ``task`` (``--answer FILE`` or
+    ``-`` for stdin, JSON matching the task's ``answer_schema``), runs it through the
+    deterministic ``validator`` the task named, and writes it to both split halves iff
+    it passes — maintaining ``de_id == en_id`` and neutral byte-identity. On a
+    validation failure it rejects with the precise reason and **writes nothing**. The
+    engine never calls a model: the model ran between ``task`` and ``accept``.
+
+    \b
+    Accepts a ``realign`` (alignment map) or an ``add`` (translated new slide). An
+    ``edit`` / cold-start / hand-judged item is not accepted yet — it says so with the
+    next step. Run ``clm slides sync verify`` after to confirm the write is sound.
+    """
+    if de_path.is_dir():
+        raise click.UsageError(
+            "`accept` operates on a single deck pair, not a directory; pass one half "
+            "(or the deck stem)."
+        )
+    de_path, en_path = _resolve_single_path(de_path, en_path)
+    de_path, en_path = _resolve_sync_pair(de_path, en_path)
+    de_path, en_path = de_path.resolve(), en_path.resolve()
+    baseline_from = _parse_baseline_from(baseline_from_spec) if baseline_from_spec else None
+    if baseline_ref is not None and baseline_from is not None:
+        raise click.UsageError(
+            "--baseline and --baseline-from are mutually exclusive (one pins a ref, the "
+            "other pins the deck's pre-rename location)."
+        )
+
+    answer = _read_answer(answer_path)
+
+    watermark_cache: SyncWatermarkCache | None = None
+    if use_watermark:
+        cache_root = resolve_cache_dir(cli_override=cache_dir)
+        watermark_cache = SyncWatermarkCache(cache_root / CACHE_DB_NAME)
+    try:
+        plan = build_sync_plan(
+            de_path,
+            en_path,
+            watermark_cache=watermark_cache,
+            provider_available=has_openrouter_api_key(),
+            baseline_ref=baseline_ref,
+            baseline_from=baseline_from,
+            detect_rename=True,
+        )
+    finally:
+        if watermark_cache is not None:
+            watermark_cache.close()
+
+    try:
+        result = accept_answer(plan, item_id, answer)
+    except KeyError:
+        raise click.UsageError(
+            f"no report item with id {item_id!r}. List the ids with "
+            f"`clm slides sync report {de_path.name} --json`."
+        ) from None
+    except AcceptRejected as exc:
+        _emit_accept_failure(item_id, str(exc), outcome="rejected", as_json=as_json)
+        sys.exit(2)
+    except AcceptUnavailable as exc:
+        _emit_accept_failure(item_id, str(exc), outcome="unavailable", as_json=as_json)
+        sys.exit(2)
+
+    _emit_accept_result(result, de_path, as_json=as_json)
+    sys.exit(0)
+
+
+def _read_answer(answer_path: str) -> object:
+    """Read + JSON-parse the model answer from a file or stdin (``-``)."""
+    raw = sys.stdin.read() if answer_path == "-" else Path(answer_path).read_text(encoding="utf-8")
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise click.UsageError(f"--answer is not valid JSON: {exc}") from exc
+
+
+def _emit_accept_failure(item_id: str, reason: str, *, outcome: str, as_json: bool) -> None:
+    """Report a rejected / unavailable accept (writes nothing); exit handled by caller."""
+    if as_json:
+        click.echo(
+            json.dumps({"item": item_id, "applied": False, "outcome": outcome, "reason": reason})
+        )
+    else:
+        click.echo(f"not accepted ({outcome}): {reason}", err=True)
+
+
+def _emit_accept_result(result: AcceptResult, de_path: Path, *, as_json: bool) -> None:
+    if as_json:
+        click.echo(json.dumps(result.to_dict(), indent=2))
+        return
+    click.echo(f"accepted {result.item} [{result.kind}]: {result.detail}")
+    if result.changed:
+        click.echo(
+            f"Review the change with `git diff` and confirm it is sound with "
+            f"`clm slides sync verify {de_path.name}`."
         )
 
 
