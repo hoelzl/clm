@@ -281,10 +281,13 @@ field lets you find and re-check later.
   residue. The ledger does not solve id-less identity; it inherits its fragility.
 - **Merge semantics.** A committed ledger conflicts when two branches sync the same
   topic. Per-topic sharding + canonical sorted JSON (the `changelog.d/` and
-  `.clm-released.<stream>.json` lesson) keeps it local; the union rule is
-  **newest `confirmed_commit` wins per slide_id**, and a genuine conflict is a
-  *true-positive* "both branches re-synced this deck" signal, surfaced not
-  silenced (as `sync-baseline-storage-and-agent-direction.md` §4 argued).
+  `.clm-released.<stream>.json` lesson) keeps it local; the rule is
+  **drop-on-conflict** (a conflicting `(slide_id, role)` is dropped → re-checked
+  next run), *not* newest-wins (⚠ corrected in §11.5: after a content merge the
+  slide is a new state neither branch confirmed, so picking a "winner" asserts
+  wrong trust). A genuine conflict is a *true-positive* "both branches re-synced
+  this deck" signal, surfaced not silenced (as
+  `sync-baseline-storage-and-agent-direction.md` §4 argued).
 - **Opaque churn.** Every sync rewrites hash lines a human cannot eyeball for
   correctness. Per-slide keeps each diff minimal and the `confirmed_oracle` field
   makes *what kind of* trust changed legible, but "reviewable in PRs" remains
@@ -302,7 +305,8 @@ field lets you find and re-check later.
   full bundle) → **content-hash + `confirmed_commit`** by default (re-derive the
   baseline blob via `git cat-file`); full-bundle remains the opt-in for
   sync-without-commit (§9). Q3 (multi-deck batch) → per-topic file, one entry per
-  slide, scales fine. Q5 (merge semantics) → surface, newest-commit-wins union.
+  slide, scales fine. Q5 (merge semantics) → surface; **drop-on-conflict** (re-check),
+  not newest-wins — see §11.5.
 - `sync-baseline-storage-and-agent-direction.md` option A's pain point "store the
   cell matches converges back onto store the watermark rows in a file" → **yes,
   and that is the point** — we *are* storing the watermark rows in a file, keyed
@@ -513,15 +517,33 @@ partial-advance + per-slide-verify path is solid.
   the sharpest part (a dropped carry silently demotes a slide to the cold path).
 - **Lift `verify` into a reusable write-gate** function out of `structural_violations`
   (`sync_verify.py:103`), callable from the apply path.
-- **Merge strategy (was unaddressed):** `include_ledger.py` has **no** union/merge
-  logic, so two branches syncing one topic produce raw conflict markers. Need a
-  `.gitattributes` merge driver ("union; newest `confirmed_commit` per
-  `(slide_id, role)` wins") *or* documented manual resolution. Per-topic +
-  per-slide-line + canonical sorted JSON makes most merges auto-resolve.
-- **Migration/seeding:** existing decks have a sqlite watermark but no ledger.
-  Optionally seed the ledger from the current watermark stamped
-  `confirmed_oracle=assume` (cheap, but asserts unverified trust — honest under the
-  strictness knob) or honest cold-start.
+
+These are tracked as the **P0 checklist** on #448: #429 (reflow hash +
+hash-versioning), #453 (topic-dir consolidation), #454 (capture id-migration map
+in `ApplyResult`), #455 (lift the verify write-gate). The two items below were
+**settled (2026-06-23)** and need no standalone code at P0:
+
+- **Merge strategy — SETTLED: documented manual / drop-on-conflict; defer any driver.**
+  `include_ledger.py` has **no** union/merge logic, so two branches syncing one topic
+  produce raw conflict markers. Per-topic + per-slide-line + canonical sorted JSON
+  makes git's line-merge auto-resolve the common case (different slides); a real
+  conflict (the *same* slide re-synced on both branches) is a true-positive worth
+  surfacing, and the correct resolution is to **drop** the entry (→ re-check) or
+  re-run `sync`/`bless`. **No `.gitattributes` driver up front** — a custom driver
+  needs an ungoverned `.git/config` entry per clone (footgun; the repo has no custom
+  driver precedent). *If* one is ever built it must be **drop-on-conflict** (union
+  non-conflicting; omit any differing `(slide_id, role)`), never newest-wins, which
+  would assert trust the merged content doesn't have.
+- **Seeding — SETTLED: default cold-start; opt-in `--seed` stamps `assume`.**
+  At P1 (no LLM) the cold path is just `structural` at `--baseline REF` — i.e. what
+  `sync` already does on a watermark miss — so an empty ledger costs ~nothing over
+  today. Default cold-start (honors append-only trust; no laundering of the
+  being-demoted watermark). Provide an opt-in `clm slides sync baseline rebuild
+  --from-watermark` (a.k.a. `--seed`) that writes entries from the existing watermark
+  stamped `confirmed_oracle=assume`, `confirmed_commit = synced_commit` — safe against
+  a *stale* watermark (mismatched hash ⇒ re-check, never silent mis-sync), and the
+  `assume` provenance keeps the inherited trust legible and revocable. Seeding mainly
+  pays off at **P2** (avoid re-judging legacy decks).
 - **Per-phase hygiene:** each phase updates the matching `clm info` topic
   (`sync-agents.md` / `commands.md`) and adds a `changelog.d/` fragment.
 
