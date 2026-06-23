@@ -96,7 +96,7 @@ def _stub_judge(
     exercise the engine wiring identically whether the (now default) OpenRouter
     backend or ``--provider local`` is selected, with no live LLM.
     """
-    from clm.cli.commands.slides import sync as cmd
+    from clm.cli.commands.slides import sync_autopilot as cmd
     from clm.infrastructure.llm.ollama_client import StaticSyncJudge, SyncProposal
 
     proposal = SyncProposal(verdict=verdict, proposed_text=proposed_text, reason=reason)
@@ -115,7 +115,7 @@ def _stub_translator(monkeypatch, *, default: str = "# ## Translated\n#\n# - poi
     offline. A translator that always succeeds means a deferral can only come from
     the engine's own decision, never a missing translation.
     """
-    from clm.cli.commands.slides import sync as cmd
+    from clm.cli.commands.slides import sync_autopilot as cmd
     from clm.slides.sync_translate import StaticSlideTranslator
 
     monkeypatch.setattr(
@@ -133,7 +133,7 @@ def _stub_verifier(
     factory to a deterministic static verifier, so the mint path runs offline.
     ``verdicts`` overrides the verdict per pair index (#231 tests).
     """
-    from clm.cli.commands.slides import sync as cmd
+    from clm.cli.commands.slides import sync_autopilot as cmd
     from clm.slides.sync_recover import StaticCorrespondenceVerifier
 
     monkeypatch.setattr(cmd, "has_openrouter_api_key", lambda *_a, **_k: True)
@@ -348,7 +348,7 @@ def _capture_translator(monkeypatch) -> dict:
     tests/slides/test_sync_translate_prompts.py). Returns a dict the test inspects
     after the run.
     """
-    from clm.cli.commands.slides import sync as cmd
+    from clm.cli.commands.slides import sync_autopilot as cmd
     from clm.slides.sync_translate import StaticSlideTranslator
 
     captured: dict = {}
@@ -533,7 +533,7 @@ def _recording_translator(monkeypatch, sink: list) -> None:
     """
     from types import SimpleNamespace
 
-    from clm.cli.commands.slides import sync as cmd
+    from clm.cli.commands.slides import sync_autopilot as cmd
     from clm.slides.sync_translate import OpenRouterSlideTranslator
 
     def factory(**kwargs):
@@ -768,7 +768,7 @@ class TestProvider:
     ):
         # With a key present the default openrouter branch builds an
         # OpenRouterSyncJudge (here swapped for a static one) and applies.
-        from clm.cli.commands.slides import sync as cmd
+        from clm.cli.commands.slides import sync_autopilot as cmd
         from clm.infrastructure.llm.ollama_client import StaticSyncJudge, SyncProposal
 
         monkeypatch.delenv("CLM_SYNC_PROVIDER", raising=False)
@@ -855,7 +855,7 @@ class TestEnvFileLoading:
     as 'LLM unavailable'."""
 
     def _swap_openrouter_judge(self, monkeypatch) -> None:
-        from clm.cli.commands.slides import sync as cmd
+        from clm.cli.commands.slides import sync_autopilot as cmd
         from clm.infrastructure.llm.ollama_client import StaticSyncJudge, SyncProposal
 
         proposal = SyncProposal(verdict="update", proposed_text=_EN_PROPOSAL, reason="")
@@ -934,7 +934,7 @@ class TestResolveTimeout:
     on the local path)."""
 
     def test_clamps_non_positive_to_provider_default(self):
-        from clm.cli.commands.slides.sync import _resolve_timeout
+        from clm.cli.commands.slides.sync_autopilot import _resolve_timeout
 
         assert _resolve_timeout(None, 120.0) == 120.0
         assert _resolve_timeout(0, 120.0) == 120.0
@@ -1147,7 +1147,7 @@ class TestSinglePath:
         # its watermark key matches the directory-batch surface (whose enumerator
         # resolves every file). Otherwise the same pair gets two keys across
         # surfaces and the second silently misses the first's watermark.
-        from clm.cli.commands.slides import sync as cmd
+        from clm.cli.commands.slides import sync_autopilot as cmd
 
         captured: dict[str, Path] = {}
         real = cmd.build_sync_plan
@@ -1300,7 +1300,9 @@ class TestBatchMode:
     ):
         # One pair raises during classification; the sweep records it as errored
         # (exit 2) and still processes the other pair.
-        from clm.cli.commands.slides import sync as cmd
+        from clm.cli.commands.slides import (
+            sync as cmd,
+        )  # batch path's build_sync_plan lives in sync.py, not autopilot
 
         root, cache_dir, _decks = self._make_tree(tmp_path, with_solo=False)
         real_build = cmd.build_sync_plan
@@ -1396,7 +1398,7 @@ class TestBatchMode:
         monkeypatch.delenv("CLM_SYNC_PROVIDER", raising=False)
         monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-        from clm.cli.commands.slides import sync as cmd
+        from clm.cli.commands.slides import sync_autopilot as cmd
         from clm.infrastructure.llm.ollama_client import StaticSyncJudge, SyncProposal
 
         proposal = SyncProposal(verdict="update", proposed_text=_EN_PROPOSAL, reason="")

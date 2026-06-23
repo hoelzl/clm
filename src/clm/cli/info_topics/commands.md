@@ -1374,7 +1374,8 @@ clm slides normalize [OPTIONS] PATH
 | `--operations TEXT` | Comma-separated operations: `preamble_code`, `placeholder_start`, `tag_migration`, `workshop_tags`, `interleaving`, `slide_ids`, `cell_spacing`, `all` (default: `all`) |
 | `--dry-run` | Preview changes without modifying files |
 | `--canonicalize-start-completed` | Force `start`/`completed` cohesion pairs into the canonical DE/EN interleave, even when DE/EN code differs (e.g. localized identifiers). Run before `clm slides split` so `unify(split(deck)) == deck` holds byte-for-byte. Only affects the `interleaving` operation. |
-| `--json` | Output as JSON |
+| `--confirm-pairs FILE` | (since CLM {version}) Apply an **agent-confirmed interleave** (#236). `FILE` (or `-` for stdin) is a JSON array of `{"de_line": N, "en_line": M}` pairs taken from a `--json` `similarity_failure` worklist; each bypasses the similarity gate and is reordered into adjacency. **Single slide `.py` file only** (the line numbers are per-file). Run on the same, unmodified file the worklist reported — a drifted pairing simply does not match and stays flagged. |
+| `--json` | Output as JSON. For an `interleaving` `similarity_failure` the worklist carries the **full** DE/EN cell `body` (not just `preview`), a 0.0–1.0 `similarity_score`, the `category`, and `failed_checks` — enough to judge a pairing (#236). |
 | `--data-dir DIR` | Course data directory (contains slides/) |
 | `--only bilingual\|split` | (since CLM {version}) Scope a **directory** run to only bilingual decks (no `.de`/`.en` tag) or only split halves — e.g. normalize the bilingual decks while leaving `.de`/`.en` pairs for `clm slides sync`. |
 | `--exclude GLOB` | (since CLM {version}) Skip decks matching `GLOB`, matched against the full path **and** each path component (so `--exclude old_decks` skips an `old_decks/` directory). Repeatable. Underscore-prefixed dirs (`_archive/`, `_drafts/`, …) are skipped automatically (issue #318) and need no `--exclude`. |
@@ -1401,6 +1402,10 @@ clm slides normalize slides/module_010/ --operations preamble_code
 clm slides normalize slides/module_010/ --operations placeholder_start
 # Pre-conversion: canonicalize start/completed order so the split round-trips exactly
 clm slides normalize slides/module_010/topic_100_intro/ --operations interleaving --canonicalize-start-completed
+# Assisted interleave (#236): read the worklist, confirm the correct pairings, apply, verify.
+clm slides normalize slides/module_010/topic_100_intro/deck.py --operations interleaving --json   # worklist
+clm slides normalize slides/module_010/topic_100_intro/deck.py --operations interleaving --confirm-pairs confirmed.json
+clm slides normalize slides/module_010/topic_100_intro/deck.py --operations interleaving           # verify: clean
 # Scope: mint ids on bilingual decks only
 clm slides normalize slides/ --operations slide_ids --only bilingual
 # Scope: only the decks that actually ship
@@ -1712,15 +1717,49 @@ clm slides coverage-report slides/ --shipping-only
 
 ### `clm slides sync`
 
-*Added in CLM {version}.*
+*Restructured into a verb group in CLM {version} (epic #440).*
 
 Single-language authoring sync for split-format decks
 (`<deck>.de.<ext>` / `<deck>.en.<ext>`, the layout produced by
-`clm slides split`). After an author edits **one** half of a pair, this
-command brings the *other* half into sync in a single pass: edits are
-propagated, brand-new slides are translated and inserted, removed
-slides are dropped, reorders are mirrored, and a shared `slide_id` is
-minted onto both decks as it goes.
+`clm slides split`). After an author edits **one** half of a pair, `sync`
+reconciles the *other* half: edits are propagated, brand-new slides are
+translated and inserted, removed slides are dropped, reorders are mirrored, and
+a shared `slide_id` is minted onto both decks.
+
+`clm slides sync` is an **agent toolkit, not an autonomous solver** (epic #440).
+It is a **verb group**, and the engine **never calls a model** on the toolkit
+path: it classifies deterministically, applies the mechanical tier itself, and
+*frames* the rest as model tasks for an agent to run. The agent workflow is in
+`clm info sync-agents`; this section is the per-verb reference.
+
+```
+clm slides sync DECK                 # default → `report` (read-only)
+clm slides sync report   DECK [opts] # the tiered ReconciliationReport
+clm slides sync verify   DECK [opts] # structural integrity check
+clm slides sync apply    DECK [opts] # deterministic tier-1 apply (no model)
+clm slides sync task     DECK --item ID            # emit a framed model task
+clm slides sync accept   DECK --item ID --answer - # validate + write an answer
+clm slides sync baseline {show,bless,clear,prune}  # the watermark accelerator
+clm slides sync autopilot DECK [opts]              # legacy all-in-one WITH models
+```
+
+| Verb | Writes? | Model? | Key? | What it does |
+|---|---|---|---|---|
+| `report` (default) | no | no | no | the tiered report — `mechanical` / `assisted` / `ambiguity`, with `is_clean` / `needs_model` / `needs_agent` |
+| `verify` | no | no | no | structural integrity check (did this edit *corrupt* the pair?) |
+| `apply` | yes | no | no | applies the **mechanical tier only**; leaves tier-2/3 as residue |
+| `task` | no | no | no | emits a framed `SyncTask` (prompt + inputs + validator) for an item |
+| `accept` | yes | no | no | validates a model answer and writes it to both halves |
+| `baseline` | (varies) | no | no | inspect/maintain the demoted watermark accelerator |
+| `autopilot` | yes | **yes** | **yes** | the legacy all-in-one — the **only** place the embedded models live |
+
+`DECK` is, everywhere, either half (`<deck>.de.<ext>`), the bilingual stem, or a
+**directory** (a batch sweep). Bare `clm slides sync DECK` is an alias for
+`clm slides sync report DECK` — **read-only**. The model flags (`--provider`,
+`--llm-model`, `--translation-model`, `--glossary-*`, `--recovery-model`,
+`--verify-cold-pairs`, `--llm-recover`, `--interactive`, `--ollama-url`,
+`--llm-timeout`) and the legacy write-everything behavior all live on
+**`autopilot`** now; never run `autopilot` in CI.
 
 **Pairing guard (since CLM {version}).** Before anything is read or written,
 sync checks that `DE_PATH` and `EN_PATH` are the two halves of **one** deck —
@@ -1762,11 +1801,11 @@ pair (stderr), and a writing run prints a short stderr tick per LLM call
 (`· reconciling …` / `· translating …`) so a long sync is visibly alive;
 progress is suppressed under `--json`.
 
-**Default behavior changed in CLM {version}: the command now writes to
-the working tree.** A bare `clm slides sync de en` applies the agreed
-changes (it no longer just prints a diff). Nothing is committed —
-review the result with `git diff`, the design's primary review surface.
-Use `--dry-run` to preview without writing. See the migration guide
+**Default behavior (CLM {version}, epic #440): the bare command reads.** A bare
+`clm slides sync de en` is `report` — it prints the tiered report and writes
+**nothing**. To write, name a verb: `apply` (mechanical tier, no model) or
+`accept` (a validated model answer); review the result with `git diff`. The old
+write-everything-with-models behavior is `autopilot`. See the migration guide
 (`clm info migration`) for the full before/after.
 
 **Per-cell direction (no `--source-lang`).** Direction is decided per
@@ -1781,10 +1820,11 @@ deck's git `HEAD`, then to the id-less-as-new heuristic alone; the
 no-silent-no-op summary states which baseline was used.
 
 **Conflicts are isolated, never guessed.** A cell edited on *both* decks
-since the last sync (or removed on one and edited on the other) is
-surfaced as a `conflict`: both decks are left untouched and it is listed
-in the summary. Resolve it with `--interactive` (`[d]e-wins` /
-`[e]n-wins`) or by editing one side and re-running.
+since the last sync (or removed on one and edited on the other) is surfaced as
+a tier-3 `conflict` (`needs_agent`): both decks are left untouched. Resolve it
+by editing one side so the halves agree and re-running `report`/`apply` (or, for
+an agent-less one-shot, `autopilot --interactive` offers `[d]e-wins` /
+`[e]n-wins`).
 
 **Tag-only edits (since CLM {version}).** Tags are language-independent, so a
 synced pair carries identical tag sets per cell. A one-sided tag-only edit
@@ -1801,25 +1841,16 @@ changed on **both** twins, and an under-reorder tag edit coinciding with
 other structural changes (add/remove) in the same pass — sync those in two
 steps.
 
-**Two LLMs.** Edits are reconciled by a judge whose backend you pick
-with `--provider`: **`openrouter`** (the default — Claude Sonnet via
-OpenRouter, fast) or **`local`** (the Ollama daemon — offline but
-slower). Set a persistent default with `$CLM_SYNC_PROVIDER`. The judge
-model is `--llm-model` (default `anthropic/claude-sonnet-4-6` for
-openrouter, `qwen3:30b` for local). The OpenRouter backend needs
-`$OPENROUTER_API_KEY` (or `$OPENAI_API_KEY`). Brand-new slides are
-always translated by an OpenRouter model (`--translation-model`, default
-`anthropic/claude-sonnet-4-6`), which needs the same key; without a key,
-add proposals defer. When the judge backend is unavailable (Ollama
-unreachable, or no OpenRouter key), edit proposals are recorded as
-errors (exit 2) rather than guessed.
-
-**`.env` is loaded automatically.** Before resolving the judge and
-translator, sync walks up from each deck's directory and loads the first
-`.env` it finds (without overriding already-exported variables), so
-`$OPENROUTER_API_KEY` / `$OPENAI_API_KEY` kept in the project `.env` (the
-usual course-repo layout) are picked up. Pass `--no-env-file` to skip
-this; `--dry-run` never loads `.env` (it uses no LLM).
+**Where the models live (epic #440).** The toolkit verbs
+(`report`/`verify`/`apply`/`task`/`accept`) never call a model. A tier-2 edit
+or new-slide translation is *framed* by `task` and run by *you*; an `accept`
+validates your answer deterministically. The two embedded models — the
+edit-reconciliation **judge** (`--provider` `openrouter` (Claude Sonnet, the
+default) or `local` (Ollama); `--llm-model`; `$CLM_SYNC_PROVIDER`) and the
+new-slide **translator** (`--translation-model`) — and the `$OPENROUTER_API_KEY`
+(or `$OPENAI_API_KEY`) they need exist **only on `autopilot`**. `autopilot`
+auto-loads the first `.env` above each deck (skip with `--no-env-file`); the
+toolkit verbs read no `.env` because they call no model.
 
 Cells synced: **all** sync-relevant cells, not only narrative markdown:
 
@@ -1881,10 +1912,11 @@ written into the file, so a deck stays id-light yet syncs precisely:
   deck-wide error (issue #364) is kept, since positional pairing would be unsound.
 - **Genuinely ambiguous id realignment** (a function renamed *while* a cell was
   split, an unresolvable tie) is left untouched on disk and re-surfaces next run.
-  A `--dry-run --json` run now **names** it as a tier-3 `realign` item in the
-  `report` block (since CLM {version}) so a driving agent can re-identify the cells
-  itself and confirm with `--verify` — see `clm info sync-agents`. A standalone,
-  agent-less run can instead opt into `--llm-recover` (above) to have Opus resolve it.
+  `clm slides sync report DECK --json` **names** it as a tier-3 `realign` item so a
+  driving agent can re-identify the cells itself — `clm slides sync task DECK
+  --item ID` frames the region, `accept` validates the answer, and `verify`
+  confirms it; see `clm info sync-agents`. A standalone, agent-less run can instead
+  opt into `clm slides sync autopilot DECK --llm-recover` to have Opus resolve it.
 - **The deck header is never silently dropped (Issue #269).** Sync does **not**
   auto-translate the j2 deck header (`{{ header_xx(…) }}`) — it is language-specific
   and each half keeps its own. But a header edited on **one** half only is now an
@@ -1918,8 +1950,8 @@ written into the file, so a deck stays id-light yet syncs precisely:
   edit. Reconcile by hand (apply the edit and the reorder on the same half, or sync
   them in separate steps) and re-run.
 
-Use `--explain` to see the anchor-level view (per-cell anchor + drift, the
-propagation direction, drifted ids) for any pair.
+Use `clm slides sync report DECK --explain` to see the anchor-level view
+(per-cell anchor + drift, the propagation direction, drifted ids) for any pair.
 
 **Translation conventions (glossary).** A brand-new slide on the add path is
 translated by the same model `clm slides translate` uses, and it honors the same
@@ -1934,52 +1966,173 @@ your slides is found automatically), or supplied explicitly with `--glossary-de`
 (unchanged from before). In **batch (`DIR`) mode** the translator is shared across
 the sweep, so the glossary is resolved once from the directory root.
 
+Common to the read/apply verbs: `DECK` is a half, the bilingual stem, or a
+directory; `--json` emits the structured form; `--baseline REF` /
+`--baseline-from PATH[@REF]` pin a baseline; `--use-watermark` + `--cache-dir`
+opt into the watermark accelerator (default off for the read verbs, **on** for
+`apply`).
+
+#### `clm slides sync report` (the default verb)
+
 ```
-clm slides sync [OPTIONS] DE_PATH [EN_PATH]
-clm slides sync [OPTIONS] DIR          # batch: sync every pair under DIR
+clm slides sync report DECK [EN_PATH] [OPTIONS]   # bare `sync DECK` is the same
 ```
 
 | Option | Description |
 |--------|-------------|
-| `--dry-run` | Classify only: print the plan and write nothing. (The default, without this flag, writes the agreed changes to the working tree.) |
-| `--explain` | Diagnostic: print the **content-anchor diff** — each cell's anchor (`id:` / `construct:` / `hash:`) and whether it is unchanged / edited / new / removed vs the watermark, the neutral-cell propagation direction, and any drifted `slide_id`s (id-migration candidates) — then the plan, and write nothing. A read-only superset of `--dry-run` for understanding *why* a cell did or did not sync. Mutually exclusive with `--interactive` and `--json`. |
-| `--verify` | **Structural safety check (since CLM {version}): confirm an edit did not *corrupt* the split pair — no LLM, no watermark, writes nothing.** Reuses `unify` to require byte-identical shared cells, header parity, and clean alignment; adds an explicit `de_id == en_id` set-symmetry + no-duplicate-id check (which `unify` does not enforce); and **warns** on any id'd cell dropped vs git `HEAD` (a deliberate removal is fine, so it never fails). Answers *"did this edit break the pair?"* — **not** *"is it in sync?"* (`--dry-run`) or *"is the translation good?"* (a semantic call this never makes). Exit `0` = structurally valid (warnings allowed), `2` = corruption. Works on a single pair or a directory; pairs with `--json`; mutually exclusive with `--dry-run` / `--explain` / `--interactive` / `--rebaseline` / `--baseline`. Designed as the deterministic gate after an agent reconciles a deck — run it in CI (it needs no model). |
-| `--interactive` | Walk each proposal and choose `[a]pply / [s]kip / [q]uit` (`[d]e-wins / [e]n-wins` for a conflict) before a single atomic apply. Mutually exclusive with `--dry-run` and `--json`. |
-| `--provider [openrouter\|local]` | Backend for the edit-reconciliation judge: `openrouter` (Claude Sonnet via OpenRouter, the default — needs `$OPENROUTER_API_KEY` / `$OPENAI_API_KEY`) or `local` (the Ollama daemon — offline, slower). Overridable with `$CLM_SYNC_PROVIDER`. |
-| `--llm-model TEXT` | Model for the edit-reconciliation judge. Default depends on `--provider`: `anthropic/claude-sonnet-4-6` (openrouter) or `qwen3:30b` (local). |
-| `--ollama-url TEXT` | Base URL of the Ollama daemon (only used with `--provider local`; default: `$OLLAMA_URL` or `http://localhost:11434`). |
-| `--llm-timeout SECONDS` | Per-call timeout for the edit judge. Provider-aware default: 120s for `openrouter` (fast hosted model), 300s for `local` (a large local reasoning model can spend minutes "thinking"). |
-| `--translation-model TEXT` | OpenRouter model used to translate brand-new slides for the add path (default: `anthropic/claude-sonnet-4-6`). Needs `$OPENROUTER_API_KEY` / `$OPENAI_API_KEY`; adds defer when absent. |
-| `--glossary-de PATH` | Translation conventions (Markdown: a style note + term glossary) for **German** targets — a brand-new EN slide translated to DE on the add path. Default: auto-discover `clm-glossary.de.md` walking up from the deck. |
-| `--glossary-en PATH` | Translation conventions for **English** targets — a brand-new DE slide translated to EN on the add path. Default: auto-discover `clm-glossary.en.md` walking up from the deck. |
-| `--verify-cold-pairs` / `--no-verify-cold-pairs` | **Bootstrap and reconcile split-pair `slide_id`s, gated by a cheap correspondence check (default on when an OpenRouter/OpenAI key is set).** A never-id'd cold pair is **minted** a shared id per slide; a half-id'd pair's id-less half **adopts** the id'd half's ids; a committed pair sharing some ids but giving one slide a *divergent* id on each half is **reconciled** — `sync` rewrites the divergent id so both halves share one (EN-authority), surfaced as a `reconcile` proposal (#228). Each is applied only after a cheap LLM (Haiku, via OpenRouter) confirms the two halves actually correspond. With `--no-verify-cold-pairs` (or no key) such a pair is **refused** instead — sync one direction at a time, or run `clm slides assign-ids`. |
-| `--llm-recover` | **Opt into the bounded-LLM recovery tier (default off).** When the deterministic id-migration is stuck on an *ambiguous* drifted `slide_id` (a function renamed while a cell was split, an unresolvable tie), ask Claude (Opus, via OpenRouter) for a **validated, body-free** id↔cell alignment. Without this flag such a region is left untouched and re-surfaces next run. The model only ever sees content anchors (construct + hash + id), never cell source, and its map is validated (it can never drop a stable `slide_id`) before any header is written. Needs `$OPENROUTER_API_KEY` / `$OPENAI_API_KEY`. |
-| `--recovery-model TEXT` | OpenRouter model for `--llm-recover` alignment (default: `anthropic/claude-opus-4`). |
-| `--cache-dir PATH` | Directory holding the structural watermark. Lookup order: flag → `$CLM_CACHE_DIR` → `tool.clm.cache_dir` in `pyproject.toml` → `<cwd>/.clm-cache/`. |
-| `--no-cache` | Do not read or write the watermark. Every run then re-derives its baseline from git `HEAD` and no synced state is persisted. |
-| `--rebaseline` | **Recover from a stale watermark (since CLM {version}, issue #364).** A watermark goes stale when both halves are edited and committed without an intervening sync, so a later run errors/conflicts against the lagging baseline even though the halves are mutually consistent. `--rebaseline` clears the stale watermark and re-records it from the current state — but **only** when the halves are consistent against git `HEAD`; it **refuses** when git `HEAD` shows real changes or divergence, so it cannot silently mask an un-synced edit (strictly safer than a blind `watermark clear`). Single-pair only; mutually exclusive with `--dry-run`, `--explain`, and `--no-cache`. |
-| `--no-env-file` | Do not auto-load a `.env` file. By default sync loads the first `.env` found above each deck (without overriding already-set variables), so keys kept in the project `.env` reach the judge/translator. |
-| `--yes`, `-y` | **Batch (`DIR`) only.** Confirm a writing directory run without the interactive prompt. A directory apply writes to every pair under the tree, so it is gated; `--dry-run` / `--explain` directory runs are unprompted. Ignored for a single pair. |
-| `--json` | Emit a JSON report instead of human-readable lines. |
+| `--json` | Emit the `ReconciliationReport` as JSON (the agent contract — see below). |
+| `--explain` | Human-readable content-anchor diagnostic (a read-only superset of the report): each cell's anchor (`id:` / `construct:` / `hash:`) and whether it is unchanged / edited / new / removed, the neutral-cell propagation direction, and any drifted `slide_id`s. |
+| `--baseline REF` | Diff against an explicit git ref (`HEAD~1`, a SHA) instead of git `HEAD`. Use after you committed single-language edits before syncing — `--baseline HEAD~1` diffs the pre-edit commit. Single-pair only. |
+| `--baseline-from PATH[@REF]` | Diff a **renamed** deck against its pre-rename half `PATH` (`@REF` defaults to `HEAD`) when auto rename-detection can't recover it. Single-pair only. |
+| `--use-watermark` | Opt back into the structural watermark as the baseline (default: git `HEAD`). |
+| `--cache-dir PATH` | Directory holding the watermark (only with `--use-watermark`). Lookup: flag → `$CLM_CACHE_DIR` → `tool.clm.cache_dir` → `<cwd>/.clm-cache/`. |
 
-Exit codes: `0` clean (every change applied, or nothing to do, with no
-errors), `1` something is left for review (a skipped proposal or an
-unresolved conflict), `2` a structural error (classifier error, missing
-target cell, or the edit LLM is unavailable).
+Read-only, no model, no key. Exit code mirrors the plan: `0` clean (in sync),
+`1` work is pending (any tier-1/2/3 item), `2` a classifier error — so a CI
+drift-check can gate on `report` exiting `0`, while `verify` is the separate
+*structural* gate.
 
-A run also surfaces structural issues the classifier will not turn into
-a proposal — for example a duplicate `slide_id` whose original cannot be
-identified (`error`), or cell order that drifted on both decks
-(`warning`, order not propagated). Any issue holds the whole watermark
-so the signal is never silently baselined.
+#### `clm slides sync verify`
 
-A run that is non-trivial against the watermark but **clean against git
-`HEAD`** (the stale-watermark case) now prints an actionable hint pointing
-at `--rebaseline` (since CLM {version}, issue #364), and sets
-`rebaseline_hint` in the `--json` report. Sync deliberately does **not**
-auto-heal: erroring loud on a stale watermark is what surfaces the
-underlying drift, and `--rebaseline` makes the cheap "halves agree against
-git HEAD" proof explicit before clearing.
+```
+clm slides sync verify DECK [EN_PATH] [--json]
+```
+
+A **structural** safety check: confirms an edit did not *corrupt* the split pair
+— byte-identical shared cells, header parity, clean alignment, `de_id == en_id`
+set-symmetry, no duplicate ids — and **warns** (never fails) on an id'd cell
+dropped vs git `HEAD`. **No model, no watermark, writes nothing.** Answers *"did
+this edit break the pair?"*, not *"is it in sync?"* (`report`) or *"is the
+translation good?"*. Exit `0` = sound (warnings allowed), `2` = corrupt. CI-safe.
+
+#### `clm slides sync apply`
+
+```
+clm slides sync apply DECK [EN_PATH] [OPTIONS]
+```
+
+Applies the **mechanical tier only** — `move` / `remove` / `retag`, the
+language-neutral verbatim propagation, and the unambiguous id-migration —
+deterministically, with **no model**. Every item that needs a model (`add` /
+`edit` / cold-start / ambiguous `realign`) is left as **residue**: nothing is
+written for it, it is reported, and the command exits non-zero pointing you at
+`report` / `task` / `accept`. (Contrast `autopilot`, which calls the embedded
+models for those tiers.)
+
+| Option | Description |
+|--------|-------------|
+| `--use-watermark` / `--no-watermark` | Use the watermark as a baseline accelerator (default **on** for `apply`); it advances on a fully clean pass. `--no-watermark` ignores it, falling back to git `HEAD`. |
+| `--baseline REF` / `--baseline-from PATH[@REF]` | As for `report`. Single-pair only. |
+| `--cache-dir PATH` | Directory holding the watermark. |
+| `--yes`, `-y` | **Directory (batch) only**: confirm a writing sweep over every pair under the tree. Ignored for a single pair. |
+| `--json` | Emit the apply result as JSON. |
+
+#### `clm slides sync task`
+
+```
+clm slides sync task DECK [EN_PATH] [--item ID] [OPTIONS]
+```
+
+Emits a framed `SyncTask` for an `assisted` (edit / new-slide) or `ambiguity`
+(`realign`) report item: the `instructions` (system prompt), the ready-to-send
+`prompt`, the `inputs` (cell bytes / glossary / direction), the `answer_schema`
+the answer must match, and the `validator` that `accept` will run. **The engine
+never calls a model** — you run the prompt through whatever model you choose (or
+do it by hand), then pipe the answer to `accept`.
+
+| Option | Description |
+|--------|-------------|
+| `--item ID` | Frame a single report item by its stable `item` id (from `report --json`). Default: every frameable tier-2/3 item. |
+| `--baseline` / `--baseline-from` / `--use-watermark` / `--cache-dir` | Baseline selection, as for `report`. |
+| `--json` | Emit the `SyncTask`(s) as JSON. |
+
+#### `clm slides sync accept`
+
+```
+clm slides sync accept DECK [EN_PATH] --item ID --answer FILE|- [OPTIONS]
+```
+
+Takes the model's answer for one item (`--answer FILE` or `-` for stdin, JSON
+matching the task's `answer_schema`), runs it through the named deterministic
+`validator`, and writes it to **both** halves iff it passes — maintaining
+`de_id == en_id` and neutral byte-identity. On failure it **rejects with the
+reason and writes nothing**, so a bad answer never corrupts the deck (retry with
+a better model/prompt). No model, no key.
+
+| Option | Description |
+|--------|-------------|
+| `--item ID` (required) | The report item the answer is for (the id `task --item ID` framed). |
+| `--answer FILE` (required) | The model's answer (JSON matching the task's `answer_schema`), or `-` for stdin. |
+| `--baseline` / `--baseline-from` / `--use-watermark` / `--cache-dir` | Baseline selection, as for `report` (must match the `report`/`task` that framed the item). |
+| `--json` | Emit the accept result as JSON. |
+
+#### `clm slides sync baseline`
+
+`show` / `bless` / `clear` / `prune` — inspect and maintain the demoted watermark
+accelerator. `bless` records the current working tree as the baseline (no commit
+needed; the replacement for the old `--rebaseline`). It is gated on `verify`
+(structure only) and records **whatever is in the working tree** — it does not
+check the translation is correct or that the tree agrees with git `HEAD`, a
+weaker gate than `--rebaseline`'s git-HEAD no-op, so review with `git diff` and
+confirm the halves correspond before blessing. These are the same store as `clm
+slides watermark` (below), co-located with `sync` and renamed: `show` was `list`,
+plus `bless`.
+
+#### `clm slides sync autopilot`
+
+```
+clm slides sync autopilot DECK [EN_PATH] [OPTIONS]
+```
+
+The legacy all-in-one (classify → tier-1 apply → judge tier-2 edits → translate
+tier-2 adds → cold-pair verify → optional `--llm-recover`) for an agent-less
+human at a terminal. It is the **only** place the embedded models live, so it is
+the only verb that needs a key, and it must **never run in CI**. It writes by
+default; `--dry-run` previews.
+
+| Option | Description |
+|--------|-------------|
+| `--dry-run` / `--explain` / `--json` | Preview (no write) / anchor diagnostic / machine-readable. |
+| `--interactive` | Walk each proposal `[a]pply / [s]kip / [q]uit` (`[d]e-wins / [e]n-wins` for a conflict). Single-pair only. |
+| `--provider [openrouter\|local]` | Edit-judge backend: `openrouter` (Claude Sonnet, default) or `local` (Ollama). `$CLM_SYNC_PROVIDER` sets a default. Needs `$OPENROUTER_API_KEY` / `$OPENAI_API_KEY` for openrouter. |
+| `--llm-model` / `--ollama-url` / `--llm-timeout` | Judge model / Ollama base URL / per-call timeout (120s openrouter, 300s local). |
+| `--translation-model TEXT` | OpenRouter model translating brand-new slides on the add path (default `anthropic/claude-sonnet-4-6`); adds defer with no key. |
+| `--glossary-de PATH` / `--glossary-en PATH` | Per-target-language translation conventions; default auto-discover `clm-glossary.<lang>.md` above the deck. |
+| `--verify-cold-pairs` / `--no-verify-cold-pairs` | Bootstrap/reconcile cold-pair `slide_id`s gated by a cheap correspondence check (default on with a key); `--no-verify-cold-pairs` refuses instead. |
+| `--llm-recover` / `--recovery-model TEXT` | Opt into the bounded Opus recovery tier for an ambiguous drifted `slide_id` (body-free, validated). |
+| `--rebaseline` | Recover from a stale watermark (clears + re-records, only when the halves agree vs git `HEAD`). Prefer `baseline bless`. |
+| `--baseline REF` / `--baseline-from PATH[@REF]` / `--cache-dir PATH` / `--no-cache` / `--no-env-file` / `--yes` | Baseline selection, watermark store, `.env` loading, and batch confirm, as before. |
+
+**Exit codes (per verb).** `report`: `0` clean, `1` work pending (any tier),
+`2` a classifier error. `verify`: `0` sound (warnings allowed), `2` corrupt. `apply`: `0` clean, `1`
+residue is left for a model (tier-2/3 items remain), `2` a structural error.
+`accept`: `0` written, `2` the answer failed the validator (nothing written).
+`autopilot`: `0` clean, `1` review left, `2` a structural error or the edit
+model was unavailable.
+
+A run surfaces structural issues the classifier will not turn into a proposal —
+e.g. a duplicate `slide_id` whose original cannot be identified (`error`), or
+cell order that drifted on both decks (`warning`). Any issue holds the whole
+watermark so the signal is never silently baselined.
+
+A read that is non-trivial against the **watermark** but clean against git
+`HEAD` (the stale-watermark case) sets `rebaseline_hint` in the `report --json`
+output and prints a hint pointing at `clm slides sync baseline bless` — which
+re-records the baseline from the current state (gated on `verify`), the
+commit-free replacement for the old `--rebaseline`.
+
+**Renaming a deck (folder or stem) is safe (since CLM {version}, epic
+#440).** Deck identity is path-derived (the watermark key and the git
+baseline are both addressed by path), so renaming a topic folder / deck
+stem used to break the baseline and a one-sided revision made in the same
+breath read as *clean*. The read path now recovers the baseline across a
+rename automatically: a **committed** rename (rename + edits in one commit,
+work tree fully committed) is followed to the pre-rename ancestor
+(`HEAD^`); an **uncommitted** rename (old half deleted, new half untracked)
+is matched to its deleted predecessor by `slide_id` set. When a rename also
+adds/removes slides — so the auto-match is ambiguous — pin it explicitly
+with `--baseline-from <old-half>[@REF]`. You may rename freely; you do not
+need a dedicated "move" command.
 
 A **cold-start mint/adopt deferral** is reported with actionable detail
 (since CLM {version}, issue #231), not just a count: when the
@@ -1991,115 +2144,107 @@ usually explains it, and `clm slides validate <deck>` can pinpoint it.
 Verifier-unavailable, safe-abort, plan-error, and race deferrals state
 their reason too. Nothing is written in any of these cases.
 
-The JSON report carries `mode` (`dry-run` / `apply` / `interactive`),
-`exit_code`, a `report` block (the agent contract, below), a `plan` block
-(`baseline_source`, per-kind `counts`, `in_sync`, the `proposals`, and
-`issues`), an `apply` block (per-kind `applied` counts, `in_sync`,
-`deferred`, `cold_deferrals` — each with `kind`, `reason`, and the
-`rejected_pairs` (`index` / `de_heading` / `en_heading`) on a verifier
-rejection —, `watermark_recorded`, and `errors`) — `null` under
-`--dry-run` — and a `walker` block of accept/skip/defer counters under
-`--interactive`. These counters are the pilot accept-rate instrumentation.
+**The JSON contracts (one per verb).**
 
-**The `report` block — the tiered agent contract (since CLM {version}).** A
-coding agent both *invokes* `clm slides sync` and *consumes* its output, so
-`--dry-run --json` (and every `--json` mode) carries a `report` block that
-partitions the engine's work into the **three tiers an agent acts on
-differently**: `mechanical` (the engine applies these deterministically with
-**no model** — move / remove / retag / a verbatim neutral-cell propagation —
-trust and ignore them), `assisted` (a **scoped model task** the engine has
-already framed — translate a new slide, reconcile an id'd-cell edit, confirm a
-cold-pair correspondence — delegate to a cheap model or do it yourself), and
-`ambiguity` (the engine **refuses to guess** — a both-sided conflict or a
-structural issue — *your* judgement, stated as *what* is ambiguous, never a
-fabricated fix). Each item carries `kind`, `role`, `direction`, `slide_id`,
-`reason`, optional `severity` (for an `ambiguity` item from a structural
-issue), and 0-based `source_position` / `target_position` (the cell's index
-among each language's sync-relevant cells, so you can locate it). The block
-also exposes `baseline_source`, `in_sync`, and three booleans — `is_clean`
-(no work in any tier), `needs_model` (a tier-2 task or tier-3 item exists),
-`needs_agent` (a tier-3 item needs *you*). An un-categorised future kind
-defaults to `ambiguity`, never silently to `mechanical`. The flat `plan` block
-above is retained for existing consumers; `report` is the blessed surface for
-an agent.
+`clm slides sync report --json` emits a `report` block carrying the
+**`ReconciliationReport`** — the blessed agent contract (the envelope it is
+wrapped in is described at the end of this section). It partitions the engine's work into the **three tiers
+an agent acts on differently**: `mechanical` (applied deterministically with
+**no model** — move / remove / retag / verbatim neutral-cell propagation — trust
+and ignore), `assisted` (a **framed model task** — translate a new slide,
+reconcile an id'd-cell edit, confirm a cold-pair correspondence — run a model or
+do it yourself), and `ambiguity` (the engine **refuses to guess** — a both-sided
+conflict or a structural issue — *your* judgement, stated as *what* is ambiguous,
+never a fabricated fix). It exposes `baseline_source`, `in_sync`, and three
+booleans — `is_clean` (no work in any tier), `needs_model` (a tier-2/3 item
+exists), `needs_agent` (a tier-3 item needs *you*). Each item carries a stable
+`item` id (the handle for `task` / `accept`), `kind` / `role` / `direction` /
+`slide_id` / `reason`, optional `severity`, and 0-based `source_position` /
+`target_position`. An un-categorised future kind defaults to `ambiguity`, never
+to `mechanical`. `report --json` wraps this in an envelope (`mode`, `exit_code`,
+`de_path`, `en_path`, the `report` block, plus a back-compat flat `plan` block
+and `apply` / `walker` / `rebaseline_hint` / `cold_baseline_hint` keys retained
+for existing consumers); **`report` is the blessed contract** — read it, not the
+flat `plan`.
 
-Under **`--dry-run`**, each `assisted` / `ambiguity` item is additionally
-enriched with the **cell bytes** the work concerns, so a delegated model can act
-without re-deriving the engine's positions: `source_lang` + `source_excerpt` +
-`source_line` (the drifted/winning side to reconcile *from*) and the matching
-`target_*` triple (the existing counterpart, for an edit/conflict; absent for an
-`add`, whose translation does not exist yet). Resolution is **fail-closed** — a
-position it cannot resolve with certainty (an out-of-range index, an unreadable
-file) yields no excerpt rather than a wrong one. Excerpts are omitted outside
-`--dry-run` (after an apply the files no longer match the plan's positions) and
-for `mechanical` items (you apply those without reading them); the `*_position`
-indices and `slide_id` still locate every cell in the source you hold.
+Each `assisted` / `ambiguity` item is enriched with the **cell bytes** the work
+concerns, so a model can act without re-deriving the engine's positions:
+`source_lang` + `source_excerpt` + `source_line` (the side to reconcile *from*)
+and the matching `target_*` triple (the existing counterpart, for an
+edit/conflict; absent for an `add`, whose translation does not exist yet).
+Resolution is **fail-closed** — a position it cannot resolve with certainty
+yields no excerpt rather than a wrong one. Excerpts are omitted for `mechanical`
+items (you apply those without reading them); the `*_position` indices and
+`slide_id` still locate every cell in the source you hold. A directory run wraps
+the per-pair reports in an envelope `{ "mode", "root", "exit_code", "pairs":
+[ … ] }`, where each `pairs[i]` is one single-pair report (a pair that errored is
+`{ "de_path", "en_path", "exit_code", "error" }`).
 
-A `--dry-run` report also surfaces a **`realign` ambiguity item** (`kind:
-"realign"`) for each drifted-`slide_id` region the deterministic id-migration
-**cannot** resolve — a function renamed *while* a cell split, or a non-unique
-construct. This is the agent-facing form of the `--llm-recover` trigger (since
-CLM {version}): rather than spending the embedded Opus model, the engine names
-the residue and hands it to *you* (you already hold the deck source). The item
+The report also names a **`realign` ambiguity item** (`kind: "realign"`) for each
+drifted-`slide_id` region the deterministic id-migration **cannot** resolve — a
+function renamed *while* a cell split, or a non-unique construct. The item
 carries the drifted `slide_id`, a `reason` (the baseline construct it no longer
 names vs. the one it now wears), and the drifted cell's bytes in `source_excerpt`
-/ `source_line` (a likely continuation in `target_*` when there is an unambiguous
-one). Re-identify the cells, move the `slide_id` onto its true continuation, then
-run `clm slides sync --verify` to confirm the result is structurally sound.
-`--llm-recover` remains for a standalone, agent-less run.
+/ `source_line` (a likely continuation in `target_*` when unambiguous). Frame it
+with `task`, move the `slide_id` onto its true continuation on both halves,
+`accept` (which runs `validate_alignment`), then `verify`.
 
-In **batch (`DIR`) mode** the `--json` report is instead an envelope
-`{ "mode", "root", "exit_code", "pairs": [ … ] }`, where each entry of
-`pairs` is exactly one single-pair object as above (so a tool can treat
-`pairs[i]` like an individual `clm slides sync --json`); a pair that errored
-appears as `{ "de_path", "en_path", "mode", "exit_code", "error" }`. A writing
-batch with `--json` requires `--yes` (there is no prompt to fall back to).
+`clm slides sync task --json` emits `{ "tasks": [ … ], "unframed": [ … ] }`. A
+`SyncTask` is `{ item, kind, tier, slide_id, direction, role, validator,
+instructions, prompt, inputs, answer_schema }` — the report-item handle (`item` /
+`kind` / `tier` / `slide_id` / `direction` / `role`) plus everything a model
+needs for it (`validator` — the deterministic check `accept` runs; `instructions`
++ `prompt`; `inputs`; `answer_schema`). `unframed` lists the tier-3 items that
+need *your* judgement *before* any model (a `conflict` / `issue`) — resolve those
+by editing the deck, not via `accept`.
 
-The **`--verify` report** is a distinct, smaller envelope:
-`{ "mode": "verify", "exit_code", "pairs": [ … ] }` (plus `"root"` in directory
-mode). Each pair carries `de_path`, `en_path`, `ok` (false iff any *error*-severity
-violation), `git_baseline` (false when the no-drop check was skipped — the pair is
-untracked), and `violations`, each a `{ "severity" (`error`/`warning`), "kind"
-(`unify` / `id-asymmetry` / `duplicate-id` / `dropped-id`), "message", "slide_id" }`.
+`clm slides sync accept --json` emits the result for the one item — `{ item,
+kind, applied, changed }` on success, or a rejection carrying the validator's
+reason (nothing written).
+
+`clm slides sync apply --json` emits per-kind `applied` counts, `in_sync`,
+`deferred`, `cold_deferrals` (each `kind` / `reason` / `rejected_pairs` with
+`index` / `de_heading` / `en_heading`), `watermark_recorded`, and `errors`. A
+**cold-start deferral** (a `mint` / `adopt` the correspondence verifier rejected)
+names each rejected pair's index and both headings plus a hint — not just a
+count; `clm slides validate <deck>` can pinpoint a crossed/missing cell. Nothing
+is written.
+
+`clm slides sync verify --json` emits `{ "mode": "verify", "exit_code", "pairs":
+[ … ] }` (plus `"root"` in directory mode). Each pair carries `de_path`,
+`en_path`, `ok` (false iff any *error*-severity violation), `git_baseline` (false
+when the no-drop check was skipped — the pair is untracked), and `violations`,
+each `{ "severity" (`error`/`warning`), "kind" (`unify` / `id-asymmetry` /
+`duplicate-id` / `dropped-id`), "message", "slide_id" }`.
 
 Examples:
 
 ```bash
-# Edit intro.de.py, then bring intro.en.py into sync (writes to the tree).
-clm slides sync slides/topic/intro.de.py slides/topic/intro.en.py
-
-# Single-path: pass one half, the twin is derived from disk.
+# What is necessary? (read-only; bare `sync DECK` is the same as `report`)
 clm slides sync slides/topic/intro.de.py
+clm slides sync report slides/topic/intro.de.py --json
 
-# Batch: preview every pair under a directory (unprompted, writes nothing).
-clm slides sync slides/ --dry-run
+# Apply the mechanical tier (writes; no model). Residue → exit non-zero.
+clm slides sync apply slides/topic/intro.de.py
 
-# Batch: sync every pair under a directory (writing → needs --yes).
-clm slides sync slides/ --yes
+# Frame a model task for one item, run it through any model, accept the answer.
+clm slides sync task slides/topic/intro.de.py --item edit-abc --json
+clm slides sync accept slides/topic/intro.de.py --item edit-abc --answer answer.json
 
-# Preview the plan first — write nothing.
-clm slides sync intro.de.py intro.en.py --dry-run
+# Structural gate after reconciling (CI-safe; exit 0 = sound, 2 = corrupt).
+clm slides sync verify slides/topic/intro.de.py
 
-# Understand the anchor-level view (per-cell drift, direction, drifted ids).
-clm slides sync intro.de.py intro.en.py --explain
+# Committed single-language edits before syncing? Diff the pre-edit commit.
+clm slides sync report intro.de.py --baseline HEAD~1
 
-# Let an LLM realign a genuinely ambiguous split (opt-in, off by default).
-clm slides sync intro.de.py intro.en.py --llm-recover
+# Bless the current consistent state as the baseline (no commit needed).
+clm slides sync baseline bless slides/topic/intro.de.py
 
-# Walk each proposal, resolving conflicts as you go.
-clm slides sync intro.de.py intro.en.py --interactive
+# Batch: read-only sweep over a directory (no --yes needed).
+clm slides sync report slides/
 
-# Use the offline local Ollama judge instead of OpenRouter.
-clm slides sync intro.de.py intro.en.py --provider local
-
-# Machine-readable plan for tooling.
-clm slides sync intro.de.py intro.en.py --dry-run --json
-
-# Stateless run: ignore/leave the watermark, baseline off git HEAD.
-clm slides sync intro.de.py intro.en.py --no-cache
-
-# Recover a stale watermark after both halves were edited+committed.
-clm slides sync intro.de.py intro.en.py --rebaseline
+# Agent-less one-shot using the embedded models (needs a key; never in CI).
+clm slides sync autopilot intro.de.py intro.en.py
 ```
 
 ### `clm slides watermark`
@@ -2131,9 +2276,10 @@ All three accept `--cache-dir PATH` (same lookup as `clm slides sync
 | `prune` | Drop **all** watermarks whose files no longer exist on disk (orphans from rename/renumber). `--dry-run` reports without deleting; `--json` emits a report. |
 
 For the **stale** (not orphan) case where the halves are mutually consistent,
-prefer `clm slides sync --rebaseline` over `watermark clear`: it proves the
-halves agree against git `HEAD` before resetting the baseline, whereas `clear`
-unconditionally discards it.
+prefer `clm slides sync baseline bless` over `watermark clear`: it proves the
+halves agree (gated on `verify`) before recording the current state as the
+baseline, whereas `clear` unconditionally discards it. (`baseline show` / `clear`
+/ `prune` are the same store as this `watermark` group, co-located with `sync`.)
 
 Examples:
 
@@ -2818,7 +2964,7 @@ CLI verb-group structure (group-first); the flat pre-1.8 names
 | `slides_normalize` | Apply mechanical fixes (tag migration, interleaving, slide IDs) |
 | `slides_language_view` | Extract single-language view with line annotations |
 | `slides_suggest_sync` | Detect asymmetric bilingual edits vs git HEAD (single bilingual file) |
-| `slides_sync_report` | Tiered reconciliation report for a split DE/EN pair — the same `mechanical`/`assisted`/`ambiguity` contract as `clm slides sync --dry-run`, with cell-text excerpts (read-only; the split-pair analogue of `slides_suggest_sync`) |
+| `slides_sync_report` | Tiered reconciliation report for a split DE/EN pair — the same `mechanical`/`assisted`/`ambiguity` contract as `clm slides sync report`, with cell-text excerpts (read-only, no model, no key; the split-pair analogue of `slides_suggest_sync`) |
 | `voiceover_extract` | Move voiceover cells to a companion file; on a split half auto-pairs both companions (`both`/`single` params, `"paired"` JSON) |
 | `voiceover_inline` | Merge voiceover cells back from companion file |
 | `authoring_rules` | Look up merged authoring rules for a course |

@@ -28,11 +28,11 @@ from clm.cli.commands.slides.search import search_slides_cmd  # noqa: E402
 from clm.cli.commands.slides.slug_report import slug_report_cmd  # noqa: E402
 from clm.cli.commands.slides.split import split_cmd  # noqa: E402
 from clm.cli.commands.slides.suggest_sync import suggest_sync_cmd  # noqa: E402
-from clm.cli.commands.slides.sync import slides_sync_cmd  # noqa: E402
+from clm.cli.commands.slides.sync import slides_sync_group  # noqa: E402
 from clm.cli.commands.slides.tidy import tidy_cmd  # noqa: E402
 from clm.cli.commands.slides.translate import slides_translate_cmd  # noqa: E402
 from clm.cli.commands.slides.unify import unify_cmd  # noqa: E402
-from clm.cli.commands.slides.watermark import watermark_group  # noqa: E402
+from clm.cli.commands.slides.watermark import baseline_group, watermark_group  # noqa: E402
 
 slides_group.add_command(normalize_slides_cmd, name="normalize")
 slides_group.add_command(assign_ids_cmd, name="assign-ids")
@@ -41,7 +41,7 @@ slides_group.add_command(split_cmd, name="split")
 slides_group.add_command(unify_cmd, name="unify")
 slides_group.add_command(language_view_cmd, name="language-view")
 slides_group.add_command(suggest_sync_cmd, name="suggest-sync")
-slides_group.add_command(slides_sync_cmd, name="sync")
+slides_group.add_command(slides_sync_group, name="sync")
 slides_group.add_command(reconcile_vo_ids_cmd, name="reconcile-vo-ids")
 slides_group.add_command(slides_translate_cmd, name="translate")
 # `bootstrap` is the cold-start direction of `translate`; keep it
@@ -54,6 +54,11 @@ slides_group.add_command(slug_report_cmd, name="slug-report")
 slides_group.add_command(coverage_report_cmd, name="coverage-report")
 slides_group.add_command(authoring_rules_cmd, name="rules")
 slides_group.add_command(watermark_group, name="watermark")
+# The watermark is demoted to a baseline accelerator (epic #440); its new home is
+# `clm slides sync baseline` (show/clear/prune + the commit-free `bless` that replaces
+# `--rebaseline`, #430). The legacy `clm slides watermark` registration above is kept
+# as a back-compat alias during the prototype.
+slides_sync_group.add_command(baseline_group, name="baseline")
 
 # `polish` needs the [summarize] extra (LLM client); skip when absent.
 try:

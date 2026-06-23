@@ -1538,11 +1538,14 @@ class TestColdStartAdopt:
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not available")
 class TestColdStartCommittedPair:
-    """A COMMITTED id-less pair bootstraps end-to-end (Issue #225).
+    """A COMMITTED id-less pair that has DRIFTED from HEAD bootstraps end-to-end (#225).
 
     The cold-start minter must serve the existing corpus, not just never-committed
     files: a committed id-less pair resolves to a git-HEAD baseline that carries no
-    ids, which is demoted to a true cold start so mint/adopt can run.
+    ids, which is demoted to a true cold start so mint/adopt can run. Issue #438 scopes
+    that demotion to a pair that has actually *drifted* from HEAD — a committed pair
+    byte-identical to HEAD is consistent (a no-op), so each test edits a half after the
+    baseline commit to exercise the cold apply.
     """
 
     def _git(self, cwd: Path, *args: str) -> None:
@@ -1563,8 +1566,14 @@ class TestColdStartCommittedPair:
             _slide_idless("de", "# ## Einleitung") + _slide_idless("de", "# ## Variablen"),
             _slide_idless("en", "# ## Introduction") + _slide_idless("en", "# ## Variables"),
         )
+        # Drift from HEAD (edit the DE first slide) so the pair is a genuine cold start,
+        # not a consistent committed no-op (#438) — the cold mint then runs.
+        de_path.write_text(
+            _slide_idless("de", "# ## Einleitung (rev)") + _slide_idless("de", "# ## Variablen"),
+            encoding="utf-8",
+        )
         plan = build_sync_plan(de_path, en_path, provider_available=True)
-        assert plan.baseline_source == "none"  # demoted from git-head (#225)
+        assert plan.baseline_source == "none"  # drifted ⇒ demoted from git-head (#225/#438)
         assert plan.count("mint") == 1
         verifier = StaticCorrespondenceVerifier(default=True)
         result = apply_plan(plan, judge=None, verifier=verifier, watermark_cache=None)
@@ -1580,6 +1589,12 @@ class TestColdStartCommittedPair:
             tmp_path,
             _slide_idless("de", "# ## A") + _slide_idless("de", "# ## B"),
             _slide("en", "s1", "# ## A") + _slide("en", "s2", "# ## B"),
+        )
+        # Drift from HEAD (edit the DE first slide) so the half-id'd pair is a genuine
+        # cold start, not a consistent committed no-op (#438) — the cold adopt then runs.
+        de_path.write_text(
+            _slide_idless("de", "# ## A (rev)") + _slide_idless("de", "# ## B"),
+            encoding="utf-8",
         )
         en_before = en_path.read_text(encoding="utf-8")
         plan = build_sync_plan(de_path, en_path, provider_available=True)
@@ -1611,16 +1626,24 @@ class TestColdStartCommittedPair:
     def test_committed_half_idd_pair_does_not_double_without_translator(self, tmp_path: Path):
         # The pre-#225 failure mode: with no provider the committed half-id'd pair fell
         # to the keyed baseline path and emitted both-direction adds → applying them
-        # (translate+insert) doubled both decks. It must now refuse and write nothing.
-        de = _slide_idless("de", "# ## A") + _slide_idless("de", "# ## B")
+        # (translate+insert) doubled both decks. A committed-unchanged pair is now a
+        # consistent no-op (#438); drift it (edit DE) so the cold path actually runs — it
+        # must refuse and write nothing (no doubling).
         en = _slide("en", "s1", "# ## A") + _slide("en", "s2", "# ## B")
-        de_path, en_path = self._commit_pair(tmp_path, de, en)
+        de_path, en_path = self._commit_pair(
+            tmp_path, _slide_idless("de", "# ## A") + _slide_idless("de", "# ## B"), en
+        )
+        de = _slide_idless("de", "# ## A (rev)") + _slide_idless("de", "# ## B")
+        de_path.write_text(de, encoding="utf-8")  # drift from HEAD
         plan = build_sync_plan(de_path, en_path, provider_available=False)
+        # Pin that the cold path actually REFUSED (PR #442 review): without this the
+        # test would pass vacuously on an empty plan that simply has nothing to apply.
+        assert plan.count("refuse") == 4
         translator = StaticSlideTranslator(default="# ## X")
         result = apply_plan(plan, judge=None, translator=translator, watermark_cache=None)
         assert result.applied_add == 0
         assert result.applied_adopt == 0
-        assert de_path.read_text(encoding="utf-8") == de  # no duplication
+        assert de_path.read_text(encoding="utf-8") == de  # no duplication (drifted DE intact)
         assert en_path.read_text(encoding="utf-8") == en
         assert len(_slide_order(de_path)) == 2
         assert len(_slide_order(en_path)) == 2

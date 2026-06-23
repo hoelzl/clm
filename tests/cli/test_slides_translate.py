@@ -217,8 +217,12 @@ class TestSyncDelegation:
         de_path = _write(tmp_path / "slides_x.de.py", de)
         _patch_key(monkeypatch)
         _patch_translator(monkeypatch, _mirror_translator(de, en))
+        # _resolve_judge now lives in sync_autopilot (epic #440); translate imports it
+        # lazily, so patch it at its home (the lazy `from ... import` reads it at call time).
+        from clm.cli.commands.slides import sync_autopilot
+
         monkeypatch.setattr(
-            cmd,
+            sync_autopilot,
             "_resolve_judge",
             lambda *_a, **_k: StaticSyncJudge(
                 default_proposal=SyncProposal(verdict="in_sync", proposed_text="")
@@ -346,8 +350,12 @@ class TestGlossary:
         _write(tmp_path / "slides_x.en.py", en)  # twin present → delegated sync
         _patch_key(monkeypatch)
         captured = _capture_translator_args(monkeypatch, _mirror_translator(de, en))
+        # _resolve_judge now lives in sync_autopilot (epic #440); translate imports it
+        # lazily, so patch it at its home (the lazy `from ... import` reads it at call time).
+        from clm.cli.commands.slides import sync_autopilot
+
         monkeypatch.setattr(
-            cmd,
+            sync_autopilot,
             "_resolve_judge",
             lambda *_a, **_k: StaticSyncJudge(
                 default_proposal=SyncProposal(verdict="in_sync", proposed_text="")

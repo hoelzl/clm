@@ -26,6 +26,7 @@ subsequent ``sync`` of that deck would look up.
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import click
@@ -38,6 +39,8 @@ from clm.cli.commands.slides.sync import (
 )
 from clm.infrastructure.llm.cache import SyncWatermarkCache, resolve_cache_dir
 from clm.slides.pairing import find_split_slide_files_recursive, iter_split_pairs
+from clm.slides.sync_apply import record_baseline
+from clm.slides.sync_verify import VerifyResult, verify_pair
 
 
 @define
@@ -383,3 +386,139 @@ def watermark_prune_cmd(cache_dir: Path | None, dry_run: bool, as_json: bool) ->
     total = sum(rows for _de, _en, rows in results)
     click.echo("")
     click.echo(f"{verb}: {total} row(s) across {len(results)} orphaned pair(s).")
+
+
+# ---------------------------------------------------------------------------
+# clm slides sync baseline  (the demoted-watermark verb group, epic #440)
+#
+# Under the agent toolkit the read surface (`report` / `verify`) baselines off git
+# HEAD; the watermark is the demoted, opt-in accelerator for `apply`. The `baseline`
+# group inspects and maintains it, co-located with `sync` and renamed to reflect that
+# role: `show` (was `list`), `clear`, `prune`, plus `bless` — the commit-free baseline
+# recorder that replaces `--rebaseline` (#430). The legacy `clm slides watermark`
+# group stays as a back-compat alias for the same store.
+# ---------------------------------------------------------------------------
+
+
+@click.group("baseline")
+def baseline_group() -> None:
+    """Inspect and maintain the sync baseline (the demoted watermark accelerator).
+
+    \b
+    show    list baselined pairs (row count, last sync, on-disk status)
+    bless   record the current working tree as the baseline (no commit needed)
+    clear   drop a pair's baseline so the next sync re-derives off git HEAD
+    prune   drop orphan baselines whose files no longer exist
+    """
+
+
+# `show` reuses the `watermark list` implementation verbatim (same store, same shape);
+# `clear` / `prune` are shared as-is.
+baseline_group.add_command(watermark_list_cmd, name="show")
+baseline_group.add_command(watermark_clear_cmd, name="clear")
+baseline_group.add_command(watermark_prune_cmd, name="prune")
+
+
+@baseline_group.command("bless")
+@click.argument("deck", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.argument(
+    "en_path",
+    required=False,
+    default=None,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click.option(
+    "--cache-dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Directory holding the baseline (see `clm slides sync --cache-dir`).",
+)
+@click.option("--json", "as_json", is_flag=True, default=False, help="Emit a JSON report.")
+def baseline_bless_cmd(
+    deck: Path, en_path: Path | None, cache_dir: Path | None, as_json: bool
+) -> None:
+    """Record the current working tree as the sync baseline — no commit needed.
+
+    Replaces ``--rebaseline`` and closes #430: after you reconcile a split pair by hand
+    (or with ``apply --no-cache``), ``bless`` snapshots the working tree as the new
+    baseline so the next ``report`` / ``apply`` sees it as in sync — **without** the
+    throwaway commit ``--rebaseline``'s git-HEAD-no-op gate used to force.
+
+    \b
+    ⚠ ``bless`` checks ONLY structure — it does **not** check that the translation is
+    correct, nor that the working tree agrees with git ``HEAD``. It records **whatever is
+    in the working tree** as the authoritative "in sync" reference, so an unreviewed or
+    wrong EN half present at bless time becomes the baseline the next ``report`` reads as
+    clean (a weaker gate than the ``--rebaseline`` it replaces, which required a git-HEAD
+    no-op). The gate is ``verify``: a structurally corrupt pair (mismatched ids, drifted
+    shared cells, header parity break) is **refused**. Review with ``git diff`` and
+    confirm the two halves correspond **before** blessing — ``bless`` trusts your
+    assertion that they are semantically in sync. DECK is a split half
+    (``<deck>.de.py`` / ``<deck>.en.py``) or bilingual stem; single pair only.
+    """
+    de_path, en_resolved = _resolve_single_path(deck, en_path)
+    de_path, en_resolved = _resolve_sync_pair(de_path, en_resolved)
+    de_path, en_resolved = de_path.resolve(), en_resolved.resolve()
+
+    verdict = verify_pair(de_path, en_resolved)
+    if not verdict.ok:
+        _emit_bless_refused(de_path, verdict, as_json=as_json)
+        sys.exit(2)
+
+    cache = _open_cache(cache_dir)
+    try:
+        had = cache.has_pair(str(de_path), str(en_resolved))
+        record_baseline(cache, de_path, en_resolved)
+    finally:
+        cache.close()
+    _emit_bless_done(de_path, replaced=had, warnings=len(verdict.warnings), as_json=as_json)
+
+
+def _emit_bless_refused(de_path: Path, verdict: VerifyResult, *, as_json: bool) -> None:
+    errors = [v for v in verdict.violations if v.severity == "error"]
+    if as_json:
+        click.echo(
+            json.dumps(
+                {
+                    "deck": str(de_path),
+                    "mode": "bless",
+                    "exit_code": 2,
+                    "blessed": False,
+                    "reason": "structural verification failed",
+                    "errors": [
+                        {"kind": v.kind, "message": v.message, "slide_id": v.slide_id}
+                        for v in errors
+                    ],
+                },
+                indent=2,
+            )
+        )
+        return
+    click.echo(
+        f"refusing to bless {de_path.name}: the pair is not a structurally valid split "
+        f"({len(errors)} error(s)) — a genuine divergence would be masked. Resolve it "
+        "(`clm slides sync report` / `verify`) first:"
+    )
+    for v in errors:
+        click.echo(f"    error [{v.kind}]: {v.message}")
+
+
+def _emit_bless_done(de_path: Path, *, replaced: bool, warnings: int, as_json: bool) -> None:
+    if as_json:
+        click.echo(
+            json.dumps(
+                {
+                    "deck": str(de_path),
+                    "mode": "bless",
+                    "exit_code": 0,
+                    "blessed": True,
+                    "replaced": replaced,
+                    "warnings": warnings,
+                },
+                indent=2,
+            )
+        )
+        return
+    verb = "re-recorded" if replaced else "recorded"
+    tail = f" ({warnings} verify warning(s) allowed)" if warnings else ""
+    click.echo(f"blessed {de_path.name}: {verb} the working tree as the sync baseline{tail}.")

@@ -28,9 +28,14 @@ its message names the offending DE/EN line.
 degrades to two separate cells rather than erroring. So the ``de_id == en_id``
 invariant is enforced here directly — the set of slide_ids in the DE half must
 equal the set in the EN half (a localized id'd cell appears once in each half; a
-neutral id'd cell appears byte-identically in both — both are symmetric), and an
-id must not be *duplicated* within a half (sync keys on it). An asymmetric or
-duplicated id is a corruption unify cannot see.
+neutral id'd cell appears byte-identically in both — both are symmetric), and a
+``(slide_id, role)`` key must not be *duplicated* within a half. Uniqueness is on
+the **pair**, not the bare id — the engine reconciles cells *per (slide_id, role)*
+(:func:`~clm.slides.sync_writeback.role_of`), so a slide and its inline
+``voiceover`` / ``notes`` narrative companion **share** a ``slide_id`` under
+different roles by design (that is the standard pattern, not a collision). An
+asymmetric id, or a duplicated ``(slide_id, role)`` key, is a corruption unify
+cannot see.
 
 **Secondary check — no accidental drop vs the git pre-edit version.** A
 ``slide_id`` present in the committed (HEAD) half but gone from the working tree
@@ -52,6 +57,7 @@ from clm.notebooks.slide_parser import comment_token_for_path
 from clm.slides.raw_cells import split_cells
 from clm.slides.split import UnifyError, unify_texts
 from clm.slides.sync_plan import _git_ref_text
+from clm.slides.sync_writeback import role_of
 
 
 @dataclass(frozen=True)
@@ -111,11 +117,13 @@ def structural_violations(de_text: str, en_text: str, comment_token: str) -> lis
     except UnifyError as exc:
         violations.append(VerifyViolation(severity="error", kind="unify", message=str(exc)))
 
-    de_ids = _slide_id_list(de_text, comment_token)
-    en_ids = _slide_id_list(en_text, comment_token)
-    violations.extend(_id_symmetry_violations(de_ids, en_ids))
-    violations.extend(_duplicate_id_violations(de_ids, "DE"))
-    violations.extend(_duplicate_id_violations(en_ids, "EN"))
+    de_keys = _slide_id_role_list(de_text, comment_token)
+    en_keys = _slide_id_role_list(en_text, comment_token)
+    violations.extend(
+        _id_symmetry_violations([sid for sid, _role in de_keys], [sid for sid, _role in en_keys])
+    )
+    violations.extend(_duplicate_id_violations(de_keys, "DE"))
+    violations.extend(_duplicate_id_violations(en_keys, "EN"))
     return violations
 
 
@@ -156,27 +164,53 @@ def _id_symmetry_violations(de_ids: list[str], en_ids: list[str]) -> list[Verify
     return out
 
 
-def _duplicate_id_violations(ids: list[str], half: str) -> list[VerifyViolation]:
-    """Flag every slide_id that appears more than once within one half."""
-    return [
-        VerifyViolation(
-            severity="error",
-            kind="duplicate-id",
-            message=(
-                f"slide_id {sid!r} appears {n} times in the {half} half — ids must be "
-                "unique within a half (sync keys on them)"
-            ),
-            slide_id=sid,
-        )
-        for sid, n in sorted(Counter(ids).items())
-        if n > 1
-    ]
+def _duplicate_id_violations(
+    keys: list[tuple[str, str | None]], half: str
+) -> list[VerifyViolation]:
+    """Flag every ``(slide_id, role)`` key that appears more than once within one half.
+
+    Uniqueness is on the **(slide_id, role) pair** — the engine's keying unit
+    (:func:`role_of`: "cells reconciled per (slide_id, role)"), the same key the
+    watermark stores — **not** the bare id. A slide and its inline ``voiceover`` /
+    ``notes`` narrative companion legitimately share a ``slide_id`` under different
+    roles; that is the standard pattern, not a collision (keying on the bare id
+    wrongly flagged every such slide). Two cells with the same id *and* role are a
+    true duplicate that would mis-key the sync.
+    """
+    out: list[VerifyViolation] = []
+    for (sid, role), n in sorted(Counter(keys).items(), key=lambda kv: (kv[0][0], kv[0][1] or "")):
+        if n > 1:
+            role_label = role if role is not None else "no-role"
+            out.append(
+                VerifyViolation(
+                    severity="error",
+                    kind="duplicate-id",
+                    message=(
+                        f"slide_id {sid!r} (role {role_label!r}) appears {n} times in the "
+                        f"{half} half — the (slide_id, role) key must be unique within a half "
+                        "(sync keys on it)"
+                    ),
+                    slide_id=sid,
+                )
+            )
+    return out
 
 
 def _slide_id_list(text: str, comment_token: str) -> list[str]:
     """Every cell's slide_id (with duplicates, in document order); id-less skipped."""
     _preamble, cells = split_cells(text, comment_token)
     return [c.metadata.slide_id for c in cells if c.metadata.slide_id]
+
+
+def _slide_id_role_list(text: str, comment_token: str) -> list[tuple[str, str | None]]:
+    """Every id'd cell's ``(slide_id, role)`` key (with duplicates, in document order).
+
+    Mirrors the engine's keying unit (:func:`role_of`): a slide and its ``voiceover``
+    / ``notes`` companion share a ``slide_id`` under different roles, so uniqueness is
+    on the *pair*. Id-less cells carry no key and are skipped.
+    """
+    _preamble, cells = split_cells(text, comment_token)
+    return [(c.metadata.slide_id, role_of(c.metadata)) for c in cells if c.metadata.slide_id]
 
 
 def dropped_id_violations(

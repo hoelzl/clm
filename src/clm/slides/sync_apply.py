@@ -266,6 +266,8 @@ def apply_plan(
     alignment_cache: SyncAlignmentCache | None = None,
     verifier: CorrespondenceVerifier | None = None,
     correspondence_cache: SyncCorrespondenceCache | None = None,
+    deterministic_only: bool = False,
+    scope_to_proposals: bool = False,
 ) -> ApplyResult:
     """Apply ``plan``'s proposals to the decks and advance the watermark.
 
@@ -293,6 +295,25 @@ def apply_plan(
     while a cell was split, an unresolvable tie — the recoverer re-identifies the
     neutral code region with a validated, cached, body-free alignment map. ``None``
     (the default) leaves the ambiguous region untouched to re-surface next run.
+
+    ``deterministic_only`` is the model-free ``apply`` verb (epic #440 decision B):
+    the engine applies only the deterministic tier-1 work — ``move`` / ``remove`` /
+    ``retag``, language-neutral verbatim propagation, and the unambiguous
+    id-migration — and treats every model-requiring item (``edit`` / ``add`` /
+    ``rename``, a localized-cell rebuild, a cold-start ``mint`` / ``adopt`` /
+    ``reconcile``, an ambiguous ``realign``) as **residue**: it is *deferred*, not
+    errored, so the watermark holds and the pass exits non-zero (the caller points
+    the agent at ``report`` / ``task``). The caller must pass every model argument
+    (``judge`` / ``translator`` / ``recoverer`` / ``verifier``) as ``None``; this
+    flag only flips the engine's reaction to their absence from "error" to "defer".
+
+    ``scope_to_proposals`` is the surgical ``accept`` mode (epic #440): apply only the
+    explicit per-cell proposals (edit / remove / retag) the caller pruned the plan to,
+    flush, and return — skipping the structural pass, id-migration, group-order
+    reconciliation, and the whole-pass fail-safes. It exists so a single-item ``accept``
+    (which prunes the plan to one proposal and supplies a single-answer stand-in) cannot
+    re-derive structural drift from the live files and re-translate a *co-drifted*
+    sibling with that one answer. The watermark never advances in this mode.
     """
     result = ApplyResult()
 
@@ -369,7 +390,13 @@ def apply_plan(
                 result.deferred += 1
                 _note_deferred(deferred_keys, proposal)
         elif kind == "edit":
-            if _accepted(decisions, proposal):
+            if deterministic_only:
+                # Model-free apply (epic #440): an edit needs the judge/translator —
+                # defer it as residue (no model call, no error), so the watermark
+                # holds and the caller routes it to `task`/`accept`.
+                result.deferred += 1
+                _note_deferred(deferred_keys, proposal)
+            elif _accepted(decisions, proposal):
                 _apply_edit(
                     proposal,
                     de_state,
@@ -415,6 +442,24 @@ def apply_plan(
             _note_deferred(deferred_keys, proposal)
         # "add" / "rename" are handled by _apply_adds below (always applied).
 
+    if scope_to_proposals:
+        # Scoped apply (epic #440, edit accept): write ONLY the explicit per-cell
+        # proposals (edit / remove / retag) the caller pruned the plan to, then
+        # persist — skipping the structural pass, id-migration, group-order
+        # reconciliation, and the whole-pass fail-safes. ``accept`` prunes the plan to
+        # a single proposal and supplies a single-answer stand-in judge/translator; if
+        # the structural pass ran it would re-derive drift from the live files and
+        # re-translate any *co-drifted* sibling (a neutral or id-less-localized cell
+        # the author also changed) with that one answer — silent cross-cell corruption
+        # — and the fail-safes, which assume a complete pass, would error on the other
+        # still-pending drift. The targeted cell is fully written by the per-cell walk
+        # above, so a scoped flush is all an edit accept needs. The watermark never
+        # advances here (a single-item accept must not bank the rest of the deck).
+        if not result.has_errors and not plan.has_errors:
+            _flush_states_atomically(de_state, en_state)
+            result.flushed = True
+        return result
+
     # The run's shared translation-outcome cache (#216 2b / #289 P2), keyed by
     # source-cell id: the add materializers fill it for the add walks, the
     # structural materializer below adds the changed id-less localized cells, and
@@ -426,7 +471,7 @@ def apply_plan(
     # id-less cell), so unlike moves they apply even on a *deferred* (non-clean)
     # pass — but, like every cell, the stamped id only reaches disk on an
     # error-free pass (the end-of-pass flush is gated on no errors).
-    _apply_adds(de_state, en_state, result, plan, translator, translations)
+    _apply_adds(de_state, en_state, result, plan, translator, translations, deterministic_only)
 
     # Moves are applied last, and only if the rest of the pass is clean (so the
     # watermark will advance and the reorder stays idempotent).
@@ -453,7 +498,14 @@ def apply_plan(
     baseline_anchors = _baseline_anchor_hashes(plan)
     _materialize_structural(plan, de_state, en_state, translator, baseline_anchors, translations)
     apply_code_structure(
-        plan, de_state, en_state, translator, result, baseline_anchors, translations
+        plan,
+        de_state,
+        en_state,
+        translator,
+        result,
+        baseline_anchors,
+        translations,
+        deterministic_only=deterministic_only,
     )
 
     # Place a newly-added slide group at its source position. The per-cell add path
@@ -1621,6 +1673,20 @@ def _build_slide_pairs(de_path: Path, en_path: Path) -> list[SlidePair]:
     return pairs
 
 
+def cold_slide_pairs(plan: SyncPlan) -> list[SlidePair]:
+    """The aligned ``(de, en)`` slide pairs a cold-start ``mint`` / ``adopt`` verifies.
+
+    The agent-facing ``task`` / ``accept`` surface (epic #440): the engine emits these
+    pairs so the agent's model can judge correspondence, and ``accept`` rebuilds the
+    SAME pairs to validate the returned verdict map — both reuse the exact
+    :func:`_build_slide_pairs` that :func:`_apply_cold_mint` / :func:`_apply_cold_adopt`
+    feed the verifier, so the agent path and the embedded ``autopilot`` verifier see an
+    identical pair list. Reads the (unchanged, pre-apply) files, so the caller must use
+    it only on a dry-run plan — the same constraint as the report's cell-text excerpts.
+    """
+    return _build_slide_pairs(plan.de_path, plan.en_path)
+
+
 def _heading_line(body: str) -> str:
     """The first non-blank line of a cell body (the slide heading)."""
     for line in body.splitlines():
@@ -1767,6 +1833,61 @@ def _adopt_ids_in_split_pair(de_path: Path, en_path: Path, authority: str) -> in
 # ---------------------------------------------------------------------------
 
 
+def _reconcile_cross_product(
+    plan: SyncPlan, de_state: FileState, en_state: FileState
+) -> tuple[list[RawCell], list[RawCell], list[SlidePair]] | None:
+    """Locate the reconcile suspects and build the verifier's DE×EN pair cross-product.
+
+    The single definition the apply tier (:func:`_apply_reconcile`) and the agent
+    ``task`` / ``accept`` surface (:func:`reconcile_pairs`) both build the correspondence
+    cross-product from — so the verdict indices (the flat ``i*m+j``) can never misalign
+    between what the agent judges and what the engine applies. Returns ``(de_suspects,
+    en_suspects, pairs)``, or ``None`` when the bucket is degenerate: a single-direction
+    set, or a suspect that cannot be located (the files changed). For ``None`` there is no
+    cross-product to verify and the caller defers the whole set / surfaces nothing to frame.
+    """
+    reconciles = [p for p in plan.proposals if p.kind == "reconcile"]
+    de_props = [p for p in reconciles if p.direction == "de->en"]
+    en_props = [p for p in reconciles if p.direction == "en->de"]
+    de_suspects = [c for p in de_props if (c := _suspect_cell(de_state, "de", p)) is not None]
+    en_suspects = [c for p in en_props if (c := _suspect_cell(en_state, "en", p)) is not None]
+    if (
+        not de_props
+        or not en_props
+        or len(de_suspects) != len(de_props)
+        or len(en_suspects) != len(en_props)
+    ):
+        return None
+    pairs = [
+        SlidePair(
+            de_heading=_heading_line(de_c.body),
+            en_heading=_heading_line(en_c.body),
+            de_snippet=_snippet(de_c.body),
+            en_snippet=_snippet(en_c.body),
+            role=role_of(de_c.metadata) or "slide",
+        )
+        for de_c in de_suspects
+        for en_c in en_suspects
+    ]
+    return de_suspects, en_suspects, pairs
+
+
+def reconcile_pairs(plan: SyncPlan) -> list[SlidePair]:
+    """The DE×EN correspondence cross-product a committed ``reconcile`` bucket verifies.
+
+    The agent ``task`` / ``accept`` surface for #228 (epic #440): the engine emits the
+    same suspect cross-product :func:`_apply_reconcile` feeds the verifier, so the agent's
+    model judges it and ``accept`` rebuilds an identical pair list (the verdict indices
+    align by construction — both go through :func:`_reconcile_cross_product`). Empty when
+    the bucket is degenerate (one-directional — those suspects are one-sided adds, not
+    twins). Reads the (unchanged, pre-apply) files, so use only on a dry-run plan.
+    """
+    de_state = FileState.load(plan.de_path)
+    en_state = FileState.load(plan.en_path)
+    cross = _reconcile_cross_product(plan, de_state, en_state)
+    return cross[2] if cross is not None else []
+
+
 def _apply_reconcile(
     plan: SyncPlan,
     verifier: CorrespondenceVerifier | None,
@@ -1806,33 +1927,13 @@ def _apply_reconcile(
 
     de_state = FileState.load(plan.de_path)
     en_state = FileState.load(plan.en_path)
-    de_props = [p for p in reconciles if p.direction == "de->en"]
-    en_props = [p for p in reconciles if p.direction == "en->de"]
-    de_suspects = [c for p in de_props if (c := _suspect_cell(de_state, "de", p)) is not None]
-    en_suspects = [c for p in en_props if (c := _suspect_cell(en_state, "en", p)) is not None]
-    # A suspect that cannot be located (the files changed under us) or a single-direction
-    # bucket (shouldn't reach here) is not safe to resolve — defer the whole set.
-    if (
-        verifier is None
-        or not de_props
-        or not en_props
-        or len(de_suspects) != len(de_props)
-        or len(en_suspects) != len(en_props)
-    ):
+    cross = _reconcile_cross_product(plan, de_state, en_state)
+    # No verifier, an unlocatable suspect, or a single-direction bucket (no cross-product
+    # to verify) is not safe to resolve — defer the whole set.
+    if verifier is None or cross is None:
         result.deferred += len(reconciles)
         return
-
-    pairs = [
-        SlidePair(
-            de_heading=_heading_line(de_c.body),
-            en_heading=_heading_line(en_c.body),
-            de_snippet=_snippet(de_c.body),
-            en_snippet=_snippet(en_c.body),
-            role=role_of(de_c.metadata) or "slide",
-        )
-        for de_c in de_suspects
-        for en_c in en_suspects
-    ]
+    de_suspects, en_suspects, pairs = cross
     verdicts = _resolve_correspondence(verifier, correspondence_cache, pairs)
     if verdicts is None:  # safe-abort → refuse the whole set (never a wrong id)
         result.deferred += len(reconciles)
@@ -2034,6 +2135,7 @@ def _apply_adds(
     plan: SyncPlan,
     translator: SlideTranslator | None,
     translations: dict[int, TranslationOutcome],
+    deterministic_only: bool = False,
 ) -> None:
     """Translate and insert counterparts for new and copy-pasted cells.
 
@@ -2066,7 +2168,11 @@ def _apply_adds(
 
     if translator is None:
         result.deferred += len(idd) + len(idless) + len(rename_props)
-        result.errors.append("add/rename present but no translator available")
+        # Model-free apply (epic #440): a new slide needs translation — defer it as
+        # residue for `task`/`accept`, no error. The autopilot/human path keeps the
+        # old contract (a missing translator when one was wanted IS an error).
+        if not deterministic_only:
+            result.errors.append("add/rename present but no translator available")
         return
 
     # Stage 2b for the add path (#216 resolve-then-apply): every translation is
@@ -3630,6 +3736,29 @@ def detect_idmigration_residue(plan: SyncPlan) -> list[DriftResidue]:
     return _describe_residue(de_cells, current_region, baseline_constructs, region_hashes)
 
 
+def idmigration_regions(plan: SyncPlan) -> tuple[list[RegionCell], list[RegionCell]] | None:
+    """The ``(base_region, current_region)`` of a stuck drifted-id region, or ``None``.
+
+    The body-free region pair the agent-facing ``clm slides sync task`` builds its
+    ``realign`` prompt from — exactly the two regions :func:`_recover_drifted_ids`
+    would feed the embedded recoverer. Gated on :func:`detect_idmigration_residue`
+    finding residue, so the ``task`` surface and the report's ``realign`` items can
+    never disagree about whether a region is stuck. Returns ``None`` whenever there is
+    no stuck region (the same conditions that make ``detect_idmigration_residue``
+    return ``[]``). Reads ``plan.de_path``; writes nothing.
+    """
+    if not detect_idmigration_residue(plan):
+        return None
+    # Residue exists, so the gating in detect_idmigration_residue already confirmed
+    # the halves' neutral regions are byte-identical and the baseline bundle is
+    # present — recompute the two regions from the same derivation it used.
+    try:
+        de_cells = _neutral_code_filter(_raw_cells(plan.de_path))
+    except OSError:
+        return None
+    return _shared_region(plan), _region_of(de_cells)
+
+
 def _describe_residue(
     de_cells: list[RawCell],
     current_region: list[RegionCell],
@@ -3829,6 +3958,20 @@ def _record_watermark(
 
     commit = get_git_info(de_path.parent).get("commit")
     cache.set_synced_commit(str(de_path), str(en_path), commit if isinstance(commit, str) else None)
+
+
+def record_baseline(cache: SyncWatermarkCache, de_path: Path, en_path: Path) -> None:
+    """Snapshot a split pair's current working-tree state as the sync baseline.
+
+    The ``baseline bless`` primitive (epic #440). Unlike :func:`apply_plan`, it
+    propagates **nothing** — it records both halves' current bytes as the new
+    watermark and advances ``synced_commit``, so a hand-reconciled (or
+    ``--no-cache``-synced) working tree can be blessed as the baseline **without a
+    throwaway commit** (#430). The caller must first assert the pair is a
+    structurally valid split (``clm slides sync verify``); ``bless`` trusts the
+    author's assertion that the localized halves are semantically in sync.
+    """
+    _record_watermark(cache, de_path, en_path)
 
 
 def _eligible_for_partial_advance(plan: SyncPlan, result: ApplyResult) -> bool:

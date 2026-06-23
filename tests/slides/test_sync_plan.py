@@ -731,75 +731,140 @@ class TestBuildSyncPlanGitFallback:
         self._git(tmp_path, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "baseline")
         return de_path, en_path
 
-    def test_committed_idless_pair_mints_with_provider(self, tmp_path: Path):
-        # Issue #225: a COMMITTED never-id'd pair resolves to a git-HEAD baseline that
-        # carries no ids — functionally a cold start. It must bootstrap (mint), not
-        # refuse: the baseline is demoted to "none" so the cold mint candidacy fires.
+    def test_committed_unchanged_idless_pair_is_consistent_noop(self, tmp_path: Path):
+        # Issue #438: a COMMITTED fully-id-less pair shares no slide_id, so it is routed
+        # off the keyed git-HEAD diff (which would double it) — but being byte-identical
+        # to HEAD on both halves it has NOT drifted since commit, so it is *consistent
+        # now*, not a cold start. It must read as a no-op (the false `needs_agent` on a
+        # clean committed deck this fixes), exactly as a bootstrapped committed-unchanged
+        # pair does — NOT a `mint`. Cold-start candidacy returns the moment it drifts
+        # (`test_committed_idless_pair_drifted_since_head_mints`).
         de_path, en_path = self._commit_pair(
             tmp_path,
             _slide_idless("de", "# ## A") + _slide_idless("de", "# ## B"),
             _slide_idless("en", "# ## A") + _slide_idless("en", "# ## B"),
         )
         plan = build_sync_plan(de_path, en_path, provider_available=True)
-        assert plan.baseline_source == "none"  # demoted from git-head (#225)
-        assert plan.count("mint") == 1
+        assert plan.baseline_source == "git-head"  # committed & unchanged vs HEAD
+        assert plan.is_noop
+        assert plan.count("mint") == 0
         assert plan.count("add") == 0
         assert plan.count("refuse") == 0
 
-    def test_committed_idless_pair_refuses_without_provider(self, tmp_path: Path):
-        # No provider → no verifier → it must REFUSE (never silently add/double).
+    def test_committed_unchanged_idless_pair_is_noop_without_provider(self, tmp_path: Path):
+        # The consistency short-circuit (#438) is provider-independent: a clean committed
+        # id-less pair is a no-op whether or not a verifier is available — it never
+        # surfaces the old dead-end `refuse` either.
         de_path, en_path = self._commit_pair(
             tmp_path,
             _slide_idless("de", "# ## A") + _slide_idless("de", "# ## B"),
             _slide_idless("en", "# ## A") + _slide_idless("en", "# ## B"),
         )
         plan = build_sync_plan(de_path, en_path, provider_available=False)
-        assert plan.baseline_source == "none"
-        assert plan.count("refuse") == 4
-        assert plan.count("add") == 0
+        assert plan.baseline_source == "git-head"
+        assert plan.is_noop
+        assert plan.count("refuse") == 0
         assert plan.count("mint") == 0
 
-    def test_committed_half_idd_pair_adopts_with_provider(self, tmp_path: Path):
-        # A COMMITTED half-id'd pair (DE id-less, EN id'd) bootstraps via adopt — the
-        # id-less DE half adopts EN's existing ids — instead of the keyed baseline path
-        # that would translate-and-insert both directions and double the deck.
+    def test_committed_unchanged_half_idd_pair_is_consistent_noop(self, tmp_path: Path):
+        # Issue #438 (half-id'd shape): EN id'd, DE id-less — still shares no id, so still
+        # un-bootstrapped, but byte-identical to HEAD ⇒ consistent ⇒ no-op. The DE half's
+        # MISSING ids are a structural matter for `verify` (de_id != en_id set-symmetry),
+        # not a sync-drift signal, so the read reports it clean rather than an `adopt`.
         de_path, en_path = self._commit_pair(
             tmp_path,
             _slide_idless("de", "# ## A") + _slide_idless("de", "# ## B"),
             _slide("en", "s1", "# ## A") + _slide("en", "s2", "# ## B"),
         )
         plan = build_sync_plan(de_path, en_path, provider_available=True)
-        assert plan.baseline_source == "none"
-        assert plan.count("adopt") == 1
-        assert plan.count("add") == 0
+        assert plan.baseline_source == "git-head"
+        assert plan.is_noop
+        assert plan.count("adopt") == 0
         assert plan.count("refuse") == 0
 
-    def test_committed_half_idd_pair_never_doubles_without_provider(self, tmp_path: Path):
+    def test_committed_idless_pair_drifted_since_head_mints(self, tmp_path: Path):
+        # The #438 boundary: once a committed id-less pair DRIFTS from HEAD (here an
+        # aligned new slide appended to BOTH halves, uncommitted), it is genuinely
+        # un-baselined again → demoted to "none" → the cold mint candidacy returns.
+        de_path, en_path = self._commit_pair(
+            tmp_path,
+            _slide_idless("de", "# ## A") + _slide_idless("de", "# ## B"),
+            _slide_idless("en", "# ## A") + _slide_idless("en", "# ## B"),
+        )
+        de_path.write_text(
+            _slide_idless("de", "# ## A")
+            + _slide_idless("de", "# ## B")
+            + _slide_idless("de", "# ## C"),
+            encoding="utf-8",
+        )
+        en_path.write_text(
+            _slide_idless("en", "# ## A")
+            + _slide_idless("en", "# ## B")
+            + _slide_idless("en", "# ## C"),
+            encoding="utf-8",
+        )
+        plan = build_sync_plan(de_path, en_path, provider_available=True)
+        assert plan.baseline_source == "none"  # drifted ⇒ no HEAD match ⇒ cold again
+        assert plan.count("mint") == 1
+        assert plan.count("refuse") == 0
+
+    def test_committed_misaligned_idless_pair_surfaces_refuse(self, tmp_path: Path):
+        # PR #442 review (HIGH): byte-stability vs HEAD is NOT consistency for id-less
+        # pairs. A committed pair where DE has 3 slides but EN has 2 (EN missing one) is
+        # byte-stable forever yet genuinely misaligned — and `verify` is blind to it (its
+        # id-symmetry check excludes id-less cells). The #438 short-circuit must NOT
+        # suppress it: the consistency gate finds it un-bootstrappable, so it falls through
+        # to the cold path and keeps its `refuse` (the pre-#438 safety net, restored).
+        de_path, en_path = self._commit_pair(
+            tmp_path,
+            _slide_idless("de", "# ## A")
+            + _slide_idless("de", "# ## B")
+            + _slide_idless("de", "# ## C"),
+            _slide_idless("en", "# ## A") + _slide_idless("en", "# ## B"),
+        )
+        plan = build_sync_plan(de_path, en_path, provider_available=True)
+        assert plan.baseline_source == "none"  # NOT short-circuited to a clean no-op
+        assert not plan.is_noop
+        assert plan.count("refuse") > 0
+        assert plan.count("mint") == 0  # misaligned ⇒ not mintable
+
+    def test_committed_half_idd_pair_drift_never_doubles_without_provider(self, tmp_path: Path):
         # REGRESSION GUARD for the silent-doubling bug uncovered alongside #225: a
         # committed half-id'd pair used to emit 4 ADDS on the git-HEAD baseline path
         # (id-less de->en + id'd en->de) → translate-insert both → DOUBLE both decks.
-        # With the demotion it refuses instead (add == 0), even with no provider.
+        # An UNCHANGED such pair is now a no-op (#438, above); to keep guarding the
+        # CLASSIFIER we drift it (edit DE after commit) so the cold path actually runs —
+        # it must still refuse (add == 0), even with no provider.
         de_path, en_path = self._commit_pair(
             tmp_path,
             _slide_idless("de", "# ## A") + _slide_idless("de", "# ## B"),
             _slide("en", "s1", "# ## A") + _slide("en", "s2", "# ## B"),
         )
+        de_path.write_text(
+            _slide_idless("de", "# ## A EDITED") + _slide_idless("de", "# ## B"),
+            encoding="utf-8",
+        )
         plan = build_sync_plan(de_path, en_path, provider_available=False)
+        assert plan.baseline_source == "none"  # drifted, still un-bootstrapped
         assert plan.count("add") == 0  # the doubling adds are gone
         assert plan.count("refuse") == 4
         assert plan.count("mint") == 0
         assert plan.count("adopt") == 0
 
-    def test_committed_mismatched_id_pair_refuses_never_doubles(self, tmp_path: Path):
-        # Both halves committed but id'd with DISJOINT ids (per-half assign-ids): the
-        # ids do not pair across decks, so the git-HEAD baseline keys are useless and
-        # the keyed path used to emit 4 id-carrying adds (both directions) → DOUBLE.
-        # The pair shares no keying → demoted to cold → refused (mismatched stays
-        # refuse), with or without a provider.
+    def test_committed_mismatched_id_pair_drift_refuses_never_doubles(self, tmp_path: Path):
+        # Both halves committed but id'd with DISJOINT ids (per-half assign-ids): the ids
+        # do not pair across decks, so the git-HEAD baseline keys are useless and the
+        # keyed path used to emit 4 id-carrying adds (both directions) → DOUBLE. Unchanged
+        # it is now a no-op (#438); drifted (edit DE) it still demotes to cold and refuses
+        # — never doubles — with or without a provider.
         de_path, en_path = self._commit_pair(
             tmp_path,
             _slide("de", "d1", "# ## A") + _slide("de", "d2", "# ## B"),
             _slide("en", "e1", "# ## A") + _slide("en", "e2", "# ## B"),
+        )
+        de_path.write_text(
+            _slide("de", "d1", "# ## A EDITED") + _slide("de", "d2", "# ## B"),
+            encoding="utf-8",
         )
         for provider in (True, False):
             plan = build_sync_plan(de_path, en_path, provider_available=provider)

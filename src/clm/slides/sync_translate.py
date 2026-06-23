@@ -36,6 +36,8 @@ __all__ = [
     "SlideTranslator",
     "StaticSlideTranslator",
     "TranslationError",
+    "build_translation_system_prompt",
+    "build_translation_user_prompt",
 ]
 
 # Claude Sonnet via OpenRouter — the voiceover propagate path's precedent.
@@ -195,24 +197,18 @@ class OpenRouterSlideTranslator:
     def _system_message(self, role: str, source_lang: str, target_lang: str) -> str:
         """Assemble the system prompt for a cell ``role`` and direction.
 
-        The role-specific base prompt with the language/comment-token descriptors
-        filled in, then the caller-supplied conventions for ``target_lang``
-        appended AFTER ``.format()`` so any braces in the glossary (JSON, f-strings,
-        code) are never read as format fields. A pure, network-free seam so the
-        prompt assembly (incl. glossary selection) is unit-testable.
+        Delegates to the module-level :func:`build_translation_system_prompt` (the
+        model-free seam shared with the agent-facing ``clm slides sync task``
+        surface), resolving this translator's per-target glossary first via
+        :meth:`_guidance_for`.
         """
-        comment_prefix, prog_lang_name = _prog_lang_descriptors(self.prog_lang)
-        system = _system_prompt_for(role).format(
-            source_lang=_LANG_NAMES.get(source_lang, source_lang),
-            target_lang=_LANG_NAMES.get(target_lang, target_lang),
+        return build_translation_system_prompt(
             role=role,
-            comment_prefix=comment_prefix,
-            prog_lang_name=prog_lang_name,
+            source_lang=source_lang,
+            target_lang=target_lang,
+            prog_lang=self.prog_lang,
+            guidance=self._guidance_for(target_lang),
         )
-        guidance = self._guidance_for(target_lang)
-        if guidance:
-            system = f"{system}\n\n{guidance}"
-        return system
 
     def _client(self):  # pragma: no cover - thin network adapter
         # Shared with the edit judge so key/base resolution stays in one place.
@@ -254,6 +250,48 @@ class OpenRouterSlideTranslator:
         # Strip BOTH ends: a leading newline would inject a blank first line
         # into the built cell; a trailing one would add a stray blank.
         return str(content).strip("\n")
+
+
+def build_translation_system_prompt(
+    *,
+    role: str,
+    source_lang: str,
+    target_lang: str,
+    prog_lang: str = "python",
+    guidance: str = "",
+) -> str:
+    """Assemble the new-slide translation system prompt for a cell ``role``/direction.
+
+    The model-free seam shared by the embedded :class:`OpenRouterSlideTranslator` and
+    the agent-facing ``clm slides sync task`` builder (epic #440, decision B): pick the
+    role-specific base prompt (code / title / prose), fill the language and
+    comment-token descriptors for ``prog_lang``, then append any caller-supplied
+    ``guidance`` (a target-language glossary / style note) **after** ``.format()`` so
+    braces in the glossary (JSON, f-strings, code) are never read as format fields.
+    Pure and network-free — both callers and a unit test can use it directly.
+    """
+    comment_prefix, prog_lang_name = _prog_lang_descriptors(prog_lang)
+    system = _system_prompt_for(role).format(
+        source_lang=_LANG_NAMES.get(source_lang, source_lang),
+        target_lang=_LANG_NAMES.get(target_lang, target_lang),
+        role=role,
+        comment_prefix=comment_prefix,
+        prog_lang_name=prog_lang_name,
+    )
+    guidance = guidance.strip()
+    if guidance:
+        system = f"{system}\n\n{guidance}"
+    return system
+
+
+def build_translation_user_prompt(source_body: str) -> str:
+    """The user-side message for a new-slide translation: the source cell body verbatim.
+
+    The translator sends the source body to the model unchanged — every instruction
+    lives in the system prompt — so this thin builder simply names that contract,
+    keeping the agent-facing ``task`` surface and the embedded translator in lockstep.
+    """
+    return source_body
 
 
 _LANG_NAMES = {"de": "German", "en": "English"}

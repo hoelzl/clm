@@ -2,6 +2,59 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## `clm slides sync` is now a verb group; the bare command reads (epic #440, {version})
+
+`clm slides sync` was a single leaf command that **wrote to the working tree by
+default** and, when an API key was present, invoked embedded models on its main
+path (the edit judge, the new-slide translator, the cold-pair verifier, the
+`--llm-recover` recoverer). It is now an **agent toolkit**: a verb group whose
+engine **never calls a model**, and whose **bare form reads**. The embedded
+models survive only behind one explicit `autopilot` verb.
+
+This is a **breaking change** for any script, skill, CI step, or repo guideline
+that ran `clm slides sync …`. The agent workflow is `clm info sync-agents`; the
+per-verb reference is `clm info commands`.
+
+What changed, concretely:
+
+- **`clm slides sync DECK` no longer writes.** Bare `sync DECK` is now an alias
+  for `clm slides sync report DECK` — it prints the tiered report and mutates
+  nothing. Every write is an explicit verb.
+- **The default no longer calls models.** The toolkit verbs
+  (`report` / `verify` / `apply` / `task` / `accept`) need **no API key**. The
+  engine classifies deterministically, `apply` writes the mechanical tier, and a
+  tier-2/3 item is *framed* as a `task` for a model **you** run, then validated
+  by `accept`. The old write-everything-with-models behavior is `autopilot` —
+  the only verb that loads `.env` and needs `$OPENROUTER_API_KEY`.
+
+Old → new:
+
+| Old | New |
+|-----|-----|
+| `clm slides sync DECK` (writes, may call models) | `clm slides sync apply DECK` (mechanical tier, no model) + `task`/`accept` for the rest, **or** `clm slides sync autopilot DECK` (one-shot with models) |
+| `clm slides sync DECK --dry-run [--json]` | `clm slides sync report DECK [--json]` |
+| `clm slides sync DECK --explain` | `clm slides sync report DECK --explain` |
+| `clm slides sync DECK --verify` | `clm slides sync verify DECK` |
+| `clm slides sync DECK --rebaseline` | `clm slides sync baseline bless DECK` |
+| `clm slides sync DECK --llm-recover` / `--interactive` / `--provider` / `--llm-model` / `--translation-model` / `--glossary-*` / `--verify-cold-pairs` | the same flags on `clm slides sync autopilot DECK` |
+| `clm slides watermark {list,clear,prune}` | `clm slides sync baseline {show,clear,prune}` (the legacy `watermark` group still works as an alias) |
+
+How to migrate a course repo (see `clm info sync-agents` §"Revising your
+repository guidelines"):
+
+- **A CI / drift check** → `clm slides sync report DECK --json` (read-only) or
+  `clm slides sync verify DECK` (a deterministic structural gate). **Never run
+  `autopilot` in CI** — it is the only verb that calls models.
+- **An automated mechanical reconcile** → `clm slides sync apply DECK`.
+- **A human one-shot** (you want the old behavior) → `clm slides sync autopilot
+  DECK`.
+- **Skills / scripts that exported `$OPENROUTER_API_KEY` for sync** → only
+  `autopilot` needs it now; document the `task` → model → `accept` handoff where
+  a skill previously relied on the engine translating.
+- **`--baseline` / `--baseline-from` / `--cache-dir`** still exist on the verbs
+  that take a baseline (`report` / `apply` / `task` / `accept`), unchanged in
+  meaning. (`verify` takes neither — it is a pure structural check.)
+
 ## Default output structure is now shared/trainer/speaker (issues #380/#381/#383, {version})
 
 A course spec with **no** `<output-targets>` previously built a single

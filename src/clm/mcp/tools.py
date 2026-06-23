@@ -21,9 +21,6 @@ from clm.core.topic_resolver import (
 )
 from clm.infrastructure.llm.cache import SyncWatermarkCache as _SyncWatermarkCache
 from clm.infrastructure.llm.cache import describe_cache_dir as _describe_cache_dir
-from clm.infrastructure.llm.openrouter_client import (
-    has_openrouter_api_key as _has_openrouter_api_key,
-)
 from clm.slides.authoring_rules import AuthoringRulesResult
 from clm.slides.authoring_rules import get_authoring_rules as _get_authoring_rules
 from clm.slides.language_tools import SyncResult
@@ -807,7 +804,10 @@ async def handle_sync_report(file: str, data_dir: Path) -> str:
             de_path,
             en_path,
             watermark_cache=watermark_cache,
-            provider_available=_has_openrouter_api_key(),
+            # Issue #438: read-only agent surface — the agent is the verifier, so a cold
+            # pair frames as a task candidate, never gated on a local key. (A clean
+            # committed id-less deck is a no-op regardless, handled in build_sync_plan.)
+            provider_available=True,
         )
     finally:
         if watermark_cache is not None:
