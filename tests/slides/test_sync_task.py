@@ -570,3 +570,44 @@ class TestTaskCli:
         code, out = _run("task", str(tmp_path), "--json")
         assert code == 2, out
         assert "single deck pair" in out.lower()
+
+
+class TestColdConsistencyCli:
+    """Issue #438 over the verb CLI: a clean committed id-less deck is a no-op report
+    (not the false `needs_agent` it used to raise), and a genuinely-new cold pair frames
+    a mint task with no embedded key."""
+
+    def test_committed_idless_deck_reports_clean_not_needs_agent(self, tmp_path: Path):
+        # The dogfooding bug: a committed, in-sync, fully id-less deck used to report a
+        # cold-pair refusal/mint on every run because it shares no slide_id. Byte-stable
+        # vs HEAD it is consistent now — `report` is clean (exit 0), not `needs_agent`.
+        de_path, _en = _commit_pair(
+            tmp_path,
+            _slide_idless("de", "# ## Einleitung") + _slide_idless("de", "# ## Variablen"),
+            _slide_idless("en", "# ## Introduction") + _slide_idless("en", "# ## Variables"),
+        )
+        code, out = _run("report", str(de_path), "--json")
+        assert code == 0, out
+        payload = json.loads(out)
+        report = payload.get("report", payload)
+        assert report["baseline_source"] == "git-head"
+        assert report["is_clean"] is True
+        assert report["needs_agent"] is False
+        assert report["needs_model"] is False
+
+    def test_new_idless_pair_frames_a_mint_task_without_a_key(self, tmp_path: Path, monkeypatch):
+        # Issue #438 (D1): the read surface no longer gates cold-pair candidacy on a key.
+        # A genuinely-new (uncommitted) id-less pair frames a mint task with no
+        # OPENROUTER key set and no monkeypatch forcing provider availability — the agent
+        # is the verifier (`accept` runs `validate_correspondence`).
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+        de_path, _en = _pair(
+            tmp_path,
+            _slide_idless("de", "# ## Einleitung") + _slide_idless("de", "# ## Variablen"),
+            _slide_idless("en", "# ## Introduction") + _slide_idless("en", "# ## Variables"),
+        )
+        code, out = _run("task", str(de_path), "--json")
+        assert code == 0, out
+        tasks = json.loads(out)["tasks"]
+        mint = next(t for t in tasks if t["kind"] == "mint")
+        assert mint["validator"] == "correspondence"

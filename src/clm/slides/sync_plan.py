@@ -3713,6 +3713,29 @@ def build_sync_plan(
         de_header_baseline = bundle.header_hashes["de"]
         en_header_baseline = bundle.header_hashes["en"]
 
+    # Issue #438: an un-bootstrapped pair (the two halves share no `slide_id`, so the
+    # keyed git-HEAD diff would double it — `_pair_is_unbootstrapped`) is routed to the
+    # cold-start `source == "none"` path even when it is *committed*. But a committed
+    # pair whose working tree is byte-identical to git HEAD on BOTH halves has not
+    # drifted since it was committed: it is *consistent now*, not a cold start. Emitting
+    # a mint / adopt / refuse for it on every run is the false `needs_agent` on a clean
+    # committed deck (#438) — the read-time analyzer borrowing the solver's pairing
+    # assumptions. Treat it as the no-op a *bootstrapped* committed-unchanged pair
+    # already is; only a genuinely new (never-committed → no HEAD bytes) or
+    # edited-since-HEAD pair keeps surfacing cold-start candidacy. A structural problem
+    # that was *committed* (e.g. a mismatched-id pair) is `verify`'s job, not a
+    # sync-drift signal, so reporting it consistent here is correct. Scoped to the
+    # implicit-HEAD read path: an explicit `--baseline` / `--baseline-from` asked about a
+    # different ref, and a watermark gives `source != "none"`, so neither reaches here.
+    if (
+        source == "none"
+        and baseline_ref is None
+        and baseline_from is None
+        and _working_tree_matches_head(de_path, de_text)
+        and _working_tree_matches_head(en_path, en_text)
+    ):
+        return SyncPlan(de_path=de_path, en_path=en_path, baseline_source="git-head")
+
     plan = classify_changes(
         de_current,
         en_current,
@@ -3868,12 +3891,14 @@ def build_sync_plan(
     # a both-id-less *unifiable* pair → `mint` (fresh shared ids); a *half-id'd*
     # pair (one half fully id'd, the other fully id-less) → `adopt` (the id-less
     # half adopts the id'd half's existing ids). `source == "none"` covers both a
-    # never-committed pair AND a committed un-bootstrapped one: an id-less committed
-    # pair is demoted to "none" above (`_pair_is_unbootstrapped`, Issue #225), since
-    # its git-HEAD baseline carries no usable ids. A watermark-baseline both-sides-
-    # idless deck (a synced deck whose ids were later stripped — against the design
-    # invariant) still refuses, a documented edge. `adopt` runs after `mint` and is a
-    # no-op when `mint` already consumed the refusals.
+    # never-committed pair AND a committed un-bootstrapped one that has *drifted* from
+    # HEAD: an id-less committed pair is demoted to "none" above
+    # (`_pair_is_unbootstrapped`, Issue #225), since its git-HEAD baseline carries no
+    # usable ids. (A committed un-bootstrapped pair byte-identical to HEAD never reaches
+    # here — it short-circuits to a consistent no-op above, Issue #438.) A
+    # watermark-baseline both-sides-idless deck (a synced deck whose ids were later
+    # stripped — against the design invariant) still refuses, a documented edge.
+    # `adopt` runs after `mint` and is a no-op when `mint` already consumed the refusals.
     if source == "none" and provider_available:
         _maybe_emit_cold_mint(plan, de_cells, en_cells, de_path, en_path)
         _maybe_emit_cold_adopt(plan, de_cells, en_cells, de_path, en_path)

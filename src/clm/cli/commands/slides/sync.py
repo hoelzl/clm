@@ -52,18 +52,19 @@ from attrs import define
 
 from clm.cli._lazy_group import LazyGroup
 
-# The agent-path module imports NO model-client class (epic #440 decision B): only the
-# key-presence env check survives here (it decides cold-pair classification, never calls
-# a model). The four OpenRouter/Ollama clients + the legacy all-in-one command live in
+# The agent-path module imports NO model client AND no key-presence check (epic #440
+# decision B + Issue #438): the read surface classifies a cold pair as always
+# agent-driveable — the agent is the verifier (`accept` runs the validator) — so it
+# gates cold-pair candidacy on nothing local. The four OpenRouter/Ollama clients, the
+# legacy all-in-one command, and the surviving `has_openrouter_api_key` gate all live in
 # the sibling ``sync_autopilot`` module, registered lazily so a plain import of this
-# module never loads them. ``has_openrouter_api_key`` reads env vars and pulls in no SDK.
+# module never loads them.
 from clm.infrastructure.llm.cache import (
     SyncAlignmentCache,
     SyncCorrespondenceCache,
     SyncWatermarkCache,
     resolve_cache_dir,
 )
-from clm.infrastructure.llm.openrouter_client import has_openrouter_api_key
 from clm.slides.glossary import resolve_guidance_by_lang
 from clm.slides.pairing import (
     derive_split_pair_from_stem,
@@ -1277,9 +1278,13 @@ def _run_report(
     Always ``sys.exit``s.
     """
     use_wm = use_watermark or baseline_ref is not None
-    # The cold-pair mint-vs-refuse classification still folds in key presence (the #438
-    # refinement is separate); has_openrouter_api_key is an env check, not a model call.
-    provider_available = has_openrouter_api_key()
+    # Issue #438: the read surface classifies cold pairs as the agent always being the
+    # verifier — `accept` runs `validate_correspondence`, so a genuinely-new/changed
+    # id-less pair surfaces as a mint/adopt *task candidate* (driveable) rather than a
+    # dead-end `refuse` keyed on a local env var. (A clean *committed* id-less deck is a
+    # no-op regardless, short-circuited in `build_sync_plan`.) Only `autopilot` — which
+    # really constructs the embedded client — gates this on `has_openrouter_api_key()`.
+    provider_available = True
     mode = "explain" if explain else "dry-run"
 
     if de_path.is_dir():
@@ -1836,7 +1841,9 @@ def sync_task_cmd(
             de_path,
             en_path,
             watermark_cache=watermark_cache,
-            provider_available=has_openrouter_api_key(),
+            # Issue #438: the agent IS the verifier (`accept` runs the validator), so a
+            # cold pair always frames as a task — never gated on an embedded key.
+            provider_available=True,
             baseline_ref=baseline_ref,
             baseline_from=baseline_from,
             detect_rename=True,
@@ -2014,7 +2021,9 @@ def sync_accept_cmd(
             de_path,
             en_path,
             watermark_cache=watermark_cache,
-            provider_available=has_openrouter_api_key(),
+            # Issue #438: matches `task`/`report` — the agent's answer (validated here)
+            # is the verifier, so cold-pair candidacy is never gated on an embedded key.
+            provider_available=True,
             baseline_ref=baseline_ref,
             baseline_from=baseline_from,
             detect_rename=True,

@@ -718,12 +718,11 @@ class TestAcceptCli:
         assert f"accepted {item_id}" in out
         assert "A more" in _cell_by_id(en_path, "a").content
 
-    def test_mint_happy_path_via_stdin(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        # The CLI gates cold-pair candidacy on key presence (the #438 decoupling is
-        # separate); force it so the agent flow is exercised without an embedded key.
-        from clm.cli.commands.slides import sync as sync_cmd
-
-        monkeypatch.setattr(sync_cmd, "has_openrouter_api_key", lambda *a, **k: True)
+    def test_mint_happy_path_via_stdin(self, tmp_path: Path):
+        # Issue #438: the agent read surface (here `accept`) no longer gates cold-pair
+        # candidacy on an embedded key — the agent's validated answer IS the verifier — so
+        # the mint flow runs with no key and no monkeypatch. (`_mint_plan` is uncommitted,
+        # so it is a genuine cold start, not a clean committed deck.)
         de_path, en_path, _plan = _mint_plan(tmp_path)
         code, out = _run(
             "accept",
