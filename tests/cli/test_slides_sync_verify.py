@@ -22,6 +22,7 @@ from clm.cli.commands.slides.sync import slides_sync_cmd
 from clm.slides.sync_verify import (
     VerifyViolation,
     dropped_id_violations,
+    structural_gate,
     structural_violations,
     verify_pair,
 )
@@ -129,6 +130,71 @@ class TestStructuralViolations:
         de = _half(_md("de", "s1", "Hallo"), '# %% lang="de"\nx = 1\n')
         en = _half(_md("en", "s1", "Hello"), '# %% lang="en"\nx = 1\n')
         assert structural_violations(de, en, "#") == []
+
+
+class TestStructuralGate:
+    """Issue #455 — the reusable structural write-gate (whole-deck + scoped)."""
+
+    def test_valid_pair_is_safe_to_record(self):
+        # Empty list == "safe to record".
+        assert structural_gate(_valid_de(), _valid_en(), "#") == []
+
+    def test_whole_deck_is_the_error_subset_of_verify(self, tmp_path):
+        # The gate and the CLI verify must not drift: the gate over in-memory text
+        # equals the error-severity violations verify_pair surfaces on the same pair.
+        de = _md("de", "s1", "Hallo")
+        en = _md("en", "s2", "Hello")  # id-asymmetry on both s1 and s2
+        de_path, en_path = _write(tmp_path, de, en)
+        gate = structural_gate(de, en, "#")
+        verify_errors = verify_pair(de_path, en_path).errors
+        assert [(v.kind, v.slide_id, v.message) for v in gate] == [
+            (v.kind, v.slide_id, v.message) for v in verify_errors
+        ]
+        assert gate  # non-empty (it is a real corruption)
+
+    def test_whole_deck_surfaces_unify_error(self):
+        de = _half(_md("de", "s1", "Hallo"), _shared("print(1)"))
+        en = _half(_md("en", "s1", "Hello"), _shared("print(2)"))  # shared diverges
+        assert [v.kind for v in structural_gate(de, en, "#")] == ["unify"]
+
+    def test_scoped_ignores_a_corruption_under_another_slide(self):
+        # s2 is dropped from DE (id-asymmetry on s2). Recording s1 must stay safe.
+        de = _md("de", "s1", "Hallo")
+        en = _half(_md("en", "s1", "Hello"), _md("en", "s2", "World"))
+        assert structural_gate(de, en, "#", slide_id="s1") == []
+        scoped_s2 = structural_gate(de, en, "#", slide_id="s2")
+        assert [(v.kind, v.slide_id) for v in scoped_s2] == [("id-asymmetry", "s2")]
+
+    def test_scoped_asymmetry_is_role_agnostic(self):
+        # id-asymmetry carries no role, so it applies to the slide under any role filter.
+        de = _md("de", "s1", "Hallo")
+        en = _half(_md("en", "s1", "Hello"), _md("en", "s2", "World"))
+        scoped = structural_gate(de, en, "#", slide_id="s2", role="slide")
+        assert [(v.kind, v.slide_id) for v in scoped] == [("id-asymmetry", "s2")]
+
+    def test_scoped_duplicate_is_role_aware(self):
+        # (s1, voiceover) is duplicated; (s1, slide) is unique. Recording the slide is
+        # safe; recording the voiceover companion is not.
+        de = _half(_md("de", "s1", "Hallo"), _vo("de", "s1", "# a"), _vo("de", "s1", "# b"))
+        en = _half(_md("en", "s1", "Hello"), _vo("en", "s1", "# a"), _vo("en", "s1", "# b"))
+        # sanity: the only errors are the (s1, voiceover) dups, one per half.
+        whole = structural_gate(de, en, "#")
+        assert {(v.kind, v.role) for v in whole} == {("duplicate-id", "voiceover")}
+        assert structural_gate(de, en, "#", slide_id="s1", role="slide") == []
+        vo_scoped = structural_gate(de, en, "#", slide_id="s1", role="voiceover")
+        assert [v.kind for v in vo_scoped] == ["duplicate-id", "duplicate-id"]
+        # role=None covers every role under the slide_id.
+        any_role = structural_gate(de, en, "#", slide_id="s1")
+        assert [v.kind for v in any_role] == ["duplicate-id", "duplicate-id"]
+
+    def test_scoped_excludes_whole_deck_unify(self):
+        # The byte-identity oracle (unify) has no slide_id, so it is whole-deck only:
+        # a scoped call relies on the id symmetry/uniqueness checks (sufficient because
+        # an id'd cell is localized — byte-identity governs only id-less neutral cells).
+        de = _half(_md("de", "s1", "Hallo"), _shared("print(1)"))
+        en = _half(_md("en", "s1", "Hello"), _shared("print(2)"))
+        assert structural_gate(de, en, "#", slide_id="s1") == []
+        assert [v.kind for v in structural_gate(de, en, "#")] == ["unify"]
 
 
 class TestDroppedIdViolations:

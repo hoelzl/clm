@@ -73,6 +73,13 @@ class VerifyViolation:
     kind: str  # "unify" | "dropped-id"
     message: str
     slide_id: str | None = None
+    # The cell role this finding is keyed to, when the check is per-(slide_id, role)
+    # (only ``duplicate-id`` today). ``None`` means role-agnostic — a slide-level
+    # finding (``id-asymmetry``) or a whole-deck one (``unify``). Used by
+    # :func:`structural_gate` to scope a per-slide write gate; it is *not* part of
+    # the CLI ``verify`` output (the JSON/human serializers enumerate fields
+    # explicitly), so adding it does not change that surface.
+    role: str | None = None
 
 
 @dataclass
@@ -125,6 +132,66 @@ def structural_violations(de_text: str, en_text: str, comment_token: str) -> lis
     violations.extend(_duplicate_id_violations(de_keys, "DE"))
     violations.extend(_duplicate_id_violations(en_keys, "EN"))
     return violations
+
+
+def structural_gate(
+    de_text: str,
+    en_text: str,
+    comment_token: str,
+    *,
+    slide_id: str | None = None,
+    role: str | None = None,
+) -> list[VerifyViolation]:
+    """Error-severity structural violations, optionally scoped to one ``(slide_id, role)``.
+
+    The reusable **write-gate** (Issue #455): a ledger / watermark write must never
+    record a pair — or a single slide — as in-sync while it fails a structural
+    invariant, because that would mask a genuine divergence as "trusted". The return
+    value is the *error* subset of :func:`structural_violations` — the exact
+    invariants ``clm slides sync verify`` enforces, computed from the **same**
+    function, so the gate and the CLI can never drift. An **empty list means "safe to
+    record"**; a non-empty list is the reason it is not. It works on in-memory text
+    (no file/git read), so the apply path can gate a watermark write on the
+    post-apply :class:`~clm.slides.split` state without a re-read.
+
+    **Whole-deck** (``slide_id is None``): every structural error in the pair — the
+    gate for batch ``bless`` and the apply-path full watermark write.
+
+    **Scoped** (``slide_id`` given): only the errors attributable to that ``slide_id``
+    — the per-slide guard for ``accept --record`` (design note §11.4), where a
+    corruption *elsewhere* in the deck must not block recording the one slide an agent
+    just reconciled. With ``role`` also given, a duplicate-``(slide_id, role)`` error
+    is limited to that exact role (a slide and its inline ``voiceover`` / ``notes``
+    companion legitimately share an id under different roles); role-agnostic errors —
+    a missing twin (``id-asymmetry``) — always apply to the slide. The whole-deck
+    byte-identity oracle (``unify``) carries no ``slide_id``, so it is reported only
+    in the whole-deck mode; a scoped call relies on the id symmetry / uniqueness
+    checks, which is sufficient because an id'd cell is *localized* (its halves differ
+    by translation by design) — byte-identity governs only the id-less neutral cells,
+    which carry no ``slide_id`` to scope to.
+    """
+    errors = [
+        v for v in structural_violations(de_text, en_text, comment_token) if v.severity == "error"
+    ]
+    if slide_id is None:
+        return errors
+    return [v for v in errors if _scoped_to(v, slide_id, role)]
+
+
+def _scoped_to(violation: VerifyViolation, slide_id: str, role: str | None) -> bool:
+    """Whether ``violation`` falls within the ``(slide_id, role)`` scope of a per-slide gate.
+
+    A violation is in scope only if it names this ``slide_id``. When ``role`` is also
+    given, a role-keyed finding (``duplicate-id``, which carries a ``role``) must match
+    that role, while a role-agnostic finding (``role is None`` — e.g. ``id-asymmetry``)
+    always applies to the slide. When ``role`` is ``None`` the gate covers every role
+    under the ``slide_id``.
+    """
+    if violation.slide_id != slide_id:
+        return False
+    if role is None:
+        return True
+    return violation.role is None or violation.role == role
 
 
 def _id_symmetry_violations(de_ids: list[str], en_ids: list[str]) -> list[VerifyViolation]:
@@ -191,6 +258,7 @@ def _duplicate_id_violations(
                         "(sync keys on it)"
                     ),
                     slide_id=sid,
+                    role=role,
                 )
             )
     return out
