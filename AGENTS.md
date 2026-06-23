@@ -188,6 +188,33 @@ When you need information, go to its canonical home rather than guessing:
 recommending a command or flag**, verify it exists in `clm info commands` —
 do not fabricate options.
 
+<!-- DOCS-LAYOUT:BEGIN (managed by /docs-layout) -->
+## Document Placement
+
+Companion to the **Documentation Map** above: that says where to *find*
+canonical info; this says where to *put* a new document. This is CLM's target
+layout — some existing docs predate it and are being migrated toward it, so
+prefer these homes for anything new.
+
+| Kind of document | Home | Naming |
+|---|---|---|
+| Agent session guide | `AGENTS.md` (root); `CLAUDE.md` only does `@AGENTS.md` | fixed |
+| User-facing docs | `docs/user-guide/` | kebab-case |
+| Developer / contributor docs | `docs/developer-guide/` | kebab-case |
+| Agent design docs / decisions | `docs/claude/design/` | kebab-case `<topic>.md` |
+| Handover docs | `docs/claude/handovers/` | `<feature>-handover.md` (+ `<feature>-handover-archive.md`) |
+| Investigations / analyses / cross-session notes | `docs/claude/` (deeper: `docs/claude/analysis/`, `docs/claude/requirements/`) | `<topic>-investigation.md` |
+| Proposals (pre-design exploration) | `docs/proposals/` | kebab-case |
+| Retired / historical docs | `docs/archive/` | under a topic subfolder |
+| Changelog | `CHANGELOG.md`; unreleased entries as fragments in `changelog.d/` | `<pr-or-issue>-<slug>.<type>.md` |
+| Version-accurate info topics | `src/clm/cli/info_topics/` (code-adjacent — do not move) | `<topic>.md` |
+| Top-level meta | repo root | `README.md`, `LICENSE`, `CONTRIBUTING.md` |
+
+CLM uses `docs/claude/` (not the agent-neutral `docs/agent/` other repos use)
+because the path is referenced from source code and the version-accurate
+`info_topics`; renaming it is a separate, deliberate migration.
+<!-- DOCS-LAYOUT:END -->
+
 ## Working in this Repo (Windows-first)
 
 CLM is developed primarily on Windows (Git Bash + `cmd.exe` available). A few
@@ -212,4 +239,4 @@ practical consequences:
 
 **Repository**: https://github.com/hoelzl/clm/ | **Issues**: https://github.com/hoelzl/clm/issues
 
-**Last Updated**: 2026-06-21
+**Last Updated**: 2026-06-23
