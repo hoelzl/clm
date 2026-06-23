@@ -206,6 +206,28 @@ class TestAcceptAdd:
         # A rejected answer writes NOTHING.
         assert (de_path.read_text(encoding="utf-8"), en_path.read_text(encoding="utf-8")) == before
 
+    def test_add_with_co_drifted_idless_sibling_refuses_not_corrupts(self, tmp_path: Path):
+        # The add reuses the FULL apply (it needs the structural pass to place the new
+        # slide), so the pass re-derives drift from disk. A co-drifted id-less localized
+        # cell in a rebuilt group must NOT be re-translated with the add's single-answer
+        # body (silent cross-cell corruption) — strict_single makes accept refuse instead,
+        # leaving the deck byte-unchanged.
+        de_path, en_path, plan = _seeded_edit_plan(
+            tmp_path,
+            _slide("de", "a", "# ## A") + _idless_code("de", "x = 1"),
+            _slide("en", "a", "# ## A") + _idless_code("en", "x = 1"),
+            _slide("de", "a", "# ## A")
+            + _idless_code("de", "x = 99")  # co-drifted id-less localized cell (de->en edit)
+            + _slide_idless("de", "# ## B"),  # the NEW slide (the add)
+            _slide("en", "a", "# ## A") + _idless_code("en", "x = 1"),
+        )
+        before = (de_path.read_text(encoding="utf-8"), en_path.read_text(encoding="utf-8"))
+        add = next(it for it in build_report(plan, with_excerpts=True).assisted if it.kind == "add")
+        with pytest.raises(AcceptRejected, match="co-drifted|another cell|autopilot"):
+            accept_answer(plan, add.item, {"translated_body": "# ## B"})
+        # No corruption AND no partial write: both halves byte-identical to before.
+        assert (de_path.read_text(encoding="utf-8"), en_path.read_text(encoding="utf-8")) == before
+
 
 # ---------------------------------------------------------------------------
 # accept_answer — realign (the agent-first `--llm-recover` write-back)

@@ -47,7 +47,7 @@ raises :class:`AcceptUnavailable` with the right next step.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
 from clm.slides.sync_plan import LOCALIZED_CODE_ROLE
@@ -165,15 +165,36 @@ def _matching_proposal(plan: SyncPlan, item: ReconciliationItem) -> Proposal:
 class _SingleAnswerTranslator:
     """A :class:`~clm.slides.sync_translate.SlideTranslator` that returns one body.
 
-    The accept plan is pruned to a single ``add``, so the translator is asked for
-    exactly that slide's twin; it returns the agent's body for any call (no
-    key-matching to drift on).
+    The accept plan is pruned to a single ``add`` / ``edit``, so the translator is asked
+    for exactly that one cell's twin; it returns the agent's body.
+
+    ``strict_single`` (the ``add`` accept) raises after the **first** call: an ``add``
+    reuses the full apply, whose structural pass re-derives drift from the working tree —
+    so a *second* translation request means a cell other than the one targeted needs
+    translating (a co-drifted sibling the author also edited, or a fresh companion of the
+    new slide). The agent supplied only one body, so returning it for that other cell would
+    silently corrupt it; raising instead makes the structural pass record an error, the
+    end-of-pass flush is skipped (nothing reaches disk), and ``accept`` rejects with the
+    next step. The add's own cell is always the first call (``_materialize_idless`` runs and
+    caches it before the structural pass), so a clean single-cell add never trips this.
     """
 
     body: str
+    strict_single: bool = False
     prompt_version: str = "agent-accept"
+    _calls: int = field(default=0, init=False)
 
     def translate(self, *, source_body: str, source_lang: str, target_lang: str, role: str) -> str:
+        if self.strict_single and self._calls >= 1:
+            from clm.slides.sync_translate import TranslationError
+
+            raise TranslationError(
+                "this accept carries one translated body, but the apply needs another cell "
+                "translated too — a co-drifted sibling the author also edited, or a companion "
+                "of the new slide. Accept that other cell's item first (then re-run `report`), "
+                "or use `clm slides sync autopilot`."
+            )
+        self._calls += 1
         return self.body
 
 
@@ -204,11 +225,15 @@ def _accept_add(plan: SyncPlan, item: ReconciliationItem, answer: Any) -> Accept
     # not decision-gated) must not be touched, and a missing translation for them
     # would error the whole atomic write. anchor_direction is dropped so accept does
     # not also carry unrelated neutral propagation — `accept` writes just this item.
+    # ``strict_single``: the add reuses the full apply (its structural pass places the new
+    # slide), which re-derives drift from disk — so if a co-drifted sibling in a rebuilt
+    # group would be re-translated with this one answer, the translator raises rather than
+    # corrupting it, and the error-gated flush leaves the deck untouched.
     pruned = replace(plan, proposals=[proposal], anchor_direction=None)
     result = apply_plan(
         pruned,
         judge=None,
-        translator=_SingleAnswerTranslator(body),
+        translator=_SingleAnswerTranslator(body, strict_single=True),
         watermark_cache=None,
     )
     if result.errors:
