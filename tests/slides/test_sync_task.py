@@ -22,7 +22,13 @@ from clm.notebooks.slide_parser import parse_cells
 from clm.slides.sync_plan import Proposal, SyncPlan, build_sync_plan, watermark_rows
 from clm.slides.sync_recover import RECOVERY_SYSTEM_PROMPT
 from clm.slides.sync_report import ReconciliationItem, ReconciliationReport, _assign_item_ids
-from clm.slides.sync_task import EDIT_ANSWER_SCHEMA, TaskUnavailable, build_task, build_tasks
+from clm.slides.sync_task import (
+    EDIT_ANSWER_SCHEMA,
+    TRANSLATION_ANSWER_SCHEMA,
+    TaskUnavailable,
+    build_task,
+    build_tasks,
+)
 from clm.slides.sync_translate import OpenRouterSlideTranslator, build_translation_system_prompt
 
 # ---------------------------------------------------------------------------
@@ -36,6 +42,10 @@ def _slide(lang: str, sid: str, body: str) -> str:
 
 def _code_idd_neutral(sid: str, body: str) -> str:
     return f'# %% tags=["keep"] slide_id="{sid}"\n{body}\n'
+
+
+def _code_localized(lang: str, sid: str, body: str) -> str:
+    return f'# %% lang="{lang}" tags=["keep"] slide_id="{sid}"\n{body}\n'
 
 
 def _code_shared(body: str) -> str:
@@ -159,6 +169,31 @@ class TestBuildTask:
         assert task.answer_schema == EDIT_ANSWER_SCHEMA
         assert "zwei NEU" in task.prompt and "two" in task.prompt  # both sides framed
         assert task.inputs["source_lang"] == "de" and task.inputs["target_lang"] == "en"
+
+    def test_code_edit_frames_the_translation_task(self, tmp_path: Path):
+        # A code edit is reconciled by re-translation, so it is framed as a translation
+        # task (validator "translation", answer {translated_body}) — NOT the prose judge.
+        de = "\n".join([_slide("de", "s1", "# ## eins"), _code_localized("de", "c1", 'x = "eins"')])
+        en = "\n".join([_slide("en", "s1", "# ## one"), _code_localized("en", "c1", 'x = "one"')])
+        de_path, en_path = _pair(tmp_path, de, en)
+        plan = _real_plan(
+            de_path,
+            en_path,
+            Proposal(
+                kind="edit",
+                role="code",
+                direction="de->en",
+                slide_id="c1",
+                source_position=1,
+                target_position=1,
+            ),
+        )
+        task = build_task(plan, "edit-c1")
+        assert task.validator == "translation"
+        assert task.answer_schema == TRANSLATION_ANSWER_SCHEMA
+        assert task.inputs["role"] == "code"
+        assert "English" in task.instructions  # the translation system prompt targets EN
+        assert 'x = "eins"' in task.prompt  # the source code body IS the prompt
 
     def test_add_frames_the_translation_task(self, tmp_path: Path):
         de = "\n".join([_slide("de", "s1", "# ## eins"), _slide("de", "s2", "# ## NEUE Folie")])

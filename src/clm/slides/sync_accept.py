@@ -21,13 +21,18 @@ with the agent's answer substituted for the model call:
 * **add** (a brand-new slide) → the answer is the translated cell body; the new
   slide's twin is translated by a single-answer stand-in over a plan **pruned to
   that one add**, so no other pending item is touched.
+* **edit** (a drifted **keyed** localized cell) → a **code** edit's answer is the
+  re-translated body (``{translated_body}``); a **prose** (markdown) edit's answer is
+  the judge verdict (``{verdict, proposed_text}``, with ``in_sync`` accepted as a
+  no-op). The write reuses the engine's edit path with a static judge / translator
+  carrying the agent's answer, over a plan pruned to that one edit.
 
-Edit reconciliation (``edit``), cold-start correspondence (``mint`` / ``adopt`` /
-``reconcile``) and the hand-judged ambiguities (``conflict`` / ``issue``) are not
-accepted yet — :func:`accept_answer` raises :class:`AcceptUnavailable` with the
-right next step (``edit`` because its answer shape differs for code vs. markdown
-cells, which also wants a ``task``-framing refinement; the cold-start kinds because
-they mint identity, which ``autopilot`` / ``assign-ids`` still own).
+A **slide_id-less** edit (a narrative cell, #403, or an id-less localized cell, #365),
+cold-start correspondence (``mint`` / ``adopt`` / ``reconcile``) and the hand-judged
+ambiguities (``conflict`` / ``issue``) are not accepted yet — :func:`accept_answer`
+raises :class:`AcceptUnavailable` with the right next step (the slide_id-less edit
+because it reconciles through the structural-propagation pass; the cold-start kinds
+because they mint identity, which ``autopilot`` / ``assign-ids`` still own).
 """
 
 from __future__ import annotations
@@ -35,12 +40,14 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
+from clm.slides.sync_plan import LOCALIZED_CODE_ROLE
 from clm.slides.sync_recover import (
     AlignmentInvalid,
     StaticAlignmentRecoverer,
     validate_alignment,
 )
 from clm.slides.sync_report import build_report
+from clm.slides.sync_writeback import CODE_ROLE
 
 if TYPE_CHECKING:
     from clm.slides.sync_plan import Proposal, SyncPlan
@@ -52,6 +59,10 @@ __all__ = [
     "AcceptUnavailable",
     "accept_answer",
 ]
+
+#: Edit roles the engine reconciles by re-translating the source (vs. the prose judge) —
+#: mirrors the code branches of ``sync_apply._resolve_edit`` and ``sync_task._CODE_EDIT_ROLES``.
+_CODE_EDIT_ROLES = frozenset({CODE_ROLE, LOCALIZED_CODE_ROLE})
 
 
 class AcceptRejected(Exception):
@@ -282,6 +293,103 @@ def _accept_realign(plan: SyncPlan, item: ReconciliationItem, answer: Any) -> Ac
 
 
 # ---------------------------------------------------------------------------
+# edit — reconcile a drifted localized cell onto the target half.
+# ---------------------------------------------------------------------------
+
+
+def _accept_edit(plan: SyncPlan, item: ReconciliationItem, answer: Any) -> AcceptResult:
+    """Validate an edit answer and write the reconciled body onto the target half.
+
+    Scoped to a **keyed** edit (the cell carries a ``slide_id``), matching how the engine
+    reconciles one: a **code** edit's answer is the re-translated body (``{translated_body}``,
+    validator ``translation``); a **prose** (markdown) edit's answer is the judge verdict
+    (``{verdict, proposed_text}``, validator ``edit``). The write reuses the engine's own
+    edit path over a plan pruned to that one edit, with a static stand-in carrying the
+    agent's answer — the code branch consults the translator, the prose branch the judge,
+    so providing both keeps either path model-free. A ``verdict="in_sync"`` prose answer is
+    accepted as a no-op (the target already reflects the source; nothing written).
+
+    A ``slide_id``-less edit (a narrative cell, #403, or an id-less localized cell, #365)
+    is not accepted yet — those reconcile through the structural-propagation pass, which
+    needs more care to drive from a single answer — so it raises :class:`AcceptUnavailable`
+    pointing at ``autopilot`` / a hand-edit + ``verify``.
+    """
+    if item.slide_id is None:
+        raise AcceptUnavailable(
+            f"{item.item!r} is a slide_id-less edit (a narrative or an id-less localized "
+            "cell); `accept` does not write those yet — they reconcile through the "
+            "structural-propagation pass. Apply it with `clm slides sync autopilot` "
+            "(needs a key), or hand-edit the twin and run `clm slides sync verify`."
+        )
+
+    from clm.infrastructure.llm.ollama_client import StaticSyncJudge, SyncProposal
+    from clm.slides.sync_apply import apply_plan
+
+    proposal = _matching_proposal(plan, item)
+    if item.role in _CODE_EDIT_ROLES:
+        obj = _load_json_answer(answer, what="translation")
+        translated = obj.get("translated_body")
+        if not isinstance(translated, str) or not translated.strip():
+            raise AcceptRejected(
+                "translation answer needs a non-empty 'translated_body' string "
+                "(the re-translated target-language code cell, runnable, no code fences)."
+            )
+        body, verdict, reason = translated, "update", ""
+    else:
+        obj = _load_json_answer(answer, what="edit")
+        raw_verdict = obj.get("verdict")
+        if raw_verdict not in ("update", "in_sync"):
+            raise AcceptRejected(
+                f"edit answer needs a 'verdict' of 'update' or 'in_sync' (got {raw_verdict!r})."
+            )
+        proposed = obj.get("proposed_text", "")
+        if not isinstance(proposed, str):
+            raise AcceptRejected("edit answer 'proposed_text' must be a string.")
+        if raw_verdict == "update" and not proposed.strip():
+            raise AcceptRejected(
+                "an 'update' edit answer needs a non-empty 'proposed_text' "
+                "(the reconciled target-language cell body)."
+            )
+        body, verdict, reason = proposed, str(raw_verdict), str(obj.get("reason", "") or "")
+
+    # Prune to just this edit (anchor_direction dropped so no unrelated neutral
+    # propagation rides along) and reuse the engine's edit path. Both static stand-ins
+    # carry the agent's body so whichever branch the engine takes returns it.
+    judge = StaticSyncJudge(
+        default_proposal=SyncProposal(verdict=verdict, proposed_text=body, reason=reason)
+    )
+    pruned = replace(plan, proposals=[proposal], anchor_direction=None)
+    result = apply_plan(
+        pruned,
+        judge=judge,
+        translator=_SingleAnswerTranslator(body),
+        watermark_cache=None,
+    )
+    if result.errors:
+        raise AcceptRejected("; ".join(result.errors))
+    if result.applied_edit:
+        return AcceptResult(
+            item=item.item,
+            kind=item.kind,
+            applied=True,
+            changed=result.applied_edit,
+            detail="reconciled the edit onto the target half.",
+        )
+    if result.in_sync:
+        return AcceptResult(
+            item=item.item,
+            kind=item.kind,
+            applied=True,
+            changed=0,
+            detail="the target already reflects the source (verdict in_sync); nothing written.",
+        )
+    raise AcceptRejected(
+        f"{item.item!r}: the edit did not apply (the deck changed since `report`); "
+        "re-run `clm slides sync report`."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
 
@@ -309,12 +417,7 @@ def accept_answer(
     if item.kind == "realign":
         return _accept_realign(plan, item, answer)
     if item.kind == "edit":
-        raise AcceptUnavailable(
-            f"{item.item!r} is an edit reconciliation; `accept` does not write edits yet "
-            "(a code-cell edit and a markdown edit take different answer shapes). Apply it "
-            "with `clm slides sync autopilot` (needs a key), or hand-edit the twin and run "
-            "`clm slides sync verify`."
-        )
+        return _accept_edit(plan, item, answer)
     if item.kind in _COLD_START_KINDS:
         raise AcceptUnavailable(
             f"{item.item!r} is a cold-start correspondence ({item.kind}); accepting it mints "

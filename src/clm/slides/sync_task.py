@@ -6,10 +6,13 @@ calling a model. It is a thin, **model-free** wrapper over the prompt builders t
 the embedded clients also use, so the agent path and the agent-less ``autopilot``
 path frame the work identically:
 
-* **edit** (a drifted id'd localized cell) → the sync-judge prompt
+* **edit** (a drifted localized cell) → split by how the engine reconciles it: a
+  **prose** (markdown / narrative) edit → the sync-judge prompt
   (:data:`~clm.infrastructure.llm.sync_prompts.SYNC_SYSTEM_PROMPT` +
-  :func:`~clm.infrastructure.llm.sync_prompts.build_sync_user_prompt`); the answer
-  is a ``{verdict, proposed_text, reason}`` object.
+  :func:`~clm.infrastructure.llm.sync_prompts.build_sync_user_prompt`), answer
+  ``{verdict, proposed_text, reason}``; a **code** edit → the translation prompt (the
+  judge's prose prompt does not fit runnable code), answer the translated body. This
+  mirrors the code/judge branches of ``sync_apply._resolve_edit``.
 * **add** (a brand-new slide) → the translation prompt
   (:func:`~clm.slides.sync_translate.build_translation_system_prompt` +
   :func:`~clm.slides.sync_translate.build_translation_user_prompt`); the answer is
@@ -42,6 +45,7 @@ from clm.infrastructure.llm.sync_prompts import (
     SYNC_SYSTEM_PROMPT,
     build_sync_user_prompt,
 )
+from clm.slides.sync_plan import LOCALIZED_CODE_ROLE
 from clm.slides.sync_recover import (
     RECOVERY_SYSTEM_PROMPT,
     build_recovery_user_prompt,
@@ -51,6 +55,7 @@ from clm.slides.sync_translate import (
     build_translation_system_prompt,
     build_translation_user_prompt,
 )
+from clm.slides.sync_writeback import CODE_ROLE
 
 if TYPE_CHECKING:
     from clm.slides.sync_plan import SyncPlan
@@ -68,6 +73,13 @@ __all__ = [
 
 #: The proposal kinds :func:`build_task` can frame as a single model task.
 _FRAMEABLE_KINDS = frozenset({"edit", "add", "realign"})
+
+#: Edit roles the engine reconciles by **re-translating** the source cell (rather than
+#: by the prose judge) — runnable code, keyed or id-less localized. Mirrors the
+#: code branches of :func:`clm.slides.sync_apply._resolve_edit`, so a ``task`` frames a
+#: code edit the same way the engine would reconcile it (and ``accept`` checks the same
+#: answer shape). Everything else (markdown, narrative) is a prose/judge edit.
+_CODE_EDIT_ROLES = frozenset({CODE_ROLE, LOCALIZED_CODE_ROLE})
 
 # Answer schemas (the shape `accept` enforces). The edit answer reuses the judge's
 # own structured-output schema verbatim, so a task answer and an embedded-judge
@@ -147,8 +159,29 @@ def _region_dicts(region: list[RegionCell]) -> list[dict[str, Any]]:
     ]
 
 
-def _edit_task(item: ReconciliationItem) -> SyncTask:
-    """Frame a drifted id'd localized-cell edit as the sync-judge task."""
+def _edit_task(
+    item: ReconciliationItem,
+    *,
+    prog_lang: str,
+    guidance_by_lang: dict[str, str],
+) -> SyncTask:
+    """Frame a drifted localized-cell edit — split by how the engine reconciles it.
+
+    A **code** edit (runnable code, keyed or id-less localized) is reconciled by
+    re-translating the source, so it is framed as a translation task (validator
+    ``translation``, answer ``{translated_body}``) — the judge's prose prompt does not
+    fit code. A **prose** edit (markdown / narrative) goes through the sync judge
+    (validator ``edit``, answer ``{verdict, proposed_text}``). This matches the
+    code/judge branches of :func:`clm.slides.sync_apply._resolve_edit`, so the framed
+    task and the embedded-client reconciliation are interchangeable.
+    """
+    if item.role in _CODE_EDIT_ROLES:
+        return _code_edit_task(item, prog_lang=prog_lang, guidance_by_lang=guidance_by_lang)
+    return _prose_edit_task(item)
+
+
+def _prose_edit_task(item: ReconciliationItem) -> SyncTask:
+    """Frame a markdown / narrative edit as the sync-judge task."""
     source_lang = item.source_lang or (item.direction or "de->en").split("->")[0]
     target_lang = item.target_lang or _other_lang(source_lang)
     source_text = item.source_excerpt or ""
@@ -176,6 +209,52 @@ def _edit_task(item: ReconciliationItem) -> SyncTask:
             "target_excerpt": item.target_excerpt,
         },
         answer_schema=EDIT_ANSWER_SCHEMA,
+    )
+
+
+def _code_edit_task(
+    item: ReconciliationItem,
+    *,
+    prog_lang: str,
+    guidance_by_lang: dict[str, str],
+) -> SyncTask:
+    """Frame a localized **code** edit as a re-translation task.
+
+    The engine reconciles a code edit by re-translating the (drifted) source code cell
+    — ``translator.translate(role="code")`` — so the task is the same translation
+    framing as a new code cell: translate the source body to the target language, keep
+    it runnable. The answer is the translated body (``{translated_body}``), validated by
+    ``accept``'s ``translation`` check.
+    """
+    source_lang = item.source_lang or (item.direction or "de->en").split("->")[0]
+    target_lang = item.target_lang or _other_lang(source_lang)
+    source_body = item.source_excerpt or ""
+    guidance = guidance_by_lang.get(target_lang, "")
+    instructions = build_translation_system_prompt(
+        role=CODE_ROLE,
+        source_lang=source_lang,
+        target_lang=target_lang,
+        prog_lang=prog_lang,
+        guidance=guidance,
+    )
+    return SyncTask(
+        item=item.item,
+        kind=item.kind,
+        tier=item.tier,
+        slide_id=item.slide_id,
+        direction=item.direction,
+        role=item.role,
+        validator="translation",
+        instructions=instructions,
+        prompt=build_translation_user_prompt(source_body),
+        inputs={
+            "source_lang": source_lang,
+            "target_lang": target_lang,
+            "role": CODE_ROLE,
+            "prog_lang": prog_lang,
+            "source_body": source_body,
+        },
+        answer_schema=TRANSLATION_ANSWER_SCHEMA,
     )
 
 
@@ -263,7 +342,7 @@ def _task_for_item(
 ) -> SyncTask:
     """Frame one report item, or raise :class:`TaskUnavailable` with the next step."""
     if item.kind == "edit":
-        return _edit_task(item)
+        return _edit_task(item, prog_lang=prog_lang, guidance_by_lang=guidance_by_lang)
     if item.kind == "add":
         return _add_task(item, prog_lang=prog_lang, guidance_by_lang=guidance_by_lang)
     if item.kind == "realign":
