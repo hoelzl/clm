@@ -1245,3 +1245,127 @@ def test_explain_warns_when_watermark_baseline_errors(tmp_path: Path):
     assert plan.has_errors
     assert "may be stale" in text
     assert "--rebaseline" in text
+
+
+# ---------------------------------------------------------------------------
+# Issue #454 — ApplyResult.id_migrations captures every old_id -> new_id an
+# id-migration rewrote (the carrier for a later ledger/watermark re-key, #448
+# P3 / #366). No behavior change — the map is captured, not yet consumed.
+# ---------------------------------------------------------------------------
+
+
+def test_issue454_neutral_migration_records_old_to_new(tmp_path: Path):
+    # The deterministic §9 neutral migration (the def-my-fun shape): the id is left
+    # on the split-out import and a new id-less cell carries the def. The migration
+    # moves the id onto the def and re-ids the orphan import -> the orphan's rename
+    # (def-my-fun -> import-time) is the carried entry; the def adopting def-my-fun is
+    # a new cell (no prior entry), so it is NOT recorded.
+    de = _slide("de", "s", "# ## S") + _code_idd_neutral(
+        "def-my-fun", 'def my_fun():\n    print("foo")'
+    )
+    en = _slide("en", "s", "# ## S") + _code_idd_neutral(
+        "def-my-fun", 'def my_fun():\n    print("foo")'
+    )
+    de_path, en_path = _write_pair(tmp_path, de, en)
+    cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+    try:
+        _seed(cache, de_path, en_path)
+        de_path.write_text(
+            _slide("de", "s", "# ## S")
+            + _code_idd_neutral("def-my-fun", "import time")
+            + _code_shared('def my_fun():\n    time.sleep(1)\n    print("foo")'),
+            encoding="utf-8",
+        )
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+        result = apply_plan(
+            plan, judge=CountingJudge(), translator=CountingTranslator(), watermark_cache=cache
+        )
+    finally:
+        cache.close()
+
+    assert result.applied_migrate == 1
+    assert result.id_migrations == {"def-my-fun": "import-time"}
+
+
+def test_issue454_localized_paired_migration_records_old_to_new(tmp_path: Path):
+    # The Phase 5d paired localized migration writes the same logical move to both
+    # decks; the dict dedups, so one old->new pair is recorded.
+    de0 = _slide("de", "g", "# ## G") + _code_localized_idd(
+        "de", "greet", 'def greet():\n    print("Hallo")'
+    )
+    en0 = _slide("en", "g", "# ## G") + _code_localized_idd(
+        "en", "greet", 'def greet():\n    print("Hello")'
+    )
+    de_path, en_path = _write_pair(tmp_path, de0, en0)
+    cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+    try:
+        _seed(cache, de_path, en_path)
+        de_path.write_text(
+            _slide("de", "g", "# ## G erweitert")
+            + _code_localized_idd("de", "greet", "import time")
+            + _code_localized_idless("de", 'def greet():\n    time.sleep(1)\n    print("Hallo")'),
+            encoding="utf-8",
+        )
+        en_path.write_text(
+            _slide("en", "g", "# ## G")
+            + _code_localized_idd("en", "greet", "import time")
+            + _code_localized_idless("en", 'def greet():\n    time.sleep(1)\n    print("Hello")'),
+            encoding="utf-8",
+        )
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+        result = apply_plan(
+            plan, judge=CountingJudge(), translator=CountingTranslator(), watermark_cache=cache
+        )
+    finally:
+        cache.close()
+
+    assert result.applied_migrate == 2  # one logical move, written to both decks
+    assert result.id_migrations == {"greet": "import-time"}
+
+
+def test_issue454_recovery_alignment_records_rename(tmp_path: Path):
+    # The §10 bounded-LLM recovery (the renamed-def split): the recoverer maps the
+    # import to a NEW slug and the renamed def as the def-my-fun continuation. Only
+    # the import's rename (def-my-fun -> import-time) is a carry; the renamed def
+    # *adopting* def-my-fun was id-less (None -> id), so it is not recorded.
+    de_path, en_path, cache = _split_renamed_both_decks(tmp_path)
+    recoverer = StaticAlignmentRecoverer(mapping={0: NEW, 1: "def-my-fun"})
+    try:
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+        result = apply_plan(
+            plan,
+            judge=CountingJudge(),
+            translator=CountingTranslator(),
+            watermark_cache=cache,
+            recoverer=recoverer,
+        )
+    finally:
+        cache.close()
+
+    assert result.applied_migrate == 4  # 2 cells re-identified on each of 2 decks
+    assert result.id_migrations == {"def-my-fun": "import-time"}
+    assert "import-time" not in result.id_migrations  # the adoption (None -> id) is not a key
+
+
+def test_issue454_clean_pass_records_no_migration(tmp_path: Path):
+    # A pass with no id churn (a neutral code edit that only propagates) leaves the
+    # map empty — nothing was rewritten.
+    de = _slide("de", "a", "# ## A") + _code_shared("import time")
+    en = _slide("en", "a", "# ## A") + _code_shared("import time")
+    de_path, en_path = _write_pair(tmp_path, de, en)
+    cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+    try:
+        _seed(cache, de_path, en_path)
+        de_path.write_text(
+            _slide("de", "a", "# ## A") + _code_shared("import time\nx = 1"),
+            encoding="utf-8",
+        )
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+        result = apply_plan(
+            plan, judge=CountingJudge(), translator=CountingTranslator(), watermark_cache=cache
+        )
+    finally:
+        cache.close()
+
+    assert result.applied_migrate == 0
+    assert result.id_migrations == {}
