@@ -651,6 +651,78 @@ class TestInterleaving:
         assert d["en_cell"]["body"] == "# # Slide\n# A second sentence."
         assert d["de_cell"]["preview"] == "# # Folie"  # preview still present (back-compat)
 
+    def test_adjacent_localized_code_pair_converges(self, tmp_path):
+        # #236 convergence: an ALREADY-adjacent DE/EN code pair that diverges only by
+        # localized identifiers (code_structure) needs no reorder and is not a structural
+        # error — so it is NOT flagged (and a course-gate run on it reads clean).
+        text = (
+            '# %% lang="de"\n'
+            "def begruessung():\n"
+            '    return "Hallo"\n'
+            "\n"
+            '# %% lang="en"\n'
+            "def greeting():\n"
+            '    return "Hello"\n'
+        )
+        path = _write_slide(tmp_path / "slides_test.py", text)
+        result = normalize_file(path, operations=["interleaving"])
+
+        assert result.review_items == []  # localization-only + adjacent → converged
+        assert result.changes == []  # nothing to reorder
+        assert path.read_text(encoding="utf-8") == text  # untouched
+
+    def test_adjacent_structural_mismatch_still_flags(self, tmp_path):
+        # The convergence is keyed on failure MODE: an already-adjacent pair that fails a
+        # STRUCTURAL check (here heading_level) is a likely authoring error → still flagged,
+        # so `clm course gate` keeps catching it.
+        text = (
+            '# %% [markdown] lang="de" tags=["slide"]\n'
+            "# # Folie\n"
+            "\n"
+            '# %% [markdown] lang="en" tags=["slide"]\n'
+            "# ## Slide\n"
+        )
+        path = _write_slide(tmp_path / "slides_test.py", text)
+        result = normalize_file(path, operations=["interleaving"])
+
+        assert len(result.review_items) == 1
+        assert result.review_items[0].issue == "similarity_failure"
+        assert "heading_level" in result.review_items[0].details["failed_checks"]
+
+    def test_confirmed_pairing_reorders_diverged_code_then_converges(self, tmp_path):
+        # #236 accept: a BLOCK-layout deck whose DE/EN code diverged (localized names) is
+        # refused by default; the agent confirms the positional pairings from the worklist,
+        # which bypasses the gate and reorders them adjacent — and a re-run is then clean.
+        text = (
+            '# %% lang="de"\ndef begruessung():\n    return "Hallo"\n\n'
+            '# %% lang="de"\ndef abschied():\n    return "Tschuess"\n\n'
+            '# %% lang="en"\ndef greeting():\n    return "Hello"\n\n'
+            '# %% lang="en"\ndef farewell():\n    return "Goodbye"\n'
+        )
+        path = _write_slide(tmp_path / "slides_test.py", text)
+
+        # 1. Worklist (the task): two refused similarity_failures, not yet adjacent.
+        wl = normalize_file(path, operations=["interleaving"], dry_run=True)
+        fails = [r for r in wl.review_items if r.issue == "similarity_failure"]
+        assert len(fails) == 2
+        confirmed = {(r.details["de_cell"]["line"], r.details["en_cell"]["line"]) for r in fails}
+
+        # 2. Accept: confirm the pairings → bypass the gate, reorder into adjacency.
+        applied = normalize_file(path, operations=["interleaving"], confirmed_pairings=confirmed)
+        assert applied.review_items == []  # all bypassed
+        assert any(c.operation == "interleaving" for c in applied.changes)
+        out = path.read_text(encoding="utf-8")
+        assert (
+            out.index("begruessung")
+            < out.index("greeting")
+            < out.index("abschied")
+            < out.index("farewell")
+        )
+
+        # 3. Verify: a plain re-run is now clean (adjacent + localization-only → converged).
+        verify = normalize_file(path, operations=["interleaving"])
+        assert verify.review_items == [] and verify.changes == []
+
     def test_voiceover_pairs_interleaved(self, tmp_path):
         """Voiceover cells are paired and interleaved like content cells."""
         text = (

@@ -57,6 +57,17 @@ from clm.slides.normalizer import (
     help="Output as JSON.",
 )
 @click.option(
+    "--confirm-pairs",
+    "confirm_pairs",
+    type=str,
+    default=None,
+    metavar="FILE",
+    help="Apply an agent-confirmed interleave (#236). FILE (or '-' for stdin) is a JSON "
+    'array of {"de_line": N, "en_line": M} pairs taken from a `--json` '
+    "`similarity_failure` worklist; each bypasses the similarity gate and is reordered "
+    "into adjacency (a plain re-run is then clean). Single slide FILE only.",
+)
+@click.option(
     "--data-dir",
     type=click.Path(exists=True, file_okay=False, path_type=Path),
     help="Course data directory (contains slides/). For course spec normalization "
@@ -93,6 +104,7 @@ def normalize_slides_cmd(
     dry_run: bool,
     canonicalize_start_completed: bool,
     as_json: bool,
+    confirm_pairs: str | None,
     data_dir: Path | None,
     only: str | None,
     exclude: tuple[str, ...],
@@ -125,6 +137,13 @@ def normalize_slides_cmd(
     """
     op_list = _parse_operations(operations)
 
+    confirmed_pairings = _parse_confirm_pairs(confirm_pairs) if confirm_pairs else None
+    if confirmed_pairings is not None and not (path.is_file() and path.suffix == ".py"):
+        raise click.UsageError(
+            "--confirm-pairs operates on a single slide .py file (its line numbers are "
+            "per-file), not a directory or spec."
+        )
+
     if has_deck_scope(only, exclude, shipping_only):
         if not path.is_dir():
             raise click.UsageError(
@@ -146,7 +165,9 @@ def normalize_slides_cmd(
             canonicalize_start_completed=canonicalize_start_completed,
         )
     else:
-        result = _dispatch(path, op_list, dry_run, data_dir, canonicalize_start_completed)
+        result = _dispatch(
+            path, op_list, dry_run, data_dir, canonicalize_start_completed, confirmed_pairings
+        )
 
     if as_json:
         click.echo(json.dumps(_result_to_dict(result), indent=2))
@@ -182,6 +203,7 @@ def _dispatch(
     dry_run: bool,
     data_dir: Path | None,
     canonicalize_start_completed: bool = False,
+    confirmed_pairings: set[tuple[int, int]] | None = None,
 ) -> NormalizationResult:
     if path.is_file() and path.suffix == ".xml":
         slides_dir = _resolve_slides_dir(data_dir, path)
@@ -205,9 +227,32 @@ def _dispatch(
             operations=operations,
             dry_run=dry_run,
             canonicalize_start_completed=canonicalize_start_completed,
+            confirmed_pairings=confirmed_pairings,
         )
     else:
         raise click.ClickException(f"Path is not a file or directory: {path}")
+
+
+def _parse_confirm_pairs(spec: str) -> set[tuple[int, int]]:
+    """Read + parse ``--confirm-pairs`` (a FILE or ``-`` for stdin) to ``{(de_line, en_line)}``."""
+    raw = sys.stdin.read() if spec == "-" else Path(spec).read_text(encoding="utf-8")
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise click.UsageError(f"--confirm-pairs is not valid JSON: {exc}") from exc
+    if not isinstance(data, list):
+        raise click.UsageError(
+            '--confirm-pairs must be a JSON array of {"de_line": N, "en_line": M} objects.'
+        )
+    pairs: set[tuple[int, int]] = set()
+    for item in data:
+        try:
+            pairs.add((int(item["de_line"]), int(item["en_line"])))
+        except (TypeError, KeyError, ValueError) as exc:
+            raise click.UsageError(
+                f"--confirm-pairs entries need integer 'de_line' and 'en_line': {exc}"
+            ) from exc
+    return pairs
 
 
 def _resolve_slides_dir(data_dir: Path | None, spec_file: Path) -> Path:

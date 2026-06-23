@@ -30,6 +30,52 @@ class TestNormalizeSlidesCmd:
         assert result.exit_code == 0
         assert "No changes needed" in result.output
 
+    def test_confirm_pairs_applies_interleave_and_converges(self, tmp_path):
+        # #236 agent flow over the CLI: --json worklist → --confirm-pairs (stdin) →
+        # reordered + exit 0 → a plain re-run is clean.
+        path = _write_slide(
+            tmp_path / "slides_test.py",
+            '# %% lang="de"\ndef begruessung():\n    return "Hallo"\n\n'
+            '# %% lang="de"\ndef abschied():\n    return "Tschuess"\n\n'
+            '# %% lang="en"\ndef greeting():\n    return "Hello"\n\n'
+            '# %% lang="en"\ndef farewell():\n    return "Goodbye"\n',
+        )
+        runner = CliRunner()
+        # 1. Worklist.
+        wl = runner.invoke(
+            normalize_slides_cmd,
+            [str(path), "--operations", "interleaving", "--json", "--dry-run"],
+        )
+        assert wl.exit_code == 2, wl.output  # review items, no mechanical change → blocked
+        items = json.loads(wl.output)["review_items"]
+        fails = [it for it in items if it["issue"] == "similarity_failure"]
+        assert len(fails) == 2
+        confirm = json.dumps(
+            [{"de_line": it["de_cell"]["line"], "en_line": it["en_cell"]["line"]} for it in fails]
+        )
+        # 2. Confirm via stdin → reorder, exit 0.
+        applied = runner.invoke(
+            normalize_slides_cmd,
+            [str(path), "--operations", "interleaving", "--confirm-pairs", "-"],
+            input=confirm,
+        )
+        assert applied.exit_code == 0, applied.output
+        out = path.read_text(encoding="utf-8")
+        assert out.index("greeting") < out.index("abschied")  # EN1 now follows DE1
+        # 3. Verify: plain re-run is clean.
+        verify = runner.invoke(normalize_slides_cmd, [str(path), "--operations", "interleaving"])
+        assert verify.exit_code == 0, verify.output
+        assert "No changes needed" in verify.output
+
+    def test_confirm_pairs_rejects_a_directory(self, tmp_path):
+        (tmp_path / "d").mkdir()
+        runner = CliRunner()
+        result = runner.invoke(
+            normalize_slides_cmd, [str(tmp_path / "d"), "--confirm-pairs", "-"], input="[]"
+        )
+        assert result.exit_code == 2
+        assert "single slide" in result.output.lower()
+
     def test_tag_migration(self, tmp_path):
         path = _write_slide(
             tmp_path / "slides_test.py",

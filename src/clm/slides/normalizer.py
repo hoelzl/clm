@@ -459,11 +459,23 @@ def _is_start_completed_pair(de_cell: _RawCell, en_cell: _RawCell) -> bool:
     )
 
 
+#: Similarity checks that a *localization* divergence legitimately fails — different
+#: code identifiers across DE/EN (``code_structure``) or a length difference
+#: (``line_count``). When a pair is ALREADY adjacent (no reorder is needed) and *only*
+#: these fail, it is correctly interleaved and not a structural authoring error, so it is
+#: not flagged (#236, the agent-confirmed-interleave convergence). The structural checks
+#: (``tags`` / ``heading_level`` / ``bullet_count``) are NOT here: a mismatch in those is
+#: a likely authoring bug, so it still flags even when adjacent (``clm course gate`` relies
+#: on that).
+_SOFT_SIMILARITY_CHECKS = frozenset({"code_structure", "line_count"})
+
+
 def _apply_interleaving(
     cells: list[_RawCell],
     file_path: str,
     *,
     canonicalize_start_completed: bool = False,
+    confirmed_pairings: set[tuple[int, int]] | None = None,
 ) -> tuple[list[_RawCell], list[Change], list[ReviewItem]]:
     """Reorder cells for proper DE/EN interleaving.
 
@@ -478,9 +490,17 @@ def _apply_interleaving(
             permitted cohesion layout ``[DE_start, DE_completed, EN_start,
             EN_completed]``. Used to pre-normalize decks before a split, so
             the round-trip ``unify(split(deck)) == deck`` holds byte-for-byte.
+        confirmed_pairings: ``{(de_line, en_line)}`` the agent confirmed correct
+            from the ``similarity_failure`` worklist (#236). A positional pair
+            whose ``(de.line, en.line)`` is in the set bypasses the similarity gate
+            and IS reordered into adjacency — once adjacent, a re-run leaves it clean
+            via the localization convergence above. Line numbers are taken from the
+            same (unmodified) file the worklist reported, so a drifted pairing simply
+            does not match and stays flagged (fail-safe).
 
     Returns ``(reordered_cells, changes, review_items)``.
     """
+    confirmed_pairings = confirmed_pairings or set()
     changes: list[Change] = []
     review_items: list[ReviewItem] = []
 
@@ -552,7 +572,18 @@ def _apply_interleaving(
                 # localized function names) and force the canonical
                 # interleave.
                 failed = []
+            if failed and (cells[de_i].line_number, cells[en_i].line_number) in confirmed_pairings:
+                # The agent reviewed the worklist and confirmed this DE/EN positional
+                # pairing is correct despite the divergence (#236) — bypass the gate and
+                # reorder it into adjacency, exactly as a confident pair.
+                failed = []
             if failed:
+                if en_i == de_i + 1 and set(failed) <= _SOFT_SIMILARITY_CHECKS:
+                    # Already adjacent (no reorder needed) and only a localization-expected
+                    # divergence — correctly interleaved, not a structural error → do not
+                    # flag (#236 convergence). Left in place; not added to confident_pairs
+                    # (it does not move). A structural mismatch still falls through to flag.
+                    continue
                 review_items.append(
                     ReviewItem(
                         file=file_path,
@@ -934,6 +965,7 @@ def normalize_file(
     dry_run: bool = False,
     assign_options: AssignOptions | None = None,
     canonicalize_start_completed: bool = False,
+    confirmed_pairings: set[tuple[int, int]] | None = None,
 ) -> NormalizationResult:
     """Normalize a single slide file.
 
@@ -950,6 +982,11 @@ def normalize_file(
             forces ``start``/``completed`` cohesion pairs into the canonical
             interleave so a subsequent ``split``/``unify`` round-trips
             byte-for-byte. No effect unless ``interleaving`` runs.
+        confirmed_pairings: ``{(de_line, en_line)}`` the agent confirmed from the
+            ``similarity_failure`` worklist (#236); each bypasses the interleaving
+            similarity gate and is reordered into adjacency. Per-file (keyed by line),
+            so it is only meaningful for a single-file run. No effect unless
+            ``interleaving`` runs.
 
     Returns:
         A :class:`NormalizationResult` with changes and review items.
@@ -990,6 +1027,7 @@ def normalize_file(
             cells,
             file_str,
             canonicalize_start_completed=canonicalize_start_completed,
+            confirmed_pairings=confirmed_pairings,
         )
         all_changes.extend(interleave_changes)
         all_review.extend(interleave_reviews)

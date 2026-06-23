@@ -1371,7 +1371,8 @@ clm slides normalize [OPTIONS] PATH
 | `--operations TEXT` | Comma-separated operations: `preamble_code`, `placeholder_start`, `tag_migration`, `workshop_tags`, `interleaving`, `slide_ids`, `cell_spacing`, `all` (default: `all`) |
 | `--dry-run` | Preview changes without modifying files |
 | `--canonicalize-start-completed` | Force `start`/`completed` cohesion pairs into the canonical DE/EN interleave, even when DE/EN code differs (e.g. localized identifiers). Run before `clm slides split` so `unify(split(deck)) == deck` holds byte-for-byte. Only affects the `interleaving` operation. |
-| `--json` | Output as JSON |
+| `--confirm-pairs FILE` | (since CLM {version}) Apply an **agent-confirmed interleave** (#236). `FILE` (or `-` for stdin) is a JSON array of `{"de_line": N, "en_line": M}` pairs taken from a `--json` `similarity_failure` worklist; each bypasses the similarity gate and is reordered into adjacency. **Single slide `.py` file only** (the line numbers are per-file). Run on the same, unmodified file the worklist reported — a drifted pairing simply does not match and stays flagged. |
+| `--json` | Output as JSON. For an `interleaving` `similarity_failure` the worklist carries the **full** DE/EN cell `body` (not just `preview`), a 0.0–1.0 `similarity_score`, the `category`, and `failed_checks` — enough to judge a pairing (#236). |
 | `--data-dir DIR` | Course data directory (contains slides/) |
 | `--only bilingual\|split` | (since CLM {version}) Scope a **directory** run to only bilingual decks (no `.de`/`.en` tag) or only split halves — e.g. normalize the bilingual decks while leaving `.de`/`.en` pairs for `clm slides sync`. |
 | `--exclude GLOB` | (since CLM {version}) Skip decks matching `GLOB`, matched against the full path **and** each path component (so `--exclude old_decks` skips an `old_decks/` directory). Repeatable. Underscore-prefixed dirs (`_archive/`, `_drafts/`, …) are skipped automatically (issue #318) and need no `--exclude`. |
@@ -1398,6 +1399,10 @@ clm slides normalize slides/module_010/ --operations preamble_code
 clm slides normalize slides/module_010/ --operations placeholder_start
 # Pre-conversion: canonicalize start/completed order so the split round-trips exactly
 clm slides normalize slides/module_010/topic_100_intro/ --operations interleaving --canonicalize-start-completed
+# Assisted interleave (#236): read the worklist, confirm the correct pairings, apply, verify.
+clm slides normalize slides/module_010/topic_100_intro/deck.py --operations interleaving --json   # worklist
+clm slides normalize slides/module_010/topic_100_intro/deck.py --operations interleaving --confirm-pairs confirmed.json
+clm slides normalize slides/module_010/topic_100_intro/deck.py --operations interleaving           # verify: clean
 # Scope: mint ids on bilingual decks only
 clm slides normalize slides/ --operations slide_ids --only bilingual
 # Scope: only the decks that actually ship
