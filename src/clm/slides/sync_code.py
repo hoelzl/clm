@@ -49,7 +49,7 @@ from clm.slides.sync_writeback import (
     FileState,
     anchor_of,
     build_twin_cell,
-    cell_content_hash,
+    hash_cell,
     role_of,
 )
 
@@ -326,7 +326,7 @@ def _region_has_localized_drift(
                 continue  # only id-less LOCALIZED cells (role_of None, lang set)
             anchor = anchor_of(meta, cell.body)
             baseline_hash = src_anchors.get(anchor)
-            if baseline_hash is not None and baseline_hash != cell_content_hash(cell.body):
+            if baseline_hash is not None and baseline_hash != hash_cell(cell.metadata, cell.body):
                 return anchor
     if src_idless_counts:
         remaining = Counter(src_idless_counts)
@@ -334,7 +334,7 @@ def _region_has_localized_drift(
             meta = cell.metadata
             if meta.is_j2 or meta.lang is None or role_of(meta) is not None:
                 continue
-            chash = cell_content_hash(cell.body)
+            chash = hash_cell(cell.metadata, cell.body)
             if remaining.get(chash, 0) > 0:
                 remaining[chash] -= 1  # an unchanged baseline cell accounts for this one
             else:
@@ -465,7 +465,7 @@ def _reuse_unchanged_twin(
     if not src_anchors:
         return None
     anchor = anchor_of(cell.metadata, cell.body)
-    if src_anchors.get(anchor) != cell_content_hash(cell.body):
+    if src_anchors.get(anchor) != hash_cell(cell.metadata, cell.body):
         return None
     return _find_by_anchor(tgt_cells, anchor)
 
