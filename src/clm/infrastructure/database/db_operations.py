@@ -20,6 +20,17 @@ class DatabaseManager:
 
     def __enter__(self):
         self.conn = sqlite3.connect(str(self.db_path))
+        # Match ExecutedNotebookCache, which writes to the same cache DB file:
+        # WAL + synchronous=NORMAL. Without these this connection inherits the
+        # default synchronous=FULL, so every result-cache commit in the build's
+        # completion loop does a full fsync. That per-job fsync is a primary
+        # reason the build progress bar stalls behind the workers and only
+        # drains after they stop (the bar advances as this consumer retires
+        # completions). NORMAL is safe for a cache: at worst the last committed
+        # transaction is lost on power failure, never corruption.
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA synchronous=NORMAL")
+        self.conn.execute("PRAGMA busy_timeout=30000")
         self.init_db(force=self.force_init)
         return self
 
