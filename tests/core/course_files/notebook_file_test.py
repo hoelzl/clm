@@ -313,14 +313,18 @@ class TestCassetteResolution:
     def test_expected_cassette_path_defaults_to_subdir_when_empty(
         self, course_1, tmp_path, monkeypatch
     ):
-        # New default: a first-ever cassette (no dir, no sibling) targets cassettes/.
+        # New default (#453): a first-ever cassette (no dir, no sibling) targets
+        # the consolidated .clm/cassettes/.
         monkeypatch.delenv("CLM_SIDECAR_LAYOUT", raising=False)
         nb = self._make_nb_file(course_1, tmp_path, with_cassette=False)
-        assert not (tmp_path / "cassettes").exists()  # not pre-created
+        assert not (tmp_path / ".clm" / "cassettes").exists()  # not pre-created
         assert (
-            nb.expected_cassette_path == tmp_path / "cassettes" / "slides_replay.http-cassette.yaml"
+            nb.expected_cassette_path
+            == tmp_path / ".clm" / "cassettes" / "slides_replay.http-cassette.yaml"
         )
-        assert nb.expected_cassette_relative_name == "cassettes/slides_replay.http-cassette.yaml"
+        assert (
+            nb.expected_cassette_relative_name == ".clm/cassettes/slides_replay.http-cassette.yaml"
+        )
 
     def test_expected_cassette_path_keeps_existing_sibling(self, course_1, tmp_path, monkeypatch):
         # A deck that already records to a sibling cassette stays a sibling so a
@@ -376,18 +380,66 @@ class TestCassetteResolution:
             nb.expected_cassette_path == tmp_path / "cassettes" / "slides_replay.http-cassette.yaml"
         )
 
-    def test_expected_cassette_path_uses_subdir_when_course_opts_in(
+    # Issue #453: .clm/cassettes/ is the consolidated home — preferred for read and
+    # the default write target, while existing legacy layouts keep working.
+    def test_cassette_path_prefers_clm_cassettes_dir(self, course_1, tmp_path):
+        nb = self._make_nb_file(course_1, tmp_path, with_cassette=False)
+        clm_dir = tmp_path / ".clm" / "cassettes"
+        clm_dir.mkdir(parents=True)
+        (clm_dir / "slides_replay.http-cassette.yaml").write_text(
+            "interactions: []\n", encoding="utf-8"
+        )
+        assert nb.cassette_path == clm_dir / "slides_replay.http-cassette.yaml"
+        assert nb.cassette_relative_name == ".clm/cassettes/slides_replay.http-cassette.yaml"
+
+    def test_cassette_path_clm_wins_over_legacy(self, course_1, tmp_path):
+        # All three layouts present → .clm/cassettes/ wins.
+        nb = self._make_nb_file(course_1, tmp_path, with_cassette=True, nested=True)  # _cassettes/
+        (tmp_path / "cassettes").mkdir()
+        (tmp_path / "cassettes" / "slides_replay.http-cassette.yaml").write_text(
+            "x\n", encoding="utf-8"
+        )
+        clm_dir = tmp_path / ".clm" / "cassettes"
+        clm_dir.mkdir(parents=True)
+        (clm_dir / "slides_replay.http-cassette.yaml").write_text("x\n", encoding="utf-8")
+        assert nb.cassette_relative_name == ".clm/cassettes/slides_replay.http-cassette.yaml"
+
+    def test_expected_cassette_path_uses_clm_dir_when_present(self, course_1, tmp_path):
+        # An empty .clm/cassettes/ is enough to switch the write target there.
+        (tmp_path / ".clm" / "cassettes").mkdir(parents=True)
+        nb = self._make_nb_file(course_1, tmp_path, with_cassette=False)
+        assert (
+            nb.expected_cassette_path
+            == tmp_path / ".clm" / "cassettes" / "slides_replay.http-cassette.yaml"
+        )
+
+    def test_expected_cassette_path_keeps_existing_legacy_dir(
         self, course_1, tmp_path, monkeypatch
     ):
-        # No cassettes/ dir exists yet, but the course spec asks for the
-        # ``subdir`` layout, so a first-ever recording targets cassettes/.
+        # Back-compat: a repo already on the top-level cassettes/ keeps writing there
+        # (no forced migration) until `clm slides tidy` relocates it to .clm/cassettes/.
         monkeypatch.delenv("CLM_SIDECAR_LAYOUT", raising=False)
-        nb = self._make_nb_file(course_1, tmp_path, with_cassette=False, sidecar_layout="subdir")
-        assert not (tmp_path / "cassettes").exists()  # not pre-created
+        (tmp_path / "cassettes").mkdir()
+        nb = self._make_nb_file(course_1, tmp_path, with_cassette=False)
         assert (
             nb.expected_cassette_path == tmp_path / "cassettes" / "slides_replay.http-cassette.yaml"
         )
-        assert nb.expected_cassette_relative_name == "cassettes/slides_replay.http-cassette.yaml"
+
+    def test_expected_cassette_path_uses_subdir_when_course_opts_in(
+        self, course_1, tmp_path, monkeypatch
+    ):
+        # No cassette dir exists yet, but the course spec asks for the
+        # ``subdir`` layout, so a first-ever recording targets .clm/cassettes/.
+        monkeypatch.delenv("CLM_SIDECAR_LAYOUT", raising=False)
+        nb = self._make_nb_file(course_1, tmp_path, with_cassette=False, sidecar_layout="subdir")
+        assert not (tmp_path / ".clm" / "cassettes").exists()  # not pre-created
+        assert (
+            nb.expected_cassette_path
+            == tmp_path / ".clm" / "cassettes" / "slides_replay.http-cassette.yaml"
+        )
+        assert (
+            nb.expected_cassette_relative_name == ".clm/cassettes/slides_replay.http-cassette.yaml"
+        )
 
     def test_expected_cassette_path_sibling_when_course_opts_sibling(
         self, course_1, tmp_path, monkeypatch
@@ -404,7 +456,8 @@ class TestCassetteResolution:
         monkeypatch.setenv("CLM_SIDECAR_LAYOUT", "subdir")
         nb = self._make_nb_file(course_1, tmp_path, with_cassette=False, sidecar_layout="sibling")
         assert (
-            nb.expected_cassette_path == tmp_path / "cassettes" / "slides_replay.http-cassette.yaml"
+            nb.expected_cassette_path
+            == tmp_path / ".clm" / "cassettes" / "slides_replay.http-cassette.yaml"
         )
 
 
@@ -531,8 +584,11 @@ class TestReplayCassetteLanguageFallback:
         assert nb.cassette_path is None
         assert nb.cassette_relative_name is None
         # Only the base (bilingual) sibling exists; the strict ``.de`` name has no
-        # sibling, so a first-ever record targets the new ``cassettes/`` default.
-        assert nb.expected_cassette_relative_name == "cassettes/slides_replay.de.http-cassette.yaml"
+        # sibling, so a first-ever record targets the new ``.clm/cassettes/`` default.
+        assert (
+            nb.expected_cassette_relative_name
+            == ".clm/cassettes/slides_replay.de.http-cassette.yaml"
+        )
 
     def test_no_fallback_for_non_split_deck(self, tmp_path):
         """A non-split deck has no language token → replay == strict lookup."""
@@ -639,13 +695,13 @@ class TestProcessNotebookOperationHttpReplay:
         # ``once`` and ``refresh`` need a write target on first run, even
         # before any cassette exists. Otherwise the bootstrap is never
         # injected and recording can never bootstrap itself. With no existing
-        # cassette/dir the new default write target is the ``cassettes/`` subdir.
+        # cassette/dir the new default write target is the ``.clm/cassettes/`` subdir.
         monkeypatch.delenv("CLM_SIDECAR_LAYOUT", raising=False)
         for mode in ("once", "refresh"):
             op, _ = self._make_operation(course_1, tmp_path, mode=mode, with_cassette=False)
-            assert op._resolve_cassette_name() == "cassettes/slides_replay.http-cassette.yaml", (
-                f"mode={mode!r} must return the expected cassette path on first run"
-            )
+            assert (
+                op._resolve_cassette_name() == ".clm/cassettes/slides_replay.http-cassette.yaml"
+            ), f"mode={mode!r} must return the expected cassette path on first run"
 
     def test_resolve_cassette_name_record_modes_prefer_existing(self, course_1, tmp_path):
         # When a cassette already exists, record modes use the actual
@@ -800,13 +856,13 @@ class TestProcessNotebookOperationHttpReplay:
         # when only the base cassette exists — never the shared base (which a
         # full re-record would overwrite / seed the other language from). The
         # strict ``.de`` name has no sibling here, so the new default puts the
-        # record target under ``cassettes/``.
+        # record target under ``.clm/cassettes/``.
         monkeypatch.delenv("CLM_SIDECAR_LAYOUT", raising=False)
         for mode in ("once", "refresh"):
             op, _ = self._make_split_operation(tmp_path, lang="de", mode=mode, base=True)
-            assert op._resolve_cassette_name() == "cassettes/slides_replay.de.http-cassette.yaml", (
-                f"mode={mode!r} must keep the language-specific record target"
-            )
+            assert (
+                op._resolve_cassette_name() == ".clm/cassettes/slides_replay.de.http-cassette.yaml"
+            ), f"mode={mode!r} must keep the language-specific record target"
 
     def test_other_files_ships_no_cassette_on_replay_for_split(self, tmp_path):
         # The base-cassette language fallback (issue #159) lives in

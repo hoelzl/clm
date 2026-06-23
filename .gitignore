@@ -263,8 +263,17 @@ clm-faststream-backend-old/
 # Diagnostic output from the voiceover test tool
 tools/diagnostic_output/
 
-# CLM local data (voiceover trace logs, etc.)
-.clm/
+# CLM build-internal sidecar tree (per topic and at the repo root). The
+# regenerable scratch under .clm/ is ignored — voiceover caches, recordings
+# event/jobs logs, local config.toml. The COMMITTED inputs under .clm/ are
+# explicitly NOT ignored: the consolidated HTTP-replay cassettes
+# (.clm/cassettes/, the CI replay fixtures — issue #453) and the per-slide sync
+# consistency ledger (.clm/sync-ledger.json — issue #448), both of which must
+# travel with the course repo. (Negating a parent dir requires ignoring its
+# contents with `/*`, not the dir itself, so the re-includes below can take.)
+**/.clm/*
+!**/.clm/cassettes/
+!**/.clm/sync-ledger.json
 
 # CLM LLM cache (default `tool.clm.cache_dir`, created by
 # `clm slides assign-ids --llm-suggest`, `clm slides coverage`, etc.)

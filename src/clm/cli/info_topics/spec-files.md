@@ -168,7 +168,7 @@ Optional `<topic>` attributes:
 | `html` | If set, skip HTML generation for this topic |
 | `evaluate` | `"true"`/`"yes"`/`"1"` (default) or `"false"`/`"no"`/`"0"` (case-insensitive). Set `evaluate="no"` to render the notebook to all configured output formats (HTML, `.ipynb`, code) **without spawning a kernel** — cells appear with empty outputs. Use this for slides that should ship as static decks (e.g., topics that depend on a live service, an interactive demo, GPU hardware, or a long-running training run that is too expensive to repeat on every build) — and as the workaround for decks that deterministically crash the kernel (e.g. xeus-cpp cumulative-JIT crashes). `evaluate="no"` workarounds are tracked debt: `clm kernel-triage` re-executes every such topic against the current kernel and reports which workarounds can be lifted — run it after each kernel/worker-image upgrade. Independent of `html=` (which skips HTML entirely) and `skip-errors` (which catches errors raised during execution). |
 | `skip-errors` | `"true"`/`"yes"`/`"1"` or `"false"`/`"no"`/`"0"` (case-insensitive; default `false`). When set, cell execution errors do not abort HTML generation. Cells whose outputs contain an error are cleared, and a processing warning is emitted listing the affected cell indices. Useful for topics that rely on live services that may be temporarily unavailable, or as a short-lived escape hatch for flaky external tools. Prefer fixing the underlying cause (e.g., recording an HTTP cassette) over leaving this enabled permanently. |
-| `http-replay` | `"true"`/`"yes"`/`"1"` or `"false"`/`"no"`/`"0"` (case-insensitive; default `false`). Opts the topic in to HTTP replay: the build routes the notebook's network traffic through a shared out-of-process replay proxy (mitmproxy) and records it to a cassette file next to the source (or under a sibling `cassettes/` directory; legacy `_cassettes/` is still read), then replays it on subsequent builds. Covered client libraries are `httpx`, `requests`, and `aiohttp` — code using other HTTP stacks (`urllib.request`, raw `urllib3`/`http.client`) is proxied but **not** routed to the topic's cassette and cannot strict-replay (the build log carries a `CLM-HTTP-REPLAY-UNTAGGED` warning); use a covered library in such decks. The replay record mode is chosen at build time via `--http-replay=<replay\|once\|new-episodes\|refresh\|disabled>` or `CLM_HTTP_REPLAY_MODE`; CI defaults to strict `replay` mode, local builds default to `new-episodes` (replay recorded requests and append any new ones to the cassette, so an edited notebook that issues additional requests does not fail the build). Use `--http-replay=once` to make a local build fail loudly on unrecorded requests. Cassettes are version-controlled alongside source but excluded from student output. Requires the `[replay]` extra (`pip install -e .[replay]`). |
+| `http-replay` | `"true"`/`"yes"`/`"1"` or `"false"`/`"no"`/`"0"` (case-insensitive; default `false`). Opts the topic in to HTTP replay: the build routes the notebook's network traffic through a shared out-of-process replay proxy (mitmproxy) and records it to a cassette file under the topic's `.clm/cassettes/` directory (legacy top-level `cassettes/` / `_cassettes/` and a sibling next to the source are still read), then replays it on subsequent builds. Covered client libraries are `httpx`, `requests`, and `aiohttp` — code using other HTTP stacks (`urllib.request`, raw `urllib3`/`http.client`) is proxied but **not** routed to the topic's cassette and cannot strict-replay (the build log carries a `CLM-HTTP-REPLAY-UNTAGGED` warning); use a covered library in such decks. The replay record mode is chosen at build time via `--http-replay=<replay\|once\|new-episodes\|refresh\|disabled>` or `CLM_HTTP_REPLAY_MODE`; CI defaults to strict `replay` mode, local builds default to `new-episodes` (replay recorded requests and append any new ones to the cassette, so an edited notebook that issues additional requests does not fail the build). Use `--http-replay=once` to make a local build fail loudly on unrecorded requests. Cassettes are version-controlled alongside source but excluded from student output. Requires the `[replay]` extra (`pip install -e .[replay]`). |
 | `author` | Override the course-level author for this topic |
 | `prog-lang` | Override the course-level programming language for this topic |
 | `module` | Optional module-directory binding for this single topic, overriding the section's `module=` default. Use sparingly — usually the section-level `module=` is enough. |
@@ -334,8 +334,8 @@ Defaults to `Coding-Akademie München` (de) / `Coding-Academy Munich` (en).
 Per-course override for where a build records a topic's **first** HTTP-replay
 cassette. Value is `subdir` or `sibling`:
 
-- `subdir` — force the topic's `cassettes/` folder even when a sibling cassette
-  already exists for the deck.
+- `subdir` — force the topic's `.clm/cassettes/` folder even when a sibling
+  cassette already exists for the deck.
 - `sibling` — force cassettes next to the slides (the pre-{version} behavior).
 
 ```xml
@@ -343,17 +343,19 @@ cassette. Value is `subdir` or `sibling`:
 ```
 
 You usually do **not** need this. As of CLM {version} the default already prefers
-the `cassettes/` subdir for a *new* cassette: a build records a topic's first
-cassette into `cassettes/` (created on demand) unless that deck already has a
-sibling cassette, in which case it stays a sibling so a deck is never split
-across layouts. Set `<sidecar-layout>sibling</sidecar-layout>` only to opt a
-course back into the old flat layout; set `subdir` only to force the folder even
-for decks that still have sibling cassettes.
+the `.clm/cassettes/` subdir for a *new* cassette (cassettes are a committed
+build input, so they live in the build-internal `.clm/` tree): a build records a
+topic's first cassette into `.clm/cassettes/` (created on demand) unless that
+deck already has a sibling cassette, in which case it stays a sibling so a deck
+is never split across layouts. Set `<sidecar-layout>sibling</sidecar-layout>`
+only to opt a course back into the old flat layout; set `subdir` only to force
+the folder even for decks that still have sibling cassettes.
 
 This only changes the *write* location of a new cassette. Reads always
-auto-detect both layouts, so a course can flip this freely without changing any
-build output. A topic's existing `cassettes/` (or legacy `_cassettes/`) folder
-always wins regardless of this setting.
+auto-detect every layout, so a course can flip this freely without changing any
+build output. A topic's existing cassette folder — `.clm/cassettes/`, or the
+legacy top-level `cassettes/` / `_cassettes/` — always wins regardless of this
+setting (run `clm slides tidy` to migrate a legacy folder to `.clm/cassettes/`).
 
 Precedence (highest first): the `CLM_SIDECAR_LAYOUT` environment variable, then
 this `<sidecar-layout>`, then `[tool.clm] sidecar-layout` in the nearest
@@ -1040,15 +1042,17 @@ layouts). Within it, CLM distinguishes three kinds of file:
 | **Core source** | `slides_*.<ext>` (incl. split `slides_*.de.<ext>` / `slides_*.en.<ext>`) | processed into notebooks/HTML |
 | **Output companions** | `img/`, `drawio/`, loose data files | **yes**, verbatim |
 | **Authoring sidecars** | `voiceover_*.<ext>`, `*.http-cassette.yaml` | **no** |
-| **Build-internal scratch** | `.clm/` (voiceover cache, backfill, traces) | **no** — fully ignored everywhere |
+| **Build-internal tree** | `.clm/` — committed: `cassettes/` (replay input), `sync-ledger.json`; ignored scratch: `voiceover-cache/`, `voiceover-backfill/`, `voiceover-traces/`, `config.toml` | **no** — `.clm/cassettes/` is a build *input* (read at runtime) but never copied to output; the rest is fully ignored everywhere |
 
 The authoring sidecars may live either next to the slides or collected into
 per-type subdirectories so the topic directory stays focused on the editable
-sources. As of CLM {version} a *new* sidecar prefers the subdir:
+sources. As of CLM {version} a *new* sidecar prefers the subdir (cassettes are a
+committed build input, so they are consolidated under the build-internal `.clm/`
+tree — `clm slides tidy` migrates a legacy top-level `cassettes/`):
 
 ```
 topic_070_rag_introduction/
-├── cassettes/      # *.http-cassette.yaml      (also accepted: legacy _cassettes/)
+├── .clm/cassettes/ # *.http-cassette.yaml      (also accepted: legacy top-level cassettes/ , _cassettes/)
 ├── voiceover/      # voiceover_*.<ext>
 ├── drawio/  img/   # output companions (unchanged)
 ├── slides_010_what_is_rag.de.py

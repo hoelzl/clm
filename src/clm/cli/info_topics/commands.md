@@ -2608,7 +2608,7 @@ companions (`img/`, `drawio/`):
 
 ```
 topic_070_rag_introduction/
-├── cassettes/      ← *.http-cassette.yaml      (was: loose in the topic dir)
+├── .clm/cassettes/ ← *.http-cassette.yaml      (was: loose in the topic dir)
 ├── voiceover/      ← voiceover_*.<ext>         (was: loose in the topic dir)
 ├── drawio/  img/   ← output companions (unchanged)
 └── slides_010_*.de.py  slides_010_*.en.py      ← core sources
@@ -2617,8 +2617,11 @@ topic_070_rag_introduction/
 `--layout sibling` flattens the sidecars back out. Both layouts are fully
 supported everywhere (build, `extract`/`inline`/`sync`, `split`/`unify`,
 `validate`); `tidy` is just the bulk reorganizer. The cassette folder is
-`cassettes/`; the historical `_cassettes/` is still read and is **consolidated**
-into `cassettes/` by `--layout subdir`.
+`.clm/cassettes/` (cassettes are a committed build input, so they live in the
+build-internal `.clm/` tree); the historical top-level `cassettes/` and
+`_cassettes/` are still read and are **consolidated** into `.clm/cassettes/` by
+`--layout subdir`. `voiceover/` stays a top-level folder (the author edits its
+narration).
 
 ```
 clm slides tidy [OPTIONS] PATH
@@ -2629,7 +2632,7 @@ tree (walked recursively).
 
 | Option | Description |
 |--------|-------------|
-| `--layout [subdir\|sibling]` | Target layout. `subdir` (default) moves sidecars into `voiceover/` / `cassettes/`; `sibling` flattens them back. |
+| `--layout [subdir\|sibling]` | Target layout. `subdir` (default) moves sidecars into `voiceover/` / `.clm/cassettes/`; `sibling` flattens them back. |
 | `--dry-run` | Print the planned moves/deletes without touching any file. |
 | `--voiceover` / `--no-voiceover` | Include/exclude voiceover companions (default: include). |
 | `--cassettes` / `--no-cassettes` | Include/exclude cassettes and the pruning of transient staging markers (default: include). |
@@ -2646,8 +2649,9 @@ Behavior:
 - A sidecar present in **both** layouts is a **conflict**: that one move is
   skipped (nothing is clobbered) and the command exits **2**. Reconcile the
   duplicate (`clm validate` flags it too) and re-run.
-- A `voiceover/` / `cassettes/` / `_cassettes/` directory emptied by a flatten
-  is removed.
+- A `voiceover/` / `.clm/cassettes/` / legacy `cassettes/` / `_cassettes/`
+  directory emptied by a move is removed (an emptied `.clm/` left by the cassette
+  move is pruned too).
 
 Exit codes: `0` done (or dry-run printed); `2` one or more conflicts were
 skipped.

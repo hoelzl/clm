@@ -40,7 +40,7 @@ def test_plan_subdir_moves_and_deletes(tmp_path):
     assert ("voiceover_010.en.py", "voiceover/voiceover_010.en.py") in moved
     assert (
         "slides_010.de.http-cassette.yaml",
-        "cassettes/slides_010.de.http-cassette.yaml",
+        ".clm/cassettes/slides_010.de.http-cassette.yaml",
     ) in moved
     # core slide sources are never moved
     assert not any(m.src.name.startswith("slides_") and m.src.suffix == ".py" for m in plan.moves)
@@ -53,7 +53,7 @@ def test_apply_subdir_no_git(tmp_path):
     t = _flat_topic(tmp_path)
     apply_tidy(plan_tidy(t, layout="subdir"), use_git=False)
     assert (t / "voiceover" / "voiceover_010.de.py").exists()
-    assert (t / "cassettes" / "slides_010.de.http-cassette.yaml").exists()
+    assert (t / ".clm" / "cassettes" / "slides_010.de.http-cassette.yaml").exists()
     assert not (t / "voiceover_010.de.py").exists()
     assert not (t / "slides_010.de.http-cassette.yaml").exists()
     assert not list(t.glob("*.staging-*"))  # markers deleted
@@ -66,9 +66,11 @@ def test_flatten_round_trips_and_prunes_dirs(tmp_path):
     apply_tidy(plan_tidy(t, layout="sibling"), use_git=False)  # flatten back
     assert (t / "voiceover_010.de.py").exists()
     assert (t / "slides_010.de.http-cassette.yaml").exists()
-    # emptied sidecar dirs are removed
+    # emptied sidecar dirs are removed — including the .clm/cassettes/ home and the
+    # now-empty .clm/ left behind by the cassette flatten (#453).
     assert not (t / "voiceover").exists()
-    assert not (t / "cassettes").exists()
+    assert not (t / ".clm" / "cassettes").exists()
+    assert not (t / ".clm").exists()
 
 
 def test_idempotent(tmp_path):
@@ -84,6 +86,17 @@ def test_legacy_cassettes_consolidated(tmp_path):
     apply_tidy(plan_tidy(t, layout="subdir"), use_git=False)
     assert (t / CASSETTE_SUBDIR / "slides_010.http-cassette.yaml").exists()
     assert not (t / CASSETTE_LEGACY_SUBDIR).exists()  # emptied legacy dir pruned
+
+
+def test_legacy_top_level_cassettes_migrated_to_clm(tmp_path):
+    # The former top-level cassettes/ is now a migration SOURCE: tidy --layout
+    # subdir relocates it under .clm/cassettes/ (#453) and prunes the emptied dir.
+    t = tmp_path / "topic_070"
+    _touch(t / "slides_010.py", "# x\n")
+    _touch(t / "cassettes" / "slides_010.http-cassette.yaml", "interactions: []\n")
+    apply_tidy(plan_tidy(t, layout="subdir"), use_git=False)
+    assert (t / ".clm" / "cassettes" / "slides_010.http-cassette.yaml").exists()
+    assert not (t / "cassettes").exists()  # emptied legacy top-level dir pruned
 
 
 def test_conflict_when_both_layouts_present(tmp_path):

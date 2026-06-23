@@ -1491,8 +1491,8 @@ class CourseSpec:
     image_options: ImageOptionsSpec = field(factory=ImageOptionsSpec)
     jupyterlite: JupyterLiteConfig | None = None
     # Per-course default for where newly written authoring sidecars land:
-    # ``"subdir"`` (a per-type ``cassettes/`` / ``voiceover/`` folder) or
-    # ``"sibling"`` (next to the slides). ``None`` leaves the choice to the
+    # ``"subdir"`` (the ``.clm/cassettes/`` cassette home / ``voiceover/`` folder)
+    # or ``"sibling"`` (next to the slides). ``None`` leaves the choice to the
     # ``CLM_SIDECAR_LAYOUT`` env var / ``[tool.clm] sidecar-layout`` pyproject
     # key and otherwise to per-topic directory presence. Only affects the
     # *write* location of new files (e.g. a first-recorded cassette during a
