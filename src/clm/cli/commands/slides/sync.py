@@ -298,6 +298,7 @@ def _run_batch(
     no_env_file: bool,
     cache_dir: Path | None,
     provider_available: bool,
+    baseline_ref: str | None = None,
     make_judge: Callable[[], SyncJudge | None],
     make_translator: Callable[[], SlideTranslator | None],
     make_recoverer: Callable[[], AlignmentRecoverer | None],
@@ -305,6 +306,11 @@ def _run_batch(
 ) -> None:
     """Sync every split deck pair under ``root`` in one pass, then ``sys.exit`` the
     worst per-pair exit code (0 clean < 1 review < 2 error).
+
+    ``baseline_ref`` (an explicit git ref, e.g. ``HEAD~10``) is applied to EVERY pair —
+    each is diffed against its own content at that ref. This is the "reconcile a week of
+    committed single-language edits" sweep: a plain git-HEAD batch reads such edits as
+    already-consistent (they match HEAD), so pin a baseline from before the editing.
 
     A read-only sweep (``mode`` ``dry-run`` / ``explain``) never constructs a model, so
     the ``make_*`` factories are only called on a writing (``apply``) sweep — the
@@ -397,6 +403,7 @@ def _run_batch(
                     provider_available=provider_available,
                     verifier=verifier,
                     correspondence_cache=correspondence_cache,
+                    baseline_ref=baseline_ref,
                 )
             )
     finally:
@@ -425,11 +432,16 @@ def _sync_one_pair(
     provider_available: bool,
     verifier: CorrespondenceVerifier | None,
     correspondence_cache: SyncCorrespondenceCache | None,
+    baseline_ref: str | None = None,
 ) -> _PairResult:
     """Sync one pair for the batch, catching any failure so the sweep continues."""
     try:
         plan = build_sync_plan(
-            de_path, en_path, watermark_cache=watermark_cache, provider_available=provider_available
+            de_path,
+            en_path,
+            watermark_cache=watermark_cache,
+            provider_available=provider_available,
+            baseline_ref=baseline_ref,
         )
         apply_result: ApplyResult | None = None
         explain_text: str | None = None
@@ -1310,10 +1322,11 @@ def _run_report(
                 f"{de_path} is a directory (batch report), which takes a single directory "
                 "argument; do not pass a second path."
             )
-        if baseline_ref is not None or baseline_from_spec is not None:
+        if baseline_from_spec is not None:
             raise click.UsageError(
-                "--baseline / --baseline-from operate on a single deck pair; run report per "
-                "deck, not over a directory."
+                "--baseline-from pins ONE deck's pre-rename half, so it is single-pair "
+                "only; run it per deck. (--baseline REF works over a directory — it diffs "
+                "every pair against that ref, e.g. to reconcile a week of committed edits.)"
             )
         _run_batch(
             de_path,
@@ -1324,6 +1337,7 @@ def _run_report(
             no_env_file=True,
             cache_dir=cache_dir,
             provider_available=provider_available,
+            baseline_ref=baseline_ref,
             make_judge=lambda: None,
             make_translator=lambda: None,
             make_recoverer=lambda: None,
@@ -1556,10 +1570,10 @@ def sync_apply_cmd(
                 f"{de_path} is a directory (batch apply), which takes a single directory "
                 "argument; do not pass a second path."
             )
-        if baseline_ref is not None or baseline_from_spec is not None:
+        if baseline_from_spec is not None:
             raise click.UsageError(
-                "--baseline / --baseline-from operate on a single deck pair; run apply "
-                "per deck, not over a directory."
+                "--baseline-from pins ONE deck's pre-rename half, so it is single-pair "
+                "only; run it per deck. (--baseline REF works over a directory.)"
             )
         _run_apply_batch(
             de_path,
@@ -1567,6 +1581,7 @@ def sync_apply_cmd(
             use_watermark=use_watermark,
             cache_dir=cache_dir,
             as_json=as_json,
+            baseline_ref=baseline_ref,
         )
         return  # _run_apply_batch always sys.exit()s; this is just for the type-checker.
 
@@ -1722,6 +1737,7 @@ def _run_apply_batch(
     use_watermark: bool,
     cache_dir: Path | None,
     as_json: bool,
+    baseline_ref: str | None = None,
 ) -> None:
     """Model-free tier-1 apply over every split pair under ``root`` (no model, epic #440).
 
@@ -1771,7 +1787,7 @@ def _run_apply_batch(
                 click.echo(f"[{i}/{len(pairs)}] {_deck_label(de_path, root)} …", err=True)
             try:
                 plan, result = _apply_deterministic(
-                    de_path, en_path, watermark_cache=watermark_cache
+                    de_path, en_path, watermark_cache=watermark_cache, baseline_ref=baseline_ref
                 )
                 exit_code = _apply_exit_code(plan, result)
                 results.append(_PairResult(de_path, en_path, plan, result, None, exit_code, None))

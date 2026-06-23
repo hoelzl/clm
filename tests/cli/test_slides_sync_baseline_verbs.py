@@ -10,8 +10,11 @@ divergence is surfaced rather than blessed.
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 from clm.cli.commands.slides.sync import slides_sync_group
@@ -95,3 +98,60 @@ def test_baseline_show_lists_a_blessed_pair(tmp_path: Path):
     assert code == 0, out
     entries = json.loads(out)
     assert any(Path(e["de_path"]).name == "slides_x.de.py" for e in entries)
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not available")
+def test_batch_report_baseline_surfaces_committed_edits(tmp_path: Path):
+    """The 'reconcile a week of committed single-language edits' sweep (#440 follow-up).
+
+    A DE edit committed without syncing EN matches git HEAD, so a default batch `report`
+    falsely reads it 'clean'. `report DIR --baseline REF` diffs every pair against REF and
+    surfaces the drift — the missing batch capability that blocked the timeframe workflow.
+    """
+    topic = tmp_path / "topic_010_x"
+    deA, enA = _pair("Titel", "Title", de_id="a", en_id="a")
+    _write(topic, deA, enA)  # writes slides_x.de.py / slides_x.en.py
+    deB, enB = _pair("Zwei", "Two", de_id="b", en_id="b")
+    (topic / "slides_y.de.py").write_text(deB, encoding="utf-8")
+    (topic / "slides_y.en.py").write_text(enB, encoding="utf-8")
+
+    def _git(*a: str) -> None:
+        subprocess.run(["git", *a], cwd=str(tmp_path), check=True, capture_output=True, text=True)
+
+    _git("init", "-q")
+    _git("config", "user.email", "t@e.com")
+    _git("config", "user.name", "t")
+    _git("add", "-A")
+    _git("-c", "commit.gpgsign=false", "commit", "-q", "-m", "base")
+    # Edit deck A's DE half and COMMIT it (EN left behind, unsynced).
+    deA2, _ = _pair("Titel bearbeitet", "Title", de_id="a", en_id="a")
+    (topic / "slides_x.de.py").write_text(deA2, encoding="utf-8")
+    _git("add", "-A")
+    _git("-c", "commit.gpgsign=false", "commit", "-q", "-m", "edit A de only")
+
+    def _pair_by(env: dict, stem: str) -> dict:
+        return next(p["report"] for p in env["pairs"] if stem in p["de_path"])
+
+    # Default git-HEAD batch: the committed edit matches HEAD → FALSE-CLEAN.
+    code, out = _run("report", str(topic), "--json")
+    env = json.loads(out)
+    assert _pair_by(env, "slides_x")["is_clean"] is True  # the motivating blind spot
+
+    # --baseline HEAD~1 over the directory: deck A's edit surfaces, deck B stays clean.
+    code, out = _run("report", str(topic), "--baseline", "HEAD~1", "--json")
+    assert code == 1, out  # work pending in the sweep
+    env = json.loads(out)
+    a = _pair_by(env, "slides_x")
+    assert a["is_clean"] is False and a["needs_model"] is True  # the de->en edit
+    assert _pair_by(env, "slides_y")["is_clean"] is True  # untouched deck unaffected
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not available")
+def test_batch_report_baseline_from_still_rejected(tmp_path: Path):
+    """`--baseline-from` pins ONE deck's pre-rename half, so it stays single-pair only."""
+    topic = tmp_path / "topic_010_x"
+    de, en = _pair("Titel", "Title")
+    _write(topic, de, en)
+    code, out = _run("report", str(topic), "--baseline-from", "old.de.py")
+    assert code == 2
+    assert "single-pair" in out.lower() or "single pair" in out.lower()

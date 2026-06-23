@@ -1982,8 +1982,8 @@ clm slides sync report DECK [EN_PATH] [OPTIONS]   # bare `sync DECK` is the same
 |--------|-------------|
 | `--json` | Emit the `ReconciliationReport` as JSON (the agent contract — see below). |
 | `--explain` | Human-readable content-anchor diagnostic (a read-only superset of the report): each cell's anchor (`id:` / `construct:` / `hash:`) and whether it is unchanged / edited / new / removed, the neutral-cell propagation direction, and any drifted `slide_id`s. |
-| `--baseline REF` | Diff against an explicit git ref (`HEAD~1`, a SHA) instead of git `HEAD`. Use after you committed single-language edits before syncing — `--baseline HEAD~1` diffs the pre-edit commit. Single-pair only. |
-| `--baseline-from PATH[@REF]` | Diff a **renamed** deck against its pre-rename half `PATH` (`@REF` defaults to `HEAD`) when auto rename-detection can't recover it. Single-pair only. |
+| `--baseline REF` | Diff against an explicit git ref (`HEAD~1`, a SHA) instead of git `HEAD`. Use after you committed single-language edits before syncing — `--baseline HEAD~1` diffs the pre-edit commit. **Works over a directory too**: every pair under the tree is diffed against REF, so a whole topic/module of committed single-language edits is reconciled in one sweep (a plain git-HEAD batch reads those edits as already-consistent). |
+| `--baseline-from PATH[@REF]` | Diff a **renamed** deck against its pre-rename half `PATH` (`@REF` defaults to `HEAD`) when auto rename-detection can't recover it. Single-pair only (it names one deck's old path). |
 | `--use-watermark` | Opt back into the structural watermark as the baseline (default: git `HEAD`). |
 | `--cache-dir PATH` | Directory holding the watermark (only with `--use-watermark`). Lookup: flag → `$CLM_CACHE_DIR` → `tool.clm.cache_dir` → `<cwd>/.clm-cache/`. |
 
@@ -2022,7 +2022,7 @@ models for those tiers.)
 | Option | Description |
 |--------|-------------|
 | `--use-watermark` / `--no-watermark` | Use the watermark as a baseline accelerator (default **on** for `apply`); it advances on a fully clean pass. `--no-watermark` ignores it, falling back to git `HEAD`. |
-| `--baseline REF` / `--baseline-from PATH[@REF]` | As for `report`. Single-pair only. |
+| `--baseline REF` / `--baseline-from PATH[@REF]` | As for `report`: `--baseline REF` works over a directory (each pair diffed against REF); `--baseline-from` is single-pair. |
 | `--cache-dir PATH` | Directory holding the watermark. |
 | `--yes`, `-y` | **Directory (batch) only**: confirm a writing sweep over every pair under the tree. Ignored for a single pair. |
 | `--json` | Emit the apply result as JSON. |

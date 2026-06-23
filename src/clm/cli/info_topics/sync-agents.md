@@ -170,6 +170,14 @@ normal loop. A few cases:
 - **You committed single-language edits *before* syncing** — they already match
   `HEAD`, so the default report reads clean. Point it at the pre-edit commit:
   `clm slides sync report DECK --baseline HEAD~1`.
+- **A whole week/module of committed single-language edits** (you edited and
+  committed many German halves over days without syncing English) — pin a baseline
+  from before the editing and sweep the directory: `clm slides sync report
+  slides/module_410 --baseline <ref-before-the-edits>`. `--baseline REF` works over a
+  directory (each pair diffed against REF), so one report tells you, per deck, exactly
+  what English is missing — instead of the default git-HEAD batch reading the lot as
+  "clean". Then reconcile each drifted deck (`apply`, then `task` → model → `accept`,
+  then `verify`). Pick the ref from the commit log just before the editing session.
 - **Bless the current consistent state** as the baseline (e.g. after reconciling
   by hand): `clm slides sync baseline bless DECK` — no throwaway commit needed
   (it replaces the old `--rebaseline`). It is gated on `verify`, so a structurally
