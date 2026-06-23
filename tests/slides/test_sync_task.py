@@ -597,10 +597,16 @@ class TestColdConsistencyCli:
 
     def test_new_idless_pair_frames_a_mint_task_without_a_key(self, tmp_path: Path, monkeypatch):
         # Issue #438 (D1): the read surface no longer gates cold-pair candidacy on a key.
-        # A genuinely-new (uncommitted) id-less pair frames a mint task with no
-        # OPENROUTER key set and no monkeypatch forcing provider availability — the agent
-        # is the verifier (`accept` runs `validate_correspondence`).
+        # A genuinely-new (uncommitted) id-less pair frames a mint task with no key. Force
+        # the key check to report FALSE (PR #442 review — `delenv` alone was inert): if a
+        # regression re-added `provider_available=has_openrouter_api_key()` to `task`, the
+        # mint task would vanish here and the test would fail. As shipped, `task` never
+        # consults it, so the mint is framed regardless — the agent is the verifier.
         monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+        monkeypatch.setattr(
+            "clm.infrastructure.llm.openrouter_client.has_openrouter_api_key",
+            lambda *a, **k: False,
+        )
         de_path, _en = _pair(
             tmp_path,
             _slide_idless("de", "# ## Einleitung") + _slide_idless("de", "# ## Variablen"),
@@ -611,3 +617,24 @@ class TestColdConsistencyCli:
         tasks = json.loads(out)["tasks"]
         mint = next(t for t in tasks if t["kind"] == "mint")
         assert mint["validator"] == "correspondence"
+
+    def test_bare_deck_routes_to_read_only_report(self, tmp_path: Path):
+        # PR #442 review (M1): the headline breaking change — a bare `clm slides sync DECK`
+        # (no verb) is an alias for `report` and must NEVER write. Pin the default-verb
+        # routing AND the read-only guarantee on a deck that genuinely has work pending
+        # (a DE-only edit): a regression deleting `_DefaultVerbGroup.parse_args` would make
+        # Click error "No such command '<deck>.de.py'" and fail here.
+        de_path, en_path = _commit_pair(
+            tmp_path,
+            _slide("de", "a", "# ## A") + _slide("de", "b", "# ## B"),
+            _slide("en", "a", "# ## A") + _slide("en", "b", "# ## B"),
+        )
+        de_path.write_text(
+            _slide("de", "a", "# ## A EDIT") + _slide("de", "b", "# ## B"), encoding="utf-8"
+        )
+        en_before = en_path.read_text(encoding="utf-8")
+        code, out = _run(str(de_path), "--json")  # bare deck, no verb → report
+        assert code == 1, out  # work pending (the edit) → report exit 1, not a crash
+        report = json.loads(out)["report"]
+        assert report["needs_model"] is True  # the de->en edit is surfaced, not applied
+        assert en_path.read_text(encoding="utf-8") == en_before  # read-only: EN untouched

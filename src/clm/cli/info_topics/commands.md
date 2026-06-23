@@ -1984,8 +1984,10 @@ clm slides sync report DECK [EN_PATH] [OPTIONS]   # bare `sync DECK` is the same
 | `--use-watermark` | Opt back into the structural watermark as the baseline (default: git `HEAD`). |
 | `--cache-dir PATH` | Directory holding the watermark (only with `--use-watermark`). Lookup: flag → `$CLM_CACHE_DIR` → `tool.clm.cache_dir` → `<cwd>/.clm-cache/`. |
 
-Read-only, no model, no key. Always exits `0` (reporting is not a gate — use
-`verify` for a gate).
+Read-only, no model, no key. Exit code mirrors the plan: `0` clean (in sync),
+`1` work is pending (any tier-1/2/3 item), `2` a classifier error — so a CI
+drift-check can gate on `report` exiting `0`, while `verify` is the separate
+*structural* gate.
 
 #### `clm slides sync verify`
 
@@ -2094,8 +2096,8 @@ default; `--dry-run` previews.
 | `--rebaseline` | Recover from a stale watermark (clears + re-records, only when the halves agree vs git `HEAD`). Prefer `baseline bless`. |
 | `--baseline REF` / `--baseline-from PATH[@REF]` / `--cache-dir PATH` / `--no-cache` / `--no-env-file` / `--yes` | Baseline selection, watermark store, `.env` loading, and batch confirm, as before. |
 
-**Exit codes (per verb).** `report` always `0` (reporting is not a gate).
-`verify`: `0` sound (warnings allowed), `2` corrupt. `apply`: `0` clean, `1`
+**Exit codes (per verb).** `report`: `0` clean, `1` work pending (any tier),
+`2` a classifier error. `verify`: `0` sound (warnings allowed), `2` corrupt. `apply`: `0` clean, `1`
 residue is left for a model (tier-2/3 items remain), `2` a structural error.
 `accept`: `0` written, `2` the answer failed the validator (nothing written).
 `autopilot`: `0` clean, `1` review left, `2` a structural error or the edit
@@ -2137,8 +2139,9 @@ their reason too. Nothing is written in any of these cases.
 
 **The JSON contracts (one per verb).**
 
-`clm slides sync report --json` emits the **`ReconciliationReport`** — the
-blessed agent contract. It partitions the engine's work into the **three tiers
+`clm slides sync report --json` emits a `report` block carrying the
+**`ReconciliationReport`** — the blessed agent contract (the envelope it is
+wrapped in is described at the end of this section). It partitions the engine's work into the **three tiers
 an agent acts on differently**: `mechanical` (applied deterministically with
 **no model** — move / remove / retag / verbatim neutral-cell propagation — trust
 and ignore), `assisted` (a **framed model task** — translate a new slide,
@@ -2151,8 +2154,11 @@ exists), `needs_agent` (a tier-3 item needs *you*). Each item carries a stable
 `item` id (the handle for `task` / `accept`), `kind` / `role` / `direction` /
 `slide_id` / `reason`, optional `severity`, and 0-based `source_position` /
 `target_position`. An un-categorised future kind defaults to `ambiguity`, never
-to `mechanical`. (The old flat `plan` block is **gone** — the report is the
-contract.)
+to `mechanical`. `report --json` wraps this in an envelope (`mode`, `exit_code`,
+`de_path`, `en_path`, the `report` block, plus a back-compat flat `plan` block
+and `apply` / `walker` / `rebaseline_hint` / `cold_baseline_hint` keys retained
+for existing consumers); **`report` is the blessed contract** — read it, not the
+flat `plan`.
 
 Each `assisted` / `ambiguity` item is enriched with the **cell bytes** the work
 concerns, so a model can act without re-deriving the engine's positions:

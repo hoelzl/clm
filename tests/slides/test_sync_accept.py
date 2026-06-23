@@ -285,6 +285,25 @@ class TestAcceptEdit:
         assert "A more" in _cell_by_id(en_path, "a").content  # the agent's text reached EN
         assert "A erweitert" in _cell_by_id(de_path, "a").content  # source half untouched
 
+    def test_edit_answer_with_cell_delimiter_is_rejected(self, tmp_path: Path):
+        # PR #442 review (CRITICAL): an answer body that smuggles a `# %%` cell delimiter
+        # re-splits into a phantom cell — and, naming one, a duplicate slide_id — on
+        # read-back, corrupting the deck while `accept` reports success. The structural
+        # cell-shape check refuses it, byte-unchanged, before any write.
+        de_path, en_path, plan = _seeded_edit_plan(
+            tmp_path,
+            _slide("de", "a", "# ## A"),
+            _slide("en", "a", "# ## A"),
+            _slide("de", "a", "# ## A erweitert"),
+            _slide("en", "a", "# ## A"),
+        )
+        before = (de_path.read_text(encoding="utf-8"), en_path.read_text(encoding="utf-8"))
+        item = _the_edit(plan)
+        injected = '# ## A\n\n# %% [markdown] lang="en" tags=["slide"] slide_id="evil"\n# Phantom'
+        with pytest.raises(AcceptRejected, match="cell delimiter|body only"):
+            accept_answer(plan, item.item, {"verdict": "update", "proposed_text": injected})
+        assert (de_path.read_text(encoding="utf-8"), en_path.read_text(encoding="utf-8")) == before
+
     def test_keyed_markdown_in_sync_is_a_no_op(self, tmp_path: Path):
         de_path, en_path, plan = _seeded_edit_plan(
             tmp_path,

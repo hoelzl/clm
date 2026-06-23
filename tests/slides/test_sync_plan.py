@@ -808,6 +808,26 @@ class TestBuildSyncPlanGitFallback:
         assert plan.count("mint") == 1
         assert plan.count("refuse") == 0
 
+    def test_committed_misaligned_idless_pair_surfaces_refuse(self, tmp_path: Path):
+        # PR #442 review (HIGH): byte-stability vs HEAD is NOT consistency for id-less
+        # pairs. A committed pair where DE has 3 slides but EN has 2 (EN missing one) is
+        # byte-stable forever yet genuinely misaligned — and `verify` is blind to it (its
+        # id-symmetry check excludes id-less cells). The #438 short-circuit must NOT
+        # suppress it: the consistency gate finds it un-bootstrappable, so it falls through
+        # to the cold path and keeps its `refuse` (the pre-#438 safety net, restored).
+        de_path, en_path = self._commit_pair(
+            tmp_path,
+            _slide_idless("de", "# ## A")
+            + _slide_idless("de", "# ## B")
+            + _slide_idless("de", "# ## C"),
+            _slide_idless("en", "# ## A") + _slide_idless("en", "# ## B"),
+        )
+        plan = build_sync_plan(de_path, en_path, provider_available=True)
+        assert plan.baseline_source == "none"  # NOT short-circuited to a clean no-op
+        assert not plan.is_noop
+        assert plan.count("refuse") > 0
+        assert plan.count("mint") == 0  # misaligned ⇒ not mintable
+
     def test_committed_half_idd_pair_drift_never_doubles_without_provider(self, tmp_path: Path):
         # REGRESSION GUARD for the silent-doubling bug uncovered alongside #225: a
         # committed half-id'd pair used to emit 4 ADDS on the git-HEAD baseline path

@@ -1991,9 +1991,11 @@ def sync_accept_cmd(
     engine never calls a model: the model ran between ``task`` and ``accept``.
 
     \b
-    Accepts a ``realign`` (alignment map) or an ``add`` (translated new slide). An
-    ``edit`` / cold-start / hand-judged item is not accepted yet — it says so with the
-    next step. Run ``clm slides sync verify`` after to confirm the write is sound.
+    Accepts an ``edit`` (judge verdict / re-translation), an ``add`` (translated new
+    slide), a ``realign`` (alignment map), and a cold-start ``mint`` / ``adopt`` /
+    ``reconcile`` (correspondence verdicts). A hand-judged ``conflict`` / ``issue`` has no
+    model task, so it is not accepted — it says so with the next step. Run ``clm slides
+    sync verify`` after to confirm the write is sound.
     """
     if de_path.is_dir():
         raise click.UsageError(

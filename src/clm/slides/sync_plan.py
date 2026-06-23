@@ -3085,6 +3085,34 @@ def _streams_aligned(de_loc: list[Cell], en_loc: list[Cell]) -> bool:
     return True
 
 
+def _committed_pair_is_consistent(
+    de_cells: list[Cell], en_cells: list[Cell], de_path: Path, en_path: Path
+) -> bool:
+    """Whether an un-bootstrapped committed pair genuinely corresponds (#438, PR #442).
+
+    Byte-stability vs HEAD is necessary but NOT sufficient for the #438 short-circuit:
+    two id-less halves can be byte-stable yet misaligned (e.g. DE has 3 slides, EN has 2)
+    — and `verify` cannot catch that (its id-symmetry check excludes id-less cells), nor
+    does `_is_unifiable` (``unify→split`` is *lossless*, so it round-trips a misaligned
+    pair too). A pair is consistent here iff the cold path would **bootstrap it cleanly**
+    rather than `refuse`: it is either a fully positionally-aligned, byte-faithfully
+    unifiable pair (the :func:`_maybe_emit_cold_mint` shape — fully id-less, or id'd and
+    matching) **or** a clean half-id'd pair (:func:`_cold_adopt_authority`). A genuinely
+    misaligned or mismatched pair is neither, so it falls through to the cold path and
+    keeps its `refuse` — exactly the pre-#438 safety net, restored for the case `verify`
+    is blind to.
+    """
+    de_loc = _localized_lang_cells(de_cells, "de")
+    en_loc = _localized_lang_cells(en_cells, "en")
+    if (
+        len(de_loc) == len(en_loc)
+        and _streams_aligned(de_loc, en_loc)
+        and _is_unifiable(de_path, en_path)
+    ):
+        return True
+    return _cold_adopt_authority(de_loc, en_loc) is not None
+
+
 def _retag_idless(
     source_cell: Cell, direction: str, position: int, tags: frozenset[str]
 ) -> Proposal:
@@ -3716,23 +3744,32 @@ def build_sync_plan(
     # Issue #438: an un-bootstrapped pair (the two halves share no `slide_id`, so the
     # keyed git-HEAD diff would double it — `_pair_is_unbootstrapped`) is routed to the
     # cold-start `source == "none"` path even when it is *committed*. But a committed
-    # pair whose working tree is byte-identical to git HEAD on BOTH halves has not
-    # drifted since it was committed: it is *consistent now*, not a cold start. Emitting
-    # a mint / adopt / refuse for it on every run is the false `needs_agent` on a clean
-    # committed deck (#438) — the read-time analyzer borrowing the solver's pairing
-    # assumptions. Treat it as the no-op a *bootstrapped* committed-unchanged pair
-    # already is; only a genuinely new (never-committed → no HEAD bytes) or
-    # edited-since-HEAD pair keeps surfacing cold-start candidacy. A structural problem
-    # that was *committed* (e.g. a mismatched-id pair) is `verify`'s job, not a
-    # sync-drift signal, so reporting it consistent here is correct. Scoped to the
-    # implicit-HEAD read path: an explicit `--baseline` / `--baseline-from` asked about a
-    # different ref, and a watermark gives `source != "none"`, so neither reaches here.
+    # pair that is byte-identical to git HEAD on BOTH halves AND *structurally
+    # consistent* (`unify→split` round-trips — the same gate the cold minter uses, so a
+    # pair this admits is one that genuinely corresponds) has not drifted since it was
+    # committed: it is *consistent now*, not a cold start. Emitting a mint / adopt /
+    # refuse for it on every run is the false `needs_agent` on a clean committed deck
+    # (#438). Treat it as the no-op a *bootstrapped* committed-unchanged pair already is.
+    #
+    # The consistency gate is load-bearing, not byte-stability alone (PR #442 review):
+    # byte-stability says nothing about whether the two id-less halves CORRESPOND. A
+    # committed pair whose halves are genuinely misaligned (e.g. DE has 3 slides, EN has
+    # 2) is byte-stable forever but NOT consistent — and neither `verify` (its id-symmetry
+    # check excludes id-less cells) nor `_is_unifiable` (a lossless round-trip) catches it.
+    # `_committed_pair_is_consistent` asks the load-bearing question — would the cold path
+    # bootstrap this cleanly (mint/adopt) rather than `refuse`? — so a misaligned pair
+    # falls through to the cold path and keeps its `refuse`, exactly as before #438. Only
+    # a genuinely new (never-committed → no HEAD bytes) or edited-since-HEAD pair also
+    # keeps surfacing candidacy. Scoped to the implicit-HEAD read path: an explicit
+    # `--baseline` / `--baseline-from` asked about a different ref, and a watermark gives
+    # `source != "none"`, so neither reaches here.
     if (
         source == "none"
         and baseline_ref is None
         and baseline_from is None
         and _working_tree_matches_head(de_path, de_text)
         and _working_tree_matches_head(en_path, en_text)
+        and _committed_pair_is_consistent(de_cells, en_cells, de_path, en_path)
     ):
         return SyncPlan(de_path=de_path, en_path=en_path, baseline_source="git-head")
 

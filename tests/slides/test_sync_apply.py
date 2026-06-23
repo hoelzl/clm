@@ -1636,6 +1636,9 @@ class TestColdStartCommittedPair:
         de = _slide_idless("de", "# ## A (rev)") + _slide_idless("de", "# ## B")
         de_path.write_text(de, encoding="utf-8")  # drift from HEAD
         plan = build_sync_plan(de_path, en_path, provider_available=False)
+        # Pin that the cold path actually REFUSED (PR #442 review): without this the
+        # test would pass vacuously on an empty plan that simply has nothing to apply.
+        assert plan.count("refuse") == 4
         translator = StaticSlideTranslator(default="# ## X")
         result = apply_plan(plan, judge=None, translator=translator, watermark_cache=None)
         assert result.applied_add == 0

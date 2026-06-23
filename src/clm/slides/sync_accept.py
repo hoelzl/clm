@@ -50,6 +50,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
+from clm.notebooks.slide_parser import comment_token_for_path
+from clm.slides.raw_cells import is_cell_boundary
 from clm.slides.sync_plan import LOCALIZED_CODE_ROLE
 from clm.slides.sync_recover import (
     AlignmentInvalid,
@@ -205,6 +207,26 @@ def _load_json_answer(answer: Any, *, what: str) -> dict[str, Any]:
     return answer
 
 
+def _reject_multicell_body(body: str, comment_token: str, *, what: str) -> None:
+    """Reject an answer body that smuggles a cell delimiter (#442 review, CRITICAL).
+
+    ``accept`` writes the agent's answer as the body of ONE cell. If that body carries
+    a ``<token> %%`` boundary line it re-splits on read-back into extra cells — minting
+    a phantom cell and, when the line names one, a **duplicate ``slide_id``** — silently
+    corrupting the deck while ``accept`` reports success (only a separate ``verify`` would
+    catch it). This is the "structural cell-shape" check the task contract promises: a
+    body that opens a new cell is refused here, byte-unchanged, before any write. Uses the
+    SAME boundary predicate the parser re-splits with, so it can never drift.
+    """
+    if any(is_cell_boundary(line, comment_token) for line in body.split("\n")):
+        raise AcceptRejected(
+            f"{what} answer must be the target cell's body only, but it contains a "
+            f"'{comment_token} %%' cell delimiter that would split it into multiple cells "
+            "on read-back (minting a phantom cell / duplicate slide_id). Return just the "
+            "body, with no cell markers."
+        )
+
+
 # ---------------------------------------------------------------------------
 # add — translate the new slide's twin and insert it (both halves), id minted.
 # ---------------------------------------------------------------------------
@@ -218,6 +240,7 @@ def _accept_add(plan: SyncPlan, item: ReconciliationItem, answer: Any) -> Accept
             "translation answer needs a non-empty 'translated_body' string "
             "(the target-language cell body in percent-format)."
         )
+    _reject_multicell_body(body, comment_token_for_path(plan.de_path), what="translation")
     from clm.slides.sync_apply import apply_plan
 
     proposal = _matching_proposal(plan, item)
@@ -383,6 +406,12 @@ def _accept_edit(plan: SyncPlan, item: ReconciliationItem, answer: Any) -> Accep
                 "(the reconciled target-language cell body)."
             )
         body, verdict, reason = proposed, str(raw_verdict), str(obj.get("reason", "") or "")
+
+    # The reconciled body is written as a SINGLE cell's body; reject one that smuggles a
+    # cell delimiter (#442 review). Only an ``update`` writes a body (``in_sync`` is a
+    # no-op), so validate only then.
+    if verdict == "update":
+        _reject_multicell_body(body, comment_token_for_path(plan.de_path), what=item.kind)
 
     # Prune to just this edit (anchor_direction dropped so no unrelated neutral
     # propagation rides along) and reuse the engine's edit path. Both static stand-ins
