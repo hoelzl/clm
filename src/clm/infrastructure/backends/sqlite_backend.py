@@ -7,6 +7,8 @@ It's a simpler alternative to the RabbitMQ-based FastStreamBackend.
 import asyncio
 import json
 import logging
+import queue
+import threading
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
@@ -65,6 +67,17 @@ class SqliteBackend(LocalOpsBackend):
     # jobs: the structured error JSON) and reports passed-only-after-retry
     # decks to the build summary's flake list.
     telemetry_store: Optional["ExecutionTelemetryStore"] = None
+
+    # Background result-cache writer (lazy). Retiring a completed job by reading
+    # its output back, pickling it, and committing the blob to the cache DB is
+    # the slow part of the poll loop; doing it inline made the single consumer
+    # fall behind the parallel workers, so the progress bar stalled mid-stage
+    # and only caught up once the workers idled. These hold a queue + a single
+    # daemon writer thread that drains that work off the poll loop. The queue is
+    # joined at the end of each wait_for_completion (so the cache is fully
+    # populated when it returns) and the thread is stopped in shutdown.
+    _result_cache_queue: Any = field(init=False, default=None)
+    _result_cache_thread: Any = field(init=False, default=None)
 
     def __attrs_post_init__(self):
         """Initialize SQLite database and job queue."""
@@ -558,98 +571,14 @@ class SqliteBackend(LocalOpsBackend):
                                     f"Could not register worker output {output_path}: {reg_exc}"
                                 )
 
-                            # Read output file and reconstruct Result object to store in database
-                            try:
-                                # Get the payload from the job to determine job type and metadata
-                                # job_queue is guaranteed non-None here (checked at start of loop)
-                                conn = self.job_queue._get_conn()
-                                cursor = conn.execute(
-                                    "SELECT payload, content_hash FROM jobs WHERE id = ?", (job_id,)
-                                )
-                                row = cursor.fetchone()
-                                if row:
-                                    from clm.infrastructure.messaging.base_classes import (
-                                        ImageResult,
-                                        Result,
-                                    )
-                                    from clm.infrastructure.messaging.notebook_classes import (
-                                        NotebookResult,
-                                        notebook_metadata_tags_from_payload,
-                                    )
-
-                                    payload_dict = json.loads(row[0])
-                                    content_hash = row[1]
-                                    correlation_id = job_info.get("correlation_id", "")
-
-                                    # Reconstruct Result object based on job type
-                                    job_type = job_info["job_type"]
-                                    result_obj: Result | None = None
-
-                                    if job_type == "notebook":
-                                        # Read notebook output
-                                        result_text = output_path.read_text(encoding="utf-8")
-                                        result_obj = NotebookResult(
-                                            correlation_id=correlation_id,
-                                            output_file=str(job_info["output_file"]),
-                                            input_file=str(job_info["input_file"]),
-                                            content_hash=content_hash,
-                                            result=result_text,
-                                            output_metadata_tags=notebook_metadata_tags_from_payload(
-                                                payload_dict
-                                            ),
-                                        )
-                                    elif job_type in ("plantuml", "drawio"):
-                                        # Read image output
-                                        result_bytes = output_path.read_bytes()
-                                        image_format = payload_dict.get("output_format", "png")
-                                        result_obj = ImageResult(
-                                            correlation_id=correlation_id,
-                                            output_file=str(job_info["output_file"]),
-                                            input_file=str(job_info["input_file"]),
-                                            content_hash=content_hash,
-                                            result=result_bytes,
-                                            image_format=image_format,
-                                        )
-                                    elif job_type == "jupyterlite":
-                                        # JupyterLite "output" is a directory tree
-                                        # rooted at <output_dir>/_output/. The
-                                        # worker already wrote a cache entry via
-                                        # job_queue.add_to_cache; we skip the
-                                        # DatabaseManager layer (which stores a
-                                        # single Result blob) because shipping
-                                        # the whole site through it is wasteful.
-                                        logger.debug(
-                                            "JupyterLite job %s: skipping DB result cache "
-                                            "(queue cache is authoritative)",
-                                            job_id,
-                                        )
-                                    else:
-                                        logger.warning(
-                                            f"Unknown job type {job_type}, skipping cache storage"
-                                        )
-
-                                    # Store result in database cache with retention
-                                    if result_obj is not None:
-                                        # Get retention config
-                                        from clm.infrastructure.config import get_config
-
-                                        retention_config = get_config().retention
-                                        retain_count = retention_config.cache_versions_to_keep
-
-                                        self.db_manager.store_latest_result(
-                                            file_path=job_info["input_file"],
-                                            content_hash=content_hash,
-                                            correlation_id=correlation_id,
-                                            result=result_obj,
-                                            retain_count=retain_count,
-                                        )
-                                        logger.debug(
-                                            f"Stored result for {job_info['input_file']} in database cache"
-                                        )
-                            except Exception as e:
-                                logger.warning(
-                                    f"Could not cache result for job {job_id}: {e}", exc_info=True
-                                )
+                            # Hand the slow part — read the output back, pickle
+                            # it, commit the blob with retention pruning — to the
+                            # background writer so the poll loop can immediately
+                            # detect and report the next completion. The bar has
+                            # already advanced (job_completed above); the queue is
+                            # drained before this wait returns, so the cache is
+                            # fully populated for callers that read it afterwards.
+                            self._enqueue_result_cache(job_id, dict(job_info), output_path)
 
                 elif status == "failed":
                     # Get job payload for error categorization and storage
@@ -752,6 +681,15 @@ class SqliteBackend(LocalOpsBackend):
             # Wait before polling again
             await asyncio.sleep(self.poll_interval)
 
+        # Drain any background result-cache writes queued during this wait so
+        # the cache DB is fully populated by the time we return — callers (and
+        # tests) read processed_files right after wait_for_completion. The
+        # writer thread stays alive for the next stage; it is stopped in
+        # shutdown. This is where any backlog the writer could not keep up with
+        # during the stage is absorbed, with a progress line so it is not a
+        # silent pause.
+        self._drain_result_cache_writes()
+
         # Stop progress tracking and log summary
         if self.progress_tracker:
             self.progress_tracker.stop_progress_logging()
@@ -824,6 +762,10 @@ class SqliteBackend(LocalOpsBackend):
                 await asyncio.wait_for(self.wait_for_completion(), timeout=5.0)
             except TimeoutError:
                 logger.warning(f"Shutdown timeout - {len(self.active_jobs)} job(s) still pending")
+
+        # Stop the background result-cache writer before any cleanup/VACUUM so
+        # all pending blob writes land first and nothing races the compaction.
+        self._stop_result_cache_writer()
 
         # Perform build-end cleanup if configured
         self._perform_build_end_cleanup()
@@ -1127,6 +1069,189 @@ class SqliteBackend(LocalOpsBackend):
             return f"jupyterlite:{target_name}:{language}:{kinds_str}:{kernel}"
         else:
             return ""
+
+    def _ensure_result_cache_writer(self) -> None:
+        """Lazily start the background result-cache writer thread + queue."""
+        if self._result_cache_thread is not None:
+            return
+        self._result_cache_queue = queue.Queue()
+        self._result_cache_thread = threading.Thread(
+            target=self._result_cache_writer_loop,
+            name="ResultCacheWriter",
+            daemon=True,
+        )
+        self._result_cache_thread.start()
+
+    def _enqueue_result_cache(self, job_id: int, job_info: dict, output_path: Path) -> None:
+        """Queue a completed job's result for background caching.
+
+        Falls back to an inline write if the writer cannot be started, so a
+        result is never silently dropped from the cache.
+        """
+        if self.db_manager is None:
+            return
+        try:
+            self._ensure_result_cache_writer()
+            assert self._result_cache_queue is not None
+            self._result_cache_queue.put((job_id, job_info, output_path))
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning(f"Could not enqueue result cache for job {job_id}; writing inline: {e}")
+            self._persist_result_to_cache(job_id, job_info, output_path, self.db_manager)
+
+    def _result_cache_writer_loop(self) -> None:
+        """Drain the result-cache queue on a dedicated DB connection.
+
+        A SQLite connection is bound to the thread that opened it, so this
+        thread uses its own DatabaseManager rather than ``self.db_manager``
+        (which the main thread keeps using concurrently). Both are WAL
+        connections to the same cache DB, so concurrent access is safe.
+        """
+        assert self.db_manager is not None
+        assert self._result_cache_queue is not None
+
+        # Open the writer's own connection. If this fails we still drain the
+        # queue (calling task_done for every item) so a join() in
+        # _drain_result_cache_writes / _stop_result_cache_writer can never hang;
+        # results just go uncached this run.
+        writer_db: DatabaseManager | None = None
+        try:
+            writer_db = DatabaseManager(self.db_manager.db_path).__enter__()
+        except Exception:
+            logger.exception(
+                "Result-cache writer could not open its DB connection; "
+                "results will not be cached this run"
+            )
+            writer_db = None
+
+        try:
+            while True:
+                item = self._result_cache_queue.get()
+                try:
+                    if item is None:  # shutdown sentinel
+                        return
+                    if writer_db is not None:
+                        job_id, job_info, output_path = item
+                        self._persist_result_to_cache(job_id, job_info, output_path, writer_db)
+                except Exception as e:
+                    logger.warning(
+                        f"Background result-cache write failed for job "
+                        f"{item[0] if item else '?'}: {e}",
+                        exc_info=True,
+                    )
+                finally:
+                    self._result_cache_queue.task_done()
+        finally:
+            if writer_db is not None:
+                try:
+                    writer_db.__exit__(None, None, None)
+                except Exception:  # pragma: no cover - best-effort close
+                    logger.debug("Error closing result-cache writer DB", exc_info=True)
+
+    def _drain_result_cache_writes(self) -> None:
+        """Block until every queued result-cache write has been committed.
+
+        Called at the end of each ``wait_for_completion`` so the cache DB is
+        fully populated for callers that read it immediately afterwards. The
+        writer thread keeps running for the next stage.
+        """
+        q = self._result_cache_queue
+        if q is None:
+            return
+        pending = q.qsize()
+        if pending:
+            self._show_progress(f"Finishing {pending} result-cache write(s)...")
+        q.join()
+
+    def _stop_result_cache_writer(self) -> None:
+        """Drain remaining writes and stop the writer thread (idempotent)."""
+        thread = self._result_cache_thread
+        q = self._result_cache_queue
+        if thread is None or q is None:
+            return
+        q.join()
+        q.put(None)  # sentinel: tells the loop to exit
+        thread.join(timeout=30.0)
+        self._result_cache_thread = None
+        self._result_cache_queue = None
+
+    def _persist_result_to_cache(
+        self, job_id: int, job_info: dict, output_path: Path, db_manager: DatabaseManager
+    ) -> None:
+        """Reconstruct a completed job's Result and store it in the cache DB.
+
+        Runs on the background writer thread (and inline as a fallback). Reads
+        the job payload via the job queue's thread-local connection and writes
+        through the supplied ``db_manager`` (the caller's connection).
+        """
+        if self.job_queue is None:
+            return
+        try:
+            # job_queue uses a thread-local connection, so this is safe to call
+            # from the writer thread.
+            conn = self.job_queue._get_conn()
+            cursor = conn.execute("SELECT payload, content_hash FROM jobs WHERE id = ?", (job_id,))
+            row = cursor.fetchone()
+            if not row:
+                return
+
+            from clm.infrastructure.messaging.base_classes import ImageResult, Result
+            from clm.infrastructure.messaging.notebook_classes import (
+                NotebookResult,
+                notebook_metadata_tags_from_payload,
+            )
+
+            payload_dict = json.loads(row[0])
+            content_hash = row[1]
+            correlation_id = job_info.get("correlation_id", "")
+
+            job_type = job_info["job_type"]
+            result_obj: Result | None = None
+
+            if job_type == "notebook":
+                result_text = output_path.read_text(encoding="utf-8")
+                result_obj = NotebookResult(
+                    correlation_id=correlation_id,
+                    output_file=str(job_info["output_file"]),
+                    input_file=str(job_info["input_file"]),
+                    content_hash=content_hash,
+                    result=result_text,
+                    output_metadata_tags=notebook_metadata_tags_from_payload(payload_dict),
+                )
+            elif job_type in ("plantuml", "drawio"):
+                result_bytes = output_path.read_bytes()
+                image_format = payload_dict.get("output_format", "png")
+                result_obj = ImageResult(
+                    correlation_id=correlation_id,
+                    output_file=str(job_info["output_file"]),
+                    input_file=str(job_info["input_file"]),
+                    content_hash=content_hash,
+                    result=result_bytes,
+                    image_format=image_format,
+                )
+            elif job_type == "jupyterlite":
+                # JupyterLite "output" is a directory tree; the worker already
+                # wrote a queue cache entry, so we skip the single-blob layer.
+                logger.debug(
+                    "JupyterLite job %s: skipping DB result cache (queue cache is authoritative)",
+                    job_id,
+                )
+            else:
+                logger.warning(f"Unknown job type {job_type}, skipping cache storage")
+
+            if result_obj is not None:
+                from clm.infrastructure.config import get_config
+
+                retain_count = get_config().retention.cache_versions_to_keep
+                db_manager.store_latest_result(
+                    file_path=job_info["input_file"],
+                    content_hash=content_hash,
+                    correlation_id=correlation_id,
+                    result=result_obj,
+                    retain_count=retain_count,
+                )
+                logger.debug(f"Stored result for {job_info['input_file']} in database cache")
+        except Exception as e:
+            logger.warning(f"Could not cache result for job {job_id}: {e}", exc_info=True)
 
     def _clear_stored_issues_for_job(self, job_id: int, job_info: dict) -> None:
         """Drop stored errors/warnings superseded by a successful run.
