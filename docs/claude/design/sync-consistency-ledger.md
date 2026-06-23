@@ -2,6 +2,9 @@
 
 **Status**: Design exploration. Direction **chosen** (§10): re-found the
 watermark as a git-committed, **per-slide** sync-consistency ledger. No code yet.
+**Revised 2026-06-23** with a code-grounded review pass — see **§11 Addendum**
+(corrects the storage path and the resolver framing; resolves sync-without-commit;
+adds the `bless`/`accept --record` confirm paths and the P0 prerequisites).
 **Author**: Claude (Opus 4.8)
 **Date**: 2026-06-23
 **Scope**: `src/clm/infrastructure/llm/cache.py` (`SyncWatermarkCache` +
@@ -153,6 +156,14 @@ and explicit that pre-record state is unverified.
 
 ### 4.1 Data model — a per-slide ledger
 
+> **⚠ Superseded in part by §11.1.** The path below is *not committable as
+> written*: `.clm/` is gitignored wholesale (`.gitignore:267`) and walk-excluded
+> (`SKIP_DIRS_FOR_COURSE`, `path_utils.py:41`). §11.1 resolves this with a
+> topic-dir consolidation (cassettes fold into `.clm/cassettes/`; only scratch is
+> gitignored), after which `<topic>/.clm/sync-ledger.json` *is* the committed
+> home. Also **drop the `subdir`/`sibling` sidecar-layout reuse** — the ledger is
+> per-topic, not per-deck-pair, so there is no layout choice to make.
+
 A committed, per-topic sidecar (one new sidecar *type*, reusing the existing
 sidecar-layout machinery — `subdir`/`sibling`, `<sidecar-layout>`,
 `CLM_SIDECAR_LAYOUT`, and the `.clm-*` release-skip convention so students never
@@ -192,6 +203,15 @@ receive it). Keyed by **slide identity**, not position:
   everything a since-deprecated model blessed) without nuking the whole ledger.
 
 ### 4.2 Per-slide baseline resolution
+
+> **⚠ Reframed by §11.2.** A literal "per-slide resolver replacing
+> `baseline_ref`" would have to splice baselines from different refs into the
+> *position-based* classifier (`classify_changes` / `_baseline_index`), and a
+> hash-only `(slide_id, role)` ledger cannot feed `_bundle_from_watermark`
+> (which needs full per-partition rows with position/tags/anchors/header_hashes).
+> The corrected model in §11.2: the ledger is a **trust overlay** — per slide,
+> *is it byte-stable since its last confirmed sync?* If yes, **skip**; if no,
+> **fall through to the existing single-ref bundle**, unchanged.
 
 Replace the single `baseline_ref` in `build_sync_plan` with a **resolver** that
 yields, per slide identity, one of:
@@ -314,11 +334,12 @@ git-derived per-slide baseline has proven out on real decks (the
 
 ## 9. Open questions
 
-1. **Sync-without-commit.** Content-hash + `confirmed_commit` cannot address a
+1. **Sync-without-commit.** ~~Content-hash + `confirmed_commit` cannot address a
    synced-but-uncommitted state (the blob does not exist). Do we keep supporting
-   "sync the working tree, don't commit, sync again"? If yes, the ledger entry
-   must store the *full row* (self-contained), not just a hash+commit. The course
-   workflow is commit-heavy, so hash+commit may be acceptable — needs a call.
+   "sync the working tree, don't commit, sync again"?~~ **RESOLVED — dropped; see
+   §11.3.** Store `hash + confirmed_commit` (no full-row). Uncommitted sync stays
+   possible via the `baseline=HEAD` fallback; only *incrementality across an
+   uncommitted sync* is lost (a cheap consistency judgement, not a translation).
 2. **Ledger granularity of the file.** Per-topic (proposed) vs per-pair sidecar
    (note A) vs one per-course file (#419's first sketch, rejected for merge
    churn). Per-topic is the merge-locality sweet spot, but a topic with many decks
@@ -347,3 +368,169 @@ non-breaking first. This kills #435 and the orphan-row rot, makes sync points
 reliably recoverable from `git log` (not inferred), makes the baseline a
 reviewable repo fact, and turns the timeframe reconcile into an incremental,
 per-slide operation that never re-litigates a sync it already paid for.
+
+---
+
+## 11. Addendum — review corrections & resolved decisions (2026-06-23)
+
+A research + adversarial-review pass over the **actual code** (`sync_plan.py`,
+`sync_apply.py`, `sync_verify.py`, `sync_writeback.py`,
+`infrastructure/llm/cache.py`, the `clm slides sync` CLI, `core/include_ledger.py`,
+`infrastructure/utils/path_utils.py`, `core/course_files/notebook_file.py`)
+refined this note. **The direction holds.** The items below correct two concrete
+errors, resolve three open decisions, and add findings the original missed.
+Inline `⚠` callouts mark where earlier text is superseded.
+
+### 11.1 Storage location — the proposed path can't be committed; do a topic-dir consolidation
+
+- `<topic>/.clm/sync-ledger.json` (§4.1) is **uncommittable as written**: `.clm/`
+  is gitignored wholesale (`.gitignore:267`), and it is *fully walk-excluded* from
+  the course file map (`SKIP_DIRS_FOR_COURSE`, `path_utils.py:41`). The comment
+  there states the exclusion is safe **only because** no build input lives under
+  `.clm/` ("HTTP-replay cassettes live in `cassettes/`, not here").
+- The committed-state precedents are `.clm-*` **files at topic root**
+  (`.clm-include`, `.clm-released.<stream>.json`), kept out of student output via
+  `SKIP_FILE_NAMES` (`path_utils.py:92`) — *not* inside the `.clm/` directory.
+- **Decision (with the user):** rather than add another top-level entry, do a
+  **topic-directory consolidation** so the ledger gets a clean committed home *and*
+  topic dirs get tidier. Target layout — topic root `{voiceover/, .clm/}` (down
+  from `{voiceover/, cassettes/, .clm/}`), with under `.clm/`:
+
+  | Path under `.clm/` | git | build role |
+  |---|---|---|
+  | `.clm/cassettes/` | **committed** | replay input + output-suppressed |
+  | `.clm/sync-ledger.json` | **committed** | the ledger; course-map- & output-excluded |
+  | `.clm/voiceover-cache\|backfill\|traces/` | gitignored | scratch, fully excluded |
+
+  `voiceover/` **stays** a top-level folder (user-edited narration).
+
+- This is its **own P0 sub-track**, because:
+  1. The walk exclusion is **name-based** (`part in SKIP_DIRS_FOR_COURSE`), so it
+     cannot split `.clm/`. Keeping `.clm/cassettes/` discoverable as a build input
+     while excluding scratch + ledger from the course map needs **subpath-aware**
+     exclusion under `.clm/`.
+  2. Cassette discovery must learn `.clm/cassettes/`: `notebook_file.py`
+     (`_CASSETTE_SUBDIRS`, `_resolve_cassette`, `expected_cassette_path`), the
+     `<sidecar-layout>` "subdir" target, and `clm slides tidy`.
+  3. `.gitignore`: `.clm/` → the three scratch subdirs only. **Landmine: never
+     gitignore `.clm/cassettes/`** — cassettes are committed replay fixtures;
+     ignoring them breaks CI replay.
+  4. Downstream migration: existing course repos `git mv cassettes/ .clm/cassettes/`
+     + `.gitignore` updates (a `tidy`-style pass).
+- **Fallback** if the consolidation is deferred: ledger at top-level
+  `<topic>/.clm-sync-ledger.json`, added to `SKIP_FILE_NAMES` (plus a leak test).
+  Either way, **drop** the `subdir`/`sibling` sidecar-layout reuse from §4.1 — the
+  ledger is per-topic. (Leave `.clm-include` / `.clm-released.<stream>.json` at
+  topic root for now; moving them touches the release/freeze + shared-release-repo
+  (#325) machinery for little extra tidiness.)
+
+### 11.2 The ledger is a trust *overlay* + git index, not a self-contained baseline
+
+- §4.2 as written would splice per-slide baselines from different refs into the
+  classifier, but `classify_changes` / `_baseline_index` are **position-based** and
+  membership-widened (`sync_plan.py`), so ref-splicing hits the coverage-divergence
+  / position-reindex landmine; and a hash-only `(slide_id, role)` ledger cannot
+  feed `_bundle_from_watermark`, which needs full per-partition rows with
+  **position, tags, anchors, header_hashes** (`sync_plan.py:294-300`).
+- **Corrected model.** Per slide the ledger answers one question — *is this slide
+  byte-stable since its last confirmed sync?* If **yes** (both half-hashes match)
+  → **skip** it (no bundle derivation). If **no/absent** → **fall through to the
+  existing single-ref bundle** machinery, unchanged. The ledger *suppresses
+  re-litigation*; it does not replace the bundle.
+- This preserves the watermark's reason-to-exist: a both-sided
+  commit-without-sync changes the current hash, so the slide won't skip and the
+  edit is still seen (the lag-behind-HEAD property, `sync-git-as-baseline.md` §3).
+- "Demote sqlite to a rebuildable cache" then means: sqlite stays the fast mirror
+  of the last-synced bundle *content* (already re-derivable via
+  `_bundle_from_git_ref`); the ledger is the authoritative per-slide *trust*
+  record on top. `baseline rebuild` **warms the cache from git** — it does not
+  reconstruct the bundle from ledger hashes.
+- **id-less narratives:** the `idless` list must key by
+  `(owning_slide_id, role, anchor)` — the classifier's actual narrative key
+  (`sync_plan.py` `_index_narratives_by_anchor`), *not* `(slide_id, role)`. A flat
+  key silently misses ~15–20 % of a typical deck (the #364/#365 residue). Include
+  `construct` in the code-cell key so two byte-identical code cells with different
+  constructs don't collide.
+
+### 11.3 Sync-without-commit — DROPPED (resolves §9.1)
+
+- Dropping ledger support does **not** make uncommitted sync impossible. The
+  ledger's de/en hashes give the **skip fast-path on a dirty tree regardless of
+  commit**. Only the *diff-reconstruction* path needs a blob; when a slide changed
+  after an uncommitted sync, it falls back to `baseline=HEAD`
+  (`_bundle_from_git_head`) and diffs the whole working tree — correct, because
+  with nothing committed HEAD is the true last-committed state ("at most one diff
+  on top of HEAD").
+- What's lost is **only incrementality across an uncommitted sync**:
+  sync → don't commit → edit more → sync again re-surfaces the first sync's
+  both-sided reconciliations as a `(de, en) → consistent?` **judgement** (the cheap
+  verify oracle), not a translation. The normal sync → commit → continue flow is
+  fully incremental.
+- **Decision:** store `hash + confirmed_commit` (no full-row). UX nudge: *commit a
+  reconciliation to lock in its baseline.* Ledger entries are therefore most
+  meaningful at/after commit (ties to §11.4).
+
+### 11.4 Confirm paths — `bless` (batch) + `accept --record` (per-item)
+
+`accept` today runs `apply_plan(..., watermark_cache=None)` — no advance, no
+ledger write (`sync_apply.py`). Two complementary confirm paths:
+
+- **`bless` (batch):** record the whole now-coherent deck at the current commit,
+  gated on a full `verify`. Safe default; ideal right after committing. (This is
+  where the agent loop records trust after `accept`-ing the residue + a clean
+  `verify`; it is also the home of `semantic` write-backs and of optional
+  seed-from-watermark.) Subsumes the role of `--rebaseline`.
+- **`accept --record` (per-item, ergonomic for the agent loop)** — feasible, with
+  three guards:
+  1. record **only the accepted slide** via the partial-advance machinery
+     (`_record_watermark_partial`, `sync_apply.py:4044`), *not* the whole pair
+     (else a slide is stamped "synced" while its sibling residue is unresolved);
+  2. gate on a **per-slide structural verify** (`structural_violations` is
+     role-aware per `(slide_id, role)`);
+  3. provenance `confirmed_by=accept, confirmed_oracle=agent` — an agent asserted
+     it and it passed structural validation, distinct from `semantic:<model>`; a
+     later run can selectively distrust agent-confirmed entries.
+
+Recording against a dirty tree (either path) gives skip-trust but pins
+`confirmed_commit=HEAD`; per §11.3, "commit to lock it in" applies to both.
+**Recommendation:** ship `bless` first; add `accept --record` once the
+partial-advance + per-slide-verify path is solid.
+
+### 11.5 Prerequisites & extra review findings (fold into P0)
+
+- **#429 reflow hash, with hash-versioning** (declared prerequisite).
+  `normalize_for_hash()` at the single chokepoint `cell_content_hash`
+  (`sync_writeback.py:115`); markdown-aware (preserve fenced/indented/HTML code +
+  list-indent depth; collapse soft-wrapped prose). Store a `hash_version` and
+  re-normalize-on-read on mismatch — **not** a hard `watermark clear` (which
+  cold-starts the whole repo at once). Note it also drives the Studio editor
+  stale-check (`web/studio/service.py:484,498`).
+- **#435 is solved-by-design**, not a separate prereq — a stable in-repo tree path
+  has no absolute-path key to miss from a worktree.
+- **Capture the id-migration map:** refactor `_migrate_one_deck` / `_apply_alignment`
+  (`sync_apply.py`) to *return* `{old_id → new_id}` (today they mutate ids in place
+  and return nothing). P3's ledger-carry depends on it; pulling it into P0 de-risks
+  the sharpest part (a dropped carry silently demotes a slide to the cold path).
+- **Lift `verify` into a reusable write-gate** function out of `structural_violations`
+  (`sync_verify.py:103`), callable from the apply path.
+- **Merge strategy (was unaddressed):** `include_ledger.py` has **no** union/merge
+  logic, so two branches syncing one topic produce raw conflict markers. Need a
+  `.gitattributes` merge driver ("union; newest `confirmed_commit` per
+  `(slide_id, role)` wins") *or* documented manual resolution. Per-topic +
+  per-slide-line + canonical sorted JSON makes most merges auto-resolve.
+- **Migration/seeding:** existing decks have a sqlite watermark but no ledger.
+  Optionally seed the ledger from the current watermark stamped
+  `confirmed_oracle=assume` (cheap, but asserts unverified trust — honest under the
+  strictness knob) or honest cold-start.
+- **Per-phase hygiene:** each phase updates the matching `clm info` topic
+  (`sync-agents.md` / `commands.md`) and adds a `changelog.d/` fragment.
+
+### 11.6 The cheaper alternative, for the record
+
+`#446` (`--since`) + a transient per-run git-ref baseline (no committed file, no
+merge logic, no migration) buys per-deck timeframe scoping at `O(deck × runs)`
+cost. What it **cannot** do, and the ledger can: **trust memoization** (it
+re-judges every run) and the §1.2 "no historical commit is known-good" handling (a
+bare `--since REF` trusts that ref blindly). A legitimate week-one increment if the
+immediate pain is only scoping the reconcile window — but not a substitute for the
+ledger's incremental-reconcile payoff.
