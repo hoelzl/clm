@@ -46,6 +46,7 @@ from clm.slides.raw_cells import RawCell, split_cells
 from clm.slides.sync_writeback import (
     cell_content_hash,
     construct_of,
+    hash_cell,
     role_of,
     row_anchor,
 )
@@ -492,7 +493,7 @@ def ordered_sync_cells(
                 position=position,
                 slide_id=cell.metadata.slide_id or None,
                 role=role,
-                content_hash=cell_content_hash(cell.content),
+                content_hash=hash_cell(cell.metadata, cell.content),
                 line_number=cell.line_number,
                 construct=construct_of(cell.metadata, cell.content),
                 tags=frozenset(cell.metadata.tags),
@@ -538,7 +539,7 @@ def watermark_rows(
                 pos[partition],
                 meta.slide_id,
                 role,
-                cell_content_hash(cell.content),
+                hash_cell(cell.metadata, cell.content),
                 construct_of(meta, cell.content),
             )
         )
@@ -736,7 +737,7 @@ def _idless_localized_hashes(cells: list[Cell], lang: str) -> list[str]:
     drift detector compares — the localized analog of :func:`_shared_hashes`.
     """
     return [
-        cell_content_hash(c.content)
+        hash_cell(c.metadata, c.content)
         for c in cells
         if not c.metadata.is_j2 and c.metadata.lang == lang and role_of(c.metadata) is None
     ]
@@ -776,7 +777,7 @@ def _drifted_idless_cells(
     owner: str | None = None
     snippets: list[str] = []
     for cell, group_sid in _idless_localized_cells(cells, lang):
-        chash = cell_content_hash(cell.content)
+        chash = hash_cell(cell.metadata, cell.content)
         if remaining.get(chash, 0) > 0:
             remaining[chash] -= 1
             continue
@@ -948,8 +949,8 @@ def _classify_idless_localized_conflicts(
     for i, ((de_cell, owner, _gi), (en_cell, _en_owner, _en_gi)) in enumerate(
         zip(de_pairing, en_pairing, strict=True)  # equal length: signatures matched above
     ):
-        de_drift = cell_content_hash(de_cell.content) != de_baseline[i]
-        en_drift = cell_content_hash(en_cell.content) != en_baseline[i]
+        de_drift = hash_cell(de_cell.metadata, de_cell.content) != de_baseline[i]
+        en_drift = hash_cell(en_cell.metadata, en_cell.content) != en_baseline[i]
         if not de_drift and not en_drift:
             continue
         kind = _idless_localized_kind(de_cell)
@@ -1209,7 +1210,7 @@ def _grouped_neutral_map(cells: list[Cell]) -> dict[str | None, list[str]]:
             group_sid = meta.slide_id
         if meta.is_j2 or meta.lang in ("de", "en"):
             continue
-        out.setdefault(group_sid, []).append(cell_content_hash(cell.content))
+        out.setdefault(group_sid, []).append(hash_cell(cell.metadata, cell.content))
     return out
 
 
@@ -3207,8 +3208,8 @@ def _classify_localized_idless_retags(
 
     de_base_hash = {pos: chash for (pos, _sid, _role, chash, _construct) in de_rows}
     en_base_hash = {pos: chash for (pos, _sid, _role, chash, _construct) in en_rows}
-    de_cur_hash = [cell_content_hash(c.content) for c in de_loc]
-    en_cur_hash = [cell_content_hash(c.content) for c in en_loc]
+    de_cur_hash = [hash_cell(c.metadata, c.content) for c in de_loc]
+    en_cur_hash = [hash_cell(c.metadata, c.content) for c in en_loc]
     # A body hash shared by two cells of a language's stream (current OR baseline)
     # cannot anchor a position against a reorder: two id-less cells with the *same*
     # body are interchangeable to the per-position hash check, so swapping them would
@@ -3320,13 +3321,13 @@ def _classify_idless_retags_under_move(
         hash_by_pos = dict(idless_rows)
         stream = [c for c in cells if not c.metadata.is_j2 and c.metadata.lang == lang]
         cur_counts = Counter(
-            cell_content_hash(c.content) for c in stream if role_of(c.metadata) is None
+            hash_cell(c.metadata, c.content) for c in stream if role_of(c.metadata) is None
         )
         cell_by_hash: dict[str, tuple[int, Cell]] = {}
         for idx, c in enumerate(stream):
             if role_of(c.metadata) is not None:
                 continue
-            chash = cell_content_hash(c.content)
+            chash = hash_cell(c.metadata, c.content)
             if cur_counts[chash] == 1 and base_counts.get(chash, 0) <= 1:
                 cell_by_hash[chash] = (idx, c)
         return base_counts, hash_by_pos, base_tags, cell_by_hash
@@ -3376,7 +3377,7 @@ def _classify_idless_retags_under_move(
         cur_groups: dict[str, list[frozenset[str]]] = {}
         for c in cells:
             if not c.metadata.is_j2 and c.metadata.lang == lang and role_of(c.metadata) is None:
-                cur_groups.setdefault(cell_content_hash(c.content), []).append(
+                cur_groups.setdefault(hash_cell(c.metadata, c.content), []).append(
                     frozenset(c.metadata.tags)
                 )
         for chash, base_tag_sets in base_groups.items():
@@ -3475,7 +3476,7 @@ def _grouped_neutral_tagged(
         if meta.is_j2 or meta.lang in ("de", "en"):
             continue
         out.setdefault(group_sid, []).append(
-            (cell_content_hash(cell.content), frozenset(meta.tags), cell.content)
+            (hash_cell(cell.metadata, cell.content), frozenset(meta.tags), cell.content)
         )
     return out
 

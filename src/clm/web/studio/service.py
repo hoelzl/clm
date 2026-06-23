@@ -36,7 +36,7 @@ from clm.slides.sync_writeback import (
     FileState,
     anchor_of,
     build_cell,
-    cell_content_hash,
+    hash_cell,
     role_of,
 )
 from clm.web.studio.models import (
@@ -298,7 +298,7 @@ class StudioService:
                     body=body,
                     body_format=body_format,
                     is_j2=cell.metadata.is_j2,
-                    content_hash=cell_content_hash(cell.content),
+                    content_hash=hash_cell(cell.metadata, cell.content),
                     anchor=anchor_of(cell.metadata, cell.content),
                     editable=editable,
                 )
@@ -481,7 +481,7 @@ class StudioService:
         if cell is None:
             raise CellNotFoundError(f"{slide_id!r}/{role!r}")
 
-        current_hash = cell_content_hash(cell.body)
+        current_hash = hash_cell(cell.metadata, cell.body)
         if current_hash != expected_cell_hash:
             raise StaleWriteError("cell_hash", current_hash)
 
@@ -495,7 +495,7 @@ class StudioService:
         state.flush()
         fresh = FileState.load(path)
         fresh_cell = fresh.find_cell(slide_id, role)
-        new_hash = cell_content_hash(fresh_cell.body) if fresh_cell is not None else ""
+        new_hash = hash_cell(fresh_cell.metadata, fresh_cell.body) if fresh_cell is not None else ""
         return EditResult(deck_version=self._deck_version(path), cell_hash=new_hash)
 
     def _for_write(self, path: Path, body: str, body_format: str) -> str:

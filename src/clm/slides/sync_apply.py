@@ -107,6 +107,7 @@ from clm.slides.sync_writeback import (
     build_twin_cell,
     cell_content_hash,
     construct_of,
+    hash_cell,
     role_of,
     row_anchor,
 )
@@ -767,7 +768,7 @@ def _shared_cell_hashes(state: FileState) -> list[str]:
     separator differences never register.
     """
     return [
-        cell_content_hash(cell.body)
+        hash_cell(cell.metadata, cell.body)
         for cell in state.cells
         if not cell.metadata.is_j2 and cell.metadata.lang not in ("de", "en")
     ]
@@ -807,7 +808,7 @@ def _shared_cell_descriptors(state: FileState) -> list[tuple[str, str]]:
     carries a snippet too so a divergence can name the offending cell(s).
     """
     return [
-        (cell_content_hash(cell.body), _cell_snippet(cell.body))
+        (hash_cell(cell.metadata, cell.body), _cell_snippet(cell.body))
         for cell in state.cells
         if not cell.metadata.is_j2 and cell.metadata.lang not in ("de", "en")
     ]
@@ -932,7 +933,7 @@ def _idless_localized_group_kinds(state: FileState) -> list[tuple[int, str]]:
 def _idless_localized_body_hashes(state: FileState) -> list[str]:
     """Ordered content hashes of a deck's id-less localized cells (document order)."""
     return [
-        cell_content_hash(cell.body)
+        hash_cell(cell.metadata, cell.body)
         for cell in state.cells
         if not cell.metadata.is_j2
         and cell.metadata.lang in ("de", "en")
@@ -2394,7 +2395,7 @@ def _materialize_structural(
         meta = cell.metadata
         if meta.is_j2 or meta.lang != source_lang or role_of(meta) is not None:
             continue
-        if src_anchors.get(anchor_of(meta, cell.body)) == cell_content_hash(cell.body):
+        if src_anchors.get(anchor_of(meta, cell.body)) == hash_cell(meta, cell.body):
             continue  # unchanged since baseline → spliced verbatim, never translated
         kind = CODE_ROLE if meta.cell_type == "code" else "markdown"
         _cache_translation(cell, source_lang, target_lang, kind, translator, translations)
@@ -2465,7 +2466,9 @@ def _identify_copy_slides(
         pos += 1
         sid = cell.metadata.slide_id
         if role in _SLIDE_ROLES and sid is not None:
-            by_sig.setdefault((sid, role, cell_content_hash(cell.body)), []).append((pos, cell))
+            by_sig.setdefault((sid, role, hash_cell(cell.metadata, cell.body)), []).append(
+                (pos, cell)
+            )
 
     copy_ids: set[int] = set()
     for prop in rename_props:

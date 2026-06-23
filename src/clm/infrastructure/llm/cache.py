@@ -739,6 +739,18 @@ def _deserialize_tags(raw: str) -> frozenset[str]:
     return frozenset(raw.split(",")) if raw else frozenset()
 
 
+# The canonicalization version of the stored ``content_hash`` values. Bump this
+# whenever ``clm.slides.sync_writeback.cell_content_hash`` / ``normalize_for_hash``
+# changes the canonical form it hashes — a stored snapshot at an older version is
+# *unreadable* (its hashes can't be compared against current ones), so the cache
+# treats a stale-version pair as absent (``has_pair``/``get_deck`` below). That
+# self-heals the migration: the pair cold-starts off git HEAD and the next apply
+# re-records it at the current version, with no manual ``watermark clear`` and no
+# false "everything edited" drift. Issue #429 introduced reflow-insensitive
+# markdown hashing → version 2.
+WATERMARK_HASH_VERSION = 2
+
+
 class SyncWatermarkCache:
     """Ordered, per-language structural watermark of the last synced deck state.
 
@@ -812,9 +824,17 @@ class SyncWatermarkCache:
                 en_path       TEXT NOT NULL,
                 synced_commit TEXT,
                 synced_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                hash_version  INTEGER,
                 PRIMARY KEY (de_path, en_path)
             )"""
         )
+        # ``hash_version`` (Issue #429): the canonicalization version of the stored
+        # content hashes. Additive; pre-#429 rows backfill to NULL, which reads as
+        # "stale version" so the pair cold-starts and re-records at the current
+        # version. Existing meta tables get the column via ALTER.
+        meta_cols = {row[1] for row in self._conn.execute("PRAGMA table_info(sync_watermark_meta)")}
+        if "hash_version" not in meta_cols:
+            self._conn.execute("ALTER TABLE sync_watermark_meta ADD COLUMN hash_version INTEGER")
         self._conn.commit()
 
     def get_deck(
@@ -828,7 +848,13 @@ class SyncWatermarkCache:
         Tuples are ``(position, slide_id, role, content_hash, construct)``;
         ``slide_id`` and ``construct`` are ``None`` for id-less / non-code rows.
         An empty list means the deck has no watermark (cold start for this pair).
+
+        A pair recorded at a different ``hash_version`` reads as empty (Issue #429):
+        its stored hashes use an older canonical form and cannot be compared, so the
+        pair cold-starts and is re-recorded at the current version on the next apply.
         """
+        if not self._version_current(de_path, en_path):
+            return []
         rows = self._conn.execute(
             "SELECT position, slide_id, role, content_hash, construct FROM sync_watermarks "
             "WHERE de_path=? AND en_path=? AND lang=? ORDER BY position",
@@ -905,6 +931,16 @@ class SyncWatermarkCache:
                     for (position, slide_id, role, content_hash, construct) in cells
                 ],
             )
+            # Stamp the canonicalization version of these hashes (Issue #429). Done
+            # on every partition write so any record path (full or partial advance)
+            # leaves the pair at the current version; a read at a different version
+            # treats the pair as absent (see ``has_pair`` / ``get_deck``).
+            self._conn.execute(
+                "INSERT INTO sync_watermark_meta (de_path, en_path, hash_version) "
+                "VALUES (?, ?, ?) "
+                "ON CONFLICT(de_path, en_path) DO UPDATE SET hash_version=excluded.hash_version",
+                (de_path, en_path, WATERMARK_HASH_VERSION),
+            )
 
     def get_deck_tags(self, de_path: str, en_path: str, lang: str) -> dict[int, frozenset[str]]:
         """Return ``{position: tag_set}`` for the rows that recorded a tag set.
@@ -937,12 +973,31 @@ class SyncWatermarkCache:
         return {r[0]: r[1] for r in rows}
 
     def has_pair(self, de_path: str, en_path: str) -> bool:
-        """Return True when any watermark row exists for the pair."""
+        """Return True when a *current-version* watermark exists for the pair.
+
+        A pair stored at a stale ``hash_version`` (or none) reads as absent
+        (Issue #429) so the caller cold-starts off git HEAD rather than diffing
+        against hashes in an incomparable canonical form.
+        """
+        if not self._version_current(de_path, en_path):
+            return False
         row = self._conn.execute(
             "SELECT 1 FROM sync_watermarks WHERE de_path=? AND en_path=? LIMIT 1",
             (de_path, en_path),
         ).fetchone()
         return row is not None
+
+    def get_hash_version(self, de_path: str, en_path: str) -> int | None:
+        """The canonicalization version the pair's hashes were recorded at, or None."""
+        row = self._conn.execute(
+            "SELECT hash_version FROM sync_watermark_meta WHERE de_path=? AND en_path=?",
+            (de_path, en_path),
+        ).fetchone()
+        return row[0] if row else None
+
+    def _version_current(self, de_path: str, en_path: str) -> bool:
+        """Whether the pair's stored hashes match the current canonicalization."""
+        return self.get_hash_version(de_path, en_path) == WATERMARK_HASH_VERSION
 
     def set_synced_commit(self, de_path: str, en_path: str, commit: str | None) -> None:
         """Record the repo HEAD commit the pair was last synced at (pair-level)."""

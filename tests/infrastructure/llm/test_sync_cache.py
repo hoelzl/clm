@@ -396,9 +396,63 @@ class TestSyncWatermarkCache:
 
         migrated = SyncWatermarkCache(path)  # _migrate runs the ALTER
         try:
-            assert migrated.get_deck("a.de.py", "a.en.py", "de") == [(0, "x", "slide", "h", None)]
+            # The ALTER is additive — the legacy row survives with construct=NULL
+            # (a wipe would lose it). Verified against the raw table.
+            raw = sqlite3.connect(str(path))
+            try:
+                row = raw.execute(
+                    "SELECT position, slide_id, role, content_hash, construct "
+                    "FROM sync_watermarks WHERE de_path='a.de.py'"
+                ).fetchone()
+            finally:
+                raw.close()
+            assert row == (0, "x", "slide", "h", None)
+            # But a pre-#429 watermark has no recorded hash_version, so it reads as
+            # stale (its hashes use the old canonical form) — get_deck cold-starts it
+            # rather than diffing against incomparable hashes. Issue #429.
+            assert migrated.get_deck("a.de.py", "a.en.py", "de") == []
+            assert migrated.has_pair("a.de.py", "a.en.py") is False
         finally:
             migrated.close()
+
+    def test_hash_version_stamped_and_gates_reads(self, tmp_path: Path):
+        # Issue #429: every write stamps the current hash version; a pair stored at
+        # a different version reads as absent so it cold-starts and re-records.
+        from clm.infrastructure.llm.cache import WATERMARK_HASH_VERSION
+
+        path = tmp_path / "clm-llm.sqlite"
+        cache = SyncWatermarkCache(path)
+        try:
+            cache.put_deck(
+                de_path="a.de.py",
+                en_path="a.en.py",
+                lang="de",
+                cells=[(0, "x", "slide", "h", None)],
+            )
+            assert cache.get_hash_version("a.de.py", "a.en.py") == WATERMARK_HASH_VERSION
+            assert cache.has_pair("a.de.py", "a.en.py") is True
+            assert cache.get_deck("a.de.py", "a.en.py", "de") == [(0, "x", "slide", "h", None)]
+
+            # Simulate a stored snapshot from a different (stale) canonicalization.
+            cache._conn.execute(
+                "UPDATE sync_watermark_meta SET hash_version=? WHERE de_path='a.de.py'",
+                (WATERMARK_HASH_VERSION - 1,),
+            )
+            cache._conn.commit()
+            assert cache.has_pair("a.de.py", "a.en.py") is False
+            assert cache.get_deck("a.de.py", "a.en.py", "de") == []
+
+            # A fresh write re-stamps the current version → readable again.
+            cache.put_deck(
+                de_path="a.de.py",
+                en_path="a.en.py",
+                lang="de",
+                cells=[(0, "x", "slide", "h2", None)],
+            )
+            assert cache.has_pair("a.de.py", "a.en.py") is True
+            assert cache.get_deck("a.de.py", "a.en.py", "de") == [(0, "x", "slide", "h2", None)]
+        finally:
+            cache.close()
 
     def test_coexists_with_other_caches(self, tmp_path: Path):
         path = tmp_path / "clm-llm.sqlite"

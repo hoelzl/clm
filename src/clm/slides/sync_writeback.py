@@ -31,6 +31,8 @@ __all__ = [
     "build_twin_cell",
     "cell_content_hash",
     "construct_of",
+    "hash_cell",
+    "normalize_for_hash",
     "role_of",
     "row_anchor",
     "set_header_tags",
@@ -112,7 +114,130 @@ def _set_trailing_blanks(cell: RawCell, n: int) -> None:
     cell.lines = [cell.lines[0], *body]
 
 
-def cell_content_hash(text: str) -> str:
+# --- Reflow-insensitive markdown normalization (Issue #429) -------------------
+#
+# A pure soft re-wrap of a markdown prose paragraph (same words, different line
+# breaks) must hash identically, or it reads as a false "edit" — wasting a
+# judge/translation call and producing false drift. ``normalize_for_hash`` joins
+# soft-wrapped prose while preserving, byte-for-byte, every whitespace-significant
+# block. It is **conservative**: anything not clearly flowing prose is preserved
+# verbatim, so the worst case is *missing* a reflow (the cell reads as edited, as
+# it does today) — never collapsing two genuinely different cells to one hash.
+
+_FENCE_RE = re.compile(r"^(`{3,}|~{3,})")
+_LIST_MARKER_RE = re.compile(r"^([-*+]|\d+[.)])\s+")
+_THEMATIC_BREAK_RE = re.compile(r"^([-*_])(\s*\1){2,}\s*$")
+
+
+def _deprefix(line: str, comment_token: str) -> str:
+    """Drop the leading comment token + the single conventional separator space.
+
+    Unlike ``slide_parser._strip_comment_prefix`` (which ``lstrip(" ")``s *all*
+    leading spaces), this keeps any further indentation so indented code blocks
+    and nested-list depth survive — they are whitespace-significant and must hash
+    byte-for-byte.
+    """
+    if line.startswith(comment_token):
+        rest = line[len(comment_token) :]
+        return rest[1:] if rest.startswith(" ") else rest
+    return line
+
+
+def _fence_char(stripped: str) -> str | None:
+    """The fence character (`` ` `` or ``~``) if ``stripped`` opens/closes a code fence."""
+    return stripped[0] if _FENCE_RE.match(stripped) else None
+
+
+def _is_structural_md(stripped: str) -> bool:
+    """A markdown line whose breaks are significant — never folded into prose.
+
+    Headings (``#``), block quotes (``>``), table rows (``|``), list markers, and
+    thematic breaks. Preserved as their own line so a reflow of *surrounding*
+    prose never merges across them.
+    """
+    if not stripped:
+        return False
+    if stripped[0] in "#>|":
+        return True
+    if _LIST_MARKER_RE.match(stripped):
+        return True
+    return bool(_THEMATIC_BREAK_RE.match(stripped))
+
+
+def normalize_for_hash(text: str, comment_token: str = "#") -> str:
+    """Canonicalize markdown ``text`` so a pure soft re-wrap hashes identically.
+
+    De-prefixes each line, **joins consecutive plain-prose lines** into one
+    logical line (collapsing the soft wrap), and collapses blank-line runs —
+    while **preserving byte-for-byte** the whitespace-significant blocks: fenced
+    code (```` ``` ````/``~~~``), ``<pre>`` HTML blocks, lines indented 4+ spaces
+    (indented code), and structural markdown (headings, list markers, block
+    quotes, table rows, thematic breaks). Issue #429.
+
+    ``comment_token`` defaults to ``"#"`` (Python/Rust). Threading the real token
+    for ``//`` languages is a follow-up — until then ``//`` markdown is hashed
+    consistently but without the reflow benefit (still safe: both the baseline
+    write and the compare read use the same default, so no false drift).
+    """
+    out: list[str] = []
+    para: list[str] = []
+    fence: str | None = None
+    in_pre = False
+
+    def flush() -> None:
+        if para:
+            out.append(" ".join(para))
+            para.clear()
+
+    for raw in text.split("\n"):
+        line = _deprefix(raw, comment_token).rstrip()
+        stripped = line.strip()
+        if fence is not None:
+            out.append(line)
+            if _fence_char(stripped) == fence and set(stripped) == {fence}:
+                fence = None  # a pure run of the fence char (no info string) closes it
+            continue
+        if in_pre:
+            out.append(line)
+            if "</pre>" in stripped.lower():
+                in_pre = False
+            continue
+        opening = _fence_char(stripped)
+        if opening is not None:
+            flush()
+            out.append(line)
+            fence = opening
+            continue
+        if stripped.lower().startswith("<pre"):
+            flush()
+            out.append(line)
+            if "</pre>" not in stripped.lower():
+                in_pre = True
+            continue
+        if stripped == "":
+            flush()
+            out.append("")
+            continue
+        if len(line) - len(line.lstrip(" ")) >= 4:  # indented code
+            flush()
+            out.append(line)
+            continue
+        if _is_structural_md(stripped):
+            flush()
+            out.append(line)
+            continue
+        para.append(stripped)
+    flush()
+
+    collapsed: list[str] = []
+    for ln in out:
+        if ln == "" and (not collapsed or collapsed[-1] == ""):
+            continue  # squash blank-line runs to a single separator
+        collapsed.append(ln)
+    return "\n".join(collapsed).strip()
+
+
+def cell_content_hash(text: str, *, markdown: bool = False) -> str:
     """Hash ``text`` the way ``Cell.content`` is hashed.
 
     ``Cell.content`` operates on the body as the parser produces it: body
@@ -120,8 +245,27 @@ def cell_content_hash(text: str) -> str:
     whatever the LLM proposed (or the user edited), which may have extra
     leading/trailing whitespace — strip the same way before hashing so
     re-runs find a matching cache row.
+
+    ``markdown=True`` (set only where the text is a markdown cell body — code
+    cells and j2 headers must stay byte-exact) routes through
+    :func:`normalize_for_hash` so a pure prose re-wrap hashes identically
+    (Issue #429). The default ``markdown=False`` preserves the historical
+    ``.strip()``-only behaviour exactly. **Changing either branch's canonical
+    form invalidates every stored hash — bump
+    ``cache.WATERMARK_HASH_VERSION`` so stale snapshots are re-baselined.**
     """
-    return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()
+    canonical = normalize_for_hash(text) if markdown else text.strip()
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def hash_cell(metadata: CellMetadata, text: str) -> str:
+    """Content hash of a cell body, reflow-normalized for markdown cells (#429).
+
+    The single place the markdown-vs-byte-exact decision is made, so every
+    write/read/compare site keys a given cell identically (mismatched flags would
+    read as false drift). Code cells and j2 headers stay byte-exact.
+    """
+    return cell_content_hash(text, markdown=metadata.cell_type == "markdown")
 
 
 def construct_of(metadata: CellMetadata, body: str) -> str | None:
@@ -160,7 +304,7 @@ def anchor_of(metadata: CellMetadata, body: str) -> str:
     construct = construct_of(metadata, body)
     if construct is not None:
         return f"construct:{construct}"
-    return f"hash:{cell_content_hash(body)}"
+    return f"hash:{cell_content_hash(body, markdown=metadata.cell_type == 'markdown')}"
 
 
 def row_anchor(slide_id: str | None, construct: str | None, content_hash: str) -> str:
