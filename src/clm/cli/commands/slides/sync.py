@@ -89,7 +89,13 @@ from clm.slides.sync_plan import (
     render_plan,
 )
 from clm.slides.sync_report import build_report
-from clm.slides.sync_task import SyncTask, TaskUnavailable, build_task, build_tasks
+from clm.slides.sync_task import (
+    _FRAMEABLE_KINDS,
+    SyncTask,
+    TaskUnavailable,
+    build_task,
+    build_tasks,
+)
 from clm.slides.sync_verify import VerifyResult, verify_pair
 
 if TYPE_CHECKING:
@@ -553,6 +559,17 @@ def _emit_batch(
             label = _deck_label(r.de_path, root)
             for err in r.apply_result.errors:
                 click.echo(f"  {label}: error: {err}")
+    # Itemize each pair's tier-2/3 residue so an agent can map deck → item-ids for
+    # `task`/`accept` (the rollup only counts them; single-pair apply does this too).
+    if mode == "apply":
+        residue_pairs = [(r, _apply_residue(r.plan)) for r in results if r.plan is not None]
+        residue_pairs = [(r, res) for r, res in residue_pairs if res]
+        if residue_pairs:
+            click.echo("")
+            click.echo("residue (per deck) — run `report` / `task` / `accept` per deck:")
+            for r, res in residue_pairs:
+                ids = ", ".join(f"{it.item}[{it.kind}]" for it in res)
+                click.echo(f"  {_deck_label(r.de_path, root)}: {ids}")
     click.echo("")
     click.echo(_batch_rollup(results))
     if mode == "apply" and any(
@@ -1627,6 +1644,30 @@ def _apply_residue(plan: SyncPlan) -> list[ReconciliationItem]:
     return [*report.assisted, *report.ambiguity]
 
 
+def _residue_hint_lines(residue: list[ReconciliationItem], de_name: str) -> list[str]:
+    """Next-step lines for apply residue, split by whether the item has a *model* task.
+
+    A `conflict` / `issue` is not frameable (:data:`_FRAMEABLE_KINDS`) — it needs *your*
+    judgement, not a model — so pointing it at `task --item ID` over-promises. Frameable
+    residue (edit / add / realign / mint / adopt / reconcile) goes to `task` → model →
+    `accept`; the rest goes to editing the deck + re-`report`.
+    """
+    framed = [it for it in residue if it.kind in _FRAMEABLE_KINDS]
+    human = [it for it in residue if it.kind not in _FRAMEABLE_KINDS]
+    lines: list[str] = []
+    if framed:
+        lines.append(
+            f"  {len(framed)} need a model: `clm slides sync task {de_name} --item ID` → "
+            "a model → `accept` (or `autopilot`)."
+        )
+    if human:
+        lines.append(
+            f"  {len(human)} need your judgement (conflict / issue): edit the deck so the "
+            f"halves agree, then re-run `clm slides sync report {de_name}`."
+        )
+    return lines
+
+
 def _emit_apply(plan: SyncPlan, result: ApplyResult, de_path: Path, *, as_json: bool) -> None:
     """Print what a single-pair model-free apply wrote and what residue remains."""
     residue = _apply_residue(plan)
@@ -1665,10 +1706,8 @@ def _emit_apply(plan: SyncPlan, result: ApplyResult, de_path: Path, *, as_json: 
         for it in residue:
             sid = f" {it.slide_id}" if it.slide_id else ""
             click.echo(f"  {it.item}  [{it.tier}/{it.kind}]{sid}: {it.reason or '(see report)'}")
-        click.echo(
-            f"Resolve them with `clm slides sync task {de_path.name} --item ID` → a model → "
-            "`accept` (or `autopilot`)."
-        )
+        for line in _residue_hint_lines(residue, de_path.name):
+            click.echo(line)
     if result.applied > 0:
         click.echo(
             f"Review the propagated changes with `git diff` and confirm with "

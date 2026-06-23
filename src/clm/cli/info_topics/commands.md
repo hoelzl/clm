@@ -2183,10 +2183,13 @@ with `task`, move the `slide_id` onto its true continuation on both halves,
 `accept` (which runs `validate_alignment`), then `verify`.
 
 `clm slides sync task --json` emits `{ "tasks": [ … ], "unframed": [ … ] }`. A
-`SyncTask` is `{ item, kind, validator, instructions, prompt, inputs,
-answer_schema }` — everything a model needs for one item. `unframed` lists the
-tier-3 items that need *your* judgement *before* any model (a `conflict` /
-`issue`) — resolve those by editing the deck, not via `accept`.
+`SyncTask` is `{ item, kind, tier, slide_id, direction, role, validator,
+instructions, prompt, inputs, answer_schema }` — the report-item handle (`item` /
+`kind` / `tier` / `slide_id` / `direction` / `role`) plus everything a model
+needs for it (`validator` — the deterministic check `accept` runs; `instructions`
++ `prompt`; `inputs`; `answer_schema`). `unframed` lists the tier-3 items that
+need *your* judgement *before* any model (a `conflict` / `issue`) — resolve those
+by editing the deck, not via `accept`.
 
 `clm slides sync accept --json` emits the result for the one item — `{ item,
 kind, applied, changed }` on success, or a rejection carrying the validator's

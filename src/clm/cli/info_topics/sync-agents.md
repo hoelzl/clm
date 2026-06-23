@@ -97,11 +97,12 @@ fabricated fix. Three shapes:
 
 ## `task` and `accept` — the model handoff you own
 
-`clm slides sync task DECK --item ID` returns a `SyncTask`: `instructions` (the
+`clm slides sync task DECK --item ID` returns a `SyncTask`: the report-item handle
+(`item`, `kind`, `tier`, `slide_id`, `direction`, `role`) plus `instructions` (the
 system prompt), `prompt` (ready to send to a model), `inputs` (the cell bytes /
 glossary / direction), `answer_schema` (the exact shape `accept` will enforce),
-and `validator` (which deterministic check runs). Omit `--item` to emit a task
-for **every** frameable tier-2/3 item.
+and `validator` (which deterministic check `accept` runs). Omit `--item` to emit a
+task for **every** frameable tier-2/3 item.
 
 Run the prompt through any model you like; capture the answer in the
 `answer_schema` shape; pipe it to `clm slides sync accept DECK --item ID --answer
