@@ -20,9 +20,10 @@ from clm.infrastructure.llm.cache import SyncWatermarkCache
 from clm.infrastructure.llm.sync_prompts import SYNC_SYSTEM_PROMPT
 from clm.notebooks.slide_parser import parse_cells
 from clm.slides.sync_plan import Proposal, SyncPlan, build_sync_plan, watermark_rows
-from clm.slides.sync_recover import RECOVERY_SYSTEM_PROMPT
+from clm.slides.sync_recover import CORRESPONDENCE_SYSTEM_PROMPT, RECOVERY_SYSTEM_PROMPT
 from clm.slides.sync_report import ReconciliationItem, ReconciliationReport, _assign_item_ids
 from clm.slides.sync_task import (
+    CORRESPONDENCE_ANSWER_SCHEMA,
     EDIT_ANSWER_SCHEMA,
     TRANSLATION_ANSWER_SCHEMA,
     TaskUnavailable,
@@ -38,6 +39,10 @@ from clm.slides.sync_translate import OpenRouterSlideTranslator, build_translati
 
 def _slide(lang: str, sid: str, body: str) -> str:
     return f'# %% [markdown] lang="{lang}" tags=["slide"] slide_id="{sid}"\n{body}\n'
+
+
+def _slide_idless(lang: str, body: str) -> str:
+    return f'# %% [markdown] lang="{lang}" tags=["slide"]\n{body}\n'
 
 
 def _code_idd_neutral(sid: str, body: str) -> str:
@@ -311,16 +316,43 @@ class TestBuildTask:
         with pytest.raises(TaskUnavailable, match="resolve it by hand|judgement|ambiguity"):
             build_task(plan, "conflict-s1")
 
-    def test_cold_start_mint_points_at_autopilot(self, tmp_path: Path):
+    def test_mint_frames_the_correspondence_task(self, tmp_path: Path):
+        # A both-id-less cold pair frames the deck-level correspondence task: every
+        # aligned slide pair at once, answered by a {pair_index -> bool} verdict map.
+        de = _slide_idless("de", "# ## Einleitung") + _slide_idless("de", "# ## Variablen")
+        en = _slide_idless("en", "# ## Introduction") + _slide_idless("en", "# ## Variables")
+        de_path, en_path = _pair(tmp_path, de, en)
+        plan = build_sync_plan(de_path, en_path, watermark_cache=None, provider_available=True)
+        task = build_task(plan, "mint")
+        assert task.kind == "mint"
+        assert task.validator == "correspondence"
+        assert task.instructions == CORRESPONDENCE_SYSTEM_PROMPT
+        assert task.answer_schema == CORRESPONDENCE_ANSWER_SCHEMA
+        assert len(task.inputs["pairs"]) == 2  # both aligned slide pairs ride in inputs
+        assert "Einleitung" in task.prompt and "Introduction" in task.prompt  # both halves
+
+    def test_adopt_frames_the_correspondence_task(self, tmp_path: Path):
+        # A half-id'd cold pair (EN id'd, DE id-less) frames the same correspondence task.
+        de = _slide_idless("de", "# ## A") + _slide_idless("de", "# ## B")
+        en = _slide("en", "s1", "# ## A") + _slide("en", "s2", "# ## B")
+        de_path, en_path = _pair(tmp_path, de, en)
+        plan = build_sync_plan(de_path, en_path, watermark_cache=None, provider_available=True)
+        task = build_task(plan, "adopt-en-de")
+        assert task.kind == "adopt" and task.validator == "correspondence"
+        assert task.answer_schema == CORRESPONDENCE_ANSWER_SCHEMA
+        assert len(task.inputs["pairs"]) == 2
+
+    def test_reconcile_is_unavailable_for_a_model_task(self, tmp_path: Path):
+        # A committed mismatched-id reconcile is the cold kind NOT yet framed.
         de, en = _slide("de", "s1", "# ## eins"), _slide("en", "s1", "# ## one")
         de_path, en_path = _pair(tmp_path, de, en)
         plan = _real_plan(
             de_path,
             en_path,
-            Proposal(kind="mint", role="slide", direction=None, slide_id="s1"),
+            Proposal(kind="reconcile", role="slide", direction="de->en", slide_id="s1"),
         )
-        with pytest.raises(TaskUnavailable, match="autopilot|assign-ids"):
-            build_task(plan, "mint-s1")
+        with pytest.raises(TaskUnavailable, match="reconcile|autopilot"):
+            build_task(plan, "reconcile-s1")
 
 
 # ---------------------------------------------------------------------------

@@ -22,6 +22,12 @@ path frame the work identically:
   (:func:`~clm.slides.sync_recover.build_recovery_user_prompt`); the answer is an
   ``{index → assignment}`` map. The region-level task, validated by
   :func:`~clm.slides.sync_recover.validate_alignment`.
+* **mint** / **adopt** (a cold-start pair with no shared identity) → the batch
+  correspondence-verification prompt
+  (:func:`~clm.slides.sync_recover.build_correspondence_user_prompt`); the answer is a
+  ``{pair_index → bool}`` verdict map (validator ``correspondence``). A single
+  **deck-level** task covers every aligned slide pair — the model confirms the halves
+  correspond before any shared id is minted / stamped.
 
 Each task names the deterministic ``validator`` that ``clm slides sync accept`` will
 run on the answer (so ``accept`` can never apply the wrong check) and carries the
@@ -29,9 +35,9 @@ run on the answer (so ``accept`` can never apply the wrong check) and carries th
 and constructs none — building a task never reaches a model (decision B is
 structural here).
 
-Cold-start correspondence (``mint`` / ``adopt`` / ``reconcile``) and the
-hand-judged ambiguities (``conflict`` / ``issue``) are not framed as model tasks
-yet — :func:`build_task` raises :class:`TaskUnavailable` with the right next step.
+The committed mismatched-id ``reconcile`` (#228) and the hand-judged ambiguities
+(``conflict`` / ``issue``) are not framed as model tasks yet — :func:`build_task`
+raises :class:`TaskUnavailable` with the right next step.
 """
 
 from __future__ import annotations
@@ -47,7 +53,9 @@ from clm.infrastructure.llm.sync_prompts import (
 )
 from clm.slides.sync_plan import LOCALIZED_CODE_ROLE
 from clm.slides.sync_recover import (
+    CORRESPONDENCE_SYSTEM_PROMPT,
     RECOVERY_SYSTEM_PROMPT,
+    build_correspondence_user_prompt,
     build_recovery_user_prompt,
 )
 from clm.slides.sync_report import ReconciliationItem, build_report
@@ -59,10 +67,11 @@ from clm.slides.sync_writeback import CODE_ROLE
 
 if TYPE_CHECKING:
     from clm.slides.sync_plan import SyncPlan
-    from clm.slides.sync_recover import RegionCell
+    from clm.slides.sync_recover import RegionCell, SlidePair
 
 __all__ = [
     "ALIGNMENT_ANSWER_SCHEMA",
+    "CORRESPONDENCE_ANSWER_SCHEMA",
     "EDIT_ANSWER_SCHEMA",
     "TRANSLATION_ANSWER_SCHEMA",
     "SyncTask",
@@ -72,7 +81,7 @@ __all__ = [
 ]
 
 #: The proposal kinds :func:`build_task` can frame as a single model task.
-_FRAMEABLE_KINDS = frozenset({"edit", "add", "realign"})
+_FRAMEABLE_KINDS = frozenset({"edit", "add", "realign", "mint", "adopt"})
 
 #: Edit roles the engine reconciles by **re-translating** the source cell (rather than
 #: by the prose judge) — runnable code, keyed or id-less localized. Mirrors the
@@ -109,6 +118,17 @@ ALIGNMENT_ANSWER_SCHEMA: dict[str, Any] = {
         "cell stays without a slide_id)"
     ),
     "additionalProperties": {"type": "string"},
+}
+CORRESPONDENCE_ANSWER_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "description": (
+        "map EVERY pair index (a string) to a boolean: true when the DE and EN slide are "
+        "the SAME slide in the two languages (a faithful translation — same topic and "
+        "intent), false when they are different slides (the decks are misaligned at that "
+        "position). When genuinely unsure, return false — a wrong pairing bakes a wrong "
+        "shared identifier"
+    ),
+    "additionalProperties": {"type": "boolean"},
 }
 
 
@@ -333,6 +353,57 @@ def _realign_task(item: ReconciliationItem, plan: SyncPlan) -> SyncTask:
     )
 
 
+def _pair_dicts(pairs: list[SlidePair]) -> list[dict[str, Any]]:
+    """Serialize the aligned cold-start slide pairs to indexed JSON rows (the prompt's view)."""
+    return [
+        {
+            "index": idx,
+            "role": p.role,
+            "de_heading": p.de_heading,
+            "en_heading": p.en_heading,
+            "de_snippet": p.de_snippet,
+            "en_snippet": p.en_snippet,
+        }
+        for idx, p in enumerate(pairs)
+    ]
+
+
+def _cold_pair_task(item: ReconciliationItem, plan: SyncPlan) -> SyncTask:
+    """Frame a cold-start ``mint`` / ``adopt`` as the batch correspondence task.
+
+    A both-id-less (``mint``) or half-id'd (``adopt``) cold pair carries no shared
+    identity, so before the engine mints fresh ids / stamps the authority's ids it must
+    confirm the DE and EN halves actually correspond. That judgement is the model's, so
+    the agent path frames it as a single **deck-level** task: every aligned slide pair at
+    once (mirroring how :func:`~clm.slides.sync_apply._apply_cold_mint` /
+    ``_apply_cold_adopt`` verify before writing), answered by a ``{pair_index → bool}``
+    verdict map (validator ``correspondence``). One mint/adopt item ⇒ one task.
+    """
+    from clm.slides.sync_apply import cold_slide_pairs
+
+    pairs = cold_slide_pairs(plan)
+    if not pairs:
+        # The candidacy gate admitted this cold pair with slides on both halves; if there
+        # are none now, the files changed underneath — say so plainly (cf. realign).
+        raise TaskUnavailable(
+            f"{item.item!r}: the cold-start pair has no slides to verify — re-run "
+            "`clm slides sync report` to refresh the plan."
+        )
+    return SyncTask(
+        item=item.item,
+        kind=item.kind,
+        tier=item.tier,
+        slide_id=item.slide_id,
+        direction=item.direction,
+        role=item.role,
+        validator="correspondence",
+        instructions=CORRESPONDENCE_SYSTEM_PROMPT,
+        prompt=build_correspondence_user_prompt(pairs),
+        inputs={"pairs": _pair_dicts(pairs)},
+        answer_schema=CORRESPONDENCE_ANSWER_SCHEMA,
+    )
+
+
 def _task_for_item(
     item: ReconciliationItem,
     plan: SyncPlan,
@@ -347,11 +418,12 @@ def _task_for_item(
         return _add_task(item, prog_lang=prog_lang, guidance_by_lang=guidance_by_lang)
     if item.kind == "realign":
         return _realign_task(item, plan)
-    if item.kind in ("mint", "adopt", "reconcile"):
+    if item.kind in ("mint", "adopt"):
+        return _cold_pair_task(item, plan)
+    if item.kind == "reconcile":
         raise TaskUnavailable(
-            f"{item.item!r} is a cold-start correspondence ({item.kind}); a per-item "
-            "`task` for it is not wired yet — bootstrap the pair with "
-            "`clm slides sync autopilot` (needs a key) or `clm slides assign-ids`."
+            f"{item.item!r} is a committed mismatched-id reconcile (#228); a `task` for it "
+            "is not wired yet — bootstrap the pair with `clm slides sync autopilot`."
         )
     raise TaskUnavailable(
         f"{item.item!r} ({item.kind}) is an ambiguity for you to resolve by hand"

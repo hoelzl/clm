@@ -436,6 +436,101 @@ class TestAcceptSlideIdLessEdit:
 
 
 # ---------------------------------------------------------------------------
+# accept_answer — cold-start mint / adopt (batch correspondence verdicts)
+# ---------------------------------------------------------------------------
+
+
+def _slide_ids(path: Path) -> list[str | None]:
+    """The slide_ids of the slide/subslide cells, in order (None where unset)."""
+    return [
+        c.metadata.slide_id
+        for c in parse_cells(path.read_text(encoding="utf-8"))
+        if "slide" in c.metadata.tags or "subslide" in c.metadata.tags
+    ]
+
+
+def _mint_plan(tmp_path: Path):  # noqa: ANN202
+    """A both-id-less cold pair (two aligned slides each half) → one pending `mint`."""
+    de = _slide_idless("de", "# ## Einleitung") + _slide_idless("de", "# ## Variablen")
+    en = _slide_idless("en", "# ## Introduction") + _slide_idless("en", "# ## Variables")
+    de_path, en_path = _pair(tmp_path, de, en)
+    plan = build_sync_plan(de_path, en_path, watermark_cache=None, provider_available=True)
+    return de_path, en_path, plan
+
+
+def _adopt_plan(tmp_path: Path):  # noqa: ANN202
+    """A half-id'd cold pair (EN id'd, DE id-less) → one pending `adopt` (en->de)."""
+    de = _slide_idless("de", "# ## A") + _slide_idless("de", "# ## B")
+    en = _slide("en", "s1", "# ## A") + _slide("en", "s2", "# ## B")
+    de_path, en_path = _pair(tmp_path, de, en)
+    plan = build_sync_plan(de_path, en_path, watermark_cache=None, provider_available=True)
+    return de_path, en_path, plan
+
+
+class TestAcceptColdStart:
+    """A cold-start `mint` / `adopt` is applied from the agent's correspondence verdicts.
+
+    The agent ran the deck-level `correspondence` task; its `{pair_index -> bool}` map is
+    validated and applied via a StaticCorrespondenceVerifier — an all-yes map mints/stamps
+    the shared ids, any-no declines and writes nothing.
+    """
+
+    def test_mint_all_yes_mints_shared_ids(self, tmp_path: Path):
+        de_path, en_path, plan = _mint_plan(tmp_path)
+        assert plan.count("mint") == 1
+        result = accept_answer(plan, "mint", {"0": True, "1": True})
+
+        assert result.applied and result.kind == "mint" and result.changed == 1
+        de_ids, en_ids = _slide_ids(de_path), _slide_ids(en_path)
+        assert de_ids == en_ids and all(de_ids) and len(de_ids) == 2  # shared ids on both
+
+    def test_adopt_all_yes_stamps_authority_ids(self, tmp_path: Path):
+        de_path, en_path, plan = _adopt_plan(tmp_path)
+        assert plan.count("adopt") == 1
+        result = accept_answer(plan, "adopt-en-de", {"0": True, "1": True})
+
+        assert result.applied and result.kind == "adopt" and result.changed == 1
+        # The id-less DE half adopts EN's existing ids verbatim (a header stamp).
+        assert _slide_ids(de_path) == ["s1", "s2"] == _slide_ids(en_path)
+
+    def test_any_no_declines_and_writes_nothing(self, tmp_path: Path):
+        de_path, en_path, plan = _mint_plan(tmp_path)
+        before = (de_path.read_text(encoding="utf-8"), en_path.read_text(encoding="utf-8"))
+        with pytest.raises(AcceptRejected, match="non-corresponding|misaligned"):
+            accept_answer(plan, "mint", {"0": True, "1": False})  # pair 1 rejected
+        assert (de_path.read_text(encoding="utf-8"), en_path.read_text(encoding="utf-8")) == before
+
+    def test_incomplete_verdict_map_is_rejected(self, tmp_path: Path):
+        de_path, en_path, plan = _mint_plan(tmp_path)
+        before = (de_path.read_text(encoding="utf-8"), en_path.read_text(encoding="utf-8"))
+        with pytest.raises(AcceptRejected, match="cover pair indices|rejected"):
+            accept_answer(plan, "mint", {"0": True})  # missing pair index 1
+        assert (de_path.read_text(encoding="utf-8"), en_path.read_text(encoding="utf-8")) == before
+
+    def test_non_boolean_verdict_is_rejected(self, tmp_path: Path):
+        de_path, en_path, plan = _mint_plan(tmp_path)
+        with pytest.raises(AcceptRejected, match="boolean"):
+            accept_answer(plan, "mint", {"0": True, "1": "yes"})
+
+    def test_reconcile_is_unavailable(self, tmp_path: Path):
+        # A committed mismatched-id reconcile is not accepted yet — honest hand-off.
+        de = _slide("de", "d1", "# ## A")
+        en = _slide("en", "e1", "# ## A")
+        de_path, en_path = _pair(tmp_path, de, en)
+        # Build a plan and inject a reconcile proposal to exercise the dispatch branch.
+        plan = build_sync_plan(de_path, en_path, watermark_cache=None, provider_available=True)
+        from clm.slides.sync_plan import Proposal
+
+        plan.proposals = [
+            Proposal(kind="reconcile", role="slide", direction="de->en", slide_id="d1")
+        ]
+        report = build_report(plan, with_excerpts=True)
+        recon = next(it for it in report.assisted if it.kind == "reconcile")
+        with pytest.raises(AcceptUnavailable, match="reconcile|autopilot"):
+            accept_answer(plan, recon.item, {"0": True})
+
+
+# ---------------------------------------------------------------------------
 # accept_answer — unavailable kinds (honest hand-off, no write)
 # ---------------------------------------------------------------------------
 
@@ -527,6 +622,26 @@ class TestAcceptCli:
         assert code == 0, out
         assert f"accepted {item_id}" in out
         assert "A more" in _cell_by_id(en_path, "a").content
+
+    def test_mint_happy_path_via_stdin(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        # The CLI gates cold-pair candidacy on key presence (the #438 decoupling is
+        # separate); force it so the agent flow is exercised without an embedded key.
+        from clm.cli.commands.slides import sync as sync_cmd
+
+        monkeypatch.setattr(sync_cmd, "has_openrouter_api_key", lambda *a, **k: True)
+        de_path, en_path, _plan = _mint_plan(tmp_path)
+        code, out = _run(
+            "accept",
+            str(de_path),
+            "--item",
+            "mint",
+            "--answer",
+            "-",
+            stdin=json.dumps({"0": True, "1": True}),
+        )
+        assert code == 0, out
+        assert "accepted mint" in out
+        assert _slide_ids(de_path) == _slide_ids(en_path) and all(_slide_ids(de_path))
 
     def test_rejected_map_exits_2_and_writes_nothing(self, tmp_path: Path):
         de_path, en_path, _plan = _realign_plan(tmp_path)

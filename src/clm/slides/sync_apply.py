@@ -1673,6 +1673,20 @@ def _build_slide_pairs(de_path: Path, en_path: Path) -> list[SlidePair]:
     return pairs
 
 
+def cold_slide_pairs(plan: SyncPlan) -> list[SlidePair]:
+    """The aligned ``(de, en)`` slide pairs a cold-start ``mint`` / ``adopt`` verifies.
+
+    The agent-facing ``task`` / ``accept`` surface (epic #440): the engine emits these
+    pairs so the agent's model can judge correspondence, and ``accept`` rebuilds the
+    SAME pairs to validate the returned verdict map — both reuse the exact
+    :func:`_build_slide_pairs` that :func:`_apply_cold_mint` / :func:`_apply_cold_adopt`
+    feed the verifier, so the agent path and the embedded ``autopilot`` verifier see an
+    identical pair list. Reads the (unchanged, pre-apply) files, so the caller must use
+    it only on a dry-run plan — the same constraint as the report's cell-text excerpts.
+    """
+    return _build_slide_pairs(plan.de_path, plan.en_path)
+
+
 def _heading_line(body: str) -> str:
     """The first non-blank line of a cell body (the slide heading)."""
     for line in body.splitlines():

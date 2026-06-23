@@ -30,10 +30,18 @@ with the agent's answer substituted for the model call:
   ``scope_to_proposals`` mode — only the per-cell write runs, no structural pass, so a
   *co-drifted* sibling in the same slide group is never re-translated with this one answer.
 
-Cold-start correspondence (``mint`` / ``adopt`` / ``reconcile``) and the hand-judged
-ambiguities (``conflict`` / ``issue``) are not accepted yet — :func:`accept_answer`
-raises :class:`AcceptUnavailable` with the right next step (the cold-start kinds mint
-identity, which ``autopilot`` / ``assign-ids`` still own).
+* **mint** / **adopt** (a cold-start pair) → the answer is the ``{pair_index → bool}``
+  correspondence verdict map; it is gated by
+  :func:`~clm.slides.sync_recover.validate_correspondence` and applied through the same
+  cold-start path ``autopilot`` drives, only with a
+  :class:`~clm.slides.sync_recover.StaticCorrespondenceVerifier` carrying the agent's
+  verdicts instead of an OpenRouter call. An **all-yes** map mints the shared ids (mint)
+  / stamps the authority's ids (adopt); a map with any **no** declines (the halves are
+  misaligned there) — ``accept`` reports which pairs were rejected and writes nothing.
+
+The committed mismatched-id ``reconcile`` (#228) and the hand-judged ambiguities
+(``conflict`` / ``issue``) are not accepted yet — :func:`accept_answer` raises
+:class:`AcceptUnavailable` with the right next step.
 """
 
 from __future__ import annotations
@@ -389,10 +397,104 @@ def _accept_edit(plan: SyncPlan, item: ReconciliationItem, answer: Any) -> Accep
 
 
 # ---------------------------------------------------------------------------
-# Dispatch
+# mint / adopt — verify a cold-start pair's correspondence, then mint / stamp ids.
 # ---------------------------------------------------------------------------
 
-_COLD_START_KINDS = frozenset({"mint", "adopt", "reconcile"})
+
+def _decode_verdicts(answer: Any) -> dict[int, bool]:
+    """Coerce a correspondence answer to a ``{pair_index → bool}`` map, or raise.
+
+    Mirrors :func:`clm.slides.sync_recover.decode_verdicts` (string keys → int, values
+    must be real booleans) but reports a precise :class:`AcceptRejected` rather than the
+    engine's safe-abort, so a malformed map is a clear rejection that writes nothing.
+    """
+    obj = _load_json_answer(answer, what="correspondence")
+    verdicts: dict[int, bool] = {}
+    for key, value in obj.items():
+        try:
+            idx = int(key)
+        except (TypeError, ValueError) as exc:
+            raise AcceptRejected(
+                f"correspondence key {key!r} is not an integer pair index"
+            ) from exc
+        if not isinstance(value, bool):
+            raise AcceptRejected(
+                f"correspondence value for pair {key!r} must be a boolean (true/false)"
+            )
+        verdicts[idx] = value
+    return verdicts
+
+
+def _cold_decline_reason(item: ReconciliationItem, result: Any) -> str:
+    """A precise reason a verified cold-start pair was NOT minted/adopted (no write)."""
+    detail = result.cold_deferrals[0] if result.cold_deferrals else None
+    if detail is not None and detail.reason == "rejected-pairs":
+        idxs = ", ".join(str(p.index) for p in detail.rejected_pairs)
+        verb = "minted" if item.kind == "mint" else "adopted"
+        return (
+            f"{item.item!r}: your verdicts judged pair(s) {idxs} non-corresponding, so no "
+            f"shared ids were {verb} — the deck halves are misaligned there; re-pair them "
+            "or fix the alignment, then re-run `clm slides sync report`."
+        )
+    reason = detail.reason if detail is not None else "no cold-start candidate"
+    return (
+        f"{item.item!r}: the cold-start {item.kind} did not apply ({reason}); the deck "
+        "likely changed since `report` — re-run it."
+    )
+
+
+def _accept_cold(plan: SyncPlan, item: ReconciliationItem, answer: Any) -> AcceptResult:
+    """Validate the agent's correspondence verdicts and apply the cold-start mint/adopt.
+
+    The agent ran the ``correspondence`` task (the deck's aligned slide pairs) and
+    returned a ``{pair_index → bool}`` map. Rebuild the SAME pairs the task showed, gate
+    the map with :func:`~clm.slides.sync_recover.validate_correspondence` (it must cover
+    every pair index exactly), then apply through the engine's own cold-start path with a
+    :class:`~clm.slides.sync_recover.StaticCorrespondenceVerifier` carrying the verdicts —
+    so the engine never calls a model. An **all-yes** map mints (mint) / stamps (adopt)
+    the shared ids onto both halves; any **no** (or a race) declines and writes nothing,
+    reported with the rejected pairs.
+    """
+    from clm.slides.sync_apply import apply_plan, cold_slide_pairs
+    from clm.slides.sync_recover import (
+        CorrespondenceInvalid,
+        StaticCorrespondenceVerifier,
+        validate_correspondence,
+    )
+
+    verdicts = _decode_verdicts(answer)
+    pairs = cold_slide_pairs(plan)
+    try:
+        validate_correspondence(verdicts, pairs)
+    except CorrespondenceInvalid as exc:
+        raise AcceptRejected(f"correspondence verdicts rejected: {exc}") from exc
+
+    # default=False so a hypothetical apply-side pair the agent did not answer defers
+    # (never mints on an assumed yes); validate_correspondence already proved a total map.
+    result = apply_plan(
+        plan,
+        judge=None,
+        verifier=StaticCorrespondenceVerifier(verdicts=verdicts, default=False),
+        watermark_cache=None,
+    )
+    if result.errors:
+        raise AcceptRejected("; ".join(result.errors))
+    changed = result.applied_mint + result.applied_adopt
+    if changed:
+        detail = (
+            "verified correspondence; minted shared ids onto both halves."
+            if item.kind == "mint"
+            else "verified correspondence; stamped the authority half's ids onto its twin."
+        )
+        return AcceptResult(
+            item=item.item, kind=item.kind, applied=True, changed=changed, detail=detail
+        )
+    raise AcceptRejected(_cold_decline_reason(item, result))
+
+
+# ---------------------------------------------------------------------------
+# Dispatch
+# ---------------------------------------------------------------------------
 
 
 def accept_answer(
@@ -417,11 +519,12 @@ def accept_answer(
         return _accept_realign(plan, item, answer)
     if item.kind == "edit":
         return _accept_edit(plan, item, answer)
-    if item.kind in _COLD_START_KINDS:
+    if item.kind in ("mint", "adopt"):
+        return _accept_cold(plan, item, answer)
+    if item.kind == "reconcile":
         raise AcceptUnavailable(
-            f"{item.item!r} is a cold-start correspondence ({item.kind}); accepting it mints "
-            "shared identity, which `clm slides sync autopilot` (needs a key) or "
-            "`clm slides assign-ids` still own."
+            f"{item.item!r} is a committed mismatched-id reconcile (#228); accepting it is "
+            "not wired yet — bootstrap the pair with `clm slides sync autopilot`."
         )
     raise AcceptUnavailable(
         f"{item.item!r} ({item.kind}) is an ambiguity for you to resolve by hand. Edit the "
