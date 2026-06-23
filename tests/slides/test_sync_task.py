@@ -52,12 +52,48 @@ def _code_shared(body: str) -> str:
     return f'# %% tags=["keep"]\n{body}\n'
 
 
+def _voiceover_idless(lang: str, body: str) -> str:
+    """An id-less narrative (voiceover) companion — a slide_id-less prose edit source."""
+    return f'# %% [markdown] lang="{lang}" tags=["voiceover"]\n{body}\n'
+
+
+def _idless_code(lang: str, body: str) -> str:
+    """A hash-only id-less *localized* code cell (no slide_id, no nameable construct)."""
+    return f'# %% lang="{lang}"\n{body}\n'
+
+
 def _pair(tmp_path: Path, de: str, en: str) -> tuple[Path, Path]:
     de_path = tmp_path / "deck_x.de.py"
     en_path = tmp_path / "deck_x.en.py"
     de_path.write_text(de, encoding="utf-8")
     en_path.write_text(en, encoding="utf-8")
     return de_path, en_path
+
+
+def _seeded_plan(tmp_path: Path, de0: str, en0: str, de1: str, en1: str) -> SyncPlan:
+    """Seed a watermark at (de0, en0), write the post-edit (de1, en1), return the plan."""
+    de_path, en_path = _pair(tmp_path, de0, en0)
+    cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+    _seed(cache, de_path, en_path)
+    de_path.write_text(de1, encoding="utf-8")
+    en_path.write_text(en1, encoding="utf-8")
+    try:
+        return build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+    finally:
+        cache.close()
+
+
+def _the_edit_item(plan: SyncPlan, direction: str | None = None) -> ReconciliationItem:
+    """The single ``edit`` report item (optionally filtered by direction)."""
+    from clm.slides.sync_report import build_report
+
+    edits = [
+        it
+        for it in build_report(plan, with_excerpts=True).assisted
+        if it.kind == "edit" and (direction is None or it.direction == direction)
+    ]
+    assert len(edits) == 1, [(it.role, it.direction, it.slide_id) for it in edits]
+    return edits[0]
 
 
 def _real_plan(de_path: Path, en_path: Path, *proposals: Proposal) -> SyncPlan:
@@ -194,6 +230,46 @@ class TestBuildTask:
         assert task.inputs["role"] == "code"
         assert "English" in task.instructions  # the translation system prompt targets EN
         assert 'x = "eins"' in task.prompt  # the source code body IS the prompt
+
+    def test_narrative_edit_frames_the_judge_task(self, tmp_path: Path):
+        # A slide_id-less narrative (voiceover) edit is prose, so it frames as the judge
+        # task — the drifted source narrative must reach the prompt (its excerpt resolves).
+        plan = _seeded_plan(
+            tmp_path,
+            _slide("de", "a", "# ## A") + _voiceover_idless("de", "Hallo Welt"),
+            _slide("en", "a", "# ## A") + _voiceover_idless("en", "Hello world"),
+            _slide("de", "a", "# ## A") + _voiceover_idless("de", "Hallo liebe Welt"),  # VO edit
+            _slide("en", "a", "# ## A") + _voiceover_idless("en", "Hello world"),
+        )
+        item = _the_edit_item(plan)
+        assert item.slide_id is None and item.role == "voiceover"
+        task = build_task(plan, item.item)
+        assert task.validator == "edit"  # prose → the sync judge
+        assert task.answer_schema == EDIT_ANSWER_SCHEMA
+        assert "Hallo liebe Welt" in task.prompt  # the drifted source narrative IS framed
+        assert "Hello world" in task.prompt  # and the stale target counterpart
+
+    def test_idless_localized_code_edit_frames_the_translation_task(self, tmp_path: Path):
+        # A slide_id-less id-less-localized CODE edit re-translates, so it frames as a
+        # translation task (validator "translation"), mirroring the engine's reconciliation.
+        plan = _seeded_plan(
+            tmp_path,
+            _slide("de", "g", "# ## G") + _idless_code("de", "a = 1") + _idless_code("de", "b = 2"),
+            _slide("en", "g", "# ## G") + _idless_code("en", "a = 1") + _idless_code("en", "b = 2"),
+            _slide("de", "g", "# ## G")
+            + _idless_code("de", "a = 1  # DE")
+            + _idless_code("de", "b = 2"),
+            _slide("en", "g", "# ## G")
+            + _idless_code("en", "a = 1")
+            + _idless_code("en", "b = 2  # EN"),
+        )
+        item = _the_edit_item(plan, direction="de->en")
+        assert item.slide_id is None and item.role == "localized-code"
+        task = build_task(plan, item.item)
+        assert task.validator == "translation"
+        assert task.answer_schema == TRANSLATION_ANSWER_SCHEMA
+        assert task.inputs["role"] == "code"
+        assert "a = 1  # DE" in task.prompt  # the drifted source code body IS the prompt
 
     def test_add_frames_the_translation_task(self, tmp_path: Path):
         de = "\n".join([_slide("de", "s1", "# ## eins"), _slide("de", "s2", "# ## NEUE Folie")])

@@ -267,6 +267,7 @@ def apply_plan(
     verifier: CorrespondenceVerifier | None = None,
     correspondence_cache: SyncCorrespondenceCache | None = None,
     deterministic_only: bool = False,
+    scope_to_proposals: bool = False,
 ) -> ApplyResult:
     """Apply ``plan``'s proposals to the decks and advance the watermark.
 
@@ -305,6 +306,14 @@ def apply_plan(
     the agent at ``report`` / ``task``). The caller must pass every model argument
     (``judge`` / ``translator`` / ``recoverer`` / ``verifier``) as ``None``; this
     flag only flips the engine's reaction to their absence from "error" to "defer".
+
+    ``scope_to_proposals`` is the surgical ``accept`` mode (epic #440): apply only the
+    explicit per-cell proposals (edit / remove / retag) the caller pruned the plan to,
+    flush, and return — skipping the structural pass, id-migration, group-order
+    reconciliation, and the whole-pass fail-safes. It exists so a single-item ``accept``
+    (which prunes the plan to one proposal and supplies a single-answer stand-in) cannot
+    re-derive structural drift from the live files and re-translate a *co-drifted*
+    sibling with that one answer. The watermark never advances in this mode.
     """
     result = ApplyResult()
 
@@ -432,6 +441,24 @@ def apply_plan(
             result.deferred += 1
             _note_deferred(deferred_keys, proposal)
         # "add" / "rename" are handled by _apply_adds below (always applied).
+
+    if scope_to_proposals:
+        # Scoped apply (epic #440, edit accept): write ONLY the explicit per-cell
+        # proposals (edit / remove / retag) the caller pruned the plan to, then
+        # persist — skipping the structural pass, id-migration, group-order
+        # reconciliation, and the whole-pass fail-safes. ``accept`` prunes the plan to
+        # a single proposal and supplies a single-answer stand-in judge/translator; if
+        # the structural pass ran it would re-derive drift from the live files and
+        # re-translate any *co-drifted* sibling (a neutral or id-less-localized cell
+        # the author also changed) with that one answer — silent cross-cell corruption
+        # — and the fail-safes, which assume a complete pass, would error on the other
+        # still-pending drift. The targeted cell is fully written by the per-cell walk
+        # above, so a scoped flush is all an edit accept needs. The watermark never
+        # advances here (a single-item accept must not bank the rest of the deck).
+        if not result.has_errors and not plan.has_errors:
+            _flush_states_atomically(de_state, en_state)
+            result.flushed = True
+        return result
 
     # The run's shared translation-outcome cache (#216 2b / #289 P2), keyed by
     # source-cell id: the add materializers fill it for the add walks, the

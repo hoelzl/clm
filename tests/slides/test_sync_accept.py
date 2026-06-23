@@ -4,9 +4,11 @@
 the deterministic validator the task named, and writes it to **both** split halves
 iff it passes — never calling a model. These tests cover the accepted kinds — ``add``
 (a translated new slide), ``realign`` (a drifted-id region re-identified from the
-agent's alignment map), and ``edit`` (a keyed localized cell reconciled: markdown via
-the judge verdict, code via the re-translated body) — plus the rejection / unavailable
-paths (which must write nothing) and the CLI surface.
+agent's alignment map), and ``edit`` (a drifted localized cell reconciled: markdown /
+narrative via the judge verdict, code via the re-translated body) — including the
+slide_id-less edits (a narrative companion #403, an id-less localized cell #365) applied
+in the engine's scoped mode so a co-drifted sibling is left untouched — plus the
+rejection / unavailable paths (which must write nothing) and the CLI surface.
 """
 
 from __future__ import annotations
@@ -75,6 +77,28 @@ def _code_localized(lang: str, sid: str, body: str) -> str:
 def _voiceover_idless(lang: str, body: str) -> str:
     """An id-less narrative (voiceover) companion — a slide_id-less prose edit source."""
     return f'# %% [markdown] lang="{lang}" tags=["voiceover"]\n{body}\n'
+
+
+def _idless_code(lang: str, body: str) -> str:
+    """A hash-only id-less *localized* code cell (no slide_id, no nameable construct)."""
+    return f'# %% lang="{lang}"\n{body}\n'
+
+
+def _idless_md(lang: str, body: str) -> str:
+    """A hash-only id-less *localized* markdown cell (no slide_id, no narrative role)."""
+    return f'# %% [markdown] lang="{lang}"\n# {body}\n'
+
+
+def _edit_by_direction(plan, direction: str) -> ReconciliationItem:  # noqa: ANN001
+    """The single ``edit`` report item flowing ``direction`` (asserts exactly one)."""
+    report = build_report(plan, with_excerpts=True)
+    edits = [
+        it
+        for it in (*report.assisted, *report.ambiguity)
+        if it.kind == "edit" and it.direction == direction
+    ]
+    assert len(edits) == 1, [(it.kind, it.role, it.direction, it.slide_id) for it in edits]
+    return edits[0]
 
 
 def _cell_by_id(path: Path, slide_id: str):  # noqa: ANN202
@@ -297,14 +321,20 @@ class TestAcceptEdit:
 
 
 # ---------------------------------------------------------------------------
-# accept_answer — unavailable kinds (honest hand-off, no write)
+# accept_answer — slide_id-less edit (narrative #403 + id-less localized #365)
 # ---------------------------------------------------------------------------
 
 
-class TestAcceptUnavailable:
-    def test_slide_id_less_edit_is_deferred(self, tmp_path: Path):
-        # An id-less voiceover (narrative) edit has no slide_id, so it reconciles through
-        # the structural-propagation pass — accept defers it with the next step.
+class TestAcceptSlideIdLessEdit:
+    """A drifted cell with no ``slide_id`` is accepted via the engine's scoped mode.
+
+    A narrative (``voiceover`` / ``notes``) cell is reconciled by the judge; an id-less
+    localized code cell by re-translation. ``accept`` prunes the plan to that one edit and
+    applies it with no structural pass, so a *co-drifted* sibling in the same group is
+    never touched (the regression these tests pin).
+    """
+
+    def test_narrative_voiceover_update_writes_target(self, tmp_path: Path):
         de_path, en_path, plan = _seeded_edit_plan(
             tmp_path,
             _slide("de", "a", "# ## A") + _voiceover_idless("de", "Hallo Welt"),
@@ -313,10 +343,120 @@ class TestAcceptUnavailable:
             _slide("en", "a", "# ## A") + _voiceover_idless("en", "Hello world"),
         )
         item = _the_edit(plan)
-        assert item.slide_id is None  # narrative is anchor-keyed, not slide_id-keyed
+        assert item.slide_id is None and item.role == "voiceover"  # narrative is anchor-keyed
+        result = accept_answer(
+            plan, item.item, {"verdict": "update", "proposed_text": "Hello dear world"}
+        )
+
+        assert result.applied and result.kind == "edit" and result.changed == 1
+        en_text = en_path.read_text(encoding="utf-8")
+        assert "Hello dear world" in en_text  # the agent's reconciled body reached EN
+        assert "Hallo liebe Welt" in de_path.read_text(encoding="utf-8")  # source untouched
+
+    def test_narrative_in_sync_is_a_no_op(self, tmp_path: Path):
+        de_path, en_path, plan = _seeded_edit_plan(
+            tmp_path,
+            _slide("de", "a", "# ## A") + _voiceover_idless("de", "Hallo Welt"),
+            _slide("en", "a", "# ## A") + _voiceover_idless("en", "Hello world"),
+            _slide("de", "a", "# ## A") + _voiceover_idless("de", "Hallo liebe Welt"),
+            _slide("en", "a", "# ## A") + _voiceover_idless("en", "Hello world"),
+        )
+        en_before = en_path.read_text(encoding="utf-8")
+        item = _the_edit(plan)
+        result = accept_answer(plan, item.item, {"verdict": "in_sync", "proposed_text": ""})
+
+        assert result.applied and result.changed == 0  # accepted, nothing written
+        assert en_path.read_text(encoding="utf-8") == en_before
+
+    def test_idless_localized_code_retranslates_only_the_targeted_cell(self, tmp_path: Path):
+        # Two id-less localized code cells; DE edits cell 0, EN edits cell 1 (each a
+        # one-sided winner → two resolvable localized-code edits). Accept ONLY cell 0's
+        # de->en edit: the targeted EN cell is re-translated, while the co-drifted cell 1
+        # (an en->de edit still pending) is left byte-for-byte on BOTH halves — proving
+        # the scoped apply skips the structural pass that would otherwise re-translate it.
+        de_path, en_path, plan = _seeded_edit_plan(
+            tmp_path,
+            _slide("de", "g", "# ## G") + _idless_code("de", "a = 1") + _idless_code("de", "b = 2"),
+            _slide("en", "g", "# ## G") + _idless_code("en", "a = 1") + _idless_code("en", "b = 2"),
+            _slide("de", "g", "# ## G")
+            + _idless_code("de", "a = 1  # DE")
+            + _idless_code("de", "b = 2"),
+            _slide("en", "g", "# ## G")
+            + _idless_code("en", "a = 1")
+            + _idless_code("en", "b = 2  # EN"),
+        )
+        item = _edit_by_direction(plan, "de->en")
+        assert item.slide_id is None and item.role == "localized-code"
+        result = accept_answer(plan, item.item, {"translated_body": "a = 1  # XL"})
+
+        assert result.applied and result.changed == 1
+        en_text, de_text = (
+            en_path.read_text(encoding="utf-8"),
+            de_path.read_text(encoding="utf-8"),
+        )
+        assert "a = 1  # XL" in en_text  # cell 0 EN twin re-translated from the answer
+        assert "a = 1  # DE" in de_text  # cell 0 DE source untouched
+        # The co-drifted sibling (cell 1, en->de) must be untouched on both halves:
+        assert "b = 2  # EN" in en_text  # EN's own edit to cell 1 survives verbatim
+        assert "b = 2  # EN" not in de_text  # NOT propagated onto DE (no structural pass)
+        assert "b = 2\n" in de_text  # DE cell 1 still its baseline body
+
+    def test_idless_localized_markdown_update_via_judge(self, tmp_path: Path):
+        de_path, en_path, plan = _seeded_edit_plan(
+            tmp_path,
+            _slide("de", "g", "# ## G") + _idless_md("de", "Eins") + _idless_md("de", "Zwei"),
+            _slide("en", "g", "# ## G") + _idless_md("en", "One") + _idless_md("en", "Two"),
+            _slide("de", "g", "# ## G")
+            + _idless_md("de", "Eins geaendert")
+            + _idless_md("de", "Zwei"),
+            _slide("en", "g", "# ## G") + _idless_md("en", "One") + _idless_md("en", "Two changed"),
+        )
+        item = _edit_by_direction(plan, "de->en")
+        assert item.slide_id is None and item.role == "localized-markdown"
+        result = accept_answer(
+            plan, item.item, {"verdict": "update", "proposed_text": "# One changed"}
+        )
+
+        assert result.applied and result.changed == 1
+        assert "# One changed" in en_path.read_text(encoding="utf-8")
+
+    def test_rejects_a_bad_narrative_verdict_and_writes_nothing(self, tmp_path: Path):
+        de_path, en_path, plan = _seeded_edit_plan(
+            tmp_path,
+            _slide("de", "a", "# ## A") + _voiceover_idless("de", "Hallo Welt"),
+            _slide("en", "a", "# ## A") + _voiceover_idless("en", "Hello world"),
+            _slide("de", "a", "# ## A") + _voiceover_idless("de", "Hallo liebe Welt"),
+            _slide("en", "a", "# ## A") + _voiceover_idless("en", "Hello world"),
+        )
         before = (de_path.read_text(encoding="utf-8"), en_path.read_text(encoding="utf-8"))
-        with pytest.raises(AcceptUnavailable, match="autopilot|verify|structural"):
-            accept_answer(plan, item.item, {"verdict": "update", "proposed_text": "Hi there"})
+        item = _the_edit(plan)
+        with pytest.raises(AcceptRejected, match="verdict"):
+            accept_answer(plan, item.item, {"proposed_text": "Hi there"})  # no verdict
+        assert (de_path.read_text(encoding="utf-8"), en_path.read_text(encoding="utf-8")) == before
+
+
+# ---------------------------------------------------------------------------
+# accept_answer — unavailable kinds (honest hand-off, no write)
+# ---------------------------------------------------------------------------
+
+
+class TestAcceptUnavailable:
+    def test_both_sided_conflict_is_unavailable(self, tmp_path: Path):
+        # A both-sided id-less localized edit is a tier-3 conflict (no clear winner) —
+        # accept refuses it (resolve-a-side is the agent's call), writing nothing.
+        de_path, en_path, plan = _seeded_edit_plan(
+            tmp_path,
+            _slide("de", "g", "# ## G") + _idless_code("de", "x = 1"),
+            _slide("en", "g", "# ## G") + _idless_code("en", "x = 1"),
+            _slide("de", "g", "# ## G") + _idless_code("de", "x = 1  # DE"),
+            _slide("en", "g", "# ## G") + _idless_code("en", "x = 1  # EN"),
+        )
+        report = build_report(plan, with_excerpts=True)
+        conflicts = [it for it in report.ambiguity if it.kind == "conflict"]
+        assert conflicts, [(it.kind, it.tier) for it in report.ambiguity]
+        before = (de_path.read_text(encoding="utf-8"), en_path.read_text(encoding="utf-8"))
+        with pytest.raises(AcceptUnavailable):
+            accept_answer(plan, conflicts[0].item, {"verdict": "update", "proposed_text": "x"})
         assert (de_path.read_text(encoding="utf-8"), en_path.read_text(encoding="utf-8")) == before
 
     def test_unknown_item_raises_keyerror(self, tmp_path: Path):

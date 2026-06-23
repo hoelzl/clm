@@ -21,18 +21,19 @@ with the agent's answer substituted for the model call:
 * **add** (a brand-new slide) → the answer is the translated cell body; the new
   slide's twin is translated by a single-answer stand-in over a plan **pruned to
   that one add**, so no other pending item is touched.
-* **edit** (a drifted **keyed** localized cell) → a **code** edit's answer is the
-  re-translated body (``{translated_body}``); a **prose** (markdown) edit's answer is
-  the judge verdict (``{verdict, proposed_text}``, with ``in_sync`` accepted as a
-  no-op). The write reuses the engine's edit path with a static judge / translator
-  carrying the agent's answer, over a plan pruned to that one edit.
+* **edit** (a drifted localized cell — **keyed**, a **narrative** companion #403, or an
+  **id-less localized** cell #365) → a **code** edit's answer is the re-translated body
+  (``{translated_body}``); a **prose** (markdown / narrative) edit's answer is the judge
+  verdict (``{verdict, proposed_text}``, with ``in_sync`` accepted as a no-op). The write
+  reuses the engine's edit path with a static judge / translator carrying the agent's
+  answer, over a plan pruned to that one edit and applied in the engine's
+  ``scope_to_proposals`` mode — only the per-cell write runs, no structural pass, so a
+  *co-drifted* sibling in the same slide group is never re-translated with this one answer.
 
-A **slide_id-less** edit (a narrative cell, #403, or an id-less localized cell, #365),
-cold-start correspondence (``mint`` / ``adopt`` / ``reconcile``) and the hand-judged
+Cold-start correspondence (``mint`` / ``adopt`` / ``reconcile``) and the hand-judged
 ambiguities (``conflict`` / ``issue``) are not accepted yet — :func:`accept_answer`
-raises :class:`AcceptUnavailable` with the right next step (the slide_id-less edit
-because it reconciles through the structural-propagation pass; the cold-start kinds
-because they mint identity, which ``autopilot`` / ``assign-ids`` still own).
+raises :class:`AcceptUnavailable` with the right next step (the cold-start kinds mint
+identity, which ``autopilot`` / ``assign-ids`` still own).
 """
 
 from __future__ import annotations
@@ -300,28 +301,25 @@ def _accept_realign(plan: SyncPlan, item: ReconciliationItem, answer: Any) -> Ac
 def _accept_edit(plan: SyncPlan, item: ReconciliationItem, answer: Any) -> AcceptResult:
     """Validate an edit answer and write the reconciled body onto the target half.
 
-    Scoped to a **keyed** edit (the cell carries a ``slide_id``), matching how the engine
-    reconciles one: a **code** edit's answer is the re-translated body (``{translated_body}``,
-    validator ``translation``); a **prose** (markdown) edit's answer is the judge verdict
-    (``{verdict, proposed_text}``, validator ``edit``). The write reuses the engine's own
-    edit path over a plan pruned to that one edit, with a static stand-in carrying the
-    agent's answer — the code branch consults the translator, the prose branch the judge,
-    so providing both keeps either path model-free. A ``verdict="in_sync"`` prose answer is
-    accepted as a no-op (the target already reflects the source; nothing written).
+    Covers every drifted localized cell — **keyed** (the cell carries a ``slide_id``),
+    **narrative** (an id-less ``voiceover`` / ``notes`` companion, #403), and **id-less
+    localized** (a ``lang=`` cell with no id, #365) — split exactly how the engine
+    reconciles each: a **code** edit's answer is the re-translated body
+    (``{translated_body}``, validator ``translation``); a **prose** (markdown / narrative)
+    edit's answer is the judge verdict (``{verdict, proposed_text}``, validator ``edit``,
+    with ``in_sync`` accepted as a no-op). The write reuses the engine's own edit path
+    over a plan pruned to that one edit, with a static stand-in carrying the agent's
+    answer — the code branch consults the translator, the prose branch the judge, so
+    providing both keeps either path model-free.
 
-    A ``slide_id``-less edit (a narrative cell, #403, or an id-less localized cell, #365)
-    is not accepted yet — those reconcile through the structural-propagation pass, which
-    needs more care to drive from a single answer — so it raises :class:`AcceptUnavailable`
-    pointing at ``autopilot`` / a hand-edit + ``verify``.
+    The pruned plan is applied in :func:`~clm.slides.sync_apply.apply_plan`'s
+    ``scope_to_proposals`` mode: only the per-cell write runs, with no structural pass.
+    That is what makes the id-less kinds safe to accept one at a time — the per-cell walk
+    targets the narrative by its ``(owning_slide_id, role, occ)`` anchor and the id-less
+    localized cell by its carried position, while skipping the structural pass keeps a
+    *co-drifted* sibling in the same slide group from being re-translated with this one
+    answer (which the single-answer stand-in would otherwise do).
     """
-    if item.slide_id is None:
-        raise AcceptUnavailable(
-            f"{item.item!r} is a slide_id-less edit (a narrative or an id-less localized "
-            "cell); `accept` does not write those yet — they reconcile through the "
-            "structural-propagation pass. Apply it with `clm slides sync autopilot` "
-            "(needs a key), or hand-edit the twin and run `clm slides sync verify`."
-        )
-
     from clm.infrastructure.llm.ollama_client import StaticSyncJudge, SyncProposal
     from clm.slides.sync_apply import apply_plan
 
@@ -364,6 +362,7 @@ def _accept_edit(plan: SyncPlan, item: ReconciliationItem, answer: Any) -> Accep
         judge=judge,
         translator=_SingleAnswerTranslator(body),
         watermark_cache=None,
+        scope_to_proposals=True,
     )
     if result.errors:
         raise AcceptRejected("; ".join(result.errors))
