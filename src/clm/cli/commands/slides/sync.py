@@ -1199,22 +1199,22 @@ def _walker_dict(walk: PlanWalkResult) -> dict:
 #
 # `clm slides sync` is a *group* of single-purpose verbs an agent drives. Bare
 # `clm slides sync DECK` defaults to the read-only `report`. The model-free agent
-# verbs — ``report`` / ``verify`` / ``task`` / ``accept`` / ``apply`` — never call a
-# model; ``report`` / ``verify`` still delegate to the legacy body (``slides_sync_cmd``,
-# registered as ``autopilot``) via ``ctx.invoke`` for their read paths, while ``apply``
-# now has its own deterministic tier-1 implementation (no models constructed). Redesign
-# decisions reflected:
+# verbs — ``report`` / ``verify`` / ``task`` / ``accept`` / ``apply`` — each have their
+# own implementation here (``_run_report`` / ``_run_verify`` / the verb bodies) and
+# never call a model; only ``autopilot`` (the legacy all-in-one, lazily registered)
+# constructs the embedded clients. Redesign decisions reflected:
 #   * read-by-default — bare ``sync DECK`` returns the report, never writes.
 #   * watermark demoted — ``report``/``verify`` baseline off git HEAD by default;
 #     ``report --use-watermark`` (or ``--baseline REF``) opts back in.
 #   * model-free engine path — ``apply`` applies only tier-1 and defers (not errors)
-#     the model-requiring residue (decision B; ``apply_plan(deterministic_only=True)``).
+#     the model-requiring residue (decision B; ``apply_plan(deterministic_only=True)``);
+#     ``task`` frames the rest and ``accept`` validates the agent's answer, both model-free.
 #   * model-import split — the agent verbs (this module) import NO model-client class;
 #     the four clients + the legacy all-in-one command live in ``sync_autopilot`` and are
 #     registered LAZILY, so importing this module (the CLI startup path) never loads them.
-# Still TODO (phase 3-4, see docs/claude/design/sync-agent-toolkit-redesign.md): ``edit``
-# accept + cold-pair ``task``/``accept``; ``baseline bless`` replacing ``--rebaseline``;
-# the §9 agent-guide info topic + skill migration.
+# Phases 1-4 have landed (verb surface + watermark demotion + ``task``/``accept`` for all
+# six kinds + the ``clm info`` cutover); the remaining cross-repo skill / PythonCourses
+# migration is gated on this PR merging (docs/claude/design/sync-agent-toolkit-redesign.md).
 # ---------------------------------------------------------------------------
 
 #: The autopilot verb is loaded lazily (only when invoked or in a ``--help`` listing), so

@@ -2067,9 +2067,13 @@ a better model/prompt). No model, no key.
 
 `show` / `bless` / `clear` / `prune` — inspect and maintain the demoted watermark
 accelerator. `bless` records the current working tree as the baseline (no commit
-needed; the replacement for the old `--rebaseline`, gated on `verify`). These are
-the same store as `clm slides watermark` (below), co-located with `sync` and
-renamed: `show` was `list`, plus `bless`.
+needed; the replacement for the old `--rebaseline`). It is gated on `verify`
+(structure only) and records **whatever is in the working tree** — it does not
+check the translation is correct or that the tree agrees with git `HEAD`, a
+weaker gate than `--rebaseline`'s git-HEAD no-op, so review with `git diff` and
+confirm the halves correspond before blessing. These are the same store as `clm
+slides watermark` (below), co-located with `sync` and renamed: `show` was `list`,
+plus `bless`.
 
 #### `clm slides sync autopilot`
 

@@ -126,10 +126,14 @@ Never writes, never calls a model, needs no API key. The **flat `plan` block is
 removed** (it was kept only for back-compat; the report is the contract).
 
 - Human form (no `--json`): a compact tier summary.
-- `--json`: the `ReconciliationReport` model verbatim — the versioned schema.
-- Exit code: `0` always (reporting is not a gate; use `verify` for a gate). *(Open
-  question O1 in §11: whether `report` should exit non-zero when `needs_agent`, for
-  CI drift sweeps. Recommendation: a separate `--exit-code` opt-in, default 0.)*
+- `--json`: the `ReconciliationReport` model as the `report` block of the envelope (the
+  flat `plan` / `apply` / `walker` keys are kept for back-compat consumers; `report` is
+  the blessed contract — the versioned schema).
+- Exit code: **`0` clean / `1` work pending (any tier) / `2` classifier error** —
+  *settled at SHIPMENT (O1 below): `report` doubles as a drift gate so a CI sweep can
+  branch on exit `0` without parsing JSON, and a human running bare `sync DECK` sees `1`
+  = "something is pending". `verify` remains the separate **structural** gate (0/2). An
+  agent still branches on the JSON booleans, not the exit code.*
 
 ### `verify` — the structural gate (read-only, no model, no watermark)
 
@@ -480,8 +484,11 @@ Each step is shippable on its own; 1 is the prototype the user asked to feel.
 
 ## 11. Open questions / risks
 
-- **O1 — `report` exit code.** Default `0` (reporting ≠ gating). Add `--exit-code` for
-  CI drift sweeps that want non-zero on `needs_agent`. *Recommendation: opt-in.*
+- **O1 — `report` exit code.** *SETTLED at shipment: `report` exits `0` clean / `1` work
+  pending / `2` classifier error* (not the originally-recommended `0`-always + opt-in
+  `--exit-code`). It doubles as a drift gate (gate CI on exit `0`), while `verify` is the
+  structural gate (`0`/`2`); an agent branches on the JSON booleans regardless. No
+  `--exit-code` flag was added — the default IS the gate.
 - **O2 — `--interactive`.** Keep only on `autopilot` (human path). *Recommendation:
   yes.*
 - **O3 — batch (`DIR`) semantics across verbs.** `report`/`verify` over a directory

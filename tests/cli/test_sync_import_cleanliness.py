@@ -58,6 +58,31 @@ def test_importing_sync_loads_neither_openai_nor_autopilot():
     assert probe.stdout.strip().endswith("OK")
 
 
+def test_importing_the_engine_modules_loads_no_model_client():
+    # The agent loop drives the ENGINE modules `sync_task` (frame) and `sync_accept`
+    # (validate + write) directly, not only the CLI module — so the model-free guarantee
+    # must hold there too. Pin that importing them loads NONE of the OpenAI SDK, the
+    # OpenRouter / Ollama client modules, or `sync_autopilot`. (Their static stand-ins are
+    # pure dataclasses; any live-client import is function-local, behind `autopilot`.)
+    probe = _run_probe(
+        """
+        import sys
+        import clm.slides.sync_task, clm.slides.sync_accept
+
+        for mod in (
+            "openai",
+            "clm.infrastructure.llm.openrouter_client",
+            "clm.infrastructure.llm.ollama_client",
+            "clm.cli.commands.slides.sync_autopilot",
+        ):
+            assert mod not in sys.modules, f"{mod} must not load on the agent engine path"
+        print("OK")
+        """
+    )
+    assert probe.returncode == 0, probe.stderr or probe.stdout
+    assert probe.stdout.strip().endswith("OK")
+
+
 def test_resolving_autopilot_loads_it_but_still_not_openai():
     # Accessing slides_sync_cmd (PEP 562 back-compat / the lazy verb spec) imports the
     # autopilot module — but even THAT does not construct a client, so the OpenAI SDK

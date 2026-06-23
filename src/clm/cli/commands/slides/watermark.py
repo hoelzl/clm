@@ -442,12 +442,19 @@ def baseline_bless_cmd(
     Replaces ``--rebaseline`` and closes #430: after you reconcile a split pair by hand
     (or with ``apply --no-cache``), ``bless`` snapshots the working tree as the new
     baseline so the next ``report`` / ``apply`` sees it as in sync — **without** the
-    throwaway commit ``--rebaseline``'s git-HEAD-no-op gate used to force. It is gated
-    on ``verify``: a structurally corrupt pair (mismatched ids, drifted shared cells,
-    header parity break) is **refused** so a genuine divergence is surfaced rather than
-    blessed, but ``bless`` trusts your assertion that the localized halves are
-    semantically in sync. DECK is a split half (``<deck>.de.py`` / ``<deck>.en.py``) or
-    bilingual stem; single pair only.
+    throwaway commit ``--rebaseline``'s git-HEAD-no-op gate used to force.
+
+    \b
+    ⚠ ``bless`` checks ONLY structure — it does **not** check that the translation is
+    correct, nor that the working tree agrees with git ``HEAD``. It records **whatever is
+    in the working tree** as the authoritative "in sync" reference, so an unreviewed or
+    wrong EN half present at bless time becomes the baseline the next ``report`` reads as
+    clean (a weaker gate than the ``--rebaseline`` it replaces, which required a git-HEAD
+    no-op). The gate is ``verify``: a structurally corrupt pair (mismatched ids, drifted
+    shared cells, header parity break) is **refused**. Review with ``git diff`` and
+    confirm the two halves correspond **before** blessing — ``bless`` trusts your
+    assertion that they are semantically in sync. DECK is a split half
+    (``<deck>.de.py`` / ``<deck>.en.py``) or bilingual stem; single pair only.
     """
     de_path, en_resolved = _resolve_single_path(deck, en_path)
     de_path, en_resolved = _resolve_sync_pair(de_path, en_resolved)
