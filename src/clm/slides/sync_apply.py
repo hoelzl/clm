@@ -213,6 +213,14 @@ class ApplyResult:
     # Per-deferral detail for cold-start mint/adopt (#231) — why the pair
     # was refused, incl. the rejected SlidePair headings on a verifier "no".
     cold_deferrals: list[ColdDeferralDetail] = field(default_factory=list)
+    # Issue #454: every ``old_id -> new_id`` a migration rewrote this pass (the §9
+    # deterministic id-migration and the §10 recovery alignment). The *carrier* for a
+    # later ledger/watermark re-key (#448 P3 / #366): an entry keyed by the old id can
+    # follow the slide to its new id instead of cold-starting. Only a non-None ->
+    # non-None *rename* is recorded — an adoption (None -> id) has no prior entry and a
+    # drop (id -> None) no destination, so both fall back to the safe cold-start. Not
+    # consumed yet (this issue is the capture; the consumer lands with the ledger MVP).
+    id_migrations: dict[str, str] = field(default_factory=dict)
 
     @property
     def applied(self) -> int:
@@ -2831,6 +2839,21 @@ def _extract_heading(body: str) -> str:
     return ""
 
 
+def _record_id_migration(result: ApplyResult, old_id: str | None, new_id: str | None) -> None:
+    """Record an ``old_id -> new_id`` slide_id rewrite in ``result`` (Issue #454).
+
+    The capture behind the future ledger/watermark re-key (#448 P3 / #366): a slide
+    that already carries a recorded entry under ``old_id`` can have that entry follow
+    it to ``new_id`` instead of cold-starting. Only a non-None -> non-None **rename**
+    is a carry — an adoption (``None -> id``, a fresh id onto a new cell) has no prior
+    entry to move, and a drop (``id -> None``) has no destination — so those fall back
+    to the safe cold-start and are deliberately not recorded in this old->new map. A
+    no-op (``old_id == new_id``) is skipped.
+    """
+    if old_id is not None and new_id is not None and old_id != new_id:
+        result.id_migrations[old_id] = new_id
+
+
 def _stamp_slide_id(cell: RawCell, slide_id: str) -> None:
     """Write ``slide_id="…"`` onto a cell header (mirrors assign-ids)."""
     stripped = _SLIDE_ID_RE.sub("", cell.lines[0]).rstrip()
@@ -3338,9 +3361,13 @@ def _migrate_one_deck(
         current_construct = construct_of(cell.metadata, cell.body)
         assert sid is not None and current_construct is not None  # guaranteed by _migration_target
         base_construct = baseline_constructs[sid]
-        _stamp_slide_id(target, sid)  # the id follows its construct
+        _stamp_slide_id(target, sid)  # the id follows its construct (target was id-less)
         new_slug = resolve_collision(current_construct, used_ids)
         used_ids.add(new_slug)
+        # The orphan's id (``sid``) moved to ``new_slug``: its recorded trust describes
+        # the orphan's content, so carry it there (#454). ``target`` adopting ``sid`` is
+        # a new cell — no prior entry, cold-start is correct — so it is not recorded.
+        _record_id_migration(result, sid, new_slug)
         _stamp_slide_id(cell, new_slug)  # the orphan gets a fresh content slug
         state.dirty = True
         result.applied_migrate += 1
@@ -3477,6 +3504,10 @@ def _migrate_localized_paired(
         _stamp_slide_id(en_targets[0], sid)
         new_slug = resolve_collision(de_cur, used_ids)  # de_cur == en_cur (neutral construct)
         used_ids.add(new_slug)
+        # Both orphans move ``sid -> new_slug`` (one logical rename, written to both
+        # halves); the targets adopting ``sid`` are new cells, so only the rename is
+        # recorded for a later ledger re-key (#454).
+        _record_id_migration(result, sid, new_slug)
         _stamp_slide_id(de_cell, new_slug)  # both orphans get the same fresh slug
         _stamp_slide_id(en_cell, new_slug)
         de_state.dirty = True
@@ -3851,6 +3882,11 @@ def _apply_alignment(
             desired = target  # a base id (continuation)
         if desired == current_id:
             continue
+        # Carry a recorded entry across the realign (#454): a continuation (an id'd cell
+        # re-identified to a base id) or a re-id onto a minted slug. The helper records
+        # only a non-None -> non-None rename, so a cleared id (drop) and a NEW id minted
+        # onto a previously id-less cell (adoption) are correctly skipped.
+        _record_id_migration(result, current_id, desired)
         if desired is None:
             _clear_slide_id(cell)
         else:
