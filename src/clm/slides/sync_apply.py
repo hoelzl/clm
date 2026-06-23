@@ -1833,6 +1833,61 @@ def _adopt_ids_in_split_pair(de_path: Path, en_path: Path, authority: str) -> in
 # ---------------------------------------------------------------------------
 
 
+def _reconcile_cross_product(
+    plan: SyncPlan, de_state: FileState, en_state: FileState
+) -> tuple[list[RawCell], list[RawCell], list[SlidePair]] | None:
+    """Locate the reconcile suspects and build the verifier's DE×EN pair cross-product.
+
+    The single definition the apply tier (:func:`_apply_reconcile`) and the agent
+    ``task`` / ``accept`` surface (:func:`reconcile_pairs`) both build the correspondence
+    cross-product from — so the verdict indices (the flat ``i*m+j``) can never misalign
+    between what the agent judges and what the engine applies. Returns ``(de_suspects,
+    en_suspects, pairs)``, or ``None`` when the bucket is degenerate: a single-direction
+    set, or a suspect that cannot be located (the files changed). For ``None`` there is no
+    cross-product to verify and the caller defers the whole set / surfaces nothing to frame.
+    """
+    reconciles = [p for p in plan.proposals if p.kind == "reconcile"]
+    de_props = [p for p in reconciles if p.direction == "de->en"]
+    en_props = [p for p in reconciles if p.direction == "en->de"]
+    de_suspects = [c for p in de_props if (c := _suspect_cell(de_state, "de", p)) is not None]
+    en_suspects = [c for p in en_props if (c := _suspect_cell(en_state, "en", p)) is not None]
+    if (
+        not de_props
+        or not en_props
+        or len(de_suspects) != len(de_props)
+        or len(en_suspects) != len(en_props)
+    ):
+        return None
+    pairs = [
+        SlidePair(
+            de_heading=_heading_line(de_c.body),
+            en_heading=_heading_line(en_c.body),
+            de_snippet=_snippet(de_c.body),
+            en_snippet=_snippet(en_c.body),
+            role=role_of(de_c.metadata) or "slide",
+        )
+        for de_c in de_suspects
+        for en_c in en_suspects
+    ]
+    return de_suspects, en_suspects, pairs
+
+
+def reconcile_pairs(plan: SyncPlan) -> list[SlidePair]:
+    """The DE×EN correspondence cross-product a committed ``reconcile`` bucket verifies.
+
+    The agent ``task`` / ``accept`` surface for #228 (epic #440): the engine emits the
+    same suspect cross-product :func:`_apply_reconcile` feeds the verifier, so the agent's
+    model judges it and ``accept`` rebuilds an identical pair list (the verdict indices
+    align by construction — both go through :func:`_reconcile_cross_product`). Empty when
+    the bucket is degenerate (one-directional — those suspects are one-sided adds, not
+    twins). Reads the (unchanged, pre-apply) files, so use only on a dry-run plan.
+    """
+    de_state = FileState.load(plan.de_path)
+    en_state = FileState.load(plan.en_path)
+    cross = _reconcile_cross_product(plan, de_state, en_state)
+    return cross[2] if cross is not None else []
+
+
 def _apply_reconcile(
     plan: SyncPlan,
     verifier: CorrespondenceVerifier | None,
@@ -1872,33 +1927,13 @@ def _apply_reconcile(
 
     de_state = FileState.load(plan.de_path)
     en_state = FileState.load(plan.en_path)
-    de_props = [p for p in reconciles if p.direction == "de->en"]
-    en_props = [p for p in reconciles if p.direction == "en->de"]
-    de_suspects = [c for p in de_props if (c := _suspect_cell(de_state, "de", p)) is not None]
-    en_suspects = [c for p in en_props if (c := _suspect_cell(en_state, "en", p)) is not None]
-    # A suspect that cannot be located (the files changed under us) or a single-direction
-    # bucket (shouldn't reach here) is not safe to resolve — defer the whole set.
-    if (
-        verifier is None
-        or not de_props
-        or not en_props
-        or len(de_suspects) != len(de_props)
-        or len(en_suspects) != len(en_props)
-    ):
+    cross = _reconcile_cross_product(plan, de_state, en_state)
+    # No verifier, an unlocatable suspect, or a single-direction bucket (no cross-product
+    # to verify) is not safe to resolve — defer the whole set.
+    if verifier is None or cross is None:
         result.deferred += len(reconciles)
         return
-
-    pairs = [
-        SlidePair(
-            de_heading=_heading_line(de_c.body),
-            en_heading=_heading_line(en_c.body),
-            de_snippet=_snippet(de_c.body),
-            en_snippet=_snippet(en_c.body),
-            role=role_of(de_c.metadata) or "slide",
-        )
-        for de_c in de_suspects
-        for en_c in en_suspects
-    ]
+    de_suspects, en_suspects, pairs = cross
     verdicts = _resolve_correspondence(verifier, correspondence_cache, pairs)
     if verdicts is None:  # safe-abort → refuse the whole set (never a wrong id)
         result.deferred += len(reconciles)

@@ -30,18 +30,19 @@ with the agent's answer substituted for the model call:
   ``scope_to_proposals`` mode — only the per-cell write runs, no structural pass, so a
   *co-drifted* sibling in the same slide group is never re-translated with this one answer.
 
-* **mint** / **adopt** (a cold-start pair) → the answer is the ``{pair_index → bool}``
-  correspondence verdict map; it is gated by
+* **mint** / **adopt** / **reconcile** (a pair whose correspondence is unconfirmed) →
+  the answer is the ``{pair_index → bool}`` correspondence verdict map; it is gated by
   :func:`~clm.slides.sync_recover.validate_correspondence` and applied through the same
-  cold-start path ``autopilot`` drives, only with a
+  cold-start / reconcile path ``autopilot`` drives, only with a
   :class:`~clm.slides.sync_recover.StaticCorrespondenceVerifier` carrying the agent's
-  verdicts instead of an OpenRouter call. An **all-yes** map mints the shared ids (mint)
-  / stamps the authority's ids (adopt); a map with any **no** declines (the halves are
-  misaligned there) — ``accept`` reports which pairs were rejected and writes nothing.
+  verdicts instead of an OpenRouter call. For a cold-start ``mint`` / ``adopt`` an
+  **all-yes** map mints / stamps the shared ids and any **no** declines; for a committed
+  ``reconcile`` (#228) each unambiguous mutual match has its divergent id rewritten
+  (EN-authority) and a genuinely-distinct leftover is deferred (it re-surfaces as an
+  ``add``). Either way a decline writes nothing and names the next step.
 
-The committed mismatched-id ``reconcile`` (#228) and the hand-judged ambiguities
-(``conflict`` / ``issue``) are not accepted yet — :func:`accept_answer` raises
-:class:`AcceptUnavailable` with the right next step.
+The hand-judged ambiguities (``conflict`` / ``issue``) are not accepted — :func:`accept_answer`
+raises :class:`AcceptUnavailable` with the right next step.
 """
 
 from __future__ import annotations
@@ -493,6 +494,76 @@ def _accept_cold(plan: SyncPlan, item: ReconciliationItem, answer: Any) -> Accep
 
 
 # ---------------------------------------------------------------------------
+# reconcile (#228) — verify the mismatched-id-twin cross-product, rewrite the id.
+# ---------------------------------------------------------------------------
+
+
+def _accept_reconcile(plan: SyncPlan, item: ReconciliationItem, answer: Any) -> AcceptResult:
+    """Validate the agent's cross-product verdicts and reconcile the mismatched-id twins.
+
+    The agent ran the ``correspondence`` task over the DE×EN suspect cross-product (#228)
+    and returned a ``{flat_index → bool}`` verdict map. Rebuild the SAME cross-product
+    (:func:`~clm.slides.sync_apply.reconcile_pairs`), gate the map (it must cover every
+    cross-product index), then apply through the engine's reconcile path with a
+    :class:`~clm.slides.sync_recover.StaticCorrespondenceVerifier` carrying the verdicts and
+    **no translator** — so an unambiguous mutual match has its divergent id rewritten
+    (EN-authority), while a genuinely-distinct leftover is *deferred* (the engine never
+    translates it; it re-surfaces as an ``add``). A bucket with no confirmed twin writes
+    nothing and is reported with the next step.
+    """
+    from clm.slides.sync_apply import apply_plan, reconcile_pairs
+    from clm.slides.sync_recover import (
+        CorrespondenceInvalid,
+        StaticCorrespondenceVerifier,
+        validate_correspondence,
+    )
+
+    pairs = reconcile_pairs(plan)
+    if not pairs:
+        raise AcceptRejected(
+            f"{item.item!r}: the reconcile bucket has no cross-product to verify (its "
+            "suspects are one-sided) — handle them as adds; re-run `clm slides sync report`."
+        )
+    verdicts = _decode_verdicts(answer)
+    try:
+        validate_correspondence(verdicts, pairs)
+    except CorrespondenceInvalid as exc:
+        raise AcceptRejected(f"correspondence verdicts rejected: {exc}") from exc
+
+    result = apply_plan(
+        plan,
+        judge=None,
+        translator=None,
+        verifier=StaticCorrespondenceVerifier(verdicts=verdicts, default=False),
+        watermark_cache=None,
+    )
+    if result.errors:
+        raise AcceptRejected("; ".join(result.errors))
+    if result.applied_reconcile:
+        detail = (
+            f"verified correspondence; reconciled {result.applied_reconcile} mismatched-id "
+            "twin(s) (EN-authority)."
+        )
+        if result.deferred:
+            detail += (
+                f" {result.deferred} leftover(s) deferred — re-run `clm slides sync report` "
+                "to handle them as adds."
+            )
+        return AcceptResult(
+            item=item.item,
+            kind=item.kind,
+            applied=True,
+            changed=result.applied_reconcile,
+            detail=detail,
+        )
+    raise AcceptRejected(
+        f"{item.item!r}: no twins were reconciled (your verdicts found no unambiguous "
+        "correspondence); the suspects are distinct slides — re-run `clm slides sync "
+        "report` to handle them as adds."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
 
@@ -522,10 +593,7 @@ def accept_answer(
     if item.kind in ("mint", "adopt"):
         return _accept_cold(plan, item, answer)
     if item.kind == "reconcile":
-        raise AcceptUnavailable(
-            f"{item.item!r} is a committed mismatched-id reconcile (#228); accepting it is "
-            "not wired yet — bootstrap the pair with `clm slides sync autopilot`."
-        )
+        return _accept_reconcile(plan, item, answer)
     raise AcceptUnavailable(
         f"{item.item!r} ({item.kind}) is an ambiguity for you to resolve by hand. Edit the "
         "deck to resolve it, then re-run `clm slides sync report` / `verify`."

@@ -3,14 +3,17 @@
 ``task`` emits everything a model needs to reconcile one tier-2/3 item (the system
 prompt, the ready-to-send prompt, the inputs, the answer schema, and the validator
 ``accept`` will run) **without the engine calling a model**. These tests cover the
-three framed kinds — ``edit`` (the sync judge), ``add`` (the translator), and
-``realign`` (the alignment recoverer) — plus the stable item-id contract both ``task``
-and ``accept`` address items by, and the CLI surface.
+framed kinds — ``edit`` (the sync judge), ``add`` (the translator), ``realign`` (the
+alignment recoverer), and ``mint`` / ``adopt`` / ``reconcile`` (the correspondence
+verifier — cold-start positional pairs or the reconcile cross-product) — plus the stable
+item-id contract both ``task`` and ``accept`` address items by, and the CLI surface.
 """
 
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -21,7 +24,12 @@ from clm.infrastructure.llm.sync_prompts import SYNC_SYSTEM_PROMPT
 from clm.notebooks.slide_parser import parse_cells
 from clm.slides.sync_plan import Proposal, SyncPlan, build_sync_plan, watermark_rows
 from clm.slides.sync_recover import CORRESPONDENCE_SYSTEM_PROMPT, RECOVERY_SYSTEM_PROMPT
-from clm.slides.sync_report import ReconciliationItem, ReconciliationReport, _assign_item_ids
+from clm.slides.sync_report import (
+    ReconciliationItem,
+    ReconciliationReport,
+    _assign_item_ids,
+    build_report,
+)
 from clm.slides.sync_task import (
     CORRESPONDENCE_ANSWER_SCHEMA,
     EDIT_ANSWER_SCHEMA,
@@ -75,6 +83,23 @@ def _pair(tmp_path: Path, de: str, en: str) -> tuple[Path, Path]:
     return de_path, en_path
 
 
+def _commit_pair(tmp_path: Path, de: str, en: str) -> tuple[Path, Path]:
+    """Write + commit a split pair so ``build_sync_plan`` resolves a git-HEAD baseline."""
+    de_path, en_path = _pair(tmp_path, de, en)
+
+    def _git(*args: str) -> None:
+        subprocess.run(
+            ["git", *args], cwd=str(tmp_path), check=True, capture_output=True, text=True
+        )
+
+    _git("init", "-q")
+    _git("config", "user.email", "t@example.com")
+    _git("config", "user.name", "Test")
+    _git("add", "-A")
+    _git("-c", "commit.gpgsign=false", "commit", "-q", "-m", "baseline")
+    return de_path, en_path
+
+
 def _seeded_plan(tmp_path: Path, de0: str, en0: str, de1: str, en1: str) -> SyncPlan:
     """Seed a watermark at (de0, en0), write the post-edit (de1, en1), return the plan."""
     de_path, en_path = _pair(tmp_path, de0, en0)
@@ -90,8 +115,6 @@ def _seeded_plan(tmp_path: Path, de0: str, en0: str, de1: str, en1: str) -> Sync
 
 def _the_edit_item(plan: SyncPlan, direction: str | None = None) -> ReconciliationItem:
     """The single ``edit`` report item (optionally filtered by direction)."""
-    from clm.slides.sync_report import build_report
-
     edits = [
         it
         for it in build_report(plan, with_excerpts=True).assisted
@@ -160,8 +183,6 @@ class TestItemIds:
         assert ids[0] != ids[1] and ids[1].endswith("-2")
 
     def test_ids_stable_across_two_report_builds(self, tmp_path: Path):
-        from clm.slides.sync_report import build_report
-
         de = "\n".join([_slide("de", "s1", "# ## eins"), _slide("de", "s2", "# ## zwei")])
         en = "\n".join([_slide("en", "s1", "# ## one"), _slide("en", "s2", "# ## two")])
         de_path, en_path = _pair(tmp_path, de, en)
@@ -342,8 +363,28 @@ class TestBuildTask:
         assert task.answer_schema == CORRESPONDENCE_ANSWER_SCHEMA
         assert len(task.inputs["pairs"]) == 2
 
-    def test_reconcile_is_unavailable_for_a_model_task(self, tmp_path: Path):
-        # A committed mismatched-id reconcile is the cold kind NOT yet framed.
+    @pytest.mark.skipif(shutil.which("git") is None, reason="git not available")
+    def test_reconcile_frames_the_correspondence_task(self, tmp_path: Path):
+        # A committed mismatched-id pair (s1 shared, B id'd d1/e1) frames the DE×EN
+        # suspect cross-product as a correspondence task (one task for the bucket).
+        de_path, en_path = _commit_pair(
+            tmp_path,
+            _slide("de", "s1", "# ## A") + _slide("de", "d1", "# ## B"),
+            _slide("en", "s1", "# ## A") + _slide("en", "e1", "# ## B"),
+        )
+        plan = build_sync_plan(de_path, en_path, provider_available=True)
+        assert plan.count("reconcile") == 2
+        recon = next(
+            it for it in build_report(plan, with_excerpts=True).assisted if it.kind == "reconcile"
+        )
+        task = build_task(plan, recon.item)
+        assert task.kind == "reconcile" and task.validator == "correspondence"
+        assert task.answer_schema == CORRESPONDENCE_ANSWER_SCHEMA
+        assert len(task.inputs["pairs"]) == 1  # the 1×1 DE×EN cross-product
+
+    def test_one_sided_reconcile_is_unavailable(self, tmp_path: Path):
+        # A degenerate ONE-DIRECTIONAL reconcile bucket has no cross-product to verify —
+        # its suspects are one-sided slides, framed as adds, so the task is unavailable.
         de, en = _slide("de", "s1", "# ## eins"), _slide("en", "s1", "# ## one")
         de_path, en_path = _pair(tmp_path, de, en)
         plan = _real_plan(
@@ -351,7 +392,7 @@ class TestBuildTask:
             en_path,
             Proposal(kind="reconcile", role="slide", direction="de->en", slide_id="s1"),
         )
-        with pytest.raises(TaskUnavailable, match="reconcile|autopilot"):
+        with pytest.raises(TaskUnavailable, match="one-sided|cross-product|adds"):
             build_task(plan, "reconcile-s1")
 
 

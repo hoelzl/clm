@@ -7,13 +7,17 @@ iff it passes — never calling a model. These tests cover the accepted kinds �
 agent's alignment map), and ``edit`` (a drifted localized cell reconciled: markdown /
 narrative via the judge verdict, code via the re-translated body) — including the
 slide_id-less edits (a narrative companion #403, an id-less localized cell #365) applied
-in the engine's scoped mode so a co-drifted sibling is left untouched — plus the
+in the engine's scoped mode so a co-drifted sibling is left untouched — and the
+correspondence-verdict kinds (cold-start ``mint`` / ``adopt`` and the committed ``reconcile``
+#228, applied through the engine's verifier path with the agent's verdicts) — plus the
 rejection / unavailable paths (which must write nothing) and the CLI surface.
 """
 
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -512,12 +516,12 @@ class TestAcceptColdStart:
         with pytest.raises(AcceptRejected, match="boolean"):
             accept_answer(plan, "mint", {"0": True, "1": "yes"})
 
-    def test_reconcile_is_unavailable(self, tmp_path: Path):
-        # A committed mismatched-id reconcile is not accepted yet — honest hand-off.
-        de = _slide("de", "d1", "# ## A")
-        en = _slide("en", "e1", "# ## A")
-        de_path, en_path = _pair(tmp_path, de, en)
-        # Build a plan and inject a reconcile proposal to exercise the dispatch branch.
+    def test_one_sided_reconcile_is_rejected(self, tmp_path: Path):
+        # A degenerate ONE-DIRECTIONAL reconcile bucket (a hand-built de->en suspect with
+        # no en->de twin) has no cross-product to verify — accept rejects with the next step.
+        de_path, en_path = _pair(
+            tmp_path, _slide("de", "d1", "# ## A"), _slide("en", "e1", "# ## A")
+        )
         plan = build_sync_plan(de_path, en_path, watermark_cache=None, provider_available=True)
         from clm.slides.sync_plan import Proposal
 
@@ -526,8 +530,77 @@ class TestAcceptColdStart:
         ]
         report = build_report(plan, with_excerpts=True)
         recon = next(it for it in report.assisted if it.kind == "reconcile")
-        with pytest.raises(AcceptUnavailable, match="reconcile|autopilot"):
+        with pytest.raises(AcceptRejected, match="one-sided|cross-product|adds"):
             accept_answer(plan, recon.item, {"0": True})
+
+
+# ---------------------------------------------------------------------------
+# accept_answer — reconcile (#228 committed mismatched-id twins via cross-product)
+# ---------------------------------------------------------------------------
+
+
+def _git(cwd: Path, *args: str) -> None:
+    subprocess.run(["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True)
+
+
+def _commit_pair(tmp_path: Path, de: str, en: str) -> tuple[Path, Path]:
+    """Write + commit a split pair so ``build_sync_plan`` resolves a git-HEAD baseline."""
+    de_path, en_path = _pair(tmp_path, de, en)
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "config", "user.email", "t@example.com")
+    _git(tmp_path, "config", "user.name", "Test")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "baseline")
+    return de_path, en_path
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not available")
+class TestAcceptReconcile:
+    """A committed mismatched-id twin (#228) is reconciled from cross-product verdicts.
+
+    The pair shares ``s1`` (so it keeps its git-HEAD baseline) but gives slide B a divergent
+    id per half → two `reconcile` suspects forming a 1×1 cross-product. An agent verdict of
+    "yes" rewrites the divergent id (EN-authority); "no" declines.
+    """
+
+    def _reconcile_plan(self, tmp_path: Path):  # noqa: ANN202
+        de_path, en_path = _commit_pair(
+            tmp_path,
+            _slide("de", "s1", "# ## A") + _slide("de", "d1", "# ## B"),
+            _slide("en", "s1", "# ## A") + _slide("en", "e1", "# ## B"),
+        )
+        plan = build_sync_plan(de_path, en_path, provider_available=True)
+        return de_path, en_path, plan
+
+    def _recon_item(self, plan):  # noqa: ANN001, ANN202
+        return next(
+            it for it in build_report(plan, with_excerpts=True).assisted if it.kind == "reconcile"
+        )
+
+    def test_confirmed_twin_reconciled_en_authority(self, tmp_path: Path):
+        de_path, en_path, plan = self._reconcile_plan(tmp_path)
+        assert plan.count("reconcile") == 2
+        en_before = en_path.read_text(encoding="utf-8")
+        result = accept_answer(plan, self._recon_item(plan).item, {"0": True})
+
+        assert result.applied and result.kind == "reconcile" and result.changed == 1
+        # DE's divergent id "d1" was rewritten to EN's "e1" (EN-authority); no slide doubled.
+        assert _slide_ids(de_path) == ["s1", "e1"] == _slide_ids(en_path)
+        assert en_path.read_text(encoding="utf-8") == en_before  # authority half untouched
+
+    def test_denied_twin_declines_and_writes_nothing(self, tmp_path: Path):
+        de_path, en_path, plan = self._reconcile_plan(tmp_path)
+        before = (de_path.read_text(encoding="utf-8"), en_path.read_text(encoding="utf-8"))
+        with pytest.raises(AcceptRejected, match="no twins|distinct|adds"):
+            accept_answer(plan, self._recon_item(plan).item, {"0": False})
+        assert (de_path.read_text(encoding="utf-8"), en_path.read_text(encoding="utf-8")) == before
+
+    def test_incomplete_cross_product_map_is_rejected(self, tmp_path: Path):
+        de_path, en_path, plan = self._reconcile_plan(tmp_path)
+        before = (de_path.read_text(encoding="utf-8"), en_path.read_text(encoding="utf-8"))
+        with pytest.raises(AcceptRejected, match="cover pair indices|rejected"):
+            accept_answer(plan, self._recon_item(plan).item, {})  # empty map (needs index 0)
+        assert (de_path.read_text(encoding="utf-8"), en_path.read_text(encoding="utf-8")) == before
 
 
 # ---------------------------------------------------------------------------

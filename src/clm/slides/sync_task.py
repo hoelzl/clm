@@ -22,12 +22,14 @@ path frame the work identically:
   (:func:`~clm.slides.sync_recover.build_recovery_user_prompt`); the answer is an
   ``{index → assignment}`` map. The region-level task, validated by
   :func:`~clm.slides.sync_recover.validate_alignment`.
-* **mint** / **adopt** (a cold-start pair with no shared identity) → the batch
-  correspondence-verification prompt
+* **mint** / **adopt** / **reconcile** (a pair whose correspondence is unconfirmed) →
+  the batch correspondence-verification prompt
   (:func:`~clm.slides.sync_recover.build_correspondence_user_prompt`); the answer is a
-  ``{pair_index → bool}`` verdict map (validator ``correspondence``). A single
-  **deck-level** task covers every aligned slide pair — the model confirms the halves
-  correspond before any shared id is minted / stamped.
+  ``{pair_index → bool}`` verdict map (validator ``correspondence``). A cold-start
+  ``mint`` / ``adopt`` frames every aligned slide pair (one **deck-level** task); a
+  committed mismatched-id ``reconcile`` (#228) frames the DE×EN suspect **cross-product**
+  (one task for the whole bucket). Either way the model confirms which halves correspond
+  before any shared id is minted / stamped / rewritten.
 
 Each task names the deterministic ``validator`` that ``clm slides sync accept`` will
 run on the answer (so ``accept`` can never apply the wrong check) and carries the
@@ -35,9 +37,9 @@ run on the answer (so ``accept`` can never apply the wrong check) and carries th
 and constructs none — building a task never reaches a model (decision B is
 structural here).
 
-The committed mismatched-id ``reconcile`` (#228) and the hand-judged ambiguities
-(``conflict`` / ``issue``) are not framed as model tasks yet — :func:`build_task`
-raises :class:`TaskUnavailable` with the right next step.
+The hand-judged ambiguities (``conflict`` / ``issue``) and a degenerate one-directional
+``reconcile`` (no cross-product — its suspects are one-sided ``add``s) are not framed as
+model tasks — :func:`build_task` raises :class:`TaskUnavailable` with the right next step.
 """
 
 from __future__ import annotations
@@ -81,7 +83,7 @@ __all__ = [
 ]
 
 #: The proposal kinds :func:`build_task` can frame as a single model task.
-_FRAMEABLE_KINDS = frozenset({"edit", "add", "realign", "mint", "adopt"})
+_FRAMEABLE_KINDS = frozenset({"edit", "add", "realign", "mint", "adopt", "reconcile"})
 
 #: Edit roles the engine reconciles by **re-translating** the source cell (rather than
 #: by the prose judge) — runnable code, keyed or id-less localized. Mirrors the
@@ -368,6 +370,28 @@ def _pair_dicts(pairs: list[SlidePair]) -> list[dict[str, Any]]:
     ]
 
 
+def _correspondence_task(item: ReconciliationItem, pairs: list[SlidePair]) -> SyncTask:
+    """Frame a list of candidate slide pairs as the correspondence-verification task.
+
+    Shared by the cold-start (``mint`` / ``adopt``) and committed-``reconcile`` paths —
+    the only difference is *which* pairs are verified (the positional cold pairs vs the
+    reconcile DE×EN cross-product); the prompt, validator, and answer schema are identical.
+    """
+    return SyncTask(
+        item=item.item,
+        kind=item.kind,
+        tier=item.tier,
+        slide_id=item.slide_id,
+        direction=item.direction,
+        role=item.role,
+        validator="correspondence",
+        instructions=CORRESPONDENCE_SYSTEM_PROMPT,
+        prompt=build_correspondence_user_prompt(pairs),
+        inputs={"pairs": _pair_dicts(pairs)},
+        answer_schema=CORRESPONDENCE_ANSWER_SCHEMA,
+    )
+
+
 def _cold_pair_task(item: ReconciliationItem, plan: SyncPlan) -> SyncTask:
     """Frame a cold-start ``mint`` / ``adopt`` as the batch correspondence task.
 
@@ -389,19 +413,27 @@ def _cold_pair_task(item: ReconciliationItem, plan: SyncPlan) -> SyncTask:
             f"{item.item!r}: the cold-start pair has no slides to verify — re-run "
             "`clm slides sync report` to refresh the plan."
         )
-    return SyncTask(
-        item=item.item,
-        kind=item.kind,
-        tier=item.tier,
-        slide_id=item.slide_id,
-        direction=item.direction,
-        role=item.role,
-        validator="correspondence",
-        instructions=CORRESPONDENCE_SYSTEM_PROMPT,
-        prompt=build_correspondence_user_prompt(pairs),
-        inputs={"pairs": _pair_dicts(pairs)},
-        answer_schema=CORRESPONDENCE_ANSWER_SCHEMA,
-    )
+    return _correspondence_task(item, pairs)
+
+
+def _reconcile_task(item: ReconciliationItem, plan: SyncPlan) -> SyncTask:
+    """Frame a committed mismatched-id ``reconcile`` bucket (#228) as a correspondence task.
+
+    The verification is over the DE×EN suspect **cross-product** (one task for the whole
+    bucket — the per-suspect report items dedup to it), answered by a verdict map keyed by
+    the flat ``i*m+j`` index. A *one-directional* bucket has no cross-product (its suspects
+    are one-sided slides, not twins), so it is unavailable as a correspondence task —
+    handle those as ``add``s.
+    """
+    from clm.slides.sync_apply import reconcile_pairs
+
+    pairs = reconcile_pairs(plan)
+    if not pairs:
+        raise TaskUnavailable(
+            f"{item.item!r}: the reconcile bucket has no cross-product to verify (its "
+            "suspects are one-sided) — handle them as `add`s; re-run `clm slides sync report`."
+        )
+    return _correspondence_task(item, pairs)
 
 
 def _task_for_item(
@@ -421,10 +453,7 @@ def _task_for_item(
     if item.kind in ("mint", "adopt"):
         return _cold_pair_task(item, plan)
     if item.kind == "reconcile":
-        raise TaskUnavailable(
-            f"{item.item!r} is a committed mismatched-id reconcile (#228); a `task` for it "
-            "is not wired yet — bootstrap the pair with `clm slides sync autopilot`."
-        )
+        return _reconcile_task(item, plan)
     raise TaskUnavailable(
         f"{item.item!r} ({item.kind}) is an ambiguity for you to resolve by hand"
         + (f": {item.reason}" if item.reason else "")
@@ -463,11 +492,12 @@ def build_tasks(
 ) -> tuple[list[SyncTask], list[ReconciliationItem]]:
     """Frame every frameable tier-2/3 item; return ``(tasks, unframed_items)``.
 
-    ``tasks`` are the ``edit`` / ``add`` / ``realign`` items framed as model tasks
-    (a realign region yields one task, deduplicated across its per-id items).
-    ``unframed_items`` are the remaining tier-2/3 items (cold-start pairs, conflicts,
-    issues) the caller surfaces with a pointer to ``report`` — they need a different
-    next step, not a model prompt.
+    ``tasks`` are the framed model tasks (``edit`` / ``add`` / ``realign`` /
+    ``mint`` / ``adopt`` / ``reconcile``). A *batch* task — a ``realign`` region or a
+    ``reconcile`` cross-product — surfaces one report item per drifted id / per suspect
+    but yields a single task, deduplicated by its (identical) prompt. ``unframed_items``
+    are the remaining tier-2/3 items (conflicts, issues, a one-sided reconcile) the caller
+    surfaces with a pointer to ``report`` — they need a different next step, not a prompt.
     """
     report = build_report(plan, with_excerpts=True)
     tasks: list[SyncTask] = []
@@ -484,9 +514,10 @@ def build_tasks(
         except TaskUnavailable:
             unframed.append(item)
             continue
-        # A realign region surfaces one report item per drifted id but one task; emit
-        # it once (keyed by the prompt, which is identical for the whole region).
-        key = task.prompt if task.kind == "realign" else task.item
+        # A batch task (a realign region, a reconcile cross-product) surfaces one report
+        # item per drifted id / per suspect but ONE task; emit it once, keyed by the prompt
+        # (identical for the whole batch). Per-item tasks are keyed by their unique item id.
+        key = task.prompt if task.kind in ("realign", "reconcile") else task.item
         if key in seen_tasks:
             continue
         seen_tasks.add(key)
