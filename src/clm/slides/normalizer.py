@@ -558,17 +558,25 @@ def _apply_interleaving(
                         file=file_path,
                         issue="similarity_failure",
                         suggestion=_similarity_suggestion(cells[de_i], cells[en_i], failed),
+                        # The agent pairing worklist (#236): the failed positional pair with
+                        # the FULL DE/EN bodies + a similarity score, so an agent can confirm
+                        # the pairing (a localized-but-correct twin) or spot a mis-pairing —
+                        # not just the truncated previews.
                         details={
                             "pair_index": pair_idx,
+                            "category": cat,
+                            "similarity_score": _similarity_score(cells[de_i], cells[en_i], failed),
                             "de_cell": {
                                 "line": cells[de_i].line_number,
                                 "tags": list(cells[de_i].metadata.tags),
                                 "preview": _cell_preview(cells[de_i]),
+                                "body": _cell_body(cells[de_i]),
                             },
                             "en_cell": {
                                 "line": cells[en_i].line_number,
                                 "tags": list(cells[en_i].metadata.tags),
                                 "preview": _cell_preview(cells[en_i]),
+                                "body": _cell_body(cells[en_i]),
                             },
                             "failed_checks": failed,
                         },
@@ -721,6 +729,43 @@ def _cell_preview(cell: _RawCell, max_len: int = 60) -> str:
                 return text[:max_len] + "..."
             return text
     return ""
+
+
+def _cell_body(cell: _RawCell) -> str:
+    """The cell's full content — the lines after its ``# %%`` header, trailing blanks trimmed.
+
+    The ``similarity_failure`` worklist (#236) carries this so an agent has the *whole* DE
+    and EN cell to judge the pairing by, not just the truncated :func:`_cell_preview`.
+    """
+    return "\n".join(cell.lines[1:]).rstrip("\n")
+
+
+def _applicable_check_count(de_cell: _RawCell, en_cell: _RawCell) -> int:
+    """How many similarity checks could fire for a DE/EN pair, given their cell types.
+
+    Tags + line-count always apply; heading-level + bullet-count are markdown-only;
+    code-structure is code-only — so the denominator of :func:`_similarity_score` reflects
+    only the checks that were actually possible for this pair.
+    """
+    n = 2  # tags + line_count
+    if de_cell.metadata.cell_type == "markdown" and en_cell.metadata.cell_type == "markdown":
+        n += 2  # heading_level + bullet_count
+    if de_cell.metadata.cell_type == "code" and en_cell.metadata.cell_type == "code":
+        n += 1  # code_structure
+    return n
+
+
+def _similarity_score(de_cell: _RawCell, en_cell: _RawCell, failed: list[str]) -> float:
+    """A 0.0–1.0 structural-similarity score (the fraction of applicable checks that passed).
+
+    The ``similarity_failure`` worklist (#236) surfaces this so an agent can rank how likely
+    a flagged positional pair is still the *correct* twin (a high score — a single localized
+    divergence) versus a genuine mis-pairing (a low score).
+    """
+    applicable = _applicable_check_count(de_cell, en_cell)
+    if applicable == 0:
+        return 0.0
+    return round(1.0 - len(failed) / applicable, 2)
 
 
 def _similarity_suggestion(de_cell: _RawCell, en_cell: _RawCell, failed: list[str]) -> str:

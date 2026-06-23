@@ -624,6 +624,33 @@ class TestInterleaving:
         assert result.review_items[0].issue == "similarity_failure"
         assert "tags" in result.review_items[0].details["failed_checks"]
 
+    def test_similarity_failure_worklist_carries_full_bodies_and_score(self, tmp_path):
+        # #236: the similarity_failure worklist gives an agent the FULL DE/EN cell bodies
+        # plus a 0..1 similarity score + the category, not just the truncated previews —
+        # enough to judge whether a flagged positional pair is a correct (localized) twin.
+        text = (
+            '# %% [markdown] lang="de" tags=["slide"]\n'
+            "# # Folie\n"
+            "# Ein zweiter Satz.\n"
+            "\n"
+            '# %% [markdown] lang="en" tags=["subslide"]\n'
+            "# # Slide\n"
+            "# A second sentence.\n"
+        )
+        path = _write_slide(tmp_path / "slides_test.py", text)
+        result = normalize_file(path, operations=["interleaving"])
+
+        assert len(result.review_items) == 1
+        d = result.review_items[0].details
+        assert d["category"] == "markdown"
+        # Only the tag check fails (slide vs subslide); the other 3 markdown checks pass.
+        assert d["failed_checks"] == ["tags"]
+        assert d["similarity_score"] == 0.75  # 1 - 1/4 applicable checks
+        # Full multi-line bodies, NOT the 60-char preview.
+        assert d["de_cell"]["body"] == "# # Folie\n# Ein zweiter Satz."
+        assert d["en_cell"]["body"] == "# # Slide\n# A second sentence."
+        assert d["de_cell"]["preview"] == "# # Folie"  # preview still present (back-compat)
+
     def test_voiceover_pairs_interleaved(self, tmp_path):
         """Voiceover cells are paired and interleaved like content cells."""
         text = (
