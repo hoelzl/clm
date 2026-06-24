@@ -300,6 +300,11 @@ class Topic(NotebookMixin, ABC):
                     continue
                 if is_ignored_file_for_course(sub):
                     continue
+                # Per-component exclusion. A ``.clm/`` in an *included source* is
+                # intentionally not materialized — including ``.clm/cassettes/``
+                # (issue #453): an include carries shared **source**, while
+                # cassettes belong to the *including topic's* own ``.clm/cassettes/``
+                # (written there at build time), not to a shared-source package.
                 if any(
                     part in {".git", ".venv", "__pycache__", "node_modules"}
                     or is_ignored_dir_for_course(Path(part))

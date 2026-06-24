@@ -449,7 +449,8 @@ auto-detected by directory presence everywhere (build, `extract`/`inline`/`sync`
 > so existing repos keep replaying with no change; `clm slides tidy` migrates them
 > (`git mv cassettes/ → .clm/cassettes/`). `.clm/cassettes/` (and the per-slide
 > sync ledger `.clm/sync-ledger.json`, issue #448) must stay **committed** — only
-> the regenerable `.clm/voiceover-cache|backfill|traces/` scratch is gitignored.
+> the regenerable `.clm/voiceover-cache|backfill|traces/` scratch and the transient
+> `*.http-cassette.yaml.staging-*` markers under `.clm/cassettes/` are gitignored.
 > `voiceover/` stays a top-level folder (the author edits its narration).
 
 *Adopt it:*

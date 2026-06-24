@@ -274,6 +274,10 @@ tools/diagnostic_output/
 **/.clm/*
 !**/.clm/cassettes/
 !**/.clm/sync-ledger.json
+# Transient per-build cassette staging markers regenerate every build (and the
+# orphan sweep / `clm slides tidy` delete them) — never commit them, even though
+# .clm/cassettes/ is now the default (tracked) write target.
+**/.clm/cassettes/*.http-cassette.yaml.staging-*
 
 # CLM LLM cache (default `tool.clm.cache_dir`, created by
 # `clm slides assign-ids --llm-suggest`, `clm slides coverage`, etc.)
