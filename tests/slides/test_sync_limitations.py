@@ -61,6 +61,16 @@ def _code_localized_idd(lang: str, sid: str, body: str) -> str:
     return f'# %% lang="{lang}" tags=["keep"] slide_id="{sid}"\n{body}\n'
 
 
+def _voiceover_idless(lang: str, body: str) -> str:
+    """An *id-less* voiceover narrative companion (anchor-managed, Issue #403)."""
+    return f'# %% [markdown] lang="{lang}" tags=["voiceover"]\n{body}\n'
+
+
+def _voiceover_idd(lang: str, sid: str, body: str) -> str:
+    """A *keyed* voiceover companion that shares its slide's id (the #443 shape)."""
+    return f'# %% [markdown] lang="{lang}" tags=["voiceover"] slide_id="{sid}"\n{body}\n'
+
+
 def _write_pair(tmp_path: Path, de: str, en: str) -> tuple[Path, Path]:
     de_path = tmp_path / "deck.de.py"
     en_path = tmp_path / "deck.en.py"
@@ -1369,3 +1379,111 @@ def test_issue454_clean_pass_records_no_migration(tmp_path: Path):
 
     assert result.applied_migrate == 0
     assert result.id_migrations == {}
+
+
+# ---------------------------------------------------------------------------
+# Issue #443 — a one-sided edit / removal of an asymmetric (id-less ↔ id'd)
+# voiceover companion must propagate or alert, never be silently dropped.
+#
+# Bundled fast reproduction of the two corpus-mutation oracle failures
+# (tests/slides/test_sync_corpus_mutation.py::test_keyed_companion_*): the deck
+# carries a voiceover companion that is id-less on DE but carries its slide's id
+# on EN. The id-less↔id'd reconcile (report #10) cancels the asymmetric pair's
+# adds every sync to avoid duplicate-voiceover doubling — but it must NOT cancel
+# a pair whose id'd half *drifted* (edited / removed), or the change vanishes
+# while the run reports "decks already consistent" (the #269 cardinal-invariant
+# violation). The engine alerts (an ``error`` issue that holds the watermark) and
+# tells the author to symmetrize the ids; propagating across the id-ness boundary
+# is exactly the doubling the reconcile guards against.
+# ---------------------------------------------------------------------------
+
+
+def _asymmetric_companion_pair(tmp_path: Path) -> tuple[Path, Path, SyncWatermarkCache]:
+    """A synced pair whose voiceover companion is id-less on DE, id'd on EN (#443)."""
+    de = _slide("de", "s1", "# ## Folie eins") + _voiceover_idless("de", "Hallo Welt")
+    en = _slide("en", "s1", "# ## Slide one") + _voiceover_idd("en", "s1", "Hello world")
+    de_path, en_path = _write_pair(tmp_path, de, en)
+    cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+    _seed(cache, de_path, en_path)
+    return de_path, en_path, cache
+
+
+def test_issue443_asymmetric_companion_is_a_clean_noop_when_unchanged(tmp_path: Path):
+    # The baseline behavior the reconcile exists for: with neither half changed the
+    # asymmetric pair re-pairs cleanly every sync — a true no-op, no alert. The fix
+    # must not regress this into a spurious error.
+    de_path, en_path, cache = _asymmetric_companion_pair(tmp_path)
+    try:
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+    finally:
+        cache.close()
+
+    assert plan.is_noop
+    assert not plan.has_errors
+    assert plan.count("add") == 0
+
+
+def test_issue443_one_sided_edit_of_keyed_companion_is_alerted(tmp_path: Path):
+    # The corpus ``test_keyed_companion_edit_is_judge_reconciled`` shape: editing the
+    # EN (id'd) half of the asymmetric companion used to report "decks already
+    # consistent" — silently dropping the edit. It must now alert.
+    de_path, en_path, cache = _asymmetric_companion_pair(tmp_path)
+    try:
+        en_path.write_text(
+            _slide("en", "s1", "# ## Slide one")
+            + _voiceover_idd("en", "s1", "Hello world, edited"),
+            encoding="utf-8",
+        )
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+    finally:
+        cache.close()
+
+    assert not plan.is_noop  # NOT a silent "already consistent"
+    assert plan.has_errors  # alerted (#269 propagate-or-alert)
+    assert plan.count("add") == 0  # the edit is not masked as a fresh narrative add
+    issue = next(i for i in plan.issues if i.severity == "error")
+    assert issue.slide_id == "s1"
+    assert "id-less" in issue.reason and "#443" in issue.reason
+
+
+def test_issue443_one_sided_removal_of_keyed_companion_is_alerted(tmp_path: Path):
+    # The corpus ``test_keyed_companion_remove_propagates`` shape: deleting the EN
+    # (id'd) half used to leave the surviving DE id-less half's add masquerading as a
+    # brand-new narrative — re-adding the deleted cell instead of propagating the
+    # removal. It must now alert, and emit no spurious add.
+    de_path, en_path, cache = _asymmetric_companion_pair(tmp_path)
+    try:
+        en_path.write_text(_slide("en", "s1", "# ## Slide one"), encoding="utf-8")
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+    finally:
+        cache.close()
+
+    assert not plan.is_noop
+    assert plan.has_errors
+    assert plan.count("add") == 0  # no "re-add the deleted companion" proposal
+    issue = next(i for i in plan.issues if i.severity == "error")
+    assert issue.slide_id == "s1"
+    assert "removal" in issue.reason
+
+
+def test_issue443_symmetric_keyed_companion_edit_still_propagates(tmp_path: Path):
+    # Guard the fix's blast radius: when BOTH halves carry the slide_id (a normal
+    # keyed companion, not asymmetric), a one-sided edit propagates as an ordinary
+    # keyed ``edit`` — the new alert must not fire.
+    de = _slide("de", "s1", "# ## Folie eins") + _voiceover_idd("de", "s1", "Hallo Welt")
+    en = _slide("en", "s1", "# ## Slide one") + _voiceover_idd("en", "s1", "Hello world")
+    de_path, en_path = _write_pair(tmp_path, de, en)
+    cache = SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+    try:
+        _seed(cache, de_path, en_path)
+        en_path.write_text(
+            _slide("en", "s1", "# ## Slide one")
+            + _voiceover_idd("en", "s1", "Hello world, edited"),
+            encoding="utf-8",
+        )
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+    finally:
+        cache.close()
+
+    assert plan.count("edit") == 1
+    assert not plan.has_errors
