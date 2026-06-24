@@ -1,10 +1,15 @@
 # Sync: A Per-Slide Consistency Ledger — Design Note
 
-**Status**: Design exploration. Direction **chosen** (§10): re-found the
-watermark as a git-committed, **per-slide** sync-consistency ledger. No code yet.
+**Status**: **Built — P1 + P2 shipped** (P3 remaining). Direction **chosen** (§10):
+re-found the watermark as a git-committed, **per-slide** sync-consistency ledger.
 **Revised 2026-06-23** with a code-grounded review pass — see **§11 Addendum**
 (corrects the storage path and the resolver framing; resolves sync-without-commit;
 adds the `bless`/`accept --record` confirm paths and the P0 prerequisites).
+**As-built P2 decisions recorded 2026-06-24 in §12** — the deliberate choices the
+implementation made (the four-rung trust ladder, `semantic` as the standalone
+`baseline establish` verb, the cost scope, the `edit`-only `accept --record`); read
+§12 alongside §8 so the divergences are not mistaken for plan drift. Only **P3**
+(id-migration ledger-carry) is unbuilt.
 **Author**: Claude (Opus 4.8)
 **Date**: 2026-06-23
 **Scope**: `src/clm/infrastructure/llm/cache.py` (`SyncWatermarkCache` +
@@ -326,6 +331,12 @@ field lets you find and re-check later.
 - **P2 — the strictness knob.** `--fallback assume|structural|semantic`; the
   `semantic` oracle lives in `autopilot` / the agent loop and **writes its verdict
   back** into the ledger with `confirmed_oracle`.
+  > **⚠ Refined in §12 (as built).** P2 shipped the same *capability* (a `semantic`
+  > rung that writes its verdict back) but **deliberately not as a `--fallback` knob
+  > on `autopilot`**: it is a standalone `baseline establish` verb, and a fourth
+  > `agent` rung (`accept --record`) landed alongside it. The full four-rung ladder
+  > and the reasons for each choice are recorded in **§12** — those divergences are
+  > deliberate decisions, not deviations from plan.
 - **P3 — ergonomics + identity.** `--since DATE` (#446) resolves the cold-path
   window; `--conflict de-wins|en-wins` (#447) for both-sided slides; id-migration
   carries ledger entries (couple to #366 realign).
@@ -556,3 +567,100 @@ re-judges every run) and the §1.2 "no historical commit is known-good" handling
 bare `--since REF` trusts that ref blindly). A legitimate week-one increment if the
 immediate pain is only scoping the reconcile window — but not a substitute for the
 ledger's incremental-reconcile payoff.
+
+---
+
+## 12. Addendum — P2 implementation decisions, as built (2026-06-24)
+
+> **Purpose of this section.** The P1/P2 implementation made several **deliberate
+> choices** that refine — and in places diverge from — the sketches in §3/§4/§8/§9.
+> They are recorded here so a future reader does not mistake them for drift between
+> plan and code. Each is a decision *taken on purpose*, with its rationale, and (where
+> applicable) the user who confirmed the fork. The direction of the note holds; these
+> are the load-bearing "as built" facts. PRs: #463 (P1 MVP), #464 (apply auto-write),
+> #465 (batch), #466 (seed), #467 (id-less narratives), #468 (`accept --record`),
+> #470 (autopilot `--ledger`), #472 (`baseline establish`).
+
+### 12.1 The trust ladder has **four** rungs, not three
+
+§3 listed `assume | structural | semantic`. As built there is a fourth, **`agent`**,
+between `structural` and `semantic` (it was foreshadowed in §11.4's
+`confirmed_oracle=agent`). `confirmed_oracle` therefore takes one of, cheapest →
+strongest: **`assume`** (inherited from the watermark by `baseline seed`, no check) <
+**`structural`** (passed the structural gate — `bless` / `apply --ledger` /
+`autopilot --ledger`) < **`agent`** (an agent reconciled the cell via `accept` and it
+passed a *per-slide* structural verify — `accept --record`) < **`semantic:<model>`**
+(an LLM judged the translation faithful — `baseline establish`). `confirmed_by` records
+the *action* (`seed` / `bless` / `apply` / `autopilot` / `accept` / `establish`). This
+keeps every provenance distinct and individually revocable, which is the whole point of
+recording the oracle (§4.3).
+
+### 12.2 `semantic` is a standalone `baseline establish` verb, **not** a `--fallback` knob on `autopilot`
+
+§8 P2 sketched `--fallback assume|structural|semantic` folded into the `autopilot`
+pass. **Decided (with the user) against that**, in favour of a dedicated
+`clm slides sync baseline establish` verb. Rationale: the semantic rung is the only
+ledger path that spends money (an LLM call per slide), so it belongs behind **one
+explicit, opt-in command** a user runs deliberately ("establish the ledger on this
+legacy deck"), not as a flag that silently turns every `autopilot` run into a paid
+audit. `autopilot` still gained `--ledger` (#470) — but only the *free* read overlay +
+`structural` write-back, never the model judge. This also keeps the model-free vs
+model-bearing split clean: `establish` is the one new model-bearing verb, isolated like
+`autopilot` (epic #440 decision B), with its client imported lazily so the agent path
+loads no model.
+
+### 12.3 The `semantic` recorder is a separate pass over the ledger, not the engine baseline
+
+Consistent with §11.2 (the ledger is a *trust overlay*, not a baseline), `establish`
+does **not** feed the position-based classifier. It reads the current localized pairs,
+judges the un-trusted ones, and writes verdicts back — a pure ledger operation. The
+judge is **injected** into `sync_ledger.record_semantic` (a `SemanticJudge` duck type),
+so the ledger module stays model-free; the concrete `OpenRouterSemanticJudge` lives in
+`sync_semantic.py` and is constructed only by the `establish` command.
+
+### 12.4 Cost scope: "cold + re-judge `assume` seeds", skip already-confirmed (operationalizing §9.4)
+
+§9.4 said "`semantic` only for slides the cheaper rungs cannot clear, always written
+back." As built (user-chosen scope), a slide is judged **iff it is not already trusted
+at its *current* halves by a real oracle**: judge the cold (no entry, or an entry at a
+*drifted* hash) **and** the `assume`-seeded (re-judging upgrades inherited trust to a
+real check); **skip** any slide already confirmed at its current hashes by `structural`
+/ `agent` / a prior `semantic` (never re-paid — counted as `skipped`). A re-judge of an
+`assume` entry overwrites it with `semantic:<model>`; a `structural`/`agent` entry is
+left untouched (no downgrade, no re-pay).
+
+### 12.5 `accept --record` is scoped to `edit`, by design (not an omission)
+
+`accept --record` (#468) banks **only** the one reconciled cell of an `edit` — the
+canonical "this translation is now correct, trust it" unit — keyed `(slide_id, role)`
+or, for an id-less narrative, `(owning_slide_id, role, occ)`. It deliberately does **not**
+record structural kinds (`add` / `mint` / `adopt` / `reconcile` / `realign`): their
+correct trust unit is "the whole now-coherent deck", which is what `apply --ledger` /
+`baseline bless --ledger` record once the deck is coherent. Banking a freshly-minted id
+mid-residue is exactly the "stamp synced while a sibling is unresolved" hazard guard 1
+exists to prevent — so the `edit`-only scope is the fail-safe choice. The per-item record
+is gated on a structural verify **scoped to that `slide_id` alone** (not `(slide_id,
+role)`): any real dup-id / asymmetry on the slide refuses, which keeps the ledger
+decoupled from `verify`'s internal role vocabulary and is strictly fail-safe (it can only
+refuse more, never record a corrupt cell).
+
+### 12.6 Provenance of the semantic verdict is `semantic:<model>` (the model, not the prompt version)
+
+The recorded `confirmed_oracle` is `f"semantic:{model}"` (per §4.1), built from the
+`--semantic-model` argument — so the *model* is legible and selectively distrustable. A
+prompt-only revision at the same model is **not** currently distinguished in the recorded
+provenance (the judge's `prompt_version` folds in the model but is reserved for a future
+result-cache key). If prompt-version revocability is ever needed, stamp `prompt_version`
+instead — a deliberate, deferred choice, noted so it is not read as a bug.
+
+### 12.7 Default model and residual risk
+
+The default judge is `anthropic/claude-haiku-4-5` (the cheap "are these twins?" tier the
+cold-pair correspondence verifier #216 already uses), overridable with `--semantic-model`
+— the §9.4 cost-discipline choice for a yes/no faithfulness judgement. **Accepted
+residual risk (by design, §4.3):** a structurally-valid-but-semantically-wrong pair the
+model judges *faithful* will be banked; the structural gate cannot catch it, and the
+`confirmed_oracle=semantic:<model>` provenance is the trail to re-check it later (the
+system prompt's "when unsure, return false" is the front-line mitigation). A judge
+failure or a malformed response **never** banks — the slide is left cold and re-judged on
+the next run.
