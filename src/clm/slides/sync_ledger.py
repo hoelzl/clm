@@ -89,10 +89,14 @@ class LedgerEntry:
 
 #: Id-less narrative key ``(owning_slide_id, role, occ)`` — the classifier's own
 #: narrative identity (:func:`~clm.slides.sync_plan._index_narratives_by_anchor`): the
-#: ``occ``-th ``role`` narrative under ``owning_slide_id`` in document order. ``occ`` is
-#: stable under a sibling-cell insert (unlike the predecessor anchor), so it pairs the
-#: DE narrative with its EN twin. ``owning_slide_id`` is ``None`` for a narrative under
-#: no slide. The #364/#365 residue the bare ``(slide_id, role)`` key cannot reach.
+#: ``occ``-th ``role`` narrative under ``owning_slide_id`` in document order, so it pairs
+#: the DE narrative with its EN twin. ``occ`` is stable under a *non-narrative* sibling
+#: insert (unlike the predecessor anchor); inserting another same-role narrative under
+#: the same slide DOES shift the trailing ``occ``\\s — but that is not a correctness
+#: hazard, because the overlay suppresses only on an exact both-halves hash match, so a
+#: shifted entry that no longer byte-matches simply is not trusted (fail-safe, never a
+#: silent edit drop). ``owning_slide_id`` is ``None`` for a narrative under no slide.
+#: Reaches the #364/#365 residue the bare ``(slide_id, role)`` key cannot.
 IdlessKey = tuple[str | None, str, int]
 
 
