@@ -1,15 +1,16 @@
 # Sync: A Per-Slide Consistency Ledger — Design Note
 
-**Status**: **Built — P1 + P2 shipped** (P3 remaining). Direction **chosen** (§10):
-re-found the watermark as a git-committed, **per-slide** sync-consistency ledger.
+**Status**: **Built — P1 + P2 + P3 all shipped** (#448 program complete). Direction
+**chosen** (§10): re-found the watermark as a git-committed, **per-slide**
+sync-consistency ledger.
 **Revised 2026-06-23** with a code-grounded review pass — see **§11 Addendum**
 (corrects the storage path and the resolver framing; resolves sync-without-commit;
 adds the `bless`/`accept --record` confirm paths and the P0 prerequisites).
-**As-built P2 decisions recorded 2026-06-24 in §12** — the deliberate choices the
-implementation made (the four-rung trust ladder, `semantic` as the standalone
-`baseline establish` verb, the cost scope, the `edit`-only `accept --record`); read
-§12 alongside §8 so the divergences are not mistaken for plan drift. Only **P3**
-(id-migration ledger-carry) is unbuilt.
+**As-built decisions recorded 2026-06-24 in §12** — the deliberate choices the
+implementation made (the four-rung trust ladder; `semantic` as the standalone
+`baseline establish` verb; the cost scope; the `edit`-only `accept --record`; the
+fail-safe id-migration carry, §12.8); read §12 alongside §8 so the divergences are
+not mistaken for plan drift.
 **Author**: Claude (Opus 4.8)
 **Date**: 2026-06-23
 **Scope**: `src/clm/infrastructure/llm/cache.py` (`SyncWatermarkCache` +
@@ -340,6 +341,10 @@ field lets you find and re-check later.
 - **P3 — ergonomics + identity.** `--since DATE` (#446) resolves the cold-path
   window; `--conflict de-wins|en-wins` (#447) for both-sided slides; id-migration
   carries ledger entries (couple to #366 realign).
+  > **⚠ Partly built (§12.8).** The **id-migration carry** shipped
+  > (`carry_id_migrations`, consuming #454's `id_migrations` — a renamed slide's
+  > entry follows its id instead of orphaning). `--since` (#446) and `--conflict`
+  > (#447) remain unbuilt ergonomics, tracked on their own issues.
 
 Each stage is independently shippable and none flips a breaking default until the
 git-derived per-slide baseline has proven out on real decks (the
@@ -664,3 +669,39 @@ model judges *faithful* will be banked; the structural gate cannot catch it, and
 system prompt's "when unsure, return false" is the front-line mitigation). A judge
 failure or a malformed response **never** banks — the slide is left cold and re-judged on
 the next run.
+
+### 12.8 P3 — id-migration carry, as built (2026-06-24)
+
+P3 (§6 "the sharpest risk", §8 P3) shipped as `sync_ledger.carry_id_migrations`, which
+consumes #454's `ApplyResult.id_migrations` (the non-None → non-None renames) and re-keys
+each affected ledger entry `(old_id, role)` → `(new_id, role)` — and the id-less narrative
+`(old_id, role, occ)` → `(new_id, role, occ)` — preserving the `LedgerEntry` verbatim
+(hashes + `confirmed_*`). Deliberate decisions:
+
+- **Carry keeps the OLD hashes and lets the overlay's exact-match gate decide.** It does
+  *not* re-hash against the new cell. Because `hash_cell` is `slide_id`-independent (it
+  hashes the body, reflow-normalized — §11.5), a **pure relabel** (body unchanged) still
+  matches → trust preserved; a rename that **also changed the body** no longer matches →
+  cold path (re-check). So carry is fail-safe by construction: it can preserve trust or
+  drop to a re-check, never silently wrong-suppress.
+- **Carry is unconditional and independent of recording.** It runs wherever ids migrate —
+  `accept` (a `realign` / `reconcile`, via `AcceptResult.id_migrations`, regardless of
+  `--record`), and `apply` / `autopilot --ledger` (via `_maybe_record_ledger`, **before**
+  the clean-gate, so even a residue pass that records nothing still doesn't orphan a
+  renamed slide). Carry *preserves* existing trust; `--record` / `record_pair` *add* it —
+  orthogonal operations.
+- **Conflict rule: drop the stale old, never clobber the new.** If `(new_id, role)` already
+  has an entry (the destination is already authoritative), the `(old_id, role)` entry is
+  dropped, not written over the destination. Carry never *creates* a ledger (a no-op when
+  none exists).
+- **Known minor:** a *clean* `apply --ledger` pass re-records every current slide via
+  `record_pair` (oracle `structural`), so for a content-stable relabel the carried richer
+  provenance (`semantic`/`agent`) is then overwritten with `structural` at the same hashes
+  — a provenance label downgrade, not a trust loss (the slide stays trusted; `establish`
+  still skips it). Preserving richer provenance across a re-record (a "don't downgrade at
+  identical hashes" rule on `record_pair`) is a deliberate deferral, noted so it is not
+  read as a bug. The `accept`-realign path has no such re-record, so it preserves
+  provenance fully.
+
+This completes the #448 program: **P1** (the committed overlay) + **P2** (the `agent` and
+`semantic` rungs) + **P3** (id-migration carry) are all built.
