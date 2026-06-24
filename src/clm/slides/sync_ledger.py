@@ -871,3 +871,70 @@ def record_semantic(
     if changed:
         save(ledger, path)
     return result
+
+
+# ---------------------------------------------------------------------------
+# Id-migration carry (P3) — re-key ledger entries across a slide_id rename so a
+# confirmed slide follows its id instead of orphaning to the cold path (#366/#454).
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class CarryResult:
+    """Outcome of :func:`carry_id_migrations`."""
+
+    path: Path
+    carried: int = 0  # entries (id'd + id-less narratives) re-keyed old -> new
+    dropped: int = 0  # stale old entries removed because the new key already existed
+
+
+def carry_id_migrations(de_path: Path, id_migrations: dict[str, str]) -> CarryResult:
+    """Re-key ledger entries across an ``old_id -> new_id`` slide_id rename (#448 P3).
+
+    Consumes :attr:`~clm.slides.sync_apply.ApplyResult.id_migrations` (#454 — the
+    non-None -> non-None renames a ``realign`` / deterministic id-migration performed):
+    a slide that already carries a ledger entry under ``old_id`` has that entry **follow
+    it to ``new_id``** (key rewritten, ``LedgerEntry`` preserved verbatim — hashes and
+    ``confirmed_*`` provenance intact) instead of orphaning to the cold path (design §6,
+    the sharpest risk). Both the id'd ``(old_id, role)`` entries and the id-less narrative
+    ``(old_id, role, occ)`` entries *owned by* ``old_id`` are carried.
+
+    **Fail-safe by construction.** The carried entry keeps its *old* hashes, so the
+    overlay's exact both-halves gate still decides suppression correctly at ``new_id``:
+    a pure relabel (content unchanged) matches and stays trusted; a rename that *also*
+    changed the cell body no longer matches and re-checks (cold path) — never a silent
+    wrong-suppression. If ``new_id`` already has an entry (the destination is already
+    authoritative) the stale ``old_id`` entry is **dropped**, not clobbered over it.
+
+    A no-op when there is no ledger file or no migrations (it never *creates* a ledger —
+    carry only moves existing trust). Saves only if something changed.
+    """
+    path = ledger_path_for(de_path)
+    if not id_migrations or not path.is_file():
+        return CarryResult(path=path)
+
+    ledger = load(path)
+    carried = 0
+    dropped = 0
+    for old_id, new_id in id_migrations.items():
+        if old_id == new_id:
+            continue
+        for role in [r for (sid, r) in list(ledger.entries) if sid == old_id]:
+            entry = ledger.entries.pop((old_id, role))
+            if (new_id, role) in ledger.entries:
+                dropped += 1  # new key already authoritative — drop the stale old, don't clobber
+            else:
+                ledger.entries[(new_id, role)] = entry
+                carried += 1
+        for key in [k for k in list(ledger.idless) if k[0] == old_id]:
+            entry = ledger.idless.pop(key)
+            new_key: IdlessKey = (new_id, key[1], key[2])
+            if new_key in ledger.idless:
+                dropped += 1
+            else:
+                ledger.idless[new_key] = entry
+                carried += 1
+
+    if carried or dropped:
+        save(ledger, path)
+    return CarryResult(path=path, carried=carried, dropped=dropped)

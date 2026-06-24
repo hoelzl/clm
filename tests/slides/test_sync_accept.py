@@ -260,6 +260,16 @@ class TestAcceptRealign:
             accept_answer(plan, "realign-def-my-fun", {"0": "not-a-base-id", "1": "def-my-fun"})
         assert (de_path.read_text(encoding="utf-8"), en_path.read_text(encoding="utf-8")) == before
 
+    def test_realign_surfaces_id_migrations_for_the_ledger_carry(self, tmp_path: Path):
+        # #448 P3: a realign rewrites slide_ids; the AcceptResult must surface the
+        # old->new map so `accept` can carry the consistency ledger across the rename
+        # (the CLI consumes result.id_migrations via `carry_id_migrations`).
+        _de, _en, plan = _realign_plan(tmp_path)
+        result = accept_answer(plan, "realign-def-my-fun", {"0": "new", "1": "def-my-fun"})
+        assert result.applied and result.id_migrations  # a non-empty rename map for the carry
+        # Every entry is a genuine non-None -> non-None rename (the carry's contract).
+        assert all(old and new and old != new for old, new in result.id_migrations.items())
+
 
 # ---------------------------------------------------------------------------
 # accept_answer — edit (keyed: markdown via judge, code via re-translation)
