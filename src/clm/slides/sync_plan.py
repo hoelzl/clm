@@ -3978,13 +3978,16 @@ def _apply_ledger_overlay(
 ) -> int:
     """Drop content proposals for ledger-trusted slides; return the count dropped.
 
-    A proposal is suppressed only when its ``(slide_id, role)`` is recorded in-sync at
-    **exactly** both current half-hashes (:meth:`SyncLedger.trusts`) — so the slide is
-    byte-stable since its confirmation. Restricted to the content-reconciliation kinds
-    (``edit`` / ``conflict``): the ledger certifies *content* (the two halves' hashes),
-    not position or structure, so ``add`` / ``remove`` / ``move`` / ``rename`` / cold-
-    start candidates are never suppressed (a reorder of a byte-stable slide is a real
-    change the ledger must not mask).
+    A proposal is suppressed only when its identity is recorded in-sync at **exactly**
+    both current half-hashes — so the slide is byte-stable since its confirmation. Two
+    identities: an **id'd** cell keys by ``(slide_id, role)`` (:meth:`SyncLedger.trusts`);
+    an **id-less narrative** (voiceover / notes, ``slide_id is None``) keys by
+    ``(owning_slide_id, role, occ)`` (:meth:`SyncLedger.trusts_idless`) — the same
+    ``occ`` the narrative proposal carries (``anchor_occ``). Restricted to the
+    content-reconciliation kinds (``edit`` / ``conflict``): the ledger certifies
+    *content* (the two halves' hashes), not position or structure, so ``add`` /
+    ``remove`` / ``move`` / ``rename`` / cold-start candidates are never suppressed (a
+    reorder of a byte-stable slide is a real change the ledger must not mask).
     """
     # A genuine duplicate ``(slide_id, role)`` within a half is resolved structurally
     # (``_resolve_duplicates`` → a ``rename``, which this overlay never suppresses), so
@@ -3992,19 +3995,44 @@ def _apply_ledger_overlay(
     # maps iterate source order, so they collapse to the same cell.
     de_by_key = {(c.slide_id, c.role): c.content_hash for c in de_current if c.slide_id}
     en_by_key = {(c.slide_id, c.role): c.content_hash for c in en_current if c.slide_id}
+    # Id-less narratives keyed by (owning_slide_id, role, occ) — the classifier's own
+    # identity, so the proposal's (owning_slide_id, role, anchor_occ) looks up the same
+    # cell. ``set()`` skip-owning matches the record path; occ is per (owning, role), so
+    # it agrees with the classifier on every key a proposal can carry (a dup-slide
+    # narrative is indexed but never bears a proposal).
+    de_narr = {
+        k: c.content_hash
+        for k, c in _index_narratives_by_anchor(
+            [c for c in de_current if c.role in NARRATIVE_ROLES and c.slide_id is None], set()
+        ).items()
+    }
+    en_narr = {
+        k: c.content_hash
+        for k, c in _index_narratives_by_anchor(
+            [c for c in en_current if c.role in NARRATIVE_ROLES and c.slide_id is None], set()
+        ).items()
+    }
     kept: list[Proposal] = []
     skipped = 0
     for p in plan.proposals:
-        if p.kind in ("edit", "conflict") and p.slide_id is not None:
-            de_h = de_by_key.get((p.slide_id, p.role))
-            en_h = en_by_key.get((p.slide_id, p.role))
-            if (
-                de_h is not None
-                and en_h is not None
-                and ledger.trusts(p.slide_id, p.role, de_h, en_h)
-            ):
-                skipped += 1
-                continue
+        if p.kind in ("edit", "conflict"):
+            if p.slide_id is not None:
+                de_h = de_by_key.get((p.slide_id, p.role))
+                en_h = en_by_key.get((p.slide_id, p.role))
+                if (
+                    de_h is not None
+                    and en_h is not None
+                    and ledger.trusts(p.slide_id, p.role, de_h, en_h)
+                ):
+                    skipped += 1
+                    continue
+            elif p.role in NARRATIVE_ROLES:
+                key = (p.owning_slide_id, p.role, p.anchor_occ)
+                de_h = de_narr.get(key)
+                en_h = en_narr.get(key)
+                if de_h is not None and en_h is not None and ledger.trusts_idless(key, de_h, en_h):
+                    skipped += 1
+                    continue
         kept.append(p)
     plan.proposals = kept
     return skipped
