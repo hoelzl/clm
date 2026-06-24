@@ -212,9 +212,11 @@ consistency ledger** (`<topic>/.clm/sync-ledger.json`, committed) fixes that.
   checked as usual (the cold path).
 - It is a **trust overlay**, not a new baseline: the classification is unchanged,
   the ledger only removes proposals the recorded trust makes redundant. Opt-in
-  (default off = today's behavior exactly), single pair in this release (run it
-  per deck), and `git log -S<slide_id> -- '**/sync-ledger.json'` answers "when was
-  slide X last synced?" exactly — from the record, not inferred.
+  (default off = today's behavior exactly); **works over a directory** too — point
+  `report`/`apply --ledger` at a whole module and each pair uses its own topic
+  ledger (the batch reports the aggregate skipped/recorded). And `git log
+  -S<slide_id> -- '**/sync-ledger.json'` answers "when was slide X last synced?"
+  exactly — from the record, not inferred.
 
 ## A clean, committed, id-less deck is *consistent* (not a cold start)
 

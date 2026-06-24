@@ -286,16 +286,6 @@ def test_cli_bless_ledger_json(tmp_path: Path) -> None:
     assert payload["ledger_recorded"] == 1
 
 
-def test_cli_report_ledger_on_directory_refuses(tmp_path: Path) -> None:
-    from click.testing import CliRunner
-
-    (tmp_path / "deck.de.py").write_text(_slide("de", "s1", "Hallo"), encoding="utf-8")
-    (tmp_path / "deck.en.py").write_text(_slide("en", "s1", "Hello"), encoding="utf-8")
-    res = CliRunner().invoke(_cli(), ["slides", "sync", "report", str(tmp_path), "--ledger"])
-    assert res.exit_code != 0
-    assert "single-pair" in res.output
-
-
 def test_cli_report_ledger_skips_relitigation(tmp_path: Path) -> None:
     from click.testing import CliRunner
 
@@ -410,3 +400,86 @@ def test_cli_apply_ledger_json_block(tmp_path: Path) -> None:
     assert res.exit_code == 0, res.output
     payload = json.loads(res.output[res.output.index("{") : res.output.rindex("}") + 1])
     assert payload["ledger"] == {"skipped": 0, "recorded": 1}
+
+
+# ---------------------------------------------------------------------------
+# Batch --ledger over a directory (report overlay + apply auto-write per pair)
+# ---------------------------------------------------------------------------
+
+
+def _make_batch(tmp_path: Path) -> tuple[Path, Path, list[tuple[Path, Path]]]:
+    """A course root with two in-sync slide-pair topics + a seeded watermark cache.
+
+    Returns ``(root, cache_dir, pairs)``. Files are named ``slides_NNN.*`` so the
+    batch walk (``find_split_slide_files_recursive``) discovers them.
+    """
+    from clm.slides.pairing import find_split_slide_files_recursive, iter_split_pairs
+
+    root = tmp_path / "course"
+    for i in range(1, 3):
+        topic = root / f"topic_{i}"
+        topic.mkdir(parents=True)
+        (topic / f"slides_{i:03d}.de.py").write_text(
+            _slide("de", f"s{i}", "Hallo"), encoding="utf-8"
+        )
+        (topic / f"slides_{i:03d}.en.py").write_text(
+            _slide("en", f"s{i}", "Hello"), encoding="utf-8"
+        )
+    pairs, _solos = iter_split_pairs(find_split_slide_files_recursive(root))
+    cache_dir = tmp_path / ".clm-cache"
+    cache_dir.mkdir()
+    cache = SyncWatermarkCache(cache_dir / "clm-llm.sqlite")
+    try:
+        for de, en in pairs:
+            _seed_watermark(cache, de, en)
+    finally:
+        cache.close()
+    return root, cache_dir, pairs
+
+
+def test_cli_report_ledger_batch_overlays_per_pair(tmp_path: Path) -> None:
+    from click.testing import CliRunner
+
+    root, cache_dir, pairs = _make_batch(tmp_path)
+    de_a, en_a = pairs[0]
+    # Drift pair A's DE, then record the ledger at the current state (watermark stays
+    # at the original) — so against the watermark A would `edit`, but the ledger trusts it.
+    de_a.write_text(_slide("de", "s1", "Hallo erweitert"), encoding="utf-8")
+    record_pair(de_a, en_a, confirmed_by="bless", commit="now")
+
+    runner = CliRunner()
+    common = ["--use-watermark", "--cache-dir", str(cache_dir)]
+    # Without --ledger the drifted pair needs review (exit 1).
+    without = runner.invoke(_cli(), ["slides", "sync", "report", str(root), *common])
+    assert without.exit_code == 1
+    # With --ledger A is trusted → both pairs clean → exit 0, and no UsageError (batch ok).
+    with_ledger = runner.invoke(
+        _cli(), ["slides", "sync", "report", str(root), "--ledger", *common]
+    )
+    assert with_ledger.exit_code == 0, with_ledger.output
+    assert "1 slide(s) skipped" in with_ledger.output
+
+
+def test_cli_apply_ledger_batch_records_each_pair(tmp_path: Path) -> None:
+    from click.testing import CliRunner
+
+    root, cache_dir, pairs = _make_batch(tmp_path)  # both in sync
+    res = CliRunner().invoke(
+        _cli(),
+        [
+            "slides",
+            "sync",
+            "apply",
+            str(root),
+            "--ledger",
+            "--yes",
+            "--json",
+            "--cache-dir",
+            str(cache_dir),
+        ],
+    )
+    assert res.exit_code == 0, res.output
+    payload = json.loads(res.output[res.output.index("{") : res.output.rindex("}") + 1])
+    assert payload["ledger"] == {"skipped": 0, "recorded": 2}  # one slide per pair
+    for de, _en in pairs:
+        assert ledger_path_for(de).is_file()
