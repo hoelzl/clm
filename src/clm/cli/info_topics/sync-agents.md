@@ -223,6 +223,11 @@ consistency ledger** (`<topic>/.clm/sync-ledger.json`, committed) fixes that.
   ledger (the batch reports the aggregate skipped/recorded). And `git log
   -S<slide_id> -- '**/sync-ledger.json'` answers "when was slide X last synced?"
   exactly — from the record, not inferred.
+- **Coverage**: id'd slides (`(slide_id, role)`) *and* id-less localized
+  **narratives** — voiceover / notes with no `slide_id` — keyed by
+  `(owning_slide_id, role, occ)` (the n-th such narrative under its owning slide),
+  so the voiceover-heavy decks the bare-id key used to miss are covered. Id-less
+  localized *code* is still governed by the structural pass, not the ledger.
 
 ## A clean, committed, id-less deck is *consistent* (not a cold start)
 

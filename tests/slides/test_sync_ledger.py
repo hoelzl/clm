@@ -584,3 +584,123 @@ def test_cli_baseline_seed_single_and_directory(tmp_path: Path) -> None:
     payload = json.loads(batch.output[batch.output.index("{") : batch.output.rindex("}") + 1])
     # Pair A already seeded (fill-gaps → 0), pair B newly seeded (1) → total 1.
     assert payload["seeded"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Id-less localized narratives — keyed by (owning_slide_id, role, occ) (§11.2)
+# ---------------------------------------------------------------------------
+
+
+def _vo(lang: str, body: str) -> str:
+    """An id-less localized voiceover narrative (no slide_id)."""
+    return f'# %% [markdown] lang="{lang}" tags=["voiceover"]\n{body}\n'
+
+
+def _ordered_with_identity(text: str, lang: str) -> list:
+    """``ordered_sync_cells`` with the narrative identity stamped (owning_slide_id/anchor)."""
+    from clm.slides.raw_cells import split_cells
+    from clm.slides.sync_plan import narrative_identity_map
+
+    identity = narrative_identity_map(split_cells(text, "#")[1])
+    return ordered_sync_cells(parse_cells(text, "#"), lang, identity)
+
+
+def test_record_pair_records_idless_narrative(tmp_path: Path) -> None:
+    de = _slide("de", "s1", "Hallo") + _vo("de", "# Sprechtext")
+    en = _slide("en", "s1", "Hello") + _vo("en", "# Voiceover")
+    de_path, en_path = _write_pair(tmp_path, de, en)
+    result = record_pair(de_path, en_path, confirmed_by="bless", commit="c")
+    assert result.recorded == 2  # the s1 slide + its id-less voiceover
+    led = load(result.path)
+    assert ("s1", "slide") in led.entries
+    assert ("s1", "voiceover", 0) in led.idless
+    # The recorded narrative hashes are the current halves' hashes.
+    vo_de = next(c for c in _ordered_with_identity(de, "de") if c.role == "voiceover")
+    vo_en = next(c for c in _ordered_with_identity(en, "en") if c.role == "voiceover")
+    assert led.idless[("s1", "voiceover", 0)].de_hash == vo_de.content_hash
+    assert led.idless[("s1", "voiceover", 0)].en_hash == vo_en.content_hash
+
+
+def test_idless_json_roundtrip(tmp_path: Path) -> None:
+    led = SyncLedger()
+    led.idless[("s1", "voiceover", 0)] = LedgerEntry("dh", "eh", None, "c", "bless", "structural")
+    led.idless[(None, "notes", 2)] = LedgerEntry("d2", "e2", None, "c2", "apply", "assume")
+    path = tmp_path / ".clm" / LEDGER_FILENAME
+    save(led, path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert isinstance(payload["idless"], list)
+    assert payload["idless"][0]["owning_slide_id"] is None  # sorted: None ("None") < "s1"
+    assert load(path).idless == led.idless
+
+
+def test_overlay_suppresses_idless_narrative_edit(tmp_path: Path) -> None:
+    de = _slide("de", "s1", "Hallo") + _vo("de", "# Sprechtext")
+    en = _slide("en", "s1", "Hello") + _vo("en", "# Voiceover")
+    de_path, en_path = _write_pair(tmp_path, de, en)
+    de_cur = _ordered_with_identity(de, "de")
+    en_cur = _ordered_with_identity(en, "en")
+    vo_de = next(c for c in de_cur if c.role == "voiceover")
+    vo_en = next(c for c in en_cur if c.role == "voiceover")
+
+    led = SyncLedger()
+    led.idless[("s1", "voiceover", 0)] = LedgerEntry(
+        vo_de.content_hash, vo_en.content_hash, None, "c", "bless", "structural"
+    )
+    narr_edit = Proposal(
+        kind="edit",
+        role="voiceover",
+        direction="de->en",
+        slide_id=None,
+        owning_slide_id="s1",
+        anchor_occ=0,
+    )
+    plan = SyncPlan(de_path=de_path, en_path=en_path, baseline_source="watermark")
+    plan.proposals = [narr_edit]
+    assert _apply_ledger_overlay(plan, led, de_cur, en_cur) == 1
+    assert plan.proposals == []
+
+    # A drifted narrative (ledger holds a different de_hash) is NOT suppressed.
+    stale = SyncLedger()
+    stale.idless[("s1", "voiceover", 0)] = LedgerEntry(
+        "OTHER", vo_en.content_hash, None, "c", "bless", "structural"
+    )
+    plan2 = SyncPlan(de_path=de_path, en_path=en_path, baseline_source="watermark")
+    plan2.proposals = [
+        Proposal(
+            kind="edit",
+            role="voiceover",
+            direction="de->en",
+            slide_id=None,
+            owning_slide_id="s1",
+            anchor_occ=0,
+        )
+    ]
+    assert _apply_ledger_overlay(plan2, stale, de_cur, en_cur) == 0
+    assert len(plan2.proposals) == 1
+
+
+def test_idless_overlay_e2e_suppresses_then_surfaces(tmp_path: Path) -> None:
+    de0 = _slide("de", "s1", "Hallo") + _vo("de", "# Sprechtext")
+    en0 = _slide("en", "s1", "Hello") + _vo("en", "# Voiceover")
+    de_path, en_path = _write_pair(tmp_path, de0, en0)
+    cache = SyncWatermarkCache(tmp_path / "wm.sqlite")
+    try:
+        _seed_watermark(cache, de_path, en_path)
+        # Edit the DE voiceover — a one-sided id-less narrative drift.
+        de_path.write_text(
+            _slide("de", "s1", "Hallo") + _vo("de", "# Sprechtext erweitert"), encoding="utf-8"
+        )
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+        assert [p for p in plan.proposals if p.role == "voiceover"], (
+            "the narrative edit should be detected without the ledger"
+        )
+        # Record at the current state, then re-plan with the ledger → suppressed.
+        record_pair(de_path, en_path, confirmed_by="bless", commit="now")
+        led = load(ledger_path_for(de_path))
+        plan2 = build_sync_plan(
+            de_path, en_path, watermark_cache=cache, allow_git_fallback=False, ledger=led
+        )
+        assert [p for p in plan2.proposals if p.role == "voiceover"] == []
+        assert plan2.ledger_skipped >= 1
+    finally:
+        cache.close()

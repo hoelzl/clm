@@ -23,13 +23,16 @@ bundle unchanged (the lag-behind-HEAD property is preserved). A slide with **no*
 entry is the cold path — checked, never assumed.
 
 **Scope (P1).** Covers **localized id'd** cells — ``(slide_id, role)`` pairs whose
-two halves are *translations* (the cells the engine reconciles and that need
-trust). Language-neutral cells are byte-identical across halves and governed
-structurally (``verify``), so they need no translation-trust and are not recorded.
-Id-less localized narratives (the #364/#365 residue) are **not** recorded yet —
-they always fall through to the cold path (the fail-safe direction: more checking,
-never silent mis-sync); a later slice keys them by ``(owning_slide_id, role,
-anchor)`` per §11.2.
+two halves are *translations* (the cells the engine reconciles and that need trust)
+— **and id-less localized narratives** (voiceover / notes without a ``slide_id``),
+keyed by ``(owning_slide_id, role, occ)`` in a separate ``idless`` store (§11.2): the
+classifier's own narrative identity (:func:`~clm.slides.sync_plan._index_narratives_by_anchor`),
+so a recorded entry lines up with the narrative proposal the overlay suppresses.
+This reaches the #364/#365 residue the bare ``(slide_id, role)`` key cannot.
+Language-neutral cells are byte-identical across halves and governed structurally
+(``verify``), so they need no translation-trust and are not recorded; id-less
+localized **code** cells stay with the structural-pass direction mechanism (#269),
+not the ledger overlay.
 
 **Write gate (§4.3).** Every write is gated on a whole-deck structural ``verify``
 (:func:`~clm.slides.sync_verify.structural_gate`): a structurally corrupt pair is
@@ -84,12 +87,27 @@ class LedgerEntry:
     confirmed_oracle: str  # "structural" | "assume" | "semantic:<model>"
 
 
+#: Id-less narrative key ``(owning_slide_id, role, occ)`` — the classifier's own
+#: narrative identity (:func:`~clm.slides.sync_plan._index_narratives_by_anchor`): the
+#: ``occ``-th ``role`` narrative under ``owning_slide_id`` in document order. ``occ`` is
+#: stable under a sibling-cell insert (unlike the predecessor anchor), so it pairs the
+#: DE narrative with its EN twin. ``owning_slide_id`` is ``None`` for a narrative under
+#: no slide. The #364/#365 residue the bare ``(slide_id, role)`` key cannot reach.
+IdlessKey = tuple[str | None, str, int]
+
+
 @dataclass
 class SyncLedger:
-    """The in-memory per-topic ledger, keyed by ``(slide_id, role)``."""
+    """The in-memory per-topic ledger.
+
+    ``entries`` keys id'd cells by ``(slide_id, role)``; ``idless`` keys id-less
+    localized **narratives** (voiceover / notes) by ``(owning_slide_id, role, occ)``
+    (§11.2) — translations that carry no ``slide_id`` and so cannot ride the id'd map.
+    """
 
     schema: int = SCHEMA_VERSION
     entries: dict[tuple[str, str], LedgerEntry] = field(default_factory=dict)
+    idless: dict[IdlessKey, LedgerEntry] = field(default_factory=dict)
 
     def trusts(self, slide_id: str, role: str, de_hash: str, en_hash: str) -> bool:
         """True iff ``(slide_id, role)`` is recorded in-sync at *exactly* these hashes.
@@ -99,6 +117,11 @@ class SyncLedger:
         Any drift on either half misses, so the slide falls through to the bundle.
         """
         entry = self.entries.get((slide_id, role))
+        return entry is not None and entry.de_hash == de_hash and entry.en_hash == en_hash
+
+    def trusts_idless(self, key: IdlessKey, de_hash: str, en_hash: str) -> bool:
+        """:meth:`trusts` for an id-less narrative keyed by ``(owning_slide_id, role, occ)``."""
+        entry = self.idless.get(key)
         return entry is not None and entry.de_hash == de_hash and entry.en_hash == en_hash
 
 
@@ -143,7 +166,27 @@ def load(path: Path) -> SyncLedger:
                     confirmed_by=rec.get("confirmed_by", "apply"),
                     confirmed_oracle=rec.get("confirmed_oracle", "structural"),
                 )
-    return SyncLedger(schema=SCHEMA_VERSION, entries=entries)
+    idless: dict[IdlessKey, LedgerEntry] = {}
+    raw_idless = data.get("idless", [])
+    if isinstance(raw_idless, list):
+        for rec in raw_idless:
+            if (
+                not isinstance(rec, dict)
+                or "role" not in rec
+                or "de_hash" not in rec
+                or "en_hash" not in rec
+            ):
+                continue
+            key: IdlessKey = (rec.get("owning_slide_id"), rec["role"], int(rec.get("occ", 0)))
+            idless[key] = LedgerEntry(
+                de_hash=rec["de_hash"],
+                en_hash=rec["en_hash"],
+                construct=rec.get("construct"),
+                confirmed_commit=rec.get("confirmed_commit"),
+                confirmed_by=rec.get("confirmed_by", "apply"),
+                confirmed_oracle=rec.get("confirmed_oracle", "structural"),
+            )
+    return SyncLedger(schema=SCHEMA_VERSION, entries=entries, idless=idless)
 
 
 def _to_json(ledger: SyncLedger) -> str:
@@ -163,7 +206,27 @@ def _to_json(ledger: SyncLedger) -> str:
             "confirmed_by": e.confirmed_by,
             "confirmed_oracle": e.confirmed_oracle,
         }
-    payload = {"schema": ledger.schema, "slides": slides}
+    # Id-less narratives are a *list* (their key has no natural nesting): one object per
+    # entry, sorted by the key so the file is canonical and a merge is line-local.
+    idless = [
+        {
+            "owning_slide_id": owning,
+            "role": role,
+            "occ": occ,
+            "de_hash": e.de_hash,
+            "en_hash": e.en_hash,
+            "construct": e.construct,
+            "confirmed_commit": e.confirmed_commit,
+            "confirmed_by": e.confirmed_by,
+            "confirmed_oracle": e.confirmed_oracle,
+        }
+        for (owning, role, occ), e in sorted(
+            ledger.idless.items(), key=lambda kv: (str(kv[0][0]), kv[0][1], kv[0][2])
+        )
+    ]
+    payload: dict[str, object] = {"schema": ledger.schema, "slides": slides}
+    if idless:
+        payload["idless"] = idless
     return json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
 
 
@@ -226,6 +289,46 @@ def current_pairs(
     return pairs
 
 
+def _idless_narrative_hashes(path: Path, lang: str) -> dict[IdlessKey, str]:
+    """``{(owning_slide_id, role, occ): content_hash}`` for ``lang``'s id-less narratives.
+
+    Keys exactly as the classifier does — :func:`~clm.slides.sync_plan._index_narratives_by_anchor`
+    over the narrative-identity-stamped cells — so a recorded entry lines up with the
+    narrative proposal the overlay must suppress. ``occ`` is per ``(owning_slide_id,
+    role)``, so the empty ``skip_owning`` set here is harmless: a dup-slide narrative is
+    indexed too, but it never bears a proposal, and it cannot shift another slide's occ.
+    Imported from ``sync_plan`` lazily (the function is only on the write path) to keep
+    the ledger module free of a load-time ``sync_plan`` dependency.
+    """
+    from clm.slides.raw_cells import split_cells
+    from clm.slides.sync_plan import (
+        NARRATIVE_ROLES,
+        _index_narratives_by_anchor,
+        narrative_identity_map,
+        ordered_sync_cells,
+    )
+
+    text = path.read_text(encoding="utf-8")
+    token = comment_token_for_path(path)
+    identity = narrative_identity_map(split_cells(text, token)[1])
+    cells = ordered_sync_cells(parse_cells(text, token), lang, identity)
+    narratives = [c for c in cells if c.role in NARRATIVE_ROLES and c.slide_id is None]
+    return {
+        key: c.content_hash for key, c in _index_narratives_by_anchor(narratives, set()).items()
+    }
+
+
+def current_idless_pairs(de_path: Path, en_path: Path) -> dict[IdlessKey, tuple[str, str]]:
+    """``{(owning_slide_id, role, occ): (de_hash, en_hash)}`` for the pair's id-less narratives.
+
+    Only keys present in **both** halves are returned — a one-sided narrative (the deck
+    grew/lost one) has no twin to certify in-sync and stays on the cold path.
+    """
+    de_map = _idless_narrative_hashes(de_path, "de")
+    en_map = _idless_narrative_hashes(en_path, "en")
+    return {key: (de_map[key], en_map[key]) for key in de_map.keys() & en_map.keys()}
+
+
 # ---------------------------------------------------------------------------
 # Recording a confirmation (the write path — gated on structural verify)
 # ---------------------------------------------------------------------------
@@ -236,7 +339,7 @@ class RecordResult:
     """Outcome of :func:`record_pair`."""
 
     path: Path
-    recorded: int = 0  # number of (slide_id, role) entries written this call
+    recorded: int = 0  # entries written this call (id'd + id-less narratives)
     refused: bool = False  # the structural gate failed — nothing was written
     reasons: list[str] = field(default_factory=list)  # structural violation messages on refusal
 
@@ -249,11 +352,12 @@ def record_pair(
     confirmed_oracle: str = "structural",
     commit: str | None = None,
 ) -> RecordResult:
-    """Record the pair's localized slides as confirmed in-sync — gated on ``verify``.
+    """Record the pair's localized slides + id-less narratives in-sync — gated on ``verify``.
 
-    Loads the existing topic ledger, updates the ``(slide_id, role)`` entries for the
-    slides in *this* pair (preserving entries for other decks in the same topic), and
-    writes it back. ``commit`` defaults to the repo HEAD at ``de_path`` (best-effort —
+    Loads the existing topic ledger, updates the ``(slide_id, role)`` entries (id'd
+    cells) and the ``(owning_slide_id, role, occ)`` ``idless`` entries (narratives) for
+    *this* pair (preserving entries for other decks in the same topic), and writes it
+    back. ``commit`` defaults to the repo HEAD at ``de_path`` (best-effort —
     git provenance must never fail a record). Returns a refusal (writing nothing) when
     the pair fails the whole-deck structural gate.
 
@@ -282,6 +386,7 @@ def record_pair(
         commit = info if isinstance(info, str) else None
 
     pairs = current_pairs(de_path, en_path)
+    idless = current_idless_pairs(de_path, en_path)
     ledger = load(path)
     for (slide_id, role), (de_hash, en_hash, construct) in pairs.items():
         ledger.entries[(slide_id, role)] = LedgerEntry(
@@ -292,8 +397,17 @@ def record_pair(
             confirmed_by=confirmed_by,
             confirmed_oracle=confirmed_oracle,
         )
+    for key, (de_hash, en_hash) in idless.items():
+        ledger.idless[key] = LedgerEntry(
+            de_hash=de_hash,
+            en_hash=en_hash,
+            construct=None,  # narratives are markdown — no construct
+            confirmed_commit=commit,
+            confirmed_by=confirmed_by,
+            confirmed_oracle=confirmed_oracle,
+        )
     save(ledger, path)
-    return RecordResult(path=path, recorded=len(pairs))
+    return RecordResult(path=path, recorded=len(pairs) + len(idless))
 
 
 def seed_from_watermark(
