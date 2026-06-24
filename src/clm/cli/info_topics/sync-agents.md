@@ -203,6 +203,15 @@ consistency ledger** (`<topic>/.clm/sync-ledger.json`, committed) fixes that.
   but **only on a fully-clean pass** (no deferred residue), so a deck you fully
   reconciled (or one already in sync) banks its trust without a separate `bless`;
   a deck still carrying residue records nothing until you finish it.
+- **Bank trust per item, in the loop** — after you `accept` a single drifted edit,
+  add `--record`: `clm slides sync accept DECK --item ID --answer - --record`. It
+  banks **just that one reconciled cell** (`confirmed_by=accept`,
+  `confirmed_oracle=agent`), gated on a *per-slide* structural verify, so the next
+  `report --ledger` skips it without waiting for a whole-deck `bless`. This is the
+  incremental confirm path: each `task → model → accept --record` step both fixes a
+  slide and records its trust. (Only `edit` is per-item recordable; a structural
+  `add` / `mint` / `adopt` / `reconcile` / `realign` is banked deck-wide by `apply
+  --ledger` / `baseline bless --ledger` once the deck is coherent.)
 - **Consult trust** when you reconcile: `clm slides sync report DECK --ledger`
   (and `apply --ledger`) **skips** any slide whose two current halves are
   byte-identical to a recorded confirmation — even against an old `--baseline`. So

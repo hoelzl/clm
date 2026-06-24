@@ -67,9 +67,11 @@ LEDGER_FILENAME = "sync-ledger.json"
 
 #: Provenance of a recorded confirmation (``confirmed_oracle``). ``structural`` =
 #: passed the deterministic structural gate; ``assume`` = inherited from the watermark
-#: by an explicit seed (no check); ``semantic:<model>`` = an LLM judged the translation
-#: (P2, agent tier only). The field is advisory metadata, kept so a later run can
-#: distrust a specific source without nuking the whole ledger.
+#: by an explicit seed (no check); ``agent`` = an agent reconciled the cell via
+#: ``accept`` and it passed a structural verify (P2, the per-item ``accept --record``
+#: path); ``semantic:<model>`` = an LLM judged the translation correct (P2, the
+#: agent/autopilot tier only). The field is advisory metadata, kept so a later run can
+#: distrust a specific source (e.g. a since-deprecated model) without nuking the ledger.
 
 
 @dataclass(frozen=True)
@@ -84,7 +86,7 @@ class LedgerEntry:
     construct: str | None
     confirmed_commit: str | None
     confirmed_by: str  # "apply" | "bless" | "accept" | "autopilot" | "seed"
-    confirmed_oracle: str  # "structural" | "assume" | "semantic:<model>"
+    confirmed_oracle: str  # "structural" | "assume" | "agent" | "semantic:<model>"
 
 
 #: Id-less narrative key ``(owning_slide_id, role, occ)`` — the classifier's own
@@ -340,12 +342,26 @@ def current_idless_pairs(de_path: Path, en_path: Path) -> dict[IdlessKey, tuple[
 
 @dataclass
 class RecordResult:
-    """Outcome of :func:`record_pair`."""
+    """Outcome of :func:`record_pair` / :func:`record_edit`."""
 
     path: Path
     recorded: int = 0  # entries written this call (id'd + id-less narratives)
     refused: bool = False  # the structural gate failed — nothing was written
     reasons: list[str] = field(default_factory=list)  # structural violation messages on refusal
+
+
+def _resolve_commit(commit: str | None, de_path: Path) -> str | None:
+    """The commit to stamp on a record — the caller's, else the repo HEAD at ``de_path``.
+
+    Git provenance is best-effort: a record must never fail because git is unavailable,
+    so an unresolvable HEAD yields ``None`` rather than raising.
+    """
+    if commit is not None:
+        return commit
+    from clm.core.git_info import get_git_info
+
+    info = get_git_info(de_path.parent).get("commit")
+    return info if isinstance(info, str) else None
 
 
 def record_pair(
@@ -383,11 +399,7 @@ def record_pair(
     if violations:
         return RecordResult(path=path, refused=True, reasons=[v.message for v in violations])
 
-    if commit is None:
-        from clm.core.git_info import get_git_info
-
-        info = get_git_info(de_path.parent).get("commit")
-        commit = info if isinstance(info, str) else None
+    commit = _resolve_commit(commit, de_path)
 
     pairs = current_pairs(de_path, en_path)
     idless = current_idless_pairs(de_path, en_path)
@@ -412,6 +424,115 @@ def record_pair(
         )
     save(ledger, path)
     return RecordResult(path=path, recorded=len(pairs) + len(idless))
+
+
+def record_edit(
+    de_path: Path,
+    en_path: Path,
+    *,
+    slide_id: str | None,
+    role: str,
+    owning_slide_id: str | None = None,
+    anchor_occ: int = 0,
+    confirmed_by: str,
+    confirmed_oracle: str = "agent",
+    commit: str | None = None,
+) -> RecordResult:
+    """Record ONE just-accepted localized edit in-sync — the per-item confirm path (§11.4).
+
+    The ``accept --record`` write-back: after ``clm slides sync accept`` reconciles a
+    single drifted localized cell, bank *that one cell* as trusted-in-sync so a later
+    ``report`` / ``apply --ledger`` skips it. It records **only** the accepted cell
+    (design guard 1 — never the whole pair, whose other residue is still unresolved), so
+    it deliberately does **not** reuse :func:`record_pair` (which records every current
+    pair, and would wrongly trust the unreconciled siblings).
+
+    Routes by the cell's identity — the three shapes an ``edit`` can take:
+
+    * **id'd** (``slide_id`` given) → ``entries[(slide_id, role)]``, gated on a
+      *per-slide* structural verify scoped to this ``slide_id`` (guard 2 — a corruption
+      *elsewhere* in the deck must not block banking the one clean slide an agent just
+      reconciled, unlike the whole-deck gate :func:`record_pair` uses). The gate is
+      scoped to ``slide_id`` alone (not ``(slide_id, role)``): any real duplicate-id or
+      asymmetry on this slide blocks the record regardless of role, which keeps the
+      ledger decoupled from ``verify``'s internal role vocabulary and is strictly
+      fail-safe (it can only refuse more, never record a corrupt cell).
+    * **id-less narrative** (``role`` ∈ :data:`~clm.slides.sync_plan.NARRATIVE_ROLES`,
+      no ``slide_id``) → ``idless[(owning_slide_id, role, anchor_occ)]``. Narratives carry
+      no id invariant (no symmetry / dup-id check applies to them), so there is no
+      structural scope to gate on; the ``accept`` validator already ran, and the
+      both-halves hash gate keeps a later drift from being trusted.
+    * **id-less localized code** (#365) → not in the ledger's scope (the structural-pass
+      direction mechanism governs it, not the overlay); returns ``recorded=0`` (a no-op,
+      not a refusal).
+
+    Provenance defaults to ``confirmed_oracle=agent`` (guard 3): an agent asserted the
+    reconciliation and it passed a structural verify — distinct from a model's
+    ``semantic:<model>`` verdict, so a later run can selectively distrust agent-confirmed
+    entries. Reads the current (post-accept) hashes from disk. A cell absent from either
+    half (the lookup misses) is a refusal — there is no in-sync twin to certify.
+    """
+    from clm.slides.sync_plan import NARRATIVE_ROLES
+
+    path = ledger_path_for(de_path)
+    commit = _resolve_commit(commit, de_path)
+
+    if slide_id is not None:
+        from clm.slides.sync_verify import structural_gate
+
+        violations = structural_gate(
+            de_path.read_text(encoding="utf-8"),
+            en_path.read_text(encoding="utf-8"),
+            comment_token_for_path(de_path),
+            slide_id=slide_id,
+        )
+        if violations:
+            return RecordResult(path=path, refused=True, reasons=[v.message for v in violations])
+        hit = current_pairs(de_path, en_path).get((slide_id, role))
+        if hit is None:
+            return RecordResult(
+                path=path,
+                refused=True,
+                reasons=[f"({slide_id}, {role}) is not a localized cell present in both halves"],
+            )
+        de_hash, en_hash, construct = hit
+        ledger = load(path)
+        ledger.entries[(slide_id, role)] = LedgerEntry(
+            de_hash=de_hash,
+            en_hash=en_hash,
+            construct=construct,
+            confirmed_commit=commit,
+            confirmed_by=confirmed_by,
+            confirmed_oracle=confirmed_oracle,
+        )
+        save(ledger, path)
+        return RecordResult(path=path, recorded=1)
+
+    if role in NARRATIVE_ROLES:
+        key: IdlessKey = (owning_slide_id, role, anchor_occ)
+        narr = current_idless_pairs(de_path, en_path).get(key)
+        if narr is None:
+            return RecordResult(
+                path=path,
+                refused=True,
+                reasons=[f"narrative {key} is not present in both halves"],
+            )
+        de_hash, en_hash = narr
+        ledger = load(path)
+        ledger.idless[key] = LedgerEntry(
+            de_hash=de_hash,
+            en_hash=en_hash,
+            construct=None,  # narratives are markdown — no construct
+            confirmed_commit=commit,
+            confirmed_by=confirmed_by,
+            confirmed_oracle=confirmed_oracle,
+        )
+        save(ledger, path)
+        return RecordResult(path=path, recorded=1)
+
+    # id-less localized code (#365): governed by the structural-pass direction mechanism,
+    # not the ledger overlay — a fail-safe no-op (nothing to record, not a refusal).
+    return RecordResult(path=path, recorded=0)
 
 
 def seed_from_watermark(

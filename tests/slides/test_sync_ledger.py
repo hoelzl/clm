@@ -20,6 +20,7 @@ from clm.slides.sync_ledger import (
     SyncLedger,
     ledger_path_for,
     load,
+    record_edit,
     record_pair,
     save,
 )
@@ -677,6 +678,227 @@ def test_overlay_suppresses_idless_narrative_edit(tmp_path: Path) -> None:
     ]
     assert _apply_ledger_overlay(plan2, stale, de_cur, en_cur) == 0
     assert len(plan2.proposals) == 1
+
+
+# ---------------------------------------------------------------------------
+# record_edit — the per-item confirm path (`accept --record`, §11.4, P2)
+# ---------------------------------------------------------------------------
+
+
+def test_record_edit_idd_records_with_agent_oracle(tmp_path: Path) -> None:
+    de_path, en_path = _write_pair(
+        tmp_path, _slide("de", "s1", "Hallo"), _slide("en", "s1", "Hello")
+    )
+    result = record_edit(
+        de_path, en_path, slide_id="s1", role="slide", confirmed_by="accept", commit="c1"
+    )
+    assert not result.refused
+    assert result.recorded == 1
+    entry = load(result.path).entries[("s1", "slide")]
+    assert entry.confirmed_by == "accept"
+    assert entry.confirmed_oracle == "agent"  # guard 3: agent-asserted provenance
+    assert entry.confirmed_commit == "c1"
+    de_cur = ordered_sync_cells(parse_cells(de_path.read_text(encoding="utf-8")), "de")
+    assert entry.de_hash == de_cur[0].content_hash
+
+
+def test_record_edit_idd_isolates_from_an_unrelated_broken_slide(tmp_path: Path) -> None:
+    # Guard 2: a corruption ELSEWHERE in the deck (s2 duplicated in DE) must not block
+    # banking the clean slide an agent just reconciled (s1). The whole-deck gate that
+    # `record_pair` uses refuses; the per-slide `record_edit` scoped to s1 records it.
+    de = _slide("de", "s1", "Hallo") + _slide("de", "s2", "Zwei") + _slide("de", "s2", "Zwei B")
+    en = _slide("en", "s1", "Hello") + _slide("en", "s2", "Two")
+    de_path, en_path = _write_pair(tmp_path, de, en)
+    assert record_pair(de_path, en_path, confirmed_by="bless").refused  # whole-deck: dup s2
+    result = record_edit(de_path, en_path, slide_id="s1", role="slide", confirmed_by="accept")
+    assert not result.refused and result.recorded == 1  # s1 banked despite s2's corruption
+    assert ("s1", "slide") in load(result.path).entries
+
+
+def test_record_edit_idd_refuses_when_this_slide_is_broken(tmp_path: Path) -> None:
+    # The slide being recorded is itself duplicated → the scoped gate fails → refuse.
+    de = _slide("de", "s1", "Hallo") + _slide("de", "s1", "Hallo B")
+    en = _slide("en", "s1", "Hello")
+    de_path, en_path = _write_pair(tmp_path, de, en)
+    result = record_edit(de_path, en_path, slide_id="s1", role="slide", confirmed_by="accept")
+    assert result.refused and result.reasons
+    assert not result.path.exists()
+
+
+def test_record_edit_idd_refuses_when_cell_absent_from_a_half(tmp_path: Path) -> None:
+    de_path, en_path = _write_pair(
+        tmp_path, _slide("de", "s1", "Hallo"), _slide("en", "s1", "Hello")
+    )
+    result = record_edit(de_path, en_path, slide_id="ghost", role="slide", confirmed_by="accept")
+    assert result.refused  # no such cell in both halves → nothing to certify
+    assert not result.path.exists()
+
+
+def test_record_edit_idless_narrative(tmp_path: Path) -> None:
+    de = _slide("de", "s1", "Hallo") + _vo("de", "# Sprechtext")
+    en = _slide("en", "s1", "Hello") + _vo("en", "# Voiceover")
+    de_path, en_path = _write_pair(tmp_path, de, en)
+    result = record_edit(
+        de_path,
+        en_path,
+        slide_id=None,
+        role="voiceover",
+        owning_slide_id="s1",
+        anchor_occ=0,
+        confirmed_by="accept",
+    )
+    assert not result.refused and result.recorded == 1
+    entry = load(result.path).idless[("s1", "voiceover", 0)]
+    assert entry.confirmed_by == "accept" and entry.confirmed_oracle == "agent"
+    vo_de = next(c for c in _ordered_with_identity(de, "de") if c.role == "voiceover")
+    assert entry.de_hash == vo_de.content_hash
+
+
+def test_record_edit_idless_code_is_a_noop(tmp_path: Path) -> None:
+    # An id-less localized CODE cell is governed by the structural-pass direction
+    # mechanism (#269/#365), not the ledger — recorded=0, no refusal, no file written.
+    de_path, en_path = _write_pair(
+        tmp_path, _slide("de", "s1", "Hallo"), _slide("en", "s1", "Hello")
+    )
+    result = record_edit(
+        de_path, en_path, slide_id=None, role="localized-code", confirmed_by="accept"
+    )
+    assert not result.refused and result.recorded == 0
+    assert not result.path.exists()
+
+
+def test_accept_result_carries_edit_identity(tmp_path: Path) -> None:
+    # The AcceptResult wiring `accept --record` consumes: a successful edit accept carries
+    # the reconciled cell's (slide_id, role) so the CLI can bank exactly it.
+    from clm.infrastructure.llm.cache import SyncWatermarkCache as _Cache
+    from clm.slides.sync_accept import accept_answer
+    from clm.slides.sync_report import build_report
+
+    de_path, en_path = _write_pair(
+        tmp_path, _slide("de", "s1", "Hallo"), _slide("en", "s1", "Hello")
+    )
+    cache = _Cache(tmp_path / "wm.sqlite")
+    try:
+        _seed_watermark(cache, de_path, en_path)
+        de_path.write_text(_slide("de", "s1", "Hallo erweitert"), encoding="utf-8")
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+    finally:
+        cache.close()
+    edit = next(it for it in build_report(plan, with_excerpts=True).assisted if it.kind == "edit")
+    result = accept_answer(plan, edit.item, {"verdict": "update", "proposed_text": "Hello more"})
+    assert result.applied and result.slide_id == "s1" and result.role == "slide"
+
+
+def test_record_accept_helper_skips_non_edit(tmp_path: Path) -> None:
+    # `accept --record` only banks an `edit`; a structural kind records nothing.
+    from clm.cli.commands.slides.sync import _record_accept
+    from clm.slides.sync_accept import AcceptResult
+
+    de_path, en_path = _write_pair(
+        tmp_path, _slide("de", "s1", "Hallo"), _slide("en", "s1", "Hello")
+    )
+    res = AcceptResult(item="add-de-en-s1", kind="add", applied=True, changed=1, detail="")
+    assert _record_accept(res, de_path, en_path, as_json=True) is False
+    assert not ledger_path_for(de_path).exists()
+
+
+def test_cli_accept_record_banks_edit(tmp_path: Path) -> None:
+    from click.testing import CliRunner
+
+    de_path, en_path = _write_pair(
+        tmp_path, _slide("de", "s1", "Hallo"), _slide("en", "s1", "Hello")
+    )
+    cache_dir = _seed_cache(tmp_path, de_path, en_path)  # watermark at the original state
+    de_path.write_text(_slide("de", "s1", "Hallo erweitert"), encoding="utf-8")  # DE drift
+    runner = CliRunner()
+    common = ["--use-watermark", "--cache-dir", str(cache_dir)]
+
+    rep = runner.invoke(_cli(), ["slides", "sync", "report", str(de_path), "--json", *common])
+    payload = json.loads(rep.output[rep.output.index("{") : rep.output.rindex("}") + 1])
+    items = [*payload["report"]["assisted"], *payload["report"]["ambiguity"]]
+    edits = [it for it in items if it["kind"] == "edit"]
+    assert edits, payload
+    item_id = edits[0]["item"]
+
+    acc = runner.invoke(
+        _cli(),
+        [
+            "slides",
+            "sync",
+            "accept",
+            str(de_path),
+            "--item",
+            item_id,
+            "--answer",
+            "-",
+            "--record",
+            *common,
+        ],
+        input='{"verdict": "update", "proposed_text": "Hello extended"}',
+    )
+    assert acc.exit_code == 0, acc.output
+    assert "recorded 1 slide confirmed in-sync (confirmed_by=accept, oracle=agent)" in acc.output
+    entry = load(ledger_path_for(de_path.resolve())).entries[("s1", "slide")]
+    assert entry.confirmed_by == "accept" and entry.confirmed_oracle == "agent"
+
+
+def test_cli_accept_without_record_writes_no_ledger(tmp_path: Path) -> None:
+    from click.testing import CliRunner
+
+    de_path, en_path = _write_pair(
+        tmp_path, _slide("de", "s1", "Hallo"), _slide("en", "s1", "Hello")
+    )
+    cache_dir = _seed_cache(tmp_path, de_path, en_path)
+    de_path.write_text(_slide("de", "s1", "Hallo erweitert"), encoding="utf-8")
+    runner = CliRunner()
+    common = ["--use-watermark", "--cache-dir", str(cache_dir)]
+    rep = runner.invoke(_cli(), ["slides", "sync", "report", str(de_path), "--json", *common])
+    payload = json.loads(rep.output[rep.output.index("{") : rep.output.rindex("}") + 1])
+    items = [*payload["report"]["assisted"], *payload["report"]["ambiguity"]]
+    item_id = next(it["item"] for it in items if it["kind"] == "edit")
+    acc = runner.invoke(
+        _cli(),
+        ["slides", "sync", "accept", str(de_path), "--item", item_id, "--answer", "-", *common],
+        input='{"verdict": "update", "proposed_text": "Hello extended"}',
+    )
+    assert acc.exit_code == 0, acc.output
+    assert not ledger_path_for(de_path.resolve()).exists()  # no --record → no ledger
+
+
+def test_cli_accept_record_json_field(tmp_path: Path) -> None:
+    from click.testing import CliRunner
+
+    de_path, en_path = _write_pair(
+        tmp_path, _slide("de", "s1", "Hallo"), _slide("en", "s1", "Hello")
+    )
+    cache_dir = _seed_cache(tmp_path, de_path, en_path)
+    de_path.write_text(_slide("de", "s1", "Hallo erweitert"), encoding="utf-8")
+    runner = CliRunner()
+    common = ["--use-watermark", "--cache-dir", str(cache_dir)]
+    rep = runner.invoke(_cli(), ["slides", "sync", "report", str(de_path), "--json", *common])
+    payload = json.loads(rep.output[rep.output.index("{") : rep.output.rindex("}") + 1])
+    items = [*payload["report"]["assisted"], *payload["report"]["ambiguity"]]
+    item_id = next(it["item"] for it in items if it["kind"] == "edit")
+    acc = runner.invoke(
+        _cli(),
+        [
+            "slides",
+            "sync",
+            "accept",
+            str(de_path),
+            "--item",
+            item_id,
+            "--answer",
+            "-",
+            "--record",
+            "--json",
+            *common,
+        ],
+        input='{"verdict": "update", "proposed_text": "Hello extended"}',
+    )
+    assert acc.exit_code == 0, acc.output
+    accpl = json.loads(acc.output[acc.output.index("{") : acc.output.rindex("}") + 1])
+    assert accpl["recorded"] is True
 
 
 def test_idless_overlay_e2e_suppresses_then_surfaces(tmp_path: Path) -> None:

@@ -2065,6 +2065,7 @@ a better model/prompt). No model, no key.
 |--------|-------------|
 | `--item ID` (required) | The report item the answer is for (the id `task --item ID` framed). |
 | `--answer FILE` (required) | The model's answer (JSON matching the task's `answer_schema`), or `-` for stdin. |
+| `--record` | (since CLM {version}) After a successful **edit** accept, bank that one reconciled cell to the per-slide consistency ledger (`<topic>/.clm/sync-ledger.json`, #448) so a later `report` / `apply --ledger` skips it (`confirmed_by=accept`, `confirmed_oracle=agent`). Records **only** the slide just accepted (not the whole pair, whose other residue is unresolved), gated on a *per-slide* structural verify (a corruption elsewhere in the deck does not block it). Structural kinds (`add` / `mint` / `adopt` / `reconcile` / `realign`) are not per-item recordable — bless them deck-wide via `apply --ledger` / `baseline bless --ledger` once the deck is coherent. The `--json` payload gains a `recorded` boolean. |
 | `--baseline` / `--baseline-from` / `--use-watermark` / `--cache-dir` | Baseline selection, as for `report` (must match the `report`/`task` that framed the item). |
 | `--json` | Emit the accept result as JSON. |
 
