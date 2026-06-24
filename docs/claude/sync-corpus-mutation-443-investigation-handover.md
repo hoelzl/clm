@@ -1,18 +1,47 @@
 # Handover — `test_sync_corpus_mutation` failures (#443) + the CI-coverage gap
 
-> Status: **investigation not started** — this document is the brief.
-> Created 2026-06-23 while cutting the CLM 1.16.0 release; **refreshed
-> 2026-06-24** against current `master`. Author had full context; you have
-> none, so this is your sole source of truth. Read it top to bottom before
-> touching code.
+> ## ✅ RESOLVED (2026-06-24)
 >
-> **Re-confirmed on current `master` (2026-06-24).** A later run on PR #468
+> Both problems are fixed and merged. This document is kept as the record of the
+> investigation; the boxed status below is the outcome, the body is the trail.
+>
+> - **The bug (#443) — FIXED, PR #471 (merged `a374e304`).** The §2 hypothesis
+>   below (the `vo_anchor` narrative-diversion path) was **refuted**. The real
+>   cause is an **asymmetric companion**: in the trigger deck the voiceover is
+>   **id-less on DE but id'd on EN**. `_index_by_key` routes the id'd half to the
+>   keyed diff and the id-less half to the anchor pass;
+>   `_reconcile_idless_idd_narratives` (`sync_plan.py`) then pairs the EN id'd
+>   `add` with the DE id-less `add` and **cancels both unconditionally** — never
+>   comparing the id'd half to its baseline, so a one-sided edit/removal
+>   vanishes. The fix adds `_alert_asymmetric_companion_drift`, which detects
+>   baseline drift on the id'd half and **alerts** (an `error`-severity
+>   `PlanIssue` that holds the watermark, pointing the author at `assign-ids`)
+>   instead of dropping it. Chose *alert* over *propagate* because propagating
+>   across the id-less↔id'd boundary is exactly the destructive doubling the
+>   reconcile (report #10 / #199) guards against. Bundled fast regression tests:
+>   `test_issue443_*` in `tests/slides/test_sync_limitations.py`.
+> - **The CI-coverage gap (Phase B/C) — CLOSED, this PR.** The corpus-mutation
+>   oracle and the no-op invariant now run in CI on a committed synthetic corpus
+>   (`tests/data/sync_corpus/`), no longer skipped. See §4 for what shipped.
+>
+> Everything below is the **original brief, as written before the fix** (with
+> 2026-06-24 line-anchor refreshes). Read it as the investigation trail, not as
+> open work. The §2 hypothesis is preserved but **wrong** — see the box above.
+
+---
+
+> Status (historical): **investigation not started** — this document was the brief.
+> Created 2026-06-23 while cutting the CLM 1.16.0 release; refreshed 2026-06-24
+> against `master`. Author had full context; the investigator had none, so this
+> was the sole source of truth.
+>
+> **Was re-confirmed on `master` before the fix (2026-06-24).** A run on PR #468
 > independently hit the *same* two failures against the live PythonCourses
-> corpus and verified (via `git stash`) that they fail **identically on clean
+> corpus and verified (via `git stash`) that they failed **identically on clean
 > `master`** — i.e. after the entire #448 consistency-ledger program (P1/P2,
 > PRs #463–#468) landed on top of 1.16.0. The ledger work touched
 > `sync_plan.py`/`sync_verify.py`/`sync_apply.py` but did **not** address this
-> bug. The line references in §2 below are updated to current `master`.
+> bug. The line references in §2 are as of `master` on 2026-06-24.
 
 ---
 
@@ -146,7 +175,13 @@ so it is the only `vo` cell the test selects.
 
 ## 4. Phase breakdown
 
-### Phase A — Root-cause and fix the sync bug (#443) — [TODO] (start here)
+### Phase A — Root-cause and fix the sync bug (#443) — ✅ DONE (PR #471)
+> **Outcome.** Root cause was the **asymmetric (id-less DE ↔ id'd EN) companion**,
+> not the `vo_anchor` path this section hypothesised. Fixed by
+> `_alert_asymmetric_companion_drift` (alert, not propagate). Bundled fast tests
+> `test_issue443_*` in `tests/slides/test_sync_limitations.py`. See the RESOLVED
+> box at the top. The original goal/components/acceptance are kept below as written.
+
 - **Goal.** A one-sided edit *or* removal of a keyed voiceover/notes companion
   (sharing its slide's id) is propagated to the other half, or alerted
   (deferred / issue), never silently dropped.
@@ -166,7 +201,25 @@ so it is the only `vo` cell the test selects.
   engine limitations the same way. `clm slides sync verify` stays green; no
   #269/#282 regressions (run the existing sync suites).
 
-### Phase B — Close the CI-coverage gap — [TODO]
+### Phase B — Close the CI-coverage gap — ✅ DONE
+> **Outcome — Option 1 (committed synthetic corpus), as recommended.** Added
+> `tests/data/sync_corpus/` — one bilingual deck (`deck_features.{de,en}.py`)
+> in post-sync-clean shape carrying all four mutation cell classes (neutral
+> shared code, id-less localized markdown, a **shared-id** voiceover companion,
+> keyed markdown). `_corpus_dir()` in `test_sync_corpus_mutation.py` now returns
+> `(root, is_bundled)` and falls back to this corpus when no real PythonCourses
+> checkout is found (env / maintainer path still win, preserving release-time
+> realism). The `skipif` is gone.
+>
+> **Second blocker found and fixed:** the tests were also `slow`, and **every CI
+> job excludes `slow`** (`ci.yml`: fast/integration/e2e all carry `and not
+> slow`). So un-skipping alone would not have run them in CI. The `slow` marker
+> is now **conditional** — applied only on the real corpus (genuinely slow, and
+> CI doesn't have it), dropped on the tiny bundled corpus (~2 s) so the
+> **`integration` CI job runs all six mutation tests**. Verified: all 6 pass
+> against the bundled corpus in ~2 s; the real-corpus path is unchanged
+> (`slow`+`integration`, still in the `-m "not docker"` release gate).
+
 - **Goal.** Mutation-oracle coverage of the real sync invariants runs **in CI**,
   not only on a developer's machine at release time.
 - **Options to weigh (pick + justify):**
@@ -190,7 +243,22 @@ so it is the only `vo` cell the test selects.
   shared-id-companion mutation. Whatever is bounded/sampled is `log`-stated, not
   silent.
 
-### Phase C — (optional) audit sibling oracles — [TODO]
+### Phase C — audit sibling oracles — ✅ DONE
+> **Outcome — split decision.** `tests/slides/test_sync_corpus_noop.py` had the
+> same `slow`+`skipif`-on-corpus gap, so it gets the same `(root, is_bundled)`
+> fallback + conditional `slow`. **But** its assertions are two kinds: a
+> *scale-independent invariant* (`test_noop_plans_apply_with_zero_bytes_and_zero_llm`
+> — a no-op plan must write zero bytes / make zero LLM calls) and *corpus-scale
+> measurement floors* (`total_pairs >= 100`, `item2_population > 1000`, the
+> no-op-pair floor — all tuned to the 212-pair real corpus). The floors would be
+> **vacuous and misleading on one synthetic pair**, so they stay gated to a real
+> corpus via `@_real_corpus_only` (`skipif(_BUNDLED)`); only the invariant runs
+> on the bundled corpus in CI. That closes the safety gap (a "nothing to do" plan
+> that nonetheless writes is caught in CI) without faking the measurement floors.
+> Verified: the invariant passes on the bundled corpus; the real-corpus run is
+> unchanged. No other `CLM_SYNC_CORPUS_DIR` / corpus-`skipif` users remain (grep
+> confirmed only these two files).
+
 - `tests/slides/test_sync_corpus_noop.py` (the no-op backstop) uses the **same**
   `skipif`-on-corpus pattern and is therefore **also CI-invisible**. Decide
   whether it should ride on the Phase B synthetic corpus too. Grep for other

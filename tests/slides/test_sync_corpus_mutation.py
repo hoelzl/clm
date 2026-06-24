@@ -40,30 +40,56 @@ _XL = "<<CORPUS-XL-9bd1>>"  # the static translator's output for a re-translatio
 _JUDGED = f"# {_MARKER}-judged"  # the static judge's proposed target body
 
 
-def _corpus_dir() -> Path | None:
-    """The sync corpus root, or ``None`` when unavailable (mirrors the noop test)."""
-    candidates: list[Path] = []
+# A tiny in-repo corpus (one bilingual deck carrying every mutation cell class,
+# in post-sync-clean shape) committed so the oracle runs in CI — see Phase B of
+# ``docs/claude/sync-corpus-mutation-443-investigation-handover.md``. It is the
+# *fallback*: a real PythonCourses checkout (env or the maintainer path) still
+# wins so the release-time run keeps its full-scale realism.
+_BUNDLED_CORPUS = Path(__file__).resolve().parents[1] / "data" / "sync_corpus"
+
+
+def _has_pair(cand: Path) -> bool:
+    if not cand.is_dir():
+        return False
+    for de_path in cand.rglob("*.de.py"):
+        if de_path.with_name(de_path.name[: -len(".de.py")] + ".en.py").exists():
+            return True
+    return False
+
+
+def _corpus_dir() -> tuple[Path, bool] | None:
+    """Resolve the sync corpus root and whether it is the bundled synthetic one.
+
+    Order: ``CLM_SYNC_CORPUS_DIR`` env, the maintainer's local PythonCourses
+    checkout, then the committed synthetic corpus (always present). Returns
+    ``(root, is_bundled)`` — ``is_bundled`` drives the ``slow`` marker below.
+    """
+    external: list[Path] = []
     env = os.environ.get("CLM_SYNC_CORPUS_DIR")
     if env:
-        candidates.append(Path(env))
-    candidates.append(Path(r"C:\Users\tc\Programming\Python\Courses\Own\PythonCourses\slides"))
-    for cand in candidates:
-        if not cand.is_dir():
-            continue
-        for de_path in cand.rglob("*.de.py"):
-            en_path = de_path.with_name(de_path.name[: -len(".de.py")] + ".en.py")
-            if en_path.exists():
-                return cand
+        external.append(Path(env))
+    external.append(Path(r"C:\Users\tc\Programming\Python\Courses\Own\PythonCourses\slides"))
+    bundled = _BUNDLED_CORPUS.resolve()
+    for cand in external:
+        if _has_pair(cand):
+            return cand, cand.resolve() == bundled
+    if _has_pair(_BUNDLED_CORPUS):
+        return _BUNDLED_CORPUS, True
     return None
 
 
-_CORPUS = _corpus_dir()
+_resolved = _corpus_dir()
+_CORPUS = _resolved[0] if _resolved else None
+_BUNDLED = _resolved[1] if _resolved else False
 
-pytestmark = [
-    pytest.mark.slow,
-    pytest.mark.integration,
-    pytest.mark.skipif(_CORPUS is None, reason="PythonCourses sync corpus not available"),
-]
+# The real PythonCourses corpus is large (rglob + a plan build per pair) — hence
+# ``slow``, and CI (which excludes ``slow`` from every job) never runs it. The
+# bundled synthetic corpus is one tiny deck and runs in ~2 s, so on the fallback
+# we drop ``slow`` and the ``integration`` CI job picks the oracle up. No
+# ``skipif``: the bundled corpus is always present.
+pytestmark = [pytest.mark.integration]
+if not _BUNDLED:
+    pytestmark.append(pytest.mark.slow)
 
 
 class _StaticJudge:
