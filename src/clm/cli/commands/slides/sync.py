@@ -2159,6 +2159,17 @@ def _emit_tasks(tasks: list[SyncTask], *, unframed: list, as_json: bool) -> None
 )
 @click.option("--json", "as_json", is_flag=True, help="Emit the accept result as JSON.")
 @click.option(
+    "--record",
+    is_flag=True,
+    help=(
+        "After a successful EDIT accept, bank that one reconciled cell to the consistency "
+        "ledger (#448) so a later `report`/`apply --ledger` skips it "
+        "(confirmed_by=accept, confirmed_oracle=agent). Records only the accepted slide, "
+        "gated on a per-slide structural verify; a structural add/mint/adopt/reconcile is "
+        "blessed deck-wide via `apply --ledger` / `baseline bless --ledger` instead."
+    ),
+)
+@click.option(
     "--baseline",
     "baseline_ref",
     default=None,
@@ -2189,6 +2200,7 @@ def sync_accept_cmd(
     item_id: str,
     answer_path: str,
     as_json: bool,
+    record: bool,
     baseline_ref: str | None,
     baseline_from_spec: str | None,
     use_watermark: bool,
@@ -2209,6 +2221,15 @@ def sync_accept_cmd(
     ``reconcile`` (correspondence verdicts). A hand-judged ``conflict`` / ``issue`` has no
     model task, so it is not accepted — it says so with the next step. Run ``clm slides
     sync verify`` after to confirm the write is sound.
+
+    \b
+    With ``--record`` a successful ``edit`` accept also banks that one reconciled cell to
+    the per-slide consistency ledger (#448) — ``confirmed_by=accept``,
+    ``confirmed_oracle=agent`` — so the next ``report``/``apply --ledger`` skips it. It
+    records only the slide just accepted (not the whole pair, whose other residue is
+    unresolved), gated on a per-slide structural verify. Structural kinds are not
+    per-item recordable; bless them deck-wide via ``apply --ledger`` / ``baseline bless
+    --ledger`` once the deck is coherent.
     """
     if de_path.is_dir():
         raise click.UsageError(
@@ -2261,8 +2282,66 @@ def sync_accept_cmd(
         _emit_accept_failure(item_id, str(exc), outcome="unavailable", as_json=as_json)
         sys.exit(2)
 
-    _emit_accept_result(result, de_path, as_json=as_json)
+    recorded = _record_accept(result, de_path, en_path, as_json=as_json) if record else None
+    _emit_accept_result(result, de_path, as_json=as_json, recorded=recorded)
     sys.exit(0)
+
+
+def _record_accept(result: AcceptResult, de_path: Path, en_path: Path, *, as_json: bool) -> bool:
+    """Bank an accepted EDIT's cell to the consistency ledger (#448 P2, `accept --record`).
+
+    The per-item confirm path (design note §11.4): records **only** the cell the agent just
+    reconciled (guard 1 — never the whole pair, whose other residue is unresolved), gated on
+    a per-slide structural verify (guard 2), provenance ``confirmed_by=accept`` /
+    ``confirmed_oracle=agent`` (guard 3 — an agent asserted it and it passed structural
+    validation, distinct from a model's ``semantic`` verdict). Only ``edit`` maps to a single
+    ledger-keyable in-sync pair; a structural ``add`` / ``mint`` / ``adopt`` / ``reconcile`` /
+    ``realign`` is banked deck-wide by ``apply --ledger`` / ``baseline bless --ledger`` once
+    the deck is coherent. Returns whether a slide was banked (for the ``--json`` contract).
+    """
+    if not result.applied:
+        return False
+    if result.kind != "edit":
+        if not as_json:
+            click.echo(
+                f"ledger: --record banks edit reconciliations; a {result.kind} is blessed "
+                "deck-wide via `apply --ledger` / `baseline bless --ledger` once the deck is "
+                "coherent — nothing recorded.",
+                err=True,
+            )
+        return False
+    from clm.slides import sync_ledger
+
+    rec = sync_ledger.record_edit(
+        de_path,
+        en_path,
+        slide_id=result.slide_id,
+        role=result.role or "",
+        owning_slide_id=result.owning_slide_id,
+        anchor_occ=result.anchor_occ,
+        confirmed_by="accept",
+        confirmed_oracle="agent",
+    )
+    if rec.refused:
+        if not as_json:
+            click.echo(f"ledger: not recorded ({'; '.join(rec.reasons)}).", err=True)
+        return False
+    if not rec.recorded:
+        # An id-less localized cell that is not a narrative (#365 code / markdown) — out of
+        # the ledger's scope (the structural-pass direction mechanism governs it), not an error.
+        if not as_json:
+            click.echo(
+                "ledger: this edit is an id-less localized cell (not a narrative; governed by "
+                "the structural-pass direction mechanism, not the ledger); nothing recorded.",
+                err=True,
+            )
+        return False
+    if not as_json:
+        click.echo(
+            "ledger: recorded 1 slide confirmed in-sync (confirmed_by=accept, oracle=agent).",
+            err=True,
+        )
+    return True
 
 
 def _read_answer(answer_path: str) -> object:
@@ -2284,9 +2363,16 @@ def _emit_accept_failure(item_id: str, reason: str, *, outcome: str, as_json: bo
         click.echo(f"not accepted ({outcome}): {reason}", err=True)
 
 
-def _emit_accept_result(result: AcceptResult, de_path: Path, *, as_json: bool) -> None:
+def _emit_accept_result(
+    result: AcceptResult, de_path: Path, *, as_json: bool, recorded: bool | None = None
+) -> None:
     if as_json:
-        click.echo(json.dumps(result.to_dict(), indent=2))
+        payload = result.to_dict()
+        if recorded is not None:
+            # The `--record` outcome (#448): whether this accept banked the cell to the
+            # ledger, so a --json consumer sees it without parsing the human note.
+            payload["recorded"] = recorded
+        click.echo(json.dumps(payload, indent=2))
         return
     click.echo(f"accepted {result.item} [{result.kind}]: {result.detail}")
     if result.changed:

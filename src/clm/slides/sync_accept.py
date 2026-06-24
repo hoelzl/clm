@@ -100,6 +100,19 @@ class AcceptResult:
     applied: bool
     changed: int
     detail: str
+    # #448 P2 (`accept --record`): the accepted EDIT's localized-cell identity, so the CLI
+    # can bank exactly this one cell to the consistency ledger (the per-item confirm path,
+    # design note §11.4). Set only for an ``edit`` — the one kind that maps to a single
+    # ledger-keyable in-sync pair; left at the defaults for every other kind, whose trust
+    # is banked deck-wide by ``apply --ledger`` / ``baseline bless --ledger``. The record
+    # routing reads these: ``slide_id`` set → id'd; else ``role`` ∈ narrative roles →
+    # id-less narrative (keyed by ``owning_slide_id`` / ``anchor_occ``); else an id-less
+    # localized code cell (#365, out of the ledger's scope). Not part of the JSON answer
+    # contract — ``to_dict`` stays the five public fields.
+    slide_id: str | None = None
+    role: str | None = None
+    owning_slide_id: str | None = None
+    anchor_occ: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -429,21 +442,29 @@ def _accept_edit(plan: SyncPlan, item: ReconciliationItem, answer: Any) -> Accep
     )
     if result.errors:
         raise AcceptRejected("; ".join(result.errors))
-    if result.applied_edit:
+
+    def _accepted(changed: int, detail: str) -> AcceptResult:
+        # Carry the reconciled cell's identity so `accept --record` can bank exactly it
+        # (#448 P2). After an accepted edit the cell IS in sync (an ``update`` wrote the
+        # reconciled body; an ``in_sync`` verdict means the target already matched), so
+        # both success paths are recordable.
         return AcceptResult(
             item=item.item,
             kind=item.kind,
             applied=True,
-            changed=result.applied_edit,
-            detail="reconciled the edit onto the target half.",
+            changed=changed,
+            detail=detail,
+            slide_id=proposal.slide_id,
+            role=proposal.role,
+            owning_slide_id=proposal.owning_slide_id,
+            anchor_occ=proposal.anchor_occ,
         )
+
+    if result.applied_edit:
+        return _accepted(result.applied_edit, "reconciled the edit onto the target half.")
     if result.in_sync:
-        return AcceptResult(
-            item=item.item,
-            kind=item.kind,
-            applied=True,
-            changed=0,
-            detail="the target already reflects the source (verdict in_sync); nothing written.",
+        return _accepted(
+            0, "the target already reflects the source (verdict in_sync); nothing written."
         )
     raise AcceptRejected(
         f"{item.item!r}: the edit did not apply (the deck changed since `report`); "
