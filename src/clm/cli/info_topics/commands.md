@@ -1986,7 +1986,7 @@ clm slides sync report DECK [EN_PATH] [OPTIONS]   # bare `sync DECK` is the same
 | `--baseline-from PATH[@REF]` | Diff a **renamed** deck against its pre-rename half `PATH` (`@REF` defaults to `HEAD`) when auto rename-detection can't recover it. Single-pair only (it names one deck's old path). |
 | `--use-watermark` | Opt back into the structural watermark as the baseline (default: git `HEAD`). |
 | `--cache-dir PATH` | Directory holding the watermark (only with `--use-watermark`). Lookup: flag → `$CLM_CACHE_DIR` → `tool.clm.cache_dir` → `<cwd>/.clm-cache/`. |
-| `--ledger` | Consult the per-slide consistency ledger (`<topic>/.clm/sync-ledger.json`, #448): skip any slide whose two current halves are byte-identical to a recorded confirmation, so a sync paid for last round is not re-litigated against an older `--baseline`. A trust *overlay* (the classification is unchanged; it only removes redundant proposals); single pair only (P1). Record confirmations with `baseline bless --ledger`. |
+| `--ledger` | Consult the per-slide consistency ledger (`<topic>/.clm/sync-ledger.json`, #448): skip any slide whose two current halves are byte-identical to a recorded confirmation, so a sync paid for last round is not re-litigated against an older `--baseline`. A trust *overlay* (the classification is unchanged; it only removes redundant proposals). **Works over a directory** (each pair uses its own topic ledger; the batch JSON/summary reports the aggregate `skipped`). Record confirmations with `baseline bless --ledger` or `apply --ledger`. |
 
 Read-only, no model, no key. Exit code mirrors the plan: `0` clean (in sync),
 `1` work is pending (any tier-1/2/3 item), `2` a classifier error — so a CI
@@ -2025,7 +2025,7 @@ models for those tiers.)
 | `--use-watermark` / `--no-watermark` | Use the watermark as a baseline accelerator (default **on** for `apply`); it advances on a fully clean pass. `--no-watermark` ignores it, falling back to git `HEAD`. |
 | `--baseline REF` / `--baseline-from PATH[@REF]` | As for `report`: `--baseline REF` works over a directory (each pair diffed against REF); `--baseline-from` is single-pair. |
 | `--cache-dir PATH` | Directory holding the watermark. |
-| `--ledger` | Use the per-slide consistency ledger (#448): **read** it to skip slides byte-stable since a recorded confirmation (no re-litigation) before applying, **and** — on a fully-clean pass (no deferred residue, the watermark fully advanced) — **record** the now-in-sync localized slides back to it (`confirmed_by=apply`, gated on structural `verify`). A pass with residue records nothing. The `--json` payload gains a `ledger: {skipped, recorded}` block. Single pair only (P1). |
+| `--ledger` | Use the per-slide consistency ledger (#448): **read** it to skip slides byte-stable since a recorded confirmation (no re-litigation) before applying, **and** — on a fully-clean pass (no deferred residue, the watermark fully advanced) — **record** the now-in-sync localized slides back to it (`confirmed_by=apply`, gated on structural `verify`). A pass with residue records nothing. The `--json` payload gains a `ledger: {skipped, recorded}` block. **Works over a directory** (each pair uses its own topic ledger; the batch reports aggregate `skipped`/`recorded`). |
 | `--yes`, `-y` | **Directory (batch) only**: confirm a writing sweep over every pair under the tree. Ignored for a single pair. |
 | `--json` | Emit the apply result as JSON. |
 

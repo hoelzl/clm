@@ -286,6 +286,9 @@ class _PairResult:
     explain_text: str | None
     exit_code: int
     error: str | None
+    # Issue #448 P1: slides this pair banked to the ledger on a fully-clean apply
+    # (apply-batch only). ``None`` when --ledger was off or the pass was not clean.
+    ledger_recorded: int | None = None
 
 
 def _run_batch(
@@ -299,6 +302,7 @@ def _run_batch(
     cache_dir: Path | None,
     provider_available: bool,
     baseline_ref: str | None = None,
+    ledger: bool = False,
     make_judge: Callable[[], SyncJudge | None],
     make_translator: Callable[[], SlideTranslator | None],
     make_recoverer: Callable[[], AlignmentRecoverer | None],
@@ -404,6 +408,7 @@ def _run_batch(
                     verifier=verifier,
                     correspondence_cache=correspondence_cache,
                     baseline_ref=baseline_ref,
+                    ledger=ledger,
                 )
             )
     finally:
@@ -415,7 +420,7 @@ def _run_batch(
             correspondence_cache.close()
 
     exit_code = max((r.exit_code for r in results), default=0)
-    _emit_batch(root, mode, results, exit_code, as_json=as_json)
+    _emit_batch(root, mode, results, exit_code, as_json=as_json, ledger=ledger)
     sys.exit(exit_code)
 
 
@@ -433,6 +438,7 @@ def _sync_one_pair(
     verifier: CorrespondenceVerifier | None,
     correspondence_cache: SyncCorrespondenceCache | None,
     baseline_ref: str | None = None,
+    ledger: bool = False,
 ) -> _PairResult:
     """Sync one pair for the batch, catching any failure so the sweep continues."""
     try:
@@ -442,6 +448,7 @@ def _sync_one_pair(
             watermark_cache=watermark_cache,
             provider_available=provider_available,
             baseline_ref=baseline_ref,
+            ledger=_load_ledger_if(ledger, de_path),
         )
         apply_result: ApplyResult | None = None
         explain_text: str | None = None
@@ -536,6 +543,13 @@ def _batch_rollup(results: list[_PairResult]) -> str:
     return f"{len(results)} pair(s): {clean} clean, {review} review, {errored} errored."
 
 
+def _ledger_totals(results: list[_PairResult]) -> tuple[int, int]:
+    """Aggregate (skipped, recorded) across a batch's pairs for the ledger summary (#448)."""
+    skipped = sum(r.plan.ledger_skipped for r in results if r.plan is not None)
+    recorded = sum(r.ledger_recorded for r in results if r.ledger_recorded is not None)
+    return skipped, recorded
+
+
 def _emit_batch(
     root: Path,
     mode: str,
@@ -543,9 +557,12 @@ def _emit_batch(
     exit_code: int,
     *,
     as_json: bool,
+    ledger: bool = False,
 ) -> None:
     if as_json:
-        click.echo(json.dumps(_batch_to_dict(root, mode, results, exit_code), indent=2))
+        click.echo(
+            json.dumps(_batch_to_dict(root, mode, results, exit_code, ledger=ledger), indent=2)
+        )
         return
     if mode == "explain":
         for r in results:
@@ -554,6 +571,7 @@ def _emit_batch(
             click.echo(f"  error: {r.error}" if r.error is not None else r.explain_text)
         click.echo("")
         click.echo(_batch_rollup(results))
+        _emit_ledger_summary(results, ledger)
         return
     # dry-run / apply: a scannable one-liner per pair, then the rollup.
     for r in results:
@@ -584,19 +602,39 @@ def _emit_batch(
                 click.echo(f"  {_deck_label(r.de_path, root)}: {ids}")
     click.echo("")
     click.echo(_batch_rollup(results))
+    _emit_ledger_summary(results, ledger)
     if mode == "apply" and any(
         r.apply_result is not None and r.apply_result.applied for r in results
     ):
         click.echo("Review the propagated changes with `git diff` before committing.")
 
 
-def _batch_to_dict(root: Path, mode: str, results: list[_PairResult], exit_code: int) -> dict:
-    return {
+def _emit_ledger_summary(results: list[_PairResult], ledger: bool) -> None:
+    """One-line batch ledger rollup (skipped via the overlay, recorded on clean applies)."""
+    if not ledger:
+        return
+    skipped, recorded = _ledger_totals(results)
+    click.echo(
+        f"ledger: {skipped} slide(s) skipped (trusted in-sync), "
+        f"{recorded} recorded across {len(results)} pair(s)."
+    )
+
+
+def _batch_to_dict(
+    root: Path, mode: str, results: list[_PairResult], exit_code: int, *, ledger: bool = False
+) -> dict:
+    payload: dict = {
         "mode": mode,
         "root": str(root),
         "exit_code": exit_code,
         "pairs": [_batch_pair_dict(r, mode) for r in results],
     }
+    if ledger:
+        # Aggregate ledger signal for a --json consumer (per-pair plan.ledger_skipped
+        # is still in each pairs[i]); recorded is apply-batch only.
+        skipped, recorded = _ledger_totals(results)
+        payload["ledger"] = {"skipped": skipped, "recorded": recorded}
+    return payload
 
 
 def _batch_pair_dict(r: _PairResult, mode: str) -> dict:
@@ -1348,11 +1386,6 @@ def _run_report(
                 "only; run it per deck. (--baseline REF works over a directory — it diffs "
                 "every pair against that ref, e.g. to reconcile a week of committed edits.)"
             )
-        if ledger:
-            raise click.UsageError(
-                "--ledger is single-pair in this release (P1); run `report --ledger` per "
-                "deck. A batch ledger overlay is a planned follow-up."
-            )
         _run_batch(
             de_path,
             mode=mode,
@@ -1363,6 +1396,7 @@ def _run_report(
             cache_dir=cache_dir,
             provider_available=provider_available,
             baseline_ref=baseline_ref,
+            ledger=ledger,
             make_judge=lambda: None,
             make_translator=lambda: None,
             make_recoverer=lambda: None,
@@ -1491,7 +1525,7 @@ def _run_report(
     help=(
         "Consult the per-slide consistency ledger (<topic>/.clm/sync-ledger.json, #448): "
         "skip slides byte-stable since a recorded confirmation so a sync paid for last "
-        "round is not re-litigated against an older baseline. Single pair only (P1)."
+        "round is not re-litigated against an older baseline. Works over a directory."
     ),
 )
 @click.option(
@@ -1587,7 +1621,8 @@ def sync_verify_cmd(de_path: Path, en_path: Path | None, as_json: bool) -> None:
     help=(
         "Use the per-slide consistency ledger (#448): skip slides byte-stable since a "
         "recorded confirmation (no re-litigation) before applying, AND — on a fully "
-        "clean pass — record the now-in-sync slides back to the ledger. Single pair (P1)."
+        "clean pass — record the now-in-sync slides back to the ledger. Works over a "
+        "directory (each pair uses its own ledger)."
     ),
 )
 @click.option("--json", "as_json", is_flag=True, help="Emit the apply result as JSON.")
@@ -1636,11 +1671,6 @@ def sync_apply_cmd(
                 "--baseline-from pins ONE deck's pre-rename half, so it is single-pair "
                 "only; run it per deck. (--baseline REF works over a directory.)"
             )
-        if ledger:
-            raise click.UsageError(
-                "--ledger is single-pair in this release (P1); run `apply --ledger` per "
-                "deck. A batch ledger overlay is a planned follow-up."
-            )
         _run_apply_batch(
             de_path,
             yes=yes,
@@ -1648,6 +1678,7 @@ def sync_apply_cmd(
             cache_dir=cache_dir,
             as_json=as_json,
             baseline_ref=baseline_ref,
+            ledger=ledger,
         )
         return  # _run_apply_batch always sys.exit()s; this is just for the type-checker.
 
@@ -1857,6 +1888,7 @@ def _run_apply_batch(
     cache_dir: Path | None,
     as_json: bool,
     baseline_ref: str | None = None,
+    ledger: bool = False,
 ) -> None:
     """Model-free tier-1 apply over every split pair under ``root`` (no model, epic #440).
 
@@ -1906,10 +1938,17 @@ def _run_apply_batch(
                 click.echo(f"[{i}/{len(pairs)}] {_deck_label(de_path, root)} …", err=True)
             try:
                 plan, result = _apply_deterministic(
-                    de_path, en_path, watermark_cache=watermark_cache, baseline_ref=baseline_ref
+                    de_path,
+                    en_path,
+                    watermark_cache=watermark_cache,
+                    baseline_ref=baseline_ref,
+                    ledger=ledger,
                 )
+                recorded = _maybe_record_ledger(ledger, plan, result, de_path, en_path)
                 exit_code = _apply_exit_code(plan, result)
-                results.append(_PairResult(de_path, en_path, plan, result, None, exit_code, None))
+                results.append(
+                    _PairResult(de_path, en_path, plan, result, None, exit_code, None, recorded)
+                )
             except Exception as exc:  # continue-on-error: one bad pair must not abort the sweep
                 results.append(
                     _PairResult(
@@ -1921,7 +1960,7 @@ def _run_apply_batch(
             watermark_cache.close()
 
     exit_code = max((r.exit_code for r in results), default=0)
-    _emit_batch(root, "apply", results, exit_code, as_json=as_json)
+    _emit_batch(root, "apply", results, exit_code, as_json=as_json, ledger=ledger)
     sys.exit(exit_code)
 
 
