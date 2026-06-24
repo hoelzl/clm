@@ -113,6 +113,12 @@ class AcceptResult:
     role: str | None = None
     owning_slide_id: str | None = None
     anchor_occ: int = 0
+    # #448 P3: every ``old_id -> new_id`` slide_id rename this accept performed (from the
+    # apply's :attr:`~clm.slides.sync_apply.ApplyResult.id_migrations`) — chiefly a
+    # ``realign``, also a ``reconcile``. The CLI carries the consistency ledger across these
+    # so a confirmed slide follows its id instead of orphaning to the cold path. Empty for
+    # accepts that rename nothing (the common ``edit`` / ``add`` / cold-start case).
+    id_migrations: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -359,7 +365,12 @@ def _accept_realign(plan: SyncPlan, item: ReconciliationItem, answer: Any) -> Ac
         else "the ids were already aligned (valid no-op); nothing written."
     )
     return AcceptResult(
-        item=item.item, kind=item.kind, applied=True, changed=changed, detail=detail
+        item=item.item,
+        kind=item.kind,
+        applied=True,
+        changed=changed,
+        detail=detail,
+        id_migrations=dict(result.id_migrations),  # #448 P3: carry the ledger across the rename
     )
 
 
@@ -630,6 +641,9 @@ def _accept_reconcile(plan: SyncPlan, item: ReconciliationItem, answer: Any) -> 
             applied=True,
             changed=result.applied_reconcile,
             detail=detail,
+            id_migrations=dict(
+                result.id_migrations
+            ),  # #448 P3: carry the ledger across the id rewrite
         )
     raise AcceptRejected(
         f"{item.item!r}: no twins were reconciled (your verdicts found no unambiguous "

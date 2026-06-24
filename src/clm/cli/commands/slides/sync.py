@@ -1763,10 +1763,16 @@ def _maybe_record_ledger(
     """
     if not enabled:
         return None
+    from clm.slides import sync_ledger
+
+    # #448 P3: carry the ledger across any id rename this pass performed, BEFORE the
+    # clean-gate — a migrated slide's entry must follow its id even on a residue pass
+    # (which records nothing below). A no-op when nothing migrated / no ledger.
+    if result.id_migrations:
+        sync_ledger.carry_id_migrations(de_path, result.id_migrations)
     fully_clean = result.watermark_recorded and result.deferred == 0 and not plan.tag_holds
     if not fully_clean:
         return 0
-    from clm.slides import sync_ledger
 
     rec = sync_ledger.record_pair(
         de_path, en_path, confirmed_by=confirmed_by, confirmed_oracle="structural"
@@ -2308,9 +2314,31 @@ def sync_accept_cmd(
         _emit_accept_failure(item_id, str(exc), outcome="unavailable", as_json=as_json)
         sys.exit(2)
 
+    carried = _carry_accept(result, de_path, as_json=as_json)
     recorded = _record_accept(result, de_path, en_path, as_json=as_json) if record else None
-    _emit_accept_result(result, de_path, as_json=as_json, recorded=recorded)
+    _emit_accept_result(result, de_path, as_json=as_json, recorded=recorded, carried=carried)
     sys.exit(0)
+
+
+def _carry_accept(result: AcceptResult, de_path: Path, *, as_json: bool) -> int | None:
+    """Carry the consistency ledger across any id rename this accept performed (#448 P3).
+
+    A ``realign`` (or ``reconcile``) rewrites slide_ids; an existing ledger entry under the
+    old id must follow the slide to its new id rather than orphan to the cold path. Runs
+    **unconditionally** — independent of ``--record`` (which *adds* trust; this *preserves*
+    it) — and is a no-op when nothing was renamed or no ledger exists. Returns the carried
+    count, or ``None`` when there was nothing to carry (so the output stays quiet).
+    """
+    if not result.applied or not result.id_migrations:
+        return None
+    from clm.slides import sync_ledger
+
+    res = sync_ledger.carry_id_migrations(de_path, result.id_migrations)
+    if res.carried and not as_json:
+        click.echo(
+            f"ledger: carried {res.carried} confirmed slide(s) across the id rename.", err=True
+        )
+    return res.carried
 
 
 def _record_accept(result: AcceptResult, de_path: Path, en_path: Path, *, as_json: bool) -> bool:
@@ -2390,7 +2418,12 @@ def _emit_accept_failure(item_id: str, reason: str, *, outcome: str, as_json: bo
 
 
 def _emit_accept_result(
-    result: AcceptResult, de_path: Path, *, as_json: bool, recorded: bool | None = None
+    result: AcceptResult,
+    de_path: Path,
+    *,
+    as_json: bool,
+    recorded: bool | None = None,
+    carried: int | None = None,
 ) -> None:
     if as_json:
         payload = result.to_dict()
@@ -2398,6 +2431,9 @@ def _emit_accept_result(
             # The `--record` outcome (#448): whether this accept banked the cell to the
             # ledger, so a --json consumer sees it without parsing the human note.
             payload["recorded"] = recorded
+        if carried is not None:
+            # #448 P3: ledger entries re-keyed across this accept's id rename(s).
+            payload["ledger_carried"] = carried
         click.echo(json.dumps(payload, indent=2))
         return
     click.echo(f"accepted {result.item} [{result.kind}]: {result.detail}")

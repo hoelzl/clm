@@ -18,6 +18,7 @@ from clm.slides.sync_ledger import (
     LEDGER_FILENAME,
     LedgerEntry,
     SyncLedger,
+    carry_id_migrations,
     ledger_path_for,
     load,
     record_edit,
@@ -1174,3 +1175,120 @@ def test_cli_establish_no_key_errors(tmp_path: Path, monkeypatch) -> None:
     )
     assert res.exit_code == 2
     assert "needs an OpenRouter key" in res.output
+
+
+# ---------------------------------------------------------------------------
+# carry_id_migrations — re-key entries across a slide_id rename (P3)
+# ---------------------------------------------------------------------------
+
+
+def test_carry_idd_rename_preserves_provenance(tmp_path: Path) -> None:
+    de_path, _en = _write_pair(tmp_path, _slide("de", "s1", "Hallo"), _slide("en", "s1", "Hello"))
+    led = SyncLedger()
+    led.entries[("old", "slide")] = LedgerEntry("dh", "eh", "fn", "c", "establish", "semantic:m")
+    save(led, ledger_path_for(de_path))
+    res = carry_id_migrations(de_path, {"old": "new"})
+    assert res.carried == 1 and res.dropped == 0
+    out = load(res.path)
+    assert ("old", "slide") not in out.entries
+    moved = out.entries[("new", "slide")]
+    assert moved.de_hash == "dh" and moved.confirmed_by == "establish"
+    assert moved.confirmed_oracle == "semantic:m"  # provenance preserved verbatim
+
+
+def test_carry_idless_owning_rename(tmp_path: Path) -> None:
+    de_path, _en = _write_pair(tmp_path, _slide("de", "s1", "Hallo"), _slide("en", "s1", "Hello"))
+    led = SyncLedger()
+    led.idless[("old", "voiceover", 0)] = LedgerEntry("d", "e", None, "c", "bless", "structural")
+    save(led, ledger_path_for(de_path))
+    res = carry_id_migrations(de_path, {"old": "new"})
+    assert res.carried == 1
+    out = load(res.path)
+    assert ("new", "voiceover", 0) in out.idless and ("old", "voiceover", 0) not in out.idless
+
+
+def test_carry_conflict_drops_stale_old(tmp_path: Path) -> None:
+    # The new id already has an authoritative entry → drop the stale old, don't clobber it.
+    de_path, _en = _write_pair(tmp_path, _slide("de", "s1", "Hallo"), _slide("en", "s1", "Hello"))
+    led = SyncLedger()
+    led.entries[("old", "slide")] = LedgerEntry("OLD", "OLD", None, "c", "seed", "assume")
+    led.entries[("new", "slide")] = LedgerEntry("NEW", "NEW", None, "c2", "bless", "structural")
+    save(led, ledger_path_for(de_path))
+    res = carry_id_migrations(de_path, {"old": "new"})
+    assert res.carried == 0 and res.dropped == 1
+    out = load(res.path)
+    assert ("old", "slide") not in out.entries
+    assert out.entries[("new", "slide")].de_hash == "NEW"  # the authoritative one kept
+
+
+def test_carry_no_ledger_or_empty_map_is_noop(tmp_path: Path) -> None:
+    de_path, _en = _write_pair(tmp_path, _slide("de", "s1", "Hallo"), _slide("en", "s1", "Hello"))
+    assert carry_id_migrations(de_path, {"old": "new"}).carried == 0  # no ledger file
+    assert not ledger_path_for(de_path).exists()  # carry never CREATES a ledger
+    save(
+        SyncLedger(
+            entries={("s1", "slide"): LedgerEntry("d", "e", None, "c", "bless", "structural")}
+        ),
+        ledger_path_for(de_path),
+    )
+    assert carry_id_migrations(de_path, {}).carried == 0  # empty map
+
+
+def test_carry_relabel_keeps_trust_e2e(tmp_path: Path) -> None:
+    # A pure slide_id relabel (body unchanged) on both halves: without carry the recorded
+    # entry orphans (the cell now wears a new id); carry moves it and — because the body is
+    # unchanged, hash_cell is slide_id-independent — the trust is preserved at the new id.
+    de_path, en_path = _write_pair(
+        tmp_path, _slide("de", "s1", "Hallo"), _slide("en", "s1", "Hello")
+    )
+    record_pair(de_path, en_path, confirmed_by="bless", commit="c")
+    de_path.write_text(_slide("de", "s2", "Hallo"), encoding="utf-8")  # relabel s1 -> s2
+    en_path.write_text(_slide("en", "s2", "Hello"), encoding="utf-8")
+    cur = sync_ledger.current_pairs(de_path, en_path)[("s2", "slide")]
+    assert not load(ledger_path_for(de_path)).trusts("s2", "slide", cur[0], cur[1])  # orphaned
+
+    carry_id_migrations(de_path, {"s1": "s2"})
+    out = load(ledger_path_for(de_path))
+    assert out.trusts("s2", "slide", cur[0], cur[1])  # trust preserved at the new id
+    assert ("s1", "slide") not in out.entries
+    assert out.entries[("s2", "slide")].confirmed_by == "bless"  # provenance intact
+
+
+def test_maybe_record_ledger_carries_even_on_residue(tmp_path: Path) -> None:
+    # The apply-path wiring: a residue pass records nothing but must still carry a rename.
+    from clm.cli.commands.slides.sync import _maybe_record_ledger
+    from clm.slides.sync_apply import ApplyResult
+
+    de_path, en_path = _write_pair(
+        tmp_path, _slide("de", "s1", "Hallo"), _slide("en", "s1", "Hello")
+    )
+    led = SyncLedger()
+    led.entries[("old", "slide")] = LedgerEntry("d", "e", None, "c", "bless", "structural")
+    save(led, ledger_path_for(de_path))
+    plan = SyncPlan(de_path=de_path, en_path=en_path, baseline_source="watermark")
+    result = ApplyResult(deferred=1, id_migrations={"old": "new"})  # not fully clean
+    recorded = _maybe_record_ledger(True, plan, result, de_path, en_path)
+    assert recorded == 0  # residue → records nothing
+    out = load(ledger_path_for(de_path))
+    assert ("new", "slide") in out.entries and ("old", "slide") not in out.entries  # carried
+
+
+def test_carry_accept_helper_moves_entry(tmp_path: Path) -> None:
+    from clm.cli.commands.slides.sync import _carry_accept
+    from clm.slides.sync_accept import AcceptResult
+
+    de_path, _en = _write_pair(tmp_path, _slide("de", "s1", "Hallo"), _slide("en", "s1", "Hello"))
+    led = SyncLedger()
+    led.entries[("old", "slide")] = LedgerEntry("d", "e", None, "c", "agent", "agent")
+    save(led, ledger_path_for(de_path))
+    res = AcceptResult(
+        item="realign-x",
+        kind="realign",
+        applied=True,
+        changed=2,
+        detail="",
+        id_migrations={"old": "new"},
+    )
+    assert _carry_accept(res, de_path, as_json=True) == 1
+    out = load(ledger_path_for(de_path))
+    assert ("new", "slide") in out.entries and ("old", "slide") not in out.entries

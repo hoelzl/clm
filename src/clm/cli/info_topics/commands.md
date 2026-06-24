@@ -2061,6 +2061,14 @@ matching the task's `answer_schema`), runs it through the named deterministic
 reason and writes nothing**, so a bad answer never corrupts the deck (retry with
 a better model/prompt). No model, no key.
 
+When an accept **renames a slide_id** (a `realign`, or a `reconcile` that rewrites
+a divergent id), it automatically **carries the consistency ledger across the
+rename** (#448 P3): an existing entry under the old id follows the slide to its new
+id (provenance preserved) instead of orphaning to the cold path. This runs whether
+or not `--record` is given (carry *preserves* trust; `--record` *adds* it); the
+`--json` payload reports `ledger_carried`. A pure relabel keeps its trust (the body
+hash is id-independent); a rename that also changed the body re-checks (fail-safe).
+
 | Option | Description |
 |--------|-------------|
 | `--item ID` (required) | The report item the answer is for (the id `task --item ID` framed). |

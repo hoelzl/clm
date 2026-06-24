@@ -253,6 +253,13 @@ consistency ledger** (`<topic>/.clm/sync-ledger.json`, committed) fixes that.
   `(owning_slide_id, role, occ)` (the n-th such narrative under its owning slide),
   so the voiceover-heavy decks the bare-id key used to miss are covered. Id-less
   localized *code* is still governed by the structural pass, not the ledger.
+- **Survives an id rename.** When a `slide_id` is rewritten — a `realign` you
+  `accept`, a `reconcile`, or a deterministic id-migration during `apply --ledger` —
+  the ledger entry **follows the slide to its new id** automatically (#448 P3),
+  keyed and provenance preserved, rather than orphaning to the cold path. A pure
+  relabel (body unchanged) keeps its trust; a rename that also changed the body
+  re-checks (the body hash is id-independent, so the exact-match gate decides). So a
+  realign no longer silently demotes a slide you already paid to confirm.
 
 ## A clean, committed, id-less deck is *consistent* (not a cold start)
 
