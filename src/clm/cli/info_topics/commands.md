@@ -2071,8 +2071,9 @@ a better model/prompt). No model, no key.
 
 #### `clm slides sync baseline`
 
-`show` / `bless` / `seed` / `clear` / `prune` — inspect and maintain the demoted
-watermark accelerator. `bless` records the current working tree as the baseline
+`show` / `bless` / `seed` / `establish` / `clear` / `prune` — inspect and maintain
+the demoted watermark accelerator. `bless` records the current working tree as the
+baseline
 (no commit needed; the replacement for the old `--rebaseline`). It is gated on
 `verify` (structure only) and records **whatever is in the working tree** — it
 does not check the translation is correct or that the tree agrees with git
@@ -2093,6 +2094,21 @@ slide drifted since the watermark no longer matches the current halves, so it
 re-checks) and **fill-gaps only** (a real `bless`/`apply` confirmation is never
 downgraded to `assume`); gated on a structural `verify` of the current pair. See
 `clm info sync-agents` (the consistency ledger section).
+
+`baseline establish DECK` (a directory too) is the **semantic** ledger rung (#448,
+since CLM {version}): a cheap LLM judges whether each localized `(de, en)` cell is a
+faithful translation and banks the faithful ones as `confirmed_oracle=semantic:<model>`
+(`confirmed_by=establish`), so a slide judged once becomes a free `--ledger` hit. A
+pair judged **not** faithful is reported (a real divergence to reconcile via `report`
+/ `task` / `accept`) and **not** banked. Cost-disciplined: it judges only slides NOT
+already trusted at their current halves — the cold (no ledger entry, or one at a
+drifted hash) and the `seed`-inherited (`oracle=assume`) ones — and skips slides
+already confirmed by `structural` / `agent` / a prior `semantic` (never re-paid).
+Gated on a structural `verify`; needs `$OPENROUTER_API_KEY` (or `$OPENAI_API_KEY`) —
+the only baseline verb that calls a model. `--semantic-model` overrides the judge
+(default `anthropic/claude-haiku-4-5`, the cheap yes/no tier); a directory run needs
+`--yes` (it calls the model per slide). Exit `0` all faithful/skipped, `1` a
+divergence found (or a judge call failed), `2` a corrupt pair refused (or no key).
 
 #### `clm slides sync autopilot`
 

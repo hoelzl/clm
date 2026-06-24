@@ -31,6 +31,7 @@ from clm.slides.sync_plan import (
     build_sync_plan,
     ordered_sync_cells,
 )
+from clm.slides.sync_semantic import SemanticVerdict, StaticSemanticJudge
 
 
 def _slide(lang: str, sid: str, body: str) -> str:
@@ -1008,3 +1009,168 @@ def test_cli_autopilot_dry_run_ledger_skips_relitigation(tmp_path: Path) -> None
     assert without.exit_code == 1  # an edit is pending against the watermark
     assert with_ledger.exit_code == 0, with_ledger.output  # the ledger trusts the slide → clean
     assert "skipped 1 slide" in with_ledger.output
+
+
+# ---------------------------------------------------------------------------
+# record_semantic — the `semantic` rung (P2 increment 3, `baseline establish`)
+# ---------------------------------------------------------------------------
+
+
+def test_record_semantic_banks_faithful(tmp_path: Path) -> None:
+    de_path, en_path = _write_pair(
+        tmp_path, _slide("de", "s1", "Hallo"), _slide("en", "s1", "Hello")
+    )
+    judge = StaticSemanticJudge(default=True)
+    res = sync_ledger.record_semantic(de_path, en_path, judge, model="test-model", commit="c1")
+    assert not res.refused
+    assert res.judged == 1 and res.recorded == 1 and res.skipped == 0
+    assert not res.rejected and not res.failed
+    entry = load(res.path).entries[("s1", "slide")]
+    assert entry.confirmed_oracle == "semantic:test-model"
+    assert entry.confirmed_by == "establish"
+    assert entry.confirmed_commit == "c1"
+
+
+def test_record_semantic_rejects_unfaithful(tmp_path: Path) -> None:
+    de_path, en_path = _write_pair(
+        tmp_path, _slide("de", "s1", "Hallo"), _slide("en", "s1", "Hello")
+    )
+    judge = StaticSemanticJudge(default=False)  # judges every pair NOT faithful
+    res = sync_ledger.record_semantic(de_path, en_path, judge, model="test-model")
+    assert res.judged == 1 and res.recorded == 0
+    assert len(res.rejected) == 1 and res.rejected[0].slide_id == "s1"
+    assert not res.path.exists()  # nothing banked → no ledger written
+
+
+def test_record_semantic_skips_already_trusted(tmp_path: Path) -> None:
+    de_path, en_path = _write_pair(
+        tmp_path, _slide("de", "s1", "Hallo"), _slide("en", "s1", "Hello")
+    )
+    record_pair(de_path, en_path, confirmed_by="bless", commit="c")  # real structural confirmation
+    judge = StaticSemanticJudge(default=True)
+    res = sync_ledger.record_semantic(de_path, en_path, judge, model="m")
+    assert res.skipped == 1 and res.judged == 0 and res.recorded == 0
+    assert judge.calls == 0  # an already-trusted slide is never re-paid
+    # The original structural confirmation is untouched (not overwritten with semantic).
+    assert load(res.path).entries[("s1", "slide")].confirmed_oracle == "structural"
+
+
+def test_record_semantic_rejudges_assume_seed(tmp_path: Path) -> None:
+    de_path, en_path = _write_pair(
+        tmp_path, _slide("de", "s1", "Hallo"), _slide("en", "s1", "Hello")
+    )
+    # An `assume`-seeded entry at the CURRENT hashes (what `baseline seed` writes).
+    full = sync_ledger.current_idd_full(de_path, en_path)[("s1", "slide")]
+    de_hash, en_hash, construct = full[2], full[3], full[4]
+    pre = SyncLedger()
+    pre.entries[("s1", "slide")] = LedgerEntry(de_hash, en_hash, construct, "c", "seed", "assume")
+    save(pre, ledger_path_for(de_path))
+
+    judge = StaticSemanticJudge(default=True)
+    res = sync_ledger.record_semantic(de_path, en_path, judge, model="m")
+    assert judge.calls == 1 and res.recorded == 1 and res.skipped == 0  # assume is re-judged
+    assert load(res.path).entries[("s1", "slide")].confirmed_oracle == "semantic:m"  # upgraded
+
+
+def test_record_semantic_judges_idless_narrative(tmp_path: Path) -> None:
+    de = _slide("de", "s1", "Hallo") + _vo("de", "# Sprechtext")
+    en = _slide("en", "s1", "Hello") + _vo("en", "# Voiceover")
+    de_path, en_path = _write_pair(tmp_path, de, en)
+    judge = StaticSemanticJudge(default=True)
+    res = sync_ledger.record_semantic(de_path, en_path, judge, model="m")
+    assert res.recorded == 2  # the s1 slide + its id-less voiceover
+    assert load(res.path).idless[("s1", "voiceover", 0)].confirmed_oracle == "semantic:m"
+
+
+def test_record_semantic_refuses_structural_corruption(tmp_path: Path) -> None:
+    de_path, en_path = _write_pair(
+        tmp_path,
+        _slide("de", "s1", "Hallo"),
+        _slide("en", "s2", "Hello"),  # id asymmetry
+    )
+    judge = StaticSemanticJudge(default=True)
+    res = sync_ledger.record_semantic(de_path, en_path, judge, model="m")
+    assert res.refused and res.reasons and judge.calls == 0
+    assert not res.path.exists()
+
+
+def test_record_semantic_failed_call_leaves_cold(tmp_path: Path) -> None:
+    de_path, en_path = _write_pair(
+        tmp_path, _slide("de", "s1", "Hallo"), _slide("en", "s1", "Hello")
+    )
+    judge = StaticSemanticJudge(raise_error=True)  # every call raises SemanticError
+    res = sync_ledger.record_semantic(de_path, en_path, judge, model="m")
+    assert res.recorded == 0 and res.judged == 0 and len(res.failed) == 1
+    assert not res.path.exists()  # a failed call banks nothing
+
+
+def test_record_semantic_mixed_verdicts(tmp_path: Path) -> None:
+    de = _slide("de", "s1", "Eins") + _slide("de", "s2", "Zwei")
+    en = _slide("en", "s1", "One") + _slide("en", "s2", "Two")
+    de_path, en_path = _write_pair(tmp_path, de, en)
+    # Pin s2's DE body to a NOT-faithful verdict; s1 falls to the default (faithful).
+    s2_de_body = sync_ledger.current_idd_full(de_path, en_path)[("s2", "slide")][0]
+    judge = StaticSemanticJudge(
+        verdicts={s2_de_body: SemanticVerdict(False, "EN omits a detail")}, default=True
+    )
+    res = sync_ledger.record_semantic(de_path, en_path, judge, model="m")
+    assert res.recorded == 1 and len(res.rejected) == 1
+    led = load(res.path)
+    assert ("s1", "slide") in led.entries and ("s2", "slide") not in led.entries
+
+
+# ---------------------------------------------------------------------------
+# CLI: `baseline establish` (monkeypatched judge — no network, no key)
+# ---------------------------------------------------------------------------
+
+
+def test_cli_establish_banks_and_reports(tmp_path: Path, monkeypatch) -> None:
+    from click.testing import CliRunner
+
+    import clm.cli.commands.slides.watermark as wm
+
+    monkeypatch.setattr(
+        wm, "_resolve_semantic_judge", lambda model: StaticSemanticJudge(default=True)
+    )
+    de_path, _en = _write_pair(tmp_path, _slide("de", "s1", "Hallo"), _slide("en", "s1", "Hello"))
+    res = CliRunner().invoke(
+        _cli(),
+        ["slides", "sync", "baseline", "establish", str(de_path), "--no-env-file"],
+    )
+    assert res.exit_code == 0, res.output
+    assert "recorded 1" in res.output
+    entry = load(ledger_path_for(de_path.resolve())).entries[("s1", "slide")]
+    assert entry.confirmed_by == "establish" and entry.confirmed_oracle.startswith("semantic:")
+
+
+def test_cli_establish_rejected_exits_one(tmp_path: Path, monkeypatch) -> None:
+    from click.testing import CliRunner
+
+    import clm.cli.commands.slides.watermark as wm
+
+    monkeypatch.setattr(
+        wm, "_resolve_semantic_judge", lambda model: StaticSemanticJudge(default=False)
+    )
+    de_path, _en = _write_pair(tmp_path, _slide("de", "s1", "Hallo"), _slide("en", "s1", "Hello"))
+    res = CliRunner().invoke(
+        _cli(),
+        ["slides", "sync", "baseline", "establish", str(de_path), "--no-env-file", "--json"],
+    )
+    assert res.exit_code == 1, res.output
+    payload = json.loads(res.output[res.output.index("{") : res.output.rindex("}") + 1])
+    assert payload["rejected"] == 1 and payload["recorded"] == 0
+    assert not ledger_path_for(de_path.resolve()).exists()
+
+
+def test_cli_establish_no_key_errors(tmp_path: Path, monkeypatch) -> None:
+    from click.testing import CliRunner
+
+    import clm.cli.commands.slides.watermark as wm
+
+    monkeypatch.setattr(wm, "_resolve_semantic_judge", lambda model: None)  # no API key
+    de_path, _en = _write_pair(tmp_path, _slide("de", "s1", "Hallo"), _slide("en", "s1", "Hello"))
+    res = CliRunner().invoke(
+        _cli(), ["slides", "sync", "baseline", "establish", str(de_path), "--no-env-file"]
+    )
+    assert res.exit_code == 2
+    assert "needs an OpenRouter key" in res.output

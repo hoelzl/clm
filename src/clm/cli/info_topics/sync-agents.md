@@ -226,6 +226,21 @@ consistency ledger** (`<topic>/.clm/sync-ledger.json`, committed) fixes that.
   (inherited trust, not a fresh check) — so the deck does not cold-start every
   slide on its first `--ledger` run. Stale-safe (a slide drifted since the
   watermark re-checks) and fill-gaps only (a real confirmation is never downgraded).
+- **Establish trust with a real check** (the `semantic` rung, the strongest):
+  `clm slides sync baseline establish DECK` LLM-judges whether each localized
+  `(de, en)` cell is a faithful translation and banks the faithful ones as
+  `confirmed_oracle=semantic:<model>` — so a slide judged once is paid for once and
+  becomes a free ledger hit. A pair judged **not** faithful is reported (a real
+  divergence — reconcile it via `report`/`task`/`accept`) and **not** banked. This is
+  the one-time "establish the ledger on a legacy deck" pass: it judges only slides not
+  already trusted (the cold and the `seed`-inherited `assume` ones) and skips the
+  already-confirmed (never re-paid — §9.4 cost discipline). It needs an OpenRouter key
+  (the only ledger verb that calls a model); `--semantic-model` overrides the cheap
+  default (`anthropic/claude-haiku-4-5`). Trust rungs, cheapest → strongest:
+  `assume` (`seed`, no check) < `structural` (`bless`/`apply`, structure only) <
+  `agent` (`accept --record`, an agent asserted + structural) < `semantic` (`establish`,
+  an LLM judged the translation). `confirmed_oracle` records which, so a later run can
+  distrust a specific rung without nuking the ledger.
 - It is a **trust overlay**, not a new baseline: the classification is unchanged,
   the ledger only removes proposals the recorded trust makes redundant. Opt-in
   (default off = today's behavior exactly); **works over a directory** too — point

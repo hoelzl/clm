@@ -28,9 +28,13 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import click
 from attrs import define
+
+if TYPE_CHECKING:
+    from clm.slides.sync_ledger import SemanticRecordResult
 
 from clm.cli.commands.slides.sync import (
     CACHE_DB_NAME,
@@ -659,4 +663,249 @@ def baseline_seed_cmd(
             )
     if len(results) > 1:
         click.echo(f"\nseeded {seeded} slide(s) across {len(results)} pair(s).")
+    sys.exit(exit_code)
+
+
+# ---------------------------------------------------------------------------
+# establish — the semantic rung (#448 P2): LLM-judge un-trusted slides + bank them.
+#
+# The only model-bearing baseline verb. The model client is imported LAZILY (inside
+# `_resolve_semantic_judge`, run only when establish executes), so a plain import of
+# this module — the agent path — never loads a model client (epic #440 decision B).
+# ---------------------------------------------------------------------------
+
+
+def _resolve_semantic_judge(model: str):  # -> SemanticJudge | None
+    """Construct the OpenRouter semantic judge for ``model``, or ``None`` (no API key).
+
+    Lazily imports the key check and the model client so importing this module costs no
+    model client. Returns ``None`` when no key is configured — establish then errors
+    (the verb is model-bearing by definition). Tests monkeypatch this to inject a
+    :class:`~clm.slides.sync_semantic.StaticSemanticJudge` (no network, no key).
+    """
+    from clm.infrastructure.llm.openrouter_client import has_openrouter_api_key
+
+    if not has_openrouter_api_key():
+        return None
+    from clm.slides.sync_semantic import OpenRouterSemanticJudge
+
+    return OpenRouterSemanticJudge(model=model)
+
+
+@baseline_group.command("establish")
+@click.argument("deck", type=click.Path(exists=True, path_type=Path))
+@click.argument(
+    "en_path",
+    required=False,
+    default=None,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click.option(
+    "--semantic-model",
+    default=None,
+    metavar="MODEL",
+    help=(
+        "OpenRouter model for the (de, en) -> correct? judge "
+        "(default: anthropic/claude-haiku-4-5, the cheap yes/no tier)."
+    ),
+)
+@click.option(
+    "--no-env-file",
+    is_flag=True,
+    default=False,
+    help="Do not auto-load a .env (where the OPENROUTER_API_KEY usually lives).",
+)
+@click.option(
+    "--yes",
+    "-y",
+    "yes",
+    is_flag=True,
+    default=False,
+    help="Confirm a directory run (it calls the LLM per slide and writes each pair's ledger).",
+)
+@click.option("--json", "as_json", is_flag=True, default=False, help="Emit a JSON report.")
+def baseline_establish_cmd(
+    deck: Path,
+    en_path: Path | None,
+    semantic_model: str | None,
+    no_env_file: bool,
+    yes: bool,
+    as_json: bool,
+) -> None:
+    """Establish the consistency ledger by LLM-judging un-trusted slides (#448, the ``semantic`` rung).
+
+    The one-time "establish the ledger on a legacy deck" pass: a cheap LLM judges whether
+    each localized ``(de, en)`` cell is a faithful translation, and banks the faithful
+    ones as ``confirmed_oracle=semantic:<model>`` — so a slide judged once becomes a free
+    ``--ledger`` hit forever. A pair judged **not** faithful is reported (a real
+    divergence to reconcile) and **not** banked.
+
+    \b
+    Cost discipline: it judges only slides NOT already trusted at their current halves —
+    the cold (no ledger entry, or one at a drifted hash) and the ``baseline seed``-inherited
+    (``oracle=assume``) ones — and skips slides already confirmed by ``structural`` /
+    ``agent`` / a prior ``semantic`` (never re-paid). Gated on a structural ``verify`` (a
+    corrupt pair is refused). Needs ``$OPENROUTER_API_KEY`` (or ``$OPENAI_API_KEY``), the
+    only baseline verb that calls a model. DECK is a split half, a bilingual stem, or a
+    directory (every pair under it; a writing directory run needs ``--yes``).
+
+    \b
+    Exit (worst over all pairs in a directory run — refusal dominates): ``2`` if **any**
+    pair was structurally refused (or no API key); else ``1`` if **any** pair had a
+    divergence (rejected) or a failed judge call; else ``0`` (every pair faithful or
+    skipped). So a batch where one pair is refused exits ``2`` even if another had a
+    divergence — the per-pair detail (and the ``--json`` ``rejected`` / ``failed`` counts)
+    distinguishes them.
+    """
+    from clm.slides import sync_ledger
+    from clm.slides.sync_semantic import DEFAULT_SEMANTIC_MODEL
+
+    model = semantic_model or DEFAULT_SEMANTIC_MODEL
+
+    if deck.is_dir():
+        if en_path is not None:
+            raise click.UsageError(
+                f"{deck} is a directory (batch establish), which takes a single directory "
+                "argument; do not pass a second path."
+            )
+        pairs = [(Path(de), Path(en)) for de, en in _resolve_pairs(deck)]
+    else:
+        de_p, en_p = _resolve_single_path(deck, en_path)
+        de_p, en_p = _resolve_sync_pair(de_p, en_p)
+        pairs = [(de_p.resolve(), en_p.resolve())]
+
+    if not pairs:
+        if as_json:
+            click.echo(json.dumps({"mode": "establish", "exit_code": 0, "pairs": []}, indent=2))
+        else:
+            click.echo(f"no split-format deck pairs found under {deck}.")
+        sys.exit(0)
+
+    # Load the .env and resolve the judge FIRST, so a missing key fails fast (exit 2)
+    # before the directory cost-confirmation below — never prompt the user to confirm an
+    # expensive batch only to then discover there is no key to run it with.
+    if not no_env_file:
+        from clm.cli.env_loading import load_env_files
+
+        deck_dirs = [d for de, en in pairs for d in (de.parent, en.parent)]
+        load_env_files(deck if deck.is_dir() else deck.parent, *deck_dirs)
+
+    judge = _resolve_semantic_judge(model)
+    if judge is None:
+        msg = (
+            "establish needs an OpenRouter key (OPENROUTER_API_KEY or OPENAI_API_KEY) for "
+            "the semantic judge — it is the only baseline verb that calls a model."
+        )
+        if as_json:
+            click.echo(json.dumps({"mode": "establish", "exit_code": 2, "error": msg}, indent=2))
+        else:
+            click.echo(f"error: {msg}", err=True)
+        sys.exit(2)
+
+    # A directory run calls the LLM per slide across every pair and writes each ledger —
+    # gate the cost like `sync apply` gates a batch write (only now that a run is possible).
+    if deck.is_dir() and not yes:
+        if as_json:
+            raise click.UsageError(
+                f"establishing the ledger over {len(pairs)} pair(s) calls a model per slide "
+                "and writes each pair's ledger — needs --yes (cannot prompt with --json)."
+            )
+        click.confirm(
+            f"About to LLM-judge and establish the ledger for {len(pairs)} pair(s) under "
+            f"{deck} — this calls a model per slide (API cost). Continue?",
+            abort=True,
+        )
+
+    results = [(de, sync_ledger.record_semantic(de, en, judge, model=model)) for de, en in pairs]
+    _emit_establish(deck, model, results, as_json=as_json)
+
+
+def _emit_establish(
+    deck: Path,
+    model: str,
+    results: list[tuple[Path, SemanticRecordResult]],
+    *,
+    as_json: bool,
+) -> None:
+    """Print what establish judged / banked / flagged, then ``sys.exit`` the worst code."""
+    refused = any(r.refused for _de, r in results)
+    has_findings = any(r.rejected or r.failed for _de, r in results)
+    exit_code = 2 if refused else (1 if has_findings else 0)
+
+    if as_json:
+        click.echo(
+            json.dumps(
+                {
+                    "mode": "establish",
+                    "model": model,
+                    "exit_code": exit_code,
+                    "judged": sum(r.judged for _de, r in results),
+                    "recorded": sum(r.recorded for _de, r in results),
+                    "skipped": sum(r.skipped for _de, r in results),
+                    "rejected": sum(len(r.rejected) for _de, r in results),
+                    "failed": sum(len(r.failed) for _de, r in results),
+                    "pairs": [
+                        {
+                            "deck": str(de),
+                            "refused": r.refused,
+                            "reasons": r.reasons,
+                            "judged": r.judged,
+                            "recorded": r.recorded,
+                            "skipped": r.skipped,
+                            "rejected": [
+                                {
+                                    "slide_id": x.slide_id,
+                                    "role": x.role,
+                                    "occ": x.occ,
+                                    "reason": x.reason,
+                                }
+                                for x in r.rejected
+                            ],
+                            "failed": [
+                                {
+                                    "slide_id": x.slide_id,
+                                    "role": x.role,
+                                    "occ": x.occ,
+                                    "reason": x.reason,
+                                }
+                                for x in r.failed
+                            ],
+                        }
+                        for de, r in results
+                    ],
+                },
+                indent=2,
+            )
+        )
+        sys.exit(exit_code)
+
+    for de, r in results:
+        if r.refused:
+            click.echo(
+                f"refused {de.name}: not a structurally valid split — {'; '.join(r.reasons)}"
+            )
+            continue
+        tail = f", {r.skipped} already trusted" if r.skipped else ""
+        click.echo(
+            f"established {de.name}: judged {r.judged}, recorded {r.recorded} "
+            f"(oracle=semantic:{model}){tail}."
+        )
+        for x in r.rejected:
+            where = f"{x.slide_id or '(no owner)'} [{x.role}{'' if x.occ is None else f'#{x.occ}'}]"
+            click.echo(f"    rejected {where}: {x.reason}")
+        for x in r.failed:
+            where = f"{x.slide_id or '(no owner)'} [{x.role}{'' if x.occ is None else f'#{x.occ}'}]"
+            click.echo(f"    failed   {where}: {x.reason} (left cold; re-run to retry)")
+    if len(results) > 1:
+        click.echo(
+            f"\nestablished {len(results)} pair(s): "
+            f"{sum(r.recorded for _de, r in results)} recorded, "
+            f"{sum(len(r.rejected) for _de, r in results)} rejected, "
+            f"{sum(len(r.failed) for _de, r in results)} failed."
+        )
+    if has_findings:
+        click.echo(
+            "Reconcile the rejected pair(s) with `clm slides sync report` / `task` / "
+            "`accept`, then re-run `establish`."
+        )
     sys.exit(exit_code)
