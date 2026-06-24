@@ -251,6 +251,17 @@ choice — run `clm slides assign-ids` — not something sync forces every run.
 (A committed *structural* problem, e.g. mismatched ids across the halves, is
 surfaced by `verify`, not by the drift report.)
 
+## Asymmetric voiceover/notes companions are alerted, not guessed
+
+A voiceover / notes companion may be **id-less on one half** but carry its slide's
+`slide_id` on the **other** (the halves disagree on whether the companion is keyed).
+Such a pair re-pairs cleanly every sync while *unchanged*, but a **one-sided edit or
+removal** of the id'd half cannot be propagated across the id-ness boundary without
+risking a duplicate voiceover. The engine **does not guess**: it surfaces an `issue`
+(`severity == "error"`, holding the watermark) whose `reason` names the slide and tells
+you to run `clm slides assign-ids` on **both** halves so the companion is keyed the same
+way. Re-`report` after that and the edit/removal propagates as an ordinary keyed change.
+
 ## Non-shell agents — the MCP tool
 
 If you drive CLM over MCP rather than the shell, `slides_sync_report(file)`

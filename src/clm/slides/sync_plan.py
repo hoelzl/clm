@@ -2292,6 +2292,9 @@ def classify_changes(
 
     _append_idless_adds(plan, de_idless, en_idless)
     _classify_narratives(plan, de_narratives, en_narratives, de_baseline, en_baseline, dup_slides)
+    _alert_asymmetric_companion_drift(
+        plan, de_narratives, en_narratives, de_idd_narr, en_idd_narr, de_baseline, en_baseline
+    )
     _reconcile_idless_idd_narratives(plan, de_narratives, en_narratives, de_idd_narr, en_idd_narr)
     _guard_narrative_mass_add(plan, de_narratives, en_narratives, de_idd_narr, en_idd_narr)
     _refuse_idless_both_directions(plan)
@@ -2614,6 +2617,130 @@ def _emit_narrative_adds(
         )
 
 
+def _idd_narrative_baseline_hashes(
+    baseline: list[BaselineCell] | None,
+) -> dict[tuple[str | None, str], str]:
+    """Map ``(owning_slide_id, role) -> content_hash`` for id'd narratives in ``baseline``.
+
+    Issue #443: a *keyed* (id-carrying) voiceover / notes companion stays on the keyed
+    diff, but when its twin on the other half is **id-less** the two are reconciled by
+    ``(owning_slide_id, role)`` (report #10). To tell a one-sided *edit* or *removal* of
+    the id'd half from the clean re-pairing, the reconcile needs that half's recorded
+    baseline body — keyed exactly as the reconcile keys the current cells.
+    """
+    out: dict[tuple[str | None, str], str] = {}
+    for cell in baseline or []:
+        if cell.role in NARRATIVE_ROLES and cell.slide_id is not None:
+            out.setdefault((cell.owning_slide_id, cell.role), cell.content_hash)
+    return out
+
+
+def _alert_asymmetric_companion_drift(
+    plan: SyncPlan,
+    de_idless: list[CurrentCell],
+    en_idless: list[CurrentCell],
+    de_idd: list[CurrentCell],
+    en_idd: list[CurrentCell],
+    de_baseline: list[BaselineCell] | None,
+    en_baseline: list[BaselineCell] | None,
+) -> None:
+    """Surface a one-sided edit/removal of an asymmetric (id-less ↔ id'd) companion (#443).
+
+    A voiceover / notes companion that is **id-less on one half** but **carries its
+    slide's id on the other** is reconciled by ``(owning_slide_id, role)`` so the halves
+    re-pair every sync without doubling (report #10 fix #1). That reconcile, however,
+    cancels the id'd half's keyed ``add`` *unconditionally* — so a one-sided **edit** of
+    the id'd half (its keyed ``add`` is the only carrier of the change) is silently
+    dropped, and a one-sided **removal** of the id'd half leaves the surviving id-less
+    half's ``add`` masquerading as a brand-new narrative (re-adding what was deleted)
+    instead of propagating the removal. Both violate the #269 propagate-or-alert
+    invariant.
+
+    Propagating cleanly across the id-less ↔ id'd boundary would require re-keying the
+    edit onto the other half's anchor pass — the very asymmetry that confuses the engine,
+    and exactly the destructive-doubling report #10 guards against. So this **alerts**:
+    it emits an ``error`` :class:`PlanIssue` (which holds the watermark and blocks a
+    silent no-op) and drops the misleading id-less ``add`` so neither the reconcile nor
+    the mass-add guard can mask the drift. The author resolves the id-ness disagreement
+    (e.g. ``assign-ids`` both halves) and re-runs; once symmetric, the cell is keyed the
+    same way on both halves and edits/removals propagate normally.
+
+    Detects per ``(owning_slide_id, role)`` against the recorded baseline:
+    - **edit** — the id'd half is present now and its body differs from its baseline;
+    - **removal** — the id'd half was in the baseline but is gone now, while the
+      id-less twin on the other half survives.
+    """
+    if de_baseline is None or en_baseline is None:
+        return  # cold start: no baseline to detect drift against
+    de_idd_base = _idd_narrative_baseline_hashes(de_baseline)
+    en_idd_base = _idd_narrative_baseline_hashes(en_baseline)
+    drop: set[int] = set()
+    # Each direction: the id-less half (whose anchor add we may drop) is on one side, the
+    # id'd half (the keyed companion that drifted) on the other.
+    for idless_cells, idd_cells, idd_base, idless_dir, idd_dir in (
+        (de_idless, en_idd, en_idd_base, "de->en", "en->de"),
+        (en_idless, de_idd, de_idd_base, "en->de", "de->en"),
+    ):
+        idd_now = {(c.owning_slide_id, c.role): c for c in idd_cells}
+        idless_by_key: dict[tuple[str | None, str], list[CurrentCell]] = {}
+        for c in idless_cells:
+            idless_by_key.setdefault((c.owning_slide_id, c.role), []).append(c)
+        keys = set(idd_base) | {k for k in idd_now if k in idless_by_key}
+        for key in keys:
+            if key not in idless_by_key:
+                continue  # no asymmetric (id-less ↔ id'd) twin to reconcile
+            owning, role = key
+            now = idd_now.get(key)
+            base_hash = idd_base.get(key)
+            edited = now is not None and base_hash is not None and now.content_hash != base_hash
+            removed = now is None and base_hash is not None
+            if not (edited or removed):
+                continue
+            what, noun = ("edited", "edit") if edited else ("removed", "removal")
+            plan.issues.append(
+                PlanIssue(
+                    severity="error",
+                    slide_id=owning,
+                    reason=(
+                        f"voiceover/notes companion of slide {owning!r} was {what} on one "
+                        "half, but its twin on the other half is id-less — the halves "
+                        "disagree on whether this companion carries a slide_id, so the "
+                        f"one-sided {noun} cannot be propagated safely. "
+                        "Assign matching ids (clm slides assign-ids) on both halves, then "
+                        "re-run sync (#443)."
+                    ),
+                )
+            )
+            # Drop both halves' adds for this drifted pair so the drift is not masked:
+            # the surviving id-less anchor add (else it re-adds a removed cell / shadows
+            # the edit) and — for an edit — the id'd half's keyed add (the only carrier
+            # of the change, which the reconcile would otherwise leave dangling once its
+            # id-less pair is gone). The error issue already holds the watermark.
+            idless_positions = {c.position for c in idless_by_key[key]}
+            # The id'd keyed add is emitted at the id'd cell's own position+slide_id
+            # (``_add`` keys it that way); ``now`` is that cell for an edit.
+            idd_position = now.position if now is not None else None
+            idd_slide_id = now.slide_id if now is not None else None
+            for p in plan.proposals:
+                if p.kind != "add" or p.role != role:
+                    continue
+                is_idless_add = (
+                    p.slide_id is None
+                    and p.direction == idless_dir
+                    and p.source_position in idless_positions
+                )
+                is_idd_add = (
+                    idd_position is not None
+                    and p.slide_id == idd_slide_id
+                    and p.direction == idd_dir
+                    and p.source_position == idd_position
+                )
+                if is_idless_add or is_idd_add:
+                    drop.add(id(p))
+    if drop:
+        plan.proposals = [p for p in plan.proposals if id(p) not in drop]
+
+
 def _reconcile_idless_idd_narratives(
     plan: SyncPlan,
     de_idless: list[CurrentCell],
@@ -2629,6 +2756,11 @@ def _reconcile_idless_idd_narratives(
     on each deck (the field "destructive doubling"). They are the **same** narrative under
     the same slide, so cancel both adds (the deck keeps one id-less + one id'd half, which
     re-pairs cleanly every sync). Pairs in document order within each ``(owning, role)``.
+
+    A one-sided *edit* / *removal* of the id'd half is **not** a clean re-pairing and is
+    surfaced upstream by :func:`_alert_asymmetric_companion_drift` (#443) before this
+    runs, which drops the drifted pair's id-less add — so what reaches here is only the
+    genuinely-unchanged asymmetric pairs.
     """
     _reconcile_narr_pairs(plan, de_idless, en_idd, "de->en", "en->de")
     _reconcile_narr_pairs(plan, en_idless, de_idd, "en->de", "de->en")
