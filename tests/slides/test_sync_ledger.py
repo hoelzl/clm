@@ -483,3 +483,104 @@ def test_cli_apply_ledger_batch_records_each_pair(tmp_path: Path) -> None:
     assert payload["ledger"] == {"skipped": 0, "recorded": 2}  # one slide per pair
     for de, _en in pairs:
         assert ledger_path_for(de).is_file()
+
+
+# ---------------------------------------------------------------------------
+# Seeding the ledger from the existing watermark (baseline seed / --seed, §11.5)
+# ---------------------------------------------------------------------------
+
+
+def test_seed_from_watermark_stamps_assume(tmp_path: Path) -> None:
+    de_path, en_path = _write_pair(
+        tmp_path, _slide("de", "s1", "Hallo"), _slide("en", "s1", "Hello")
+    )
+    cache = SyncWatermarkCache(tmp_path / "wm.sqlite")
+    try:
+        _seed_watermark(cache, de_path, en_path)
+        cache.set_synced_commit(str(de_path), str(en_path), "deadbeef")
+        result = sync_ledger.seed_from_watermark(de_path, en_path, cache)
+    finally:
+        cache.close()
+    assert not result.refused
+    assert result.recorded == 1
+    entry = load(ledger_path_for(de_path)).entries[("s1", "slide")]
+    assert entry.confirmed_oracle == "assume"
+    assert entry.confirmed_by == "seed"
+    assert entry.confirmed_commit == "deadbeef"
+    # The seeded hashes are the watermark's (== current, since the deck is unchanged).
+    de_cur = ordered_sync_cells(parse_cells(de_path.read_text(encoding="utf-8")), "de")
+    assert entry.de_hash == de_cur[0].content_hash
+
+
+def test_seed_is_stale_safe_drifted_slide_not_trusted(tmp_path: Path) -> None:
+    de_path, en_path = _write_pair(
+        tmp_path, _slide("de", "s1", "Hallo"), _slide("en", "s1", "Hello")
+    )
+    cache = SyncWatermarkCache(tmp_path / "wm.sqlite")
+    try:
+        _seed_watermark(cache, de_path, en_path)
+        sync_ledger.seed_from_watermark(de_path, en_path, cache)
+    finally:
+        cache.close()
+    # Drift DE after seeding: the seeded entry holds the OLD hash, so the slide is no
+    # longer trusted at its current halves — it re-checks (never a silent mis-sync).
+    de_path.write_text(_slide("de", "s1", "Hallo NEU"), encoding="utf-8")
+    led = load(ledger_path_for(de_path))
+    new_de = ordered_sync_cells(parse_cells(de_path.read_text(encoding="utf-8")), "de")[0]
+    en_cur = ordered_sync_cells(parse_cells(en_path.read_text(encoding="utf-8")), "en")[0]
+    assert not led.trusts("s1", "slide", new_de.content_hash, en_cur.content_hash)
+
+
+def test_seed_fill_gaps_only_never_downgrades(tmp_path: Path) -> None:
+    de_path, en_path = _write_pair(
+        tmp_path, _slide("de", "s1", "Hallo"), _slide("en", "s1", "Hello")
+    )
+    # A real structural confirmation already exists; seeding must not downgrade it.
+    pre = SyncLedger()
+    pre.entries[("s1", "slide")] = LedgerEntry("dh", "eh", None, "c", "bless", "structural")
+    save(pre, ledger_path_for(de_path))
+    cache = SyncWatermarkCache(tmp_path / "wm.sqlite")
+    try:
+        _seed_watermark(cache, de_path, en_path)
+        result = sync_ledger.seed_from_watermark(de_path, en_path, cache)
+    finally:
+        cache.close()
+    assert result.recorded == 0  # the only slide already had a real entry
+    entry = load(ledger_path_for(de_path)).entries[("s1", "slide")]
+    assert entry.confirmed_oracle == "structural"  # not downgraded to assume
+
+
+def test_seed_no_watermark_records_nothing(tmp_path: Path) -> None:
+    de_path, en_path = _write_pair(
+        tmp_path, _slide("de", "s1", "Hallo"), _slide("en", "s1", "Hello")
+    )
+    cache = SyncWatermarkCache(tmp_path / "wm.sqlite")  # never seeded
+    try:
+        result = sync_ledger.seed_from_watermark(de_path, en_path, cache)
+    finally:
+        cache.close()
+    assert result.recorded == 0
+    assert not ledger_path_for(de_path).exists()
+
+
+def test_cli_baseline_seed_single_and_directory(tmp_path: Path) -> None:
+    from click.testing import CliRunner
+
+    root, cache_dir, pairs = _make_batch(tmp_path)  # two in-sync pairs + seeded watermark
+    de_a, _en_a = pairs[0]
+    runner = CliRunner()
+    # Single pair.
+    single = runner.invoke(
+        _cli(), ["slides", "sync", "baseline", "seed", str(de_a), "--cache-dir", str(cache_dir)]
+    )
+    assert single.exit_code == 0, single.output
+    assert load(ledger_path_for(de_a)).entries[("s1", "slide")].confirmed_oracle == "assume"
+    # Directory (the other pair) via JSON.
+    batch = runner.invoke(
+        _cli(),
+        ["slides", "sync", "baseline", "seed", str(root), "--cache-dir", str(cache_dir), "--json"],
+    )
+    assert batch.exit_code == 0, batch.output
+    payload = json.loads(batch.output[batch.output.index("{") : batch.output.rindex("}") + 1])
+    # Pair A already seeded (fill-gaps → 0), pair B newly seeded (1) → total 1.
+    assert payload["seeded"] == 1

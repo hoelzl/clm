@@ -48,9 +48,13 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from clm.notebooks.slide_parser import Cell, comment_token_for_path, parse_cells
 from clm.slides.sync_writeback import construct_of, hash_cell, role_of
+
+if TYPE_CHECKING:
+    from clm.infrastructure.llm.cache import SyncWatermarkCache
 
 SCHEMA_VERSION = 1
 #: The committed ledger lives under the build-internal ``.clm/`` tree (issue #453),
@@ -76,7 +80,7 @@ class LedgerEntry:
     # keys on the hashes alone, so this is deliberately recorded-but-unread today.
     construct: str | None
     confirmed_commit: str | None
-    confirmed_by: str  # "apply" | "bless" | "accept" | "autopilot"
+    confirmed_by: str  # "apply" | "bless" | "accept" | "autopilot" | "seed"
     confirmed_oracle: str  # "structural" | "assume" | "semantic:<model>"
 
 
@@ -290,3 +294,78 @@ def record_pair(
         )
     save(ledger, path)
     return RecordResult(path=path, recorded=len(pairs))
+
+
+def seed_from_watermark(
+    de_path: Path,
+    en_path: Path,
+    cache: SyncWatermarkCache,
+    *,
+    confirmed_by: str = "seed",
+) -> RecordResult:
+    """Seed the ledger from the existing watermark, stamping ``confirmed_oracle=assume``.
+
+    The opt-in bootstrap (design note §11.5): a legacy deck that already has a
+    watermark but no ledger inherits its per-slide trust here instead of cold-starting
+    every slide. For each localized ``(slide_id, role)`` recorded in the watermark's
+    ``de`` / ``en`` partitions it writes a ledger entry carrying the **watermark's**
+    recorded half-hashes (not the current file's), the watermark's ``synced_commit``,
+    and ``confirmed_oracle="assume"`` — inherited trust, **not** a fresh check.
+
+    **Safe against a stale watermark:** the entry stores the watermark hashes, so on
+    the next ``report``/``apply --ledger`` a slide that has drifted since the watermark
+    no longer matches the *current* halves and re-checks (the cold path) — never a
+    silent mis-sync. The ``assume`` provenance keeps the inherited trust legible and
+    revocable. A version-stale watermark (#429) reads as empty (``get_deck`` gates on
+    ``hash_version``), so nothing is seeded — correct, since its hashes are
+    incomparable.
+
+    Gated on a whole-deck structural ``verify`` of the *current* pair (a corrupt
+    working tree is refused, like ``bless``). **Fill-gaps only:** an existing entry
+    (e.g. a real ``bless``/``apply`` confirmation) is never downgraded to ``assume`` —
+    only ``(slide_id, role)`` keys absent from the ledger are seeded.
+    """
+    from clm.slides.sync_plan import MEMBERSHIP_ROLES
+    from clm.slides.sync_verify import structural_gate
+
+    de_text = de_path.read_text(encoding="utf-8")
+    en_text = en_path.read_text(encoding="utf-8")
+    violations = structural_gate(de_text, en_text, comment_token_for_path(de_path))
+    path = ledger_path_for(de_path)
+    if violations:
+        return RecordResult(path=path, refused=True, reasons=[v.message for v in violations])
+
+    def _idd(
+        rows: list[tuple[int, str | None, str, str, str | None]],
+    ) -> dict[tuple[str, str], tuple[str, str | None]]:
+        # The real-role id'd cells only — drop the membership-widened synthetic rows
+        # (#190 §5.3), matching what ``record_pair`` records.
+        return {
+            (sid, role): (chash, construct)
+            for (_pos, sid, role, chash, construct) in rows
+            if sid is not None and role not in MEMBERSHIP_ROLES
+        }
+
+    de_map = _idd(cache.get_deck(str(de_path), str(en_path), "de"))
+    en_map = _idd(cache.get_deck(str(de_path), str(en_path), "en"))
+    commit = cache.get_synced_commit(str(de_path), str(en_path))
+
+    ledger = load(path)
+    seeded = 0
+    for key in de_map.keys() & en_map.keys():
+        if key in ledger.entries:
+            continue  # never downgrade a real confirmation to ``assume``
+        de_hash, construct = de_map[key]
+        en_hash, _ = en_map[key]
+        ledger.entries[key] = LedgerEntry(
+            de_hash=de_hash,
+            en_hash=en_hash,
+            construct=construct,
+            confirmed_commit=commit,
+            confirmed_by=confirmed_by,
+            confirmed_oracle="assume",
+        )
+        seeded += 1
+    if seeded:
+        save(ledger, path)
+    return RecordResult(path=path, recorded=seeded)

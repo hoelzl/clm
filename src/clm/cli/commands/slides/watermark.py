@@ -560,3 +560,103 @@ def _emit_bless_done(
         else ""
     )
     click.echo(f"blessed {de_path.name}: {verb} the working tree as the sync baseline{tail}.{led}")
+
+
+@baseline_group.command("seed")
+@click.argument("deck", type=click.Path(exists=True, path_type=Path))
+@click.argument(
+    "en_path",
+    required=False,
+    default=None,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click.option(
+    "--cache-dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Directory holding the baseline/watermark (see `clm slides sync --cache-dir`).",
+)
+@click.option("--json", "as_json", is_flag=True, default=False, help="Emit a JSON report.")
+def baseline_seed_cmd(
+    deck: Path, en_path: Path | None, cache_dir: Path | None, as_json: bool
+) -> None:
+    """Seed the consistency ledger from the existing watermark (#448 — ``--seed``).
+
+    Bootstraps the per-slide ledger for a deck (or every pair under a directory) that
+    already has a structural watermark but no ledger: each localized slide inherits the
+    watermark's recorded half-hashes and ``synced_commit``, stamped
+    ``confirmed_oracle=assume`` (inherited trust, **not** a fresh check). So a legacy
+    deck does not cold-start every slide on its first ``--ledger`` run.
+
+    \b
+    Safe against a **stale** watermark: the seeded entry carries the watermark hashes,
+    so a slide that has drifted since then no longer matches the current halves and
+    re-checks on the next ``report``/``apply --ledger`` — never a silent mis-sync.
+    **Fill-gaps only** — an existing real confirmation (``bless`` / ``apply``) is never
+    downgraded to ``assume``. Gated on a structural ``verify`` of the current pair.
+
+    DECK is a split half (``<deck>.de.py`` / ``<deck>.en.py``), a bilingual stem, or a
+    directory (every split pair under it).
+    """
+    from clm.slides import sync_ledger
+
+    if deck.is_dir():
+        if en_path is not None:
+            raise click.UsageError(
+                f"{deck} is a directory (batch seed), which takes a single directory "
+                "argument; do not pass a second path."
+            )
+        pairs = [(Path(de), Path(en)) for de, en in _resolve_pairs(deck)]
+    else:
+        de_p, en_p = _resolve_single_path(deck, en_path)
+        de_p, en_p = _resolve_sync_pair(de_p, en_p)
+        pairs = [(de_p.resolve(), en_p.resolve())]
+
+    cache = _open_cache(cache_dir)
+    results: list[tuple[Path, sync_ledger.RecordResult]] = []
+    try:
+        for de, en in pairs:
+            results.append((de, sync_ledger.seed_from_watermark(de, en, cache)))
+    finally:
+        cache.close()
+
+    seeded = sum(r.recorded for _de, r in results)
+    refused = [(de, r) for de, r in results if r.refused]
+    exit_code = 2 if refused else 0
+    if as_json:
+        click.echo(
+            json.dumps(
+                {
+                    "mode": "seed",
+                    "exit_code": exit_code,
+                    "seeded": seeded,
+                    "pairs": [
+                        {
+                            "deck": str(de),
+                            "seeded": r.recorded,
+                            "refused": r.refused,
+                            "reasons": r.reasons,
+                        }
+                        for de, r in results
+                    ],
+                },
+                indent=2,
+            )
+        )
+        sys.exit(exit_code)
+    for de, r in results:
+        if r.refused:
+            click.echo(
+                f"refused {de.name}: not a structurally valid split — {'; '.join(r.reasons)}"
+            )
+        elif r.recorded:
+            click.echo(
+                f"seeded {de.name}: {r.recorded} slide(s) from the watermark (oracle=assume)."
+            )
+        else:
+            click.echo(
+                f"{de.name}: nothing to seed (no watermark, or all slides already in the ledger)."
+            )
+    if len(results) > 1:
+        click.echo(f"\nseeded {seeded} slide(s) across {len(results)} pair(s).")
+    sys.exit(exit_code)
