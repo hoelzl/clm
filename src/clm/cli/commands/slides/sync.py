@@ -1585,8 +1585,9 @@ def sync_verify_cmd(de_path: Path, en_path: Path | None, as_json: bool) -> None:
     "--ledger",
     is_flag=True,
     help=(
-        "Consult the per-slide consistency ledger (#448): skip slides byte-stable since "
-        "a recorded confirmation (no re-litigation) before applying. Single pair only (P1)."
+        "Use the per-slide consistency ledger (#448): skip slides byte-stable since a "
+        "recorded confirmation (no re-litigation) before applying, AND — on a fully "
+        "clean pass — record the now-in-sync slides back to the ledger. Single pair (P1)."
     ),
 )
 @click.option("--json", "as_json", is_flag=True, help="Emit the apply result as JSON.")
@@ -1615,6 +1616,14 @@ def sync_apply_cmd(
     fully clean pass (``--no-watermark`` ignores it, falling back to git HEAD). A
     directory is a batch sweep (gated by ``--yes``). Review writes with ``git diff`` and
     confirm soundness with ``clm slides sync verify``.
+
+    With ``--ledger`` the consistency ledger (#448) is both **read** (skip slides
+    byte-stable since a recorded confirmation) and **written**: a fully-clean apply —
+    no deferred residue, the watermark fully advanced — records the now-in-sync
+    localized slides back to ``<topic>/.clm/sync-ledger.json`` (``confirmed_by=apply``,
+    gated on structural ``verify``). A pass with residue records nothing (the deck is
+    not fully reconciled); resolve the residue and re-apply, or ``baseline bless
+    --ledger``.
     """
     if de_path.is_dir():
         if en_path is not None:
@@ -1675,9 +1684,43 @@ def sync_apply_cmd(
             "(byte-stable since their last recorded confirmation).",
             err=True,
         )
+    ledger_recorded = _maybe_record_ledger(ledger, plan, result, de_path, en_path)
     exit_code = _apply_exit_code(plan, result)
-    _emit_apply(plan, result, de_path, as_json=as_json)
+    _emit_apply(plan, result, de_path, as_json=as_json, ledger_recorded=ledger_recorded)
     sys.exit(exit_code)
+
+
+def _maybe_record_ledger(
+    enabled: bool, plan: SyncPlan, result: ApplyResult, de_path: Path, en_path: Path
+) -> int | None:
+    """Record the now-in-sync slides to the ledger after a fully-clean apply (#448 P1).
+
+    "Emit the watermark as the ledger" (design §8 P1): record **only when the watermark
+    fully advanced** — ``watermark_recorded`` with nothing deferred and no tag hold,
+    i.e. the exact full-advance condition (a *partial* advance pins deferred / tag-only
+    conflicts at the old baseline, so the deck is not fully in sync and recording it
+    would wrongly trust those slides). ``record_pair`` re-gates on structural ``verify``
+    and reads the post-apply files. Returns the recorded count, ``0`` when the pass was
+    not fully clean (so a ``--json`` consumer sees the ledger was consulted but nothing
+    banked), or ``None`` when ``--ledger`` was off.
+    """
+    if not enabled:
+        return None
+    fully_clean = result.watermark_recorded and result.deferred == 0 and not plan.tag_holds
+    if not fully_clean:
+        return 0
+    from clm.slides import sync_ledger
+
+    rec = sync_ledger.record_pair(
+        de_path, en_path, confirmed_by="apply", confirmed_oracle="structural"
+    )
+    recorded = 0 if rec.refused else rec.recorded
+    if recorded:
+        click.echo(
+            f"ledger: recorded {recorded} slide(s) confirmed in-sync (confirmed_by=apply).",
+            err=True,
+        )
+    return recorded
 
 
 def _apply_deterministic(
@@ -1749,32 +1792,42 @@ def _residue_hint_lines(residue: list[ReconciliationItem], de_name: str) -> list
     return lines
 
 
-def _emit_apply(plan: SyncPlan, result: ApplyResult, de_path: Path, *, as_json: bool) -> None:
+def _emit_apply(
+    plan: SyncPlan,
+    result: ApplyResult,
+    de_path: Path,
+    *,
+    as_json: bool,
+    ledger_recorded: int | None = None,
+) -> None:
     """Print what a single-pair model-free apply wrote and what residue remains."""
     residue = _apply_residue(plan)
     if as_json:
-        click.echo(
-            json.dumps(
+        payload: dict = {
+            "de_path": str(plan.de_path),
+            "en_path": str(plan.en_path),
+            "mode": "apply",
+            "exit_code": _apply_exit_code(plan, result),
+            "apply": _apply_dict(result),
+            "residue": [
                 {
-                    "de_path": str(plan.de_path),
-                    "en_path": str(plan.en_path),
-                    "mode": "apply",
-                    "exit_code": _apply_exit_code(plan, result),
-                    "apply": _apply_dict(result),
-                    "residue": [
-                        {
-                            "item": it.item,
-                            "kind": it.kind,
-                            "tier": it.tier,
-                            "slide_id": it.slide_id,
-                            "reason": it.reason,
-                        }
-                        for it in residue
-                    ],
-                },
-                indent=2,
-            )
-        )
+                    "item": it.item,
+                    "kind": it.kind,
+                    "tier": it.tier,
+                    "slide_id": it.slide_id,
+                    "reason": it.reason,
+                }
+                for it in residue
+            ],
+        }
+        if ledger_recorded is not None:
+            # The ledger contract: what the overlay skipped (consulted) and what a
+            # fully-clean apply banked back, so a --json consumer sees both.
+            payload["ledger"] = {
+                "skipped": plan.ledger_skipped,
+                "recorded": ledger_recorded,
+            }
+        click.echo(json.dumps(payload, indent=2))
         return
     click.echo(_outcome_line(result))
     for line in _cold_deferral_lines(result):

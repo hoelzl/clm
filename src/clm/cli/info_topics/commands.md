@@ -2025,7 +2025,7 @@ models for those tiers.)
 | `--use-watermark` / `--no-watermark` | Use the watermark as a baseline accelerator (default **on** for `apply`); it advances on a fully clean pass. `--no-watermark` ignores it, falling back to git `HEAD`. |
 | `--baseline REF` / `--baseline-from PATH[@REF]` | As for `report`: `--baseline REF` works over a directory (each pair diffed against REF); `--baseline-from` is single-pair. |
 | `--cache-dir PATH` | Directory holding the watermark. |
-| `--ledger` | Consult the per-slide consistency ledger (#448): skip slides byte-stable since a recorded confirmation (no re-litigation) before applying. Single pair only (P1). |
+| `--ledger` | Use the per-slide consistency ledger (#448): **read** it to skip slides byte-stable since a recorded confirmation (no re-litigation) before applying, **and** — on a fully-clean pass (no deferred residue, the watermark fully advanced) — **record** the now-in-sync localized slides back to it (`confirmed_by=apply`, gated on structural `verify`). A pass with residue records nothing. The `--json` payload gains a `ledger: {skipped, recorded}` block. Single pair only (P1). |
 | `--yes`, `-y` | **Directory (batch) only**: confirm a writing sweep over every pair under the tree. Ignored for a single pair. |
 | `--json` | Emit the apply result as JSON. |
 

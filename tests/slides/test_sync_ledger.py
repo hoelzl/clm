@@ -331,3 +331,82 @@ def test_cli_report_ledger_skips_relitigation(tmp_path: Path) -> None:
     )
     payload = json.loads(as_json.output[as_json.output.index("{") : as_json.output.rindex("}") + 1])
     assert payload["plan"]["ledger_skipped"] == 1
+
+
+# ---------------------------------------------------------------------------
+# apply --ledger auto-writes on a fully-clean pass (the "emit the watermark as
+# the ledger" follow-up). Records nothing when residue remains.
+# ---------------------------------------------------------------------------
+
+
+def _seed_cache(tmp_path: Path, de_path: Path, en_path: Path) -> Path:
+    """Seed the watermark at the current state in a CLI-resolvable cache dir."""
+    cache_dir = tmp_path / ".clm-cache"
+    cache_dir.mkdir(exist_ok=True)
+    cache = SyncWatermarkCache(cache_dir / "clm-llm.sqlite")
+    try:
+        _seed_watermark(cache, de_path, en_path)
+    finally:
+        cache.close()
+    return cache_dir
+
+
+def test_cli_apply_ledger_records_on_clean_pass(tmp_path: Path) -> None:
+    from click.testing import CliRunner
+
+    de_path, en_path = _write_pair(
+        tmp_path, _slide("de", "s1", "Hallo"), _slide("en", "s1", "Hello")
+    )
+    cache_dir = _seed_cache(tmp_path, de_path, en_path)  # in sync → a clean apply
+    res = CliRunner().invoke(
+        _cli(),
+        ["slides", "sync", "apply", str(de_path), "--ledger", "--cache-dir", str(cache_dir)],
+    )
+    assert res.exit_code == 0, res.output
+    assert "recorded 1 slide(s) confirmed in-sync (confirmed_by=apply)" in res.output
+    led = load(ledger_path_for(de_path))
+    assert led.entries[("s1", "slide")].confirmed_by == "apply"
+
+
+def test_cli_apply_ledger_skips_record_with_residue(tmp_path: Path) -> None:
+    from click.testing import CliRunner
+
+    de_path, en_path = _write_pair(
+        tmp_path, _slide("de", "s1", "Hallo"), _slide("en", "s1", "Hello")
+    )
+    cache_dir = _seed_cache(tmp_path, de_path, en_path)
+    # A localized edit on DE is model residue for the deterministic apply (deferred),
+    # so the deck is NOT fully reconciled → the ledger must record nothing.
+    de_path.write_text(_slide("de", "s1", "Hallo erweitert"), encoding="utf-8")
+    res = CliRunner().invoke(
+        _cli(),
+        ["slides", "sync", "apply", str(de_path), "--ledger", "--cache-dir", str(cache_dir)],
+    )
+    assert res.exit_code == 1  # residue pending
+    assert "recorded" not in res.output  # nothing banked
+    assert not ledger_path_for(de_path).exists()  # no ledger written
+
+
+def test_cli_apply_ledger_json_block(tmp_path: Path) -> None:
+    from click.testing import CliRunner
+
+    de_path, en_path = _write_pair(
+        tmp_path, _slide("de", "s1", "Hallo"), _slide("en", "s1", "Hello")
+    )
+    cache_dir = _seed_cache(tmp_path, de_path, en_path)
+    res = CliRunner().invoke(
+        _cli(),
+        [
+            "slides",
+            "sync",
+            "apply",
+            str(de_path),
+            "--ledger",
+            "--json",
+            "--cache-dir",
+            str(cache_dir),
+        ],
+    )
+    assert res.exit_code == 0, res.output
+    payload = json.loads(res.output[res.output.index("{") : res.output.rindex("}") + 1])
+    assert payload["ledger"] == {"skipped": 0, "recorded": 1}
