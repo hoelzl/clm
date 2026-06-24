@@ -210,6 +210,12 @@ consistency ledger** (`<topic>/.clm/sync-ledger.json`, committed) fixes that.
   ones you synced last round stay quiet. A slide that *did* change since its
   confirmation does not match and surfaces normally; a slide with no entry is
   checked as usual (the cold path).
+- **Bootstrap a legacy deck** that already has a watermark but no ledger:
+  `clm slides sync baseline seed DECK` (a directory works too). Each localized
+  slide inherits the watermark's recorded hashes, stamped `confirmed_oracle=assume`
+  (inherited trust, not a fresh check) — so the deck does not cold-start every
+  slide on its first `--ledger` run. Stale-safe (a slide drifted since the
+  watermark re-checks) and fill-gaps only (a real confirmation is never downgraded).
 - It is a **trust overlay**, not a new baseline: the classification is unchanged,
   the ledger only removes proposals the recorded trust makes redundant. Opt-in
   (default off = today's behavior exactly); **works over a directory** too — point

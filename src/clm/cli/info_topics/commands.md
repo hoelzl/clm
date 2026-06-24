@@ -2070,19 +2070,28 @@ a better model/prompt). No model, no key.
 
 #### `clm slides sync baseline`
 
-`show` / `bless` / `clear` / `prune` — inspect and maintain the demoted watermark
-accelerator. `bless` records the current working tree as the baseline (no commit
-needed; the replacement for the old `--rebaseline`). It is gated on `verify`
-(structure only) and records **whatever is in the working tree** — it does not
-check the translation is correct or that the tree agrees with git `HEAD`, a
-weaker gate than `--rebaseline`'s git-HEAD no-op, so review with `git diff` and
-confirm the halves correspond before blessing. These are the same store as `clm
-slides watermark` (below), co-located with `sync` and renamed: `show` was `list`,
-plus `bless`. `bless --ledger` additionally records the per-slide consistency
-ledger (`<topic>/.clm/sync-ledger.json`, #448) — each localized slide confirmed
-in-sync at the current halves, so a later `report` / `apply --ledger` skips it
-(no re-litigation) until it drifts. See `clm info sync-agents` (the consistency
-ledger section).
+`show` / `bless` / `seed` / `clear` / `prune` — inspect and maintain the demoted
+watermark accelerator. `bless` records the current working tree as the baseline
+(no commit needed; the replacement for the old `--rebaseline`). It is gated on
+`verify` (structure only) and records **whatever is in the working tree** — it
+does not check the translation is correct or that the tree agrees with git
+`HEAD`, a weaker gate than `--rebaseline`'s git-HEAD no-op, so review with `git
+diff` and confirm the halves correspond before blessing. These are the same store
+as `clm slides watermark` (below), co-located with `sync` and renamed: `show` was
+`list`, plus `bless` / `seed`. `bless --ledger` additionally records the per-slide
+consistency ledger (`<topic>/.clm/sync-ledger.json`, #448) — each localized slide
+confirmed in-sync at the current halves, so a later `report` / `apply --ledger`
+skips it (no re-litigation) until it drifts.
+
+`baseline seed DECK` (a directory works too) **bootstraps** the ledger from an
+existing watermark for a legacy deck that has a watermark but no ledger: each
+localized slide inherits the watermark's recorded half-hashes and `synced_commit`,
+stamped `confirmed_oracle=assume` (inherited trust, not a fresh check), so the
+deck does not cold-start every slide on its first `--ledger` run. Stale-safe (a
+slide drifted since the watermark no longer matches the current halves, so it
+re-checks) and **fill-gaps only** (a real `bless`/`apply` confirmation is never
+downgraded to `assume`); gated on a structural `verify` of the current pair. See
+`clm info sync-agents` (the consistency ledger section).
 
 #### `clm slides sync autopilot`
 
