@@ -1124,6 +1124,11 @@ def _plan_dict(plan: SyncPlan) -> dict:
     return {
         "baseline_source": plan.baseline_source,
         "in_sync": plan.in_sync_count,
+        # Issue #448 P1: content proposals the consistency-ledger overlay suppressed
+        # (slides byte-stable since a recorded confirmation). Surfaced so a `--ledger
+        # --json` consumer can tell "0 real changes" from "N changes trusted away" —
+        # without it a suppressed run reads as falsely consistent. 0 when no --ledger.
+        "ledger_skipped": plan.ledger_skipped,
         "counts": {
             kind: plan.count(kind)
             for kind in (
@@ -1286,6 +1291,20 @@ _EN_ARG = click.argument(
 )
 
 
+def _load_ledger_if(enabled: bool, de_path: Path):  # -> SyncLedger | None
+    """Load the per-slide consistency ledger for ``de_path``'s topic, or ``None`` (#448).
+
+    Imported lazily so the read surface pays nothing when ``--ledger`` is off. An
+    absent file is an empty ledger (every slide cold), so enabling the flag on a deck
+    that was never blessed is a safe no-op.
+    """
+    if not enabled:
+        return None
+    from clm.slides.sync_ledger import ledger_path_for, load
+
+    return load(ledger_path_for(de_path))
+
+
 def _run_report(
     de_path: Path,
     en_path: Path | None,
@@ -1296,6 +1315,7 @@ def _run_report(
     baseline_from_spec: str | None,
     use_watermark: bool,
     cache_dir: Path | None,
+    ledger: bool = False,
 ) -> None:
     """Build the plan and render the read-only report / anchor-diff — never a model.
 
@@ -1327,6 +1347,11 @@ def _run_report(
                 "--baseline-from pins ONE deck's pre-rename half, so it is single-pair "
                 "only; run it per deck. (--baseline REF works over a directory — it diffs "
                 "every pair against that ref, e.g. to reconcile a week of committed edits.)"
+            )
+        if ledger:
+            raise click.UsageError(
+                "--ledger is single-pair in this release (P1); run `report --ledger` per "
+                "deck. A batch ledger overlay is a planned follow-up."
             )
         _run_batch(
             de_path,
@@ -1370,7 +1395,14 @@ def _run_report(
             baseline_ref=baseline_ref,
             baseline_from=baseline_from,
             detect_rename=True,
+            ledger=_load_ledger_if(ledger, de_path),
         )
+        if ledger and plan.ledger_skipped:
+            click.echo(
+                f"ledger: skipped {plan.ledger_skipped} slide(s) trusted in-sync "
+                "(byte-stable since their last recorded confirmation).",
+                err=True,
+            )
         if watermark_cache is not None:
             recorded_commit = watermark_cache.get_synced_commit(str(de_path), str(en_path))
         if explain:
@@ -1454,6 +1486,15 @@ def _run_report(
     help="Directory holding the watermark (only with --use-watermark).",
 )
 @click.option(
+    "--ledger",
+    is_flag=True,
+    help=(
+        "Consult the per-slide consistency ledger (<topic>/.clm/sync-ledger.json, #448): "
+        "skip slides byte-stable since a recorded confirmation so a sync paid for last "
+        "round is not re-litigated against an older baseline. Single pair only (P1)."
+    ),
+)
+@click.option(
     "--no-env-file",
     is_flag=True,
     help="Accepted for symmetry; report reads no .env (it never calls a model).",
@@ -1467,6 +1508,7 @@ def sync_report_cmd(
     baseline_from_spec: str | None,
     use_watermark: bool,
     cache_dir: Path | None,
+    ledger: bool,
     no_env_file: bool,
 ) -> None:
     """Return the read-only tiered reconciliation report (writes nothing, no model).
@@ -1488,6 +1530,7 @@ def sync_report_cmd(
         baseline_from_spec=baseline_from_spec,
         use_watermark=use_watermark,
         cache_dir=cache_dir,
+        ledger=ledger,
     )
 
 
@@ -1538,6 +1581,14 @@ def sync_verify_cmd(de_path: Path, en_path: Path | None, as_json: bool) -> None:
     default=None,
     help="Directory holding the watermark.",
 )
+@click.option(
+    "--ledger",
+    is_flag=True,
+    help=(
+        "Consult the per-slide consistency ledger (#448): skip slides byte-stable since "
+        "a recorded confirmation (no re-litigation) before applying. Single pair only (P1)."
+    ),
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit the apply result as JSON.")
 def sync_apply_cmd(
     de_path: Path,
@@ -1547,6 +1598,7 @@ def sync_apply_cmd(
     baseline_ref: str | None,
     baseline_from_spec: str | None,
     cache_dir: Path | None,
+    ledger: bool,
     as_json: bool,
 ) -> None:
     """Apply the deterministic tier-1 reconciliation — writes, but never calls a model.
@@ -1574,6 +1626,11 @@ def sync_apply_cmd(
             raise click.UsageError(
                 "--baseline-from pins ONE deck's pre-rename half, so it is single-pair "
                 "only; run it per deck. (--baseline REF works over a directory.)"
+            )
+        if ledger:
+            raise click.UsageError(
+                "--ledger is single-pair in this release (P1); run `apply --ledger` per "
+                "deck. A batch ledger overlay is a planned follow-up."
             )
         _run_apply_batch(
             de_path,
@@ -1606,11 +1663,18 @@ def sync_apply_cmd(
             watermark_cache=watermark_cache,
             baseline_ref=baseline_ref,
             baseline_from=baseline_from,
+            ledger=ledger,
         )
     finally:
         if watermark_cache is not None:
             watermark_cache.close()
 
+    if ledger and plan.ledger_skipped:
+        click.echo(
+            f"ledger: skipped {plan.ledger_skipped} slide(s) trusted in-sync "
+            "(byte-stable since their last recorded confirmation).",
+            err=True,
+        )
     exit_code = _apply_exit_code(plan, result)
     _emit_apply(plan, result, de_path, as_json=as_json)
     sys.exit(exit_code)
@@ -1623,6 +1687,7 @@ def _apply_deterministic(
     watermark_cache: SyncWatermarkCache | None,
     baseline_ref: str | None = None,
     baseline_from: tuple[Path, Path, str] | None = None,
+    ledger: bool = False,
 ) -> tuple[SyncPlan, ApplyResult]:
     """Build the plan and apply only its deterministic tier-1 work (no model, epic #440).
 
@@ -1640,6 +1705,7 @@ def _apply_deterministic(
         baseline_ref=baseline_ref,
         baseline_from=baseline_from,
         detect_rename=True,
+        ledger=_load_ledger_if(ledger, de_path),
     )
     result = apply_plan(
         plan,

@@ -53,6 +53,7 @@ from clm.slides.sync_writeback import (
 
 if TYPE_CHECKING:
     from clm.infrastructure.llm.cache import SyncWatermarkCache
+    from clm.slides.sync_ledger import SyncLedger
 
 __all__ = [
     "MEMBERSHIP_ROLES",
@@ -326,6 +327,10 @@ class SyncPlan:
     # the SAME rows the classifier diffed against (anchor reuse, id-migration)
     # instead of re-deriving them — plan and apply agree by construction.
     baseline_bundle: BaselineBundle | None = None
+    # Issue #448 P1: how many content proposals the consistency-ledger trust overlay
+    # suppressed this run (slides byte-stable since a recorded confirmation, so not
+    # re-litigated). 0 when no ledger was supplied.
+    ledger_skipped: int = 0
 
     @property
     def has_baseline(self) -> bool:
@@ -3599,6 +3604,7 @@ def build_sync_plan(
     baseline_ref: str | None = None,
     baseline_from: tuple[Path, Path, str] | None = None,
     detect_rename: bool = False,
+    ledger: SyncLedger | None = None,
 ) -> SyncPlan:
     """Resolve the baseline and classify the pair into a :class:`SyncPlan`.
 
@@ -3635,6 +3641,15 @@ def build_sync_plan(
     ``reconcile`` (#228): a committed mismatched-id bucket that is the whole
     actionable plan upgrades to ``reconcile`` candidates (handled in
     :func:`classify_changes`) instead of refusing.
+
+    ``ledger`` (Issue #448 P1) is the per-slide consistency-ledger trust overlay. When
+    given, a final post-pass suppresses the content proposals (``edit`` / ``conflict``)
+    of any slide whose two current halves are byte-identical to a recorded
+    confirmation — so a sync recorded last round is not re-litigated against an older
+    bundle baseline. It is an *overlay*: the position-based classification is unchanged;
+    the ledger only removes proposals the recorded trust makes redundant (§11.2). A
+    drifted slide does not match and surfaces normally; ``None`` (the default) is the
+    pre-ledger behavior exactly.
     """
     de_text = de_path.read_text(encoding="utf-8")
     en_text = en_path.read_text(encoding="utf-8")
@@ -3941,7 +3956,58 @@ def build_sync_plan(
         _maybe_emit_cold_mint(plan, de_cells, en_cells, de_path, en_path)
         _maybe_emit_cold_adopt(plan, de_cells, en_cells, de_path, en_path)
 
+    # Issue #448 P1: the consistency-ledger trust overlay. A slide whose two current
+    # halves are byte-identical to a recorded confirmation is trusted-in-sync, so its
+    # content-reconciliation proposals are suppressed — the engine does not re-litigate
+    # a sync already paid for, even when the bundle baseline (e.g. an old --baseline
+    # ref) differs. A drifted-since-confirmation slide does not match and falls through
+    # the bundle unchanged; a slide with no entry is the cold path. The overlay is a
+    # post-pass on the already-classified plan, so it never touches the position-based
+    # classifier (§11.2: trust overlay, not baseline splice).
+    if ledger is not None:
+        plan.ledger_skipped = _apply_ledger_overlay(plan, ledger, de_current, en_current)
+
     return plan
+
+
+def _apply_ledger_overlay(
+    plan: SyncPlan,
+    ledger: SyncLedger,
+    de_current: list[CurrentCell],
+    en_current: list[CurrentCell],
+) -> int:
+    """Drop content proposals for ledger-trusted slides; return the count dropped.
+
+    A proposal is suppressed only when its ``(slide_id, role)`` is recorded in-sync at
+    **exactly** both current half-hashes (:meth:`SyncLedger.trusts`) — so the slide is
+    byte-stable since its confirmation. Restricted to the content-reconciliation kinds
+    (``edit`` / ``conflict``): the ledger certifies *content* (the two halves' hashes),
+    not position or structure, so ``add`` / ``remove`` / ``move`` / ``rename`` / cold-
+    start candidates are never suppressed (a reorder of a byte-stable slide is a real
+    change the ledger must not mask).
+    """
+    # A genuine duplicate ``(slide_id, role)`` within a half is resolved structurally
+    # (``_resolve_duplicates`` → a ``rename``, which this overlay never suppresses), so
+    # the last-wins collapse here is safe: a dup never reaches a *trusted* edit. Both
+    # maps iterate source order, so they collapse to the same cell.
+    de_by_key = {(c.slide_id, c.role): c.content_hash for c in de_current if c.slide_id}
+    en_by_key = {(c.slide_id, c.role): c.content_hash for c in en_current if c.slide_id}
+    kept: list[Proposal] = []
+    skipped = 0
+    for p in plan.proposals:
+        if p.kind in ("edit", "conflict") and p.slide_id is not None:
+            de_h = de_by_key.get((p.slide_id, p.role))
+            en_h = en_by_key.get((p.slide_id, p.role))
+            if (
+                de_h is not None
+                and en_h is not None
+                and ledger.trusts(p.slide_id, p.role, de_h, en_h)
+            ):
+                skipped += 1
+                continue
+        kept.append(p)
+    plan.proposals = kept
+    return skipped
 
 
 def _maybe_emit_cold_mint(

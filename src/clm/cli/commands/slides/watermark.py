@@ -433,9 +433,19 @@ baseline_group.add_command(watermark_prune_cmd, name="prune")
     default=None,
     help="Directory holding the baseline (see `clm slides sync --cache-dir`).",
 )
+@click.option(
+    "--ledger",
+    is_flag=True,
+    default=False,
+    help=(
+        "Also record the per-slide consistency ledger (<topic>/.clm/sync-ledger.json, "
+        "#448): confirm each localized slide in-sync at the current halves so a later "
+        "`report`/`apply --ledger` skips it (no re-litigation) until it drifts."
+    ),
+)
 @click.option("--json", "as_json", is_flag=True, default=False, help="Emit a JSON report.")
 def baseline_bless_cmd(
-    deck: Path, en_path: Path | None, cache_dir: Path | None, as_json: bool
+    deck: Path, en_path: Path | None, cache_dir: Path | None, ledger: bool, as_json: bool
 ) -> None:
     """Record the current working tree as the sync baseline — no commit needed.
 
@@ -471,7 +481,25 @@ def baseline_bless_cmd(
         record_baseline(cache, de_path, en_resolved)
     finally:
         cache.close()
-    _emit_bless_done(de_path, replaced=had, warnings=len(verdict.warnings), as_json=as_json)
+
+    ledger_recorded: int | None = None
+    if ledger:
+        from clm.slides import sync_ledger
+
+        # bless already passed `verify` above; record_pair re-gates structurally as a
+        # safety net and records each localized slide at the current halves.
+        result = sync_ledger.record_pair(
+            de_path, en_resolved, confirmed_by="bless", confirmed_oracle="structural"
+        )
+        ledger_recorded = 0 if result.refused else result.recorded
+
+    _emit_bless_done(
+        de_path,
+        replaced=had,
+        warnings=len(verdict.warnings),
+        ledger_recorded=ledger_recorded,
+        as_json=as_json,
+    )
 
 
 def _emit_bless_refused(de_path: Path, verdict: VerifyResult, *, as_json: bool) -> None:
@@ -503,22 +531,32 @@ def _emit_bless_refused(de_path: Path, verdict: VerifyResult, *, as_json: bool) 
         click.echo(f"    error [{v.kind}]: {v.message}")
 
 
-def _emit_bless_done(de_path: Path, *, replaced: bool, warnings: int, as_json: bool) -> None:
+def _emit_bless_done(
+    de_path: Path,
+    *,
+    replaced: bool,
+    warnings: int,
+    ledger_recorded: int | None = None,
+    as_json: bool,
+) -> None:
     if as_json:
-        click.echo(
-            json.dumps(
-                {
-                    "deck": str(de_path),
-                    "mode": "bless",
-                    "exit_code": 0,
-                    "blessed": True,
-                    "replaced": replaced,
-                    "warnings": warnings,
-                },
-                indent=2,
-            )
-        )
+        payload: dict[str, object] = {
+            "deck": str(de_path),
+            "mode": "bless",
+            "exit_code": 0,
+            "blessed": True,
+            "replaced": replaced,
+            "warnings": warnings,
+        }
+        if ledger_recorded is not None:
+            payload["ledger_recorded"] = ledger_recorded
+        click.echo(json.dumps(payload, indent=2))
         return
     verb = "re-recorded" if replaced else "recorded"
     tail = f" ({warnings} verify warning(s) allowed)" if warnings else ""
-    click.echo(f"blessed {de_path.name}: {verb} the working tree as the sync baseline{tail}.")
+    led = (
+        f" — ledger: {ledger_recorded} slide(s) confirmed in-sync"
+        if ledger_recorded is not None
+        else ""
+    )
+    click.echo(f"blessed {de_path.name}: {verb} the working tree as the sync baseline{tail}.{led}")
