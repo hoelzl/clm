@@ -39,36 +39,56 @@ _PHASE0_NOOP_PAIRS = 81
 _NOOP_FLOOR = 40
 
 
-def _corpus_dir() -> Path | None:
-    """The sync corpus root, or ``None`` when unavailable (skip).
+# The committed synthetic corpus shared with ``test_sync_corpus_mutation.py``
+# (one tiny in-sync bilingual deck). It is a *fallback*: a real PythonCourses
+# checkout still wins. On the bundled corpus only the scale-independent no-op
+# *invariant* runs — the population/size floors below are real-corpus-scale and
+# would be vacuous on one pair, so they stay gated to a real corpus. See Phase C
+# of ``docs/claude/sync-corpus-mutation-443-investigation-handover.md``.
+_BUNDLED_CORPUS = Path(__file__).resolve().parents[1] / "data" / "sync_corpus"
 
-    Requires at least one *real* ``.de.py`` / ``.en.py`` pair (not merely a
-    ``.de.py``), so the skip predicate agrees with ``discover_pairs``: a de-only
-    or unpaired tree skips cleanly instead of running an empty harness that would
-    trip ``test_corpus_discovered``'s ``total_pairs >= 100`` floor.
+
+def _has_pair(cand: Path) -> bool:
+    if not cand.is_dir():
+        return False
+    for de_path in cand.rglob("*.de.py"):
+        if de_path.with_name(de_path.name[: -len(".de.py")] + ".en.py").exists():
+            return True
+    return False
+
+
+def _corpus_dir() -> tuple[Path, bool] | None:
+    """Resolve the corpus root and whether it is the bundled synthetic one.
+
+    Order: ``CLM_SYNC_CORPUS_DIR`` env, the maintainer's PythonCourses checkout,
+    then the committed synthetic corpus. Requires at least one real ``.de.py`` /
+    ``.en.py`` pair so the skip predicate agrees with ``discover_pairs``.
+    Returns ``(root, is_bundled)``.
     """
-    candidates: list[Path] = []
+    external: list[Path] = []
     env = os.environ.get("CLM_SYNC_CORPUS_DIR")
     if env:
-        candidates.append(Path(env))
-    candidates.append(Path(r"C:\Users\tc\Programming\Python\Courses\Own\PythonCourses\slides"))
-    for cand in candidates:
-        if not cand.is_dir():
-            continue
-        for de_path in cand.rglob("*.de.py"):
-            en_path = de_path.with_name(de_path.name[: -len(".de.py")] + ".en.py")
-            if en_path.exists():
-                return cand  # at least one real pair -> usable corpus
+        external.append(Path(env))
+    external.append(Path(r"C:\Users\tc\Programming\Python\Courses\Own\PythonCourses\slides"))
+    bundled = _BUNDLED_CORPUS.resolve()
+    for cand in external:
+        if _has_pair(cand):
+            return cand, cand.resolve() == bundled
+    if _has_pair(_BUNDLED_CORPUS):
+        return _BUNDLED_CORPUS, True
     return None
 
 
-_CORPUS = _corpus_dir()
+_resolved = _corpus_dir()
+_CORPUS = _resolved[0] if _resolved else None
+_BUNDLED = _resolved[1] if _resolved else False
 
-pytestmark = [
-    pytest.mark.slow,
-    pytest.mark.integration,
-    pytest.mark.skipif(_CORPUS is None, reason="PythonCourses sync corpus not available"),
-]
+# Real corpus = ``slow`` (≈18 s over 212 pairs) and CI never runs ``slow``; the
+# bundled fallback is one pair (~instant), so drop ``slow`` there and let the
+# ``integration`` CI job run the no-op invariant. No ``skipif``: bundled always present.
+pytestmark = [pytest.mark.integration]
+if not _BUNDLED:
+    pytestmark.append(pytest.mark.slow)
 
 
 @pytest.fixture(scope="module")
@@ -85,6 +105,13 @@ def report():
     return result
 
 
+_real_corpus_only = pytest.mark.skipif(
+    _BUNDLED,
+    reason="scale-dependent floor — meaningful only on the full PythonCourses corpus",
+)
+
+
+@_real_corpus_only
 def test_corpus_discovered(report):
     # Sanity: the harness actually found a substantial corpus (else every other
     # assertion is vacuously true).
@@ -100,6 +127,7 @@ def test_noop_plans_apply_with_zero_bytes_and_zero_llm(report):
     assert report.violations == [], report.render()
 
 
+@_real_corpus_only
 def test_noop_pairs_do_not_catastrophically_regress(report):
     # If a later phase makes already-synced pairs churn, they stop classifying
     # as no-op and this floor trips. (Phase-0 measured 81; floor has headroom for
@@ -110,6 +138,7 @@ def test_noop_pairs_do_not_catastrophically_regress(report):
     )
 
 
+@_real_corpus_only
 def test_churn_baseline_populations_present(report):
     # The measurement half: the item-2 (neutral, silent-drop) and item-3 (id-less
     # localized, re-translated) exposure populations are what Phases 2-3 must
