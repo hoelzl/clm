@@ -27,17 +27,19 @@ SKIP_DIRS_FOR_COURSE = frozenset(
     (
         "__pycache__",
         ".cargo",
-        # CLM's own build-internal sidecar tree. A topic-local ``.clm/`` holds
-        # voiceover scratch only — ``voiceover-cache/`` (transcripts,
-        # alignments, timelines, transitions), ``voiceover-backfill/``, and
-        # ``voiceover-traces/`` — written by ``clm voiceover`` commands. None of
-        # it is a runtime build input (HTTP-replay cassettes live in
-        # ``cassettes/``, not here), so it is fully walk-excluded: it reaches
-        # neither the course file map, worker payloads, source mounts, nor
-        # output. The project-wide ``.gitignore`` already drops it from git, but
-        # that does not cover the dir-group copy to output (issue #431). Also
-        # makes ``is_private_dir_name``'s dot-prefix rule consistent — ``.clm``
-        # already matches that shape, it just wasn't enumerated.
+        # CLM's build-internal sidecar tree. A topic-local ``.clm/`` holds
+        # voiceover scratch — ``voiceover-cache/`` (transcripts, alignments,
+        # timelines, transitions), ``voiceover-backfill/``, ``voiceover-traces/`` —
+        # plus local ``config.toml`` and (issue #448) the committed per-slide sync
+        # ledger ``sync-ledger.json``. None of that is course content, so ``.clm``
+        # is walk-excluded by name here. The ONE exception is ``.clm/cassettes/``
+        # (issue #453): committed HTTP-replay cassettes the kernel reads at
+        # runtime, which DO belong in the course file map — :func:`is_ignored_dir_for_course`
+        # carves them back in, and ``Topic.add_files_in_dir`` walks them explicitly
+        # (the name-based prune here would otherwise skip the whole ``.clm`` tree).
+        # Output still suppresses them (``cassettes`` ∈ ``SKIP_DIRS_FOR_OUTPUT`` and
+        # the ``.http-cassette.yaml`` pattern). Also makes ``is_private_dir_name``'s
+        # dot-prefix rule consistent — ``.clm`` already matches that shape.
         ".clm",
         ".git",
         ".idea",
@@ -78,8 +80,12 @@ SKIP_DIRS_FOR_COURSE = frozenset(
 )
 
 # Cassettes differ from voiceover companions: the kernel reads them at runtime,
-# so ``cassettes/`` (and the legacy ``_cassettes/``) stay in the course file map
-# but are suppressed from output here. See ``NotebookFile._resolve_cassette``.
+# so the cassette sidecar (``.clm/cassettes/`` — issue #453 — and the legacy
+# top-level ``cassettes/`` / ``_cassettes/``) stays in the course file map but is
+# suppressed from output here. ``.clm`` is inherited from ``SKIP_DIRS_FOR_COURSE``,
+# so ``.clm/cassettes/`` is output-suppressed by that part alone; ``cassettes`` /
+# ``_cassettes`` keep the legacy top-level layout suppressed too. See
+# ``NotebookFile._resolve_cassette``.
 SKIP_DIRS_FOR_OUTPUT = SKIP_DIRS_FOR_COURSE | frozenset({"pu", "drawio", "_cassettes", "cassettes"})
 
 SKIP_DIRS_PATTERNS = ["*.egg-info*", "*cmake-build*"]
@@ -321,7 +327,27 @@ def is_private_dir_name(name: str) -> bool:
     return name.startswith(("_", "."))
 
 
+def is_clm_cassette_path(dir_path: Path) -> bool:
+    """True iff ``dir_path`` is the committed ``.clm/cassettes/`` tree (issue #453).
+
+    The single carve-out to ``.clm`` being walk-excluded: HTTP-replay cassettes
+    consolidated under ``.clm/cassettes/`` are a runtime build input the kernel
+    reads, so — unlike the rest of ``.clm`` — they belong in the course file map.
+    Matches the ``cassettes`` directory itself and anything beneath it.
+    """
+    parts = dir_path.parts
+    for i, part in enumerate(parts):
+        if part == ".clm" and i + 1 < len(parts) and parts[i + 1] == "cassettes":
+            return True
+    return False
+
+
 def is_ignored_dir_for_course(dir_path: Path) -> bool:
+    # ``.clm/cassettes/`` is the one committed-runtime-input exception to ``.clm``
+    # being excluded (issue #453): the kernel reads those cassettes, so they stay
+    # in the course file map even though every other ``.clm`` child is dropped.
+    if is_clm_cassette_path(dir_path):
+        return False
     for part in dir_path.parts:
         if part in SKIP_DIRS_FOR_COURSE:
             return True

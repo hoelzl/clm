@@ -431,15 +431,27 @@ companions (`voiceover_*.py`) and HTTP-replay cassettes (`*.http-cassette.yaml`)
 
 ```
 topic_070_rag_introduction/
-├── cassettes/   ← *.http-cassette.yaml
-├── voiceover/   ← voiceover_*.py
+├── .clm/cassettes/ ← *.http-cassette.yaml
+├── voiceover/      ← voiceover_*.py
 ├── drawio/  img/
 └── slides_010_*.de.py  slides_010_*.en.py
 ```
 
 **Nothing changes unless you opt in** — the flat layout (sidecars next to the
-slides) keeps working, and both layouts are auto-detected by directory presence
-everywhere (build, `extract`/`inline`/`sync`, `split`/`unify`, `validate`).
+slides) and the legacy top-level `cassettes/` keep working, and every layout is
+auto-detected by directory presence everywhere (build, `extract`/`inline`/`sync`,
+`split`/`unify`, `validate`).
+
+> **CLM {version} consolidates cassettes under `.clm/cassettes/`.** HTTP-replay
+> cassettes are a committed build *input*, not author-edited content, so they now
+> live in the build-internal `.clm/` tree (issue #453) instead of a top-level
+> `cassettes/`. The top-level `cassettes/` and `_cassettes/` are still **read**,
+> so existing repos keep replaying with no change; `clm slides tidy` migrates them
+> (`git mv cassettes/ → .clm/cassettes/`). `.clm/cassettes/` (and the per-slide
+> sync ledger `.clm/sync-ledger.json`, issue #448) must stay **committed** — only
+> the regenerable `.clm/voiceover-cache|backfill|traces/` scratch and the transient
+> `*.http-cassette.yaml.staging-*` markers under `.clm/cassettes/` are gitignored.
+> `voiceover/` stays a top-level folder (the author edits its narration).
 
 *Adopt it:*
 
@@ -453,17 +465,18 @@ clm slides tidy slides --layout sibling
 ```
 
 `tidy` uses `git mv` for tracked files, deletes transient `*.staging-*` cassette
-markers, and **consolidates the historical `_cassettes/` directory into
-`cassettes/`** (the underscore name is still read as a fallback).
+markers, and **consolidates the legacy top-level `cassettes/` / `_cassettes/`
+directories into `.clm/cassettes/`** (both names are still read as a fallback).
 
 **Since CLM {version} the foldered layout is the default** for a *new* sidecar:
-a build records a topic's first cassette into `cassettes/`, and `clm voiceover
-extract` / `sync` create a new companion in `voiceover/` — **unless** that deck
-already has a sibling sidecar, which is kept a sibling so a deck is never split
-across layouts. This default is write-time only and never changes build output
-(both layouts are still read). Precedence for a new sidecar: explicit `--layout`
-flag → an existing per-type directory → a course default → **subdir** (the new
-fallback). Opt a course back into the flat layout with `sibling`:
+a build records a topic's first cassette into `.clm/cassettes/`, and `clm
+voiceover extract` / `sync` create a new companion in `voiceover/` — **unless**
+that deck already has a sibling (or legacy top-level) sidecar, which is kept in
+place so a deck is never split across layouts. This default is write-time only
+and never changes build output (every layout is still read). Precedence for a
+new sidecar: explicit `--layout` flag → an existing per-type directory → a course
+default → **subdir** (the new fallback). Opt a course back into the flat layout
+with `sibling`:
 
 ```toml
 [tool.clm]

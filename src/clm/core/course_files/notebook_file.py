@@ -56,11 +56,16 @@ def _get_operation_stage(format_: str, kind: str) -> int:
 _LANGUAGE_CASSETTE_TOKENS = ("de", "en")
 
 # Topic-relative subdirectories that may hold HTTP-replay cassettes, in
-# read-preference order. ``cassettes`` is the current name; ``_cassettes`` is
-# the original underscore-prefixed form, still accepted as a legacy alias.
-# Auto-detected by presence — no flag — mirroring the ``voiceover/`` companion
-# sidecar (``slides.voiceover_tools.resolve_companion``).
-_CASSETTE_SUBDIRS = ("cassettes", "_cassettes")
+# read-preference order. ``.clm/cassettes`` is the current home (issue #453: the
+# build-internal sidecar consolidation); the top-level ``cassettes`` and the
+# original underscore-prefixed ``_cassettes`` are still accepted as legacy
+# locations, so a repo that has not yet run ``clm slides tidy`` keeps replaying.
+# Because it is first, it is also the default target a new cassette is written to
+# (``expected_cassette_path`` uses ``_CASSETTE_SUBDIRS[0]``). Auto-detected by
+# presence — no flag — mirroring the ``voiceover/`` companion sidecar
+# (``slides.voiceover_tools.resolve_companion``). A two-segment entry like
+# ``.clm/cassettes`` composes fine via ``topic_dir / sub`` (pathlib joins it).
+_CASSETTE_SUBDIRS = (".clm/cassettes", "cassettes", "_cassettes")
 
 
 def _base_cassette_stem(stem: str) -> str | None:
@@ -127,7 +132,8 @@ class NotebookFile(CourseFile):
     def _resolve_cassette(self, cassette_name: str) -> Path | None:
         """Return the existing cassette ``cassette_name`` for this topic, else None.
 
-        Prefers a sidecar subdirectory (``cassettes/`` then the legacy
+        Prefers a sidecar subdirectory in ``_CASSETTE_SUBDIRS`` order
+        (``.clm/cassettes/`` then the legacy top-level ``cassettes/`` /
         ``_cassettes/``); otherwise falls back to the sibling next to the source
         ``.py``. Encapsulates the read-precedence shared by ``cassette_path`` and
         ``replay_cassette_path`` so both honour the same layout detection.
@@ -144,9 +150,10 @@ class NotebookFile(CourseFile):
     def cassette_path(self) -> Path | None:
         """Return the HTTP-replay cassette path if present, else None.
 
-        Prefers ``<topic_dir>/cassettes/<stem>.http-cassette.yaml`` (or the
-        legacy ``_cassettes/``) when that layout is in use; otherwise falls back
-        to the sibling ``<topic_dir>/<stem>.http-cassette.yaml``.
+        Prefers ``<topic_dir>/.clm/cassettes/<stem>.http-cassette.yaml`` (or the
+        legacy top-level ``cassettes/`` / ``_cassettes/``) when that layout is in
+        use; otherwise falls back to the sibling
+        ``<topic_dir>/<stem>.http-cassette.yaml``.
         """
         return self._resolve_cassette(f"{self.path.stem}.http-cassette.yaml")
 
@@ -160,15 +167,17 @@ class NotebookFile(CourseFile):
         ``voiceover_tools.expected_companion`` so cassettes and voiceover
         companions land consistently):
 
-        - If a sidecar subdirectory (``cassettes/``, then legacy ``_cassettes/``)
-          exists, write inside it.
+        - If a sidecar subdirectory (``.clm/cassettes/``, then legacy
+          ``cassettes/`` / ``_cassettes/``) exists, write inside it — so a repo
+          already on a legacy layout keeps writing there until ``clm slides tidy``
+          migrates it.
         - Else if the course default forces a layout
           (``<sidecar-layout>`` / ``CLM_SIDECAR_LAYOUT`` / ``[tool.clm]
           sidecar-layout``): ``sibling`` → next to the slide; ``subdir`` →
-          ``cassettes/``.
+          ``.clm/cassettes/`` (``_CASSETTE_SUBDIRS[0]``).
         - Else (no course default): keep an existing sibling cassette a sibling
           so a deck is never split across layouts; otherwise default a
-          first-ever recording to ``cassettes/``. The folder need not exist —
+          first-ever recording to ``.clm/cassettes/``. The folder need not exist —
           the atomic cassette write ``mkdir``s it.
         """
         cassette_name = f"{self.path.stem}.http-cassette.yaml"
@@ -202,8 +211,8 @@ class NotebookFile(CourseFile):
         When that is absent and this is a split ``.de``/``.en`` deck, falls
         back to the base (bilingual) cassette that already holds both
         languages' recorded interactions, searching the sidecar subdirectory
-        (``cassettes/`` then legacy ``_cassettes/``) before the sibling layout
-        — same precedence as ``cassette_path`` (Issue #159).
+        (``.clm/cassettes/`` then legacy ``cassettes/`` / ``_cassettes/``) before
+        the sibling layout — same precedence as ``cassette_path`` (Issue #159).
 
         This is used **only** on the replay path. Record/seed/sweep keep using
         the strict, language-specific ``cassette_path`` so a re-record can

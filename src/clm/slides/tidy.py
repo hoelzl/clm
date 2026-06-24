@@ -2,9 +2,16 @@
 
 ``clm slides tidy`` moves the authoring *sidecars* — voiceover companions
 (``voiceover_*.py``) and HTTP-replay cassettes (``*.http-cassette.yaml``) — into
-per-type subdirectories (``voiceover/`` and ``cassettes/``) so the topic
+per-type subdirectories (``voiceover/`` and ``.clm/cassettes/``) so the topic
 directory holds only the core ``slides_*.py`` sources and genuine output
 companions (``img/``, ``drawio/``). ``--layout sibling`` flattens them back.
+
+Cassettes consolidated to ``.clm/cassettes/`` (issue #453): the build-internal
+``.clm/`` tree is where committed runtime inputs that are not author-edited
+content belong, so a tidy migrates a topic's cassettes there. The legacy
+top-level ``cassettes/`` and the original ``_cassettes/`` are recognised as
+migration *sources* (``--layout subdir`` moves them into ``.clm/cassettes/``);
+``voiceover/`` stays a top-level folder because the author edits its narration.
 
 - **Moves** use ``git mv`` for tracked files (history follows the file), falling
   back to a plain move for untracked files or outside a repo.
@@ -16,8 +23,9 @@ companions (``img/``, ``drawio/``). ``--layout sibling`` flattens them back.
 - A target that already exists (the same sidecar present in *both* layouts) is a
   **conflict**: that one move is skipped so nothing is clobbered, and the caller
   is told to reconcile the duplicate (``clm validate`` flags it too).
-- A ``voiceover/`` / ``cassettes/`` / legacy ``_cassettes/`` directory emptied by
-  a flatten is removed.
+- A ``voiceover/`` / ``.clm/cassettes/`` / legacy ``cassettes/`` / ``_cassettes/``
+  directory emptied by a move is removed (an emptied ``.clm/`` left by the
+  cassette move is pruned too).
 
 This is the bulk counterpart to the per-op layout handling in
 :mod:`clm.slides.voiceover_tools` and ``NotebookFile`` cassette resolution.
@@ -34,10 +42,19 @@ from pathlib import Path
 
 from clm.slides.voiceover_tools import COMPANION_SUBDIR
 
-# Canonical cassette sidecar dir, plus the legacy underscore-prefixed alias that
-# `tidy` consolidates into the canonical one under ``--layout subdir``.
-CASSETTE_SUBDIR = "cassettes"
+# Canonical cassette sidecar dir (issue #453): committed HTTP-replay cassettes
+# consolidated under the build-internal ``.clm/`` tree. ``tidy --layout subdir``
+# moves cassettes here.
+CASSETTE_SUBDIR = ".clm/cassettes"
+# Legacy single-level cassette dirs ``tidy`` migrates FROM into ``CASSETTE_SUBDIR``:
+# the original underscore-prefixed ``_cassettes/`` and the former top-level
+# ``cassettes/``. ``CASSETTE_LEGACY_SUBDIR`` is kept as the underscore alias for
+# back-compat; ``CASSETTE_LEGACY_SUBDIRS`` is the full set of leaf dir names.
 CASSETTE_LEGACY_SUBDIR = "_cassettes"
+CASSETTE_LEGACY_SUBDIRS = ("cassettes", "_cassettes")
+# The leaf directory name of ``CASSETTE_SUBDIR`` (".clm/cassettes" -> "cassettes"),
+# used for empty-dir pruning which matches on a single path component.
+_CASSETTE_LEAF = CASSETTE_SUBDIR.rsplit("/", 1)[-1]
 
 _VOICEOVER_RE = re.compile(r"voiceover_.*\.(py|cs|cpp|cxx|cc|java|ts|rs)$")
 _CASSETTE_RE = re.compile(r".*\.http-cassette\.yaml$")
@@ -112,6 +129,22 @@ def _topic_dir(f: Path, sidecar_dirs: tuple[str, ...]) -> Path:
     return f.parent.parent if f.parent.name in sidecar_dirs else f.parent
 
 
+def _cassette_topic_dir(f: Path) -> Path:
+    """The topic directory owning cassette file ``f`` across all recognised layouts.
+
+    Cassettes can live at three depths relative to the topic (issue #453):
+    ``.clm/cassettes/<f>`` (the new canonical home — grandparent ``.clm``, topic
+    three levels up), the legacy single-level ``cassettes/`` / ``_cassettes/``
+    (topic two levels up), or as a sibling next to the slide (topic is the parent).
+    """
+    parent = f.parent
+    if parent.name == _CASSETTE_LEAF and parent.parent.name == ".clm":
+        return parent.parent.parent
+    if parent.name in CASSETTE_LEGACY_SUBDIRS:
+        return parent.parent
+    return parent
+
+
 def _target(topic: Path, name: str, subdir: str, layout: str) -> Path:
     return topic / subdir / name if layout == "subdir" else topic / name
 
@@ -127,7 +160,7 @@ def plan_tidy(
 
     ``root`` may be a single slide/sidecar file or a directory (topic, section,
     or whole course root) walked recursively. ``layout`` is ``"subdir"`` (move
-    sidecars into ``voiceover/`` / ``cassettes/``) or ``"sibling"`` (flatten).
+    sidecars into ``voiceover/`` / ``.clm/cassettes/``) or ``"sibling"`` (flatten).
     """
     plan = TidyPlan()
     planned_dst: set[Path] = set()
@@ -154,7 +187,7 @@ def plan_tidy(
             add_move(f, _target(topic, name, COMPANION_SUBDIR, layout), "voiceover")
             continue
         if do_cassettes and _CASSETTE_RE.match(name):
-            topic = _topic_dir(f, (CASSETTE_SUBDIR, CASSETTE_LEGACY_SUBDIR))
+            topic = _cassette_topic_dir(f)
             add_move(f, _target(topic, name, CASSETTE_SUBDIR, layout), "cassette")
             continue
 
@@ -180,8 +213,15 @@ def _git_mv(src: Path, dst: Path) -> bool:
 
 
 def _prune_empty_sidecar_dirs(plan: TidyPlan) -> list[Path]:
-    """Remove sidecar dirs left empty by the applied plan. Return removed dirs."""
-    sidecar_names = {COMPANION_SUBDIR, CASSETTE_SUBDIR, CASSETTE_LEGACY_SUBDIR}
+    """Remove sidecar dirs left empty by the applied plan. Return removed dirs.
+
+    Matches the **leaf** directory name (``voiceover`` / ``cassettes`` /
+    ``_cassettes``) so the two-segment ``.clm/cassettes`` is covered, and prunes
+    an emptied ``.clm`` parent left behind by the cassette move (issue #453) —
+    but only when ``.clm`` itself is now empty, so a ledger / voiceover-cache
+    beside the cassettes keeps it.
+    """
+    sidecar_names = {COMPANION_SUBDIR, _CASSETTE_LEAF, CASSETTE_LEGACY_SUBDIR}
     candidates: set[Path] = set()
     for mv in plan.moves:
         if mv.src.parent.name in sidecar_names:
@@ -194,6 +234,12 @@ def _prune_empty_sidecar_dirs(plan: TidyPlan) -> list[Path]:
         if d.is_dir() and not any(d.iterdir()):
             d.rmdir()
             removed.append(d)
+            # An emptied ``.clm/cassettes`` may leave an empty ``.clm`` behind;
+            # prune it too, but never a ``.clm`` that still holds the ledger/scratch.
+            clm_parent = d.parent
+            if clm_parent.name == ".clm" and clm_parent.is_dir() and not any(clm_parent.iterdir()):
+                clm_parent.rmdir()
+                removed.append(clm_parent)
     return removed
 
 

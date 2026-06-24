@@ -1817,8 +1817,9 @@ class NotebookProcessor:
         resolves.
 
         **Invariant:** an http-replay notebook must keep its cassette beside the
-        notebook at the topic root (the ``_cassettes/`` dir under
-        ``source_topic_dir``). ``cassette_name`` is resolved relative to the
+        notebook at the topic root (the ``.clm/cassettes/`` dir under
+        ``source_topic_dir`` — or a legacy ``cassettes/`` / ``_cassettes/``).
+        ``cassette_name`` is resolved relative to the
         notebook's own parent while the tag here resolves against
         ``source_topic_dir``; for a notebook nested in a sub-directory of the
         topic the two diverge, so the proxy would write staging to a dir the

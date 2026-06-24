@@ -300,6 +300,11 @@ class Topic(NotebookMixin, ABC):
                     continue
                 if is_ignored_file_for_course(sub):
                     continue
+                # Per-component exclusion. A ``.clm/`` in an *included source* is
+                # intentionally not materialized — including ``.clm/cassettes/``
+                # (issue #453): an include carries shared **source**, while
+                # cassettes belong to the *including topic's* own ``.clm/cassettes/``
+                # (written there at build time), not to a shared-source package.
                 if any(
                     part in {".git", ".venv", "__pycache__", "node_modules"}
                     or is_ignored_dir_for_course(Path(part))
@@ -345,6 +350,18 @@ class Topic(NotebookMixin, ABC):
                     if is_ignored_file_for_course(sub_file):
                         continue
                     self.add_file(sub_file)
+        # Issue #453: ``.clm`` is walk-excluded above (build-internal sidecar tree),
+        # but the committed HTTP-replay cassettes consolidated under ``.clm/cassettes/``
+        # ARE a runtime build input and belong in the course file map. Add them
+        # explicitly — the generic ``.clm`` prune skips the whole tree, so the ledger
+        # (``.clm/sync-ledger.json``) and voiceover scratch beside the cassettes stay
+        # excluded while the cassettes come in (output still suppresses them).
+        clm_cassettes = dir_path / ".clm" / "cassettes"
+        if clm_cassettes.is_dir():
+            for sub_file in clm_cassettes.glob("**/*"):
+                if is_ignored_file_for_course(sub_file):
+                    continue
+                self.add_file(sub_file)
         self._add_slide_units(direct_slide_paths)
         for file in direct_files:
             self.add_file(file)

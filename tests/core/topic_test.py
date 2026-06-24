@@ -369,3 +369,49 @@ def test_build_file_map_excludes_voiceover_subdir_keeps_cassettes(tmp_path):
     assert is_ignored_file_for_output(cassette)
     # core slide source is present.
     assert (topic.path / "slides_010.py") in paths
+
+
+def test_build_file_map_clm_cassettes_in_map_ledger_and_scratch_excluded(tmp_path):
+    """Issue #453: the consolidated ``.clm/`` sidecar tree in the build walk.
+
+    ``.clm/cassettes/`` stays in the course file map (the kernel reads cassettes at
+    runtime) but is suppressed from output; the committed ``.clm/sync-ledger.json``
+    (#448) and the regenerable ``.clm/voiceover-cache/`` scratch never enter the
+    map, the provenance-eligible output tree, or output.
+    """
+    from clm.infrastructure.utils.path_utils import (
+        is_ignored_file_for_output,
+        is_ignored_path_in_output_tree,
+    )
+
+    course, topic, course_root = _make_isolated_topic(tmp_path)
+    (topic.path / "slides_010.py").write_text("# slide content\n")
+
+    clm = topic.path / ".clm"
+    cassette = clm / "cassettes" / "slides_010.http-cassette.yaml"
+    cassette.parent.mkdir(parents=True)
+    cassette.write_text("interactions: []\n")
+    ledger = clm / "sync-ledger.json"
+    ledger.write_text('{"version": 1, "slides": {}}\n')
+    scratch = clm / "voiceover-cache" / "transcripts" / "t.json"
+    scratch.parent.mkdir(parents=True)
+    scratch.write_text("{}\n")
+
+    topic.build_file_map()
+
+    paths = {f.path for f in topic.files}
+    # The cassette under .clm/cassettes/ IS in the map (replay input) ...
+    assert cassette in paths
+    # ... but is suppressed from output and the provenance-eligible output tree.
+    assert is_ignored_file_for_output(cassette)
+    assert is_ignored_path_in_output_tree(Path(".clm") / "cassettes" / cassette.name)
+    # The ledger and voiceover scratch never enter the map, output, or provenance.
+    assert ledger not in paths
+    assert scratch not in paths
+    assert is_ignored_file_for_output(ledger)
+    assert is_ignored_path_in_output_tree(Path(".clm") / "sync-ledger.json")
+    assert is_ignored_path_in_output_tree(
+        Path(".clm") / "voiceover-cache" / "transcripts" / "t.json"
+    )
+    # core slide source is present.
+    assert (topic.path / "slides_010.py") in paths
