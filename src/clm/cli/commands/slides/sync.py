@@ -468,10 +468,22 @@ def _sync_one_pair(
                 correspondence_cache=correspondence_cache,
             )
         # else dry-run: classify only, write nothing.
+        # #448 P2: on an autopilot apply sweep (mode=="apply" — `report` uses dry-run/explain)
+        # record each pair's now-in-sync slides to its ledger on a fully-clean pass
+        # (confirmed_by=autopilot). `_emit_batch` surfaces the aggregate via ledger_recorded.
+        ledger_recorded = (
+            _maybe_record_ledger(
+                ledger, plan, apply_result, de_path, en_path, confirmed_by="autopilot"
+            )
+            if (mode == "apply" and apply_result is not None)
+            else None
+        )
         exit_code = (
             _plan_exit_code(plan) if apply_result is None else _apply_exit_code(plan, apply_result)
         )
-        return _PairResult(de_path, en_path, plan, apply_result, explain_text, exit_code, None)
+        return _PairResult(
+            de_path, en_path, plan, apply_result, explain_text, exit_code, None, ledger_recorded
+        )
     except Exception as exc:  # continue-on-error: one bad pair must not abort the sweep
         return _PairResult(de_path, en_path, None, None, None, 2, f"{type(exc).__name__}: {exc}")
 
@@ -1137,8 +1149,9 @@ def _to_dict(
     *,
     rebaseline_hint: bool = False,
     cold_baseline_hint: bool = False,
+    ledger_recorded: int | None = None,
 ) -> dict:
-    return {
+    payload: dict = {
         "de_path": str(plan.de_path),
         "en_path": str(plan.en_path),
         "mode": mode,
@@ -1156,6 +1169,12 @@ def _to_dict(
         "rebaseline_hint": rebaseline_hint,
         "cold_baseline_hint": cold_baseline_hint,
     }
+    if ledger_recorded is not None:
+        # #448 P2: autopilot --ledger surfaces what a fully-clean pass banked, alongside
+        # the overlay's `plan.ledger_skipped`. Only emitted when the ledger was recorded
+        # to (an apply ran), so `report` / dry-run (which never record) keep their shape.
+        payload["ledger"] = {"skipped": plan.ledger_skipped, "recorded": ledger_recorded}
+    return payload
 
 
 def _plan_dict(plan: SyncPlan) -> dict:
@@ -1722,18 +1741,25 @@ def sync_apply_cmd(
 
 
 def _maybe_record_ledger(
-    enabled: bool, plan: SyncPlan, result: ApplyResult, de_path: Path, en_path: Path
+    enabled: bool,
+    plan: SyncPlan,
+    result: ApplyResult,
+    de_path: Path,
+    en_path: Path,
+    *,
+    confirmed_by: str = "apply",
 ) -> int | None:
-    """Record the now-in-sync slides to the ledger after a fully-clean apply (#448 P1).
+    """Record the now-in-sync slides to the ledger after a fully-clean apply (#448 P1/P2).
 
     "Emit the watermark as the ledger" (design §8 P1): record **only when the watermark
     fully advanced** — ``watermark_recorded`` with nothing deferred and no tag hold,
     i.e. the exact full-advance condition (a *partial* advance pins deferred / tag-only
     conflicts at the old baseline, so the deck is not fully in sync and recording it
     would wrongly trust those slides). ``record_pair`` re-gates on structural ``verify``
-    and reads the post-apply files. Returns the recorded count, ``0`` when the pass was
-    not fully clean (so a ``--json`` consumer sees the ledger was consulted but nothing
-    banked), or ``None`` when ``--ledger`` was off.
+    and reads the post-apply files. ``confirmed_by`` is the provenance — ``apply`` for the
+    model-free apply verb, ``autopilot`` for the model-bearing all-in-one (P2). Returns
+    the recorded count, ``0`` when the pass was not fully clean (so a ``--json`` consumer
+    sees the ledger was consulted but nothing banked), or ``None`` when ``--ledger`` was off.
     """
     if not enabled:
         return None
@@ -1743,12 +1769,12 @@ def _maybe_record_ledger(
     from clm.slides import sync_ledger
 
     rec = sync_ledger.record_pair(
-        de_path, en_path, confirmed_by="apply", confirmed_oracle="structural"
+        de_path, en_path, confirmed_by=confirmed_by, confirmed_oracle="structural"
     )
     recorded = 0 if rec.refused else rec.recorded
     if recorded:
         click.echo(
-            f"ledger: recorded {recorded} slide(s) confirmed in-sync (confirmed_by=apply).",
+            f"ledger: recorded {recorded} slide(s) confirmed in-sync (confirmed_by={confirmed_by}).",
             err=True,
         )
     return recorded

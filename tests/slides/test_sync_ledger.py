@@ -926,3 +926,85 @@ def test_idless_overlay_e2e_suppresses_then_surfaces(tmp_path: Path) -> None:
         assert plan2.ledger_skipped >= 1
     finally:
         cache.close()
+
+
+# ---------------------------------------------------------------------------
+# autopilot --ledger — read overlay + write-back on a clean pass (P2 increment 2)
+# ---------------------------------------------------------------------------
+
+
+def test_cli_autopilot_ledger_records_on_clean_pass(tmp_path: Path) -> None:
+    from click.testing import CliRunner
+
+    de_path, en_path = _write_pair(
+        tmp_path, _slide("de", "s1", "Hallo"), _slide("en", "s1", "Hello")
+    )
+    cache_dir = _seed_cache(tmp_path, de_path, en_path)  # in sync → a clean autopilot pass
+    res = CliRunner().invoke(
+        _cli(),
+        [
+            "slides",
+            "sync",
+            "autopilot",
+            str(de_path),
+            "--ledger",
+            "--no-verify-cold-pairs",
+            "--no-env-file",
+            "--cache-dir",
+            str(cache_dir),
+        ],
+    )
+    assert res.exit_code == 0, res.output
+    assert "recorded 1 slide(s) confirmed in-sync (confirmed_by=autopilot)" in res.output
+    assert load(ledger_path_for(de_path.resolve())).entries[("s1", "slide")].confirmed_by == (
+        "autopilot"
+    )
+
+
+def test_cli_autopilot_ledger_batch_records_each_pair(tmp_path: Path) -> None:
+    from click.testing import CliRunner
+
+    root, cache_dir, pairs = _make_batch(tmp_path)  # two in-sync pairs + seeded watermark
+    res = CliRunner().invoke(
+        _cli(),
+        [
+            "slides",
+            "sync",
+            "autopilot",
+            str(root),
+            "--ledger",
+            "--yes",
+            "--json",
+            "--no-verify-cold-pairs",
+            "--no-env-file",
+            "--cache-dir",
+            str(cache_dir),
+        ],
+    )
+    assert res.exit_code == 0, res.output
+    payload = json.loads(res.output[res.output.index("{") : res.output.rindex("}") + 1])
+    assert payload["ledger"] == {"skipped": 0, "recorded": 2}  # one slide per pair
+    for de, _en in pairs:
+        led = load(ledger_path_for(de))
+        assert len(led.entries) == 1
+        assert next(iter(led.entries.values())).confirmed_by == "autopilot"
+
+
+def test_cli_autopilot_dry_run_ledger_skips_relitigation(tmp_path: Path) -> None:
+    from click.testing import CliRunner
+
+    de_path, en_path = _write_pair(
+        tmp_path, _slide("de", "s1", "Hallo"), _slide("en", "s1", "Hello")
+    )
+    cache_dir = _seed_cache(tmp_path, de_path, en_path)  # watermark at original
+    de_path.write_text(_slide("de", "s1", "Hallo erweitert"), encoding="utf-8")  # drift
+    record_pair(de_path, en_path, confirmed_by="bless", commit="now")  # trust current state
+    runner = CliRunner()
+    common = ["--dry-run", "--no-verify-cold-pairs", "--no-env-file", "--cache-dir", str(cache_dir)]
+    without = runner.invoke(_cli(), ["slides", "sync", "autopilot", str(de_path), *common])
+    with_ledger = runner.invoke(
+        _cli(), ["slides", "sync", "autopilot", str(de_path), "--ledger", *common]
+    )
+    assert without.exit_code == 1  # an edit is pending against the watermark
+    assert with_ledger.exit_code == 0, with_ledger.output  # the ledger trusts the slide → clean
+    assert "skipped 1 slide" in with_ledger.output

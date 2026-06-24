@@ -33,6 +33,8 @@ from clm.cli.commands.slides.sync import (
     _cold_baseline_hint_text,
     _is_stale_but_consistent,
     _issue_line,
+    _load_ledger_if,
+    _maybe_record_ledger,
     _parse_baseline_from,
     _plan_exit_code,
     _print_human,
@@ -441,6 +443,19 @@ def _resolve_verifier(verify_enabled: bool) -> CorrespondenceVerifier | None:
         "for a single pair."
     ),
 )
+@click.option(
+    "--ledger",
+    is_flag=True,
+    help=(
+        "Use the per-slide consistency ledger (#448): **read** it to skip slides "
+        "byte-stable since a recorded confirmation (no re-litigation) before syncing, "
+        "**and** — on a fully clean pass (nothing deferred, the watermark fully "
+        "advanced) — **record** the now-in-sync localized slides back to "
+        "<topic>/.clm/sync-ledger.json (confirmed_by=autopilot, gated on structural "
+        "verify). A pass with residue records nothing. Works over a directory (each "
+        "pair uses its own topic ledger)."
+    ),
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit a JSON report.")
 def slides_sync_cmd(
     de_path: Path,
@@ -466,6 +481,7 @@ def slides_sync_cmd(
     baseline_from_spec: str | None,
     no_env_file: bool,
     yes: bool,
+    ledger: bool,
     as_json: bool,
 ) -> None:
     """Bring a split DE/EN deck pair into sync after editing one side.
@@ -618,6 +634,7 @@ def slides_sync_cmd(
             no_env_file=no_env_file,
             cache_dir=cache_dir,
             provider_available=provider_available,
+            ledger=ledger,
             make_judge=lambda: _resolve_judge(provider, llm_model, ollama_url, llm_timeout),
             make_translator=lambda: OpenRouterSlideTranslator(
                 model=translation_model,
@@ -713,7 +730,14 @@ def slides_sync_cmd(
             # gates this to the no-watermark / no-explicit-baseline case, so a normal
             # watermarked apply is unaffected.
             detect_rename=True,
+            ledger=_load_ledger_if(ledger, de_path),
         )
+        if ledger and plan.ledger_skipped:
+            click.echo(
+                f"ledger: skipped {plan.ledger_skipped} slide(s) trusted in-sync "
+                "(byte-stable since their last recorded confirmation).",
+                err=True,
+            )
         # Read the commit the watermark was recorded at (Fix D) while the cache is
         # still open, so the stale-watermark hint can name the exact --baseline ref.
         if watermark_cache is not None:
@@ -782,6 +806,17 @@ def slides_sync_cmd(
         if correspondence_cache is not None:
             correspondence_cache.close()
 
+    # #448 P2: after a fully-clean autopilot apply / interactive pass, record the
+    # now-in-sync slides to the ledger (confirmed_by=autopilot) — mirrors `apply
+    # --ledger` (#464) for the model-bearing path. `_maybe_record_ledger` re-gates on
+    # structural verify and reads the post-apply working tree (no open cache needed);
+    # dry-run / explain (apply_result None) record nothing.
+    ledger_recorded: int | None = None
+    if apply_result is not None:
+        ledger_recorded = _maybe_record_ledger(
+            ledger, plan, apply_result, de_path, en_path, confirmed_by="autopilot"
+        )
+
     exit_code = (
         _plan_exit_code(plan) if apply_result is None else _apply_exit_code(plan, apply_result)
     )
@@ -815,6 +850,7 @@ def slides_sync_cmd(
                     exit_code,
                     rebaseline_hint=rebaseline_hint,
                     cold_baseline_hint=cold_baseline_hint,
+                    ledger_recorded=ledger_recorded,
                 ),
                 indent=2,
             )

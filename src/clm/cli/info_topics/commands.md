@@ -2117,6 +2117,7 @@ default; `--dry-run` previews.
 | `--verify-cold-pairs` / `--no-verify-cold-pairs` | Bootstrap/reconcile cold-pair `slide_id`s gated by a cheap correspondence check (default on with a key); `--no-verify-cold-pairs` refuses instead. |
 | `--llm-recover` / `--recovery-model TEXT` | Opt into the bounded Opus recovery tier for an ambiguous drifted `slide_id` (body-free, validated). |
 | `--rebaseline` | Recover from a stale watermark (clears + re-records, only when the halves agree vs git `HEAD`). Prefer `baseline bless`. |
+| `--ledger` | (since CLM {version}) Use the per-slide consistency ledger (#448): **read** it to skip slides byte-stable since a recorded confirmation (no re-litigation), **and** — on a fully clean pass (nothing deferred, the watermark fully advanced) — **record** the now-in-sync slides back to it (`confirmed_by=autopilot`, gated on structural `verify`). Mirrors `apply --ledger` for the model-bearing path; works over a directory. The `--json` payload gains a `ledger: {skipped, recorded}` block (single pair and batch). |
 | `--baseline REF` / `--baseline-from PATH[@REF]` / `--cache-dir PATH` / `--no-cache` / `--no-env-file` / `--yes` | Baseline selection, watermark store, `.env` loading, and batch confirm, as before. |
 
 **Exit codes (per verb).** `report`: `0` clean, `1` work pending (any tier),

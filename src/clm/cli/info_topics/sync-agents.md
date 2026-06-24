@@ -199,10 +199,11 @@ consistency ledger** (`<topic>/.clm/sync-ledger.json`, committed) fixes that.
   *both* halves at this commit (gated on `verify` — a corrupt pair is never
   recorded). A slide is trusted-in-sync **only from its first recorded
   confirmation forward**: there is no commit in history we assume was in sync, so
-  trust is recorded, never guessed. `apply --ledger` also records automatically —
-  but **only on a fully-clean pass** (no deferred residue), so a deck you fully
-  reconciled (or one already in sync) banks its trust without a separate `bless`;
-  a deck still carrying residue records nothing until you finish it.
+  trust is recorded, never guessed. `apply --ledger` (and the legacy `autopilot
+  --ledger`) also record automatically — but **only on a fully-clean pass** (no
+  deferred residue), so a deck you fully reconciled (or one already in sync) banks
+  its trust without a separate `bless` (`confirmed_by=apply` / `=autopilot`); a deck
+  still carrying residue records nothing until you finish it.
 - **Bank trust per item, in the loop** — after you `accept` a single drifted edit,
   add `--record`: `clm slides sync accept DECK --item ID --answer - --record`. It
   banks **just that one reconciled cell** (`confirmed_by=accept`,
