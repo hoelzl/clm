@@ -186,6 +186,33 @@ normal loop. A few cases:
   `clm slides sync baseline prune`; `clm slides sync baseline clear DECK` re-derives
   off git `HEAD` next time.
 
+## The consistency ledger — don't re-litigate a slide you already synced (`--ledger`)
+
+A baseline is *one* answer for the whole deck. But after a few rounds a deck is
+never uniformly drifted: slide X was reconciled three days ago, slide Y two weeks
+ago, slide Z never. Pointing `--baseline <2-weeks-ago>` at the deck re-proposes an
+`edit` for slide X too — re-litigating a sync you already did. The **per-slide
+consistency ledger** (`<topic>/.clm/sync-ledger.json`, committed) fixes that.
+
+- **Record trust** when you bless a reconciled deck: `clm slides sync baseline
+  bless DECK --ledger`. For each localized slide it records the fingerprint of
+  *both* halves at this commit (gated on `verify` — a corrupt pair is never
+  recorded). A slide is trusted-in-sync **only from its first recorded
+  confirmation forward**: there is no commit in history we assume was in sync, so
+  trust is recorded, never guessed.
+- **Consult trust** when you reconcile: `clm slides sync report DECK --ledger`
+  (and `apply --ledger`) **skips** any slide whose two current halves are
+  byte-identical to a recorded confirmation — even against an old `--baseline`. So
+  the timeframe reconcile above surfaces only the genuinely-drifted slides; the
+  ones you synced last round stay quiet. A slide that *did* change since its
+  confirmation does not match and surfaces normally; a slide with no entry is
+  checked as usual (the cold path).
+- It is a **trust overlay**, not a new baseline: the classification is unchanged,
+  the ledger only removes proposals the recorded trust makes redundant. Opt-in
+  (default off = today's behavior exactly), single pair in this release (run it
+  per deck), and `git log -S<slide_id> -- '**/sync-ledger.json'` answers "when was
+  slide X last synced?" exactly — from the record, not inferred.
+
 ## A clean, committed, id-less deck is *consistent* (not a cold start)
 
 A pair whose halves share **no `slide_id`** (a fully id-less deck, or a half-id'd
