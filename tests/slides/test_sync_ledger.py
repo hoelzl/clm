@@ -323,3 +323,11 @@ def test_cli_report_ledger_skips_relitigation(tmp_path: Path) -> None:
     assert without.exit_code == 1  # an edit is pending
     assert with_ledger.exit_code == 0  # the ledger trusts the slide → clean
     assert "skipped 1 slide" in with_ledger.output
+
+    # The skip count is also in the JSON contract (so a --json consumer can tell
+    # "0 real changes" from "N trusted away" — not falsely consistent).
+    as_json = runner.invoke(
+        _cli(), ["slides", "sync", "report", str(de_path), "--ledger", "--json", *common]
+    )
+    payload = json.loads(as_json.output[as_json.output.index("{") : as_json.output.rindex("}") + 1])
+    assert payload["plan"]["ledger_skipped"] == 1

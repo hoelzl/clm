@@ -71,6 +71,9 @@ class LedgerEntry:
 
     de_hash: str
     en_hash: str
+    # The cell's content-anchor construct slug (or None for markdown). Recorded as
+    # forward-looking provenance for the P3 id-migration carry (#366) — the overlay
+    # keys on the hashes alone, so this is deliberately recorded-but-unread today.
     construct: str | None
     confirmed_commit: str | None
     confirmed_by: str  # "apply" | "bless" | "accept" | "autopilot"
@@ -253,6 +256,11 @@ def record_pair(
     Stale entries for slides removed from the deck are left in place (harmless — no
     current cell matches them, so they never wrongly suppress); a future ``prune``
     sweeps them.
+
+    Only the final file write is atomic (:func:`atomic_write_bytes`); the
+    load→update→save is not locked, so two concurrent records into one topic's ledger
+    could lose an update (read-modify-write race). For an authoring CLI that is
+    effectively never hit; left unlocked for P1.
     """
     from clm.slides.sync_verify import structural_gate
 

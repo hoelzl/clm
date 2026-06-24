@@ -1124,6 +1124,11 @@ def _plan_dict(plan: SyncPlan) -> dict:
     return {
         "baseline_source": plan.baseline_source,
         "in_sync": plan.in_sync_count,
+        # Issue #448 P1: content proposals the consistency-ledger overlay suppressed
+        # (slides byte-stable since a recorded confirmation). Surfaced so a `--ledger
+        # --json` consumer can tell "0 real changes" from "N changes trusted away" —
+        # without it a suppressed run reads as falsely consistent. 0 when no --ledger.
+        "ledger_skipped": plan.ledger_skipped,
         "counts": {
             kind: plan.count(kind)
             for kind in (

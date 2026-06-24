@@ -3986,6 +3986,10 @@ def _apply_ledger_overlay(
     start candidates are never suppressed (a reorder of a byte-stable slide is a real
     change the ledger must not mask).
     """
+    # A genuine duplicate ``(slide_id, role)`` within a half is resolved structurally
+    # (``_resolve_duplicates`` → a ``rename``, which this overlay never suppresses), so
+    # the last-wins collapse here is safe: a dup never reaches a *trusted* edit. Both
+    # maps iterate source order, so they collapse to the same cell.
     de_by_key = {(c.slide_id, c.role): c.content_hash for c in de_current if c.slide_id}
     en_by_key = {(c.slide_id, c.role): c.content_hash for c in en_current if c.slide_id}
     kept: list[Proposal] = []
