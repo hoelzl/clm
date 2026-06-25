@@ -2038,8 +2038,8 @@ models for those tiers.)
 | `--baseline REF` / `--baseline-from PATH[@REF]` | As for `report`: `--baseline REF` works over a directory (each pair diffed against REF); `--baseline-from` is single-pair. |
 | `--cache-dir PATH` | Directory holding the watermark. |
 | `--ledger` | Use the per-slide consistency ledger (#448): **read** it to skip slides byte-stable since a recorded confirmation (no re-litigation) before applying, **and** — on a fully-clean pass (no deferred residue, the watermark fully advanced) — **record** the now-in-sync localized slides back to it (`confirmed_by=apply`, gated on structural `verify`). A pass with residue records nothing. The `--json` payload gains a `ledger: {skipped, recorded}` block. **Works over a directory** (each pair uses its own topic ledger; the batch reports aggregate `skipped`/`recorded`). |
-| `--auto-heal` / `--no-auto-heal` | (since CLM {version}, #364) Auto-re-baseline a **stale-but-consistent** watermark instead of erroring on a false stale-baseline conflict: when the watermark is stale but git `HEAD` shows the halves consistent (both edited + committed without an intervening sync), clear + re-record it and apply cleanly. **On by default**; safe by construction (heals only when git `HEAD` is a verified no-op, so it can never mask an un-synced edit, and never outside a git repo). The `--json` payload carries `auto_healed: true` when it fires. Ignored with `--baseline` / `--baseline-from` / `--no-watermark`. |
-| `--yes`, `-y` | **Directory (batch) only**: confirm a writing sweep over every pair under the tree. Ignored for a single pair. (Single-pair only: auto-heal runs per-pair.) |
+| `--auto-heal` / `--no-auto-heal` | (since CLM {version}, #364) Auto-re-baseline a **stale-but-consistent** watermark instead of erroring on a false stale-baseline conflict: when the watermark is stale but git `HEAD` shows the halves consistent (both edited + committed without an intervening sync), clear + re-record it and apply cleanly. **On by default**; safe by construction (heals only when git `HEAD` is a verified no-op, so it can never mask an un-synced edit, and never outside a git repo). The `--json` payload carries `auto_healed: true` when it fires. **Works over a directory too** — each pair heals independently; the batch rollup names the count and each `--json` pair entry carries `auto_healed`. Ignored with `--baseline` / `--baseline-from` / `--no-watermark`. |
+| `--yes`, `-y` | **Directory (batch) only**: confirm a writing sweep over every pair under the tree. Ignored for a single pair. |
 | `--json` | Emit the apply result as JSON. |
 
 #### `clm slides sync task`
@@ -2154,7 +2154,7 @@ default; `--dry-run` previews.
 | `--verify-cold-pairs` / `--no-verify-cold-pairs` | Bootstrap/reconcile cold-pair `slide_id`s gated by a cheap correspondence check (default on with a key); `--no-verify-cold-pairs` refuses instead. |
 | `--llm-recover` / `--recovery-model TEXT` | Opt into the bounded Opus recovery tier for an ambiguous drifted `slide_id` (body-free, validated). |
 | `--rebaseline` | Recover from a stale watermark (clears + re-records, only when the halves agree vs git `HEAD`); single-pair, exits after. Prefer `baseline bless`, or just let `--auto-heal` (below) handle it. |
-| `--auto-heal` / `--no-auto-heal` | (since CLM {version}, #364) On a **writing** run, auto-re-baseline a stale-but-consistent watermark before reconciling (the same safe heal as `--rebaseline`, applied automatically). On by default; ignored for `--dry-run` / `--explain` / `--no-cache` / `--baseline` / `--baseline-from` / `--rebaseline`. |
+| `--auto-heal` / `--no-auto-heal` | (since CLM {version}, #364) On a **writing** run, auto-re-baseline a stale-but-consistent watermark before reconciling (the same safe heal as `--rebaseline`, applied automatically). On by default; **per pair over a directory** sweep too. Ignored for `--dry-run` / `--explain` / `--no-cache` / `--baseline` / `--baseline-from` / `--rebaseline`. |
 | `--ledger` | (since CLM {version}) Use the per-slide consistency ledger (#448): **read** it to skip slides byte-stable since a recorded confirmation (no re-litigation), **and** — on a fully clean pass (nothing deferred, the watermark fully advanced) — **record** the now-in-sync slides back to it (`confirmed_by=autopilot`, gated on structural `verify`). Mirrors `apply --ledger` for the model-bearing path; works over a directory. The `--json` payload gains a `ledger: {skipped, recorded}` block (single pair and batch). |
 | `--baseline REF` / `--baseline-from PATH[@REF]` / `--cache-dir PATH` / `--no-cache` / `--no-env-file` / `--yes` | Baseline selection, watermark store, `.env` loading, and batch confirm, as before. |
 
@@ -2178,9 +2178,15 @@ a stale-but-consistent watermark, since CLM {version}, #364) or `baseline bless`
 replacement for the old `--rebaseline`. A **writing** `apply` / `autopilot` run
 heals it automatically by default (`--no-auto-heal` opts out); the heal is safe by
 construction (it fires only when git `HEAD` shows the halves consistent, so it can
-never mask an un-synced edit). This is the recoverable case behind the "id-less
-localized cells edited on both decks" error: the error now steers to `apply`
-(auto-heal) / `baseline bless`, naming the offending cell's owning slide group.
+never mask an un-synced edit), and applies **per pair** over a directory sweep
+(the batch rollup names how many were re-baselined). This is the recoverable case
+behind the "id-less localized cells edited on both decks" error: the error now
+steers to `apply` (auto-heal) / `baseline bless`, names the offending cell's
+owning slide group, and (since CLM {version}) carries the offending cells'
+**localized positions + bytes** in the `report --json` issue item
+(`source_position` / `source_excerpt` / `target_*`). `--explain` additionally
+shows the **git-HEAD baseline side by side** with the watermark baseline whenever
+the two disagree, so a stale watermark is visible rather than a mystery.
 
 **Renaming a deck (folder or stem) is safe (since CLM {version}, epic
 #440).** Deck identity is path-derived (the watermark key and the git

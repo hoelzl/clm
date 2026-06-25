@@ -289,6 +289,9 @@ class _PairResult:
     # Issue #448 P1: slides this pair banked to the ledger on a fully-clean apply
     # (apply-batch only). ``None`` when --ledger was off or the pass was not clean.
     ledger_recorded: int | None = None
+    # Issue #364: this pair's stale-but-consistent watermark was auto-re-baselined
+    # before reconciling (writing sweeps only). Surfaced in the batch rollup / JSON.
+    healed: bool = False
 
 
 def _run_batch(
@@ -303,6 +306,7 @@ def _run_batch(
     provider_available: bool,
     baseline_ref: str | None = None,
     ledger: bool = False,
+    auto_heal: bool = True,
     make_judge: Callable[[], SyncJudge | None],
     make_translator: Callable[[], SlideTranslator | None],
     make_recoverer: Callable[[], AlignmentRecoverer | None],
@@ -409,6 +413,7 @@ def _run_batch(
                     correspondence_cache=correspondence_cache,
                     baseline_ref=baseline_ref,
                     ledger=ledger,
+                    auto_heal=auto_heal,
                 )
             )
     finally:
@@ -439,6 +444,7 @@ def _sync_one_pair(
     correspondence_cache: SyncCorrespondenceCache | None,
     baseline_ref: str | None = None,
     ledger: bool = False,
+    auto_heal: bool = True,
 ) -> _PairResult:
     """Sync one pair for the batch, catching any failure so the sweep continues."""
     try:
@@ -450,6 +456,27 @@ def _sync_one_pair(
             baseline_ref=baseline_ref,
             ledger=_load_ledger_if(ledger, de_path),
         )
+        # Auto-heal a stale-but-consistent watermark on a WRITING sweep (#364), then
+        # re-plan — mirrors the single-pair autopilot path. Read-only sweeps
+        # (dry-run / explain) never heal. Skipped when --baseline pins the diff.
+        healed = False
+        if mode == "apply" and auto_heal and baseline_ref is None:
+            healed = _auto_heal_stale_watermark(
+                de_path,
+                en_path,
+                plan,
+                watermark_cache=watermark_cache,
+                provider_available=provider_available,
+            )
+            if healed:
+                plan = build_sync_plan(
+                    de_path,
+                    en_path,
+                    watermark_cache=watermark_cache,
+                    provider_available=provider_available,
+                    baseline_ref=None,
+                    ledger=_load_ledger_if(ledger, de_path),
+                )
         apply_result: ApplyResult | None = None
         explain_text: str | None = None
         if mode == "explain":
@@ -482,7 +509,15 @@ def _sync_one_pair(
             _plan_exit_code(plan) if apply_result is None else _apply_exit_code(plan, apply_result)
         )
         return _PairResult(
-            de_path, en_path, plan, apply_result, explain_text, exit_code, None, ledger_recorded
+            de_path,
+            en_path,
+            plan,
+            apply_result,
+            explain_text,
+            exit_code,
+            None,
+            ledger_recorded,
+            healed=healed,
         )
     except Exception as exc:  # continue-on-error: one bad pair must not abort the sweep
         return _PairResult(de_path, en_path, None, None, None, 2, f"{type(exc).__name__}: {exc}")
@@ -552,7 +587,11 @@ def _batch_rollup(results: list[_PairResult]) -> str:
     clean = sum(1 for r in results if r.exit_code == 0)
     review = sum(1 for r in results if r.exit_code == 1)
     errored = sum(1 for r in results if r.exit_code == 2)
-    return f"{len(results)} pair(s): {clean} clean, {review} review, {errored} errored."
+    healed = sum(1 for r in results if r.healed)
+    line = f"{len(results)} pair(s): {clean} clean, {review} review, {errored} errored."
+    if healed:
+        line += f" ({healed} stale watermark(s) auto-re-baselined.)"
+    return line
 
 
 def _ledger_totals(results: list[_PairResult]) -> tuple[int, int]:
@@ -661,7 +700,10 @@ def _batch_pair_dict(r: _PairResult, mode: str) -> dict:
     assert r.plan is not None
     # Each non-errored pair reuses the single-pair object shape verbatim, so a
     # consumer can treat ``pairs[i]`` exactly like one ``clm slides sync --json``.
-    return _to_dict(r.plan, r.apply_result, None, mode, r.exit_code)
+    d = _to_dict(r.plan, r.apply_result, None, mode, r.exit_code)
+    if r.healed:  # #364: surface a per-pair auto-re-baseline on a writing sweep
+        d["auto_healed"] = True
+    return d
 
 
 def _progress_snippet(text: str, limit: int = 44) -> str:
@@ -1753,6 +1795,7 @@ def sync_apply_cmd(
             as_json=as_json,
             baseline_ref=baseline_ref,
             ledger=ledger,
+            auto_heal=auto_heal,
         )
         return  # _run_apply_batch always sys.exit()s; this is just for the type-checker.
 
@@ -1772,34 +1815,15 @@ def sync_apply_cmd(
         watermark_cache = SyncWatermarkCache(cache_root / CACHE_DB_NAME)
     healed = False
     try:
-        plan, result = _apply_deterministic(
+        plan, result, healed = _apply_deterministic_with_heal(
             de_path,
             en_path,
             watermark_cache=watermark_cache,
             baseline_ref=baseline_ref,
             baseline_from=baseline_from,
             ledger=ledger,
+            auto_heal=auto_heal,
         )
-        # Auto-heal a stale-but-consistent watermark (#364): re-baseline and re-plan
-        # to a clean result instead of erroring on a false stale-baseline conflict.
-        # Only when the watermark is the baseline (no --baseline / --baseline-from).
-        if auto_heal and baseline_ref is None and baseline_from is None:
-            healed = _auto_heal_stale_watermark(
-                de_path,
-                en_path,
-                plan,
-                watermark_cache=watermark_cache,
-                provider_available=False,
-            )
-            if healed:
-                plan, result = _apply_deterministic(
-                    de_path,
-                    en_path,
-                    watermark_cache=watermark_cache,
-                    baseline_ref=None,
-                    baseline_from=None,
-                    ledger=ledger,
-                )
     finally:
         if watermark_cache is not None:
             watermark_cache.close()
@@ -1914,6 +1938,51 @@ def _apply_deterministic(
     return plan, result
 
 
+def _apply_deterministic_with_heal(
+    de_path: Path,
+    en_path: Path,
+    *,
+    watermark_cache: SyncWatermarkCache | None,
+    baseline_ref: str | None = None,
+    baseline_from: tuple[Path, Path, str] | None = None,
+    ledger: bool = False,
+    auto_heal: bool = True,
+) -> tuple[SyncPlan, ApplyResult, bool]:
+    """:func:`_apply_deterministic`, auto-healing a stale watermark first (#364).
+
+    Shared by the single-pair apply and the apply **batch** so they heal identically:
+    if the watermark is stale but git HEAD shows the halves consistent, re-baseline it
+    and re-plan to a clean result instead of erroring on a false stale-baseline
+    conflict. Returns ``(plan, result, healed)``. Auto-heal is skipped when an explicit
+    baseline pins the diff (``--baseline`` / ``--baseline-from``) or ``auto_heal`` is off;
+    it is safe by construction (``_auto_heal_stale_watermark`` re-records only against a
+    verified git-HEAD no-op), so a pair that is *not* stale-but-consistent is untouched.
+    """
+    plan, result = _apply_deterministic(
+        de_path,
+        en_path,
+        watermark_cache=watermark_cache,
+        baseline_ref=baseline_ref,
+        baseline_from=baseline_from,
+        ledger=ledger,
+    )
+    if not (auto_heal and baseline_ref is None and baseline_from is None):
+        return plan, result, False
+    if not _auto_heal_stale_watermark(
+        de_path, en_path, plan, watermark_cache=watermark_cache, provider_available=False
+    ):
+        return plan, result, False
+    plan, result = _apply_deterministic(
+        de_path,
+        en_path,
+        watermark_cache=watermark_cache,
+        baseline_ref=None,
+        baseline_from=None,
+        ledger=ledger,
+    )
+    return plan, result, True
+
+
 def _apply_residue(plan: SyncPlan) -> list[ReconciliationItem]:
     """The tier-2/3 report items model-free apply left untouched (the residue)."""
     report = build_report(plan, with_excerpts=False)
@@ -2012,6 +2081,7 @@ def _run_apply_batch(
     as_json: bool,
     baseline_ref: str | None = None,
     ledger: bool = False,
+    auto_heal: bool = True,
 ) -> None:
     """Model-free tier-1 apply over every split pair under ``root`` (no model, epic #440).
 
@@ -2060,17 +2130,28 @@ def _run_apply_batch(
             if not as_json:
                 click.echo(f"[{i}/{len(pairs)}] {_deck_label(de_path, root)} …", err=True)
             try:
-                plan, result = _apply_deterministic(
+                plan, result, healed = _apply_deterministic_with_heal(
                     de_path,
                     en_path,
                     watermark_cache=watermark_cache,
                     baseline_ref=baseline_ref,
                     ledger=ledger,
+                    auto_heal=auto_heal,
                 )
                 recorded = _maybe_record_ledger(ledger, plan, result, de_path, en_path)
                 exit_code = _apply_exit_code(plan, result)
                 results.append(
-                    _PairResult(de_path, en_path, plan, result, None, exit_code, None, recorded)
+                    _PairResult(
+                        de_path,
+                        en_path,
+                        plan,
+                        result,
+                        None,
+                        exit_code,
+                        None,
+                        recorded,
+                        healed=healed,
+                    )
                 )
             except Exception as exc:  # continue-on-error: one bad pair must not abort the sweep
                 results.append(
