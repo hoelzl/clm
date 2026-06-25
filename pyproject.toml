@@ -329,8 +329,18 @@ markers = [
 # fix the root cause). There is intentionally no ``--reruns`` here — reruns are
 # opt-in per test via ``@pytest.mark.flaky`` only.
 addopts = "-n auto --dist loadgroup -rR -m 'not slow and not db_only and not integration and not e2e and not docker'"
-# Timeout configuration - prevents tests from hanging indefinitely
-timeout = 600  # 10 minutes default timeout for all tests
+# Per-test timeout — converts a hung test into a prompt, attributable failure
+# instead of a 10-minute stall (the old 600s default, which turned a contention
+# hang on the pre-push gate into a Ctrl-C + manual re-run). 120s matches CI's
+# fast-suite ``--timeout=120`` (.github/workflows/ci.yml), the authoritative
+# ceiling on 2-4 vCPU hardware: the slowest legitimate fast test measures ~5.5s
+# (16-worker dev box) / ~11s (64-worker contention), so 120s is a >10x backstop,
+# NOT a performance gate. The heavier non-fast suites need more headroom, so
+# ``tests/conftest.py`` bumps their per-test timeout at collection time —
+# integration -> 240, e2e/slow/docker -> 600, matching CI — so running them
+# locally (a non-default ``-m`` selection) never false-kills against this
+# fast-suite default. (A ``timeout`` marker takes precedence over this value.)
+timeout = 120
 timeout_method = "thread"  # Works better with asyncio tests
 # Filter out deprecation warnings from third-party packages
 filterwarnings = [
