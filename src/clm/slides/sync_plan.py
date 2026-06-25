@@ -1084,9 +1084,10 @@ def _classify_idless_localized_drift(
                     reason="id-less localized cells (lang= cells with no slide_id) were "
                     f"edited on both decks{_drift_cells_clause(de_snips, en_snips)}; sync "
                     "cannot determine a single direction. If the halves are already "
-                    "consistent the watermark is likely stale — reset it with "
-                    "`clm slides sync --rebaseline`; otherwise resolve the divergence "
-                    "manually (or give the cells slide_ids so they pair per-cell)",
+                    "consistent the watermark is likely stale — `clm slides sync apply` "
+                    "auto-re-baselines it (or `clm slides sync baseline bless`); otherwise "
+                    "resolve the divergence manually (or give the cells slide_ids so they "
+                    "pair per-cell)",
                 )
             )
         return

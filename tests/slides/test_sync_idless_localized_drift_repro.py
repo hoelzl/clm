@@ -249,12 +249,15 @@ class TestIdlessDriftErrorIsLocalized:
 
     def test_error_steers_to_rebaseline_not_just_assign_ids(self, tmp_path: Path):
         # #364 item 3: the old message only said "assign slide_ids" (which does not help
-        # the stale-watermark case). The new message leads with the actual common fix.
+        # the stale-watermark case). The new message leads with the actual common fix,
+        # steering to the live verbs (`sync apply` auto-heals; `baseline bless`), not the
+        # retired `--rebaseline` flag.
         plan, _result, _de_after, _en_after = _sync(
             tmp_path, "watermark", DE0_U, EN0_U, DE1_U, EN1_U
         )
         reason = "\n".join(e.reason for e in _error_issues(plan))
-        assert "--rebaseline" in reason
+        assert "baseline bless" in reason
+        assert "sync apply" in reason
 
 
 # ---------------------------------------------------------------------------

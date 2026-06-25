@@ -182,6 +182,14 @@ normal loop. A few cases:
   by hand): `clm slides sync baseline bless DECK` — no throwaway commit needed
   (it replaces the old `--rebaseline`). It is gated on `verify`, so a structurally
   corrupt pair is refused rather than blessed.
+- **Stale watermark? Just `apply`.** If both halves were edited + committed without
+  an intervening sync, the watermark falls behind and a watermarked run would error
+  on a *false* stale-baseline conflict ("id-less localized cells edited on both
+  decks", or a keyed conflict). A writing `clm slides sync apply DECK` (or
+  `autopilot`) now **auto-re-baselines** that stale-but-consistent watermark by
+  default (#364) — safe by construction (only when git `HEAD` shows the halves
+  consistent), so the reconcile just proceeds. Pass `--no-auto-heal` to surface the
+  conflict instead.
 - **Inspect / maintain**: `clm slides sync baseline show`; drop orphans with
   `clm slides sync baseline prune`; `clm slides sync baseline clear DECK` re-derives
   off git `HEAD` next time.
