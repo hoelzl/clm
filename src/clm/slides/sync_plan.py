@@ -268,6 +268,16 @@ class PlanIssue:
     # structural warning (reorder, ambiguous de/en state, shared-cell auto-heal),
     # which must keep holding the whole watermark.
     tag_hold: TagHold | None = None
+    # Issue #364: machine-readable localization of the id-less-localized both-decks
+    # drift error. The localized (non-j2 ``lang``) position + role of the first drifted
+    # cell on each half, so ``report --json`` can resolve the offending cells to bytes
+    # (the human ``reason`` already names them). ``None`` on every other issue, so the
+    # report enriches only the issues that carry a position.
+    source_position: int | None = None
+    target_position: int | None = None
+    source_lang: str | None = None
+    target_lang: str | None = None
+    role: str | None = None
 
 
 #: One membership-widened watermark row: (position, slide_id, role, content_hash, construct).
@@ -792,6 +802,35 @@ def _drifted_idless_cells(
     return owner, snippets
 
 
+def _first_drifted_idless_position(
+    cells: list[Cell], lang: str, baseline: list[str]
+) -> tuple[int | None, str | None]:
+    """The localized position + role of the first id-less localized cell of ``lang``
+    that drifted from ``baseline``, or ``(None, None)``.
+
+    Companion to :func:`_drifted_idless_cells` (same multiset-diff, same order) that
+    yields the **non-j2 ``lang`` index** — the position the report's excerpt resolver
+    targets under the ``localized`` scheme — and the ``localized-code`` / ``localized-
+    markdown`` role, so the both-decks error is machine-localizable, not just named in
+    prose (Issue #364). Walks :func:`_idless_localized_cells` and
+    :func:`_idless_localized_lang_positions` in lock-step (identical predicate/order).
+    """
+    remaining: Counter[str] = Counter(baseline)
+    positions = _idless_localized_lang_positions(cells, lang)
+    for idx, (cell, _group_sid) in enumerate(_idless_localized_cells(cells, lang)):
+        chash = hash_cell(cell.metadata, cell.content)
+        if remaining.get(chash, 0) > 0:
+            remaining[chash] -= 1
+            continue
+        role = (
+            LOCALIZED_CODE_ROLE
+            if _idless_localized_kind(cell) == "code"
+            else LOCALIZED_MARKDOWN_ROLE
+        )
+        return positions[idx], role
+    return None, None
+
+
 def _drift_cells_clause(de_snippets: list[str], en_snippets: list[str]) -> str:
     """A `` (DE 'x'; EN 'y')`` clause naming the drifted cells, or ``""`` if none.
 
@@ -1075,6 +1114,11 @@ def _classify_idless_localized_drift(
                 return
             de_owner, de_snips = _drifted_idless_cells(de_cells, "de", de_baseline)
             en_owner, en_snips = _drifted_idless_cells(en_cells, "en", en_baseline)
+            # Machine-readable localization (#364): the first drifted cell's localized
+            # position + role on each half, so `report --json` resolves the offending
+            # cells to bytes (DE the source side, EN the target — the prose names them).
+            de_pos, de_role = _first_drifted_idless_position(de_cells, "de", de_baseline)
+            en_pos, en_role = _first_drifted_idless_position(en_cells, "en", en_baseline)
             plan.issues.append(
                 PlanIssue(
                     severity="error",
@@ -1088,6 +1132,11 @@ def _classify_idless_localized_drift(
                     "auto-re-baselines it (or `clm slides sync baseline bless`); otherwise "
                     "resolve the divergence manually (or give the cells slide_ids so they "
                     "pair per-cell)",
+                    source_position=de_pos,
+                    target_position=en_pos,
+                    source_lang="de" if de_pos is not None else None,
+                    target_lang="en" if en_pos is not None else None,
+                    role=de_role or en_role,
                 )
             )
         return
@@ -4509,13 +4558,15 @@ def render_explain(
     # Issue #364 item 4: the anchor diff below is computed against the *watermark*
     # baseline. When that baseline is stale (both halves edited + committed without an
     # intervening sync) the diff can look clean yet the plan still carries an error —
-    # the classifier compares against the same stale baseline. Say so up front, and
-    # point at the git-HEAD diff, so a clean-looking diff that errors is not a mystery.
+    # the classifier compares against the same stale baseline. Say so up front; the
+    # git-HEAD baseline is shown side by side at the foot of the report so a
+    # clean-looking diff that errors is not a mystery.
     if plan.has_errors and plan.baseline_source == "watermark":
         lines.append(
             "  note: errors below are against the recorded watermark, which may be stale; "
-            "compare against committed state with `--baseline HEAD` "
-            "(or `--rebaseline` if the halves are already consistent)."
+            "the git-HEAD baseline is shown for comparison below. If the halves are "
+            "consistent against HEAD, `clm slides sync apply` auto-re-baselines it "
+            "(or `clm slides sync baseline bless`)."
         )
     has_baseline = watermark_cache is not None and watermark_cache.has_pair(
         str(de_path), str(en_path)
@@ -4559,4 +4610,41 @@ def render_explain(
 
     lines.append("plan:")
     lines.append(render_plan(plan))
+    lines.extend(_githead_comparison_lines(de_path, en_path, plan))
     return "\n".join(lines)
+
+
+def _githead_comparison_lines(de_path: Path, en_path: Path, plan: SyncPlan) -> list[str]:
+    """A side-by-side git-HEAD plan when the watermark baseline disagrees with it (#364).
+
+    Only when the report above is against the **watermark** baseline: re-classify the
+    pair against git HEAD (no watermark) and, if there is a real git baseline and the
+    two plans disagree, append the git-HEAD plan. This makes a *stale* watermark
+    visible — a plan that errors/conflicts against the recorded watermark while git
+    HEAD shows the halves consistent — instead of leaving a clean-looking anchor diff
+    that nonetheless errors. ``provider_available=False`` is sound here: the divergence
+    that matters (HEAD clean vs watermark not) has no proposals, so the model-gated
+    cold-pair handling cannot change it.
+    """
+    if plan.baseline_source != "watermark":
+        return []
+    githead = build_sync_plan(de_path, en_path, watermark_cache=None, provider_available=False)
+    if githead.baseline_source != "git-head":
+        return []  # no committed baseline to compare against (not in git / un-committed)
+    same = (plan.is_noop, plan.has_errors, len(plan.proposals), len(plan.issues)) == (
+        githead.is_noop,
+        githead.has_errors,
+        len(githead.proposals),
+        len(githead.issues),
+    )
+    if same:
+        return []  # the two baselines agree — nothing to disambiguate
+    lines = ["", "— git-HEAD baseline (for comparison) —"]
+    if githead.is_noop and not plan.is_noop:
+        lines.append(
+            "  the halves are CONSISTENT against git HEAD but NOT against the recorded "
+            "watermark above → the watermark is stale. `clm slides sync apply` "
+            "auto-re-baselines it (or `clm slides sync baseline bless`)."
+        )
+    lines.append(render_plan(githead))
+    return lines

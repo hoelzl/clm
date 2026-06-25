@@ -1224,7 +1224,9 @@ def test_explain_without_watermark_reads_everything_as_new(tmp_path: Path):
 def test_explain_warns_when_watermark_baseline_errors(tmp_path: Path):
     # Issue #364 item 4: an error against a (possibly stale) watermark baseline can show
     # a clean-looking anchor diff yet still error. --explain must say so up front and
-    # point at the git-HEAD / --rebaseline comparison, so the mismatch is not a mystery.
+    # steer to the live verbs (`apply` auto-heals / `baseline bless`), so the mismatch
+    # is not a mystery. (The git-HEAD side-by-side appears only inside a git repo; this
+    # tmp dir is not one, so just the up-front note is asserted here.)
     # Use an UNPAIRABLE structure (DE has an extra id-less cell EN lacks) so the drift
     # keeps the deck-wide error path rather than degrading to a conflict (Issue #365).
     de = _slide("de", "a", "# ## A") + _code_localized_idless("de", "for q in test_queries:\n    p")
@@ -1254,7 +1256,7 @@ def test_explain_warns_when_watermark_baseline_errors(tmp_path: Path):
 
     assert plan.has_errors
     assert "may be stale" in text
-    assert "--rebaseline" in text
+    assert "baseline bless" in text  # steers to the live verb, not the retired --rebaseline
 
 
 # ---------------------------------------------------------------------------

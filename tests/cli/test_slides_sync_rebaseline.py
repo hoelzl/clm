@@ -275,3 +275,93 @@ class TestAutoHeal:
         )
         assert "re-baselined a stale watermark" not in res.stderr
         assert "watermark is stale" in res.stderr
+
+
+def _stale_consistent_batch(tmp_path: Path, stems: tuple[str, ...]):
+    """A git repo under tmp_path with several committed, mutually-consistent pairs,
+    each carrying a *stale* watermark. Returns the cache dir."""
+    for stem in stems:
+        (tmp_path / f"{stem}.de.py").write_text(_deck("de", "neu"), encoding="utf-8")
+        (tmp_path / f"{stem}.en.py").write_text(_deck("en", "new"), encoding="utf-8")
+
+    def _git(*args: str) -> None:
+        subprocess.run(
+            ["git", *args], cwd=str(tmp_path), check=True, capture_output=True, text=True
+        )
+
+    _git("init", "-q")
+    _git("config", "user.email", "t@example.com")
+    _git("config", "user.name", "Test")
+    _git("add", "-A")
+    _git("-c", "commit.gpgsign=false", "commit", "-q", "-m", "baseline")
+    cache = tmp_path / "cache"
+    for stem in stems:
+        _seed_watermark(
+            cache,
+            tmp_path / f"{stem}.de.py",
+            tmp_path / f"{stem}.en.py",
+            de_text=_deck("de", "alt"),
+            en_text=_deck("en", "old"),
+        )
+    return cache
+
+
+class TestBatchAutoHeal:
+    """#364 follow-up: the directory (batch) sweeps auto-heal stale-but-consistent
+    watermarks per pair, like the single-pair path."""
+
+    def test_apply_batch_heals_all_pairs(self, cli_runner, tmp_path):
+        cache = _stale_consistent_batch(tmp_path, ("slides_a", "slides_b"))
+        res = cli_runner.invoke(sync_apply_cmd, ["--yes", "--cache-dir", str(cache), str(tmp_path)])
+        assert res.exit_code == 0, res.output + res.stderr
+        # Both stale watermarks were re-baselined; the rollup reports the count.
+        assert "auto-re-baselined" in res.output
+
+    def test_apply_batch_json_marks_healed_pairs(self, cli_runner, tmp_path):
+        cache = _stale_consistent_batch(tmp_path, ("slides_a", "slides_b"))
+        res = cli_runner.invoke(
+            sync_apply_cmd, ["--yes", "--json", "--cache-dir", str(cache), str(tmp_path)]
+        )
+        payload = json.loads(res.output[res.output.find("{") :])
+        assert payload["exit_code"] == 0
+        assert all(p.get("auto_healed") for p in payload["pairs"])
+
+    def test_apply_batch_no_auto_heal_surfaces_conflicts(self, cli_runner, tmp_path):
+        cache = _stale_consistent_batch(tmp_path, ("slides_a",))
+        res = cli_runner.invoke(
+            sync_apply_cmd,
+            ["--yes", "--no-auto-heal", "--cache-dir", str(cache), str(tmp_path)],
+        )
+        assert "auto-re-baselined" not in res.output
+        assert res.exit_code != 0  # the stale conflict surfaces
+
+    def test_autopilot_batch_heals(self, cli_runner, tmp_path):
+        cache = _stale_consistent_batch(tmp_path, ("slides_a", "slides_b"))
+        res = cli_runner.invoke(
+            slides_sync_cmd, ["--yes", "--cache-dir", str(cache), str(tmp_path)]
+        )
+        assert "auto-re-baselined" in res.output
+
+
+class TestExplainSideBySide:
+    """#364 follow-up: --explain shows the git-HEAD baseline next to the (stale)
+    watermark baseline when they disagree."""
+
+    def test_explain_shows_githead_comparison_when_stale(self, cli_runner, tmp_path):
+        de_path, _en, cache = _stale_consistent(tmp_path)
+        res = cli_runner.invoke(
+            slides_sync_cmd, ["--explain", "--cache-dir", str(cache), str(de_path)]
+        )
+        out = res.output + res.stderr
+        assert "git-HEAD baseline (for comparison)" in out
+        assert "CONSISTENT against git HEAD" in out
+
+    def test_explain_no_comparison_when_watermark_fresh(self, cli_runner, tmp_path):
+        # Watermark matches committed content → both baselines agree → no comparison.
+        de_path, en_path = _commit_pair(tmp_path, _deck("de", "x"), _deck("en", "y"))
+        cache = tmp_path / "cache"
+        _seed_watermark(cache, de_path, en_path, de_text=_deck("de", "x"), en_text=_deck("en", "y"))
+        res = cli_runner.invoke(
+            slides_sync_cmd, ["--explain", "--cache-dir", str(cache), str(de_path)]
+        )
+        assert "git-HEAD baseline (for comparison)" not in (res.output + res.stderr)

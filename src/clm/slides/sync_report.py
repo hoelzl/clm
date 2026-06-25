@@ -205,6 +205,14 @@ def _item_from_issue(issue: PlanIssue) -> ReconciliationItem:
         slide_id=issue.slide_id,
         reason=issue.reason,
         severity=issue.severity,
+        # Issue #364: an id-less-localized drift error carries the localized positions
+        # + role of the offending cells, so `_enrich` can resolve them to bytes. None
+        # on every other issue (no position) — those stay text-only.
+        role=issue.role,
+        source_position=issue.source_position,
+        target_position=issue.target_position,
+        source_lang=issue.source_lang,
+        target_lang=issue.target_lang,
     )
 
 
@@ -337,6 +345,25 @@ def _keyed_item_languages(item: ReconciliationItem) -> tuple[str | None, str | N
 
 def _enrich(item: ReconciliationItem, index: _SourceIndex) -> None:
     """Resolve an item's positions to concrete cell bytes (mutates ``item`` in place)."""
+    # An id-less-localized drift *issue* (#364) carries the localized (non-j2) positions
+    # of the offending cells — its ``slide_id`` is the owning slide *group*, not a cell
+    # key — so resolve it positionally under the localized scheme. Must run BEFORE the
+    # keyed branch, which the owner ``slide_id`` + localized ``role`` would otherwise
+    # claim (and fail, since ``role_of`` never returns a ``localized-*`` role).
+    if item.kind == "issue" and (
+        item.source_position is not None or item.target_position is not None
+    ):
+        if item.source_position is not None:
+            item.source_lang = item.source_lang or "de"
+            item.source_excerpt, item.source_line = index.resolve(
+                item.source_lang, "localized", item.source_position
+            )
+        if item.target_position is not None:
+            item.target_lang = item.target_lang or "en"
+            item.target_excerpt, item.target_line = index.resolve(
+                item.target_lang, "localized", item.target_position
+            )
+        return
     # A *keyed* item (carries a ``slide_id``) is resolved by its ``(slide_id, role)``
     # key, not by position. This is both the natural address for a cell identified by
     # its id and robust against the positional-scheme ambiguity: a localized id'd cell

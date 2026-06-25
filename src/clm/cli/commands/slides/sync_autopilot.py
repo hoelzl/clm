@@ -649,6 +649,7 @@ def slides_sync_cmd(
             cache_dir=cache_dir,
             provider_available=provider_available,
             ledger=ledger,
+            auto_heal=auto_heal,
             make_judge=lambda: _resolve_judge(provider, llm_model, ollama_url, llm_timeout),
             make_translator=lambda: OpenRouterSlideTranslator(
                 model=translation_model,

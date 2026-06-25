@@ -259,6 +259,39 @@ class TestIdlessDriftErrorIsLocalized:
         assert "baseline bless" in reason
         assert "sync apply" in reason
 
+    @pytest.mark.parametrize("baseline", ["git-head", "watermark"])
+    def test_error_carries_structured_positions(self, tmp_path: Path, baseline: str):
+        # #364 follow-up: the error is machine-localizable — it carries the localized
+        # positions + role of the first drifted cell on each half, not just prose.
+        plan, _result, _de_after, _en_after = _sync(tmp_path, baseline, DE0_U, EN0_U, DE1_U, EN1_U)
+        located = [
+            e
+            for e in _error_issues(plan)
+            if e.source_position is not None or e.target_position is not None
+        ]
+        assert located, "the id-less drift error should carry structured positions"
+        err = located[0]
+        assert err.source_position is not None  # DE side drifted
+        assert err.target_position is not None  # EN side drifted
+        assert err.source_lang == "de" and err.target_lang == "en"
+        assert err.role in ("localized-code", "localized-markdown")
+
+    def test_report_enriches_idless_error_with_cell_bytes(self, tmp_path: Path):
+        # The report (with excerpts) resolves those positions to the offending cells'
+        # bytes, so an agent reads them straight from `report --json`.
+        from clm.slides.sync_report import build_report
+
+        plan, _result, _de_after, _en_after = _sync(
+            tmp_path, "watermark", DE0_U, EN0_U, DE1_U, EN1_U
+        )
+        report = build_report(plan, with_excerpts=True)
+        issues = [i for i in report.ambiguity if i.kind == "issue" and i.source_excerpt]
+        assert issues, "the id-less error item should be enriched with cell bytes"
+        item = issues[0]
+        assert "test_queries" in item.source_excerpt  # the drifted DE cell
+        assert item.target_excerpt is not None
+        assert "comparison_queries" in item.target_excerpt  # the drifted EN cell
+
 
 # ---------------------------------------------------------------------------
 # #365 increment 2 — resolve a side: a per-cell *one-sided* winner inside a
