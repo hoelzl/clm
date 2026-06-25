@@ -82,6 +82,46 @@ class TestDescribeCacheDir:
         assert resolved.is_dir()  # wrapper ensures existence
 
 
+class TestSubdirWalkUp:
+    """Issue #477: from a subdir, describe_cache_dir must discover the project
+    root (walk up) rather than treating cwd as root.
+
+    A real git repo is used so the worktree-anchoring git lookup is deterministic
+    (a main worktree → no re-anchor), independent of any ambient repo the temp
+    dir might sit under.
+    """
+
+    def test_relative_cache_dir_found_from_subdir(self, tmp_path: Path, monkeypatch, git_available):
+        monkeypatch.delenv("CLM_CACHE_DIR", raising=False)
+        repo = tmp_path / "repo"
+        _init_repo(repo, cache_dir_value="../shared-cache")
+        sub = repo / "slides" / "module_410" / "topic_031"
+        sub.mkdir(parents=True)
+        monkeypatch.chdir(sub)
+        # repo_root=None → cwd-based; the walk-up finds repo/pyproject.toml.
+        res = describe_cache_dir()
+        assert res.source == "pyproject"
+        assert res.configured_value == "../shared-cache"
+        # Anchored to the discovered root (repo), NOT the subdir → repo's sibling.
+        assert res.path.resolve() == (tmp_path / "shared-cache").resolve()
+
+    def test_default_anchors_to_root_from_subdir(self, tmp_path: Path, monkeypatch, git_available):
+        # No [tool.clm] cache_dir → the default <root>/.clm-cache must anchor to
+        # the discovered root, never creating a stray <subdir>/.clm-cache (#477).
+        monkeypatch.delenv("CLM_CACHE_DIR", raising=False)
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _git("init", cwd=repo)
+        (repo / "pyproject.toml").write_text("[tool.other]\n", encoding="utf-8")
+        sub = repo / "slides" / "topic_031"
+        sub.mkdir(parents=True)
+        monkeypatch.chdir(sub)
+        res = describe_cache_dir()
+        assert res.source == "default"
+        assert res.path.resolve() == (repo / ".clm-cache").resolve()
+        assert res.path.resolve() != (sub / ".clm-cache").resolve()
+
+
 class TestWorktreeAnchoring:
     def test_relative_cache_dir_anchors_to_main_root_from_worktree(
         self, tmp_path: Path, monkeypatch, git_available

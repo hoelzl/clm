@@ -118,15 +118,36 @@ def cli(ctx, cache_db_path, jobs_db_path, telemetry_db_path):
     Build and manage educational course materials with support for
     Jupyter notebooks, PlantUML diagrams, and Draw.io diagrams.
     """
+    from click.core import ParameterSource
+
     from clm.infrastructure.database.execution_telemetry import default_telemetry_db_path
+    from clm.infrastructure.utils.path_utils import find_project_root
+
+    def _anchor_default(name: str, value: str) -> Path:
+        """Anchor a DB-path *default* to the discovered project root (issue #477).
+
+        A build/status run from a topic subdirectory must open the SAME database
+        as one run from the repo root — otherwise the relative default
+        ``clm_cache.db`` / ``clm_jobs.db`` resolves under the subdir and silently
+        diverges. Only the untouched default is re-anchored; an explicitly
+        supplied path (absolute or relative) is respected verbatim so a caller who
+        passes ``--cache-db-path foo.db`` still gets a cwd-relative file.
+        """
+        path = Path(value)
+        if ctx.get_parameter_source(name) == ParameterSource.DEFAULT and not path.is_absolute():
+            return find_project_root() / path
+        return path
+
+    cache_db = _anchor_default("cache_db_path", cache_db_path)
+    jobs_db = _anchor_default("jobs_db_path", jobs_db_path)
 
     ctx.ensure_object(dict)
-    ctx.obj["CACHE_DB_PATH"] = Path(cache_db_path)
-    ctx.obj["JOBS_DB_PATH"] = Path(jobs_db_path)
+    ctx.obj["CACHE_DB_PATH"] = cache_db
+    ctx.obj["JOBS_DB_PATH"] = jobs_db
     ctx.obj["TELEMETRY_DB_PATH"] = (
         Path(telemetry_db_path)
         if telemetry_db_path is not None
-        else default_telemetry_db_path(Path(cache_db_path))
+        else default_telemetry_db_path(cache_db)
     )
 
 

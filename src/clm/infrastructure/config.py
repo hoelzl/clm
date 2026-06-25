@@ -934,12 +934,16 @@ def find_config_files() -> dict[str, Path | None]:
     if user_config.exists():
         config_files["user"] = user_config
 
-    # Project config (in current working directory or .clm subdirectory)
-    # Check .clm/config.toml first, then clm.toml
-    cwd = Path.cwd()
+    # Project config: discovered by walking up from cwd to the project root
+    # (issue #477), so a command run from a topic subdirectory finds the same
+    # project config as one run from the repo root. Check .clm/config.toml first,
+    # then clm.toml.
+    from clm.infrastructure.utils.path_utils import find_project_root
+
+    root = find_project_root()
     project_configs = [
-        cwd / ".clm" / "config.toml",
-        cwd / "clm.toml",
+        root / ".clm" / "config.toml",
+        root / "clm.toml",
     ]
 
     for project_config in project_configs:
@@ -966,8 +970,12 @@ def get_config_file_locations() -> dict[str, Path]:
     user_config_dir = Path(platformdirs.user_config_dir("clm", appauthor=False))
     locations["user"] = user_config_dir / "config.toml"
 
-    # Project config location (in current working directory)
-    locations["project"] = Path.cwd() / ".clm" / "config.toml"
+    # Project config location: anchored to the discovered project root (issue
+    # #477), so `config locate` / `config init --location=project` agree no matter
+    # which subdirectory the command runs from.
+    from clm.infrastructure.utils.path_utils import find_project_root
+
+    locations["project"] = find_project_root() / ".clm" / "config.toml"
 
     return locations
 

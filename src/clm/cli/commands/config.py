@@ -3,6 +3,8 @@
 This module provides commands for managing CLM configuration files.
 """
 
+from pathlib import Path
+
 import click
 
 
@@ -120,12 +122,23 @@ def config_locate():
     and which files currently exist.
     """
     from clm.infrastructure.config import find_config_files, get_config_file_locations
+    from clm.infrastructure.utils.path_utils import find_project_root
 
     locations = get_config_file_locations()
     existing = find_config_files()
 
     click.echo("Configuration File Locations:")
     click.echo("=" * 60)
+
+    # The project root every cwd-independent lookup below is anchored to. Showing
+    # it makes clear WHY a given config / cache file was chosen — and surfaces the
+    # case (issue #477) where a command run from a subdirectory resolves to a
+    # project root above it rather than the cwd.
+    root = find_project_root()
+    click.echo("\nProject root (discovered by walking up for pyproject.toml/.clm/.git):")
+    click.echo(f"  Path: {root}")
+    if root != Path.cwd().resolve():
+        click.echo(f"  Note: differs from the current directory ({Path.cwd()})")
 
     click.echo("\nSystem config (lowest priority):")
     click.echo(f"  Path: {locations['system']}")

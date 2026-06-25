@@ -206,6 +206,49 @@ IGNORE_PATH_REGEX = re.compile(
 )
 
 
+#: Markers that identify a CLM/Python project root, in per-directory precedence
+#: order (the FIRST that matches at the nearest ancestor wins). ``pyproject.toml``
+#: is checked first because it is the file that actually carries ``[tool.clm]
+#: cache_dir`` — so a nested project's own ``pyproject.toml`` correctly wins over
+#: an outer one. A bare ``.clm/`` directory is **deliberately NOT a marker**: a
+#: *topic* directory has its own ``.clm/`` (voiceover scratch + the committed sync
+#: ledger — see :data:`SKIP_DIRS_FOR_COURSE`), so treating the bare dir as a root
+#: marker would stop the ascent at a topic and defeat the walk-up. A topic-local
+#: ``.clm/`` has no ``config.toml``, so the ``.clm/config.toml`` marker is safe.
+_PROJECT_ROOT_FILE_MARKERS = ("pyproject.toml", ".clm/config.toml", "clm.toml")
+
+
+def find_project_root(start: Path | None = None) -> Path:
+    """Walk up from ``start`` (default: cwd) to the nearest project root.
+
+    Mirrors how ``git`` / ``uv`` / ``ruff`` resolve a project: ascend the
+    directory tree until a root marker is found, so a CLM command behaves
+    identically no matter which subdirectory it is invoked from. Markers, in
+    per-directory precedence: ``pyproject.toml``, ``.clm/config.toml``,
+    ``clm.toml``, then a ``.git`` entry. Returns the **resolved** marked
+    directory, or — when no marker exists anywhere up to the filesystem root —
+    the resolved ``start`` (preserving today's cwd-as-root behavior for
+    directories that are genuinely outside any project).
+
+    ``.git`` is matched with :meth:`Path.exists` (not ``is_dir``) because a
+    linked git **worktree** records its ``.git`` as a *file*, not a directory;
+    using ``is_dir`` would skip worktrees. This finds the project root only —
+    distinct from :func:`clm.infrastructure.llm.cache._main_worktree_root`,
+    which answers the different question "what root is *shared* across linked
+    worktrees" (git-common-dir based) and re-anchors a relative ``cache_dir``.
+    """
+    base = (start or Path.cwd()).resolve()
+    for directory in (base, *base.parents):
+        for marker in _PROJECT_ROOT_FILE_MARKERS:
+            if (directory / marker).is_file():
+                return directory
+        # ``.git`` is a directory in a normal checkout, a FILE in a linked
+        # worktree — ``.exists()`` covers both.
+        if (directory / ".git").exists():
+            return directory
+    return base
+
+
 def is_image_file(input_path: Path) -> bool:
     is_image_data = IMG_DATA_FOLDERS.intersection(input_path.absolute().parts) != set()
     return input_path.suffix in IMG_FILE_EXTENSIONS and not is_image_data
