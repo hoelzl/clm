@@ -25,7 +25,6 @@ from unittest.mock import MagicMock
 import pytest
 from nbformat.v4 import new_code_cell, new_notebook
 
-from clm.infrastructure.database import worker_heartbeats as _wh
 from clm.infrastructure.database.schema import init_database
 from clm.infrastructure.database.worker_heartbeats import WorkerHeartbeatStore
 from clm.infrastructure.messaging.notebook_classes import NotebookPayload
@@ -35,17 +34,10 @@ from clm.workers.notebook.notebook_processor import (
 )
 from clm.workers.notebook.output_spec import create_output_spec
 
-
-@pytest.fixture(autouse=True)
-def _relax_slow_write_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The production 50ms self-disable threshold legitimately trips under
-    # xdist load (lock contention, WAL checkpoint, antivirus scan) and also
-    # during the slow integration test below — a single SQLite write that
-    # spikes past 50ms silently turns subsequent writes into no-ops and the
-    # `expected at least one heartbeat row` assertion then fails with
-    # `None is not None`. Lift the threshold for these tests; sibling
-    # ``test_worker_heartbeats.py`` does the same.
-    monkeypatch.setattr(_wh, "SLOW_WRITE_THRESHOLD_SECONDS", 30.0)
+# The heartbeat slow-write self-disable threshold (production default 50ms,
+# which trips under xdist load and during the slow integration test below) is
+# relaxed session-wide via the ``CLM_HEARTBEAT_SLOW_WRITE_THRESHOLD_SECONDS``
+# env override set in ``tests/conftest.py``. No per-file fixture is needed.
 
 
 # -- shared helpers ----------------------------------------------------------

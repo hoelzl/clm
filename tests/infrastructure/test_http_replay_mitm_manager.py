@@ -20,6 +20,16 @@ import pytest
 from clm.infrastructure.http_replay_mitm import proxy_manager
 from clm.infrastructure.http_replay_mitm.proxy_manager import MitmproxyManager
 
+# Every test here does ``subprocess.Popen([sys.executable, "-c", ...])`` — a
+# full CPython cold-start. Without a marker, ``--dist loadgroup`` scatters these
+# across all xdist workers so 16+ interpreters spawn simultaneously, stealing
+# CPU from timing-sensitive neighbours (worker-registration polls, recordings
+# threads) and amplifying contention flakes. ``serial`` pins the whole module to
+# the single shared serial xdist_group so the spawns run one-at-a-time on one
+# worker while the rest of the suite stays parallel (same mechanism as the #163
+# lifecycle_mock fix). See docs/developer-guide/testing.md ("serial" lever).
+pytestmark = pytest.mark.serial
+
 
 def _manager() -> MitmproxyManager:
     # cassette_path is irrelevant for the reader-thread mechanics.

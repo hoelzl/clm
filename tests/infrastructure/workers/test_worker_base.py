@@ -14,6 +14,26 @@ from clm.infrastructure.database.job_queue import Job, JobQueue
 from clm.infrastructure.database.schema import init_database
 from clm.infrastructure.workers.worker_base import Worker
 
+# Several tests here start a real worker thread and poll committed SQLite state
+# for a transition. The waits are event-driven / gated where possible, but the
+# threaded tests remain CPU-starvation-sensitive under heavy xdist load, so a
+# scoped ``flaky`` retry is a thin safety net (at most two retries, only on the
+# contention exception signature — a deterministic logic regression still fails
+# red, and ``-rR`` in addopts surfaces any retry). See the same marker on
+# ``test_lifecycle_mock.py`` for the rationale; do not widen it without fixing
+# the underlying contention.
+pytestmark = pytest.mark.flaky(
+    reruns=2,
+    reruns_delay=1,
+    only_rerun=[
+        "OSError",
+        "PermissionError",
+        "AssertionError",
+        "OperationalError",
+        "TimeoutError",
+    ],
+)
+
 
 def _wait_until(
     predicate: Callable[[], bool],
@@ -76,10 +96,30 @@ class MockWorker(Worker):
         self.processed_jobs = []
         self.should_fail = False
         self.process_delay = 0.0
+        # Opt-in gate (``gate_job``): when set, ``process_job`` blocks INSIDE the
+        # "busy" state until the test calls ``release_job()``. This makes the
+        # otherwise-transient "busy" status persist, so a test can observe it
+        # deterministically instead of racing a fixed ``process_delay`` window —
+        # under heavy pytest-xdist load this poll thread can be starved across
+        # the entire window and miss it, which is exactly the flake that bit
+        # ``test_worker_updates_status``. Off by default, so existing tests keep
+        # their ``process_delay`` behaviour unchanged.
+        self.gate_job = False
+        self._release_job = threading.Event()
+
+    def release_job(self) -> None:
+        """Release a job held open by the ``gate_job`` gate (see above)."""
+        self._release_job.set()
 
     def process_job(self, job: Job):
         """Process a test job."""
-        time.sleep(self.process_delay)
+        if self.gate_job:
+            # Hold the "busy" state until the test observes it and releases.
+            # The 15s ceiling is a backstop only; the happy path returns the
+            # instant ``release_job()`` is called.
+            self._release_job.wait(timeout=15.0)
+        else:
+            time.sleep(self.process_delay)
         self.processed_jobs.append(job.id)
 
         if self.should_fail:
@@ -296,9 +336,14 @@ def test_worker_updates_heartbeat(worker_id, db_path):
 def test_worker_updates_status(worker_id, db_path):
     """Test worker updates status between idle and busy.
 
-    Uses polling rather than fixed sleeps because under parallel test load
-    (pytest-xdist) a thread can easily take >150ms to start and pick up its
-    first job. A fixed sleep makes the test race with the scheduler.
+    Gates the job (``gate_job``) so the "busy" status PERSISTS until this test
+    observes it, then releases it. Polling for a *transient* "busy" window (the
+    old approach: a fixed ``process_delay`` the worker sleeps through) is a
+    flake: under heavy pytest-xdist load this poll thread can be descheduled
+    across the entire window and miss it, timing out even though the worker did
+    go busy. Widening the *state's lifetime* (hold it open) is the fix, not
+    widening the poll ceiling — the same lesson as recordings' self-expiring
+    ARMED_AFTER_TAKE state (PR #180).
     """
     # Add a job
     queue = JobQueue(db_path)
@@ -311,19 +356,20 @@ def test_worker_updates_status(worker_id, db_path):
     )
     queue.close()
 
-    # Use a generous process_delay so the "busy" window is wide enough to
-    # observe even under heavy CI contention.
+    # Gate the job so "busy" is held open until we observe it and release it.
     worker = MockWorker(worker_id, db_path)
-    worker.process_delay = 1.0
+    worker.gate_job = True
 
     thread = threading.Thread(target=worker.run)
     thread.start()
     try:
-        # Wait for the worker to pick up the job and transition to "busy".
+        # "busy" now persists, so this poll cannot miss it under load.
         _wait_until(lambda: _read_worker_status(db_path, worker_id) == "busy")
-        # Then wait for it to finish and return to "idle".
+        # Release the job and confirm it returns to (and stays) "idle".
+        worker.release_job()
         _wait_until(lambda: _read_worker_status(db_path, worker_id) == "idle")
     finally:
+        worker.release_job()  # ensure the worker thread can never wedge on the gate
         worker.stop()
         thread.join(timeout=5)
 

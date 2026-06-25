@@ -18,6 +18,22 @@ import pytest
 from clm.cli.file_event_handler import FileEventHandler
 
 
+async def _drain_debounce(handler: FileEventHandler, timeout: float = 5.0) -> None:
+    """Await all currently-pending debounce tasks to completion.
+
+    Event-driven replacement for a fixed ``await asyncio.sleep(margin)``: returns
+    the instant the scheduled debounce work finishes instead of racing a
+    hard-coded wall-clock margin that a CPU-starved xdist worker can overshoot.
+    An empty ``_pending_tasks`` dict (an ignored/filtered event scheduled
+    nothing) returns immediately, making the negative assertions deterministic.
+    See ``tests/cli/test_watch_mode.py`` for the fuller rationale.
+    """
+    tasks = list(handler._pending_tasks.values())
+    if not tasks:
+        return
+    await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=timeout)
+
+
 class MockEvent:
     """Mock watchdog event."""
 
@@ -94,7 +110,7 @@ class TestCreationEventFiltering:
         new_file.write_text("# new\n", encoding="utf-8")
 
         handler.on_created(MockEvent(str(new_file)))
-        await asyncio.sleep(0.1)
+        await _drain_debounce(handler)
 
         assert mock_course.add_file.call_count == 1
 
@@ -117,7 +133,7 @@ class TestCreationEventFiltering:
         ignored_file.write_text("# extra\n", encoding="utf-8")
 
         handler.on_created(MockEvent(str(ignored_file)))
-        await asyncio.sleep(0.1)
+        await _drain_debounce(handler)
 
         assert mock_course.add_file.call_count == 0
 
@@ -139,7 +155,7 @@ class TestCreationEventFiltering:
         unselected.write_text("# extra\n", encoding="utf-8")
 
         handler.on_created(MockEvent(str(unselected)))
-        await asyncio.sleep(0.1)
+        await _drain_debounce(handler)
 
         assert mock_course.add_file.call_count == 1
 
@@ -167,7 +183,7 @@ class TestCreationEventFiltering:
 
         handler.on_created(MockEvent(str(f1)))
         handler.on_created(MockEvent(str(f2)))
-        await asyncio.sleep(0.1)
+        await _drain_debounce(handler)
 
         assert mock_course.add_file.call_count == 2
 
@@ -197,7 +213,7 @@ class TestModificationEventFiltering:
 
         f1 = section_tree["section1"] / "slides_intro.py"
         handler.on_modified(MockEvent(str(f1)))
-        await asyncio.sleep(0.1)
+        await _drain_debounce(handler)
 
         assert mock_course.process_file.call_count == 1
 
@@ -222,7 +238,7 @@ class TestModificationEventFiltering:
 
         ignored = section_tree["unselected"] / "slides_ignored.py"
         handler.on_modified(MockEvent(str(ignored)))
-        await asyncio.sleep(0.1)
+        await _drain_debounce(handler)
 
         # `on_modified` still fires, but `on_file_modified` short-circuits
         # because find_course_file returns None.

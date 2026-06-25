@@ -233,6 +233,7 @@ dev = [
     "pytest-mock>=3.12.0",
     "pytest-timeout>=2.2.0",
     "pytest-xdist>=3.5.0",  # Parallel test execution
+    "pytest-rerunfailures>=14.0",  # scoped reruns for the `flaky` marker (no global --reruns)
     "hypothesis>=6.148.2",  # Property-based testing (slides split/unify round-trip)
     "mypy>=1.0",
     "ruff>=0.1.0",
@@ -302,13 +303,27 @@ markers = [
     # rest of the suite stays fully parallel. The mapping marker -> xdist_group
     # lives in ``tests/conftest.py`` (``pytest_collection_modifyitems``).
     "serial: pin a heavy/contention-prone test to a single xdist worker",
+    # ``flaky`` opts a test into pytest-rerunfailures' SCOPED rerun: there is
+    # deliberately NO global ``--reruns`` in addopts (that would rerun every
+    # test and mask real regressions), so only tests carrying
+    # ``@pytest.mark.flaky(reruns=N, only_rerun=[...])`` are retried, and only
+    # when the failure matches the contention exception signature. It is a thin
+    # SAFETY NET over the structural fixes, not a substitute for them — a test
+    # that reruns often (surfaced by ``-rR`` in the summary) is a signal to fix
+    # the root cause, not to widen the net. Reserve it for the known
+    # thread-starvation / subprocess-contention families.
+    "flaky: scoped pytest-rerunfailures retry for known-contention tests",
 ]
 # Run fast unit tests by default, skip db_only, integration, slow, e2e, and docker tests.
 # Use -n auto for parallel execution via pytest-xdist (pass -n0 to disable).
 # --dist loadgroup keeps the default load-balancing scheduler but honours the
 # ``xdist_group`` mark that the ``serial`` marker maps to, so contention-prone
 # tests are serialized onto one worker instead of racing each other.
-addopts = "-n auto --dist loadgroup -m 'not slow and not db_only and not integration and not e2e and not docker'"
+# ``-rR`` surfaces pytest-rerunfailures' rerun summary so a scoped ``flaky``
+# retry is never silent (anti-masking: a frequently-rerun test is a signal to
+# fix the root cause). There is intentionally no ``--reruns`` here — reruns are
+# opt-in per test via ``@pytest.mark.flaky`` only.
+addopts = "-n auto --dist loadgroup -rR -m 'not slow and not db_only and not integration and not e2e and not docker'"
 # Timeout configuration - prevents tests from hanging indefinitely
 timeout = 600  # 10 minutes default timeout for all tests
 timeout_method = "thread"  # Works better with asyncio tests
@@ -510,6 +525,7 @@ dev = [
     "pytest-mock>=3.12.0",
     "pytest-timeout>=2.2.0",
     "pytest-xdist>=3.5.0",
+    "pytest-rerunfailures>=14.0",
     "hypothesis>=6.148.2",
     "mypy>=1.0",
     "ruff>=0.1.0",

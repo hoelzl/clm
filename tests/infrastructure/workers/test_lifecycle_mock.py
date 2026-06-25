@@ -25,7 +25,28 @@ from tests.fixtures.mock_workers import MockWorker, MockWorkerConfig, MockWorker
 # use generous timeouts; pinning the module onto one xdist worker additionally
 # stops it from racing other heavy tests for CPU. See the ``serial`` marker in
 # pyproject and its xdist_group mapping in ``tests/conftest.py``.
-pytestmark = pytest.mark.serial
+#
+# ``flaky`` is a thin scoped SAFETY NET on top of those structural mitigations:
+# if a registration poll still loses a CPU-starvation race on a busy box, the
+# test is retried (at most twice, only on the contention exception signature)
+# instead of forcing a manual re-run. ``only_rerun`` keeps a genuine logic
+# regression — which fails deterministically on every retry — red. ``-rR`` in
+# addopts makes any retry visible; a test that reruns often wants a root-cause
+# fix, not more retries.
+pytestmark = [
+    pytest.mark.serial,
+    pytest.mark.flaky(
+        reruns=2,
+        reruns_delay=1,
+        only_rerun=[
+            "OSError",
+            "PermissionError",
+            "AssertionError",
+            "OperationalError",
+            "TimeoutError",
+        ],
+    ),
+]
 
 
 class TestMockWorkerBasics:

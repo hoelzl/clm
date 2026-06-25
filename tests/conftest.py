@@ -75,6 +75,22 @@ from xml.etree import ElementTree as ETree
 
 import pytest
 
+# Relax the heartbeat slow-write self-disable threshold for the whole test
+# session. The production default (50ms, in
+# ``clm.infrastructure.database.worker_heartbeats.SLOW_WRITE_THRESHOLD_SECONDS``)
+# legitimately trips under pytest-xdist load — a single SQLite UPSERT can spike
+# past 50ms on lock contention, a WAL checkpoint, or an antivirus scan — which
+# silently turns subsequent heartbeat writes into no-ops and fails
+# ``assert None == expected``. We set the env override HERE, before the first
+# ``clm`` import below (which may transitively import worker_heartbeats and
+# evaluate the module constant), so the relaxation lands in ONE place for
+# in-process stores AND subprocess workers (which inherit the env). This
+# replaces the per-file ``_relax_slow_write_threshold`` autouse fixtures, so a
+# new heartbeat test cannot silently re-acquire the flake. The dedicated
+# disable-path test re-patches the constant to 0.0 in its own scope, preserving
+# that coverage. ``setdefault`` lets an operator override it explicitly.
+os.environ.setdefault("CLM_HEARTBEAT_SLOW_WRITE_THRESHOLD_SECONDS", "30")
+
 from clm.core.course_spec import TopicSpec
 from clm.core.utils.text_utils import Text
 from clm.infrastructure.backends.local_ops_backend import LocalOpsBackend

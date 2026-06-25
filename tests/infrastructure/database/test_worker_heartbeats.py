@@ -21,7 +21,6 @@ from pathlib import Path
 
 import pytest
 
-from clm.infrastructure.database import worker_heartbeats as _wh
 from clm.infrastructure.database.schema import DATABASE_VERSION, init_database
 from clm.infrastructure.database.worker_heartbeats import (
     MAX_EXCERPT_LENGTH,
@@ -29,17 +28,11 @@ from clm.infrastructure.database.worker_heartbeats import (
     truncate_excerpt,
 )
 
-
-@pytest.fixture(autouse=True)
-def _relax_slow_write_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Under pytest-xdist load, a single SQLite write can legitimately spike
-    # past the production 50ms self-disable threshold (lock contention, WAL
-    # checkpoint, antivirus scan, etc.), silently turning subsequent writes
-    # into no-ops and producing AssertionError(None == "expected"). Lift the
-    # threshold for these tests; test_slow_write_disables_further_writes
-    # re-patches it back to 0.0 inside its own scope, so the disable path
-    # is still covered.
-    monkeypatch.setattr(_wh, "SLOW_WRITE_THRESHOLD_SECONDS", 30.0)
+# The heartbeat slow-write self-disable threshold is relaxed session-wide for
+# the whole test suite via the ``CLM_HEARTBEAT_SLOW_WRITE_THRESHOLD_SECONDS``
+# env override set in ``tests/conftest.py`` (the production default of 50ms
+# trips under xdist load). ``test_slow_write_disables_further_writes`` below
+# re-patches the constant to 0.0 in its own scope to cover the disable path.
 
 
 # -- helpers -----------------------------------------------------------------
@@ -433,13 +426,17 @@ def test_heartbeat_timestamps_match_sqlite_now(db_path: Path) -> None:
         conn.close()
 
     cell_elapsed, since_last_output, since_heartbeat = row
-    # The values must be non-negative (UTC-vs-local mismatch produces a large
-    # negative offset, e.g. -7200 on CEST). A small positive value is fine —
-    # we don't pin an upper bound because CI machines vary, but anything > 60
-    # for an operation we just performed would indicate something seriously
-    # wrong.
-    assert 0 <= cell_elapsed < 60, f"cell_elapsed={cell_elapsed} (UTC/local mismatch?)"
-    assert 0 <= since_last_output < 60, (
+    # The real invariant is NON-NEGATIVITY: a UTC-vs-local mismatch produces a
+    # large offset of ~timezone magnitude (e.g. -7200s on CEST), which the
+    # ``0 <=`` lower bound catches. The upper bound is only a coarse sanity cap;
+    # it must sit well above any plausible scheduler latency (under heavy
+    # pytest-xdist oversubscription this read-after-write thread can be
+    # descheduled for many seconds, so the old ``< 60`` tripped spuriously) yet
+    # well below the ~3600-7200s a timezone error would produce. 3600s satisfies
+    # both — it still flags the regression this test exists to catch without
+    # racing the scheduler. (A >1h stall would hit the 600s test timeout first.)
+    assert 0 <= cell_elapsed < 3600, f"cell_elapsed={cell_elapsed} (UTC/local mismatch?)"
+    assert 0 <= since_last_output < 3600, (
         f"since_last_output={since_last_output} (UTC/local mismatch?)"
     )
-    assert 0 <= since_heartbeat < 60, f"since_heartbeat={since_heartbeat} (UTC/local mismatch?)"
+    assert 0 <= since_heartbeat < 3600, f"since_heartbeat={since_heartbeat} (UTC/local mismatch?)"

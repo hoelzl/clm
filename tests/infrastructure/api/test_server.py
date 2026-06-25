@@ -58,10 +58,25 @@ def reset_singleton():
 
 
 def _free_port() -> int:
-    """Bind to port 0, read the assigned port, release it."""
+    """Bind to port 0, read the assigned port, release it.
+
+    NOTE: this has a time-of-check/time-of-use gap — the socket is closed before
+    the returned port is used, so another xdist worker can grab the same
+    ephemeral port in between (WinError 10048). Only the real-uvicorn
+    integration test (which actually binds) needs a genuinely-free port and
+    accepts that risk (it is ``serial``, so it does not race). The fake-uvicorn
+    lifecycle tests never open a socket (``FakeUvicornServer.run`` just sleeps),
+    so they use ``_DUMMY_PORT`` instead and avoid the race entirely.
+    """
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
+
+
+# A fixed, never-bound port for the fake-uvicorn tests. ``FakeUvicornServer``
+# does not open a socket, so the value is arbitrary and can safely be shared
+# across xdist workers without an ephemeral-port collision.
+_DUMMY_PORT = 59999
 
 
 # ---------------------------------------------------------------------------
@@ -140,7 +155,7 @@ class TestStartAndStop:
     def test_start_and_stop_cycle(self, db_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(server_module.uvicorn, "Server", FakeUvicornServer)
 
-        server = WorkerApiServer(db_path, host="127.0.0.1", port=_free_port())
+        server = WorkerApiServer(db_path, host="127.0.0.1", port=_DUMMY_PORT)
 
         assert server.start(timeout=2.0) is True
         assert server.is_running is True
@@ -156,7 +171,7 @@ class TestStartAndStop:
     def test_start_is_idempotent(self, db_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(server_module.uvicorn, "Server", FakeUvicornServer)
 
-        server = WorkerApiServer(db_path, host="127.0.0.1", port=_free_port())
+        server = WorkerApiServer(db_path, host="127.0.0.1", port=_DUMMY_PORT)
         assert server.start(timeout=2.0) is True
 
         # Second start should be a no-op and return True.
@@ -183,7 +198,7 @@ class TestStartAndStop:
         monkeypatch.setattr(server_module.uvicorn, "Server", NeverStartsServer)
 
         # Patch _run_server to *not* set the started event.
-        server = WorkerApiServer(db_path, host="127.0.0.1", port=_free_port())
+        server = WorkerApiServer(db_path, host="127.0.0.1", port=_DUMMY_PORT)
 
         original_run = server._run_server
 
@@ -216,7 +231,7 @@ class TestIsRunning:
         as soon as ``_shutdown_requested`` is set."""
         monkeypatch.setattr(server_module.uvicorn, "Server", FakeUvicornServer)
 
-        server = WorkerApiServer(db_path, host="127.0.0.1", port=_free_port())
+        server = WorkerApiServer(db_path, host="127.0.0.1", port=_DUMMY_PORT)
         server.start(timeout=2.0)
         try:
             assert server.is_running is True
@@ -234,7 +249,7 @@ class TestStopWarnsOnStubbornThread:
     ) -> None:
         monkeypatch.setattr(server_module.uvicorn, "Server", FakeUvicornServer)
 
-        server = WorkerApiServer(db_path, host="127.0.0.1", port=_free_port())
+        server = WorkerApiServer(db_path, host="127.0.0.1", port=_DUMMY_PORT)
         server.start(timeout=2.0)
 
         # Swap the thread with one that ignores the shutdown signal.

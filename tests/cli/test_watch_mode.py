@@ -9,6 +9,26 @@ import pytest
 from clm.cli.file_event_handler import FileEventHandler
 
 
+async def _drain_debounce(handler: FileEventHandler, timeout: float = 5.0) -> None:
+    """Await all currently-pending debounce tasks to completion.
+
+    Event-driven replacement for a fixed ``await asyncio.sleep(margin)``: it
+    returns the instant the scheduled debounce work finishes (so the happy path
+    is faster) instead of racing a hard-coded ~50ms wall-clock margin that a
+    CPU-starved xdist worker can overshoot, running the assertion before the
+    debounce continuation has run its mock. ``handler._pending_tasks`` holds the
+    task scheduled by each ``on_*`` callback (it removes itself from the dict
+    then runs the handler); a coalesced/cancelled event leaves exactly the
+    surviving task. ``return_exceptions=True`` tolerates a task cancelled by a
+    newer event; an empty dict (nothing scheduled — e.g. an ignored event)
+    returns immediately, which also makes the negative assertions deterministic.
+    """
+    tasks = list(handler._pending_tasks.values())
+    if not tasks:
+        return
+    await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=timeout)
+
+
 class MockEvent:
     """Mock watchdog event."""
 
@@ -67,8 +87,8 @@ class TestDebouncing:
         # Trigger on_modified
         handler.on_modified(MockEvent(str(test_file)))
 
-        # Wait for debounce
-        await asyncio.sleep(0.15)
+        # Wait for the debounced task to finish.
+        await _drain_debounce(handler)
 
         # Should process the file once
         assert mock_course.process_file.call_count == 1
@@ -95,8 +115,8 @@ class TestDebouncing:
             handler.on_modified(MockEvent(str(test_file)))
             await asyncio.sleep(0.02)  # 20ms between events
 
-        # Wait for debounce to complete
-        await asyncio.sleep(0.15)
+        # Wait for the surviving debounced task to finish.
+        await _drain_debounce(handler)
 
         # Should only process once due to debouncing
         assert mock_course.process_file.call_count == 1
@@ -120,11 +140,11 @@ class TestDebouncing:
 
         # First event
         handler.on_modified(MockEvent(str(test_file)))
-        await asyncio.sleep(0.1)  # Wait for first debounce to complete
+        await _drain_debounce(handler)  # Wait for first debounce to complete
 
         # Second event after debounce delay
         handler.on_modified(MockEvent(str(test_file)))
-        await asyncio.sleep(0.1)  # Wait for second debounce to complete
+        await _drain_debounce(handler)  # Wait for second debounce to complete
 
         # Should process twice
         assert mock_course.process_file.call_count == 2
@@ -154,8 +174,8 @@ class TestDebouncing:
         handler.on_modified(MockEvent(str(file1)))
         handler.on_modified(MockEvent(str(file2)))
 
-        # Wait for debounce
-        await asyncio.sleep(0.15)
+        # Wait for both debounced tasks to finish.
+        await _drain_debounce(handler)
 
         # Both files should be processed
         assert mock_course.process_file.call_count == 2
@@ -190,8 +210,8 @@ class TestDebouncing:
         # Still should have one pending task (the new one)
         assert len(handler._pending_tasks) == 1
 
-        # Wait for debounce
-        await asyncio.sleep(0.25)
+        # Wait for the surviving (post-cancellation) debounced task to finish.
+        await _drain_debounce(handler)
 
         # Should only process once
         assert mock_course.process_file.call_count == 1
@@ -254,7 +274,7 @@ class TestFileEventHandlerEvents:
             handler.on_created(MockEvent(str(test_file)))
             await asyncio.sleep(0.02)
 
-        await asyncio.sleep(0.15)
+        await _drain_debounce(handler)
 
         # Should only add file once
         assert mock_course.add_file.call_count == 1
@@ -280,7 +300,7 @@ class TestFileEventHandlerEvents:
             handler.on_deleted(MockEvent(str(test_file)))
             await asyncio.sleep(0.02)
 
-        await asyncio.sleep(0.15)
+        await _drain_debounce(handler)
 
         # Should only try to find and delete once
         assert mock_course.find_course_file.call_count == 1
@@ -307,7 +327,7 @@ class TestIgnoredFiles:
         temp_file = tmp_path / ".~lock.test.ipynb"
 
         handler.on_modified(MockEvent(str(temp_file)))
-        await asyncio.sleep(0.15)
+        await _drain_debounce(handler)
 
         # Should not process temp files
         assert mock_course.process_file.call_count == 0
@@ -332,7 +352,7 @@ class TestIgnoredFiles:
         git_file = git_dir / "HEAD"
 
         handler.on_modified(MockEvent(str(git_file)))
-        await asyncio.sleep(0.15)
+        await _drain_debounce(handler)
 
         # Should not process .git files
         assert mock_course.process_file.call_count == 0
