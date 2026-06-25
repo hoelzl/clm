@@ -421,36 +421,31 @@ class TestSyncWatermarkCache:
         from clm.infrastructure.llm.cache import WATERMARK_HASH_VERSION
 
         path = tmp_path / "clm-llm.sqlite"
+        # Absolute paths outside any git worktree, so the key is stored verbatim:
+        # the watermark canonicalizes a worktree path to its main-checkout twin
+        # (#435), and the raw-SQL UPDATE below must match the stored key. Real
+        # callers always pass ``.resolve()``d (absolute) deck paths.
+        de, en = str(tmp_path / "a.de.py"), str(tmp_path / "a.en.py")
         cache = SyncWatermarkCache(path)
         try:
-            cache.put_deck(
-                de_path="a.de.py",
-                en_path="a.en.py",
-                lang="de",
-                cells=[(0, "x", "slide", "h", None)],
-            )
-            assert cache.get_hash_version("a.de.py", "a.en.py") == WATERMARK_HASH_VERSION
-            assert cache.has_pair("a.de.py", "a.en.py") is True
-            assert cache.get_deck("a.de.py", "a.en.py", "de") == [(0, "x", "slide", "h", None)]
+            cache.put_deck(de_path=de, en_path=en, lang="de", cells=[(0, "x", "slide", "h", None)])
+            assert cache.get_hash_version(de, en) == WATERMARK_HASH_VERSION
+            assert cache.has_pair(de, en) is True
+            assert cache.get_deck(de, en, "de") == [(0, "x", "slide", "h", None)]
 
             # Simulate a stored snapshot from a different (stale) canonicalization.
             cache._conn.execute(
-                "UPDATE sync_watermark_meta SET hash_version=? WHERE de_path='a.de.py'",
-                (WATERMARK_HASH_VERSION - 1,),
+                "UPDATE sync_watermark_meta SET hash_version=? WHERE de_path=?",
+                (WATERMARK_HASH_VERSION - 1, de),
             )
             cache._conn.commit()
-            assert cache.has_pair("a.de.py", "a.en.py") is False
-            assert cache.get_deck("a.de.py", "a.en.py", "de") == []
+            assert cache.has_pair(de, en) is False
+            assert cache.get_deck(de, en, "de") == []
 
             # A fresh write re-stamps the current version → readable again.
-            cache.put_deck(
-                de_path="a.de.py",
-                en_path="a.en.py",
-                lang="de",
-                cells=[(0, "x", "slide", "h2", None)],
-            )
-            assert cache.has_pair("a.de.py", "a.en.py") is True
-            assert cache.get_deck("a.de.py", "a.en.py", "de") == [(0, "x", "slide", "h2", None)]
+            cache.put_deck(de_path=de, en_path=en, lang="de", cells=[(0, "x", "slide", "h2", None)])
+            assert cache.has_pair(de, en) is True
+            assert cache.get_deck(de, en, "de") == [(0, "x", "slide", "h2", None)]
         finally:
             cache.close()
 
@@ -480,14 +475,17 @@ class TestSyncWatermarkCache:
             snap.close()
             wm.close()
 
-    def test_iter_entries(self, watermarks):
-        watermarks.put_deck(
-            de_path="a.de.py", en_path="a.en.py", lang="de", cells=[(0, "x", "slide", "h", "c0")]
-        )
+    def test_iter_entries(self, watermarks, tmp_path):
+        # Absolute paths outside any git worktree → key stored verbatim, so the
+        # exact-key assertion holds even when the suite runs from a linked
+        # worktree (the watermark canonicalizes a worktree key to its main twin,
+        # #435). Real callers pass ``.resolve()``d (absolute) deck paths.
+        de, en = str(tmp_path / "a.de.py"), str(tmp_path / "a.en.py")
+        watermarks.put_deck(de_path=de, en_path=en, lang="de", cells=[(0, "x", "slide", "h", "c0")])
         rows = watermarks.iter_entries()
         assert len(rows) == 1
         # (de_path, en_path, lang, position, slide_id, role, content_hash, construct, synced_at)
-        assert rows[0][:8] == ("a.de.py", "a.en.py", "de", 0, "x", "slide", "h", "c0")
+        assert rows[0][:8] == (de, en, "de", 0, "x", "slide", "h", "c0")
 
 
 # ---------------------------------------------------------------------------
