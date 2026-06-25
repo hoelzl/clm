@@ -9,6 +9,8 @@ from typing import Any
 from attrs import frozen
 
 from clm.core.course_files.notebook_file import NotebookFile
+from clm.infrastructure.build_profiling import now as profiler_now
+from clm.infrastructure.build_profiling import profiler
 from clm.infrastructure.messaging.correlation_ids import (
     new_correlation_id,
     note_correlation_id_dependency,
@@ -415,6 +417,10 @@ class ProcessNotebookOperation(Operation):
         return stems
 
     async def payload(self, build_reporter: Any = None) -> NotebookPayload:
+        # Profiling: time the synchronous payload build (slide read + base64 of
+        # every topic sibling + content hashing) which runs on the event loop
+        # and contributes to submission starving the completion poll loop.
+        _payload_t0 = profiler_now() if profiler.enabled else 0.0
         course = self.input_file.course
         correlation_id = await new_correlation_id()
 
@@ -483,6 +489,8 @@ class ProcessNotebookOperation(Operation):
             cross_references=self.compute_cross_references(data),
         )
         await note_correlation_id_dependency(correlation_id, payload)
+        if profiler.enabled:
+            profiler.record_payload_build(profiler_now() - _payload_t0)
         return payload
 
     @property
