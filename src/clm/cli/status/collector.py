@@ -63,10 +63,16 @@ class StatusCollector:
         if db_path:
             return Path(db_path)
 
-        # Check current directory
+        # Anchor the jobs-DB discovery to the discovered project root (issue #477)
+        # so `clm status` opens the SAME database whether it runs from the repo
+        # root or a topic subdirectory — otherwise a subdir run opens a different
+        # (usually empty) DB and reports a misleadingly idle system.
+        from clm.infrastructure.utils.path_utils import find_project_root
+
+        root = find_project_root()
         default_paths = [
-            Path.cwd() / "clm_jobs.db",
-            Path.cwd() / "jobs.db",
+            root / "clm_jobs.db",
+            root / "jobs.db",
             Path.home() / ".clm" / "clm_jobs.db",
         ]
 
@@ -75,7 +81,7 @@ class StatusCollector:
                 return path
 
         # Return default (may not exist yet)
-        return Path.cwd() / "clm_jobs.db"
+        return root / "clm_jobs.db"
 
     def collect(self) -> StatusInfo:
         """Collect complete system status.

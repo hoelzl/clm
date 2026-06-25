@@ -1518,7 +1518,7 @@ clm slides assign-ids [OPTIONS] PATH
 | `--llm-model TEXT` | Ollama model name (default: `qwen3:30b`). |
 | `--ollama-url TEXT` | Base URL of the Ollama daemon (default: `$OLLAMA_URL` or `http://localhost:11434`). |
 | `--llm-timeout SECONDS` | Per-call timeout (default: 120s — cold-load on a 30B model can exceed 60s). |
-| `--cache-dir PATH` | Directory for the LLM cache. Lookup order: flag → `$CLM_CACHE_DIR` → `tool.clm.cache_dir` in `pyproject.toml` → `<cwd>/.clm-cache/`. |
+| `--cache-dir PATH` | Directory for the LLM cache. Lookup order: flag → `$CLM_CACHE_DIR` → `tool.clm.cache_dir` in `pyproject.toml` → `<project-root>/.clm-cache/`. |
 | `--only bilingual\|split` | (since CLM {version}) Scope a **directory** run to only bilingual decks (no `.de`/`.en` tag) or only split halves — e.g. `--only bilingual` mints bilingual decks while leaving `.de`/`.en` pairs for `clm slides sync`. |
 | `--exclude GLOB` | (since CLM {version}) Skip decks matching `GLOB`, matched against the full path **and** each path component (so `--exclude old_decks` skips an `old_decks/` dir). Repeatable. Underscore-prefixed dirs (`_archive/`, …) are skipped automatically (issue #318). |
 | `--shipping-only` | (since CLM {version}) Scope a directory run to decks reachable from course specs (the shipping set). |
@@ -1972,6 +1972,18 @@ directory; `--json` emits the structured form; `--baseline REF` /
 opt into the watermark accelerator (default off for the read verbs, **on** for
 `apply`).
 
+**Project root & worktrees (since CLM {version}).** The cache directory is
+resolved relative to the **project root**, discovered by walking up from the
+current directory to the nearest `pyproject.toml` / `.clm/config.toml` / `.git`
+(like `git` / `uv` / `ruff`). So every `clm` invocation resolves the same cache
+no matter which subdirectory (e.g. a topic dir) it runs from — earlier releases
+treated the current directory as the root, so a command run from a topic
+silently created a stray `<topic>/.clm-cache/` and missed the configured one
+(#477). The watermark is additionally keyed by the **main-checkout** path even
+when run from a linked git **worktree**, so a watermark recorded from the main
+checkout is found from any worktree and vice-versa (#435) — no `--cache-dir`
+gymnastics needed.
+
 #### `clm slides sync report` (the default verb)
 
 ```
@@ -1985,7 +1997,7 @@ clm slides sync report DECK [EN_PATH] [OPTIONS]   # bare `sync DECK` is the same
 | `--baseline REF` | Diff against an explicit git ref (`HEAD~1`, a SHA) instead of git `HEAD`. Use after you committed single-language edits before syncing — `--baseline HEAD~1` diffs the pre-edit commit. **Works over a directory too**: every pair under the tree is diffed against REF, so a whole topic/module of committed single-language edits is reconciled in one sweep (a plain git-HEAD batch reads those edits as already-consistent). |
 | `--baseline-from PATH[@REF]` | Diff a **renamed** deck against its pre-rename half `PATH` (`@REF` defaults to `HEAD`) when auto rename-detection can't recover it. Single-pair only (it names one deck's old path). |
 | `--use-watermark` | Opt back into the structural watermark as the baseline (default: git `HEAD`). |
-| `--cache-dir PATH` | Directory holding the watermark (only with `--use-watermark`). Lookup: flag → `$CLM_CACHE_DIR` → `tool.clm.cache_dir` → `<cwd>/.clm-cache/`. |
+| `--cache-dir PATH` | Directory holding the watermark (only with `--use-watermark`). Lookup: flag → `$CLM_CACHE_DIR` → `tool.clm.cache_dir` → `<project-root>/.clm-cache/`. |
 | `--ledger` | Consult the per-slide consistency ledger (`<topic>/.clm/sync-ledger.json`, #448): skip any slide whose two current halves are byte-identical to a recorded confirmation, so a sync paid for last round is not re-litigated against an older `--baseline`. A trust *overlay* (the classification is unchanged; it only removes redundant proposals). **Works over a directory** (each pair uses its own topic ledger; the batch JSON/summary reports the aggregate `skipped`). Record confirmations with `baseline bless --ledger` or `apply --ledger`. |
 
 Read-only, no model, no key. Exit code mirrors the plan: `0` clean (in sync),
@@ -2411,7 +2423,7 @@ clm slides bootstrap [OPTIONS] SOURCE   # alias
 | `--glossary PATH` | Translation conventions file (Markdown: a style note + term glossary) appended to the translation prompt. Default: auto-discover `clm-glossary.<target-lang>.md` walking up from SOURCE's directory. |
 | `--provider [openrouter\|local]` | Edit-judge backend for the *delegated-sync* path (when the twin already exists); unused on the bootstrap path. Overridable with `$CLM_SYNC_PROVIDER`. |
 | `--llm-model TEXT` | Model for the delegated-sync edit judge (default `anthropic/claude-sonnet-4-6` for openrouter). |
-| `--cache-dir PATH` | Directory holding the translation + watermark caches. Lookup: flag → `$CLM_CACHE_DIR` → `tool.clm.cache_dir` → `<cwd>/.clm-cache/`. |
+| `--cache-dir PATH` | Directory holding the translation + watermark caches. Lookup: flag → `$CLM_CACHE_DIR` → `tool.clm.cache_dir` → `<project-root>/.clm-cache/`. |
 | `--no-cache` | Do not read or write the translation / watermark caches. |
 | `--no-env-file` | Do not auto-load a `.env` file. |
 | `--json` | Emit a JSON report instead of human-readable lines. |
@@ -2480,7 +2492,7 @@ clm slides coverage [OPTIONS] PATH
 | `--llm-model TEXT` | Ollama model name (default: `qwen3:30b`). |
 | `--ollama-url TEXT` | Base URL of the Ollama daemon (default: `$OLLAMA_URL` or `http://localhost:11434`). |
 | `--llm-timeout SECONDS` | Per-call timeout (default: 120s — cold-load on a 30B local model can exceed 60s). |
-| `--cache-dir PATH` | Directory for the LLM cache. Lookup order: flag → `$CLM_CACHE_DIR` → `tool.clm.cache_dir` in `pyproject.toml` → `<cwd>/.clm-cache/`. |
+| `--cache-dir PATH` | Directory for the LLM cache. Lookup order: flag → `$CLM_CACHE_DIR` → `tool.clm.cache_dir` in `pyproject.toml` → `<project-root>/.clm-cache/`. |
 | `--report-only` | Skip cache writes; reads still happen. Useful for measuring the current cache hit rate without persisting fresh verdicts. |
 | `--dump` | Print a readable text dump of cached verdicts instead of running a coverage check. PATH is ignored. Combine with `--json` for machine output. |
 | `--json` | Emit a JSON report. |
@@ -2535,7 +2547,7 @@ clm slides split [OPTIONS] SOURCE
 |--------|-------------|
 | `--force` | Overwrite existing `.de.py` / `.en.py` companions if present |
 | `--report-only`, `--dry-run` | Compute the split and report what would be written without modifying files |
-| `--cache-dir PATH` | Directory for the sync watermark recorded for the split pair (default: `--cache-dir` > `$CLM_CACHE_DIR` > `tool.clm.cache_dir` in pyproject > `<cwd>/.clm-cache/`). Must match what `clm slides sync` resolves so the watermark is found. |
+| `--cache-dir PATH` | Directory for the sync watermark recorded for the split pair (default: `--cache-dir` > `$CLM_CACHE_DIR` > `tool.clm.cache_dir` in pyproject > `<project-root>/.clm-cache/`). Must match what `clm slides sync` resolves so the watermark is found. |
 | `--no-watermark` | Do not record a sync watermark for the freshly-split pair |
 | `--json` | Emit a JSON report |
 
@@ -2580,7 +2592,7 @@ in-sync **by construction**, so this is safe — and it means the next default
 `clm slides sync` (no `--baseline`) sees a single-language edit as an *edit* to
 propagate, rather than reading the whole deck as new (no baseline). The watermark
 is keyed by the same cache directory `sync` resolves (`--cache-dir` >
-`$CLM_CACHE_DIR` > `tool.clm.cache_dir` > `<cwd>/.clm-cache/`), so pass the same
+`$CLM_CACHE_DIR` > `tool.clm.cache_dir` > `<project-root>/.clm-cache/`), so pass the same
 `--cache-dir` to both if you override it. Recording is best-effort: if the cache
 cannot be opened the split still succeeds and emits a `warning:`. Pass
 `--no-watermark` to skip it; a `--report-only` run records nothing.

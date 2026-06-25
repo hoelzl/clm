@@ -197,6 +197,26 @@ class TestConfigLocate:
         assert "pyproject.toml [tool.clm] cache_dir" in section
         assert "my-llm-cache" in section
 
+    def test_locate_shows_discovered_project_root_from_subdir(self, tmp_path, monkeypatch):
+        # Issue #477: from a subdir, `config locate` reports the discovered root
+        # (walked up) and notes it differs from cwd. (The cache-path anchoring
+        # itself is covered deterministically in test_cache_dir_resolution.py.)
+        monkeypatch.setattr(
+            "clm.infrastructure.config.platformdirs.user_config_dir",
+            lambda *a, **kw: str(tmp_path / "user"),
+        )
+        (tmp_path / "user").mkdir()
+        repo = tmp_path / "repo"
+        sub = repo / "slides" / "topic_031"
+        sub.mkdir(parents=True)
+        (repo / "pyproject.toml").write_text("[tool.clm]\n", encoding="utf-8")
+        monkeypatch.chdir(sub)
+        result = CliRunner().invoke(cli, ["config", "locate"])
+        assert result.exit_code == 0, result.output
+        assert "Project root" in result.output
+        assert str(repo.resolve()) in result.output
+        assert "differs from the current directory" in result.output
+
 
 class TestConfigHelp:
     def test_group_help(self):

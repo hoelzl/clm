@@ -1,5 +1,6 @@
 """SQLite-based cache for LLM summaries."""
 
+import functools
 import logging
 import sqlite3
 from dataclasses import dataclass
@@ -837,6 +838,21 @@ class SyncWatermarkCache:
             self._conn.execute("ALTER TABLE sync_watermark_meta ADD COLUMN hash_version INTEGER")
         self._conn.commit()
 
+    def _key(self, de_path: str, en_path: str) -> tuple[str, str]:
+        """Canonicalize the ``(de_path, en_path)`` watermark key (issue #435).
+
+        Routes the absolute key paths through :func:`to_main_worktree_path` so a
+        path resolved inside a linked git worktree is keyed by its main-checkout
+        equivalent — every read and write therefore agrees on one key regardless
+        of which worktree the command runs from. A no-op in the main checkout, and
+        idempotent (re-keying an already-canonical key returns it unchanged), so
+        internal methods that re-enter another keyed method stay correct.
+        """
+        return (
+            str(to_main_worktree_path(Path(de_path))),
+            str(to_main_worktree_path(Path(en_path))),
+        )
+
     def get_deck(
         self,
         de_path: str,
@@ -853,6 +869,7 @@ class SyncWatermarkCache:
         its stored hashes use an older canonical form and cannot be compared, so the
         pair cold-starts and is re-recorded at the current version on the next apply.
         """
+        de_path, en_path = self._key(de_path, en_path)
         if not self._version_current(de_path, en_path):
             return []
         rows = self._conn.execute(
@@ -903,6 +920,7 @@ class SyncWatermarkCache:
             raise ValueError(
                 f"lang must be 'de', 'en', 'shared', 'de-header', or 'en-header', got {lang!r}"
             )
+        de_path, en_path = self._key(de_path, en_path)
         tag_for = tags or {}
         anchor_for = anchors or {}
         with self._conn:  # single transaction (BEGIN/COMMIT or ROLLBACK)
@@ -949,6 +967,7 @@ class SyncWatermarkCache:
         distinguish a *known* empty tag set (present, ``frozenset()``) from an
         *undeterminable* one (absent — a pre-#198 watermark row). Issue #198.
         """
+        de_path, en_path = self._key(de_path, en_path)
         rows = self._conn.execute(
             "SELECT position, tags FROM sync_watermarks "
             "WHERE de_path=? AND en_path=? AND lang=? AND tags IS NOT NULL ORDER BY position",
@@ -965,6 +984,7 @@ class SyncWatermarkCache:
         narrative classifier reads as "anchor undeterminable" and skips, so an old
         watermark degrades gracefully (no false edit).
         """
+        de_path, en_path = self._key(de_path, en_path)
         rows = self._conn.execute(
             "SELECT position, anchor FROM sync_watermarks "
             "WHERE de_path=? AND en_path=? AND lang=? AND anchor IS NOT NULL ORDER BY position",
@@ -979,6 +999,7 @@ class SyncWatermarkCache:
         (Issue #429) so the caller cold-starts off git HEAD rather than diffing
         against hashes in an incomparable canonical form.
         """
+        de_path, en_path = self._key(de_path, en_path)
         if not self._version_current(de_path, en_path):
             return False
         row = self._conn.execute(
@@ -989,6 +1010,7 @@ class SyncWatermarkCache:
 
     def get_hash_version(self, de_path: str, en_path: str) -> int | None:
         """The canonicalization version the pair's hashes were recorded at, or None."""
+        de_path, en_path = self._key(de_path, en_path)
         row = self._conn.execute(
             "SELECT hash_version FROM sync_watermark_meta WHERE de_path=? AND en_path=?",
             (de_path, en_path),
@@ -1001,6 +1023,7 @@ class SyncWatermarkCache:
 
     def set_synced_commit(self, de_path: str, en_path: str, commit: str | None) -> None:
         """Record the repo HEAD commit the pair was last synced at (pair-level)."""
+        de_path, en_path = self._key(de_path, en_path)
         with self._conn:
             self._conn.execute(
                 "INSERT INTO sync_watermark_meta (de_path, en_path, synced_commit) "
@@ -1012,6 +1035,7 @@ class SyncWatermarkCache:
 
     def get_synced_commit(self, de_path: str, en_path: str) -> str | None:
         """Return the commit recorded by :meth:`set_synced_commit`, or ``None``."""
+        de_path, en_path = self._key(de_path, en_path)
         row = self._conn.execute(
             "SELECT synced_commit FROM sync_watermark_meta WHERE de_path=? AND en_path=?",
             (de_path, en_path),
@@ -1020,6 +1044,7 @@ class SyncWatermarkCache:
 
     def clear_pair(self, de_path: str, en_path: str) -> int:
         """Delete all watermark rows + metadata for the pair; return rows removed."""
+        de_path, en_path = self._key(de_path, en_path)
         cursor = self._conn.execute(
             "DELETE FROM sync_watermarks WHERE de_path=? AND en_path=?",
             (de_path, en_path),
@@ -1084,8 +1109,15 @@ def describe_cache_dir(
     3. ``tool.clm.cache_dir`` in ``<repo_root>/pyproject.toml``
     4. ``<repo_root>/.clm-cache/`` (default, gitignored)
 
-    ``repo_root`` defaults to the current working directory. This function has
-    **no side effects** — it does not create the directory.
+    ``repo_root`` defaults to the **discovered project root** —
+    :func:`clm.infrastructure.utils.path_utils.find_project_root` walks up from
+    the current working directory to the nearest ``pyproject.toml`` /
+    ``.clm/config.toml`` / ``.git`` (like ``git`` / ``uv`` / ``ruff``), so the
+    cache resolves to the same place no matter which subdirectory the command
+    was invoked from (issue #477). Without the walk-up, running from a topic
+    subdir treated the subdir as the root: it missed ``[tool.clm] cache_dir``
+    and created a stray ``<subdir>/.clm-cache``. This function has **no side
+    effects** — it does not create the directory.
 
     Git-worktree anchoring: a *relative* ``[tool.clm] cache_dir`` (e.g.
     ``../shared-cache``) is normally joined to ``repo_root``. But in a git
@@ -1100,6 +1132,8 @@ def describe_cache_dir(
     """
     import os
 
+    from clm.infrastructure.utils.path_utils import find_project_root
+
     if cli_override is not None:
         return CacheDirResolution(path=Path(cli_override), source="cli")
 
@@ -1107,7 +1141,11 @@ def describe_cache_dir(
     if env:
         return CacheDirResolution(path=Path(env), source="env")
 
-    root = repo_root or Path.cwd()
+    # Discover the project root by walking up (issue #477); an explicit
+    # ``repo_root`` opts out and anchors to that root verbatim (library callers /
+    # tests). The worktree re-anchoring of a relative value below then runs with
+    # the correct root (the worktree checkout root, not a subdir).
+    root = repo_root or find_project_root()
     pyproject = root / "pyproject.toml"
     if pyproject.is_file():
         configured = _read_pyproject_cache_dir(pyproject)
@@ -1184,6 +1222,79 @@ def _main_worktree_root(start: Path) -> Path | None:
     if common.name != ".git":
         return None
     return common.parent
+
+
+def _git_show_toplevel(start: Path) -> Path | None:
+    """The working-tree root of the (possibly linked) worktree containing ``start``.
+
+    ``git rev-parse --show-toplevel`` run with ``cwd=start``. Returns ``None`` when
+    git is unavailable or ``start`` is outside a repo. Used together with
+    :func:`_main_worktree_root` to remap a worktree path to its main-checkout twin.
+    """
+    import subprocess
+
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=str(start),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        return None
+    out = completed.stdout.strip()
+    if not out:
+        return None
+    return Path(out).resolve()
+
+
+@functools.cache
+def _worktree_remap_for_dir(directory: str) -> tuple[str, str] | None:
+    """``(worktree_toplevel, main_root)`` if ``directory`` is in a LINKED worktree.
+
+    ``None`` for the main worktree, outside a repo, or when git is unavailable.
+    Memoized: the answer is constant per worktree, so keying a whole batch of
+    pairs makes at most one git invocation per unique directory.
+    """
+    start = Path(directory)
+    main_root = _main_worktree_root(start)
+    if main_root is None:
+        return None
+    top = _git_show_toplevel(start)
+    if top is None:
+        return None
+    return (str(top), str(main_root))
+
+
+def to_main_worktree_path(p: Path) -> Path:
+    """Remap a path under a linked git worktree to its main-checkout equivalent.
+
+    The sync watermark is keyed by the absolute ``(de_path, en_path)`` strings,
+    but :meth:`Path.resolve` from a linked worktree yields the *worktree* path —
+    which never matches the rows recorded from the main checkout, so every pair
+    misses its watermark and silently cold-starts off git HEAD (issue #435).
+    Canonicalizing the **key** to the main-checkout path lets the worktree and the
+    main checkout share both the cache file (#374) and the keys inside it, and
+    keeps writes on the single canonical key (no orphaned worktree-path rows).
+
+    Returns ``p`` unchanged when it is not under a linked worktree, is outside a
+    repo, or git is unavailable — so the main checkout and non-git callers are
+    unaffected, and the function is idempotent (a main-checkout path remaps to
+    itself). Only the watermark **key** is canonicalized; file reads and the
+    content-keyed, worktree-portable sync ledger keep the real on-disk path.
+    """
+    resolved = p.resolve()
+    directory = resolved if resolved.is_dir() else resolved.parent
+    remap = _worktree_remap_for_dir(str(directory))
+    if remap is None:
+        return p
+    wt_top, main_root = Path(remap[0]), Path(remap[1])
+    try:
+        rel = resolved.relative_to(wt_top)
+    except ValueError:
+        return p
+    return main_root / rel
 
 
 def _ensure_dir(path: Path) -> Path:

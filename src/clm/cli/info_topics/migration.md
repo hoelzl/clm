@@ -1049,7 +1049,7 @@ or as a CI step.
 
 Verdicts are stored in `clm-llm.sqlite` in the LLM cache directory
 resolved from `--cache-dir` → `$CLM_CACHE_DIR` →
-`tool.clm.cache_dir` → `<cwd>/.clm-cache/`. For AZAV-scale courses
+`tool.clm.cache_dir` → `<project-root>/.clm-cache/`. For AZAV-scale courses
 where the cache is worth sharing across machines, point
 `tool.clm.cache_dir` in the course repo's `pyproject.toml` at a
 sibling git repo (e.g. `../PythonCoursesClmLlmCache`) and commit
