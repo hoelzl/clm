@@ -22,7 +22,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from clm.cli.commands.slides.sync import CACHE_DB_NAME, slides_sync_cmd
+from clm.cli.commands.slides.sync import CACHE_DB_NAME, slides_sync_cmd, sync_apply_cmd
 from clm.infrastructure.llm.cache import SyncWatermarkCache
 from clm.notebooks.slide_parser import parse_cells
 from clm.slides.sync_plan import ordered_sync_cells
@@ -114,7 +114,10 @@ class TestStaleHint:
         # A two-sided conflict against the stale watermark — not clean.
         assert res.exit_code != 0
         assert "watermark is stale" in res.stderr
-        assert "--rebaseline" in res.stderr
+        # The hint steers to the live verbs (the old `--rebaseline` flag was replaced
+        # by `baseline bless`, and `apply` now auto-heals).
+        assert "baseline bless" in res.stderr
+        assert "sync apply" in res.stderr
 
     def test_hint_in_json(self, cli_runner, tmp_path):
         de_path, _en, cache = _stale_consistent(tmp_path)
@@ -201,3 +204,74 @@ class TestRebaseline:
         )
         assert res.exit_code != 0
         assert "single deck pair" in (res.stderr + res.output)
+
+
+class TestAutoHeal:
+    """#364: a writing run auto-re-baselines a stale-but-consistent watermark by
+    default, instead of surfacing a false stale-baseline conflict."""
+
+    def test_apply_auto_heals(self, cli_runner, tmp_path):
+        de_path, _en, cache = _stale_consistent(tmp_path)
+        res = cli_runner.invoke(sync_apply_cmd, ["--cache-dir", str(cache), str(de_path)])
+        assert res.exit_code == 0, res.output + res.stderr
+        assert "re-baselined a stale watermark" in res.stderr
+        # The watermark now matches current → a follow-up apply is clean, no heal.
+        follow = cli_runner.invoke(sync_apply_cmd, ["--cache-dir", str(cache), str(de_path)])
+        assert follow.exit_code == 0
+        assert "re-baselined a stale watermark" not in follow.stderr
+
+    def test_apply_json_reports_auto_healed(self, cli_runner, tmp_path):
+        de_path, _en, cache = _stale_consistent(tmp_path)
+        res = cli_runner.invoke(sync_apply_cmd, ["--json", "--cache-dir", str(cache), str(de_path)])
+        payload = json.loads(res.output[res.output.find("{") :])
+        assert payload["auto_healed"] is True
+        assert payload["exit_code"] == 0
+
+    def test_apply_no_auto_heal_surfaces_conflict(self, cli_runner, tmp_path):
+        de_path, _en, cache = _stale_consistent(tmp_path)
+        res = cli_runner.invoke(
+            sync_apply_cmd, ["--no-auto-heal", "--cache-dir", str(cache), str(de_path)]
+        )
+        # The stale-baseline conflict is surfaced, not silently healed.
+        assert res.exit_code != 0
+        assert "re-baselined a stale watermark" not in res.stderr
+
+    def test_apply_does_not_heal_real_divergence(self, cli_runner, tmp_path):
+        # git HEAD shows a genuine pending change (one half edited but uncommitted),
+        # so auto-heal must NOT fire — healing would mask the un-synced edit.
+        de_path, en_path = _commit_pair(tmp_path, _deck("de", "old"), _deck("en", "old"))
+        cache = tmp_path / "cache"
+        _seed_watermark(
+            cache, de_path, en_path, de_text=_deck("de", "older"), en_text=_deck("en", "older")
+        )
+        de_path.write_text(_deck("de", "edited-uncommitted"), encoding="utf-8")
+        res = cli_runner.invoke(sync_apply_cmd, ["--cache-dir", str(cache), str(de_path)])
+        assert "re-baselined a stale watermark" not in res.stderr
+
+    def test_apply_no_heal_outside_git(self, cli_runner, tmp_path):
+        # No git repo → the git-head plan has no baseline (vacuously a no-op); auto-heal
+        # must NOT fire and wipe a legitimate watermark-diffed state.
+        de_path = tmp_path / "slides_intro.de.py"
+        en_path = tmp_path / "slides_intro.en.py"
+        de_path.write_text(_deck("de", "neu"), encoding="utf-8")
+        en_path.write_text(_deck("en", "new"), encoding="utf-8")
+        cache = tmp_path / "cache"
+        _seed_watermark(
+            cache, de_path, en_path, de_text=_deck("de", "alt"), en_text=_deck("en", "old")
+        )
+        res = cli_runner.invoke(sync_apply_cmd, ["--cache-dir", str(cache), str(de_path)])
+        assert "re-baselined a stale watermark" not in res.stderr
+
+    def test_autopilot_auto_heals_on_write(self, cli_runner, tmp_path):
+        de_path, _en, cache = _stale_consistent(tmp_path)
+        res = cli_runner.invoke(slides_sync_cmd, ["--cache-dir", str(cache), str(de_path)])
+        assert "re-baselined a stale watermark" in res.stderr
+
+    def test_autopilot_dry_run_does_not_heal(self, cli_runner, tmp_path):
+        # Read-only mode keeps the hint; it never writes/heals.
+        de_path, _en, cache = _stale_consistent(tmp_path)
+        res = cli_runner.invoke(
+            slides_sync_cmd, ["--dry-run", "--cache-dir", str(cache), str(de_path)]
+        )
+        assert "re-baselined a stale watermark" not in res.stderr
+        assert "watermark is stale" in res.stderr

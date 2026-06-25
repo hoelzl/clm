@@ -30,6 +30,7 @@ import click
 from clm.cli.commands.slides.sync import (
     CACHE_DB_NAME,
     _apply_exit_code,
+    _auto_heal_stale_watermark,
     _cold_baseline_hint_text,
     _is_stale_but_consistent,
     _issue_line,
@@ -392,6 +393,18 @@ def _resolve_verifier(verify_enabled: bool) -> CorrespondenceVerifier | None:
     ),
 )
 @click.option(
+    "--auto-heal/--no-auto-heal",
+    "auto_heal",
+    default=True,
+    help=(
+        "Auto-re-baseline a stale-but-consistent watermark on a WRITING run instead of "
+        "erroring (#364): the same safe heal as --rebaseline (only when git HEAD shows "
+        "the halves consistent), applied automatically before reconciling. On by "
+        "default; ignored for --dry-run / --explain / --no-cache / --baseline / "
+        "--baseline-from / --rebaseline."
+    ),
+)
+@click.option(
     "--baseline",
     "baseline_ref",
     default=None,
@@ -477,6 +490,7 @@ def slides_sync_cmd(
     cache_dir: Path | None,
     no_cache: bool,
     rebaseline: bool,
+    auto_heal: bool,
     baseline_ref: str | None,
     baseline_from_spec: str | None,
     no_env_file: bool,
@@ -742,6 +756,42 @@ def slides_sync_cmd(
         # still open, so the stale-watermark hint can name the exact --baseline ref.
         if watermark_cache is not None:
             recorded_commit = watermark_cache.get_synced_commit(str(de_path), str(en_path))
+
+        # Auto-heal a stale-but-consistent watermark on a WRITING run (#364): re-baseline
+        # and re-plan so the reconcile proceeds cleanly instead of erroring on a false
+        # stale-baseline conflict. Read-only modes (dry-run/explain) keep the hint
+        # below; --rebaseline / --baseline / --no-cache opt out, as does --no-auto-heal.
+        if (
+            auto_heal
+            and not dry_run
+            and not explain
+            and not no_cache
+            and not rebaseline
+            and baseline_ref is None
+            and baseline_from is None
+            and _auto_heal_stale_watermark(
+                de_path,
+                en_path,
+                plan,
+                watermark_cache=watermark_cache,
+                provider_available=provider_available,
+            )
+        ):
+            click.echo(
+                f"note: re-baselined a stale watermark for {de_path.name} automatically "
+                "(halves consistent against git HEAD). Pass --no-auto-heal to opt out.",
+                err=True,
+            )
+            plan = build_sync_plan(
+                de_path,
+                en_path,
+                watermark_cache=watermark_cache,
+                provider_available=provider_available,
+                baseline_ref=None,
+                baseline_from=None,
+                detect_rename=True,
+                ledger=_load_ledger_if(ledger, de_path),
+            )
 
         if explain:
             mode = "explain"

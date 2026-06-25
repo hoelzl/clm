@@ -768,21 +768,64 @@ def _is_stale_but_consistent(
     """
     if plan.baseline_source != "watermark" or plan.is_noop:
         return False
-    return _githead_plan(de_path, en_path, provider_available=provider_available).is_noop
+    githead = _githead_plan(de_path, en_path, provider_available=provider_available)
+    # Require a REAL git baseline: outside a git repo (or for an un-committed deck)
+    # the git-head plan has no baseline to diff against (``baseline_source == "none"``)
+    # and is vacuously a no-op — that must NOT read as "halves consistent at HEAD".
+    return githead.baseline_source == "git-head" and githead.is_noop
+
+
+def _auto_heal_stale_watermark(
+    de_path: Path,
+    en_path: Path,
+    plan: SyncPlan,
+    *,
+    watermark_cache: SyncWatermarkCache | None,
+    provider_available: bool,
+) -> bool:
+    """Re-baseline a *stale-but-consistent* watermark in place; return whether it healed.
+
+    The recoverable case behind #364: both halves were edited and committed without
+    an intervening sync, so the watermark fell behind and a watermark-baselined run
+    now errors/conflicts against a *false* baseline — even though git HEAD shows the
+    halves already mutually consistent. Re-record the watermark from that consistent
+    HEAD state so the caller can re-plan to a clean result, instead of surfacing a
+    cryptic stale-baseline conflict.
+
+    Safe by construction (the same gate as ``baseline bless`` / the old
+    ``--rebaseline``): heals **only** when the git-HEAD plan is a no-op, so nothing
+    that still needs syncing is ever masked. A no-op for a non-watermark run (already
+    git-HEAD baselined, or ``--baseline`` pinned) — the caller gates on those.
+    """
+    if watermark_cache is None or plan.baseline_source != "watermark" or plan.is_noop:
+        return False
+    githead = _githead_plan(de_path, en_path, provider_available=provider_available)
+    # Heal ONLY against a real git baseline (``baseline_source == "git-head"``).
+    # Outside a git repo / for an un-committed deck the git-head plan has no baseline
+    # and is vacuously a no-op — healing then would wipe a legitimate watermark-diffed
+    # edit (it has no committed state to prove the halves are actually consistent).
+    if githead.baseline_source != "git-head" or not githead.is_noop:
+        return False  # no real baseline, or genuine pending changes — never mask them
+    if watermark_cache.has_pair(str(de_path), str(en_path)):
+        watermark_cache.clear_pair(str(de_path), str(en_path))
+    # A no-op plan has no proposals, so no judge/translator is needed; apply still
+    # writes the fresh whole-deck watermark at the current (consistent) state.
+    apply_plan(githead, judge=None, watermark_cache=watermark_cache)
+    return True
 
 
 def _rebaseline_hint_text(de_path: Path, recorded_commit: str | None = None) -> str:
     # When we know the commit the watermark was recorded at, name it as a precise
-    # --baseline target (diff against the last synced point) alongside --rebaseline.
+    # --baseline target (diff against the last synced point).
     baseline_ref = recorded_commit[:12] if recorded_commit else "<last-synced-commit>"
     return (
         "note: this deck's halves are consistent against git HEAD, but its recorded "
         "watermark is stale (the usual cause: both halves edited + committed without an "
-        "intervening sync). Reset it with "
-        f"`clm slides sync --rebaseline {de_path.name}` (refuses if HEAD shows real "
-        "changes), diff against the last sync with "
-        f"`clm slides sync --baseline {baseline_ref} {de_path.name}`, "
-        "or `clm slides watermark clear`."
+        f"intervening sync). `clm slides sync apply {de_path.name}` auto-re-baselines it "
+        "(it heals a stale-but-consistent watermark by default; pass --no-auto-heal to "
+        f"opt out), or reset it now with `clm slides sync baseline bless {de_path.name}`. "
+        f"Diff against the last sync with `clm slides sync --baseline {baseline_ref} "
+        f"{de_path.name}`."
     )
 
 
@@ -1644,6 +1687,17 @@ def sync_verify_cmd(de_path: Path, en_path: Path | None, as_json: bool) -> None:
         "directory (each pair uses its own ledger)."
     ),
 )
+@click.option(
+    "--auto-heal/--no-auto-heal",
+    "auto_heal",
+    default=True,
+    help=(
+        "Auto-re-baseline a stale-but-consistent watermark instead of erroring (#364): "
+        "when the watermark is stale but git HEAD shows the halves consistent, reset it "
+        "and apply cleanly. Safe (only when HEAD is a verified no-op); on by default. "
+        "Ignored with --baseline / --baseline-from / --no-watermark."
+    ),
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit the apply result as JSON.")
 def sync_apply_cmd(
     de_path: Path,
@@ -1654,6 +1708,7 @@ def sync_apply_cmd(
     baseline_from_spec: str | None,
     cache_dir: Path | None,
     ledger: bool,
+    auto_heal: bool,
     as_json: bool,
 ) -> None:
     """Apply the deterministic tier-1 reconciliation — writes, but never calls a model.
@@ -1715,6 +1770,7 @@ def sync_apply_cmd(
     if use_watermark:
         cache_root = resolve_cache_dir(cli_override=cache_dir)
         watermark_cache = SyncWatermarkCache(cache_root / CACHE_DB_NAME)
+    healed = False
     try:
         plan, result = _apply_deterministic(
             de_path,
@@ -1724,10 +1780,36 @@ def sync_apply_cmd(
             baseline_from=baseline_from,
             ledger=ledger,
         )
+        # Auto-heal a stale-but-consistent watermark (#364): re-baseline and re-plan
+        # to a clean result instead of erroring on a false stale-baseline conflict.
+        # Only when the watermark is the baseline (no --baseline / --baseline-from).
+        if auto_heal and baseline_ref is None and baseline_from is None:
+            healed = _auto_heal_stale_watermark(
+                de_path,
+                en_path,
+                plan,
+                watermark_cache=watermark_cache,
+                provider_available=False,
+            )
+            if healed:
+                plan, result = _apply_deterministic(
+                    de_path,
+                    en_path,
+                    watermark_cache=watermark_cache,
+                    baseline_ref=None,
+                    baseline_from=None,
+                    ledger=ledger,
+                )
     finally:
         if watermark_cache is not None:
             watermark_cache.close()
 
+    if healed and not as_json:
+        click.echo(
+            f"note: re-baselined a stale watermark for {de_path.name} automatically "
+            "(its halves are consistent against git HEAD). Pass --no-auto-heal to opt out.",
+            err=True,
+        )
     if ledger and plan.ledger_skipped:
         click.echo(
             f"ledger: skipped {plan.ledger_skipped} slide(s) trusted in-sync "
@@ -1736,7 +1818,14 @@ def sync_apply_cmd(
         )
     ledger_recorded = _maybe_record_ledger(ledger, plan, result, de_path, en_path)
     exit_code = _apply_exit_code(plan, result)
-    _emit_apply(plan, result, de_path, as_json=as_json, ledger_recorded=ledger_recorded)
+    _emit_apply(
+        plan,
+        result,
+        de_path,
+        as_json=as_json,
+        ledger_recorded=ledger_recorded,
+        auto_healed=healed,
+    )
     sys.exit(exit_code)
 
 
@@ -1862,6 +1951,7 @@ def _emit_apply(
     *,
     as_json: bool,
     ledger_recorded: int | None = None,
+    auto_healed: bool = False,
 ) -> None:
     """Print what a single-pair model-free apply wrote and what residue remains."""
     residue = _apply_residue(plan)
@@ -1871,6 +1961,7 @@ def _emit_apply(
             "en_path": str(plan.en_path),
             "mode": "apply",
             "exit_code": _apply_exit_code(plan, result),
+            "auto_healed": auto_healed,
             "apply": _apply_dict(result),
             "residue": [
                 {
