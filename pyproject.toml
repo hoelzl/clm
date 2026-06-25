@@ -298,11 +298,16 @@ markers = [
     # external processes — a mitmdump proxy, a Jupyter kernel, a worker pool —
     # whose simultaneous startup across many xdist workers oversubscribes the
     # box and produces contention flakes (readiness ceilings expiring, worker
-    # registration starvation, port races). All ``serial`` tests share one
-    # group, so xdist runs them one-at-a-time on a dedicated worker while the
-    # rest of the suite stays fully parallel. The mapping marker -> xdist_group
-    # lives in ``tests/conftest.py`` (``pytest_collection_modifyitems``).
-    "serial: pin a heavy/contention-prone test to a single xdist worker",
+    # registration starvation, port races). An optional argument names the
+    # RESOURCE CLASS: ``@pytest.mark.serial`` (default group) vs
+    # ``@pytest.mark.serial("subproc")`` / ``("workerpool")`` / ``("port")``.
+    # Same-class tests share one group (run one-at-a-time on one worker);
+    # DIFFERENT classes get different groups that run on different workers
+    # concurrently — so e.g. the subprocess-spawning family doesn't serialize
+    # behind the worker-pool family. The marker -> xdist_group mapping lives in
+    # ``tests/conftest.py`` (``pytest_collection_modifyitems``) via
+    # ``tests/xdist_group_helpers.serial_group_name``.
+    "serial: pin a heavy/contention-prone test to a single xdist worker (optional resource-class arg)",
     # ``flaky`` opts a test into pytest-rerunfailures' SCOPED rerun: there is
     # deliberately NO global ``--reruns`` in addopts (that would rerun every
     # test and mask real regressions), so only tests carrying

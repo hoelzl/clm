@@ -27,8 +27,10 @@ from clm.infrastructure.http_replay_mitm.proxy_manager import MitmproxyManager
 # threads) and amplifying contention flakes. ``serial`` pins the whole module to
 # the single shared serial xdist_group so the spawns run one-at-a-time on one
 # worker while the rest of the suite stays parallel (same mechanism as the #163
-# lifecycle_mock fix). See docs/developer-guide/testing.md ("serial" lever).
-pytestmark = pytest.mark.serial
+# lifecycle_mock fix). The ``"subproc"`` resource class puts these on their own
+# load group, distinct from the worker-pool family, so the two run on different
+# workers concurrently. See docs/developer-guide/testing.md ("serial" lever).
+pytestmark = pytest.mark.serial("subproc")
 
 
 def _manager() -> MitmproxyManager:

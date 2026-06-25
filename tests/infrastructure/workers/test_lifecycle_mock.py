@@ -34,7 +34,7 @@ from tests.fixtures.mock_workers import MockWorker, MockWorkerConfig, MockWorker
 # addopts makes any retry visible; a test that reruns often wants a root-cause
 # fix, not more retries.
 pytestmark = [
-    pytest.mark.serial,
+    pytest.mark.serial("workerpool"),
     pytest.mark.flaky(
         reruns=2,
         reruns_delay=1,

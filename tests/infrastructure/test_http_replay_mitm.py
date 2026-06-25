@@ -46,10 +46,12 @@ from clm.infrastructure.http_replay_mitm.proxy_manager import (
 #     explicit (run on demand via ``pytest -m integration`` or directly by
 #     path), and the #184 mitmdump contention/flakiness surface leaves the
 #     commit path entirely.
-#   * ``serial`` still pins them onto one xdist worker whenever they ARE run in
-#     parallel, so the mitmdump spawns don't race each other. See the ``serial``
-#     marker in pyproject and its xdist_group mapping in ``tests/conftest.py``.
-pytestmark = [pytest.mark.serial, pytest.mark.integration]
+#   * ``serial("subproc")`` still pins them onto one xdist worker whenever they
+#     ARE run in parallel, so the mitmdump spawns don't race each other (they
+#     share the ``subproc`` load group with the other subprocess-spawning
+#     tests). See the ``serial`` marker in pyproject and its xdist_group mapping
+#     in ``tests/conftest.py``.
+pytestmark = [pytest.mark.serial("subproc"), pytest.mark.integration]
 
 # Skip the whole module if mitmdump isn't reachable — the [mitmproxy]
 # extra installs the Python package but the executable lookup may still
