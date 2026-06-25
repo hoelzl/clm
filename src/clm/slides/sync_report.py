@@ -210,6 +210,11 @@ class _SourceIndex:
       :func:`sync_plan._localized_lang_cells` assigns. Used by the id-less localized
       membership proposals, whose positions are non-j2 ``lang`` indices.
 
+    It also resolves a cell by its **``(slide_id, role)`` key** (:meth:`resolve_by_key`),
+    the natural address for a *keyed* item: a keyed conflict carries a ``slide_id``
+    but no position, and its ``role`` (e.g. ``"code"``) does not reliably pick the
+    right *positional* scheme, so the id is the sound key.
+
     Built from the working-tree files (each read + parsed once) — sound **only**
     while they still hold the cells the plan's positions index, i.e. a ``--dry-run``
     before any apply. An out-of-range position resolves to ``(None, None)`` rather
@@ -219,6 +224,11 @@ class _SourceIndex:
     def __init__(self, de_path: Path, en_path: Path) -> None:
         self._sync: dict[str, list[Cell]] = {}
         self._localized: dict[str, list[Cell]] = {}
+        # ``(slide_id, role) -> Cell`` per language for keyed lookups (#451). The
+        # engine reconciles per ``(slide_id, role)``, which is unique per half, so
+        # the last write on a (pathological) duplicate is harmless — a real dup-id
+        # is surfaced as an error elsewhere, never as a clean keyed conflict.
+        self._by_key: dict[str, dict[tuple[str, str], Cell]] = {}
         for lang, path in (("de", de_path), ("en", en_path)):
             cells = parse_cells(path.read_text(encoding="utf-8"), comment_token_for_path(path))
             self._sync[lang] = [
@@ -227,6 +237,12 @@ class _SourceIndex:
             self._localized[lang] = [
                 c for c in cells if not c.metadata.is_j2 and c.metadata.lang == lang
             ]
+            keyed: dict[tuple[str, str], Cell] = {}
+            for c in cells:
+                role = role_of(c.metadata)
+                if role is not None and c.metadata.slide_id is not None and c.metadata.lang == lang:
+                    keyed[(c.metadata.slide_id, role)] = c
+            self._by_key[lang] = keyed
 
     def resolve(
         self, lang: str | None, scheme: str, position: int | None
@@ -238,6 +254,17 @@ class _SourceIndex:
         if position >= len(cells):
             return None, None
         cell = cells[position]
+        return cell.content, cell.line_number
+
+    def resolve_by_key(self, lang: str, slide_id: str, role: str) -> tuple[str | None, int | None]:
+        """The ``(body, 1-based line)`` of the ``(slide_id, role)`` cell in ``lang``.
+
+        ``(None, None)`` when the half has no such cell — e.g. the side that
+        *removed* the cell in a remove-vs-edit conflict.
+        """
+        cell = self._by_key.get(lang, {}).get((slide_id, role))
+        if cell is None:
+            return None, None
         return cell.content, cell.line_number
 
 
@@ -276,8 +303,48 @@ def _item_languages(item: ReconciliationItem) -> tuple[str | None, str | None]:
     return None, None
 
 
+def _keyed_item_languages(item: ReconciliationItem) -> tuple[str | None, str | None]:
+    """``(source, target)`` languages for a *keyed* item (one carrying a ``slide_id``).
+
+    A direction names them outright; a directionless **conflict** is DE→EN (DE the
+    source, EN the target — matching the id-less conflict convention and the de-wins
+    default). Anything else has no source/target to resolve.
+    """
+    if item.direction in ("de->en", "en->de"):
+        source, target = item.direction.split("->")
+        return source, target
+    if item.kind == "conflict":
+        return "de", "en"
+    return None, None
+
+
 def _enrich(item: ReconciliationItem, index: _SourceIndex) -> None:
     """Resolve an item's positions to concrete cell bytes (mutates ``item`` in place)."""
+    # A *keyed* item (carries a ``slide_id``) is resolved by its ``(slide_id, role)``
+    # key, not by position. This is both the natural address for a cell identified by
+    # its id and robust against the positional-scheme ambiguity: a localized id'd cell
+    # has role ``"code"`` / ``"markdown"``, which the positional path mis-reads as the
+    # id-less *localized* scheme while the cell's position is a *sync* index — so an
+    # interleaved id-less cell would make a position-based resolve pick the wrong cell.
+    # By-key is identical to the positional result for sync-scheme roles and correct
+    # for localized roles, so it strictly improves keyed resolution. It also fills a
+    # keyed **conflict**, which carries no position at all (issue #451): the both-edited
+    # cell's current DE (source) and EN (target) bytes. A remove-vs-edit conflict
+    # leaves the removed half ``None``. The id-less localized items (``slide_id`` is
+    # ``None``) keep the positional path below.
+    if item.slide_id and item.role:
+        source_lang, target_lang = _keyed_item_languages(item)
+        if source_lang is not None:
+            item.source_lang = source_lang
+            item.source_excerpt, item.source_line = index.resolve_by_key(
+                source_lang, item.slide_id, item.role
+            )
+        if target_lang is not None:
+            item.target_lang = target_lang
+            item.target_excerpt, item.target_line = index.resolve_by_key(
+                target_lang, item.slide_id, item.role
+            )
+        return
     source_lang, target_lang = _item_languages(item)
     scheme = _scheme_for(item.role)
     if source_lang is not None:
