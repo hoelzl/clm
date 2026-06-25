@@ -2212,8 +2212,13 @@ Each `assisted` / `ambiguity` item is enriched with the **cell bytes** the work
 concerns, so a model can act without re-deriving the engine's positions:
 `source_lang` + `source_excerpt` + `source_line` (the side to reconcile *from*)
 and the matching `target_*` triple (the existing counterpart, for an
-edit/conflict; absent for an `add`, whose translation does not exist yet).
-Resolution is **fail-closed** — a position it cannot resolve with certainty
+edit/conflict; absent for an `add`, whose translation does not exist yet). A
+**keyed `conflict`** (both halves changed since baseline) carries *both* current
+cells — DE in `source_*`, EN in `target_*` — resolved by its `slide_id` (since
+CLM {version}, issue #451), so an agent can judge directly whether EN is already
+a faithful translation of DE (most early-baseline conflicts are false — a
+consistent bilingual edit). A remove-vs-edit conflict carries only the surviving
+side. Resolution is **fail-closed** — a cell it cannot resolve with certainty
 yields no excerpt rather than a wrong one. Excerpts are omitted for `mechanical`
 items (you apply those without reading them); the `*_position` indices and
 `slide_id` still locate every cell in the source you hold. A directory run wraps

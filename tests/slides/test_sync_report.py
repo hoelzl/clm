@@ -274,6 +274,11 @@ def _idless_code(lang: str, body: str) -> str:
     return f'# %% lang="{lang}" tags=["keep"]\n{body}\n'
 
 
+def _idd_code(lang: str, sid: str, body: str) -> str:
+    # A localized id'd code cell → role_of returns CODE_ROLE ("code").
+    return f'# %% lang="{lang}" tags=["keep"] slide_id="{sid}"\n{body}\n'
+
+
 def _pair(tmp_path: Path, de: str, en: str) -> tuple[Path, Path]:
     de_path = tmp_path / "deck_x.de.py"
     en_path = tmp_path / "deck_x.en.py"
@@ -316,6 +321,40 @@ class TestCellExcerpts:
         assert "zweite Folie" in item.source_excerpt
         assert "second slide" in item.target_excerpt
         assert isinstance(item.source_line, int) and isinstance(item.target_line, int)
+
+    def test_keyed_code_edit_resolves_by_key_not_position(self, tmp_path):
+        # A keyed CODE edit has role "code" (the localized-code role), which the
+        # positional path would resolve under the *localized* (non-j2) scheme while
+        # the cell's position is a *sync* index. An interleaved id-less code cell
+        # makes those indices diverge — by-key resolution stays correct. Same root
+        # cause as the keyed-conflict fix (#451), kept consistent across kinds.
+        de = "\n".join(
+            [_idless_code("de", 'print("vorlauf")'), _idd_code("de", "cc", "def de_f(): ...")]
+        )
+        en = "\n".join(
+            [_idless_code("en", 'print("prelude")'), _idd_code("en", "cc", "def en_f(): ...")]
+        )
+        de_path, en_path = _pair(tmp_path, de, en)
+        plan = _real_plan(
+            de_path,
+            en_path,
+            # `_edit` would set source_position=1 (sync index of the keyed cell); the
+            # positional path under the localized scheme would (wrongly) pick index 1
+            # there = the keyed cell on EN side too, but for the SOURCE it would pick
+            # localized[1]. Either way an interleave can misalign — by-key cannot.
+            Proposal(
+                kind="edit",
+                role="code",
+                direction="de->en",
+                slide_id="cc",
+                source_position=1,
+                target_position=1,
+            ),
+        )
+        item = build_report(plan, with_excerpts=True).assisted[0]
+        assert "def de_f()" in item.source_excerpt
+        assert "def en_f()" in item.target_excerpt
+        assert "vorlauf" not in (item.source_excerpt or "")
 
     def test_idless_localized_edit_uses_nonj2_scheme(self, tmp_path):
         de = "\n".join([_idless_code("de", 'print("eins")'), _idless_code("de", 'print("zwei")')])
@@ -403,17 +442,77 @@ class TestCellExcerpts:
         assert item.source_lang == "de"
         assert item.source_excerpt is None and item.target_excerpt is None
 
-    def test_keyed_conflict_without_positions_stays_unresolved(self, tmp_path):
+    def test_keyed_conflict_resolves_both_sides_by_key(self, tmp_path):
+        # Issue #451: a keyed conflict (both halves changed since baseline) now
+        # carries both current cells, resolved by (slide_id, role), so an agent can
+        # judge whether EN is already a faithful translation of DE.
+        de = "\n".join([_slide("de", "s1", "erste Folie"), _slide("de", "s2", "zweite Folie")])
+        en = "\n".join([_slide("en", "s1", "first slide"), _slide("en", "s2", "second slide")])
+        de_path, en_path = _pair(tmp_path, de, en)
+        plan = _real_plan(
+            de_path,
+            en_path,
+            Proposal(kind="conflict", role="slide", direction=None, slide_id="s2"),
+        )
+        item = build_report(plan, with_excerpts=True).ambiguity[0]
+        assert (item.source_lang, item.target_lang) == ("de", "en")
+        assert "zweite Folie" in item.source_excerpt
+        assert "second slide" in item.target_excerpt
+        assert isinstance(item.source_line, int) and isinstance(item.target_line, int)
+
+    def test_keyed_conflict_code_role_resolves_by_key_not_position(self, tmp_path):
+        # A keyed CODE conflict has role "code", which the positional scheme would
+        # (wrongly) treat as the *localized* (non-j2) scheme — yet the cell's
+        # position is a *sync* index. An interleaved id-less code cell makes those
+        # two indices diverge, so a position-based resolve would pick the wrong
+        # cell. Resolving by (slide_id, role) is immune. Issue #451.
+        de = "\n".join(
+            [_idless_code("de", 'print("vorlauf")'), _idd_code("de", "cc", "def de_f(): ...")]
+        )
+        en = "\n".join(
+            [_idless_code("en", 'print("prelude")'), _idd_code("en", "cc", "def en_f(): ...")]
+        )
+        de_path, en_path = _pair(tmp_path, de, en)
+        plan = _real_plan(
+            de_path,
+            en_path,
+            Proposal(kind="conflict", role="code", direction=None, slide_id="cc"),
+        )
+        item = build_report(plan, with_excerpts=True).ambiguity[0]
+        assert "def de_f()" in item.source_excerpt
+        assert "def en_f()" in item.target_excerpt
+        # The interleaved id-less code must NOT be what we resolved.
+        assert "vorlauf" not in (item.source_excerpt or "")
+        assert "prelude" not in (item.target_excerpt or "")
+
+    def test_keyed_conflict_removed_side_has_no_excerpt(self, tmp_path):
+        # remove-vs-edit: DE removed the cell, EN still has it. Only the surviving
+        # (EN) side carries an excerpt; the removed side stays None.
+        de = "\n".join([_slide("de", "s1", "nur DE")])  # s2 removed on DE
+        en = "\n".join([_slide("en", "s1", "only EN"), _slide("en", "s2", "second slide")])
+        de_path, en_path = _pair(tmp_path, de, en)
+        plan = _real_plan(
+            de_path,
+            en_path,
+            Proposal(kind="conflict", role="slide", direction=None, slide_id="s2"),
+        )
+        item = build_report(plan, with_excerpts=True).ambiguity[0]
+        assert item.source_excerpt is None  # DE removed it
+        assert item.target_lang == "en" and "second slide" in item.target_excerpt
+
+    def test_keyed_conflict_missing_cell_stays_unresolved(self, tmp_path):
+        # A keyed conflict whose slide_id is in neither half (pathological) yields
+        # no excerpt rather than a wrong one.
         de = "\n".join([_slide("de", "s1", "erste Folie")])
         en = "\n".join([_slide("en", "s1", "first slide")])
         de_path, en_path = _pair(tmp_path, de, en)
         plan = _real_plan(
             de_path,
             en_path,
-            Proposal(kind="conflict", role="slide", direction=None, slide_id="s1"),
+            Proposal(kind="conflict", role="slide", direction=None, slide_id="ghost"),
         )
         item = build_report(plan, with_excerpts=True).ambiguity[0]
-        assert item.source_lang is None and item.source_excerpt is None
+        assert item.source_excerpt is None and item.target_excerpt is None
 
     def test_mechanical_items_are_not_enriched(self, tmp_path):
         de = "\n".join([_slide("de", "s1", "erste Folie"), _slide("de", "s2", "zweite Folie")])
