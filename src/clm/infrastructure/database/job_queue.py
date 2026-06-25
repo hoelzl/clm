@@ -93,6 +93,15 @@ class JobQueue:
                 timeout=30.0,
                 isolation_level=None,  # Enable autocommit mode for simple operations
             )
+            # The WAL/synchronous=NORMAL pragmas set in init_database run on a
+            # throwaway connection; journal_mode=WAL persists in the DB file but
+            # synchronous is PER-CONNECTION and otherwise reverts to the default
+            # FULL here, fsyncing on every commit. On this hot path (each
+            # add_job INSERT, each worker get_next_job/status UPDATE, every
+            # poll-loop write) that per-commit fsync is pure latency. NORMAL is
+            # safe under WAL: at worst the last committed transaction is lost on
+            # power failure, never corruption — fine for a rebuildable queue.
+            self._local.conn.execute("PRAGMA synchronous=NORMAL")
             self._local.conn.row_factory = sqlite3.Row
         return cast(Connection, self._local.conn)
 

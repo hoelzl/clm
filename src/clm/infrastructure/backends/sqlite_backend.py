@@ -10,6 +10,7 @@ import logging
 import queue
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -21,6 +22,8 @@ from clm.core.output_write_registry import (
 )
 from clm.infrastructure.backend import JobsPendingTimeoutError
 from clm.infrastructure.backends.local_ops_backend import LocalOpsBackend
+from clm.infrastructure.build_profiling import now as profiler_now
+from clm.infrastructure.build_profiling import profiler
 from clm.infrastructure.database.db_operations import DatabaseManager
 from clm.infrastructure.database.job_queue import JobQueue
 from clm.infrastructure.database.schema import init_database
@@ -37,6 +40,12 @@ if TYPE_CHECKING:
     from clm.infrastructure.utils.copy_file_data import CopyFileData
 
 logger = logging.getLogger(__name__)
+
+
+# Max concurrent ``execute_operation`` calls (see ``_ensure_submission_semaphore``).
+# Small on purpose: the submit thread is single, and a tighter cap keeps any
+# on-loop cache-hit-replay burst short so the progress bar stays responsive.
+SUBMISSION_CONCURRENCY = 8
 
 
 @define
@@ -79,6 +88,24 @@ class SqliteBackend(LocalOpsBackend):
     _result_cache_queue: Any = field(init=False, default=None)
     _result_cache_thread: Any = field(init=False, default=None)
 
+    # Bounded thread pool for the synchronous job-submission tail (job-cache
+    # probe, worker-availability wait, payload JSON serialization, jobs-DB
+    # INSERT). That work has no await and used to run inline on the event loop,
+    # so a submission burst starved the completion poll loop and froze the
+    # progress bar (the bar only advances from that poll loop). Offloading it
+    # keeps the loop free to poll. Small + bounded because the jobs DB
+    # serializes writers anyway, so more threads only add lock contention.
+    _submit_executor: "ThreadPoolExecutor | None" = field(init=False, default=None)
+
+    # Caps how many operations are processed concurrently, bounding the on-loop
+    # work that runs per event-loop turn. The cache-HIT replay path still runs
+    # on the loop (it reads the result cache and mutates the non-thread-safe
+    # output registry), so without a cap a burst of cache hits blocks the poll
+    # loop for the whole batch. The gate keeps any such burst small, and adds
+    # backpressure so submission does not build the whole course's payloads
+    # in memory at once. Created lazily on the event loop.
+    _submission_semaphore: "asyncio.Semaphore | None" = field(init=False, default=None)
+
     def __attrs_post_init__(self):
         """Initialize SQLite database and job queue."""
         # Database should already be initialized, but ensure it exists
@@ -115,7 +142,52 @@ class SqliteBackend(LocalOpsBackend):
         self._perform_session_start_cleanup()
 
     async def execute_operation(self, operation: Operation, payload: Payload) -> None:
+        """Submit a job to the SQLite queue (timing wrapper).
+
+        The real work lives in :meth:`_execute_operation_impl`. This thin
+        wrapper only measures the call under ``CLM_PROFILE_BUILD`` — this is
+        the awaitless submission body whose synchronous cost (payload
+        serialization, cache lookup, INSERT, or cache-hit unpickle+write)
+        starves the completion poll loop and freezes the progress bar.
+        """
+        async with self._ensure_submission_semaphore():
+            # Time inside the gate so the (off-loop) semaphore wait is not
+            # counted as on-loop blocking.
+            if not profiler.enabled:
+                await self._execute_operation_impl(operation, payload)
+                return
+            start = profiler_now()
+            cache_hit = False
+            try:
+                cache_hit = await self._execute_operation_impl(operation, payload)
+            finally:
+                profiler.record_execute_op(profiler_now() - start, cache_hit)
+
+    def _ensure_submission_semaphore(self) -> asyncio.Semaphore:
+        """Lazily create the per-operation concurrency gate on the event loop.
+
+        Bounds how many ``execute_operation`` calls run concurrently. The
+        cache-HIT replay path runs on the loop (result-cache read + non-thread-
+        safe registry mutation), so this cap limits how much of it can pile into
+        a single event-loop turn and stall the completion poll loop, and it
+        backpressures submission so the whole course's payloads are not built in
+        memory at once. Misses spend their time awaiting the single submit
+        thread, so a handful of permits keeps that thread saturated without
+        bloating its queue.
+        """
+        sem = self._submission_semaphore
+        if sem is None:
+            sem = asyncio.Semaphore(SUBMISSION_CONCURRENCY)
+            self._submission_semaphore = sem
+        return sem
+
+    async def _execute_operation_impl(self, operation: Operation, payload: Payload) -> bool:
         """Submit a job to the SQLite queue.
+
+        Returns ``True`` when the operation was satisfied from a cache (DB
+        result cache or SQLite job cache) without submitting a worker job,
+        ``False`` when a new job was enqueued. The boolean is only consumed by
+        the profiling wrapper.
 
         Args:
             operation: Operation to execute
@@ -225,86 +297,60 @@ class SqliteBackend(LocalOpsBackend):
                         detail="stored result replayed, no execution",
                     )
 
-                return
-
-        # Check SQLite job cache
-        # Same gate as the database cache above — --ignore-cache (ignore_db)
-        # must bypass *both* caches, otherwise workers get silently skipped
-        # for output paths whose content_hash matches a prior run.
-        if not self.ignore_db and self.job_queue:
-            cached = self.job_queue.check_cache(str(payload.output_file), payload.content_hash())
-            if cached:
-                logger.debug(f"SQLite cache hit for {payload.output_file}")
-                # Output file should already exist from previous run
-                output_path = Path(payload.output_file)
-                # Make path absolute relative to workspace if not already absolute
-                if not output_path.is_absolute():
-                    output_path = self.workspace_path / output_path
-                if output_path.exists():
-                    # Replay stored errors/warnings for this result, exactly
-                    # like the database-cache path above. Without this, a
-                    # results_cache hit (e.g. after retention pruned the
-                    # processed_files entry) silently dropped the issues a
-                    # worker recorded for this content — the build went
-                    # green while the output still contained the flagged
-                    # content (issue #321: replay must be observationally
-                    # equivalent to execution).
-                    self._report_cached_issues(
-                        payload.input_file,
-                        payload.content_hash(),
-                        payload.output_metadata(),
-                    )
-                    # Report cache hit to build reporter for progress tracking
-                    if self.build_reporter:
-                        self.build_reporter.report_cache_hit(
-                            str(payload.input_file),
-                            job_type,
-                            detail="output already on disk, no execution",
-                        )
-                    return
-                else:
-                    logger.warning(f"Cache indicated file exists but not found: {output_path}")
+                return True
 
         if service_name not in service_to_job_type:
             raise ValueError(f"Unknown service: {service_name}")
 
-        # Check if workers are available for this job type (unless check is skipped for testing)
-        if not self.skip_worker_check:
-            available_workers = self._get_available_workers(job_type)
-            if available_workers == 0:
-                raise RuntimeError(
-                    f"No workers available to process '{job_type}' jobs. "
-                    f"Please start {job_type} workers before submitting jobs. "
-                    f"Workers should register in the database within 10 seconds of starting."
-                )
-
-            logger.debug(f"Found {available_workers} available worker(s) for job type '{job_type}'")
-
-        # Prepare payload dict using Pydantic's model_dump() with mode='json'
-        # This ensures bytes are serialized to base64 strings for JSON compatibility
-        payload_dict = payload.model_dump(mode="json")
-
-        # Extract correlation_id from payload
-        correlation_id = getattr(payload, "correlation_id", None)
-
-        # Add job to queue (job_queue is always initialized in __attrs_post_init__)
-        assert self.job_queue is not None
-
-        # Note: Job cancellation for watch mode is handled by the file_event_handler
-        # when a file change is detected, not here. The same source file can produce
-        # multiple output files (HTML, .ipynb, .py in multiple languages), so we
-        # cannot cancel by input file alone during normal operation submission.
-
-        job_id = self.job_queue.add_job(
-            job_type=job_type,
-            input_file=str(payload.input_file),
-            output_file=str(payload.output_file),
-            content_hash=payload.content_hash(),
-            payload=payload_dict,
-            correlation_id=correlation_id,
+        # The remaining submission work — the SQLite job-cache probe, the
+        # worker-availability wait (which can ``time.sleep`` for seconds while
+        # workers activate), the payload JSON serialization (which re-encodes
+        # the base64 sibling blobs), and the jobs-DB INSERT — is fully
+        # synchronous. Run inline on the event loop it was the dominant cost
+        # that starved the completion poll loop, so a submission burst froze
+        # the progress bar (which only advances from that poll loop) while the
+        # workers raced ahead. It touches only thread-safe resources (JobQueue
+        # keeps a per-thread SQLite connection; model_dump is pure), so we run
+        # it on a bounded thread pool and the event loop stays free to poll.
+        #
+        # Everything AFTER the offload — the registries, the build reporter,
+        # the active_jobs dict, and the db_manager-backed cached-issue replay —
+        # is confined to the event-loop thread because none of it is
+        # thread-safe (the DB result-cache replay above, db_manager.get_result,
+        # stays on the loop for the same reason).
+        _offload_t0 = profiler_now() if profiler.enabled else 0.0
+        outcome, job_id = await asyncio.get_running_loop().run_in_executor(
+            self._ensure_submit_executor(),
+            self._submit_job_blocking,
+            payload,
+            job_type,
         )
+        if profiler.enabled:
+            profiler.record_submit_offload(profiler_now() - _offload_t0)
 
-        # Track active job
+        if outcome == "jobcache_hit":
+            # Stored output is already on disk (results_cache hit). Replay its
+            # issues and report the hit here on the loop thread — db_manager
+            # reads and the build reporter are loop-confined. Mirrors the
+            # database-cache replay above (issue #321: a cache replay must be
+            # observationally equivalent to execution).
+            self._report_cached_issues(
+                payload.input_file,
+                payload.content_hash(),
+                payload.output_metadata(),
+            )
+            if self.build_reporter:
+                self.build_reporter.report_cache_hit(
+                    str(payload.input_file),
+                    job_type,
+                    detail="output already on disk, no execution",
+                )
+            return True
+
+        # outcome == "submitted": the job is in the jobs DB. Register it for the
+        # poll loop and report it — all loop-confined state.
+        assert job_id is not None
+        correlation_id = getattr(payload, "correlation_id", None)
         self.active_jobs[job_id] = {
             "job_type": job_type,
             "input_file": str(payload.input_file),
@@ -328,6 +374,83 @@ class SqliteBackend(LocalOpsBackend):
         logger.debug(
             f"Added job {job_id} ({job_type}): {payload.input_file} -> {payload.output_file}"
         )
+        return False
+
+    def _submit_job_blocking(self, payload: Payload, job_type: str) -> tuple[str, int | None]:
+        """Synchronous job-submission tail, run off the event loop.
+
+        Performs the SQLite job-cache probe, the worker-availability wait, the
+        payload JSON serialization, and the jobs-DB INSERT. Returns
+        ``("jobcache_hit", None)`` when a stored output already satisfies the
+        request, or ``("submitted", job_id)`` when a new job was enqueued.
+
+        Runs on a :attr:`_submit_executor` thread, so it must touch ONLY
+        thread-safe resources: ``JobQueue`` keeps a per-thread SQLite connection
+        (so ``check_cache`` / ``_get_available_workers`` / ``add_job`` are safe
+        here) and ``model_dump`` is pure. It must NOT touch ``db_manager``, the
+        registries, or the build reporter — the caller does the cache-issue
+        replay, reporting, and ``active_jobs`` bookkeeping on the event-loop
+        thread after this returns.
+        """
+        assert self.job_queue is not None
+
+        # SQLite job cache: a stored result whose output is already on disk
+        # needs no worker run. Same --ignore-cache gate as the DB cache above.
+        if not self.ignore_db:
+            cached = self.job_queue.check_cache(str(payload.output_file), payload.content_hash())
+            if cached:
+                logger.debug(f"SQLite cache hit for {payload.output_file}")
+                output_path = Path(payload.output_file)
+                if not output_path.is_absolute():
+                    output_path = self.workspace_path / output_path
+                if output_path.exists():
+                    return ("jobcache_hit", None)
+                logger.warning(f"Cache indicated file exists but not found: {output_path}")
+
+        # Worker availability (may briefly block waiting for workers to activate).
+        if not self.skip_worker_check:
+            available_workers = self._get_available_workers(job_type)
+            if available_workers == 0:
+                raise RuntimeError(
+                    f"No workers available to process '{job_type}' jobs. "
+                    f"Please start {job_type} workers before submitting jobs. "
+                    f"Workers should register in the database within 10 seconds of starting."
+                )
+            logger.debug(f"Found {available_workers} available worker(s) for job type '{job_type}'")
+
+        # Prepare payload dict (model_dump mode='json' base64-encodes bytes) and
+        # enqueue the job. Job cancellation for watch mode is handled elsewhere
+        # (the file_event_handler), not here.
+        payload_dict = payload.model_dump(mode="json")
+        correlation_id = getattr(payload, "correlation_id", None)
+        job_id = self.job_queue.add_job(
+            job_type=job_type,
+            input_file=str(payload.input_file),
+            output_file=str(payload.output_file),
+            content_hash=payload.content_hash(),
+            payload=payload_dict,
+            correlation_id=correlation_id,
+        )
+        return ("submitted", job_id)
+
+    def _ensure_submit_executor(self) -> ThreadPoolExecutor:
+        """Lazily create the single-thread job-submission executor.
+
+        Deliberately ONE worker. The goal is only to move the synchronous
+        submission tail OFF the event loop, not to submit concurrently:
+        ``check_cache`` (``BEGIN IMMEDIATE``) and ``add_job`` (INSERT) take the
+        jobs-DB write lock, which SQLite serializes anyway, so multiple
+        submission threads just pile onto that lock and starve the workers'
+        ``get_next_job`` and the poll loop's own writes (measured: an 8-thread
+        pool nearly doubled total build time). A single dedicated thread
+        reproduces the original serial submission throughput with zero added
+        lock contention, while the event loop stays free to poll.
+        """
+        executor = self._submit_executor
+        if executor is None:
+            executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="clm-submit")
+            self._submit_executor = executor
+        return executor
 
     def _can_replay_from_cache(self, payload: Payload) -> bool:
         """Gate the ``processed_files`` short-circuit on the execution cache.
@@ -474,7 +597,18 @@ class SqliteBackend(LocalOpsBackend):
         failed_jobs: list[dict[str, Any]] = []
         last_cleanup_time = start_time
 
+        # Profiling: the inter-iteration gap of this poll loop. A healthy gap is
+        # ~poll_interval; a multi-second gap means the loop was starved of the
+        # event loop (submission monopolizing it) and the progress bar was
+        # frozen for that long. Recorded per cycle under CLM_PROFILE_BUILD.
+        last_cycle_t = profiler_now() if profiler.enabled else 0.0
+        cycle_gap = 0.0
+
         while True:
+            if profiler.enabled:
+                _cycle_now = profiler_now()
+                cycle_gap = _cycle_now - last_cycle_t
+                last_cycle_t = _cycle_now
             # If no active jobs, check whether we can exit
             if not self.active_jobs:
                 if all_submitted is None or all_submitted.is_set():
@@ -667,6 +801,11 @@ class SqliteBackend(LocalOpsBackend):
             for job_id in completed_jobs:
                 del self.active_jobs[job_id]
 
+            if profiler.enabled:
+                profiler.record_poll_cycle(
+                    cycle_gap, len(completed_jobs), len(self.active_jobs), self.poll_interval
+                )
+
             # Check timeout
             elapsed = asyncio.get_event_loop().time() - start_time
             if elapsed > self.max_wait_for_completion_duration:
@@ -688,7 +827,7 @@ class SqliteBackend(LocalOpsBackend):
         # shutdown. This is where any backlog the writer could not keep up with
         # during the stage is absorbed, with a progress line so it is not a
         # silent pause.
-        self._drain_result_cache_writes()
+        await self._drain_result_cache_writes()
 
         # Stop progress tracking and log summary
         if self.progress_tracker:
@@ -755,6 +894,8 @@ class SqliteBackend(LocalOpsBackend):
     async def shutdown(self):
         """Shutdown the backend and perform build-end cleanup if configured."""
         logger.debug("Shutting down SQLite backend")
+        # Emit the build profiling summary (no-op unless CLM_PROFILE_BUILD is set).
+        profiler.dump_summary()
         # Wait for remaining jobs with shorter timeout
         if self.active_jobs:
             logger.warning(f"Shutdown called with {len(self.active_jobs)} job(s) still pending")
@@ -766,6 +907,13 @@ class SqliteBackend(LocalOpsBackend):
         # Stop the background result-cache writer before any cleanup/VACUUM so
         # all pending blob writes land first and nothing races the compaction.
         self._stop_result_cache_writer()
+
+        # Shut down the job-submission thread pool (all submission is done by
+        # the time we reach shutdown). wait=True so its jobs-DB connections are
+        # closed before any end-of-build cleanup/VACUUM.
+        if self._submit_executor is not None:
+            self._submit_executor.shutdown(wait=True)
+            self._submit_executor = None
 
         # Perform build-end cleanup if configured
         self._perform_build_end_cleanup()
@@ -1147,12 +1295,17 @@ class SqliteBackend(LocalOpsBackend):
                 except Exception:  # pragma: no cover - best-effort close
                     logger.debug("Error closing result-cache writer DB", exc_info=True)
 
-    def _drain_result_cache_writes(self) -> None:
-        """Block until every queued result-cache write has been committed.
+    async def _drain_result_cache_writes(self) -> None:
+        """Wait until every queued result-cache write has been committed.
 
         Called at the end of each ``wait_for_completion`` so the cache DB is
         fully populated for callers that read it immediately afterwards. The
         writer thread keeps running for the next stage.
+
+        The blocking ``queue.join()`` runs off the event loop (``to_thread``):
+        if the background writer fell behind, joining inline here would freeze
+        the loop — and therefore the progress bar — at the end of every stage
+        (three times per stage with the default shared/trainer/speaker targets).
         """
         q = self._result_cache_queue
         if q is None:
@@ -1160,7 +1313,7 @@ class SqliteBackend(LocalOpsBackend):
         pending = q.qsize()
         if pending:
             self._show_progress(f"Finishing {pending} result-cache write(s)...")
-        q.join()
+        await asyncio.to_thread(q.join)
 
     def _stop_result_cache_writer(self) -> None:
         """Drain remaining writes and stop the writer thread (idempotent)."""

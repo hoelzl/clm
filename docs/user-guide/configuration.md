@@ -176,6 +176,16 @@ export DRAWIO_EXECUTABLE="/Applications/draw.io.app/Contents/MacOS/draw.io"
 set DRAWIO_EXECUTABLE="C:\Program Files\draw.io\draw.io.exe"
 ```
 
+### Diagnostics
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `CLM_PROFILE_BUILD` | Set to `1` to make `clm build` emit `[build-profile]` lines (to stderr) measuring the completion poll loop's health: per-cycle gaps, the worst stall and how many completions it hid, and the on-loop vs offloaded submission cost. Use when the progress bar appears to stall behind the workers. Zero overhead when unset. | (unset) |
+
+The `scripts/profile_build_stall.py` harness drives a throwaway synthetic course
+with this enabled (against isolated temp databases) to reproduce and measure the
+build's submission / poll-loop behavior.
+
 ### Slide Authoring
 
 | Variable | Description | Default |
