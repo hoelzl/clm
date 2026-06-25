@@ -78,9 +78,19 @@ _ASSISTED_KINDS = frozenset({"add", "edit", "rename", "mint", "adopt", "reconcil
 
 #: Proposal roles whose ``source_position`` / ``target_position`` index a language's
 #: **non-j2 cells** (the engine's "localized" scheme) rather than its sync-relevant
-#: cells (the default "sync" scheme). These four roles appear *only* on the id-less
-#: localized membership proposals (edit / conflict / retag), so the role alone is a
-#: sound discriminator between the two schemes.
+#: cells (the default "sync" scheme), used by :func:`_scheme_for` for the *positional*
+#: enrichment path.
+#:
+#: IMPORTANT — the role alone is NOT a keyed-vs-id-less discriminator: ``role_of``
+#: returns ``"code"`` / ``"markdown"`` for *keyed* (id'd) localized cells too, and a
+#: keyed cell's position is a *sync* index, not a localized one. So this set is only
+#: sound *because* :func:`_enrich` routes every **keyed** item (one carrying a
+#: ``slide_id``) through :meth:`_SourceIndex.resolve_by_key` and returns **before**
+#: the positional path runs (issue #451). By the time ``_scheme_for`` is consulted the
+#: item is therefore guaranteed id-less, and a localized role correctly names the
+#: non-j2 scheme. Keep that ordering: consulting ``_scheme_for`` on a keyed item would
+#: resolve a sync-index position against the localized cell list (a wrong/empty
+#: excerpt when id-less cells are interleaved).
 _LOCALIZED_POSITION_ROLES = frozenset(
     {LOCALIZED_CODE_ROLE, LOCALIZED_MARKDOWN_ROLE, "code", "markdown"}
 )
@@ -289,12 +299,19 @@ def _item_languages(item: ReconciliationItem) -> tuple[str | None, str | None]:
     index in ``source_position`` and the EN index in ``target_position`` — so it
     resolves as DE→EN. Every other directionless item (a keyed conflict / mint /
     issue) has no positional source/target and stays unresolved.
+
+    This is the **positional** path; :func:`_enrich` only reaches it for id-less items
+    (keyed items resolve by ``(slide_id, role)`` first). The explicit
+    ``item.slide_id is None`` guard on the conflict branch enforces that invariant
+    locally: a keyed conflict must never be read positionally, because its ``role``
+    (e.g. ``"code"``) would mis-select the localized scheme for a sync-index position.
     """
     if item.direction in ("de->en", "en->de"):
         source, target = item.direction.split("->")
         return source, target
     if (
         item.kind == "conflict"
+        and item.slide_id is None
         and _scheme_for(item.role) == "localized"
         and item.source_position is not None
         and item.target_position is not None

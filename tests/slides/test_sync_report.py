@@ -485,6 +485,61 @@ class TestCellExcerpts:
         assert "vorlauf" not in (item.source_excerpt or "")
         assert "prelude" not in (item.target_excerpt or "")
 
+    def test_keyed_conflict_with_positions_still_resolves_by_key(self, tmp_path):
+        # Invariant guard: even if a (future / erroneous) producer set positions on a
+        # keyed conflict, the keyed branch must win — never the position+scheme path,
+        # which would mis-select the localized scheme for role "code". The bad
+        # positions below point at the interleaved id-less cell under the localized
+        # scheme; by-key must ignore them and resolve the id'd cell.
+        de = "\n".join(
+            [_idless_code("de", 'print("vorlauf")'), _idd_code("de", "cc", "def de_f(): ...")]
+        )
+        en = "\n".join(
+            [_idless_code("en", 'print("prelude")'), _idd_code("en", "cc", "def en_f(): ...")]
+        )
+        de_path, en_path = _pair(tmp_path, de, en)
+        plan = _real_plan(
+            de_path,
+            en_path,
+            Proposal(
+                kind="conflict",
+                role="code",
+                direction=None,
+                slide_id="cc",
+                source_position=0,  # localized index 0 = the id-less "vorlauf" cell
+                target_position=0,  # localized index 0 = the id-less "prelude" cell
+            ),
+        )
+        item = build_report(plan, with_excerpts=True).ambiguity[0]
+        assert "def de_f()" in item.source_excerpt  # resolved by (slide_id, role), not pos
+        assert "vorlauf" not in (item.source_excerpt or "")
+
+    def test_item_languages_skips_keyed_conflict(self):
+        # The positional path is id-less-only: a keyed conflict (slide_id set), even
+        # with positions, must not be claimed by `_item_languages` (it is handled by
+        # the by-key branch in `_enrich`). Guards the `_scheme_for("code")` footgun.
+        from clm.slides.sync_report import ReconciliationItem, _item_languages
+
+        keyed = ReconciliationItem(
+            tier="ambiguity",
+            kind="conflict",
+            role="code",
+            slide_id="cc",
+            source_position=0,
+            target_position=0,
+        )
+        assert _item_languages(keyed) == (None, None)
+        # The id-less twin (slide_id None) is still resolved positionally.
+        idless = ReconciliationItem(
+            tier="ambiguity",
+            kind="conflict",
+            role="code",
+            slide_id=None,
+            source_position=0,
+            target_position=0,
+        )
+        assert _item_languages(idless) == ("de", "en")
+
     def test_keyed_conflict_removed_side_has_no_excerpt(self, tmp_path):
         # remove-vs-edit: DE removed the cell, EN still has it. Only the surviving
         # (EN) side carries an excerpt; the removed side stays None.
