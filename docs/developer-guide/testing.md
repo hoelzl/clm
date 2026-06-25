@@ -156,23 +156,35 @@ usual but keeps any tests sharing an `xdist_group` on the **same** worker.
 
 Four levers keep the per-commit fast suite both quick and flake-free:
 
-**1. `serial` — pin contention-prone tests to one worker.** A mock worker pool
-(`tests/infrastructure/workers/test_lifecycle_mock.py`) polls committed SQLite
-registration state; under many concurrent xdist workers its threads get starved
-and registration appears to stall (issue #163). The `serial` marker puts every
-such test on a single shared `xdist_group` so they run one-at-a-time on one
-dedicated worker while the rest of the suite stays fully parallel:
+**1. `serial` — pin contention-prone tests to one worker, by resource class.**
+A mock worker pool (`tests/infrastructure/workers/test_lifecycle_mock.py`) polls
+committed SQLite registration state; under many concurrent xdist workers its
+threads get starved and registration appears to stall (issue #163). The `serial`
+marker pins such tests onto a single `xdist_group` so they run one-at-a-time on
+one worker while the rest of the suite stays fully parallel.
+
+An optional argument names the **resource class** so that *different* heavy
+families don't serialize behind each other: same-class tests share one group
+(one worker, one-at-a-time); different classes get different groups that run on
+*different* workers concurrently. Current classes: `workerpool` (worker-thread /
+registration tests), `subproc` (CPython/mitmdump subprocess spawns), `port`
+(real socket binds). Bare `serial` (no arg) is a default catch-all group.
 
 ```python
 import pytest
 
-pytestmark = pytest.mark.serial  # whole module, or @pytest.mark.serial per-test
+pytestmark = pytest.mark.serial("subproc")   # whole module
+# or per-test:  @pytest.mark.serial("port")
+# or unclassified default group:  @pytest.mark.serial
 ```
 
-`tests/conftest.py` maps `serial` onto the `xdist_group`. **Reach for `serial`
-when a test contends for a global resource** (a fixed port, a shared daemon, a
-registration table) — it is the cheap, surgical alternative to widening
-timeouts, and a no-op under `-n0`.
+`tests/conftest.py` maps the marker (and its optional class arg) onto the
+`xdist_group` via `tests/xdist_group_helpers.serial_group_name`;
+`tests/test_serial_xdist_groups.py` is the meta-test that guards the mapping and
+the split. **Reach for `serial` when a test contends for a global resource** (a
+fixed port, a shared daemon, a registration table) — it is the cheap, surgical
+alternative to widening timeouts, and a no-op under `-n0`. Give it a resource
+class so it only serializes against tests that share the *same* resource.
 
 **2. `integration` — keep real-subprocess long-poles off every commit.** A test
 that spawns a real OS subprocess (a Jupyter kernel, a mitmdump proxy) is slow

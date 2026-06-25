@@ -563,7 +563,16 @@ def pytest_configure(config):
 @pytest.hookimpl(tryfirst=True)
 def pytest_collection_modifyitems(config, items):
     """Auto-skip tests based on tool availability; map ``serial`` to a group."""
+    from tests.xdist_group_helpers import serial_group_name
+
     tool_status = get_tool_availability()
+
+    # Tally serial-marked items per resulting load group so the meta-test
+    # (``tests/test_serial_xdist_groups.py``) can confirm the heavy families
+    # land in DISTINCT groups. This hook sees the FULL collected item list on
+    # every xdist worker (collection runs per-worker before distribution), so
+    # the counts are complete wherever the meta-test happens to execute.
+    serial_group_counts: dict[str, int] = {}
 
     # Count tests by marker for reporting
     docker_tests = []
@@ -650,15 +659,26 @@ def pytest_collection_modifyitems(config, items):
             if not tool_status["docker"]:
                 item.add_marker(skip_docker)
 
-        # Map the project's ``serial`` marker onto an xdist load group so the
-        # ``--dist loadgroup`` scheduler (see pyproject ``addopts``) pins every
-        # serial-marked test onto a single worker. Contention-prone tests that
-        # spawn heavyweight external processes (a mitmdump proxy, a worker
-        # pool) thereby run one-at-a-time instead of racing each other across
-        # workers and oversubscribing the box. A no-op when xdist is disabled
-        # (``-n0``), since there is then only one worker anyway.
-        if "serial" in markers:
-            item.add_marker(pytest.mark.xdist_group("serial"))
+        # Map the project's ``serial`` marker onto a PER-RESOURCE xdist load
+        # group so the ``--dist loadgroup`` scheduler (see pyproject ``addopts``)
+        # pins each contention-prone family onto ONE worker. The optional marker
+        # argument names the resource class: ``@pytest.mark.serial`` -> the
+        # default ``"serial"`` group; ``@pytest.mark.serial("subproc")`` ->
+        # ``"serial-subproc"``. Distinct classes get distinct groups, so e.g. the
+        # subprocess-spawning tests and the worker-pool tests each run
+        # one-at-a-time *within* their class while the two classes run on
+        # DIFFERENT workers concurrently — instead of all serial tests stacking
+        # onto one worker (the single-bucket bottleneck). A no-op under ``-n0``
+        # (one worker anyway).
+        serial_marker = item.get_closest_marker("serial")
+        if serial_marker is not None:
+            resource_class = serial_marker.args[0] if serial_marker.args else None
+            group = serial_group_name(resource_class)
+            item.add_marker(pytest.mark.xdist_group(group))
+            serial_group_counts[group] = serial_group_counts.get(group, 0) + 1
+
+    # Expose the per-group tally for the split-invariant meta-test.
+    setattr(config, "_clm_serial_group_counts", serial_group_counts)
 
 
 @pytest.fixture(scope="function")
@@ -969,30 +989,52 @@ def e2e_test_data_template(tmp_path_factory):
         Path: Path to the template directory containing test-data
     """
     template_dir = tmp_path_factory.mktemp("test-data-template")
-    # Other tests in the suite write transient spec files into the shared
-    # ``tests/test-data/course-specs/`` tree (see e.g. the outline-command
-    # fixtures in ``tests/cli/test_outline.py``). Under xdist that creates a
-    # race against this copytree on Windows: ``os.scandir`` sees the file
-    # but it has been unlinked by the time ``copytree`` tries to read it,
-    # which raises ``[WinError 2]``. The volatile names all follow the
-    # pattern ``test-spec-<slug>-test_<funcname>.xml`` because they use
-    # ``request.node.name``; the committed specs use bare names like
-    # ``test-spec-1.xml`` and don't contain ``-test_``. Skip the volatile
-    # ones at scan time so the e2e setup is robust to concurrent writers.
+    # Some tests write transient, per-test spec files under the shared
+    # ``tests/test-data`` tree (the outline-command fixtures in
+    # ``tests/cli/test_outline.py`` — a spec must live one level under
+    # test-data so ``resolve_course_paths``' grandparent rule finds the shared
+    # ``slides/`` sibling). Under xdist that races this copytree on Windows:
+    # ``os.scandir`` sees a file that has been unlinked by the time copytree
+    # opens it (``[WinError 2]``). Those fixtures write into a dedicated
+    # ``_volatile_specs/`` subdirectory (M-2); excluding that ONE directory
+    # wholesale is robust to whatever filename a future fixture chooses — unlike
+    # the previous ``test-spec-*-test_*.xml`` filename-substring glob, which a
+    # differently-named volatile spec would silently defeat. The old pattern is
+    # kept too, as a belt-and-suspenders for any stray writer outside that dir.
     shutil.copytree(
         DATA_DIR,
         template_dir / "test-data",
-        ignore=shutil.ignore_patterns("test-spec-*-test_*.xml"),
+        ignore=shutil.ignore_patterns("_volatile_specs", "test-spec-*-test_*.xml"),
     )
     return template_dir / "test-data"
+
+
+def _link_or_copy(src, dst, *, follow_symlinks=True):
+    """``copytree`` copy_function: hardlink for speed, byte-copy per file on failure.
+
+    The old approach tried ``copytree(copy_function=os.link)`` wholesale and, on
+    ``OSError``, retried with a plain ``copytree`` — but the first attempt may
+    have already created ``dst`` and linked some files before failing on one,
+    so the retry hit ``FileExistsError`` against the now-partial directory (and
+    the trigger scales with worker count: Windows handle pressure under parallel
+    load makes a mid-copy ``os.link`` failure load-correlated). Degrading only
+    the *single* failing file to ``shutil.copy2`` keeps the hardlink speed win
+    for every other file and can never leave a partial tree for a retry to trip
+    on. ``copy2`` preserves metadata, so the fallback is faithful.
+    """
+    try:
+        os.link(src, dst)
+    except OSError:
+        shutil.copy2(src, dst, follow_symlinks=follow_symlinks)
 
 
 @pytest.fixture
 def e2e_test_data_copy(tmp_path, e2e_test_data_template):
     """Copy test-data to temp directory for E2E testing.
 
-    Uses hardlinks from session-scoped template for fast per-test copies.
-    Falls back to regular copy on platforms that don't support hardlinks.
+    Uses hardlinks from the session-scoped template for fast per-test copies,
+    falling back to a byte copy per file (see :func:`_link_or_copy`) when a
+    hardlink can't be made.
 
     Returns:
         tuple: (data_dir, output_dir) where data_dir is the copied test-data
@@ -1001,13 +1043,9 @@ def e2e_test_data_copy(tmp_path, e2e_test_data_template):
     data_dir = tmp_path / "test-data"
     output_dir = tmp_path / "output"
 
-    # Try to use hardlinks for fast copy from template (O(n) files, not O(n) bytes)
-    # Falls back to regular copy on Windows or cross-filesystem scenarios
-    try:
-        shutil.copytree(e2e_test_data_template, data_dir, copy_function=os.link)
-    except OSError:
-        # Fallback to regular copy if hardlinks not supported
-        shutil.copytree(e2e_test_data_template, data_dir)
+    # Hardlink each file (O(n) files, not O(n) bytes); a file that can't be
+    # linked degrades to a byte copy without aborting the whole tree.
+    shutil.copytree(e2e_test_data_template, data_dir, copy_function=_link_or_copy)
 
     # Create output directory
     output_dir.mkdir(parents=True, exist_ok=True)

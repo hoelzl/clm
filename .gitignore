@@ -263,6 +263,11 @@ clm-faststream-backend-old/
 # Diagnostic output from the voiceover test tool
 tools/diagnostic_output/
 
+# Transient per-test spec files written by the outline-command tests (they must
+# sit one level under tests/test-data so resolve_course_paths finds the shared
+# slides/ sibling). Created and unlinked per test; the dir itself may linger.
+tests/test-data/_volatile_specs/
+
 # CLM build-internal sidecar tree (per topic and at the repo root). The
 # regenerable scratch under .clm/ is ignored — voiceover caches, recordings
 # event/jobs logs, local config.toml. The COMMITTED inputs under .clm/ are

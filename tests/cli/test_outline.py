@@ -27,6 +27,23 @@ from clm.cli.main import cli
 from clm.core.course import Course
 from clm.core.course_spec import CourseSpec
 
+# Per-test spec files for the resolution-dependent outline tests live in a
+# dedicated ``_volatile_specs/`` subdirectory of the shared test-data root. The
+# spec must sit one level under ``tests/test-data`` so ``resolve_course_paths``'
+# grandparent rule still finds the shared ``slides/`` sibling — but writing and
+# unlinking it there (rather than in the committed ``course-specs/``) keeps it
+# clear of the session ``e2e_test_data_template`` copytree, which excludes
+# ``_volatile_specs`` wholesale (see tests/conftest.py), so concurrent xdist
+# workers never race that scan. The directory is gitignored. Keyed by
+# ``request.node.name`` so two workers never collide on the same path.
+_VOLATILE_SPECS_DIR = Path("tests/test-data/_volatile_specs")
+
+
+def _volatile_spec_path(request, slug: str) -> Path:
+    """Return a per-test spec path under the ignored ``_volatile_specs/`` dir."""
+    _VOLATILE_SPECS_DIR.mkdir(parents=True, exist_ok=True)
+    return _VOLATILE_SPECS_DIR / f"{slug}-{request.node.name}.xml"
+
 
 class TestOutlineCommandHelp:
     """Test outline command help and basic structure."""
@@ -334,11 +351,7 @@ class TestOutlineIncludeDisabled:
         File name is per-test (request.node.name) so concurrent xdist workers
         do not race the same shared path.
         """
-        data_dir = Path("tests/test-data")
-        specs_dir = data_dir / "course-specs"
-        spec_file = specs_dir / f"test-spec-with-disabled-{request.node.name}.xml"
-        # Keep spec file inside tests/test-data/course-specs so
-        # resolve_course_paths can locate the shared slides/ sibling.
+        spec_file = _volatile_spec_path(request, "with-disabled")
         spec_file.write_text(
             dedent("""\
                 <course>
@@ -445,9 +458,7 @@ class TestOutlineDisabledShowsRealTitles:
     @pytest.fixture
     def spec_with_resolvable_disabled_section(self, request):
         """Spec whose disabled section references a topic that exists on disk."""
-        data_dir = Path("tests/test-data")
-        specs_dir = data_dir / "course-specs"
-        spec_file = specs_dir / f"test-spec-disabled-resolvable-{request.node.name}.xml"
+        spec_file = _volatile_spec_path(request, "disabled-resolvable")
         spec_file.write_text(
             dedent("""\
                 <course>
@@ -587,9 +598,7 @@ class TestOutlineSectionsOnly:
 
     def test_sections_only_with_include_disabled_markdown(self, request):
         """--sections-only also suppresses topic bullets for disabled sections."""
-        data_dir = Path("tests/test-data")
-        specs_dir = data_dir / "course-specs"
-        spec_file = specs_dir / f"test-spec-sections-only-disabled-{request.node.name}.xml"
+        spec_file = _volatile_spec_path(request, "sections-only-disabled")
         spec_file.write_text(
             dedent("""\
                 <course>
@@ -637,9 +646,7 @@ class TestOutlineSectionsOnly:
 
     def test_sections_only_with_include_disabled_json(self, request):
         """JSON sections-only output keeps disabled flag but drops topics."""
-        data_dir = Path("tests/test-data")
-        specs_dir = data_dir / "course-specs"
-        spec_file = specs_dir / f"test-spec-sections-only-disabled-json-{request.node.name}.xml"
+        spec_file = _volatile_spec_path(request, "sections-only-disabled-json")
         spec_file.write_text(
             dedent("""\
                 <course>

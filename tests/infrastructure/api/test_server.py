@@ -332,7 +332,7 @@ class TestGlobalSingleton:
 
 
 @pytest.mark.integration
-@pytest.mark.serial
+@pytest.mark.serial("port")
 class TestRealUvicornStartup:
     """Bind an actual uvicorn server; hit /health; ensure clean shutdown.
 
