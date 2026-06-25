@@ -243,6 +243,20 @@ xdist load, so the suite relaxes it in one place instead of every heartbeat
 test re-patching the constant. Never raise the **production** default — relax it
 only in tests, via this env var.
 
+### Per-test timeout
+
+`[tool.pytest.ini_options] timeout` (pyproject) defaults to **120s** — the same
+ceiling CI enforces on the fast suite (`--timeout=120`). The slowest legitimate
+fast test measures ~5.5s (16-worker dev box) / ~11s (64-worker contention), so
+120s is a generous hang **backstop**, not a performance gate: it converts a
+contention hang on the pre-push gate from a 10-minute stall (the old 600s) into
+a prompt, attributable failure the scoped `flaky` retry can absorb. The heavier
+suites need more, so `tests/conftest.py` bumps their per-test timeout at
+collection time to match CI — `integration` → 240s, `e2e`/`slow`/`docker` →
+600s — so running them **locally** (a non-default `-m` selection, e.g.
+`pytest -m e2e`) never false-kills against the fast default. Override a single
+test with `@pytest.mark.timeout(N)`; it takes precedence over all of the above.
+
 > The HTTP-replay / cassette tests need the `replay` extra (`pyyaml`,
 > `filelock`). It is included in the auto-synced `dev` dependency group, so
 > `uv sync` / `uv run pytest` always has it; without it those tests

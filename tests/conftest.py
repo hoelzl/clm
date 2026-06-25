@@ -677,6 +677,19 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(pytest.mark.xdist_group(group))
             serial_group_counts[group] = serial_group_counts.get(group, 0) + 1
 
+        # Give the heavier non-fast suites the generous per-test timeout CI
+        # grants them (.github/workflows/ci.yml: integration --timeout=240,
+        # e2e/docker --timeout=600), so running them LOCALLY (a non-default
+        # ``-m`` selection) never false-kills against the tight fast-suite
+        # default in ``[tool.pytest.ini_options] timeout`` (120s). A ``timeout``
+        # marker takes precedence over the ini/CLI value; an explicit per-test
+        # ``@pytest.mark.timeout`` is left untouched.
+        if item.get_closest_marker("timeout") is None:
+            if {"e2e", "slow", "docker"} & set(markers):
+                item.add_marker(pytest.mark.timeout(600))
+            elif "integration" in markers:
+                item.add_marker(pytest.mark.timeout(240))
+
     # Expose the per-group tally for the split-invariant meta-test.
     setattr(config, "_clm_serial_group_counts", serial_group_counts)
 
