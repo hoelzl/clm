@@ -154,7 +154,7 @@ long comment there for the cap history and why 16 is safe). The default schedule
 is `--dist loadgroup` (set in `pyproject.toml` `addopts`): it load-balances as
 usual but keeps any tests sharing an `xdist_group` on the **same** worker.
 
-Three levers keep the per-commit fast suite both quick and flake-free:
+Four levers keep the per-commit fast suite both quick and flake-free:
 
 **1. `serial` — pin contention-prone tests to one worker.** A mock worker pool
 (`tests/infrastructure/workers/test_lifecycle_mock.py`) polls committed SQLite
@@ -197,6 +197,39 @@ blocks on a `threading.Condition`; the `JobManager` helpers wait on an
 as a backstop. (For a timer-*expiring* transient state, widen the state's own
 lifetime past the wait ceiling rather than the ceiling itself — see the
 `retake_window_seconds` note in `test_session.py`.)
+
+> **Polling a transient state is itself the trap.** When the state you wait
+> for is *self-expiring* (a worker's `"busy"` status that lasts only one job, a
+> session's auto-expiring `ARMED_AFTER_TAKE`), a generous poll ceiling does not
+> help — a CPU-starved poll thread can be descheduled across the whole window
+> and miss it. Widen the **state's lifetime** instead: gate the work on an
+> `Event` the test releases so the state persists until observed (see
+> `MockWorker.gate_job` in `tests/infrastructure/workers/test_worker_base.py`).
+
+**4. `flaky` — a scoped, loud safety net, never a global rerun.** A handful of
+families stay CPU-starvation-sensitive even after the structural fixes (the
+worker-registration `#163` family, the threaded `test_worker_base.py` tests).
+Mark *those* with `@pytest.mark.flaky(reruns=2, reruns_delay=1,
+only_rerun=[...])` (pytest-rerunfailures) so a contention loss is retried once
+or twice instead of forcing a manual re-run. The rules that keep this from
+masking real bugs:
+
+- **No global `--reruns`.** Reruns are opt-in per test via the marker only; a
+  blanket rerun across the whole suite hides regressions and is forbidden.
+- **`only_rerun` scopes the retry** to the contention exception signature
+  (`OSError`, `PermissionError`, `AssertionError`, `OperationalError`,
+  `TimeoutError`). A deterministic logic regression fails on every retry, so it
+  still goes red — only *intermittent* failures are absorbed.
+- **`-rR` (in `addopts`) makes every retry visible.** A test that reruns often
+  is a signal to fix its root cause, not to widen the net. `flaky` is the
+  last-resort lever; reach for levers 1–3 first.
+
+There is also a session-wide env override
+`CLM_HEARTBEAT_SLOW_WRITE_THRESHOLD_SECONDS` (set to 30 in `tests/conftest.py`):
+the production 50ms heartbeat self-disable threshold legitimately trips under
+xdist load, so the suite relaxes it in one place instead of every heartbeat
+test re-patching the constant. Never raise the **production** default — relax it
+only in tests, via this env var.
 
 > The HTTP-replay / cassette tests need the `replay` extra (`pyyaml`,
 > `filelock`). It is included in the auto-synced `dev` dependency group, so

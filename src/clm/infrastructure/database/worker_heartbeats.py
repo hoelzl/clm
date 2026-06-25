@@ -24,6 +24,7 @@ Design notes
 from __future__ import annotations
 
 import logging
+import os
 import re
 import sqlite3
 import threading
@@ -73,7 +74,15 @@ MAX_EXCERPT_LENGTH = 120
 # parallel test load or in the presence of WAL checkpoints, an occasional
 # spike to 10-20ms is common. We only want to fire on genuine pathologies
 # (lock held by a dead writer, filesystem stall, etc.).
-SLOW_WRITE_THRESHOLD_SECONDS = 0.050  # 50 ms
+#
+# Overridable via ``CLM_HEARTBEAT_SLOW_WRITE_THRESHOLD_SECONDS`` so the test
+# suite can relax it in one place (``tests/conftest.py`` sets it session-wide,
+# and subprocess workers inherit it through the environment) instead of every
+# heartbeat test re-patching this constant. The production default stays 50ms —
+# do NOT raise it; that defeats the real-disk safety mechanism.
+SLOW_WRITE_THRESHOLD_SECONDS = float(
+    os.environ.get("CLM_HEARTBEAT_SLOW_WRITE_THRESHOLD_SECONDS", "0.050")
+)  # 50 ms in production
 
 # ANSI escape sequences we strip from stream output before truncating.
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
