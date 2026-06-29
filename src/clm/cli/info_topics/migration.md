@@ -2,6 +2,25 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## `//`-language decks re-baseline the sync watermark once (issue #458, {version})
+
+`clm slides sync`'s reflow-insensitive markdown hashing (#429) now threads the
+deck's real source comment token, so `//`-comment decks (C++/C#/Java/TS) get the
+same benefit Python/Rust decks already had: a pure soft re-wrap of a markdown
+prose cell no longer reads as an edit. Because that changes every `//`-deck
+markdown hash, `WATERMARK_HASH_VERSION` is bumped to `3`.
+
+**One-time migration — no action required.** The watermark's existing
+stale-version self-heal does the work: on the first `clm slides sync apply` (or
+`autopilot`) after upgrading, a `//` deck's stale-version watermark is treated as
+absent, the pair cold-starts off git `HEAD`, and the new hashes are recorded — no
+manual `clm slides sync baseline clear` and no false "everything edited" drift.
+The committed **consistency ledger** (`--ledger`) self-heals the same way:
+a `//`-deck entry whose hashes the new engine computes differently re-checks and
+re-records on the next `baseline bless --ledger` / `apply --ledger`. **`#`-comment
+decks (Python/Rust) are unaffected** — their hashes are byte-identical (`"#"` was
+the prior default), so neither the watermark nor the ledger re-baselines for them.
+
 ## Cohort calendar event UIDs are now globally unique (issue #436, {version})
 
 `clm calendar generate -f ics` and `clm calendar push` give every event a

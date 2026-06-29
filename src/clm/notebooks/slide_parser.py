@@ -29,6 +29,12 @@ class CellMetadata:
     raw_header: str = ""
     slide_id: str | None = None
     for_slide: str | None = None
+    # The source language's line-comment token (``"#"`` python/rust, ``"//"``
+    # cpp/csharp/java/typescript), stamped by :func:`parse_cell_header`. Carried here so
+    # the content-hash chokepoints (:func:`~clm.slides.sync_writeback.hash_cell` /
+    # ``anchor_of``) can reflow-normalize ``//`` markdown with the real token (#458)
+    # without threading it through every call site. Defaults to ``"#"``.
+    comment_token: str = "#"
 
     @property
     def is_slide(self) -> bool:
@@ -154,6 +160,7 @@ def parse_cell_header(header: str, comment_token: str = "#") -> CellMetadata:
             cell_type="j2",
             is_j2=True,
             raw_header=header,
+            comment_token=comment_token,
         )
 
     cell_type = "markdown" if "[markdown]" in header else "code"
@@ -183,6 +190,7 @@ def parse_cell_header(header: str, comment_token: str = "#") -> CellMetadata:
         raw_header=header,
         slide_id=slide_id,
         for_slide=for_slide,
+        comment_token=comment_token,
     )
 
 

@@ -2800,7 +2800,11 @@ def _build_narrative_cell(
         body_lines.pop(0)
     while body_lines and body_lines[-1] == "":
         body_lines.pop()
-    return RawCell(lines=[header, *body_lines], line_number=0, metadata=parse_cell_header(header))
+    return RawCell(
+        lines=[header, *body_lines],
+        line_number=0,
+        metadata=parse_cell_header(header, comment_token),
+    )
 
 
 def _slug_or_default(en_body: str) -> str:
@@ -2859,7 +2863,7 @@ def _stamp_slide_id(cell: RawCell, slide_id: str) -> None:
     stripped = _SLIDE_ID_RE.sub("", cell.lines[0]).rstrip()
     header = f'{stripped} slide_id="{slide_id}"'
     cell.lines[0] = header
-    cell.metadata = parse_cell_header(header)
+    cell.metadata = parse_cell_header(header, cell.metadata.comment_token)
 
 
 def _build_cell(
@@ -2878,7 +2882,11 @@ def _build_cell(
         body_lines.pop(0)
     while body_lines and body_lines[-1] == "":
         body_lines.pop()
-    return RawCell(lines=[header, *body_lines], line_number=0, metadata=parse_cell_header(header))
+    return RawCell(
+        lines=[header, *body_lines],
+        line_number=0,
+        metadata=parse_cell_header(header, comment_token),
+    )
 
 
 def _insert_at_anchor(
@@ -3900,7 +3908,7 @@ def _clear_slide_id(cell: RawCell) -> None:
     """Remove any ``slide_id="…"`` from a cell header (the inverse of stamping)."""
     header = _SLIDE_ID_RE.sub("", cell.lines[0]).rstrip()
     cell.lines[0] = header
-    cell.metadata = parse_cell_header(header)
+    cell.metadata = parse_cell_header(header, cell.metadata.comment_token)
 
 
 def _header_rows(cells: list[Cell]) -> list[tuple[int, str | None, str, str, str | None]]:
