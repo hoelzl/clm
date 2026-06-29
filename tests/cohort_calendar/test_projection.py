@@ -268,3 +268,41 @@ class TestActivityDays:
         (a,) = proj.assignments
         assert a.kind == "merged"
         assert a.activity_labels == ("Projekt A", "Projekt B")
+
+
+class TestBucketRefIdentity:
+    """Issue #436: the UID seed must be globally unique, not the bare stem."""
+
+    @staticmethod
+    def _qualified_deck(module: str, topic: str, stem: str) -> ScheduleDeck:
+        return ScheduleDeck(video_title=stem, topic_id=topic, deck_file=stem, module=module)
+
+    @staticmethod
+    def _solo_bucket(deck_: ScheduleDeck, *, week: int) -> Bucket:
+        return Bucket(decks=[deck_], span=1, week=week, weekday_label="Mon", weekdays=("mon",))
+
+    def test_same_stem_different_topic_and_module_do_not_collide(self):
+        # Two distinct review decks both named slides_010_review.de — the exact
+        # ML-AZAV collision from #436. Their bucket refs (and thus UIDs) must differ.
+        d1 = self._qualified_deck(
+            "module_545_foundations", "review_w01_w06", "slides_010_review.de"
+        )
+        d2 = self._qualified_deck("module_550_ml_azav", "review_w05_w09", "slides_010_review.de")
+        proj = project([self._solo_bucket(d1, week=1), self._solo_bucket(d2, week=2)], cfg())
+        assert proj.ok
+        refs = [a.bucket_refs for a in proj.assignments]
+        assert refs == [
+            ("module_545_foundations/review_w01_w06/slides_010_review.de",),
+            ("module_550_ml_azav/review_w05_w09/slides_010_review.de",),
+        ]
+        # The derived UIDs are what actually collided in the calendar / push.
+        from clm.cohort_calendar.render import assignment_uid
+
+        uids = {assignment_uid(a, "jan") for a in proj.assignments}
+        assert len(uids) == 2
+
+    def test_ref_skips_empty_parts(self):
+        # A deck with no resolvable module degrades gracefully to topic/stem.
+        d = self._qualified_deck("", "intro", "slides_010_intro")
+        (a,) = project([self._solo_bucket(d, week=1)], cfg()).assignments
+        assert a.bucket_refs == ("intro/slides_010_intro",)

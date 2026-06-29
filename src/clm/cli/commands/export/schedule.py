@@ -80,6 +80,15 @@ class ScheduleDeck:
     # filename ("02 Linear Regression.html"); 0 when unknown (e.g. a disabled
     # deck read from the filesystem, which is never built/numbered).
     number_in_section: int = 0
+    # Parent module directory name (e.g. "module_550_ml_azav"). With topic_id and
+    # deck_file this forms the deck's globally-unique identity: the stem alone is
+    # unique only *within* a topic, so two decks sharing a stem once collided to a
+    # single cohort-calendar UID and silently dropped an event (issue #436). Empty
+    # only for a deck read from disk for a topic that does not resolve (a
+    # disabled-export edge that never reaches the calendar's UID path). Appended
+    # last so the established positional field order (disabled, number_in_section)
+    # is unchanged.
+    module: str = ""
 
 
 @dataclass
@@ -187,6 +196,10 @@ def _topic_decks(topic, language: str) -> list[ScheduleDeck]:
     language so a split pair is listed once (and with the correct title),
     mirroring the build's per-language routing.
     """
+    # A topic lives at slides/<module>/<topic>, so the topic path's parent is the
+    # module directory regardless of whether the topic is a directory or a single
+    # file; this completes each deck's globally-unique module/topic/stem identity.
+    module = topic.path.parent.name
     decks: list[ScheduleDeck] = []
     for notebook in topic.notebooks:
         if not notebook_in_language(notebook, language):
@@ -202,6 +215,7 @@ def _topic_decks(topic, language: str) -> list[ScheduleDeck]:
                 video_title=title,
                 topic_id=topic.id,
                 deck_file=notebook.path.stem,
+                module=module,
                 number_in_section=getattr(notebook, "number_in_section", 0) or 0,
             )
         )
@@ -239,6 +253,11 @@ def _decks_for_subsection(
         if not disabled and topic_spec.id in topic_decks:
             decks.extend(topic_decks[topic_spec.id])
         else:
+            # Resolve the deck's module from the filesystem topic map (same source
+            # disabled_topic_slides reads), so a disabled deck still carries its
+            # globally-unique module/topic/stem identity.
+            topic_path = course._topic_path_map.get(topic_spec.id)
+            module = topic_path.parent.name if topic_path is not None else ""
             slides = disabled_topic_slides(course, topic_spec, language) or []
             for file_name, title in slides:
                 decks.append(
@@ -246,6 +265,7 @@ def _decks_for_subsection(
                         video_title=title,
                         topic_id=topic_spec.id,
                         deck_file=Path(file_name).stem,
+                        module=module,
                         disabled=disabled,
                     )
                 )

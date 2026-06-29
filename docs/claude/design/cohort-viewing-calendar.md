@@ -394,10 +394,12 @@ into their own calendar app automatically.
   exclusive-end semantics).
 - `SUMMARY` = localized video/deck titles for that assignment (`-L` controls
   language); `DESCRIPTION` lists deck files / topic ids for traceability.
-- `UID` is stable across re-exports — derived from `(channel, bucket-ref)` —
-  so re-issuing the feed *updates* events in place instead of duplicating them.
-  This is what lets holidays/catch-up edits propagate cleanly to a subscribed
-  student.
+- `UID` is stable across re-exports — derived from `(channel, bucket-ref)`,
+  where the bucket-ref is each deck's globally-unique `module/topic/stem`
+  identity (issue #436; *not* the bare slide-file stem, which collided when two
+  decks shared it and silently dropped an event) — so re-issuing the feed
+  *updates* events in place instead of duplicating them. This is what lets
+  holidays/catch-up edits propagate cleanly to a subscribed student.
 - `insert` entries (review/exam days) become events with no deck list.
 
 ## 9. Relationship to release (kept independent)
