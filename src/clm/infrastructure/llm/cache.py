@@ -748,8 +748,11 @@ def _deserialize_tags(raw: str) -> frozenset[str]:
 # self-heals the migration: the pair cold-starts off git HEAD and the next apply
 # re-records it at the current version, with no manual ``watermark clear`` and no
 # false "everything edited" drift. Issue #429 introduced reflow-insensitive
-# markdown hashing → version 2.
-WATERMARK_HASH_VERSION = 2
+# markdown hashing → version 2. Issue #458 threaded the real source comment token
+# into that hashing so ``//`` languages (C++/C#/Java/TS) get the reflow benefit too,
+# changing every ``//``-deck markdown hash (``#``-deck hashes are byte-identical, since
+# ``"#"`` was the prior default) → version 3. The same gate re-baselines stale pairs.
+WATERMARK_HASH_VERSION = 3
 
 
 class SyncWatermarkCache:

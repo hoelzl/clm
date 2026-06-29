@@ -111,7 +111,7 @@ def _strip_slide_id(cell: RawCell) -> None:
     """Remove ``slide_id="…"`` from a cell header in place (byte-preserving)."""
     new_header = _SLIDE_ID_RE.sub("", cell.lines[0]).rstrip()
     cell.lines[0] = new_header
-    cell.metadata = parse_cell_header(new_header)
+    cell.metadata = parse_cell_header(new_header, cell.metadata.comment_token)
 
 
 def _stamp_slide_id(cell: RawCell, slide_id: str) -> None:
@@ -119,7 +119,7 @@ def _stamp_slide_id(cell: RawCell, slide_id: str) -> None:
     stripped = _SLIDE_ID_RE.sub("", cell.lines[0]).rstrip()
     new_header = f'{stripped} slide_id="{slide_id}"'
     cell.lines[0] = new_header
-    cell.metadata = parse_cell_header(new_header)
+    cell.metadata = parse_cell_header(new_header, cell.metadata.comment_token)
 
 
 def reconcile_voiceover_ids(

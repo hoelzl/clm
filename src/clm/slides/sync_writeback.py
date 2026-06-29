@@ -174,10 +174,11 @@ def normalize_for_hash(text: str, comment_token: str = "#") -> str:
     (indented code), and structural markdown (headings, list markers, block
     quotes, table rows, thematic breaks). Issue #429.
 
-    ``comment_token`` defaults to ``"#"`` (Python/Rust). Threading the real token
-    for ``//`` languages is a follow-up — until then ``//`` markdown is hashed
-    consistently but without the reflow benefit (still safe: both the baseline
-    write and the compare read use the same default, so no false drift).
+    ``comment_token`` is the source language's line-comment token (``"#"`` python/
+    rust, ``"//"`` cpp/csharp/java/typescript): each line is de-prefixed with it
+    before reflow, so a ``//`` markdown cell gets the same reflow-insensitivity a
+    ``#`` cell does (#458 — the token is threaded from ``CellMetadata.comment_token``
+    via :func:`hash_cell` / :func:`anchor_of`). Defaults to ``"#"``.
     """
     out: list[str] = []
     para: list[str] = []
@@ -237,7 +238,7 @@ def normalize_for_hash(text: str, comment_token: str = "#") -> str:
     return "\n".join(collapsed).strip()
 
 
-def cell_content_hash(text: str, *, markdown: bool = False) -> str:
+def cell_content_hash(text: str, *, markdown: bool = False, comment_token: str = "#") -> str:
     """Hash ``text`` the way ``Cell.content`` is hashed.
 
     ``Cell.content`` operates on the body as the parser produces it: body
@@ -249,12 +250,14 @@ def cell_content_hash(text: str, *, markdown: bool = False) -> str:
     ``markdown=True`` (set only where the text is a markdown cell body — code
     cells and j2 headers must stay byte-exact) routes through
     :func:`normalize_for_hash` so a pure prose re-wrap hashes identically
-    (Issue #429). The default ``markdown=False`` preserves the historical
-    ``.strip()``-only behaviour exactly. **Changing either branch's canonical
-    form invalidates every stored hash — bump
-    ``cache.WATERMARK_HASH_VERSION`` so stale snapshots are re-baselined.**
+    (Issue #429), de-prefixing each line with ``comment_token`` so ``//``
+    languages get the same reflow-insensitivity (Issue #458). The default
+    ``markdown=False`` preserves the historical ``.strip()``-only behaviour
+    exactly (and ignores ``comment_token``). **Changing either branch's canonical
+    form invalidates every stored hash — bump ``cache.WATERMARK_HASH_VERSION`` so
+    stale snapshots are re-baselined.**
     """
-    canonical = normalize_for_hash(text) if markdown else text.strip()
+    canonical = normalize_for_hash(text, comment_token) if markdown else text.strip()
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
@@ -265,7 +268,9 @@ def hash_cell(metadata: CellMetadata, text: str) -> str:
     write/read/compare site keys a given cell identically (mismatched flags would
     read as false drift). Code cells and j2 headers stay byte-exact.
     """
-    return cell_content_hash(text, markdown=metadata.cell_type == "markdown")
+    return cell_content_hash(
+        text, markdown=metadata.cell_type == "markdown", comment_token=metadata.comment_token
+    )
 
 
 def construct_of(metadata: CellMetadata, body: str) -> str | None:
@@ -304,7 +309,9 @@ def anchor_of(metadata: CellMetadata, body: str) -> str:
     construct = construct_of(metadata, body)
     if construct is not None:
         return f"construct:{construct}"
-    return f"hash:{cell_content_hash(body, markdown=metadata.cell_type == 'markdown')}"
+    return "hash:" + cell_content_hash(
+        body, markdown=metadata.cell_type == "markdown", comment_token=metadata.comment_token
+    )
 
 
 def row_anchor(slide_id: str | None, construct: str | None, content_hash: str) -> str:
@@ -421,7 +428,13 @@ def build_twin_cell(source_cell: RawCell, target_lang: str, target_body: str) ->
         body_lines.pop(0)
     while body_lines and body_lines[-1] == "":
         body_lines.pop()
-    return RawCell(lines=[header, *body_lines], line_number=0, metadata=parse_cell_header(header))
+    # Reuse the source cell's comment token so the twin's metadata hashes correctly for
+    # a ``//`` deck if compared in-pass before the disk re-parse (#458).
+    return RawCell(
+        lines=[header, *body_lines],
+        line_number=0,
+        metadata=parse_cell_header(header, source_cell.metadata.comment_token),
+    )
 
 
 @dataclass
@@ -494,7 +507,7 @@ class FileState:
         new_header = set_header_tags(cell.lines[0], new_tags)
         if new_header != cell.lines[0]:
             cell.lines[0] = new_header
-            cell.metadata = parse_cell_header(new_header)
+            cell.metadata = parse_cell_header(new_header, cell.metadata.comment_token)
             self.dirty = True
         return True
 
@@ -530,7 +543,7 @@ class FileState:
             new_header = set_header_tags(cell.lines[0], new_tags)
             if new_header != cell.lines[0]:
                 cell.lines[0] = new_header
-                cell.metadata = parse_cell_header(new_header)
+                cell.metadata = parse_cell_header(new_header, cell.metadata.comment_token)
                 self.dirty = True
             return True
         return False

@@ -14,6 +14,11 @@ def _md(text: str) -> str:
     return cell_content_hash(text, markdown=True)
 
 
+def _md_slash(text: str) -> str:
+    """Markdown hash for a ``//``-comment deck (C++/C#/Java/TS), Issue #458."""
+    return cell_content_hash(text, markdown=True, comment_token="//")
+
+
 class TestProseReflow:
     def test_softwrap_hashes_equal(self) -> None:
         a = "# This is a long paragraph that\n# wraps across two lines."
@@ -101,6 +106,59 @@ class TestCodeCellUnchanged:
         a = cell_content_hash("x = 1\ny = 2", markdown=False)
         b = cell_content_hash("x = 1 y = 2", markdown=False)
         assert a != b
+
+
+class TestSlashCommentReflow:
+    """Issue #458: ``//``-comment decks get the same reflow-insensitivity as ``#``."""
+
+    def test_softwrap_hashes_equal(self) -> None:
+        a = "// This is a long paragraph that\n// wraps across two lines."
+        b = "// This is a long paragraph that wraps\n// across two lines."
+        assert _md_slash(a) == _md_slash(b)
+
+    def test_one_long_line_equals_wrapped(self) -> None:
+        words = " ".join(f"word{i}" for i in range(40))
+        one_line = f"// {words}"
+        wrapped = "\n".join(f"// {chunk}" for chunk in _wrap(words, 8))
+        assert _md_slash(one_line) == _md_slash(wrapped)
+
+    def test_genuinely_different_prose_differs(self) -> None:
+        a = "// This is a long paragraph that\n// wraps across two lines."
+        b = "// This is a DIFFERENT paragraph that\n// wraps across two lines."
+        assert _md_slash(a) != _md_slash(b)
+
+    def test_heading_kept_on_own_line(self) -> None:
+        a = "// # Heading\n// Some prose here that is\n// wrapped."
+        b = "// # Heading\n// Some prose here that is wrapped."
+        assert _md_slash(a) == _md_slash(b)
+        assert normalize_for_hash(a, "//").startswith("# Heading\n")
+
+    def test_fenced_code_blank_line_is_significant(self) -> None:
+        a = "// ```cpp\n// int x = 1;\n// int y = 2;\n// ```"
+        b = "// ```cpp\n// int x = 1;\n//\n// int y = 2;\n// ```"
+        assert _md_slash(a) != _md_slash(b)
+
+    def test_without_token_the_slash_prefix_blocks_reflow(self) -> None:
+        # The #458 motivation: hashing a //-cell with the "#" default leaves the "// "
+        # prefix on each line, so a re-wrap moves the embedded // tokens → different hash.
+        a = "// This is a long paragraph that\n// wraps across two lines."
+        b = "// This is a long paragraph that wraps\n// across two lines."
+        assert cell_content_hash(a, markdown=True) != cell_content_hash(b, markdown=True)
+
+
+class TestHashCommentUnchangedByVersionBump:
+    """#458 must not change any ``#``-deck hash (``"#"`` was the prior default)."""
+
+    def test_default_equals_explicit_hash_token(self) -> None:
+        text = "# A paragraph of prose\n# wrapped across lines."
+        assert cell_content_hash(text, markdown=True) == cell_content_hash(
+            text, markdown=True, comment_token="#"
+        )
+
+    def test_hash_reflow_still_works(self) -> None:
+        a = "# A paragraph of prose that\n# wraps across two lines."
+        b = "# A paragraph of prose\n# that wraps across two lines."
+        assert _md(a) == _md(b)
 
 
 def _wrap(words: str, n: int) -> list[str]:

@@ -248,10 +248,15 @@ class StudioService:
 
     # ----------------------------------------------------------------- open
 
-    def _cell_views(self, text: str, lang: str | None) -> list[CellView]:
+    def _cell_views(self, text: str, lang: str | None, comment_token: str = "#") -> list[CellView]:
         from collections import Counter
 
-        parsed = parse_cells(text)
+        # Parse with the deck's real comment token so a ``//`` deck's cells carry the
+        # right token in BOTH the render hash (hash_cell below) and the clean-edit
+        # round-trip check (token at line below) — otherwise the markdown reflow hash
+        # (#458) computed here would differ from the write-guard's, false-tripping the
+        # optimistic-concurrency check and making ``//`` markdown cells uneditable.
+        parsed = parse_cells(text, comment_token)
         # A cell is only safely addressable when its (slide_id, role) key is
         # UNIQUE in the file — FileState.find_cell returns the first match and
         # ignores language, so a colliding key (e.g. a genuinely interleaved
@@ -316,7 +321,7 @@ class StudioService:
             deck_id=deck_id,
             deck_version=self._deck_version(path),
             lang=lang,
-            cells=self._cell_views(text, lang),
+            cells=self._cell_views(text, lang, comment_token_for_path(path)),
             lock=self.compute_lock(deck_id, path),
         )
 

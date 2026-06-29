@@ -169,7 +169,7 @@ def _write_slide_id(cell: _Cell, slide_id: str) -> None:
     stripped = _strip_existing_slide_id(existing).rstrip()
     new_header = f'{stripped} slide_id="{slide_id}"'
     cell.lines[0] = new_header
-    cell.metadata = parse_cell_header(new_header)
+    cell.metadata = parse_cell_header(new_header, cell.metadata.comment_token)
 
 
 # ---------------------------------------------------------------------------

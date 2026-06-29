@@ -53,6 +53,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from clm.infrastructure.llm.cache import WATERMARK_HASH_VERSION
 from clm.notebooks.slide_parser import Cell, comment_token_for_path, parse_cells
 from clm.slides.sync_writeback import construct_of, hash_cell, role_of
 
@@ -92,6 +93,14 @@ class LedgerEntry:
     confirmed_commit: str | None
     confirmed_by: str  # "apply" | "bless" | "accept" | "autopilot" | "seed" | "establish"
     confirmed_oracle: str  # "structural" | "assume" | "agent" | "semantic:<model>"
+    # The hash-function version (``cache.WATERMARK_HASH_VERSION``) the de/en hashes were
+    # computed under. ``trusts`` requires it to equal the current version, so a hash-form
+    # change (#458 threaded the comment token into markdown hashing) cleanly invalidates a
+    # stale entry — it re-checks and re-records rather than trusting a hash a newer engine
+    # would compute differently. Defaults to the current version (a pre-#458 entry, which
+    # carries no field, is assumed current — its hashes are unchanged for ``#`` decks and
+    # simply will not match for ``//`` decks, so it re-checks either way).
+    hash_version: int = WATERMARK_HASH_VERSION
 
 
 #: Id-less narrative key ``(owning_slide_id, role, occ)`` — the classifier's own
@@ -128,12 +137,26 @@ class SyncLedger:
         Any drift on either half misses, so the slide falls through to the bundle.
         """
         entry = self.entries.get((slide_id, role))
-        return entry is not None and entry.de_hash == de_hash and entry.en_hash == en_hash
+        return _entry_trusts(entry, de_hash, en_hash)
 
     def trusts_idless(self, key: IdlessKey, de_hash: str, en_hash: str) -> bool:
         """:meth:`trusts` for an id-less narrative keyed by ``(owning_slide_id, role, occ)``."""
-        entry = self.idless.get(key)
-        return entry is not None and entry.de_hash == de_hash and entry.en_hash == en_hash
+        return _entry_trusts(self.idless.get(key), de_hash, en_hash)
+
+
+def _entry_trusts(entry: LedgerEntry | None, de_hash: str, en_hash: str) -> bool:
+    """Whether ``entry`` confirms exactly these hashes under the *current* hash version.
+
+    A stale ``hash_version`` (an entry recorded before a hash-form change) is never
+    trusted — it re-checks and re-records, rather than trusting a hash a newer engine
+    would compute differently (#458).
+    """
+    return (
+        entry is not None
+        and entry.hash_version == WATERMARK_HASH_VERSION
+        and entry.de_hash == de_hash
+        and entry.en_hash == en_hash
+    )
 
 
 def ledger_path_for(de_path: Path) -> Path:
@@ -176,6 +199,7 @@ def load(path: Path) -> SyncLedger:
                     confirmed_commit=rec.get("confirmed_commit"),
                     confirmed_by=rec.get("confirmed_by", "apply"),
                     confirmed_oracle=rec.get("confirmed_oracle", "structural"),
+                    hash_version=rec.get("hash_version", WATERMARK_HASH_VERSION),
                 )
     idless: dict[IdlessKey, LedgerEntry] = {}
     raw_idless = data.get("idless", [])
@@ -196,6 +220,7 @@ def load(path: Path) -> SyncLedger:
                 confirmed_commit=rec.get("confirmed_commit"),
                 confirmed_by=rec.get("confirmed_by", "apply"),
                 confirmed_oracle=rec.get("confirmed_oracle", "structural"),
+                hash_version=rec.get("hash_version", WATERMARK_HASH_VERSION),
             )
     return SyncLedger(schema=SCHEMA_VERSION, entries=entries, idless=idless)
 
@@ -207,7 +232,7 @@ def _to_json(ledger: SyncLedger) -> str:
     branches confirm *different* slides, and turn a genuine same-slide conflict into
     a reviewable line conflict (the design's drop-on-conflict → re-check rule).
     """
-    slides: dict[str, dict[str, dict[str, str | None]]] = {}
+    slides: dict[str, dict[str, dict[str, str | int | None]]] = {}
     for (slide_id, role), e in ledger.entries.items():
         slides.setdefault(slide_id, {})[role] = {
             "de_hash": e.de_hash,
@@ -216,6 +241,7 @@ def _to_json(ledger: SyncLedger) -> str:
             "confirmed_commit": e.confirmed_commit,
             "confirmed_by": e.confirmed_by,
             "confirmed_oracle": e.confirmed_oracle,
+            "hash_version": e.hash_version,
         }
     # Id-less narratives are a *list* (their key has no natural nesting): one object per
     # entry, sorted by the key so the file is canonical and a merge is line-local.
@@ -230,6 +256,7 @@ def _to_json(ledger: SyncLedger) -> str:
             "confirmed_commit": e.confirmed_commit,
             "confirmed_by": e.confirmed_by,
             "confirmed_oracle": e.confirmed_oracle,
+            "hash_version": e.hash_version,
         }
         for (owning, role, occ), e in sorted(
             ledger.idless.items(), key=lambda kv: (str(kv[0][0]), kv[0][1], kv[0][2])
