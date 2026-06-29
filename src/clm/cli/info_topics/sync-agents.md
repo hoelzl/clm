@@ -162,6 +162,41 @@ makes). Exit `0` = structurally valid (warnings allowed), `2` = corruption. Run
 it after every hand edit and after every `accept`. It is CI-safe because it
 needs no model, and works on a single pair or a directory.
 
+## Diagnosing a `verify` failure — `clm slides sync diagnose DECK`
+
+A `verify` failure is a **symptom, not a diagnosis**: the same code —
+`id-asymmetry`, `duplicate-id` — is produced by several *unrelated* root causes,
+each needing a *different* fix. **The anti-pattern is to rename / re-slug ids until
+`verify` passes** — that hides the real defect (it can point an id at the wrong
+content while the truly-missing slide stays absent — the `array-limitations`
+trap). So: **diagnose each failing pair before touching it.**
+
+`clm slides sync diagnose DECK` does that mechanically. It is a **read-only
+superset of `verify` and `reconcile-vo-ids`** — it runs the same structural checks
+*and* the occurrence-pairing detection that catches the most common case `verify`
+cannot see (a narration cell id'd on one half, id-less on the other: no
+`id-asymmetry` fires, because the slide's id is still on the slide cell in both
+halves). For each finding it emits a **root cause**, the **evidence** (the cell's
+*content language* vs its `lang=` tag, who carries the id, whether a twin exists),
+the **prescribed fix**, and whether that fix is **mechanical** or **authoring**:
+
+| Root cause | Meaning | Fix |
+|---|---|---|
+| `DUPLICATE-NARRATION-OVERSTAMP` | several `voiceover`/`notes` cells under one slide all id'd (`assign-ids` over-stamp) | **mechanical** — strip to id-less (`--apply`) |
+| `NARRATIVE-ID-DISAGREEMENT` | a narration cell id'd on one half, id-less on its twin | **mechanical** — strip to id-less (`--apply`) |
+| `MIS-TAG` | a cell's content language ≠ its `lang=` tag → routed into the wrong half | authoring — move it to the right half with the twin's id |
+| `ID-LESS-TWIN` | the twin exists but was never tagged | authoring — add `tags=[…]` + `slide_id` (no translation) |
+| `CONTENT-GAP` | the slide exists in only one language | authoring — translate the missing twin (same id) |
+| `WHOLE-DECK-GAP` | one half is empty | authoring — a translation project; track it |
+| `DUPLICATE-ID-NON-NARRATIVE`, `UNIFY-ALIGNMENT`, `DROPPED-ID` | a real structural problem | authoring — resolve by hand |
+
+`diagnose --apply` performs **only** the two mechanical narrative fixes (re-gated
+by structure so a write never introduces a new error); everything else is a
+worklist entry it **never** auto-rewrites — and it never renames an id to silence a
+symptom. Read-only by default, `--json` for the structured form. Use it as step 1
+when `verify` (or a sweep) reports `id-asymmetry` / `duplicate-id`, then act on the
+labelled findings instead of guessing.
+
 ## Baselines (you rarely touch these)
 
 `report` / `verify` default to git `HEAD`; you do not need the watermark for the

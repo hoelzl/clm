@@ -188,3 +188,56 @@ def reconcile_voiceover_ids(
     de_out = reconstruct(de_pre, de_cells) if result.de_changed else de_text
     en_out = reconstruct(en_pre, en_cells) if result.en_changed else en_text
     return de_out, en_out, result
+
+
+def _collapse_one_half(cells: list[RawCell]) -> int:
+    """Strip the id from every narrative cell in a duplicated ``(slide_id, role)`` group.
+
+    Returns the number of cells stripped. Mutates ``cells`` in place.
+    """
+    groups: dict[tuple[str, str], list[RawCell]] = {}
+    for cell in cells:
+        meta = cell.metadata
+        if meta.is_j2 or not meta.is_narrative or meta.slide_id is None:
+            continue
+        role = role_of(meta)
+        if role is None:
+            continue
+        groups.setdefault((meta.slide_id, role), []).append(cell)
+    stripped = 0
+    for group in groups.values():
+        if len(group) <= 1:
+            continue
+        for cell in group:
+            _strip_slide_id(cell)
+            stripped += 1
+    return stripped
+
+
+def collapse_intra_half_duplicates(
+    de_text: str,
+    en_text: str,
+    de_token: str,
+    en_token: str,
+) -> tuple[str, str, int]:
+    """Strip ``slide_id`` from narrative cells that duplicate a ``(slide_id, role)`` key
+    within a half — the **symmetric** over-stamp :func:`reconcile_voiceover_ids` leaves
+    alone.
+
+    A slide with several ``voiceover`` / ``notes`` cells all stamped with the slide's id
+    (``assign-ids`` ``source=voiceover-inherit``) collides on ``(slide_id, role)`` within
+    each half. When *both* halves are over-stamped the same way, the occurrence pairing
+    sees them *agree* (both id'd), so ``reconcile_voiceover_ids`` does not touch them —
+    yet ``verify`` flags a ``duplicate-id`` on each half. This strips the id from
+    **every** narrative cell in a duplicated ``(slide_id, role)`` group → the engine's
+    canonical id-less narration form (collision-proof). It never mints or derives an id
+    (#162). Returns ``(de_text', en_text', stripped_count)``; a half is returned
+    byte-identical when nothing changed.
+    """
+    de_pre, de_cells = split_cells(de_text, de_token)
+    en_pre, en_cells = split_cells(en_text, en_token)
+    de_stripped = _collapse_one_half(de_cells)
+    en_stripped = _collapse_one_half(en_cells)
+    de_out = reconstruct(de_pre, de_cells) if de_stripped else de_text
+    en_out = reconstruct(en_pre, en_cells) if en_stripped else en_text
+    return de_out, en_out, de_stripped + en_stripped
