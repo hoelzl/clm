@@ -103,6 +103,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from clm.infrastructure.llm.ollama_client import SyncJudge, SyncProposal
+    from clm.slides.sync_diagnose import ApplyDiagnoseResult, DiagnoseResult
     from clm.slides.sync_plan_walker import PlanWalkResult
     from clm.slides.sync_recover import AlignmentRecoverer, CorrespondenceVerifier
     from clm.slides.sync_report import ReconciliationItem
@@ -1221,6 +1222,162 @@ def _print_verify_human(results: list[VerifyResult], root: Path | None) -> None:
 
 
 # ---------------------------------------------------------------------------
+# diagnose — classify a verify symptom into its root cause (Issue: sync diagnose)
+# ---------------------------------------------------------------------------
+
+
+def _run_diagnose(de_path: Path, en_path: Path | None, *, as_json: bool, apply_fixes: bool) -> None:
+    """Classify ``verify`` symptoms for a pair / tree into root causes, then ``sys.exit``.
+
+    A read-only superset of ``verify`` (same producer; never alters verify's exit
+    semantics): each violation — plus the verify-invisible narrative id-disagreements —
+    is labelled with its root cause and prescribed fix. ``--apply`` performs ONLY the
+    mechanical narrative fixes (strip duplicated/asymmetric narration ids to id-less),
+    re-gated by structure; everything else stays advisory. Lazy-imports the classifier
+    inside the body to preserve the LazyGroup startup cost. Always ``sys.exit``s.
+    """
+    from clm.slides.sync_diagnose import apply_mechanical_fixes, diagnose_pair
+
+    root: Path | None
+    if de_path.is_dir():
+        if en_path is not None:
+            raise click.UsageError(
+                f"{de_path} is a directory (batch diagnose), which takes a single "
+                "directory argument; do not pass a second path."
+            )
+        pairs, solos = iter_split_pairs(find_split_slide_files_recursive(de_path))
+        for solo in solos:
+            tag = split_lang_tag(solo)
+            other = "EN" if tag == "de" else "DE"
+            click.echo(
+                f"warning: skipping {solo.name} — no {other} twin found under {de_path}.",
+                err=True,
+            )
+        pair_list = [(de_p.resolve(), en_p.resolve()) for de_p, en_p in pairs]
+        root = de_path
+    else:
+        de_resolved, en_resolved = _resolve_single_path(de_path, en_path)
+        de_resolved, en_resolved = _resolve_sync_pair(de_resolved, en_resolved)
+        de_resolved, en_resolved = de_resolved.resolve(), en_resolved.resolve()
+        pair_list = [(de_resolved, en_resolved)]
+        root = None
+
+    applied: list[ApplyDiagnoseResult] | None = [] if apply_fixes else None
+    results: list[DiagnoseResult] = []
+    for de_p, en_p in pair_list:
+        if apply_fixes:
+            ar = apply_mechanical_fixes(de_p, en_p)
+            assert applied is not None
+            applied.append(ar)
+            results.append(ar.residual if ar.residual is not None else diagnose_pair(de_p, en_p))
+        else:
+            results.append(diagnose_pair(de_p, en_p))
+
+    exit_code = 2 if any(not r.ok for r in results) else 0
+    if as_json:
+        click.echo(json.dumps(_diagnose_to_dict(results, applied, root, exit_code), indent=2))
+    else:
+        _print_diagnose_human(results, applied, root)
+    sys.exit(exit_code)
+
+
+def _diagnose_to_dict(
+    results: list[DiagnoseResult],
+    applied: list[ApplyDiagnoseResult] | None,
+    root: Path | None,
+    exit_code: int,
+) -> dict[str, object]:
+    payload: dict[str, object] = {"mode": "diagnose", "exit_code": exit_code}
+    if root is not None:
+        payload["root"] = str(root)
+    applied_by_path = (
+        {(str(a.de_path), str(a.en_path)): a for a in applied} if applied is not None else {}
+    )
+    pairs: list[dict] = []
+    for r in results:
+        entry: dict = {
+            "de_path": str(r.de_path),
+            "en_path": str(r.en_path),
+            "ok": r.ok,
+            "git_baseline": r.git_baseline,
+            "diagnoses": [
+                {
+                    "root_cause": d.root_cause,
+                    "fix_class": d.fix_class,
+                    "severity": d.severity,
+                    "slide_id": d.slide_id,
+                    "role": d.role,
+                    "prescribed_fix": d.prescribed_fix,
+                    "evidence": d.evidence,
+                }
+                for d in r.diagnoses
+            ],
+        }
+        ar = applied_by_path.get((str(r.de_path), str(r.en_path)))
+        if ar is not None:
+            entry["applied"] = {
+                "written": ar.written,
+                "refused": ar.refused,
+                "reconcile_changes": ar.reconcile_changes,
+                "collapsed_duplicates": ar.collapsed_duplicates,
+                "new_errors": ar.new_errors,
+            }
+        pairs.append(entry)
+    payload["pairs"] = pairs
+    return payload
+
+
+def _print_diagnose_human(
+    results: list[DiagnoseResult], applied: list[ApplyDiagnoseResult] | None, root: Path | None
+) -> None:
+    if not results:
+        click.echo(
+            f"no split-format deck pairs found under {root}."
+            if root is not None
+            else "nothing to diagnose."
+        )
+        return
+    applied_by_path = (
+        {(str(a.de_path), str(a.en_path)): a for a in applied} if applied is not None else {}
+    )
+    for r in results:
+        mark = "PASS" if r.ok else "FAIL"
+        errs = [d for d in r.diagnoses if d.severity == "error"]
+        warns = [d for d in r.diagnoses if d.severity == "warning"]
+        bits = []
+        if errs:
+            bits.append(f"{len(errs)} finding{'s' if len(errs) != 1 else ''}")
+        if warns:
+            bits.append(f"{len(warns)} warning{'s' if len(warns) != 1 else ''}")
+        if not r.git_baseline:
+            bits.append("dropped-id check skipped (untracked)")
+        summary = f" ({', '.join(bits)})" if bits else " (no issues)"
+        click.echo(f"{mark} {r.de_path.name}{summary}")
+        ar = applied_by_path.get((str(r.de_path), str(r.en_path)))
+        if ar is not None:
+            if ar.refused:
+                click.echo(f"    --apply REFUSED (would introduce: {', '.join(ar.new_errors)})")
+            elif ar.written:
+                click.echo(
+                    f"    --apply: stripped {ar.reconcile_changes} asymmetric + "
+                    f"{ar.collapsed_duplicates} duplicate narration id(s) to id-less."
+                )
+            else:
+                click.echo("    --apply: no mechanical narrative fix needed.")
+        for d in r.diagnoses:
+            sid = f" slide_id={d.slide_id!r}" if d.slide_id else ""
+            role = f" role={d.role!r}" if d.role else ""
+            click.echo(f"    [{d.root_cause} / {d.fix_class}]{sid}{role}")
+            click.echo(f"        → {d.prescribed_fix}")
+    if len(results) > 1:
+        clean = sum(1 for r in results if r.ok)
+        click.echo(
+            f"\ndiagnosed {len(results)} pair(s): {clean} clean, "
+            f"{len(results) - clean} with findings."
+        )
+
+
+# ---------------------------------------------------------------------------
 # Exit codes
 # ---------------------------------------------------------------------------
 
@@ -1832,6 +1989,43 @@ def sync_verify_cmd(de_path: Path, en_path: Path | None, as_json: bool) -> None:
     corrupt. Answers "did this edit corrupt the pair?", not "is it in sync?".
     """
     _run_verify(de_path, en_path, as_json=as_json)
+
+
+@slides_sync_group.command("diagnose")
+@_DECK_ARG
+@_EN_ARG
+@click.option("--json", "as_json", is_flag=True, help="Emit the diagnosis as JSON.")
+@click.option(
+    "--apply",
+    "apply_fixes",
+    is_flag=True,
+    help=(
+        "Apply ONLY the mechanical narrative fixes — strip duplicated / asymmetric "
+        "narration ids to the canonical id-less form, re-gated by structure. Mis-tags, "
+        "content gaps, and whole-deck gaps stay advisory. Dry-run when omitted."
+    ),
+)
+def sync_diagnose_cmd(
+    de_path: Path, en_path: Path | None, as_json: bool, apply_fixes: bool
+) -> None:
+    """Classify each ``verify`` symptom into its root cause + fix (read-only by default).
+
+    A ``verify`` failure is a *symptom*, not a diagnosis: ``id-asymmetry`` /
+    ``duplicate-id`` each have several unrelated root causes needing different fixes.
+    ``diagnose`` is a read-only superset of ``verify`` **and** ``reconcile-vo-ids``: for
+    every finding — plus the verify-invisible narrative id-disagreements — it names the
+    root cause (mis-tag / id-less-twin / content-gap / whole-deck-gap / narration
+    over-stamp / …), the evidence (content-language vs ``lang=`` tag, who carries the
+    id), and whether the fix is **mechanical** (auto-fixable) or **authoring**.
+
+    \b
+    It **never** suggests renaming an id to make verify pass (that buries a real gap —
+    the ``array-limitations`` trap). ``--apply`` performs only the identity-preserving
+    narrative fixes, re-gated so a write never introduces a new structural error;
+    everything else is a worklist entry. Exit ``0`` = no error-severity finding, ``2`` =
+    findings remain. Works on a single pair or a directory.
+    """
+    _run_diagnose(de_path, en_path, as_json=as_json, apply_fixes=apply_fixes)
 
 
 @slides_sync_group.command("apply")

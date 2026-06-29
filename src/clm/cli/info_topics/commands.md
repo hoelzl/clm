@@ -2019,6 +2019,39 @@ dropped vs git `HEAD`. **No model, no watermark, writes nothing.** Answers *"did
 this edit break the pair?"*, not *"is it in sync?"* (`report`) or *"is the
 translation good?"*. Exit `0` = sound (warnings allowed), `2` = corrupt. CI-safe.
 
+#### `clm slides sync diagnose`
+
+```
+clm slides sync diagnose DECK [EN_PATH] [OPTIONS]
+```
+
+A `verify` failure is a *symptom*, not a diagnosis: the same code (`id-asymmetry`,
+`duplicate-id`) has several unrelated root causes, each needing a **different**
+fix. `diagnose` is a **read-only superset of `verify` and `reconcile-vo-ids`**: for
+every finding — *plus* the verify-invisible narrative id-disagreements (a narration
+cell id'd on one half, id-less on the other, which `verify` cannot see because the
+slide's id is still carried by the slide cell in both halves) — it names the root
+cause, the evidence behind it (content-language vs `lang=` tag, who carries the id,
+whether a twin exists), and whether the fix is **mechanical** (auto-fixable) or
+**authoring** (needs a human / translation).
+
+Root-cause vocabulary: `DUPLICATE-NARRATION-OVERSTAMP`, `NARRATIVE-ID-DISAGREEMENT`
+(mechanical); `MIS-TAG`, `ID-LESS-TWIN`, `CONTENT-GAP`, `WHOLE-DECK-GAP`,
+`DUPLICATE-ID-NON-NARRATIVE`, `UNIFY-ALIGNMENT`, `DROPPED-ID` (authoring/advisory).
+
+It **never** suggests renaming an id to make `verify` pass — that buries a real gap
+(the `array-limitations` trap). Content language is judged by a tiny built-in DE/EN
+heuristic that **abstains** on short/title-only text, so a mis-tag is asserted only
+on confident evidence.
+
+| Option | Description |
+|--------|-------------|
+| `--apply` | Perform **only** the identity-preserving narrative fixes (strip a duplicated / asymmetric narration id to the canonical id-less form, via `reconcile-vo-ids`), re-gated by structure so a write never introduces a new error. Mis-tags, content gaps, mis-pairings, and whole-deck gaps stay advisory (never auto-rewritten). Dry-run when omitted. |
+| `--json` | Emit the diagnosis as JSON: per pair, `ok` + a `diagnoses[]` of `{root_cause, fix_class, severity, slide_id, role, prescribed_fix, evidence}`, plus an `applied` block under `--apply`. |
+
+Read-only by default (no model, no key). Exit `0` = no error-severity finding,
+`2` = findings remain. Works on a single pair or a directory.
+
 #### `clm slides sync apply`
 
 ```
