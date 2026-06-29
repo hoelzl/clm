@@ -68,7 +68,12 @@ from clm.infrastructure.llm.openrouter_client import (
     has_openrouter_api_key,
 )
 from clm.slides.glossary import GLOSSARY_STEM, resolve_guidance_by_lang
-from clm.slides.sync_apply import ApplyResult, apply_plan
+from clm.slides.sync_apply import (
+    CONFLICT_POLICIES,
+    ApplyResult,
+    apply_plan,
+    conflict_policy_decisions,
+)
 from clm.slides.sync_plan import SyncPlan, build_sync_plan, render_explain
 from clm.slides.sync_plan_walker import PlanWalkResult, WalkerOptions, run_plan_walker
 from clm.slides.sync_recover import (
@@ -109,6 +114,28 @@ def _resolve_sync_guidance(
         for lang in sorted(used):
             click.echo(f"Using glossary ({lang}): {used[lang]}", err=True)
     return guidance
+
+
+def _preview_conflict_policy(plan: SyncPlan, policy: str) -> None:
+    """Print what a ``--conflict`` policy WOULD resolve / defer on a dry-run (#447).
+
+    The "review before you destroy" surface: a dry-run names how many conflicts the
+    policy would overwrite (the equivalence/escalate refinements need the model, so the
+    count is an upper bound — "attempt"), and how many are deferred by construction
+    (id-less localized / remove-vs-edit).
+    """
+    conflicts = [p for p in plan.proposals if p.kind == "conflict"]
+    if not conflicts:
+        return
+    would_resolve = len(conflict_policy_decisions(plan, policy))
+    deferred = len(conflicts) - would_resolve
+    click.echo(
+        f"--conflict {policy} (dry-run): would attempt to resolve {would_resolve} of "
+        f"{len(conflicts)} conflict(s) by overwriting the losing half; {deferred} "
+        "(id-less / remove-vs-edit) deferred for manual resolution. Re-run with --yes "
+        "(without --dry-run) to apply.",
+        err=True,
+    )
 
 
 # Provider-aware default per-call timeout. A large local reasoning model
@@ -436,6 +463,23 @@ def _resolve_verifier(verify_enabled: bool) -> CorrespondenceVerifier | None:
 )
 @_SINCE_OPTION
 @click.option(
+    "--conflict",
+    "conflict",
+    type=click.Choice(CONFLICT_POLICIES),
+    default="leave",
+    show_default=True,
+    help=(
+        "Non-interactive conflict policy (#447). `leave` (default) defers every "
+        "both-edited conflict, as today. `de-wins` / `en-wins` take that side as "
+        "authoritative — re-translate it over the loser and OVERWRITE it (irreversible: "
+        "the losing half's edits are discarded — review the git diff). `de-wins-safe` / "
+        "`en-wins-safe` first ask the model whether the LOSING half carries content the "
+        "winner lacks and DEFER (escalate) those for manual review, resolving only the "
+        "rest. A writing run with a non-`leave` policy requires --yes. id-less-localized "
+        "and remove-vs-edit conflicts are never auto-resolved (reported instead)."
+    ),
+)
+@click.option(
     "--no-env-file",
     is_flag=True,
     default=False,
@@ -497,6 +541,7 @@ def slides_sync_cmd(
     baseline_ref: str | None,
     baseline_from_spec: str | None,
     since_spec: str | None,
+    conflict: str,
     no_env_file: bool,
     yes: bool,
     ledger: bool,
@@ -549,6 +594,31 @@ def slides_sync_cmd(
             "standalone structural check)."
         )
     baseline_ref = _apply_since(since_spec, baseline_ref, baseline_from_spec, de_path)
+    # --conflict (#447): a non-interactive resolution policy. Guard the data-loss cases
+    # before any model construction; a WRITING resolving run requires --yes (a banner
+    # alone is not a gate). Works over a single pair and a directory sweep.
+    if conflict != "leave":
+        if interactive:
+            raise click.UsageError(
+                "--conflict and --interactive are mutually exclusive: --interactive "
+                "resolves each conflict by prompt; --conflict applies one policy to all."
+            )
+        if verify:
+            raise click.UsageError(
+                "--conflict has no effect with --verify (a read-only structural check)."
+            )
+        if not (dry_run or explain):
+            click.echo(
+                f"WARNING: --conflict {conflict} resolves both-edited conflicts by "
+                "OVERWRITING the losing half — the discarded edits survive only in git. "
+                "Review the git diff before committing.",
+                err=True,
+            )
+            if not yes:
+                raise click.UsageError(
+                    f"--conflict {conflict} discards the losing half of each resolved "
+                    "conflict (irreversible); pass --yes to confirm, or --dry-run to preview."
+                )
     if interactive and as_json:
         raise click.UsageError("--interactive and --json are mutually exclusive")
     if interactive and dry_run:
@@ -667,6 +737,7 @@ def slides_sync_cmd(
             provider_available=provider_available,
             ledger=ledger,
             auto_heal=auto_heal,
+            conflict_policy=conflict,
             make_judge=lambda: _resolve_judge(provider, llm_model, ollama_url, llm_timeout),
             make_translator=lambda: OpenRouterSlideTranslator(
                 model=translation_model,
@@ -820,6 +891,8 @@ def slides_sync_cmd(
             )
         elif dry_run:
             mode = "dry-run"
+            if conflict != "leave" and not as_json:
+                _preview_conflict_policy(plan, conflict)
         elif interactive:
             mode = "interactive"
             judge = _resolve_judge(provider, llm_model, ollama_url, llm_timeout)
@@ -865,6 +938,10 @@ def slides_sync_cmd(
                 alignment_cache=alignment_cache,
                 verifier=verifier,
                 correspondence_cache=correspondence_cache,
+                # #447: a conflict-only OVERLAY (NOT `decisions`, which would defer the
+                # deterministic kinds). Built from THIS post-auto-heal plan so id(proposal)
+                # keys match. `leave` → {} (the deterministic kinds stay batch-applied).
+                conflict_decisions=conflict_policy_decisions(plan, conflict),
             )
     finally:
         if watermark_cache is not None:
@@ -931,5 +1008,17 @@ def slides_sync_cmd(
 
     if cold_baseline_hint and not as_json:
         click.echo(_cold_baseline_hint_text(de_path), err=True)
+
+    if (
+        apply_result is not None
+        and not as_json
+        and (apply_result.conflicts_resolved or apply_result.conflicts_escalated)
+    ):
+        click.echo(
+            f"--conflict {conflict}: resolved {apply_result.conflicts_resolved} conflict(s) "
+            f"by overwriting the losing half; escalated {apply_result.conflicts_escalated} for "
+            "manual review. Review the git diff before committing.",
+            err=True,
+        )
 
     sys.exit(exit_code)

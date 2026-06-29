@@ -81,7 +81,7 @@ from clm.slides.sync_accept import (
     AcceptUnavailable,
     accept_answer,
 )
-from clm.slides.sync_apply import ApplyResult, apply_plan
+from clm.slides.sync_apply import ApplyResult, apply_plan, conflict_policy_decisions
 from clm.slides.sync_plan import (
     PlanIssue,
     SyncPlan,
@@ -451,6 +451,7 @@ def _run_batch(
     baseline_ref: str | None = None,
     ledger: bool = False,
     auto_heal: bool = True,
+    conflict_policy: str = "leave",
     make_judge: Callable[[], SyncJudge | None],
     make_translator: Callable[[], SlideTranslator | None],
     make_recoverer: Callable[[], AlignmentRecoverer | None],
@@ -558,6 +559,7 @@ def _run_batch(
                     baseline_ref=baseline_ref,
                     ledger=ledger,
                     auto_heal=auto_heal,
+                    conflict_policy=conflict_policy,
                 )
             )
     finally:
@@ -589,6 +591,7 @@ def _sync_one_pair(
     baseline_ref: str | None = None,
     ledger: bool = False,
     auto_heal: bool = True,
+    conflict_policy: str = "leave",
 ) -> _PairResult:
     """Sync one pair for the batch, catching any failure so the sweep continues."""
     try:
@@ -637,6 +640,10 @@ def _sync_one_pair(
                 alignment_cache=alignment_cache,
                 verifier=verifier,
                 correspondence_cache=correspondence_cache,
+                # #447: a conflict-only OVERLAY (NOT `decisions`, which would flip the
+                # deterministic kinds into interactive mode and defer them). Built from
+                # THIS post-auto-heal plan so id(proposal) keys match. `leave` → {}.
+                conflict_decisions=conflict_policy_decisions(plan, conflict_policy),
             )
         # else dry-run: classify only, write nothing.
         # #448 P2: on an autopilot apply sweep (mode=="apply" — `report` uses dry-run/explain)
@@ -1623,6 +1630,8 @@ def _apply_dict(result: ApplyResult) -> dict:
         },
         "in_sync": result.in_sync,
         "deferred": result.deferred,
+        "conflicts_resolved": result.conflicts_resolved,
+        "conflicts_escalated": result.conflicts_escalated,
         "cold_deferrals": [
             {
                 "kind": d.kind,
