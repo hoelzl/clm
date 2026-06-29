@@ -75,6 +75,25 @@ class TestBuildSchedule:
         ]
         assert monday.decks[0].video_title == "Some Topic from Test 1"
 
+    def test_deck_carries_real_module_for_uid_identity(self, course):
+        # Issue #436: each deck's globally-unique cohort-calendar UID seed is
+        # module/topic/stem, and `module` is derived from the topic's parent dir
+        # on disk (topic.path.parent.name). Lock that real derivation here — every
+        # cohort_calendar unit test injects `module=` by hand, so without this a
+        # regression in the derivation (e.g. reading the topic dir instead of the
+        # module) would pass all tests yet still let real calendars collide. Monday
+        # draws two topics from two different modules, the exact collision shape.
+        weeks = build_schedule(course, "en")
+        monday = weeks[0].days[0]
+        assert [(d.module, d.topic_id) for d in monday.decks] == [
+            ("module_000_test_1", "some_topic_from_test_1"),
+            ("module_010_test_2", "a_topic_from_test_2"),
+        ]
+        wednesday = weeks[1].days[0]
+        assert [(d.module, d.topic_id) for d in wednesday.decks] == [
+            ("module_030_single_notebook", "simple_notebook"),
+        ]
+
     def test_label_uses_name_override(self, course):
         weeks = build_schedule(course, "en")
         tuesday = weeks[0].days[1]

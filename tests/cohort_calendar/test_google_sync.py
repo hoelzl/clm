@@ -140,6 +140,37 @@ class TestBuildDesiredEvents:
         assert body["summary"] == "Review & Q&A"
         assert "description" not in body
 
+    def test_same_stem_decks_yield_two_events_not_one(self):
+        # Issue #436: two distinct decks sharing the slide-file stem
+        # "slides_010_review.de" must produce two events, not collide into one.
+        proj = Projection(
+            (
+                Assignment(
+                    dt.date(2026, 3, 2),
+                    dt.date(2026, 3, 2),
+                    (deck("Review W1-6", "review_w01_w06", "slides_010_review.de"),),
+                    None,
+                    "video",
+                    ("module_545_foundations/review_w01_w06/slides_010_review.de",),
+                    section_title="W01",
+                ),
+                Assignment(
+                    dt.date(2026, 3, 9),
+                    dt.date(2026, 3, 9),
+                    (deck("Review W5-9", "review_w05_w09", "slides_010_review.de"),),
+                    None,
+                    "video",
+                    ("module_550_ml_azav/review_w05_w09/slides_010_review.de",),
+                    section_title="W06",
+                ),
+            ),
+            (),
+        )
+        desired = gs.build_desired_events(proj, namespace="jan")
+        assert len(desired) == 2
+        # Both survive into a sync plan (neither silently dropped).
+        assert len(gs.plan_sync(desired, []).inserts) == 2
+
     def test_span_covers_all_dates(self):
         body = gs.build_desired_events(sample(), namespace="jan")[UID_SPAN]
         assert body["start"] == {"date": "2026-03-04"}

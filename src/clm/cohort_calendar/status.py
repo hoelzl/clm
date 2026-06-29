@@ -7,8 +7,9 @@ it takes the reference date explicitly (the CLI passes the system date, or
 Drift is measured against the *ideal* calendar — the same buckets, start, and
 pattern but with **no holidays and no adjustments** — i.e. the as-planned
 schedule. The reference assignment (the one active today, else the next one) is
-matched to its ideal twin by its first bucket ref (a deck-file stem, stable even
-across merges), and the gap in calendar days is the drift.
+matched to its ideal twin by its first bucket ref (the deck's globally-unique
+``module/topic/stem`` identity, issue #436, stable even across merges), and the
+gap in calendar days is the drift.
 """
 
 from __future__ import annotations

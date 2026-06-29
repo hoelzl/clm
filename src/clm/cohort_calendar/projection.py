@@ -68,7 +68,7 @@ class Assignment:
     decks: tuple[ScheduleDeck, ...]  # empty for an `insert`
     label: str | None  # set for inserts; else None
     kind: str  # "video" | "merged" | "insert"
-    bucket_refs: tuple[str, ...]  # stable id seeds (deck-file stems) for .ics UIDs
+    bucket_refs: tuple[str, ...]  # globally-unique id seeds (module/topic/stem) for .ics UIDs
     plan_label: str = ""  # plan-relative coordinate, e.g. "W4 Tuesday" (drift/status)
     section_title: str = ""  # localized section name of the (first) bucket; "" for inserts
     activity_labels: tuple[str, ...] = ()  # non-deck day items (project work, exam, …)
@@ -164,8 +164,22 @@ def _resolve_ref(ref: str, buckets) -> tuple[int | None, str | None]:
     return matches[0], None
 
 
+def _deck_ref(deck: ScheduleDeck) -> str:
+    """A deck's globally-unique, stable id seed: ``module/topic/stem``.
+
+    The bare deck-file stem is unique only *within* a topic, so two distinct
+    decks that share a stem (a common pattern — many topics name their lead deck
+    ``slides_010_*``) once produced the same ``.ics`` / Google Calendar UID and
+    silently dropped one event (issue #436). Qualifying the stem with the topic
+    id and the parent module name makes the seed unique across the whole course
+    while staying stable across re-projection — none of the three parts depends
+    on dates. Empty parts (an unresolved disabled-export deck) are skipped.
+    """
+    return "/".join(part for part in (deck.module, deck.topic_id, deck.deck_file) if part)
+
+
 def _bucket_refs(decks: tuple[ScheduleDeck, ...]) -> tuple[str, ...]:
-    return tuple(d.deck_file for d in decks)
+    return tuple(_deck_ref(d) for d in decks)
 
 
 def _activity_labels(buckets_slice) -> tuple[str, ...]:

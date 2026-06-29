@@ -178,9 +178,10 @@ def _ics_escape(text: str) -> str:
 def assignment_uid(a: Assignment, namespace: str) -> str:
     """A stable UID per assignment so re-exports update rather than duplicate.
 
-    Seeded by the assignment's bucket refs (deck-file stems) for video/merged
-    rows, or the date for an insert — both stable across re-projection of the
-    same content, even as dates shift. Shared with the Google Calendar push
+    Seeded by the assignment's bucket refs — each deck's globally-unique
+    ``module/topic/stem`` identity (issue #436) — for video/merged rows, or the
+    date for an insert; both are stable across re-projection of the same content,
+    even as dates shift. Shared with the Google Calendar push
     (:mod:`clm.cohort_calendar.google_sync`) so the ``.ics`` feed and a pushed
     calendar agree on event identity.
     """

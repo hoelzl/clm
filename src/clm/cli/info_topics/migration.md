@@ -2,6 +2,37 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## Cohort calendar event UIDs are now globally unique (issue #436, {version})
+
+`clm calendar generate -f ics` and `clm calendar push` give every event a
+**stable UID** so re-exporting / re-pushing updates events in place instead of
+duplicating them. That UID was seeded from the bare **slide-file stem**, which is
+unique only *within* a topic — so two distinct decks sharing a stem (a common
+pattern: many topics name their lead deck `slides_010_*`) produced the **same**
+UID and collided. One event was silently dropped from the `.ics` feed and from a
+pushed Google calendar (`duplicate event UID … keeping the later assignment`).
+
+The UID is now seeded from each deck's globally-unique **`module/topic/stem`**
+identity, eliminating the entire collision class.
+
+**One-time migration — no action required.** Because every **video / merged**
+event's UID changes (date-keyed review/exam *inserts* keep theirs and are left
+in place), the **first `clm calendar push` after upgrading re-creates those
+events once**: it deletes the old-UID events and inserts the new ones in a single
+sync. Students subscribed to the shared Google calendar (read-only "See all event
+details", with no event guests) and `.ics` subscribers see a one-time refresh of
+the entries — **no notification emails are sent** (the events have no attendees)
+and no manual step is needed. Preview the churn first:
+
+```bash
+clm calendar push course.xml --channel <name> --dry-run
+```
+
+The `.ics` feed re-keys the same way on its next export. After this single
+re-creation the calendar is stable again. (There is no opt-out / versioned scheme:
+the old stem-only UID was buggy, so keeping it alive was deliberately rejected in
+favour of one clean re-key.)
+
 ## `clm slides sync` is now a verb group; the bare command reads (epic #440, {version})
 
 `clm slides sync` was a single leaf command that **wrote to the working tree by
