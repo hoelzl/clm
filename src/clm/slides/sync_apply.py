@@ -136,16 +136,44 @@ DECISION_APPLY = "apply"
 DECISION_SKIP = "skip"
 DECISION_DE_WINS = "de-wins"
 DECISION_EN_WINS = "en-wins"
+# The "escalate" variants (#447): resolve toward the winning side, but DEFER any
+# conflict whose *losing* side carries content the winner does not (a meaningful
+# independent edit a blanket de-wins would discard). Same edit direction as the
+# plain variants; the escalate gate runs in :func:`_materialize_edits`.
+DECISION_DE_WINS_SAFE = "de-wins-safe"
+DECISION_EN_WINS_SAFE = "en-wins-safe"
+
+# The decisions that resolve a conflict toward a winning side (the four below) vs
+# the plain (non-escalate) two, used to pick the edit direction.
+_WINS_DECISIONS = frozenset(
+    {DECISION_DE_WINS, DECISION_EN_WINS, DECISION_DE_WINS_SAFE, DECISION_EN_WINS_SAFE}
+)
+_DE_WINS_DECISIONS = frozenset({DECISION_DE_WINS, DECISION_DE_WINS_SAFE})
+_SAFE_DECISIONS = frozenset({DECISION_DE_WINS_SAFE, DECISION_EN_WINS_SAFE})
+
+#: The ``--conflict`` policy vocabulary (Issue #447). ``leave`` (default) defers every
+#: conflict (today's behavior); the rest are opt-in, data-loss-bearing resolutions.
+CONFLICT_POLICIES = ("leave", "de-wins", "en-wins", "de-wins-safe", "en-wins-safe")
+_POLICY_DECISION = {
+    "de-wins": DECISION_DE_WINS,
+    "en-wins": DECISION_EN_WINS,
+    "de-wins-safe": DECISION_DE_WINS_SAFE,
+    "en-wins-safe": DECISION_EN_WINS_SAFE,
+}
 
 __all__ = [
+    "CONFLICT_POLICIES",
     "DECISION_APPLY",
     "DECISION_DE_WINS",
+    "DECISION_DE_WINS_SAFE",
     "DECISION_EN_WINS",
+    "DECISION_EN_WINS_SAFE",
     "DECISION_SKIP",
     "ApplyResult",
     "ColdDeferralDetail",
     "RejectedPair",
     "apply_plan",
+    "conflict_policy_decisions",
     "content_index",
 ]
 
@@ -207,6 +235,11 @@ class ApplyResult:
     # propagated language-neutral / id-less-localized cells the per-cell walk cannot reach
     in_sync: int = 0  # an edit the judge decided needed no change
     deferred: int = 0  # conflict (or moves/adds declined this pass)
+    # Issue #447: conflicts a non-interactive --conflict policy resolved toward the
+    # winning side (de-wins / en-wins), and — under a *-safe (escalate) policy — those
+    # DEFERRED because the losing side carried independent content the winner lacked.
+    conflicts_resolved: int = 0
+    conflicts_escalated: int = 0
     flushed: bool = False  # True iff the atomic temp-swap actually wrote both decks
     watermark_recorded: bool = False
     errors: list[str] = field(default_factory=list)
@@ -271,6 +304,7 @@ def apply_plan(
     translator: SlideTranslator | None = None,
     watermark_cache: SyncWatermarkCache | None = None,
     decisions: dict[int, str] | None = None,
+    conflict_decisions: dict[int, str] | None = None,
     recoverer: AlignmentRecoverer | None = None,
     alignment_cache: SyncAlignmentCache | None = None,
     verifier: CorrespondenceVerifier | None = None,
@@ -368,7 +402,15 @@ def apply_plan(
     # mechanically (#216 resolve-then-apply). Read against the pre-mutation
     # snapshots/state, exactly as the inline edit appliers used to.
     edit_outcomes = _materialize_edits(
-        plan, decisions, de_state, en_state, de_content, en_content, judge, translator
+        plan,
+        decisions,
+        conflict_decisions,
+        de_state,
+        en_state,
+        de_content,
+        en_content,
+        judge,
+        translator,
     )
 
     moves: list[Proposal] = []
@@ -433,6 +475,7 @@ def apply_plan(
             _apply_conflict(
                 proposal,
                 decisions,
+                conflict_decisions,
                 de_state,
                 en_state,
                 edit_outcomes,
@@ -635,26 +678,133 @@ def _is_idless_localized_conflict(proposal: Proposal) -> bool:
     )
 
 
-def _conflict_decision(decisions: dict[int, str] | None, proposal: Proposal) -> str:
-    """The resolution for a conflict proposal (defaults to skip/defer)."""
+def _conflict_decision(
+    decisions: dict[int, str] | None,
+    conflict_decisions: dict[int, str] | None,
+    proposal: Proposal,
+) -> str:
+    """The resolution for a conflict proposal (defaults to skip/defer).
+
+    ``conflict_decisions`` (Issue #447) is a conflict-only OVERLAY: the non-interactive
+    ``--conflict`` policy supplies it while leaving ``decisions`` at ``None`` (the batch
+    default), so the deterministic kinds still auto-apply — only conflicts are steered.
+    A conflict's decision comes from the overlay when present, else from ``decisions``
+    (the interactive walker's complete map), else defers.
+    """
+    if conflict_decisions is not None and id(proposal) in conflict_decisions:
+        return conflict_decisions[id(proposal)]
     if decisions is None:
         return DECISION_SKIP
     return decisions.get(id(proposal), DECISION_SKIP)
 
 
 def _conflict_as_edit(proposal: Proposal, direction: str) -> Proposal:
-    """Recast a resolved conflict as an ``edit`` flowing the winning direction."""
+    """Recast a resolved conflict as an ``edit`` flowing the winning direction.
+
+    Copies **all** identity fields, not just ``(kind, role, direction, slide_id)``: a
+    narrative conflict is located by its positional anchor (``anchor`` /
+    ``owning_slide_id`` / ``anchor_occ``), so dropping them made ``_resolve_edit`` ->
+    ``_resolve_narrative_edit`` fail to find the cell ("source narrative not found by
+    anchor"). Keyed conflicts carry these as ``None`` and are unaffected (Issue #447).
+    """
     return Proposal(
         kind="edit",
         role=proposal.role,
         direction=direction,
         slide_id=proposal.slide_id,
+        reason=proposal.reason,
+        source_position=proposal.source_position,
+        target_position=proposal.target_position,
+        anchor=proposal.anchor,
+        owning_slide_id=proposal.owning_slide_id,
+        anchor_occ=proposal.anchor_occ,
     )
+
+
+def _is_remove_vs_edit_conflict(proposal: Proposal) -> bool:
+    """A conflict where one half was *removed* while the other was *edited* (#447).
+
+    De-wins toward the removed side would translate an empty body over the edited
+    half (clobbering it); de-wins toward the edited side is a removal, not a
+    re-translation. Either way a blanket policy must NOT treat it as a both-edited
+    conflict — the policy omits it and reports it for manual resolution. Detected by
+    the structured ``conflict_subtype`` the classifier stamps (not a reason string).
+    """
+    return proposal.kind == "conflict" and proposal.conflict_subtype == "remove-vs-edit"
+
+
+def conflict_policy_decisions(plan: SyncPlan, policy: str) -> dict[int, str]:
+    """Synthesize the per-conflict ``decisions`` map a non-interactive policy needs (#447).
+
+    The non-interactive analogue of the interactive walker's per-conflict ``[d]e-wins`` /
+    ``[e]n-wins`` choice: it maps **every** both-edited conflict to the policy's decision,
+    so ``apply_plan(decisions=…)`` resolves them in one pass. ``leave`` (and any unknown
+    policy) returns ``{}`` (today's behavior — conflicts defer). Two conflict classes are
+    deliberately **omitted** (left to defer + be reported), never silently resolved:
+
+    - **id-less localized** conflicts (#365) — resolving *which side wins* of a genuine
+      both-sided id-less edit is out of scope (a v2; the count is reported);
+    - **remove-vs-edit** conflicts — one half is absent, so a directed edit would clobber
+      the edited half with a translation of nothing.
+
+    Keyed by ``id(proposal)``, so it MUST be built from the exact ``plan`` object passed
+    to ``apply_plan`` (rebuild it after any auto-heal re-plan, or every key misses).
+    """
+    decision = _POLICY_DECISION.get(policy)
+    if decision is None:  # "leave" or unknown → no resolutions
+        return {}
+    out: dict[int, str] = {}
+    for proposal in plan.proposals:
+        if proposal.kind != "conflict":
+            continue
+        if _is_idless_localized_conflict(proposal) or _is_remove_vs_edit_conflict(proposal):
+            continue
+        out[id(proposal)] = decision
+    return out
+
+
+def _loser_has_independent_content(
+    proposal: Proposal,
+    direction: str,
+    de_content: dict[tuple[str, str], str],
+    en_content: dict[tuple[str, str], str],
+    judge: SyncJudge | None,
+) -> bool:
+    """Whether the LOSING half carries content the winning half lacks (the escalate gate).
+
+    The directional containment check the ``*-safe`` (escalate) policies use: reusing the
+    judge's ``in_sync`` verdict as an oracle, ask whether the *winner* would need to change
+    to reflect the *loser* (``judge.propose(source=loser, target=winner)``). An ``update``
+    verdict means the loser has information the winner does not — overwriting it would
+    discard a meaningful independent edit, so the conflict is escalated (deferred) instead.
+    Scoped to **keyed markdown** conflicts (bodies in ``de_content``/``en_content``); for a
+    code or id-less conflict, or with no judge, returns ``False`` (resolve, don't escalate).
+    """
+    if judge is None or proposal.slide_id is None or proposal.role == CODE_ROLE:
+        return False
+    key = (proposal.slide_id, proposal.role)
+    de_body = de_content.get(key, "")
+    en_body = en_content.get(key, "")
+    if not de_body or not en_body:
+        return False
+    # ``direction`` is the winning edit direction: de->en means DE wins / EN loses.
+    if direction == "de->en":
+        loser, winner, loser_lang, winner_lang = en_body, de_body, "en", "de"
+    else:
+        loser, winner, loser_lang, winner_lang = de_body, en_body, "de", "en"
+    try:
+        verdict = judge.propose(
+            loser, winner, source_lang=loser_lang, target_lang=winner_lang
+        ).verdict
+    except OllamaError:
+        return False  # cannot check → resolve (the loud banner + git diff are the gate)
+    return verdict == "update"
 
 
 def _apply_conflict(
     proposal: Proposal,
     decisions: dict[int, str] | None,
+    conflict_decisions: dict[int, str] | None,
     de_state: FileState,
     en_state: FileState,
     edit_outcomes: dict[int, _EditOutcome],
@@ -684,25 +834,31 @@ def _apply_conflict(
         result.deferred += 1
         _note_deferred(deferred_keys, proposal)
         return
-    decision = _conflict_decision(decisions, proposal)
-    if decision == DECISION_DE_WINS:
+    decision = _conflict_decision(decisions, conflict_decisions, proposal)
+    if decision in _WINS_DECISIONS:
+        outcome = edit_outcomes.get(id(proposal))
+        # The escalate gate (a *-safe policy) materialized this as "escalate" because the
+        # losing half carries independent content — defer + count, never overwrite (#447).
+        if outcome is not None and outcome.verdict == "escalate":
+            result.deferred += 1
+            result.conflicts_escalated += 1
+            _note_deferred(deferred_keys, proposal)
+            return
+        # The equivalence gate found the halves already in sync — no overwrite needed
+        # (and no model winner consumed); count as in-sync so the watermark advances.
+        if outcome is not None and outcome.verdict == "in_sync":
+            result.in_sync += 1
+            return
+        direction = "de->en" if decision in _DE_WINS_DECISIONS else "en->de"
         _apply_edit(
-            _conflict_as_edit(proposal, "de->en"),
+            _conflict_as_edit(proposal, direction),
             de_state,
             en_state,
             edit_outcomes[id(proposal)],
             result,
             narrative_targets,
         )
-    elif decision == DECISION_EN_WINS:
-        _apply_edit(
-            _conflict_as_edit(proposal, "en->de"),
-            de_state,
-            en_state,
-            edit_outcomes[id(proposal)],
-            result,
-            narrative_targets,
-        )
+        result.conflicts_resolved += 1
     else:
         outcome = edit_outcomes.get(id(proposal))
         if outcome is not None and outcome.verdict == "in_sync":
@@ -1123,6 +1279,7 @@ def _apply_retag_idless(
 def _materialize_edits(
     plan: SyncPlan,
     decisions: dict[int, str] | None,
+    conflict_decisions: dict[int, str] | None,
     de_state: FileState,
     en_state: FileState,
     de_content: dict[tuple[str, str], str],
@@ -1162,9 +1319,27 @@ def _materialize_edits(
                 ):
                     outcomes[id(proposal)] = _EditOutcome("in_sync")
                 continue
-            decision = _conflict_decision(decisions, proposal)
-            if decision in (DECISION_DE_WINS, DECISION_EN_WINS):
-                direction = "de->en" if decision == DECISION_DE_WINS else "en->de"
+            decision = _conflict_decision(decisions, conflict_decisions, proposal)
+            if decision in _WINS_DECISIONS:
+                direction = "de->en" if decision in _DE_WINS_DECISIONS else "en->de"
+                # Equivalence gate (#447): a decided markdown conflict whose halves are
+                # already equivalent needs no overwrite (and no winner consumed) — record
+                # in_sync so the apply downgrades it, exactly like the undecided case.
+                if proposal.role != CODE_ROLE and _conflict_already_equivalent(
+                    proposal, de_content, en_content, judge
+                ):
+                    outcomes[id(proposal)] = _EditOutcome("in_sync")
+                    continue
+                # Escalate gate (*-safe policies): defer if the losing side carries
+                # content the winner lacks (a meaningful independent edit to preserve).
+                if decision in _SAFE_DECISIONS and _loser_has_independent_content(
+                    proposal, direction, de_content, en_content, judge
+                ):
+                    outcomes[id(proposal)] = _EditOutcome(
+                        "escalate",
+                        error="losing half carries content not in the winning half",
+                    )
+                    continue
                 outcomes[id(proposal)] = _resolve_edit(
                     _conflict_as_edit(proposal, direction),
                     de_state,

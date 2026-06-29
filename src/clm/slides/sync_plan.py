@@ -232,6 +232,12 @@ class Proposal:
     anchor: str | None = None
     owning_slide_id: str | None = None
     anchor_occ: int = 0
+    # Issue #447: the structured subtype of a ``conflict`` proposal, so a non-interactive
+    # ``--conflict`` policy can tell a both-edited conflict (resolvable de-wins/en-wins)
+    # from a ``"remove-vs-edit"`` one (one half absent — a directed edit would clobber the
+    # edited half), without parsing the human ``reason``. ``None`` for the default
+    # both-edited conflict and every non-conflict proposal.
+    conflict_subtype: str | None = None
 
 
 @dataclass(frozen=True)
@@ -2291,6 +2297,7 @@ def classify_changes(
                         direction=None,
                         slide_id=sid,
                         reason="removed on DE but edited on EN since last sync",
+                        conflict_subtype="remove-vs-edit",
                     )
                 )
             else:
@@ -2314,6 +2321,7 @@ def classify_changes(
                         direction=None,
                         slide_id=sid,
                         reason="removed on EN but edited on DE since last sync",
+                        conflict_subtype="remove-vs-edit",
                     )
                 )
             else:

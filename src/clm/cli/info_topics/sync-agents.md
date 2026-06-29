@@ -89,7 +89,17 @@ The engine **refuses to guess**. The item states *what* is ambiguous, never a
 fabricated fix. Three shapes:
 
 - A **`conflict`** — the same cell drifted on both halves in opposite directions.
-  Decide the winner (edit the deck so both halves agree), then re-`report`.
+  Decide the winner (edit the deck so both halves agree), then re-`report`. For a
+  whole-deck "one side is authoritative" reconcile (e.g. you edited German all week
+  and want English overwritten to match), `clm slides sync autopilot DECK --conflict
+  de-wins --yes` resolves **every** both-edited conflict non-interactively (#447):
+  it re-translates the German cell over the English one. This **discards the English
+  edits** (irreversible — review the `git diff`), so it is opt-in and `--yes`-gated;
+  `--dry-run` previews it. `--conflict de-wins-safe` is the cautious tier — it asks the
+  model whether the English half carries content the German lacks and **escalates**
+  (leaves as a conflict) those, resolving only the rest. id-less and remove-vs-edit
+  conflicts are never auto-resolved. `--conflict` is autopilot-only (resolving a
+  conflict re-translates, which needs the embedded model).
 - An **`issue`** (carries `severity`) — a structural situation the classifier
   will not turn into a proposal (a one-sided header edit, a both-sided
   incompatible shared-cell change). Read `reason`, fix the deck, re-`report`.
