@@ -28,8 +28,10 @@ from typing import TYPE_CHECKING
 import click
 
 from clm.cli.commands.slides.sync import (
+    _SINCE_OPTION,
     CACHE_DB_NAME,
     _apply_exit_code,
+    _apply_since,
     _auto_heal_stale_watermark,
     _cold_baseline_hint_text,
     _is_stale_but_consistent,
@@ -432,6 +434,7 @@ def _resolve_verifier(verify_enabled: bool) -> CorrespondenceVerifier | None:
         "content. Single-pair only; mutually exclusive with --baseline / --rebaseline."
     ),
 )
+@_SINCE_OPTION
 @click.option(
     "--no-env-file",
     is_flag=True,
@@ -493,6 +496,7 @@ def slides_sync_cmd(
     auto_heal: bool,
     baseline_ref: str | None,
     baseline_from_spec: str | None,
+    since_spec: str | None,
     no_env_file: bool,
     yes: bool,
     ledger: bool,
@@ -531,7 +535,20 @@ def slides_sync_cmd(
       * --interactive: prompts per proposal before a single atomic apply.
       * A cell edited on both sides since the last sync is isolated as a
         conflict (left untouched, listed in the summary) rather than guessed.
+
+    ``--since DATE|REF`` resolves a timeframe to the baseline ref (sugar over
+    --baseline) — the one-shot "reconcile everything I changed since Monday".
     """
+    # --since (#446): reject its own conflicts BEFORE resolving so we never echo a
+    # resolution we then reject; then fold it into baseline_ref so every existing
+    # --baseline guard/behavior applies unchanged.
+    if since_spec is not None and (rebaseline or verify):
+        raise click.UsageError(
+            "--since is mutually exclusive with --rebaseline / --verify (it pins a "
+            "historical baseline; --rebaseline resets the watermark and --verify is a "
+            "standalone structural check)."
+        )
+    baseline_ref = _apply_since(since_spec, baseline_ref, baseline_from_spec, de_path)
     if interactive and as_json:
         raise click.UsageError("--interactive and --json are mutually exclusive")
     if interactive and dry_run:
