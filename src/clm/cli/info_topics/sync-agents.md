@@ -177,7 +177,12 @@ normal loop. A few cases:
   directory (each pair diffed against REF), so one report tells you, per deck, exactly
   what English is missing — instead of the default git-HEAD batch reading the lot as
   "clean". Then reconcile each drifted deck (`apply`, then `task` → model → `accept`,
-  then `verify`). Pick the ref from the commit log just before the editing session.
+  then `verify`). Pick the ref from the commit log just before the editing session —
+  **or skip the manual ref-picking with `--since`** (#446): `clm slides sync report
+  slides/module_410 --since "2 days ago"` resolves the timeframe to the last commit
+  at/before then and uses it as the baseline (a git ref works too: `--since HEAD~5`,
+  an alias for `--baseline`). `--since` is available on `report` / `apply` / `task` /
+  `accept` / `autopilot`.
 - **Bless the current consistent state** as the baseline (e.g. after reconciling
   by hand): `clm slides sync baseline bless DECK` — no throwaway commit needed
   (it replaces the old `--rebaseline`). It is gated on `verify`, so a structurally

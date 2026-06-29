@@ -43,6 +43,7 @@ Exit codes:
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -258,6 +259,148 @@ def _parse_baseline_from(spec: str) -> tuple[Path, Path, str]:
     assert sibling_name is not None  # split_lang_tag guarantees a swappable tag
     sibling = old.with_name(sibling_name)
     return (old, sibling, ref) if tag == "de" else (sibling, old, ref)
+
+
+# ---------------------------------------------------------------------------
+# --since DATE|REF  (Issue #446): resolve a timeframe to a baseline commit
+#
+# Pure CLI sugar over --baseline: a date/relative time resolves to the commit that
+# was HEAD at that instant; the concrete SHA flows through the existing --baseline
+# path with zero engine changes. We shell out to git in the raw-subprocess style of
+# sync_plan._git_show (NOT run_git, which carries a dry-run/auth shim) — timeframe
+# resolution belongs at the CLI layer, not the engine.
+# ---------------------------------------------------------------------------
+
+
+@define(frozen=True)
+class SinceResolution:
+    """A ``--since DATE|REF`` value resolved to a concrete baseline commit (#446)."""
+
+    requested: str
+    resolved_sha: str
+    kind: str  # "ref" | "date"
+    committed: str | None
+
+
+def _git_capture(cwd: Path, args: list[str]) -> tuple[int, str]:
+    """Run ``git <args>`` in ``cwd``; return ``(returncode, stdout.strip())``.
+
+    ``(-1, "")`` when git is unavailable. Mirrors ``sync_plan._git_show``'s raw
+    subprocess (utf-8, ``check=False``) — no ``run_git`` dry-run/auth shim.
+    """
+    try:
+        completed = subprocess.run(
+            ["git", *args],
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+        )
+    except (FileNotFoundError, OSError):
+        return (-1, "")
+    return (completed.returncode, completed.stdout.strip())
+
+
+def _git_committed_iso(cwd: Path, sha: str) -> str | None:
+    """The ISO committer date of ``sha`` (``git show -s --format=%cI``), or ``None``."""
+    rc, out = _git_capture(cwd, ["show", "-s", "--format=%cI", sha])
+    return out if (rc == 0 and out) else None
+
+
+def _resolve_since(value: str, cwd: Path) -> SinceResolution:
+    """Resolve ``--since VALUE`` to a concrete baseline commit (issue #446).
+
+    Try-ref-first: if VALUE peels to a commit (``git rev-parse --verify
+    VALUE^{commit}``) it is used verbatim — ``--since HEAD~1`` is exactly ``--baseline
+    HEAD~1`` and the literal ``HEAD`` resolves as a ref. Otherwise VALUE is a git
+    approxidate/date (``"2 days ago"``, ``2026-06-21``) and resolves to the last commit
+    at/before that instant (``git rev-list -1 --before=VALUE HEAD``) — the commit that
+    was HEAD then, so the diff captures everything edited *since*.
+
+    Raises :class:`click.UsageError` on empty input, a non-repo ``cwd``, or an
+    unresolvable/empty date. NOTE: ``rev-list --before`` filters by *committer* date,
+    so on rebased/cherry-picked (non-monotonic) history the chosen commit may not be the
+    strict HEAD-at-that-instant — fine for linear authoring history.
+    """
+    value = value.strip()
+    if not value:
+        raise click.UsageError(
+            '--since needs a date or git ref (e.g. "2 days ago", 2026-06-21, HEAD~1).'
+        )
+    rc, _root = _git_capture(cwd, ["rev-parse", "--show-toplevel"])
+    if rc != 0:
+        raise click.UsageError(
+            f"--since needs git history, but {cwd} is not inside a git work tree."
+        )
+    rc, sha = _git_capture(cwd, ["rev-parse", "--verify", "--quiet", f"{value}^{{commit}}"])
+    if rc == 0 and sha:
+        return SinceResolution(
+            requested=value, resolved_sha=sha, kind="ref", committed=_git_committed_iso(cwd, sha)
+        )
+    rc, sha = _git_capture(cwd, ["rev-list", "-1", f"--before={value}", "HEAD"])
+    if rc != 0:
+        raise click.UsageError(f"--since {value!r}: could not query git history (is HEAD valid?).")
+    if not sha:
+        raise click.UsageError(
+            f"--since {value!r}: no commit at or before that time (the repo's history may "
+            "not reach that far back, or the date is malformed)."
+        )
+    return SinceResolution(
+        requested=value, resolved_sha=sha, kind="date", committed=_git_committed_iso(cwd, sha)
+    )
+
+
+def _since_cwd(de_path: Path) -> Path:
+    """The directory to run ``--since`` git queries from: the deck's own directory."""
+    base = de_path if de_path.is_dir() else de_path.parent
+    return base.resolve()
+
+
+def _apply_since(
+    since_spec: str | None,
+    baseline_ref: str | None,
+    baseline_from_spec: str | None,
+    de_path: Path,
+) -> str | None:
+    """Fold ``--since`` into ``baseline_ref`` with mutual-exclusion guards (#446).
+
+    Returns the ``baseline_ref`` to use (unchanged when ``--since`` is absent). MUST be
+    called at the TOP of a command body, BEFORE any ``if de_path.is_dir()`` dispatch, so
+    a directory run with a conflicting ``--baseline`` is still rejected. Echoes the
+    resolved commit to stderr (stdout stays clean for ``--json``; the chosen SHA also
+    surfaces as the plan's ``git:<sha>`` baseline_source label).
+    """
+    if since_spec is None:
+        return baseline_ref
+    if baseline_ref is not None:
+        raise click.UsageError(
+            "--since and --baseline are mutually exclusive (--since resolves to a baseline ref)."
+        )
+    if baseline_from_spec is not None:
+        raise click.UsageError("--since and --baseline-from are mutually exclusive.")
+    resolution = _resolve_since(since_spec, _since_cwd(de_path))
+    when = f" (committed {resolution.committed})" if resolution.committed else ""
+    click.echo(
+        f"resolved --since {resolution.requested!r} to {resolution.resolved_sha[:12]}{when}.",
+        err=True,
+    )
+    return resolution.resolved_sha
+
+
+# A reusable ``--since`` click option, attached to report/apply/task/accept/autopilot.
+_SINCE_OPTION = click.option(
+    "--since",
+    "since_spec",
+    default=None,
+    metavar="DATE|REF",
+    help=(
+        "Resolve a timeframe to a baseline (sugar over --baseline). A git ref is used "
+        'verbatim; a date/relative time ("2 days ago", 2026-06-21) resolves to the last '
+        "commit at/before it (what was HEAD then), so a week of committed single-language "
+        "edits is diffed correctly. Mutually exclusive with --baseline / --baseline-from."
+    ),
+)
 
 
 # ---------------------------------------------------------------------------
@@ -1612,6 +1755,7 @@ def _run_report(
         "@REF defaults to HEAD). For a rename the auto-detection can't recover."
     ),
 )
+@_SINCE_OPTION
 @click.option(
     "--use-watermark",
     is_flag=True,
@@ -1644,6 +1788,7 @@ def sync_report_cmd(
     explain: bool,
     baseline_ref: str | None,
     baseline_from_spec: str | None,
+    since_spec: str | None,
     use_watermark: bool,
     cache_dir: Path | None,
     ledger: bool,
@@ -1658,7 +1803,9 @@ def sync_report_cmd(
     (``--use-watermark`` or ``--baseline REF``). A renamed deck recovers its baseline
     automatically (committed rename → HEAD^, uncommitted rename → matched predecessor);
     ``--baseline-from PATH[@REF]`` pins it explicitly when the rename can't be detected.
+    ``--since DATE|REF`` resolves a timeframe to the baseline ref (sugar over --baseline).
     """
+    baseline_ref = _apply_since(since_spec, baseline_ref, baseline_from_spec, de_path)
     _run_report(
         de_path,
         en_path,
@@ -1713,6 +1860,7 @@ def sync_verify_cmd(de_path: Path, en_path: Path | None, as_json: bool) -> None:
     metavar="PATH[@REF]",
     help="Diff a renamed deck against its pre-rename half PATH (single pair only).",
 )
+@_SINCE_OPTION
 @click.option(
     "--cache-dir",
     type=click.Path(path_type=Path),
@@ -1748,6 +1896,7 @@ def sync_apply_cmd(
     use_watermark: bool,
     baseline_ref: str | None,
     baseline_from_spec: str | None,
+    since_spec: str | None,
     cache_dir: Path | None,
     ledger: bool,
     auto_heal: bool,
@@ -1775,7 +1924,13 @@ def sync_apply_cmd(
     gated on structural ``verify``). A pass with residue records nothing (the deck is
     not fully reconciled); resolve the residue and re-apply, or ``baseline bless
     --ledger``.
+
+    ``--since DATE|REF`` resolves a timeframe to the baseline ref (sugar over
+    --baseline); it works over a directory exactly as --baseline does.
     """
+    # Resolve --since BEFORE the directory dispatch so a dir + conflicting --baseline is
+    # still rejected and --since works over a directory sweep (#446).
+    baseline_ref = _apply_since(since_spec, baseline_ref, baseline_from_spec, de_path)
     if de_path.is_dir():
         if en_path is not None:
             raise click.UsageError(
@@ -2201,6 +2356,7 @@ def _run_apply_batch(
     is_flag=True,
     help="Opt back into the structural watermark as the baseline (default: git HEAD).",
 )
+@_SINCE_OPTION
 @click.option(
     "--cache-dir",
     type=click.Path(path_type=Path),
@@ -2214,6 +2370,7 @@ def sync_task_cmd(
     as_json: bool,
     baseline_ref: str | None,
     baseline_from_spec: str | None,
+    since_spec: str | None,
     use_watermark: bool,
     cache_dir: Path | None,
 ) -> None:
@@ -2242,6 +2399,7 @@ def sync_task_cmd(
             "--baseline and --baseline-from are mutually exclusive (one pins a ref, the "
             "other pins the deck's pre-rename location)."
         )
+    baseline_ref = _apply_since(since_spec, baseline_ref, baseline_from_spec, de_path)
 
     prog_lang = _resolve_prog_lang(de_path)
     guidance_by_lang, _used = resolve_guidance_by_lang(
@@ -2392,6 +2550,7 @@ def _emit_tasks(tasks: list[SyncTask], *, unframed: list, as_json: bool) -> None
     is_flag=True,
     help="Opt back into the structural watermark as the baseline (default: git HEAD).",
 )
+@_SINCE_OPTION
 @click.option(
     "--cache-dir",
     type=click.Path(path_type=Path),
@@ -2407,6 +2566,7 @@ def sync_accept_cmd(
     record: bool,
     baseline_ref: str | None,
     baseline_from_spec: str | None,
+    since_spec: str | None,
     use_watermark: bool,
     cache_dir: Path | None,
 ) -> None:
@@ -2449,6 +2609,7 @@ def sync_accept_cmd(
             "--baseline and --baseline-from are mutually exclusive (one pins a ref, the "
             "other pins the deck's pre-rename location)."
         )
+    baseline_ref = _apply_since(since_spec, baseline_ref, baseline_from_spec, de_path)
 
     answer = _read_answer(answer_path)
 
