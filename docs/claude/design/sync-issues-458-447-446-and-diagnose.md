@@ -1,7 +1,15 @@
 # Slides-sync improvements: #458, #447, #446, and a `sync diagnose` verb
 
-**Status:** proposal (design only; nothing implemented)
-**Date:** 2026-06-29
+**Status:** ✅ all shipped (2026-06-30). #446 `--since` → PR #489; `sync diagnose`
+→ PR #490; #458 comment-token hashing → PR #491; #447 `--conflict` policy
+(autopilot-only + escalate) → PR #492. Implementation notes that diverged from this
+proposal: `sync diagnose` runs reconcile's occurrence-pairing **and** verify (the
+id-less-twin case is verify-invisible); #447 applies the policy as a conflict-only
+`apply_plan(conflict_decisions=…)` overlay (a plain `decisions=` map would defer the
+deterministic edits) and the escalate tier reuses `judge.propose(loser, winner)` as a
+directional containment oracle (no new judge); Studio's `//`-deck hash fix (#458) is
+latent because Studio is `.py`-only today. This doc is retained as the design record.
+**Date:** 2026-06-29 (designed); 2026-06-30 (shipped)
 **Scope:** three open issues plus tooling that automates a manual diagnostic
 workflow.
 
