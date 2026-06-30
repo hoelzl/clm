@@ -75,7 +75,15 @@ def _rel(path: Path, base: Path) -> str:
     help="Course data directory (contains slides/). Default: inferred from the "
     "spec file (its grandparent).",
 )
-@click.option("--json", "as_json", is_flag=True, help="Output as JSON.")
+@click.option(
+    "--json",
+    "as_json",
+    is_flag=True,
+    help="Output as JSON. Adds a per-topic ``topics`` array — each entry "
+    "carries its ``section``, ``resolved_module`` and ``slide_files`` (the "
+    "source ``.py`` decks), plus first-occurrence-shadowed duplicates and "
+    "unresolved topics. This is the section -> source-file mapping in one call.",
+)
 def spec_decks_cmd(
     spec_file: Path | None,
     all_specs: Path | None,
@@ -90,6 +98,12 @@ def spec_decks_cmd(
     references pick their module; unbound duplicates are first-occurrence-wins).
     This is the reliable way to compute a spec's "shipping set" — do not guess
     from deck filenames.
+
+    Plain output is one deck path per line. ``--json`` additionally emits a
+    per-topic ``topics`` array keyed by ``section`` with each topic's
+    ``slide_files`` — i.e. the **section -> source-``.py``-deck mapping**, with
+    no need to parse the spec XML by hand. (``clm export outline --format json``
+    gives the same mapping grouped by section and annotated with deck titles.)
 
     \b
     Examples:

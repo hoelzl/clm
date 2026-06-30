@@ -246,6 +246,10 @@ async def handle_course_outline(
 ) -> str:
     """Generate a structured JSON outline for a course.
 
+    The outline doubles as the section -> source-deck mapping: each section's
+    ``topics`` array carries the topic ``directory`` and a ``slides`` list of
+    ``{file, title}`` (the source ``.py`` deck files).
+
     Args:
         spec_file: Path to the course spec file (absolute or relative to data_dir).
         data_dir: Root data directory.
