@@ -9,6 +9,212 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 Unreleased changes are collected as fragment files in [`changelog.d/`](changelog.d/)
 and folded into this file by `scripts/collect_changelog.py` at release time.
 
+## [1.18.0] - 2026-06-30
+
+### Added
+
+- **`clm slides sync report` / `apply` / `task` / `accept` / `autopilot` gain
+  `--since DATE|REF`.** Resolves a *timeframe* to a baseline commit instead of forcing
+  you to hand-resolve a git ref: a git ref is used verbatim (an alias for
+  `--baseline`), while a date or relative time (`"2 days ago"`, `2026-06-21`) resolves
+  to the last commit at/before that instant (what was `HEAD` then), so a week of
+  committed single-language edits is diffed correctly. Try-ref-first, so a branch/tag
+  literally named like a date is treated as a ref. The chosen commit is echoed to
+  stderr and surfaces as the plan's `git:<sha>` baseline source. Mutually exclusive
+  with `--baseline` / `--baseline-from` (and, on `autopilot`, `--rebaseline` /
+  `--verify`); works over a directory exactly as `--baseline` does. Pure sugar over
+  `--baseline` — no engine change. (#446)
+
+- **`clm slides sync autopilot` gains a non-interactive `--conflict` policy (#447).**
+  The "German is the source of truth" reconcile without `--interactive`: `--conflict
+  de-wins` (or `en-wins`) takes that side as authoritative and re-translates it over the
+  losing half of **every** both-edited conflict in one pass — making a whole-week
+  reconcile fully agent-drivable. Because that **overwrites the losing half**
+  (irreversible — the discarded edits survive only in git), it is opt-in (`leave` stays
+  the default) and a writing run requires `--yes`; `--dry-run` previews exactly what
+  would be overwritten. `de-wins-safe` / `en-wins-safe` add an **escalate** tier: a
+  model containment check defers any conflict whose losing half carries content the
+  winner lacks (a meaningful independent edit), resolving only the rest. An equivalence
+  gate skips already-in-sync conflicts (no needless overwrite/translation). id-less
+  localized and remove-vs-edit conflicts are never auto-resolved (deferred + reported).
+  The `--json` apply payload gains `conflicts_resolved` / `conflicts_escalated`.
+  Autopilot-only (the agent toolkit's `apply` stays model-free — resolving a conflict
+  re-translates). Also fixes a latent bug in the interactive `[d]e-wins` / `[e]n-wins`
+  path: a narrative conflict's anchor identity is now preserved when recasting it to a
+  directed edit (it previously failed to locate the cell).
+
+- **New `clm slides sync diagnose` verb — classify a `verify` symptom into its root
+  cause.** A `verify` failure (`id-asymmetry`, `duplicate-id`) has several unrelated
+  root causes, each needing a different fix; renaming ids until `verify` passes hides
+  the real defect. `diagnose` is a read-only superset of `verify` **and**
+  `reconcile-vo-ids`: for every finding — plus the verify-invisible narrative
+  id-disagreements (a narration cell id'd on one half, id-less on the other) — it
+  names the root cause (`MIS-TAG` / `ID-LESS-TWIN` / `CONTENT-GAP` / `WHOLE-DECK-GAP`
+  / `DUPLICATE-NARRATION-OVERSTAMP` / `NARRATIVE-ID-DISAGREEMENT` / …), the evidence
+  (content-language vs `lang=` tag, who carries the id, whether a twin exists), and
+  whether the fix is mechanical or authoring. `--apply` performs **only** the
+  identity-preserving narrative fixes (strip a duplicated/asymmetric narration id to
+  the canonical id-less form), re-gated by structure; it **never** renames an id to
+  silence a symptom. Content language is judged by a tiny built-in DE/EN heuristic
+  that abstains on short/title-only text. Read-only by default, `--json` for agents;
+  the root-cause catalog ships in `clm info sync-agents`. Also adds
+  `reconcile_vo_ids.collapse_intra_half_duplicates` for the symmetric narration
+  over-stamp the existing reconciler left alone.
+
+### Changed
+
+- **Tightened the fast-suite per-test timeout from 600s to 120s** (matching CI's
+  `--timeout=120`), so a contention *hang* on the pre-push gate fails promptly
+  instead of stalling ~10 minutes (which forced a manual Ctrl-C + re-run). The
+  slowest legitimate fast test measures ~5.5s (16-worker dev box) / ~11s
+  (64-worker contention), so 120s is a >10x backstop, not a performance gate.
+  `tests/conftest.py` bumps the heavier suites' per-test timeout at collection
+  time to match CI — `integration` → 240s, `e2e`/`slow`/`docker` → 600s — so
+  running them locally (a non-default `-m` selection) never false-kills against
+  the fast default; an explicit `@pytest.mark.timeout` still wins.
+  Test-infrastructure only.
+
+- **Hardened the test suite against pytest-xdist contention flakes.** Removed the
+  remaining oversubscription-sensitive synchronization that forced manual test
+  re-runs under high worker counts: the worker-status test now gates the
+  transient `"busy"` state on an event instead of polling a 1s window
+  (empirically reproduced 1-in-3 at 64 workers); the watch-mode debounce tests
+  await the scheduled task instead of a fixed `asyncio.sleep` margin; the
+  `http_replay_mitm_manager` subprocess-spawning module is now `serial`; the
+  fake-uvicorn lifecycle tests dropped a `_free_port()` TOCTOU bind; the
+  heartbeat slow-write threshold is relaxed once session-wide via
+  `CLM_HEARTBEAT_SLOW_WRITE_THRESHOLD_SECONDS` (production default unchanged at
+  50ms). A scoped `@pytest.mark.flaky` safety net (pytest-rerunfailures, no
+  global `--reruns`, `only_rerun`-filtered, `-rR`-loud) retries only the known
+  thread-starvation families without masking real regressions. See
+  `docs/claude/test-flakiness-investigation.md` and the "Four levers" section of
+  `docs/developer-guide/testing.md`.
+
+- **Further reduced pytest-xdist contention in the test suite** (follow-up to the
+  flakiness hardening). The single `serial` xdist load group is now split by
+  resource class — `@pytest.mark.serial("subproc")` / `("workerpool")` /
+  `("port")` — so the subprocess-spawning and worker-pool families run on
+  different workers concurrently instead of stacking one-at-a-time on a single
+  worker (M-1; guarded by `tests/test_serial_xdist_groups.py`). The
+  outline-command tests now write their transient per-test specs into a
+  dedicated, gitignored, copytree-excluded `_volatile_specs/` directory rather
+  than the committed `course-specs/` tree, removing a Windows scandir/unlink
+  race against the e2e data-copy fixture (M-2). The e2e hardlink copy degrades
+  to a per-file byte copy on failure instead of aborting and crashing a retry on
+  a partial directory (M-4). Test-infrastructure only.
+
+### Fixed
+
+- **Stale-watermark auto-heal now covers directory (batch) sweeps.** A writing
+  `clm slides sync apply DIR` / `autopilot DIR` re-baselines each pair's
+  stale-but-consistent watermark independently (the same safe git-HEAD-no-op gate as
+  the single-pair path), instead of only the single-pair case. The batch rollup names
+  how many were re-baselined and each `--json` pair entry carries `auto_healed`
+  (#364 follow-up).
+- **`clm slides sync --explain` shows the git-HEAD baseline side by side** with the
+  watermark baseline when the two disagree — so a stale watermark (errors/conflicts
+  vs the watermark, clean vs git HEAD) is visible at a glance rather than a
+  clean-looking anchor diff that nonetheless errors (#364 follow-up).
+- **The "id-less localized cells edited on both decks" error is now machine-readable.**
+  Besides naming the offending cell's owning slide group in prose, the `report --json`
+  issue item carries the offending cells' localized positions and bytes
+  (`source_position` / `source_excerpt` / `source_line` for DE, `target_*` for EN), so
+  an agent reads them straight from the report (#364 follow-up).
+
+- **`clm slides sync apply` / `autopilot` auto-heal a stale watermark.** When both
+  halves of a split deck were edited and committed without an intervening sync, the
+  watermark falls behind and a watermark-baselined run errored on a *false*
+  stale-baseline conflict (the "id-less localized cells edited on both decks" error,
+  or a keyed conflict) even though the halves are already mutually consistent. A
+  **writing** run now detects that case and re-baselines the watermark automatically
+  before reconciling, so the sync just proceeds (#364). On by default and safe by
+  construction — it heals only when git `HEAD` shows the halves consistent (a
+  verified no-op), so it can never mask an un-synced edit, and never fires outside a
+  git repo. Pass `--no-auto-heal` to surface the conflict instead; the `apply
+  --json` payload carries `auto_healed: true` when it fires.
+- **Stale-watermark messaging now points at the live verbs.** The stale-watermark
+  hint and the id-less-localized error steered to the retired `clm slides sync
+  --rebaseline` flag; they now point at `clm slides sync apply` (which auto-heals)
+  and `clm slides sync baseline bless` (#364). The id-less error already names the
+  offending cell's owning slide group and echoes the drifted cells.
+
+- **Cohort calendar: fix UID collisions that silently dropped events (#436).**
+  `clm calendar generate -f ics` and `clm calendar push` seeded each event's
+  stable UID from the bare slide-file **stem**, which is unique only within a
+  topic — so two distinct decks that share a stem (a common pattern: many topics
+  name their lead deck `slides_010_*`) produced the **same** UID and collided.
+  One event was silently dropped from the `.ics` feed and from a pushed Google
+  calendar (`duplicate event UID … keeping the later assignment`). The UID is now
+  seeded from each deck's globally-unique **`module/topic/stem`** identity, which
+  eliminates the entire collision class. **One-time migration:** because every
+  video/merged event's UID changes (date-keyed review/exam inserts keep theirs),
+  the first `clm calendar push` after upgrading re-creates those events once
+  (read-only `.ics`/Google subscribers see a one-time refresh — no emails, since
+  the events have no attendees, and no manual step). Preview it with
+  `clm calendar push … --dry-run`. See `clm info migration`.
+
+- **`clm slides sync report` now carries both current cells on a keyed `conflict`.**
+  A baseline-relative conflict (both halves changed since the baseline) previously
+  reported empty `source_excerpt` / `target_excerpt`, forcing an agent to re-open
+  and re-parse every `.de.py` / `.en.py` to tell a *false* conflict (a consistent
+  bilingual edit) from a genuine one. The conflict's current DE cell (`source_*`)
+  and EN cell (`target_*`) are now populated — resolved by the conflict's
+  `slide_id` (robust to the position-scheme used for id-less cells), with a
+  remove-vs-edit conflict carrying only the surviving side. Flows through `clm
+  slides sync report --json`, the `slides_sync_report` MCP tool, and `task` /
+  `accept` framing. (#451)
+
+- **`//`-comment decks (C++/C#/Java/TS) now get reflow-insensitive markdown
+  hashing.** #429 made a pure soft re-wrap of a markdown prose cell hash identically
+  (so it is not mis-read as an edit), but it hard-coded the `#` comment token, so only
+  Python/Rust decks benefited; a `//` deck's re-wrap still read as drift. The real
+  source comment token is now threaded from `CellMetadata.comment_token` through
+  `cell_content_hash` / `hash_cell` / `anchor_of` (Option A — the ~25 hash call sites
+  are unchanged, so the threading is atomic and can't half-apply). `WATERMARK_HASH_VERSION`
+  is bumped to 3 and the consistency ledger gains a per-entry `hash_version`, so `//`
+  decks re-baseline once automatically (the existing stale-version self-heal); `#`-deck
+  hashes are byte-identical and do not re-baseline. The Studio render path threads the
+  token too, so a future `//`-deck would not false-trip the optimistic-concurrency
+  guard. (#458, follow-up to #429)
+
+- **Cache & config discovery now walk up to the project root.** `clm` resolves
+  the LLM/sync cache directory, project config, and the build/jobs databases
+  relative to the **project root** — discovered by walking up from the current
+  directory to the nearest `pyproject.toml` / `.clm/config.toml` / `.git`, like
+  `git` / `uv` / `ruff`. Running a command from a subdirectory (e.g. a topic dir)
+  no longer treats the subdirectory as the root: it stops ignoring
+  `[tool.clm] cache_dir`, stops creating a stray `<subdir>/.clm-cache/`, and so a
+  watermark/`baseline bless` written from a subdir is visible from the repo root
+  (#477). `clm config locate` now also reports the discovered project root. An
+  explicitly supplied `--cache-db-path` / `--jobs-db-path` is still honored
+  verbatim.
+- **`clm slides sync` watermarks now work from a git worktree.** The watermark is
+  keyed by the **main-checkout** path even when the command runs inside a linked
+  git worktree, so a watermark recorded from the main checkout is found from any
+  worktree (and writes land on the one canonical key instead of accumulating
+  orphaned worktree-path rows). Previously every pair silently missed its
+  watermark from a worktree and cold-started off git `HEAD` (#435). The committed
+  per-slide sync ledger (#448) was already worktree-portable and is unaffected.
+
+- **Build progress bar no longer freezes for minutes behind job submission.**
+  When many topics needed rebuilding, the `clm build` progress bar could sit
+  frozen at a few dozen completed jobs for one to two minutes — while
+  `clm monitor` showed hundreds of jobs finishing — and then jump far ahead. The
+  bar advances only from the completion poll loop, and that loop shares one
+  asyncio event loop with job *submission*, whose synchronous body (the SQLite
+  job-cache probe, the worker-availability wait, the payload JSON serialization,
+  and the jobs-DB INSERT) ran inline with no `await` and starved the poll loop
+  during a submission burst. The previous attempt only moved the result-cache
+  *write* off the poll loop, which was never what blocked the bar. The submission
+  body now runs on a dedicated single-thread executor, a per-operation semaphore
+  bounds how much work (notably the on-loop cache-hit replay) lands in one
+  event-loop turn, the end-of-stage result-cache drain no longer blocks the loop,
+  and the jobs-DB runtime connection now uses `synchronous=NORMAL` (it had been
+  reverting to the fsync-on-every-commit default). On a 1,440-job synthetic
+  rebuild this cut the worst progress-loop stall from ~19 s to ~1 s and reduced
+  total build time. A new opt-in `CLM_PROFILE_BUILD=1` build diagnostic and the
+  `scripts/profile_build_stall.py` harness make the poll-loop health measurable.
+
 ## [1.17.0] - 2026-06-25
 
 ### Added
