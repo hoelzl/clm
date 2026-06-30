@@ -107,6 +107,14 @@ def create_server(data_dir: Path) -> FastMCP:
     ) -> str:
         """Generate a structured JSON outline for a course.
 
+        The outline is the **section -> source-deck mapping**: a list of
+        sections, each with a ``topics`` array whose entries carry the topic
+        ``directory`` and a ``slides`` list of ``{file, title}`` (the source
+        ``.py`` deck files). Use this instead of parsing the spec XML or
+        grepping ``slides/`` to learn which files back each section. (The CLI
+        ``clm course decks <spec> --json`` returns the same mapping as a flat,
+        build-resolution-accurate ``topics`` array.)
+
         Args:
             spec_file: Path to the course spec file (absolute, or
                 relative to the data directory).

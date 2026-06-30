@@ -1,8 +1,10 @@
 """Outline command for generating course outlines in Markdown and JSON format.
 
 This module provides a command to export a course structure as a Markdown
-outline or structured JSON, with section names as headings and topic titles
-as entries.
+outline (section headings + topic/deck titles) or structured JSON. The JSON
+form additionally carries each topic's directory and its slide ``{file,
+title}`` entries, so it doubles as the section -> source-``.py`` deck-file
+mapping.
 """
 
 import json
@@ -620,6 +622,10 @@ def generate_outline_json(
 ) -> dict:
     """Generate a structured JSON outline for a course.
 
+    Each section entry carries a ``topics`` list; every topic carries its
+    ``directory`` and a ``slides`` list of ``{file, title}`` — the
+    section -> source-``.py`` deck-file mapping, annotated with titles.
+
     Args:
         course: The course to generate an outline for
         language: Language code ('en' or 'de')
@@ -781,8 +787,14 @@ def outline(
 ):
     """Generate an outline of a course in Markdown or JSON format.
 
-    Creates a document with section names as headings and topic titles
-    as entries. Use --format json for structured output.
+    Markdown (the default) uses section names as headings and topic/deck
+    titles as bullet entries — titles only, no file paths. Pass
+    ``--format json`` for structured output: each section then carries a
+    ``topics`` array whose entries include the topic ``directory`` and a
+    ``slides`` list of ``{file, title}`` — i.e. the **section -> source-``.py``
+    deck-file mapping**, annotated with titles, without parsing the spec XML.
+    (``clm course decks <spec> --json`` gives the same mapping as a flat,
+    build-resolution-accurate ``topics`` array.)
 
     \b
     Examples:
