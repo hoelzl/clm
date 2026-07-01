@@ -161,6 +161,41 @@ def _isolate_http_replay_env():
                 os.environ[key] = value
 
 
+@pytest.fixture(autouse=True)
+def _isolate_db_path_env():
+    """Clear the ``CLM_*_DB_PATH`` env vars for the duration of every test.
+
+    The cache / jobs / telemetry DB paths *default* to a project-root-anchored
+    location (issue #477). A developer who points one at a scratch disk in their
+    shell — e.g. ``CLM_JOBS_DB_PATH=Z:\\clm_jobs.db`` — would otherwise have that
+    value bleed into the test process and override the default *inside* every
+    test that asserts the resolved default (``test_default_db_path_detection``,
+    the db-path anchoring sweep, …). CI runs with a clean environment, so such a
+    test passes in CI but fails on the configured dev machine — exactly the
+    ambient-environment dependence a hermetic suite must not have.
+
+    Snapshotting, clearing, and restoring here makes default-path resolution
+    deterministic regardless of the developer's shell. A test that needs a
+    specific path *set* does so in its own body via ``monkeypatch.setenv``
+    (test_status_collector's env-var tests, test_sqlite_backend_resilience's
+    decoy) — that runs after this fixture, so those are unaffected. Mirrors the
+    ``_isolate_http_replay_env`` / ``_neutralise_pool_size_cap`` precedents.
+    """
+    keys = (
+        "CLM_CACHE_DB_PATH",
+        "CLM_JOBS_DB_PATH",
+        "CLM_TELEMETRY_DB_PATH",
+        "CLM_DB_PATH",
+    )
+    saved = {k: os.environ.pop(k, None) for k in keys}
+    try:
+        yield
+    finally:
+        for key, value in saved.items():
+            if value is not None:
+                os.environ[key] = value
+
+
 # ====================================================================
 # Tool Availability Detection
 # ====================================================================
