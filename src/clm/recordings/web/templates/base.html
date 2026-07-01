@@ -192,13 +192,16 @@
 
     /* Collapsible-section persistence.
        Each <details data-section-collapse> remembers its open/closed
-       state in sessionStorage keyed by section name, so the frequent
-       SSE-driven #lectures-dynamic swaps (which re-render every section
-       as `open`) don't undo a section the user collapsed. Restoration
-       runs synchronously inside htmx:afterSwap — before the browser
-       paints the freshly-swapped subtree — so a collapsed section never
-       flashes open. `toggle` doesn't bubble, so the listener is attached
-       in the capture phase to catch it from the document root. */
+       state in localStorage keyed by section name. localStorage (not
+       sessionStorage) so the choice survives a browser/tab restart and a
+       `clm recordings serve` restart — not just an in-tab refresh.
+       Sections default to *collapsed*: the server renders them without
+       `open`, and only sections explicitly stored "open" are expanded on
+       load, so the page starts fully collapsed the first time. Restoration
+       runs synchronously inside htmx:afterSwap — before the browser paints
+       the freshly-swapped subtree — so the expanded set never flashes.
+       `toggle` doesn't bubble, so the listener is attached in the capture
+       phase to catch it from the document root. */
     var SECTION_STORAGE_PREFIX = 'clm:sectionOpen:';
     function _restoreSectionCollapse(scope) {
         var root = scope || document;
@@ -206,21 +209,40 @@
             var key = d.getAttribute('data-section-key');
             if (!key) return;
             var stored;
-            try { stored = sessionStorage.getItem(SECTION_STORAGE_PREFIX + key); }
+            try { stored = localStorage.getItem(SECTION_STORAGE_PREFIX + key); }
             catch (e) { stored = null; }
-            if (stored === 'closed') d.removeAttribute('open');
-            else if (stored === 'open') d.setAttribute('open', '');
+            // Default (no stored value) and "closed" both collapse; only an
+            // explicit "open" expands.
+            if (stored === 'open') d.setAttribute('open', '');
+            else d.removeAttribute('open');
         });
+    }
+    function _persistSectionState(d) {
+        var key = d.getAttribute('data-section-key');
+        if (!key) return;
+        try {
+            localStorage.setItem(SECTION_STORAGE_PREFIX + key, d.open ? 'open' : 'closed');
+        } catch (e) { /* private browsing / quota exceeded — ignore */ }
     }
     document.addEventListener('toggle', function (evt) {
         var d = evt.target;
         if (!d || !d.hasAttribute || !d.hasAttribute('data-section-collapse')) return;
-        var key = d.getAttribute('data-section-key');
-        if (!key) return;
-        try {
-            sessionStorage.setItem(SECTION_STORAGE_PREFIX + key, d.open ? 'open' : 'closed');
-        } catch (e) { /* private browsing / quota exceeded — ignore */ }
+        _persistSectionState(d);
     }, true);
+    /* Expand-all / collapse-all toolbar controls. Set every section and
+       persist the new state so the choice survives reloads and restarts. */
+    function _setAllSections(open) {
+        document.querySelectorAll('[data-section-collapse]').forEach(function (d) {
+            if (open) d.setAttribute('open', '');
+            else d.removeAttribute('open');
+            _persistSectionState(d);
+        });
+    }
+    document.addEventListener('click', function (evt) {
+        if (!evt.target || !evt.target.closest) return;
+        if (evt.target.closest('[data-expand-all]')) { _setAllSections(true); return; }
+        if (evt.target.closest('[data-collapse-all]')) { _setAllSections(false); return; }
+    });
     document.addEventListener('htmx:afterSwap', function () {
         _restoreSectionCollapse();
     });
