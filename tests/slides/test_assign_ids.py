@@ -1346,18 +1346,162 @@ class TestStampIds:
         assert len(de_ids) == 3
         assert len(set(de_ids)) == 3  # the narrative no longer shares "intro"
 
-    def test_split_half_alone_downgraded_with_refusal(self, tmp_path):
+    def test_split_half_alone_refused_untouched(self, tmp_path):
+        # A refused deck stays byte-identical — no fallback pass smuggles
+        # DE-derived (non-EN-authority) ids in through the back door.
+        text = (
+            '# %% [markdown] lang="de" tags=["slide"]\n'
+            "# ## Einführung\n"
+            "\n"
+            '# %% [markdown] lang="de"\n'
+            "# Ein Hinweis.\n"
+        )
+        de = _write(tmp_path, text, name="slides_solo.de.py")
+        result = assign_ids_in_file(de, AssignOptions(**_STAMP))
+        assert result.assignments == []
+        assert any("--stamp-ids needs both halves" in r.reason for r in result.refusals)
+        assert de.read_text(encoding="utf-8") == text
+
+    def test_prefixless_lone_half_refused_untouched(self, tmp_path):
+        # The pair-atomic guard is prefix-AGNOSTIC: apis.de.py is a split
+        # half too (the sync surface supports prefix-less decks by design).
+        text = '# %% [markdown] lang="de" tags=["slide"]\n# ## Datenbanken\n'
+        de = _write(tmp_path, text, name="apis.de.py")
+        result = assign_ids_in_file(de, AssignOptions(**_STAMP))
+        assert result.assignments == []
+        assert any("--stamp-ids needs both halves" in r.reason for r in result.refusals)
+        assert de.read_text(encoding="utf-8") == text
+
+    def test_prefixless_split_pair_stamped(self, tmp_path):
+        from clm.slides.assign_ids import assign_ids_in_files
+
         de = _write(
             tmp_path,
             '# %% [markdown] lang="de" tags=["slide"] slide_id="intro"\n'
             "# ## Einführung\n"
             "\n"
             '# %% [markdown] lang="de"\n'
-            "# Ein Hinweis.\n",
-            name="slides_solo.de.py",
+            "# Ein lokalisierter Hinweis ohne Bezeichner.\n",
+            name="apis.de.py",
         )
-        result = assign_ids_in_file(de, AssignOptions(**_STAMP))
+        en = _write(
+            tmp_path,
+            '# %% [markdown] lang="en" tags=["slide"] slide_id="intro"\n'
+            "# ## Introduction\n"
+            "\n"
+            '# %% [markdown] lang="en"\n'
+            "# A localized note without an identifier.\n",
+            name="apis.en.py",
+        )
+        result = assign_ids_in_files([de, en], AssignOptions(**_STAMP))
+        assert result.files_modified == 2
+        assert not result.refusals
+        de_ids = [
+            c.metadata.slide_id
+            for c in parse_cells(de.read_text(encoding="utf-8"), "#")
+            if c.metadata.slide_id
+        ]
+        en_ids = [
+            c.metadata.slide_id
+            for c in parse_cells(en.read_text(encoding="utf-8"), "#")
+            if c.metadata.slide_id
+        ]
+        assert de_ids == en_ids
+        assert len(de_ids) == 2
+
+    def test_preserved_divergent_twin_detected_in_both_orders(self):
+        # A twin pair committed to two different ids must refuse regardless
+        # of which member carries the preserve marker / is visited first.
+        def deck(first: str, second: str) -> str:
+            return (
+                '# %% [markdown] lang="de" tags=["slide"] slide_id="intro"\n'
+                "# ## Einführung\n"
+                "\n"
+                f'# %% [markdown] lang="de" tags=["voiceover"] slide_id="{first}"\n'
+                "# Sprechertext\n"
+                "\n"
+                f'# %% [markdown] lang="en" tags=["voiceover"] slide_id="{second}"\n'
+                "# Voiceover text\n"
+            )
+
+        for first, second in (("id-a", "!id-b"), ("!id-b", "id-a"), ("!id-a", "!id-b")):
+            new_text, result = _run(deck(first, second), **_STAMP)
+            assert any("divergent ids" in r.reason for r in result.refusals), (
+                f"divergence not detected for order ({first}, {second})"
+            )
+            assert new_text == deck(first, second)  # nothing overwritten
+
+    def test_block_layout_run_refused_entirely(self):
+        # [de1, de2, en1, en2]: greedily pairing the adjacent interior
+        # (de2, en1) would stamp one identity onto two cells that are not
+        # translations of each other, and the mis-minted id would then
+        # spread via twin adoption after the author fixes the ordering.
+        # The whole irregular run must be refused instead.
+        text = (
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="intro"\n'
+            "# ## Einführung\n"
+            "\n"
+            '# %% [markdown] lang="de"\n'
+            "# Erster deutscher Absatz über Variablen.\n"
+            "\n"
+            '# %% [markdown] lang="de"\n'
+            "# Zweiter deutscher Absatz über Schleifen.\n"
+            "\n"
+            '# %% [markdown] lang="en"\n'
+            "# First English paragraph about variables.\n"
+            "\n"
+            '# %% [markdown] lang="en"\n'
+            "# Second English paragraph about loops.\n"
+        )
+        new_text, result = _run(text, **_STAMP)
         assert result.assignments == []
-        assert any("--stamp-ids needs both halves" in r.reason for r in result.refusals)
-        # The localized cell was NOT half-stamped.
-        assert "slide_id" not in de.read_text(encoding="utf-8").splitlines()[3]
+        assert len(result.refusals) == 4
+        assert new_text == text
+
+    def test_legacy_repoint_via_twin_adoption_labeled_repoint(self):
+        # DE narrative carries the inherited owner id (legacy), EN twin an
+        # own id: the DE re-point adopts the twin's id but is still a §12.1
+        # re-point in the audit trail, not a plain twin adoption.
+        text = (
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="intro"\n'
+            "# ## Einführung\n"
+            "\n"
+            '# %% [markdown] lang="de" tags=["voiceover"] slide_id="intro"\n'
+            "# Sprechertext\n"
+            "\n"
+            '# %% [markdown] lang="en" tags=["voiceover"] slide_id="my-own"\n'
+            "# Voiceover text\n"
+        )
+        new_text, result = _run(text, **_STAMP)
+        assert [(a.slide_id, a.source) for a in result.assignments] == [
+            ("my-own", "narrative-repoint")
+        ]
+
+    def test_pair_records_attributed_to_half_files(self, tmp_path):
+        from clm.slides.assign_ids import assign_ids_in_files
+
+        de = _write(
+            tmp_path,
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="intro"\n'
+            "# ## Einführung\n"
+            "\n"
+            '# %% [markdown] lang="de" tags=["voiceover"] slide_id="intro"\n'
+            "# Willkommen zur Einführung in dieses Thema.\n",
+            name="slides_attr.de.py",
+        )
+        en = _write(
+            tmp_path,
+            '# %% [markdown] lang="en" tags=["slide"] slide_id="intro"\n'
+            "# ## Introduction\n"
+            "\n"
+            '# %% [markdown] lang="en" tags=["voiceover"] slide_id="intro"\n'
+            "# Welcome to the introduction of this topic.\n",
+            name="slides_attr.en.py",
+        )
+        result = assign_ids_in_files([de, en], AssignOptions(**_STAMP))
+        assert len(result.assignments) == 2
+        by_file = {Path(a.file).name: a for a in result.assignments}
+        # One record per half, each at that half's real line number (the
+        # narrative header is line 4 in both 5-line files).
+        assert set(by_file) == {"slides_attr.de.py", "slides_attr.en.py"}
+        assert all(a.line == 4 for a in result.assignments)

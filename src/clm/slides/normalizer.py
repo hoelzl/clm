@@ -95,7 +95,10 @@ class NormalizationResult:
         for c in self.changes:
             op_counts[c.operation] = op_counts.get(c.operation, 0) + 1
         for op, count in sorted(op_counts.items()):
-            parts.append(f"{count} {op.replace('_', ' ')}{'s' if count != 1 else ''}")
+            label = op.replace("_", " ")
+            # "slide ids"/"stamp ids" are already plural — no naive extra "s".
+            plural = "s" if count != 1 and not label.endswith("s") else ""
+            parts.append(f"{count} {label}{plural}")
         if self.review_items:
             ri = len(self.review_items)
             parts.append(f"{ri} item{'s' if ri != 1 else ''} for review")

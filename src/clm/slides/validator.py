@@ -978,30 +978,47 @@ def _check_slide_ids(cells: list[Cell], file_path: str) -> list[Finding]:
         for ci in group:
             cell_to_group[ci] = f"slide:{gi}"
 
-    # Narrative twin groups: directly-adjacent voiceover/notes cells with
-    # differing langs and the same role are one logical narrative (the
-    # DE/EN pair shares its own id, like slide pairs). Direct adjacency is
-    # the interleave convention `normalize --stamp-ids` stamps under.
+    # Narrative and localized twin groups: directly-adjacent lang-tagged
+    # cells with differing langs, the same cell type, and the same
+    # role/tags are one logical cell (the DE/EN pair shares its own id,
+    # like slide pairs). Direct adjacency + these equality conditions
+    # mirror the stamp engine's pairing (`_build_stamp_pairs`) — the
+    # interleave convention `normalize --stamp-ids` stamps under.
+    narrative_pairs: list[tuple[int, int]] = []
+    localized_pairs: list[tuple[int, int]] = []
     for i in range(len(cells) - 1):
         ma, mb = cells[i].metadata, cells[i + 1].metadata
         if (
-            ma.is_narrative
-            and mb.is_narrative
-            and not ma.is_j2
-            and not mb.is_j2
-            and ma.lang
-            and mb.lang
-            and ma.lang != mb.lang
-            and ("voiceover" in ma.tags) == ("voiceover" in mb.tags)
-            and i not in cell_to_group
-            and i + 1 not in cell_to_group
+            ma.is_j2
+            or mb.is_j2
+            or not ma.lang
+            or not mb.lang
+            or ma.lang == mb.lang
+            or ma.cell_type != mb.cell_type
+            or ma.is_slide_start
+            or mb.is_slide_start
+            or i in cell_to_group
+            or i + 1 in cell_to_group
         ):
-            cell_to_group[i] = cell_to_group[i + 1] = f"narr:{i}"
+            continue
+        if ma.is_narrative and mb.is_narrative:
+            if ("voiceover" in ma.tags) == ("voiceover" in mb.tags):
+                cell_to_group[i] = cell_to_group[i + 1] = f"narr:{i}"
+                narrative_pairs.append((i, i + 1))
+        elif not ma.is_narrative and not mb.is_narrative and list(ma.tags) == list(mb.tags):
+            cell_to_group[i] = cell_to_group[i + 1] = f"loc:{i}"
+            localized_pairs.append((i, i + 1))
 
     # Bare slide_id -> (group key, line) of first sighting. A second
     # occurrence in the *same* group is the pair sharing the id and is
     # fine; in a *different* group it's a real duplicate.
     bare_first_seen: dict[str, tuple[str, int]] = {}
+
+    # Localized (non-slide, non-narrative) cell ids live in a SEPARATE map:
+    # the corpus carries legacy localized ids that deliberately shadow their
+    # slide's id, so cross-kind collisions involving localized cells are
+    # warnings and must never make a slide/narrative error retroactively.
+    localized_first_seen: dict[str, tuple[str, int]] = {}
 
     # Most recent slide_id (bare) seen in source order. Updated by
     # ``slide``/``subslide`` cells and by the j2 ``header()`` macro
@@ -1103,9 +1120,8 @@ def _check_slide_ids(cells: list[Cell], file_path: str) -> list[Finding]:
                 # narrative's id) still errors, now as a duplicate.
                 group_key = cell_to_group.get(idx, f"narr-solo:{idx}")
                 prev = bare_first_seen.get(bare)
-                if prev is None:
-                    bare_first_seen[bare] = (group_key, cell.line_number)
-                elif prev[0] != group_key:
+                loc_prev = localized_first_seen.get(bare)
+                if prev is not None and prev[0] != group_key:
                     findings.append(
                         Finding(
                             severity="error",
@@ -1125,7 +1141,111 @@ def _check_slide_ids(cells: list[Cell], file_path: str) -> list[Finding]:
                             ),
                         )
                     )
+                elif loc_prev is not None and loc_prev[0] != group_key:
+                    findings.append(
+                        Finding(
+                            severity="warning",
+                            category="pairing",
+                            file=file_path,
+                            line=cell.line_number,
+                            message=(
+                                f"voiceover/notes slide_id={bare!r} duplicates a "
+                                f"localized cell's id first seen at line {loc_prev[1]}"
+                            ),
+                            suggestion="Own narrative ids should be unique in the file.",
+                        )
+                    )
+                elif prev is None:
+                    bare_first_seen[bare] = (group_key, cell.line_number)
             continue
+
+        if meta.lang is not None and meta.slide_id is not None:
+            # A localized (non-slide, non-narrative) cell id — the population
+            # `normalize --stamp-ids` (#520) creates. Registered separately;
+            # duplicates involving localized ids are WARNINGS (see the map's
+            # comment — legacy decks shadow slide ids on purpose).
+            bare = strip_preserve_marker(meta.slide_id)
+            group_key = cell_to_group.get(idx, f"loc-solo:{idx}")
+            prev = bare_first_seen.get(bare)
+            loc_prev = localized_first_seen.get(bare)
+            duplicate = (prev is not None and prev[0] != group_key) or (
+                loc_prev is not None and loc_prev[0] != group_key
+            )
+            if duplicate:
+                first_line = prev[1] if prev is not None else loc_prev[1]  # type: ignore[index]
+                findings.append(
+                    Finding(
+                        severity="warning",
+                        category="pairing",
+                        file=file_path,
+                        line=cell.line_number,
+                        message=(
+                            f"localized cell slide_id={bare!r} duplicates an id "
+                            f"first seen at line {first_line}"
+                        ),
+                        suggestion=(
+                            "Stamped localized ids should be unique in the file "
+                            "(`clm slides normalize --stamp-ids` mints unique slugs)."
+                        ),
+                    )
+                )
+            elif loc_prev is None:
+                localized_first_seen[bare] = (group_key, cell.line_number)
+            continue
+
+    # Twin-mismatch checks for narrative and localized DE/EN pairs: twins
+    # must share one id (a divergence splits into asymmetric DE/EN id sets,
+    # which `sync verify`'s structural gate rejects). Narrative divergence
+    # is an error — the severity the pre-#520 adjacency rule gave this
+    # state; localized divergence warns, matching the other localized-id
+    # checks above. Pairs where either side is id-less are fine (stamping
+    # adopts the twin's id).
+    for na, nb in narrative_pairs:
+        sid_a = cells[na].metadata.slide_id
+        sid_b = cells[nb].metadata.slide_id
+        if sid_a is None or sid_b is None:
+            continue
+        if strip_preserve_marker(sid_a) == strip_preserve_marker(sid_b):
+            continue
+        findings.append(
+            Finding(
+                severity="error",
+                category="pairing",
+                file=file_path,
+                line=cells[na].line_number,
+                message=(
+                    f"DE/EN narrative twins carry mismatched slide_id: "
+                    f"{strip_preserve_marker(sid_a)!r} (line {cells[na].line_number}) vs "
+                    f"{strip_preserve_marker(sid_b)!r} (line {cells[nb].line_number})"
+                ),
+                suggestion=(
+                    "Adjacent DE/EN voiceover/notes twins share one id; "
+                    "resolve the divergence manually or re-run "
+                    "`clm slides normalize --stamp-ids` after fixing it."
+                ),
+            )
+        )
+    for la, lb in localized_pairs:
+        sid_a = cells[la].metadata.slide_id
+        sid_b = cells[lb].metadata.slide_id
+        if sid_a is None or sid_b is None:
+            continue
+        if strip_preserve_marker(sid_a) == strip_preserve_marker(sid_b):
+            continue
+        findings.append(
+            Finding(
+                severity="warning",
+                category="pairing",
+                file=file_path,
+                line=cells[la].line_number,
+                message=(
+                    f"DE/EN localized twins carry mismatched slide_id: "
+                    f"{strip_preserve_marker(sid_a)!r} (line {cells[la].line_number}) vs "
+                    f"{strip_preserve_marker(sid_b)!r} (line {cells[lb].line_number})"
+                ),
+                suggestion="Adjacent DE/EN localized twins share one id.",
+            )
+        )
 
     # Pair-mismatch check: when a DE slide cell sits next to an EN slide
     # cell in source order, the EN-derived slug policy (handover §2.3)

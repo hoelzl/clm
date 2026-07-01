@@ -304,6 +304,45 @@ class TestNormalizeStampIds:
         assert result.exit_code != 0
         assert "replaces the regular operations" in result.output
 
+    def test_rejects_canonicalize_combination(self, tmp_path):
+        de, _en = self._pair(tmp_path)
+        runner = CliRunner()
+        result = runner.invoke(
+            normalize_slides_cmd,
+            [str(de.parent), "--stamp-ids", "--canonicalize-start-completed"],
+        )
+        assert result.exit_code != 0
+        assert "interleaving operation" in result.output
+
+    def test_prefixless_deck_discovered_and_stamped(self, tmp_path):
+        # The sync surface supports prefix-less split decks (apis.de.py);
+        # the one-time Phase-0 migration must reach them too.
+        topic = tmp_path / "topic_030_apis"
+        de = _write_slide(topic / "apis.de.py", _STAMP_DE)
+        en = _write_slide(topic / "apis.en.py", _STAMP_EN)
+        runner = CliRunner()
+        result = runner.invoke(normalize_slides_cmd, [str(topic), "--stamp-ids"])
+        assert result.exit_code == 0, result.output
+        assert de.read_text(encoding="utf-8") != _STAMP_DE
+        assert en.read_text(encoding="utf-8") != _STAMP_EN
+
+    def test_changes_name_both_half_files(self, tmp_path):
+        de, en = self._pair(tmp_path)
+        runner = CliRunner()
+        result = runner.invoke(normalize_slides_cmd, [str(de.parent), "--stamp-ids", "--json"])
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.output[result.output.index("{") :])
+        files = {Path(c["file"]).name for c in payload["changes"]}
+        assert files == {de.name, en.name}
+
+    def test_summary_grammar(self, tmp_path):
+        de, _en = self._pair(tmp_path)
+        runner = CliRunner()
+        result = runner.invoke(normalize_slides_cmd, [str(de.parent), "--stamp-ids"])
+        assert result.exit_code == 0, result.output
+        assert "stamp ids." in result.output
+        assert "stamp idss" not in result.output
+
     def test_rejects_spec_input(self, tmp_path):
         spec = tmp_path / "course.xml"
         spec.write_text("<course/>", encoding="utf-8")

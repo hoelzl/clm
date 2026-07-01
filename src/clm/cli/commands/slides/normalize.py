@@ -167,6 +167,11 @@ def normalize_slides_cmd(
             raise click.UsageError(
                 "--confirm-pairs belongs to the interleaving operation, not --stamp-ids."
             )
+        if canonicalize_start_completed:
+            raise click.UsageError(
+                "--canonicalize-start-completed belongs to the interleaving "
+                "operation, not --stamp-ids."
+            )
         result = _run_stamp_ids(
             path,
             dry_run=dry_run,
@@ -249,10 +254,16 @@ def _run_stamp_ids(
     the unified deck, which is what keeps DE/EN ids identical (#162). A
     single split-half argument is expanded to its on-disk twin for the same
     reason. Results are folded into the normalize report shape.
+
+    Discovery is prefix-AGNOSTIC for split decks: the sync surface supports
+    ``apis.de.py`` as well as ``slides_x.de.py``, and this one-time sync-v3
+    migration must reach every deck sync manages — so a directory walk
+    unions the routing-prefixed slide files with every prefix-less split
+    half (voiceover companions are excluded by both walks).
     """
     from clm.core.topic_resolver import find_slide_files_recursive
     from clm.slides.assign_ids import AssignOptions, assign_ids_in_files
-    from clm.slides.pairing import split_twin
+    from clm.slides.pairing import derive_split_twin, find_split_slide_files_recursive
 
     if path.is_file() and path.suffix == ".xml":
         raise click.UsageError(
@@ -276,10 +287,12 @@ def _run_stamp_ids(
             data_dir=data_dir,
         )
     elif path.is_dir():
-        files = list(find_slide_files_recursive(path))
+        files = sorted(
+            set(find_slide_files_recursive(path)) | set(find_split_slide_files_recursive(path))
+        )
     else:
         files = [path]
-        twin = split_twin(path)
+        twin = derive_split_twin(path)
         if twin is not None:
             files.append(twin)
 
