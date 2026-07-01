@@ -87,6 +87,47 @@ def test_get_result(db_manager):
     assert non_existent is None
 
 
+def test_diagnose_cache_miss_no_entry(db_manager):
+    """No row for the file at all -> ('no_entry', None)."""
+    reason, detail = db_manager.diagnose_cache_miss("never_built.py", "hash", "test_metadata")
+    assert reason == "no_entry"
+    assert detail is None
+
+
+def test_diagnose_cache_miss_hash_mismatch(db_manager):
+    """A row for the same file+target but a different hash -> ('hash_mismatch', stored)."""
+    result = create_result(metadata="html-de")
+    db_manager.store_result("test.py", "old_hash", "corr", result)
+
+    # Same file + same output target, different content hash (the get_result
+    # exact-key lookup would have missed).
+    reason, detail = db_manager.diagnose_cache_miss("test.py", "new_hash", "html-de")
+    assert reason == "hash_mismatch"
+    assert detail == "old_hash"
+
+
+def test_diagnose_cache_miss_hash_mismatch_reports_newest(db_manager):
+    """When several hashes are stored for a target, report the newest one."""
+    result = create_result(metadata="html-de")
+    db_manager.store_result("test.py", "hash_old", "corr", result)
+    db_manager.store_result("test.py", "hash_new", "corr", result)
+
+    reason, detail = db_manager.diagnose_cache_miss("test.py", "requested", "html-de")
+    assert reason == "hash_mismatch"
+    assert detail == "hash_new"
+
+
+def test_diagnose_cache_miss_metadata_mismatch(db_manager):
+    """Rows exist for the file but not for this output target -> metadata_mismatch."""
+    result = create_result(metadata="html-de")
+    db_manager.store_result("test.py", "hash", "corr", result)
+
+    # Same content hash, but a target (kind/format/language) never built before.
+    reason, detail = db_manager.diagnose_cache_miss("test.py", "hash", "notebook-en")
+    assert reason == "metadata_mismatch"
+    assert detail is None
+
+
 def test_remove_old_entries(db_manager):
     result = create_result()
     # Store multiple results

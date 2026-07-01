@@ -211,6 +211,22 @@ class BuildReporter:
             cached=self._stage_cached_count,
         )
 
+    def report_rebuild_reason(self, file_path: str, job_type: str, reason: str) -> None:
+        """Explain why a file is being rebuilt instead of served from cache.
+
+        Only called under ``clm build --explain-rebuilds``. Purely
+        informational: it does not touch the progress/cache counters (the
+        normal :meth:`report_file_started` path still tracks the submitted
+        job). The reason is also written to the log file by the backend; this
+        surfaces it on the console in verbose output modes.
+
+        Args:
+            file_path: Path to the source file being rebuilt
+            job_type: Type of job (notebook, plantuml, drawio)
+            reason: Human-readable explanation of the cache miss
+        """
+        self.formatter.show_rebuild_reason(file_path, job_type, reason)
+
     def report_file_started(self, file_path: str, job_type: str, job_id: int | None = None) -> None:
         """Report that a file has started processing.
 

@@ -1361,3 +1361,112 @@ async def test_speaker_alias_triggers_executed_notebooks_check(
     finally:
         backend.active_jobs.clear()
         await backend.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# --explain-rebuilds: log WHY a deck missed the cache and is being rebuilt
+# ---------------------------------------------------------------------------
+
+
+def test_format_rebuild_reason_no_entry():
+    reason = SqliteBackend._format_rebuild_reason("no_entry", None, MockPayload())
+    assert "no cache entry" in reason
+
+
+def test_format_rebuild_reason_hash_mismatch():
+    payload = MockPayload(data="abc")
+    reason = SqliteBackend._format_rebuild_reason("hash_mismatch", "deadbeefcafe0000", payload)
+    assert "content hash changed" in reason
+    assert "deadbeefcafe" in reason  # cached short hash
+    assert payload.content_hash()[:12] in reason  # current short hash
+
+
+def test_format_rebuild_reason_metadata_mismatch():
+    payload = MockPayload()
+    reason = SqliteBackend._format_rebuild_reason("metadata_mismatch", None, payload)
+    assert "output target" in reason
+    assert payload.output_metadata() in reason  # "default"
+
+
+@pytest.mark.asyncio
+async def test_explain_rebuild_reports_formatted_reason(temp_db, temp_workspace, temp_cache_db):
+    """_explain_rebuild turns a diagnose verdict into a reason and reports it."""
+    reporter = Mock()
+    db_manager = _make_mock_db_manager(temp_cache_db, None)
+    db_manager.diagnose_cache_miss.return_value = ("hash_mismatch", "0123456789abcdef")
+
+    backend = SqliteBackend(
+        db_path=temp_db,
+        workspace_path=temp_workspace,
+        db_manager=db_manager,
+        build_reporter=reporter,
+        explain_rebuilds=True,
+        skip_worker_check=True,
+    )
+    try:
+        payload = MockPayload(data="content")
+        backend._explain_rebuild(payload, "notebook")
+
+        db_manager.diagnose_cache_miss.assert_called_once()
+        reporter.report_rebuild_reason.assert_called_once()
+        file_arg, job_arg, reason_arg = reporter.report_rebuild_reason.call_args.args
+        assert file_arg == payload.input_file
+        assert job_arg == "notebook"
+        assert "content hash changed" in reason_arg
+        assert "0123456789ab" in reason_arg
+    finally:
+        await backend.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_explain_rebuilds_triggers_on_cache_miss(temp_db, temp_workspace, temp_cache_db):
+    """A processed_files miss under --explain-rebuilds probes for a reason and still submits."""
+    reporter = Mock()
+    db_manager = _make_mock_db_manager(temp_cache_db, None)  # get_result -> None (miss)
+    db_manager.diagnose_cache_miss.return_value = ("no_entry", None)
+
+    backend = SqliteBackend(
+        db_path=temp_db,
+        workspace_path=temp_workspace,
+        db_manager=db_manager,
+        build_reporter=reporter,
+        explain_rebuilds=True,
+        skip_worker_check=True,
+    )
+    try:
+        operation = MockOperation(service_name_value="notebook-processor")
+        payload = MockPayload(data="fresh content")
+        await backend.execute_operation(operation, payload)
+
+        db_manager.diagnose_cache_miss.assert_called_once()
+        reporter.report_rebuild_reason.assert_called_once()
+        assert "no cache entry" in reporter.report_rebuild_reason.call_args.args[2]
+        # The reason is diagnostic only — the job is still submitted.
+        assert len(backend.active_jobs) == 1
+    finally:
+        backend.active_jobs.clear()
+        await backend.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_explain_rebuilds_off_runs_no_probe(temp_db, temp_workspace, temp_cache_db):
+    """Default build: a cache miss must NOT run the diagnostic probe (no slowdown)."""
+    db_manager = _make_mock_db_manager(temp_cache_db, None)  # get_result -> None (miss)
+
+    backend = SqliteBackend(
+        db_path=temp_db,
+        workspace_path=temp_workspace,
+        db_manager=db_manager,
+        skip_worker_check=True,
+        # explain_rebuilds defaults to False
+    )
+    try:
+        operation = MockOperation(service_name_value="notebook-processor")
+        payload = MockPayload(data="fresh content")
+        await backend.execute_operation(operation, payload)
+
+        db_manager.diagnose_cache_miss.assert_not_called()
+        assert len(backend.active_jobs) == 1
+    finally:
+        backend.active_jobs.clear()
+        await backend.shutdown()

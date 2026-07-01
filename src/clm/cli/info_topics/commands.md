@@ -49,6 +49,7 @@ Key options:
 | `--watch-mode [fast\|normal]` | `fast` = notebooks only; `normal` = all formats |
 | `--ignore-cache` | Reprocess all files (still updates cache) |
 | `--clear-cache` | Clear cache before building |
+| `--explain-rebuilds` | Log **why** each deck missed the build cache and is being rebuilt: `no cache entry`, `content hash changed` (source text or a dependency differs, with the cached vs. current hash), or `no cache entry for this output target` (new kind/format/language). Off by default so a normal build pays nothing — the reason probe runs only on a miss when this is set. Reasons go to the log file always, and to the console under `-O verbose`. Also settable via `CLM_EXPLAIN_REBUILDS={1,true,yes,0,false,no}`. Use `clm cache explain FILE --spec SPEC` for a full per-artifact, per-cache-layer breakdown of a single deck (CLM {version}). |
 | `--clean` | Wipe each output root and regenerate from scratch (legacy flow; preserves nested `.git/`). Use for emergency recovery from a corrupted output tree. The default no longer wipes — see "Git-friendly output writes" below. |
 | `--no-sweep` | Disable the post-build stray-file sweep. Useful when iterating on a single section and you don't want orphans from other sections deleted. |
 | `--incremental` | Keep directories, only write newly processed files (skip cached ones). Implies `--no-sweep`. |
@@ -4543,6 +4544,7 @@ Create and manage ZIP archives of course output.
 | `CLM_HTTP_REPLAY_TRACE_MAX_BODY_BYTES` | Cap on bytes recorded for the head/tail body excerpts in trace events (default: implementation-defined). |
 | `CLM_FAIL_ON_ERROR` | Override the default exit-on-cell-error policy for `clm build`. Accepts `1`/`true`/`yes` or `0`/`false`/`no`. Overridden by `--fail-on-error` / `--no-fail-on-error`. See `clm build` → "Exit codes". |
 | `CLM_FAIL_ON_MISSING_XREF` | Override the default exit-on-missing-cross-reference policy for `clm build` (issue #17). Accepts `1`/`true`/`yes` or `0`/`false`/`no`. Overridden by `--fail-on-missing-xref` / `--no-fail-on-missing-xref`. See `clm info spec-files` → "Cross-references". |
+| `CLM_EXPLAIN_REBUILDS` | Log why each deck missed the build cache and is being rebuilt (`clm build`). Accepts `1`/`true`/`yes` or `0`/`false`/`no`. Overridden by `--explain-rebuilds`. See `clm build` → the `--explain-rebuilds` option. |
 | `LANGFUSE_HOST` | Langfuse server URL (or `LANGFUSE_BASE_URL`); enables LLM call tracing when set with keys below |
 | `LANGFUSE_PUBLIC_KEY` | Langfuse public key for LLM tracing |
 | `LANGFUSE_SECRET_KEY` | Langfuse secret key for LLM tracing |

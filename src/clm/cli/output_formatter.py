@@ -198,6 +198,25 @@ class OutputFormatter(ABC):
             detail: Optional human-readable cache-layer description
         """
 
+    def show_rebuild_reason(  # noqa: B027
+        self, file_path: str, job_type: str, reason: str
+    ) -> None:
+        """Show why a file is being rebuilt instead of replayed (optional).
+
+        Emitted only under ``clm build --explain-rebuilds``. Complements
+        :meth:`show_cache_hit`: where that explains a replay, this explains a
+        miss (no cache entry, content hash changed, new output target).
+
+        This method is intentionally not abstract - it's an optional hook that
+        subclasses may override for verbose output. The default implementation
+        is a no-op (the reason still reaches the log file via the backend).
+
+        Args:
+            file_path: Path to the source file being rebuilt
+            job_type: Type of job (notebook, plantuml, drawio)
+            reason: Human-readable explanation of the cache miss
+        """
+
     def show_startup_message(self, message: str) -> None:  # noqa: B027
         """Show a startup progress message (optional).
 
@@ -601,6 +620,19 @@ class VerboseOutputFormatter(DefaultOutputFormatter):
         detail_info = f" ({detail})" if detail else ""
         self.console.print(
             f"  [cyan]↻[/cyan] [dim]Replayed from cache {job_type}: {display_path}{detail_info}[/dim]"
+        )
+
+    def show_rebuild_reason(self, file_path: str, job_type: str, reason: str) -> None:
+        """Show why a file is being rebuilt instead of replayed.
+
+        Args:
+            file_path: Path to the source file being rebuilt
+            job_type: Type of job (notebook, plantuml, drawio)
+            reason: Human-readable explanation of the cache miss
+        """
+        display_path = format_error_path(file_path)
+        self.console.print(
+            f"  [yellow]⟳[/yellow] [dim]Rebuilding {job_type}: {display_path} — {reason}[/dim]"
         )
 
     def show_file_completed(
