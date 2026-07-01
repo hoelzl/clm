@@ -42,7 +42,6 @@ dependencies = [
     "tabulate>=0.9.0",
     "uvicorn>=0.24.0",
     "watchdog>=6.0.0",
-    "deepeval>=4.0.5",
 ]
 
 [project.optional-dependencies]
@@ -227,6 +226,13 @@ mcp = [
 ]
 # Development and testing
 dev = [
+    # The CLI test suite drives Click's CliRunner via the 8.2+ API (no
+    # `mix_stderr`); on Click 8.1 ~30 tests fail with "I/O operation on closed
+    # file". The base requirement stays `click>=8.1.0` so the opt-in
+    # `[jupyterlite]` extra (whose `empack` caps `click<8.2`) can still resolve
+    # in its own fork; pinning the floor here forces the dev/test/`all` fork to a
+    # modern Click. Paired with `[tool.uv] conflicts` (jupyterlite ⟂ dev).
+    "click>=8.2",
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
     "pytest-cov>=4.0",
@@ -252,8 +258,20 @@ web = [
     "segno>=1.6.0",  # Pure-Python QR codes for Mobile Deck Studio pairing
 ]
 # Everything
+# NOTE: `all` intentionally excludes `ml` and `jupyterlite`.
+#   - `ml` (torch/pandas/transformers/…) is course-*runtime*: clm never imports
+#     it; it exists only so Direct-mode notebook kernels can import it. Bundling
+#     it made every `clm` install carry a multi-GB ML stack for no clm-side
+#     benefit. Install it explicitly (`[ml]`) on a box that runs ML course decks
+#     in Direct mode — or use the Docker notebook image, which bakes it in.
+#   - `jupyterlite` pulls `empack`, which caps `click<8.2` and collides with
+#     clm's own CLI (needs `click>=8.2`); it is also a pure out-of-process build
+#     tool clm only shells out to. It is a conflicting extra (see
+#     `[tool.uv] conflicts` below) and is installed on demand (`[jupyterlite]`).
+# Wave 2 moves the JupyterLite build into an isolated `uvx` tool env and drops
+# the extra entirely. See docs/claude/design/dependency-environment-isolation.md.
 all = [
-    "coding-academy-lecture-manager[all-workers,ml,summarize,voiceover,recordings,slides,gcal,mcp,jupyterlite,replay,dev,tui,web]",
+    "coding-academy-lecture-manager[all-workers,summarize,voiceover,recordings,slides,gcal,mcp,replay,dev,tui,web]",
 ]
 
 [project.urls]
@@ -533,7 +551,17 @@ version = "{new_version}\""""
 #      pre-commit gate.
 # See docs/proposals/PRE_COMMIT_HOOK_HARDENING.md (Fix 1) for rationale.
 dev = [
-    "coding-academy-lecture-manager[notebook,plantuml,drawio,recordings,slides,mcp,summarize,voiceover,jupyterlite,replay,tui,web]",
+    # This is the group `uv sync` installs by default (local dev / worktree
+    # setup / pre-push gate). `jupyterlite` is intentionally NOT here: its
+    # `empack` dependency caps `click<8.2`, which collides with the CLI test
+    # suite's need for `click>=8.2` and used to silently pin a freshly-synced
+    # worktree to click 8.1.8 (issue #516 follow-up). Install JupyterLite on
+    # demand with `uv sync --extra jupyterlite --no-default-groups`. `ml` is
+    # likewise excluded (huge, course-runtime-only, py3.14-blocked).
+    "coding-academy-lecture-manager[notebook,plantuml,drawio,recordings,slides,mcp,summarize,voiceover,replay,tui,web]",
+    # Force this fork to a modern Click (the CliRunner 8.2+ API); paired with
+    # the jupyterlite conflict in `[tool.uv]` so the two resolve separately.
+    "click>=8.2",
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
     "pytest-cov>=4.0",
@@ -553,6 +581,37 @@ dev = [
 # Update with: python scripts/update_exclude_newer.py
 # (also refreshes uv.lock; see scripts/check_exclude_newer.py for drift check)
 exclude-newer = "2026-05-28"
+
+# `jupyterlite` transitively depends on `empack`, which pins `click<8.2`, while
+# clm's own CLI + its test suite (the `dev` extra) require `click>=8.2`. Left in
+# one resolution these are unsatisfiable together and uv pins the whole graph to
+# click 8.1.8, silently breaking ~30 CLI tests on a freshly-synced worktree
+# (issue #516 follow-up). Declaring the two extras as conflicting makes uv
+# resolve them in separate forks: the default / `dev` / `all` environment gets a
+# modern click, while an opt-in `[jupyterlite]` build env keeps its
+# empack-compatible click<8.2. Wave 2 removes the jupyterlite extra (the build
+# moves to an isolated `uvx` tool env) and this conflict goes with it.
+conflicts = [
+    [
+        { extra = "jupyterlite" },
+        { extra = "dev" },
+    ],
+    # `all` bundles the `dev` extra (and thus `click>=8.2`), so it is likewise
+    # incompatible with jupyterlite's empack cap. Declared as its own pair
+    # because `all` and `dev` are not mutually exclusive with each other.
+    [
+        { extra = "jupyterlite" },
+        { extra = "all" },
+    ],
+    # The default-installed `dev` dependency-group also pins `click>=8.2`, so a
+    # `uv sync --extra jupyterlite` (which keeps default groups) would clash.
+    # This pairing makes uv fork them; install jupyterlite with
+    # `--no-default-groups` to activate the empack-compatible fork.
+    [
+        { extra = "jupyterlite" },
+        { group = "dev" },
+    ],
+]
 
 # Exempt PyTorch packages from exclude-newer: the cu130 index doesn't
 # provide upload dates on its wheels, so they must opt out entirely.

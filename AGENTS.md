@@ -42,13 +42,17 @@ the "Extended Modules" section of `architecture.md` for entry points.
 
 ```bash
 pip install -e .                  # core only
-pip install -e ".[all]"           # everything (recommended for development)
+pip install -e ".[all]"           # everything clm needs for dev (or: uv sync)
 ```
 
-For the full list of optional extras (`[notebook]`, `[plantuml]`, `[drawio]`,
-`[all-workers]`, `[recordings]`, `[summarize]`, `[voiceover]`, `[slides]`,
-`[gcal]`, `[mcp]`, `[ml]`, `[dev]`, `[tui]`, `[web]`) see
-`docs/user-guide/installation.md`.
+`[all]` deliberately **excludes** `[ml]` (course-runtime PyTorch/pandas stack,
+not imported by clm) and `[jupyterlite]` (a shell-out build tool whose `empack`
+pins `click<8.2`, incompatible with clm's CLI). Add ML with
+`pip install -e ".[all,ml]"`; build JupyterLite output in isolation with
+`uv sync --extra jupyterlite --no-default-groups`. For the full list of optional
+extras (`[notebook]`, `[plantuml]`, `[drawio]`, `[all-workers]`, `[recordings]`,
+`[summarize]`, `[voiceover]`, `[slides]`, `[gcal]`, `[mcp]`, `[ml]`, `[dev]`,
+`[tui]`, `[web]`) see `docs/user-guide/installation.md`.
 
 ## Testing
 

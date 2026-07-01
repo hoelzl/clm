@@ -111,11 +111,18 @@ jobs:
     - name: Install dependencies
       if: needs.changes.outputs.code == 'true'
       run: |
-        # Install all dependencies except ML (PyTorch, FastAI, etc.) which aren't needed for tests.
-        # ``replay`` is included so the HTTP-replay cassette tests (merge, format,
-        # doctor) actually run in CI instead of being skipped by their importorskip
-        # guards.
-        uv pip install --system -e ".[all-workers,summarize,recordings,slides,mcp,replay,dev,tui,web]"
+        # Install from the lockfile so CI runs the EXACT versions a developer
+        # gets locally (issue #516 follow-up: the old fresh `uv pip install`
+        # resolved a different Click than the lock, hiding environment drift).
+        # `--locked` also fails if uv.lock is stale vs pyproject.toml. We pin the
+        # same extra set as before via explicit `--extra` + `--no-default-groups`
+        # (the `dev` extra carries the pytest stack), so the ONLY change here is
+        # the version source, not the package set. `replay` keeps the HTTP-replay
+        # cassette tests running instead of importorskip-skipping. ML/jupyterlite
+        # stay out by design.
+        uv sync --locked --python ${{ matrix.python-version }} --no-default-groups \
+          --extra all-workers --extra summarize --extra recordings --extra slides \
+          --extra mcp --extra replay --extra dev --extra tui --extra web
 
     - name: Start Xvfb
       if: needs.changes.outputs.code == 'true'
@@ -147,12 +154,12 @@ jobs:
     - name: Run unit tests
       if: needs.changes.outputs.code == 'true'
       run: |
-        pytest -v -m "not slow and not integration and not e2e and not docker" --timeout=120 --cov=src/clm --cov-report=xml --cov-report=term
+        uv run pytest -v -m "not slow and not integration and not e2e and not docker" --timeout=120 --cov=src/clm --cov-report=xml --cov-report=term
 
     - name: Run integration tests
       if: needs.changes.outputs.code == 'true'
       run: |
-        pytest -v -m "integration and not docker and not slow" --timeout=240 --log-cli-level=INFO --cov=src/clm --cov-append --cov-report=xml --cov-report=term
+        uv run pytest -v -m "integration and not docker and not slow" --timeout=240 --log-cli-level=INFO --cov=src/clm --cov-append --cov-report=xml --cov-report=term
       env:
         CLM_ENABLE_TEST_LOGGING: "1"
         CLM_LOG_LEVEL: INFO
@@ -160,7 +167,7 @@ jobs:
     - name: Run E2E tests
       if: needs.changes.outputs.code == 'true'
       run: |
-        pytest -v -m "e2e and not docker and not slow" --timeout=600 --log-cli-level=INFO --cov=src/clm --cov-append --cov-report=xml --cov-report=term
+        uv run pytest -v -m "e2e and not docker and not slow" --timeout=600 --log-cli-level=INFO --cov=src/clm --cov-append --cov-report=xml --cov-report=term
       env:
         CLM_E2E_TIMEOUT: 600  # 10 minutes timeout for E2E tests (allows multi-build tests)
         CLM_ENABLE_TEST_LOGGING: "1"
@@ -199,22 +206,27 @@ jobs:
     - name: Install dependencies
       if: needs.changes.outputs.code == 'true'
       run: |
-        uv pip install --system -e ".[dev,tui,web,notebook,summarize,recordings,slides,mcp]"
+        # From the lockfile (see the test job), same extra set as before so
+        # lint/type-check sees the exact versions developers do. The `dev` extra
+        # carries ruff + mypy; the worker extras give mypy the imports to resolve.
+        uv sync --locked --python 3.12 --no-default-groups \
+          --extra dev --extra tui --extra web --extra notebook --extra summarize \
+          --extra recordings --extra slides --extra mcp
 
     - name: Run ruff check
       if: needs.changes.outputs.code == 'true'
       run: |
-        ruff check src/ tests/
+        uv run ruff check src/ tests/
 
     - name: Run ruff format check
       if: needs.changes.outputs.code == 'true'
       run: |
-        ruff format --check src/ tests/
+        uv run ruff format --check src/ tests/
 
     - name: Run mypy
       if: needs.changes.outputs.code == 'true'
       run: |
-        mypy src/clm
+        uv run mypy src/clm
 
   docker-test:
     name: Docker Integration Tests
@@ -274,12 +286,13 @@ jobs:
 
     - name: Install dependencies
       run: |
-        # Install all dependencies except ML (PyTorch, FastAI, etc.) which aren't needed for tests
-        uv pip install --system -e ".[all-workers,recordings,dev,tui,web]"
+        # From the lockfile (see the test job), same extra set as before.
+        uv sync --locked --python 3.12 --no-default-groups \
+          --extra all-workers --extra recordings --extra dev --extra tui --extra web
 
     - name: Run Docker integration tests
       run: |
-        pytest -v -n0 -m "docker" --timeout=600 --log-cli-level=INFO
+        uv run pytest -v -n0 -m "docker" --timeout=600 --log-cli-level=INFO
       env:
         CLM_E2E_TIMEOUT: 600
         CLM_ENABLE_TEST_LOGGING: "1"
