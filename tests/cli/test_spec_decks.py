@@ -86,6 +86,38 @@ class TestSpecDecksCommand:
         assert data["lang"] == "both"
         assert any("slides_intro.py" in d for d in data["decks"])
 
+    def test_json_shape_is_flat_not_grouped_by_section(self, tmp_path):
+        """The JSON is a flat ``topics[]`` (each with a ``section`` string
+        field), NOT a ``sections[]`` grouping. This contract is documented in
+        the ``--json`` help and ``clm info commands``; an agent that filters
+        against an assumed nested schema gets silent no-output (issue #516)."""
+        _topic(tmp_path, "module_100_basics", "topic_010_intro", "slides_intro.py")
+        spec_file = _write_spec(tmp_path, f"<sections>{_section('S', 'intro')}</sections>")
+
+        result = CliRunner().invoke(
+            cli, ["course", "decks", str(spec_file), "--data-dir", str(tmp_path), "--json"]
+        )
+
+        assert result.exit_code == 0
+        data = _json_from_output(result.output)
+        # Exactly the documented top-level keys — no ``sections`` key.
+        assert set(data) == {
+            "spec",
+            "slides_dir",
+            "lang",
+            "deck_count",
+            "decks",
+            "topics",
+            "unresolved",
+        }
+        assert "sections" not in data
+        # ``topics`` is a flat list; ``section`` is a plain string field on each.
+        assert isinstance(data["topics"], list)
+        assert data["topics"], "expected at least one resolved topic"
+        for topic in data["topics"]:
+            assert isinstance(topic["section"], str)
+            assert isinstance(topic["slide_files"], list)
+
     def test_lang_filter_excludes_other_split_half(self, tmp_path):
         _topic(
             tmp_path,
