@@ -151,6 +151,102 @@ class TestLectures:
         assert "Week 1" in resp.text
         assert "01 Introduction" in resp.text
 
+    @staticmethod
+    def _set_split_course(app, *, de_name: str, en_name: str) -> None:
+        """Cache a course with one *split* deck (``.de.py`` + ``.en.py``).
+
+        A split deck lives as two separate ``NotebookFile`` objects that
+        share a slot number; each carries an ``output_language_filter``
+        ("de"/"en"). ``section.notebooks`` yields both, so the lectures
+        route must pick the one matching the shown language.
+        """
+        from clm.core.utils.text_utils import Text
+
+        mock_course = MagicMock()
+        mock_section = MagicMock()
+        mock_section.name = Text(de="Woche 1", en="Week 1")
+
+        de_nb = MagicMock()
+        de_nb.title = Text(de="Einführung", en="Einführung")
+        de_nb.number_in_section = 1
+        de_nb.output_language_filter = "de"
+        de_nb.file_name.return_value = de_name
+
+        en_nb = MagicMock()
+        en_nb.title = Text(de="Introduction", en="Introduction")
+        en_nb.number_in_section = 1
+        en_nb.output_language_filter = "en"
+        en_nb.file_name.return_value = en_name
+
+        mock_section.notebooks = [de_nb, en_nb]
+        mock_course.sections = [mock_section]
+        mock_course.output_dir_name = Text(de="kurs-de", en="course-en")
+        app.state.course = mock_course
+
+    def test_split_deck_shows_only_selected_language(self, app, recording_root: Path):
+        """A split deck contributes one row for the shown language, not both.
+
+        Both ``.de.py`` and ``.en.py`` companions are separate notebooks;
+        the route filters by ``output_language_filter`` so switching the
+        DE/EN toggle actually switches languages instead of listing both.
+        """
+        self._set_split_course(app, de_name="01 Einführung", en_name="01 Introduction")
+
+        with TestClient(app) as c:  # default cookie -> "de"
+            de_html = c.get("/lectures").text
+        assert "01 Einführung" in de_html
+        assert "01 Introduction" not in de_html
+
+        with TestClient(app, cookies={"clm_lang": "en"}) as c:
+            en_html = c.get("/lectures").text
+        assert "01 Introduction" in en_html
+        assert "01 Einführung" not in en_html
+
+    def test_split_deck_same_name_yields_single_row(self, app, recording_root: Path):
+        """When the DE and EN titles coincide, only one row shows per language.
+
+        This is the collision the user hit: both companions rendered the
+        same ``deck_name`` and reacted to a single control. Filtering by
+        language collapses them to one row.
+        """
+        self._set_split_course(app, de_name="01 Intro", en_name="01 Intro")
+
+        with TestClient(app) as c:  # "de"
+            html = c.get("/lectures").text
+        # ``data-deck-row`` also appears as a JS selector in base.html, so
+        # count the row-specific attribute sequence that only the <tr>
+        # emits — exactly once per rendered deck row.
+        assert html.count("data-deck-row data-deck-key=") == 1
+
+    def test_armed_deck_not_marked_in_other_language(self, app, recording_root: Path):
+        """A deck armed in DE must not appear armed when viewing EN.
+
+        Even with identical DE/EN deck names, the row-level armed match
+        compares ``lang`` so the other language's row stays inert — the
+        precondition for recording DE and EN independently.
+        """
+        self._set_split_course(app, de_name="01 Intro", en_name="01 Intro")
+        session = app.state.session
+        session.arm("kurs-de", "Woche 1", "01 Intro", lang="de")
+
+        with TestClient(app) as c:  # "de" — same language as the arm
+            de_html = c.get("/lectures").text
+        assert 'class="row-armed"' in de_html
+
+        with TestClient(app, cookies={"clm_lang": "en"}) as c:
+            en_html = c.get("/lectures").text
+        assert 'class="row-armed"' not in en_html
+
+    def test_sections_are_collapsible(self, app, recording_root: Path):
+        """Section cards render as persisted-collapsible ``<details>`` blocks."""
+        self._set_split_course(app, de_name="01 Einführung", en_name="01 Introduction")
+
+        with TestClient(app) as c:
+            html = c.get("/lectures").text
+        assert "<details" in html
+        assert "data-section-collapse" in html
+        assert 'data-section-key="Woche 1"' in html
+
     def test_lectures_shows_course_slug(self, app, recording_root: Path):
         """The arm form should include the correct course_slug."""
         from clm.core.utils.text_utils import Text
@@ -196,8 +292,11 @@ class TestLectures:
         app.state.course = mock_course
 
         # Arm and move the session into RECORDING with a known start time.
+        # Arm in the language the page is rendered in (default cookie "de")
+        # so the row-level armed match — which now compares lang — holds,
+        # mirroring the cookie-driven /arm route in production.
         session = app.state.session
-        session.arm("kurs-de", "Woche 1", "01 Intro")
+        session.arm("kurs-de", "Woche 1", "01 Intro", lang="de")
         with session._lock:
             session._state = SessionState.RECORDING
             session._recording_started_at = _time.monotonic() - 12.0
@@ -1642,7 +1741,9 @@ class TestPartsInlineChipStrip:
         """When a deck is armed, its chip strip carries data-armed-part."""
         self._set_course(app)
         session = app.state.session
-        session.arm("kurs-de", "W1", "01 Hello", part_number=2)
+        # Default view lang is "de"; arm in the same language so the
+        # row-level armed match (which compares lang) holds.
+        session.arm("kurs-de", "W1", "01 Hello", part_number=2, lang="de")
 
         with TestClient(app) as c:
             html = c.get("/lectures").text

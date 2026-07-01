@@ -288,6 +288,20 @@ async def lectures(request: Request):
                 decks = []
                 section_name = section.name[lang]
                 for nb in section.notebooks:
+                    # Split decks live as two source files (``foo.de.py`` /
+                    # ``foo.en.py``); both are separate notebooks that share a
+                    # slot number, so ``section.notebooks`` yields both. Each
+                    # split companion carries an intrinsic
+                    # ``output_language_filter`` ("de"/"en"); skip the ones
+                    # that don't match the language currently being shown so a
+                    # split deck contributes a single row for the selected
+                    # language instead of one row per companion (which, when
+                    # the DE/EN titles coincide, share a name and both react
+                    # to the same control). Bilingual notebooks leave the
+                    # filter ``None`` and always show.
+                    nb_lang = getattr(nb, "output_language_filter", None)
+                    if nb_lang in ("de", "en") and nb_lang != lang:
+                        continue
                     deck_name = nb.file_name(lang, "")
                     decks.append(
                         {

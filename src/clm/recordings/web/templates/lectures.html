@@ -93,8 +93,15 @@
 {% endif %}
 
 {% for section in sections %}
-<section class="card">
-    <div class="card-header"><h3 class="card-title">{{ section.name }}</h3></div>
+{# Collapsible section. Rendered ``open`` by default; the collapse state
+   is persisted client-side (see base.html) so the frequent SSE-driven
+   ``#lectures-dynamic`` swaps don't re-expand a section the user closed.
+   ``data-section-key`` keys that persistence. #}
+<details class="card section-card" open data-section-collapse data-section-key="{{ section.name }}">
+    <summary class="card-header section-summary">
+        <h3 class="card-title">{{ section.name }}</h3>
+        <span class="section-chevron" aria-hidden="true">▾</span>
+    </summary>
     <table>
         <thead>
             <tr>
@@ -105,7 +112,7 @@
         </thead>
         <tbody>
             {% for deck in section.decks %}
-            {% set is_armed = snapshot.armed_deck and snapshot.armed_deck.deck_name == deck.deck_name and snapshot.armed_deck.section_name == section.name %}
+            {% set is_armed = snapshot.armed_deck and snapshot.armed_deck.deck_name == deck.deck_name and snapshot.armed_deck.section_name == section.name and snapshot.armed_deck.lang == lang %}
             {% set armed_part = snapshot.armed_deck.part_number if is_armed else 0 %}
             {% set has_existing_parts = deck.status and deck.status.parts_status %}
             {% set unprocessed_count = deck.status.raw_parts | length if deck.status else 0 %}
@@ -250,7 +257,7 @@
             {% endfor %}
         </tbody>
     </table>
-</section>
+</details>
 {% endfor %}
 
 {% if not sections and not error %}
