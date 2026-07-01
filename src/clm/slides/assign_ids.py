@@ -24,6 +24,19 @@ Rules in one paragraph:
 - Voiceover and notes cells inherit the slide_id of the most recent
   preceding slide/subslide cell (1:N relationship). They are *never*
   written from an extracted heading of their own.
+- **Stamp mode** (``AssignOptions.stamp_ids``, the engine behind
+  ``clm slides normalize --stamp-ids`` — sync-v3 Phase 0, #520): the two
+  rules above are widened for the one-time v3 normalization. Every id-less
+  *localized* cell (``lang=…``, markdown or code, not a slide/subslide)
+  gets a content-slug id, and every localized *narrative* (voiceover/notes)
+  gets its **own unique** id instead of inheriting the owner slide's
+  (design §3.4/§12.1) — an existing inherited-owner or placeholder id is
+  re-pointed, any other existing id is kept (ids stay monotone). Stamping
+  is strictly **pair-atomic**: only directly-adjacent DE/EN twins are
+  stamped (both twins get the exact same id), a cell without an adjacent
+  twin is refused rather than given a one-sided id that would break split
+  id-set symmetry. Shared (language-neutral) cells are never stamped —
+  they pair by byte-parity, not by name.
 """
 
 from __future__ import annotations
@@ -31,12 +44,16 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from clm.infrastructure.utils.path_utils import split_lang_suffix
-from clm.notebooks.slide_parser import comment_token_for_path, parse_cell_header
+from clm.notebooks.slide_parser import (
+    CellMetadata,
+    comment_token_for_path,
+    parse_cell_header,
+)
 from clm.slides.code_cell_extract import extract_from_code
 from clm.slides.headingless import (
     Category,
@@ -100,7 +117,10 @@ class AssignedId:
     # "llm" / "paired" / "twin" / "content:<extractor>" (markdown bullet/bold/
     # img_alt/img_src/prose or the code AST extractors
     # code:class/def/assign/import/call/for/expr) /
-    # "code:line" (the opt-in first-code-line fallback, #251).
+    # "code:line" (the opt-in first-code-line fallback, #251) /
+    # "narrative-own" (stamp mode: a fresh own id minted for a narrative) /
+    # "narrative-repoint" (stamp mode: an inherited-owner/placeholder id
+    # replaced by the narrative's own id — sync-v3 §12.1, #520).
     source: str
 
 
@@ -203,6 +223,13 @@ class AssignOptions:
     report_only: bool = False
     llm_suggester: TitleSuggester | None = None
     llm_cache: TitleSuggestionCache | None = None
+    # Stamp mode (sync-v3 Phase 0, #520 — `clm slides normalize --stamp-ids`):
+    # additionally id every localized cell and give narratives their own
+    # unique ids (re-pointing inherited-owner/placeholder ids). Pair-atomic:
+    # only directly-adjacent DE/EN twins are stamped; solo cells are refused.
+    # The caller decides the accept posture (the normalize CLI turns
+    # accept_content_derived + accept_code_derived on).
+    stamp_ids: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -228,6 +255,319 @@ def _classify_for_assignment(cell: _Cell) -> str:
     if meta.is_narrative and meta.lang is not None:
         return "narrative"
     return "skip"
+
+
+# ---------------------------------------------------------------------------
+# Stamp mode (sync-v3 Phase 0, #520): localized + narrative id stamping
+# ---------------------------------------------------------------------------
+
+
+def _narrative_role(meta: CellMetadata) -> str:
+    return "voiceover" if "voiceover" in meta.tags else "notes"
+
+
+def _stamp_class(cell: _Cell) -> str | None:
+    """Stamp-eligibility class of a cell under ``AssignOptions.stamp_ids``.
+
+    ``"narrative"`` — localized voiceover/notes cell (own-id policy, §12.1)
+    ``"localized"`` — any other lang-tagged non-slide cell (markdown or code)
+    ``None`` — everything the stamp pass must not touch: shared/neutral
+    cells (they pair by byte-parity, never by name — design §3.4), j2
+    directives, and slide/subslide cells (the existing machinery owns those).
+    """
+    meta = cell.metadata
+    if meta.is_j2 or meta.lang is None or meta.is_slide_start:
+        return None
+    if meta.is_narrative:
+        return "narrative"
+    return "localized"
+
+
+def _build_stamp_pairs(cells: list[_Cell]) -> dict[int, tuple[int, int]]:
+    """Map each paired stamp-eligible cell index to ``(twin_idx, slug_source_idx)``.
+
+    Twins are **directly adjacent** cells ``(i, i+1)`` of the same stamp
+    class and cell type with differing langs — narratives additionally need
+    the same voiceover/notes role, localized cells identical tags. The
+    bilingual/unified interleave convention keeps DE/EN twins adjacent (the
+    ``interleaving`` normalize operation enforces exactly this), so anything
+    looser risks pairing cells across slides. A cell without an adjacent twin
+    stays out of the map and the stamp pass refuses it: minting a one-sided
+    id would break split id-set symmetry (``sync verify``'s structural gate).
+    """
+    pairs: dict[int, tuple[int, int]] = {}
+    i = 0
+    while i < len(cells) - 1:
+        a, b = cells[i], cells[i + 1]
+        kind = _stamp_class(a)
+        ma, mb = a.metadata, b.metadata
+        if (
+            kind is not None
+            and kind == _stamp_class(b)
+            and ma.cell_type == mb.cell_type
+            and ma.lang != mb.lang
+            and (
+                _narrative_role(ma) == _narrative_role(mb)
+                if kind == "narrative"
+                else list(ma.tags) == list(mb.tags)
+            )
+        ):
+            en_idx = i if ma.lang == "en" else i + 1
+            pairs[i] = (i + 1, en_idx)
+            pairs[i + 1] = (i, en_idx)
+            i += 2
+            continue
+        i += 1
+    return pairs
+
+
+def _is_legacy_narrative_id(existing: str, current_slide_id: str | None, file_path: Path) -> bool:
+    """An inherited owner id or a conversion placeholder — re-pointable in stamp mode.
+
+    Anything else on a narrative counts as its *own* id and is kept (ids are
+    monotone; stamp mode never replaces an id the §12.1 policy already accepts).
+    """
+    bare = strip_preserve_marker(existing)
+    if current_slide_id is not None and bare == current_slide_id:
+        return True
+    return _is_placeholder_narrative_id(existing, file_path)
+
+
+def _stamp_refuse(
+    result: AssignResult,
+    file_str: str,
+    line: int,
+    reason: str,
+    *,
+    severity: str = "soft",
+    proposed_slug: str | None = None,
+    proposed_title: str | None = None,
+) -> None:
+    result.refusals.append(
+        Refusal(
+            file=file_str,
+            line=line,
+            severity=severity,
+            reason=reason,
+            proposed_slug=proposed_slug,
+            proposed_title=proposed_title,
+        )
+    )
+
+
+def _handle_stamp(
+    cell: _Cell,
+    idx: int,
+    kind: str,
+    cells: list[_Cell],
+    stamp_pairs: dict[int, tuple[int, int]],
+    stamp_slug: dict[int, str | None],
+    current_slide_id: str | None,
+    options: AssignOptions,
+    used_ids: set[str],
+    file_path: Path,
+    file_str: str,
+    result: AssignResult,
+    comment_token: str,
+) -> None:
+    """Stamp one localized/narrative cell (``AssignOptions.stamp_ids``).
+
+    Resolution order per adjacent DE/EN twin pair (``stamp_slug`` caches the
+    outcome under the pair's lower index so both twins commit to the same id):
+
+    1. a preserved (``!``) or *own* existing id on either twin wins — the
+       other twin adopts it;
+    2. otherwise mint a content slug from the EN member (DE-sibling fallback),
+       gated by the usual accept knobs, and write it onto both twins —
+       re-pointing inherited-owner/placeholder narrative ids (§12.1);
+    3. cells without an adjacent twin, narratives without a preceding
+       slide/title anchor, and non-extractable bodies are refused, never
+       half-stamped.
+    """
+    existing = cell.metadata.slide_id
+    pair = stamp_pairs.get(idx)
+    group_key = min(idx, pair[0]) if pair is not None else idx
+
+    if existing and is_preserved(existing):
+        # Lock the pair to the preserved bare form so the twin adopts it.
+        stamp_slug.setdefault(group_key, strip_preserve_marker(existing))
+        return
+
+    legacy = (
+        kind == "narrative"
+        and existing is not None
+        and _is_legacy_narrative_id(existing, current_slide_id, file_path)
+    )
+
+    if existing and not legacy:
+        # An own id — monotone: never replaced in stamp mode. Register it so
+        # an id-less twin adopts it; flag twins that committed elsewhere.
+        bare = strip_preserve_marker(existing)
+        prior = stamp_slug.setdefault(group_key, bare)
+        if prior is not None and prior != bare:
+            _stamp_refuse(
+                result,
+                file_str,
+                cell.line_number,
+                f"DE/EN twins carry divergent ids ({prior!r} vs {bare!r}); resolve manually",
+            )
+        return
+
+    if kind == "narrative" and current_slide_id is None:
+        _stamp_refuse(
+            result,
+            file_str,
+            cell.line_number,
+            "narrative has no preceding slide/subslide (or title) anchor; "
+            "fix the deck structure first",
+        )
+        return
+
+    if pair is None:
+        _stamp_refuse(
+            result,
+            file_str,
+            cell.line_number,
+            "no directly-adjacent DE/EN twin; a one-sided id would break split "
+            "id symmetry — normalize the interleaving first",
+        )
+        return
+
+    twin_idx, slug_source_idx = pair
+
+    if group_key in stamp_slug:
+        # Second member of the pair: mirror the twin's resolution.
+        resolved = stamp_slug[group_key]
+        if resolved is None:
+            _stamp_refuse(
+                result,
+                file_str,
+                cell.line_number,
+                "twin cell refused; both cells in the pair need a manual id",
+            )
+            return
+        if existing and strip_preserve_marker(existing) == resolved:
+            return  # idempotent
+        if not options.report_only:
+            _write_slide_id(cell, resolved)
+        used_ids.add(resolved)
+        result.assignments.append(
+            AssignedId(
+                file=file_str,
+                line=cell.line_number,
+                slide_id=resolved,
+                source="narrative-repoint" if legacy else "paired",
+            )
+        )
+        return
+
+    # First member of the pair to resolve. Adoption first: the twin's own
+    # (or preserved) id wins over a fresh mint — ids stay monotone.
+    twin = cells[twin_idx]
+    twin_existing = twin.metadata.slide_id
+    if twin_existing:
+        twin_own = is_preserved(twin_existing) or not (
+            kind == "narrative"
+            and _is_legacy_narrative_id(twin_existing, current_slide_id, file_path)
+        )
+        if twin_own:
+            twin_bare = strip_preserve_marker(twin_existing)
+            stamp_slug[group_key] = twin_bare
+            if existing and strip_preserve_marker(existing) == twin_bare:
+                return
+            if not options.report_only:
+                _write_slide_id(cell, twin_bare)
+            used_ids.add(twin_bare)
+            result.assignments.append(
+                AssignedId(
+                    file=file_str,
+                    line=cell.line_number,
+                    slide_id=twin_bare,
+                    source="twin",
+                )
+            )
+            return
+
+    # Mint a fresh id from the EN member; fall back to the other sibling
+    # when the EN body has nothing extractable (transliteration keeps the
+    # resulting slug ASCII).
+    slug_source = cells[slug_source_idx]
+    extraction = _extract_from_cell(slug_source, comment_token, options.accept_code_derived)
+    if extraction.category == Category.NON_EXTRACTABLE:
+        alt_idx = twin_idx if slug_source_idx == idx else idx
+        alt_extraction = _extract_from_cell(
+            cells[alt_idx], comment_token, options.accept_code_derived
+        )
+        if alt_extraction.category != Category.NON_EXTRACTABLE:
+            extraction = Extraction(
+                alt_extraction.category,
+                alt_extraction.text,
+                f"sibling-{alt_extraction.source}",
+            )
+    if extraction.category == Category.NON_EXTRACTABLE:
+        _stamp_refuse(
+            result,
+            file_str,
+            cell.line_number,
+            "cell has no heading and no extractable content",
+            severity="hard",
+        )
+        stamp_slug[group_key] = None
+        return
+
+    is_code_line = extraction.source in _CODE_LINE_SOURCES
+    if extraction.category == Category.HEADED:
+        write = True
+        source_label = extraction.source
+    elif is_code_line:
+        write = options.accept_code_derived
+        source_label = extraction.source
+    else:
+        write = options.accept_content_derived
+        source_label = f"content:{extraction.source}"
+
+    proposed = _proposed_slug_from_extraction(extraction, used_ids)
+
+    if not write:
+        accept_flag = "--accept-code-derived" if is_code_line else "--accept-content-derived"
+        _stamp_refuse(
+            result,
+            file_str,
+            cell.line_number,
+            f"headingless cell; pass {accept_flag} to accept",
+            proposed_slug=proposed or None,
+            proposed_title=extraction.text,
+        )
+        stamp_slug[group_key] = None
+        return
+
+    if not proposed:
+        _stamp_refuse(
+            result,
+            file_str,
+            cell.line_number,
+            "could not derive a usable slug from content",
+            proposed_title=extraction.text,
+        )
+        stamp_slug[group_key] = None
+        return
+
+    stamp_slug[group_key] = proposed
+    if existing and strip_preserve_marker(existing) == proposed:
+        return  # idempotent
+    if not options.report_only:
+        _write_slide_id(cell, proposed)
+    used_ids.add(proposed)
+    if kind == "narrative":
+        source_label = "narrative-repoint" if legacy else "narrative-own"
+    result.assignments.append(
+        AssignedId(
+            file=file_str,
+            line=cell.line_number,
+            slide_id=proposed,
+            source=source_label,
+        )
+    )
 
 
 def _proposed_slug_from_extraction(
@@ -328,6 +668,11 @@ def assign_ids_for_cells(
     # sibling's id already in used_ids and bump the counter.
     group_slug: dict[int, str | None] = {}
 
+    # Stamp mode (#520): the adjacent-twin map and the per-pair slug cache
+    # for localized/narrative cells (the stamp-mode analogue of group_slug).
+    stamp_pairs: dict[int, tuple[int, int]] = _build_stamp_pairs(cells) if options.stamp_ids else {}
+    stamp_slug: dict[int, str | None] = {}
+
     # Track the most recent slide_id (bare form) by source order so that
     # narrative cells (voiceover/notes) inherit from the preceding
     # slide/subslide.
@@ -402,10 +747,46 @@ def assign_ids_for_cells(
             continue
 
         if role == "narrative":
-            _handle_narrative(cell, current_slide_id, options, file_path, file_str, result)
+            if options.stamp_ids:
+                # §12.1 (sync-v3, #520): narratives get their OWN unique id
+                # instead of inheriting the owner slide's.
+                _handle_stamp(
+                    cell,
+                    idx,
+                    "narrative",
+                    cells,
+                    stamp_pairs,
+                    stamp_slug,
+                    current_slide_id,
+                    options,
+                    used_ids,
+                    file_path,
+                    file_str,
+                    result,
+                    comment_token,
+                )
+            else:
+                _handle_narrative(cell, current_slide_id, options, file_path, file_str, result)
             continue
 
-        # role == "skip": unchanged.
+        # role == "skip": unchanged — except stamp mode, which additionally
+        # ids the id-less localized (non-slide, non-narrative) cells.
+        if options.stamp_ids and _stamp_class(cell) == "localized":
+            _handle_stamp(
+                cell,
+                idx,
+                "localized",
+                cells,
+                stamp_pairs,
+                stamp_slug,
+                current_slide_id,
+                options,
+                used_ids,
+                file_path,
+                file_str,
+                result,
+                comment_token,
+            )
 
     return result
 
@@ -901,6 +1282,25 @@ def assign_ids_in_file(path: Path, options: AssignOptions) -> AssignResult:
     (#162 defensive). Run order decides which half's slug wins when *both* are
     id-less, but the two halves always end up in slide_id parity.
     """
+    if options.stamp_ids and split_lang_suffix(path) is not None:
+        # Stamp mode is strictly pair-atomic: minting localized/narrative ids
+        # on ONE half would derive divergent slugs per language (#162). The
+        # only safe stamp route for split decks is the unified pair path
+        # (assign_ids_in_split_pair); a lone half falls back to the normal
+        # slide-only behavior plus one loud refusal.
+        result = assign_ids_in_file(path, replace(options, stamp_ids=False))
+        result.refusals.append(
+            Refusal(
+                file=str(path),
+                line=1,
+                severity="soft",
+                reason=(
+                    "split half processed alone; --stamp-ids needs both halves "
+                    "(pair-atomic minting) — run it on the deck pair or directory"
+                ),
+            )
+        )
+        return result
     text = path.read_text(encoding="utf-8")
     twin_ids = _twin_ids_for(path, text)
     new_text, result = assign_ids_for_text(text, path, options, twin_ids=twin_ids)
@@ -1015,8 +1415,26 @@ def assign_ids_in_files(files: list[Path], options: AssignOptions) -> AssignResu
                 _merge_result(combined, pair_result)
             else:
                 # Not unifiable — fall back to the per-file defensive on each.
-                _merge_result(combined, assign_ids_in_file(de_path, options))
-                _merge_result(combined, assign_ids_in_file(en_path, options))
+                # Stamp mode never runs per-half (pair-atomicity, #162): the
+                # deck gets ONE loud refusal instead of a per-cell flood, and
+                # the halves still get the normal slide-only pass.
+                per_file_options = options
+                if options.stamp_ids:
+                    per_file_options = replace(options, stamp_ids=False)
+                    combined.refusals.append(
+                        Refusal(
+                            file=str(de_path),
+                            line=1,
+                            severity="soft",
+                            reason=(
+                                "split pair is not unifiable; --stamp-ids skipped this "
+                                "deck — fix the DE/EN alignment first (e.g. `clm slides "
+                                "normalize --operations interleaving` or `clm slides sync`)"
+                            ),
+                        )
+                    )
+                _merge_result(combined, assign_ids_in_file(de_path, per_file_options))
+                _merge_result(combined, assign_ids_in_file(en_path, per_file_options))
             handled.add(de_path)
             handled.add(en_path)
         else:

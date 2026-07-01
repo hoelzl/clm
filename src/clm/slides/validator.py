@@ -946,9 +946,18 @@ def _check_slide_ids(cells: list[Cell], file_path: str) -> list[Finding]:
     A *missing* slide_id on a ``slide``/``subslide`` cell is an
     ``error`` as of CLM 1.8 (it was a warning through 1.7, during the
     PythonCourses migration sweep). All other rules — duplicate ids,
-    narrative-cell adjacency mismatch, slug-format violations, DE/EN
-    pair mismatch — fire at the severity their semantics warrant
+    narrative-cell id rules, slug-format violations, DE/EN pair
+    mismatch — fire at the severity their semantics warrant
     (errors for content bugs, warnings for style/format drift).
+
+    Narrative (voiceover/notes) ids accept **two** conventions: the legacy
+    inherited form (id equals the preceding slide/subslide anchor's id) and
+    the sync-v3 *own-id* form (§12.1 / #520 — a unique id of the
+    narrative's own, minted by ``clm slides normalize --stamp-ids``). An
+    own id participates in the duplicate check — keyed on the adjacent
+    DE/EN narrative twin group, exactly like slide pairs — so the stale
+    copy-paste id this rule has always guarded against (an id that equals
+    some *other* cell's id) still errors, as a duplicate.
 
     The ``!`` preserve marker is stripped before every comparison except
     the slug-format check, where it's permitted as a single leading
@@ -964,15 +973,35 @@ def _check_slide_ids(cells: list[Cell], file_path: str) -> list[Finding]:
     # treat both members as one occurrence — keying on group identity
     # avoids flagging the EN sibling as a duplicate of the DE cell.
     slide_groups = build_slide_groups(cells)
-    cell_to_group: dict[int, int] = {}
+    cell_to_group: dict[int, str] = {}
     for gi, group in enumerate(slide_groups):
         for ci in group:
-            cell_to_group[ci] = gi
+            cell_to_group[ci] = f"slide:{gi}"
 
-    # Bare slide_id -> (group index, line) of first sighting. A second
+    # Narrative twin groups: directly-adjacent voiceover/notes cells with
+    # differing langs and the same role are one logical narrative (the
+    # DE/EN pair shares its own id, like slide pairs). Direct adjacency is
+    # the interleave convention `normalize --stamp-ids` stamps under.
+    for i in range(len(cells) - 1):
+        ma, mb = cells[i].metadata, cells[i + 1].metadata
+        if (
+            ma.is_narrative
+            and mb.is_narrative
+            and not ma.is_j2
+            and not mb.is_j2
+            and ma.lang
+            and mb.lang
+            and ma.lang != mb.lang
+            and ("voiceover" in ma.tags) == ("voiceover" in mb.tags)
+            and i not in cell_to_group
+            and i + 1 not in cell_to_group
+        ):
+            cell_to_group[i] = cell_to_group[i + 1] = f"narr:{i}"
+
+    # Bare slide_id -> (group key, line) of first sighting. A second
     # occurrence in the *same* group is the pair sharing the id and is
     # fine; in a *different* group it's a real duplicate.
-    bare_first_seen: dict[str, tuple[int, int]] = {}
+    bare_first_seen: dict[str, tuple[str, int]] = {}
 
     # Most recent slide_id (bare) seen in source order. Updated by
     # ``slide``/``subslide`` cells and by the j2 ``header()`` macro
@@ -1019,11 +1048,11 @@ def _check_slide_ids(cells: list[Cell], file_path: str) -> list[Finding]:
             bare = strip_preserve_marker(sid)
             findings.extend(_check_slug_format(sid, cell, file_path))
 
-            gi = cell_to_group[idx]
+            group_key = cell_to_group[idx]
             prev = bare_first_seen.get(bare)
             if prev is None:
-                bare_first_seen[bare] = (gi, cell.line_number)
-            elif prev[0] != gi:
+                bare_first_seen[bare] = (group_key, cell.line_number)
+            elif prev[0] != group_key:
                 findings.append(
                     Finding(
                         severity="error",
@@ -1067,23 +1096,35 @@ def _check_slide_ids(cells: list[Cell], file_path: str) -> list[Finding]:
                     )
                 )
             elif bare != current_slide_id:
-                findings.append(
-                    Finding(
-                        severity="error",
-                        category="pairing",
-                        file=file_path,
-                        line=cell.line_number,
-                        message=(
-                            f"voiceover/notes slide_id={bare!r} does not match "
-                            f"preceding slide {current_slide_id!r}"
-                        ),
-                        suggestion=(
-                            "Voiceover/notes slide_id must match the immediately "
-                            "preceding slide/subslide (likely a stale id left by "
-                            "copy-paste)."
-                        ),
+                # The sync-v3 own-id convention (§12.1 / #520): a narrative id
+                # of the cell's own is legal iff it is unique. Register it in
+                # the duplicate map keyed on the narrative twin group — a
+                # stale copy-paste id (one that equals some other slide's or
+                # narrative's id) still errors, now as a duplicate.
+                group_key = cell_to_group.get(idx, f"narr-solo:{idx}")
+                prev = bare_first_seen.get(bare)
+                if prev is None:
+                    bare_first_seen[bare] = (group_key, cell.line_number)
+                elif prev[0] != group_key:
+                    findings.append(
+                        Finding(
+                            severity="error",
+                            category="pairing",
+                            file=file_path,
+                            line=cell.line_number,
+                            message=(
+                                f"voiceover/notes slide_id={bare!r} duplicates an id "
+                                f"first seen at line {prev[1]} (and does not match the "
+                                f"preceding slide {current_slide_id!r})"
+                            ),
+                            suggestion=(
+                                "A narrative id is either the preceding slide's id "
+                                "(legacy inherit) or a unique id of its own "
+                                "(`clm slides normalize --stamp-ids`); this one is "
+                                "neither — likely a stale id left by copy-paste."
+                            ),
+                        )
                     )
-                )
             continue
 
     # Pair-mismatch check: when a DE slide cell sits next to an EN slide

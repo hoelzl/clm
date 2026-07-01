@@ -222,3 +222,110 @@ class TestNormalizeSlidesCmd:
         result = runner.invoke(normalize_slides_cmd, [str(topic)])
         assert result.exit_code == 0
         assert "tag_migration" in result.output
+
+
+_STAMP_DE = (
+    '# %% [markdown] lang="de" tags=["slide"] slide_id="intro"\n'
+    "# ## Einführung\n"
+    "\n"
+    '# %% [markdown] lang="de" tags=["voiceover"] slide_id="intro"\n'
+    "# Willkommen zur Einführung in dieses Thema.\n"
+    "\n"
+    '# %% [markdown] lang="de"\n'
+    "# Ein lokalisierter Hinweis ohne Bezeichner.\n"
+)
+_STAMP_EN = (
+    '# %% [markdown] lang="en" tags=["slide"] slide_id="intro"\n'
+    "# ## Introduction\n"
+    "\n"
+    '# %% [markdown] lang="en" tags=["voiceover"] slide_id="intro"\n'
+    "# Welcome to the introduction of this topic.\n"
+    "\n"
+    '# %% [markdown] lang="en"\n'
+    "# A localized note without an identifier.\n"
+)
+
+
+class TestNormalizeStampIds:
+    """`normalize --stamp-ids` — sync-v3 Phase 0 (#520)."""
+
+    def _pair(self, tmp_path: Path) -> tuple[Path, Path]:
+        topic = tmp_path / "topic_010_test"
+        de = _write_slide(topic / "slides_test.de.py", _STAMP_DE)
+        en = _write_slide(topic / "slides_test.en.py", _STAMP_EN)
+        return de, en
+
+    def test_stamps_split_pair_in_directory(self, tmp_path):
+        de, en = self._pair(tmp_path)
+        runner = CliRunner()
+        result = runner.invoke(normalize_slides_cmd, [str(de.parent), "--stamp-ids"])
+        assert result.exit_code == 0, result.output
+        assert "stamp_ids" in result.output
+        de_text = de.read_text(encoding="utf-8")
+        en_text = en.read_text(encoding="utf-8")
+        # The voiceover no longer shares the slide's id; both halves agree.
+        assert de_text.count('slide_id="intro"') == 1
+        assert de_text.splitlines()[3] == en_text.splitlines()[3].replace('lang="en"', 'lang="de"')
+
+    def test_dry_run_writes_nothing(self, tmp_path):
+        de, en = self._pair(tmp_path)
+        runner = CliRunner()
+        result = runner.invoke(normalize_slides_cmd, [str(de.parent), "--stamp-ids", "--dry-run"])
+        assert result.exit_code == 0, result.output
+        assert de.read_text(encoding="utf-8") == _STAMP_DE
+        assert en.read_text(encoding="utf-8") == _STAMP_EN
+
+    def test_json_report_shape(self, tmp_path):
+        de, _en = self._pair(tmp_path)
+        runner = CliRunner()
+        result = runner.invoke(normalize_slides_cmd, [str(de.parent), "--stamp-ids", "--json"])
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.output[result.output.index("{") :])
+        assert payload["files_modified"] == 2
+        assert all(c["operation"] == "stamp_ids" for c in payload["changes"])
+        assert any("narrative" in c["description"] for c in payload["changes"])
+
+    def test_single_split_half_expands_to_pair(self, tmp_path):
+        de, en = self._pair(tmp_path)
+        runner = CliRunner()
+        result = runner.invoke(normalize_slides_cmd, [str(de), "--stamp-ids"])
+        assert result.exit_code == 0, result.output
+        # Both halves were stamped even though only one was named.
+        assert de.read_text(encoding="utf-8") != _STAMP_DE
+        assert en.read_text(encoding="utf-8") != _STAMP_EN
+
+    def test_rejects_operations_combination(self, tmp_path):
+        de, _en = self._pair(tmp_path)
+        runner = CliRunner()
+        result = runner.invoke(
+            normalize_slides_cmd,
+            [str(de.parent), "--stamp-ids", "--operations", "cell_spacing"],
+        )
+        assert result.exit_code != 0
+        assert "replaces the regular operations" in result.output
+
+    def test_rejects_spec_input(self, tmp_path):
+        spec = tmp_path / "course.xml"
+        spec.write_text("<course/>", encoding="utf-8")
+        runner = CliRunner()
+        result = runner.invoke(normalize_slides_cmd, [str(spec), "--stamp-ids"])
+        assert result.exit_code != 0
+        assert "not a course spec" in result.output
+
+    def test_refusals_surface_as_review_items(self, tmp_path):
+        topic = tmp_path / "topic_020_solo"
+        # A bilingual deck whose only stamp candidate has no adjacent twin.
+        bilingual = _write_slide(
+            topic / "slides_solo.py",
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="intro"\n'
+            "# ## Einführung\n"
+            "\n"
+            '# %% [markdown] lang="de"\n'
+            "# Ein Hinweis nur auf Deutsch.\n",
+        )
+        runner = CliRunner()
+        result = runner.invoke(normalize_slides_cmd, [str(bilingual), "--stamp-ids", "--json"])
+        assert result.exit_code == 2, result.output  # review items, no changes
+        payload = json.loads(result.output[result.output.index("{") :])
+        assert payload["review_items"]
+        assert payload["review_items"][0]["issue"] == "stamp_id_soft_refusal"
