@@ -175,6 +175,18 @@ default is):
 | `PLANTUML_JAR` | Path to PlantUML JAR file |
 | `DRAWIO_EXECUTABLE` | Path to Draw.io executable |
 
+These can equivalently be set in the config file, which now takes effect for
+**Direct** workers (the env var still wins if both are set):
+
+```toml
+[external_tools]
+plantuml_jar = "/usr/local/share/plantuml.jar"
+drawio_executable = "/usr/bin/drawio"
+```
+
+(Docker workers use the tools baked into the worker image, so a host path does
+not apply to them.)
+
 **Platform-specific Draw.io paths**:
 ```bash
 # Linux

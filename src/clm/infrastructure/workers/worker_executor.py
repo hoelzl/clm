@@ -646,12 +646,26 @@ class DirectWorkerExecutor(WorkerExecutor):
                 env["CACHE_DB_PATH"] = str(self.cache_db_path.absolute())
                 logger.debug(f"Passing CACHE_DB_PATH={env['CACHE_DB_PATH']} to worker")
 
-            # Ensure converter-specific environment variables are passed through
-            # These are needed by PlantUML and Draw.io converters
-            for var in ["PLANTUML_JAR", "DRAWIO_EXECUTABLE"]:
-                if var in os.environ:
-                    env[var] = os.environ[var]
-                    logger.debug(f"Passing {var}={env[var]} to worker")
+            # Converter-specific paths (PlantUML jar / Draw.io executable) needed
+            # by the plantuml and drawio Direct workers, which read these env
+            # vars at import time. Resolve through the config system so a
+            # ``clm.toml`` ``[external_tools]`` value reaches the worker, not just
+            # a host env var: ``get_config().external_tools.*`` already folds
+            # ``PLANTUML_JAR``/``DRAWIO_EXECUTABLE`` (env) over the config file, and
+            # ``resolve_setting`` layers a CLI value on top (none exists for these
+            # yet, so the CLI tier is always None). Docker workers use the jar
+            # baked into the image, so they are intentionally not injected here.
+            from clm.infrastructure.config import get_config, resolve_setting
+
+            external_tools = get_config().external_tools
+            for env_var, config_value in (
+                ("PLANTUML_JAR", external_tools.plantuml_jar),
+                ("DRAWIO_EXECUTABLE", external_tools.drawio_executable),
+            ):
+                resolved = resolve_setting(None, config_value=config_value, default="")
+                if resolved:
+                    env[env_var] = resolved
+                    logger.debug(f"Passing {env_var}={resolved} to worker")
 
             # Build command
             cmd = [sys.executable, "-m", module]
