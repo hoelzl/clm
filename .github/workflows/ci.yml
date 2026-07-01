@@ -31,11 +31,11 @@ jobs:
       code: ${{ steps.filter.outputs.code }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           lfs: false
       - name: Filter paths
-        uses: dorny/paths-filter@v3
+        uses: dorny/paths-filter@v4
         id: filter
         with:
           # ``code`` is true when at least one changed file is NOT docs-only.
@@ -57,7 +57,7 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
       with:
         lfs: false
 
@@ -167,7 +167,7 @@ jobs:
         CLM_LOG_LEVEL: INFO
 
     - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v6
+      uses: codecov/codecov-action@v7
       continue-on-error: true
       with:
         files: ./coverage.xml
@@ -182,7 +182,7 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
 
     - name: Set up Python
       if: needs.changes.outputs.code == 'true'
@@ -230,7 +230,7 @@ jobs:
     # now fetched + SHA-256-verified inside the Dockerfiles, so the only LFS
     # object the image builds need is the small drawio font.
     - name: Checkout code
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
       with:
         lfs: true
 
