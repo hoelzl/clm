@@ -365,6 +365,32 @@ class TestStatusCollector:
         collector = StatusCollector()
         assert collector.db_path == db_path
 
+    def test_default_db_path_prefers_jobs_db_env(self, tmp_path, monkeypatch):
+        """CLM_JOBS_DB_PATH (the build's jobs-DB env var) wins over the anchored default.
+
+        Without this, a build redirected via CLM_JOBS_DB_PATH (e.g. a RAM disk)
+        would leave `clm status` / `clm monitor` opening a different, idle DB.
+        """
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("CLM_DB_PATH", raising=False)
+        # The anchored default exists, but the env var must take precedence.
+        (tmp_path / "clm_jobs.db").touch()
+        target = tmp_path / "ram" / "jobs.db"
+        monkeypatch.setenv("CLM_JOBS_DB_PATH", str(target))
+
+        collector = StatusCollector()
+        assert collector.db_path == target
+
+    def test_default_db_path_legacy_env_still_works(self, tmp_path, monkeypatch):
+        """The legacy CLM_DB_PATH still works when CLM_JOBS_DB_PATH is unset."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("CLM_JOBS_DB_PATH", raising=False)
+        target = tmp_path / "legacy.db"
+        monkeypatch.setenv("CLM_DB_PATH", str(target))
+
+        collector = StatusCollector()
+        assert collector.db_path == target
+
     def test_collect_queue_stats_uses_correct_timestamp_comparison(self, db_path, job_queue):
         """Test that queue stats correctly compare timestamps.
 

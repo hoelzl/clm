@@ -170,25 +170,6 @@ class RetentionConfig(BaseModel):
     )
 
 
-class PathsConfig(BaseModel):
-    """Path-related configuration."""
-
-    cache_db_path: str = Field(
-        default="clm_cache.db",
-        description="Path to the cache database (stores processed file results)",
-    )
-
-    jobs_db_path: str = Field(
-        default="clm_jobs.db",
-        description="Path to the job queue database (stores jobs, workers, events)",
-    )
-
-    workspace_path: str = Field(
-        default="",
-        description="Workspace path for workers (usually derived from output directory)",
-    )
-
-
 class ExternalToolsConfig(BaseModel):
     """External tool paths configuration."""
 
@@ -763,11 +744,16 @@ class ClmConfig(BaseSettings):
     system config > defaults.
 
     Environment Variables:
-        - CLM_PATHS__DB_PATH: Database path
         - CLM_LOGGING__LOG_LEVEL: Logging level
         - PLANTUML_JAR: PlantUML JAR path (no CLM_ prefix)
         - DRAWIO_EXECUTABLE: Draw.io executable path (no CLM_ prefix)
         - And many more (see nested config classes)
+
+    Note: the database paths (cache/jobs/telemetry) are NOT configured here.
+    They are global CLI options (``--cache-db-path`` etc.) with matching
+    ``CLM_CACHE_DB_PATH`` / ``CLM_JOBS_DB_PATH`` / ``CLM_TELEMETRY_DB_PATH``
+    environment variables, resolved in ``clm.cli.main`` so a run from a topic
+    subdirectory opens the same DB as one from the repo root.
     """
 
     model_config = SettingsConfigDict(
@@ -775,11 +761,6 @@ class ClmConfig(BaseSettings):
         env_nested_delimiter="__",
         extra="ignore",
         case_sensitive=False,
-    )
-
-    paths: PathsConfig = Field(
-        default_factory=PathsConfig,
-        description="Path-related configuration",
     )
 
     retention: RetentionConfig = Field(
@@ -1021,21 +1002,13 @@ def create_example_config() -> str:
 # Nested settings use double underscores: CLM_<SECTION>__<KEY>
 #
 # Examples:
-#   CLM_PATHS__CACHE_DB_PATH=/tmp/cache.db
-#   CLM_PATHS__JOBS_DB_PATH=/tmp/jobs.db
 #   CLM_LOGGING__LOG_LEVEL=DEBUG
 #   PLANTUML_JAR=/usr/local/share/plantuml.jar
 #   DRAWIO_EXECUTABLE=/usr/local/bin/drawio
-
-[paths]
-# Path to the cache database (stores processed file results)
-cache_db_path = "clm_cache.db"
-
-# Path to the job queue database (stores jobs, workers, events)
-jobs_db_path = "clm_jobs.db"
-
-# Workspace path for workers (optional, usually derived from output directory)
-workspace_path = ""
+#
+# The database paths are NOT set here — they are global CLI options
+# (--cache-db-path / --jobs-db-path / --telemetry-db-path) with matching
+# CLM_CACHE_DB_PATH / CLM_JOBS_DB_PATH / CLM_TELEMETRY_DB_PATH env vars.
 
 [retention]
 # Database retention and cleanup configuration

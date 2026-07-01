@@ -19,21 +19,6 @@ from clm.infrastructure.config import (
 class TestConfigDefaults:
     """Test default configuration values."""
 
-    def test_default_paths(self, monkeypatch):
-        """Test default path configuration."""
-        # Clear any environment variables that might interfere
-        for var in [
-            "CLM_PATHS__CACHE_DB_PATH",
-            "CLM_PATHS__JOBS_DB_PATH",
-            "CLM_PATHS__WORKSPACE_PATH",
-        ]:
-            monkeypatch.delenv(var, raising=False)
-
-        config = ClmConfig()
-        assert config.paths.cache_db_path == "clm_cache.db"
-        assert config.paths.jobs_db_path == "clm_jobs.db"
-        assert config.paths.workspace_path == ""
-
     def test_default_logging(self, monkeypatch):
         """Test default logging configuration."""
         # Clear any environment variables that might interfere
@@ -85,16 +70,14 @@ class TestEnvironmentVariables:
 
     def test_clm_prefixed_env_vars(self, monkeypatch):
         """Test CLM_ prefixed environment variables."""
-        monkeypatch.setenv("CLM_PATHS__CACHE_DB_PATH", "/tmp/cache.db")
-        monkeypatch.setenv("CLM_PATHS__JOBS_DB_PATH", "/tmp/jobs.db")
         monkeypatch.setenv("CLM_LOGGING__LOG_LEVEL", "DEBUG")
         monkeypatch.setenv("CLM_LOGGING__ENABLE_TEST_LOGGING", "true")
+        monkeypatch.setenv("CLM_RETENTION__CACHE_VERSIONS_TO_KEEP", "5")
 
         config = ClmConfig()
-        assert config.paths.cache_db_path == "/tmp/cache.db"
-        assert config.paths.jobs_db_path == "/tmp/jobs.db"
         assert config.logging.log_level == "DEBUG"
         assert config.logging.enable_test_logging is True
+        assert config.retention.cache_versions_to_keep == 5
 
     def test_nested_env_vars(self, monkeypatch):
         """Test nested environment variables with double underscores."""
@@ -162,10 +145,6 @@ class TestConfigurationFiles:
         # Create a temporary config file
         config_file = tmp_path / "clm.toml"
         config_file.write_text("""
-[paths]
-cache_db_path = "/tmp/cache.db"
-jobs_db_path = "/tmp/jobs.db"
-
 [logging]
 log_level = "WARNING"
 
@@ -177,8 +156,6 @@ plantuml_jar = "/custom/plantuml.jar"
         monkeypatch.chdir(tmp_path)
 
         config = ClmConfig()
-        assert config.paths.cache_db_path == "/tmp/cache.db"
-        assert config.paths.jobs_db_path == "/tmp/jobs.db"
         assert config.logging.log_level == "WARNING"
         assert config.external_tools.plantuml_jar == "/custom/plantuml.jar"
 
@@ -189,62 +166,53 @@ plantuml_jar = "/custom/plantuml.jar"
         clm_dir.mkdir()
         config_file = clm_dir / "config.toml"
         config_file.write_text("""
-[paths]
-cache_db_path = "/tmp/dotclm_cache.db"
-jobs_db_path = "/tmp/dotclm_jobs.db"
+[logging]
+log_level = "WARNING"
+
+[retention]
+cache_versions_to_keep = 3
 """)
 
         monkeypatch.chdir(tmp_path)
 
         config = ClmConfig()
-        assert config.paths.cache_db_path == "/tmp/dotclm_cache.db"
-        assert config.paths.jobs_db_path == "/tmp/dotclm_jobs.db"
+        assert config.logging.log_level == "WARNING"
+        assert config.retention.cache_versions_to_keep == 3
 
     def test_config_file_priority(self, tmp_path, monkeypatch):
         """Test that .clm/config.toml has priority over clm.toml."""
         # Create both config files
         (tmp_path / "clm.toml").write_text("""
-[paths]
-cache_db_path = "/tmp/clm_cache.db"
-jobs_db_path = "/tmp/clm_jobs.db"
+[logging]
+log_level = "INFO"
 """)
 
         clm_dir = tmp_path / ".clm"
         clm_dir.mkdir()
         (clm_dir / "config.toml").write_text("""
-[paths]
-cache_db_path = "/tmp/dotclm_cache.db"
-jobs_db_path = "/tmp/dotclm_jobs.db"
+[logging]
+log_level = "ERROR"
 """)
 
         monkeypatch.chdir(tmp_path)
 
         config = ClmConfig()
         # .clm/config.toml should take priority
-        assert config.paths.cache_db_path == "/tmp/dotclm_cache.db"
-        assert config.paths.jobs_db_path == "/tmp/dotclm_jobs.db"
+        assert config.logging.log_level == "ERROR"
 
     def test_env_overrides_config_file(self, tmp_path, monkeypatch):
         """Test that environment variables override config files."""
         config_file = tmp_path / "clm.toml"
         config_file.write_text("""
-[paths]
-cache_db_path = "/tmp/config_cache.db"
-jobs_db_path = "/tmp/config_jobs.db"
-
 [logging]
 log_level = "INFO"
 """)
 
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setenv("CLM_PATHS__CACHE_DB_PATH", "/tmp/env_cache.db")
-        monkeypatch.setenv("CLM_PATHS__JOBS_DB_PATH", "/tmp/env_jobs.db")
         monkeypatch.setenv("CLM_LOGGING__LOG_LEVEL", "ERROR")
 
         config = ClmConfig()
         # Environment variables should override config file
-        assert config.paths.cache_db_path == "/tmp/env_cache.db"
-        assert config.paths.jobs_db_path == "/tmp/env_jobs.db"
         assert config.logging.log_level == "ERROR"
 
     def test_legacy_env_overrides_config_file(self, tmp_path, monkeypatch):
@@ -318,7 +286,7 @@ class TestConfigHelpers:
         assert len(example) > 0
 
         # Should contain expected sections
-        assert "[paths]" in example
+        assert "[retention]" in example
         assert "[logging]" in example
         assert "[external_tools]" in example
         assert "[jupyter]" in example
@@ -349,7 +317,7 @@ class TestConfigHelpers:
 
         # Check content is valid
         content = config_path.read_text()
-        assert "[paths]" in content
+        assert "[retention]" in content
         assert "[logging]" in content
 
     def test_write_example_config_project(self, tmp_path, monkeypatch):
@@ -381,18 +349,18 @@ class TestGetConfig:
         """Test that get_config reload parameter works."""
         # Get initial config
         config1 = get_config()
-        initial_cache_db_path = config1.paths.cache_db_path
+        initial_log_level = config1.logging.log_level
 
         # Set environment variable
-        monkeypatch.setenv("CLM_PATHS__CACHE_DB_PATH", "/tmp/reloaded.db")
+        monkeypatch.setenv("CLM_LOGGING__LOG_LEVEL", "ERROR")
 
         # Get config again without reload - should be same instance
         config2 = get_config(reload=False)
-        assert config2.paths.cache_db_path == initial_cache_db_path
+        assert config2.logging.log_level == initial_log_level
 
         # Get config with reload - should have new value
         config3 = get_config(reload=True)
-        assert config3.paths.cache_db_path == "/tmp/reloaded.db"
+        assert config3.logging.log_level == "ERROR"
 
 
 class TestConfigIntegration:
@@ -402,9 +370,8 @@ class TestConfigIntegration:
         """Test complete priority chain: env > project > user > system > defaults."""
         # Create project config
         (tmp_path / "clm.toml").write_text("""
-[paths]
-cache_db_path = "/project/cache.db"
-jobs_db_path = "/project/jobs.db"
+[retention]
+cache_versions_to_keep = 9
 
 [logging]
 log_level = "WARNING"
@@ -422,8 +389,7 @@ plantuml_jar = "/project/plantuml.jar"
         config = ClmConfig()
 
         # From project config (no env var override)
-        assert config.paths.cache_db_path == "/project/cache.db"
-        assert config.paths.jobs_db_path == "/project/jobs.db"
+        assert config.retention.cache_versions_to_keep == 9
 
         # From environment variable (overrides project config)
         assert config.logging.log_level == "ERROR"
@@ -450,11 +416,6 @@ plantuml_jar = "/project/plantuml.jar"
 
         config_file = tmp_path / "clm.toml"
         config_file.write_text("""
-[paths]
-cache_db_path = "/test/cache.db"
-jobs_db_path = "/test/jobs.db"
-workspace_path = "/test/workspace"
-
 [external_tools]
 plantuml_jar = "/test/plantuml.jar"
 drawio_executable = "/test/drawio"
@@ -484,9 +445,6 @@ use_sqlite_queue = false
         config = ClmConfig()
 
         # Verify all settings were loaded
-        assert config.paths.cache_db_path == "/test/cache.db"
-        assert config.paths.jobs_db_path == "/test/jobs.db"
-        assert config.paths.workspace_path == "/test/workspace"
         assert config.external_tools.plantuml_jar == "/test/plantuml.jar"
         assert config.external_tools.drawio_executable == "/test/drawio"
         assert config.logging.log_level == "DEBUG"

@@ -444,16 +444,17 @@ async def test_session_start_cleanup_handles_exception(temp_db, temp_workspace):
 
 @pytest.mark.asyncio
 async def test_build_end_cleanup_prunes_and_vacuums(temp_db, temp_workspace, tmp_path, monkeypatch):
-    # Point config cache_db_path at tmp_path so ExecutedNotebookCache works.
+    # Regression: the build-end executed-notebook prune must target the cache DB
+    # the backend actually opened (``db_manager.db_path``), NOT a path re-derived
+    # from config/env. A decoy ``CLM_CACHE_DB_PATH`` must be left untouched — the
+    # old code opened (and would create) ``get_config().paths.cache_db_path``
+    # here, pruning the wrong file whenever the cache path was overridden.
     from clm.infrastructure import config as config_mod
 
-    monkeypatch.setattr(
-        config_mod,
-        "_config",
-        None,
-    )
+    monkeypatch.setattr(config_mod, "_config", None)
     monkeypatch.setenv("CLM_RETENTION__AUTO_VACUUM_AFTER_CLEANUP", "true")
-    monkeypatch.setenv("CLM_PATHS__CACHE_DB_PATH", str(tmp_path / "cache.db"))
+    decoy = tmp_path / "decoy_cache.db"
+    monkeypatch.setenv("CLM_CACHE_DB_PATH", str(decoy))
 
     cache_db = tmp_path / "cache.db"
     backend = _backend(temp_db, temp_workspace)
@@ -468,6 +469,10 @@ async def test_build_end_cleanup_prunes_and_vacuums(temp_db, temp_workspace, tmp
         await backend.shutdown()
         # Reset the cached config.
         config_mod._config = None
+
+    # The backend's real cache DB was used; the env/config decoy was never opened.
+    assert cache_db.exists()
+    assert not decoy.exists()
 
 
 @pytest.mark.asyncio

@@ -54,7 +54,7 @@ class TestConfigInit:
         assert "Created configuration file" in result.output
         content = isolated_config_dirs["user"].read_text()
         # Example config must document a handful of expected sections.
-        assert "[paths]" in content
+        assert "[retention]" in content
         assert "[logging]" in content
         assert "[worker_management]" in content
 
@@ -90,7 +90,7 @@ class TestConfigInit:
         assert "Created configuration file" in result.output
         # Now contains the templated content, not the sentinel.
         assert cfg.read_text() != "# existing\n"
-        assert "[paths]" in cfg.read_text()
+        assert "[retention]" in cfg.read_text()
 
     def test_init_reports_permission_error(self, isolated_config_dirs):
         runner = CliRunner()
@@ -119,7 +119,7 @@ class TestConfigShow:
         assert result.exit_code == 0, result.output
         assert "Current CLM Configuration" in result.output
         for header in (
-            "[Paths]",
+            "[Databases]",
             "[External Tools]",
             "[Logging]",
             "[Jupyter]",
@@ -130,14 +130,11 @@ class TestConfigShow:
     def test_show_reflects_project_config_values(self, isolated_config_dirs):
         project_cfg = isolated_config_dirs["project"]
         project_cfg.parent.mkdir(parents=True, exist_ok=True)
-        project_cfg.write_text(
-            '[logging]\nlog_level = "DEBUG"\n[paths]\ncache_db_path = "custom_cache.db"\n'
-        )
+        project_cfg.write_text('[logging]\nlog_level = "DEBUG"\n')
         runner = CliRunner()
         result = runner.invoke(cli, ["config", "show"])
         assert result.exit_code == 0, result.output
         assert "DEBUG" in result.output
-        assert "custom_cache.db" in result.output
 
     def test_show_includes_llm_cache_section(self, isolated_config_dirs):
         runner = CliRunner()

@@ -1060,17 +1060,24 @@ class SqliteBackend(LocalOpsBackend):
                         f"Build end: Cleaned up {total_cache_cleaned} cache database entries"
                     )
 
-            # Clean up executed notebook cache (shares clm_cache.db)
-            cache_db_path = get_config().paths.cache_db_path
-            try:
-                with ExecutedNotebookCache(cache_db_path) as nb_cache:
-                    nb_cleaned = nb_cache.prune_stale_hashes()
-                    if nb_cleaned > 0:
-                        logger.info(
-                            f"Build end: Cleaned up {nb_cleaned} stale executed notebook cache entries"
-                        )
-            except Exception as e:
-                logger.debug(f"Could not clean executed notebook cache: {e}")
+                # Clean up executed notebook cache (shares the cache DB file).
+                # Use the path this backend actually opened — the same file
+                # ``db_manager`` manages — not ``get_config().paths.cache_db_path``,
+                # a separate, CLI-disconnected setting. That config field ignores
+                # ``--cache-db-path`` / ``CLM_CACHE_DB_PATH`` and the project-root
+                # anchoring, so it pointed at the wrong DB (or created a stray
+                # ``clm_cache.db`` in the cwd) whenever the cache path was
+                # overridden or the build ran from a subdirectory.
+                try:
+                    with ExecutedNotebookCache(self.db_manager.db_path) as nb_cache:
+                        nb_cleaned = nb_cache.prune_stale_hashes()
+                        if nb_cleaned > 0:
+                            logger.info(
+                                f"Build end: Cleaned up {nb_cleaned} stale executed "
+                                f"notebook cache entries"
+                            )
+                except Exception as e:
+                    logger.debug(f"Could not clean executed notebook cache: {e}")
 
             # Vacuum if configured (can be slow for large DBs)
             if retention_config.auto_vacuum_after_cleanup:

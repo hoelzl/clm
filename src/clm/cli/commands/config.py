@@ -67,7 +67,8 @@ def config_init(location, force):
 
 
 @config.command(name="show")
-def config_show():
+@click.pass_context
+def config_show(ctx):
     """Show current configuration values.
 
     This command displays the current configuration, including values
@@ -80,10 +81,17 @@ def config_show():
     click.echo("Current CLM Configuration:")
     click.echo("=" * 60)
 
-    click.echo("\n[Paths]")
-    click.echo(f"  cache_db_path: {cfg.paths.cache_db_path}")
-    click.echo(f"  jobs_db_path: {cfg.paths.jobs_db_path}")
-    click.echo(f"  workspace_path: {cfg.paths.workspace_path or '(not set)'}")
+    # Effective database paths — the ones a build/status/monitor run actually
+    # opens. These come from the global CLI options (resolved in clm.cli.main,
+    # honoring --cache-db-path / CLM_CACHE_DB_PATH and project-root anchoring),
+    # not from the config file / ClmConfig, so show what was resolved here.
+    obj = ctx.obj or {}
+    click.echo("\n[Databases]  (effective paths for this invocation)")
+    click.echo(f"  cache_db_path: {obj.get('CACHE_DB_PATH', '(default: clm_cache.db)')}")
+    click.echo(f"  jobs_db_path: {obj.get('JOBS_DB_PATH', '(default: clm_jobs.db)')}")
+    click.echo(
+        f"  telemetry_db_path: {obj.get('TELEMETRY_DB_PATH', '(default: next to cache DB)')}"
+    )
 
     from clm.infrastructure.llm.cache import CACHE_DB_NAME, describe_cache_dir
 
