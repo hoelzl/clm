@@ -39,6 +39,13 @@
         <button type="submit" class="btn btn-sm {% if lang == 'en' %}btn-primary{% endif %}">EN</button>
     </form>
     <span class="spacer"></span>
+    {% if sections %}
+    {# Expand/collapse the whole list. Client-side only (see base.html):
+       they toggle every section's <details> and persist the choice, so no
+       server round-trip and no full-page reset. #}
+    <button type="button" class="btn btn-sm btn-ghost" data-expand-all>Expand all</button>
+    <button type="button" class="btn btn-sm btn-ghost" data-collapse-all>Collapse all</button>
+    {% endif %}
     <form hx-post="/lectures/refresh" hx-disabled-elt="find button" class="u-inline">
         <button type="submit" class="btn btn-sm btn-ghost">Refresh</button>
     </form>
@@ -93,11 +100,12 @@
 {% endif %}
 
 {% for section in sections %}
-{# Collapsible section. Rendered ``open`` by default; the collapse state
-   is persisted client-side (see base.html) so the frequent SSE-driven
-   ``#lectures-dynamic`` swaps don't re-expand a section the user closed.
-   ``data-section-key`` keys that persistence. #}
-<details class="card section-card" open data-section-collapse data-section-key="{{ section.name }}">
+{# Collapsible section. Rendered *collapsed* by default (no ``open``); the
+   collapse state is persisted client-side in localStorage (see base.html),
+   so the page starts fully collapsed the first time and a user's choices
+   survive reloads, the frequent SSE-driven ``#lectures-dynamic`` swaps, and
+   server restarts. ``data-section-key`` keys that persistence. #}
+<details class="card section-card" data-section-collapse data-section-key="{{ section.name }}">
     <summary class="card-header section-summary">
         <h3 class="card-title">{{ section.name }}</h3>
         <span class="section-chevron" aria-hidden="true">▾</span>

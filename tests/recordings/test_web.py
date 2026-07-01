@@ -247,6 +247,28 @@ class TestLectures:
         assert "data-section-collapse" in html
         assert 'data-section-key="Woche 1"' in html
 
+    def test_sections_start_collapsed(self, app, recording_root: Path):
+        """Section cards render collapsed by default (no ``open`` attribute).
+
+        The page starts fully collapsed; client-side JS re-expands only
+        the sections a user previously opened (persisted in localStorage).
+        """
+        self._set_split_course(app, de_name="01 Einführung", en_name="01 Introduction")
+
+        with TestClient(app) as c:
+            html = c.get("/lectures").text
+        assert '<details class="card section-card" data-section-collapse' in html
+        assert '<details class="card section-card" open' not in html
+
+    def test_lectures_has_expand_collapse_controls(self, app, recording_root: Path):
+        """The toolbar exposes expand-all / collapse-all controls."""
+        self._set_split_course(app, de_name="01 Einführung", en_name="01 Introduction")
+
+        with TestClient(app) as c:
+            html = c.get("/lectures").text
+        assert "data-expand-all" in html
+        assert "data-collapse-all" in html
+
     def test_lectures_shows_course_slug(self, app, recording_root: Path):
         """The arm form should include the correct course_slug."""
         from clm.core.utils.text_utils import Text
