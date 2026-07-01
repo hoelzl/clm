@@ -239,7 +239,19 @@ class _SourceIndex:
     than the wrong cell.
     """
 
-    def __init__(self, de_path: Path, en_path: Path) -> None:
+    def __init__(
+        self,
+        de_path: Path,
+        en_path: Path,
+        *,
+        de_text: str | None = None,
+        en_text: str | None = None,
+    ) -> None:
+        # Issue #501: a separated-voiceover plan's positions index the *companion-inlined*
+        # projection, not the voiceover-free working tree — so the caller passes the
+        # projected text (``SyncPlan.projected_*_text``) and we parse that instead of
+        # re-reading disk, which would mis-resolve every position past a narration cell.
+        texts = {"de": de_text, "en": en_text}
         self._sync: dict[str, list[Cell]] = {}
         self._localized: dict[str, list[Cell]] = {}
         # ``(slide_id, role) -> Cell`` per language for keyed lookups (#451). The
@@ -248,7 +260,10 @@ class _SourceIndex:
         # is surfaced as an error elsewhere, never as a clean keyed conflict.
         self._by_key: dict[str, dict[tuple[str, str], Cell]] = {}
         for lang, path in (("de", de_path), ("en", en_path)):
-            cells = parse_cells(path.read_text(encoding="utf-8"), comment_token_for_path(path))
+            text = texts[lang]
+            if text is None:
+                text = path.read_text(encoding="utf-8")
+            cells = parse_cells(text, comment_token_for_path(path))
             self._sync[lang] = [
                 c for c in cells if role_of(c.metadata) is not None and c.metadata.lang == lang
             ]
@@ -403,15 +418,26 @@ def _enrich(item: ReconciliationItem, index: _SourceIndex) -> None:
         )
 
 
-def _enrich_report(report: ReconciliationReport, de_path: Path, en_path: Path) -> None:
+def _enrich_report(
+    report: ReconciliationReport,
+    de_path: Path,
+    en_path: Path,
+    *,
+    de_text: str | None = None,
+    en_text: str | None = None,
+) -> None:
     """Attach cell bytes to every assisted / ambiguity item (best-effort, in place).
 
     Mechanical items are skipped — the agent applies them without reading the cell.
     A file that cannot be read or parsed leaves the whole report un-enriched: the
     tiers stay valid; only the excerpts are absent.
+
+    ``de_text`` / ``en_text`` (Issue #501) override the working-tree read with the
+    plan's companion-inlined projection so a separated-voiceover excerpt resolves to
+    the correct narration bytes.
     """
     try:
-        index = _SourceIndex(de_path, en_path)
+        index = _SourceIndex(de_path, en_path, de_text=de_text, en_text=en_text)
     except (OSError, ValueError):  # unreadable / undecodable file — degrade to no excerpts
         return
     for item in (*report.assisted, *report.ambiguity):
@@ -555,7 +581,13 @@ def build_report(plan: SyncPlan, *, with_excerpts: bool = False) -> Reconciliati
         ambiguity=ambiguity,
     )
     if with_excerpts:
-        _enrich_report(report, plan.de_path, plan.en_path)
+        _enrich_report(
+            report,
+            plan.de_path,
+            plan.en_path,
+            de_text=plan.projected_de_text,
+            en_text=plan.projected_en_text,
+        )
         _append_idmigration_residue(report, plan)
     # Assign item ids last, so the realign residue items (appended above) are
     # numbered too and the dedup order is stable for this deck state.

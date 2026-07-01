@@ -839,6 +839,16 @@ class SyncWatermarkCache:
         meta_cols = {row[1] for row in self._conn.execute("PRAGMA table_info(sync_watermark_meta)")}
         if "hash_version" not in meta_cols:
             self._conn.execute("ALTER TABLE sync_watermark_meta ADD COLUMN hash_version INTEGER")
+        # ``representation`` (Issue #501): whether the pair's watermark rows were
+        # recorded over the plain deck text (``"plain"`` / NULL — the legacy default)
+        # or over the *companion-inlined* projection of a separated-voiceover deck
+        # (``"separated"``). A ``sync`` run whose current computed representation
+        # disagrees with this marker demotes to a git-HEAD cold-start rather than
+        # diffing across representations (which would silently swallow the very
+        # cross-language voiceover drift #501 exists to catch). Additive; pre-#501
+        # rows backfill to NULL, read as ``"plain"``.
+        if "representation" not in meta_cols:
+            self._conn.execute("ALTER TABLE sync_watermark_meta ADD COLUMN representation TEXT")
         self._conn.commit()
 
     def _key(self, de_path: str, en_path: str) -> tuple[str, str]:
@@ -1041,6 +1051,36 @@ class SyncWatermarkCache:
         de_path, en_path = self._key(de_path, en_path)
         row = self._conn.execute(
             "SELECT synced_commit FROM sync_watermark_meta WHERE de_path=? AND en_path=?",
+            (de_path, en_path),
+        ).fetchone()
+        return row[0] if row else None
+
+    def set_representation(self, de_path: str, en_path: str, representation: str) -> None:
+        """Record how the pair's watermark rows are represented (Issue #501).
+
+        ``"plain"`` for a deck synced over its plain text, ``"separated"`` for a
+        separated-voiceover deck synced over the companion-inlined projection. Read
+        back by :meth:`get_representation`; a later run whose computed representation
+        disagrees cold-starts off git HEAD rather than diffing across representations.
+        """
+        de_path, en_path = self._key(de_path, en_path)
+        with self._conn:
+            self._conn.execute(
+                "INSERT INTO sync_watermark_meta (de_path, en_path, representation) "
+                "VALUES (?, ?, ?) "
+                "ON CONFLICT(de_path, en_path) DO UPDATE SET representation=excluded.representation",
+                (de_path, en_path, representation),
+            )
+
+    def get_representation(self, de_path: str, en_path: str) -> str | None:
+        """The representation the pair's watermark was recorded in, or ``None``.
+
+        ``None`` for a pre-#501 watermark (no marker), which the caller reads as the
+        legacy ``"plain"`` representation.
+        """
+        de_path, en_path = self._key(de_path, en_path)
+        row = self._conn.execute(
+            "SELECT representation FROM sync_watermark_meta WHERE de_path=? AND en_path=?",
             (de_path, en_path),
         ).fetchone()
         return row[0] if row else None

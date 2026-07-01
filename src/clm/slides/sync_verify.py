@@ -56,6 +56,7 @@ from pathlib import Path
 from clm.notebooks.slide_parser import comment_token_for_path
 from clm.slides.raw_cells import split_cells
 from clm.slides.split import UnifyError, unify_texts
+from clm.slides.sync_companion import project_pair
 from clm.slides.sync_plan import _git_ref_text
 from clm.slides.sync_writeback import role_of
 
@@ -316,8 +317,18 @@ def verify_pair(de_path: Path, en_path: Path) -> VerifyResult:
     (``git_baseline=False``) when neither is.
     """
     comment_token = comment_token_for_path(de_path)
-    de_text = de_path.read_text(encoding="utf-8")
-    en_text = en_path.read_text(encoding="utf-8")
+    raw_de_text = de_path.read_text(encoding="utf-8")
+    raw_en_text = en_path.read_text(encoding="utf-8")
+
+    # Issue #501: verify the companion-inlined projection. A separated-voiceover pair
+    # whose narration drifted to one language now leaves an inlined voiceover cell on
+    # only one half, which ``unify_texts`` reports as a structural violation; a
+    # symmetric companion pair inlines identically on both halves and verifies clean.
+    # A plain pair projects to itself, and a mixed / cross-language pair falls back to
+    # its raw text (``sync`` surfaces that refusal separately).
+    projection = project_pair(de_path, en_path, raw_de_text, raw_en_text)
+    de_text = projection.de_text
+    en_text = projection.en_text
 
     violations = structural_violations(de_text, en_text, comment_token)
 

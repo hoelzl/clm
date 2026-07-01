@@ -576,16 +576,34 @@ def _find_owning_slide_id(cells: list[_RawCell], voiceover_idx: int) -> str | No
     return None
 
 
+def has_voiceover_cells_text(
+    text: str, comment_token: str = "#", *, include_notes: bool = False
+) -> bool:
+    """True iff slide *text* carries at least one cell ``extract`` would pull out.
+
+    The IO-free core of :func:`_has_voiceover_cells`. By default only a
+    ``voiceover``-tagged cell counts; with ``include_notes`` a ``notes`` cell
+    counts too (see :func:`_is_extractable_cell`). The ``clm slides sync`` companion
+    projection (issue #501) uses the voiceover-only form to tell a *mixed* deck
+    (inline ``voiceover`` cells **and** a companion — refused) from the sanctioned
+    steady state (inline ``notes`` beside a voiceover companion, post-#387), so the
+    predicate must never count ``notes``.
+    """
+    _preamble, cells = _split_raw_cells(text, comment_token)
+    return any(_is_extractable_cell(c, include_notes=include_notes) for c in cells)
+
+
 def _has_voiceover_cells(path: Path, *, include_notes: bool = False) -> bool:
     """True iff ``path`` has at least one cell ``extract`` would pull out.
 
     By default that means a ``voiceover``-tagged cell; with ``include_notes``
     a ``notes`` cell also counts (see :func:`_is_extractable_cell`).
     """
-    _preamble, cells = _split_raw_cells(
-        path.read_text(encoding="utf-8"), comment_token_for_path(path)
+    return has_voiceover_cells_text(
+        path.read_text(encoding="utf-8"),
+        comment_token_for_path(path),
+        include_notes=include_notes,
     )
-    return any(_is_extractable_cell(c, include_notes=include_notes) for c in cells)
 
 
 def _slide_start_ids_of(path: Path) -> list[str | None]:

@@ -360,6 +360,21 @@ def apply_plan(
     """
     result = ApplyResult()
 
+    # Issue #501 Phase 1: a companion-involving pair (separated voiceover) is READ-ONLY
+    # until the ≤4-file companion write-back lands (Phase 2). The plan was built over the
+    # in-memory inlined projection, so the 2-file flush below would write the inlined
+    # voiceover back into the deck on disk — breaking the wholly-sidecar invariant — and a
+    # mixed / cross-language pair has already refused with a blocking issue. Refuse and
+    # write nothing; ``report`` / ``verify`` / ``diagnose`` still surface the drift.
+    if plan.companion_aware:
+        result.errors.append(
+            "voiceover for this deck lives in a separated companion file; "
+            "`clm slides sync` can report the cross-language drift but cannot yet apply it "
+            "(companion write-back is not implemented). Reconcile the companions manually "
+            "for now."
+        )
+        return result
+
     # Stage 2b/3 for a cold-start mint (#216 §12): a `pending` mint candidate is the
     # whole plan (a cold pair carries no other ops), so handle it on its own path —
     # verify correspondence, then mint shared ids via the file-level minter — and
