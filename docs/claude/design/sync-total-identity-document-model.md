@@ -1,8 +1,10 @@
 # Sync v3: Total Identity over One Document — Target-Model Design Note
 
-**Status**: Draft for maintainer review (pre-implementation)
+**Status**: Design agreed with the maintainer — §12 decisions settled 2026-07-02;
+ready for Phase 0
 **Author**: Claude (Fable 5), with the maintainer
-**Date**: 2026-07-01
+**Date**: 2026-07-01 (decisions recorded 2026-07-02)
+**Issue**: [#520](https://github.com/hoelzl/clm/issues/520) (umbrella)
 **Motivating assessment**: `docs/claude/sync-engine-architecture-assessment-2.md`
 (evidence: `docs/claude/analysis/sync-engine-assessment-2/`)
 **Supersedes (as the forward design)**: the per-channel classifier model of
@@ -505,9 +507,10 @@ step. The old engine remains the default until Phase 4's evidence gate.
   triaged to zero-or-explained; **W10 replay reports ~3 items, not 73**.
 - **Phase 3 — Apply v3 + ledger promotion.** Per-item `apply --decisions`;
   `record`; ledger seeded from a verified pass (the #448 seed logic, one-time);
-  new verbs behind `sync v3 …` or an env flag. Exit: mutation oracle green
-  through the v3 write path; a real dogfood week on PythonCourses using only
-  v3 verbs, with the fall-back-to-manual count as the metric.
+  v3 engine behind `CLM_SYNC_ENGINE=v3` per the §12.5 dispatch design. Exit:
+  mutation oracle green through the v3 write path; a real dogfood week on
+  PythonCourses using only v3 verbs, with the fall-back-to-manual count as the
+  metric.
 - **Phase 4 — Cutover + deletion.** Flip the default, delete the watermark and
   the old core, prune the surface, update `info_topics/{commands,sync-agents,
   migration}.md` (Info Topics Maintenance Rule), the `deck-sync` /
@@ -534,17 +537,32 @@ exist and are being reused, not rebuilt.
 
 ---
 
-## 12. Open questions (maintainer decisions wanted)
+## 12. Decisions (settled with the maintainer, 2026-07-02)
 
-1. **Narrative id policy** — confirm: every narrative gets its *own* unique id
-   at normalize (recommended; aligned with #501's canonical form), vs. keeping
-   `(owner, occ)` identity for narratives. Own-ids is what makes §7 fully
-   closed.
-2. **Ledger granularity** — per-topic file (recommended, follows #448) vs.
-   per-deck.
-3. **`--since` scope** — keep as a forensic report view (recommended) or drop
-   entirely once ledger trust makes it redundant for correctness.
-4. **Stable deck id** — design now (content-based) or defer with rename
-   recovery (recommended: defer; orthogonal).
-5. **Cutover style** — parallel verbs (`sync v3 report`) vs. env-flag switch
-   during Phases 3–4.
+1. **Narrative id policy — SETTLED: every narrative gets its own unique id**
+   at normalize (aligned with #501's canonical form). This is what makes §7
+   fully closed; `(owner, occ)` identity for narratives is off the table.
+2. **Ledger granularity — SETTLED: per-topic file** (follows #448).
+3. **`--since` — SETTLED: kept**, as a forensic report view (§8): "show me the
+   git-window changes annotated with trust state". Never a trust source.
+4. **Stable deck id — SETTLED: deferred.** Path-derived deck identity with the
+   existing rename recovery persists; a content-based deck id remains a
+   Phase-5 option.
+5. **Cutover style — SETTLED: env-flag switch, engineered for clean v2
+   removal** (the maintainer's stated priority). Concretely:
+   - One dispatch point, at the **verb layer**: each verb resolves
+     `CLM_SYNC_ENGINE` (`v2` default through Phase 3, `v3` opt-in; flipped in
+     Phase 4) and calls one engine facade. No v2/v3 branching below that
+     point.
+   - The v2 core stays an **isolated, deletable module tree** — no v3 code
+     imports from `sync_plan.py`/`sync_apply.py`/`sync_code.py`, enforced by
+     an import-cleanliness test (the same mechanism that made "no model on the
+     agent path" structural in 1.16). Removal in Phase 4 is: delete the
+     modules, delete the flag check, done.
+   - The JSON envelope is **self-describing** (`schema: 3` plus the stable
+     top-level booleans `is_clean` / `needs_model` / `needs_agent` in both
+     shapes), so agents branching on the booleans survive the flip and
+     consumers can detect which report shape they hold.
+   - Downstream invocations never change names: the same verbs mean the same
+     thing before and after cutover — the env flag only exists during the
+     transition window and is removed with v2.
