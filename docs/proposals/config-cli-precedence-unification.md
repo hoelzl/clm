@@ -161,17 +161,22 @@ resolve_setting(...)` and injects it into the worker env at the existing
 import-time `os.environ.get(...)` read is unchanged. One canonical env var per
 setting; legacy spellings become deprecated fallbacks (below).
 
-### 4.3 Canonical env spellings + deprecation
+### 4.3 Canonical env spellings — hard cut, no deprecation window
 
-Pick one canonical spelling per setting and accept the old one for one release
-with a `DeprecationWarning`:
+**Decision:** the user base is small enough that we do a **hard cut** — the old
+spelling is removed outright (no deprecation-warning grace release), and the
+removal is announced by email + documented in `clm info migration` (a
+removed → replacement table). Pick one canonical spelling per setting:
 
-| Setting | Canonical | Deprecated (fallback + warn) |
+| Setting | Canonical | Removed (hard cut) |
 |---|---|---|
 | jobs DB path | `CLM_JOBS_DB_PATH` | `CLM_DB_PATH` |
 | max workers | `CLM_WORKER_MANAGEMENT__MAX_WORKERS_CAP` | `CLM_MAX_WORKERS` |
 | E2E knobs | `CLM_LOGGING__TESTING__E2E_*` (align defaults) | `CLM_E2E_*` |
 | plantuml / drawio | `PLANTUML_JAR` / `DRAWIO_EXECUTABLE` (no `CLM_` prefix — established) | — |
+
+Every hard cut adds a row to the `clm info migration` table so downstream repos
+have a single reference.
 
 ### 4.4 `clm config show` becomes honest
 
@@ -208,7 +213,7 @@ effect — no more advertising dead settings.
 ## 7. Phasing (independently-shippable PRs)
 
 0. **DB paths** — *done* (#498 add `CLM_*_DB_PATH`; #499 fix cleanup + status/monitor + remove `[paths]`).
-1. **Resolver + honest `config show`** — add `resolve_setting`, make `config show` show effective value + source for all sections. Low risk, no behaviour change beyond display.
+1. **Resolver + `config show --json` + first hard cut** — *done* (#502): add `resolve_setting` (the shared seam), add `clm config show --json` (machine-readable effective config), remove `USE_SQLITE_QUEUE` / `workers.use_sqlite_queue` outright, and seed the `clm info migration` removed → replacement table.
 2. **external_tools** — host-resolve + inject `PLANTUML_JAR` / `DRAWIO_EXECUTABLE`; config file now works. Add a test that a `clm.toml` value reaches the converter.
 3. **logging.log_level** — resolver + inject; `--log-level` default `None`.
 4. **jupyter.*** — host-resolve + inject.
@@ -229,10 +234,10 @@ default`) reaches the actual behaviour, not just the `ClmConfig` object.
   config-file channel for real settings and keeps raw-env-only ergonomics.
   Rejected in favour of wire-up (the goal is a config file that actually works).
 
-## 9. Open questions
+## 9. Decisions (resolved)
 
-1. Should `use_sqlite_queue` (no consumer) be wired or removed? (Lean: remove.)
-2. Do we want a machine-readable `clm config show --json` to make the
-   effective-value/source data scriptable while we are touching it?
-3. Deprecation window: one minor release, or keep legacy env spellings
-   indefinitely as silent fallbacks?
+1. **`use_sqlite_queue`** — **removed** (Phase 1 / #502). It was a leftover from
+   the multi-queue era; SQLite is the only job queue and nothing read the flag.
+2. **`clm config show --json`** — **added** (Phase 1 / #502).
+3. **Deprecation window** — **none; hard cuts** (§4.3). Small user base; removals
+   are announced by email and captured in the `clm info migration` table.
