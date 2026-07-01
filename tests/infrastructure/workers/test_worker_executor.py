@@ -18,6 +18,7 @@ from clm.infrastructure.workers.worker_executor import (
     WorkerConfig,
     WorkerExecutor,
     _mitmproxy_docker_env,
+    _notebook_worker_jupyter_env,
 )
 
 
@@ -119,6 +120,34 @@ class TestWorkerConfig:
         """Test that default execution mode is docker."""
         config = WorkerConfig(worker_type="notebook", count=2, image="test:latest")
         assert config.execution_mode == "docker"
+
+
+class TestNotebookWorkerJupyterEnv:
+    """The config → worker-env mapping for Jupyter settings (Phase 4)."""
+
+    def test_maps_config_values(self):
+        fake_cfg = MagicMock()
+        fake_cfg.jupyter.jinja_line_statement_prefix = "# j2"
+        fake_cfg.jupyter.jinja_templates_path = "templates"
+        fake_cfg.jupyter.log_cell_processing = False
+        with patch("clm.infrastructure.config.get_config", return_value=fake_cfg):
+            env = _notebook_worker_jupyter_env()
+        assert env == {
+            "JINJA_LINE_STATEMENT_PREFIX": "# j2",
+            "JINJA_TEMPLATES_PATH": "templates",
+            # False must serialize to the exact "False" the worker compares against.
+            "LOG_CELL_PROCESSING": "False",
+        }
+
+    def test_log_cell_processing_true_serializes_to_capital_true(self):
+        # The worker reads LOG_CELL_PROCESSING with an exact `== "True"` match.
+        fake_cfg = MagicMock()
+        fake_cfg.jupyter.jinja_line_statement_prefix = "# j2"
+        fake_cfg.jupyter.jinja_templates_path = "templates"
+        fake_cfg.jupyter.log_cell_processing = True
+        with patch("clm.infrastructure.config.get_config", return_value=fake_cfg):
+            env = _notebook_worker_jupyter_env()
+        assert env["LOG_CELL_PROCESSING"] == "True"
 
 
 class TestDirectWorkerExecutor:
@@ -229,6 +258,31 @@ class TestDirectWorkerExecutor:
         env = mock_popen.call_args[1]["env"]
         assert "PLANTUML_JAR" not in env
         assert "DRAWIO_EXECUTABLE" not in env
+
+    @patch("subprocess.Popen")
+    def test_start_worker_injects_jupyter_config(self, mock_popen, db_path, workspace_path):
+        """Config-resolved Jupyter settings reach the Direct worker env (Phase 4)."""
+        mock_process = MagicMock()
+        mock_process.pid = 12345
+        mock_popen.return_value = mock_process
+
+        fake_cfg = MagicMock()
+        fake_cfg.external_tools.plantuml_jar = ""
+        fake_cfg.external_tools.drawio_executable = ""
+        fake_cfg.jupyter.jinja_line_statement_prefix = "# jj"
+        fake_cfg.jupyter.jinja_templates_path = "/tpl"
+        fake_cfg.jupyter.log_cell_processing = True
+
+        executor = DirectWorkerExecutor(db_path=db_path, workspace_path=workspace_path)
+        config = WorkerConfig(worker_type="notebook", count=1, execution_mode="direct")
+
+        with patch("clm.infrastructure.config.get_config", return_value=fake_cfg):
+            executor.start_worker("notebook", 0, config)
+
+        env = mock_popen.call_args[1]["env"]
+        assert env["JINJA_LINE_STATEMENT_PREFIX"] == "# jj"
+        assert env["JINJA_TEMPLATES_PATH"] == "/tpl"
+        assert env["LOG_CELL_PROCESSING"] == "True"
 
     @patch("subprocess.Popen")
     def test_start_worker_unknown_type(self, mock_popen, db_path, workspace_path):

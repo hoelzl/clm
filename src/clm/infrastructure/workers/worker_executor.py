@@ -38,6 +38,32 @@ _DOCKER_HOST_ALIAS = "host.docker.internal"
 _MITM_CA_CONTAINER_PATH = "/clm/mitmproxy-ca-bundle.pem"
 
 
+def _notebook_worker_jupyter_env() -> dict[str, str]:
+    """Config-resolved Jupyter settings to inject into a worker's environment.
+
+    The notebook worker reads ``JINJA_LINE_STATEMENT_PREFIX`` /
+    ``JINJA_TEMPLATES_PATH`` / ``LOG_CELL_PROCESSING`` from the environment at
+    import time. Injecting the config-folded values here (env var >
+    ``clm.toml`` ``[jupyter]`` > default, already resolved by
+    ``ClmConfig.jupyter``) makes a config-file setting actually take effect —
+    Phase 4 of the config/CLI/env unification. Unlike the PlantUML/Draw.io tool
+    paths these are behavioural (not host-specific), so they are injected into
+    both Direct and Docker workers. There is no CLI flag for them, so no
+    ``resolve_setting`` CLI tier applies. Harmless for non-notebook workers,
+    which ignore these variables.
+    """
+    from clm.infrastructure.config import get_config
+
+    jupyter = get_config().jupyter
+    return {
+        "JINJA_LINE_STATEMENT_PREFIX": jupyter.jinja_line_statement_prefix,
+        "JINJA_TEMPLATES_PATH": jupyter.jinja_templates_path,
+        # notebook_processor reads this as an exact ``== "True"`` match, so emit
+        # that canonical form rather than a lowercase ``"true"``.
+        "LOG_CELL_PROCESSING": "True" if jupyter.log_cell_processing else "False",
+    }
+
+
 def _mitmproxy_docker_env(
     host_environ: dict[str, str],
 ) -> tuple[dict[str, str], tuple[str, str] | None]:
@@ -298,6 +324,10 @@ class DockerWorkerExecutor(WorkerExecutor):
                 ),  # For output path conversion
                 "LOG_LEVEL": self.log_level,
                 "PYTHONUNBUFFERED": "1",  # Enable immediate log output
+                # Config-resolved Jupyter settings for the notebook worker
+                # (Phase 4). Behavioural (not host-path) settings, so they apply
+                # inside the container too.
+                **_notebook_worker_jupyter_env(),
             }
 
             # Pass pre-assigned worker ID if provided (enables pre-registration)
@@ -666,6 +696,9 @@ class DirectWorkerExecutor(WorkerExecutor):
                 if resolved:
                     env[env_var] = resolved
                     logger.debug(f"Passing {env_var}={resolved} to worker")
+
+            # Config-resolved Jupyter settings for the notebook worker (Phase 4).
+            env.update(_notebook_worker_jupyter_env())
 
             # Build command
             cmd = [sys.executable, "-m", module]
