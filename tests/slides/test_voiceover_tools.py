@@ -10,11 +10,14 @@ import pytest
 from clm.notebooks.slide_parser import parse_cells
 from clm.slides.split import split_text
 from clm.slides.voiceover_tools import (
+    InlineTextResult,
     PairedExtractionResult,
     VoiceoverError,
     companion_path,
+    extract_pair_text,
     extract_voiceover,
     extract_voiceover_pair,
+    inline_pair_text,
     inline_voiceover,
     merge_voiceover_text,
     read_companion_baselines,
@@ -2634,3 +2637,128 @@ class TestMidGroupJ2Anchor:
             'widget("alpha")',
             "VO for ALPHA.",
         )
+
+
+# ---------------------------------------------------------------------------
+# Pure text cores: inline_pair_text / extract_pair_text (issue #501, Phase 0)
+#
+# These IO-free funnels back the `clm slides sync` companion projection. The
+# golden round-trip suite proves inline->extract is byte-stable on an in-sync
+# pair (the design's Phase 0 gate); the unmatched tests pin the total-transform
+# contract (a companion cell whose anchor no longer resolves is never dropped).
+# ---------------------------------------------------------------------------
+
+
+DECK_ID_ONLY = """\
+# %% [markdown] lang="de" tags=["slide"] slide_id="intro"
+# ## Einführung
+#
+# Inhalt.
+"""
+
+COMPANION_GHOST_FOR_SLIDE = """\
+# %% [markdown] lang="de" tags=["voiceover"] for_slide="does-not-exist"
+# Narration für ein fehlendes Slide.
+"""
+
+
+def _extract_to_in_sync_pair(
+    tmp_path: Path, name: str, body: str, *, layout: str
+) -> tuple[Path, str, str]:
+    """Write ``body`` to ``name``, extract it, and return
+    ``(slide_path, deck_text, companion_text)`` for the resulting in-sync pair."""
+    slide = tmp_path / name
+    slide.write_text(body, encoding="utf-8")
+    extract_voiceover(slide, layout=layout, force=True)
+    comp = resolve_companion(slide)
+    assert comp is not None, "extract should have produced a companion"
+    return slide, slide.read_text(encoding="utf-8"), comp.read_text(encoding="utf-8")
+
+
+class TestInlinePairText:
+    def test_returns_inline_text_result(self):
+        result = inline_pair_text(DECK_ID_ONLY, "", "#")
+        assert isinstance(result, InlineTextResult)
+        # No companion cells -> deck text is returned unchanged, nothing matched.
+        assert result.inlined_text == DECK_ID_ONLY
+        assert result.had_companion_cells is False
+        assert result.cells_inlined == 0
+        assert result.unmatched_cells == 0
+
+    def test_matches_on_disk_inline_voiceover(self, tmp_path: Path):
+        # The on-disk inline_voiceover now delegates to the pure core; assert the
+        # written slide equals what the pure core computes from the same inputs.
+        slide, deck_text, comp_text = _extract_to_in_sync_pair(
+            tmp_path, "slides_intro.py", SLIDE_WITH_SLIDE_IDS, layout="sibling"
+        )
+        expected = inline_pair_text(deck_text, comp_text, "#").inlined_text
+        inline_voiceover(slide)
+        assert slide.read_text(encoding="utf-8") == expected
+
+    def test_unmatched_for_slide_is_retained_not_dropped(self):
+        # Total-transform contract (#501): a companion cell whose for_slide points
+        # at a slide that is gone is surfaced as unmatched and kept verbatim in the
+        # remaining companion text — never dropped, never dumped into the deck.
+        result = inline_pair_text(DECK_ID_ONLY, COMPANION_GHOST_FOR_SLIDE, "#")
+        assert result.cells_inlined == 0
+        assert result.unmatched_cells == 1
+        assert result.inlined_text == DECK_ID_ONLY  # deck untouched
+        assert "does-not-exist" in result.remaining_companion_text
+        assert "fehlendes Slide" in result.remaining_companion_text
+        assert result.placements[0].status == "unmatched"
+
+    def test_operates_on_copies_no_input_mutation(self):
+        # Read-mode purity: the in-place header rewrite must not leak — calling
+        # twice on the same strings yields the same result.
+        first = inline_pair_text(DECK_ID_ONLY, "", "#").inlined_text
+        second = inline_pair_text(DECK_ID_ONLY, "", "#").inlined_text
+        assert first == second == DECK_ID_ONLY
+
+
+class TestExtractPairText:
+    def test_empty_companion_when_no_voiceover(self, tmp_path: Path):
+        deck = tmp_path / "slides_x.py"
+        deck_text, companion_text, comp_path = extract_pair_text(
+            SLIDE_WITHOUT_VOICEOVER, deck, layout="sibling"
+        )
+        assert deck_text == SLIDE_WITHOUT_VOICEOVER
+        assert companion_text == ""
+        assert comp_path == companion_path(deck)
+
+    def test_matches_on_disk_extract(self, tmp_path: Path):
+        # extract_pair_text is the pure inverse; assert it reproduces the texts
+        # the on-disk extract_voiceover writes for the same slide content.
+        slide = tmp_path / "slides_x.py"
+        slide.write_text(SLIDE_WITH_SLIDE_IDS, encoding="utf-8")
+        pre_extract_text = slide.read_text(encoding="utf-8")
+
+        out_deck, out_comp, comp_path = extract_pair_text(pre_extract_text, slide, layout="sibling")
+
+        extract_voiceover(slide, layout="sibling", force=True)
+        assert out_deck == slide.read_text(encoding="utf-8")
+        assert out_comp == comp_path.read_text(encoding="utf-8")
+
+
+class TestInlineExtractRoundTrip:
+    """The Phase 0 golden gate: inline then extract is byte-stable on an in-sync
+    pair, so the sync projection's write-back is a true no-op when nothing drifted.
+    """
+
+    @pytest.mark.parametrize("layout", ["sibling", "subdir"])
+    @pytest.mark.parametrize(
+        "name,body",
+        [
+            ("slides_ids.py", SLIDE_WITH_SLIDE_IDS),
+            ("slides_full.py", SLIDE_WITH_VOICEOVER),
+        ],
+    )
+    def test_round_trip_byte_stable(self, tmp_path: Path, layout: str, name: str, body: str):
+        slide, deck_text, comp_text = _extract_to_in_sync_pair(tmp_path, name, body, layout=layout)
+
+        core = inline_pair_text(deck_text, comp_text, "#")
+        assert core.unmatched == [], "an in-sync pair must inline losslessly"
+
+        out_deck, out_comp, _ = extract_pair_text(core.inlined_text, slide, layout=layout)
+
+        assert out_deck == deck_text, "deck should round-trip byte-identically"
+        assert out_comp == comp_text, "companion should round-trip byte-identically"
