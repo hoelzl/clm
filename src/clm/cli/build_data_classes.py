@@ -148,6 +148,17 @@ class OutputConflictInfo:
     conflict_count: int
 
 
+# Human-readable labels for the cache-miss reason codes produced by
+# ``DatabaseManager.diagnose_cache_miss`` (surfaced by ``clm build
+# --explain-rebuilds``). Kept here so every summary renderer — text, rich,
+# JSON — agrees on wording and ordering.
+REBUILD_REASON_LABELS: dict[str, str] = {
+    "hash_mismatch": "content changed (source or a dependency)",
+    "no_entry": "no cache entry (never built here, or cache cleared)",
+    "metadata_mismatch": "new output target (kind/format/language)",
+}
+
+
 @dataclass
 class BuildSummary:
     """Summary of a build execution.
@@ -182,6 +193,12 @@ class BuildSummary:
     flaky_files: list[FlakyFileInfo] = field(default_factory=list)
     """Decks that passed only after at least one failed execution attempt
     (issue #330). Empty on builds where every execution passed first try."""
+    rebuild_reasons: dict[str, int] = field(default_factory=dict)
+    """Count of cache misses per reason code (``hash_mismatch`` /
+    ``no_entry`` / ``metadata_mismatch``), aggregated across all rebuilt
+    output artifacts. Populated only under ``clm build --explain-rebuilds`` —
+    empty otherwise, so every renderer that reads it is a no-op on a normal
+    build."""
     timed_out: bool = False
     """True when the build aborted because one or more worker jobs did not
     complete within ``max_wait_for_completion_duration`` (issue #143). A
@@ -205,6 +222,26 @@ class BuildSummary:
     def successful_files(self) -> int:
         """Number of source files that processed without an error (never < 0)."""
         return max(0, self.total_files - self.failed_files)
+
+    @property
+    def total_rebuilds_explained(self) -> int:
+        """Total cache misses recorded under ``--explain-rebuilds`` (0 if off)."""
+        return sum(self.rebuild_reasons.values())
+
+    def rebuild_reason_breakdown(self) -> list[tuple[str, int]]:
+        """``(label, count)`` per rebuild reason, most frequent first.
+
+        Empty unless the build ran with ``--explain-rebuilds``. Ordered by
+        descending count (then label) so the dominant cause of unexpected
+        rebuilds reads at the top. Unknown codes fall back to the raw code.
+        """
+        return sorted(
+            (
+                (REBUILD_REASON_LABELS.get(code, code), count)
+                for code, count in self.rebuild_reasons.items()
+            ),
+            key=lambda pair: (-pair[1], pair[0]),
+        )
 
     def has_errors(self) -> bool:
         """Check if build has any errors."""
@@ -252,6 +289,12 @@ class BuildSummary:
             for flaky in self.flaky_files:
                 types = ", ".join(flaky.failure_types) or "unknown"
                 parts.append(f"  {flaky.file_path} (attempts: {flaky.max_attempts}, {types})")
+
+        if self.rebuild_reasons:
+            parts.append("")
+            parts.append(f"Rebuild reasons ({self.total_rebuilds_explained} cache misses):")
+            for label, count in self.rebuild_reason_breakdown():
+                parts.append(f"  {count}  {label}")
 
         return "\n".join(parts)
 

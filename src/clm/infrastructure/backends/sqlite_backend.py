@@ -541,7 +541,9 @@ class SqliteBackend(LocalOpsBackend):
         reason = self._format_rebuild_reason(reason_code, detail, payload)
         logger.info(f"Rebuilding {payload.input_file} -> {payload.output_file}: {reason}")
         if self.build_reporter:
-            self.build_reporter.report_rebuild_reason(str(payload.input_file), job_type, reason)
+            self.build_reporter.report_rebuild_reason(
+                str(payload.input_file), job_type, reason, reason_code
+            )
 
     @staticmethod
     def _format_rebuild_reason(reason_code: str, detail: str | None, payload: Payload) -> str:

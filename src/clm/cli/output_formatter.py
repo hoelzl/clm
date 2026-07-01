@@ -533,6 +533,7 @@ class DefaultOutputFormatter(OutputFormatter):
                 )
 
         self._show_flaky_files(summary)
+        self._show_rebuild_reasons(summary)
 
         # Show log file location for detailed debugging
         if summary.errors or summary.warnings:
@@ -540,6 +541,20 @@ class DefaultOutputFormatter(OutputFormatter):
 
             log_dir = get_log_dir()
             self.console.print(f"\n[dim]Full logs available in: {log_dir}[/dim]")
+
+    def _show_rebuild_reasons(self, summary: BuildSummary) -> None:
+        """Show the aggregated cache-miss breakdown (only under --explain-rebuilds).
+
+        Empty on a normal build (rebuild reasons are recorded only when the
+        flag is on), so this is a no-op unless the user asked for it.
+        """
+        if not summary.rebuild_reasons:
+            return
+        self.console.print(
+            f"\n[bold]Rebuild reasons ({summary.total_rebuilds_explained} cache misses):[/bold]"
+        )
+        for label, count in summary.rebuild_reason_breakdown():
+            self.console.print(f"  [cyan]{count:>5}[/cyan]  {label}")
 
     def _show_flaky_files(self, summary: BuildSummary) -> None:
         """Show decks that passed only after a retry (issue #330)."""
@@ -735,6 +750,7 @@ class VerboseOutputFormatter(DefaultOutputFormatter):
                 )
 
         self._show_flaky_files(summary)
+        self._show_rebuild_reasons(summary)
 
         # Show log file location for detailed debugging
         if summary.errors or summary.warnings:
@@ -978,6 +994,10 @@ class JSONOutputFormatter(OutputFormatter):
             }
             for f in summary.flaky_files
         ]
+
+        # Cache-miss reason counts under --explain-rebuilds. Empty dict on a
+        # normal build (the flag was off, so no reasons were recorded).
+        self.output_data["rebuild_reasons"] = dict(summary.rebuild_reasons)
 
         # Output-write registry summary (PR 2.3). Always emit the keys
         # so machine consumers don't have to special-case their absence
