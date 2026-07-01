@@ -1775,20 +1775,25 @@ clm slides sync autopilot DECK [opts]              # legacy all-in-one WITH mode
 `--llm-timeout`) and the legacy write-everything behavior all live on
 **`autopilot`** now; never run `autopilot` in CI.
 
-**Separated voiceover companions (read modes, since CLM {version}).** When a
-deck keeps its voiceover in **separated companion files** (`voiceover_*.de.<ext>`
-/ `voiceover_*.en.<ext>`, the sticky default after `clm voiceover extract`), the
-read verbs (`report` / `verify` / `diagnose`) inline each companion **in memory**
-and reconcile the narration like any other cell — so a companion edited on only
-one language surfaces as `add …/voiceover [translation pending]` instead of
-drifting silently until `clm validate`. A standing, in-sync separated pair still
-reports **0 changes**. Pointing sync at a `voiceover_*` file reconciles its deck
+**Separated voiceover companions (since CLM {version}).** When a deck keeps its
+voiceover in **separated companion files** (`voiceover_*.de.<ext>` /
+`voiceover_*.en.<ext>`, the sticky default after `clm voiceover extract`), sync
+inlines each companion **in memory** and reconciles the narration like any other
+cell. The read verbs (`report` / `verify` / `diagnose`) surface a companion edited
+on only one language as `add …/voiceover [translation pending]` instead of letting
+it drift silently until `clm validate`, and the write verbs (`apply` / `accept` /
+`autopilot`) propagate it — translated when needed — into the other language's
+companion, committing both decks and both companions in one atomic write. A
+standing, in-sync separated pair reports **0 changes** and writes nothing. A
+one-sided narration creates the missing companion pinned to the twin's layout;
+speaker `notes` stay inline in the deck (voiceover-only extract). The reconciled
+state records a `separated` marker in the watermark so later runs diff in the same
+representation (a legacy voiceover-free watermark auto-re-baselines on the first
+companion-aware run). Pointing sync at a `voiceover_*` file reconciles its deck
 pair. A deck that keeps voiceover **both** inline and in a companion (mixed), or
 inconsistently across the two languages (one inline, one separated), is refused
 with a normalize hint (`clm voiceover inline` / `extract`); an orphaned companion
 cell (its slide was renamed or removed) is refused rather than dropped.
-*Applying* the reconciliation (the four-file write-back) is not yet implemented —
-`apply` on a separated pair reports the drift and writes nothing.
 
 **Pairing guard (since CLM {version}).** Before anything is read or written,
 sync checks that `DE_PATH` and `EN_PATH` are the two halves of **one** deck —

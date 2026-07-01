@@ -37,7 +37,9 @@ from clm.slides.sync_apply import apply_plan
 from clm.slides.sync_companion import Representation, project_pair
 from clm.slides.sync_plan import build_sync_plan
 from clm.slides.sync_report import build_report
+from clm.slides.sync_translate import StaticSlideTranslator
 from clm.slides.sync_verify import verify_pair
+from clm.slides.voiceover_tools import resolve_companion
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
 
@@ -393,26 +395,25 @@ class TestRepresentationMarker:
 
 
 # ---------------------------------------------------------------------------
-# Apply is guarded (Phase 1 is read-only) and plain pairs are untouched.
+# Apply on an in-sync separated pair is a clean no-op; plain pairs are untouched.
+# (The full write-back is exercised in TestCompanionApplyWriteback below.)
 # ---------------------------------------------------------------------------
 
 
 class TestApplyGuardAndPlainParity:
-    def test_apply_refuses_a_separated_pair(self, tmp_path: Path) -> None:
+    def test_apply_in_sync_separated_pair_writes_nothing(self, tmp_path: Path) -> None:
         pair = _make_pair(
             tmp_path,
             de_comp=_companion("de", ("intro", "Willkommen.")),
             en_comp=_companion("en", ("intro", "Welcome.")),
         )
-        before_de = pair.de.read_text(encoding="utf-8")
-        before_comp = pair.de_comp.read_text(encoding="utf-8")
+        before = {p: p.read_text(encoding="utf-8") for p in (pair.de, pair.en, pair.de_comp)}
         plan = build_sync_plan(pair.de, pair.en)
         result = apply_plan(plan, judge=None)
-        assert result.has_errors
-        assert result.flushed is False
-        # Neither the deck nor the companion was written.
-        assert pair.de.read_text(encoding="utf-8") == before_de
-        assert pair.de_comp.read_text(encoding="utf-8") == before_comp
+        assert not result.has_errors
+        # An in-sync pair changes no files (the empty-plan short-circuit).
+        for path, text in before.items():
+            assert path.read_text(encoding="utf-8") == text
 
     def test_plain_pair_is_not_companion_aware(self, tmp_path: Path) -> None:
         pair = _make_pair(tmp_path)
@@ -498,3 +499,186 @@ class TestCompanionArgResolution:
         orphan.write_text(_companion("de", ("intro", "x")), encoding="utf-8")
         with pytest.raises(click.UsageError, match="voiceover companion"):
             _resolve_single_path(orphan, None)
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 — APPLY write-back: reconcile a separated pair into ≤4 files.
+# ---------------------------------------------------------------------------
+
+
+def _errors(result) -> list[str]:
+    return list(result.errors)
+
+
+class TestCompanionApplyWriteback:
+    def test_new_narration_translated_into_the_other_companion(self, tmp_path: Path) -> None:
+        # The headline fix: a narration added on one side is translated and written
+        # into the OTHER language's companion; a second report is clean.
+        pair = _make_pair(
+            tmp_path,
+            de_comp=_companion("de", ("intro", "Willkommen.")),
+            en_comp=_companion("en", ("intro", "Welcome.")),
+        )
+        pair.de_comp.write_text(
+            _companion("de", ("intro", "Willkommen."), ("ende", "Danke.")),
+            encoding="utf-8",
+        )
+        translator = StaticSlideTranslator(mapping={"#\n# - Danke.": "#\n# - Thanks."})
+        plan = build_sync_plan(pair.de, pair.en)
+        result = apply_plan(plan, judge=None, translator=translator)
+        assert _errors(result) == []
+        assert result.applied_add == 1
+        assert "Thanks." in pair.en_comp.read_text(encoding="utf-8")
+        # Deck stays voiceover-free on disk (the wholly-sidecar invariant).
+        assert "voiceover" not in pair.en.read_text(encoding="utf-8")
+        # A second report against the reconciled tree is clean.
+        assert build_sync_plan(pair.de, pair.en).proposals == []
+
+    def test_deterministic_remove_propagates_without_a_model(self, tmp_path: Path) -> None:
+        pair = _make_pair(
+            tmp_path,
+            de_comp=_companion("de", ("intro", "Willkommen."), ("ende", "Danke.")),
+            en_comp=_companion("en", ("intro", "Welcome."), ("ende", "Thanks.")),
+        )
+        # Author removes the ende narration on DE only.
+        pair.de_comp.write_text(_companion("de", ("intro", "Willkommen.")), encoding="utf-8")
+        plan = build_sync_plan(pair.de, pair.en)
+        result = apply_plan(plan, judge=None)  # no translator needed for a remove
+        assert _errors(result) == []
+        assert result.applied_remove == 1
+        assert "Thanks." not in pair.en_comp.read_text(encoding="utf-8")
+        assert build_sync_plan(pair.de, pair.en).proposals == []
+
+    def test_one_sided_companion_created_at_twin_layout(self, tmp_path: Path) -> None:
+        pair = _make_pair(tmp_path, de_comp=_companion("de", ("intro", "Willkommen.")))
+        assert resolve_companion(pair.en) is None
+        translator = StaticSlideTranslator(mapping={"#\n# - Willkommen.": "#\n# - Welcome."})
+        plan = build_sync_plan(pair.de, pair.en)
+        result = apply_plan(plan, judge=None, translator=translator)
+        assert _errors(result) == []
+        created = resolve_companion(pair.en)
+        assert created is not None
+        # Pinned to the DE twin's (sibling) layout, not relocated into a subdir.
+        assert created.parent == pair.en.parent
+        assert "Welcome." in created.read_text(encoding="utf-8")
+        assert build_sync_plan(pair.de, pair.en).proposals == []
+
+    def test_subdir_layout_is_preserved_on_write_back(self, tmp_path: Path) -> None:
+        pair = _make_pair(
+            tmp_path,
+            de_comp=_companion("de", ("intro", "Willkommen.")),
+            en_comp=_companion("en", ("intro", "Welcome.")),
+            subdir=True,
+        )
+        pair.de_comp.write_text(
+            _companion("de", ("intro", "Willkommen."), ("ende", "Danke.")),
+            encoding="utf-8",
+        )
+        translator = StaticSlideTranslator(mapping={"#\n# - Danke.": "#\n# - Thanks."})
+        plan = build_sync_plan(pair.de, pair.en)
+        apply_plan(plan, judge=None, translator=translator)
+        created = resolve_companion(pair.en)
+        assert created is not None
+        assert created.parent.name == "voiceover"  # stayed in the subdir layout
+
+    def test_clean_apply_records_separated_watermark_and_is_idempotent(
+        self, tmp_path: Path
+    ) -> None:
+        pair = _make_pair(
+            tmp_path,
+            de_comp=_companion("de", ("intro", "Willkommen."), ("ende", "Danke.")),
+            en_comp=_companion("en", ("intro", "Welcome."), ("ende", "Thanks.")),
+        )
+        pair.de_comp.write_text(_companion("de", ("intro", "Willkommen.")), encoding="utf-8")
+        cache = SyncWatermarkCache(tmp_path / "wm.db")
+        plan = build_sync_plan(pair.de, pair.en, watermark_cache=cache)
+        result = apply_plan(plan, judge=None, watermark_cache=cache)
+        assert result.watermark_recorded
+        assert cache.get_representation(str(pair.de), str(pair.en)) == "separated"
+        # The recorded separated watermark is used next run (not demoted) and is clean.
+        plan2 = build_sync_plan(pair.de, pair.en, watermark_cache=cache)
+        assert plan2.baseline_source == "watermark"
+        assert plan2.proposals == []
+
+    def test_mixed_pair_still_writes_nothing(self, tmp_path: Path) -> None:
+        # A refused (mixed) pair must never be written by apply.
+        de_inline = (
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="intro"\n#\n# ## X\n\n'
+            '# %% [markdown] lang="de" tags=["voiceover"]\n#\n# - inline\n\n'
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="ende"\n#\n# ## Y\n'
+        )
+        pair = _make_pair(
+            tmp_path,
+            de_text=de_inline,
+            de_comp=_companion("de", ("intro", "Willkommen.")),
+            en_comp=_companion("en", ("intro", "Welcome.")),
+            commit=False,
+        )
+        before = {p: p.read_text(encoding="utf-8") for p in (pair.de, pair.en, pair.de_comp)}
+        plan = build_sync_plan(pair.de, pair.en)
+        assert plan.has_errors  # the refusal rides on the plan's blocking issue
+        result = apply_plan(plan, judge=None)
+        # The plan's blocking issue holds the flush — apply writes nothing.
+        assert result.flushed is False
+        for path, text in before.items():
+            assert path.read_text(encoding="utf-8") == text
+
+    def test_inline_notes_stay_in_the_deck_on_write_back(self, tmp_path: Path) -> None:
+        # Voiceover-only extract: a note inline in the deck stays there; only the
+        # voiceover round-trips to the companion (the post-#387 steady state).
+        de_deck = (
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="intro"\n#\n# ## Einführung\n'
+            "\n"
+            '# %% [markdown] lang="de" tags=["notes"]\n#\n# - Eine Sprechernotiz.\n'
+            "\n"
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="ende"\n#\n# ## Ende\n'
+        )
+        en_deck = de_deck.replace('lang="de"', 'lang="en"').replace(
+            "Eine Sprechernotiz.", "A speaker note."
+        )
+        pair = _make_pair(
+            tmp_path,
+            de_text=de_deck,
+            en_text=en_deck,
+            de_comp=_companion("de", ("intro", "Willkommen.")),
+            en_comp=_companion("en", ("intro", "Welcome.")),
+        )
+        pair.de_comp.write_text(
+            _companion("de", ("intro", "Willkommen."), ("ende", "Danke.")),
+            encoding="utf-8",
+        )
+        translator = StaticSlideTranslator(mapping={"#\n# - Danke.": "#\n# - Thanks."})
+        plan = build_sync_plan(pair.de, pair.en)
+        apply_plan(plan, judge=None, translator=translator)
+        de_after = pair.de.read_text(encoding="utf-8")
+        assert 'tags=["notes"]' in de_after  # the note is still inline in the deck
+        assert "Eine Sprechernotiz." in de_after
+        assert "notes" not in pair.de_comp.read_text(encoding="utf-8")
+
+    def test_crash_during_write_back_leaves_files_untouched(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pair = _make_pair(
+            tmp_path,
+            de_comp=_companion("de", ("intro", "Willkommen.")),
+            en_comp=_companion("en", ("intro", "Welcome.")),
+        )
+        pair.de_comp.write_text(
+            _companion("de", ("intro", "Willkommen."), ("ende", "Danke.")),
+            encoding="utf-8",
+        )
+        before = {
+            p: p.read_text(encoding="utf-8") for p in (pair.de, pair.en, pair.de_comp, pair.en_comp)
+        }
+
+        def _boom(_writes: object) -> None:
+            raise OSError("disk full")
+
+        monkeypatch.setattr("clm.slides.sync_apply.atomic_write_all", _boom)
+        translator = StaticSlideTranslator(mapping={"#\n# - Danke.": "#\n# - Thanks."})
+        plan = build_sync_plan(pair.de, pair.en)
+        with pytest.raises(OSError, match="disk full"):
+            apply_plan(plan, judge=None, translator=translator)
+        # The whole batch failed before any os.replace — every target is untouched.
+        for path, text in before.items():
+            assert path.read_text(encoding="utf-8") == text

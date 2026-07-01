@@ -53,6 +53,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from clm.infrastructure.llm.ollama_client import OllamaError
+from clm.infrastructure.utils.path_utils import atomic_write_all
 from clm.notebooks.slide_parser import Cell, comment_token_for_path, parse_cell_header, parse_cells
 from clm.slides.anchor_primitives import (
     TITLE_MACRO_KIND,
@@ -110,6 +111,12 @@ from clm.slides.sync_writeback import (
     hash_cell,
     role_of,
     row_anchor,
+)
+from clm.slides.voiceover_tools import (
+    COMPANION_SUBDIR,
+    _prune_other_companions,
+    extract_pair_text,
+    resolve_companion,
 )
 
 if TYPE_CHECKING:
@@ -360,18 +367,23 @@ def apply_plan(
     """
     result = ApplyResult()
 
-    # Issue #501 Phase 1: a companion-involving pair (separated voiceover) is READ-ONLY
-    # until the ≤4-file companion write-back lands (Phase 2). The plan was built over the
-    # in-memory inlined projection, so the 2-file flush below would write the inlined
-    # voiceover back into the deck on disk — breaking the wholly-sidecar invariant — and a
-    # mixed / cross-language pair has already refused with a blocking issue. Refuse and
-    # write nothing; ``report`` / ``verify`` / ``diagnose`` still surface the drift.
-    if plan.companion_aware:
+    # Issue #501: a *separated*-voiceover pair applies through the ≤4-file companion
+    # write-back below — the plan (and the FileStates it drives) are built over the
+    # in-memory inlined projection, and the flush extracts back to deck + companion.
+    # ``plan.projected_de_text is not None`` iff the pair is separated-and-projectable
+    # (a mixed / cross-language / orphaned-cell pair carries a blocking issue and no
+    # projection, so it writes nothing via the normal error gating). Cold-start
+    # *bootstrap* over a separated deck (mint / adopt / reconcile) is out of scope —
+    # those paths mint ids on the raw deck and can't coordinate the companion; refuse
+    # so the author bootstraps ids first rather than half-applying.
+    companion_writeback = plan.projected_de_text is not None
+    if companion_writeback and any(
+        p.kind in ("mint", "adopt", "reconcile") for p in plan.proposals
+    ):
         result.errors.append(
-            "voiceover for this deck lives in a separated companion file; "
-            "`clm slides sync` can report the cross-language drift but cannot yet apply it "
-            "(companion write-back is not implemented). Reconcile the companions manually "
-            "for now."
+            "this separated-voiceover deck still needs its slide ids bootstrapped; run "
+            "`clm slides assign-ids` on the deck halves (and `clm slides sync verify`), "
+            "then re-run sync."
         )
         return result
 
@@ -404,12 +416,16 @@ def apply_plan(
         return result
 
     # Pre-apply content (parser-stripped) for the judge, keyed by (slide_id,
-    # role). Read before FileState mutates anything.
-    de_content = content_index(plan.de_path, "de")
-    en_content = content_index(plan.en_path, "en")
+    # role). Read before FileState mutates anything. For a separated pair every read
+    # is over the companion-inlined projection (Issue #501), so the apply engine sees
+    # and mutates the SAME text the plan's positions index; the flush extracts it back.
+    de_src = plan.projected_de_text
+    en_src = plan.projected_en_text
+    de_content = content_index(plan.de_path, "de", text=de_src)
+    en_content = content_index(plan.en_path, "en", text=en_src)
 
-    de_state = FileState.load(plan.de_path)
-    en_state = FileState.load(plan.en_path)
+    de_state = FileState.load(plan.de_path, text=de_src)
+    en_state = FileState.load(plan.en_path, text=en_src)
 
     # Stage 2b (edit path): resolve every edit — and every conflict the caller
     # chose to win — into a materialized outcome up front, the only place an edit
@@ -523,7 +539,10 @@ def apply_plan(
         # above, so a scoped flush is all an edit accept needs. The watermark never
         # advances here (a single-item accept must not bank the rest of the deck).
         if not result.has_errors and not plan.has_errors:
-            _flush_states_atomically(de_state, en_state)
+            if companion_writeback:
+                _flush_companion_writeback(de_state, en_state)
+            else:
+                _flush_states_atomically(de_state, en_state)
             result.flushed = True
         return result
 
@@ -614,7 +633,10 @@ def apply_plan(
     # independently declines on any plan issue / error, so "wrote nothing" and
     # "held the watermark" stay consistent.
     if not result.has_errors and not plan.has_errors:
-        _flush_states_atomically(de_state, en_state)
+        if companion_writeback:
+            _flush_companion_writeback(de_state, en_state)
+        else:
+            _flush_states_atomically(de_state, en_state)
         result.flushed = True
 
     # Watermark advance. A fully clean pass advances the whole deck. A
@@ -635,7 +657,27 @@ def apply_plan(
     # silently baseline them), where its own cell's tags are pinned at the old
     # baseline so the conflict re-surfaces while everything else banks.
     if watermark_cache is not None and not plan.blocking_issues:
-        if _pass_is_clean(plan, result) and not plan.tag_holds:
+        if companion_writeback:
+            # Issue #501: record the watermark over the INLINED projection with the
+            # "separated" marker so a later run diffs in the same representation. Only
+            # on a fully clean pass — a partial (deferred) separated pass holds the
+            # watermark and re-baselines off the projected git-HEAD next run (the
+            # partial-advance path is not modeled over inlined text in Phase 2).
+            if _pass_is_clean(plan, result) and not plan.tag_holds:
+                # Record over the RE-PROJECTION of the just-written files, not the
+                # in-memory render: ``extract`` canonicalizes headers that ``inline``
+                # keeps, so the next run reads ``inline(disk)`` — record exactly that
+                # so a clean pair does not re-surface as drift next run.
+                _record_watermark(
+                    watermark_cache,
+                    plan.de_path,
+                    plan.en_path,
+                    de_text=_inlined_from_disk(plan.de_path),
+                    en_text=_inlined_from_disk(plan.en_path),
+                    representation="separated",
+                )
+                result.watermark_recorded = True
+        elif _pass_is_clean(plan, result) and not plan.tag_holds:
             _record_watermark(watermark_cache, plan.de_path, plan.en_path)
             result.watermark_recorded = True
         elif (
@@ -3309,7 +3351,115 @@ def _atomic_write_text(path: Path, text: str) -> None:
         raise
 
 
-def content_index(path: Path, lang: str) -> dict[tuple[str, str], str]:
+def _read_or_none(path: Path) -> str | None:
+    """The text of ``path``, or ``None`` when it does not exist / cannot be read."""
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
+def _inlined_from_disk(path: Path) -> str:
+    """Re-project ``path``'s on-disk deck + companion into inlined text (Issue #501).
+
+    Recomputes exactly what the *next* ``build_sync_plan`` will read for this half —
+    ``inline(deck, companion)`` over the freshly written files — so a separated pair's
+    watermark is recorded in the SAME representation the next run diffs against.
+    Because ``extract`` canonicalizes a voiceover header that ``inline`` does not
+    strip, recording over the pre-write ``FileState.render()`` would drift by exactly
+    that canonicalization; re-projecting the written files closes the gap.
+    """
+    companion = resolve_companion(path)
+    deck = path.read_text(encoding="utf-8")
+    if companion is None:
+        return deck
+    from clm.slides.voiceover_tools import inline_pair_text
+
+    return inline_pair_text(
+        deck, companion.read_text(encoding="utf-8"), comment_token_for_path(path)
+    ).inlined_text
+
+
+def _companion_layout(path: Path) -> str | None:
+    """The layout (``"subdir"`` / ``"sibling"``) of ``path``'s companion, or ``None``.
+
+    ``None`` when the half has no companion yet — the caller then pins the new
+    companion to the twin's layout so a single deck is never split across both.
+    """
+    comp = resolve_companion(path)
+    if comp is None:
+        return None
+    return "subdir" if comp.parent.name == COMPANION_SUBDIR else "sibling"
+
+
+def _flush_companion_writeback(de_state: FileState, en_state: FileState) -> None:
+    """Extract the reconciled inlined decks back into ≤4 files and write atomically (#501).
+
+    The separated-voiceover counterpart of :func:`_flush_states_atomically`. Each
+    half's rendered projection (deck **with** its voiceover inlined) is split back
+    into a voiceover-free deck + a voiceover companion via
+    :func:`extract_pair_text` (voiceover-only — notes stay inline in the deck, per
+    the issue #501 maintainer decision), and only the outputs that differ from disk
+    are committed in one :func:`atomic_write_all` batch (the dirty-diff — a naive
+    re-extract re-derives anchors and could otherwise churn a clean file). An emptied
+    companion is deleted and any stale copy in the other layout is pruned.
+
+    **Nothing changed → nothing written** (the empty-plan short-circuit): if apply
+    mutated neither half the author's on-disk files are left byte-for-byte untouched,
+    even where they are not in the canonical extract form. But once *either* half
+    changed, **both** are re-extracted: ``extract`` canonicalizes a voiceover header
+    (it stamps ``slide_id`` / ``vo_anchor`` that ``inline`` does not strip), so
+    writing only the mutated half would leave the two companions in different
+    representations and the next ``report`` would diff them as drift. Re-extracting
+    both keeps the pair in one representation; the dirty-diff still skips any file
+    already in that form, so a canonical deck sees only the genuinely-changed
+    companion written. The deck on disk stays voiceover-free before *and* after, so a
+    crash between replaces can never leave a mixed / wholly-inline deck.
+    """
+    if not (de_state.dirty or en_state.dirty):
+        return
+    # Pin each half's companion layout to its own, falling back to the twin's, so a
+    # newly-created companion (a one-sided → propagated narration) lands in the same
+    # place (``voiceover/`` subdir vs sibling) as the existing half's — never split
+    # across both layouts (design §5.5).
+    own_layout = {s.path: _companion_layout(s.path) for s in (de_state, en_state)}
+    twin_layout = {
+        de_state.path: own_layout[en_state.path],
+        en_state.path: own_layout[de_state.path],
+    }
+    writes: list[tuple[Path, str]] = []
+    deletions: list[Path] = []
+    for state in (de_state, en_state):
+        layout = own_layout[state.path] or twin_layout[state.path]
+        deck_text, companion_text, companion_path = extract_pair_text(
+            state.render(), state.path, layout=layout
+        )
+        if _read_or_none(state.path) != deck_text:
+            writes.append((state.path, deck_text))
+        existing = resolve_companion(state.path)
+        if companion_text:
+            target = existing if existing is not None else companion_path
+            if _read_or_none(target) != companion_text:
+                writes.append((target, companion_text))
+        elif existing is not None:
+            # The deck lost all its voiceover — remove the now-empty companion.
+            deletions.append(existing)
+    if writes:
+        for path, _text in writes:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_all(writes)
+    for path in deletions:
+        path.unlink(missing_ok=True)
+    # Clear any stale companion left in the other layout (e.g. a sibling shadowed by
+    # a freshly-written subdir copy), mirroring ``extract``'s own prune.
+    for state in (de_state, en_state):
+        kept = resolve_companion(state.path)
+        if kept is not None:
+            _prune_other_companions(state.path, keep=kept)
+        state.dirty = False
+
+
+def content_index(path: Path, lang: str, *, text: str | None = None) -> dict[tuple[str, str], str]:
     """Map ``(slide_id, role) -> parser-stripped content`` for one deck.
 
     Filtered to ``lang`` so the apply-side lookup matches exactly what the
@@ -3317,9 +3467,14 @@ def content_index(path: Path, lang: str) -> dict[tuple[str, str], str]:
     role+language predicate, so the judge can never be fed an
     other-language cell that happens to share a key. Public so the interactive
     walker can render each proposal's current source/target bodies.
+
+    ``text`` (Issue #501) overrides the disk read with the companion-inlined
+    projection so the apply-side lookup matches the plan built over that same text.
     """
+    if text is None:
+        text = path.read_text(encoding="utf-8")
     index: dict[tuple[str, str], str] = {}
-    for cell in parse_cells(path.read_text(encoding="utf-8"), comment_token_for_path(path)):
+    for cell in parse_cells(text, comment_token_for_path(path)):
         role = role_of(cell.metadata)
         if role is None:
             continue
@@ -4122,6 +4277,10 @@ def _record_watermark(
     cache: SyncWatermarkCache,
     de_path: Path,
     en_path: Path,
+    *,
+    de_text: str | None = None,
+    en_text: str | None = None,
+    representation: str | None = None,
 ) -> None:
     """Record both decks' post-apply state as the new baseline.
 
@@ -4131,9 +4290,17 @@ def _record_watermark(
     shared cells. The classifier still reads only the real-role rows
     (``_baseline_from_watermark`` filters the synthetic membership roles), so this
     does not change its behavior.
+
+    ``de_text`` / ``en_text`` (Issue #501) override the disk read with the
+    companion-inlined projection so a separated-voiceover pair records its watermark
+    in the SAME representation the plan diffs against; ``representation`` stamps the
+    marker (``"separated"``) so a later run whose computed representation disagrees
+    demotes to a git-HEAD cold-start rather than diffing across representations.
     """
-    de_text = de_path.read_text(encoding="utf-8")
-    en_text = en_path.read_text(encoding="utf-8")
+    if de_text is None:
+        de_text = de_path.read_text(encoding="utf-8")
+    if en_text is None:
+        en_text = en_path.read_text(encoding="utf-8")
     de_cells = parse_cells(de_text, comment_token_for_path(de_path))
     en_cells = parse_cells(en_text, comment_token_for_path(en_path))
     de_rows = watermark_rows(de_cells)
@@ -4195,6 +4362,10 @@ def _record_watermark(
 
     commit = get_git_info(de_path.parent).get("commit")
     cache.set_synced_commit(str(de_path), str(en_path), commit if isinstance(commit, str) else None)
+    # Issue #501: stamp the representation the rows were recorded in, so a later run
+    # whose computed representation differs demotes to a git-HEAD cold-start. Default
+    # "plain" keeps a non-companion pair's marker explicit (and the pre-#501 behavior).
+    cache.set_representation(str(de_path), str(en_path), representation or "plain")
 
 
 def record_baseline(cache: SyncWatermarkCache, de_path: Path, en_path: Path) -> None:
