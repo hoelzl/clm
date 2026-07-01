@@ -454,8 +454,18 @@ class FileState:
     ends_with_newline: bool = True
 
     @classmethod
-    def load(cls, path: Path) -> FileState:
-        text = path.read_text(encoding="utf-8")
+    def load(cls, path: Path, *, text: str | None = None) -> FileState:
+        """Load a deck's :class:`FileState` from ``path`` (or from ``text``).
+
+        ``text`` (Issue #501) overrides the disk read with an in-memory
+        representation — the companion-inlined projection of a separated-voiceover
+        deck — so the apply engine mutates and renders the SAME text the plan's
+        positions index. ``path`` is still used for the comment token and as the
+        write target. When ``text`` is ``None`` (the default) the file is read from
+        disk exactly as before.
+        """
+        if text is None:
+            text = path.read_text(encoding="utf-8")
         preamble, cells = split_cells(text, comment_token_for_path(path))
         return cls(
             path=path,

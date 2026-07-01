@@ -500,6 +500,10 @@ class _RecordingCache:
         # Pair-level metadata (Fix D), not a per-cell channel — nothing to record here.
         pass
 
+    def set_representation(self, de_path, en_path, representation):  # noqa: ANN001
+        # Pair-level marker (Issue #501), not a per-cell channel — nothing to record.
+        pass
+
 
 class TestChannelCoverage:
     def test_every_recorded_channel_has_a_named_check(self, tmp_path: Path):
