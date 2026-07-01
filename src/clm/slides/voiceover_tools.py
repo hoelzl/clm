@@ -20,6 +20,7 @@ from collections import defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Final, cast
 
 from clm.infrastructure.utils.path_utils import atomic_write_all
 from clm.notebooks.slide_parser import comment_token_for_path, parse_cell_header, parse_cells
@@ -183,6 +184,111 @@ class InlineResult:
         return "; ".join(parts)
 
 
+@dataclass
+class InlineTextResult:
+    """Pure result of inlining companion voiceover into slide *text* (issue #501).
+
+    The IO-free core of :func:`inline_voiceover`: given the slide and companion
+    texts it computes where each companion cell lands, the resulting inlined slide
+    text, and the text of any cell that could *not* be placed — but writes
+    nothing. The ``clm slides sync`` companion projection (design
+    ``sync-separated-voiceover-companions.md``) feeds ``inlined_text`` to the
+    plan engine in read *and* apply modes, so both observe the identical
+    representation; ``unmatched`` is the total-transform hook — an unresolvable
+    ``for_slide`` becomes a blocking plan issue rather than dropped narration.
+    """
+
+    inlined_text: str
+    """Slide text with every *matched* companion cell inlined at its anchor.
+    Equals the input ``slide_text`` when nothing matched."""
+    remaining_companion_text: str
+    """Reconstructed text of the unmatched companion cells (``""`` when none).
+    These keep their ``for_slide`` / ``vo_anchor`` so a retry can re-place them."""
+    unmatched: list[_RawCell] = field(default_factory=list)
+    placements: list[Placement] = field(default_factory=list)
+    cells_inlined: int = 0
+    relocated_cells: int = 0
+    had_companion_cells: bool = False
+
+    @property
+    def unmatched_cells(self) -> int:
+        return len(self.unmatched)
+
+
+def inline_pair_text(
+    slide_text: str,
+    companion_text: str,
+    comment_token: str = "#",
+) -> InlineTextResult:
+    """Inline companion voiceover cells into slide *text*, IO-free (issue #501).
+
+    The pure core of :func:`inline_voiceover`. Companion cells are parsed fresh
+    from ``companion_text`` (so the in-place header rewrite below never leaks into
+    a caller's model — the projection is safe to run in a non-mutating ``sync``
+    read mode), placed after their owning slide via ``for_slide`` / ``vo_anchor``
+    (:func:`_plan_insertion`), and stripped of the author-only ``for_slide`` /
+    ``vo_anchor`` attributes so an inlined cell looks exactly like a hand-authored
+    inline voiceover cell. A cell whose anchor no longer resolves is returned
+    *unmatched* (never dropped, never dumped at EOF), mirroring
+    :func:`inline_voiceover`'s retain-in-companion contract.
+
+    Returns an :class:`InlineTextResult`; writes nothing.
+    """
+    result = InlineTextResult(inlined_text=slide_text, remaining_companion_text="")
+
+    preamble, slide_cells = _split_raw_cells(slide_text, comment_token)
+    _, companion_cells = _split_raw_cells(companion_text, comment_token)
+    if not companion_cells:
+        return result
+    result.had_companion_cells = True
+
+    id_map = _build_slide_id_to_cell_map(slide_cells)
+
+    insertions: list[tuple[int, _RawCell]] = []  # (insert_after_idx, cell), companion order
+    unmatched: list[_RawCell] = []
+    for vo_cell in companion_cells:
+        anchor = _parse_vo_anchor(vo_cell.header)
+        for_slide = vo_cell.metadata.for_slide
+        insert_after, status = _plan_insertion(slide_cells, vo_cell, id_map)
+
+        if insert_after is None:
+            result.placements.append(Placement(for_slide, anchor, "unmatched"))
+            unmatched.append(vo_cell)
+            continue
+
+        if status == "relocated":
+            result.relocated_cells += 1
+        anchor_cell = slide_cells[insert_after]
+        result.placements.append(
+            Placement(
+                for_slide,
+                anchor,
+                status,
+                after_line=anchor_cell.line_number,
+                after_header=anchor_cell.header,
+            )
+        )
+        insertions.append((insert_after, vo_cell))
+
+    # Strip the author-only companion attributes from the cells about to land
+    # back in the slide. Unmatched cells are NOT stripped: they keep their
+    # for_slide / vo_anchor so a retry after fixing the slide_id can re-place them.
+    for _, vo_cell in insertions:
+        clean_header = _strip_author_attrs(vo_cell.header)
+        vo_cell.lines[0] = clean_header
+        vo_cell.metadata = parse_cell_header(clean_header)
+
+    result.unmatched = unmatched
+    result.cells_inlined = len(insertions)
+
+    if insertions:
+        new_cells = _apply_insertions(slide_cells, insertions, [])
+        result.inlined_text = _reconstruct(preamble, new_cells)
+    if unmatched:
+        result.remaining_companion_text = _reconstruct("", unmatched)
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Companion file naming
 # ---------------------------------------------------------------------------
@@ -341,7 +447,22 @@ def _is_extractable_cell(cell: _RawCell, *, include_notes: bool) -> bool:
     return include_notes and "notes" in tags
 
 
-def _ensure_slide_ids(cells: list[_RawCell], path: Path, text: str) -> int:
+# Sentinel for :func:`_ensure_slide_ids` / :func:`_plan_extraction_from_text`:
+# "derive the twin ids from disk" (the historical default). Distinct from
+# ``twin_ids=None`` (a real value meaning "no twin", used for bilingual files),
+# so the sync companion projection (issue #501) can thread the already-loaded
+# in-memory twin ids without a re-read while callers that pass nothing keep the
+# exact disk-reading behavior.
+_TWIN_FROM_DISK: Final = object()
+
+
+def _ensure_slide_ids(
+    cells: list[_RawCell],
+    path: Path,
+    text: str,
+    *,
+    twin_ids: list[str | None] | None | object = _TWIN_FROM_DISK,
+) -> int:
     """Auto-generate slide_ids for content cells that lack them.
 
     Delegates to the shared assign-ids engine (via the normalizer adapter).
@@ -357,11 +478,19 @@ def _ensure_slide_ids(cells: list[_RawCell], path: Path, text: str) -> int:
     is read-only; when it has no id for a slide, minting falls back to the
     normal EN-derived slug. Bilingual files (no ``.de`` / ``.en`` suffix) pass
     ``twin_ids=None`` and are unaffected.
+
+    ``twin_ids`` defaults to :data:`_TWIN_FROM_DISK`, deriving the twin's ids from
+    disk exactly as before. The sync companion projection (issue #501) threads
+    the already-loaded in-memory twin ids instead, so a text-only extract mints
+    twin-consistently with no hidden disk read.
     """
     from clm.slides.assign_ids import _twin_ids_for
 
-    twin_ids = _twin_ids_for(path, text)
-    changes, _refusals = _apply_slide_ids(cells, path, twin_ids=twin_ids)
+    if twin_ids is _TWIN_FROM_DISK:
+        resolved = _twin_ids_for(path, text)
+    else:
+        resolved = cast("list[str | None] | None", twin_ids)
+    changes, _refusals = _apply_slide_ids(cells, path, twin_ids=resolved)
     return len(changes)
 
 
@@ -485,12 +614,35 @@ def _plan_extraction(
     """Compute the extraction result and the ``(path, text)`` writes WITHOUT
     writing anything.
 
-    Returns ``(result, writes)``. ``writes`` is empty when there are no
-    voiceover cells (nothing to do) or under ``dry_run`` — so an empty list
-    means "do not touch disk". The caller owns the existing-companion force
-    check and the actual commit (via :func:`atomic_write_all`), so the paired
-    path can guard *both* companions up front and write all four files in one
-    atomic batch.
+    Reads ``path`` and delegates to :func:`_plan_extraction_from_text` (issue
+    #501); see there for the returned shape. The caller owns the
+    existing-companion force check and the actual commit (via
+    :func:`atomic_write_all`), so the paired path can guard *both* companions up
+    front and write all four files in one atomic batch.
+    """
+    text = path.read_text(encoding="utf-8")
+    return _plan_extraction_from_text(
+        text, path, dry_run=dry_run, layout=layout, include_notes=include_notes
+    )
+
+
+def _plan_extraction_from_text(
+    text: str,
+    path: Path,
+    *,
+    dry_run: bool,
+    layout: str | None = None,
+    include_notes: bool = False,
+    twin_ids: list[str | None] | None | object = _TWIN_FROM_DISK,
+) -> tuple[ExtractionResult, list[tuple[Path, str]]]:
+    """IO-free core of :func:`_plan_extraction` (issue #501): compute the
+    extraction from slide *text* rather than reading ``path``.
+
+    Returns ``(result, writes)``. ``writes`` is empty when there are no voiceover
+    cells (nothing to do) or under ``dry_run`` — so an empty list means "do not
+    touch disk". ``path`` is used only for the companion location, the comment
+    token, and twin-aware id minting; ``twin_ids`` threads the sync projection's
+    in-memory twin ids (default: derive from disk, the historical behavior).
 
     ``layout`` selects the companion write target (see
     :func:`expected_companion`): ``"subdir"`` / ``"sibling"`` force a location,
@@ -503,7 +655,6 @@ def _plan_extraction(
         dry_run=dry_run,
     )
 
-    text = path.read_text(encoding="utf-8")
     preamble, cells = _split_raw_cells(text, comment_token_for_path(path))
 
     # Indices of the cells we will pull into the companion (voiceover by
@@ -517,7 +668,7 @@ def _plan_extraction(
 
     # Auto-generate slide_ids for cells that need them (twin-aware on a split
     # half so a per-language extract keeps de_id == en_id; see _ensure_slide_ids).
-    result.ids_generated = _ensure_slide_ids(cells, path, text)
+    result.ids_generated = _ensure_slide_ids(cells, path, text, twin_ids=twin_ids)
 
     # Build companion cells with for_slide metadata (owning slide) and a
     # vo_anchor (immediate predecessor, occurrence-qualified) so inline can
@@ -783,6 +934,43 @@ def extract_voiceover_pair(
     return PairedExtractionResult(
         results=[de_result, en_result], ids_minted=ids_minted, dry_run=dry_run
     )
+
+
+def extract_pair_text(
+    inlined_text: str,
+    deck_path: Path,
+    *,
+    layout: str | None = None,
+    include_notes: bool = False,
+    twin_ids: list[str | None] | None | object = _TWIN_FROM_DISK,
+) -> tuple[str, str, Path]:
+    """Inverse of :func:`inline_pair_text` (issue #501): split inlined deck *text*
+    into ``(deck_text, companion_text, companion_path)`` without touching disk.
+
+    The IO-free core of ``extract`` for the ``clm slides sync`` companion
+    projection (design ``sync-separated-voiceover-companions.md``): after the plan
+    engine reconciles the inlined deck, this re-homes the voiceover into the
+    companion — **voiceover-only by default** (notes stay inline, per the issue
+    #501 maintainer decision) — and returns the two texts for the caller to commit
+    atomically alongside the twin's. ``companion_text`` is ``""`` when the deck has
+    no voiceover to extract. ``deck_path`` is used only for the companion location,
+    the comment token, and (twin-aware) id minting; pass ``twin_ids`` to keep the
+    mint pure and twin-consistent without a disk read.
+    """
+    _result, writes = _plan_extraction_from_text(
+        inlined_text,
+        deck_path,
+        dry_run=False,
+        layout=layout,
+        include_notes=include_notes,
+        twin_ids=twin_ids,
+    )
+    comp = expected_companion(deck_path, layout=layout)
+    if not writes:
+        return inlined_text, "", comp
+    deck_text = next(t for p, t in writes if p == deck_path)
+    companion_text = next(t for p, t in writes if p == comp)
+    return deck_text, companion_text, comp
 
 
 # ---------------------------------------------------------------------------
@@ -1236,80 +1424,36 @@ def inline_voiceover(
     slide_text = path.read_text(encoding="utf-8")
     companion_text = comp.read_text(encoding="utf-8")
 
-    comment_token = comment_token_for_path(path)
-    preamble, slide_cells = _split_raw_cells(slide_text, comment_token)
-    _, companion_cells = _split_raw_cells(companion_text, comment_token)
+    # Pure core (issue #501): plan the placement and compute the inlined slide
+    # text plus any unmatched remainder without touching disk. The IO — the
+    # writes / unlink / empty-dir cleanup below — stays here.
+    core = inline_pair_text(slide_text, companion_text, comment_token_for_path(path))
 
-    if not companion_cells:
+    result.relocated_cells = core.relocated_cells
+    result.unmatched_cells = core.unmatched_cells
+    result.placements = core.placements
+    result.cells_inlined = core.cells_inlined
+
+    if not core.had_companion_cells:
         return result
-
-    # Build slide_id → cell index map for the slide file
-    id_map = _build_slide_id_to_cell_map(slide_cells)
-
-    # Plan each companion cell against the (edited) slide file. Voiceovers
-    # are anchored to their original predecessor cell so they return to
-    # their exact position; if that anchor is gone we fall back to the end
-    # of the owning slide group and record a relocation.
-    insertions: list[tuple[int, _RawCell]] = []  # (insert_after_idx, cell) in companion order
-    unmatched: list[_RawCell] = []
-
-    for vo_cell in companion_cells:
-        anchor = _parse_vo_anchor(vo_cell.header)
-        for_slide = vo_cell.metadata.for_slide
-        insert_after, status = _plan_insertion(slide_cells, vo_cell, id_map)
-
-        if insert_after is None:
-            result.unmatched_cells += 1
-            result.placements.append(Placement(for_slide, anchor, "unmatched"))
-            unmatched.append(vo_cell)
-            continue
-
-        if status == "relocated":
-            result.relocated_cells += 1
-        anchor_cell = slide_cells[insert_after]
-        result.placements.append(
-            Placement(
-                for_slide,
-                anchor,
-                status,
-                after_line=anchor_cell.line_number,
-                after_header=anchor_cell.header,
-            )
-        )
-        insertions.append((insert_after, vo_cell))
-
-    # Strip the author-only companion attributes from the cells about to land
-    # back in the slide file. Unmatched cells are NOT stripped: they stay in
-    # the companion (below) and must keep their for_slide / vo_anchor so a
-    # retry after fixing the slide_id can re-place them.
-    for _, vo_cell in insertions:
-        clean_header = _strip_author_attrs(vo_cell.header)
-        vo_cell.lines[0] = clean_header
-        vo_cell.metadata = parse_cell_header(clean_header)
-
-    result.cells_inlined = len(insertions)
-
-    if not insertions and not unmatched:
+    if core.cells_inlined == 0 and core.unmatched_cells == 0:
         return result
 
     if not dry_run:
-        if insertions:
+        if core.cells_inlined:
             # Inline only the cells we could place. Unmatched cells are *not*
-            # dumped at the end of the slide (stripped of for_slide/anchor);
-            # they are preserved in the companion below so they stay placeable.
-            new_cells = _apply_insertions(slide_cells, insertions, [])
-            new_text = _reconstruct(preamble, new_cells)
-            path.write_text(new_text, encoding="utf-8", newline="\n")
+            # dumped at the end of the slide; they are preserved in the
+            # companion below so they stay placeable.
+            path.write_text(core.inlined_text, encoding="utf-8", newline="\n")
 
-        if unmatched:
+        if core.unmatched:
             # Some companion cells could not be matched — typically the owning
             # slide_id was renamed. Rather than destroying the clean,
             # anchor-bearing companion (the recoverable source of truth) and
             # stranding the narration at EOF, rewrite the companion to the
             # unmatched remainder and keep it. The author fixes the slide_id(s)
             # and re-runs inline to place them.
-            remaining_text = _reconstruct("", unmatched)
-            comp.write_text(remaining_text, encoding="utf-8", newline="\n")
+            comp.write_text(core.remaining_companion_text, encoding="utf-8", newline="\n")
             result.companion_retained = True
         else:
             comp.unlink()
