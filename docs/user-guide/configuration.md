@@ -152,10 +152,21 @@ Environment variables override configuration files.
 
 ### Paths
 
+These are the env-var forms of the global `--cache-db-path` / `--jobs-db-path` /
+`--telemetry-db-path` options, honored by every command (an explicit path is
+respected verbatim — it is not re-anchored to the project root the way the bare
+default is):
+
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `CLM_PATHS__CACHE_DB_PATH` | Cache database path | `clm_cache.db` |
-| `CLM_PATHS__JOBS_DB_PATH` | Job queue database path | `clm_jobs.db` |
+| `CLM_CACHE_DB_PATH` | Cache database path (persistent — processed-file results) | `clm_cache.db` |
+| `CLM_JOBS_DB_PATH` | Job-queue database path (jobs, workers, events). Ephemeral: only needs to survive a single `clm` run, so it can live on a RAM disk (e.g. `Z:\clm_jobs.db`) to spare the SSD. **Direct worker mode only** — a host RAM-disk path is not visible inside Docker workers. | `clm_jobs.db` |
+| `CLM_TELEMETRY_DB_PATH` | Execution-telemetry database (per-deck kernel crash/flake history). Kept separate from the cache DB so clearing the cache never erases the history. | `clm_telemetry.db` next to the cache DB |
+
+> The older `CLM_PATHS__CACHE_DB_PATH` / `CLM_PATHS__JOBS_DB_PATH` variables feed
+> the `[paths]` config model surfaced by `clm config`, **not** the database a
+> command actually opens. Use the `CLM_*_DB_PATH` forms above to relocate the
+> databases a build/status/monitor run uses.
 
 ### External Tools
 

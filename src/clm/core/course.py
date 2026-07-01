@@ -60,6 +60,7 @@ from clm.infrastructure.utils.path_utils import (
 
 if TYPE_CHECKING:
     from clm.core.cross_references import CrossReferenceResolver
+    from clm.core.topic_resolver import TopicMatch
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,12 @@ class Course(NotebookMixin):
     sections: list[Section] = Factory(list)
     dir_groups: list[DirGroup] = Factory(list)
     _topic_path_map: dict[str, Path] = Factory(dict)
+    # Full filesystem topic map (every occurrence per topic ID), cached from
+    # the single ``build_topic_map`` scan in ``_build_topic_map``. Reused by
+    # module-bound resolution so a spec that binds many topics to a module
+    # does not re-walk the whole ``slides/`` tree once per bound topic — that
+    # rescan dominated "Loading course specification" on large courses.
+    _full_topic_map: "dict[str, list[TopicMatch]]" = field(factory=dict, init=False, repr=False)
     output_languages: list[str] | None = None
     output_kinds: list[str] | None = None
     fallback_execute: bool = False
@@ -1007,12 +1014,18 @@ class Course(NotebookMixin):
 
         # Module-bound resolution. Use the full topic map (includes every
         # occurrence) so we can pick the one in the requested module even
-        # when other modules share the topic ID.
+        # when other modules share the topic ID. The map is scanned once in
+        # ``_build_topic_map`` (called at the start of ``_build_sections``,
+        # before any topic is resolved) and cached here; re-walking the
+        # ``slides/`` tree per bound topic used to dominate course loading.
         from clm.core.topic_resolver import build_topic_map, matches_for_binding
 
-        slides_dir = self.course_root / "slides"
-        full_map = build_topic_map(slides_dir)
-        candidates = matches_for_binding(full_map, topic_id, module)
+        if not self._full_topic_map:
+            # Defensive: only when resolution is driven without the normal
+            # ``_build_topic_map`` priming (e.g. a direct unit-test call).
+            slides_dir = self.course_root / "slides"
+            self._full_topic_map = build_topic_map(slides_dir)
+        candidates = matches_for_binding(self._full_topic_map, topic_id, module)
 
         if not candidates:
             logger.error(f"Topic not found: {topic_id} in module {module}")
@@ -1093,6 +1106,10 @@ class Course(NotebookMixin):
                     (first_path, str(dup.path)) for dup in matches[1:]
                 ]
             self._topic_path_map[topic_id] = matches[0].path
+
+        # Retain the full (all-occurrences) map so module-bound resolution can
+        # filter it in memory instead of re-scanning the filesystem per topic.
+        self._full_topic_map = full_map
 
         logger.debug(f"Built topic map with {len(self._topic_path_map)} topics")
 
