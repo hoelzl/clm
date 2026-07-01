@@ -1450,8 +1450,9 @@ def _check_split_companion_for_slide_parity(de_path: Path, en_path: Path) -> lis
             suggestion=(
                 "Each narration cell's for_slide is the slide_id of the slide it "
                 "narrates; the DE/EN companions must cover the same set of slides, "
-                "or one language ships with missing voiceover. Add the missing "
-                "narration, or route the change through `clm slides sync`."
+                "or one language ships with missing voiceover. Run `clm slides sync` "
+                "to propagate the missing narration to the other language (it now "
+                "reconciles separated voiceover companions), or add it by hand."
             ),
         )
     ]

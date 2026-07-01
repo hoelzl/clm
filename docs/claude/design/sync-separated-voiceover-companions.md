@@ -1,6 +1,7 @@
 # Reconciling separated voiceover companions in `clm slides sync`
 
-**Status:** proposed · **Issue:** [#501](https://github.com/hoelzl/clm/issues/501) ·
+**Status:** implemented (Phases 0–3; PRs #510 / #513 / #515 / this one) ·
+**Issue:** [#501](https://github.com/hoelzl/clm/issues/501) ·
 **Date:** 2026-07-01 · **Supersedes:** the "N-file atomicity — design not started"
 deferral in `split-voiceover-hardening.md` §3 #6 / §12 #7.
 
