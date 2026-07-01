@@ -176,6 +176,61 @@ class TestDirectWorkerExecutor:
         assert executor.worker_info[worker_id]["pid"] == 12345
 
     @patch("subprocess.Popen")
+    def test_start_worker_injects_external_tools_from_config(
+        self, mock_popen, db_path, workspace_path
+    ):
+        """Config-resolved PlantUML/Draw.io paths reach the Direct worker env.
+
+        This is the Phase 2 wiring: a ``clm.toml`` ``[external_tools]`` value
+        (folded into ``get_config().external_tools`` — proven by the config
+        tests) must be injected into the worker environment, not just a host
+        ``PLANTUML_JAR`` env var.
+        """
+        mock_process = MagicMock()
+        mock_process.pid = 12345
+        mock_popen.return_value = mock_process
+
+        fake_cfg = MagicMock()
+        fake_cfg.external_tools.plantuml_jar = "/cfg/plantuml.jar"
+        fake_cfg.external_tools.drawio_executable = "/cfg/drawio"
+
+        executor = DirectWorkerExecutor(db_path=db_path, workspace_path=workspace_path)
+        config = WorkerConfig(worker_type="plantuml", count=1, execution_mode="direct")
+
+        with patch("clm.infrastructure.config.get_config", return_value=fake_cfg):
+            executor.start_worker("plantuml", 0, config)
+
+        env = mock_popen.call_args[1]["env"]
+        assert env["PLANTUML_JAR"] == "/cfg/plantuml.jar"
+        assert env["DRAWIO_EXECUTABLE"] == "/cfg/drawio"
+
+    @patch("subprocess.Popen")
+    def test_start_worker_omits_unset_external_tools(
+        self, mock_popen, db_path, workspace_path, monkeypatch
+    ):
+        """When neither env nor config sets the tool paths, nothing is injected."""
+        monkeypatch.delenv("PLANTUML_JAR", raising=False)
+        monkeypatch.delenv("DRAWIO_EXECUTABLE", raising=False)
+
+        mock_process = MagicMock()
+        mock_process.pid = 12345
+        mock_popen.return_value = mock_process
+
+        fake_cfg = MagicMock()
+        fake_cfg.external_tools.plantuml_jar = ""
+        fake_cfg.external_tools.drawio_executable = ""
+
+        executor = DirectWorkerExecutor(db_path=db_path, workspace_path=workspace_path)
+        config = WorkerConfig(worker_type="plantuml", count=1, execution_mode="direct")
+
+        with patch("clm.infrastructure.config.get_config", return_value=fake_cfg):
+            executor.start_worker("plantuml", 0, config)
+
+        env = mock_popen.call_args[1]["env"]
+        assert "PLANTUML_JAR" not in env
+        assert "DRAWIO_EXECUTABLE" not in env
+
+    @patch("subprocess.Popen")
     def test_start_worker_unknown_type(self, mock_popen, db_path, workspace_path):
         """Test that starting unknown worker type fails."""
         executor = DirectWorkerExecutor(db_path=db_path, workspace_path=workspace_path)
