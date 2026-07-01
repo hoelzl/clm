@@ -173,6 +173,50 @@ class DatabaseManager:
         db_result = cursor.fetchone()
         return pickle.loads(db_result[0]) if db_result else None
 
+    def diagnose_cache_miss(
+        self, file_path: str, content_hash: str, output_metadata: str
+    ) -> tuple[str, str | None]:
+        """Explain why :meth:`get_result` missed for this exact key.
+
+        Read-only diagnostic used only by ``clm build --explain-rebuilds`` —
+        it runs one extra indexed ``SELECT`` and is never called on a normal
+        build, so the default hot path pays nothing. Returns a
+        ``(reason, detail)`` pair:
+
+        - ``("no_entry", None)`` — no ``processed_files`` row exists for this
+          file at all (never built against this cache, or the cache was
+          cleared).
+        - ``("hash_mismatch", stored_hash)`` — a row exists for this file and
+          this same output target, but its content hash differs (the source
+          text or one of its dependencies changed). ``stored_hash`` is the
+          newest stored hash for that target.
+        - ``("metadata_mismatch", None)`` — rows exist for this file but none
+          for this output target (a new kind/format/language, or the
+          output-metadata key drifted).
+
+        The caller only reaches this when ``get_result(file_path,
+        content_hash, output_metadata)`` returned ``None``, so a row matching
+        all three cannot exist; the ``hash_mismatch`` branch therefore always
+        reports a genuinely different stored hash.
+        """
+        assert self.conn is not None, "Database connection not initialized"
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT content_hash, output_metadata FROM processed_files
+            WHERE file_path = ?
+            ORDER BY created_at DESC
+            """,
+            (str(file_path),),
+        )
+        rows = cursor.fetchall()
+        if not rows:
+            return ("no_entry", None)
+        for row_hash, row_meta in rows:
+            if row_meta == output_metadata:
+                return ("hash_mismatch", row_hash)
+        return ("metadata_mismatch", None)
+
     def remove_old_entries(self, file_path: str) -> None:
         assert self.conn is not None, "Database connection not initialized"
         cursor = self.conn.cursor()

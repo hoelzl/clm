@@ -157,6 +157,30 @@ def _resolve_fail_on_missing_xref(cli_value: bool | None, resolved_http_replay_m
     return resolved_http_replay_mode == "replay"
 
 
+def _resolve_explain_rebuilds(cli_flag: bool) -> bool:
+    """Resolve whether ``clm build`` logs why each deck missed the cache.
+
+    Off by default: the extra per-miss probe only runs when explicitly
+    requested, so a normal build pays nothing. Enabled by the
+    ``--explain-rebuilds`` flag or ``CLM_EXPLAIN_REBUILDS={1,true,yes}``.
+    """
+    import os
+
+    if cli_flag:
+        return True
+    env_value = os.environ.get("CLM_EXPLAIN_REBUILDS")
+    if env_value is not None:
+        normalized = env_value.strip().lower()
+        if normalized in ("1", "true", "yes"):
+            return True
+        if normalized in ("0", "false", "no"):
+            return False
+        raise click.UsageError(
+            f"Invalid CLM_EXPLAIN_REBUILDS={env_value!r}. Valid values: 1/true/yes/0/false/no."
+        )
+    return False
+
+
 def _resolve_write_provenance_manifest(
     *, requested: bool, is_snapshot: bool, verify_against_dir: Path | None
 ) -> bool:
@@ -480,6 +504,14 @@ class BuildConfig:
     # builds at the entry point — it embeds a build timestamp and source commit,
     # so it must never enter a byte-reproducibility baseline.
     write_provenance_manifest: bool = True
+
+    # Log why each deck missed the cache and is being rebuilt (issue: many
+    # decks rebuilding whose sources should not change). Resolved from
+    # ``--explain-rebuilds`` / ``CLM_EXPLAIN_REBUILDS`` by
+    # ``_resolve_explain_rebuilds``. Off by default so the per-miss diagnostic
+    # probe never runs on a normal build; the reasons go to the log file and,
+    # under ``--output-mode verbose``, to the console.
+    explain_rebuilds: bool = False
 
 
 def _should_emit_provenance_manifest(summary: BuildSummary | None, config: BuildConfig) -> bool:
@@ -1638,6 +1670,7 @@ async def main_build(
     telemetry_db_path: Path | None = None,
     no_html: bool = False,
     no_diagrams: bool = False,
+    explain_rebuilds: bool = False,
 ) -> BuildSummary | None:
     """Main orchestration function for course building.
 
@@ -1763,6 +1796,7 @@ async def main_build(
         fail_on_missing_xref=fail_on_missing_xref,
         write_provenance_manifest=provenance_manifest,
         telemetry_db_path=telemetry_db_path,
+        explain_rebuilds=explain_rebuilds,
     )
 
     # Create output formatter early to show startup messages
@@ -1850,6 +1884,7 @@ async def main_build(
                 ignore_db=config.ignore_cache,
                 build_reporter=build_reporter,
                 incremental=config.incremental,
+                explain_rebuilds=config.explain_rebuilds,
                 image_registry=course.image_registry,
                 telemetry_store=telemetry_store,
             )
@@ -2247,6 +2282,18 @@ async def main_build(
     ),
 )
 @click.option(
+    "--explain-rebuilds",
+    is_flag=True,
+    default=False,
+    help=(
+        "Log why each deck missed the build cache and is being rebuilt "
+        "(no cache entry / content hash changed / new output target). Off "
+        "by default so a normal build pays nothing; reasons go to the log "
+        "file, and to the console under --output-mode verbose. Also "
+        "settable via CLM_EXPLAIN_REBUILDS={1,true,yes,0,false,no}."
+    ),
+)
+@click.option(
     "--image-mode",
     type=click.Choice(["duplicated", "shared"], case_sensitive=False),
     default="duplicated",
@@ -2326,6 +2373,7 @@ def build(
     http_replay,
     fail_on_error,
     fail_on_missing_xref,
+    explain_rebuilds,
     image_mode,
     image_format,
     inline_images,
@@ -2422,6 +2470,7 @@ def build(
     resolved_fail_on_missing_xref = _resolve_fail_on_missing_xref(
         fail_on_missing_xref, resolved_http_replay_mode
     )
+    resolved_explain_rebuilds = _resolve_explain_rebuilds(explain_rebuilds)
 
     effective_provenance_manifest = _resolve_write_provenance_manifest(
         requested=provenance_manifest,
@@ -2471,6 +2520,7 @@ def build(
             telemetry_db_path=ctx.obj.get("TELEMETRY_DB_PATH") if ctx.obj else None,
             no_html=no_html,
             no_diagrams=no_diagrams,
+            explain_rebuilds=resolved_explain_rebuilds,
         )
     )
 

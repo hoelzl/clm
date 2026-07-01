@@ -70,6 +70,12 @@ class SqliteBackend(LocalOpsBackend):
     skip_worker_check: bool = False  # Skip worker availability check (for unit tests only)
     build_reporter: Optional["BuildReporter"] = None  # Optional build reporter for improved output
     incremental: bool = False  # Incremental mode: skip writing cached results
+    # When True (``clm build --explain-rebuilds`` / ``CLM_EXPLAIN_REBUILDS``),
+    # a ``processed_files`` cache MISS runs one extra read-only probe to log
+    # *why* the deck is being rebuilt (no cache entry / content-hash changed /
+    # new output target). Off by default so a normal build pays nothing — the
+    # miss path stays a single boolean check.
+    explain_rebuilds: bool = False
     # Persistent per-deck execution telemetry (issue #330). When set, the
     # backend records retry/crash telemetry the notebook worker attached to
     # its results (completed jobs: ``execution_telemetry`` warnings; failed
@@ -299,6 +305,14 @@ class SqliteBackend(LocalOpsBackend):
 
                 return True
 
+            # Cache MISS on the stored result. When rebuild explanation is
+            # enabled, run one extra read-only probe to log why. Only for a
+            # genuine ``result is None`` miss — the ``result`` truthy but
+            # replay-gated case (Recording HTML producer) already logs its
+            # own reason in ``_can_replay_from_cache``.
+            if self.explain_rebuilds and result is None:
+                self._explain_rebuild(payload, job_type)
+
         if service_name not in service_to_job_type:
             raise ValueError(f"Unknown service: {service_name}")
 
@@ -503,6 +517,50 @@ class SqliteBackend(LocalOpsBackend):
             )
             return False
         return True
+
+    def _explain_rebuild(self, payload: Payload, job_type: str) -> None:
+        """Log *why* a ``processed_files`` cache miss forces a rebuild.
+
+        Only invoked when :attr:`explain_rebuilds` is set, so the extra
+        read-only probe never runs on a normal build. Touches ``db_manager``,
+        so — like the cache-hit replay path above — it must stay on the
+        event-loop thread (``db_manager`` is not thread-safe). Purely
+        informational: it never changes the rebuild decision, and a probe
+        failure degrades to a debug line rather than disturbing the build.
+        """
+        if self.db_manager is None:
+            return
+        try:
+            reason_code, detail = self.db_manager.diagnose_cache_miss(
+                payload.input_file, payload.content_hash(), payload.output_metadata()
+            )
+        except Exception as e:  # never let a diagnostic break the build
+            logger.debug(f"Could not diagnose rebuild reason for {payload.input_file}: {e}")
+            return
+
+        reason = self._format_rebuild_reason(reason_code, detail, payload)
+        logger.info(f"Rebuilding {payload.input_file} -> {payload.output_file}: {reason}")
+        if self.build_reporter:
+            self.build_reporter.report_rebuild_reason(str(payload.input_file), job_type, reason)
+
+    @staticmethod
+    def _format_rebuild_reason(reason_code: str, detail: str | None, payload: Payload) -> str:
+        """Turn a ``diagnose_cache_miss`` verdict into a human-readable reason."""
+        if reason_code == "no_entry":
+            return "no cache entry for this file (never built with this cache, or cache cleared)"
+        if reason_code == "hash_mismatch":
+            stored = (detail or "")[:12]
+            current = payload.content_hash()[:12]
+            return (
+                f"content hash changed — source text or a dependency differs "
+                f"(cached {stored}…, now {current}…)"
+            )
+        if reason_code == "metadata_mismatch":
+            return (
+                f"no cache entry for this output target "
+                f"({payload.output_metadata()}) — new kind/format/language"
+            )
+        return "cache miss"
 
     def _cleanup_dead_worker_jobs(self) -> int:
         """Check for jobs stuck in 'processing' with dead workers and reset them.
