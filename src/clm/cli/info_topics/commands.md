@@ -855,19 +855,23 @@ decks. Module-bound `<topic>`/`<section>` references resolve in their module;
 unbound topic IDs that match multiple modules are first-occurrence-wins (matching
 the build), and the shadowed matches are reported in `--json` output.
 
-Plain output is one deck path per line. `--json` adds a per-topic `topics`
-array that pairs each topic's `section` with its `slide_files` — the
+Plain output is one deck path per line. `--json` emits a **flat** `topics`
+array (**not** grouped by section): each entry pairs a `section` *string field*
+with that topic's `resolved_module` and `slide_files` — the
 **section → source-`.py`-deck mapping** in one call, so there is no need to
 parse the spec XML or grep `slides/` to learn which files back each section.
-(`clm export outline <spec> --format json` returns the same mapping grouped by
-section and annotated with deck titles.)
+Top-level keys are `spec`, `slides_dir`, `lang`, `deck_count`, `decks`,
+`topics`, `unresolved` — there is **no** `sections` key, and `section` is a
+string field on each topic, not a grouping key. For the same mapping already
+nested as `sections[].topics[]` and annotated with deck titles, use
+`clm export outline <spec> --format json`.
 
 | Option | Description |
 |--------|-------------|
 | `--all-specs DIR` | Resolve the union shipping set across every `*.xml` spec in `DIR`, annotating each deck with the spec(s) that reference it. Mutually exclusive with `SPEC_FILE`. |
 | `--lang de\|en\|both` | Keep only decks serving this language. Bilingual decks (no `.de`/`.en` tag) serve both, so they always survive the filter; split halves are kept only for their own language. Default: `both`. |
 | `--data-dir DIR` | Course data directory (contains `slides/`). Default: inferred from the spec file (its grandparent). |
-| `--json` | Output as JSON: a per-topic `topics` array (each with `section`, `resolved_module`, `slide_files`), plus unresolved topics and first-occurrence-shadowed duplicates. |
+| `--json` | Output as JSON: a **flat** `topics` array (not grouped by section) — each entry is `{topic_id, section, resolved_module, slide_files, shadowed, …}` with `section` as a plain string field. Top-level keys: `spec`, `slides_dir`, `lang`, `deck_count`, `decks`, `topics`, `unresolved` (no `sections` key). For the section-grouped shape use `clm export outline --format json`. |
 
 Topic references that resolve to no directory on disk are reported as a warning
 (stderr) but do not fail the command.

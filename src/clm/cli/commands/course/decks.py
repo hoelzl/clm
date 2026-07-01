@@ -79,10 +79,13 @@ def _rel(path: Path, base: Path) -> str:
     "--json",
     "as_json",
     is_flag=True,
-    help="Output as JSON. Adds a per-topic ``topics`` array — each entry "
-    "carries its ``section``, ``resolved_module`` and ``slide_files`` (the "
-    "source ``.py`` decks), plus first-occurrence-shadowed duplicates and "
-    "unresolved topics. This is the section -> source-file mapping in one call.",
+    help="Output as JSON. Emits a FLAT ``topics`` array (NOT grouped by "
+    "section): each entry is ``{topic_id, section, resolved_module, "
+    "slide_files, shadowed, …}`` where ``section`` is a plain string field. "
+    "Top-level keys: ``spec``, ``slides_dir``, ``lang``, ``deck_count``, "
+    "``decks``, ``topics``, ``unresolved`` — there is no ``sections`` key. For "
+    "the section-grouped shape (``sections[].topics[]`` with deck titles) use "
+    "``clm export outline --format json``.",
 )
 def spec_decks_cmd(
     spec_file: Path | None,
@@ -99,11 +102,16 @@ def spec_decks_cmd(
     This is the reliable way to compute a spec's "shipping set" — do not guess
     from deck filenames.
 
-    Plain output is one deck path per line. ``--json`` additionally emits a
-    per-topic ``topics`` array keyed by ``section`` with each topic's
-    ``slide_files`` — i.e. the **section -> source-``.py``-deck mapping**, with
-    no need to parse the spec XML by hand. (``clm export outline --format json``
-    gives the same mapping grouped by section and annotated with deck titles.)
+    Plain output is one deck path per line. ``--json`` emits a **flat**
+    ``topics`` array (**not** grouped by section): each entry carries a
+    ``section`` *string field* alongside that topic's ``resolved_module`` and
+    ``slide_files`` (the source ``.py`` decks) — the **section ->
+    source-``.py``-deck mapping** in one call, with no need to parse the spec
+    XML by hand. Top-level keys are ``spec``, ``slides_dir``, ``lang``,
+    ``deck_count``, ``decks``, ``topics``, ``unresolved`` (there is **no**
+    ``sections`` key). For the same mapping already nested as
+    ``sections[].topics[]`` and annotated with deck titles, use
+    ``clm export outline <spec> --format json``.
 
     \b
     Examples:
