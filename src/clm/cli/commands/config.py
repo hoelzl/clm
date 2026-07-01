@@ -8,6 +8,17 @@ from pathlib import Path
 import click
 
 
+def _obj_str(obj: dict, key: str) -> str | None:
+    """Stringify a resolved ``ctx.obj`` path, or ``None`` when absent.
+
+    ``ctx.obj`` carries the effective DB paths resolved by the top-level CLI
+    callback; it is populated in normal invocation but may be empty when
+    ``config show`` is driven in isolation (e.g. a unit test).
+    """
+    val = obj.get(key)
+    return str(val) if val is not None else None
+
+
 @click.group()
 def config():
     """Manage CLM configuration files."""
@@ -67,35 +78,69 @@ def config_init(location, force):
 
 
 @config.command(name="show")
+@click.option(
+    "--json",
+    "as_json",
+    is_flag=True,
+    help="Emit the effective configuration as JSON (machine-readable).",
+)
 @click.pass_context
-def config_show(ctx):
+def config_show(ctx, as_json):
     """Show current configuration values.
 
     This command displays the current configuration, including values
-    from all sources (config files and environment variables).
+    from all sources (config files and environment variables). Pass
+    ``--json`` for a machine-readable dump of the effective configuration.
     """
     from clm.infrastructure.config import get_config
 
     cfg = get_config(reload=True)
-
-    click.echo("Current CLM Configuration:")
-    click.echo("=" * 60)
 
     # Effective database paths — the ones a build/status/monitor run actually
     # opens. These come from the global CLI options (resolved in clm.cli.main,
     # honoring --cache-db-path / CLM_CACHE_DB_PATH and project-root anchoring),
     # not from the config file / ClmConfig, so show what was resolved here.
     obj = ctx.obj or {}
-    click.echo("\n[Databases]  (effective paths for this invocation)")
-    click.echo(f"  cache_db_path: {obj.get('CACHE_DB_PATH', '(default: clm_cache.db)')}")
-    click.echo(f"  jobs_db_path: {obj.get('JOBS_DB_PATH', '(default: clm_jobs.db)')}")
-    click.echo(
-        f"  telemetry_db_path: {obj.get('TELEMETRY_DB_PATH', '(default: next to cache DB)')}"
-    )
+    databases = {
+        "cache_db_path": _obj_str(obj, "CACHE_DB_PATH"),
+        "jobs_db_path": _obj_str(obj, "JOBS_DB_PATH"),
+        "telemetry_db_path": _obj_str(obj, "TELEMETRY_DB_PATH"),
+    }
 
     from clm.infrastructure.llm.cache import CACHE_DB_NAME, describe_cache_dir
 
     llm = describe_cache_dir()
+
+    if as_json:
+        import json
+
+        # ``model_dump`` carries every ClmConfig section (external_tools,
+        # logging, jupyter, workers, retention, worker_management, git, llm,
+        # recordings) as the effective env/file/default-folded values; the
+        # databases and LLM-cache location are resolved outside ClmConfig, so
+        # they are added explicitly.
+        payload = {
+            "databases": databases,
+            "llm_cache": {
+                "dir": str(llm.path),
+                "source": llm.source,
+                "db": str(llm.path / CACHE_DB_NAME),
+            },
+            **cfg.model_dump(mode="json"),
+        }
+        click.echo(json.dumps(payload, indent=2, default=str))
+        return
+
+    click.echo("Current CLM Configuration:")
+    click.echo("=" * 60)
+
+    click.echo("\n[Databases]  (effective paths for this invocation)")
+    click.echo(f"  cache_db_path: {databases['cache_db_path'] or '(default: clm_cache.db)'}")
+    click.echo(f"  jobs_db_path: {databases['jobs_db_path'] or '(default: clm_jobs.db)'}")
+    click.echo(
+        f"  telemetry_db_path: {databases['telemetry_db_path'] or '(default: next to cache DB)'}"
+    )
+
     click.echo("\n[LLM Cache]  (summaries, titles, translations, sync watermarks)")
     click.echo(f"  llm_cache_dir: {llm.path}  (from {llm.source})")
     click.echo(f"  llm_cache_db: {llm.path / CACHE_DB_NAME}")
@@ -119,7 +164,6 @@ def config_show(ctx):
     click.echo("\n[Workers]")
     click.echo(f"  worker_type: {cfg.workers.worker_type or '(not set)'}")
     click.echo(f"  worker_id: {cfg.workers.worker_id or '(not set)'}")
-    click.echo(f"  use_sqlite_queue: {cfg.workers.use_sqlite_queue}")
 
 
 @config.command(name="locate")

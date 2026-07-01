@@ -12,8 +12,31 @@ from clm.infrastructure.config import (
     find_config_files,
     get_config,
     get_config_file_locations,
+    resolve_setting,
     write_example_config,
 )
+
+
+class TestResolveSetting:
+    """Test the shared CLI > env/file > default resolver."""
+
+    def test_cli_value_wins(self):
+        assert resolve_setting("cli", config_value="cfg", default="def") == "cli"
+
+    def test_config_value_when_no_cli(self):
+        assert resolve_setting(None, config_value="cfg", default="def") == "cfg"
+
+    def test_default_when_nothing_set(self):
+        assert resolve_setting(None, config_value=None, default="def") == "def"
+
+    def test_empty_string_config_is_unset(self):
+        # ClmConfig string fields default to "" to mean "not configured".
+        assert resolve_setting(None, config_value="", default="def") == "def"
+
+    def test_falsy_non_empty_cli_value_still_wins(self):
+        # 0 / False are explicit CLI choices, not "unset" (only None is unset).
+        assert resolve_setting(0, config_value=5, default=9) == 0
+        assert resolve_setting(False, config_value=True, default=True) is False
 
 
 class TestConfigDefaults:
@@ -56,13 +79,12 @@ class TestConfigDefaults:
     def test_default_workers(self, monkeypatch):
         """Test default workers configuration."""
         # Clear any environment variables that might interfere
-        for var in ["WORKER_TYPE", "WORKER_ID", "USE_SQLITE_QUEUE"]:
+        for var in ["WORKER_TYPE", "WORKER_ID"]:
             monkeypatch.delenv(var, raising=False)
 
         config = ClmConfig()
         assert config.workers.worker_type == ""
         assert config.workers.worker_id == ""
-        assert config.workers.use_sqlite_queue is True
 
 
 class TestEnvironmentVariables:
@@ -406,7 +428,6 @@ plantuml_jar = "/project/plantuml.jar"
             "DRAWIO_EXECUTABLE",
             "WORKER_TYPE",
             "WORKER_ID",
-            "USE_SQLITE_QUEUE",
             "JINJA_LINE_STATEMENT_PREFIX",
             "JINJA_TEMPLATES_PATH",
             "LOG_CELL_PROCESSING",
@@ -437,7 +458,6 @@ log_cell_processing = true
 [workers]
 worker_type = "plantuml"
 worker_id = "test-worker-1"
-use_sqlite_queue = false
 """)
 
         monkeypatch.chdir(tmp_path)
@@ -457,7 +477,6 @@ use_sqlite_queue = false
         assert config.jupyter.log_cell_processing is True
         assert config.workers.worker_type == "plantuml"
         assert config.workers.worker_id == "test-worker-1"
-        assert config.workers.use_sqlite_queue is False
 
 
 class TestWorkerManagementConfig:

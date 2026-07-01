@@ -168,7 +168,6 @@ class TestDirectWorkerExecutor:
         assert env["WORKER_ID"] == worker_id
         assert env["DB_PATH"] == str(db_path.absolute())
         assert env["WORKSPACE_PATH"] == str(workspace_path.absolute())
-        assert env["USE_SQLITE_QUEUE"] == "true"
 
         # Verify worker is tracked
         assert worker_id in executor.processes

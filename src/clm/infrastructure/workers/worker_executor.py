@@ -634,7 +634,6 @@ class DirectWorkerExecutor(WorkerExecutor):
                     "DB_PATH": str(self.db_path.absolute()),
                     "WORKSPACE_PATH": str(self.workspace_path.absolute()),
                     "LOG_LEVEL": self.log_level,
-                    "USE_SQLITE_QUEUE": "true",
                 }
             )
 

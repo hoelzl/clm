@@ -67,7 +67,6 @@ class LegacyEnvSettingsSource(PydanticBaseSettingsSource):
         ("jupyter", "log_cell_processing"): "LOG_CELL_PROCESSING",
         ("workers", "worker_type"): "WORKER_TYPE",
         ("workers", "worker_id"): "WORKER_ID",
-        ("workers", "use_sqlite_queue"): "USE_SQLITE_QUEUE",
     }
 
     def get_field_value(self, field: FieldInfo, field_name: str) -> tuple[Any, str, bool]:
@@ -93,7 +92,7 @@ class LegacyEnvSettingsSource(PydanticBaseSettingsSource):
 
                 # Set the value, converting booleans
                 final_key = field_path[-1]
-                if env_var in ("LOG_CELL_PROCESSING", "USE_SQLITE_QUEUE"):
+                if env_var == "LOG_CELL_PROCESSING":
                     # Boolean conversion
                     current[final_key] = env_value.lower() in ("true", "1", "yes")
                 else:
@@ -262,11 +261,6 @@ class WorkersConfig(BaseModel):
     worker_id: str = Field(
         default="",
         description="Worker ID",
-    )
-
-    use_sqlite_queue: bool = Field(
-        default=True,
-        description="Use SQLite queue for job orchestration",
     )
 
 
@@ -983,6 +977,33 @@ def get_config(reload: bool = False) -> ClmConfig:
     return _config
 
 
+def resolve_setting(cli_value: Any, *, config_value: Any, default: Any) -> Any:
+    """Fold the CLI/env/config-file/default channels into one effective value.
+
+    The standard CLM precedence is ``CLI flag > environment variable > config
+    file > built-in default``. ``config_value`` is expected to be
+    ``get_config().<section>.<field>`` — ``ClmConfig`` already folds the
+    environment-variable and config-file tiers internally, so this helper only
+    layers an explicit CLI value on top and falls back to ``default`` when
+    nothing is set.
+
+    A ``cli_value`` of ``None`` means "flag not supplied" (Click options that
+    participate should default to ``None``, not the built-in default, so
+    "unset" is distinguishable). An empty-string ``config_value`` is treated as
+    unset — several ``ClmConfig`` string fields default to ``""`` to mean "not
+    configured".
+
+    This is the shared seam the config-unification work routes every
+    multi-channel setting through (see
+    ``docs/proposals/config-cli-precedence-unification.md``).
+    """
+    if cli_value is not None:
+        return cli_value
+    if config_value is not None and config_value != "":
+        return config_value
+    return default
+
+
 def create_example_config() -> str:
     """Create an example configuration file content.
 
@@ -1102,10 +1123,6 @@ worker_type = ""
 # Environment variable: WORKER_ID (no CLM_ prefix)
 # Usually set automatically, not needed in config file
 worker_id = ""
-
-# Use SQLite queue for job orchestration
-# Environment variable: USE_SQLITE_QUEUE (no CLM_ prefix)
-use_sqlite_queue = true
 
 [worker_management]
 # Worker lifecycle management configuration
