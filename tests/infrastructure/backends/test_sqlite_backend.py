@@ -1409,11 +1409,12 @@ async def test_explain_rebuild_reports_formatted_reason(temp_db, temp_workspace,
 
         db_manager.diagnose_cache_miss.assert_called_once()
         reporter.report_rebuild_reason.assert_called_once()
-        file_arg, job_arg, reason_arg = reporter.report_rebuild_reason.call_args.args
+        file_arg, job_arg, reason_arg, code_arg = reporter.report_rebuild_reason.call_args.args
         assert file_arg == payload.input_file
         assert job_arg == "notebook"
         assert "content hash changed" in reason_arg
         assert "0123456789ab" in reason_arg
+        assert code_arg == "hash_mismatch"  # machine code for summary aggregation
     finally:
         await backend.shutdown()
 
@@ -1441,6 +1442,7 @@ async def test_explain_rebuilds_triggers_on_cache_miss(temp_db, temp_workspace, 
         db_manager.diagnose_cache_miss.assert_called_once()
         reporter.report_rebuild_reason.assert_called_once()
         assert "no cache entry" in reporter.report_rebuild_reason.call_args.args[2]
+        assert reporter.report_rebuild_reason.call_args.args[3] == "no_entry"
         # The reason is diagnostic only — the job is still submitted.
         assert len(backend.active_jobs) == 1
     finally:

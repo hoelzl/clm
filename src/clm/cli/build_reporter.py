@@ -79,6 +79,12 @@ class BuildReporter:
         # source file via :meth:`report_flaky_file`.
         self._flaky_files: dict[str, FlakyFileInfo] = {}
 
+        # Cache-miss reason counts under ``--explain-rebuilds`` (issue: many
+        # decks rebuilding whose sources should not change), keyed by reason
+        # code. Stays empty unless :meth:`report_rebuild_reason` is called,
+        # which only happens when the flag is on.
+        self._rebuild_reasons: dict[str, int] = {}
+
     def start_build(
         self,
         course_name: str,
@@ -124,6 +130,9 @@ class BuildReporter:
 
         # Reset flake tracking
         self._flaky_files = {}
+
+        # Reset rebuild-reason tracking
+        self._rebuild_reasons = {}
 
         self.formatter.show_build_start(course_name, total_files, output_dirs)
 
@@ -211,20 +220,27 @@ class BuildReporter:
             cached=self._stage_cached_count,
         )
 
-    def report_rebuild_reason(self, file_path: str, job_type: str, reason: str) -> None:
+    def report_rebuild_reason(
+        self, file_path: str, job_type: str, reason: str, reason_code: str
+    ) -> None:
         """Explain why a file is being rebuilt instead of served from cache.
 
         Only called under ``clm build --explain-rebuilds``. Purely
         informational: it does not touch the progress/cache counters (the
         normal :meth:`report_file_started` path still tracks the submitted
-        job). The reason is also written to the log file by the backend; this
-        surfaces it on the console in verbose output modes.
+        job). Records the ``reason_code`` for the aggregated per-reason
+        breakdown in the final :class:`BuildSummary`, and surfaces the
+        human-readable ``reason`` on the console in verbose output modes (the
+        backend also writes it to the log file).
 
         Args:
             file_path: Path to the source file being rebuilt
             job_type: Type of job (notebook, plantuml, drawio)
             reason: Human-readable explanation of the cache miss
+            reason_code: Machine reason code for aggregation (``hash_mismatch``
+                / ``no_entry`` / ``metadata_mismatch``)
         """
+        self._rebuild_reasons[reason_code] = self._rebuild_reasons.get(reason_code, 0) + 1
         self.formatter.show_rebuild_reason(file_path, job_type, reason)
 
     def report_file_started(self, file_path: str, job_type: str, job_id: int | None = None) -> None:
@@ -461,6 +477,7 @@ class BuildReporter:
             output_conflicts=list(self._output_conflicts),
             output_large_file_collision_count=self._output_large_file_collision_count,
             flaky_files=sorted(self._flaky_files.values(), key=lambda f: f.file_path),
+            rebuild_reasons=dict(self._rebuild_reasons),
             timed_out=self._timed_out,
         )
 
