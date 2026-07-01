@@ -7,6 +7,9 @@ Welcome to the introduction.
 # %% [markdown] lang="en" tags=["subslide"] slide_id="details"
 # ## Details
 
+# %% [markdown] lang="en" tags=["voiceover"]
+One more note about the details.
+
 # %% [markdown] lang="en"
 A localized note without an identifier.
 
