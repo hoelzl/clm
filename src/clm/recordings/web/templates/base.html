@@ -190,6 +190,44 @@
         _hydrateAllChipStrips();
     });
 
+    /* Collapsible-section persistence.
+       Each <details data-section-collapse> remembers its open/closed
+       state in sessionStorage keyed by section name, so the frequent
+       SSE-driven #lectures-dynamic swaps (which re-render every section
+       as `open`) don't undo a section the user collapsed. Restoration
+       runs synchronously inside htmx:afterSwap — before the browser
+       paints the freshly-swapped subtree — so a collapsed section never
+       flashes open. `toggle` doesn't bubble, so the listener is attached
+       in the capture phase to catch it from the document root. */
+    var SECTION_STORAGE_PREFIX = 'clm:sectionOpen:';
+    function _restoreSectionCollapse(scope) {
+        var root = scope || document;
+        root.querySelectorAll('[data-section-collapse]').forEach(function (d) {
+            var key = d.getAttribute('data-section-key');
+            if (!key) return;
+            var stored;
+            try { stored = sessionStorage.getItem(SECTION_STORAGE_PREFIX + key); }
+            catch (e) { stored = null; }
+            if (stored === 'closed') d.removeAttribute('open');
+            else if (stored === 'open') d.setAttribute('open', '');
+        });
+    }
+    document.addEventListener('toggle', function (evt) {
+        var d = evt.target;
+        if (!d || !d.hasAttribute || !d.hasAttribute('data-section-collapse')) return;
+        var key = d.getAttribute('data-section-key');
+        if (!key) return;
+        try {
+            sessionStorage.setItem(SECTION_STORAGE_PREFIX + key, d.open ? 'open' : 'closed');
+        } catch (e) { /* private browsing / quota exceeded — ignore */ }
+    }, true);
+    document.addEventListener('htmx:afterSwap', function () {
+        _restoreSectionCollapse();
+    });
+    document.addEventListener('DOMContentLoaded', function () {
+        _restoreSectionCollapse();
+    });
+
     /* Elapsed-time ticker.
        Any element carrying `data-elapsed-base-seconds="N"` is anchored
        on render (we capture Date.now() at anchor time) and re-rendered

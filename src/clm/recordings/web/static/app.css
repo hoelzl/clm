@@ -292,6 +292,30 @@ footer {
     flex-wrap: wrap;
 }
 
+/* Collapsible section cards (lectures page). The section header is a
+   <summary>; hide the native disclosure triangle and use a chevron that
+   rotates with the open state. Collapse state is persisted client-side
+   (see base.html) so SSE-driven swaps don't reset it. */
+.section-summary {
+    cursor: pointer;
+    list-style: none;      /* Firefox: drop the default marker */
+    user-select: none;
+}
+.section-summary::-webkit-details-marker { display: none; }  /* Safari/Chrome */
+.section-chevron {
+    display: inline-block;
+    color: var(--c-fg-muted);
+    font-size: var(--t-sm);
+    transform: rotate(-90deg);   /* collapsed: chevron points right */
+    transition: transform 0.15s ease;
+}
+.section-card[open] > .section-summary .section-chevron {
+    transform: rotate(0deg);     /* expanded: chevron points down */
+}
+/* The header keeps its bottom margin only while the section is open, so a
+   collapsed card is a tight single-line summary. */
+.section-card:not([open]) > .section-summary { margin-bottom: 0; }
+
 /* Buttons */
 .btn {
     display: inline-flex;
