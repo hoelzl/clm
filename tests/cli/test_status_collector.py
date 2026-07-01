@@ -372,21 +372,10 @@ class TestStatusCollector:
         would leave `clm status` / `clm monitor` opening a different, idle DB.
         """
         monkeypatch.chdir(tmp_path)
-        monkeypatch.delenv("CLM_DB_PATH", raising=False)
         # The anchored default exists, but the env var must take precedence.
         (tmp_path / "clm_jobs.db").touch()
         target = tmp_path / "ram" / "jobs.db"
         monkeypatch.setenv("CLM_JOBS_DB_PATH", str(target))
-
-        collector = StatusCollector()
-        assert collector.db_path == target
-
-    def test_default_db_path_legacy_env_still_works(self, tmp_path, monkeypatch):
-        """The legacy CLM_DB_PATH still works when CLM_JOBS_DB_PATH is unset."""
-        monkeypatch.chdir(tmp_path)
-        monkeypatch.delenv("CLM_JOBS_DB_PATH", raising=False)
-        target = tmp_path / "legacy.db"
-        monkeypatch.setenv("CLM_DB_PATH", str(target))
 
         collector = StatusCollector()
         assert collector.db_path == target

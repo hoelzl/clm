@@ -9,8 +9,10 @@ their `CLM_*_DB_PATH` environment variables (resolved once in `clm.cli.main`).
 A parallel `[paths]` config section / `CLM_PATHS__*` family used to shadow them
 but never actually relocated the database a command opened — it has been
 removed. The `USE_SQLITE_QUEUE` flag is also gone: SQLite is the only job queue,
-so the switch had no effect. These are **hard cuts** — the old names no longer
-work.
+so the switch had no effect. Several env vars that duplicated a nested config
+key (`CLM_DB_PATH`, the `CLM_E2E_*` progress knobs) were renamed to their
+canonical `CLM_<SECTION>__<KEY>` form. These are **hard cuts** — the old names
+no longer work.
 
 | Removed variable | Replacement | Notes |
 |---|---|---|
@@ -19,9 +21,14 @@ work.
 | `CLM_PATHS__WORKSPACE_PATH` | *(none)* | Was vestigial; the worker workspace is derived from the output dir. |
 | `[paths]` section in `clm.toml` / `.clm/config.toml` | CLI options / `CLM_*_DB_PATH` | An old `[paths]` block still loads (it is ignored). |
 | `USE_SQLITE_QUEUE` | *(none)* | SQLite is the only queue; the flag had no consumer. |
+| `CLM_DB_PATH` | `CLM_JOBS_DB_PATH` | The legacy jobs-DB auto-detect for `clm status` / `monitor`; the `CLM_JOBS_DB_PATH` form is now the only one. |
+| `CLM_E2E_PROGRESS_INTERVAL` | `CLM_PROGRESS__UPDATE_INTERVAL` | Build progress-log interval (drives real builds, not just E2E tests). Also `[progress] update_interval` in `clm.toml`. |
+| `CLM_E2E_LONG_JOB_THRESHOLD` | `CLM_PROGRESS__LONG_JOB_THRESHOLD` | `[progress] long_job_threshold`. |
+| `CLM_E2E_SHOW_WORKER_DETAILS` | `CLM_PROGRESS__SHOW_WORKER_DETAILS` | `[progress] show_worker_details`. |
 
-`CLM_DB_PATH` (the legacy jobs-DB auto-detect used by `clm status` / `monitor`)
-still works but is superseded by `CLM_JOBS_DB_PATH`, which now takes precedence.
+The worker-count cap keeps its friendly short env var: **`CLM_MAX_WORKERS`** is
+the canonical spelling (the env form of the `[worker_management] max_workers_cap`
+config field). Nothing there was removed.
 
 Run `clm config show` (or `clm config show --json`) to see the **effective**
 database paths and configuration for the current invocation.

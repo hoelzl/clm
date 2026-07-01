@@ -152,9 +152,11 @@ def config_show(ctx, as_json):
     click.echo("\n[Logging]")
     click.echo(f"  log_level: {cfg.logging.log_level}")
     click.echo(f"  enable_test_logging: {cfg.logging.enable_test_logging}")
-    click.echo(f"  e2e_progress_interval: {cfg.logging.testing.e2e_progress_interval}")
-    click.echo(f"  e2e_long_job_threshold: {cfg.logging.testing.e2e_long_job_threshold}")
-    click.echo(f"  e2e_show_worker_details: {cfg.logging.testing.e2e_show_worker_details}")
+
+    click.echo("\n[Progress]")
+    click.echo(f"  update_interval: {cfg.progress.update_interval}")
+    click.echo(f"  long_job_threshold: {cfg.progress.long_job_threshold}")
+    click.echo(f"  show_worker_details: {cfg.progress.show_worker_details}")
 
     click.echo("\n[Jupyter]")
     click.echo(f"  jinja_line_statement_prefix: {cfg.jupyter.jinja_line_statement_prefix}")

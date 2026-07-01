@@ -376,30 +376,21 @@ class TestSetStage:
 
 
 class TestGetProgressTrackerConfig:
-    """Test get_progress_tracker_config function."""
+    """get_progress_tracker_config reads [logging.testing] via the config system."""
 
-    def test_default_config(self):
-        """Should return default config."""
-        config = get_progress_tracker_config()
+    def test_reads_from_config(self):
+        """Values come from ClmConfig.progress (env/file precedence lives there)."""
+        fake_cfg = MagicMock()
+        fake_cfg.progress.update_interval = 7  # int → coerced to float
+        fake_cfg.progress.long_job_threshold = 42
+        fake_cfg.progress.show_worker_details = False
 
-        assert config["progress_interval"] == 5.0
-        assert config["long_job_threshold"] == 30.0
-        assert config["show_worker_details"] is True
-
-    def test_config_from_environment(self):
-        """Should read from environment variables."""
-        with patch.dict(
-            os.environ,
-            {
-                "CLM_E2E_PROGRESS_INTERVAL": "10.0",
-                "CLM_E2E_LONG_JOB_THRESHOLD": "60.0",
-                "CLM_E2E_SHOW_WORKER_DETAILS": "false",
-            },
-        ):
+        with patch("clm.infrastructure.config.get_config", return_value=fake_cfg):
             config = get_progress_tracker_config()
 
-        assert config["progress_interval"] == 10.0
-        assert config["long_job_threshold"] == 60.0
+        assert config["progress_interval"] == 7.0
+        assert isinstance(config["progress_interval"], float)
+        assert config["long_job_threshold"] == 42.0
         assert config["show_worker_details"] is False
 
 

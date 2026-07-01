@@ -13,8 +13,8 @@ To enable logging for any test:
 Environment variables:
 - CLM_LOG_LEVEL: Set log level (DEBUG, INFO, WARNING, ERROR) - default: INFO
 - CLM_ENABLE_TEST_LOGGING: Enable logging for all tests (set to any value)
-- CLM_E2E_PROGRESS_INTERVAL: Seconds between progress updates (default: 5)
-- CLM_E2E_LONG_JOB_THRESHOLD: Seconds before warning about long jobs (default: 30)
+- CLM_PROGRESS__UPDATE_INTERVAL: Seconds between progress updates (default: 5)
+- CLM_PROGRESS__LONG_JOB_THRESHOLD: Seconds before warning about long jobs (default: 30)
 """
 
 # ---------------------------------------------------------------------------
@@ -703,8 +703,8 @@ def configure_test_logging(request):
 
     Environment variables:
     - CLM_LOG_LEVEL: Log level (DEBUG, INFO, WARNING, ERROR) - default: INFO
-    - CLM_E2E_PROGRESS_INTERVAL: Seconds between progress updates (default: 5)
-    - CLM_E2E_LONG_JOB_THRESHOLD: Seconds before warning about long jobs (default: 30)
+    - CLM_LOGGING__TESTING__E2E_PROGRESS_INTERVAL: Seconds between progress updates (default: 5)
+    - CLM_LOGGING__TESTING__E2E_LONG_JOB_THRESHOLD: Seconds before warning about long jobs (default: 30)
     """
     # Get log level from environment, default to INFO
     log_level_name = os.environ.get("CLM_LOG_LEVEL", "INFO").upper()

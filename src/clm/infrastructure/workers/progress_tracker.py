@@ -5,7 +5,6 @@ for monitoring job execution during e2e tests and production workloads.
 """
 
 import logging
-import os
 import threading
 from collections import defaultdict
 from collections.abc import Callable
@@ -370,14 +369,22 @@ class ProgressTracker:
 
 
 def get_progress_tracker_config() -> dict:
-    """Get progress tracker configuration from environment variables.
+    """Progress-tracker configuration, resolved through the config system.
+
+    Reads the ``[progress]`` config section (env: ``CLM_PROGRESS__*``, or a
+    ``clm.toml`` block), which ``ClmConfig`` already folds over env > file >
+    default. Phase 5 of the config/CLI/env unification replaced the raw
+    ``CLM_E2E_*`` reads; the defaults match the values the build had always
+    used (5s / 30s / show-details), so build behaviour is unchanged.
 
     Returns:
-        Dictionary with configuration values
+        Dictionary with configuration values.
     """
+    from clm.infrastructure.config import get_config
+
+    progress = get_config().progress
     return {
-        "progress_interval": float(os.environ.get("CLM_E2E_PROGRESS_INTERVAL", "5.0")),
-        "long_job_threshold": float(os.environ.get("CLM_E2E_LONG_JOB_THRESHOLD", "30.0")),
-        "show_worker_details": os.environ.get("CLM_E2E_SHOW_WORKER_DETAILS", "true").lower()
-        in ("true", "1", "yes"),
+        "progress_interval": float(progress.update_interval),
+        "long_job_threshold": float(progress.long_job_threshold),
+        "show_worker_details": progress.show_worker_details,
     }
