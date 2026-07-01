@@ -492,3 +492,15 @@ line and asserts no working-tree re-read.
   by the walker. A known ceiling for a future native-awareness v2.
 - **Mixed decks stay unsupported by design;** the refusal is the safety net.
   Reopening partial splits reopens obstacle 2 (provenance) as a separate design.
+- **A *standing* one-sided narration propagates, it is not suppressed (Phase 1
+  finding).** §5.5 anticipated that with the inlined baseline a *standing* one-sided
+  asymmetry would classify as `in_sync` and only a *genuinely new* narrative would
+  propagate. In practice the engine's narrative-add detection is a **current-state
+  pairing gap**, not a baseline delta: a narrative present on one half with no twin
+  on the other proposes `add …/voiceover [translation pending]` regardless of the
+  baseline — and it already does so today for a *standing one-sided inline*
+  voiceover (a committed, unchanged deck). Phase 1 therefore keeps companion
+  behavior **identical to inline** (propagate, the core ask) rather than adding a
+  baseline-aware suppression that would diverge companion from inline and change
+  shipped inline behavior. Suppressing a deliberately-permanent one-sided asymmetry
+  is a separate, engine-wide narrative-baseline refinement (deferred).

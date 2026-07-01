@@ -43,6 +43,7 @@ from clm.notebooks.slide_parser import Cell, CellMetadata, comment_token_for_pat
 from clm.slides.anchor_primitives import narrative_anchor_token, owning_group
 from clm.slides.pairing import TITLE_SLIDE_ID, is_title_macro_cell
 from clm.slides.raw_cells import RawCell, split_cells
+from clm.slides.sync_companion import ProjectedPair, Representation, project_pair
 from clm.slides.sync_writeback import (
     cell_content_hash,
     construct_of,
@@ -50,6 +51,7 @@ from clm.slides.sync_writeback import (
     role_of,
     row_anchor,
 )
+from clm.slides.voiceover_tools import COMPANION_SUBDIR, companion_name, inline_pair_text
 
 if TYPE_CHECKING:
     from clm.infrastructure.llm.cache import SyncWatermarkCache
@@ -347,6 +349,18 @@ class SyncPlan:
     # suppressed this run (slides byte-stable since a recorded confirmation, so not
     # re-litigated). 0 when no ledger was supplied.
     ledger_skipped: int = 0
+    # Issue #501: this pair involves a separated voiceover companion (separated /
+    # mixed / cross-language — never plain). The 2-file deck engine must not *write*
+    # it: apply refuses (the ≤4-file companion write-back is Phase 2), while the read
+    # modes still surface the drift. Distinct from ``projected_*_text``: a mixed /
+    # cross-language pair is companion-aware but *not* projected (it refuses).
+    companion_aware: bool = False
+    # Issue #501: the companion-inlined working-tree text the plan was built over,
+    # per language — set only for a projected (separated) pair, ``None`` otherwise.
+    # Excerpt resolvers and ``verify`` read this instead of the voiceover-free
+    # working tree, whose positions would not match the plan's inlined-cell indices.
+    projected_de_text: str | None = None
+    projected_en_text: str | None = None
 
     @property
     def has_baseline(self) -> bool:
@@ -1684,7 +1698,42 @@ def _bundle_from_texts(
     )
 
 
-def _bundle_from_git_ref(de_path: Path, en_path: Path, ref: str = "HEAD") -> BaselineBundle | None:
+def _companion_text_at_ref(deck_path: Path, ref: str) -> str | None:
+    """Companion text for ``deck_path`` at git ``ref``, or ``None`` (Issue #501).
+
+    Mirrors :func:`clm.slides.voiceover_tools.resolve_companion`'s on-disk
+    precedence — the relocated ``voiceover/<name>`` before the sibling ``<name>`` —
+    but reads from git so the *baseline* is projected the same way the working tree
+    is (design §5.3). ``None`` when git is unavailable or the companion did not
+    exist at ``ref`` (then the baseline is the raw deck, correctly modeling
+    "voiceover added since ``ref``" as a real add).
+    """
+    name = companion_name(deck_path)
+    for rel in (f"{COMPANION_SUBDIR}/{name}", name):
+        text = _git_show(deck_path.parent, f"{ref}:./{rel}")
+        if text is not None:
+            return text
+    return None
+
+
+def _inline_companion_at_ref(deck_path: Path, deck_text: str, ref: str) -> str:
+    """Project ``deck_text`` by inlining its companion at ``ref`` (Issue #501).
+
+    The identity when no companion exists at ``ref``. The baseline projection must
+    use the SAME inline transform as the working tree so a standing companion reads
+    as in-sync and only a genuine drift diffs (design §5.3, the keystone).
+    """
+    companion_text = _companion_text_at_ref(deck_path, ref)
+    if companion_text is None:
+        return deck_text
+    return inline_pair_text(
+        deck_text, companion_text, comment_token_for_path(deck_path)
+    ).inlined_text
+
+
+def _bundle_from_git_ref(
+    de_path: Path, en_path: Path, ref: str = "HEAD", *, project_companion: bool = False
+) -> BaselineBundle | None:
     """The pair at git ``ref`` re-derived as a :class:`BaselineBundle`, or ``None``.
 
     Reads each half's text at ``ref`` (rename-following, via :func:`_git_ref_text`)
@@ -1695,6 +1744,10 @@ def _bundle_from_git_ref(de_path: Path, en_path: Path, ref: str = "HEAD") -> Bas
     ``source`` is ``"git-head"`` for the default HEAD fallback (unchanged) and
     ``"git:<ref>"`` for an explicit ``--baseline`` ref (e.g. ``git:HEAD^`` for the
     committed-rename auto-follow), so the plan headline names the baseline used.
+
+    ``project_companion`` (Issue #501) inlines each half's voiceover companion at
+    ``ref`` before deriving the bundle, so a separated-voiceover deck's baseline is
+    projected identically to its working tree.
     """
     if _lang_for_path(de_path) is None or _lang_for_path(en_path) is None:
         return None
@@ -1702,6 +1755,9 @@ def _bundle_from_git_ref(de_path: Path, en_path: Path, ref: str = "HEAD") -> Bas
     en_text = _git_ref_text(en_path, ref)
     if de_text is None or en_text is None:
         return None
+    if project_companion:
+        de_text = _inline_companion_at_ref(de_path, de_text, ref)
+        en_text = _inline_companion_at_ref(en_path, en_text, ref)
     return _bundle_from_texts(
         de_text,
         en_text,
@@ -1711,12 +1767,34 @@ def _bundle_from_git_ref(de_path: Path, en_path: Path, ref: str = "HEAD") -> Bas
     )
 
 
+def _companion_text_at_old_path(cwd: Path, root: Path, old_deck: Path, ref: str) -> str | None:
+    """Companion text for a deck's *pre-rename* ``old_deck`` path at ``ref`` (Issue #501).
+
+    The rename-recovery analogue of :func:`_companion_text_at_ref`: addresses the
+    companion repo-root-relative (subdir before sibling) so it resolves at ``ref``
+    even though the old directory is gone from the work tree, running git from the
+    deck's current ``cwd``. ``None`` when the companion is absent at ``ref``.
+    """
+    try:
+        base_rel = old_deck.resolve().relative_to(root)
+    except ValueError:
+        return None
+    name = companion_name(old_deck)
+    for rel in (base_rel.parent / COMPANION_SUBDIR / name, base_rel.parent / name):
+        text = _git_show(cwd, f"{ref}:{rel.as_posix()}")
+        if text is not None:
+            return text
+    return None
+
+
 def _bundle_from_explicit_paths(
     de_path: Path,
     en_path: Path,
     old_de: Path,
     old_en: Path,
     ref: str,
+    *,
+    project_companion: bool = False,
 ) -> BaselineBundle | None:
     """Baseline bundle read from explicit *old* paths at ``ref`` (rename recovery).
 
@@ -1728,6 +1806,9 @@ def _bundle_from_explicit_paths(
     untracked-rename recovery (epic #440). ``None`` when git is unavailable, a deck's
     language cannot be inferred, the old paths lie outside the repo, or the old text
     is absent at ``ref``.
+
+    ``project_companion`` (Issue #501) inlines each half's voiceover companion at the
+    *old* path so the rename-recovered baseline is projected like the working tree.
     """
     if _lang_for_path(de_path) is None or _lang_for_path(en_path) is None:
         return None
@@ -1746,6 +1827,17 @@ def _bundle_from_explicit_paths(
     en_text = _git_show(cwd, f"{ref}:{en_rel}")
     if de_text is None or en_text is None:
         return None
+    if project_companion:
+        de_comp = _companion_text_at_old_path(cwd, root, old_de, ref)
+        if de_comp is not None:
+            de_text = inline_pair_text(
+                de_text, de_comp, comment_token_for_path(de_path)
+            ).inlined_text
+        en_comp = _companion_text_at_old_path(cwd, root, old_en, ref)
+        if en_comp is not None:
+            en_text = inline_pair_text(
+                en_text, en_comp, comment_token_for_path(en_path)
+            ).inlined_text
     return _bundle_from_texts(
         de_text,
         en_text,
@@ -1755,10 +1847,12 @@ def _bundle_from_explicit_paths(
     )
 
 
-def _bundle_from_git_head(de_path: Path, en_path: Path) -> BaselineBundle | None:
+def _bundle_from_git_head(
+    de_path: Path, en_path: Path, *, project_companion: bool = False
+) -> BaselineBundle | None:
     """The committed (HEAD) pair as a :class:`BaselineBundle` — wrapper over
     :func:`_bundle_from_git_ref`."""
-    return _bundle_from_git_ref(de_path, en_path, "HEAD")
+    return _bundle_from_git_ref(de_path, en_path, "HEAD", project_companion=project_companion)
 
 
 def _baseline_ref_unresolved_reason(de_path: Path, en_path: Path, ref: str) -> str | None:
@@ -3784,6 +3878,37 @@ def _pair_is_unbootstrapped(de_current: list[CurrentCell], en_current: list[Curr
     return de_ids.isdisjoint(en_ids)
 
 
+def _refused_sync_plan(de_path: Path, en_path: Path, projection: ProjectedPair) -> SyncPlan:
+    """A minimal plan carrying only a companion refusal (Issue #501).
+
+    A *mixed* / *cross-language* representation, or a *separated* pair whose companion
+    holds an unplaceable cell, cannot be reconciled: the plan proposes nothing and
+    raises one blocking ``error`` issue so ``report`` / ``diagnose`` surface it and
+    ``apply`` refuses. ``companion_aware`` is set so the apply-side guard also trips.
+    """
+    plan = SyncPlan(de_path=de_path, en_path=en_path, baseline_source="none", companion_aware=True)
+    plan.issues.append(PlanIssue(severity="error", slide_id=None, reason=projection.refusal or ""))
+    return plan
+
+
+def _watermark_representation_matches(
+    cache: SyncWatermarkCache, de_path: Path, en_path: Path, projection: ProjectedPair
+) -> bool:
+    """Whether the pair's watermark was recorded in its *current* representation (#501).
+
+    A legacy voiceover-free watermark (no marker → read as ``"plain"``) on a
+    now-separated deck, or an inlined watermark on a now-plain deck, mismatches — the
+    caller then demotes to a projected git-HEAD cold-start rather than diffing across
+    representations. A plain pair with a legacy watermark matches (``"plain"`` both
+    sides), so the pre-#501 path is unchanged.
+    """
+    stored = cache.get_representation(str(de_path), str(en_path)) or Representation.PLAIN.value
+    current = (
+        Representation.SEPARATED.value if projection.is_separated else Representation.PLAIN.value
+    )
+    return stored == current
+
+
 def build_sync_plan(
     de_path: Path,
     en_path: Path,
@@ -3841,10 +3966,25 @@ def build_sync_plan(
     drifted slide does not match and surfaces normally; ``None`` (the default) is the
     pre-ledger behavior exactly.
     """
-    de_text = de_path.read_text(encoding="utf-8")
-    en_text = en_path.read_text(encoding="utf-8")
+    raw_de_text = de_path.read_text(encoding="utf-8")
+    raw_en_text = en_path.read_text(encoding="utf-8")
     de_token = comment_token_for_path(de_path)
     en_token = comment_token_for_path(en_path)
+    # Issue #501: classify the pair's voiceover representation and, for a *separated*
+    # pair, inline each half's companion IN MEMORY so the plan is built over the same
+    # representation the apply write-back produces (design
+    # ``sync-separated-voiceover-companions.md`` §5). A *mixed* / *cross-language* pair,
+    # or a separated pair whose companion holds an unplaceable cell, refuses and writes
+    # nothing — surfaced as one blocking issue, with ``apply`` guarded. A *plain* pair
+    # projects to itself, byte-untouched, so the raw texts flow through unchanged. The
+    # raw (voiceover-free) texts are retained for the git-HEAD identity comparisons
+    # below, whose committed bytes never carry the inlined voiceover.
+    projection = project_pair(de_path, en_path, raw_de_text, raw_en_text)
+    if projection.refusal is not None:
+        return _refused_sync_plan(de_path, en_path, projection)
+    de_text = projection.de_text
+    en_text = projection.en_text
+    project_companion = projection.is_separated
     de_cells = parse_cells(de_text, de_token)
     en_cells = parse_cells(en_text, en_token)
     # Issue #403 Phase B: narrative identity (owning slide + positional anchor),
@@ -3890,14 +4030,26 @@ def build_sync_plan(
         # given ref, ignoring the watermark and the HEAD fallback (epic #440).
         if bootstrapped:
             old_de, old_en, from_ref = baseline_from
-            bundle = _bundle_from_explicit_paths(de_path, en_path, old_de, old_en, from_ref)
+            bundle = _bundle_from_explicit_paths(
+                de_path, en_path, old_de, old_en, from_ref, project_companion=project_companion
+            )
     elif baseline_ref is not None:
         # Explicit --baseline ref: diff against this git ref, ignoring the
         # watermark, and do NOT fall back to HEAD if it is unavailable.
         if bootstrapped:
-            bundle = _bundle_from_git_ref(de_path, en_path, baseline_ref)
+            bundle = _bundle_from_git_ref(
+                de_path, en_path, baseline_ref, project_companion=project_companion
+            )
     else:
-        if watermark_cache is not None:
+        # Issue #501: only trust the watermark when its recorded representation
+        # matches the pair's current one. A legacy voiceover-free watermark on a
+        # now-separated deck (or an inlined watermark on a now-plain deck) would diff
+        # across representations and silently swallow the cross-language drift — so on
+        # a marker mismatch we leave ``bundle`` None and fall through to the git-HEAD
+        # baseline, which is projected identically (the automatic first-run re-baseline).
+        if watermark_cache is not None and _watermark_representation_matches(
+            watermark_cache, de_path, en_path, projection
+        ):
             bundle = _bundle_from_watermark(watermark_cache, de_path, en_path)
         if bundle is None and allow_git_fallback and bootstrapped:
             # Rename recovery (epic #440), only on the pure-git read path. An
@@ -3908,9 +4060,13 @@ def build_sync_plan(
                 detected = _detect_untracked_rename(de_path, en_path, de_cells)
                 if detected is not None:
                     od, oe, dref = detected
-                    bundle = _bundle_from_explicit_paths(de_path, en_path, od, oe, dref)
+                    bundle = _bundle_from_explicit_paths(
+                        de_path, en_path, od, oe, dref, project_companion=project_companion
+                    )
             if bundle is None:
-                bundle = _bundle_from_git_head(de_path, en_path)
+                bundle = _bundle_from_git_head(
+                    de_path, en_path, project_companion=project_companion
+                )
                 # A *committed* rename (rename + edits in one commit) leaves HEAD ==
                 # the work tree, so the HEAD baseline reads "clean" and hides the
                 # one-sided revision. When the deck was renamed into its current name
@@ -3920,11 +4076,13 @@ def build_sync_plan(
                     detect_rename
                     and bundle is not None
                     and bundle.source == "git-head"
-                    and _working_tree_matches_head(de_path, de_text)
-                    and _working_tree_matches_head(en_path, en_text)
+                    and _working_tree_matches_head(de_path, raw_de_text)
+                    and _working_tree_matches_head(en_path, raw_en_text)
                     and _detect_committed_rename(de_path, en_path)
                 ):
-                    caret = _bundle_from_git_ref(de_path, en_path, "HEAD^")
+                    caret = _bundle_from_git_ref(
+                        de_path, en_path, "HEAD^", project_companion=project_companion
+                    )
                     if caret is not None:
                         bundle = caret
 
@@ -3973,11 +4131,16 @@ def build_sync_plan(
         source == "none"
         and baseline_ref is None
         and baseline_from is None
-        and _working_tree_matches_head(de_path, de_text)
-        and _working_tree_matches_head(en_path, en_text)
+        and _working_tree_matches_head(de_path, raw_de_text)
+        and _working_tree_matches_head(en_path, raw_en_text)
         and _committed_pair_is_consistent(de_cells, en_cells, de_path, en_path)
     ):
-        return SyncPlan(de_path=de_path, en_path=en_path, baseline_source="git-head")
+        return SyncPlan(
+            de_path=de_path,
+            en_path=en_path,
+            baseline_source="git-head",
+            companion_aware=projection.touches_companion,
+        )
 
     plan = classify_changes(
         de_current,
@@ -3997,6 +4160,14 @@ def build_sync_plan(
     plan.idless_baseline_de = de_idless_baseline
     plan.idless_baseline_en = en_idless_baseline
     plan.baseline_bundle = bundle
+    # Issue #501: mark a companion-involving pair so the apply-side guard refuses the
+    # 2-file flush (the ≤4-file write-back is Phase 2), and carry the projected
+    # inlined texts so excerpt resolvers / verify read the same representation the
+    # plan's positions index rather than the voiceover-free working tree.
+    plan.companion_aware = projection.touches_companion
+    if projection.is_separated:
+        plan.projected_de_text = de_text
+        plan.projected_en_text = en_text
 
     # Issue #2: an explicit --baseline ref that yielded no bundle used to degrade
     # silently to baseline=none. Surface the concrete reason (rename not followable,

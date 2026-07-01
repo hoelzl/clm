@@ -1775,6 +1775,21 @@ clm slides sync autopilot DECK [opts]              # legacy all-in-one WITH mode
 `--llm-timeout`) and the legacy write-everything behavior all live on
 **`autopilot`** now; never run `autopilot` in CI.
 
+**Separated voiceover companions (read modes, since CLM {version}).** When a
+deck keeps its voiceover in **separated companion files** (`voiceover_*.de.<ext>`
+/ `voiceover_*.en.<ext>`, the sticky default after `clm voiceover extract`), the
+read verbs (`report` / `verify` / `diagnose`) inline each companion **in memory**
+and reconcile the narration like any other cell — so a companion edited on only
+one language surfaces as `add …/voiceover [translation pending]` instead of
+drifting silently until `clm validate`. A standing, in-sync separated pair still
+reports **0 changes**. Pointing sync at a `voiceover_*` file reconciles its deck
+pair. A deck that keeps voiceover **both** inline and in a companion (mixed), or
+inconsistently across the two languages (one inline, one separated), is refused
+with a normalize hint (`clm voiceover inline` / `extract`); an orphaned companion
+cell (its slide was renamed or removed) is refused rather than dropped.
+*Applying* the reconciliation (the four-file write-back) is not yet implemented —
+`apply` on a separated pair reports the drift and writes nothing.
+
 **Pairing guard (since CLM {version}).** Before anything is read or written,
 sync checks that `DE_PATH` and `EN_PATH` are the two halves of **one** deck —
 one `.de` half and one `.en` half of the same name (the routing prefix is not

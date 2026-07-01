@@ -98,6 +98,7 @@ from clm.slides.sync_task import (
     build_tasks,
 )
 from clm.slides.sync_verify import VerifyResult, verify_pair
+from clm.slides.voiceover_tools import COMPANION_SUBDIR, resolve_companion
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -178,6 +179,37 @@ def _resolve_sync_pair(de_path: Path, en_path: Path) -> tuple[Path, Path]:
     return ordered
 
 
+def _deck_for_companion(companion_path: Path) -> Path | None:
+    """Map a ``voiceover_*`` companion argument back to its slide-deck half (#501).
+
+    ``clm slides sync voiceover_x.de.py`` should reconcile the *deck* the companion
+    belongs to. The companion may sit beside the deck or one directory up (a
+    relocated ``voiceover/`` companion), and its stem prefix (``slides_`` / ``topic_``
+    / ``project_`` / none) is not recoverable from the companion name alone — so we
+    generate every candidate deck path and keep the one whose own
+    :func:`resolve_companion` round-trips back to this file. ``None`` when no deck
+    claims the companion.
+    """
+    name = companion_path.name
+    prefix = "voiceover_"
+    if not name.startswith(prefix):
+        return None
+    rest = name[len(prefix) :]  # "<stem>.<lang>.<ext>"
+    deck_dirs = [companion_path.parent]
+    if companion_path.parent.name == COMPANION_SUBDIR:
+        deck_dirs.append(companion_path.parent.parent)
+    resolved = companion_path.resolve()
+    for deck_dir in deck_dirs:
+        for deck_prefix in ("slides_", "topic_", "project_", ""):
+            candidate = deck_dir / f"{deck_prefix}{rest}"
+            if not candidate.exists():
+                continue
+            comp = resolve_companion(candidate)
+            if comp is not None and comp.resolve() == resolved:
+                return candidate
+    return None
+
+
 def _resolve_single_path(de_path: Path, en_path: Path | None) -> tuple[Path, Path]:
     """Single-path contract: when EN_PATH is omitted, derive the second half from
     DE_PATH so the author can run ``clm slides sync <deck>.de.<ext>``.
@@ -198,10 +230,15 @@ def _resolve_single_path(de_path: Path, en_path: Path | None) -> tuple[Path, Pat
         twin = derive_split_twin(de_path)
         if twin is None:
             if de_path.name.startswith("voiceover_"):
+                # Issue #501: pointing sync at a companion reconciles its *deck* pair.
+                deck = _deck_for_companion(de_path)
+                if deck is not None:
+                    return _resolve_single_path(deck, None)
                 raise click.UsageError(
-                    f"{de_path.name} is a voiceover companion, not a deck half; "
-                    f"`clm slides sync` reconciles slide decks (<deck>.de.<ext> / "
-                    f"<deck>.en.<ext>), not their voiceover companions."
+                    f"{de_path.name} is a voiceover companion, but its slide deck could "
+                    f"not be found; expected the deck half (<deck>.de.<ext> / "
+                    f"<deck>.en.<ext>) beside it or one directory up from a "
+                    f"`{COMPANION_SUBDIR}/` companion. Pass the deck half instead."
                 )
             other = "EN" if tag == "de" else "DE"
             raise click.UsageError(
