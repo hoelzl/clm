@@ -116,10 +116,8 @@ clm config locate
 
 ```toml
 # CLM Configuration File (config.toml)
-
-[paths]
-cache_db_path = "clm_cache.db"
-jobs_db_path = "clm_jobs.db"
+# Note: database paths are NOT configured here — use --cache-db-path /
+# --jobs-db-path (or the CLM_*_DB_PATH env vars).
 
 [external_tools]
 plantuml_jar = "/usr/local/share/plantuml-1.2024.6.jar"
