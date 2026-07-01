@@ -45,15 +45,22 @@ class TestConfigDefaults:
     def test_default_logging(self, monkeypatch):
         """Test default logging configuration."""
         # Clear any environment variables that might interfere
-        for var in ["CLM_LOGGING__LOG_LEVEL", "CLM_LOGGING__ENABLE_TEST_LOGGING"]:
+        for var in [
+            "CLM_LOGGING__LOG_LEVEL",
+            "CLM_LOGGING__ENABLE_TEST_LOGGING",
+            "CLM_PROGRESS__UPDATE_INTERVAL",
+            "CLM_PROGRESS__LONG_JOB_THRESHOLD",
+            "CLM_PROGRESS__SHOW_WORKER_DETAILS",
+        ]:
             monkeypatch.delenv(var, raising=False)
 
         config = ClmConfig()
         assert config.logging.log_level == "INFO"
         assert config.logging.enable_test_logging is False
-        assert config.logging.testing.e2e_progress_interval == 10
-        assert config.logging.testing.e2e_long_job_threshold == 60
-        assert config.logging.testing.e2e_show_worker_details is False
+        # Progress defaults match the build's live progress behaviour.
+        assert config.progress.update_interval == 5
+        assert config.progress.long_job_threshold == 30
+        assert config.progress.show_worker_details is True
 
     def test_default_external_tools(self, monkeypatch):
         """Test default external tools configuration."""
@@ -103,14 +110,14 @@ class TestEnvironmentVariables:
 
     def test_nested_env_vars(self, monkeypatch):
         """Test nested environment variables with double underscores."""
-        monkeypatch.setenv("CLM_LOGGING__TESTING__E2E_PROGRESS_INTERVAL", "5")
-        monkeypatch.setenv("CLM_LOGGING__TESTING__E2E_LONG_JOB_THRESHOLD", "30")
-        monkeypatch.setenv("CLM_LOGGING__TESTING__E2E_SHOW_WORKER_DETAILS", "true")
+        monkeypatch.setenv("CLM_PROGRESS__UPDATE_INTERVAL", "5")
+        monkeypatch.setenv("CLM_PROGRESS__LONG_JOB_THRESHOLD", "30")
+        monkeypatch.setenv("CLM_PROGRESS__SHOW_WORKER_DETAILS", "true")
 
         config = ClmConfig()
-        assert config.logging.testing.e2e_progress_interval == 5
-        assert config.logging.testing.e2e_long_job_threshold == 30
-        assert config.logging.testing.e2e_show_worker_details is True
+        assert config.progress.update_interval == 5
+        assert config.progress.long_job_threshold == 30
+        assert config.progress.show_worker_details is True
 
     def test_legacy_env_vars(self, monkeypatch):
         """Test legacy environment variables without CLM_ prefix."""
@@ -445,10 +452,10 @@ drawio_executable = "/test/drawio"
 log_level = "DEBUG"
 enable_test_logging = true
 
-[logging.testing]
-e2e_progress_interval = 5
-e2e_long_job_threshold = 30
-e2e_show_worker_details = true
+[progress]
+update_interval = 5
+long_job_threshold = 30
+show_worker_details = true
 
 [jupyter]
 jinja_line_statement_prefix = "## custom"
@@ -469,9 +476,9 @@ worker_id = "test-worker-1"
         assert config.external_tools.drawio_executable == "/test/drawio"
         assert config.logging.log_level == "DEBUG"
         assert config.logging.enable_test_logging is True
-        assert config.logging.testing.e2e_progress_interval == 5
-        assert config.logging.testing.e2e_long_job_threshold == 30
-        assert config.logging.testing.e2e_show_worker_details is True
+        assert config.progress.update_interval == 5
+        assert config.progress.long_job_threshold == 30
+        assert config.progress.show_worker_details is True
         assert config.jupyter.jinja_line_statement_prefix == "## custom"
         assert config.jupyter.jinja_templates_path == "/test/templates"
         assert config.jupyter.log_cell_processing is True

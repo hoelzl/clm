@@ -58,11 +58,10 @@ class StatusCollector:
 
     def _get_default_db_path(self) -> Path:
         """Get default database path from environment or config."""
-        # Prefer CLM_JOBS_DB_PATH — the env var for the global ``--jobs-db-path``
-        # that ``clm build`` honors — so ``clm status`` / ``clm monitor`` open the
-        # same jobs DB a redirected build wrote (e.g. a RAM-disk path). Fall back
-        # to the legacy CLM_DB_PATH for compatibility.
-        db_path = os.getenv("CLM_JOBS_DB_PATH") or os.getenv("CLM_DB_PATH")
+        # CLM_JOBS_DB_PATH is the env var for the global ``--jobs-db-path`` that
+        # ``clm build`` honors, so ``clm status`` / ``clm monitor`` open the same
+        # jobs DB a redirected build wrote (e.g. a RAM-disk path).
+        db_path = os.getenv("CLM_JOBS_DB_PATH")
         if db_path:
             return Path(db_path)
 

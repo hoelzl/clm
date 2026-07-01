@@ -298,9 +298,21 @@ from a project `.env` automatically (pass `--no-env-file` to skip).
 
 | Variable | Description | Default |
 |----------|-------------|---------|
+| `CLM_MAX_WORKERS` | Hard cap on the effective worker count per type (the friendly short form of the `[worker_management] max_workers_cap` config field). Further clamped against CPU/RAM-derived caps at pool start. `--max-workers` on `clm build` overrides it. | (auto caps only) |
 | `CLM_MAX_CONCURRENCY` | Max concurrent operations | `50` |
 | `CLM_MAX_WORKER_STARTUP_CONCURRENCY` | Max concurrent worker starts | `10` |
 | `CLM_OUTPUT_DEDUP_HASH_LIMIT_MB` | Skip output-write deduplication for files larger than this many megabytes. Repeat writes to a large-file output are reported as a single summary collision counter rather than per-event warnings. Set to `0` to force every write through the large-file fast path (useful for tests). | `50` |
+
+### Build progress
+
+Tuning for the build's progress logging (also settable as `[progress]` in
+`clm.toml`):
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `CLM_PROGRESS__UPDATE_INTERVAL` | Seconds between progress log updates | `5` |
+| `CLM_PROGRESS__LONG_JOB_THRESHOLD` | Seconds before warning about a long-running job | `30` |
+| `CLM_PROGRESS__SHOW_WORKER_DETAILS` | Show per-worker details in progress output | `true` |
 
 ### Database Retention
 

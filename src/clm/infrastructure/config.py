@@ -183,22 +183,27 @@ class ExternalToolsConfig(BaseModel):
     )
 
 
-class LoggingTestingConfig(BaseModel):
-    """Test-specific logging configuration."""
+class ProgressConfig(BaseModel):
+    """Build progress-reporting configuration.
 
-    e2e_progress_interval: int = Field(
-        default=10,
-        description="Progress update interval for E2E tests (seconds)",
+    Drives the :class:`ProgressTracker` used by every build (via
+    ``get_progress_tracker_config``) — not a test-only knob, despite the
+    former ``logging.testing.e2e_*`` home these settings used to live under.
+    """
+
+    update_interval: int = Field(
+        default=5,
+        description="Seconds between progress log updates",
     )
 
-    e2e_long_job_threshold: int = Field(
-        default=60,
-        description="Long job warning threshold (seconds)",
+    long_job_threshold: int = Field(
+        default=30,
+        description="Seconds before warning about a long-running job",
     )
 
-    e2e_show_worker_details: bool = Field(
-        default=False,
-        description="Show worker details in E2E tests",
+    show_worker_details: bool = Field(
+        default=True,
+        description="Show per-worker details in progress output",
     )
 
 
@@ -213,11 +218,6 @@ class LoggingConfig(BaseModel):
     enable_test_logging: bool = Field(
         default=False,
         description="Enable logging for tests",
-    )
-
-    testing: LoggingTestingConfig = Field(
-        default_factory=LoggingTestingConfig,
-        description="Test-specific logging settings",
     )
 
     @field_validator("log_level")
@@ -772,6 +772,11 @@ class ClmConfig(BaseSettings):
         description="Logging configuration",
     )
 
+    progress: ProgressConfig = Field(
+        default_factory=ProgressConfig,
+        description="Build progress-reporting configuration",
+    )
+
     jupyter: JupyterConfig = Field(
         default_factory=JupyterConfig,
         description="Jupyter notebook processing configuration",
@@ -1087,18 +1092,18 @@ log_level = "INFO"
 # Environment variable: CLM_LOGGING__ENABLE_TEST_LOGGING
 enable_test_logging = false
 
-[logging.testing]
-# Progress update interval for E2E tests (seconds)
-# Environment variable: CLM_LOGGING__TESTING__E2E_PROGRESS_INTERVAL
-e2e_progress_interval = 10
+[progress]
+# Seconds between build progress log updates
+# Environment variable: CLM_PROGRESS__UPDATE_INTERVAL
+update_interval = 5
 
-# Long job warning threshold (seconds)
-# Environment variable: CLM_LOGGING__TESTING__E2E_LONG_JOB_THRESHOLD
-e2e_long_job_threshold = 60
+# Seconds before warning about a long-running job
+# Environment variable: CLM_PROGRESS__LONG_JOB_THRESHOLD
+long_job_threshold = 30
 
-# Show worker details in E2E tests
-# Environment variable: CLM_LOGGING__TESTING__E2E_SHOW_WORKER_DETAILS
-e2e_show_worker_details = false
+# Show per-worker details in progress output
+# Environment variable: CLM_PROGRESS__SHOW_WORKER_DETAILS
+show_worker_details = true
 
 [jupyter]
 # Jinja2 line statement prefix for template processing

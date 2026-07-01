@@ -1147,7 +1147,7 @@ if __name__ == "__main__":
     )
 
     # Example configuration
-    db_path = Path(os.getenv("CLM_DB_PATH", "clm_jobs.db"))
+    db_path = Path(os.getenv("CLM_JOBS_DB_PATH", "clm_jobs.db"))
     workspace_path = Path(os.getenv("CLM_WORKSPACE_PATH", os.getcwd()))
 
     logger.info("Configuration:")
