@@ -3076,7 +3076,7 @@ clm mcp [OPTIONS]
 | Option | Description |
 |--------|-------------|
 | `--data-dir DIR` | Course data directory (default: `CLM_DATA_DIR` or cwd) |
-| `--log-level TEXT` | Log level for stderr output |
+| `--log-level TEXT` | Log level (DEBUG/INFO/WARNING/ERROR/CRITICAL) for host and worker logging. Overrides `CLM_LOGGING__LOG_LEVEL` / `[logging] log_level`; defaults to `INFO` when unset. |
 
 The MCP server exposes 16 tools over stdio transport. Tool names mirror the
 CLI verb-group structure (group-first); the flat pre-1.8 names

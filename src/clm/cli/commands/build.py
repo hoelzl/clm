@@ -181,6 +181,28 @@ def _resolve_explain_rebuilds(cli_flag: bool) -> bool:
     return False
 
 
+def _resolve_log_level(cli_log_level: str | None) -> str:
+    """Effective logging level: ``--log-level`` > env/config file > ``INFO``.
+
+    Phase 3 of the config/CLI/env unification: ``--log-level`` now defaults to
+    ``None`` (unset), so a ``[logging] log_level`` in ``clm.toml`` — or
+    ``CLM_LOGGING__LOG_LEVEL`` — finally takes effect when the flag is absent
+    (``ClmConfig.logging.log_level`` already folds env over config file, and
+    itself defaults to ``INFO``). The resolved level flows to both host logging
+    (``setup_logging``) and, via ``logger.getEffectiveLevel()`` at pool-manager
+    creation, to the workers.
+    """
+    from clm.infrastructure.config import get_config, resolve_setting
+
+    resolved = resolve_setting(
+        cli_log_level,
+        config_value=get_config().logging.log_level,
+        default="INFO",
+    )
+    # resolve_setting is typed -> Any; the inputs here are always level strings.
+    return str(resolved)
+
+
 def _resolve_write_provenance_manifest(
     *, requested: bool, is_snapshot: bool, verify_against_dir: Path | None
 ) -> bool:
@@ -378,7 +400,7 @@ class BuildConfig:
     spec_file: Path
     data_dir: Path
     output_dir: Path
-    log_level: str
+    log_level: str | None
     cache_db_path: Path
     jobs_db_path: Path
     ignore_cache: bool
@@ -688,7 +710,7 @@ async def print_all_correlation_ids():
 def initialize_paths_and_course(config: BuildConfig) -> tuple[Course, list[Path], Path]:
     """Initialize paths, load course spec, and create course object."""
     spec_file = config.spec_file.absolute()
-    setup_logging(config.log_level, console_logging=config.verbose_logging)
+    setup_logging(_resolve_log_level(config.log_level), console_logging=config.verbose_logging)
 
     # Resolve course paths using centralized helper
     data_dir, default_output = resolve_course_paths(spec_file, config.data_dir)
@@ -2087,8 +2109,11 @@ async def main_build(
 @click.option(
     "--log-level",
     type=click.Choice(LOG_LEVELS, case_sensitive=False),
-    default="INFO",
-    help="Set the logging level.",
+    default=None,
+    help=(
+        "Set the logging level. Overrides [logging] log_level / "
+        "CLM_LOGGING__LOG_LEVEL; defaults to INFO when unset."
+    ),
 )
 @click.option(
     "--ignore-cache",
