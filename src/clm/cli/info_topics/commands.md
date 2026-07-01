@@ -9,9 +9,9 @@ clm [OPTIONS] COMMAND [ARGS]...
 | Option | Description |
 |--------|-------------|
 | `--version` | Show version and exit |
-| `--cache-db-path PATH` | Path to cache database (default: `clm_cache.db`) |
-| `--jobs-db-path PATH` | Path to job queue database (default: `clm_jobs.db`) |
-| `--telemetry-db-path PATH` | Path to the execution-telemetry database recording per-deck kernel crash/flake history across builds (default: `clm_telemetry.db` next to the cache database). Deliberately a separate file: clearing the cache never erases the flake history. (CLM {version}+) |
+| `--cache-db-path PATH` | Path to cache database (default: `clm_cache.db`). Env: `CLM_CACHE_DB_PATH`. |
+| `--jobs-db-path PATH` | Path to job queue database (default: `clm_jobs.db`). The jobs DB is ephemeral (it only needs to outlive a single `clm` run), so it may be placed on a RAM disk to spare the SSD — e.g. `CLM_JOBS_DB_PATH=Z:\clm_jobs.db`. Direct worker mode only; a host RAM-disk path is not visible inside Docker workers. Env: `CLM_JOBS_DB_PATH`. (CLM {version}+) |
+| `--telemetry-db-path PATH` | Path to the execution-telemetry database recording per-deck kernel crash/flake history across builds (default: `clm_telemetry.db` next to the cache database). Deliberately a separate file: clearing the cache never erases the flake history. Env: `CLM_TELEMETRY_DB_PATH`. (CLM {version}+) |
 
 ## Commands
 

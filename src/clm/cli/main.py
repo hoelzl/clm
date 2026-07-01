@@ -93,22 +93,29 @@ _COMMANDS = "clm.cli.commands"
     "--cache-db-path",
     type=click.Path(),
     default="clm_cache.db",
-    help="Path to the cache database (stores processed file results)",
+    envvar="CLM_CACHE_DB_PATH",
+    help=("Path to the cache database (stores processed file results). Env: CLM_CACHE_DB_PATH."),
 )
 @click.option(
     "--jobs-db-path",
     type=click.Path(),
     default="clm_jobs.db",
-    help="Path to the job queue database (stores jobs, workers, events)",
+    envvar="CLM_JOBS_DB_PATH",
+    help=(
+        "Path to the job queue database (stores jobs, workers, events). "
+        "Ephemeral — safe to place on a RAM disk (e.g. CLM_JOBS_DB_PATH=Z:\\clm_jobs.db) "
+        "in Direct worker mode. Env: CLM_JOBS_DB_PATH."
+    ),
 )
 @click.option(
     "--telemetry-db-path",
     type=click.Path(),
     default=None,
+    envvar="CLM_TELEMETRY_DB_PATH",
     help=(
         "Path to the execution-telemetry database (per-deck kernel "
         "crash/flake history; issue #330). Default: clm_telemetry.db "
-        "next to the cache database."
+        "next to the cache database. Env: CLM_TELEMETRY_DB_PATH."
     ),
 )
 @click.pass_context

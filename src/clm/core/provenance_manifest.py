@@ -33,6 +33,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 from collections.abc import Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -60,6 +61,13 @@ MANIFEST_FILENAME = ".clm-manifest.json"
 MANIFEST_VERSION = 1
 
 _HASH_CHUNK = 1 << 16
+
+# Below this many files, hash serially — a thread pool's setup cost outweighs
+# the overlap. Above it, parallelize (see :func:`_hash_paths_parallel`).
+_PARALLEL_HASH_THRESHOLD = 64
+# Upper bound on hashing threads regardless of core count, so a many-core box
+# does not saturate the disk with competing reads.
+_MAX_HASH_WORKERS = 16
 
 # Audience routing for shared-mode images, mirroring the ``target`` branch of
 # ``SharedImageFile.get_processing_operation``. ``speaker`` is the deprecated
@@ -259,6 +267,26 @@ def hash_file(path: Path) -> str:
     return f"sha256:{digest.hexdigest()}"
 
 
+def _hash_paths_parallel(paths: list[Path]) -> list[str]:
+    """Hash *paths* concurrently, returning digests in the same order.
+
+    A thread pool overlaps the per-file reads (hashing releases the GIL during
+    I/O and large ``update`` calls), which is a several-fold speedup when a
+    build's output tree spans thousands of files. Falls back to a serial pass
+    for a handful of files, where the pool's setup cost would not pay off. The
+    worker count is capped so a many-core machine does not thrash the disk.
+    """
+    if len(paths) < _PARALLEL_HASH_THRESHOLD:
+        return [hash_file(p) for p in paths]
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    max_workers = min(_MAX_HASH_WORKERS, (os.cpu_count() or 4) * 2)
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        # ``map`` preserves input order, so results line up with ``paths``.
+        return list(pool.map(hash_file, paths))
+
+
 def build_provenance_manifest(
     course: Course,
     target: OutputTarget,
@@ -283,7 +311,11 @@ def build_provenance_manifest(
     every cleanly-built one.
     """
     failed = frozenset(failed_topics or ())
-    files: list[dict[str, Any]] = []
+    # First pass: enumerate + de-dup + existence-check, collecting the (entry,
+    # path) pairs. Hashing — the dominant cost, one full read per output file —
+    # is deferred to a parallel pass below so the disk reads overlap instead of
+    # running back-to-back (thousands of files, gigabytes, on every build).
+    pending: list[tuple[dict[str, Any], Path]] = []
     seen: set[str] = set()
     for out_path, record in enumerate_expected_outputs(course, target):
         try:
@@ -295,17 +327,29 @@ def build_provenance_manifest(
         if record["topic_id"] in failed:
             continue
         seen.add(rel)
-        files.append(
-            {
-                "path": rel,
-                "section_id": record["section_id"],
-                "topic_id": record["topic_id"],
-                "kind": record["kind"],
-                "format": record["format"],
-                "language": record["language"],
-                "content_hash": hash_file(out_path),
-            }
+        pending.append(
+            (
+                {
+                    "path": rel,
+                    "section_id": record["section_id"],
+                    "topic_id": record["topic_id"],
+                    "kind": record["kind"],
+                    "format": record["format"],
+                    "language": record["language"],
+                },
+                out_path,
+            )
         )
+
+    # Second pass: hash every file concurrently. Hashing releases the GIL
+    # during file reads and large ``update`` calls, so a thread pool overlaps
+    # the I/O-bound work across cores. Results are matched back by index, so
+    # the deterministic final sort is unaffected.
+    files: list[dict[str, Any]] = [entry for entry, _ in pending]
+    if pending:
+        hashes = _hash_paths_parallel([path for _, path in pending])
+        for entry, digest in zip(files, hashes, strict=True):
+            entry["content_hash"] = digest
     files.sort(key=lambda r: r["path"])
     return {
         "version": MANIFEST_VERSION,
