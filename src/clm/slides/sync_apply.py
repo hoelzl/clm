@@ -68,6 +68,7 @@ from clm.slides.pairing import TITLE_SLIDE_ID, is_title_macro_cell
 from clm.slides.raw_cells import RawCell, split_cells
 from clm.slides.slug import resolve_collision, slugify
 from clm.slides.sync_code import TranslationOutcome, apply_code_structure
+from clm.slides.sync_companion import project_pair
 from clm.slides.sync_plan import (
     LOCALIZED_CODE_ROLE,
     LOCALIZED_MARKDOWN_ROLE,
@@ -4378,8 +4379,26 @@ def record_baseline(cache: SyncWatermarkCache, de_path: Path, en_path: Path) -> 
     throwaway commit** (#430). The caller must first assert the pair is a
     structurally valid split (``clm slides sync verify``); ``bless`` trusts the
     author's assertion that the localized halves are semantically in sync.
+
+    Issue #501: a separated-voiceover pair is blessed over its companion-inlined
+    projection with the ``separated`` marker, so the blessed watermark is in the same
+    representation the next run diffs against (blessing the voiceover-free deck would
+    demote on the very next run and make the bless a no-op).
     """
-    _record_watermark(cache, de_path, en_path)
+    de_text = de_path.read_text(encoding="utf-8")
+    en_text = en_path.read_text(encoding="utf-8")
+    projection = project_pair(de_path, en_path, de_text, en_text)
+    if projection.is_separated:
+        _record_watermark(
+            cache,
+            de_path,
+            en_path,
+            de_text=projection.de_text,
+            en_text=projection.en_text,
+            representation="separated",
+        )
+    else:
+        _record_watermark(cache, de_path, en_path)
 
 
 def _eligible_for_partial_advance(plan: SyncPlan, result: ApplyResult) -> bool:

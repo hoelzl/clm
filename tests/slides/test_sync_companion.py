@@ -1,26 +1,25 @@
-"""Companion-aware ``clm slides sync`` — Phase 1 (issue #501).
+"""Companion-aware ``clm slides sync`` (issue #501).
 
 ``clm slides sync`` was structurally blind to **separated voiceover companion
 files** (``voiceover_*.de.py`` / ``voiceover_*.en.py``): editing one companion was
-never propagated to the other language and no ``sync`` subcommand reported it.
-Phase 1 makes the read modes companion-aware by inlining each half's companion in
-memory (design ``sync-separated-voiceover-companions.md``) so the existing plan
-engine sees the narration like any other cell — while writing nothing (apply is
-guarded; the ≤4-file write-back is Phase 2).
+never propagated to the other language and no ``sync`` subcommand reported it. The
+feature inlines each half's companion in memory (design
+``sync-separated-voiceover-companions.md``) so the existing plan engine sees the
+narration like any other cell, and extracts the reconciled projection back into the
+companions on write-back. These tests pin the whole contract, grouped by phase:
 
-These tests pin the Phase 1 contract:
-
-* a **standing** separated pair reports **0 changes** — the keystone: the git-HEAD
-  baseline is projected identically to the working tree, so a companion present on
-  both sides now and at HEAD reads as in-sync, *not* a spurious add (§5.3);
-* a **drifted** companion surfaces as ``add …/voiceover [translation pending]`` in
-  ``report`` — exactly as inline voiceover already does (the headline fix);
-* **mixed** / **cross-language** representations, and an **unplaceable** companion
-  cell, **refuse** and write nothing;
-* a legacy voiceover-free **watermark** on a now-separated deck **demotes** to a
-  projected git-HEAD baseline (the automatic re-baseline);
-* ``apply`` on a separated pair **refuses** (Phase 1 is read-only);
-* pointing ``sync`` at a ``voiceover_*`` file reconciles its **deck pair**.
+* **Read** (Phase 1) — a standing separated pair reports **0 changes** (the §5.3
+  keystone: the baseline is projected identically), a drifted companion surfaces as
+  ``add …/voiceover [translation pending]``, mixed / cross-language / unplaceable
+  cells **refuse**, a legacy watermark **demotes**, and a ``voiceover_*`` argument
+  resolves to its deck pair.
+* **Apply** (Phase 2) — a narration added / edited / removed on one side is
+  reconciled into the other companion in one atomic ≤4-file write; an in-sync pair
+  writes nothing; a one-sided companion is created at the twin's layout; notes stay
+  inline; the deck stays voiceover-free on disk.
+* **Bless + ledger** (Phase 3) — ``bless`` records a ``separated`` watermark and the
+  consistency ledger fingerprints the projection, so a confirmed narration is
+  suppressed while a later drift still surfaces.
 """
 
 from __future__ import annotations
@@ -682,3 +681,74 @@ class TestCompanionApplyWriteback:
         # The whole batch failed before any os.replace — every target is untouched.
         for path, text in before.items():
             assert path.read_text(encoding="utf-8") == text
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 — bless + consistency-ledger parity over the projection.
+# ---------------------------------------------------------------------------
+
+
+class TestCompanionBlessAndLedger:
+    def test_bless_records_a_separated_watermark(self, tmp_path: Path) -> None:
+        from clm.slides.sync_apply import record_baseline
+
+        pair = _make_pair(
+            tmp_path,
+            de_comp=_companion("de", ("intro", "Willkommen.")),
+            en_comp=_companion("en", ("intro", "Welcome.")),
+        )
+        # Hand-reconcile a fresh state and bless it as the baseline.
+        pair.de_comp.write_text(_companion("de", ("intro", "Hallo.")), encoding="utf-8")
+        pair.en_comp.write_text(_companion("en", ("intro", "Hi.")), encoding="utf-8")
+        cache = SyncWatermarkCache(tmp_path / "wm.db")
+        record_baseline(cache, pair.de, pair.en)
+        assert cache.get_representation(str(pair.de), str(pair.en)) == "separated"
+        # The blessed (separated) watermark is trusted next run — not demoted — and clean.
+        plan = build_sync_plan(pair.de, pair.en, watermark_cache=cache)
+        assert plan.baseline_source == "watermark"
+        assert plan.proposals == []
+
+    def test_bless_plain_pair_records_plain_representation(self, tmp_path: Path) -> None:
+        from clm.slides.sync_apply import record_baseline
+
+        pair = _make_pair(tmp_path)
+        cache = SyncWatermarkCache(tmp_path / "wm.db")
+        record_baseline(cache, pair.de, pair.en)
+        assert cache.get_representation(str(pair.de), str(pair.en)) == "plain"
+
+    def test_ledger_suppresses_a_separated_voiceover(self, tmp_path: Path) -> None:
+        from clm.slides import sync_ledger
+
+        pair = _make_pair(
+            tmp_path,
+            de_comp=_companion("de", ("intro", "Willkommen.")),
+            en_comp=_companion("en", ("intro", "Welcome.")),
+        )
+        # A one-sided voiceover edit would normally propose an edit against git HEAD.
+        pair.de_comp.write_text(
+            _companion("de", ("intro", "Hallo und willkommen.")), encoding="utf-8"
+        )
+        assert any(p.role == "voiceover" for p in build_sync_plan(pair.de, pair.en).proposals)
+        # Record the current state as trusted-in-sync (the voiceover lives in the
+        # companion, so this only works because the ledger fingerprints the projection).
+        rec = sync_ledger.record_pair(pair.de, pair.en, confirmed_by="test")
+        assert not rec.refused
+        ledger = sync_ledger.load(sync_ledger.ledger_path_for(pair.de))
+        plan = build_sync_plan(pair.de, pair.en, ledger=ledger)
+        assert [p for p in plan.proposals if p.role == "voiceover"] == []
+        assert plan.ledger_skipped >= 1
+
+    def test_ledger_does_not_suppress_a_drifted_voiceover(self, tmp_path: Path) -> None:
+        from clm.slides import sync_ledger
+
+        pair = _make_pair(
+            tmp_path,
+            de_comp=_companion("de", ("intro", "Willkommen.")),
+            en_comp=_companion("en", ("intro", "Welcome.")),
+        )
+        sync_ledger.record_pair(pair.de, pair.en, confirmed_by="test")
+        # Drift AFTER recording: the ledger must not mask it.
+        pair.de_comp.write_text(_companion("de", ("intro", "Etwas anderes.")), encoding="utf-8")
+        ledger = sync_ledger.load(sync_ledger.ledger_path_for(pair.de))
+        plan = build_sync_plan(pair.de, pair.en, ledger=ledger)
+        assert any(p.role == "voiceover" for p in plan.proposals)

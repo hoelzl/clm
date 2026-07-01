@@ -281,6 +281,28 @@ def save(ledger: SyncLedger, path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _inlined_deck_text(path: Path) -> str:
+    """A deck's text with its separated voiceover companion inlined (issue #501).
+
+    The ledger records and reads its per-cell fingerprints over this projection —
+    the SAME companion-inlined representation ``build_sync_plan``'s trust overlay
+    compares against (``de_current`` is built from the projected text). Without it a
+    separated deck's voiceover lives only in the companion, so ``record_pair`` /
+    ``record_edit`` would fingerprint a voiceover-free deck, never record the
+    narration, and the overlay's suppression would silently never fire for it. A
+    plain deck (no companion) returns its text unchanged, so nothing else moves.
+    """
+    from clm.slides.voiceover_tools import inline_pair_text, resolve_companion
+
+    text = path.read_text(encoding="utf-8")
+    companion = resolve_companion(path)
+    if companion is None:
+        return text
+    return inline_pair_text(
+        text, companion.read_text(encoding="utf-8"), comment_token_for_path(path)
+    ).inlined_text
+
+
 def _localized_idd_hashes(
     cells: list[Cell], lang: str
 ) -> dict[tuple[str, str], tuple[str, str | None]]:
@@ -313,10 +335,12 @@ def current_pairs(
     """``{(slide_id, role): (de_hash, en_hash, construct)}`` for the pair's localized id'd cells.
 
     Only keys present (id'd, localized) in **both** halves are returned — a
-    one-sided cell has no twin to certify in-sync.
+    one-sided cell has no twin to certify in-sync. Fingerprints the companion-inlined
+    projection (issue #501) so a separated deck's voiceover narratives — id'd once
+    ``extract`` has canonicalized them — are recorded like any other localized cell.
     """
-    de_cells = parse_cells(de_path.read_text(encoding="utf-8"), comment_token_for_path(de_path))
-    en_cells = parse_cells(en_path.read_text(encoding="utf-8"), comment_token_for_path(en_path))
+    de_cells = parse_cells(_inlined_deck_text(de_path), comment_token_for_path(de_path))
+    en_cells = parse_cells(_inlined_deck_text(en_path), comment_token_for_path(en_path))
     de_map = _localized_idd_hashes(de_cells, "de")
     en_map = _localized_idd_hashes(en_cells, "en")
     pairs: dict[tuple[str, str], tuple[str, str, str | None]] = {}
@@ -346,7 +370,7 @@ def _idless_narrative_hashes(path: Path, lang: str) -> dict[IdlessKey, str]:
         ordered_sync_cells,
     )
 
-    text = path.read_text(encoding="utf-8")
+    text = _inlined_deck_text(path)  # issue #501: fingerprint over the companion-inlined projection
     token = comment_token_for_path(path)
     identity = narrative_identity_map(split_cells(text, token)[1])
     cells = ordered_sync_cells(parse_cells(text, token), lang, identity)
@@ -711,7 +735,7 @@ def _idless_narrative_full(path: Path, lang: str) -> dict[IdlessKey, tuple[str, 
         ordered_sync_cells,
     )
 
-    text = path.read_text(encoding="utf-8")
+    text = _inlined_deck_text(path)  # issue #501: fingerprint over the companion-inlined projection
     token = comment_token_for_path(path)
     raw_cells = split_cells(text, token)[1]
     identity = narrative_identity_map(raw_cells)
