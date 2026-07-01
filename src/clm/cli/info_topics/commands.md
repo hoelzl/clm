@@ -3229,7 +3229,7 @@ Manage CLM configuration files.
 |------------|-------------|
 | `config init` | Create an example configuration file |
 | `config locate` | Show configuration file locations |
-| `config show` | Show current configuration values |
+| `config show` | Show current configuration values (effective DB paths + config sections). Add `--json` for machine-readable output. |
 
 ### `clm cache` (CLM {version}+)
 

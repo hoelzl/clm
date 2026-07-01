@@ -144,6 +144,22 @@ class TestConfigShow:
         assert "llm_cache_dir:" in result.output
         assert "clm-llm.sqlite" in result.output
 
+    def test_show_json_is_machine_readable(self, isolated_config_dirs):
+        import json
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["config", "show", "--json"])
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        # Effective DB paths + LLM cache are resolved outside ClmConfig.
+        assert set(data["databases"]) == {"cache_db_path", "jobs_db_path", "telemetry_db_path"}
+        assert "dir" in data["llm_cache"]
+        # Every ClmConfig section is dumped (retention is a live one).
+        assert "retention" in data
+        assert "logging" in data
+        # use_sqlite_queue was removed — it must not resurface anywhere.
+        assert "use_sqlite_queue" not in data.get("workers", {})
+
 
 class TestConfigLocate:
     def test_locate_shows_all_locations(self, isolated_config_dirs):

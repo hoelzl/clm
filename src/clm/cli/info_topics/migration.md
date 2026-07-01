@@ -2,6 +2,30 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## Removed / renamed configuration variables ({version})
+
+The database paths are configured **only** through the global CLI options and
+their `CLM_*_DB_PATH` environment variables (resolved once in `clm.cli.main`).
+A parallel `[paths]` config section / `CLM_PATHS__*` family used to shadow them
+but never actually relocated the database a command opened — it has been
+removed. The `USE_SQLITE_QUEUE` flag is also gone: SQLite is the only job queue,
+so the switch had no effect. These are **hard cuts** — the old names no longer
+work.
+
+| Removed variable | Replacement | Notes |
+|---|---|---|
+| `CLM_PATHS__CACHE_DB_PATH` | `CLM_CACHE_DB_PATH` (or `--cache-db-path`) | Same meaning; the new form actually takes effect. |
+| `CLM_PATHS__JOBS_DB_PATH` | `CLM_JOBS_DB_PATH` (or `--jobs-db-path`) | Now honored by `clm build`, `status`, and `monitor` alike. |
+| `CLM_PATHS__WORKSPACE_PATH` | *(none)* | Was vestigial; the worker workspace is derived from the output dir. |
+| `[paths]` section in `clm.toml` / `.clm/config.toml` | CLI options / `CLM_*_DB_PATH` | An old `[paths]` block still loads (it is ignored). |
+| `USE_SQLITE_QUEUE` | *(none)* | SQLite is the only queue; the flag had no consumer. |
+
+`CLM_DB_PATH` (the legacy jobs-DB auto-detect used by `clm status` / `monitor`)
+still works but is superseded by `CLM_JOBS_DB_PATH`, which now takes precedence.
+
+Run `clm config show` (or `clm config show --json`) to see the **effective**
+database paths and configuration for the current invocation.
+
 ## `//`-language decks re-baseline the sync watermark once (issue #458, {version})
 
 `clm slides sync`'s reflow-insensitive markdown hashing (#429) now threads the

@@ -204,7 +204,6 @@ Workers require these environment variables (automatically set by the pool manag
 - `DB_PATH`: Path to SQLite database
 - `WORKSPACE_PATH`: Path to workspace directory
 - `LOG_LEVEL`: Logging verbosity
-- `USE_SQLITE_QUEUE`: Enable SQLite queue mode
 
 ### WorkerConfig Parameters
 
