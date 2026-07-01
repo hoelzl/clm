@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import click
 import pytest
@@ -33,6 +33,7 @@ from clm.cli.commands.build import (
     _resolve_fail_on_missing_xref,
     _resolve_http_replay_mode,
     _resolve_http_replay_transport,
+    _resolve_log_level,
     _resolve_write_provenance_manifest,
     _should_emit_provenance_manifest,
     configure_workers,
@@ -105,6 +106,34 @@ class TestFindEnvFile:
         # Guard against an ancestor having a .env on the dev machine
         # by checking behaviour relative to tmp_path itself.
         assert _find_env_file(nested) is None or _find_env_file(nested).parent != tmp_path
+
+
+# ---------------------------------------------------------------------------
+# _resolve_log_level
+# ---------------------------------------------------------------------------
+
+
+class TestResolveLogLevel:
+    """Effective log level: --log-level > CLM_LOGGING__LOG_LEVEL/config > INFO."""
+
+    def test_cli_flag_wins(self) -> None:
+        # Even when the config/env resolves to WARNING, an explicit flag wins.
+        with patch("clm.infrastructure.config.get_config") as gc:
+            gc.return_value.logging.log_level = "WARNING"
+            assert _resolve_log_level("DEBUG") == "DEBUG"
+
+    def test_config_used_when_flag_unset(self) -> None:
+        # ClmConfig.logging.log_level already folds CLM_LOGGING__LOG_LEVEL over
+        # the config file; with no flag it takes effect.
+        with patch("clm.infrastructure.config.get_config") as gc:
+            gc.return_value.logging.log_level = "WARNING"
+            assert _resolve_log_level(None) == "WARNING"
+
+    def test_defaults_to_info(self) -> None:
+        # ClmConfig.logging.log_level defaults to INFO when nothing is set.
+        with patch("clm.infrastructure.config.get_config") as gc:
+            gc.return_value.logging.log_level = "INFO"
+            assert _resolve_log_level(None) == "INFO"
 
 
 # ---------------------------------------------------------------------------

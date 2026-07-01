@@ -247,7 +247,7 @@ tidy` to move *existing* sidecars between layouts in bulk.
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `CLM_LOGGING__LOG_LEVEL` | Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL) | `INFO` |
+| `CLM_LOGGING__LOG_LEVEL` | Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL). Honored by `clm build` for both host and worker logging; the `--log-level` flag overrides it. Also settable as `[logging] log_level` in `clm.toml`. | `INFO` |
 | `CLM_LOGGING__ENABLE_TEST_LOGGING` | Enable logging during tests | `false` |
 | `CLM_LOG_DIR` | Directory for `clm.log` and `workers/` logs. Overrides the platform default (Windows: `%LOCALAPPDATA%/clm/Logs`; macOS: `~/Library/Logs/clm`; Linux: `~/.local/state/clm/log`). Useful to relocate logs, or to give parallel processes their own log file so they don't race to open/rotate the shared one. | platform default |
 
