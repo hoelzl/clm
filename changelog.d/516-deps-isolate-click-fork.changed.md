@@ -10,6 +10,6 @@
   `uv sync --extra jupyterlite --no-default-groups` (a `[tool.uv] conflicts`
   fork) to build the JupyterLite output format. The unused `deepeval` dependency
   was removed. See `docs/user-guide/installation.md`.
-- **CI now installs from `uv.lock` (`uv sync --locked`) instead of fresh
+- **CI now installs from `uv.lock` (`uv sync --frozen`) instead of fresh
   `uv pip install`,** so continuous integration runs the exact dependency
-  versions a developer gets locally and fails fast on lockfile drift.
+  versions a developer gets locally rather than re-resolving independently.
