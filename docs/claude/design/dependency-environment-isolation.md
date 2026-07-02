@@ -186,15 +186,36 @@ kernel_python: str = Field(
 )
 ```
 
-Resolution order (already the house style — env > `clm.toml [jupyter]` >
-default): env var **`CLM_NOTEBOOK_KERNEL_PYTHON`** overrides
-`clm.toml [jupyter].kernel_python`, default empty.
+**Resolution precedence** (most specific wins; first non-empty is used):
 
-- **Empty (default):** no provisioning, no `JUPYTER_PATH` injection — byte-for-
-  byte today's behaviour. This is the safety valve: Wave 2b is inert until a
-  user opts in.
-- **Set:** provision a `python3` kernelspec pointing at that interpreter and
-  prepend its root to the worker's `JUPYTER_PATH`.
+1. **`CLM_NOTEBOOK_KERNEL_PYTHON`** (env) — operator escape hatch for one
+   invocation (debugging, CI). Beats everything.
+2. **Course-spec override** — a `<kernel-python>` element in the course spec
+   (resolved relative to the course root, like `<jupyterlite>`'s `<wheels>` /
+   `<environment>`). This is the key ask: it lets *this course* pick its
+   environment, so a **plain-Python course points at a light venv** while an
+   ml-heavy course in the same checkout points at the fat `[ml]` venv — no
+   global reconfiguration between builds.
+3. **Project config** — `clm.toml [jupyter].kernel_python`, discovered from the
+   directory `clm` is started in (the existing `get_config()` discovery). The
+   repo-wide default when a spec says nothing.
+4. **Default empty** — use clm's own environment = **today's behaviour**, byte
+   for byte. Wave 2b is inert until something above is set (the safety valve).
+
+Behaviour:
+- **Resolves to empty:** no provisioning, no `JUPYTER_PATH` injection.
+- **Resolves to a path:** provision a `python3` kernelspec pointing at that
+  interpreter and prepend its root to the worker's `JUPYTER_PATH`.
+
+**Granularity caveat (course-level, not per-target — in Wave 2b).** One
+`clm build` runs one course spec, so a course-level interpreter is resolved
+*once per build* and injected into the notebook worker pool cleanly. A
+*per-output-target* interpreter is deliberately **out of scope for 2b**: one
+worker pool serves all targets in a build, so per-target selection would force
+either per-job kernelspec selection (back onto the execution hot path we are
+avoiding) or per-target worker pools. Course-level covers the "light venv for
+plain-Python courses" goal; per-target can come later if a real need appears.
+The `<kernel-python>` element is specced at course level for that reason.
 
 Scope: **Python only.** C++/C#/Java/TS kernels (`xcpp20`, `.net-csharp`,
 `java`, …) are external toolchains, not clm's venv, and are out of scope — the
@@ -215,13 +236,22 @@ to resolve as it does today.
      `display_name`, `language: "python"`;
    - returns the **root** dir (the one *containing* `kernels/`), which is what
      `JUPYTER_PATH` wants.
-2. **Env injection** — in `worker_executor.py`, extend the notebook-worker env
+2. **Resolve the interpreter** — apply the precedence above (env → course-spec
+   → project `clm.toml` → empty). Note `_notebook_worker_jupyter_env()` today
+   reads only global config; the **course-spec** layer means the resolved value
+   must be threaded from where the spec is parsed at build time down to worker-
+   pool startup (the pool is created per build, so the course is known). Cleanest
+   shape: resolve once during build setup and pass the concrete interpreter path
+   into the executor (e.g. an argument / a field on the pool config), rather than
+   having `worker_executor.py` re-read the spec. Keep the env/`clm.toml` layers in
+   the executor's config read; inject the spec layer from the build.
+3. **Env injection** — in `worker_executor.py`, extend the notebook-worker env
    assembly next to `_notebook_worker_jupyter_env()` (`:41-64`, injected at
-   `:701`; Docker path mirrors at `:318-379`). When `kernel_python` is set,
-   compute the root via the helper and set
+   `:701`; Docker path mirrors at `:318-379`). When the resolved interpreter is
+   non-empty, compute the root via the helper and set
    `JUPYTER_PATH = <root><os.pathsep><existing JUPYTER_PATH>`. Direct mode only
    in Wave 2b; the Docker image already isolates, so skip injection there.
-3. **No `notebook_processor.py` change.** The reaping/JobObject teardown that
+4. **No `notebook_processor.py` change.** The reaping/JobObject teardown that
    already kills kernel grandchildren (`_ReapingKernelManager`,
    `notebook_processor.py:586`; Windows JobObject in `worker_executor.py:741`)
    covers the course-venv kernel unchanged — it is still a subprocess of the
@@ -229,25 +259,38 @@ to resolve as it does today.
 
 ### Provisioning command (setup friction mitigation)
 
-A first-class CLI entry so users don't hand-write `kernel.json`:
+A first-class CLI entry so users don't hand-write `kernel.json`. Lives under a
+new **`clm provision`** command group (confirmed):
 
 - **MVP — register an existing interpreter:**
   `clm provision kernel-env --python <path-to-course-venv-python>` → runs the
-  helper, prints the root dir and the `clm.toml`/env line to set. Zero venv
+  helper, prints the root dir and the `clm.toml`/spec/env line to set. Zero venv
   management; the user brings their own course venv.
 - **Follow-up — create it too:** `clm provision kernel-env --create --with ml`
   → `uv venv` a course env, install `ipykernel` + the requested course-runtime
-  set, then register. Deferred; not needed to remove `[ml]` from clm's env.
+  set, then register. Deferred (question 3, agreed); not needed to remove `[ml]`
+  from clm's env.
 
-(Command name to confirm at implementation — `clm provision …` vs folding under
-an existing group. It must appear in `clm info commands`.)
+Must appear in `clm info commands`, and the new `<kernel-python>` spec element
+in `clm info spec-files`.
+
+**Future — fold `clm docker` under `provision`.** The existing `clm docker`
+commands (image build/management) are conceptually the same "prepare an
+environment clm will run against" as `provision kernel-env`. A later,
+deliberate redesign can move them under `clm provision` (e.g. `clm provision
+docker-image`) so all environment provisioning lives in one group. Out of scope
+for Wave 2b — noted so the group is designed with room for it (don't hard-code
+`provision` as kernel-only).
 
 ### Migration / phasing (within 2b)
 
-- **2b-1:** config knob + provisioning helper + `JUPYTER_PATH` wiring +
-  `clm provision kernel-env` (register-existing MVP). Opt-in, empty default →
-  no behaviour change. Ships with tests + docs. **`[ml]` stays a clm extra** for
-  this step so nothing breaks for current users.
+- **2b-1:** config knob (env + `clm.toml` + course-spec `<kernel-python>`)
+  with the full resolution precedence + provisioning helper + `JUPYTER_PATH`
+  wiring + `clm provision kernel-env` (register-existing MVP). Opt-in, empty
+  default → no behaviour change. Ships with tests + docs, including the new
+  `<kernel-python>` element in `clm info spec-files` and `clm provision` in
+  `clm info commands`. **`[ml]` stays a clm extra** for this step so nothing
+  breaks for current users.
 - **2b-2:** once the knob is proven, reposition `[ml]` as a *course* extra
   (installed into the course venv, not clm's). Update
   `docs/user-guide/installation.md`, the `clm info` topics, and the memory. This
