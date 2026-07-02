@@ -17,6 +17,7 @@ import pytest
 
 from clm.workers.jupyterlite import builder as builder_module
 from clm.workers.jupyterlite.builder import (
+    JUPYTERLITE_CORE_VERSION,
     BuildArgs,
     build_result_to_summary,
     build_site,
@@ -212,6 +213,54 @@ def test_build_site_normalizes_backslash_paths_in_contents(
                     _no_backslash_in_path(item)
 
         _no_backslash_in_path(data)
+
+
+def test_run_build_shells_out_to_uvx_tool_env(tmp_path: Path) -> None:
+    """The build invokes ``jupyter-lite`` from an isolated ``uvx`` tool env.
+
+    Wave 2a moved the build out of clm's own venv: clm shells out to
+    ``uvx --from jupyterlite-core==<pin> --with … jupyter-lite build`` so
+    jupyterlite-core/empack never enter clm's dependency graph. We assert the
+    command shape (pinned ``--from``, both kernel addons ``--with``-installed)
+    and that the correct addon is disabled for the chosen kernel.
+    """
+    with patch.object(builder_module.subprocess, "run") as run:
+        builder_module._run_jupyter_lite_build(
+            tmp_path / "lite", tmp_path / "site", kernel="pyodide"
+        )
+
+    cmd = run.call_args.args[0]
+    assert Path(cmd[0]).name.startswith("uvx")
+    assert "--from" in cmd
+    assert f"jupyterlite-core=={JUPYTERLITE_CORE_VERSION}" in cmd
+    # Both kernel addons are provisioned into the tool env...
+    assert any("jupyterlite-pyodide-kernel==" in part for part in cmd)
+    assert any("jupyterlite-xeus==" in part for part in cmd)
+    # ...and jupyter-server (the contents addon needs it).
+    assert any(part.startswith("jupyter-server") for part in cmd)
+    assert "jupyter-lite" in cmd and "build" in cmd
+    # pyodide kernel → xeus addon disabled.
+    disable_idx = cmd.index("--disable-addons")
+    assert cmd[disable_idx + 1] == "jupyterlite-xeus"
+
+
+def test_run_build_disables_pyodide_addon_for_xeus(tmp_path: Path) -> None:
+    with patch.object(builder_module.subprocess, "run") as run:
+        builder_module._run_jupyter_lite_build(
+            tmp_path / "lite", tmp_path / "site", kernel="xeus-python"
+        )
+    cmd = run.call_args.args[0]
+    disable_idx = cmd.index("--disable-addons")
+    assert cmd[disable_idx + 1] == "jupyterlite-pyodide-kernel"
+
+
+def test_run_build_missing_uv_raises_actionable_error(tmp_path: Path) -> None:
+    """A missing ``uvx`` surfaces as an install-uv hint, not a raw OSError."""
+    with patch.object(builder_module.subprocess, "run", side_effect=FileNotFoundError):
+        with pytest.raises(RuntimeError, match="uv is not installed"):
+            builder_module._run_jupyter_lite_build(
+                tmp_path / "lite", tmp_path / "site", kernel="pyodide"
+            )
 
 
 def test_build_result_summary_is_valid_json(

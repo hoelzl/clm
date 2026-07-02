@@ -97,7 +97,7 @@ pip install -e ".[web]"      # Web dashboard
 
 # Install for development
 pip install -e ".[dev]"      # Development tools
-pip install -e ".[all]"      # Everything clm needs (excludes [ml] + [jupyterlite]; see below)
+pip install -e ".[all]"      # Everything clm needs (excludes [ml]; see below)
 ```
 
 ### Python Optional Dependencies
@@ -160,15 +160,16 @@ CLM has several optional dependency groups for different features:
   - Required for: `clm calendar push` (mirror a cohort's viewing calendar into Google Calendar)
   - Install: `pip install -e ".[gcal]"`
 
-**Output Bundling**:
-- **[jupyterlite]**: jupyterlite-core, jupyterlite-pyodide-kernel, jupyterlite-xeus, jupyter-server
-  - Required for: the `jupyterlite` output format (browser-based notebook site bundler)
-  - **Not in `[all]` and not in the default `uv sync` groups.** Its `empack`
-    dependency pins `click<8.2`, which conflicts with clm's CLI (`click>=8.2`);
-    `[tool.uv] conflicts` keeps the two in separate resolution forks. Install it
-    on its own so it can't hold your Click back:
-    `uv sync --extra jupyterlite --no-default-groups`
-  - Install (isolated env): `pip install -e ".[jupyterlite]"`
+**Output Bundling (JupyterLite)**:
+- The `jupyterlite` output format (browser-based notebook site bundler) needs
+  **no clm extra**. clm never imports jupyterlite-core — it only shells out to
+  `jupyter lite build`, which runs in an **isolated `uvx` tool environment**
+  pinned in `src/clm/workers/jupyterlite/builder.py`. The only requirement is
+  that [`uv`](https://docs.astral.sh/uv/) is installed and `uvx` is on PATH; the
+  first build provisions the tool env automatically. Keeping jupyterlite-core
+  and its `empack` dependency (which caps `click<8.2`) out of clm's environment
+  is deliberate — it makes the old Click collision structurally impossible. See
+  `docs/claude/design/dependency-environment-isolation.md`.
 
 **HTTP Replay**:
 - **[replay]**: mitmproxy, pyyaml, filelock
@@ -186,24 +187,22 @@ CLM has several optional dependency groups for different features:
   replay, dev, tui, web
   - Required for: Full clm development and testing
   - Install: `pip install -e ".[all]"`
-  - **Deliberately excludes `[ml]` and `[jupyterlite]`.** Neither is imported by
-    clm itself: `[ml]` (PyTorch/pandas/transformers/…) is *course-runtime* — it
-    exists only so Direct-mode notebook kernels can import it — and `[jupyterlite]`
-    is a standalone build tool clm shells out to whose `empack` dependency pins
-    `click<8.2` (incompatible with clm's CLI). Bundling them made every install
-    multi-GB and, in jupyterlite's case, held the whole environment back to an old
-    Click. Install them explicitly when a course needs them (see below), or run
+  - **Deliberately excludes `[ml]`.** It is not imported by clm itself:
+    `[ml]` (PyTorch/pandas/transformers/…) is *course-runtime* — it exists only
+    so Direct-mode notebook kernels can import it. Bundling it made every install
+    multi-GB. Install it explicitly when a course needs it (see below), or run
     the workers in Docker mode (the notebook image bakes the ML stack in).
+    (JupyterLite is likewise absent, but it is not a clm extra at all — its
+    build runs in an isolated `uvx` tool env.)
 
 **Notes**:
 - Core package works without worker dependencies (can use Docker mode)
 - For direct execution mode, install worker-specific dependencies
 - For clm development and testing, install with `[all]` (or just `uv sync`)
 - To run **ML course decks** in Direct mode: `pip install -e ".[all,ml]"`
-- To build the **JupyterLite** output format, install it in isolation so its
-  `click<8.2` cap can't drag the rest of your env down:
-  `uv sync --extra jupyterlite --no-default-groups` (or a separate venv /
-  `pip install -e ".[jupyterlite]"` in its own environment)
+- To build the **JupyterLite** output format, just make sure `uv` is installed
+  (`uvx` on PATH); clm runs `jupyter lite build` in an isolated tool env — there
+  is nothing to add to clm's own environment.
 - External tools (PlantUML JAR, Draw.io app) still required for those workers
 
 ## External Tool Dependencies

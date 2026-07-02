@@ -444,8 +444,10 @@ clm build --watch               # Watch for changes and auto-rebuild
 - Apply optional branding via `overrides.json` (theme, logo, site name)
 - Write a deterministic `jupyterlite-manifest.json` for content-addressed caching
 
-**Dependencies** (optional, install with `[jupyterlite]`):
-- jupyterlite-core, jupyterlite-pyodide-kernel, jupyterlite-xeus, jupyter-server
+**Dependencies** (not a clm extra): the build shells out to `jupyter lite build`
+in an isolated `uvx` tool env pinned in `builder.py` (jupyterlite-core,
+jupyterlite-pyodide-kernel, jupyterlite-xeus, jupyter-server). clm's env only
+needs `uv` on PATH — see `docs/claude/design/dependency-environment-isolation.md`.
 
 **Location**: `src/clm/workers/jupyterlite/`
 
@@ -1171,10 +1173,12 @@ distributed repo.
 
 Site-level bundler that consumes already-built notebook output and produces
 a deployable JupyterLite static site. Opt-in only via `<jupyterlite>` config
-block + `<format>jupyterlite</format>` per target. Requires `[jupyterlite]`.
+block + `<format>jupyterlite</format>` per target. Not a clm extra — the build
+runs in an isolated `uvx` tool env (needs only `uv` on PATH).
 
 - `builder` — `build_site(BuildArgs)` orchestrator: assembles lite-dir,
-  shells out to `jupyter lite build`, emits launcher + README + manifest.
+  shells out to `jupyter lite build` in a pinned `uvx` tool env, emits launcher
+  + README + manifest.
 - `lite_dir` — pure-IO assembler: `assemble_lite_dir()`, `write_overrides()`,
   `hash_manifest()`.
 - `miniserve` — download/cache/verify prebuilt binaries, emit per-OS launcher

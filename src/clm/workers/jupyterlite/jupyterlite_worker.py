@@ -2,11 +2,11 @@
 
 Pulls ``jupyterlite`` jobs off the shared queue, reconstructs a
 ``BuildArgs`` bundle from the payload, and shells out to
-``jupyter lite build``. The heavy ``jupyterlite-core`` dependency is
-imported lazily (inside ``build_site``) so that the worker module
-itself is safe to import even when the ``[jupyterlite]`` extra is
-absent — that way discovery/registration code paths don't explode on
-installs that never opt into the format.
+``jupyter lite build`` in an isolated ``uvx`` tool environment. clm never
+installs or imports ``jupyterlite-core`` — the tool env is provisioned on
+demand (needs only ``uv`` on PATH) — so the worker module is always safe to
+import; discovery/registration code paths never depend on the JupyterLite
+toolchain being present.
 """
 
 from __future__ import annotations

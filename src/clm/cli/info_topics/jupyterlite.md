@@ -128,6 +128,16 @@ and miniserve launcher:
 - `clm jupyterlite preview --target <name> <spec.xml>` — serves a previously
   built JupyterLite site locally.
 
+## Build requirements
+
+CLM does **not** install the JupyterLite toolchain into its own environment.
+`clm build` shells out to `jupyter lite build` inside an isolated `uvx`
+(`uv tool run`) environment with pinned versions of `jupyterlite-core`, both
+kernel addons, and `jupyter-server`. The only requirement is that
+[`uv`](https://docs.astral.sh/uv/) is installed and `uvx` is on your PATH; the
+first build provisions the tool env automatically and later builds reuse uv's
+cache. This keeps `jupyterlite-core`/`empack` out of CLM's dependency graph.
+
 ## Validation
 
 At spec-parse time:

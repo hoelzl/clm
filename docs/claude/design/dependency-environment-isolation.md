@@ -1,7 +1,8 @@
 # Design: dependency-environment isolation (three roles, three environments)
 
-Status: proposed (2026-07-02). Wave 1 (packaging) has shipped; this document
-specifies Wave 2 (the structural split). Context: issue #516 follow-up.
+Status: in progress (2026-07-02). Wave 1 (packaging) and Wave 2a (JupyterLite
+tool env) have shipped; Wave 2b (course-runtime kernel env) is still proposed.
+Context: issue #516 follow-up.
 
 ## Problem
 
@@ -124,8 +125,10 @@ mitmproxy transport) and confirm none leak constraints into clm's resolution.
   default `uv sync` group; fork jupyterlite via `[tool.uv] conflicts` so clm's
   CLI gets modern Click; CI installs from the lock. Removes the immediate
   landmine without any worker-code change. (This PR.)
-- **Wave 2a:** Role C — move the JupyterLite build to a `uvx` tool env; drop the
-  `[jupyterlite]` extra + conflict.
+- **Wave 2a (shipped):** Role C — the JupyterLite build now shells out to a
+  pinned `uvx` tool env (`src/clm/workers/jupyterlite/builder.py`); the
+  `[jupyterlite]` extra and the `[tool.uv] conflicts` fork are deleted. clm's
+  env only needs `uv` on PATH.
 - **Wave 2b:** Role B — kernelspec/`JUPYTER_PATH` course-venv wiring (route 1),
   then the interpreter knob (route 2). Remove `[ml]` as a clm extra.
 

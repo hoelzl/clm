@@ -29,16 +29,16 @@ logger = logging.getLogger(__name__)
 
 
 def _get_jupyterlite_core_version() -> str:
-    """Return the installed ``jupyterlite-core`` version, or ``""`` if missing."""
-    try:
-        from importlib.metadata import PackageNotFoundError, version
+    """Return the ``jupyterlite-core`` version used for the build cache key.
 
-        try:
-            return version("jupyterlite-core")
-        except PackageNotFoundError:
-            return ""
-    except Exception:
-        return ""
+    The site build runs in an isolated ``uvx`` tool env (Wave 2a), not clm's
+    own venv, so jupyterlite-core is no longer importable here — the version is
+    the pin the tool env is built from (``builder.JUPYTERLITE_CORE_VERSION``).
+    Bumping that pin invalidates previously-cached sites, which is what we want.
+    """
+    from clm.workers.jupyterlite.builder import JUPYTERLITE_CORE_VERSION
+
+    return JUPYTERLITE_CORE_VERSION
 
 
 @frozen
