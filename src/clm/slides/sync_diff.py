@@ -42,6 +42,7 @@ import-cleanliness test (design §12.5).
 from __future__ import annotations
 
 import hashlib
+import re
 from collections import Counter
 from difflib import SequenceMatcher
 from typing import Literal
@@ -160,6 +161,27 @@ def content_fingerprint(cell: SideCell) -> str:
     return hashlib.sha256("\n".join(_lines_sans_id(cell)).encode("utf-8")).hexdigest()
 
 
+# The for_slide attribute, stripped alongside slide_id for the owner-free
+# signature: an owner re-home (or a group rename cascading into for_slide)
+# must not read as a content edit.
+_FOR_SLIDE_ATTR_RE = re.compile(r'\s*for_slide="[^"]*"')
+
+
+def _pair_sig(cell: SideCell) -> str:
+    """The content fingerprint additionally modulo the ``for_slide`` attribute.
+
+    Everything except identity (slide_id) and ownership (for_slide) —
+    body, tags, lang attr, vo_anchor, unknown header attrs, separator
+    bytes. When this signature is base-identical on both sides, the only
+    thing that can have moved is the owner reference, which has its own
+    rows — so the content classification can be skipped without silencing
+    any other one-sided drift (the review's early-return finding).
+    """
+    lines = _lines_sans_id(cell)
+    header = _FOR_SLIDE_ATTR_RE.sub("", lines[0])
+    return hashlib.sha256("\n".join((header, *lines[1:])).encode("utf-8")).hexdigest()
+
+
 def _body_fp(cell: SideCell) -> str:
     return hashlib.sha256(cell.body.encode("utf-8")).hexdigest()
 
@@ -197,9 +219,18 @@ class MemberBaseline:
     en_body_fp: str | None
     de_tags: tuple[str, ...] | None
     en_tags: tuple[str, ...] | None
+    de_sig: str | None = None  # owner-free signature (see _pair_sig)
+    en_sig: str | None = None
 
     def side_fp(self, lang: Lang) -> str | None:
         return self.de_fp if lang == "de" else self.en_fp
+
+    def side_sig(self, lang: Lang) -> str | None:
+        return self.de_sig if lang == "de" else self.en_sig
+
+    @property
+    def one_sided(self) -> bool:
+        return (self.de_fp is None) != (self.en_fp is None)
 
 
 @define
@@ -214,10 +245,16 @@ class DeckBaseline:
     """
 
     members: dict[str, MemberBaseline] = field(factory=dict)
-    #: anchor ids in base document order (group-level order diff)
+    #: anchor ids in base document order (rename detection)
     group_order: list[str] = field(factory=list)
-    #: per (group, part): member key handles in base document order
-    member_order: dict[tuple[str, str], list[str]] = field(factory=dict)
+    #: per side: anchor ids in that side's file order (order diff — per
+    #: side, never the DE-biased merged order)
+    group_order_by_side: dict[Lang, list[str]] = field(factory=dict)
+    #: per (lang, group, part): ID-KEYED member handles in that side's file
+    #: order. Positional handles are excluded — their ordinals renumber on
+    #: any insert/remove, so they alias different cells across states (the
+    #: pool alignment owns their order instead).
+    member_order: dict[tuple[Lang, str, str], list[str]] = field(factory=dict)
     #: per (lang, part): preamble fingerprint (None = file absent at base)
     preamble_fps: dict[tuple[str, str], str | None] = field(factory=dict)
     complete: bool = True
@@ -225,7 +262,8 @@ class DeckBaseline:
 
 def _member_group_token(member: Member, owner_group: str) -> str:
     if member.key.scheme == "pos":
-        return member.key.value.split("/", 1)[0]
+        # rsplit: a group token may itself contain "/" (ids are free-form)
+        return member.key.value.rsplit("/", 2)[0]
     return owner_group
 
 
@@ -251,6 +289,7 @@ def baseline_from_deck(deck: BilingualDeck) -> DeckBaseline:
     ``complete=False``.
     """
     base = DeckBaseline(complete=True)
+    order: dict[tuple[Lang, str, str], list[tuple[int, str]]] = {}
     for member, group_token in _iter_with_groups(deck):
         entry = MemberBaseline(
             key=member.key.render(),
@@ -265,13 +304,29 @@ def baseline_from_deck(deck: BilingualDeck) -> DeckBaseline:
             en_body_fp=_body_fp(member.en) if member.en else None,
             de_tags=member.de.tags if member.de else None,
             en_tags=member.en.tags if member.en else None,
+            de_sig=_pair_sig(member.de) if member.de else None,
+            en_sig=_pair_sig(member.en) if member.en else None,
         )
         base.members[entry.key] = entry
-        for part in ("deck", "companion"):
-            sides = [s for s in (member.de, member.en) if s is not None and s.part == part]
-            if sides:
-                base.member_order.setdefault((group_token, part), []).append(entry.key)
+        if member.key.scheme != "id":
+            continue  # pos handles alias across states — never order-tracked
+        for lang in _SIDES:
+            cell = member.side(lang)
+            if cell is not None:
+                order.setdefault((lang, group_token, cell.part), []).append((cell.index, entry.key))
+    base.member_order = {
+        key: [handle for _, handle in sorted(entries)] for key, entries in order.items()
+    }
     base.group_order = [g.anchor_id for g in deck.groups]
+    for lang in _SIDES:
+        seq: list[tuple[int, str]] = []
+        for group in deck.groups:
+            if group.anchor is None:
+                continue
+            cell = group.anchor.side(lang)
+            if cell is not None and cell.part == "deck":
+                seq.append((cell.index, group.anchor_id))
+        base.group_order_by_side[lang] = [gid for _, gid in sorted(seq)]
     base.preamble_fps = {
         ("de", "deck"): _lines_fp(deck.de_deck_preamble),
         ("en", "deck"): _lines_fp(deck.en_deck_preamble),
@@ -431,8 +486,14 @@ class _Differ:
         self.group_map: dict[str, str] = {}
         #: current pos members, for mid-transition twin absorption
         self._pos_members: list[tuple[Member, str]] = []
+        #: current id-keyed members, for conflicting-stamp detection
+        self._id_members: list[tuple[Member, str]] = []
         #: pos members absorbed into a transition item (skipped by pools)
         self.absorbed_pos: set[int] = set()
+        #: id-keyed members consumed by another member's conflict item
+        self.consumed_id_members: set[str] = set()
+        #: content fps of migrated base entries → the winning id handle
+        self.migrated_fps: dict[str, str] = {}
 
     # -- plumbing ---------------------------------------------------------
 
@@ -485,6 +546,7 @@ class _Differ:
         id_members = [(m, g) for m, g in members if m.key.scheme == "id"]
         pos_members = [(m, g) for m, g in members if m.key.scheme == "pos"]
         self._pos_members = pos_members
+        self._id_members = id_members
 
         self._detect_group_renames()
         self._emit_pending_id_stamps()
@@ -574,6 +636,8 @@ class _Differ:
         handle = member.key.render()
         if handle in self.key_migrations.values():
             return  # already emitted as a group rename transition
+        if handle in self.consumed_id_members:
+            return  # claimed by another member's conflict item
         entry = self.base.members.get(handle)
         if entry is None:
             entry = self._match_key_migration(member, group)
@@ -603,7 +667,7 @@ class _Differ:
         for entry in self.base.members.values():
             if entry.key in self.matched_base_keys or not entry.key.startswith("pos:"):
                 continue
-            token, kind, _ = entry.key.split(":", 1)[1].split("/")
+            token, kind, _ = entry.key.split(":", 1)[1].rsplit("/", 2)
             if token != base_group or kind != member.kind:
                 continue
             content_match = (entry.de_fp, entry.en_fp) == fps or (
@@ -619,8 +683,64 @@ class _Differ:
                 and entry.de_body_fp in body_fps
             )
             if content_match or fork_match:
-                self.key_migrations[entry.key] = member.key.render()
+                new_handle = member.key.render()
+                self.key_migrations[entry.key] = new_handle
+                for fp in (entry.de_fp, entry.en_fp):
+                    if fp is not None:
+                        self.migrated_fps[fp] = new_handle
                 return entry
+        return None
+
+    def _stamped_candidate_exists(self, group: str, kind: str, side: Lang) -> bool:
+        """An unmatched one-sided id'd current member on ``side`` in this
+        pool's group/kind — the shape a stamped(+edited) pool cell takes."""
+        assert self.base is not None
+        migration_targets = set(self.key_migrations.values())
+        for candidate, owner_group in self._id_members:
+            if not candidate.is_one_sided or candidate.kind != kind:
+                continue
+            if owner_group != group or candidate.side(side) is None:
+                continue
+            handle = candidate.key.render()
+            if handle in self.base.members or handle in migration_targets:
+                continue
+            return True
+        return False
+
+    def _pool_side_deficit(self, group: str, kind: str, side: Lang) -> bool:
+        """True when the (group, kind) pool has fewer current cells on
+        ``side`` than unclaimed base entries recorded that side — some base
+        cell is unaccounted for there."""
+        assert self.base is not None
+        base_token = self._base_group_for(group)
+        base_count = 0
+        for entry in self.base.members.values():
+            if not entry.key.startswith("pos:") or entry.key in self.matched_base_keys:
+                continue
+            token, entry_kind, _ = entry.key.split(":", 1)[1].rsplit("/", 2)
+            if token == base_token and entry_kind == kind and entry.side_fp(side) is not None:
+                base_count += 1
+        cur_count = 0
+        for candidate, owner_group in self._pos_members:
+            if id(candidate) in self.absorbed_pos or candidate.kind != kind:
+                continue
+            if _member_group_token(candidate, owner_group) != group:
+                continue
+            if candidate.side(side) is not None:
+                cur_count += 1
+        return base_count > cur_count
+
+    def _conflicting_stamp(self, member: Member) -> str | None:
+        """The winner's handle when this cell's content already migrated a
+        positional base entry to a *different* id — the two halves stamped
+        competing ids onto the same cell (never resolved silently, P8)."""
+        my_handle = member.key.render()
+        for fp in self._member_fps(member):
+            if fp is None:
+                continue
+            winner = self.migrated_fps.get(fp)
+            if winner is not None and winner != my_handle:
+                return winner
         return None
 
     def _base_group_for(self, current_group: str) -> str:
@@ -684,6 +804,34 @@ class _Differ:
                 member=member,
             )
             return
+        rival = self._conflicting_stamp(member)
+        if rival is not None:
+            self.emit(
+                handle,
+                "conflict",
+                "ambiguous_alignment",
+                "both",
+                f"conflicting id stamps: this cell's content matched a positional "
+                f"base entry already claimed by {rival} — the halves stamped "
+                f"different ids onto the same cell; decide which id wins",
+                group=group,
+                member=member,
+            )
+            return
+        if member.role == "header":
+            side_h: Lang = "de" if member.de is not None else "en"
+            self.emit(
+                handle,
+                "add",
+                "translate_new",
+                "de_to_en" if side_h == "de" else "en_to_de",
+                f"new header member on the {side_h} side — headers are "
+                f"per-language, adapt for the twin",
+                group=group,
+                side=side_h,
+                member=member,
+            )
+            return
         if member.langness == "localized" and member.role != "header":
             side: Lang | None = "de" if member.en is None else "en" if member.de is None else None
             self.emit(
@@ -701,6 +849,24 @@ class _Differ:
             return
         if member.is_one_sided:
             side = "de" if member.de is not None else "en"
+            if self._pool_side_deficit(group, member.kind, side):
+                # A base cell of this pool is unaccounted for on this side:
+                # the "new" id'd cell is plausibly that cell, stamped AND
+                # edited. A mechanical copy could duplicate it on apply —
+                # frame instead (P8).
+                self.emit(
+                    handle,
+                    "conflict",
+                    "ambiguous_alignment",
+                    "both",
+                    f"new id'd cell on the {side} side while a positional base "
+                    f"cell of this pool is unaccounted for — possibly the same "
+                    f"cell stamped and edited; reconcile before copying",
+                    group=group,
+                    side=side,
+                    member=member,
+                )
+                return
             self.emit(
                 handle,
                 "add",
@@ -748,10 +914,41 @@ class _Differ:
             or entry.role == "header"
             or self._observed_langness(member) == entry.langness
         )
-        if self._has_item(handle) and stable_class and self._only_owner_moved(member, entry):
-            # The content fingerprint moved *because* the owner attribute is
-            # part of the header bytes; the owner/layout item already covers
-            # it — and no langness transition is being suppressed.
+        two_sided = member.de is not None and member.en is not None
+        base_two_sided = entry.de_fp is not None and entry.en_fp is not None
+        cross_divergent = (
+            entry.langness == "shared"
+            and member.role != "header"
+            and member.de is not None
+            and member.en is not None
+            and _pair_sig(member.de) != _pair_sig(member.en)
+        )
+        if (
+            stable_class
+            and two_sided
+            and base_two_sided
+            and not cross_divergent
+            and self._only_owner_moved(member, entry)
+        ):
+            # The owner-free signature is base-identical on every side:
+            # whatever moved the content fingerprint was the owner attribute
+            # alone. The owner/layout rows above cover an actual re-home; an
+            # owner delta fully explained by a group rename (mapped through
+            # key_migrations) needs nothing at all. One-sided states never
+            # take this shortcut — a pending twin is work regardless.
+            if migrated is not None and not self._has_item(handle):
+                self.emit(
+                    handle,
+                    "transition",
+                    "record_key_migration",
+                    "none",
+                    f"member key migrates {entry.key} → {migrated}",
+                    group=group,
+                    member=member,
+                    base=entry,
+                )
+            elif not self._has_item(handle):
+                self.in_sync += 1
             return
         if member.de and member.en and member.de.cell_type != member.en.cell_type:
             self.emit(
@@ -803,17 +1000,14 @@ class _Differ:
 
     @staticmethod
     def _only_owner_moved(member: Member, entry: MemberBaseline) -> bool:
-        """True when body and tags are base-identical on every present side —
-        i.e. the content fingerprint moved only through the owner attribute."""
-        for cell, body_fp, tags in (
-            (member.de, entry.de_body_fp, entry.de_tags),
-            (member.en, entry.en_body_fp, entry.en_tags),
-        ):
+        """True when the owner-free signature (:func:`_pair_sig` — every
+        byte except the slide_id and for_slide attributes) is base-identical
+        on every present side: the content fingerprint can only have moved
+        through the owner reference."""
+        for cell, sig in ((member.de, entry.de_sig), (member.en, entry.en_sig)):
             if cell is None:
                 continue
-            if body_fp is not None and _body_fp(cell) != body_fp:
-                return False
-            if tags is not None and cell.tags != tags:
+            if sig is None or _pair_sig(cell) != sig:
                 return False
         return True
 
@@ -920,16 +1114,19 @@ class _Differ:
     def _classify_shared(
         self, member: Member, group: str, entry: MemberBaseline, handle: str
     ) -> None:
-        base_fp = entry.de_fp if entry.de_fp is not None else entry.en_fp
-        de_fp, en_fp = self._member_fps(member)
-        moved_de = de_fp != base_fp and member.de is not None
-        moved_en = en_fp != base_fp and member.en is not None
-
         if (entry.de_fp is None) != (entry.en_fp is None):
             self._classify_base_one_sided(member, group, entry, handle)
             return
+        de_fp, en_fp = self._member_fps(member)
+        # Each side moves against ITS OWN recorded fingerprint: a baseline
+        # that itself carried a divergence must never make the unchanged
+        # twin look edited (the review's false-propagate finding).
+        moved_de = member.de is not None and de_fp != entry.de_fp
+        moved_en = member.en is not None and en_fp != entry.en_fp
+        base_diverged = entry.de_fp != entry.en_fp
+
         if member.de is None or member.en is None:
-            self._classify_one_sided(member, group, entry, handle, base_fp)
+            self._classify_one_sided(member, group, entry, handle)
             return
         if not moved_de and not moved_en:
             if de_fp != en_fp:  # base itself carried the divergence
@@ -953,19 +1150,24 @@ class _Differ:
                 "mechanical",
                 "record_symmetric_edit",
                 "both",
-                "identical edit on both sides — record the new fingerprint",
+                "the sides converged on identical bytes — record the new fingerprint",
                 group=group,
                 member=member,
                 base=entry,
             )
             return
-        if moved_de and moved_en:
+        if (moved_de and moved_en) or base_diverged:
+            # Both moved — or one moved while the pair was already diverged
+            # at base: either way no side is a safe verbatim source.
             self.emit(
                 handle,
                 "conflict",
-                "conflict_shared",
-                "both",
-                "both sides moved off base and differ",
+                "conflict_shared" if moved_de and moved_en else "pending_divergence",
+                "both" if moved_de and moved_en else "none",
+                "both sides moved off base and differ"
+                if moved_de and moved_en
+                else "one side moved while the pair was already diverged at base — "
+                "align before recording",
                 group=group,
                 member=member,
                 base=entry,
@@ -1083,15 +1285,55 @@ class _Differ:
         group: str,
         entry: MemberBaseline,
         handle: str,
-        base_fp: str | None,
     ) -> None:
-        """Base class shared, current one-sided: a removal in progress —
-        unless the surviving side also edited (remove vs edit, framed)."""
+        """Base class shared (two-sided), current one-sided.
+
+        A removal in progress — unless the "removed" side is actually still
+        present as an estranged cell the parse could not pair (a rival id
+        stamp, or a mid-transition twin combined with an edit). Concluding
+        ``mirror_remove`` in those states would delete real content on
+        apply, so any estranged candidate downgrades the row to a framed
+        decision (P8: never a silent default).
+        """
         present: Lang = "de" if member.de is not None else "en"
         gone: Lang = "en" if present == "de" else "de"
         cell = member.side(present)
         assert cell is not None
-        if content_fingerprint(cell) == base_fp:
+
+        rival = self._find_rival_stamp(member, group, gone, entry)
+        if rival is not None:
+            self.consumed_id_members.add(rival.key.render())
+            self.emit(
+                handle,
+                "conflict",
+                "ambiguous_alignment",
+                "both",
+                f"the halves stamped competing ids onto the same cell "
+                f"({handle} vs {rival.key.render()}) — decide which id wins",
+                group=group,
+                member=member,
+                base=entry,
+            )
+            return
+        if entry.key.startswith("pos:"):
+            # The entry only just migrated pos→id: the "gone" twin is very
+            # likely the estranged id-less cell, not a removal.
+            estranged = self._absorb_any_pos_twin(group, member.kind, gone)
+            if estranged is not None:
+                self.emit(
+                    handle,
+                    "conflict",
+                    "ambiguous_alignment",
+                    "both",
+                    f"the {gone} half holds an unpaired cell where this member's twin "
+                    f"used to be (mid-stamp or mid-transition combined with an edit) — "
+                    f"reconcile the pair manually",
+                    group=group,
+                    member=member,
+                    base=entry,
+                )
+                return
+        if content_fingerprint(cell) == entry.side_fp(present):
             self.emit(
                 handle,
                 "remove",
@@ -1115,6 +1357,50 @@ class _Differ:
                 member=member,
                 base=entry,
             )
+
+    def _find_rival_stamp(
+        self, member: Member, group: str, gone: Lang, entry: MemberBaseline
+    ) -> Member | None:
+        """A one-sided id-keyed member on the ``gone`` side whose bytes match
+        this member's base entry: the same base cell stamped with two ids."""
+        assert self.base is not None
+        for candidate, owner_group in self._id_members:
+            if candidate is member or not candidate.is_one_sided:
+                continue
+            handle = candidate.key.render()
+            if handle in self.consumed_id_members or handle in self.base.members:
+                continue  # already handled / a genuinely matched member
+            cell = candidate.side(gone)
+            if cell is None or candidate.kind != member.kind or owner_group != group:
+                continue
+            if content_fingerprint(cell) == entry.side_fp(gone) or _body_fp(cell) == (
+                entry.de_body_fp if gone == "de" else entry.en_body_fp
+            ):
+                return candidate
+        return None
+
+    def _absorb_any_pos_twin(self, group: str, kind: str, lang: Lang) -> Member | None:
+        """Claim the single unpaired positional cell on ``lang`` in this pool.
+
+        Used only for framed rows: when exactly one estranged candidate
+        exists it is almost certainly the mid-transition twin, and claiming
+        it prevents the pool from re-reporting it as a mechanical
+        copy/remove. Zero or several candidates → no claim (ambiguity stays
+        with the pool's own alignment)."""
+        candidates = []
+        for candidate, owner_group in self._pos_members:
+            if id(candidate) in self.absorbed_pos or candidate.kind != kind:
+                continue
+            token = _member_group_token(candidate, owner_group)
+            if token != group or not candidate.is_one_sided:
+                continue
+            if candidate.side(lang) is None:
+                continue
+            candidates.append(candidate)
+        if len(candidates) != 1:
+            return None
+        self.absorbed_pos.add(id(candidates[0]))
+        return candidates[0]
 
     # -- base class localized ---------------------------------------------------
 
@@ -1284,13 +1570,18 @@ class _Differ:
                 base=entry,
             )
             return
+        # A byte-exact twin was not found — the estranged cell may ALSO have
+        # been edited. Claim a lone unpaired candidate so the pool cannot
+        # re-report it as a mechanical copy that would duplicate the cell.
+        self._absorb_any_pos_twin(group, member.kind, gone)
         self.emit(
             handle,
             "conflict",
             "remove_localized_side",
             "both" if other_moved else ("de_to_en" if gone == "en" else "en_to_de"),
-            f"the {gone} variant of a localized member was deleted — removal intent, "
-            f"unify intent, or an accident: decide",
+            f"the {gone} variant of a localized member was deleted (or stripped of "
+            f"its lang attribute and edited) — removal intent, unify intent, or an "
+            f"accident: decide",
             group=group,
             side=gone,
             member=member,
@@ -1329,6 +1620,12 @@ class _Differ:
                 body_fp=entry.de_body_fp if missing == "de" else entry.en_body_fp,
                 content_fp=entry.side_fp(missing),
             )
+            if twin is None:
+                # The unmarked twin may ALSO have been edited: claim a lone
+                # unpaired candidate so the pool cannot re-report it as a
+                # mechanical copy that would duplicate the cell (§7.3: a
+                # fork cannot destabilize its neighbors).
+                twin = self._absorb_any_pos_twin(group, member.kind, missing)
             if twin is not None:
                 self.emit(
                     handle,
@@ -1455,18 +1752,18 @@ class _Differ:
         for key, entry in self.base.members.items():
             if not key.startswith("pos:") or key in consumed_base:
                 continue
-            token, kind, ordinal = key.split(":", 1)[1].split("/")
+            token, kind, _ordinal = key.split(":", 1)[1].rsplit("/", 2)
             mapped = self.group_map.get(token, token)
             base_pools.setdefault((mapped, kind), []).append(entry)
         for pool in base_pools.values():
             pool.sort(key=lambda e: int(e.key.rsplit("/", 1)[1]))
 
         for pool_key in sorted(set(pools) | set(base_pools), key=str):
-            group, _kind = pool_key
-            self._align_pool(group, pools.get(pool_key, []), base_pools.get(pool_key, []))
+            group, kind = pool_key
+            self._align_pool(group, kind, pools.get(pool_key, []), base_pools.get(pool_key, []))
 
     def _align_pool(
-        self, group: str, members: list[Member], base_entries: list[MemberBaseline]
+        self, group: str, kind: str, members: list[Member], base_entries: list[MemberBaseline]
     ) -> None:
         localized_pool = any(m.langness == "localized" for m in members) or any(
             e.langness == "localized" for e in base_entries
@@ -1478,32 +1775,54 @@ class _Differ:
                 if cell is not None:
                     per_side[lang].append((content_fingerprint(cell), member))
 
+        # ``absent`` marks a base slot whose side never existed — it takes
+        # no part in that side's alignment (a phantom slot could steal a
+        # byte-identical real cell, the review's critical finding).
         status: dict[Lang, list[tuple[str, Member | None]]] = {}
         news: dict[Lang, list[Member]] = {}
         moved_sides: dict[Lang, bool] = {"de": False, "en": False}
         for lang in _SIDES:
-            # Each side aligns against its OWN base fingerprints (falling
-            # back to the twin's for a one-sided base entry), so a baseline
-            # that itself carried a divergence still aligns cleanly.
-            base_fps = [
-                (e.side_fp(lang) or e.side_fp("en" if lang == "de" else "de")) or ""
-                for e in base_entries
-            ]
-            side_status, side_new = self._align_side(base_fps, per_side[lang])
-            # A "new" cell byte-equal to a "missing" slot is a move within
-            # the pool, not a remove + add: reclaim it and note the reorder.
-            for idx, (state, _) in enumerate(side_status):
-                if state != "missing":
-                    continue
-                for candidate in side_new:
-                    cell = candidate.side(lang)
-                    if cell is not None and content_fingerprint(cell) == base_fps[idx]:
-                        side_status[idx] = ("same", candidate)
-                        side_new.remove(candidate)
-                        moved_sides[lang] = True
-                        break
+            slot_map = [i for i, e in enumerate(base_entries) if e.side_fp(lang) is not None]
+            base_fps = [base_entries[i].side_fp(lang) or "" for i in slot_map]
+            aligned, side_new, moved = self._align_side(base_fps, per_side[lang])
+            side_status: list[tuple[str, Member | None]] = [("absent", None) for _ in base_entries]
+            for pos, verdict in zip(slot_map, aligned, strict=True):
+                side_status[pos] = verdict
             status[lang] = side_status
             news[lang] = side_new
+            moved_sides[lang] = moved
+
+        # A pending twin that LANDED shows up as a "new" cell on the side
+        # its base entry never had: claim it for the entry before the news
+        # are classified (otherwise it reads as an add to copy — duplicating
+        # the cell). Byte-identical claims first; then a LONE remaining
+        # candidate (the twin landed with edits — framed downstream); with
+        # several candidates the slot stays ambiguous and never mechanical.
+        for idx, entry in enumerate(base_entries):
+            if not entry.one_sided:
+                continue
+            pending: Lang = "de" if entry.de_fp is None else "en"
+            recorded: Lang = "en" if pending == "de" else "de"
+            rec_state, rec_member = status[recorded][idx]
+            if rec_state in ("absent", "missing"):
+                continue
+            want = {entry.side_fp(recorded) or ""}
+            rec_cell = rec_member.side(recorded) if rec_member else None
+            if rec_cell is not None:
+                want.add(content_fingerprint(rec_cell))
+            claimed = None
+            for candidate in news[pending]:
+                cell = candidate.side(pending)
+                if cell is not None and content_fingerprint(cell) in want:
+                    claimed = candidate
+                    break
+            if claimed is None and len(news[pending]) == 1:
+                claimed = news[pending][0]
+            if claimed is not None:
+                news[pending].remove(claimed)
+                status[pending][idx] = ("landed", claimed)
+            elif news[pending]:
+                status[pending][idx] = ("ambiguous", None)
 
         for idx, entry in enumerate(base_entries):
             de_state, de_member = status["de"][idx]
@@ -1512,21 +1831,40 @@ class _Differ:
             self._classify_pool_slot(group, entry, de_state, en_state, de_member, en_member)
 
         self._classify_pool_news(group, news["de"], news["en"], localized_pool)
-        self._emit_pool_moves(group, moved_sides)
+        self._emit_pool_moves(group, kind, moved_sides, per_side)
 
-    def _emit_pool_moves(self, group: str, moved_sides: dict[Lang, bool]) -> None:
+    def _emit_pool_moves(
+        self,
+        group: str,
+        kind: str,
+        moved_sides: dict[Lang, bool],
+        per_side: dict[Lang, list[tuple[str, Member]]],
+    ) -> None:
         if not (moved_sides["de"] or moved_sides["en"]):
             return
-        handle = MemberKey.positional(group, "pool", 0).render()
+        handle = MemberKey.positional(group, f"pool.{kind}", 0).render()
         if moved_sides["de"] and moved_sides["en"]:
-            self.emit(
-                handle,
-                "order",
-                "order_decision",
-                "both",
-                f"positional members of group {group!r} moved on both sides — align",
-                group=group,
-            )
+            de_fps = [fp for fp, _ in per_side["de"]]
+            en_fps = [fp for fp, _ in per_side["en"]]
+            if de_fps == en_fps:
+                self.emit(
+                    handle,
+                    "order",
+                    "record_order",
+                    "both",
+                    f"positional {kind} members of group {group!r} reordered "
+                    f"identically on both sides — record",
+                    group=group,
+                )
+            else:
+                self.emit(
+                    handle,
+                    "order",
+                    "order_decision",
+                    "both",
+                    f"positional {kind} members of group {group!r} moved on both sides — align",
+                    group=group,
+                )
             return
         moved: Lang = "de" if moved_sides["de"] else "en"
         self.emit(
@@ -1534,8 +1872,8 @@ class _Differ:
             "order",
             "mirror_order",
             "de_to_en" if moved == "de" else "en_to_de",
-            f"positional members of group {group!r} moved on the {moved} side — "
-            f"mirror the new order to the twin",
+            f"positional {kind} members of group {group!r} moved on the {moved} "
+            f"side — mirror the new order to the twin",
             group=group,
             side=moved,
         )
@@ -1543,36 +1881,61 @@ class _Differ:
     @staticmethod
     def _align_side(
         base_fps: list[str], current: list[tuple[str, Member]]
-    ) -> tuple[list[tuple[str, Member | None]], list[Member]]:
+    ) -> tuple[list[tuple[str, Member | None]], list[Member], bool]:
         """Align one side's cell sequence to the base pool by fingerprint.
 
-        Returns per-base-slot ``(state, member)`` — state ∈ ``same`` /
-        ``changed`` / ``missing`` — plus the list of genuinely new members.
-        ``SequenceMatcher`` opcodes make the classification positional and
-        order-preserving: equal blocks are untouched cells, replace blocks
-        pair base and current slots in order (edits), delete blocks are
-        removals, insert blocks are additions.
+        Two passes (§3.3's discipline): fingerprints that occur exactly once
+        on each side match directly — wherever they sit, so a non-adjacent
+        reorder is a *move*, never an edit+remove+add cascade — and the
+        residue aligns positionally via ``SequenceMatcher`` (equal blocks =
+        untouched duplicates, replace = edits, delete = removals, insert =
+        additions). Returns per-base-slot ``(state, member)`` (state ∈
+        ``same`` / ``changed`` / ``missing``), the genuinely new members,
+        and whether the matched pairs are out of order (a reorder).
         """
         cur_fps = [fp for fp, _ in current]
-        matcher = SequenceMatcher(a=base_fps, b=cur_fps, autojunk=False)
+        base_count = Counter(base_fps)
+        cur_count = Counter(cur_fps)
         status: list[tuple[str, Member | None]] = [("missing", None)] * len(base_fps)
+        pairs: list[tuple[int, int]] = []
+        used: set[int] = set()
+        for i, fp in enumerate(base_fps):
+            if fp and base_count[fp] == 1 and cur_count.get(fp) == 1:
+                j = cur_fps.index(fp)
+                status[i] = ("same", current[j][1])
+                used.add(j)
+                pairs.append((i, j))
+        residue_base = [i for i in range(len(base_fps)) if status[i][0] == "missing"]
+        residue_cur = [j for j in range(len(cur_fps)) if j not in used]
+        matcher = SequenceMatcher(
+            a=[base_fps[i] for i in residue_base],
+            b=[cur_fps[j] for j in residue_cur],
+            autojunk=False,
+        )
         new: list[Member] = []
         for tag, i1, i2, j1, j2 in matcher.get_opcodes():
             if tag == "equal":
                 for offset in range(i2 - i1):
-                    status[i1 + offset] = ("same", current[j1 + offset][1])
+                    bi, cj = residue_base[i1 + offset], residue_cur[j1 + offset]
+                    status[bi] = ("same", current[cj][1])
+                    pairs.append((bi, cj))
             elif tag == "replace":
                 span = min(i2 - i1, j2 - j1)
                 for offset in range(span):
-                    status[i1 + offset] = ("changed", current[j1 + offset][1])
+                    bi, cj = residue_base[i1 + offset], residue_cur[j1 + offset]
+                    status[bi] = ("changed", current[cj][1])
+                    # deliberately NOT a `pairs` entry: a changed slot is a
+                    # positional guess, not fingerprint-identity evidence,
+                    # and must never count as a reorder.
                 for j in range(j1 + span, j2):
-                    new.append(current[j][1])
-                # base slots beyond the span stay "missing"
+                    new.append(current[residue_cur[j]][1])
             elif tag == "insert":
                 for j in range(j1, j2):
-                    new.append(current[j][1])
+                    new.append(current[residue_cur[j]][1])
             # "delete": base slots stay "missing"
-        return status, new
+        pairs.sort()
+        moved = any(c2 < c1 for (_, c1), (_, c2) in zip(pairs, pairs[1:], strict=False))
+        return status, new, moved
 
     def _classify_pool_slot(
         self,
@@ -1592,6 +1955,11 @@ class _Differ:
         """
         handle = entry.key
         member = de_member or en_member
+        if entry.one_sided:
+            self._classify_pool_slot_base_one_sided(
+                group, entry, de_state, en_state, de_member, en_member
+            )
+            return
         if de_state == "same" and en_state == "same":
             if (
                 entry.langness == "shared"
@@ -1629,16 +1997,27 @@ class _Differ:
                 group, entry, de_state, en_state, de_member, en_member
             )
             return
-        if (entry.de_fp is None) != (entry.en_fp is None):
-            self._classify_pool_slot_base_one_sided(
-                group, entry, de_state, en_state, de_member, en_member
-            )
-            return
         states = (de_state, en_state)
         if "missing" in states:
             gone: Lang = "de" if de_state == "missing" else "en"
             other_state = en_state if gone == "de" else de_state
-            if other_state == "same":
+            if self._stamped_candidate_exists(group, entry.kind, gone):
+                # An unmatched one-sided id'd cell exists on the "removed"
+                # side: the cell was plausibly stamped (and edited), not
+                # removed — a mechanical removal could delete real content.
+                self.emit(
+                    handle,
+                    "conflict",
+                    "ambiguous_alignment",
+                    "both",
+                    f"the {gone} side lost this positional cell while gaining an "
+                    f"unmatched id'd cell — possibly the same cell stamped and "
+                    f"edited; reconcile before removing",
+                    group=group,
+                    member=member,
+                    base=entry,
+                )
+            elif other_state == "same":
                 self.emit(
                     handle,
                     "remove",
@@ -1696,6 +2075,21 @@ class _Differ:
         twin_cell = en_cell if moved == "de" else de_cell
         if moved_cell is None:  # pragma: no cover - changed implies present
             return
+        if entry.de_fp != entry.en_fp:
+            # One side moved while the pair was already diverged at base —
+            # no side is a safe verbatim source (same rule as id-keyed).
+            self.emit(
+                handle,
+                "conflict",
+                "pending_divergence",
+                "none",
+                f"the {moved} side moved while the pair was already diverged at "
+                f"base — align before recording",
+                group=group,
+                member=member,
+                base=entry,
+            )
+            return
         if (
             twin_cell is not None
             and moved_cell.body == twin_cell.body
@@ -1736,17 +2130,20 @@ class _Differ:
         en_member: Member | None,
     ) -> None:
         """A pool slot whose twin was already missing at base (§ same rule
-        as :meth:`_classify_base_one_sided`: carried absence ≠ removal)."""
+        as :meth:`_classify_base_one_sided`: carried absence ≠ removal).
+
+        The pending side's state is ``absent`` (it never joined that side's
+        alignment) unless the landed-twin claim in :meth:`_align_pool`
+        upgraded it to ``landed``.
+        """
         handle = entry.key
         recorded: Lang = "de" if entry.de_fp is not None else "en"
         pending: Lang = "en" if recorded == "de" else "de"
-        rec_state = de_state if recorded == "de" else en_state
-        pen_state = en_state if recorded == "de" else de_state
-        member = (de_member if recorded == "de" else en_member) or (
-            en_member if recorded == "de" else de_member
-        )
-        if pen_state == "missing":
-            if rec_state == "missing":
+        rec_state, rec_member = (de_state, de_member) if recorded == "de" else (en_state, en_member)
+        pen_state, pen_member = (en_state, en_member) if recorded == "de" else (de_state, de_member)
+        member = rec_member or pen_member
+        if rec_state == "missing":
+            if pen_state == "absent":
                 self.emit(
                     handle,
                     "remove",
@@ -1756,7 +2153,33 @@ class _Differ:
                     group=group,
                     base=entry,
                 )
-                return
+            else:
+                self.emit(
+                    handle,
+                    "conflict",
+                    "remove_vs_edit",
+                    "both",
+                    f"the recorded {recorded} side vanished while the {pending} "
+                    f"twin landed — decide",
+                    group=group,
+                    member=member,
+                    base=entry,
+                )
+            return
+        if pen_state == "ambiguous":
+            self.emit(
+                handle,
+                "conflict",
+                "ambiguous_alignment",
+                "none",
+                f"the {pending} twin is pending while several unmatched new cells "
+                f"exist on that side — align manually before copying",
+                group=group,
+                member=member,
+                base=entry,
+            )
+            return
+        if pen_state == "absent":
             self.emit(
                 handle,
                 "add",
@@ -1769,23 +2192,13 @@ class _Differ:
                 base=entry,
             )
             return
-        if rec_state == "missing":
-            self.emit(
-                handle,
-                "conflict",
-                "remove_vs_edit",
-                "both",
-                f"the recorded {recorded} side vanished while the {pending} twin appeared — decide",
-                group=group,
-                member=member,
-                base=entry,
-            )
-            return
-        de_cell = de_member.de if de_member else None
-        en_cell = en_member.en if en_member else None
-        de_fp = content_fingerprint(de_cell) if de_cell else None
-        en_fp = content_fingerprint(en_cell) if en_cell else None
-        if de_fp == en_fp:
+        # pen_state == "landed": the pending twin appeared. Byte-equal to
+        # the recorded side → record; anything else → align first.
+        rec_cell = rec_member.side(recorded) if rec_member else None
+        pen_cell = pen_member.side(pending) if pen_member else None
+        rec_fp = content_fingerprint(rec_cell) if rec_cell else None
+        pen_fp = content_fingerprint(pen_cell) if pen_cell else None
+        if rec_fp is not None and rec_fp == pen_fp:
             self.emit(
                 handle,
                 "add",
@@ -1793,21 +2206,6 @@ class _Differ:
                 "both",
                 f"the pending {pending} twin landed byte-identically — record",
                 group=group,
-                member=member,
-                base=entry,
-            )
-            return
-        if pen_state == "same":
-            # The twin landed as a byte-copy of the recorded base and the
-            # recorded side has since moved: an ordinary one-sided edit.
-            self.emit(
-                handle,
-                "mechanical",
-                "propagate_shared_edit",
-                "de_to_en" if recorded == "de" else "en_to_de",
-                f"shared member edited on the {recorded} side — verbatim copy",
-                group=group,
-                side=recorded,
                 member=member,
                 base=entry,
             )
@@ -1904,6 +2302,22 @@ class _Differ:
                 en_solo.append(m)
         de_solo = [m for bucket in de_by_fp.values() for m in bucket]
 
+        assert self.base is not None
+        if not self.base.complete:
+            # Ledger mode: a pos member with no entry is COLD, never a
+            # mechanical add/copy (design §5 — the id-keyed path's rule,
+            # mirrored here).
+            for member in {id(m): m for m in matched_pairs + de_solo + en_solo}.values():
+                self.emit(
+                    member.key.render(),
+                    "unverified",
+                    "verify_cold",
+                    "none",
+                    "no ledger entry — cold member, needs verification",
+                    group=group,
+                    member=member,
+                )
+            return
         for member in matched_pairs:
             self.emit(
                 member.key.render(),
@@ -1911,6 +2325,21 @@ class _Differ:
                 "record_symmetric_add",
                 "both",
                 "identical new member on both sides — record",
+                group=group,
+                member=member,
+            )
+        # A two-sided member with divergent sides lands in BOTH solo lists:
+        # one framed item, not two duplicate rows.
+        divergent_pairs = [m for m in de_solo if m in en_solo]
+        for member in divergent_pairs:
+            de_solo.remove(member)
+            en_solo.remove(member)
+            self.emit(
+                member.key.render(),
+                "conflict",
+                "conflict_shared",
+                "both",
+                "new shared member differs between the sides",
                 group=group,
                 member=member,
             )
@@ -1962,14 +2391,20 @@ class _Differ:
         Global by-id pairing deliberately keeps a mid-move member one member
         (P2), so the parse records no divergence — the differ derives each
         side's physical group by bracketing the cell index between anchor
-        indexes and compares against the base owner group. One side moved →
-        mechanical order mirror; both sides in different groups → decision.
+        indexes and compares against that side's OWN base group. A side that
+        moved off its base placement → mechanical order mirror; both moved
+        differently → decision; a split already carried at base (or forced
+        by a one-sided anchor) is never reported as a fresh move.
         """
         assert self.base is not None
         anchor_index: dict[Lang, list[tuple[int, str]]] = {"de": [], "en": []}
+        two_sided_anchor: dict[str, bool] = {}
         for group in self.current.groups:
             if group.anchor is None:
                 continue
+            two_sided_anchor[group.anchor_id] = (
+                group.anchor.de is not None and group.anchor.en is not None
+            )
             for lang in _SIDES:
                 cell = group.anchor.side(lang)
                 if cell is not None and cell.part == "deck":
@@ -1986,12 +2421,12 @@ class _Differ:
                     break
             return token
 
-        base_group_of: dict[str, str] = {}
-        for (base_token, part), handles in self.base.member_order.items():
+        base_group_of: dict[tuple[Lang, str], str] = {}
+        for (lang, base_token, part), handles in self.base.member_order.items():
             if part != "deck":
                 continue
             for h in handles:
-                base_group_of[self.key_migrations.get(h, h)] = self.group_map.get(
+                base_group_of[(lang, self.key_migrations.get(h, h))] = self.group_map.get(
                     base_token, base_token
                 )
 
@@ -2007,15 +2442,36 @@ class _Differ:
             en_group = group_of("en", en)
             if de_group == en_group:
                 continue
+            if not (
+                de_group
+                and en_group
+                and two_sided_anchor.get(de_group)
+                and two_sided_anchor.get(en_group)
+            ):
+                # A one-sided anchor forces the twin's cells under another
+                # bracket — placement there is an artifact, not a choice
+                # (the group's own add/remove items carry the real work).
+                continue
             handle = member.key.render()
-            base_group = base_group_of.get(handle)
-            if base_group is not None and en_group == base_group:
-                moved: Lang | None = "de"
-            elif base_group is not None and de_group == base_group:
-                moved = "en"
-            else:
-                moved = None
-            if moved is not None:
+            base_de = base_group_of.get(("de", handle))
+            base_en = base_group_of.get(("en", handle))
+            moved_de = base_de is not None and de_group != base_de
+            moved_en = base_en is not None and en_group != base_en
+            if not moved_de and not moved_en:
+                if base_de is not None and base_en is not None:
+                    self.emit(
+                        handle,
+                        "order",
+                        "order_decision",
+                        "none",
+                        f"the sides place this member under different groups and "
+                        f"already did at base (de: {de_group!r}, en: {en_group!r}) — "
+                        f"carried divergent placement, decide",
+                        member=member,
+                    )
+                continue
+            if moved_de != moved_en:
+                moved: Lang = "de" if moved_de else "en"
                 self.emit(
                     handle,
                     "order",
@@ -2034,7 +2490,7 @@ class _Differ:
                     "order",
                     "order_decision",
                     "both",
-                    f"the sides place this member under different groups "
+                    f"the sides moved this member under different groups "
                     f"(de: {de_group!r}, en: {en_group!r}) — decide",
                     member=member,
                 )
@@ -2045,16 +2501,25 @@ class _Differ:
         assert self.base is not None
         self._diff_group_order()
         current_orders = self._current_member_orders()
-        for (group, part), base_seq in self.base.member_order.items():
-            mapped_group = self.group_map.get(group, group)
-            base_handles = [self.key_migrations.get(h, h) for h in base_seq]
-            de_seq = current_orders.get(("de", mapped_group, part), [])
-            en_seq = current_orders.get(("en", mapped_group, part), [])
-            self._compare_order(mapped_group, part, base_handles, de_seq, en_seq)
+        scopes = {
+            (self.group_map.get(group, group), part)
+            for (_lang, group, part) in self.base.member_order
+        }
+        for group, part in sorted(scopes):
+            base_of: dict[Lang, list[str]] = {}
+            cur_of: dict[Lang, list[str]] = {}
+            for lang in _SIDES:
+                base_token = self._base_group_for(group)
+                base_seq = self.base.member_order.get((lang, base_token, part), [])
+                base_of[lang] = [self.key_migrations.get(h, h) for h in base_seq]
+                cur_of[lang] = current_orders.get((lang, group, part), [])
+            self._compare_order(group, part, base_of, cur_of)
 
     def _current_member_orders(self) -> dict[tuple[Lang, str, str], list[str]]:
         orders: dict[tuple[Lang, str, str], list[tuple[int, str]]] = {}
         for member, group in _iter_with_groups(self.current):
+            if member.key.scheme != "id":
+                continue  # pos handles alias across states (ordinal renumbering)
             token = _member_group_token(member, group)
             for lang in _SIDES:
                 cell = member.side(lang)
@@ -2066,55 +2531,80 @@ class _Differ:
         return {key: [handle for _, handle in sorted(entries)] for key, entries in orders.items()}
 
     def _compare_order(
-        self, group: str, part: str, base_seq: list[str], de_seq: list[str], en_seq: list[str]
+        self,
+        group: str,
+        part: str,
+        base_of: dict[Lang, list[str]],
+        cur_of: dict[Lang, list[str]],
     ) -> None:
-        """Order divergence over the members every sequence knows (§6.2)."""
-        common = [h for h in base_seq if h in set(de_seq) & set(en_seq)]
-        if len(common) < 2:
+        """Order divergence, judged per side against that side's OWN base.
+
+        A merged base sequence would be DE-biased: a bundle whose sides
+        already disagreed about order at base must diff clean-of-mechanics
+        (a carried divergence is a framed decision, never a fresh
+        one-sided reorder with an arbitrary direction).
+        """
+        common_set = set(base_of["de"]) & set(base_of["en"]) & set(cur_of["de"]) & set(cur_of["en"])
+        if len(common_set) < 2:
             return
-        de_order = [h for h in de_seq if h in set(common)]
-        en_order = [h for h in en_seq if h in set(common)]
-        de_moved = de_order != common
-        en_moved = en_order != common
-        if not de_moved and not en_moved:
-            return
-        handle = MemberKey.positional(group, part, 0).render()
-        if de_moved and en_moved:
-            if de_order == en_order:
-                self.emit(
-                    handle,
-                    "order",
-                    "record_order",
-                    "both",
-                    f"members of group {group!r} reordered identically on both sides",
-                    group=group,
-                )
-            else:
+        base_orders = {lang: [h for h in base_of[lang] if h in common_set] for lang in _SIDES}
+        cur_orders = {lang: [h for h in cur_of[lang] if h in common_set] for lang in _SIDES}
+        moved = {lang: cur_orders[lang] != base_orders[lang] for lang in _SIDES}
+        handle = MemberKey.positional(group, f"order.{part}", 0).render()
+        if not moved["de"] and not moved["en"]:
+            if cur_orders["de"] != cur_orders["en"]:
                 self.emit(
                     handle,
                     "order",
                     "order_decision",
-                    "both",
-                    f"members of group {group!r} reordered differently per side "
-                    f"(de: {de_order}, en: {en_order})",
+                    "none",
+                    f"the sides order group {group!r} differently and already did "
+                    f"at base — carried divergence, decide",
                     group=group,
                 )
             return
-        moved: Lang = "de" if de_moved else "en"
+        if moved["de"] and moved["en"]:
+            action = "record_order" if cur_orders["de"] == cur_orders["en"] else "order_decision"
+            self.emit(
+                handle,
+                "order",
+                action,
+                "both",
+                f"members of group {group!r} reordered on both sides "
+                f"(de: {cur_orders['de']}, en: {cur_orders['en']})",
+                group=group,
+            )
+            return
+        moved_side: Lang = "de" if moved["de"] else "en"
+        if cur_orders["de"] == cur_orders["en"]:
+            # The moved side converged on the twin's order: record, don't mirror.
+            self.emit(
+                handle,
+                "order",
+                "record_order",
+                "both",
+                f"the {moved_side} side aligned group {group!r} to the twin's order — record",
+                group=group,
+            )
+            return
         self.emit(
             handle,
             "order",
             "mirror_order",
-            "de_to_en" if de_moved else "en_to_de",
-            f"members of group {group!r} reordered on the {moved} side — mirror "
-            f"the new order to the twin",
+            "de_to_en" if moved_side == "de" else "en_to_de",
+            f"members of group {group!r} reordered on the {moved_side} side — "
+            f"mirror the new order to the twin",
             group=group,
-            side=moved,
+            side=moved_side,
         )
 
     def _diff_group_order(self) -> None:
         assert self.base is not None
-        base_ids = [self.group_map.get(g, g) for g in self.base.group_order]
+        base_of = {
+            lang: [self.group_map.get(g, g) for g in self.base.group_order_by_side.get(lang, [])]
+            for lang in _SIDES
+        }
+        cur_of: dict[Lang, list[str]] = {}
         current_by_side: dict[Lang, list[tuple[int, str]]] = {"de": [], "en": []}
         for group in self.current.groups:
             anchor = group.anchor
@@ -2122,39 +2612,11 @@ class _Differ:
                 continue
             for lang in _SIDES:
                 cell = anchor.side(lang)
-                if cell is not None:
+                if cell is not None and cell.part == "deck":
                     current_by_side[lang].append((cell.index, group.anchor_id))
-        de_seq = [gid for _, gid in sorted(current_by_side["de"])]
-        en_seq = [gid for _, gid in sorted(current_by_side["en"])]
-        common = [g for g in base_ids if g in set(de_seq) & set(en_seq)]
-        if len(common) < 2:
-            return
-        de_order = [g for g in de_seq if g in set(common)]
-        en_order = [g for g in en_seq if g in set(common)]
-        de_moved = de_order != common
-        en_moved = en_order != common
-        if not de_moved and not en_moved:
-            return
-        handle = MemberKey.positional("~groups", "deck", 0).render()
-        if de_moved and en_moved:
-            action = "record_order" if de_order == en_order else "order_decision"
-            self.emit(
-                handle,
-                "order",
-                action,
-                "both",
-                f"slide groups reordered (de: {de_order}, en: {en_order})",
-            )
-        else:
-            moved: Lang = "de" if de_moved else "en"
-            self.emit(
-                handle,
-                "order",
-                "mirror_order",
-                "de_to_en" if de_moved else "en_to_de",
-                f"slide groups reordered on the {moved} side — mirror to the twin",
-                side=moved,
-            )
+        for lang in _SIDES:
+            cur_of[lang] = [gid for _, gid in sorted(current_by_side[lang])]
+        self._compare_order("~groups", "deck", base_of, cur_of)
 
     # -- preambles ------------------------------------------------------------------
 

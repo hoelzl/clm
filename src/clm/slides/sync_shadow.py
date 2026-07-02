@@ -266,12 +266,17 @@ def _run_v2(pair: ShadowPair, ref: str) -> None:
             pair.en_path,
             baseline_ref=ref,
             allow_git_fallback=False,
+            # The real `sync report` surface hardcodes provider_available=True
+            # (the #438 read-surface convention) — the shadow's v2 column must
+            # match the verdicts it claims to compare against.
+            provider_available=True,
         )
         report = build_report(plan)
     except Exception as exc:  # noqa: BLE001 - the sweep must survive any pair
         pair.v2_error = f"{type(exc).__name__}: {exc}"
         return
-    pair.v2_in_sync = bool(report.in_sync)
+    # The verdict, not the in-sync CELL COUNT (`report.in_sync` is an int).
+    pair.v2_in_sync = bool(report.is_clean)
     pair.v2_items = [
         {
             "item": item.item,

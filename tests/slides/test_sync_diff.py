@@ -213,9 +213,11 @@ class TestSharedRows:
         en = EN0.replace(
             '# %% tags=["keep"]\nx = 1', '# %%\nnew_en = 0\n\n# %% tags=["keep"]\nx = 1'
         )
-        diff = _diff(base, de, en)
-        assert {i.action for i in diff.items} == {"ambiguous_alignment"}
-        assert all(i.outcome == "conflict" for i in diff.items)
+        # The parse pairs the two inserts into ONE member (same slot):
+        # exactly one framed row, mirroring the id-keyed analogue — never
+        # two duplicate items for one divergence.
+        item = _only_item(_diff(base, de, en))
+        assert (item.outcome, item.action) == ("conflict", "conflict_shared")
 
     def test_one_sided_remove_mirrors_and_is_surfaced(self):
         base = _snapshot(DE0, EN0)
@@ -678,3 +680,259 @@ def test_every_direction_is_member_local(side: str):
         "pos:s0/code/0": "de_to_en",
         "pos:s0/code/1": "en_to_de",
     }
+
+
+class TestAdversarialReviewRegressions:
+    """Shapes from the Phase 2 pre-merge adversarial review (30 raw → 25
+    confirmed findings, every one with a verified repro). Each test pins one
+    fixed defect class; the common theme is P8: a state the engine cannot
+    resolve safely must FRAME, never emit a mechanical action that could
+    lose or duplicate content on apply."""
+
+    def test_base_carried_divergence_never_propagates_mechanically(self):
+        """CRITICAL: an id-keyed shared member whose baseline already carried
+        a byte divergence must not read the unchanged twin as 'edited'."""
+        de = DE0.replace(
+            '# %% tags=["keep"]\nx = 1', '# %% tags=["keep"] slide_id="x-cell"\nx = 98'
+        )
+        en = EN0.replace('# %% tags=["keep"]\nx = 1', '# %% tags=["keep"] slide_id="x-cell"\nx = 1')
+        base = _snapshot(de, en)
+        item = _only_item(_diff(base, de, en))  # unchanged input
+        assert (item.outcome, item.action) == ("conflict", "pending_divergence")
+        assert item.direction == "none"
+
+    def test_base_diverged_plus_one_sided_edit_stays_framed(self):
+        de = DE0.replace(
+            '# %% tags=["keep"]\nx = 1', '# %% tags=["keep"] slide_id="x-cell"\nx = 98'
+        )
+        en = EN0.replace('# %% tags=["keep"]\nx = 1', '# %% tags=["keep"] slide_id="x-cell"\nx = 1')
+        base = _snapshot(de, en)
+        item = _only_item(_diff(base, de.replace("x = 98", "x = 99"), en))
+        assert item.outcome == "conflict"
+        assert item.action in ("pending_divergence", "conflict_shared")
+
+    def test_carried_pending_twin_never_becomes_mirror_remove(self):
+        """CRITICAL: an inline notes cell present on DE only, byte-identical
+        to the companion cells — the phantom-slot steal shape. Unchanged
+        input must never yield a destructive mechanical remove."""
+        notes = '# %% [markdown] tags=["notes"] for_slide="s0"\n#\n# - Note text\n\n'
+        de = _build(HEADER_DE, _slide("s0", "de", "Titel"), notes)
+        en = _build(HEADER_EN, _slide("s0", "en", "Title"))
+        comp = notes.rstrip("\n") + "\n"
+        base = _snapshot(de, en, comp, comp)
+        diff = _diff(base, de, en, comp, comp)
+        assert not any(i.action == "mirror_remove" for i in diff.items)
+        assert [(i.outcome, i.action) for i in diff.items] == [("add", "copy_new_shared")]
+
+    def test_non_adjacent_reorder_is_one_order_item(self):
+        """MAJOR: [x,y,z,w] → [y,x,w,z] on DE must be one mirror_order, not
+        an edit+remove+add cascade of false content rows."""
+        cells = "".join(_shared_code(n, i + 1) for i, n in enumerate("xyzw"))
+        de = _build(HEADER_DE, _slide("s0", "de", "T"), cells)
+        en = _build(HEADER_EN, _slide("s0", "en", "T"), cells)
+        base = _snapshot(de, en)
+        reordered = (
+            _shared_code("y", 2)
+            + _shared_code("x", 1)
+            + _shared_code("w", 4)
+            + _shared_code("z", 3)
+        )
+        de2 = _build(HEADER_DE, _slide("s0", "de", "T"), reordered)
+        item = _only_item(_diff(base, de2, en))
+        assert (item.outcome, item.action) == ("order", "mirror_order")
+        assert item.direction == "de_to_en"
+
+    def test_identical_pool_reorder_on_both_sides_records(self):
+        cells = _shared_code("x", 1) + _shared_code("y", 2)
+        de = _build(HEADER_DE, _slide("s0", "de", "T"), cells)
+        en = _build(HEADER_EN, _slide("s0", "en", "T"), cells)
+        base = _snapshot(de, en)
+        swapped = _shared_code("y", 2) + _shared_code("x", 1)
+        de2 = _build(HEADER_DE, _slide("s0", "de", "T"), swapped)
+        en2 = _build(HEADER_EN, _slide("s0", "en", "T"), swapped)
+        item = _only_item(_diff(base, de2, en2))
+        assert (item.outcome, item.action) == ("order", "record_order")
+
+    def test_pool_move_handles_are_kind_unique(self):
+        """MINOR: markdown and code pools of one group moving on opposite
+        sides must not collide on one handle with contradictory directions."""
+        md = "# %% [markdown]\n# alpha\n\n# %% [markdown]\n# beta\n\n"
+        code = _shared_code("x", 1) + _shared_code("y", 2)
+        de = _build(HEADER_DE, _slide("s0", "de", "T"), md, code)
+        en = _build(HEADER_EN, _slide("s0", "en", "T"), md, code)
+        base = _snapshot(de, en)
+        md_swapped = "# %% [markdown]\n# beta\n\n# %% [markdown]\n# alpha\n\n"
+        code_swapped = _shared_code("y", 2) + _shared_code("x", 1)
+        de2 = _build(HEADER_DE, _slide("s0", "de", "T"), md_swapped, code)
+        en2 = _build(HEADER_EN, _slide("s0", "en", "T"), md, code_swapped)
+        diff = _diff(base, de2, en2)
+        keys = [i.key for i in diff.items]
+        assert len(keys) == len(set(keys)), keys
+        assert {i.action for i in diff.items} == {"mirror_order"}
+        assert {i.direction for i in diff.items} == {"de_to_en", "en_to_de"}
+
+    def test_insert_straddling_id_member_emits_no_false_order_row(self):
+        """MAJOR (ordinal aliasing): a one-sided insert whose pool straddles
+        an id'd member must not manufacture an order row."""
+        de = _build(
+            HEADER_DE,
+            _slide("s0", "de", "T"),
+            _shared_code("a", 1),
+            _localized("s0-m", "de", "DE"),
+            _shared_code("b", 2),
+        )
+        en = _build(
+            HEADER_EN,
+            _slide("s0", "en", "T"),
+            _shared_code("a", 1),
+            _localized("s0-m", "en", "EN"),
+            _shared_code("b", 2),
+        )
+        base = _snapshot(de, en)
+        de2 = de.replace('# %% tags=["keep"]\na = 1', '# %%\nn = 0\n\n# %% tags=["keep"]\na = 1')
+        item = _only_item(_diff(base, de2, en))
+        assert (item.outcome, item.action) == ("add", "copy_new_shared")
+
+    def test_carried_order_divergence_is_framed_not_mirrored(self):
+        """MAJOR: sides that already disagreed about id-member order at base
+        must not diff as a fresh EN reorder (the DE-biased merged order)."""
+        de = _build(
+            HEADER_DE,
+            _slide("s0", "de", "T"),
+            _localized("m1", "de", "eins"),
+            _localized("m2", "de", "zwei"),
+        )
+        en = _build(
+            HEADER_EN,
+            _slide("s0", "en", "T"),
+            _localized("m2", "en", "two"),
+            _localized("m1", "en", "one"),
+        )
+        base = _snapshot(de, en)
+        diff = _diff(base, de, en)  # unchanged input
+        assert [(i.outcome, i.action, i.direction) for i in diff.items] == [
+            ("order", "order_decision", "none")
+        ]
+
+    def test_carried_one_sided_group_fires_no_cross_group_mirror(self):
+        """MAJOR: a group existing on one half only (carried at base) must
+        not read as a member move on the other half."""
+        de = _build(
+            HEADER_DE,
+            _slide("s0", "de", "T"),
+            _localized("m0", "de", "null"),
+            _slide("s1", "de", "T2"),
+            _localized("x1", "de", "eins"),
+        )
+        en = _build(
+            HEADER_EN,
+            _slide("s0", "en", "T"),
+            _localized("m0", "en", "zero"),
+            _localized("x1", "en", "one"),
+        )
+        base = _snapshot(de, en)
+        diff = _diff(base, de, en)  # unchanged input
+        assert not any(i.action == "mirror_order" for i in diff.items)
+
+    def test_conflicting_id_stamps_frame_instead_of_deleting(self):
+        """MINOR: the halves stamping different ids onto the same cell must
+        yield one framed decision, never mirror_remove + copy."""
+        shared = "# %% [markdown]\n# Shared text\n\n"
+        de = _build(HEADER_DE, _slide("s0", "de", "T"), shared)
+        en = _build(HEADER_EN, _slide("s0", "en", "T"), shared)
+        base = _snapshot(de, en)
+        de2 = de.replace("# %% [markdown]\n# Shared", '# %% [markdown] slide_id="ida"\n# Shared')
+        en2 = en.replace("# %% [markdown]\n# Shared", '# %% [markdown] slide_id="idb"\n# Shared')
+        diff = _diff(base, de2, en2)
+        assert all(i.action == "ambiguous_alignment" for i in diff.items), [
+            (i.outcome, i.action, i.key) for i in diff.items
+        ]
+        assert not any(i.action in ("mirror_remove", "copy_new_shared") for i in diff.items)
+
+    def test_mid_stamp_with_edited_twin_is_fully_framed(self):
+        """MAJOR (#443 + edit): DE stamps an id while EN edits the same
+        id-less cell — no mechanical row may revert the stamp or copy."""
+        base = _snapshot(DE0, EN0)
+        de = DE0.replace('# %% tags=["keep"]\ny = 2', '# %% tags=["keep"] slide_id="y-cell"\ny = 2')
+        en = EN0.replace("y = 2", "y = 99")
+        diff = _diff(base, de, en)
+        assert diff.items and all(i.outcome == "conflict" for i in diff.items), [
+            (i.outcome, i.action, i.key) for i in diff.items
+        ]
+
+    def test_clean_group_rename_rehomes_companions_quietly(self):
+        """MAJOR: a consistent anchor-id rename (slide_id + every for_slide)
+        must yield exactly the rename transition — no verify_translation
+        noise on the companions."""
+        comp_de = (
+            '# %% [markdown] lang="de" tags=["notes"] for_slide="s0" slide_id="s0-n"\n#\n# - t\n'
+        )
+        comp_en = (
+            '# %% [markdown] lang="en" tags=["notes"] for_slide="s0" slide_id="s0-n"\n#\n# - t\n'
+        )
+        de = _build(HEADER_DE, _slide("s0", "de", "T"))
+        en = _build(HEADER_EN, _slide("s0", "en", "T"))
+        base = _snapshot(de, en, comp_de, comp_en)
+        diff = _diff(
+            base,
+            de.replace('slide_id="s0"', 'slide_id="s1"'),
+            en.replace('slide_id="s0"', 'slide_id="s1"'),
+            comp_de.replace('for_slide="s0"', 'for_slide="s1"'),
+            comp_en.replace('for_slide="s0"', 'for_slide="s1"'),
+        )
+        assert [(i.outcome, i.action) for i in diff.items] == [
+            ("transition", "record_group_rename")
+        ]
+
+    def test_owner_change_with_one_sided_anchor_drift_surfaces_both(self):
+        """MAJOR: a both-sided owner change combined with a one-sided header
+        drift (vo_anchor) must surface BOTH — never swallow the drift."""
+        comp_de = (
+            '# %% [markdown] lang="de" tags=["notes"] for_slide="s0" slide_id="n1"\n#\n# - t\n'
+        )
+        comp_en = (
+            '# %% [markdown] lang="en" tags=["notes"] for_slide="s0" slide_id="n1"\n#\n# - t\n'
+        )
+        de = _build(HEADER_DE, _slide("s0", "de", "T"), _slide("s1", "de", "T2"))
+        en = _build(HEADER_EN, _slide("s0", "en", "T"), _slide("s1", "en", "T2"))
+        base = _snapshot(de, en, comp_de, comp_en)
+        diff = _diff(
+            base,
+            de,
+            en,
+            comp_de.replace('for_slide="s0"', 'for_slide="s1" vo_anchor="tm:xyz#0"'),
+            comp_en.replace('for_slide="s0"', 'for_slide="s1"'),
+        )
+        actions = {i.action for i in diff.items}
+        assert "record_owner" in actions
+        assert len(diff.items) >= 2  # the anchor drift is not swallowed
+
+    def test_ledger_mode_pool_members_are_cold_not_added(self):
+        """MAJOR: with complete=False a pos member without an entry is COLD
+        (framed verification), never a mechanical add/copy."""
+        base = _snapshot(DE0, EN0)
+        removed = [k for k in base.members if k.startswith("pos:")]
+        for key in removed:
+            del base.members[key]
+        base.complete = False
+        diff = _diff(base, DE0, EN0)
+        assert diff.items
+        assert {i.action for i in diff.items} == {"verify_cold"}
+        assert {i.outcome for i in diff.items} == {"unverified"}
+
+    def test_slide_id_containing_slash_does_not_crash(self):
+        """MAJOR: '/' is legal in slide ids; pos-key parsing must rsplit."""
+        de = _build(
+            HEADER_DE,
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="intro/setup"\n#\n# # T\n\n',
+            _shared_code("x"),
+        )
+        en = _build(
+            HEADER_EN,
+            '# %% [markdown] lang="en" tags=["slide"] slide_id="intro/setup"\n#\n# # T\n\n',
+            _shared_code("x"),
+        )
+        base = _snapshot(de, en)
+        diff = _diff(base, de.replace("x = 1", "x = 2"), en)
+        item = _only_item(diff)
+        assert item.action == "propagate_shared_edit"
