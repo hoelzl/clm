@@ -76,6 +76,75 @@ def resolve_notebook_kernel_python(spec_value: str = "") -> str:
     return (get_config().jupyter.kernel_python or "").strip()
 
 
+def _venv_interpreter(venv_dir: Path) -> Path:
+    """Return the Python interpreter inside a virtualenv *directory*.
+
+    A venv stores its interpreter at ``Scripts/python.exe`` on Windows and
+    ``bin/python`` on POSIX — so a single committed ``<kernel-python>`` value
+    can point at the venv *directory* and resolve correctly on every platform,
+    instead of hard-coding one OS's interpreter layout.
+
+    Prefers whichever interpreter actually exists (so a POSIX venv checked out
+    on the same box as a Windows one still resolves), falling back to the
+    platform-native path when neither is present yet — so provisioning's
+    "not found" error names a concrete, expected location.
+    """
+    windows = venv_dir / "Scripts" / "python.exe"
+    posix = venv_dir / "bin" / "python"
+    ordered = (windows, posix) if os.name == "nt" else (posix, windows)
+    for candidate in ordered:
+        if candidate.is_file():
+            return candidate
+    return ordered[0]
+
+
+def resolve_kernel_interpreter(value: str, *, project_root: Path | None = None) -> str:
+    """Turn a raw kernel-python value into an absolute interpreter path.
+
+    Complements :func:`resolve_notebook_kernel_python` (which only picks the
+    winning *tier*): this normalises whatever that tier yielded into a concrete,
+    absolute interpreter, so the value threaded to the worker is platform- and
+    cwd-independent. The rules, in order:
+
+    - ``""`` (or whitespace) → ``""`` — use clm's own environment.
+    - ``~`` is expanded.
+    - A **relative** path is anchored to ``project_root`` (default:
+      :func:`find_project_root`, which locates the ``pyproject.toml`` /
+      ``clm.toml`` / ``.git`` dir) — NOT the process cwd — so a value committed
+      to a shared repo resolves the same no matter where ``clm build`` runs.
+    - A **directory** is treated as a virtualenv and resolved to the interpreter
+      inside it (``Scripts/python.exe`` on Windows, ``bin/python`` on POSIX),
+      so one committed value works cross-platform.
+    - Anything else is returned as an interpreter path verbatim (existence is
+      validated later, in :func:`provision_course_kernel`).
+
+    Args:
+        value: The raw kernel-python value (a venv directory or an interpreter,
+            absolute or project-relative). Typically the result of
+            :func:`resolve_notebook_kernel_python`.
+        project_root: Anchor for relative values. Defaults to
+            :func:`find_project_root`.
+
+    Returns:
+        An absolute interpreter path, or ``""`` for "use clm's env".
+    """
+    if not value or not value.strip():
+        return ""
+
+    path = Path(value.strip()).expanduser()
+    if not path.is_absolute():
+        if project_root is None:
+            from clm.infrastructure.utils.path_utils import find_project_root
+
+            project_root = find_project_root()
+        path = project_root / path
+
+    if path.is_dir():
+        path = _venv_interpreter(path)
+
+    return str(path)
+
+
 def _kernel_envs_root() -> Path:
     """Return the base dir under which per-interpreter kernelspecs are written.
 
@@ -182,6 +251,7 @@ def jupyter_path_with_kernel(root: Path, existing: str | None) -> str:
 __all__ = [
     "KERNEL_PYTHON_ENV_VAR",
     "resolve_notebook_kernel_python",
+    "resolve_kernel_interpreter",
     "provision_course_kernel",
     "jupyter_path_with_kernel",
 ]

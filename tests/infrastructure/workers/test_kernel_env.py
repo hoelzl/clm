@@ -8,6 +8,7 @@ the ipykernel validation subprocess is patched or bypassed.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -18,6 +19,7 @@ from clm.infrastructure.workers.kernel_env import (
     KERNEL_PYTHON_ENV_VAR,
     jupyter_path_with_kernel,
     provision_course_kernel,
+    resolve_kernel_interpreter,
     resolve_notebook_kernel_python,
 )
 from clm.infrastructure.workers.worker_executor import DirectWorkerExecutor, WorkerConfig
@@ -66,6 +68,74 @@ def test_resolve_env_whitespace_is_ignored(monkeypatch):
     with patch("clm.infrastructure.config.get_config", return_value=fake_cfg):
         # Blank env falls through to the spec value.
         assert resolve_notebook_kernel_python("/spec/python") == "/spec/python"
+
+
+# --------------------------------------------------------------------------- #
+# resolve_kernel_interpreter — venv-dir + project-relative normalisation
+# --------------------------------------------------------------------------- #
+
+
+def _make_venv(root: Path) -> Path:
+    """Create a venv-shaped dir with BOTH interpreter layouts present."""
+    (root / "Scripts").mkdir(parents=True, exist_ok=True)
+    (root / "bin").mkdir(parents=True, exist_ok=True)
+    (root / "Scripts" / "python.exe").write_text("", encoding="utf-8")
+    (root / "bin" / "python").write_text("", encoding="utf-8")
+    return root
+
+
+def test_resolve_interpreter_empty_is_empty():
+    assert resolve_kernel_interpreter("") == ""
+    assert resolve_kernel_interpreter("   ") == ""
+
+
+def test_resolve_interpreter_venv_dir_picks_platform_interpreter(tmp_path):
+    venv = _make_venv(tmp_path / ".venv")
+    result = Path(resolve_kernel_interpreter(str(venv)))
+    if os.name == "nt":
+        assert result == venv / "Scripts" / "python.exe"
+    else:
+        assert result == venv / "bin" / "python"
+
+
+def test_resolve_interpreter_venv_dir_uses_existing_when_only_other_layout(tmp_path):
+    # Only the POSIX layout exists → resolve to it regardless of host OS.
+    venv = tmp_path / ".venv"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "bin" / "python").write_text("", encoding="utf-8")
+    assert Path(resolve_kernel_interpreter(str(venv))) == venv / "bin" / "python"
+
+
+def test_resolve_interpreter_relative_anchored_to_project_root(tmp_path):
+    venv = _make_venv(tmp_path / ".venv")
+    result = Path(resolve_kernel_interpreter(".venv", project_root=tmp_path))
+    assert result.parent.parent == venv  # <root>/.venv/<bin|Scripts>/python*
+    assert result.is_file()
+
+
+def test_resolve_interpreter_relative_not_cwd(tmp_path, monkeypatch):
+    # A relative value must anchor to project_root, NOT the process cwd.
+    _make_venv(tmp_path / ".venv")
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    monkeypatch.chdir(other)
+    result = Path(resolve_kernel_interpreter(".venv", project_root=tmp_path))
+    assert str(tmp_path) in str(result)
+    assert str(other) not in str(result)
+
+
+def test_resolve_interpreter_direct_file_returned_absolute(tmp_path):
+    interp = tmp_path / "custom" / "python"
+    interp.parent.mkdir(parents=True)
+    interp.write_text("", encoding="utf-8")
+    assert Path(resolve_kernel_interpreter(str(interp))) == interp
+
+
+def test_resolve_interpreter_missing_venv_yields_platform_default(tmp_path):
+    # Non-existent path (venv not built yet) → returned so provisioning can emit
+    # an actionable "not found" naming a concrete interpreter.
+    result = resolve_kernel_interpreter(str(tmp_path / "absent"))
+    assert result == str(tmp_path / "absent")
 
 
 # --------------------------------------------------------------------------- #

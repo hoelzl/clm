@@ -3382,17 +3382,26 @@ Provision environments clm runs *against* (as opposed to clm's own venv).
 | `provision kernel-env --python PATH` | Register a course venv as the Direct-mode Python notebook kernel (Wave 2b) |
 
 `provision kernel-env` writes a `python3` kernelspec pointing at the given
-interpreter and prints how to activate it. clm then runs the notebook kernel in
-that environment — so the course-runtime ML/data-science stack (torch/pandas/…)
-lives in a **separate** course venv from clm, while clm keeps driving nbconvert.
-It registers an interpreter you already have; it does not create the venv. The
-interpreter must have `ipykernel` installed (pass `--no-validate` to skip that
-check).
+venv and prints how to activate it. clm then runs the notebook kernel in that
+environment — so the course-runtime ML/data-science stack (torch/pandas/…) lives
+in a **separate** course venv from clm, while clm keeps driving nbconvert. It
+registers a venv you already have; it does not create it. The venv must have
+`ipykernel` installed (pass `--no-validate` to skip that check).
+
+`--python` accepts either the **venv directory** (clm picks the platform
+interpreter inside it — `Scripts/python.exe` on Windows, `bin/python` on POSIX)
+or a specific interpreter; a relative value resolves against the project root.
+The same is true of the `<kernel-python>` element and `clm.toml`
+`[jupyter] kernel_python`, so a single committed value like `.venv` works
+cross-platform. (`clm build` also provisions the kernelspec automatically from
+those settings — this command is for pre-registering / validating.)
 
 Populate that course venv from the self-contained `course-runtime-requirements.txt`
 shipped in the clm repo (it includes `ipykernel`): `python -m pip install -r
 course-runtime-requirements.txt`. As of CLM {version} this stack is no longer a
-clm extra — see `clm info migration`.
+clm extra — see `clm info migration`. Pointing `<kernel-python>` at the course's
+own `.venv` is also how a **globally installed clm** builds a course whose
+runtime stack lives in that course's venv.
 
 Selection precedence for the kernel interpreter (most specific wins):
 

@@ -1859,9 +1859,19 @@ async def main_build(
     # untouched. Docker mode ignores it (a host interpreter is meaningless in a
     # container). Resolved here where the spec is in scope; the executor just
     # provisions + injects JUPYTER_PATH.
-    from clm.infrastructure.workers.kernel_env import resolve_notebook_kernel_python
+    from clm.infrastructure.workers.kernel_env import (
+        resolve_kernel_interpreter,
+        resolve_notebook_kernel_python,
+    )
 
-    notebook_kernel_python = resolve_notebook_kernel_python(course.spec.kernel_python)
+    # First pick the winning tier (env > spec > clm.toml), then normalise it to
+    # an absolute interpreter: a value may be a venv *directory* (resolved to the
+    # platform interpreter inside it) and a relative value is anchored to the
+    # project root — so a single committed <kernel-python> works cross-platform
+    # and regardless of the invocation cwd.
+    notebook_kernel_python = resolve_kernel_interpreter(
+        resolve_notebook_kernel_python(course.spec.kernel_python)
+    )
 
     lifecycle_manager = WorkerLifecycleManager(
         config=worker_config,
