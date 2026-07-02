@@ -385,6 +385,7 @@ def _handle_stamp(
     cells: list[_Cell],
     stamp_pairs: dict[int, tuple[int, int]],
     stamp_slug: dict[int, str | None],
+    stamp_claims: dict[str, int],
     current_slide_id: str | None,
     options: AssignOptions,
     used_ids: set[str],
@@ -494,6 +495,27 @@ def _handle_stamp(
         )
         if twin_own:
             twin_bare = strip_preserve_marker(twin_existing)
+            # Adoption gate: writing the twin's id onto this cell must not
+            # CREATE a duplicate. The twin's id can be claimed elsewhere in
+            # the document — e.g. a stale narrative id equal to some OTHER
+            # slide's id on a structurally divergent deck — and adopting it
+            # would stamp that foreign identity onto this cell (found by the
+            # #520 corpus rehearsal on slides_pe_02a_fundamentals).
+            pair_claims = sum(
+                1
+                for sid in (existing, twin_existing)
+                if sid and strip_preserve_marker(sid) == twin_bare
+            )
+            if stamp_claims.get(twin_bare, 0) > pair_claims:
+                _stamp_refuse(
+                    result,
+                    file_str,
+                    cell.line_number,
+                    f"twin id {twin_bare!r} duplicates an id used elsewhere in "
+                    "this document; resolve manually",
+                )
+                stamp_slug[group_key] = None
+                return
             stamp_slug[group_key] = twin_bare
             if existing and strip_preserve_marker(existing) == twin_bare:
                 return
@@ -697,10 +719,21 @@ def assign_ids_for_cells(
     # sibling's id already in used_ids and bump the counter.
     group_slug: dict[int, str | None] = {}
 
-    # Stamp mode (#520): the adjacent-twin map and the per-pair slug cache
-    # for localized/narrative cells (the stamp-mode analogue of group_slug).
+    # Stamp mode (#520): the adjacent-twin map, the per-pair slug cache
+    # (the stamp-mode analogue of group_slug), and the claim counts backing
+    # the twin-adoption uniqueness gate (a set cannot tell "claimed by a
+    # cell OUTSIDE the pair" from "claimed by the twin itself").
     stamp_pairs: dict[int, tuple[int, int]] = _build_stamp_pairs(cells) if options.stamp_ids else {}
     stamp_slug: dict[int, str | None] = {}
+    stamp_claims: dict[str, int] = {}
+    if options.stamp_ids:
+        for rid in reserved_ids or ():
+            stamp_claims[rid] = stamp_claims.get(rid, 0) + 1
+        for claim_cell in cells:
+            claim_sid = claim_cell.metadata.slide_id
+            if claim_sid:
+                claim_bare = strip_preserve_marker(claim_sid)
+                stamp_claims[claim_bare] = stamp_claims.get(claim_bare, 0) + 1
 
     # Track the most recent slide_id (bare form) by source order so that
     # narrative cells (voiceover/notes) inherit from the preceding
@@ -786,6 +819,7 @@ def assign_ids_for_cells(
                     cells,
                     stamp_pairs,
                     stamp_slug,
+                    stamp_claims,
                     current_slide_id,
                     options,
                     used_ids,
@@ -808,6 +842,7 @@ def assign_ids_for_cells(
                 cells,
                 stamp_pairs,
                 stamp_slug,
+                stamp_claims,
                 current_slide_id,
                 options,
                 used_ids,
