@@ -389,6 +389,31 @@ class TestExtractVoiceover:
         assert result.cells_extracted == 0
         assert not (tmp_path / "voiceover_intro.py").exists()
 
+    def test_for_slide_owner_is_the_slide_not_an_idd_content_cell(self, tmp_path: Path):
+        # After `normalize --stamp-ids` (#520) plain content cells carry
+        # their own slide_ids; the owner walk must not drift for_slide onto
+        # the id of a localized cell sitting between the slide and its
+        # voiceover — the owner is the slide/subslide anchor.
+        slide_file = tmp_path / "slides_intro.py"
+        slide_file.write_text(
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="intro"\n'
+            "# ## Einführung\n"
+            "\n"
+            '# %% [markdown] lang="de" slide_id="a-localized-note"\n'
+            "# Ein Hinweis mit eigener Kennung.\n"
+            "\n"
+            '# %% [markdown] lang="de" tags=["voiceover"]\n'
+            "# Sprechertext.\n",
+            encoding="utf-8",
+        )
+
+        result = extract_voiceover(slide_file, layout="sibling")
+
+        assert result.cells_extracted == 1
+        comp_text = (tmp_path / "voiceover_intro.py").read_text(encoding="utf-8")
+        assert 'for_slide="intro"' in comp_text
+        assert 'for_slide="a-localized-note"' not in comp_text
+
     def test_dry_run_does_not_modify_files(self, tmp_path: Path):
         slide_file = tmp_path / "slides_intro.py"
         slide_file.write_text(SLIDE_WITH_VOICEOVER, encoding="utf-8")

@@ -1545,6 +1545,142 @@ class TestStampIds:
         assert any("only one deck half" in r.reason for r in result.refusals)
         assert comp_de.read_text(encoding="utf-8") == comp_text
 
+    def test_companion_pre242_title_shape_refused_untouched(self, tmp_path):
+        # Pre-#242 extract wrote title cells as slide_id="title" with NO
+        # for_slide — a documented on-disk population (_is_title_intent).
+        # Without the owner reference an own id cannot be told from an
+        # inherited one, and re-pointing would break the title placement
+        # contract: refuse, never guess or propagate.
+        from clm.slides.assign_ids import stamp_ids_in_companion_pair
+
+        text_de = '# %% [markdown] lang="de" tags=["notes"] slide_id="title"\n#\n# - Willkommen.\n'
+        text_en = '# %% [markdown] lang="en" tags=["notes"]\n#\n# - Welcome.\n'
+        comp_de = _write(tmp_path, text_de, name="voiceover_x.de.py")
+        comp_en = _write(tmp_path, text_en, name="voiceover_x.en.py")
+        result = stamp_ids_in_companion_pair(comp_de, comp_en, AssignOptions(**_STAMP))
+        assert result.assignments == []
+        assert any("no for_slide owner reference" in r.reason for r in result.refusals)
+        assert comp_de.read_text(encoding="utf-8") == text_de
+        assert comp_en.read_text(encoding="utf-8") == text_en
+
+    def test_companion_reordered_anchors_refused_untouched(self, tmp_path):
+        # Two same-owner narratives reordered in one half share
+        # (for_slide, role, cell_type) — only the vo_anchor sequence reveals
+        # the cross-wise order. Pairing them positionally would stamp each
+        # cell with the OTHER narration's identity; the mirror check must
+        # refuse instead.
+        from clm.slides.assign_ids import stamp_ids_in_companion_pair
+
+        text_de = (
+            '# %% [markdown] lang="de" tags=["notes"] slide_id="intro" '
+            'for_slide="intro" vo_anchor="id:intro#0"\n#\n# - Der Apfel ist rot.\n'
+            "\n"
+            '# %% [markdown] lang="de" tags=["notes"] slide_id="intro" '
+            'for_slide="intro" vo_anchor="id:intro#1"\n#\n# - Die Banane ist gelb.\n'
+        )
+        text_en = (
+            '# %% [markdown] lang="en" tags=["notes"] slide_id="intro" '
+            'for_slide="intro" vo_anchor="id:intro#1"\n#\n# - The banana is yellow.\n'
+            "\n"
+            '# %% [markdown] lang="en" tags=["notes"] slide_id="intro" '
+            'for_slide="intro" vo_anchor="id:intro#0"\n#\n# - The apple is red.\n'
+        )
+        comp_de = _write(tmp_path, text_de, name="voiceover_x.de.py")
+        comp_en = _write(tmp_path, text_en, name="voiceover_x.en.py")
+        result = stamp_ids_in_companion_pair(comp_de, comp_en, AssignOptions(**_STAMP))
+        assert result.assignments == []
+        assert any("do not mirror" in r.reason for r in result.refusals)
+        assert comp_de.read_text(encoding="utf-8") == text_de
+        assert comp_en.read_text(encoding="utf-8") == text_en
+
+    def test_companion_full_stem_placeholder_repointed(self, tmp_path):
+        # A conversion placeholder embedding the deck's routing-prefixed stem
+        # (slides_demo-cell-1) must be recognized on the companion path too —
+        # the placeholder test runs against the DECK stem, not the
+        # voiceover_* filename.
+        from clm.slides.assign_ids import stamp_ids_in_companion_pair
+
+        comp_de = _write(
+            tmp_path,
+            '# %% [markdown] lang="de" tags=["notes"] slide_id="slides_demo-cell-1" '
+            'for_slide="intro"\n#\n# - Willkommen zur Einführung.\n',
+            name="voiceover_demo.de.py",
+        )
+        comp_en = _write(
+            tmp_path,
+            '# %% [markdown] lang="en" tags=["notes"] slide_id="slides_demo-cell-1" '
+            'for_slide="intro"\n#\n# - Welcome to the introduction.\n',
+            name="voiceover_demo.en.py",
+        )
+        result = stamp_ids_in_companion_pair(
+            comp_de,
+            comp_en,
+            AssignOptions(**_STAMP),
+            deck_paths=(tmp_path / "slides_demo.de.py", tmp_path / "slides_demo.en.py"),
+        )
+        assert [a.source for a in result.assignments] == [
+            "narrative-repoint",
+            "narrative-repoint",
+        ]
+        assert result.assignments[0].slide_id != "slides_demo-cell-1"
+
+    def test_companion_adoption_never_creates_duplicates(self, tmp_path):
+        # Crosswise hand-set own ids: pair 1 = (own "note-a", legacy), pair 2
+        # = (legacy, own "note-a"). Adopting blindly would leave BOTH files
+        # with two cells carrying "note-a"; the adoption gate must refuse the
+        # second claim.
+        from clm.slides.assign_ids import stamp_ids_in_companion_pair
+
+        comp_de = _write(
+            tmp_path,
+            '# %% [markdown] lang="de" tags=["notes"] slide_id="note-a" for_slide="intro"\n'
+            "#\n# - Eins.\n"
+            "\n"
+            '# %% [markdown] lang="de" tags=["notes"] slide_id="zwei" for_slide="zwei"\n'
+            "#\n# - Zwei.\n",
+            name="voiceover_x.de.py",
+        )
+        comp_en = _write(
+            tmp_path,
+            '# %% [markdown] lang="en" tags=["notes"] slide_id="intro" for_slide="intro"\n'
+            "#\n# - One.\n"
+            "\n"
+            '# %% [markdown] lang="en" tags=["notes"] slide_id="note-a" for_slide="zwei"\n'
+            "#\n# - Two.\n",
+            name="voiceover_x.en.py",
+        )
+        result = stamp_ids_in_companion_pair(comp_de, comp_en, AssignOptions(**_STAMP))
+        assert any("duplicates an id used elsewhere" in r.reason for r in result.refusals)
+        for comp in (comp_de, comp_en):
+            ids = [
+                c.metadata.slide_id
+                for c in parse_cells(comp.read_text(encoding="utf-8"), "#")
+                if c.metadata.slide_id
+            ]
+            assert len(ids) == len(set(ids)), f"{comp.name}: duplicate ids created: {ids}"
+
+    def test_companion_adoption_refuses_deck_id_collision(self, tmp_path):
+        # A hand-set companion id equal to another deck slide's id must not
+        # be propagated onto the twin (reserved_ids covers the deck).
+        from clm.slides.assign_ids import stamp_ids_in_companion_pair
+
+        text_en = (
+            '# %% [markdown] lang="en" tags=["notes"] slide_id="intro" for_slide="intro"\n'
+            "#\n# - One.\n"
+        )
+        comp_de = _write(
+            tmp_path,
+            '# %% [markdown] lang="de" tags=["notes"] slide_id="usage" for_slide="intro"\n'
+            "#\n# - Eins.\n",
+            name="voiceover_x.de.py",
+        )
+        comp_en = _write(tmp_path, text_en, name="voiceover_x.en.py")
+        result = stamp_ids_in_companion_pair(
+            comp_de, comp_en, AssignOptions(**_STAMP), reserved_ids={"intro", "usage"}
+        )
+        assert any("duplicates an id used elsewhere" in r.reason for r in result.refusals)
+        assert comp_en.read_text(encoding="utf-8") == text_en  # not propagated
+
     def test_companion_dry_run_writes_nothing(self, tmp_path):
         from clm.slides.assign_ids import stamp_ids_in_companion_pair
 

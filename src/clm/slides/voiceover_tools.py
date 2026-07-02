@@ -567,12 +567,14 @@ def _find_owning_slide_id(cells: list[_RawCell], voiceover_idx: int) -> str | No
         # Must be same language or language-neutral
         if meta.lang is not None and vo_lang is not None and meta.lang != vo_lang:
             continue
-        if meta.slide_id:
-            return meta.slide_id
-        # An id-less real slide is the owning slide but offers no id to
-        # reference; stop here instead of walking past it into the title macro.
+        # Only a slide/subslide anchor owns a voiceover. Plain content cells
+        # carry their own slide_ids after `normalize --stamp-ids` (#520) —
+        # returning one of those would silently drift for_slide onto a
+        # non-slide id. An id-less real slide is still the owning slide but
+        # offers no id to reference; stop there instead of walking past it
+        # into the title macro, which would mis-anchor the voiceover.
         if meta.is_slide_start:
-            return None
+            return meta.slide_id or None
     return None
 
 

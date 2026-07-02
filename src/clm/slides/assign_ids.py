@@ -1468,24 +1468,39 @@ def _reattribute_pair_records(
 # ---------------------------------------------------------------------------
 
 
-def _companion_member_state(cell: _Cell, file_path: Path) -> tuple[str, str | None]:
+def _companion_member_state(cell: _Cell, deck_path: Path) -> tuple[str, str | None]:
     """Classify one companion cell's id: (state, bare_id).
 
     ``"preserved"``/``"own"`` ids win and are adopted by the twin;
     ``"legacy"`` (the inherited owner id — ``slide_id == for_slide`` — or a
-    conversion placeholder) is re-pointable; ``"none"`` means id-less.
+    conversion placeholder) is re-pointable; ``"none"`` means id-less;
+    ``"unowned"`` means the cell has no ``for_slide`` owner reference at all
+    (e.g. the pre-#242 title shape ``slide_id="title"`` without ``for_slide``)
+    — without the owner there is no way to tell an own id from an inherited
+    one, and re-pointing the title shape would break the ``_is_title_intent``
+    placement contract, so unowned cells are refused, never guessed at.
+
+    ``deck_path`` is the owning DECK half, not the companion file: the
+    ``<deck-stem>-cell-N`` placeholder test matches against the deck's stem
+    (extract copies deck placeholders into the companion verbatim, and a
+    ``slides_``-prefixed placeholder does not match the ``voiceover_`` name).
     """
     meta = cell.metadata
+    if not meta.for_slide:
+        return "unowned", (strip_preserve_marker(meta.slide_id) if meta.slide_id else None)
     sid = meta.slide_id
     if not sid:
         return "none", None
     bare = strip_preserve_marker(sid)
     if is_preserved(sid):
         return "preserved", bare
-    owner = strip_preserve_marker(meta.for_slide) if meta.for_slide else None
-    if (owner is not None and bare == owner) or _is_placeholder_narrative_id(sid, file_path):
+    owner = strip_preserve_marker(meta.for_slide)
+    if bare == owner or _is_placeholder_narrative_id(sid, deck_path):
         return "legacy", bare
     return "own", bare
+
+
+_VO_ANCHOR_RE = re.compile(r'\bvo_anchor="([^"]*)"')
 
 
 def stamp_ids_in_companion_pair(
@@ -1494,6 +1509,7 @@ def stamp_ids_in_companion_pair(
     options: AssignOptions,
     *,
     reserved_ids: set[str] | None = None,
+    deck_paths: tuple[Path, Path] | None = None,
 ) -> AssignResult:
     """Give every cell of a voiceover companion pair its own unique id (#520).
 
@@ -1506,26 +1522,40 @@ def stamp_ids_in_companion_pair(
     anchor placement are unaffected.
 
     The two halves are extract products and must MIRROR (same cell count and
-    the same ``for_slide``/role/cell-type sequence); pairing is positional.
-    A non-mirroring pair is refused **untouched** — same pair-atomicity
-    contract as the deck path. ``reserved_ids`` carries the owning deck
-    pair's ids so a fresh mint can never collide across the ≤4 files v3
-    treats as one document.
+    the same ``for_slide``/role/cell-type/``vo_anchor`` sequence); pairing is
+    positional. A non-mirroring pair is refused **untouched** — same
+    pair-atomicity contract as the deck path. ``reserved_ids`` carries the
+    owning deck pair's ids so a fresh mint can never collide across the ≤4
+    files v3 treats as one document; adopting an existing id onto the twin
+    is gated on the same namespace, so stamping can never *create* a
+    duplicate. ``deck_paths`` (the owning deck halves) sharpen the
+    conversion-placeholder test — placeholders embed the deck's stem, not
+    the companion's.
     """
     result = AssignResult(files_visited=2)
     de_text = de_comp.read_text(encoding="utf-8")
     en_text = en_comp.read_text(encoding="utf-8")
     pre_de, de_cells = _split_cells(de_text, comment_token_for_path(de_comp))
     pre_en, en_cells = _split_cells(en_text, comment_token_for_path(en_comp))
+    de_deck, en_deck = deck_paths if deck_paths is not None else (de_comp, en_comp)
+
+    def _anchor_of(cell: _Cell) -> str | None:
+        match = _VO_ANCHOR_RE.search(cell.header)
+        return match.group(1) if match else None
 
     def _shape(cells: list[_Cell]) -> list[tuple]:
+        # vo_anchor is part of the mirror shape: two same-owner narratives
+        # reordered in ONE half would otherwise zip cross-wise and be
+        # stamped with each other's identity. CellMetadata does not carry
+        # the attribute, so read it off the raw header.
         return [
             (
                 strip_preserve_marker(m.for_slide) if m.for_slide else None,
                 _narrative_role(m) if m.is_narrative else None,
                 m.cell_type,
+                _anchor_of(c),
             )
-            for m in (c.metadata for c in cells)
+            for c, m in ((cell, cell.metadata) for cell in cells)
         ]
 
     if len(de_cells) != len(en_cells) or _shape(de_cells) != _shape(en_cells):
@@ -1534,8 +1564,8 @@ def stamp_ids_in_companion_pair(
             str(de_comp),
             1,
             "voiceover companion halves do not mirror (cell count or "
-            "for_slide/role sequence differs); --stamp-ids skipped this "
-            "companion pair — re-extract both halves first",
+            "for_slide/vo_anchor/role sequence differs); --stamp-ids skipped "
+            "this companion pair — re-extract both halves first",
         )
         return result
 
@@ -1543,13 +1573,32 @@ def stamp_ids_in_companion_pair(
     for cell in (*de_cells, *en_cells):
         if cell.metadata.slide_id:
             used_ids.add(strip_preserve_marker(cell.metadata.slide_id))
+    # Multiplicity of every existing bare id across both halves — the
+    # adoption gate needs to know whether an id is claimed by cells OUTSIDE
+    # the pair under resolution (used_ids is a set and cannot tell).
+    id_claims: dict[str, int] = {}
+    for cell in (*de_cells, *en_cells):
+        if cell.metadata.slide_id:
+            bare = strip_preserve_marker(cell.metadata.slide_id)
+            id_claims[bare] = id_claims.get(bare, 0) + 1
+    stamped_this_run: set[str] = set()
 
     comment_token = comment_token_for_path(en_comp)
     for de_cell, en_cell in zip(de_cells, en_cells, strict=True):
         if not (de_cell.metadata.is_narrative and en_cell.metadata.is_narrative):
             continue
-        de_state, de_bare = _companion_member_state(de_cell, de_comp)
-        en_state, en_bare = _companion_member_state(en_cell, en_comp)
+        de_state, de_bare = _companion_member_state(de_cell, de_deck)
+        en_state, en_bare = _companion_member_state(en_cell, en_deck)
+
+        if de_state == "unowned" or en_state == "unowned":
+            _stamp_refuse(
+                result,
+                str(de_comp),
+                de_cell.line_number,
+                "companion cell has no for_slide owner reference (pre-#242 "
+                "shape); re-extract both halves, then re-run --stamp-ids",
+            )
+            continue
 
         # A committed (preserved/own) id wins; two DIFFERENT committed ids
         # are a divergence to resolve manually, never to overwrite.
@@ -1570,6 +1619,25 @@ def stamp_ids_in_companion_pair(
 
         if committed:
             target = next(iter(committed))
+            # Adoption gate: writing the committed id onto the twin must not
+            # CREATE a duplicate — refuse when the id is already claimed by
+            # a deck cell (reserved), by another cell of these companion
+            # files, or by an earlier pair this run.
+            pair_claims = sum(1 for bare in (de_bare, en_bare) if bare == target)
+            externally_claimed = (
+                target in (reserved_ids or ())
+                or id_claims.get(target, 0) > pair_claims
+                or target in stamped_this_run
+            )
+            if externally_claimed:
+                _stamp_refuse(
+                    result,
+                    str(de_comp),
+                    de_cell.line_number,
+                    f"companion twin id {target!r} duplicates an id used "
+                    "elsewhere in this deck's files; resolve manually",
+                )
+                continue
             adopt_source = "twin"
         else:
             # Both legacy/id-less: mint the own id from the EN body.
@@ -1610,11 +1678,12 @@ def stamp_ids_in_companion_pair(
             used_ids.add(target)
             adopt_source = "narrative-own"
 
-        for cell, path, state, bare in (
+        stamped_this_run.add(target)
+        for cell, path, state, prior_bare in (
             (de_cell, de_comp, de_state, de_bare),
             (en_cell, en_comp, en_state, en_bare),
         ):
-            if state == "preserved" or bare == target:
+            if state == "preserved" or prior_bare == target:
                 continue  # marker untouched / already correct
             if not options.report_only:
                 _write_slide_id(cell, target)
@@ -1690,7 +1759,13 @@ def _stamp_companions_for_pair(
     reserved.update(a.slide_id for a in pair_result.assignments)
     _merge_result(
         combined,
-        stamp_ids_in_companion_pair(de_comp, en_comp, options, reserved_ids=reserved),
+        stamp_ids_in_companion_pair(
+            de_comp,
+            en_comp,
+            options,
+            reserved_ids=reserved,
+            deck_paths=(de_path, en_path),
+        ),
     )
 
 
