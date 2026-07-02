@@ -92,14 +92,16 @@ interpreter**, mirroring what Docker already does. Two routes, cheapest first:
    still drives nbconvert (Role A) while the *kernel subprocess* runs in the
    course venv. Mostly env plumbing in `worker_executor.py` + a small
    provisioning helper; `[ml]` leaves clm's venv entirely.
-2. **First-class interpreter knob (proper feature).** Add a config/spec option
-   (e.g. `CLM_NOTEBOOK_KERNEL_PYTHON`, or a per-course spec attribute) that the
-   worker threads into the `KernelManager` / kernelspec selection. Makes
-   course-runtime isolation an explicit, per-course setting. Requires new code +
-   tests; today no such override exists.
+2. **First-class interpreter knob (proper feature).** Add a config option
+   (`CLM_NOTEBOOK_KERNEL_PYTHON` / `clm.toml [jupyter].kernel_python`) that
+   *drives* the route-1 provisioning. Makes course-runtime isolation an explicit,
+   opt-in setting with an empty default (no behaviour change until set).
 
-Recommended: ship route 1 first (it removes `[ml]` from clm's env with minimal
-risk), design route 2 as the durable interface.
+**Decision (see "Wave 2b — detailed design" below):** these are not two
+competing routes — route 1 is the mechanism and route 2 is the interface over
+it. We ship the config knob backed by kernelspec+`JUPYTER_PATH` provisioning,
+and deliberately do **not** thread a raw interpreter into `KernelManager`
+(that would add code to the hot execution path for no extra capability).
 
 ### Role C — subprocess tool environments
 clm already shells out to JupyterLite; change the invocation from
@@ -129,8 +131,194 @@ mitmproxy transport) and confirm none leak constraints into clm's resolution.
   pinned `uvx` tool env (`src/clm/workers/jupyterlite/builder.py`); the
   `[jupyterlite]` extra and the `[tool.uv] conflicts` fork are deleted. clm's
   env only needs `uv` on PATH.
-- **Wave 2b:** Role B — kernelspec/`JUPYTER_PATH` course-venv wiring (route 1),
-  then the interpreter knob (route 2). Remove `[ml]` as a clm extra.
+- **Wave 2b:** Role B — kernelspec/`JUPYTER_PATH` course-venv wiring exposed as a
+  first-class config knob (see the detailed design below), then remove `[ml]` as
+  a clm extra.
+
+## Wave 2b — detailed design (Role B: course-runtime kernel env)
+
+### The exact mechanism we exploit
+
+Direct-mode notebook execution runs in clm's own venv, but the *kernel* it
+launches is selected indirectly, and that indirection is the whole opening:
+
+1. `TrackingExecutePreprocessor` is constructed with **no `kernel_name`**
+   (`src/clm/workers/notebook/notebook_processor.py:1613`). nbconvert therefore
+   falls back to the notebook's `metadata.kernelspec.name`.
+2. That name is stamped by `kernelspec_for(payload.prog_lang)`
+   (`notebook_processor.py:1222`) from a fixed per-language table
+   (`src/clm/workers/notebook/utils/prog_lang_utils.py:64-68`) — for Python it is
+   the literal string **`python3`**.
+3. `jupyter_client` resolves `python3` by scanning kernelspec directories. The
+   dirs named by the **`JUPYTER_PATH`** env var are searched *before* the user
+   and system data dirs, and the first `kernels/python3/kernel.json` found wins.
+
+So: if the worker process has `JUPYTER_PATH` pointing at a directory that
+contains `kernels/python3/kernel.json` whose `argv[0]` is a **course-venv**
+interpreter, then nbconvert (Role A, clm's venv) drives the run while the
+**kernel subprocess** (Role B) executes in the course venv. `import pandas`
+is satisfied by the course venv; `[ml]` never has to be in clm's venv.
+
+No change to `notebook_processor.py` is required — this is pure environment
+plumbing, mirroring what the Docker image already does (conda `/opt/conda` +
+clm installed `--no-deps`, `docker/notebook/Dockerfile`).
+
+### Why not thread an interpreter into `KernelManager` directly
+
+The original doc floated a "route 2" that threads a raw interpreter path into
+the `KernelManager`/`ExecutePreprocessor`. We reject that: it means overriding
+`kernel_name` and/or subclassing the manager to rewrite `argv`, i.e. real code
+on the hot execution path, for no capability the kernelspec+`JUPYTER_PATH`
+approach lacks. The durable, first-class interface is a **config knob that
+drives the kernelspec provisioning**, not a new kernel-launch code path.
+
+### Config surface
+
+Add one field to `JupyterConfig` (`src/clm/infrastructure/config.py:234`):
+
+```python
+kernel_python: str = Field(
+    default="",
+    description="Path to the interpreter that runs the Python notebook kernel "
+                "in Direct mode. Empty = use clm's own environment (today's "
+                "behaviour). Set to a course venv to isolate course-runtime "
+                "packages ([ml] etc.) from clm's environment.",
+)
+```
+
+**Resolution precedence** (most specific wins; first non-empty is used):
+
+1. **`CLM_NOTEBOOK_KERNEL_PYTHON`** (env) — operator escape hatch for one
+   invocation (debugging, CI). Beats everything.
+2. **Course-spec override** — a `<kernel-python>` element in the course spec
+   (resolved relative to the course root, like `<jupyterlite>`'s `<wheels>` /
+   `<environment>`). This is the key ask: it lets *this course* pick its
+   environment, so a **plain-Python course points at a light venv** while an
+   ml-heavy course in the same checkout points at the fat `[ml]` venv — no
+   global reconfiguration between builds.
+3. **Project config** — `clm.toml [jupyter].kernel_python`, discovered from the
+   directory `clm` is started in (the existing `get_config()` discovery). The
+   repo-wide default when a spec says nothing.
+4. **Default empty** — use clm's own environment = **today's behaviour**, byte
+   for byte. Wave 2b is inert until something above is set (the safety valve).
+
+Behaviour:
+- **Resolves to empty:** no provisioning, no `JUPYTER_PATH` injection.
+- **Resolves to a path:** provision a `python3` kernelspec pointing at that
+  interpreter and prepend its root to the worker's `JUPYTER_PATH`.
+
+**Granularity caveat (course-level, not per-target — in Wave 2b).** One
+`clm build` runs one course spec, so a course-level interpreter is resolved
+*once per build* and injected into the notebook worker pool cleanly. A
+*per-output-target* interpreter is deliberately **out of scope for 2b**: one
+worker pool serves all targets in a build, so per-target selection would force
+either per-job kernelspec selection (back onto the execution hot path we are
+avoiding) or per-target worker pools. Course-level covers the "light venv for
+plain-Python courses" goal; per-target can come later if a real need appears.
+The `<kernel-python>` element is specced at course level for that reason.
+
+Scope: **Python only.** C++/C#/Java/TS kernels (`xcpp20`, `.net-csharp`,
+`java`, …) are external toolchains, not clm's venv, and are out of scope — the
+provisioning writes only the `python3` kernelspec and leaves every other name
+to resolve as it does today.
+
+### Wiring (where the code goes)
+
+1. **Provisioning helper** — a small module (e.g.
+   `src/clm/infrastructure/workers/kernel_env.py`) with
+   `provision_course_kernel(python_exe: Path) -> Path` that:
+   - validates `python_exe` exists and that `ipykernel` is importable from it
+     (a cheap `python_exe -c "import ipykernel"` check → actionable error if
+     missing);
+   - writes `<clm-data>/kernel-envs/<hash-of-python>/kernels/python3/kernel.json`
+     with
+     `argv = [str(python_exe), "-m", "ipykernel_launcher", "-f", "{connection_file}"]`,
+     `display_name`, `language: "python"`;
+   - returns the **root** dir (the one *containing* `kernels/`), which is what
+     `JUPYTER_PATH` wants.
+2. **Resolve the interpreter** — apply the precedence above (env → course-spec
+   → project `clm.toml` → empty). Note `_notebook_worker_jupyter_env()` today
+   reads only global config; the **course-spec** layer means the resolved value
+   must be threaded from where the spec is parsed at build time down to worker-
+   pool startup (the pool is created per build, so the course is known). Cleanest
+   shape: resolve once during build setup and pass the concrete interpreter path
+   into the executor (e.g. an argument / a field on the pool config), rather than
+   having `worker_executor.py` re-read the spec. Keep the env/`clm.toml` layers in
+   the executor's config read; inject the spec layer from the build.
+3. **Env injection** — in `worker_executor.py`, extend the notebook-worker env
+   assembly next to `_notebook_worker_jupyter_env()` (`:41-64`, injected at
+   `:701`; Docker path mirrors at `:318-379`). When the resolved interpreter is
+   non-empty, compute the root via the helper and set
+   `JUPYTER_PATH = <root><os.pathsep><existing JUPYTER_PATH>`. Direct mode only
+   in Wave 2b; the Docker image already isolates, so skip injection there.
+4. **No `notebook_processor.py` change.** The reaping/JobObject teardown that
+   already kills kernel grandchildren (`_ReapingKernelManager`,
+   `notebook_processor.py:586`; Windows JobObject in `worker_executor.py:741`)
+   covers the course-venv kernel unchanged — it is still a subprocess of the
+   worker.
+
+### Provisioning command (setup friction mitigation)
+
+A first-class CLI entry so users don't hand-write `kernel.json`. Lives under a
+new **`clm provision`** command group (confirmed):
+
+- **MVP — register an existing interpreter:**
+  `clm provision kernel-env --python <path-to-course-venv-python>` → runs the
+  helper, prints the root dir and the `clm.toml`/spec/env line to set. Zero venv
+  management; the user brings their own course venv.
+- **Follow-up — create it too:** `clm provision kernel-env --create --with ml`
+  → `uv venv` a course env, install `ipykernel` + the requested course-runtime
+  set, then register. Deferred (question 3, agreed); not needed to remove `[ml]`
+  from clm's env.
+
+Must appear in `clm info commands`, and the new `<kernel-python>` spec element
+in `clm info spec-files`.
+
+**Future — fold `clm docker` under `provision`.** The existing `clm docker`
+commands (image build/management) are conceptually the same "prepare an
+environment clm will run against" as `provision kernel-env`. A later,
+deliberate redesign can move them under `clm provision` (e.g. `clm provision
+docker-image`) so all environment provisioning lives in one group. Out of scope
+for Wave 2b — noted so the group is designed with room for it (don't hard-code
+`provision` as kernel-only).
+
+### Migration / phasing (within 2b)
+
+- **2b-1:** config knob (env + `clm.toml` + course-spec `<kernel-python>`)
+  with the full resolution precedence + provisioning helper + `JUPYTER_PATH`
+  wiring + `clm provision kernel-env` (register-existing MVP). Opt-in, empty
+  default → no behaviour change. Ships with tests + docs, including the new
+  `<kernel-python>` element in `clm info spec-files` and `clm provision` in
+  `clm info commands`. **`[ml]` stays a clm extra** for this step so nothing
+  breaks for current users.
+- **2b-2:** once the knob is proven, reposition `[ml]` as a *course* extra
+  (installed into the course venv, not clm's). Update
+  `docs/user-guide/installation.md`, the `clm info` topics, and the memory. This
+  is the step that actually removes the multi-GB stack from clm's env.
+
+### Testing
+
+- **Unit:** helper writes `kernel.json` with the correct `argv`/`{connection_file}`;
+  empty knob → `_notebook_worker_jupyter_env()`-adjacent injection is a no-op and
+  `JUPYTER_PATH` is untouched; set knob → root is prepended (not appended) and
+  survives an existing `JUPYTER_PATH`; missing `ipykernel` → actionable error.
+- **Integration (gated, needs a second venv):** create a throwaway venv with a
+  marker package that is **not** installed in clm's env, point
+  `CLM_NOTEBOOK_KERNEL_PYTHON` at it, and assert a notebook that `import`s the
+  marker executes green in Direct mode — proving the kernel really ran in the
+  course venv. Skip when the fixture venv can't be built.
+
+### Open questions / risks specific to 2b
+
+- **`ipykernel` in the course venv is mandatory** (the kernel launcher lives
+  there). Provisioning validates it; document it for the `--python` path.
+- **http-replay interaction:** the course-venv kernel still inherits the worker
+  env, so the mitmproxy bootstrap env vars (`worker_executor.py:98-133`,
+  `:349-379`) still reach it — but the *replay bootstrap client-patching* must be
+  importable/enabled in the course venv too. Verify with an ml+replay course
+  before flipping `[ml]` out (2b-2), or document replay as clm-env-only for now.
+- **Version-truth surfacing:** an explicit course venv is the point — see the
+  Trade-offs note below.
 
 ## Trade-offs / risks
 
