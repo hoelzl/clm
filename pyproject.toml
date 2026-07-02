@@ -67,77 +67,16 @@ drawio = [
 all-workers = [
     "coding-academy-lecture-manager[notebook,plantuml,drawio]",
 ]
-# ML/LLM packages for advanced notebook features
-ml = [
-    # Core ML
-    "torch>=2.8.0",
-    "torchvision>=0.20.0",
-    "torchaudio>=2.8.0",
-    "fastai>=2.7",
-    "transformers",
-    "numba>=0.60.0",
-    # Image generation and model acceleration
-    "diffusers>=0.35.1",
-    "accelerate>=1.11.0",
-    # Tokenization and model utilities
-    "sentencepiece>=0.2.1",
-    "timm>=1.0.15",
-    "hf-xet>=1.1.10",
-    "protobuf>=6.32.1",
-    # Data science
-    "numpy>=2.0.1",
-    "pandas>=2.2.2",
-    "scipy>=1.14.0",
-    "scikit-learn>=1.5.1",
-    "skorch>=1.0.2",
-    "sqlalchemy>=2.0.32",
-    "psycopg[binary]>=3.2",  # PostgreSQL driver for the Docker/Postgres deployment decks
-    # Visualization
-    "matplotlib>=3.9.2",
-    "seaborn>=0.13.2",
-    "plotly>=6.4.0",
-    "gradio>=6.5.1",
-    "pillow>=11.2.1",
-    # Text and web processing
-    "beautifulsoup4>=4.12.2",
-    "inscriptis>=1.0.2",
-    "ftfy>=6.1.1",
-    "clean-text>=0.6.0",
-    "trafilatura>=1.6.0",
-    "newspaper4k>=0.2.8",
-    "bm25s[core]>=0.3.2.post1",
-    # Utilities
-    "tqdm>=4.66.5",
-    "toolz>=0.12.1",
-    "packaging>=25.0",
-    "icecream>=2.1.10",
-    "cookiecutter",
-    "PyGitHub>=2.0.0",
-    # Notebook testing
-    "ipytest",
-    # LLM/RAG
-    "langchain>=1.2.7",
-    "langsmith",
-    "langchain-anthropic",
-    "langchain-community>=0.3.0",
-    "langchain-core",
-    "langchain-openai",
-    "langchain-openrouter",
-    "langchain-text-splitters",
-    "langgraph>=1.1.2",
-    "deepagents>=0.6.0",  # AI-Agents-II deck (create_deep_agent on LangGraph)
-    "qdrant-client>=1.13.0",
-    "langchain-qdrant",
-    "fastembed>=0.6.0",
-    "openai>=2.8.1",
-    "tiktoken>=0.9.0",
-    "langfuse>=4.0.0",
-    # Evaluation
-    # Document processing (used with RAG)
-    "pypdf>=6.3.2",
-    "pymediawiki>=0.7.5",
-]
-# LLM summarization (lighter than [ml])
+# NOTE: The former `[ml]` extra was REMOVED in CLM 1.19 (Wave 2b-2). The multi-GB
+# machine-learning / data-science stack is course-*runtime* (Role B): clm never
+# imports it, and it belongs in a separate *course venv* that the Direct-mode
+# notebook kernel runs in — NOT in clm's own (Role A) venv. It now lives in the
+# self-contained `course-runtime-requirements.txt` at the repo root; install it
+# into the course venv and wire it up with `clm provision kernel-env --python`
+# (or the `<kernel-python>` spec element). See
+# docs/claude/design/dependency-environment-isolation.md and
+# docs/user-guide/installation.md.
+# LLM summarization (lighter than the course-runtime ML stack)
 summarize = [
     "openai>=1.0.0",
 ]
@@ -249,13 +188,14 @@ web = [
     "segno>=1.6.0",  # Pure-Python QR codes for Mobile Deck Studio pairing
 ]
 # Everything
-# NOTE: `all` intentionally excludes `ml`. `ml` (torch/pandas/transformers/…)
-# is course-*runtime*: clm never imports it; it exists only so Direct-mode
-# notebook kernels can import it. Bundling it made every `clm` install carry a
-# multi-GB ML stack for no clm-side benefit. Install it explicitly (`[ml]`) on
-# a box that runs ML course decks in Direct mode — or use the Docker notebook
+# NOTE: `all` carries no ML/data-science stack. That stack (torch/pandas/
+# transformers/…) is course-*runtime* (Role B): clm never imports it; it exists
+# only so Direct-mode notebook *kernels* can import it. As of CLM 1.19 it is no
+# longer a clm extra at all — install `course-runtime-requirements.txt` into a
+# separate course venv and point clm at it with `clm provision kernel-env
+# --python` (or the `<kernel-python>` spec element), or use the Docker notebook
 # image, which bakes it in.
-# (JupyterLite is not a clm extra at all — its build runs in an isolated `uvx`
+# (JupyterLite is likewise not a clm extra — its build runs in an isolated `uvx`
 # tool env; see the note above the `slides` extra and
 # docs/claude/design/dependency-environment-isolation.md.)
 all = [
@@ -283,6 +223,7 @@ include = [
     "/tests",
     "/README.md",
     "/LICENSE",
+    "/course-runtime-requirements.txt",
 ]
 
 [tool.pytest.ini_options]
@@ -530,8 +471,9 @@ version = "{new_version}\""""
 #      extras contain packages that several test modules import at
 #      collection time (e.g. tests/workers/notebook imports nbformat
 #      from the [notebook] extra), so without them `uv sync` would
-#      leave the fast suite broken. `ml` is deliberately excluded
-#      because it's huge and blocked on Python 3.14.
+#      leave the fast suite broken. The course-runtime ML stack is not
+#      here (and is no longer a clm extra as of 1.19) — it's huge,
+#      course-runtime-only, and lives in the separate course venv.
 #      `replay` (mitmproxy + pyyaml + filelock) is included so the
 #      HTTP-replay / cassette tests actually *run* in the fast suite
 #      instead of silently `pytest.importorskip`-skipping: without it,
@@ -540,10 +482,12 @@ version = "{new_version}\""""
 # See docs/proposals/PRE_COMMIT_HOOK_HARDENING.md (Fix 1) for rationale.
 dev = [
     # This is the group `uv sync` installs by default (local dev / worktree
-    # setup / pre-push gate). `ml` is excluded (huge, course-runtime-only,
-    # py3.14-blocked) and JupyterLite is not a clm extra at all — its build runs
-    # in an isolated `uvx` tool env (Wave 2a), so nothing here pulls
-    # jupyterlite-core/empack into clm's resolution.
+    # setup / pre-push gate). The course-runtime ML stack is absent (huge,
+    # course-runtime-only, py3.14-blocked, and no longer a clm extra as of 1.19 —
+    # it lives in the course venv, see course-runtime-requirements.txt), and
+    # JupyterLite is not a clm extra at all — its build runs in an isolated `uvx`
+    # tool env (Wave 2a), so nothing here pulls jupyterlite-core/empack into
+    # clm's resolution.
     "coding-academy-lecture-manager[notebook,plantuml,drawio,recordings,slides,mcp,summarize,voiceover,replay,tui,web]",
     # Keep this environment on a modern Click (the CliRunner 8.2+ API).
     "click>=8.2",

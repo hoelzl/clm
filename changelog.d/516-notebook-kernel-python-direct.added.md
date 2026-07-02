@@ -1,7 +1,7 @@
 - **Direct-mode notebook execution can now run its Python kernel in a separate
   interpreter (Wave 2b).** Point clm at a course venv and the notebook kernel
-  runs there — so course-runtime packages (`[ml]`: torch/pandas/…) live in a
-  separate environment from clm's own, while clm keeps driving nbconvert
+  runs there — so the course-runtime ML/data-science stack (torch/pandas/…) lives
+  in a separate environment from clm's own, while clm keeps driving nbconvert
   (mirroring what the Docker notebook image already does). Register a course
   interpreter with the new `clm provision kernel-env --python <path>`, then
   select it via the `CLM_NOTEBOOK_KERNEL_PYTHON` env var, a course-spec

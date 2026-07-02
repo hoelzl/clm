@@ -97,7 +97,7 @@ pip install -e ".[web]"      # Web dashboard
 
 # Install for development
 pip install -e ".[dev]"      # Development tools
-pip install -e ".[all]"      # Everything clm needs (excludes [ml]; see below)
+pip install -e ".[all]"      # Everything clm needs (no ML stack; see below)
 ```
 
 ### Python Optional Dependencies
@@ -116,10 +116,15 @@ CLM has several optional dependency groups for different features:
   - Install: `pip install -e ".[drawio]"`
 - **[all-workers]**: All worker dependencies combined
   - Install: `pip install -e ".[all-workers]"`
-- **[ml]**: PyTorch, FastAI, transformers, deepagents, psycopg
-  - Optional for advanced ML notebooks (incl. the LangGraph deep-agents deck and
-    the Postgres deployment decks)
-  - Install: `pip install -e ".[ml]"`
+
+> **The ML / data-science stack is no longer a clm extra.** As of CLM 1.19 the
+> old `[ml]` extra (PyTorch, FastAI, transformers, pandas, the LangGraph
+> deep-agents deck, the Postgres deployment decks, …) has been removed. It is
+> *course-runtime* — clm never imports it — so it belongs in a **separate course
+> venv** that the Direct-mode notebook kernel runs in, not in clm's own venv. It
+> now ships as the self-contained `course-runtime-requirements.txt`. See
+> [Running ML course decks in Direct mode](#running-ml-course-decks-in-direct-mode)
+> below.
 
 **UI Features**:
 - **[tui]**: textual, rich
@@ -187,19 +192,24 @@ CLM has several optional dependency groups for different features:
   replay, dev, tui, web
   - Required for: Full clm development and testing
   - Install: `pip install -e ".[all]"`
-  - **Deliberately excludes `[ml]`.** It is not imported by clm itself:
-    `[ml]` (PyTorch/pandas/transformers/…) is *course-runtime* — it exists only
-    so Direct-mode notebook kernels can import it. Bundling it made every install
-    multi-GB. Install it explicitly when a course needs it (see below), or run
-    the workers in Docker mode (the notebook image bakes the ML stack in).
-    (JupyterLite is likewise absent, but it is not a clm extra at all — its
-    build runs in an isolated `uvx` tool env.)
+  - **Carries no ML / data-science stack.** It is not imported by clm itself:
+    the ML stack (PyTorch/pandas/transformers/…) is *course-runtime* — it exists
+    only so Direct-mode notebook kernels can import it. Bundling it made every
+    install multi-GB, so as of CLM 1.19 it is no longer a clm extra at all.
+    Install it into a **separate course venv** when a course needs it (see
+    [Running ML course decks in Direct mode](#running-ml-course-decks-in-direct-mode)),
+    or run the workers in Docker mode (the notebook image bakes the ML stack in).
+    (JupyterLite is likewise absent, and it too is not a clm extra — its build
+    runs in an isolated `uvx` tool env.)
 
 **Notes**:
 - Core package works without worker dependencies (can use Docker mode)
 - For direct execution mode, install worker-specific dependencies
 - For clm development and testing, install with `[all]` (or just `uv sync`)
-- To run **ML course decks** in Direct mode: `pip install -e ".[all,ml]"`
+- To run **ML course decks** in Direct mode, install the course-runtime stack
+  into a separate course venv — see
+  [Running ML course decks in Direct mode](#running-ml-course-decks-in-direct-mode).
+  (Do **not** install it into clm's own venv.)
 - To build the **JupyterLite** output format, just make sure `uv` is installed
   (`uvx` on PATH); clm runs `jupyter lite build` in an isolated tool env — there
   is nothing to add to clm's own environment.
@@ -336,13 +346,48 @@ npm install -g tslab
 tslab install
 ```
 
-**Machine Learning Libraries** (optional):
+## Running ML Course Decks in Direct Mode
+
+Some course decks (deep-learning, RAG / LangGraph deep-agents, the Postgres
+deployment decks, …) import a heavy machine-learning / data-science stack
+(PyTorch, transformers, pandas, scikit-learn, …) *at notebook-execution time*.
+
+**clm never imports any of that stack** — only the notebook *kernels* do. It is
+therefore *course-runtime* (what the architecture docs call "Role B") and, as of
+CLM 1.19, is **not a clm extra**. Installing it into clm's own venv would bloat
+every clm install by multiple GB for no clm-side benefit. Instead, put it in a
+**separate course venv** and point clm's Direct-mode notebook kernel at it.
+
+The stack ships as the self-contained `course-runtime-requirements.txt` at the
+repo root (it already includes `ipykernel`, which the kernel launcher needs).
+
 ```bash
-# Install ML packages for advanced notebooks
-pip install -e ".[ml]"
+# 1. Create a dedicated course venv (any Python 3.12–3.14).
+uv venv /opt/course-venvs/ml          # or: python -m venv /opt/course-venvs/ml
+
+# 2. Install the course-runtime stack into it (NOT into clm's venv).
+/opt/course-venvs/ml/bin/python -m pip install -r course-runtime-requirements.txt
+
+# 3. Point clm at it so Direct-mode notebook kernels run in that venv.
+clm provision kernel-env --python /opt/course-venvs/ml/bin/python
 ```
 
-This includes: PyTorch, torchvision, torchaudio, FastAI, transformers, numba.
+`clm provision kernel-env` writes a `python3` kernelspec that clm prepends to
+`JUPYTER_PATH` for notebook workers, so nbconvert (driven by clm's own venv,
+"Role A") launches the kernel subprocess in the course venv. See
+`clm info commands` (`provision kernel-env`) for the full resolution precedence
+(`CLM_NOTEBOOK_KERNEL_PYTHON` env var → course-spec `<kernel-python>` element →
+`clm.toml` `[jupyter] kernel_python`), and `clm info spec-files` for
+`<kernel-python>`.
+
+> **Prefer Docker for heavy ML decks.** The Docker notebook image already bakes
+> in an equivalent course-runtime stack and is fully isolated, so Docker mode
+> needs none of the above. The course-venv route is for running ML decks in
+> Direct mode on a dev box.
+
+For the architecture and rationale (the three dependency roles, why the ML stack
+left clm's env), see
+[`docs/claude/design/dependency-environment-isolation.md`](../claude/design/dependency-environment-isolation.md).
 
 ## Docker Workers (Optional)
 

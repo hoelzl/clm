@@ -291,10 +291,15 @@ for Wave 2b — noted so the group is designed with room for it (don't hard-code
   `<kernel-python>` element in `clm info spec-files` and `clm provision` in
   `clm info commands`. **`[ml]` stays a clm extra** for this step so nothing
   breaks for current users.
-- **2b-2:** once the knob is proven, reposition `[ml]` as a *course* extra
-  (installed into the course venv, not clm's). Update
-  `docs/user-guide/installation.md`, the `clm info` topics, and the memory. This
-  is the step that actually removes the multi-GB stack from clm's env.
+- **2b-2 (shipped):** with the knob proven, `[ml]` is repositioned as a *course*
+  runtime environment (installed into the course venv, not clm's). The `[ml]`
+  extra was **removed** from `pyproject.toml` and the stack now ships as the
+  self-contained `course-runtime-requirements.txt` (repo root, includes
+  `ipykernel`); install it into the course venv and wire it up with `clm
+  provision kernel-env --python`. `docs/user-guide/installation.md`, the `clm
+  info` topics (`migration`, `commands`, `spec-files`), `AGENTS.md`, and the
+  memory were updated. This is the step that actually removes the multi-GB stack
+  from clm's env.
 
 ### Testing
 

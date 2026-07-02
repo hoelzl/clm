@@ -3367,10 +3367,16 @@ Provision environments clm runs *against* (as opposed to clm's own venv).
 
 `provision kernel-env` writes a `python3` kernelspec pointing at the given
 interpreter and prints how to activate it. clm then runs the notebook kernel in
-that environment — so course-runtime packages (`[ml]`: torch/pandas/…) live in a
-**separate** venv from clm, while clm keeps driving nbconvert. It registers an
-interpreter you already have; it does not create the venv. The interpreter must
-have `ipykernel` installed (pass `--no-validate` to skip that check).
+that environment — so the course-runtime ML/data-science stack (torch/pandas/…)
+lives in a **separate** course venv from clm, while clm keeps driving nbconvert.
+It registers an interpreter you already have; it does not create the venv. The
+interpreter must have `ipykernel` installed (pass `--no-validate` to skip that
+check).
+
+Populate that course venv from the self-contained `course-runtime-requirements.txt`
+shipped in the clm repo (it includes `ipykernel`): `python -m pip install -r
+course-runtime-requirements.txt`. As of CLM {version} this stack is no longer a
+clm extra — see `clm info migration`.
 
 Selection precedence for the kernel interpreter (most specific wins):
 
