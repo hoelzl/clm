@@ -50,6 +50,7 @@ class WorkerLifecycleManager:
         session_id: str | None = None,
         cache_db_path: Path | None = None,
         data_dir: Path | None = None,
+        notebook_kernel_python: str = "",
     ):
         """Initialize lifecycle manager.
 
@@ -60,12 +61,16 @@ class WorkerLifecycleManager:
             session_id: Optional session ID for event logging
             cache_db_path: Path to executed notebook cache database
             data_dir: Path to source data directory (for Docker workers to mount)
+            notebook_kernel_python: Resolved interpreter for the Direct notebook
+                kernel (Wave 2b); "" = clm's own env. Forwarded to the pool
+                manager / direct executor.
         """
         self.config = config
         self.db_path = db_path
         self.workspace_path = workspace_path
         self.cache_db_path = cache_db_path
         self.data_dir = data_dir
+        self.notebook_kernel_python = notebook_kernel_python
         self.session_id = session_id or f"session-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
 
         # Worker pool manager (used for actual worker start/stop)
@@ -197,6 +202,7 @@ class WorkerLifecycleManager:
             network_name=self.config.network_name,
             log_level=logging.getLevelName(logger.getEffectiveLevel()),
             cache_db_path=self.cache_db_path,
+            notebook_kernel_python=self.notebook_kernel_python,
         )
 
         # Update discovery to use pool_manager's executors for accurate health checks

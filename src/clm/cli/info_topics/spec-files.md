@@ -329,6 +329,30 @@ Defaults to `Coding-Akademie München` (de) / `Coding-Academy Munich` (en).
 
 ## Optional Elements
 
+### `<kernel-python>` (Optional, CLM {version}+)
+
+Course-level interpreter that runs the **Python notebook kernel in Direct
+execution mode**. Point it at a course venv so course-runtime packages
+(`[ml]`: torch/pandas/…) run in a separate environment from clm's own, while
+clm keeps driving the build. Empty/absent (the default) runs the kernel in
+clm's environment, exactly as before.
+
+```xml
+<kernel-python>/opt/course-venvs/ml/bin/python</kernel-python>
+```
+
+The interpreter must have `ipykernel` installed. Register it once with
+`clm provision kernel-env --python <path>` (writes the kernelspec clm points the
+build at). This is the key lever for keeping a **plain-Python** course on a light
+venv while an ML-heavy course uses a fat one — no global reconfiguration.
+
+Precedence (highest first): the `CLM_NOTEBOOK_KERNEL_PYTHON` environment
+variable, then this `<kernel-python>`, then `clm.toml` `[jupyter] kernel_python`;
+unset ⇒ clm's own environment. Only the Python kernel is affected (C++/C#/Java/TS
+kernels are external toolchains). Direct mode only — the Docker notebook image
+already isolates the course-runtime stack. See `clm info commands` (`clm
+provision`) and `docs/claude/design/dependency-environment-isolation.md`.
+
 ### `<sidecar-layout>` (Optional, CLM {version}+)
 
 Per-course override for where a build records a topic's **first** HTTP-replay

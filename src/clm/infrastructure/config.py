@@ -249,6 +249,19 @@ class JupyterConfig(BaseModel):
         description="Log cell processing in notebook processor",
     )
 
+    kernel_python: str = Field(
+        default="",
+        description=(
+            "Path to the interpreter that runs the Python notebook kernel in "
+            "Direct mode. Empty = use clm's own environment (default). Set to a "
+            "course venv to isolate course-runtime packages ([ml] etc.) from "
+            "clm's environment. This is the project-level (clm.toml) tier; the "
+            "env var CLM_NOTEBOOK_KERNEL_PYTHON and a course-spec <kernel-python> "
+            "element override it. See docs/claude/design/"
+            "dependency-environment-isolation.md."
+        ),
+    )
+
 
 class WorkersConfig(BaseModel):
     """Worker configuration."""

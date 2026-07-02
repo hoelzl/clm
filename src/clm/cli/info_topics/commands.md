@@ -3357,6 +3357,33 @@ Build and push CLM Docker images.
 | `docker pull` | Pull images from Docker Hub |
 | `docker push` | Push images to Docker Hub |
 
+### `clm provision`
+
+Provision environments clm runs *against* (as opposed to clm's own venv).
+
+| Subcommand | Description |
+|------------|-------------|
+| `provision kernel-env --python PATH` | Register a course venv as the Direct-mode Python notebook kernel (Wave 2b) |
+
+`provision kernel-env` writes a `python3` kernelspec pointing at the given
+interpreter and prints how to activate it. clm then runs the notebook kernel in
+that environment — so course-runtime packages (`[ml]`: torch/pandas/…) live in a
+**separate** venv from clm, while clm keeps driving nbconvert. It registers an
+interpreter you already have; it does not create the venv. The interpreter must
+have `ipykernel` installed (pass `--no-validate` to skip that check).
+
+Selection precedence for the kernel interpreter (most specific wins):
+
+1. `CLM_NOTEBOOK_KERNEL_PYTHON` environment variable.
+2. Course-spec `<kernel-python>` element (see `clm info spec-files`).
+3. `clm.toml` `[jupyter] kernel_python`.
+4. Unset ⇒ the kernel runs in clm's own environment (default).
+
+Only the Python (`python3`) kernel is affected; C++/C#/Java/TS kernels are
+external toolchains and resolve as before. Applies to **Direct** execution only
+— the Docker notebook image already isolates the course-runtime stack. See
+`docs/claude/design/dependency-environment-isolation.md`.
+
 ### `clm git`
 
 Manage git repositories for course output directories.

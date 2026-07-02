@@ -583,6 +583,7 @@ class DirectWorkerExecutor(WorkerExecutor):
         workspace_path: Path,
         log_level: str = "INFO",
         cache_db_path: Path | None = None,
+        notebook_kernel_python: str = "",
     ):
         """Initialize direct process executor.
 
@@ -591,13 +592,30 @@ class DirectWorkerExecutor(WorkerExecutor):
             workspace_path: Path to workspace directory
             log_level: Logging level for workers
             cache_db_path: Path to executed notebook cache database
+            notebook_kernel_python: Resolved interpreter for the Python notebook
+                kernel (Wave 2b). Empty = run the kernel in clm's own env
+                (default). When set, a ``python3`` kernelspec pointing at it is
+                provisioned once here and prepended to each Direct notebook
+                worker's ``JUPYTER_PATH`` so the kernel subprocess runs in that
+                (course) environment. Docker mode ignores this — a host
+                interpreter path is meaningless inside a container.
         """
         self.db_path = db_path
         self.workspace_path = workspace_path
         self.log_level = log_level
         self.cache_db_path = cache_db_path
+        self.notebook_kernel_python = notebook_kernel_python
         self.processes: dict[str, subprocess.Popen] = {}
         self.worker_info: dict[str, dict] = {}  # worker_id -> {type, index, etc.}
+
+        # Provision the course kernelspec once (idempotent) so every notebook
+        # worker this executor starts shares one JUPYTER_PATH root. Fails fast
+        # at construction with an actionable error if the interpreter is bad.
+        self._kernel_jupyter_path_root: Path | None = None
+        if notebook_kernel_python:
+            from clm.infrastructure.workers.kernel_env import provision_course_kernel
+
+            self._kernel_jupyter_path_root = provision_course_kernel(Path(notebook_kernel_python))
 
         # Windows-only: kill-on-close JobObject that owns every worker
         # subprocess we start. On Windows, Popen.terminate() calls
@@ -699,6 +717,23 @@ class DirectWorkerExecutor(WorkerExecutor):
 
             # Config-resolved Jupyter settings for the notebook worker (Phase 4).
             env.update(_notebook_worker_jupyter_env())
+
+            # Course-runtime kernel isolation (Wave 2b): point the notebook
+            # kernel at a separate interpreter by prepending our provisioned
+            # `python3` kernelspec root to JUPYTER_PATH. Notebook workers only —
+            # other worker types don't launch a Jupyter kernel.
+            if worker_type == "notebook" and self._kernel_jupyter_path_root is not None:
+                from clm.infrastructure.workers.kernel_env import jupyter_path_with_kernel
+
+                env["JUPYTER_PATH"] = jupyter_path_with_kernel(
+                    self._kernel_jupyter_path_root, env.get("JUPYTER_PATH")
+                )
+                logger.debug(
+                    "Notebook worker %s: JUPYTER_PATH=%s (course kernel %s)",
+                    worker_id,
+                    env["JUPYTER_PATH"],
+                    self.notebook_kernel_python,
+                )
 
             # Build command
             cmd = [sys.executable, "-m", module]
