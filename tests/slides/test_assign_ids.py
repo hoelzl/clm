@@ -1545,6 +1545,38 @@ class TestStampIds:
         assert any("only one deck half" in r.reason for r in result.refusals)
         assert comp_de.read_text(encoding="utf-8") == comp_text
 
+    def test_deck_adoption_refuses_id_claimed_by_another_cell(self):
+        # The slides_pe_02a_fundamentals shape from the #520 corpus
+        # rehearsal: an id-less DE narrative adjacent to an EN narrative
+        # carrying a stale id equal to some OTHER slide's id ("recap").
+        # Adopting it would stamp that foreign identity onto the DE cell
+        # (and create a bare-id duplicate); the twin-adoption gate must
+        # refuse instead.
+        text = (
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="recap"\n'
+            "# ## Rückblick\n"
+            "\n"
+            '# %% [markdown] lang="en" tags=["slide"] slide_id="recap"\n'
+            "# ## Recap\n"
+            "\n"
+            '# %% [markdown] lang="de" tags=["subslide"] slide_id="other"\n'
+            "# ## Anderes\n"
+            "\n"
+            '# %% [markdown] lang="en" tags=["subslide"] slide_id="other"\n'
+            "# ## Other\n"
+            "\n"
+            '# %% [markdown] lang="de" tags=["voiceover"]\n'
+            "# Sprechertext.\n"
+            "\n"
+            '# %% [markdown] lang="en" tags=["voiceover"] slide_id="recap"\n'
+            "# Narration text.\n"
+        )
+        new_text, result = _run(text, **_STAMP)
+        assert result.assignments == []
+        assert any("duplicates an id used elsewhere" in r.reason for r in result.refusals)
+        # The DE narrative was NOT stamped with the foreign id.
+        assert new_text == text
+
     def test_companion_pre242_title_shape_refused_untouched(self, tmp_path):
         # Pre-#242 extract wrote title cells as slide_id="title" with NO
         # for_slide — a documented on-disk population (_is_title_intent).
