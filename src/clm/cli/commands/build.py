@@ -1853,12 +1853,23 @@ async def main_build(
     # Direct mode it stays the legacy primary ``output_root``.
     worker_workspace_path = _resolve_worker_workspace_path(course, worker_config)
 
+    # Resolve the Direct-mode notebook-kernel interpreter (Wave 2b): env
+    # CLM_NOTEBOOK_KERNEL_PYTHON > course spec <kernel-python> > clm.toml
+    # [jupyter].kernel_python > "" (clm's own env). "" leaves today's behaviour
+    # untouched. Docker mode ignores it (a host interpreter is meaningless in a
+    # container). Resolved here where the spec is in scope; the executor just
+    # provisions + injects JUPYTER_PATH.
+    from clm.infrastructure.workers.kernel_env import resolve_notebook_kernel_python
+
+    notebook_kernel_python = resolve_notebook_kernel_python(course.spec.kernel_python)
+
     lifecycle_manager = WorkerLifecycleManager(
         config=worker_config,
         db_path=config.jobs_db_path,
         workspace_path=worker_workspace_path,
         cache_db_path=config.cache_db_path,
         data_dir=data_dir,
+        notebook_kernel_python=notebook_kernel_python,
     )
 
     # Out-of-process HTTP-replay proxy (issue #165). Must run BEFORE workers

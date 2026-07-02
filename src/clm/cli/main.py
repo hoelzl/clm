@@ -73,6 +73,7 @@ _COMMANDS = "clm.cli.commands"
         "config": f"{_COMMANDS}.config:config",
         "db": f"{_COMMANDS}.db:db",
         "docker": f"{_COMMANDS}.docker:docker_group",
+        "provision": f"{_COMMANDS}.provision:provision_group",
         "jobs": f"{_COMMANDS}.jobs:jobs_group",
         "git": f"{_COMMANDS}.git:git_group",
         "release": f"{_COMMANDS}.release:release_group",

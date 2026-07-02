@@ -1353,6 +1353,22 @@ def test_from_file():
     assert course.dictionaries[2].name == Text(de="", en="")
 
 
+def test_kernel_python_defaults_empty():
+    """A spec without <kernel-python> leaves kernel_python empty (Wave 2b)."""
+    spec = CourseSpec.from_file(io.StringIO(COURSE_1_XML))
+    assert spec.kernel_python == ""
+
+
+def test_kernel_python_parsed_from_element():
+    """<kernel-python> at course level populates CourseSpec.kernel_python."""
+    xml = COURSE_1_XML.replace(
+        "</course>",
+        "    <kernel-python>/opt/course-venv/bin/python</kernel-python>\n</course>",
+    )
+    spec = CourseSpec.from_file(io.StringIO(xml))
+    assert spec.kernel_python == "/opt/course-venv/bin/python"
+
+
 class TestGitHubSpecDeriveDirName:
     """Tests for GitHubSpec.derive_dir_name."""
 

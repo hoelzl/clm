@@ -119,6 +119,7 @@ class WorkerPoolManager:
         max_startup_concurrency: int | None = None,
         cache_db_path: Path | None = None,
         data_dir: Path | None = None,
+        notebook_kernel_python: str = "",
     ):
         """Initialize worker pool manager.
 
@@ -133,6 +134,9 @@ class WorkerPoolManager:
                 Defaults to CLM_MAX_WORKER_STARTUP_CONCURRENCY env var or 10.
             cache_db_path: Path to executed notebook cache database
             data_dir: Path to source data directory (for Docker workers to mount)
+            notebook_kernel_python: Resolved interpreter for the Direct notebook
+                kernel (Wave 2b); "" = clm's own env. Forwarded to the direct
+                executor; Docker mode ignores it.
         """
         self.db_path = db_path
         self.workspace_path = workspace_path
@@ -141,6 +145,7 @@ class WorkerPoolManager:
         self.network_name = network_name
         self.log_level = log_level
         self.cache_db_path = cache_db_path
+        self.notebook_kernel_python = notebook_kernel_python
 
         # Determine max startup concurrency
         if max_startup_concurrency is None:
@@ -206,6 +211,7 @@ class WorkerPoolManager:
                     workspace_path=self.workspace_path,
                     log_level=self.log_level,
                     cache_db_path=self.cache_db_path,
+                    notebook_kernel_python=self.notebook_kernel_python,
                 )
             else:
                 raise ValueError(f"Unknown execution mode: {mode}")
