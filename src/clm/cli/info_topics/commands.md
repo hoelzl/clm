@@ -1390,6 +1390,7 @@ clm slides normalize [OPTIONS] PATH
 | Option | Description |
 |--------|-------------|
 | `--operations TEXT` | Comma-separated operations: `preamble_code`, `placeholder_start`, `tag_migration`, `workshop_tags`, `interleaving`, `slide_ids`, `cell_spacing`, `all` (default: `all`) |
+| `--stamp-ids` | (since CLM {version}) The **one-time sync-v3 id normalization** (#520): stamps a `slide_id` onto every id-less **localized** cell (`lang=…`, markdown or code) and gives every voiceover/notes **narrative** its **own unique** content-slug id — re-pointing legacy inherited-owner (and `<deck-stem>-cell-N` placeholder) ids; any other existing id is kept, `!`-preserved ids always win. EN-authority and **pair-atomic**: split decks are stamped through the unified pair so `de_id == en_id`, and a refusal means the deck was left **untouched**. Cells without a directly-adjacent DE/EN twin (including whole block-interleaved runs like `de,de,en,en` — run the `interleaving` operation first), lone split halves, and non-unifiable pairs are refused as review items, never half-stamped. Directory discovery is **prefix-agnostic** for split decks (`apis.de.py` is found alongside `slides_x.de.py`); voiceover companion files are not touched (follow-up). Shared language-neutral cells are never stamped. **Replaces the regular operations for that run** (combining with `--operations`, `--confirm-pairs`, or `--canonicalize-start-completed` is an error); honors `--dry-run`, `--json`, and the directory scoping options. |
 | `--dry-run` | Preview changes without modifying files |
 | `--canonicalize-start-completed` | Force `start`/`completed` cohesion pairs into the canonical DE/EN interleave, even when DE/EN code differs (e.g. localized identifiers). Run before `clm slides split` so `unify(split(deck)) == deck` holds byte-for-byte. Only affects the `interleaving` operation. |
 | `--confirm-pairs FILE` | (since CLM {version}) Apply an **agent-confirmed interleave** (#236). `FILE` (or `-` for stdin) is a JSON array of `{"de_line": N, "en_line": M}` pairs taken from a `--json` `similarity_failure` worklist; each bypasses the similarity gate and is reordered into adjacency. **Single slide `.py` file only** (the line numbers are per-file). Run on the same, unmodified file the worklist reported — a drifted pairing simply does not match and stays flagged. |
@@ -1428,7 +1429,21 @@ clm slides normalize slides/module_010/topic_100_intro/deck.py --operations inte
 clm slides normalize slides/ --operations slide_ids --only bilingual
 # Scope: only the decks that actually ship
 clm slides normalize slides/ --shipping-only
+# One-time sync-v3 id normalization (#520): preview, then stamp
+clm slides normalize slides/ --stamp-ids --dry-run
+clm slides normalize slides/ --stamp-ids
 ```
+
+Under `--stamp-ids`, narrative ids follow the sync-v3 convention: a
+voiceover/notes cell carries its **own** unique id instead of the owning
+slide's. `clm validate` accepts both conventions — the legacy inherited form
+(narrative id equals the preceding slide/subslide anchor's id) and a unique
+own id. A narrative id that duplicates another slide's or narrative's id is
+still an **error** (the stale copy-paste case), and divergent ids on an
+adjacent DE/EN narrative twin pair are an error too (they split into
+asymmetric id sets). Duplicates involving **localized** cell ids are
+**warnings** — legacy decks deliberately shadow slide ids on some localized
+cells.
 
 ### `clm slides assign-ids`
 

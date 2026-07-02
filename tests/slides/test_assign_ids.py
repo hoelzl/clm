@@ -1117,3 +1117,391 @@ class TestSkippedCells:
         assert result.assignments == []
         assert result.refusals == []
         assert new_text == text
+
+
+# ---------------------------------------------------------------------------
+# Stamp mode (sync-v3 Phase 0, #520): localized + narrative id stamping
+# ---------------------------------------------------------------------------
+
+_STAMP = {"stamp_ids": True, "accept_content_derived": True, "accept_code_derived": True}
+
+_STAMP_BILINGUAL = (
+    '# %% [markdown] lang="de" tags=["slide"] slide_id="intro"\n'
+    "# ## Einführung\n"
+    "\n"
+    '# %% [markdown] lang="en" tags=["slide"] slide_id="intro"\n'
+    "# ## Introduction\n"
+    "\n"
+    '# %% [markdown] lang="de" tags=["voiceover"] slide_id="intro"\n'
+    "# Willkommen zur Einführung in dieses Thema.\n"
+    "\n"
+    '# %% [markdown] lang="en" tags=["voiceover"] slide_id="intro"\n'
+    "# Welcome to the introduction of this topic.\n"
+    "\n"
+    '# %% [markdown] lang="de"\n'
+    "# Ein lokalisierter Hinweis ohne Bezeichner.\n"
+    "\n"
+    '# %% [markdown] lang="en"\n'
+    "# A localized note without an identifier.\n"
+    "\n"
+    '# %% tags=["keep"]\n'
+    "x = 1\n"
+)
+
+
+class TestStampIds:
+    def test_owner_inherited_narrative_repointed_to_own_id(self):
+        new_text, result = _run(_STAMP_BILINGUAL, **_STAMP)
+        narrative = [a for a in result.assignments if a.source == "narrative-repoint"]
+        assert len(narrative) == 2  # both twins of the voiceover pair
+        own = narrative[0].slide_id
+        assert own != "intro"
+        assert narrative[1].slide_id == own
+        # The slide pair keeps its id untouched.
+        assert new_text.count('slide_id="intro"') == 2
+
+    def test_idless_localized_pair_shares_one_content_slug(self):
+        new_text, result = _run(_STAMP_BILINGUAL, **_STAMP)
+        localized = [
+            a
+            for a in result.assignments
+            if a.source in ("content:prose", "paired") and "note" in a.slide_id
+        ]
+        assert len(localized) == 2
+        assert localized[0].slide_id == localized[1].slide_id
+        # EN-authority: the shared slug comes from the EN body.
+        assert localized[0].slide_id.startswith("a-localized-note")
+
+    def test_shared_and_j2_cells_never_stamped(self):
+        new_text, result = _run(_STAMP_BILINGUAL, **_STAMP)
+        # The neutral code cell is untouched: exactly 2 narrative re-points
+        # plus 2 localized stamps.
+        assert '# %% tags=["keep"]\nx = 1' in new_text
+        assert len(result.assignments) == 4
+
+    def test_idempotent_second_run(self):
+        first, result1 = _run(_STAMP_BILINGUAL, **_STAMP)
+        assert result1.assignments
+        second, result2 = _run(first, **_STAMP)
+        assert result2.assignments == []
+        assert result2.refusals == []
+        assert second == first
+
+    def test_stamp_off_keeps_legacy_behavior(self):
+        new_text, result = _run(_STAMP_BILINGUAL, accept_content_derived=True)
+        # Without stamp_ids the voiceover keeps the inherited owner id and
+        # localized content cells stay id-less.
+        assert new_text == _STAMP_BILINGUAL
+        assert result.assignments == []
+
+    def test_own_id_narrative_kept(self):
+        text = (
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="intro"\n'
+            "# ## Einführung\n"
+            "\n"
+            '# %% [markdown] lang="de" tags=["voiceover"] slide_id="my-own-story"\n'
+            "# Sprechertext\n"
+            "\n"
+            '# %% [markdown] lang="en" tags=["voiceover"] slide_id="my-own-story"\n'
+            "# Voiceover text\n"
+        )
+        new_text, result = _run(text, **_STAMP)
+        assert result.assignments == []
+        assert new_text == text
+
+    def test_preserved_narrative_id_wins_and_twin_adopts(self):
+        text = (
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="intro"\n'
+            "# ## Einführung\n"
+            "\n"
+            '# %% [markdown] lang="de" tags=["voiceover"] slide_id="!keep-me"\n'
+            "# Sprechertext\n"
+            "\n"
+            '# %% [markdown] lang="en" tags=["voiceover"]\n'
+            "# Voiceover text\n"
+        )
+        new_text, result = _run(text, **_STAMP)
+        assert 'slide_id="!keep-me"' in new_text  # marker untouched
+        # The id-less EN twin adopts the preserved bare form (resolved via
+        # the pair cache, hence "paired" — the same label the slide
+        # machinery uses for a sibling applying a cached resolution).
+        assert len(result.assignments) == 1
+        adopted = result.assignments[0]
+        assert adopted.slide_id == "keep-me"
+        assert adopted.source == "paired"
+
+    def test_solo_localized_cell_refused_not_half_stamped(self):
+        text = (
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="intro"\n'
+            "# ## Einführung\n"
+            "\n"
+            '# %% [markdown] lang="de"\n'
+            "# Ein Hinweis nur auf Deutsch.\n"
+        )
+        new_text, result = _run(text, **_STAMP)
+        assert result.assignments == []
+        assert len(result.refusals) == 1
+        assert "no directly-adjacent DE/EN twin" in result.refusals[0].reason
+        assert new_text == text
+
+    def test_narrative_without_anchor_refused(self):
+        text = (
+            '# %% [markdown] lang="de" tags=["voiceover"]\n'
+            "# Sprechertext ohne Slide davor\n"
+            "\n"
+            '# %% [markdown] lang="en" tags=["voiceover"]\n'
+            "# Voiceover without a preceding slide\n"
+        )
+        new_text, result = _run(text, **_STAMP)
+        assert result.assignments == []
+        assert all("no preceding slide" in r.reason for r in result.refusals)
+        assert new_text == text
+
+    def test_collision_gets_suffix(self):
+        text = (
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="a"\n'
+            "# ## A\n"
+            "\n"
+            '# %% [markdown] lang="de" tags=["voiceover"]\n'
+            "# Der gleiche Text.\n"
+            "\n"
+            '# %% [markdown] lang="en" tags=["voiceover"]\n'
+            "# The same narration text.\n"
+            "\n"
+            '# %% [markdown] lang="de" tags=["subslide"] slide_id="b"\n'
+            "# ## B\n"
+            "\n"
+            '# %% [markdown] lang="de" tags=["voiceover"]\n'
+            "# Der gleiche Text nochmal.\n"
+            "\n"
+            '# %% [markdown] lang="en" tags=["voiceover"]\n'
+            "# The same narration text.\n"
+        )
+        new_text, result = _run(text, **_STAMP)
+        slugs = sorted({a.slide_id for a in result.assignments})
+        assert len(slugs) == 2
+        assert slugs[1] == f"{slugs[0]}-2"
+
+    def test_content_not_accepted_refuses_with_proposal(self):
+        new_text, result = _run(_STAMP_BILINGUAL, stamp_ids=True)
+        # Without the accept knobs the prose-derived stamps refuse softly,
+        # carrying the proposed slug for the worklist.
+        soft = [r for r in result.refusals if r.severity == "soft" and r.proposed_slug]
+        assert soft
+        assert result.assignments == []
+
+    def test_localized_code_pair_stamped_via_code_extractor(self):
+        text = (
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="intro"\n'
+            "# ## Einführung\n"
+            "\n"
+            '# %% lang="de"\n'
+            "zahl = 1\n"
+            "\n"
+            '# %% lang="en"\n'
+            "number = 1\n"
+        )
+        new_text, result = _run(text, **_STAMP)
+        assert [a.slide_id for a in result.assignments] == ["number", "number"]
+
+    def test_split_pair_stamped_identically(self, tmp_path):
+        from clm.slides.assign_ids import assign_ids_in_files
+
+        de = _write(
+            tmp_path,
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="intro"\n'
+            "# ## Einführung\n"
+            "\n"
+            '# %% [markdown] lang="de" tags=["voiceover"] slide_id="intro"\n'
+            "# Willkommen zur Einführung in dieses Thema.\n"
+            "\n"
+            '# %% [markdown] lang="de"\n'
+            "# Ein lokalisierter Hinweis ohne Bezeichner.\n",
+            name="slides_stamp.de.py",
+        )
+        en = _write(
+            tmp_path,
+            '# %% [markdown] lang="en" tags=["slide"] slide_id="intro"\n'
+            "# ## Introduction\n"
+            "\n"
+            '# %% [markdown] lang="en" tags=["voiceover"] slide_id="intro"\n'
+            "# Welcome to the introduction of this topic.\n"
+            "\n"
+            '# %% [markdown] lang="en"\n'
+            "# A localized note without an identifier.\n",
+            name="slides_stamp.en.py",
+        )
+
+        result = assign_ids_in_files([de, en], AssignOptions(**_STAMP))
+        assert result.files_modified == 2
+        assert not result.refusals
+
+        def ids_of(path: Path) -> list[str]:
+            cells = parse_cells(path.read_text(encoding="utf-8"), "#")
+            return [c.metadata.slide_id for c in cells if c.metadata.slide_id]
+
+        de_ids = ids_of(de)
+        en_ids = ids_of(en)
+        assert de_ids == en_ids  # identical ids, identical order
+        assert len(de_ids) == 3
+        assert len(set(de_ids)) == 3  # the narrative no longer shares "intro"
+
+    def test_split_half_alone_refused_untouched(self, tmp_path):
+        # A refused deck stays byte-identical — no fallback pass smuggles
+        # DE-derived (non-EN-authority) ids in through the back door.
+        text = (
+            '# %% [markdown] lang="de" tags=["slide"]\n'
+            "# ## Einführung\n"
+            "\n"
+            '# %% [markdown] lang="de"\n'
+            "# Ein Hinweis.\n"
+        )
+        de = _write(tmp_path, text, name="slides_solo.de.py")
+        result = assign_ids_in_file(de, AssignOptions(**_STAMP))
+        assert result.assignments == []
+        assert any("--stamp-ids needs both halves" in r.reason for r in result.refusals)
+        assert de.read_text(encoding="utf-8") == text
+
+    def test_prefixless_lone_half_refused_untouched(self, tmp_path):
+        # The pair-atomic guard is prefix-AGNOSTIC: apis.de.py is a split
+        # half too (the sync surface supports prefix-less decks by design).
+        text = '# %% [markdown] lang="de" tags=["slide"]\n# ## Datenbanken\n'
+        de = _write(tmp_path, text, name="apis.de.py")
+        result = assign_ids_in_file(de, AssignOptions(**_STAMP))
+        assert result.assignments == []
+        assert any("--stamp-ids needs both halves" in r.reason for r in result.refusals)
+        assert de.read_text(encoding="utf-8") == text
+
+    def test_prefixless_split_pair_stamped(self, tmp_path):
+        from clm.slides.assign_ids import assign_ids_in_files
+
+        de = _write(
+            tmp_path,
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="intro"\n'
+            "# ## Einführung\n"
+            "\n"
+            '# %% [markdown] lang="de"\n'
+            "# Ein lokalisierter Hinweis ohne Bezeichner.\n",
+            name="apis.de.py",
+        )
+        en = _write(
+            tmp_path,
+            '# %% [markdown] lang="en" tags=["slide"] slide_id="intro"\n'
+            "# ## Introduction\n"
+            "\n"
+            '# %% [markdown] lang="en"\n'
+            "# A localized note without an identifier.\n",
+            name="apis.en.py",
+        )
+        result = assign_ids_in_files([de, en], AssignOptions(**_STAMP))
+        assert result.files_modified == 2
+        assert not result.refusals
+        de_ids = [
+            c.metadata.slide_id
+            for c in parse_cells(de.read_text(encoding="utf-8"), "#")
+            if c.metadata.slide_id
+        ]
+        en_ids = [
+            c.metadata.slide_id
+            for c in parse_cells(en.read_text(encoding="utf-8"), "#")
+            if c.metadata.slide_id
+        ]
+        assert de_ids == en_ids
+        assert len(de_ids) == 2
+
+    def test_preserved_divergent_twin_detected_in_both_orders(self):
+        # A twin pair committed to two different ids must refuse regardless
+        # of which member carries the preserve marker / is visited first.
+        def deck(first: str, second: str) -> str:
+            return (
+                '# %% [markdown] lang="de" tags=["slide"] slide_id="intro"\n'
+                "# ## Einführung\n"
+                "\n"
+                f'# %% [markdown] lang="de" tags=["voiceover"] slide_id="{first}"\n'
+                "# Sprechertext\n"
+                "\n"
+                f'# %% [markdown] lang="en" tags=["voiceover"] slide_id="{second}"\n'
+                "# Voiceover text\n"
+            )
+
+        for first, second in (("id-a", "!id-b"), ("!id-b", "id-a"), ("!id-a", "!id-b")):
+            new_text, result = _run(deck(first, second), **_STAMP)
+            assert any("divergent ids" in r.reason for r in result.refusals), (
+                f"divergence not detected for order ({first}, {second})"
+            )
+            assert new_text == deck(first, second)  # nothing overwritten
+
+    def test_block_layout_run_refused_entirely(self):
+        # [de1, de2, en1, en2]: greedily pairing the adjacent interior
+        # (de2, en1) would stamp one identity onto two cells that are not
+        # translations of each other, and the mis-minted id would then
+        # spread via twin adoption after the author fixes the ordering.
+        # The whole irregular run must be refused instead.
+        text = (
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="intro"\n'
+            "# ## Einführung\n"
+            "\n"
+            '# %% [markdown] lang="de"\n'
+            "# Erster deutscher Absatz über Variablen.\n"
+            "\n"
+            '# %% [markdown] lang="de"\n'
+            "# Zweiter deutscher Absatz über Schleifen.\n"
+            "\n"
+            '# %% [markdown] lang="en"\n'
+            "# First English paragraph about variables.\n"
+            "\n"
+            '# %% [markdown] lang="en"\n'
+            "# Second English paragraph about loops.\n"
+        )
+        new_text, result = _run(text, **_STAMP)
+        assert result.assignments == []
+        assert len(result.refusals) == 4
+        assert new_text == text
+
+    def test_legacy_repoint_via_twin_adoption_labeled_repoint(self):
+        # DE narrative carries the inherited owner id (legacy), EN twin an
+        # own id: the DE re-point adopts the twin's id but is still a §12.1
+        # re-point in the audit trail, not a plain twin adoption.
+        text = (
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="intro"\n'
+            "# ## Einführung\n"
+            "\n"
+            '# %% [markdown] lang="de" tags=["voiceover"] slide_id="intro"\n'
+            "# Sprechertext\n"
+            "\n"
+            '# %% [markdown] lang="en" tags=["voiceover"] slide_id="my-own"\n'
+            "# Voiceover text\n"
+        )
+        new_text, result = _run(text, **_STAMP)
+        assert [(a.slide_id, a.source) for a in result.assignments] == [
+            ("my-own", "narrative-repoint")
+        ]
+
+    def test_pair_records_attributed_to_half_files(self, tmp_path):
+        from clm.slides.assign_ids import assign_ids_in_files
+
+        de = _write(
+            tmp_path,
+            '# %% [markdown] lang="de" tags=["slide"] slide_id="intro"\n'
+            "# ## Einführung\n"
+            "\n"
+            '# %% [markdown] lang="de" tags=["voiceover"] slide_id="intro"\n'
+            "# Willkommen zur Einführung in dieses Thema.\n",
+            name="slides_attr.de.py",
+        )
+        en = _write(
+            tmp_path,
+            '# %% [markdown] lang="en" tags=["slide"] slide_id="intro"\n'
+            "# ## Introduction\n"
+            "\n"
+            '# %% [markdown] lang="en" tags=["voiceover"] slide_id="intro"\n'
+            "# Welcome to the introduction of this topic.\n",
+            name="slides_attr.en.py",
+        )
+        result = assign_ids_in_files([de, en], AssignOptions(**_STAMP))
+        assert len(result.assignments) == 2
+        by_file = {Path(a.file).name: a for a in result.assignments}
+        # One record per half, each at that half's real line number (the
+        # narrative header is line 4 in both 5-line files).
+        assert set(by_file) == {"slides_attr.de.py", "slides_attr.en.py"}
+        assert all(a.line == 4 for a in result.assignments)

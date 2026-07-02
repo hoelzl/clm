@@ -1931,11 +1931,45 @@ class TestCheckSlideIds:
         result = validate_file(p, checks=["pairing"])
         assert result.findings == []
 
-    def test_narrative_with_stale_slide_id_errors(self, tmp_path):
+    def test_narrative_with_unique_own_id_passes(self, tmp_path):
+        # The sync-v3 own-id convention (§12.1 / #520, `normalize
+        # --stamp-ids`): a narrative id of the cell's own — unique in the
+        # file, not the anchor's id — is legal. (Through CLM 1.18 this was
+        # an unconditional adjacency error.)
+        p = _write_slide(
+            tmp_path,
+            "slides_own_id.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"] slide_id="second"
+            # ## Zweites
+
+            # %% [markdown] lang="en" tags=["slide"] slide_id="second"
+            # ## Second
+
+            # %% [markdown] lang="de" tags=["voiceover"] slide_id="own-narration"
+            # Sprechertext mit eigener Kennung
+
+            # %% [markdown] lang="en" tags=["voiceover"] slide_id="own-narration"
+            # Voiceover with its own id
+            """,
+        )
+        result = validate_file(p, checks=["pairing"])
+        assert result.findings == []
+
+    def test_narrative_with_stale_duplicate_slide_id_errors(self, tmp_path):
+        # The stale copy-paste id this rule has always guarded against: an
+        # id that equals some OTHER slide's id. Under the own-id convention
+        # it is flagged as a duplicate rather than an adjacency mismatch.
         p = _write_slide(
             tmp_path,
             "slides_stale.py",
             """\
+            # %% [markdown] lang="de" tags=["slide"] slide_id="first"
+            # ## Erstes
+
+            # %% [markdown] lang="en" tags=["slide"] slide_id="first"
+            # ## First
+
             # %% [markdown] lang="de" tags=["slide"] slide_id="second"
             # ## Zweites
 
@@ -1947,11 +1981,158 @@ class TestCheckSlideIds:
             """,
         )
         result = validate_file(p, checks=["pairing"])
-        mismatch = [f for f in result.findings if "does not match preceding slide" in f.message]
+        mismatch = [f for f in result.findings if "duplicates an id" in f.message]
         assert len(mismatch) == 1
         assert mismatch[0].severity == "error"
         assert "'first'" in mismatch[0].message
         assert "'second'" in mismatch[0].message
+
+    def test_narrative_twins_share_their_own_id_without_duplicate_error(self, tmp_path):
+        # Adjacent DE/EN narrative twins share one own id, exactly like a
+        # DE/EN slide pair — the duplicate check must treat them as one
+        # logical narrative.
+        p = _write_slide(
+            tmp_path,
+            "slides_own_twins.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"] slide_id="intro"
+            # ## Titel
+
+            # %% [markdown] lang="en" tags=["slide"] slide_id="intro"
+            # ## Title
+
+            # %% [markdown] lang="de" tags=["notes"] slide_id="speaker-notes-intro"
+            # Notizen
+
+            # %% [markdown] lang="en" tags=["notes"] slide_id="speaker-notes-intro"
+            # Notes
+            """,
+        )
+        result = validate_file(p, checks=["pairing"])
+        assert result.findings == []
+
+    def test_narrative_twins_with_divergent_own_ids_error(self, tmp_path):
+        # Divergent twin ids split into asymmetric DE/EN id sets (a sync
+        # verify failure); the pre-#520 adjacency rule errored here too.
+        p = _write_slide(
+            tmp_path,
+            "slides_divergent_twins.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"] slide_id="intro"
+            # ## Titel
+
+            # %% [markdown] lang="en" tags=["slide"] slide_id="intro"
+            # ## Title
+
+            # %% [markdown] lang="de" tags=["voiceover"] slide_id="own-de"
+            # Sprechertext
+
+            # %% [markdown] lang="en" tags=["voiceover"] slide_id="own-en"
+            # Voiceover text
+            """,
+        )
+        result = validate_file(p, checks=["pairing"])
+        mismatch = [f for f in result.findings if "narrative twins carry mismatched" in f.message]
+        assert len(mismatch) == 1
+        assert mismatch[0].severity == "error"
+
+    def test_narrative_legacy_plus_own_twin_errors_as_mismatch(self, tmp_path):
+        # Mixed form: DE still inherits the owner id, EN carries an own id —
+        # the twins diverge, which splits asymmetrically.
+        p = _write_slide(
+            tmp_path,
+            "slides_mixed_twins.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"] slide_id="intro"
+            # ## Titel
+
+            # %% [markdown] lang="en" tags=["slide"] slide_id="intro"
+            # ## Title
+
+            # %% [markdown] lang="de" tags=["voiceover"] slide_id="intro"
+            # Sprechertext
+
+            # %% [markdown] lang="en" tags=["voiceover"] slide_id="own-en"
+            # Voiceover text
+            """,
+        )
+        result = validate_file(p, checks=["pairing"])
+        mismatch = [f for f in result.findings if "narrative twins carry mismatched" in f.message]
+        assert len(mismatch) == 1
+
+    def test_narrative_twin_grouping_respects_cell_type(self, tmp_path):
+        # A markdown voiceover next to a code voiceover is NOT a twin pair
+        # (the stamp engine requires equal cell types); the code pair behind
+        # them is. Their shared own id must not be flagged as a duplicate.
+        p = _write_slide(
+            tmp_path,
+            "slides_cell_type.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"] slide_id="demo"
+            # ## Demo
+
+            # %% [markdown] lang="en" tags=["slide"] slide_id="demo"
+            # ## Demo
+
+            # %% lang="en" tags=["voiceover"] slide_id="demo-en"
+            print("en narration")
+
+            # %% lang="de" tags=["voiceover"] slide_id="demo-en"
+            print("de narration")
+            """,
+        )
+        result = validate_file(p, checks=["pairing"])
+        dup = [f for f in result.findings if "duplicates an id" in f.message]
+        assert dup == []
+
+    def test_localized_duplicate_ids_warn_not_error(self, tmp_path):
+        # Stamped localized ids participate in duplicate detection — but as
+        # warnings: the corpus carries legacy localized ids that shadow
+        # their slide's id on purpose.
+        p = _write_slide(
+            tmp_path,
+            "slides_loc_dup.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"] slide_id="intro"
+            # ## Titel
+
+            # %% [markdown] lang="en" tags=["slide"] slide_id="intro"
+            # ## Title
+
+            # %% [markdown] lang="de" slide_id="body-x"
+            # Absatz eins
+
+            # %% [markdown] lang="en" slide_id="body-x"
+            # Paragraph one
+
+            # %% [markdown] lang="de" slide_id="body-x"
+            # Absatz zwei
+
+            # %% [markdown] lang="en" slide_id="body-x"
+            # Paragraph two
+            """,
+        )
+        result = validate_file(p, checks=["pairing"])
+        dup = [f for f in result.findings if "localized cell slide_id" in f.message]
+        assert len(dup) == 2  # the second pair's two cells
+        assert all(f.severity == "warning" for f in dup)
+
+    def test_localized_id_shadowing_slide_id_warns(self, tmp_path):
+        p = _write_slide(
+            tmp_path,
+            "slides_loc_shadow.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"] slide_id="intro"
+            # ## Titel
+
+            # %% [markdown] lang="de" slide_id="intro"
+            # Absatz
+            """,
+        )
+        result = validate_file(p, checks=["pairing"])
+        dup = [f for f in result.findings if "localized cell slide_id" in f.message]
+        assert len(dup) == 1
+        assert dup[0].severity == "warning"
 
     def test_narrative_without_preceding_anchor_errors(self, tmp_path):
         p = _write_slide(
@@ -2033,10 +2214,12 @@ class TestCheckSlideIds:
         result = validate_file(p, checks=["pairing"])
         assert result.findings == []
 
-    def test_title_macro_followed_by_mismatched_narrative_errors(self, tmp_path):
+    def test_title_macro_narrative_with_own_id_passes(self, tmp_path):
+        # Under the own-id convention a unique narrative id below the title
+        # macro is legal (formerly an adjacency error against "title").
         p = _write_slide(
             tmp_path,
-            "slides_title_mismatch.py",
+            "slides_title_own_id.py",
             """\
             # j2 from 'macros.j2' import header
             # {{ header("Einfuehrung", "Introduction") }}
@@ -2046,9 +2229,7 @@ class TestCheckSlideIds:
             """,
         )
         result = validate_file(p, checks=["pairing"])
-        mismatch = [f for f in result.findings if "does not match preceding slide" in f.message]
-        assert len(mismatch) == 1
-        assert "'title'" in mismatch[0].message
+        assert result.findings == []
 
     # -- Pair-mismatch warning --
 
@@ -2174,7 +2355,10 @@ class TestCheckSlideIds:
         warnings = [f for f in result.findings if "missing slide_id" in f.message]
         assert len(warnings) == 1
 
-    def test_quick_mode_flags_narrative_mismatch(self, tmp_path):
+    def test_quick_mode_flags_narrative_duplicate(self, tmp_path):
+        # Quick mode reuses _check_slide_ids, so the own-id duplicate rule
+        # fires there too: a narrative id equal to another slide's id is a
+        # stale copy-paste, not an own id.
         p = _write_slide(
             tmp_path,
             "slides_quick_stale.py",
@@ -2182,12 +2366,15 @@ class TestCheckSlideIds:
             # %% [markdown] lang="de" tags=["slide"] slide_id="real"
             # ## Titel
 
-            # %% [markdown] lang="de" tags=["voiceover"] slide_id="stale"
+            # %% [markdown] lang="de" tags=["slide"] slide_id="other"
+            # ## Anderes
+
+            # %% [markdown] lang="de" tags=["voiceover"] slide_id="real"
             # Sprechertext
             """,
         )
         result = validate_quick(p)
-        mismatch = [f for f in result.findings if "does not match preceding slide" in f.message]
+        mismatch = [f for f in result.findings if "duplicates an id" in f.message]
         assert len(mismatch) == 1
         assert mismatch[0].severity == "error"
 

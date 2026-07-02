@@ -11,7 +11,9 @@ import click
 from clm.cli.commands.shared import has_deck_scope, resolve_scoped_files
 from clm.slides.normalizer import (
     ALL_OPERATIONS,
+    Change,
     NormalizationResult,
+    ReviewItem,
     normalize_course,
     normalize_directory,
     normalize_file,
@@ -32,6 +34,20 @@ from clm.slides.normalizer import (
         "Comma-separated list of operations: "
         + ", ".join(sorted(ALL_OPERATIONS))
         + ", all. Default: all."
+    ),
+)
+@click.option(
+    "--stamp-ids",
+    "stamp_ids",
+    is_flag=True,
+    help=(
+        "One-time sync-v3 normalization (#520): stamp slide_ids onto id-less "
+        "localized cells and give every voiceover/notes narrative its own "
+        "unique content-slug id (re-pointing inherited-owner ids). "
+        "EN-authority and pair-atomic (split decks are stamped through the "
+        "unified pair; unpairable cells are refused, never half-stamped). "
+        "Shared language-neutral cells are never stamped. Runs INSTEAD of "
+        "the regular operations; combine with --dry-run to preview."
     ),
 )
 @click.option(
@@ -101,6 +117,7 @@ from clm.slides.normalizer import (
 def normalize_slides_cmd(
     path: Path,
     operations: str | None,
+    stamp_ids: bool,
     dry_run: bool,
     canonicalize_start_completed: bool,
     as_json: bool,
@@ -134,7 +151,46 @@ def normalize_slides_cmd(
         clm slides normalize slides/module_100/topic_010/
         clm slides normalize slides/ --operations tag_migration
         clm slides normalize course-specs/python-basics.xml
+        clm slides normalize slides/ --stamp-ids --dry-run
+
+    --stamp-ids is the one-time sync-v3 (#520) id normalization: every
+    localized cell and every narrative gets a slide_id (narratives their
+    OWN unique id, not the owner slide's). It replaces the regular
+    operations for that run.
     """
+    if stamp_ids:
+        if operations is not None:
+            raise click.UsageError(
+                "--stamp-ids replaces the regular operations; drop --operations."
+            )
+        if confirm_pairs is not None:
+            raise click.UsageError(
+                "--confirm-pairs belongs to the interleaving operation, not --stamp-ids."
+            )
+        if canonicalize_start_completed:
+            raise click.UsageError(
+                "--canonicalize-start-completed belongs to the interleaving "
+                "operation, not --stamp-ids."
+            )
+        result = _run_stamp_ids(
+            path,
+            dry_run=dry_run,
+            only=only,
+            exclude=exclude,
+            shipping_only=shipping_only,
+            specs_dir=specs_dir,
+            data_dir=data_dir,
+        )
+        if as_json:
+            click.echo(json.dumps(_result_to_dict(result), indent=2))
+        else:
+            _print_human_readable(result, dry_run)
+        if result.review_items and not result.changes:
+            sys.exit(2)
+        elif result.review_items:
+            sys.exit(1)
+        return
+
     op_list = _parse_operations(operations)
 
     confirmed_pairings = _parse_confirm_pairs(confirm_pairs) if confirm_pairs else None
@@ -179,6 +235,98 @@ def normalize_slides_cmd(
         sys.exit(2)
     elif result.review_items:
         sys.exit(1)
+
+
+def _run_stamp_ids(
+    path: Path,
+    *,
+    dry_run: bool,
+    only: str | None,
+    exclude: tuple[str, ...],
+    shipping_only: bool,
+    specs_dir: Path | None,
+    data_dir: Path | None,
+) -> NormalizationResult:
+    """The ``--stamp-ids`` pass: localized + narrative id stamping (#520 Phase 0).
+
+    Runs the assign-ids engine in stamp mode over the resolved file set —
+    ``assign_ids_in_files`` pairs split halves and stamps each pair through
+    the unified deck, which is what keeps DE/EN ids identical (#162). A
+    single split-half argument is expanded to its on-disk twin for the same
+    reason. Results are folded into the normalize report shape.
+
+    Discovery is prefix-AGNOSTIC for split decks: the sync surface supports
+    ``apis.de.py`` as well as ``slides_x.de.py``, and this one-time sync-v3
+    migration must reach every deck sync manages — so a directory walk
+    unions the routing-prefixed slide files with every prefix-less split
+    half (voiceover companions are excluded by both walks).
+    """
+    from clm.core.topic_resolver import find_slide_files_recursive
+    from clm.slides.assign_ids import AssignOptions, assign_ids_in_files
+    from clm.slides.pairing import derive_split_twin, find_split_slide_files_recursive
+
+    if path.is_file() and path.suffix == ".xml":
+        raise click.UsageError(
+            "--stamp-ids runs on a slide file or directory, not a course spec; "
+            "pass the slides/ directory instead."
+        )
+
+    options = AssignOptions(
+        stamp_ids=True,
+        accept_content_derived=True,
+        accept_code_derived=True,
+        report_only=dry_run,
+    )
+    if has_deck_scope(only, exclude, shipping_only):
+        files = resolve_scoped_files(
+            path,
+            only=only,
+            exclude=exclude,
+            shipping_only=shipping_only,
+            specs_dir=specs_dir,
+            data_dir=data_dir,
+        )
+    elif path.is_dir():
+        files = sorted(
+            set(find_slide_files_recursive(path)) | set(find_split_slide_files_recursive(path))
+        )
+    else:
+        files = [path]
+        twin = derive_split_twin(path)
+        if twin is not None:
+            files.append(twin)
+
+    assign_result = assign_ids_in_files(files, options)
+
+    result = NormalizationResult(files_modified=assign_result.files_modified)
+    for a in assign_result.assignments:
+        result.changes.append(
+            Change(
+                file=a.file,
+                operation="stamp_ids",
+                line=a.line,
+                description=f'slide_id="{a.slide_id}" ({a.source})',
+            )
+        )
+    for r in assign_result.refusals:
+        details = {
+            k: v
+            for k, v in {
+                "line": r.line,
+                "proposed_slug": r.proposed_slug,
+                "proposed_title": r.proposed_title,
+            }.items()
+            if v is not None
+        }
+        result.review_items.append(
+            ReviewItem(
+                file=r.file,
+                issue=f"stamp_id_{r.severity}_refusal",
+                suggestion=r.reason,
+                details=details,
+            )
+        )
+    return result
 
 
 def _parse_operations(ops_str: str | None) -> list[str] | None:
