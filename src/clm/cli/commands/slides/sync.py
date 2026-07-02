@@ -43,6 +43,7 @@ Exit codes:
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -111,6 +112,24 @@ if TYPE_CHECKING:
     from clm.slides.sync_translate import SlideTranslator
 
 CACHE_DB_NAME = "clm-llm.sqlite"
+
+
+def _v3_engine() -> bool:
+    """The §12.5 engine switch: ``CLM_SYNC_ENGINE=v3`` opts a verb into the
+    v3 core (#520 Phase 3). This is the ONE dispatch point per verb — no
+    v2/v3 branching lives below the verb layer, so Phase 4's cutover is
+    "flip the default, delete the v2 modules, delete this check"."""
+    return os.environ.get("CLM_SYNC_ENGINE", "").strip().lower() == "v3"
+
+
+def _reject_v2_flags_under_v3(**flags: object) -> None:
+    """Fail fast when a v2-only option reaches the v3 engine."""
+    given = [f"--{name.replace('_', '-')}" for name, value in flags.items() if value]
+    if given:
+        raise click.UsageError(
+            f"{', '.join(given)} belongs to the v2 engine and is not supported with "
+            f"CLM_SYNC_ENGINE=v3 (the v3 engine always trusts the committed ledger)"
+        )
 
 
 def _resolve_prog_lang(path: Path) -> str:
@@ -1759,8 +1778,15 @@ def slides_sync_group() -> None:
       task       emit a framed model task for a tier-2/3 item (read-only, no model)
       accept     validate a model answer + write it to both halves (writes, no model)
       apply      apply the reconciliation (writes; see `apply --help` re: models)
+      record     v3 engine: record the verified state into the committed ledger
       autopilot  legacy all-in-one WITH embedded models (agent-less human)
       baseline   inspect/maintain the watermark accelerator
+
+    \b
+    CLM_SYNC_ENGINE=v3 switches report/apply (and enables record) onto the v3
+    document-model engine (#520): one canonical bilingual deck, a generic
+    3-way member diff, and the committed per-topic ledger as the only trust
+    store. v2 stays the default through Phase 3.
     """
 
 
@@ -2008,6 +2034,19 @@ def sync_report_cmd(
     ``--baseline-from PATH[@REF]`` pins it explicitly when the rename can't be detected.
     ``--since DATE|REF`` resolves a timeframe to the baseline ref (sugar over --baseline).
     """
+    if _v3_engine():
+        _reject_v2_flags_under_v3(
+            explain=explain,
+            baseline=baseline_ref,
+            baseline_from=baseline_from_spec,
+            since=since_spec,
+            use_watermark=use_watermark,
+            cache_dir=cache_dir,
+            ledger=ledger,
+        )
+        from clm.cli.commands.slides.sync_v3 import run_report_v3
+
+        sys.exit(run_report_v3(de_path, en_path, as_json=as_json))
     baseline_ref = _apply_since(since_spec, baseline_ref, baseline_from_spec, de_path)
     _run_report(
         de_path,
@@ -2067,6 +2106,59 @@ def sync_shadow_cmd(scope: Path, baseline_ref: str, as_json: bool) -> None:
         click.echo(json.dumps(report.to_payload(), indent=2, ensure_ascii=False))
     else:
         click.echo(report.render_text())
+
+
+@slides_sync_group.command("record")
+@_DECK_ARG
+@_EN_ARG
+@click.option(
+    "--member",
+    "members",
+    multiple=True,
+    metavar="KEY",
+    help="Record only these member handles (default: the whole deck, swept).",
+)
+@click.option(
+    "--provenance",
+    default="record",
+    show_default=True,
+    metavar="WHO",
+    help="Trust provenance to stamp: 'record', 'agent', or 'semantic:<model>'.",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit the record result as JSON.")
+def sync_record_cmd(
+    de_path: Path,
+    en_path: Path | None,
+    members: tuple[str, ...],
+    provenance: str,
+    as_json: bool,
+) -> None:
+    """Record the deck's current verified state into the committed ledger (v3).
+
+    The bless/accept confirmation paths collapsed into one verb (#520 Phase 3,
+    design §8): after you have verified — or reconciled — a deck, ``record``
+    banks its members' current fingerprints in ``<topic>/.clm/sync-ledger.json``
+    so ``report`` trusts them until they drift. Gated on the structural verify
+    (a corrupt pair is refused, nothing written). A full record sweeps stale
+    entries and performs the §7.3 pos→id key migration (logged); ``--member``
+    upserts just the named handles. Requires ``CLM_SYNC_ENGINE=v3``.
+    """
+    if not _v3_engine():
+        raise click.UsageError(
+            "`sync record` is a v3-engine verb — set CLM_SYNC_ENGINE=v3 (the v2 "
+            "equivalents are `sync baseline bless --ledger` / `sync accept --record`)"
+        )
+    from clm.cli.commands.slides.sync_v3 import run_record_v3
+
+    sys.exit(
+        run_record_v3(
+            de_path,
+            en_path,
+            members=members,
+            provenance=provenance,
+            as_json=as_json,
+        )
+    )
 
 
 @slides_sync_group.command("diagnose")
@@ -2160,6 +2252,29 @@ def sync_diagnose_cmd(
         "Ignored with --baseline / --baseline-from / --no-watermark."
     ),
 )
+@click.option(
+    "--decisions",
+    "decisions_spec",
+    default=None,
+    metavar="FILE|-",
+    help=(
+        "v3 engine only (CLM_SYNC_ENGINE=v3): a JSON decision document answering "
+        "framed report items per member handle ('-' reads stdin). Invalid answers "
+        "are rejected per item; valid ones land."
+    ),
+)
+@click.option(
+    "--member",
+    "members",
+    multiple=True,
+    metavar="KEY",
+    help="v3 engine only: apply only the item(s) with these member handles.",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="v3 engine only: execute and validate everything, write nothing.",
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit the apply result as JSON.")
 def sync_apply_cmd(
     de_path: Path,
@@ -2172,6 +2287,9 @@ def sync_apply_cmd(
     cache_dir: Path | None,
     ledger: bool,
     auto_heal: bool,
+    decisions_spec: str | None,
+    members: tuple[str, ...],
+    dry_run: bool,
     as_json: bool,
 ) -> None:
     """Apply the deterministic tier-1 reconciliation — writes, but never calls a model.
@@ -2200,6 +2318,31 @@ def sync_apply_cmd(
     ``--since DATE|REF`` resolves a timeframe to the baseline ref (sugar over
     --baseline); it works over a directory exactly as --baseline does.
     """
+    if _v3_engine():
+        _reject_v2_flags_under_v3(
+            baseline=baseline_ref,
+            baseline_from=baseline_from_spec,
+            since=since_spec,
+            cache_dir=cache_dir,
+            ledger=ledger,
+        )
+        from clm.cli.commands.slides.sync_v3 import run_apply_v3
+
+        sys.exit(
+            run_apply_v3(
+                de_path,
+                en_path,
+                decisions_spec=decisions_spec,
+                members=members,
+                dry_run=dry_run,
+                as_json=as_json,
+            )
+        )
+    if decisions_spec is not None or members or dry_run:
+        raise click.UsageError(
+            "--decisions/--member/--dry-run belong to the v3 engine — set "
+            "CLM_SYNC_ENGINE=v3 to use them"
+        )
     # Resolve --since BEFORE the directory dispatch so a dir + conflicting --baseline is
     # still rejected and --since works over a directory sweep (#446).
     baseline_ref = _apply_since(since_spec, baseline_ref, baseline_from_spec, de_path)

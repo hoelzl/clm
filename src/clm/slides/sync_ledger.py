@@ -66,6 +66,11 @@ if TYPE_CHECKING:
     from clm.slides.sync_semantic import SemanticJudge
 
 SCHEMA_VERSION = 1
+#: Schemas this module can read. Schema 2 is the Phase-3 coexistence envelope
+#: (#520): the same file additionally carries the v3 ``decks`` section, which
+#: this module preserves verbatim via ``SyncLedger.extra`` — the v1 sections
+#: keep their schema-1 shape inside it. Written by ``clm.slides.doc_ledger``.
+_READABLE_SCHEMAS = (1, 2)
 #: The committed ledger lives under the build-internal ``.clm/`` tree (issue #453),
 #: alongside ``cassettes/`` — both are committed build inputs, neither is student output.
 LEDGER_SUBDIR = ".clm"
@@ -128,6 +133,10 @@ class SyncLedger:
     schema: int = SCHEMA_VERSION
     entries: dict[tuple[str, str], LedgerEntry] = field(default_factory=dict)
     idless: dict[IdlessKey, LedgerEntry] = field(default_factory=dict)
+    #: Unknown top-level sections (the v3 ``decks`` store, #520 Phase 3),
+    #: preserved verbatim across a load→save round trip so a v2 record can
+    #: never clobber the v3 engine's trust. Never read by this module.
+    extra: dict[str, object] = field(default_factory=dict)
 
     def trusts(self, slide_id: str, role: str, de_hash: str, en_hash: str) -> bool:
         """True iff ``(slide_id, role)`` is recorded in-sync at *exactly* these hashes.
@@ -181,7 +190,7 @@ def load(path: Path) -> SyncLedger:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return SyncLedger()
-    if not isinstance(data, dict) or data.get("schema") != SCHEMA_VERSION:
+    if not isinstance(data, dict) or data.get("schema") not in _READABLE_SCHEMAS:
         return SyncLedger()
     entries: dict[tuple[str, str], LedgerEntry] = {}
     slides = data.get("slides", {})
@@ -222,7 +231,8 @@ def load(path: Path) -> SyncLedger:
                 confirmed_oracle=rec.get("confirmed_oracle", "structural"),
                 hash_version=rec.get("hash_version", WATERMARK_HASH_VERSION),
             )
-    return SyncLedger(schema=SCHEMA_VERSION, entries=entries, idless=idless)
+    extra = {k: v for k, v in data.items() if k not in ("schema", "slides", "idless")}
+    return SyncLedger(schema=SCHEMA_VERSION, entries=entries, idless=idless, extra=extra)
 
 
 def _to_json(ledger: SyncLedger) -> str:
@@ -262,9 +272,13 @@ def _to_json(ledger: SyncLedger) -> str:
             ledger.idless.items(), key=lambda kv: (str(kv[0][0]), kv[0][1], kv[0][2])
         )
     ]
-    payload: dict[str, object] = {"schema": ledger.schema, "slides": slides}
+    # A file carrying preserved v3 sections stays on the coexistence
+    # envelope (schema 2); a plain v1 payload keeps its schema-1 shape.
+    schema = 2 if ledger.extra else ledger.schema
+    payload: dict[str, object] = {"schema": schema, "slides": slides}
     if idless:
         payload["idless"] = idless
+    payload.update(ledger.extra)
     return json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
 
 
