@@ -1448,6 +1448,30 @@ def test_issue443_one_sided_edit_of_keyed_companion_is_alerted(tmp_path: Path):
     assert "id-less" in issue.reason and "#443" in issue.reason
 
 
+def test_issue443_one_sided_edit_of_idless_half_is_alerted(tmp_path: Path):
+    # The mirror image, found by the #520 corpus rehearsal on the normalized
+    # corpus (slides_pe_02a_fundamentals): editing the DE (id-LESS) half of
+    # the asymmetric companion reported "decks already consistent" — the
+    # edit's only carrier is the id-less anchor add, which the reconcile
+    # cancels. It must alert exactly like the id'd-half edit.
+    de_path, en_path, cache = _asymmetric_companion_pair(tmp_path)
+    try:
+        de_path.write_text(
+            _slide("de", "s1", "# ## Folie eins") + _voiceover_idless("de", "Hallo Welt, neu"),
+            encoding="utf-8",
+        )
+        plan = build_sync_plan(de_path, en_path, watermark_cache=cache, allow_git_fallback=False)
+    finally:
+        cache.close()
+
+    assert not plan.is_noop  # NOT a silent "already consistent"
+    assert plan.has_errors  # alerted (#269 propagate-or-alert)
+    assert plan.count("add") == 0  # the edit is not masked as a fresh narrative add
+    issue = next(i for i in plan.issues if i.severity == "error")
+    assert issue.slide_id == "s1"
+    assert "id-less" in issue.reason and "#443" in issue.reason
+
+
 def test_issue443_one_sided_removal_of_keyed_companion_is_alerted(tmp_path: Path):
     # The corpus ``test_keyed_companion_remove_propagates`` shape: deleting the EN
     # (id'd) half used to leave the surviving DE id-less half's add masquerading as a

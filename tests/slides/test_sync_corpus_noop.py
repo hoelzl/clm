@@ -140,18 +140,17 @@ def test_noop_pairs_do_not_catastrophically_regress(report):
 
 @_real_corpus_only
 def test_churn_baseline_populations_present(report):
-    # The measurement half: the item-2 (neutral, silent-drop) and item-3 (id-less
-    # localized, re-translated) exposure populations are what Phases 2-3 must
-    # drive to zero. Guard that the harness still measures them (a non-zero,
-    # plausible magnitude), so a refactor can't silently zero the baseline out.
+    # The measurement half. Item-2 (neutral, silent-drop exposure) is still a
+    # live population — shared cells are never stamped (#520 §3.4) — so guard
+    # that the harness keeps measuring it (a non-zero, plausible magnitude).
     c = report.census
     assert c.item2_population > 1000, report.render()  # Phase-0: ~8,014
-    assert c.item3_population > 100, report.render()  # Phase-0: ~1,702
-    # The per-group blast radius pins the GROUPING (not just the predicate): a
-    # broken _split_groups would collapse cells into too few groups (inflating
-    # max_in_one_group) or shatter them (deflating it). `blast_total ==
-    # item3_population` is true by construction (same predicate, same cells), so
-    # assert the grouping-shaped quantities instead.
-    assert report.blast_groups_with_idless > 100, report.render()  # Phase-0: ~948
-    assert 1 <= report.blast_max_in_one_group <= 50, report.render()  # Phase-0: ~10
-    assert report.blast_max_in_one_group <= report.census.item3_population
+    # Item-3 (id-less localized, re-translated) was ~1,702 before the sync-v3
+    # Phase 0 normalize commit (`clm slides normalize --stamp-ids`, #520)
+    # stamped ids on the whole population. Post-normalize this is a CEILING:
+    # only the handful of cells on refused asymmetric decks may remain
+    # id-less (~5 measured), and the number regressing upward means id-less
+    # localized cells are being (re)introduced — the exposure the one-time
+    # normalization exists to keep closed.
+    assert c.item3_population < 100, report.render()  # normalized: ~5
+    assert report.blast_max_in_one_group <= max(report.census.item3_population, 1)

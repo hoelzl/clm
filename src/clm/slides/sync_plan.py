@@ -2787,6 +2787,29 @@ def _idd_narrative_baseline_hashes(
     return out
 
 
+def _idless_narrative_baseline_hashes(
+    baseline: list[BaselineCell] | None,
+) -> dict[tuple[str, str], Counter[str]]:
+    """Map ``(owning_slide_id, role) -> hash multiset`` for ID-LESS baseline narratives.
+
+    The mirror of :func:`_idd_narrative_baseline_hashes` for the other half of
+    the #443 asymmetry: detecting a one-sided edit of the **id-less** half
+    needs its recorded bodies, keyed the way the reconcile keys the current
+    cells. Rows without Phase-B owning info (pre-#403 watermarks) are skipped —
+    a ``None`` owner would aggregate every id-less narrative of a role into one
+    bucket and produce spurious drift.
+    """
+    out: dict[tuple[str, str], Counter[str]] = {}
+    for cell in baseline or []:
+        if (
+            cell.role in NARRATIVE_ROLES
+            and cell.slide_id is None
+            and cell.owning_slide_id is not None
+        ):
+            out.setdefault((cell.owning_slide_id, cell.role), Counter())[cell.content_hash] += 1
+    return out
+
+
 def _alert_asymmetric_companion_drift(
     plan: SyncPlan,
     de_idless: list[CurrentCell],
@@ -2820,18 +2843,25 @@ def _alert_asymmetric_companion_drift(
     Detects per ``(owning_slide_id, role)`` against the recorded baseline:
     - **edit** — the id'd half is present now and its body differs from its baseline;
     - **removal** — the id'd half was in the baseline but is gone now, while the
-      id-less twin on the other half survives.
+      id-less twin on the other half survives;
+    - **id-less edit** — the id-less half's recorded bodies (hash multiset per
+      key) no longer match the working tree while the id'd twin exists. Found
+      by the #520 corpus rehearsal: the id-less half's edit rides only on its
+      anchor ``add``, which the reconcile cancels — the mirror image of the
+      id'd-half drop above.
     """
     if de_baseline is None or en_baseline is None:
         return  # cold start: no baseline to detect drift against
     de_idd_base = _idd_narrative_baseline_hashes(de_baseline)
     en_idd_base = _idd_narrative_baseline_hashes(en_baseline)
+    de_idless_base = _idless_narrative_baseline_hashes(de_baseline)
+    en_idless_base = _idless_narrative_baseline_hashes(en_baseline)
     drop: set[int] = set()
     # Each direction: the id-less half (whose anchor add we may drop) is on one side, the
     # id'd half (the keyed companion that drifted) on the other.
-    for idless_cells, idd_cells, idd_base, idless_dir, idd_dir in (
-        (de_idless, en_idd, en_idd_base, "de->en", "en->de"),
-        (en_idless, de_idd, de_idd_base, "en->de", "de->en"),
+    for idless_cells, idd_cells, idd_base, idless_base, idless_dir, idd_dir in (
+        (de_idless, en_idd, en_idd_base, de_idless_base, "de->en", "en->de"),
+        (en_idless, de_idd, de_idd_base, en_idless_base, "en->de", "de->en"),
     ):
         idd_now = {(c.owning_slide_id, c.role): c for c in idd_cells}
         idless_by_key: dict[tuple[str | None, str], list[CurrentCell]] = {}
@@ -2846,9 +2876,15 @@ def _alert_asymmetric_companion_drift(
             base_hash = idd_base.get(key)
             edited = now is not None and base_hash is not None and now.content_hash != base_hash
             removed = now is None and base_hash is not None
-            if not (edited or removed):
+            idless_edited = False
+            if not (edited or removed) and owning is not None:
+                base_counts = idless_base.get((owning, role))
+                if base_counts is not None and (now is not None or base_hash is not None):
+                    now_counts: Counter[str] = Counter(c.content_hash for c in idless_by_key[key])
+                    idless_edited = now_counts != base_counts
+            if not (edited or removed or idless_edited):
                 continue
-            what, noun = ("edited", "edit") if edited else ("removed", "removal")
+            what, noun = ("removed", "removal") if removed else ("edited", "edit")
             plan.issues.append(
                 PlanIssue(
                     severity="error",

@@ -223,7 +223,12 @@ class TestMassAddGuard:
             ]
         )
         plan, result, _de, en_after = _sync(tmp_path, de0, en0, de1, en0)
-        assert any(p.kind == "refuse" for p in plan.proposals)
+        # The #443 asymmetric-drift alert (id-less half's multiset changed
+        # while an id'd twin exists) catches this shape before the mass-add
+        # guard since the #520 corpus rehearsal — an error-severity issue
+        # instead of refuse proposals. Either mechanism satisfies the
+        # invariant: loud, watermark held, nothing written.
+        assert plan.has_errors or any(p.kind == "refuse" for p in plan.proposals)
         assert result.watermark_recorded is False
         assert "# extra" not in en_after  # nothing written — duplicates avoided
 

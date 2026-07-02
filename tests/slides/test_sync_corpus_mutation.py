@@ -451,25 +451,27 @@ def _half_has_key(text: str, side: str, sid: str, role: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _run_mutation(pairs, tmp_path, mutate, check, side: str = "en"):
+def _run_mutation(pairs, tmp_path, mutate, check, side: str = "en", require_propagation=True):
     """Apply ``mutate`` to each selected pair's ``side`` half; assert propagate-or-alert.
 
     ``mutate(text)`` receives the mutated half's text and returns
-    ``(mutated_text, judge)`` or None. ``check(plan, result, twin_after)``
-    returns True when the change demonstrably reached the OTHER half. The pairs
-    were selected for carrying the mutation's target cell class, so the
-    mutation must find a target in every one.
+    ``(mutated_text, judge)`` or None — None skips the pair: selection counts
+    cell classes on the DE half only, and on a normalized corpus (#520) the
+    residual carriers of a class can be one-sided asymmetric decks where the
+    mutated half has no target (e.g. an id-less narrative surviving only on
+    DE because the stamp refused the asymmetric pair). The bundled corpus is
+    symmetric, so CI always exercises every mutation.
     """
     if not pairs:
         pytest.skip("no clean corpus pair carries this mutation's cell class")
     propagated_somewhere = False
+    exercised = 0
     for i, (name, de_text, en_text) in enumerate(pairs):
         source_text = en_text if side == "en" else de_text
         prepared = mutate(source_text)
-        assert prepared is not None, (
-            f"{name}: selected for this cell class but the mutation found no target — "
-            "selection and mutation disagree (test bug)"
-        )
+        if prepared is None:
+            continue
+        exercised += 1
         mutated, judge = prepared
         tmp = tmp_path / f"m{i}"
         tmp.mkdir()
@@ -491,9 +493,16 @@ def _run_mutation(pairs, tmp_path, mutate, check, side: str = "en"):
         if propagated:
             propagated_somewhere = True
             assert result.watermark_recorded, f"{name} [{side}-side]: propagated but watermark held"
+    if not exercised:
+        pytest.skip("no selected pair carries this mutation's target on the mutated half")
     # The clean common case on real decks is propagation, not an alert; if every
     # single pair only alerted, the engine has regressed into refuse-everything.
-    assert propagated_somewhere, "mutation alerted on every pair — nothing propagated"
+    # Classes whose only residual carriers are asymmetric decks (the ones
+    # --stamp-ids refused, #520) legitimately alert on every pair and opt out
+    # via require_propagation=False — the falsely-consistent and
+    # propagate-or-alert asserts above still hold for them.
+    if require_propagation:
+        assert propagated_somewhere, "mutation alerted on every pair — nothing propagated"
 
 
 @pytest.mark.parametrize("side", ["en", "de"])
@@ -535,7 +544,11 @@ def test_idless_narrative_edit_is_judge_reconciled(corpus_pairs, tmp_path, side)
     # (#199/#403), not the keyed diff — the arm of the engine where one-sided
     # edits have historically gone missing (#443 was next door). Narrative
     # edits are judge-reconciled (without a judge the engine alerts instead);
-    # a silent drop never satisfies #269.
+    # a silent drop never satisfies #269. On the normalized corpus (#520)
+    # the only residual id-less narratives live on asymmetric decks whose
+    # edits correctly ALERT (the #471 asymmetric-companion error), so
+    # propagation is not required there; the bundled corpus still proves
+    # the judge-reconcile path in CI.
     _run_mutation(
         corpus_pairs["idless_narr"],
         tmp_path,
@@ -544,6 +557,7 @@ def test_idless_narrative_edit_is_judge_reconciled(corpus_pairs, tmp_path, side)
         ),
         lambda plan, result, twin_after: _JUDGED in twin_after,
         side=side,
+        require_propagation=_BUNDLED,
     )
 
 
