@@ -42,6 +42,7 @@ This module must not import from the v2 sync core (``sync_plan`` /
 from __future__ import annotations
 
 import logging
+import re
 from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
@@ -171,8 +172,31 @@ class _DeckSeg:
     groups: list[_GroupSeg] = field(factory=list)
 
 
+# The slide_id attribute, for parity checks that must ignore it (the same
+# strip form assign_ids._SLIDE_ID_RE uses when rewriting ids).
+_SLIDE_ID_ATTR_RE = re.compile(r'\s*slide_id="[^"]*"')
+
+
+def _lines_sans_id(cell: SideCell) -> tuple[str, ...]:
+    """The cell's verbatim lines with the header's slide_id attribute removed.
+
+    Shared-member byte parity is judged modulo the id attribute: a shared
+    pair differing *only* by a one-sided id stamp is the #443 transition
+    (observed as ``id_stamp_pending_twin``), not a content divergence —
+    reporting both would be noise.
+    """
+    return (_SLIDE_ID_ATTR_RE.sub("", cell.lines[0]), *cell.lines[1:])
+
+
 def _bare(slide_id: str | None) -> str | None:
-    return strip_preserve_marker(slide_id) if slide_id else None
+    """The bare id, or ``None`` for absent, empty, or marker-only ids.
+
+    ``slide_id=""`` and ``slide_id="!"`` carry no usable identity — treating
+    them as id'd would bypass the id-less refusals and mint empty keys.
+    """
+    if not slide_id:
+        return None
+    return strip_preserve_marker(slide_id) or None
 
 
 def _segment_deck(source: _Source) -> _DeckSeg:
@@ -308,6 +332,11 @@ class _Parser:
         # DE cell -> EN cell pairing, across parts (one map per bundle).
         self.pairs: dict[_Ref, _Ref] = {}
         self.paired_en: set[_Ref] = set()
+        # Member-keyed observations are recorded against the Member OBJECT and
+        # materialized only after positional ordinals are assigned — otherwise
+        # a frozen Observation would carry the pre-ordinal sentinel key and
+        # never resolve via member_by_key (P1: identity carried unchanged).
+        self._member_obs: list[tuple[str, Member, Lang | None, str]] = []
 
     # -- plumbing -------------------------------------------------------------
 
@@ -334,6 +363,21 @@ class _Parser:
     def refuse(self, code: str, detail: str, member: MemberKey | None = None) -> None:
         self.refusals.append(RefusalReason(code=code, detail=detail, member=member))
 
+    def observe_member(
+        self,
+        kind: str,
+        member: Member,
+        side: Lang | None = None,
+        detail: str = "",
+    ) -> None:
+        """Record an observation about ``member``, keyed once keys are final."""
+        self._member_obs.append((kind, member, side, detail))
+
+    def _materialize_member_observations(self) -> None:
+        for kind, member, side, detail in self._member_obs:
+            self.observe(kind, member=member.key, side=side, detail=detail)
+        self._member_obs.clear()
+
     # -- phase 1: keying preconditions ------------------------------------------
 
     def check_keying(self) -> None:
@@ -344,6 +388,12 @@ class _Parser:
         DE and EN sides are the only sanctioned repetition. The legacy
         inherited-id narrative (``slide_id`` equal to the owning slide's) is
         exactly such a duplicate — a normalize-first refusal, per §12.1.
+
+        Keying refusals return *before* pairing, so the §3.4 conditions that
+        need pairing to judge (id-less localized/narrative vs the #443
+        transition) are not enumerated alongside them — rule-2 resolution is
+        meaningless without unique keys. That costs no extra author round
+        trip: ``normalize --stamp-ids`` repairs both classes in one pass.
         """
         for lang in LANGS:
             counts: Counter[str] = Counter()
@@ -368,10 +418,13 @@ class _Parser:
                     )
         for lang, deck in (("de", self.de_deck), ("en", self.en_deck)):
             for cell in deck.cells:
-                if ("slide" in cell.tags or "subslide" in cell.tags) and cell.slide_id is None:
+                if ("slide" in cell.tags or "subslide" in cell.tags) and _bare(
+                    cell.slide_id
+                ) is None:
                     self.refuse(
                         "idless_anchor",
-                        f"slide-start cell without slide_id (deck.{lang} line {cell.line_number})",
+                        f"slide-start cell without a usable slide_id "
+                        f"(deck.{lang} line {cell.line_number})",
                     )
 
     # -- phase 2: pairing --------------------------------------------------------
@@ -414,40 +467,64 @@ class _Parser:
     def pair_positionally(self, de_idxs: list[int], en_idxs: list[int], part: Part) -> None:
         """Rule-2 pairing of one kind-class pool of leftover cells.
 
-        First id-less × id-less by ordinal (the steady-state shared members),
-        then id'd × id-less (the #443 id-stamp-pending shape); whatever
-        remains stays one-sided.
+        Two cursors walk the pools slot by slot, so an id'd-on-one-half cell
+        *occupies its positional slot* rather than being pushed behind the
+        id-less residue (which would shift every later sibling onto the
+        wrong twin — the interleaved-#443 mis-adoption):
+
+        - id-less × id-less: the steady-state positional pair.
+        - exactly one side id'd: the #443 id-stamp-pending shape — adopted
+          when the id-less twin is localized (lang-tagged, where cross-side
+          bodies differ by nature) or, for shared cells, when the bodies are
+          byte-equal (an id stamped onto one half of an unchanged cell). A
+          shared-class id'd cell with a *different* body is a genuinely new
+          one-sided member: only its own side's cursor advances, so the
+          remaining id-less cells still align.
+        - both sides id'd (necessarily different ids, or the global by-id
+          pass would have paired them): two one-sided members.
+
+        Whatever remains past either pool's end stays one-sided.
         """
         de_pool = self._unpaired("de", part, de_idxs)
         en_pool = self._unpaired("en", part, en_idxs)
-        de_idless = [i for i in de_pool if self._cell("de", (part, i)).slide_id is None]
-        en_idless = [i for i in en_pool if self._cell("en", (part, i)).slide_id is None]
-        for de_i, en_i in zip(de_idless, en_idless, strict=False):
-            self.pairs[(part, de_i)] = (part, en_i)
-        # The #443 pass: an id'd cell on one half adopts the positional
-        # id-less residue on the other; the id'd side's key wins.
-        de_idd = [i for i in de_pool if self._cell("de", (part, i)).slide_id is not None]
-        en_idd = [i for i in en_pool if self._cell("en", (part, i)).slide_id is not None]
-        de_idless_rest = de_idless[len(en_idless) :]
-        en_idless_rest = en_idless[len(de_idless) :]
-        for de_i, en_i in zip(de_idd, en_idless_rest, strict=False):
-            self.pairs[(part, de_i)] = (part, en_i)
-            key = _bare(self._cell("de", (part, de_i)).slide_id)
-            self.observe(
-                "id_stamp_pending_twin",
-                member=MemberKey.for_id(key or "?"),
-                side="en",
-                detail="id'd on the de half only; the en twin pairs positionally (#443)",
-            )
-        for de_i, en_i in zip(de_idless_rest, en_idd, strict=False):
-            self.pairs[(part, de_i)] = (part, en_i)
-            key = _bare(self._cell("en", (part, en_i)).slide_id)
-            self.observe(
-                "id_stamp_pending_twin",
-                member=MemberKey.for_id(key or "?"),
-                side="de",
-                detail="id'd on the en half only; the de twin pairs positionally (#443)",
-            )
+        i = j = 0
+        while i < len(de_pool) and j < len(en_pool):
+            de_cell = self._cell("de", (part, de_pool[i]))
+            en_cell = self._cell("en", (part, en_pool[j]))
+            de_id = _bare(de_cell.slide_id)
+            en_id = _bare(en_cell.slide_id)
+            if de_id is None and en_id is None:
+                self.pairs[(part, de_pool[i])] = (part, en_pool[j])
+                i += 1
+                j += 1
+                continue
+            if de_id is not None and en_id is not None:
+                i += 1
+                j += 1
+                continue
+            idd_cell, idless_cell = (de_cell, en_cell) if de_id else (en_cell, de_cell)
+            adopt = idless_cell.lang_attr is not None or idd_cell.lines[1:] == idless_cell.lines[1:]
+            if adopt:
+                self.pairs[(part, de_pool[i])] = (part, en_pool[j])
+                idless_side: Lang = "en" if de_id else "de"
+                idd_side = "de" if de_id else "en"
+                self.observe(
+                    "id_stamp_pending_twin",
+                    member=MemberKey.for_id(de_id or en_id or "?"),
+                    side=idless_side,
+                    detail=(
+                        f"id'd on the {idd_side} half only; the {idless_side} twin "
+                        f"pairs positionally (#443)"
+                    ),
+                )
+                i += 1
+                j += 1
+                continue
+            # Unrelated one-sided id'd shared cell: skip it, keep alignment.
+            if de_id is not None:
+                i += 1
+            else:
+                j += 1
 
     def pair_region(
         self,
@@ -527,29 +604,6 @@ class _Parser:
         if primary is None:  # pragma: no cover - callers pass at least one ref
             raise DocLensError("member with no sides")
         kind = primary.cell_type
-        key = self._key_of(de_cell, en_cell)
-        if de_cell and en_cell:
-            if de_cell.cell_type != en_cell.cell_type:
-                self.observe(
-                    "member_kind_mismatch",
-                    member=key,
-                    detail=f"paired cells have kinds {de_cell.cell_type}/{en_cell.cell_type}",
-                )
-            if (de_cell.lang_attr is None) != (en_cell.lang_attr is None):
-                self.observe(
-                    "lang_attr_mismatch",
-                    member=key,
-                    detail=(
-                        f"lang attribute present on one side only "
-                        f"(de: {de_cell.lang_attr!r}, en: {en_cell.lang_attr!r})"
-                    ),
-                )
-            if de_cell.part != en_cell.part:
-                self.observe(
-                    "layout_cross_language",
-                    member=key,
-                    detail="member is inline on one half and in the companion on the other",
-                )
         langness = (
             "localized"
             if (de_cell and de_cell.lang_attr) or (en_cell and en_cell.lang_attr)
@@ -559,7 +613,7 @@ class _Parser:
         if role == "header":
             langness = "localized"  # header members are per-language by design
         member = Member(
-            key=key,
+            key=self._key_of(de_cell, en_cell),
             kind=kind,
             role=role,
             langness=langness,
@@ -568,11 +622,33 @@ class _Parser:
             de=de_cell,
             en=en_cell,
         )
+        if de_cell and en_cell:
+            if de_cell.cell_type != en_cell.cell_type:
+                self.observe_member(
+                    "member_kind_mismatch",
+                    member,
+                    detail=f"paired cells have kinds {de_cell.cell_type}/{en_cell.cell_type}",
+                )
+            if (de_cell.lang_attr is None) != (en_cell.lang_attr is None):
+                self.observe_member(
+                    "lang_attr_mismatch",
+                    member,
+                    detail=(
+                        f"lang attribute present on one side only "
+                        f"(de: {de_cell.lang_attr!r}, en: {en_cell.lang_attr!r})"
+                    ),
+                )
+            if de_cell.part != en_cell.part:
+                self.observe_member(
+                    "layout_cross_language",
+                    member,
+                    detail="member is inline on one half and in the companion on the other",
+                )
         if member.is_one_sided:
             side: Lang = "de" if de_cell else "en"
-            self.observe(
+            self.observe_member(
                 "one_sided_member",
-                member=key,
+                member,
                 side=side,
                 detail=f"present on the {side} side only",
             )
@@ -580,11 +656,11 @@ class _Parser:
             member.langness == "shared"
             and de_cell is not None
             and en_cell is not None
-            and de_cell.lines != en_cell.lines
+            and _lines_sans_id(de_cell) != _lines_sans_id(en_cell)
         ):
-            self.observe(
+            self.observe_member(
                 "shared_divergence",
-                member=key,
+                member,
                 detail="shared member's projections differ byte-wise",
             )
         return member
@@ -669,6 +745,7 @@ class _Parser:
         groups = self._emit_groups(de_seg, en_seg, group_merge)
         orphans = self._place_companions(groups, de_comp_idxs, en_comp_idxs)
         self._assign_positional_ordinals(header, groups, orphans)
+        self._materialize_member_observations()
 
         # Document-level observations.
         self._check_layout_invariant()
@@ -790,34 +867,41 @@ class _Parser:
             if primary is None:  # pragma: no cover
                 continue
             if member.role not in ("voiceover", "notes"):
-                self.observe(
+                self.observe_member(
                     "unexpected_companion_cell",
-                    member=member.key,
+                    member,
                     detail=f"companion cell with role {member.role!r}",
                 )
             de_owner = _bare(member.de.for_slide) if member.de else None
             en_owner = _bare(member.en.for_slide) if member.en else None
             if member.de and member.en and de_owner != en_owner:
-                self.observe(
+                self.observe_member(
                     "owner_mismatch",
-                    member=member.key,
+                    member,
                     detail=f"for_slide differs between halves (de: {de_owner}, en: {en_owner})",
                 )
             owner = de_owner or en_owner
             if owner is None and _bare(primary.slide_id) == TITLE_SLIDE_ID:
-                # Pre-#242 legacy: slide_id="title" with no for_slide is
-                # title intent.
+                # Pre-#242 legacy: slide_id="title" with no for_slide is title
+                # *intent* — the "title" id is an owner reference, not the
+                # member's identity, and keying it id:title would collide with
+                # the title anchor. The stamp machinery refuses this unowned
+                # shape rather than guessing (#527), and so do we — with the
+                # actual fix spelled out instead of a misleading duplicate_id.
+                # Re-keying positionally keeps the remaining enumeration clean.
                 owner = TITLE_SLIDE_ID
-                self.observe(
-                    "legacy_title_intent",
-                    member=member.key,
-                    detail='companion cell with slide_id="title" and no for_slide',
+                member.key = MemberKey.positional("?", member.kind, -1)
+                self.refuse(
+                    "legacy_title_companion",
+                    f'companion cell with slide_id="title" and no for_slide '
+                    f"(line {primary.line_number}) — pre-#242 legacy title intent; "
+                    f'give the cell for_slide="title" and its own slide_id',
                 )
             group = by_anchor.get(owner) if owner is not None else None
             if group is None:
-                self.observe(
+                self.observe_member(
                     "owner_missing",
-                    member=member.key,
+                    member,
                     detail=f"for_slide {owner!r} matches no slide anchor",
                 )
                 orphans.append(member)

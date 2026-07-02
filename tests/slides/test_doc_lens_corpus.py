@@ -41,9 +41,18 @@ _BUNDLED_CORPUS = Path(__file__).parent.parent / "data" / "doc_corpus"
 # (slide_id == for_slide duplicates the deck id in the ≤4-file namespace)
 # + 3 decks with residual id-less localized cells = 62. The ceiling gives a
 # little headroom for ordinary authoring churn; a real rise means id-less /
-# duplicate-id content is being reintroduced.
-_REAL_REFUSAL_CEILING = 80
-_REAL_PARSED_FLOOR = 600
+# duplicate-id content is being reintroduced. Refusal CODES are pinned too:
+# a new code appearing on the real corpus means the parser started refusing
+# a shape it used to accept — investigate before widening the set.
+_REAL_REFUSAL_CEILING = 70
+_REAL_PARSED_FLOOR = 620
+_EXPECTED_REFUSAL_CODES = {
+    "duplicate_id",
+    "idless_localized",
+    "idless_narrative",
+    "idless_anchor",
+    "legacy_title_companion",
+}
 
 
 def _real_corpus_dir() -> Path | None:
@@ -129,6 +138,7 @@ class TestRealCorpus:
         assert len(pairs) >= _REAL_PARSED_FLOOR
         parsed = 0
         refused: list[str] = []
+        unexpected_codes: dict[str, set[str]] = {}
         for de_path, _en_path in pairs:
             bundle = load_bundle(de_path)
             if not bundle.outcome.ok:
@@ -137,6 +147,9 @@ class TestRealCorpus:
                     f"{de_path.name}: refusal must be framed with enumerated reasons"
                 )
                 refused.append(de_path.name)
+                codes = {r.code for r in refusal.reasons}
+                if not codes <= _EXPECTED_REFUSAL_CODES:
+                    unexpected_codes[de_path.name] = codes - _EXPECTED_REFUSAL_CODES
                 continue
             parsed += 1
             _assert_byte_identity(bundle)
@@ -144,3 +157,4 @@ class TestRealCorpus:
         assert len(refused) <= _REAL_REFUSAL_CEILING, (
             f"{len(refused)} refusals exceed the ceiling {_REAL_REFUSAL_CEILING}: {refused[:10]}…"
         )
+        assert not unexpected_codes, f"refusals with unexpected codes: {unexpected_codes}"

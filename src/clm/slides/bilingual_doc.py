@@ -202,11 +202,13 @@ class SlideGroup:
 #   one_sided_group        whole group present on one side only
 #   id_stamp_pending_twin  id'd on one half, id-less positional twin (#443)
 #   lang_attr_mismatch     paired sides disagree about lang-ness
+#   member_kind_mismatch   paired sides disagree about the cell kind
 #   wrong_language_cell    a cell whose lang attr contradicts its file side
 #   preamble_divergence    DE/EN deck preambles differ
 #   layout_mixed           one half has inline voiceover AND a companion
 #   layout_cross_language  the halves use different voiceover layouts
 #   owner_missing          companion member's for_slide matches no anchor
+#   owner_mismatch         paired companion sides name different owners
 #   group_order_divergence paired groups appear in different order per side
 #   unexpected_companion_cell  non-narrative cell in a companion file
 ObservationKind = str
@@ -226,7 +228,9 @@ class Observation:
 class RefusalReason:
     """One reason a bundle failed the §3.4 normalize precondition."""
 
-    code: str  # duplicate_id | idless_anchor | idless_localized | idless_narrative
+    # duplicate_id | idless_anchor | idless_localized | idless_narrative
+    # | legacy_title_companion
+    code: str
     detail: str
     member: MemberKey | None = None
 

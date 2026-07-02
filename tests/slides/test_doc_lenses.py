@@ -14,6 +14,7 @@ enumerated, never exceptions, never heuristic parses).
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -422,6 +423,261 @@ class TestRefusals:
         assert project(deck, "de", "deck") == "just some text\n"
         assert project(deck, "en", "deck") == "other text\n"
 
+    def test_empty_slide_id_anchor_refuses_as_idless(self):
+        # slide_id="" (and "!") carries no identity — it must hit the
+        # idless_anchor refusal, not mint an empty or line-number key.
+        de = _strip_final_blank(
+            HEADER_DE + '# %% [markdown] lang="de" tags=["slide"] slide_id=""\n# # A\n\n'
+        )
+        en = _strip_final_blank(
+            HEADER_EN + '# %% [markdown] lang="en" tags=["slide"] slide_id="!"\n# # A\n\n'
+        )
+        outcome = parse_bundle(de, en)
+        assert not outcome.ok
+        assert outcome.refusal is not None
+        assert {r.code for r in outcome.refusal.reasons} == {"idless_anchor"}
+
+
+class TestPairingAlignment:
+    """The #443 adoption must be slot-aware (review finding: interleaved
+    id'd cells previously stole the wrong twin via tail-residue pairing)."""
+
+    def test_443_interleaved_shared_cells_adopt_the_matching_twin(self):
+        # Three shared cells A/X/B; the author stamped an id on DE's X only.
+        # X must adopt EN's byte-equal x — not shift B onto the wrong twin.
+        cells = [_shared_code("cell_a", 1), _shared_code("cell_x", 2), _shared_code("cell_b", 3)]
+        de = _strip_final_blank(
+            HEADER_DE
+            + _slide("g", "de", "G")
+            + cells[0]
+            + cells[1].replace('tags=["keep"]', 'tags=["keep"] slide_id="x-cell"')
+            + cells[2]
+        )
+        en = _strip_final_blank(HEADER_EN + _slide("g", "en", "G") + "".join(cells))
+        outcome = _assert_round_trip(de, en)
+        deck = outcome.deck
+        assert deck is not None
+        member = deck.member_by_key(MemberKey.for_id("x-cell"))
+        assert member is not None
+        assert member.de is not None and member.en is not None
+        assert member.de.lines[1:] == member.en.lines[1:]  # the true twin
+        kinds = [o.kind for o in deck.observations]
+        assert kinds == ["id_stamp_pending_twin"]  # no false shared_divergence
+
+    def test_new_one_sided_idd_shared_cell_does_not_steal_a_twin(self):
+        # A genuinely new id'd shared cell on DE only (different body): it
+        # must stay one-sided and leave the id-less alignment untouched.
+        de = _strip_final_blank(
+            HEADER_DE
+            + _slide("g", "de", "G")
+            + '# %% tags=["keep"] slide_id="new-cell"\nbrand_new = 0\n\n'
+            + _shared_code("cell_a", 1)
+            + _shared_code("cell_b", 2)
+        )
+        en = _strip_final_blank(
+            HEADER_EN
+            + _slide("g", "en", "G")
+            + _shared_code("cell_a", 1)
+            + _shared_code("cell_b", 2)
+        )
+        outcome = _assert_round_trip(de, en)
+        deck = outcome.deck
+        assert deck is not None
+        member = deck.member_by_key(MemberKey.for_id("new-cell"))
+        assert member is not None
+        assert member.en is None  # one-sided, nothing adopted
+        kinds = [o.kind for o in deck.observations]
+        assert kinds == ["one_sided_member"]  # and no divergence noise
+
+    def test_reverse_443_direction_en_idd_de_idless(self):
+        # The mirror of test_443_shape...: id'd on the EN half, id-less DE
+        # twin — one member under the EN id, observation side="de".
+        de = _strip_final_blank(
+            HEADER_DE + _slide("a", "de", "A") + '# %% [markdown] lang="de"\n# T\n\n'
+        )
+        en = _strip_final_blank(HEADER_EN + _slide("a", "en", "A") + _localized("noted", "en", "T"))
+        outcome = _assert_round_trip(de, en)
+        deck = outcome.deck
+        assert deck is not None
+        member = deck.member_by_key(MemberKey.for_id("noted"))
+        assert member is not None
+        assert member.de is not None and member.en is not None
+        obs = [o for o in deck.observations if o.kind == "id_stamp_pending_twin"]
+        assert len(obs) == 1
+        assert obs[0].side == "de"
+        assert obs[0].member == MemberKey.for_id("noted")
+
+    def test_reverse_443_in_companion_files(self):
+        de = _strip_final_blank(HEADER_DE + _slide("a", "de", "A"))
+        en = _strip_final_blank(HEADER_EN + _slide("a", "en", "A"))
+        de_c = _strip_final_blank(
+            '# %% [markdown] lang="de" tags=["notes"] for_slide="a"\n#\n# - Text\n\n'
+        )
+        en_c = _strip_final_blank(_companion_cell("a-vo", "en", "a", "Text"))
+        outcome = _assert_round_trip(de, en, de_c, en_c)
+        deck = outcome.deck
+        assert deck is not None
+        member = deck.member_by_key(MemberKey.for_id("a-vo"))
+        assert member is not None
+        assert member.de is not None and member.en is not None
+        obs = [o for o in deck.observations if o.kind == "id_stamp_pending_twin"]
+        assert len(obs) == 1 and obs[0].side == "de"
+
+
+class TestObservationKeys:
+    """Observations must carry the member's FINAL key (P1: identity computed
+    once and carried unchanged) — never the pre-ordinal sentinel."""
+
+    def test_one_sided_idless_member_observation_resolves(self):
+        de = _strip_final_blank(
+            HEADER_DE + _slide("a", "de", "A") + "# %%\n# de-only shared extra\n\n"
+        )
+        en = _strip_final_blank(HEADER_EN + _slide("a", "en", "A"))
+        outcome = _assert_round_trip(de, en)
+        deck = outcome.deck
+        assert deck is not None
+        obs = [o for o in deck.observations if o.kind == "one_sided_member"]
+        assert len(obs) == 1
+        assert obs[0].member is not None
+        assert obs[0].member.render() == "pos:a/code/0"
+        assert deck.member_by_key(obs[0].member) is not None
+
+    def test_two_diverged_shared_cells_get_distinct_observation_keys(self):
+        de = _strip_final_blank(
+            HEADER_DE + _slide("a", "de", "A") + _shared_code("x", 1) + _shared_code("y", 1)
+        )
+        en = _strip_final_blank(
+            HEADER_EN + _slide("a", "en", "A") + _shared_code("x", 2) + _shared_code("y", 2)
+        )
+        outcome = _assert_round_trip(de, en)
+        deck = outcome.deck
+        assert deck is not None
+        obs = [o for o in deck.observations if o.kind == "shared_divergence"]
+        assert len(obs) == 2
+        keys = {o.member.render() for o in obs if o.member is not None}
+        assert keys == {"pos:a/code/0", "pos:a/code/1"}
+        for o in obs:
+            assert o.member is not None
+            assert deck.member_by_key(o.member) is not None
+
+
+class TestObservationKinds:
+    """Each documented observation kind fires from a realistic input."""
+
+    def test_member_kind_mismatch(self):
+        de = _strip_final_blank(
+            HEADER_DE + _slide("a", "de", "A") + '# %% [markdown] lang="de" slide_id="odd"\n# T\n\n'
+        )
+        en = _strip_final_blank(
+            HEADER_EN + _slide("a", "en", "A") + '# %% lang="en" slide_id="odd"\nprint("t")\n\n'
+        )
+        outcome = _assert_round_trip(de, en)
+        assert outcome.deck is not None
+        obs = {o.kind for o in outcome.deck.observations}
+        assert "member_kind_mismatch" in obs
+
+    def test_lang_attr_mismatch(self):
+        de = _strip_final_blank(
+            HEADER_DE + _slide("a", "de", "A") + '# %% [markdown] lang="de" slide_id="odd"\n# T\n\n'
+        )
+        en = _strip_final_blank(
+            HEADER_EN + _slide("a", "en", "A") + '# %% [markdown] slide_id="odd"\n# T\n\n'
+        )
+        outcome = _assert_round_trip(de, en)
+        assert outcome.deck is not None
+        obs = [o for o in outcome.deck.observations if o.kind == "lang_attr_mismatch"]
+        assert len(obs) == 1
+        assert obs[0].member == MemberKey.for_id("odd")
+
+    def test_owner_mismatch(self):
+        de = _strip_final_blank(HEADER_DE + _slide("a", "de", "A") + _slide("b", "de", "B"))
+        en = _strip_final_blank(HEADER_EN + _slide("a", "en", "A") + _slide("b", "en", "B"))
+        de_c = _strip_final_blank(_companion_cell("vo", "de", "a", "Text"))
+        en_c = _strip_final_blank(_companion_cell("vo", "en", "b", "Text"))
+        outcome = _assert_round_trip(de, en, de_c, en_c)
+        assert outcome.deck is not None
+        obs = [o for o in outcome.deck.observations if o.kind == "owner_mismatch"]
+        assert len(obs) == 1
+        assert obs[0].member == MemberKey.for_id("vo")
+
+    def test_unexpected_companion_cell(self):
+        de = _strip_final_blank(HEADER_DE + _slide("a", "de", "A"))
+        en = _strip_final_blank(HEADER_EN + _slide("a", "en", "A"))
+        de_c = _strip_final_blank('# %% lang="de" slide_id="odd-code"\nprint("?")\n\n')
+        en_c = _strip_final_blank('# %% lang="en" slide_id="odd-code"\nprint("?")\n\n')
+        outcome = _assert_round_trip(de, en, de_c, en_c)
+        assert outcome.deck is not None
+        assert "unexpected_companion_cell" in {o.kind for o in outcome.deck.observations}
+
+    def test_legacy_title_companion_refuses_with_the_actual_fix(self):
+        # Pre-#242 shape: slide_id="title", no for_slide. The "title" id is an
+        # owner reference, not the member's identity — keying it would collide
+        # with the title anchor. Like `--stamp-ids`, the parse refuses the
+        # unowned shape rather than guessing, and the detail names the real
+        # fix instead of a misleading duplicate_id.
+        de = _strip_final_blank(HEADER_DE + _slide("a", "de", "A"))
+        en = _strip_final_blank(HEADER_EN + _slide("a", "en", "A"))
+        de_c = _strip_final_blank(
+            '# %% [markdown] lang="de" tags=["notes"] slide_id="title"\n#\n# - Gruß\n\n'
+        )
+        en_c = _strip_final_blank(
+            '# %% [markdown] lang="en" tags=["notes"] slide_id="title"\n#\n# - Greeting\n\n'
+        )
+        outcome = parse_bundle(de, en, de_c, en_c)
+        assert not outcome.ok
+        assert outcome.refusal is not None
+        codes = {r.code for r in outcome.refusal.reasons}
+        assert "legacy_title_companion" in codes
+        assert "duplicate_id" not in codes  # never the misleading collision
+        legacy = next(r for r in outcome.refusal.reasons if r.code == "legacy_title_companion")
+        assert 'for_slide="title"' in legacy.detail
+
+    def test_legacy_title_companion_refuses_without_title_macro_too(self):
+        de = _strip_final_blank(_slide("a", "de", "A"))
+        en = _strip_final_blank(_slide("a", "en", "A"))
+        de_c = _strip_final_blank(
+            '# %% [markdown] lang="de" tags=["notes"] slide_id="title"\n#\n# - Gruß\n\n'
+        )
+        en_c = _strip_final_blank(
+            '# %% [markdown] lang="en" tags=["notes"] slide_id="title"\n#\n# - Greeting\n\n'
+        )
+        outcome = parse_bundle(de, en, de_c, en_c)
+        assert not outcome.ok
+        assert outcome.refusal is not None
+        assert "legacy_title_companion" in {r.code for r in outcome.refusal.reasons}
+
+
+class TestGroupStructure:
+    def test_subslide_anchors_its_own_group(self):
+        sub = '# %% [markdown] lang="{lang}" tags=["subslide"] slide_id="a-sub"\n#\n# ## Sub\n\n'
+        de = _strip_final_blank(
+            HEADER_DE + _slide("a", "de", "A") + sub.format(lang="de") + _shared_code("x")
+        )
+        en = _strip_final_blank(
+            HEADER_EN + _slide("a", "en", "A") + sub.format(lang="en") + _shared_code("x")
+        )
+        outcome = _assert_round_trip(de, en)
+        deck = outcome.deck
+        assert deck is not None
+        assert [g.anchor_id for g in deck.groups] == ["title", "a", "a-sub"]
+        sub_group = deck.groups[2]
+        assert sub_group.anchor is not None
+        assert sub_group.anchor.role == "subslide"
+        # The shared cell after the subslide belongs to the SUBSLIDE's group.
+        assert [m.key.render() for m in sub_group.members] == ["pos:a-sub/code/0"]
+
+    def test_preface_group_without_title_macro(self):
+        de = _strip_final_blank("# %%\nimport math\n\n" + _slide("a", "de", "A"))
+        en = _strip_final_blank("# %%\nimport math\n\n" + _slide("a", "en", "A"))
+        outcome = _assert_round_trip(de, en)
+        deck = outcome.deck
+        assert deck is not None
+        assert deck.header == []
+        assert [g.anchor_id for g in deck.groups] == ["~preface", "a"]
+        preface = deck.groups[0]
+        assert preface.anchor is None
+        assert [m.key.render() for m in preface.members] == ["pos:~preface/code/0"]
+
 
 class TestByteEdgeCases:
     def test_leading_blank_line_survives(self):
@@ -536,25 +792,57 @@ def test_round_trip_property(bundle: tuple[str, str, str | None, str | None]) ->
 
 
 @given(bundle=_normalized_bundle(), data=st.data())
-@settings(deadline=None, suppress_health_check=[HealthCheck.too_slow], max_examples=80)
+@settings(deadline=None, suppress_health_check=[HealthCheck.too_slow], max_examples=100)
 def test_round_trip_survives_one_sided_mutations(
     bundle: tuple[str, str, str | None, str | None], data: st.DataObject
 ) -> None:
     """Byte-identity and reparse-identity are unconditional on parseable
-    input: whatever one-sided edit an author makes, either the parse refuses
-    (framed) or the round trip holds."""
+    input: whatever one-sided edit an author makes — on either half, in the
+    deck or in a companion — either the parse refuses (framed) or the round
+    trip holds."""
     de, en, de_c, en_c = bundle
-    mutation = data.draw(st.sampled_from(["edit_shared", "drop_en_cell", "add_en_cell", "none"]))
-    if mutation == "edit_shared":
-        en = en.replace(" = 1", " = 2")
-    elif mutation == "drop_en_cell":
-        cells = en.split("\n# %%")
-        if len(cells) > 1:
-            idx = data.draw(st.integers(min_value=1, max_value=len(cells) - 1))
-            cells.pop(idx)
-            en = "\n# %%".join(cells)
-    elif mutation == "add_en_cell":
-        en = en + "\n" + _strip_final_blank(_localized("extra-en", "en", "added"))
+    side = data.draw(st.sampled_from(["de", "en"]))
+    menu = ["edit_shared", "drop_cell", "add_cell", "strip_id", "none"]
+    if (de_c if side == "de" else en_c) is not None:
+        menu += ["drop_companion_cell", "strip_companion_id"]
+    mutation = data.draw(st.sampled_from(menu))
+
+    def mutate(text: str) -> str:
+        if mutation == "edit_shared" and " = 1" in text:
+            return text.replace(" = 1", " = 2", 1)
+        if mutation == "drop_cell":
+            cells = text.split("\n# %%")
+            if len(cells) > 1:
+                idx = data.draw(st.integers(min_value=1, max_value=len(cells) - 1))
+                cells.pop(idx)
+                return "\n# %%".join(cells)
+        if mutation == "add_cell":
+            return text + "\n" + _strip_final_blank(_localized(f"extra-{side}", side, "added"))
+        if mutation == "strip_id":
+            # Remove the first localized member's slide_id (the #443 shape).
+            return re.sub(r'(\[markdown\] lang="[a-z]+") slide_id="[^"]*"', r"\1", text, count=1)
+        return text
+
+    def mutate_companion(text: str) -> str:
+        if mutation == "drop_companion_cell":
+            cells = text.split("\n# %%")
+            if len(cells) > 1:
+                cells.pop(len(cells) - 1)
+                return "\n# %%".join(cells)
+        if mutation == "strip_companion_id":
+            return re.sub(r' slide_id="[^"]*"', "", text, count=1)
+        return text
+
+    if mutation in ("drop_companion_cell", "strip_companion_id"):
+        if side == "de" and de_c is not None:
+            de_c = mutate_companion(de_c)
+        elif en_c is not None:
+            en_c = mutate_companion(en_c)
+    elif side == "de":
+        de = mutate(de)
+    else:
+        en = mutate(en)
+
     outcome = parse_bundle(de, en, de_c, en_c)
     if not outcome.ok:
         assert outcome.refusal is not None
