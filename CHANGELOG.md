@@ -9,6 +9,364 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 Unreleased changes are collected as fragment files in [`changelog.d/`](changelog.d/)
 and folded into this file by `scripts/collect_changelog.py` at release time.
 
+## [1.19.0] - 2026-07-03
+
+### Added
+
+- **`clm slides sync` now reconciles separated voiceover companions (write-back).**
+  Building on the read-mode support, `sync apply` / `autopilot` / `accept` now
+  *write* a separated-voiceover pair: a narration added, edited, moved, or removed
+  in one language's companion (`voiceover_*.de.py` / `.en.py`) is propagated —
+  translated when needed — into the other language's companion, committing the ≤4
+  files (both decks + both companions) in one atomic batch (issue #501). The deck
+  stays voiceover-free on disk before and after, so a crash can never leave a
+  half-inlined deck. A one-sided narration creates the missing companion pinned to
+  the twin's layout (`voiceover/` subdir vs sibling); an emptied companion is
+  deleted. An in-sync pair writes nothing, and the reconciled state is recorded in
+  the watermark under a `separated` representation marker so later runs diff in the
+  same representation (a legacy voiceover-free watermark auto-re-baselines on the
+  first companion-aware run). Speaker `notes` stay inline in the deck (voiceover-only
+  extract). A mixed / cross-language / orphaned-cell pair still refuses and writes
+  nothing.
+
+- **`clm slides sync baseline bless` and the consistency ledger are now
+  companion-aware.** Blessing a separated-voiceover pair records its watermark over
+  the companion-inlined projection with the `separated` marker (so the bless is not
+  demoted on the next run), and the consistency-ledger recorders (`accept --record`,
+  `bless`, and the semantic-judge pass) fingerprint the same projection — so a
+  narration confirmed in-sync is stored and later suppressed like any other cell
+  instead of being invisible to the ledger (issue #501). A drift *after* a
+  confirmation still surfaces (the recorded hashes no longer match). The `clm
+  validate` companion-parity suggestion now points authors at `clm slides sync`,
+  which reconciles the divergence.
+
+- **`clm slides sync` now sees separated voiceover companions (read modes).**
+  When a split deck keeps its voiceover in separated companion files
+  (`voiceover_*.de.py` / `voiceover_*.en.py`), `sync report` / `verify` /
+  `diagnose` inline each companion in memory and reconcile the narration like any
+  other cell — so a companion edited on only one language now surfaces as
+  `add …/voiceover [translation pending]` instead of drifting silently until
+  `clm validate` (issue #501). A standing, in-sync separated pair reports **0
+  changes** (the git-HEAD baseline is projected the same way, so a companion
+  present on both sides is not mistaken for a new add). Pointing `sync` at a
+  `voiceover_*` file now reconciles its deck pair. A deck whose voiceover is
+  stored *both* inline and in a companion (mixed), or inconsistently across the
+  two languages (one inline, one separated), is refused with a normalize hint, and
+  an orphaned companion cell (its slide was renamed or removed) refuses rather than
+  dropping the narration. Applying the reconciliation (the four-file write-back) is
+  not yet implemented — `sync apply` on a separated pair reports the drift and
+  writes nothing.
+
+- **Direct-mode notebook execution can now run its Python kernel in a separate
+  interpreter (Wave 2b).** Point clm at a course venv and the notebook kernel
+  runs there — so the course-runtime ML/data-science stack (torch/pandas/…) lives
+  in a separate environment from clm's own, while clm keeps driving nbconvert
+  (mirroring what the Docker notebook image already does). Register a course
+  interpreter with the new `clm provision kernel-env --python <path>`, then
+  select it via the `CLM_NOTEBOOK_KERNEL_PYTHON` env var, a course-spec
+  `<kernel-python>` element, or `clm.toml` `[jupyter] kernel_python` (that is the
+  precedence, most specific first). The value can be the **venv directory** (clm
+  picks the platform interpreter inside it — `Scripts/python.exe` on Windows,
+  `bin/python` on POSIX) and a **relative** value is resolved against the project
+  root, so a single committed setting like `kernel_python = ".venv"` works
+  cross-platform and lets a globally-installed clm build a course whose runtime
+  stack lives in the course's own venv. Unset ⇒ the kernel runs in clm's own
+  environment, exactly as before — this is fully opt-in. Only the `python3`
+  kernel is affected; C++/C#/Java/TS kernels and Docker mode are unchanged. See
+  `clm info commands` / `clm info spec-files` and
+  `docs/claude/design/dependency-environment-isolation.md`.
+
+- **Sync v3 Phase 1 — canonical bilingual document model + lens projections** (#520):
+  new `clm.slides.bilingual_doc` (the `BilingualDeck` model with total `MemberKey`
+  identity per design §3.3) and `clm.slides.doc_lenses` (`parse_bundle` reads the
+  ≤4-file deck+companion bundle into one document; `project` renders each file back
+  byte-identically). Projection mismatches (one-sided members, shared divergence,
+  the #443 id'd-on-one-half shape, layout mixtures) are recorded as first-class
+  observations; input failing the §3.4 normalize precondition (duplicate ids,
+  id-less anchors, id-less localized/narrative cells) yields a framed
+  "normalize first" refusal with every reason enumerated. Round-trip laws are
+  pinned by golden + Hypothesis property tests plus a corpus gate
+  (`tests/data/doc_corpus` bundled fixtures in CI; the full-corpus
+  `project ∘ parse` byte-identity run verified locally over PythonCourses:
+  644/706 pairs parse — the 62 refusals are the standing normalize worklist —
+  with zero byte divergences). Internal-only for now: no CLI surface change; the
+  v2 engine is untouched (an import-cleanliness test pins that the v3 modules
+  never import `sync_plan`/`sync_apply`/`sync_code`, per the §12.5 cutover design).
+
+- `clm slides normalize --stamp-ids` — the one-time sync-v3 id normalization
+  (#520 Phase 0): stamps a `slide_id` onto every id-less localized cell and
+  gives every voiceover/notes narrative its **own unique** content-slug id
+  (re-pointing legacy inherited-owner and placeholder ids). EN-authority and
+  pair-atomic: split decks are stamped through the unified pair so
+  `de_id == en_id`; cells without a directly-adjacent DE/EN twin are refused
+  as review items, never half-stamped. Voiceover companion files are stamped
+  together with their deck pair (own ids on the companion cells,
+  `for_slide`/`vo_anchor` untouched, one id namespace across the deck +
+  companion files). Shared language-neutral cells are never stamped.
+  `clm validate` now accepts both narrative-id conventions — the legacy
+  inherited form and a unique own id — while still flagging a narrative id
+  that duplicates another cell's id (the stale copy-paste case) and
+  divergent ids on a DE/EN narrative twin pair.
+
+- Sync v3 Phase 2 (#520): the generic 3-way member differ
+  (`clm.slides.sync_diff`) — one diff over the `BilingualDeck` member stream
+  against a per-member baseline (git-ref snapshot now, the committed ledger in
+  Phase 3), with per-member direction, the closed §7.2/§7.3 class-transition
+  table (fork/unify/id-stamp/relayout, complete or in-progress), and a
+  registered mechanical/framed action vocabulary. Guarded by the §7.4
+  transition-matrix walk, the §6.3 field-coverage test, Hypothesis noise-floor
+  properties (any single one-sided mutation is propagated or alerted, never
+  silent, never a cascade), and a full-corpus self-diff noise ceiling.
+- Experimental `clm slides sync shadow DECK|DIR --baseline REF [--json]`
+  (#520): read-only v2-vs-v3 comparison harness for the migration window —
+  both engines' verdicts over the same pairs at the same git baseline. The W10
+  dogfood replay triage is recorded in
+  `docs/claude/analysis/sync-v3-phase2-w10-replay.md`.
+
+- **Sync v3 Phase 3 (#520): per-item apply, the `record` verb, and the
+  member-keyed committed ledger — behind `CLM_SYNC_ENGINE=v3`.** The committed
+  per-topic `.clm/sync-ledger.json` is promoted to the v3 trust store (schema-2
+  envelope; the v1 sections coexist untouched, and the v2 engine round-trips
+  the v3 `decks` section verbatim): per-member entries record langness, layout,
+  per-side fingerprints, tags, provenance, and a hash version that lazily
+  invalidates on hashing changes. `clm slides sync apply` (under
+  `CLM_SYNC_ENGINE=v3`) executes every mechanical diff row deterministically
+  and resolves framed items from a per-item validated `--decisions` JSON
+  document (multi-cell smuggling and stale handles rejected individually, valid
+  answers land regardless), re-parses the mutated bundle before writing, writes
+  the ≤4 files atomically, and records each landed item into the ledger; the
+  new `clm slides sync record` verb (bless/accept collapsed) banks a verified
+  deck's state wholesale or per member, gated on the structural verify and
+  performing the pos→id key migration at record time. Engine dispatch is a
+  single verb-layer switch (`CLM_SYNC_ENGINE`, v2 default), with the schema-3
+  JSON envelope keeping `is_clean`/`needs_model`/`needs_agent` stable.
+
+- **`clm config show --json`** emits the effective configuration as
+  machine-readable JSON — the resolved database paths, the LLM-cache location,
+  and every `ClmConfig` section (with env/file/default already folded in) — for
+  scripting and debugging.
+
+- **`clm build --explain-rebuilds` logs why each deck missed the build cache
+  and is being rebuilt.** When many decks rebuild whose sources should not have
+  changed, this names the cause per deck: `no cache entry` (never built with
+  this cache, or the cache was cleared), `content hash changed` (the source
+  text or one of its dependencies differs — with the cached vs. current hash),
+  or `no cache entry for this output target` (a new kind/format/language). Off
+  by default so a normal build pays nothing — the extra read-only probe runs
+  only on a miss and only when the flag is set. Per-deck reasons always go to
+  the log file and, under `-O verbose`, to the console; the build summary also
+  gains an aggregated **Rebuild reasons** breakdown (count per reason, most
+  frequent first — and a `rebuild_reasons` object under `-O json`) so the
+  dominant cause of unexpected rebuilds is visible at a glance. Also settable
+  via `CLM_EXPLAIN_REBUILDS={1,true,yes,0,false,no}`. Complements
+  `clm cache explain FILE --spec SPEC`, which gives a full per-artifact,
+  per-cache-layer breakdown for a single deck.
+
+- **`CLM_JOBS_DB_PATH` / `CLM_CACHE_DB_PATH` / `CLM_TELEMETRY_DB_PATH` env vars.**
+  The global `--jobs-db-path` / `--cache-db-path` / `--telemetry-db-path` options
+  now also read these environment variables, so the databases can be relocated
+  once instead of per-invocation. An explicit env path is honored verbatim (not
+  re-anchored to the project root). The jobs DB is ephemeral — pointing
+  `CLM_JOBS_DB_PATH` at a RAM disk (e.g. `Z:\clm_jobs.db`, Direct worker mode)
+  spares the SSD without affecting the persistent cache or telemetry databases.
+  (Note: the pre-existing `CLM_PATHS__*` variables only feed `clm config`
+  display; these new `CLM_*_DB_PATH` forms are what a build/status/monitor run
+  actually opens.)
+
+- **Recordings dashboard: Expand all / Collapse all controls.** The lecture
+  list toolbar gained buttons to expand or collapse every section at once,
+  making a long list quick to fold down to just its section headers.
+
+### Changed
+
+- **The `[all]` extra and the default `uv sync` environment no longer bundle
+  `[ml]` or `[jupyterlite]`.** Neither is imported by clm itself — `[ml]`
+  (PyTorch/pandas/transformers/…) is course-*runtime* that only Direct-mode
+  notebook kernels import, and `[jupyterlite]` is a standalone build tool clm
+  shells out to. Bundling them made every clm install multi-GB, and
+  jupyterlite's transitive `empack` (which pins `click<8.2`) silently held the
+  whole environment back to Click 8.1.8, breaking ~30 CLI tests on a
+  freshly-synced worktree (issue #516 follow-up). `[ml]` and `[jupyterlite]` are
+  now opt-in: `pip install -e ".[all,ml]"` for ML course decks, and
+  `uv sync --extra jupyterlite --no-default-groups` (a `[tool.uv] conflicts`
+  fork) to build the JupyterLite output format. The unused `deepeval` dependency
+  was removed. See `docs/user-guide/installation.md`.
+- **CI now installs from `uv.lock` (`uv sync --frozen`) instead of fresh
+  `uv pip install`,** so continuous integration runs the exact dependency
+  versions a developer gets locally rather than re-resolving independently.
+
+- **The JupyterLite site build now runs in an isolated `uvx` tool environment,
+  and the `[jupyterlite]` extra has been removed.** clm never imported
+  `jupyterlite-core` — it only shells out to `jupyter lite build` — so the build
+  now invokes `uvx --from jupyterlite-core==<pin> --with … jupyter-lite build`
+  with pinned versions of jupyterlite-core, both kernel addons, and
+  jupyter-server (pins live in `src/clm/workers/jupyterlite/builder.py`). Because
+  jupyterlite-core/`empack` (which caps `click<8.2`) can no longer enter clm's
+  dependency graph, the `[tool.uv] conflicts` Click fork added in the previous
+  release is gone too. Building the JupyterLite output format now needs only
+  [`uv`](https://docs.astral.sh/uv/) on your PATH — nothing added to clm's own
+  environment. See `docs/claude/design/dependency-environment-isolation.md`
+  (Wave 2a) and issue #516.
+
+- **`clm course decks --json`, `clm export outline --format json`, and the
+  `course_outline` MCP tool now document that their JSON *is* the
+  section → source-`.py`-deck mapping.** The capability was always present (a
+  per-topic array carrying each topic's `section` / `resolved_module` /
+  `slide_files`, or sections whose topics carry `slides: [{file, title}]`), but
+  the help text and tool descriptions only said "List the deck files" / "Output
+  as JSON" / "Generate a structured JSON outline", so agents reconstructed the
+  mapping by parsing the spec XML or grepping `slides/`. The command help,
+  docstrings, `clm info commands`, and the two MCP `course_outline` docstrings
+  now state the mapping explicitly and cross-reference each other. Docs only —
+  no behavior change.
+
+- **Unified duplicate environment-variable spellings (hard cut).** Settings that
+  had two env names now have one canonical form (old names no longer work; see
+  `clm info migration` for the full table):
+  - `CLM_DB_PATH` → `CLM_JOBS_DB_PATH` (the legacy jobs-DB auto-detect for
+    `clm status` / `monitor`).
+  - `CLM_E2E_PROGRESS_INTERVAL` / `CLM_E2E_LONG_JOB_THRESHOLD` /
+    `CLM_E2E_SHOW_WORKER_DETAILS` → `CLM_PROGRESS__UPDATE_INTERVAL` /
+    `CLM_PROGRESS__LONG_JOB_THRESHOLD` / `CLM_PROGRESS__SHOW_WORKER_DETAILS`
+    (also settable as `[progress]` in `clm.toml`). These drive **real build**
+    progress output (not just E2E tests), so they moved out of the misleading
+    `logging.testing.e2e_*` home into a top-level `[progress]` section. They now
+    flow through the config system with the defaults the build had always used
+    (5 s / 30 s / show-details), so build output is unchanged.
+
+  The worker-count cap keeps its friendly short env var — **`CLM_MAX_WORKERS`**
+  is the canonical spelling (the env form of `[worker_management] max_workers_cap`)
+  and is now documented as such. Phase 5 of the config/CLI/env unification
+  (`docs/proposals/config-cli-precedence-unification.md`).
+
+- **`[external_tools]` config-file settings now take effect.** `plantuml_jar`
+  and `drawio_executable` set in `clm.toml` / `.clm/config.toml` were previously
+  ignored — only the raw `PLANTUML_JAR` / `DRAWIO_EXECUTABLE` env vars reached
+  the converters. The host now resolves each through the config system
+  (env var > config file) and injects the effective value into **Direct**
+  workers, so a config-file path is honored (the env var still wins when both
+  are set). Docker workers continue to use the tools baked into the worker
+  image. This is Phase 2 of the config/CLI/env unification
+  (`docs/proposals/config-cli-precedence-unification.md`).
+
+- **`[jupyter]` config-file settings now take effect.** `jinja_line_statement_prefix`,
+  `jinja_templates_path`, and `log_cell_processing` set in `clm.toml` (or via
+  `JINJA_LINE_STATEMENT_PREFIX` / `JINJA_TEMPLATES_PATH` / `LOG_CELL_PROCESSING`)
+  were previously ignored — the notebook worker read only the raw env vars, and
+  the host never injected the config-folded value. The host now injects the
+  resolved settings (env > config file > default, via `ClmConfig.jupyter`) into
+  both Direct and Docker notebook workers. `log_cell_processing` is normalized to
+  the exact `True`/`False` the worker compares against (a prior `LOG_CELL_PROCESSING=true`
+  lowercase env value silently did nothing). Phase 4 of the config/CLI/env
+  unification (`docs/proposals/config-cli-precedence-unification.md`).
+
+- **`clm build` now honors the configured log level.** `[logging] log_level`
+  in `clm.toml` and the `CLM_LOGGING__LOG_LEVEL` environment variable previously
+  had no effect on a build — `--log-level` hard-defaulted to `INFO`, so the
+  config value was always overridden. `--log-level` now defaults to "unset" and
+  the effective level resolves as `--log-level` > `CLM_LOGGING__LOG_LEVEL` >
+  `[logging] log_level` > `INFO`, applied to both host and worker logging. Phase
+  3 of the config/CLI/env unification
+  (`docs/proposals/config-cli-precedence-unification.md`).
+
+- **Recordings dashboard: sections start collapsed and remember state across
+  restarts.** The lecture list now renders every section collapsed by default,
+  so it opens as a compact list of section headers instead of a long scroll.
+  A section's open/closed state is now stored in `localStorage` (was
+  `sessionStorage`), so a user's choices survive not just a page refresh but a
+  browser restart and a `clm recordings serve` restart.
+
+### Removed
+
+- **The `[ml]` optional-dependency extra was removed (Wave 2b-2).** The multi-GB
+  machine-learning / data-science stack (PyTorch, transformers, pandas,
+  scikit-learn, the LangGraph deep-agents deck, the Postgres deployment decks, …)
+  is *course-runtime* — clm never imports it, only notebook kernels do — so it no
+  longer belongs in clm's own venv. `pip install "coding-academy-lecture-manager[ml]"`
+  and `pip install -e ".[all,ml]"` now fail on the unknown extra. It ships instead
+  as the self-contained `course-runtime-requirements.txt` (which includes
+  `ipykernel`): install it into a separate course venv and point clm at it with
+  `clm provision kernel-env --python <path>` (Wave 2b-1), or run the notebook
+  worker in Docker mode (the image already bakes an equivalent stack in). See
+  `clm info migration`, `clm info commands` (`provision kernel-env`), and the
+  installation guide's "Running ML course decks in Direct mode" section. (#516)
+
+- **Removed the `USE_SQLITE_QUEUE` flag and the `workers.use_sqlite_queue`
+  config field.** A leftover from the multi-queue era — SQLite is the only job
+  queue now, so the flag had no consumer (the pool manager set it in the worker
+  environment but nothing read it). Hard cut; see `clm info migration` for the
+  full removed/renamed configuration-variable table.
+
+- **Removed the vestigial `[paths]` config section and its `CLM_PATHS__*`
+  environment variables.** `CLM_PATHS__CACHE_DB_PATH` / `CLM_PATHS__JOBS_DB_PATH`
+  / `CLM_PATHS__WORKSPACE_PATH` (and the `[paths]` block in `clm.toml` /
+  `.clm/config.toml`) never actually relocated the databases a command opened —
+  those paths come from the global `--cache-db-path` / `--jobs-db-path` /
+  `--telemetry-db-path` options (and their `CLM_*_DB_PATH` env vars). The config
+  section only surfaced in `clm config show`, misleadingly displaying hardcoded
+  defaults rather than the effective paths. `clm config show` now reports the
+  actual resolved database paths under a `[Databases]` heading. Old config files
+  with a leftover `[paths]` section keep loading (the section is ignored).
+
+### Fixed
+
+- **`clm course decks --json` help now says its output is a *flat* `topics[]`,
+  not a section grouping (#516).** The old wording ("a per-topic `topics` array
+  **keyed by `section`**") read as a `{section: [...]}` mapping, so agents wrote
+  filters against a non-existent `sections[]` shape, got `[]`, and reported a
+  silent no-output failure (exit 0, nothing printed) even though the command
+  emitted valid JSON. The `--json` help, command docstring, and `clm info
+  commands` entry now state the shape is a **flat** `topics` array whose
+  `section` is a plain string field, list the real top-level keys (`spec`,
+  `slides_dir`, `lang`, `deck_count`, `decks`, `topics`, `unresolved` — no
+  `sections` key), and point at `clm export outline --format json` for the
+  section-grouped (`sections[].topics[]`) shape. Docs only — no behavior change.
+
+- **Build-end cache cleanup now follows `--cache-db-path`.** The end-of-build
+  "prune stale executed-notebook hashes" step located the cache DB via a
+  separate, CLI-disconnected config field (`get_config().paths.cache_db_path`)
+  instead of the path the build actually opened. When `--cache-db-path` /
+  `CLM_CACHE_DB_PATH` was overridden — or a build ran from a topic
+  subdirectory — it pruned the wrong file (or created a stray `clm_cache.db`
+  in the cwd) and never pruned the real cache. It now uses the backend's own
+  cache DB path.
+- **`clm status` / `clm monitor` honor `CLM_JOBS_DB_PATH`.** They previously
+  auto-detected the jobs DB via the legacy `CLM_DB_PATH` only, so a build
+  redirected with `CLM_JOBS_DB_PATH` (e.g. onto a RAM disk) left them opening a
+  different, idle database. `CLM_JOBS_DB_PATH` now takes precedence, with
+  `CLM_DB_PATH` kept as a fallback.
+
+- **Course loading no longer re-scans `slides/` once per module-bound topic.**
+  A spec that binds topics to a module (`<topic module="…">` or a section-level
+  `module=` default) resolved each bound topic by re-walking the entire
+  `slides/` tree from scratch, so "Loading course specification…" scaled with
+  *(bound topics × total slide files)*. The full topic map is now built once and
+  cached (`Course._full_topic_map`) and reused for module-bound resolution. On a
+  real 124-topic / 54-module-bound course over ~2,150 slide files this cut
+  `Course.from_spec` from ~32 s to ~1 s.
+- **Provenance-manifest hashing now runs in parallel.** Writing
+  `.clm-manifest.json` re-reads and SHA-256-hashes every output file; the reads
+  were serial, so the step took several seconds on a large output tree. Hashing
+  is now done with a bounded thread pool (order-preserving, so the manifest is
+  still deterministic), a ~4–7× speedup per target on a multi-core machine
+  (~6 s → ~1.2 s across three targets in local testing).
+
+- **Recordings dashboard: split decks no longer show both languages at once.**
+  The lecture list enumerated every notebook in a section, so a split deck
+  (`slides_foo.de.py` + `slides_foo.en.py`) appeared as two rows regardless of
+  the selected language. The DE/EN toggle now filters split companions by their
+  `output_language_filter`, so it actually switches between languages and a
+  split deck contributes a single row.
+- **Recordings dashboard: same-named DE/EN decks are controlled independently.**
+  When a split deck's German and English titles coincided, both rows shared a
+  `deck_name` and reacted to a single Record/Arm/Stop control (recording one
+  language appeared to record the other). The row-level armed match now also
+  compares the recording language, so DE and EN versions of a deck can be
+  recorded independently.
+- **Recordings dashboard: section cards are collapsible.** Each section is now a
+  `<details>` block whose open/closed state is remembered across live updates,
+  so a long lecture list can be collapsed down instead of scrolling.
+
 ## [1.18.0] - 2026-06-30
 
 ### Added
