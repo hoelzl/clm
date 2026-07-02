@@ -2037,6 +2037,38 @@ def sync_verify_cmd(de_path: Path, en_path: Path | None, as_json: bool) -> None:
     _run_verify(de_path, en_path, as_json=as_json)
 
 
+@slides_sync_group.command("shadow")
+@click.argument(
+    "scope",
+    metavar="DECK|DIR",
+    type=click.Path(exists=True, dir_okay=True, path_type=Path),
+)
+@click.option(
+    "--baseline",
+    "baseline_ref",
+    required=True,
+    metavar="REF",
+    help="The git ref both engines diff against (the shared base state).",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit the shadow comparison as JSON.")
+def sync_shadow_cmd(scope: Path, baseline_ref: str, as_json: bool) -> None:
+    """[experimental] Run the v2 report and the v3 differ side by side (#520 Phase 2).
+
+    Read-only comparison harness for the sync v3 migration: both engines see the
+    same pair(s) at the same explicit git baseline, and the output tabulates their
+    verdicts (v2: kind × tier items; v3: member-keyed outcome/action items) so
+    disagreements can be triaged. This verb exists only for the v2→v3 transition
+    window and is removed (or folded into ``report``) at cutover.
+    """
+    from clm.slides.sync_shadow import shadow_scope
+
+    report = shadow_scope(scope, baseline_ref)
+    if as_json:
+        click.echo(json.dumps(report.to_payload(), indent=2, ensure_ascii=False))
+    else:
+        click.echo(report.render_text())
+
+
 @slides_sync_group.command("diagnose")
 @_DECK_ARG
 @_EN_ARG

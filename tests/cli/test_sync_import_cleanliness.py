@@ -92,7 +92,7 @@ def test_v3_doc_modules_import_no_v2_sync_core():
     probe = _run_probe(
         """
         import sys
-        import clm.slides.bilingual_doc, clm.slides.doc_lenses
+        import clm.slides.bilingual_doc, clm.slides.doc_lenses, clm.slides.sync_diff
 
         for mod in (
             "clm.slides.sync_plan",

@@ -1774,6 +1774,7 @@ clm slides sync task     DECK --item ID            # emit a framed model task
 clm slides sync accept   DECK --item ID --answer - # validate + write an answer
 clm slides sync baseline {show,bless,clear,prune}  # the watermark accelerator
 clm slides sync autopilot DECK [opts]              # legacy all-in-one WITH models
+clm slides sync shadow   DECK|DIR --baseline REF   # [experimental] v2-vs-v3 comparison
 ```
 
 | Verb | Writes? | Model? | Key? | What it does |
@@ -1785,6 +1786,7 @@ clm slides sync autopilot DECK [opts]              # legacy all-in-one WITH mode
 | `accept` | yes | no | no | validates a model answer and writes it to both halves |
 | `baseline` | (varies) | no | no | inspect/maintain the demoted watermark accelerator |
 | `autopilot` | yes | **yes** | **yes** | the legacy all-in-one — the **only** place the embedded models live |
+| `shadow` | no | no | no | [experimental, #520 transition window] both engines' verdicts side by side at an explicit git baseline |
 
 `DECK` is, everywhere, either half (`<deck>.de.<ext>`), the bilingual stem, or a
 **directory** (a batch sweep). Bare `clm slides sync DECK` is an alias for
@@ -2071,6 +2073,20 @@ set-symmetry, no duplicate ids — and **warns** (never fails) on an id'd cell
 dropped vs git `HEAD`. **No model, no watermark, writes nothing.** Answers *"did
 this edit break the pair?"*, not *"is it in sync?"* (`report`) or *"is the
 translation good?"*. Exit `0` = sound (warnings allowed), `2` = corrupt. CI-safe.
+
+#### `clm slides sync shadow` (experimental, transition-window only)
+
+```
+clm slides sync shadow DECK|DIR --baseline REF [--json]
+```
+
+Read-only comparison harness for the sync v3 migration (#520 Phase 2): runs the
+current (v2) report engine **and** the v3 member differ over the same pair(s) at
+the same explicit git baseline and tabulates both verdicts — v2 as kind × tier
+items, v3 as member-keyed `outcome/action` items with full excerpts. Used to
+triage engine disagreements while v3 burns in; it writes nothing, needs no model,
+and is removed (or folded into `report`) at cutover. `--json` emits a
+`{"schema": 3, "mode": "shadow", "summary", "pairs"}` payload.
 
 #### `clm slides sync diagnose`
 
