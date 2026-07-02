@@ -360,6 +360,11 @@ class DiffItem:
     side: Lang | None = None
     member: Member | None = None
     base: MemberBaseline | None = None
+    #: For positional pool slots whose two sides live on DIFFERENT parsed
+    #: members (a one-sided insert shifts the cross-side pairing): the member
+    #: carrying the slot's twin-side cell. ``None`` when ``member`` carries
+    #: both sides. The Phase-3 executor needs it to act on the right cell.
+    twin: Member | None = None
 
     def payload(self) -> dict:
         entry: dict = {
@@ -509,6 +514,7 @@ class _Differ:
         side: Lang | None = None,
         member: Member | None = None,
         base: MemberBaseline | None = None,
+        twin: Member | None = None,
     ) -> None:
         if action not in MECHANICAL_ACTIONS and action not in FRAMED_ACTIONS:
             raise ValueError(f"unregistered diff action: {action}")  # pragma: no cover
@@ -523,6 +529,7 @@ class _Differ:
                 side=side,
                 member=member,
                 base=base,
+                twin=twin if twin is not member else None,
             )
         )
 
@@ -1955,6 +1962,13 @@ class _Differ:
         """
         handle = entry.key
         member = de_member or en_member
+
+        def twin_of(main: Member | None) -> Member | None:
+            for cand in (de_member, en_member):
+                if cand is not None and cand is not main:
+                    return cand
+            return None
+
         if entry.one_sided:
             self._classify_pool_slot_base_one_sided(
                 group, entry, de_state, en_state, de_member, en_member
@@ -1977,6 +1991,7 @@ class _Differ:
                     group=group,
                     member=member,
                     base=entry,
+                    twin=twin_of(member),
                 )
             else:
                 self.in_sync += 1
@@ -2056,6 +2071,7 @@ class _Differ:
                     group=group,
                     member=member,
                     base=entry,
+                    twin=twin_of(member),
                 )
             else:
                 self.emit(
@@ -2067,6 +2083,7 @@ class _Differ:
                     group=group,
                     member=member,
                     base=entry,
+                    twin=twin_of(member),
                 )
             return
         moved: Lang = "de" if de_state == "changed" else "en"
@@ -2106,6 +2123,7 @@ class _Differ:
                 side=moved,
                 member=moved_member,
                 base=entry,
+                twin=twin_of(moved_member),
             )
             return
         self.emit(
@@ -2118,6 +2136,7 @@ class _Differ:
             side=moved,
             member=moved_member,
             base=entry,
+            twin=twin_of(moved_member),
         )
 
     def _classify_pool_slot_base_one_sided(
@@ -2234,6 +2253,13 @@ class _Differ:
         """Localized positional pools exist only for per-language headers."""
         handle = entry.key
         member = de_member or en_member
+
+        def twin_of(main: Member | None) -> Member | None:
+            for cand in (de_member, en_member):
+                if cand is not None and cand is not main:
+                    return cand
+            return None
+
         if "missing" in (de_state, en_state):
             gone: Lang = "de" if de_state == "missing" else "en"
             self.emit(
@@ -2259,6 +2285,7 @@ class _Differ:
                 group=group,
                 member=member,
                 base=entry,
+                twin=twin_of(member),
             )
             return
         moved_member = de_member if moved == ["de"] else en_member
@@ -2272,6 +2299,7 @@ class _Differ:
             side=moved[0],  # type: ignore[arg-type]
             member=moved_member,
             base=entry,
+            twin=twin_of(moved_member),
         )
 
     def _classify_pool_news(

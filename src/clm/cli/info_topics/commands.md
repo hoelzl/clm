@@ -1775,6 +1775,7 @@ clm slides sync accept   DECK --item ID --answer - # validate + write an answer
 clm slides sync baseline {show,bless,clear,prune}  # the watermark accelerator
 clm slides sync autopilot DECK [opts]              # legacy all-in-one WITH models
 clm slides sync shadow   DECK|DIR --baseline REF   # [experimental] v2-vs-v3 comparison
+clm slides sync record   DECK|DIR [opts]           # [v3 engine only] record verified state
 ```
 
 | Verb | Writes? | Model? | Key? | What it does |
@@ -1787,6 +1788,7 @@ clm slides sync shadow   DECK|DIR --baseline REF   # [experimental] v2-vs-v3 com
 | `baseline` | (varies) | no | no | inspect/maintain the demoted watermark accelerator |
 | `autopilot` | yes | **yes** | **yes** | the legacy all-in-one — the **only** place the embedded models live |
 | `shadow` | no | no | no | [experimental, #520 transition window] both engines' verdicts side by side at an explicit git baseline |
+| `record` | ledger only | no | no | [v3 engine only, `CLM_SYNC_ENGINE=v3`] bank the deck's verified state in the committed per-topic ledger |
 
 `DECK` is, everywhere, either half (`<deck>.de.<ext>`), the bilingual stem, or a
 **directory** (a batch sweep). Bare `clm slides sync DECK` is an alias for
@@ -2087,6 +2089,46 @@ items, v3 as member-keyed `outcome/action` items with full excerpts. Used to
 triage engine disagreements while v3 burns in; it writes nothing, needs no model,
 and is removed (or folded into `report`) at cutover. `--json` emits a
 `{"schema": 3, "mode": "shadow", "summary", "pairs"}` payload.
+
+#### `CLM_SYNC_ENGINE=v3` — the document-model engine (experimental, #520 Phase 3)
+
+Setting the environment variable `CLM_SYNC_ENGINE=v3` switches `report` and
+`apply` onto the sync **v3** engine and enables the v3-only `record` verb
+(v2 stays the default; the flag exists only for the transition window and the
+verbs keep their names and exit codes across the cutover). The v3 engine
+parses the whole ≤4-file bundle (both deck halves plus any separated
+voiceover companions) into **one** canonical bilingual document, diffs it
+member-by-member against the **committed per-topic ledger**
+(`<topic>/.clm/sync-ledger.json` — the only trust store; no watermark, no git
+baseline), and reports one `outcome/action` item per member, keyed by a stable
+member handle (`id:<slide-id>` / `pos:<group>/<kind>/<n>`).
+
+- `report DECK|DIR [--json]` — exit `0` clean / `1` work pending / `2` error.
+  The JSON envelope is self-describing (`"schema": 3, "engine": "v3"`) and
+  keeps the stable `is_clean` / `needs_model` / `needs_agent` booleans. A
+  member never recorded in the ledger is **`unverified`** (cold) — framed for
+  verification, never silently trusted. Framed items carry an `answers` list
+  naming the decision shapes `apply --decisions` accepts for them.
+- `apply DECK [--decisions FILE|-] [--member KEY]... [--dry-run] [--json]` —
+  **per item**: every mechanical row executes deterministically; framed items
+  execute only with a valid decision (`{"decisions": [{"key": …, "choice": …}
+  | {"key": …, "body": …}]}`), each answer validated individually (a body
+  smuggling a cell delimiter, a wrong choice, or a stale handle is rejected
+  with a reason while the valid answers still land). The mutated bundle is
+  re-parsed before anything touches disk and written atomically (≤4 files);
+  every landed item is recorded into the ledger. Exit `0` all-applied / `1`
+  residue / `2` error.
+- `record DECK|DIR [--member KEY]... [--provenance WHO] [--json]` — the
+  bless/accept confirmation paths collapsed into one verb: bank the deck's
+  current state as verified (gated on the structural verify; a corrupt pair
+  is refused untouched). A full record sweeps stale entries and performs the
+  pos→id key migration when a cell gained an id (logged). Exit `0` recorded /
+  `1` some pairs refused / `2` error.
+
+The v2-only options (`--use-watermark`, `--baseline`, `--baseline-from`,
+`--since`, `--cache-dir`, `--ledger`) are rejected under the v3 engine, and
+the v3-only apply options are rejected under v2. `verify`, `task`, `accept`,
+`baseline`, and `autopilot` are unaffected by the flag in this phase.
 
 #### `clm slides sync diagnose`
 

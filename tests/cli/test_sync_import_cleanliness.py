@@ -15,6 +15,7 @@ from __future__ import annotations
 import subprocess
 import sys
 import textwrap
+from pathlib import Path
 
 
 def _run_probe(script: str) -> subprocess.CompletedProcess[str]:
@@ -93,6 +94,7 @@ def test_v3_doc_modules_import_no_v2_sync_core():
         """
         import sys
         import clm.slides.bilingual_doc, clm.slides.doc_lenses, clm.slides.sync_diff
+        import clm.slides.doc_ledger, clm.slides.doc_apply
 
         for mod in (
             "clm.slides.sync_plan",
@@ -105,6 +107,37 @@ def test_v3_doc_modules_import_no_v2_sync_core():
     )
     assert probe.returncode == 0, probe.stderr or probe.stdout
     assert probe.stdout.strip().endswith("OK")
+
+
+def test_v3_cli_facade_imports_no_v2_sync_core():
+    # The §12.5 dispatch design: the v3 verb runners (report/apply/record)
+    # bind only the v3 core in their module-level import list. (A sys.modules
+    # probe cannot see this — importing the facade triggers the parent
+    # package's eager import of the v2 ``sync`` module, which is exactly the
+    # one file Phase 4 edits at cutover.) The one v2-adjacent component the
+    # facade uses — the structural verify gate — must stay a function-local
+    # import, so "delete the v2 modules" cannot be blocked by this facade.
+    import ast
+
+    from clm.cli.commands.slides import sync_v3
+
+    source = Path(sync_v3.__file__).read_text(encoding="utf-8")
+    forbidden = {
+        "clm.slides.sync_plan",
+        "clm.slides.sync_apply",
+        "clm.slides.sync_code",
+        "clm.slides.sync_verify",
+    }
+    for node in ast.parse(source).body:  # module level only, by design
+        if isinstance(node, ast.Import):
+            names = {alias.name for alias in node.names}
+        elif isinstance(node, ast.ImportFrom):
+            names = {node.module or ""}
+            names |= {f"{node.module}.{alias.name}" for alias in node.names if node.module}
+        else:
+            continue
+        hits = names & forbidden
+        assert not hits, f"v3 CLI facade imports {sorted(hits)} at module level"
 
 
 def test_resolving_autopilot_loads_it_but_still_not_openai():
