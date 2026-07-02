@@ -220,6 +220,10 @@ class ApplyOutcome:
     #: an I/O error) — no file and no ledger entry was touched.
     error: str | None = None
     dry_run: bool = False
+    #: The in-memory ledger was updated (landed items recorded) — the caller
+    #: must persist it. Independent of ``wrote``: a confirm-only pass changes
+    #: the ledger without touching any file.
+    ledger_changed: bool = False
 
     def count(self, status: str) -> int:
         return sum(1 for r in self.results if r.status == status)
@@ -379,7 +383,10 @@ class _Executor:
         if preamble is None:
             if not cells:
                 return None
-            preamble = ()
+            # A newly created file mirrors its twin's preamble (the jupytext
+            # header block is language-neutral) rather than starting bare.
+            twin_preamble = self.preambles.get((_other(lang), part))
+            preamble = twin_preamble if twin_preamble is not None else ()
         lines = list(preamble)
         for cell in cells:
             lines.extend(cell.lines)
@@ -432,28 +439,30 @@ class _Executor:
         target_stream.insert(insert_at, member)
         self._set_side(member, target, new_cell)
 
-    def _locate_twin(self, item: DiffItem, twin: Lang) -> tuple[Member, SideCell]:
-        """The twin-side cell a mechanical row acts on.
+    @staticmethod
+    def _holder(item: DiffItem, lang: Lang) -> Member | None:
+        """The member carrying the item's ``lang`` cell.
 
-        Id-keyed members carry both sides on one member. Positional pool
-        slots may not (a one-sided insert shifts the cross-side pairing), so
-        the twin is located by its *base* fingerprint — the mechanical
-        guarantee is exactly that the twin has not moved off base. Anything
-        not uniquely locatable fails the item (P8: never guess).
+        The :class:`DiffItem` side convention: ``member`` carries the DE
+        cell (and, when ``twin`` is ``None``, every present side); a set
+        ``twin`` carries the EN cell of a pool slot whose cross-side pairing
+        shifted. Resolving each side through this rule is what keeps the
+        executor from ever acting on a neighboring slot's cell.
         """
-        if item.twin is not None:
-            # The differ located the slot's twin-side member for us (a
-            # shifted cross-side pairing) — always the right cell.
-            cell = item.twin.side(twin)
+        if item.twin is not None and lang == "en":
+            return item.twin
+        return item.member
+
+    def _locate_twin(self, item: DiffItem, twin: Lang) -> tuple[Member, SideCell]:
+        """The twin-side cell a row acts on (holder rule, then fp search).
+
+        Anything not uniquely locatable fails the item (P8: never guess).
+        """
+        holder = self._holder(item, twin)
+        if holder is not None:
+            cell = holder.side(twin)
             if cell is not None:
-                return item.twin, cell
-        member = item.member
-        if member is not None:
-            # No shifted pairing was signalled, so the member's own twin-side
-            # cell (paired at parse time) is the slot's cell.
-            cell = member.side(twin)
-            if cell is not None:
-                return member, cell
+                return holder, cell
         base_fp = item.base.side_fp(twin) if item.base is not None else None
         if base_fp is None:
             raise _ItemError(f"cannot locate the {twin} twin of {item.key} (no base fingerprint)")
@@ -474,10 +483,11 @@ class _Executor:
 
     @staticmethod
     def _item_part(item: DiffItem) -> str:
-        member = item.member
-        if member is not None:
+        for holder in (item.member, item.twin):
+            if holder is None:
+                continue
             for lang in _SIDES:
-                cell = member.side(lang)
+                cell = holder.side(lang)
                 if cell is not None:
                     return cell.part
         if item.base is not None:
@@ -485,13 +495,13 @@ class _Executor:
         return "deck"
 
     def _moved_cell(self, item: DiffItem, side: Lang) -> tuple[Member, SideCell]:
-        member = item.member
-        if member is None:
+        holder = self._holder(item, side)
+        if holder is None:
             raise _ItemError(f"item {item.key} carries no member (executor bug)")
-        cell = member.side(side)
+        cell = holder.side(side)
         if cell is None:
             raise _ItemError(f"the {side} side of {item.key} is missing")
-        return member, cell
+        return holder, cell
 
     # -- mechanical rows -------------------------------------------------------
 
@@ -581,7 +591,8 @@ class _Executor:
         target_part = moved.part
         if twin.part == target_part:
             raise _ItemError(f"the {twin_lang} side of {item.key} already relayouted")
-        self._stream_remove(twin_lang, twin.part, member)
+        # Every raising validation runs BEFORE the first mutation: a failed
+        # item must be a strict no-op (never leave the twin half-removed).
         if target_part == "companion":
             owner = moved.for_slide or (member.owner.value if member.owner is not None else None)
             if owner is None:
@@ -590,12 +601,15 @@ class _Executor:
             new_cell = evolve(
                 twin, lines=(header, *twin.lines[1:]), part="companion", for_slide=owner
             )
-            if self.preambles.get((twin_lang, "companion")) is None:
-                mirror = self.preambles.get((moved_side, "companion"))
-                self.preambles[(twin_lang, "companion")] = mirror if mirror is not None else ()
         else:
             header = _set_for_slide(twin.header, None)
             new_cell = evolve(twin, lines=(header, *twin.lines[1:]), part="deck", for_slide=None)
+        if not any(m is member for m in self.streams.get((moved_side, target_part), [])):
+            raise _ItemError(f"the relayouted {moved_side} cell of {item.key} is unlocatable")
+        if target_part == "companion" and self.preambles.get((twin_lang, "companion")) is None:
+            mirror = self.preambles.get((moved_side, "companion"))
+            self.preambles[(twin_lang, "companion")] = mirror if mirror is not None else ()
+        self._stream_remove(twin_lang, twin.part, member)
         self._insert_mirrored(member, moved_side, twin_lang, target_part, new_cell)
 
     def propagate_preamble(self, item: DiffItem, source: Lang) -> None:
@@ -679,11 +693,15 @@ class _Executor:
                 f"pool {group}/{kind}: {len(leftovers)} target cell(s) have no source "
                 f"twin — re-run report"
             )
-        part = self._item_part(item)
-        self._permute_occupants(target, part, desired)
-
-    def _members_by_handle(self) -> dict[str, Member]:
-        return {m.key.render(): m for m in self.deck.members()}
+        # A pool's cells may span parts (the pool key carries none): permute
+        # each part's occupants within their own stream.
+        by_part: dict[str, list[Member]] = {}
+        for m in desired:
+            cell = m.side(target)
+            assert cell is not None
+            by_part.setdefault(cell.part, []).append(m)
+        for part, members in by_part.items():
+            self._permute_occupants(target, part, members)
 
     def _mirror_scope_order(self, group: str, part: str, source: Lang) -> None:
         target = _other(source)
@@ -758,6 +776,9 @@ class _Executor:
         cell = member.side(target)
         if cell is None:
             raise _ItemError(f"the {target} side of {item.key} is missing")
+        # Validate before mutating: a failed item must be a strict no-op.
+        if not any(m is member for m in self.streams.get((source, cell.part), [])):
+            raise _ItemError(f"the moved {source} cell of {item.key} is unlocatable")
         self._stream_remove(target, cell.part, member)
         self._insert_mirrored(member, source, target, cell.part, cell)
 
@@ -786,8 +807,13 @@ def _record_item(
     item: DiffItem,
     *,
     provenance: str,
-) -> None:
-    """Update the ledger for one landed item (surgical, never wholesale)."""
+) -> set[tuple[str, str]]:
+    """Update the ledger for one landed item (surgical, never wholesale).
+
+    Returns the ``(group, kind)`` pools that were re-recorded wholesale, so
+    the caller can un-bless the pool siblings that still carry unresolved
+    items (:func:`_drop_unresolved_from_pools`).
+    """
     key = item.key
     action = item.action
 
@@ -795,7 +821,7 @@ def _record_item(
         if item.base is not None:
             target.members.pop(item.base.key, None)
         _upsert(target, fresh, key, provenance)
-        return
+        return set()
     if action == "record_group_rename":
         if item.base is not None and item.base.key.startswith("id:"):
             old_group = item.base.key.split(":", 1)[1]
@@ -804,17 +830,17 @@ def _record_item(
             if new_group is not None:
                 rename_group_scopes(target, old_group, new_group)
         _upsert(target, fresh, key, provenance)
-        return
+        return set()
     if action in ("record_order", "mirror_order", "order_decision"):
         if key.startswith("id:"):
             _upsert(target, fresh, key, provenance)
-            return
+            return set()
         if "/pool." in key:
             body = key.split(":", 1)[1]
             group, tail, _ = body.rsplit("/", 2)
             kind = tail[len("pool.") :]
             rerecord_pool(target, fresh, group, kind)
-            return
+            return {(group, kind)}
         if "/order." in key:
             body = key.split(":", 1)[1]
             group, tail, _ = body.rsplit("/", 2)
@@ -823,28 +849,29 @@ def _record_item(
                 record_group_order(target, fresh)
             else:
                 record_order_scope(target, fresh, group, part)
-            return
-        return
+            return set()
+        return set()
     if action in ("record_preamble", "propagate_preamble", "conflict_preamble"):
         part = key.split(":", 1)[1].rsplit("/", 2)[1]
         record_preamble_scope(target, fresh, part)
-        return
+        return set()
     if action in ("record_remove", "mirror_remove", "remove_vs_edit", "remove_localized_side"):
         pool = _pool_scope(item)
         if pool is not None:
             rerecord_pool(target, fresh, *pool)
-        else:
-            if key not in fresh.members:
-                target.members.pop(key, None)
-            else:  # a "keep"/re-add resolution: the member persists — record it
-                _upsert(target, fresh, key, provenance)
-        return
+            return {pool}
+        if key not in fresh.members:
+            target.members.pop(key, None)
+        else:  # a "keep"/re-add resolution: the member persists — record it
+            _upsert(target, fresh, key, provenance)
+        return set()
 
     pool = _pool_scope(item)
     if pool is not None:
         rerecord_pool(target, fresh, *pool)
-        return
+        return {pool}
     _upsert(target, fresh, key, provenance)
+    return set()
 
 
 def _upsert(target: DeckLedger, fresh: DeckLedger, key: str, provenance: str) -> None:
@@ -861,19 +888,60 @@ def _upsert(target: DeckLedger, fresh: DeckLedger, key: str, provenance: str) ->
     )
 
 
-def _sweep_migrated_pos(target: DeckLedger) -> None:
-    """Drop stale ``pos:`` entries whose fingerprints match an ``id:`` entry.
+def _member_fp_pair(member: Member) -> tuple[str | None, str | None]:
+    return (
+        content_fingerprint(member.de) if member.de else None,
+        content_fingerprint(member.en) if member.en else None,
+    )
 
-    After a stamp/migration the same cell must not be trusted under two keys;
-    dropping the positional one only removes trust (fail-safe re-check).
+
+def _sweep_migrated_pos(target: DeckLedger, landed: list[tuple[DiffItem, str]]) -> None:
+    """Drop the stale ``pos:`` entry a landed stamp/migration superseded.
+
+    Targeted, never a blanket fp sweep (duplicated boilerplate content
+    legitimately shares fingerprints with id'd cells — a blanket sweep would
+    delete fresh confirmations): only the fingerprints of the *migrated base
+    entries themselves* (or the stamped member, whose fp the id attribute
+    does not change) are matched.
     """
-    id_fps = {
-        (lm.entry.de_fp, lm.entry.en_fp) for k, lm in target.members.items() if k.startswith("id:")
-    }
+    migrated_fps: set[tuple[str | None, str | None]] = set()
+    for item, _provenance in landed:
+        if item.action not in ("stamp_twin_id", "record_key_migration", "record_group_rename"):
+            continue
+        if item.base is not None:
+            migrated_fps.add((item.base.de_fp, item.base.en_fp))
+        if item.member is not None:
+            migrated_fps.add(_member_fp_pair(item.member))
+    if not migrated_fps:
+        return
     for key in [k for k in target.members if k.startswith("pos:")]:
         lm = target.members[key]
-        if (lm.entry.de_fp, lm.entry.en_fp) in id_fps:
+        if (lm.entry.de_fp, lm.entry.en_fp) in migrated_fps:
             del target.members[key]
+
+
+def _drop_unresolved_from_pools(
+    target: DeckLedger,
+    rerecorded_pools: set[tuple[str, str]],
+    unresolved: list[Member],
+) -> None:
+    """Un-bless pool entries whose members still carry unresolved items.
+
+    ``rerecord_pool`` is wholesale by necessity (ordinals renumber
+    together), but a pool sibling whose framed item was left pending /
+    rejected / failed must NOT come out of the pass trusted at its diverged
+    state — its fresh entries are dropped back to cold (fail-safe: it
+    re-checks as ``unverified`` next round, never silently in sync).
+    """
+    if not rerecorded_pools or not unresolved:
+        return
+    unresolved_fps = {_member_fp_pair(m) for m in unresolved}
+    for group, kind in rerecorded_pools:
+        prefix = f"pos:{group}/{kind}/"
+        for key in [k for k in target.members if k.startswith(prefix)]:
+            lm = target.members[key]
+            if (lm.entry.de_fp, lm.entry.en_fp) in unresolved_fps:
+                del target.members[key]
 
 
 # ---------------------------------------------------------------------------
@@ -962,10 +1030,11 @@ def _apply_body_decision(ex: _Executor, item: DiffItem, body: str) -> None:
             ex._insert_mirrored(member, surviving, gone, source_cell.part, new_cell)
             return
         for lang in _SIDES:
-            cell = member.side(lang)
-            if cell is None:
+            holder = ex._holder(item, lang)
+            cell = holder.side(lang) if holder is not None else None
+            if holder is None or cell is None:
                 raise _ItemError(f"the {lang} side of {item.key} is missing")
-            ex._set_side(member, lang, evolve(cell, lines=_replace_body(cell, body)))
+            ex._set_side(holder, lang, evolve(cell, lines=_replace_body(cell, body)))
         return
     raise _ItemError(f"'{item.action}' does not accept a body answer")
 
@@ -973,16 +1042,17 @@ def _apply_body_decision(ex: _Executor, item: DiffItem, body: str) -> None:
 def _apply_choice_decision(ex: _Executor, item: DiffItem, choice: str) -> None:
     action = item.action
     if choice == "confirm":
-        member = item.member
-        if member is None:
+        de_holder = ex._holder(item, "de")
+        en_holder = ex._holder(item, "en")
+        de_cell = de_holder.side("de") if de_holder is not None else None
+        en_cell = en_holder.side("en") if en_holder is not None else None
+        if de_cell is None and en_cell is None:
             raise _ItemError("item carries no member to confirm")
-        if member.is_one_sided:
+        if de_cell is None or en_cell is None:
             raise _ItemError(
                 "cannot confirm a one-sided member — supply the twin first (translate/edit)"
             )
-        de_attr = member.de.lang_attr is not None if member.de else False
-        en_attr = member.en.lang_attr is not None if member.en else False
-        if de_attr != en_attr:
+        if (de_cell.lang_attr is not None) != (en_cell.lang_attr is not None):
             raise _ItemError(
                 "cannot confirm a member mid-transition (the sides disagree about "
                 "lang attributes) — complete or revert the transition first"
@@ -994,26 +1064,18 @@ def _apply_choice_decision(ex: _Executor, item: DiffItem, choice: str) -> None:
             ex.propagate(item_with_side(item, side), side)
             return
         if action == "unify_choose_body":
-            member = item.member
-            if member is None:
-                raise _ItemError("item carries no member")
-            chosen = member.side(side)
-            twin = member.side(_other(side))
-            if chosen is None or twin is None:
-                raise _ItemError(f"both sides of {item.key} are needed to unify")
-            ex._set_side(member, _other(side), evolve(twin, lines=_replace_body(twin, chosen.body)))
+            _, chosen = ex._moved_cell(item, side)
+            twin_holder, twin = ex._locate_twin(item, _other(side))
+            ex._set_side(
+                twin_holder, _other(side), evolve(twin, lines=_replace_body(twin, chosen.body))
+            )
             return
         if action == "conflict_owner":
-            member = item.member
-            if member is None:
-                raise _ItemError("item carries no member")
-            chosen = member.side(side)
-            twin = member.side(_other(side))
-            if chosen is None or twin is None:
-                raise _ItemError(f"both sides of {item.key} are needed")
+            _, chosen = ex._moved_cell(item, side)
+            twin_holder, twin = ex._locate_twin(item, _other(side))
             header = _set_for_slide(twin.header, chosen.for_slide)
             ex._set_side(
-                member,
+                twin_holder,
                 _other(side),
                 evolve(twin, lines=(header, *twin.lines[1:]), for_slide=chosen.for_slide),
             )
@@ -1026,29 +1088,29 @@ def _apply_choice_decision(ex: _Executor, item: DiffItem, choice: str) -> None:
             return
         raise _ItemError(f"'{action}' does not accept a side choice")
     if choice == "remove":
-        # A deliberate removal: delete every remaining side of the member.
-        # No base-fingerprint check here — the agent explicitly chose to
-        # discard the (possibly edited) survivor.
-        member = item.member
-        if member is None:
-            raise _ItemError("item carries no member")
-        removed = False
-        for lang in _SIDES:
-            cell = member.side(lang)
-            if cell is not None:
-                ex._stream_remove(lang, cell.part, member)
-                ex._set_side(member, lang, None)
-                removed = True
-        if not removed:
-            raise _ItemError(f"{item.key} has no remaining cells to remove")
+        # A deliberate removal: delete the SURVIVING side of the slot. Only
+        # ``item.side`` (the already-gone side) tells which cell is the
+        # slot's — under a shifted pool pairing the member's other-side cell
+        # belongs to a neighboring slot and must never be touched.
+        if item.side is None:
+            raise _ItemError(
+                f"{item.key} names no removed side — reconcile manually (edit + record)"
+            )
+        survivor = _other(item.side)
+        holder = ex._holder(item, survivor)
+        cell = holder.side(survivor) if holder is not None else None
+        if holder is None or cell is None:
+            raise _ItemError(f"{item.key} has no remaining cell to remove")
+        ex._stream_remove(survivor, cell.part, holder)
+        ex._set_side(holder, survivor, None)
         return
     if choice == "keep":
         # remove_vs_edit: keep the edited survivor and re-add it on the twin.
-        member = item.member
-        if member is None:
-            raise _ItemError("item carries no member")
-        present = "de" if member.de is not None else "en"
-        ex.copy_new(item, present)  # type: ignore[arg-type]
+        if item.side is None:
+            raise _ItemError(
+                f"{item.key} names no removed side — reconcile manually (edit + record)"
+            )
+        ex.copy_new(item, _other(item.side))
         return
     raise _ItemError(f"unsupported choice {choice!r}")
 
@@ -1135,9 +1197,11 @@ def apply_deck(
 
     ordered = sorted(enumerate(diff.items), key=lambda e: (_PHASES.get(e[1].action, 9), e[0]))
     landed: list[tuple[DiffItem, str]] = []  # (item, provenance)
+    unresolved_items: list[DiffItem] = []  # pending / rejected / failed
     seen_decisions: set[str] = set()
     for _, item in ordered:
         if only_members is not None and item.key not in only_members:
+            unresolved_items.append(item)  # a skipped pool sibling must not be blessed
             outcome.results.append(
                 ItemResult(item.key, item.action, "skipped", "excluded by --member")
             )
@@ -1174,6 +1238,7 @@ def apply_deck(
                 )
             else:
                 assert item.action in FRAMED_ACTIONS
+                unresolved_items.append(item)
                 outcome.results.append(
                     ItemResult(
                         item.key,
@@ -1184,6 +1249,7 @@ def apply_deck(
                 )
         except _ItemError as exc:
             status = "rejected" if decision is not None else "failed"
+            unresolved_items.append(item)
             outcome.results.append(ItemResult(item.key, item.action, status, str(exc)))
     for key in decisions:
         if key not in seen_decisions:
@@ -1246,6 +1312,8 @@ def apply_deck(
         from clm.infrastructure.utils.path_utils import atomic_write_all
 
         try:
+            for path, _text in writes:
+                path.parent.mkdir(parents=True, exist_ok=True)
             atomic_write_all(writes)
         except OSError as exc:
             outcome.error = f"write failed: {exc}"
@@ -1257,9 +1325,20 @@ def apply_deck(
     fresh = snapshot_deck(final_deck, provenance="apply", commit=commit)
     target = ledger.decks.setdefault(deck_key, DeckLedger())
     priority = {"record_group_rename": 0, "record_key_migration": 1}
+    rerecorded_pools: set[tuple[str, str]] = set()
     for item, provenance in sorted(landed, key=lambda e: priority.get(e[0].action, 2)):
-        _record_item(target, fresh, item, provenance=provenance)
-    _sweep_migrated_pos(target)
+        rerecorded_pools |= _record_item(target, fresh, item, provenance=provenance)
+    # Never bless the unresolved: a wholesale pool re-record must not trust
+    # siblings whose framed items were left pending/rejected/failed.
+    unresolved_members = [
+        holder
+        for item in unresolved_items
+        for holder in (item.member, item.twin)
+        if holder is not None
+    ]
+    _drop_unresolved_from_pools(target, rerecorded_pools, unresolved_members)
+    _sweep_migrated_pos(target, landed)
+    outcome.ledger_changed = True
     return outcome
 
 

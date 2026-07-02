@@ -107,7 +107,7 @@ class _Deck:
             only_members=only_members,
             dry_run=dry_run,
         )
-        if outcome.error is None and not dry_run:
+        if outcome.error is None and not dry_run and outcome.ledger_changed:
             doc_ledger.save(ledger, ledger_path)
         return outcome
 
@@ -519,3 +519,127 @@ class TestWritePathOracle:
         again = deck.apply()
         assert again.results == []
         assert not again.wrote
+
+
+class TestReviewRegressions:
+    """Pins for the Phase-3 adversarial review findings (never regress)."""
+
+    def test_pool_rerecord_never_blesses_a_pending_sibling(self, tmp_path: Path):
+        # One pool: cell x edited on DE only (mechanical), cell y edited
+        # differently on BOTH sides (framed conflict). Applying the
+        # mechanical item re-records the pool wholesale — but the pending
+        # conflict's slot must come out COLD, never trusted at its diverged
+        # state (which would silently drop the required reconciliation).
+        deck = _deck(tmp_path)
+        deck.edit_de("x = 1", "x = 42")
+        deck.edit_de("y = 2", "y = 111")
+        deck.edit_en("y = 2", "y = 222")
+        outcome = deck.apply()
+        statuses = _statuses(outcome)
+        assert statuses["pos:s0/code/0"] == "applied"
+        assert statuses["pos:s0/code/1"] == "pending"
+        _, diff = deck.diff()
+        assert not diff.is_clean, "the pending conflict was silently blessed"
+        assert any(i.outcome in ("conflict", "unverified") for i in diff.items)
+
+    def test_member_filter_does_not_bless_the_skipped_sibling(self, tmp_path: Path):
+        deck = _deck(tmp_path)
+        deck.edit_de("x = 1", "x = 42")
+        deck.edit_de("y = 2", "y = 99")
+        deck.apply(only_members={"pos:s0/code/0"})
+        _, diff = deck.diff()
+        assert not diff.is_clean, "the skipped edit was silently blessed"
+
+    def test_confirm_only_apply_marks_the_ledger_changed(self, tmp_path: Path):
+        deck = _deck(tmp_path)
+        deck.write_de(*DE_PARTS, _localized("s0-new", "de", "Neu"))
+        deck.write_en(*EN_PARTS, _localized("s0-new", "en", "New"))
+        outcome = deck.apply(_decision("id:s0-new", choice="confirm"))
+        assert outcome.all_applied
+        assert not outcome.wrote
+        assert outcome.ledger_changed  # the CLI save gate keys on this
+        deck.assert_converged()
+
+    def test_duplicate_content_confirm_survives_the_migration_sweep(self, tmp_path: Path):
+        # A pos-keyed cell byte-identical (modulo slide_id) to an id'd cell:
+        # its recorded trust must survive an unrelated apply — the migration
+        # sweep is targeted, never a blanket fingerprint sweep.
+        idd_dup = '# %% [markdown] tags=["keep"] slide_id="s0-dup"\n# same text\n\n'
+        pos_dup = '# %% [markdown] tags=["keep"]\n# same text\n\n'
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("s0", "de", "Titel"), idd_dup, pos_dup, _shared_code("x")),
+            _build(HEADER_EN, _slide("s0", "en", "Title"), idd_dup, pos_dup, _shared_code("x")),
+        )
+        deck.record()
+        deck.edit_de("x = 1", "x = 42")  # unrelated mechanical edit
+        assert deck.apply().all_applied
+        ledger = doc_ledger.load(doc_ledger.ledger_path_for(deck.de_path))
+        pos_keys = [k for k in ledger.decks["slides_t"].members if k.startswith("pos:s0/markdown")]
+        assert pos_keys, "the duplicate-content pos entry was swept by an unrelated apply"
+        deck.assert_converged()
+
+    # The verifier's repro shape: two per-language header cells BEFORE the
+    # title macro form the ~header localized pool; deleting the DE half of
+    # slot A while editing the EN half of slot B makes the parse pair slot
+    # B's DE cell with slot A's EN cell (shifted cross-side pairing).
+    HA_DE = "# j2 from 'macros.j2' import a_mac\n# {{ a_mac(\"A de\") }}\n\n"
+    HA_EN = "# j2 from 'macros.j2' import a_mac\n# {{ a_mac(\"A en\") }}\n\n"
+    HB_DE = "# j2 from 'macros.j2' import b_mac\n# {{ b_mac(\"B de\") }}\n\n"
+    HB_EN = "# j2 from 'macros.j2' import b_mac\n# {{ b_mac(\"B en\") }}\n\n"
+
+    def _shifted_deck(self, tmp_path: Path) -> _Deck:
+        deck = _Deck(
+            tmp_path,
+            _build(
+                self.HA_DE, self.HB_DE, HEADER_DE, _slide("s0", "de", "Titel"), _shared_code("x")
+            ),
+            _build(
+                self.HA_EN, self.HB_EN, HEADER_EN, _slide("s0", "en", "Title"), _shared_code("x")
+            ),
+        )
+        deck.record()
+        de_text = deck.de_path.read_text(encoding="utf-8")
+        deck.de_path.write_text(de_text.replace(self.HA_DE, ""), encoding="utf-8")
+        deck.edit_en('b_mac("B en")', 'b_mac("B en!")')
+        return deck
+
+    def test_shifted_pairing_carries_the_member_twin_convention(self, tmp_path: Path):
+        deck = self._shifted_deck(tmp_path)
+        _, diff = deck.diff()
+        edits = [i for i in diff.items if i.action == "translate_edit"]
+        assert len(edits) == 1, [(i.action, i.key) for i in diff.items]
+        item = edits[0]
+        # The pairing shifted: member carries the slot's DE cell, twin its
+        # EN cell — the executor's holder rule depends on exactly this.
+        assert item.twin is not None
+        assert item.member is not None and item.member.de is not None
+        assert "b_mac" in item.member.de.header
+        assert item.twin.en is not None and 'b_mac("B en!")' in item.twin.en.header
+        # ...and the report excerpts render each side from its carrier.
+        payload = item.payload()
+        assert 'b_mac("B de")' in payload["de"]
+        assert 'b_mac("B en!")' in payload["en"]
+        # A j2 header line is itself a cell boundary, so a body answer is
+        # structurally rejected — never a wrong-cell write, byte-unchanged.
+        before = deck.de_path.read_text(encoding="utf-8")
+        outcome = deck.apply(_decision(item.key, body='# {{ b_mac("B de!") }}'))
+        result = next(r for r in outcome.results if r.key == item.key)
+        assert result.status == "rejected"
+        assert deck.de_path.read_text(encoding="utf-8") == before
+
+    def test_shifted_pairing_remove_decision_touches_only_the_survivor(self, tmp_path: Path):
+        deck = self._shifted_deck(tmp_path)
+        _, diff = deck.diff()
+        removals = [i for i in diff.items if i.action == "remove_localized_side"]
+        assert removals, [(i.action, i.key) for i in diff.items]
+        decisions = {i.key: doc_apply.Decision(key=i.key, choice="remove") for i in removals}
+        outcome = deck.apply(decisions)
+        assert all(r.status == "applied" for r in outcome.results if r.key in decisions), (
+            outcome.to_payload()
+        )
+        en = deck.en_path.read_text(encoding="utf-8")
+        de = deck.de_path.read_text(encoding="utf-8")
+        assert "a_mac" not in en  # the surviving EN half of slot A was removed
+        assert 'b_mac("B de")' in de  # slot B's DE cell was NEVER touched
+        assert 'b_mac("B en!")' in en  # slot B's edited EN cell survived

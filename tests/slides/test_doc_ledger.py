@@ -137,6 +137,37 @@ class TestTrustSemantics:
         diff = diff_deck(_parse(DE0, EN0), base)
         assert [(i.key, i.action) for i in diff.items] == [(key, "verify_cold")]
 
+    def test_partial_record_of_a_pos_key_rerecords_its_whole_pool(self):
+        # Positional ordinals renumber together: a per-entry patch would mix
+        # ordinal generations (aliased keys), so a pos --member re-records
+        # the (group, kind) pool wholesale.
+        ledger = _recorded_ledger()
+        de = _build(
+            HEADER_DE,
+            _slide("s0", "de", "Titel"),
+            _shared_code("z", 9),  # new cell shifts the pool ordinals
+            _shared_code("x"),
+            _localized("s0-m", "de", "DE Text"),
+        )
+        en = _build(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            _shared_code("z", 9),
+            _shared_code("x"),
+            _localized("s0-m", "en", "EN text"),
+        )
+        recorded, _ = doc_ledger.record_deck_snapshot(
+            ledger,
+            "slides_x",
+            _parse(de, en),
+            provenance="record",
+            member_keys={"pos:s0/code/1"},
+        )
+        assert recorded == 2  # the whole pool, not one aliased ordinal
+        base = doc_ledger.baseline_from_ledger(ledger.decks["slides_x"])
+        diff = diff_deck(_parse(de, en), base)
+        assert not any(i.key.startswith("pos:s0/code") for i in diff.items)
+
     def test_partial_record_upserts_only_the_named_members(self):
         ledger = _recorded_ledger()
         de = DE0.replace("DE Text", "DE Text NEU")

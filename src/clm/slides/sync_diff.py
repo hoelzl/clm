@@ -260,6 +260,17 @@ class DeckBaseline:
     complete: bool = True
 
 
+def _pair_twin(de_member: Member | None, en_member: Member | None) -> Member | None:
+    """The EN-carrier of a pool slot when it differs from the DE-carrier.
+
+    ``DiffItem.twin`` side convention: ``member`` = the DE-carrying member
+    (`de_member or en_member`), ``twin`` = the distinct EN-carrying member.
+    """
+    if de_member is not None and en_member is not None and en_member is not de_member:
+        return en_member
+    return None
+
+
 def _member_group_token(member: Member, owner_group: str) -> str:
     if member.key.scheme == "pos":
         # rsplit: a group token may itself contain "/" (ids are free-form)
@@ -361,9 +372,11 @@ class DiffItem:
     member: Member | None = None
     base: MemberBaseline | None = None
     #: For positional pool slots whose two sides live on DIFFERENT parsed
-    #: members (a one-sided insert shifts the cross-side pairing): the member
-    #: carrying the slot's twin-side cell. ``None`` when ``member`` carries
-    #: both sides. The Phase-3 executor needs it to act on the right cell.
+    #: members (a one-sided insert shifts the cross-side pairing). Fixed
+    #: side convention: when ``twin`` is set, ``member`` carries the slot's
+    #: **DE** cell and ``twin`` its **EN** cell; when ``None``, ``member``
+    #: carries every present side. The Phase-3 executor resolves each side
+    #: through this convention so it always acts on the right cell.
     twin: Member | None = None
 
     def payload(self) -> dict:
@@ -378,11 +391,11 @@ class DiffItem:
             entry["group"] = self.group
         if self.side is not None:
             entry["side"] = self.side
-        if self.member is not None:
-            for lang in _SIDES:
-                cell = self.member.side(lang)
-                if cell is not None:
-                    entry[lang] = "\n".join(cell.lines)
+        for lang in _SIDES:
+            holder = self.twin if (self.twin is not None and lang == "en") else self.member
+            cell = holder.side(lang) if holder is not None else None
+            if cell is not None:
+                entry[lang] = "\n".join(cell.lines)
         return entry
 
 
@@ -1257,6 +1270,7 @@ class _Differ:
                 "both",
                 f"the recorded {recorded} side vanished while the {pending} twin appeared — decide",
                 group=group,
+                side=recorded,
                 member=member,
                 base=entry,
             )
@@ -1361,6 +1375,7 @@ class _Differ:
                 "both",
                 f"removed on the {gone} side but edited on the {present} side",
                 group=group,
+                side=gone,
                 member=member,
                 base=entry,
             )
@@ -1962,12 +1977,9 @@ class _Differ:
         """
         handle = entry.key
         member = de_member or en_member
-
-        def twin_of(main: Member | None) -> Member | None:
-            for cand in (de_member, en_member):
-                if cand is not None and cand is not main:
-                    return cand
-            return None
+        # The DiffItem side convention: `member` carries the slot's DE cell,
+        # `twin` its EN cell when the two live on different parsed members.
+        pair_twin = _pair_twin(de_member, en_member)
 
         if entry.one_sided:
             self._classify_pool_slot_base_one_sided(
@@ -1991,7 +2003,7 @@ class _Differ:
                     group=group,
                     member=member,
                     base=entry,
-                    twin=twin_of(member),
+                    twin=pair_twin,
                 )
             else:
                 self.in_sync += 1
@@ -2052,6 +2064,7 @@ class _Differ:
                     "both",
                     f"removed on the {gone} side but edited on the twin",
                     group=group,
+                    side=gone,
                     member=member,
                     base=entry,
                 )
@@ -2071,7 +2084,7 @@ class _Differ:
                     group=group,
                     member=member,
                     base=entry,
-                    twin=twin_of(member),
+                    twin=pair_twin,
                 )
             else:
                 self.emit(
@@ -2083,11 +2096,10 @@ class _Differ:
                     group=group,
                     member=member,
                     base=entry,
-                    twin=twin_of(member),
+                    twin=pair_twin,
                 )
             return
         moved: Lang = "de" if de_state == "changed" else "en"
-        moved_member = de_member if moved == "de" else en_member
         moved_cell = de_cell if moved == "de" else en_cell
         twin_cell = en_cell if moved == "de" else de_cell
         if moved_cell is None:  # pragma: no cover - changed implies present
@@ -2121,9 +2133,9 @@ class _Differ:
                 f"({list(twin_cell.tags)} → {list(moved_cell.tags)})",
                 group=group,
                 side=moved,
-                member=moved_member,
+                member=member,
                 base=entry,
-                twin=twin_of(moved_member),
+                twin=pair_twin,
             )
             return
         self.emit(
@@ -2134,9 +2146,9 @@ class _Differ:
             f"shared positional member edited on the {moved} side — verbatim copy",
             group=group,
             side=moved,
-            member=moved_member,
+            member=member,
             base=entry,
-            twin=twin_of(moved_member),
+            twin=pair_twin,
         )
 
     def _classify_pool_slot_base_one_sided(
@@ -2160,7 +2172,8 @@ class _Differ:
         pending: Lang = "en" if recorded == "de" else "de"
         rec_state, rec_member = (de_state, de_member) if recorded == "de" else (en_state, en_member)
         pen_state, pen_member = (en_state, en_member) if recorded == "de" else (de_state, de_member)
-        member = rec_member or pen_member
+        member = de_member or en_member  # the DiffItem convention: DE carrier first
+        pair_twin = _pair_twin(de_member, en_member)
         if rec_state == "missing":
             if pen_state == "absent":
                 self.emit(
@@ -2181,8 +2194,10 @@ class _Differ:
                     f"the recorded {recorded} side vanished while the {pending} "
                     f"twin landed — decide",
                     group=group,
+                    side=recorded,
                     member=member,
                     base=entry,
+                    twin=pair_twin,
                 )
             return
         if pen_state == "ambiguous":
@@ -2227,6 +2242,7 @@ class _Differ:
                 group=group,
                 member=member,
                 base=entry,
+                twin=pair_twin,
             )
             return
         self.emit(
@@ -2239,6 +2255,7 @@ class _Differ:
             group=group,
             member=member,
             base=entry,
+            twin=pair_twin,
         )
 
     def _classify_pool_slot_localized(
@@ -2253,13 +2270,7 @@ class _Differ:
         """Localized positional pools exist only for per-language headers."""
         handle = entry.key
         member = de_member or en_member
-
-        def twin_of(main: Member | None) -> Member | None:
-            for cand in (de_member, en_member):
-                if cand is not None and cand is not main:
-                    return cand
-            return None
-
+        pair_twin = _pair_twin(de_member, en_member)
         if "missing" in (de_state, en_state):
             gone: Lang = "de" if de_state == "missing" else "en"
             self.emit(
@@ -2285,10 +2296,9 @@ class _Differ:
                 group=group,
                 member=member,
                 base=entry,
-                twin=twin_of(member),
+                twin=pair_twin,
             )
             return
-        moved_member = de_member if moved == ["de"] else en_member
         self.emit(
             handle,
             "edit",
@@ -2297,9 +2307,9 @@ class _Differ:
             f"the {moved[0]} header variant was edited — adapt the twin",
             group=group,
             side=moved[0],  # type: ignore[arg-type]
-            member=moved_member,
+            member=member,
             base=entry,
-            twin=twin_of(moved_member),
+            twin=pair_twin,
         )
 
     def _classify_pool_news(

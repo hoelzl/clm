@@ -391,7 +391,9 @@ def record_deck_snapshot(
     pseudo-scopes go through the ``record_*_scope`` helpers); everything
     else — including possibly-stale twin entries — is left in place, which is
     fail-safe (a stale entry mismatches and re-checks, never silently
-    trusts).
+    trusts). A ``pos:`` key re-records its whole ``(group, kind)`` pool —
+    positional ordinals renumber together, so a per-entry patch would leave
+    aliased ordinals (see the scope-update rules below).
     """
     fresh = snapshot_deck(deck, provenance=provenance, commit=commit)
     old = ledger.decks.get(deck_key)
@@ -402,6 +404,10 @@ def record_deck_snapshot(
     target = old if old is not None else DeckLedger()
     recorded = 0
     for key in sorted(member_keys):
+        if key.startswith("pos:"):
+            group, kind, _ordinal = key.split(":", 1)[1].rsplit("/", 2)
+            recorded += rerecord_pool(target, fresh, group, kind)
+            continue
         lm = fresh.members.get(key)
         if lm is None:
             continue

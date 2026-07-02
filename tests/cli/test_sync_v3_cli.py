@@ -180,3 +180,60 @@ class TestV3Loop:
         payload = _json_payload(result.output)
         assert payload["engine"] == "v3"
         assert len(payload["pairs"]) == 1
+
+    def test_confirm_only_apply_persists_the_ledger(self, cli_runner: CliRunner, tmp_path: Path):
+        # Review regression: a confirm-only apply mutates no file, but its
+        # ledger updates must still be saved — silently discarding them made
+        # every confirmation a no-op.
+        de, _en = _write_pair(tmp_path)
+        cold = cli_runner.invoke(slides_sync_group, ["report", str(de), "--json"], env=V3)
+        decisions = json.dumps(
+            {
+                "decisions": [
+                    {"key": item["key"], "choice": "confirm"}
+                    for item in _json_payload(cold.output)["items"]
+                ]
+            }
+        )
+        result = cli_runner.invoke(
+            slides_sync_group,
+            ["apply", str(de), "--decisions", "-", "--json"],
+            input=decisions,
+            env=V3,
+        )
+        assert result.exit_code == 0, result.output
+        payload = _json_payload(result.output)
+        assert payload["ledger_recorded"] is True
+        assert (tmp_path / ".clm" / "sync-ledger.json").is_file()
+        again = cli_runner.invoke(slides_sync_group, ["report", str(de), "--json"], env=V3)
+        assert again.exit_code == 0, again.output
+
+    def test_apply_never_records_a_structurally_corrupt_pair(
+        self, cli_runner: CliRunner, tmp_path: Path
+    ):
+        # Review regression: the lens tolerates (observes) an id-asymmetry
+        # the structural gate refuses — apply may write its mechanical items,
+        # but the ledger must not bless members of a corrupt pair.
+        de, en = _write_pair(tmp_path)
+        assert cli_runner.invoke(slides_sync_group, ["record", str(de)], env=V3).exit_code == 0
+        en.write_text(
+            en.read_text(encoding="utf-8").replace('slide_id="s0-m"', 'slide_id="s0-x"'),
+            "utf-8",
+        )
+        de.write_text(de.read_text(encoding="utf-8").replace("x = 1", "x = 42"), "utf-8")
+        ledger_before = (tmp_path / ".clm" / "sync-ledger.json").read_text(encoding="utf-8")
+        result = cli_runner.invoke(slides_sync_group, ["apply", str(de), "--json"], env=V3)
+        assert result.exit_code != 0, result.output
+        payload = _json_payload(result.output)
+        assert payload["ledger_recorded"] is False
+        assert payload["verify_violations"]
+        assert (tmp_path / ".clm" / "sync-ledger.json").read_text(encoding="utf-8") == ledger_before
+
+    def test_directory_sweep_warns_on_solo_halves(self, cli_runner: CliRunner, tmp_path: Path):
+        _write_pair(tmp_path)
+        (tmp_path / "slides_solo.de.py").write_text(DE, encoding="utf-8")
+        result = cli_runner.invoke(slides_sync_group, ["report", str(tmp_path), "--json"], env=V3)
+        payload = _json_payload(result.output)
+        assert any("slides_solo" in s for s in payload["skipped_solos"])
+        stderr = getattr(result, "stderr", "") or result.output
+        assert "no twin half found" in stderr

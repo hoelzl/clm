@@ -44,12 +44,24 @@ def _echo_json(payload: dict) -> None:
     click.echo(json.dumps(payload, indent=2, ensure_ascii=False))
 
 
-def _scope_pairs(de_path: Path, en_path: Path | None) -> list[tuple[Path, Path | None]]:
-    """DECK|DIR scope → the bundles to visit (each as load_bundle inputs)."""
+def _scope_pairs(
+    de_path: Path, en_path: Path | None
+) -> tuple[list[tuple[Path, Path | None]], list[Path]]:
+    """DECK|DIR scope → the bundles to visit plus any unpaired solo halves.
+
+    A solo half (its twin deleted or misnamed) is total divergence — it must
+    never vanish silently from a sweep (the v2 engines warn per solo, and so
+    do the v3 runners).
+    """
     if de_path.is_dir():
-        pairs, _solos = iter_split_pairs(find_split_slide_files_recursive(de_path))
-        return [(de, en) for de, en in pairs]
-    return [(de_path, en_path)]
+        pairs, solos = iter_split_pairs(find_split_slide_files_recursive(de_path))
+        return [(de, en) for de, en in pairs], list(solos)
+    return [(de_path, en_path)], []
+
+
+def _warn_solos(solos: list[Path]) -> None:
+    for solo in solos:
+        click.echo(f"warning: skipping {solo.name} — no twin half found", err=True)
 
 
 def _load(de_path: Path, en_path: Path | None) -> LoadedBundle:
@@ -112,7 +124,9 @@ def run_report_v3(de_path: Path, en_path: Path | None, *, as_json: bool) -> int:
     """The v3 read verb. Exit 0 clean / 1 work pending / 2 error."""
     results: list[tuple[LoadedBundle, DeckDiff]] = []
     errors: list[str] = []
-    for de, en in _scope_pairs(de_path, en_path):
+    pairs, solos = _scope_pairs(de_path, en_path)
+    _warn_solos(solos)
+    for de, en in pairs:
         try:
             bundle = _load(de, en)
         except DocLensError as exc:
@@ -133,6 +147,7 @@ def run_report_v3(de_path: Path, en_path: Path | None, *, as_json: bool) -> int:
                     "needs_model": any(d.needs_model for _, d in results),
                     "needs_agent": any(d.needs_agent for _, d in results) or bool(errors),
                     "errors": errors,
+                    "skipped_solos": [str(p) for p in solos],
                     "pairs": payloads,
                 }
             )
@@ -170,11 +185,14 @@ def run_apply_v3(
 
     decisions: dict[str, doc_apply.Decision] = {}
     if decisions_spec is not None:
-        text = (
-            sys.stdin.read()
-            if decisions_spec == "-"
-            else Path(decisions_spec).read_text(encoding="utf-8")
-        )
+        try:
+            text = (
+                sys.stdin.read()
+                if decisions_spec == "-"
+                else Path(decisions_spec).read_text(encoding="utf-8")
+            )
+        except OSError as exc:
+            raise click.UsageError(f"cannot read the decision document: {exc}") from exc
         decisions, decision_errors = doc_apply.load_decisions_text(text)
         if decision_errors:
             for error in decision_errors:
@@ -204,11 +222,30 @@ def run_apply_v3(
         dry_run=dry_run,
         commit=_head_commit(bundle.de_path),
     )
-    if outcome.error is None and not dry_run and (outcome.wrote or outcome.count("recorded")):
-        doc_ledger.save(ledger, ledger_path)
+    verify_violations: list[str] = []
+    if outcome.error is None and not dry_run and outcome.ledger_changed:
+        # The structural write-gate on the TRUST store (design §5): landed
+        # file mutations stay (review them with git), but a pair that fails
+        # the structural verify is never recorded as verified — same gate
+        # `record` applies. Lazy import: sync_verify still loads v2 modules.
+        from clm.slides.sync_verify import structural_gate
+
+        verify_violations = [
+            v.message
+            for v in structural_gate(
+                bundle.de_path.read_text(encoding="utf-8"),
+                bundle.en_path.read_text(encoding="utf-8"),
+                bundle.comment_token,
+            )
+        ]
+        if not verify_violations:
+            doc_ledger.save(ledger, ledger_path)
 
     if as_json:
-        _echo_json(outcome.to_payload())
+        payload = outcome.to_payload()
+        payload["ledger_recorded"] = outcome.ledger_changed and not verify_violations
+        payload["verify_violations"] = verify_violations
+        _echo_json(payload)
     else:
         for result in outcome.results:
             click.echo(f"  {result.status:8s} {result.action} {result.key}  {result.reason}")
@@ -219,9 +256,17 @@ def run_apply_v3(
             click.echo(f"wrote {names}" + (" (dry run)" if dry_run else ""))
         elif dry_run:
             click.echo("dry run — nothing written")
+        for violation in verify_violations:
+            click.echo(f"verify: {violation}", err=True)
+        if verify_violations:
+            click.echo(
+                "structural verify failed — applied changes were written but NOT "
+                "recorded into the ledger; fix the pair, then `sync record`",
+                err=True,
+            )
     if outcome.error is not None:
         return 2
-    return 0 if outcome.all_applied else 1
+    return 0 if outcome.all_applied and not verify_violations else 1
 
 
 def _head_commit(path: Path) -> str | None:
@@ -257,7 +302,9 @@ def run_record_v3(
     rows: list[dict] = []
     refused = 0
     errors = 0
-    for de, en in _scope_pairs(de_path, en_path):
+    pairs, solos = _scope_pairs(de_path, en_path)
+    _warn_solos(solos)
+    for de, en in pairs:
         row = _record_one(de, en, members=members, provenance=provenance)
         rows.append(row)
         if row.get("error"):
@@ -317,9 +364,10 @@ def _record_one(
 
     ledger_path = doc_ledger.ledger_path_for(bundle.de_path)
     ledger = doc_ledger.load(ledger_path)
+    deck_key = doc_ledger.deck_key_for(bundle.de_path)
     recorded, migrations = doc_ledger.record_deck_snapshot(
         ledger,
-        doc_ledger.deck_key_for(bundle.de_path),
+        deck_key,
         bundle.outcome.deck,
         provenance=provenance,
         commit=_head_commit(bundle.de_path),
@@ -328,6 +376,17 @@ def _record_one(
     doc_ledger.save(ledger, ledger_path)
     row["recorded"] = recorded
     row["ledger"] = str(ledger_path)
+    if members:
+        deck_ledger = ledger.decks.get(deck_key)
+        known = deck_ledger.members.keys() if deck_ledger is not None else set()
+        unknown = sorted(k for k in members if k not in known)
+        if unknown:
+            row["unknown_members"] = unknown
+            click.echo(
+                f"warning: {bundle.de_path.name}: no such member(s) in the current "
+                f"deck: {', '.join(unknown)}",
+                err=True,
+            )
     if migrations:
         # The §7.3 key migration is an explicit, logged rename.
         row["key_migrations"] = dict(sorted(migrations.items()))
