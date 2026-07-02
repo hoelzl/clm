@@ -1,10 +1,11 @@
 """End-to-end integration test for the JupyterLite builder.
 
-Runs the real ``jupyter lite build`` CLI on a synthetic 2-notebook tree
-and asserts the site's ``index.html`` is produced. Skipped when
-``jupyterlite-core`` is not importable (i.e., the ``[jupyterlite]``
-extra is not installed) so the fast-suite dev box doesn't need to pull
-the extra.
+Runs the real ``jupyter lite build`` CLI on a synthetic 1-notebook tree
+and asserts the site's ``index.html`` is produced. The build shells out
+to an isolated ``uvx`` tool env (Wave 2a) — clm no longer installs
+jupyterlite-core — so this test is skipped when ``uvx`` is not on PATH.
+The first run provisions the tool env (a few seconds); subsequent runs
+reuse the cached uv tool env.
 
 Marked ``integration`` — excluded from the default fast suite and
 Docker suite; runs via ``pytest -m integration``.
@@ -12,20 +13,20 @@ Docker suite; runs via ``pytest -m integration``.
 
 from __future__ import annotations
 
-import importlib.util
 import json
+import shutil
 from pathlib import Path
 
 import pytest
 
 pytestmark = pytest.mark.integration
 
-HAS_JUPYTERLITE = importlib.util.find_spec("jupyterlite_core") is not None
+HAS_UVX = shutil.which("uvx") is not None
 
 
 @pytest.mark.skipif(
-    not HAS_JUPYTERLITE,
-    reason="jupyterlite-core not installed (pip install -e '.[jupyterlite]')",
+    not HAS_UVX,
+    reason="uvx not on PATH (JupyterLite builds run in an isolated uvx tool env)",
 )
 def test_jupyter_lite_build_produces_index_html(tmp_path: Path) -> None:
     from clm.workers.jupyterlite.builder import BuildArgs, build_site

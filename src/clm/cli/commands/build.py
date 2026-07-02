@@ -971,8 +971,8 @@ def enable_jupyterlite_workers_if_needed(course, worker_config) -> None:
     the operator already set a higher count via CLI/config) so the build's
     lifecycle manager spins up one jupyterlite worker alongside the
     notebook/plantuml/drawio workers. This keeps the opt-in contract tight:
-    installing the ``[jupyterlite]`` extra has no effect until a course
-    actually uses the format.
+    the jupyterlite worker (which shells out to an isolated ``uvx`` tool env)
+    never starts until a course actually uses the format.
     """
     wants_jl = any(t.includes_format("jupyterlite") for t in course.output_targets)
     if not wants_jl:

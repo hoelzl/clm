@@ -10,15 +10,18 @@ exactly as they do today.
 
 ## Installation
 
-Install CLM with the JupyterLite extra:
+There is **nothing to install into CLM's environment** for JupyterLite. CLM
+never imports `jupyterlite-core`; it shells out to `jupyter lite build`, which
+runs in an **isolated `uvx` tool environment** that CLM provisions on demand
+with pinned versions of `jupyterlite-core`, the Pyodide and xeus-python kernel
+addons, and `jupyter-server`.
 
-```bash
-pip install "coding-academy-lecture-manager[jupyterlite]"
-```
-
-This is also included in the `[all]` extra. The extra brings in
-`jupyterlite-core`, the Pyodide and xeus-python kernel addons, and
-`jupyter-server`.
+The only requirement is that [`uv`](https://docs.astral.sh/uv/) is installed and
+`uvx` is on your PATH (uv ships `uvx`). The first build provisions the tool env
+(a few seconds); later builds reuse uv's cached tool environment. Keeping the
+JupyterLite toolchain out of CLM's own environment avoids a dependency
+collision (`empack`, pulled in by `jupyterlite-xeus`, caps `click<8.2` while
+CLM's CLI needs `click>=8.2`).
 
 ## Quick Start
 
@@ -242,7 +245,9 @@ For most courses, `xeus-python` with pre-staged wheels is recommended.
 
 ## Troubleshooting
 
-**"jupyterlite-core is not installed"**: Run `pip install -e ".[jupyterlite]"`.
+**"uv is not installed (or `uvx` is not on PATH)"**: The site build runs in an
+isolated `uvx` tool env. Install [`uv`](https://docs.astral.sh/uv/) and make
+sure `uvx` is on your PATH, then retry.
 
 **Build fails with kernel addon errors**: CLM automatically disables the
 inactive kernel addon during builds. If you see errors from

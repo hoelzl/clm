@@ -1,8 +1,9 @@
 """``clm jupyterlite`` command group.
 
 Provides ``clm jupyterlite preview <target>`` for locally serving
-a previously built JupyterLite site. Requires the ``[jupyterlite]``
-extra only for the actual build — preview itself is pure stdlib.
+a previously built JupyterLite site. Preview itself is pure stdlib; the
+actual build shells out to an isolated ``uvx`` tool env (needs ``uv`` on
+PATH), not any clm extra.
 """
 
 from __future__ import annotations

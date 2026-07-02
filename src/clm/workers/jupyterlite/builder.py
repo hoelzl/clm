@@ -12,7 +12,6 @@ import json
 import logging
 import shutil
 import subprocess
-import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +19,44 @@ from pathlib import Path
 from clm.workers.jupyterlite.lite_dir import assemble_lite_dir, hash_manifest
 
 logger = logging.getLogger(__name__)
+
+# Pinned versions for the isolated JupyterLite tool environment.
+#
+# The site build no longer runs in clm's own venv: clm shells out to an
+# isolated ``uvx`` (``uv tool run``) environment so that jupyterlite-core's
+# transitive constraints — notably ``empack``'s ``click<8.2`` cap — can never
+# enter clm's dependency graph (issue #516 / Wave 2a). Because that tool env is
+# created on demand from these pins, they ARE the version truth: they define
+# both what ``uvx`` installs and the ``jupyterlite_core_version`` that feeds the
+# build cache key, so a bump here correctly invalidates previously-cached sites.
+JUPYTERLITE_CORE_VERSION = "0.7.6"
+_JUPYTERLITE_PYODIDE_KERNEL_VERSION = "0.7.2"
+_JUPYTERLITE_XEUS_VERSION = "4.5.2"
+_JUPYTER_SERVER_SPEC = "jupyter-server>=2.12"
+
+
+def _jupyter_lite_tool_command() -> list[str]:
+    """Return the ``uvx`` prefix that runs ``jupyter-lite`` from a tool env.
+
+    Both kernel addons are ``--with``-installed so the tool env always has
+    them present; ``_run_jupyter_lite_build`` then disables whichever kernel
+    the course did not pick via ``--disable-addons``. ``jupyter-server`` is
+    required by jupyterlite-core's ``contents`` addon (it is not declared as a
+    dependency by jupyterlite-core itself).
+    """
+    uvx = shutil.which("uvx") or "uvx"
+    return [
+        uvx,
+        "--from",
+        f"jupyterlite-core=={JUPYTERLITE_CORE_VERSION}",
+        "--with",
+        f"jupyterlite-pyodide-kernel=={_JUPYTERLITE_PYODIDE_KERNEL_VERSION}",
+        "--with",
+        f"jupyterlite-xeus=={_JUPYTERLITE_XEUS_VERSION}",
+        "--with",
+        _JUPYTER_SERVER_SPEC,
+        "jupyter-lite",
+    ]
 
 
 @dataclass
@@ -51,26 +88,24 @@ class BuildResult:
 
 
 def _run_jupyter_lite_build(lite_dir: Path, site_dir: Path, kernel: str) -> None:
-    """Invoke ``jupyter lite build`` as a subprocess.
+    """Invoke ``jupyter lite build`` in an isolated ``uvx`` tool environment.
 
-    We call the CLI directly (instead of importing ``jupyterlite_core``)
-    because the CLI is the supported entry point and it shells out
-    further to its own tasks — keeping this boundary explicit also makes
-    the build reproducible from a developer's terminal by copy-pasting
-    the command we log.
+    clm never installs or imports ``jupyterlite-core``; it shells out to the
+    CLI from a dedicated, pinned ``uvx`` (``uv tool run``) environment (see
+    ``_jupyter_lite_tool_command``). Running the build out-of-process this way
+    keeps jupyterlite-core's transitive constraints (``empack`` caps
+    ``click<8.2``) entirely out of clm's dependency graph. The exact command we
+    run is logged so it can be reproduced from a developer's terminal.
 
-    The ``--disable-addons`` flag is load-bearing: ``jupyterlite-xeus``
-    and ``jupyterlite-pyodide-kernel`` are both installed by the
-    ``[jupyterlite]`` extra, but each one's ``post_build`` hook assumes
-    its kernel is the active one. Leaving both enabled causes the
-    non-active addon to raise (xeus demands an environment file;
-    pyodide-kernel demands a wheelhouse). We turn off whichever kernel
-    the course did not pick.
+    The ``--disable-addons`` flag is load-bearing: ``jupyterlite-xeus`` and
+    ``jupyterlite-pyodide-kernel`` are both installed into the tool env (both
+    ``--with``), but each one's ``post_build`` hook assumes its kernel is the
+    active one. Leaving both enabled causes the non-active addon to raise (xeus
+    demands an environment file; pyodide-kernel demands a wheelhouse). We turn
+    off whichever kernel the course did not pick.
     """
     cmd = [
-        sys.executable,
-        "-m",
-        "jupyterlite_core",
+        *_jupyter_lite_tool_command(),
         "build",
         "--lite-dir",
         str(lite_dir),
@@ -86,8 +121,9 @@ def _run_jupyter_lite_build(lite_dir: Path, site_dir: Path, kernel: str) -> None
         subprocess.run(cmd, check=True, capture_output=True, text=True)
     except FileNotFoundError as e:
         raise RuntimeError(
-            "jupyterlite-core is not installed. Install with "
-            "`pip install -e '.[jupyterlite]'` and retry."
+            "uv is not installed (or `uvx` is not on PATH). The JupyterLite "
+            "site build runs in an isolated `uvx` tool environment; install uv "
+            "(https://docs.astral.sh/uv/) and retry."
         ) from e
     except subprocess.CalledProcessError as e:
         stderr = e.stderr or ""
@@ -358,6 +394,7 @@ def build_result_to_summary(result: BuildResult) -> str:
 
 
 __all__ = [
+    "JUPYTERLITE_CORE_VERSION",
     "BuildArgs",
     "BuildResult",
     "build_site",
