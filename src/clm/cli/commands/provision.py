@@ -28,8 +28,10 @@ def provision_group() -> None:
     "python_exe",
     required=True,
     type=click.Path(path_type=Path),
-    help="Path to the Python interpreter (course venv) that should host the "
-    "Direct-mode notebook kernel. Must have 'ipykernel' installed.",
+    help="The course venv that should host the Direct-mode notebook kernel: "
+    "either the venv directory (clm picks the platform interpreter inside it) "
+    "or a specific Python interpreter. Relative paths resolve against the "
+    "project root. Must have 'ipykernel' installed.",
 )
 @click.option(
     "--no-validate",
@@ -42,22 +44,25 @@ def kernel_env(python_exe: Path, no_validate: bool) -> None:
 
     Writes a ``python3`` kernelspec pointing at the given interpreter and prints
     the ways to activate it. clm then runs the notebook kernel in that
-    environment (course-runtime packages like ``[ml]`` live there, not in clm's
-    own venv) while clm keeps driving nbconvert.
+    environment (the course-runtime ML/data-science stack lives there, not in
+    clm's own venv) while clm keeps driving nbconvert.
 
     This registers an interpreter you already have; it does not create the venv.
     """
     from clm.infrastructure.workers.kernel_env import (
         KERNEL_PYTHON_ENV_VAR,
         provision_course_kernel,
+        resolve_kernel_interpreter,
     )
 
+    # Accept a venv directory or a relative path, same as <kernel-python> /
+    # clm.toml: normalise to an absolute interpreter before provisioning.
+    resolved = Path(resolve_kernel_interpreter(str(python_exe)))
+
     try:
-        root = provision_course_kernel(python_exe, validate=not no_validate)
+        root = provision_course_kernel(resolved, validate=not no_validate)
     except RuntimeError as e:
         raise click.ClickException(str(e)) from e
-
-    resolved = python_exe.expanduser()
     click.echo(f"Registered course kernel for: {resolved}")
     click.echo(f"Kernelspec root: {root}")
     click.echo("")

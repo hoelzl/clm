@@ -380,6 +380,27 @@ clm provision kernel-env --python /opt/course-venvs/ml/bin/python
 `clm.toml` `[jupyter] kernel_python`), and `clm info spec-files` for
 `<kernel-python>`.
 
+### Course repo with one bundled venv (global clm)
+
+A course repo often keeps **one** venv (its own `.venv`) that holds both clm and
+the course-runtime stack, and builds with a **globally installed** `clm`. Without
+configuration, a global `clm` would run the kernel in *its* venv (no ML stack)
+and the build would fail. Point clm at the course's own venv — the value can be
+the **venv directory**, and a **relative** path is resolved against the project
+root and to the right per-platform interpreter, so one committed setting works on
+Windows and POSIX:
+
+```toml
+# clm.toml (or .clm/config.toml) at the course repo root
+[jupyter]
+kernel_python = ".venv"    # → .venv/Scripts/python.exe (Windows) or .venv/bin/python (POSIX)
+```
+
+or per course, in the spec: `<kernel-python>.venv</kernel-python>`. `clm build`
+provisions the kernelspec from that automatically — no separate
+`clm provision kernel-env` step needed. (The course's `.venv` must include
+`ipykernel`; installing `course-runtime-requirements.txt` covers it.)
+
 > **Prefer Docker for heavy ML decks.** The Docker notebook image already bakes
 > in an equivalent course-runtime stack and is fully isolated, so Docker mode
 > needs none of the above. The course-venv route is for running ML decks in

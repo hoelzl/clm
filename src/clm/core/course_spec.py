@@ -1498,13 +1498,14 @@ class CourseSpec:
     # *write* location of new files (e.g. a first-recorded cassette during a
     # build); reads always auto-detect both layouts. From ``<sidecar-layout>``.
     sidecar_layout: str | None = None
-    # Course-level interpreter for the Python notebook kernel in Direct mode
-    # (Wave 2b, issue #516 follow-up). Empty = clm's own environment. Set to a
-    # course venv path so course-runtime packages ([ml] etc.) run in a separate
-    # environment from clm. Overridden by the CLM_NOTEBOOK_KERNEL_PYTHON env
-    # var; overrides the project-level clm.toml [jupyter].kernel_python. Path is
-    # used verbatim (absolute or resolved by the shell/user); relative paths are
-    # taken as-is. From ``<kernel-python>``.
+    # Course-level venv for the Python notebook kernel in Direct mode (Wave 2b,
+    # issue #516 follow-up). Empty = clm's own environment. Set to a course venv
+    # so the course-runtime ML/data-science stack runs in a separate environment
+    # from clm. May be the venv *directory* (clm picks the platform interpreter
+    # inside it) or a specific interpreter; a relative value is anchored to the
+    # project root (see kernel_env.resolve_kernel_interpreter). Overridden by the
+    # CLM_NOTEBOOK_KERNEL_PYTHON env var; overrides the project-level clm.toml
+    # [jupyter].kernel_python. From ``<kernel-python>``.
     kernel_python: str = ""
     author: str = "Dr. Matthias Hölzl"
     organization: Text = field(

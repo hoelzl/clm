@@ -331,23 +331,35 @@ Defaults to `Coding-Akademie München` (de) / `Coding-Academy Munich` (en).
 
 ### `<kernel-python>` (Optional, CLM {version}+)
 
-Course-level interpreter that runs the **Python notebook kernel in Direct
-execution mode**. Point it at a course venv so the course-runtime ML/data-science
-stack (torch/pandas/…) runs in a separate environment from clm's own, while
-clm keeps driving the build. Empty/absent (the default) runs the kernel in
-clm's environment, exactly as before.
+Course-level venv that runs the **Python notebook kernel in Direct execution
+mode**. Point it at a course venv so the course-runtime ML/data-science stack
+(torch/pandas/…) runs in a separate environment from clm's own, while clm keeps
+driving the build. Empty/absent (the default) runs the kernel in clm's
+environment, exactly as before.
+
+The value may be the **venv directory** — clm picks the platform interpreter
+inside it (`Scripts/python.exe` on Windows, `bin/python` on POSIX) — or a
+specific interpreter. A **relative** value is resolved against the **project
+root** (the directory holding `pyproject.toml` / `clm.toml` / `.git`), not the
+current directory, so a single committed value works on every platform and no
+matter where `clm build` is invoked. This is what makes the element portable:
 
 ```xml
-<kernel-python>/opt/course-venvs/ml/bin/python</kernel-python>
+<!-- Portable: this repo's own .venv, resolved cross-platform (recommended). -->
+<kernel-python>.venv</kernel-python>
+
+<!-- Or an explicit interpreter / an out-of-tree venv directory: -->
+<kernel-python>/opt/course-venvs/ml</kernel-python>
 ```
 
-The interpreter must have `ipykernel` installed. Populate the course venv from
-the self-contained `course-runtime-requirements.txt` shipped in the clm repo
-(`python -m pip install -r course-runtime-requirements.txt`; it includes
-`ipykernel`), then register it once with `clm provision kernel-env --python
-<path>` (writes the kernelspec clm points the build at). This is the key lever
-for keeping a **plain-Python** course on a light venv while an ML-heavy course
-uses a fat one — no global reconfiguration.
+The venv must have `ipykernel` installed. Populate it from the self-contained
+`course-runtime-requirements.txt` shipped in the clm repo (`python -m pip install
+-r course-runtime-requirements.txt`; it includes `ipykernel`). You can optionally
+pre-register/validate it with `clm provision kernel-env --python <venv-or-path>`,
+but `clm build` provisions the kernelspec automatically from this element. This
+is the key lever for keeping a **plain-Python** course on a light venv while an
+ML-heavy course uses a fat one — and it lets a **globally installed clm** build a
+course whose runtime stack lives in the course's own venv.
 
 Precedence (highest first): the `CLM_NOTEBOOK_KERNEL_PYTHON` environment
 variable, then this `<kernel-python>`, then `clm.toml` `[jupyter] kernel_python`;
