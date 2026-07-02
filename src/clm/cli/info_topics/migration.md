@@ -2,6 +2,39 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## The `[ml]` extra was removed — install the course-runtime stack in a course venv ({version})
+
+**Breaking.** The `[ml]` optional-dependency extra (PyTorch, FastAI,
+transformers, pandas, scikit-learn, the LangGraph deep-agents deck, the Postgres
+deployment decks, …) no longer exists. `pip install "coding-academy-lecture-manager[ml]"`
+and `pip install -e ".[all,ml]"` will now fail on the unknown `ml` extra.
+
+**Why.** That stack is *course-runtime*: clm never imports any of it — only the
+notebook *kernels* do. It has no place in clm's own venv, where it added
+multiple GB to every install. It is now a **separate course venv** that the
+Direct-mode notebook kernel runs in (Wave 2b of the dependency-isolation work;
+the mechanism landed in {version}'s `clm provision kernel-env` / `<kernel-python>`).
+
+**Migration.** The stack ships as a self-contained `course-runtime-requirements.txt`
+at the clm repo root (it already includes `ipykernel`):
+
+```bash
+# Before (installed the ML stack into clm's own venv):
+#   pip install -e ".[all,ml]"
+
+# After — put it in a dedicated course venv, then point clm at it:
+uv venv /opt/course-venvs/ml          # or: python -m venv /opt/course-venvs/ml
+/opt/course-venvs/ml/bin/python -m pip install -r course-runtime-requirements.txt
+clm provision kernel-env --python /opt/course-venvs/ml/bin/python
+```
+
+clm's own venv keeps driving nbconvert; the course venv only runs the kernel
+subprocess. Alternatively, run the notebook worker in **Docker mode** — the
+notebook image already bakes an equivalent stack in and needs none of this. See
+`clm info commands` (`provision kernel-env`), `clm info spec-files`
+(`<kernel-python>`), and the installation guide's "Running ML course decks in
+Direct mode" section.
+
 ## Removed / renamed configuration variables ({version})
 
 The database paths are configured **only** through the global CLI options and
@@ -1760,7 +1793,7 @@ CMD ["python", "-m", "clm.workers.notebook"]
 | `[plantuml]` | PlantUML diagram conversion |
 | `[drawio]` | Draw.io diagram conversion |
 | `[all-workers]` | All workers |
-| `[ml]` | ML packages (PyTorch, FastAI, etc.) |
+| ~~`[ml]`~~ | **Removed in {version}** — the course-runtime ML stack moved to a course venv (`course-runtime-requirements.txt` + `clm provision kernel-env`); see the {version} migration note above. |
 | `[summarize]` | LLM-powered summaries and polish (openai) |
 | `[voiceover]` | Video-to-speaker-notes pipeline |
 | `[recordings]` | Video recording management and audio processing |

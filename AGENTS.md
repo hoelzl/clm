@@ -45,15 +45,18 @@ pip install -e .                  # core only
 pip install -e ".[all]"           # everything clm needs for dev (or: uv sync)
 ```
 
-`[all]` deliberately **excludes** `[ml]` (course-runtime PyTorch/pandas stack,
-not imported by clm; add it with `pip install -e ".[all,ml]"`). JupyterLite is
-**not a clm extra** — clm only shells out to `jupyter lite build`, which now
-runs in an isolated `uvx` tool env (pinned in
-`src/clm/workers/jupyterlite/builder.py`), so it needs no install step beyond
-having `uv` on PATH. For the full list of optional extras (`[notebook]`,
-`[plantuml]`, `[drawio]`, `[all-workers]`, `[recordings]`, `[summarize]`,
-`[voiceover]`, `[slides]`, `[gcal]`, `[mcp]`, `[ml]`, `[dev]`, `[tui]`, `[web]`)
-see `docs/user-guide/installation.md`.
+The course-runtime ML/data-science stack (PyTorch/pandas/transformers/…) is
+**not a clm extra** — the old `[ml]` extra was removed (Wave 2b-2). clm never
+imports it; it belongs in a separate *course venv* the Direct-mode notebook
+kernel runs in. It ships as `course-runtime-requirements.txt` (repo root):
+install it into a course venv, then `clm provision kernel-env --python <path>`
+(or use Docker mode). JupyterLite is likewise **not a clm extra** — clm only
+shells out to `jupyter lite build`, which runs in an isolated `uvx` tool env
+(pinned in `src/clm/workers/jupyterlite/builder.py`), so it needs no install
+step beyond having `uv` on PATH. For the full list of optional extras
+(`[notebook]`, `[plantuml]`, `[drawio]`, `[all-workers]`, `[recordings]`,
+`[summarize]`, `[voiceover]`, `[slides]`, `[gcal]`, `[mcp]`, `[dev]`, `[tui]`,
+`[web]`) see `docs/user-guide/installation.md`.
 
 ## Testing
 
