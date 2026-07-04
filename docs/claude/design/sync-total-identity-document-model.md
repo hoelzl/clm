@@ -516,6 +516,10 @@ step. The old engine remains the default until Phase 4's evidence gate.
   migration}.md` (Info Topics Maintenance Rule), the `deck-sync` /
   `reconcile-deck-edits` skills, and PythonCourses guidance; changelog
   fragment; breaking-release notes (milestone-#158 style).
+  **DONE 2026-07-04**: the v3 verbs are unconditional (`CLM_SYNC_ENGINE`
+  removed), the v2 core + watermark store + judge stack deleted, `--since`
+  re-implemented as the bundle-at-ref forensic view, split/translate/Studio/
+  MCP ported to the ledger engine, v1 ledger sections dropped on save.
 - **Phase 5 — Optional.** MCP `sync_apply_decisions`; stable deck id; ledger
   analytics (staleness dashboards).
 

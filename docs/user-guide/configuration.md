@@ -282,15 +282,15 @@ and `CLM_LLM__API_KEY` (or `OPENAI_API_KEY`) to authenticate.
 
 ### Slide Sync (`clm slides sync`)
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `CLM_SYNC_PROVIDER` | Default backend for the edit-reconciliation judge: `openrouter` (Claude Sonnet via OpenRouter) or `local` (the offline Ollama daemon). The `--provider` flag overrides it. | `openrouter` |
-| `CLM_SYNC__SHARED_DIVERGENCE` | How to handle a **language-neutral** code cell edited *differently* on both decks (a divergence the single-entity model would otherwise have to guess). `auto-heal` propagates the winning side (keyed direction, else newer file) and emits a **warning**; `error` surfaces it and writes nothing, so you resolve it by hand. | `auto-heal` |
-
-The OpenRouter backends (the judge, the brand-new-slide translator, and the
-opt-in `--llm-recover` alignment recoverer) authenticate with
-`OPENROUTER_API_KEY` (or `OPENAI_API_KEY`), which `clm slides sync` also picks up
-from a project `.env` automatically (pass `--no-env-file` to skip).
+`clm slides sync` needs no configuration and never calls a model: every verb
+diffs against the committed per-topic ledger
+(`<topic>/.clm/sync-ledger.json`). The pre-cutover variables
+(`CLM_SYNC_ENGINE`, `CLM_SYNC_PROVIDER`, `CLM_SYNC__SHARED_DIVERGENCE`) are
+ignored since the v2 engine was removed (#520 Phase 4) — a shared divergence
+is now always a framed `pending_divergence` / `conflict_shared` report item,
+never auto-healed. `clm slides translate` (the whole-deck bootstrap)
+authenticates with `OPENROUTER_API_KEY` (or `OPENAI_API_KEY`), picked up from
+a project `.env` automatically (pass `--no-env-file` to skip).
 
 ### Performance
 

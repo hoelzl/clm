@@ -1,9 +1,9 @@
 """CLI tests for ``clm slides translate`` (alias ``bootstrap``) — Issue #232, Phase 4.
 
 The command wraps the bootstrap engine. These tests drive the Click surface with
-the translator factory and judge patched to static fakes, so they exercise flag
-parsing, the bootstrap-vs-sync dispatch, file writes and exit codes without a
-live LLM or an API key.
+the translator factory patched to a static fake, so they exercise flag parsing,
+the bootstrap-vs-report dispatch (twin present → read-only v3 sync diff), file
+writes and exit codes without a live LLM or an API key.
 """
 
 from __future__ import annotations
@@ -79,10 +79,9 @@ def _patch_translator(monkeypatch, translator) -> None:
 def _capture_translator_args(monkeypatch, translator) -> dict:
     """Patch ``_make_translator`` to record the resolved guidance it is handed.
 
-    The command calls ``_make_translator(model, cache, prog_lang, guidance,
-    guidance_by_lang)`` positionally, so the fake captures both the single-string
-    ``guidance`` (bootstrap path) and the per-language ``guidance_by_lang``
-    (delegated-sync path) and returns a working static ``translator``.
+    The command calls ``_make_translator(model, cache, prog_lang, guidance)``
+    positionally, so the fake captures the single-string ``guidance`` (the
+    bootstrap path is one-way) and returns a working static ``translator``.
     """
     captured: dict = {}
 
@@ -155,6 +154,9 @@ class TestBootstrap:
         assert payload["target"].endswith("slides_x.en.py")
         assert payload["cells_translated"] == 1
         assert payload["source_lang"] == "de" and payload["target_lang"] == "en"
+        # The bootstrap records the pair in the committed sync ledger.
+        assert payload["ledger_recorded"] is True
+        assert (tmp_path / ".clm" / "sync-ledger.json").is_file()
 
     def test_to_override_reverse_direction(self, cli_runner, tmp_path, monkeypatch):
         de, en = _split(_DECK)
@@ -205,39 +207,78 @@ class TestDryRun:
 
 
 # ---------------------------------------------------------------------------
-# Present-twin → sync delegation
+# Present twin → read-only v3 sync report (#520)
 # ---------------------------------------------------------------------------
 
 
-class TestSyncDelegation:
-    def test_second_run_delegates_to_sync(self, cli_runner, tmp_path, monkeypatch):
-        from clm.infrastructure.llm.ollama_client import StaticSyncJudge, SyncProposal
-
+class TestTwinPresentReport:
+    def test_second_run_reports_clean_and_writes_nothing(self, cli_runner, tmp_path, monkeypatch):
         de, en = _split(_DECK)
         de_path = _write(tmp_path / "slides_x.de.py", de)
         _patch_key(monkeypatch)
         _patch_translator(monkeypatch, _mirror_translator(de, en))
-        # _resolve_judge now lives in sync_autopilot (epic #440); translate imports it
-        # lazily, so patch it at its home (the lazy `from ... import` reads it at call time).
-        from clm.cli.commands.slides import sync_autopilot
-
-        monkeypatch.setattr(
-            sync_autopilot,
-            "_resolve_judge",
-            lambda *_a, **_k: StaticSyncJudge(
-                default_proposal=SyncProposal(verdict="in_sync", proposed_text="")
-            ),
-        )
 
         first = cli_runner.invoke(slides_translate_cmd, [str(de_path), *_common(tmp_path)])
         assert first.exit_code == 0, first.output
         twin = tmp_path / "slides_x.en.py"
         before = twin.read_text(encoding="utf-8")
 
+        # The read-only report needs no API key at all.
+        _patch_key(monkeypatch, present=False)
         second = cli_runner.invoke(slides_translate_cmd, [str(de_path), *_common(tmp_path)])
         assert second.exit_code == 0, second.output
-        assert "incremental sync" in second.output
+        assert "in sync" in second.output
         assert twin.read_text(encoding="utf-8") == before  # not doubled
+
+    def test_drifted_pair_exits_1_and_writes_nothing(self, cli_runner, tmp_path, monkeypatch):
+        de, en = _split(_DECK)
+        de_path = _write(tmp_path / "slides_x.de.py", de)
+        _patch_key(monkeypatch)
+        _patch_translator(monkeypatch, _mirror_translator(de, en))
+        first = cli_runner.invoke(slides_translate_cmd, [str(de_path), *_common(tmp_path)])
+        assert first.exit_code == 0, first.output
+
+        # Drift the DE half after the ledger-recorded bootstrap.
+        de_after = de_path.read_text(encoding="utf-8")
+        de_path.write_text(
+            de_after.replace("# - DE Bullet", "# - DE Bullet geändert"), encoding="utf-8"
+        )
+        de_drifted = de_path.read_text(encoding="utf-8")
+        twin = tmp_path / "slides_x.en.py"
+        en_before = twin.read_text(encoding="utf-8")
+
+        result = cli_runner.invoke(slides_translate_cmd, [str(de_path), *_common(tmp_path)])
+        assert result.exit_code == 1
+        assert "pending sync item(s)" in result.output
+        # Read-only: neither half was rewritten.
+        assert de_path.read_text(encoding="utf-8") == de_drifted
+        assert twin.read_text(encoding="utf-8") == en_before
+
+    def test_twin_present_json_reports_sync_state(self, cli_runner, tmp_path, monkeypatch):
+        de, en = _split(_DECK)
+        de_path = _write(tmp_path / "slides_x.de.py", de)
+        _patch_key(monkeypatch)
+        _patch_translator(monkeypatch, _mirror_translator(de, en))
+        assert (
+            cli_runner.invoke(slides_translate_cmd, [str(de_path), *_common(tmp_path)]).exit_code
+            == 0
+        )
+        de_path.write_text(
+            de_path.read_text(encoding="utf-8").replace("# - DE Bullet", "# - Anders"),
+            encoding="utf-8",
+        )
+
+        result = cli_runner.invoke(
+            slides_translate_cmd, [str(de_path), "--json", *_common(tmp_path)]
+        )
+        assert result.exit_code == 1
+        payload = json.loads(result.output)
+        assert payload["action"] == "synced"
+        assert payload["ledger_recorded"] is False  # the report path records nothing
+        assert payload["exit_code"] == 1
+        assert payload["sync"]["is_clean"] is False
+        assert payload["sync"]["items"] >= 1
+        assert payload["sync"]["error"] is None
 
     def test_force_overwrites_existing_twin(self, cli_runner, tmp_path, monkeypatch):
         de, en = _split(_DECK)
@@ -339,38 +380,22 @@ class TestGlossary:
         assert captured["guidance"] == ""
         assert "Using glossary" not in (result.stderr or "")
 
-    def test_delegated_sync_resolves_per_language_map(self, cli_runner, tmp_path, monkeypatch):
-        # When the twin already exists, translate degrades to the bidirectional sync
-        # engine — so it must resolve a PER-LANGUAGE map (not the single target
-        # glossary), or a reverse-direction add would get the wrong-language conventions.
-        from clm.infrastructure.llm.ollama_client import StaticSyncJudge, SyncProposal
-
+    def test_twin_present_report_builds_no_translator(self, cli_runner, tmp_path, monkeypatch):
+        # The twin-present path is a read-only v3 diff: no translator (and no
+        # glossary resolution) may be constructed at all.
         de, en = _split(_DECK)
         de_path = _write(tmp_path / "slides_x.de.py", de)
-        _write(tmp_path / "slides_x.en.py", en)  # twin present → delegated sync
-        _patch_key(monkeypatch)
+        _write(tmp_path / "slides_x.en.py", en)  # twin present → read-only report
+        _patch_key(monkeypatch, present=False)
         captured = _capture_translator_args(monkeypatch, _mirror_translator(de, en))
-        # _resolve_judge now lives in sync_autopilot (epic #440); translate imports it
-        # lazily, so patch it at its home (the lazy `from ... import` reads it at call time).
-        from clm.cli.commands.slides import sync_autopilot
-
-        monkeypatch.setattr(
-            sync_autopilot,
-            "_resolve_judge",
-            lambda *_a, **_k: StaticSyncJudge(
-                default_proposal=SyncProposal(verdict="in_sync", proposed_text="")
-            ),
-        )
-        (tmp_path / "clm-glossary.de.md").write_text("DE conventions", encoding="utf-8")
         (tmp_path / "clm-glossary.en.md").write_text("EN conventions", encoding="utf-8")
 
         result = cli_runner.invoke(slides_translate_cmd, [str(de_path), *_common(tmp_path)])
 
-        assert result.exit_code == 0, result.output
-        assert "incremental sync" in result.output  # delegated, not bootstrapped
-        # Per-language map (both directions), and the single guidance is NOT used.
-        assert captured["guidance"] == ""
-        assert captured["guidance_by_lang"] == {"de": "DE conventions", "en": "EN conventions"}
+        # Exit 1: the pair has no ledger entry, so its members report cold.
+        assert result.exit_code == 1, result.output
+        assert "pending sync item(s)" in result.output
+        assert captured == {}  # _make_translator was never called
 
 
 # ---------------------------------------------------------------------------

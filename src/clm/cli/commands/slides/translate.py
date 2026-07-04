@@ -10,44 +10,40 @@ Code is mostly **not** translated: a cell with no ``lang`` attribute is shared
 and copied byte-for-byte into both halves; only ``lang``-tagged cells are
 translated (code cells through the identifier-preserving code prompt). The
 voiceover companion is translated in lockstep. Freshly-bootstrapped pairs are
-minted with EN-authority shared ``slide_id``\\ s and the sync watermark is
-recorded, so the next ``clm slides translate`` (or ``clm slides sync``) is a
-clean incremental no-op rather than a re-translation.
+minted with EN-authority shared ``slide_id``\\ s and recorded in the committed
+sync ledger, so the next ``clm slides translate`` (or ``clm slides sync``) is
+a clean no-op rather than a re-translation.
 
 Dispatch (design decision D2): when the twin is **absent** the deck is
-bootstrapped; when it is **present** the command degrades to incremental
-``sync`` (``build_sync_plan`` + ``apply_plan``), so re-running converges and
-never doubles the deck.
+bootstrapped; when it is **present** the command runs the read-only v3 sync
+diff (#520) and reports it — reconciliation belongs to the ``clm slides sync``
+verbs, so re-running converges and never doubles the deck.
 
 Exit codes:
 
-- ``0`` — wrote the new half (or the delegated sync was clean)
-- ``1`` — needs review (a delegated sync deferred something), or no API key
-- ``2`` — a hard error (a bad source path, or the engine could not translate)
+- ``0`` — wrote the new half (or the existing pair is in sync)
+- ``1`` — needs review (the existing pair has pending sync items), or no API key
+- ``2`` — a hard error (a bad source path, an unparseable pair, or the engine
+  could not translate)
 """
 
 from __future__ import annotations
 
 import json
-import os
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import click
 
-from clm.cli.commands.slides.sync import CACHE_DB_NAME
 from clm.infrastructure.llm.cache import (
-    SyncWatermarkCache,
+    CACHE_DB_NAME,
     TranslationCache,
     resolve_cache_dir,
 )
-from clm.infrastructure.llm.openrouter_client import (
-    DEFAULT_SYNC_JUDGE_MODEL,
-    has_openrouter_api_key,
-)
+from clm.infrastructure.llm.openrouter_client import has_openrouter_api_key
 from clm.infrastructure.utils.path_utils import path_to_prog_lang
-from clm.slides.glossary import GLOSSARY_STEM, resolve_guidance, resolve_guidance_by_lang
+from clm.slides.glossary import GLOSSARY_STEM, resolve_guidance
 from clm.slides.sync_translate import (
     DEFAULT_TRANSLATION_MODEL,
     CachingSlideTranslator,
@@ -132,27 +128,11 @@ def _make_translator(
     help="OpenRouter model used to translate the deck. Needs $OPENROUTER_API_KEY (or $OPENAI_API_KEY).",
 )
 @click.option(
-    "--provider",
-    type=click.Choice(["openrouter", "local"]),
-    default=lambda: os.environ.get("CLM_SYNC_PROVIDER") or "openrouter",
-    show_default="openrouter (or $CLM_SYNC_PROVIDER)",
-    help=(
-        "Edit-reconciliation judge backend for the delegated-sync path (when the "
-        "twin already exists): 'openrouter' (default) or 'local' (Ollama). Unused "
-        "on the bootstrap path."
-    ),
-)
-@click.option(
-    "--llm-model",
-    default=None,
-    help=f"Model for the delegated-sync edit judge (default '{DEFAULT_SYNC_JUDGE_MODEL}' for openrouter).",
-)
-@click.option(
     "--cache-dir",
     type=click.Path(path_type=Path),
     default=None,
     help=(
-        "Directory holding the translation + watermark caches (default: "
+        "Directory holding the translation cache (default: "
         "--cache-dir > $CLM_CACHE_DIR > tool.clm.cache_dir > <cwd>/.clm-cache/)."
     ),
 )
@@ -166,9 +146,7 @@ def _make_translator(
         f"'{GLOSSARY_STEM}.<target-lang>.md' walking up from SOURCE's directory."
     ),
 )
-@click.option(
-    "--no-cache", is_flag=True, help="Do not read or write the translation/watermark caches."
-)
+@click.option("--no-cache", is_flag=True, help="Do not read or write the translation cache.")
 @click.option(
     "--no-env-file",
     is_flag=True,
@@ -186,8 +164,6 @@ def slides_translate_cmd(
     dry_run: bool,
     force: bool,
     translation_model: str,
-    provider: str,
-    llm_model: str | None,
     cache_dir: Path | None,
     glossary: Path | None,
     no_cache: bool,
@@ -205,9 +181,10 @@ def slides_translate_cmd(
     \b
     Behavior:
       * Twin absent → bootstrap: translate the whole deck, copy shared (no-lang)
-        cells verbatim, mint EN-authority shared slide_ids, and record the sync
-        watermark. Re-running is then a clean incremental sync.
-      * Twin present → delegate to incremental sync (never re-translates the deck).
+        cells verbatim, mint EN-authority shared slide_ids, and record the pair
+        in the committed sync ledger. Re-running is then a clean no-op.
+      * Twin present → read-only sync report (never re-translates the deck);
+        reconcile with the `clm slides sync` verbs.
       * --dry-run previews the plan and writes nothing.
     """
     # Resolve direction + twin path up front (pure, no LLM) so we know whether
@@ -224,6 +201,18 @@ def slides_translate_cmd(
 
     will_sync = paths.twin_exists and not force
 
+    result: BootstrapResult
+    if will_sync:
+        # Read-only diff — no model, no key, no cache. Reconciliation belongs to
+        # the `clm slides sync` verbs.
+        result = bootstrap_deck(source, target_lang=to_lang, force=False)
+        exit_code = _exit_code(result)
+        if as_json:
+            click.echo(json.dumps(_to_dict(result, exit_code), indent=2))
+        else:
+            _print_human(result)
+        sys.exit(exit_code)
+
     # Load the project .env so a key kept only in .env is found before the key
     # check (the usual course-repo layout). Skipped with --no-env-file.
     if not no_env_file:
@@ -232,9 +221,8 @@ def slides_translate_cmd(
         load_env_files(paths.source_path.parent, paths.twin_path.parent)
 
     # The bootstrap path translates the WHOLE deck, so without a key it would
-    # produce nothing useful — fail fast and write nothing (unlike sync's
-    # per-cell defer). The delegated-sync path degrades like `clm slides sync`.
-    if not will_sync and not has_openrouter_api_key():
+    # produce nothing useful — fail fast and write nothing.
+    if not has_openrouter_api_key():
         click.echo(
             "error: OPENROUTER_API_KEY (or OPENAI_API_KEY) is not set; cannot "
             "translate the deck. Set a key (or keep it in a .env next to the deck) "
@@ -243,68 +231,35 @@ def slides_translate_cmd(
         )
         sys.exit(1)
 
-    watermark_cache: SyncWatermarkCache | None = None
     translation_cache: TranslationCache | None = None
     if not no_cache:
         cache_root = resolve_cache_dir(cli_override=cache_dir)
-        watermark_cache = SyncWatermarkCache(cache_root / CACHE_DB_NAME)
         translation_cache = TranslationCache(cache_root / CACHE_DB_NAME)
 
-    # Resolve translation conventions (style + glossary). The bootstrap path is
+    # Resolve translation conventions (style + glossary): the bootstrap is
     # single-direction (source -> target), so the target-language glossary applies
-    # (an explicit --glossary, else an auto-discovered clm-glossary.<target>.md). The
-    # delegated-sync path (twin present) translates brand-new slides in BOTH
-    # directions — exactly like `clm slides sync` — so it resolves a per-language map
-    # there, so a reverse-direction add gets ITS language's conventions rather than
-    # the target's (parity with sync; --glossary still pins the target language).
-    guidance = ""
-    guidance_by_lang: dict[str, str] = {}
-    if will_sync:
-        guidance_by_lang, used = resolve_guidance_by_lang(
-            source.parent,
-            explicit={paths.target_lang: glossary, paths.source_lang: None},
-        )
-        if not as_json:
-            for lang in sorted(used):
-                click.echo(f"Using glossary ({lang}): {used[lang]}", err=True)
-    else:
-        guidance, glossary_path = resolve_guidance(glossary, source.parent, paths.target_lang)
-        if glossary_path is not None and not as_json:
-            click.echo(f"Using glossary: {glossary_path}", err=True)
+    # (an explicit --glossary, else an auto-discovered clm-glossary.<target>.md).
+    guidance, glossary_path = resolve_guidance(glossary, source.parent, paths.target_lang)
+    if glossary_path is not None and not as_json:
+        click.echo(f"Using glossary: {glossary_path}", err=True)
 
-    result: BootstrapResult
     try:
         translator = _make_translator(
             translation_model,
             translation_cache,
             path_to_prog_lang(source),
             guidance,
-            guidance_by_lang,
         )
-        # A judge is only consulted on the delegated-sync path (twin present). The judge
-        # factory lives with the other model-client construction in sync_autopilot (epic
-        # #440 decision B); import it lazily so loading this command does not pull the
-        # autopilot module (and the sync agent-path module stays import-clean of it).
-        if will_sync:
-            from clm.cli.commands.slides.sync_autopilot import _resolve_judge
-
-            judge = _resolve_judge(provider, llm_model, None, None)
-        else:
-            judge = None
         result = bootstrap_deck(
             source,
             target_lang=to_lang,
             translator=translator,
-            judge=judge,
-            watermark_cache=watermark_cache,
             force=force,
         )
     except TranslateDeckError as exc:
         click.echo(f"error: {exc}", err=True)
         sys.exit(2)
     finally:
-        if watermark_cache is not None:
-            watermark_cache.close()
         if translation_cache is not None:
             translation_cache.close()
 
@@ -322,15 +277,12 @@ def slides_translate_cmd(
 
 
 def _exit_code(result: BootstrapResult) -> int:
-    """0 wrote/clean, 1 review (a delegated sync deferred), 2 sync error."""
+    """0 wrote/clean, 1 review (the existing pair has pending items), 2 error."""
     if result.action == "bootstrapped":
         return 0  # the engine is all-or-nothing; reaching here means it wrote.
-    apply_result = result.apply_result
-    if apply_result is None:
-        return 0
-    if apply_result.has_errors or (result.plan is not None and result.plan.has_errors):
+    if result.diff_error is not None:
         return 2
-    if apply_result.deferred > 0:
+    if result.diff is not None and not result.diff.is_clean:
         return 1
     return 0
 
@@ -386,8 +338,9 @@ def _emit_dry_run(paths: BootstrapPaths, *, as_json: bool) -> None:
         return
     if action == "sync":
         click.echo(
-            f"{paths.twin_path.name} already exists — `clm slides translate` would run "
-            f"an incremental sync (use `clm slides sync --dry-run` for the per-cell plan)."
+            f"{paths.twin_path.name} already exists — `clm slides translate` would "
+            f"report the pair's sync state (use `clm slides sync report` for the "
+            f"per-member view)."
         )
         return
     click.echo(
@@ -406,17 +359,26 @@ def _emit_dry_run(paths: BootstrapPaths, *, as_json: bool) -> None:
 
 def _print_human(result: BootstrapResult) -> None:
     if result.action == "synced":
-        apply_result = result.apply_result
-        assert apply_result is not None
-        click.echo(
-            f"{result.twin_path.name} already existed — ran incremental sync: "
-            f"{apply_result.applied} applied, {apply_result.deferred} deferred, "
-            f"{len(apply_result.errors)} error(s)."
-        )
-        for err in apply_result.errors:
-            click.echo(f"  error: {err}")
-        if apply_result.applied > 0:
-            click.echo("Review the propagated changes with `git diff` before committing.")
+        if result.diff_error is not None:
+            click.echo(
+                f"{result.twin_path.name} already exists but the pair cannot be "
+                f"diffed: {result.diff_error}",
+                err=True,
+            )
+            return
+        diff = result.diff
+        assert diff is not None
+        if diff.is_clean:
+            click.echo(
+                f"{result.twin_path.name} already exists and the pair is in sync "
+                f"({diff.in_sync_count} member(s)) — nothing to translate."
+            )
+        else:
+            click.echo(
+                f"{result.twin_path.name} already exists with {len(diff.items)} "
+                "pending sync item(s) — nothing was translated. Reconcile with "
+                "`clm slides sync report/apply`, then re-run if needed."
+            )
         return
 
     deck = result.deck
@@ -451,17 +413,17 @@ def _to_dict(result: BootstrapResult, exit_code: int) -> dict:
         "source_lang": result.source_lang,
         "target_lang": result.target_lang,
         "companion": companion,
-        "watermark_recorded": result.watermark_recorded,
+        "ledger_recorded": result.ledger_recorded,
         "exit_code": exit_code,
     }
     if result.deck is not None:
         out["cells_translated"] = result.deck.translated_count
         out["cells_copied"] = result.deck.copied_count
         out["ids_assigned"] = result.ids_assigned
-    if result.apply_result is not None:
+    if result.action == "synced":
         out["sync"] = {
-            "applied": result.apply_result.applied,
-            "deferred": result.apply_result.deferred,
-            "errors": list(result.apply_result.errors),
+            "is_clean": result.diff.is_clean if result.diff is not None else False,
+            "items": len(result.diff.items) if result.diff is not None else None,
+            "error": result.diff_error,
         }
     return out

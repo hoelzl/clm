@@ -804,7 +804,7 @@ class TestCodeDerivedFallback:
         assert 'slide_id="1-1j-1-1j"' in new_text
 
     def test_accept_content_derived_alone_does_not_mint(self):
-        # Critical back-compat: course_gate / sync_apply / translate_bootstrap
+        # Critical back-compat: course_gate / translate_bootstrap
         # pass accept_content_derived=True and must NOT start minting opaque
         # code-line slugs — that needs the separate accept_code_derived knob.
         new_text, result = _run(self.BARE, accept_content_derived=True)

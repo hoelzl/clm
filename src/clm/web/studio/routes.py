@@ -6,7 +6,7 @@ rather than URL path segments (a greedy path converter would swallow them).
 
 Optimistic-concurrency failures surface as **409** (``deck_version`` or
 ``cell_hash`` no longer current); the response carries the fresh guard so the
-phone can re-fetch and retry. A write to a watermark-**locked** language is
+phone can re-fetch and retry. A write to a ledger-**locked** language is
 **423** (P3a). ``/deck/sync`` starts a streamed sync-to-other-language (P3b).
 """
 

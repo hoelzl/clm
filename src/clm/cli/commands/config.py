@@ -141,7 +141,7 @@ def config_show(ctx, as_json):
         f"  telemetry_db_path: {databases['telemetry_db_path'] or '(default: next to cache DB)'}"
     )
 
-    click.echo("\n[LLM Cache]  (summaries, titles, translations, sync watermarks)")
+    click.echo("\n[LLM Cache]  (summaries, titles, translations)")
     click.echo(f"  llm_cache_dir: {llm.path}  (from {llm.source})")
     click.echo(f"  llm_cache_db: {llm.path / CACHE_DB_NAME}")
 
@@ -230,7 +230,7 @@ def config_locate():
 
     llm = describe_cache_dir()
     db_path = llm.path / CACHE_DB_NAME
-    click.echo("\nLLM cache directory (watermarks, summaries, translations):")
+    click.echo("\nLLM cache directory (summaries, translations):")
     click.echo(f"  Path: {llm.path}")
     _source_labels = {
         "cli": "--cache-dir flag",

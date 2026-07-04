@@ -1,10 +1,12 @@
-"""Tests for the P3 bilingual lock (design §3.5).
+"""Tests for the P3 bilingual lock (design §3.5) over the v3 sync engine.
 
-A language is editable iff the *other* split half is clean relative to the sync
-watermark. The lock-logic tests stub ``build_sync_plan`` with a controlled plan
-so the direction→dirty→editable mapping and the 423 enforcement are exercised
-hermetically (no git, no LLM); one test runs the *real* plan build to confirm a
-twin with no baseline is treated as unlocked (cold-start).
+A language is editable iff the *other* split half is clean relative to the
+committed per-topic sync ledger — the only trust store. The tests drive the
+real ``load_bundle`` + ``diff_bundle`` path (read-only, LLM-free): the ledger
+is seeded via :func:`record_pair` (the ``clm slides sync record`` recipe) and
+dirtiness is produced by editing real files on disk. A never-recorded pair is
+all-cold — every member is a framed ``verify_cold`` item — which locks BOTH
+halves until a record blesses the state.
 """
 
 from __future__ import annotations
@@ -12,28 +14,25 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from clm.slides.sync_plan import Proposal, SyncPlan
 from clm.web.app import create_app
 from clm.web.studio.service import LanguageLockedError, StudioService
 
-from .conftest import Bilingual, Course
+from .conftest import Bilingual, Course, record_pair
 
 TOKEN = "test-studio-token"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
 
 
-def _fake_plan(*proposals: Proposal, baseline: str = "git-head"):
-    """A factory that ignores the real paths and returns a fixed plan."""
+def _dirty_de(bilingual: Bilingual) -> None:
+    """Edit only the DE half's localized slide cell (→ items with de_to_en)."""
+    text = bilingual.de_path.read_text(encoding="utf-8")
+    bilingual.de_path.write_text(text.replace("Willkommen", "Herzlich willkommen"), "utf-8")
 
-    def _build(de_path, en_path, **kwargs):  # noqa: ANN001 - test stub
-        return SyncPlan(
-            de_path=de_path,
-            en_path=en_path,
-            baseline_source=baseline,
-            proposals=list(proposals),
-        )
 
-    return _build
+def _dirty_en(bilingual: Bilingual) -> None:
+    """Edit only the EN half's localized slide cell (→ items with en_to_de)."""
+    text = bilingual.en_path.read_text(encoding="utf-8")
+    bilingual.en_path.write_text(text.replace("Welcome", "A warm welcome"), "utf-8")
 
 
 class TestNoTwinIsUnlocked:
@@ -57,71 +56,85 @@ class TestNoTwinIsUnlocked:
         assert result.ok
 
 
-class TestColdStartUnlocked:
-    def test_twin_with_no_baseline_is_editable(
+class TestColdStartLocked:
+    def test_unrecorded_pair_locks_both(
         self, bilingual_service: StudioService, bilingual: Bilingual
     ):
-        # Real build_sync_plan: no watermark + no git → baseline "none" → unlocked.
-        view = bilingual_service.open_deck(bilingual.de_id)
-        assert view.lock.is_pair is True
-        assert view.lock.lang == "de"
-        assert view.lock.other_lang == "en"
-        assert view.lock.twin_deck_id == bilingual.en_id
-        assert view.lock.editable is True
-        assert view.lock.baseline == "none"
+        # No ledger entry → every member is cold (verify_cold) → judgment needed
+        # → both halves lock until `clm slides sync record` blesses the state.
+        de = bilingual_service.open_deck(bilingual.de_id)
+        en = bilingual_service.open_deck(bilingual.en_id)
+        assert de.lock.is_pair is True
+        assert de.lock.lang == "de"
+        assert de.lock.other_lang == "en"
+        assert de.lock.twin_deck_id == bilingual.en_id
+        assert de.lock.baseline == "ledger"
+        assert de.lock.editable is False and de.lock.has_conflicts is True
+        assert en.lock.editable is False and en.lock.has_conflicts is True
 
 
-class TestWatermarkDerivedLock:
-    def test_de_dirty_locks_en(
-        self, bilingual_service: StudioService, bilingual: Bilingual, monkeypatch
-    ):
-        # DE drifted (direction de->en) → DE is the source; EN is locked + DE-stale.
-        monkeypatch.setattr(
-            "clm.slides.sync_plan.build_sync_plan",
-            _fake_plan(
-                Proposal(kind="edit", role="slide", direction="de->en", slide_id="intro-welcome")
-            ),
-        )
+class TestLedgerDerivedLock:
+    def test_de_dirty_locks_en(self, bilingual_service: StudioService, bilingual: Bilingual):
+        # DE drifted (items direction de_to_en) → DE is the source; EN is locked.
+        record_pair(bilingual.de_path, bilingual.en_path)
+        _dirty_de(bilingual)
         de = bilingual_service.open_deck(bilingual.de_id)
         en = bilingual_service.open_deck(bilingual.en_id)
         assert de.lock.editable is True and de.lock.other_stale is True
         assert en.lock.editable is False
         assert en.lock.locked_reason and "DE" in en.lock.locked_reason
 
-    def test_conflict_locks_both(
-        self, bilingual_service: StudioService, bilingual: Bilingual, monkeypatch
-    ):
-        monkeypatch.setattr(
-            "clm.slides.sync_plan.build_sync_plan",
-            _fake_plan(
-                Proposal(kind="conflict", role="slide", direction=None, slide_id="intro-welcome")
-            ),
-        )
+    def test_en_dirty_locks_de(self, bilingual_service: StudioService, bilingual: Bilingual):
+        record_pair(bilingual.de_path, bilingual.en_path)
+        _dirty_en(bilingual)
+        de = bilingual_service.open_deck(bilingual.de_id)
+        en = bilingual_service.open_deck(bilingual.en_id)
+        assert en.lock.editable is True and en.lock.other_stale is True
+        assert de.lock.editable is False
+        assert de.lock.locked_reason and "EN" in de.lock.locked_reason
+
+    def test_conflict_locks_both(self, bilingual_service: StudioService, bilingual: Bilingual):
+        # The same member edited on BOTH sides → a framed conflict (direction
+        # "both") → judgment needed → both halves lock.
+        record_pair(bilingual.de_path, bilingual.en_path)
+        _dirty_de(bilingual)
+        _dirty_en(bilingual)
         de = bilingual_service.open_deck(bilingual.de_id)
         en = bilingual_service.open_deck(bilingual.en_id)
         assert de.lock.editable is False and de.lock.has_conflicts is True
         assert en.lock.editable is False and en.lock.has_conflicts is True
 
-    def test_clean_pair_both_editable(
-        self, bilingual_service: StudioService, bilingual: Bilingual, monkeypatch
-    ):
-        monkeypatch.setattr("clm.slides.sync_plan.build_sync_plan", _fake_plan())
+    def test_clean_pair_both_editable(self, bilingual_service: StudioService, bilingual: Bilingual):
+        record_pair(bilingual.de_path, bilingual.en_path)
         de = bilingual_service.open_deck(bilingual.de_id)
         en = bilingual_service.open_deck(bilingual.en_id)
         assert de.lock.editable is True and en.lock.editable is True
         assert de.lock.other_stale is False and en.lock.other_stale is False
+        assert de.lock.baseline == "ledger"
+
+    def test_normalize_refusal_locks_both(
+        self, bilingual_service: StudioService, bilingual: Bilingual
+    ):
+        # A pair the doc lenses refuse to normalize (here: a duplicate slide_id
+        # on one side) cannot be trusted → judgment needed → both halves lock.
+        record_pair(bilingual.de_path, bilingual.en_path)
+        text = bilingual.en_path.read_text(encoding="utf-8")
+        bilingual.en_path.write_text(
+            text.replace('slide_id="intro-notes"', 'slide_id="intro-welcome"'), "utf-8"
+        )
+        de = bilingual_service.open_deck(bilingual.de_id)
+        en = bilingual_service.open_deck(bilingual.en_id)
+        assert de.lock.editable is False and de.lock.has_conflicts is True
+        assert en.lock.editable is False and en.lock.has_conflicts is True
+        assert de.lock.baseline == "ledger"
 
 
 class TestLockEnforcement:
     def test_edit_on_locked_language_raises(
-        self, bilingual_service: StudioService, bilingual: Bilingual, monkeypatch
+        self, bilingual_service: StudioService, bilingual: Bilingual
     ):
-        monkeypatch.setattr(
-            "clm.slides.sync_plan.build_sync_plan",
-            _fake_plan(
-                Proposal(kind="edit", role="slide", direction="de->en", slide_id="intro-welcome")
-            ),
-        )
+        record_pair(bilingual.de_path, bilingual.en_path)
+        _dirty_de(bilingual)
         en = bilingual_service.open_deck(bilingual.en_id)  # EN is locked
         slide = next(c for c in en.cells if c.role == "slide")
         with pytest.raises(LanguageLockedError):
@@ -135,14 +148,10 @@ class TestLockEnforcement:
             )
 
     def test_insert_on_locked_language_raises(
-        self, bilingual_service: StudioService, bilingual: Bilingual, monkeypatch
+        self, bilingual_service: StudioService, bilingual: Bilingual
     ):
-        monkeypatch.setattr(
-            "clm.slides.sync_plan.build_sync_plan",
-            _fake_plan(
-                Proposal(kind="edit", role="slide", direction="de->en", slide_id="intro-welcome")
-            ),
-        )
+        record_pair(bilingual.de_path, bilingual.en_path)
+        _dirty_de(bilingual)
         en = bilingual_service.open_deck(bilingual.en_id)
         with pytest.raises(LanguageLockedError):
             bilingual_service.insert_cell(
@@ -153,14 +162,10 @@ class TestLockEnforcement:
             )
 
     def test_edit_on_source_language_succeeds(
-        self, bilingual_service: StudioService, bilingual: Bilingual, monkeypatch
+        self, bilingual_service: StudioService, bilingual: Bilingual
     ):
-        monkeypatch.setattr(
-            "clm.slides.sync_plan.build_sync_plan",
-            _fake_plan(
-                Proposal(kind="edit", role="slide", direction="de->en", slide_id="intro-welcome")
-            ),
-        )
+        record_pair(bilingual.de_path, bilingual.en_path)
+        _dirty_de(bilingual)
         de = bilingual_service.open_deck(bilingual.de_id)  # DE is the editable source
         slide = next(c for c in de.cells if c.role == "slide")
         result = bilingual_service.edit_body(
@@ -175,13 +180,9 @@ class TestLockEnforcement:
 
 
 class TestLockOverHttp:
-    def test_locked_write_is_423_with_reason(self, bilingual: Bilingual, monkeypatch):
-        monkeypatch.setattr(
-            "clm.slides.sync_plan.build_sync_plan",
-            _fake_plan(
-                Proposal(kind="edit", role="slide", direction="de->en", slide_id="intro-welcome")
-            ),
-        )
+    def test_locked_write_is_423_with_reason(self, bilingual: Bilingual):
+        record_pair(bilingual.de_path, bilingual.en_path)
+        _dirty_de(bilingual)
         app = create_app(
             db_path=bilingual.slides_dir.parent / "jobs.db",
             spec_path=bilingual.spec_path,

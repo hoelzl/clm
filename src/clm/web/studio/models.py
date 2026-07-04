@@ -40,7 +40,7 @@ class CellView(BaseModel):
 class LockState(BaseModel):
     """The bilingual lock state of an opened deck (P3 — design §3.5).
 
-    Derived from the structural sync watermark, not invented session state: a
+    Derived from the committed sync ledger, not invented session state: a
     language is editable iff the *other* half is clean relative to the last
     synced baseline. ``is_pair`` is False for a deck with no split twin on disk
     (a single-language deck is always editable — no lock applies).
@@ -62,11 +62,9 @@ class LockState(BaseModel):
         default=False, description="True when this half is dirty so the twin needs a sync."
     )
     has_conflicts: bool = Field(
-        default=False, description="Both halves changed since the watermark (locks both)."
+        default=False, description="The pair needs judgment (conflict/cold/refusal) - locks both."
     )
-    baseline: str = Field(
-        default="n/a", description='Baseline source: "watermark"/"git-head"/"none"/"n/a".'
-    )
+    baseline: str = Field(default="n/a", description='Baseline source: "ledger"/"n/a".')
 
 
 class DeckView(BaseModel):

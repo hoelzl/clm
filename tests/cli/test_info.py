@@ -96,7 +96,9 @@ class TestInfoTopicDisplay:
         result = runner.invoke(cli, ["info", "sync-agents"])
         assert result.exit_code == 0
         assert "clm slides sync" in result.output
-        assert "realign" in result.output
+        # v3 verbs (the v2 "realign" verb died at the #520 Phase 4 cutover).
+        assert "sync apply" in result.output
+        assert "ledger" in result.output
 
     def test_info_topic_contains_version(self):
         """Test that displayed topics have version substituted."""

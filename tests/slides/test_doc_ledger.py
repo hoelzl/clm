@@ -2,9 +2,9 @@
 
 The member-keyed committed trust store: round-trip fidelity, the
 ``complete=False`` ledger baseline, hash-version lazy migration, the §7.3
-pos→id key migration at record time, and — critically for the Phase-3
-transition — schema-2 coexistence with the v1 ``sync_ledger`` sections in the
-same file (neither engine may clobber the other's trust).
+pos→id key migration at record time, and — post the Phase-4 cutover — the
+legacy-envelope handling: schema-1/2 files still load, but the v1
+``slides`` / ``idless`` sections are ignored and dropped on the next save.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from pathlib import Path
 
 from attrs import evolve
 
-from clm.slides import doc_ledger, sync_ledger
+from clm.slides import doc_ledger
 from clm.slides.bilingual_doc import BilingualDeck
 from clm.slides.doc_lenses import parse_bundle
 from clm.slides.sync_diff import baseline_from_deck, diff_deck
@@ -228,62 +228,61 @@ class TestDeckKeys:
         assert doc_ledger.load(path).decks.keys() == {"slides_a", "slides_b"}
 
 
-class TestCoexistenceWithV1:
-    """The Phase-3 envelope: one file, two engines, no clobbering."""
+class TestLegacyEnvelopeDropsOnSave:
+    """Post-cutover (#520 Phase 4): the v1 sections load as nothing, save as gone."""
+
+    _V1_SLIDES = {
+        "s1": {
+            "slide": {
+                "de_hash": "d1",
+                "en_hash": "e1",
+                "construct": None,
+                "confirmed_commit": None,
+                "confirmed_by": "bless",
+                "confirmed_oracle": "structural",
+                "hash_version": 3,
+            }
+        }
+    }
 
     def _v1_file(self, tmp_path: Path) -> Path:
         path = tmp_path / "sync-ledger.json"
         path.write_text(
-            json.dumps(
-                {
-                    "schema": 1,
-                    "slides": {
-                        "s1": {
-                            "slide": {
-                                "de_hash": "d1",
-                                "en_hash": "e1",
-                                "construct": None,
-                                "confirmed_commit": None,
-                                "confirmed_by": "bless",
-                                "confirmed_oracle": "structural",
-                                "hash_version": 3,
-                            }
-                        }
-                    },
-                }
-            ),
+            json.dumps({"schema": 1, "slides": self._V1_SLIDES}),
             encoding="utf-8",
         )
         return path
 
-    def test_v3_save_preserves_the_v1_sections(self, tmp_path: Path):
+    def test_schema_1_file_loads_as_empty_store(self, tmp_path: Path):
+        path = self._v1_file(tmp_path)
+        assert doc_ledger.load(path).decks == {}
+
+    def test_save_over_a_v1_file_drops_the_legacy_sections(self, tmp_path: Path):
         path = self._v1_file(tmp_path)
         ledger = doc_ledger.load(path)
-        assert ledger.decks == {}
         doc_ledger.record_deck_snapshot(ledger, "slides_x", _parse(DE0, EN0), provenance="record")
         doc_ledger.save(ledger, path)
         data = json.loads(path.read_text(encoding="utf-8"))
         assert data["schema"] == 2
-        assert "s1" in data["slides"]  # the v1 payload survived verbatim
+        assert set(data.keys()) == {"schema", "decks"}  # v1 "slides" is gone
         assert "slides_x" in data["decks"]
 
-    def test_v2_load_and_save_preserve_the_v3_decks_section(self, tmp_path: Path):
-        path = self._v1_file(tmp_path)
-        v3 = doc_ledger.load(path)
-        doc_ledger.record_deck_snapshot(v3, "slides_x", _parse(DE0, EN0), provenance="record")
-        doc_ledger.save(v3, path)
-        # The v2 module reads its own sections from the schema-2 envelope...
-        v2 = sync_ledger.load(path)
-        assert ("s1", "slide") in v2.entries
-        assert "decks" in v2.extra
-        # ...and a v2 round trip keeps the v3 store byte-meaningful.
-        sync_ledger.save(v2, path)
-        again = doc_ledger.load(path)
-        assert "slides_x" in again.decks
-        assert again.decks["slides_x"].members == v3.decks["slides_x"].members
+    def test_schema_2_coexistence_envelope_keeps_decks_drops_v1(self, tmp_path: Path):
+        # A pre-cutover Phase-3 file carrying BOTH engines' sections: the decks
+        # section survives the load/save round trip; the v1 sections do not.
+        ledger = doc_ledger.TopicLedger()
+        doc_ledger.record_deck_snapshot(ledger, "slides_x", _parse(DE0, EN0), provenance="record")
+        path = tmp_path / "sync-ledger.json"
+        doc_ledger.save(ledger, path)
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["slides"] = self._V1_SLIDES
+        data["idless"] = {}
+        path.write_text(json.dumps(data), encoding="utf-8")
 
-    def test_plain_v1_round_trip_keeps_schema_1(self, tmp_path: Path):
-        path = self._v1_file(tmp_path)
-        v2 = sync_ledger.load(path)
-        sync_ledger.save(v2, path)
-        assert json.loads(path.read_text(encoding="utf-8"))["schema"] == 1
+        loaded = doc_ledger.load(path)
+        assert "slides_x" in loaded.decks
+        assert loaded.decks["slides_x"].members == ledger.decks["slides_x"].members
+        doc_ledger.save(loaded, path)
+        again = json.loads(path.read_text(encoding="utf-8"))
+        assert set(again.keys()) == {"schema", "decks"}
+        assert "slides_x" in again["decks"]

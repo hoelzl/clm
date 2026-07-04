@@ -1,17 +1,17 @@
 """P3b — Sync-to-other-language as a streamed subprocess.
 
-Runs ``python -m clm slides sync <de_path> --yes`` as a subprocess and streams
+Runs ``python -m clm slides sync apply <de_path>`` as a subprocess and streams
 its stdout/stderr lines over the Studio WS channel, so the phone sees progress
-while the server-side LLM reconciliation runs. The sync writes **both** halves
-and advances the watermark; on completion both halves are clean, so the language
-lock (P3a) releases on the next open.
+while the reconciliation runs. The v3 apply writes every **mechanical** item to
+both halves and records each landed item in the committed ledger; when nothing
+framed remains, both halves are clean and the language lock (P3a) releases on
+the next open. Framed residue (translations, conflicts — exit 1) keeps the
+lock; those need the agent/desktop workflow.
 
-Decision (user, 2026-06-20): **subprocess**, not in-process ``apply_plan`` — the
-heavy LLM/network imports stay out of the serve process and it matches CLM's
-``clm run`` subprocess pattern. The subprocess **inherits the serve process's
-cwd**, so it resolves the same ``.clm-cache`` watermark DB that
-:meth:`StudioService.compute_lock` reads in-process — lock and sync stay in
-lockstep.
+Decision (user, 2026-06-20): **subprocess**, not in-process apply — the heavy
+imports stay out of the serve process and it matches CLM's ``clm run``
+subprocess pattern. Lock and sync read the same committed per-topic ledger, so
+they stay in lockstep by construction.
 """
 
 from __future__ import annotations

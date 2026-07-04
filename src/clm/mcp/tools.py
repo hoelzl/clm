@@ -19,10 +19,12 @@ from clm.core.topic_resolver import (
 from clm.core.topic_resolver import (
     resolve_topic as _resolve_topic,
 )
-from clm.infrastructure.llm.cache import SyncWatermarkCache as _SyncWatermarkCache
-from clm.infrastructure.llm.cache import describe_cache_dir as _describe_cache_dir
 from clm.slides.authoring_rules import AuthoringRulesResult
 from clm.slides.authoring_rules import get_authoring_rules as _get_authoring_rules
+from clm.slides.doc_lenses import DocLensError
+from clm.slides.doc_lenses import load_bundle as _load_bundle
+from clm.slides.doc_report import diff_bundle as _diff_bundle
+from clm.slides.doc_report import pair_payload as _pair_payload
 from clm.slides.language_tools import SyncResult
 from clm.slides.language_tools import get_language_view as _get_language_view
 from clm.slides.language_tools import suggest_sync as _suggest_sync
@@ -36,8 +38,6 @@ from clm.slides.search import SearchResult
 from clm.slides.search import search_slides as _search_slides
 from clm.slides.spec_validator import SpecValidationResult
 from clm.slides.spec_validator import validate_spec as _validate_spec
-from clm.slides.sync_plan import build_sync_plan as _build_sync_plan
-from clm.slides.sync_report import build_report as _build_report
 from clm.slides.validator import ValidationResult
 from clm.slides.validator import validate_course as _validate_course
 from clm.slides.validator import validate_directory as _validate_directory
@@ -739,8 +739,6 @@ async def handle_suggest_sync(
 # sync_report (split-pair reconciliation report — the agent contract)
 # ---------------------------------------------------------------------------
 
-_SYNC_CACHE_DB_NAME = "clm-llm.sqlite"
-
 
 def _resolve_split_pair(target: Path) -> tuple[Path, Path] | None:
     """A deck half OR a bilingual stem -> ordered ``(de_path, en_path)``, or ``None``.
@@ -756,18 +754,15 @@ def _resolve_split_pair(target: Path) -> tuple[Path, Path] | None:
 
 
 async def handle_sync_report(file: str, data_dir: Path) -> str:
-    """Produce the tiered reconciliation report for a split DE/EN deck pair.
+    """Produce the sync report for a split DE/EN deck pair (v3 engine, #520).
 
-    Runs the *same* deterministic engine as ``clm slides sync --dry-run`` and returns
-    its :class:`~clm.slides.sync_report.ReconciliationReport` — the engine's work
-    partitioned into the three tiers an agent acts on differently (``mechanical`` /
-    ``assisted`` / ``ambiguity``), each assisted/ambiguity item enriched with the
-    source/target cell bytes. This is the blessed agent contract for non-shell agents
-    (the split-pair analogue of the legacy single-file ``slides_suggest_sync``).
-    Read-only: no file is written and no model is called.
-
-    The baseline is the structural watermark when one already exists for this pair
-    (matching the CLI), else each half's git ``HEAD`` — never creating a cache.
+    Runs the *same* read verb as ``clm slides sync report --json`` and returns the
+    schema-3 member table: per-member items (mechanical vs framed actions, each
+    framed item carrying its decision-answer vocabulary) diffed against the
+    committed per-topic ledger — the only trust store. This is the blessed agent
+    contract for non-shell agents (the split-pair analogue of the legacy
+    single-file ``slides_suggest_sync``). Read-only: no file is written, the
+    ledger is not touched, and no model is called.
 
     Args:
         file: A deck half (``<deck>.de.<ext>`` / ``<deck>.en.<ext>``) or the bilingual
@@ -775,9 +770,9 @@ async def handle_sync_report(file: str, data_dir: Path) -> str:
         data_dir: Root data directory (a relative ``file`` resolves against it).
 
     Returns:
-        JSON: the ``ReconciliationReport`` (``de_path`` / ``en_path`` /
-        ``baseline_source``, the three tier lists, and ``is_clean`` / ``needs_model`` /
-        ``needs_agent``), or an ``{"error": …}`` object.
+        JSON: the schema-3 pair payload (``de_path`` / ``en_path``, the ``items``
+        rows, and ``is_clean`` / ``needs_model`` / ``needs_agent``), or an
+        ``{"error": …}`` object.
     """
     target = Path(file)
     if not target.is_absolute():
@@ -798,29 +793,12 @@ async def handle_sync_report(file: str, data_dir: Path) -> str:
         )
     de_path, en_path = pair
 
-    # Use the structural watermark only if one already exists — never create a cache
-    # (this tool is read-only). Absent a watermark, build_sync_plan falls back to git
-    # HEAD, exactly like a fresh `clm slides sync`.
-    db_path = _describe_cache_dir().path / _SYNC_CACHE_DB_NAME
-    watermark_cache = _SyncWatermarkCache(db_path) if db_path.exists() else None
     try:
-        plan = _build_sync_plan(
-            de_path,
-            en_path,
-            watermark_cache=watermark_cache,
-            # Issue #438: read-only agent surface — the agent is the verifier, so a cold
-            # pair frames as a task candidate, never gated on a local key. (A clean
-            # committed id-less deck is a no-op regardless, handled in build_sync_plan.)
-            provider_available=True,
-        )
-    finally:
-        if watermark_cache is not None:
-            watermark_cache.close()
-
-    # Read-only / pre-apply, so excerpt resolution is sound (the files match the plan's
-    # positions). build_report mirrors the CLI's `--dry-run` report exactly.
-    report = _build_report(plan, with_excerpts=True)
-    return json.dumps(report.model_dump(mode="json"), indent=2)
+        bundle = _load_bundle(de_path, en_path)
+    except DocLensError as exc:
+        return json.dumps({"error": str(exc)}, indent=2)
+    payload = _pair_payload(bundle, _diff_bundle(bundle))
+    return json.dumps(payload, indent=2)
 
 
 # ---------------------------------------------------------------------------

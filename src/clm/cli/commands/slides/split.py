@@ -23,33 +23,40 @@ import click
 
 from clm.slides.split import SplitError, SplitResult, split_in_file
 
-CACHE_DB_NAME = "clm-llm.sqlite"
 
-
-def _record_split_watermark(de_path: Path, en_path: Path, cache_dir: Path | None) -> str | None:
-    """Record a sync watermark for a freshly-split pair (Fix #3.1).
+def _record_split_ledger(de_path: Path, en_path: Path) -> str | None:
+    """Record the freshly-split pair into the committed sync ledger (Fix #3.1).
 
     The two halves are in-sync BY CONSTRUCTION of the split, so recording a
-    baseline here means the next default ``clm slides sync`` (no ``--baseline``)
-    sees a single-language edit as an edit, not the whole deck as new.
-
-    Reuses ``resolve_cache_dir`` so split and sync key the cache identically
-    (same worktree-anchoring). Best-effort: returns a warning string instead of
-    raising — splitting must never fail because the watermark couldn't be
-    recorded. Returns ``None`` on success.
+    baseline here means the next ``clm slides sync`` sees a single-language
+    edit as an edit, not the whole deck as cold. Same write path as
+    ``clm slides sync record``. Best-effort: returns a warning string instead
+    of raising — splitting must never fail because the ledger couldn't be
+    written. Returns ``None`` on success.
     """
     try:
-        from clm.infrastructure.llm.cache import SyncWatermarkCache, resolve_cache_dir
-        from clm.slides.sync_apply import _record_watermark
+        from clm.slides import doc_ledger
+        from clm.slides.doc_lenses import load_bundle
 
-        cache_root = resolve_cache_dir(cli_override=cache_dir)
-        cache = SyncWatermarkCache(cache_root / CACHE_DB_NAME)
-        try:
-            _record_watermark(cache, de_path, en_path)
-        finally:
-            cache.close()
-    except Exception as exc:  # noqa: BLE001 — never let a cache hiccup fail the split
-        return f"could not record sync watermark for the split pair: {exc}"
+        bundle = load_bundle(de_path, en_path)
+        if bundle.outcome.refusal is not None:
+            reasons = "; ".join(f"[{r.code}] {r.detail}" for r in bundle.outcome.refusal.reasons)
+            return (
+                "could not record the split pair in the sync ledger (run "
+                f"`clm slides normalize`, then `clm slides sync record`): {reasons}"
+            )
+        assert bundle.outcome.deck is not None
+        ledger_path = doc_ledger.ledger_path_for(bundle.de_path)
+        ledger = doc_ledger.load(ledger_path)
+        doc_ledger.record_deck_snapshot(
+            ledger,
+            doc_ledger.deck_key_for(bundle.de_path),
+            bundle.outcome.deck,
+            provenance="record",
+        )
+        doc_ledger.save(ledger, ledger_path)
+    except Exception as exc:  # noqa: BLE001 — never let a ledger hiccup fail the split
+        return f"could not record the split pair in the sync ledger: {exc}"
     return None
 
 
@@ -68,22 +75,15 @@ def _record_split_watermark(de_path: Path, en_path: Path, cache_dir: Path | None
     help="Compute the split and report what would be written without modifying files.",
 )
 @click.option(
-    "--cache-dir",
-    type=click.Path(path_type=Path),
-    default=None,
-    help=(
-        "Directory for the sync watermark recorded for the split pair (default: "
-        "--cache-dir > $CLM_CACHE_DIR > tool.clm.cache_dir > <cwd>/.clm-cache/). "
-        "Must match what `clm slides sync` resolves so the watermark is found."
-    ),
-)
-@click.option(
-    "--no-watermark",
+    "--no-record",
+    "--no-watermark",  # pre-1.20 name, kept as an alias
+    "no_record",
     is_flag=True,
     help=(
-        "Do not record a sync watermark for the freshly-split pair. By default "
-        "split records one (the halves are in-sync by construction) so the next "
-        "`clm slides sync` has a baseline and sees single-language edits as edits."
+        "Do not record the freshly-split pair in the committed sync ledger. By "
+        "default split records it (the halves are in-sync by construction) so the "
+        "next `clm slides sync` has a baseline and sees single-language edits as "
+        "edits."
     ),
 )
 @click.option("--json", "as_json", is_flag=True, help="Emit a JSON report.")
@@ -91,8 +91,7 @@ def split_cmd(
     source: Path,
     force: bool,
     report_only: bool,
-    cache_dir: Path | None,
-    no_watermark: bool,
+    no_record: bool,
     as_json: bool,
 ) -> None:
     """Split a bilingual SOURCE slide file into ``<basename>.de.<ext>`` and
@@ -124,10 +123,10 @@ def split_cmd(
             click.echo(f"error: {exc}", err=True)
         sys.exit(2)
 
-    # Record a watermark for the in-sync pair so the next default sync has a
+    # Record the in-sync pair in the sync ledger so the next sync has a
     # baseline (Fix #3.1). Only when both halves were actually written.
-    if result.wrote and not no_watermark:
-        warning = _record_split_watermark(Path(result.de_path), Path(result.en_path), cache_dir)
+    if result.wrote and not no_record:
+        warning = _record_split_ledger(Path(result.de_path), Path(result.en_path))
         if warning is not None:
             result.warnings.append(warning)
 
