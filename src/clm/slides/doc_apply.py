@@ -45,6 +45,11 @@ from pathlib import Path
 from attrs import define, evolve, field, frozen
 
 from clm.slides.bilingual_doc import BilingualDeck, Lang, Member, SideCell
+from clm.slides.doc_identity import (
+    content_fingerprint,
+    iter_with_groups,
+    member_group_token,
+)
 from clm.slides.doc_ledger import (
     DeckLedger,
     LedgerMember,
@@ -57,15 +62,13 @@ from clm.slides.doc_ledger import (
     snapshot_deck,
 )
 from clm.slides.doc_lenses import LoadedBundle, parse_bundle
+from clm.slides.doc_write import DeckEmitter, DeckWriteError, write_changed_files
 from clm.slides.raw_cells import is_cell_boundary
 from clm.slides.sync_diff import (
     FRAMED_ACTIONS,
     MECHANICAL_ACTIONS,
     DeckDiff,
     DiffItem,
-    _iter_with_groups,
-    _member_group_token,
-    content_fingerprint,
 )
 from clm.slides.sync_writeback import set_header_tags, swap_lang
 
@@ -340,104 +343,22 @@ _RECORD_ONLY = frozenset(
 )
 
 
-class _ItemError(Exception):
+class _ItemError(DeckWriteError):
     """A per-item execution failure: this item fails, others proceed."""
 
 
 @define
-class _Executor:
-    bundle: LoadedBundle
-    deck: BilingualDeck
-    comment_token: str
+class _Executor(DeckEmitter):
+    """The emitter's stream view plus the per-item action methods.
 
-    streams: dict[tuple[Lang, str], list[Member]] = field(factory=dict)
-    preambles: dict[tuple[Lang, str], tuple[str, ...] | None] = field(factory=dict)
-    mutated: bool = False
+    Emission and the generic stream plumbing (``set_side`` /
+    ``stream_remove`` / ``insert_mirrored``) live on
+    :class:`~clm.slides.doc_write.DeckEmitter`; this subclass adds the
+    diff-item executors on top.
+    """
 
-    def __attrs_post_init__(self) -> None:
-        order: dict[tuple[Lang, str], list[tuple[int, Member]]] = {}
-        for member in self.deck.members():
-            for lang in _SIDES:
-                cell = member.side(lang)
-                if cell is not None:
-                    order.setdefault((lang, cell.part), []).append((cell.index, member))
-        self.streams = {
-            key: [m for _, m in sorted(entries, key=lambda e: e[0])]
-            for key, entries in order.items()
-        }
-        for lang in _SIDES:
-            self.streams.setdefault((lang, "deck"), [])
-        self.preambles = {
-            ("de", "deck"): self.deck.de_deck_preamble,
-            ("en", "deck"): self.deck.en_deck_preamble,
-            ("de", "companion"): self.deck.de_companion_preamble,
-            ("en", "companion"): self.deck.en_companion_preamble,
-        }
-
-    # -- emission -----------------------------------------------------------
-
-    def emit(self, lang: Lang, part: str) -> str | None:
-        preamble = self.preambles.get((lang, part))
-        members = self.streams.get((lang, part), [])
-        cells = [c for m in members if (c := m.side(lang)) is not None and c.part == part]
-        if preamble is None:
-            if not cells:
-                return None
-            # A newly created file mirrors its twin's preamble (the jupytext
-            # header block is language-neutral) rather than starting bare.
-            twin_preamble = self.preambles.get((_other(lang), part))
-            preamble = twin_preamble if twin_preamble is not None else ()
-        lines = list(preamble)
-        for cell in cells:
-            lines.extend(cell.lines)
-        return "\n".join(lines)
-
-    def emit_all(self) -> dict[tuple[Lang, str], str | None]:
-        return {
-            (lang, part): self.emit(lang, part) for lang in _SIDES for part in ("deck", "companion")
-        }
-
-    # -- stream plumbing ------------------------------------------------------
-
-    def _set_side(self, member: Member, lang: Lang, cell: SideCell | None) -> None:
-        if lang == "de":
-            member.de = cell
-        else:
-            member.en = cell
-        self.mutated = True
-
-    def _stream_remove(self, lang: Lang, part: str, member: Member) -> None:
-        stream = self.streams.get((lang, part), [])
-        for i, m in enumerate(stream):
-            if m is member:
-                del stream[i]
-                return
-
-    def _insert_mirrored(
-        self, member: Member, source: Lang, target: Lang, part: str, new_cell: SideCell
-    ) -> None:
-        """Insert ``member``'s new ``target`` cell after the mirrored predecessor.
-
-        Walk backwards from the member's position in the *source* stream to
-        the nearest member that also has a cell in the target stream; insert
-        right after it (or at the top of the file when none precedes it).
-        """
-        source_stream = self.streams.get((source, part), [])
-        target_stream = self.streams.setdefault((target, part), [])
-        try:
-            pos = next(i for i, m in enumerate(source_stream) if m is member)
-        except StopIteration:
-            raise _ItemError("the source cell is not in its own stream (executor bug)") from None
-        insert_at = 0
-        for prev in reversed(source_stream[:pos]):
-            for j, m in enumerate(target_stream):
-                if m is prev:
-                    insert_at = j + 1
-                    break
-            if insert_at:
-                break
-        target_stream.insert(insert_at, member)
-        self._set_side(member, target, new_cell)
+    bundle: LoadedBundle = field(kw_only=True)
+    comment_token: str = field(kw_only=True)
 
     @staticmethod
     def _holder(item: DiffItem, lang: Lang) -> Member | None:
@@ -510,7 +431,7 @@ class _Executor:
         _, moved = self._moved_cell(item, source)
         twin_member, twin_cell = self._locate_twin(item, _other(source))
         new_lines = _with_slide_id_of(moved.lines, twin_cell.header)
-        self._set_side(twin_member, _other(source), evolve(twin_cell, lines=new_lines))
+        self.set_side(twin_member, _other(source), evolve(twin_cell, lines=new_lines))
 
     def copy_new(self, item: DiffItem, source: Lang) -> None:
         member, moved = self._moved_cell(item, source)
@@ -518,7 +439,7 @@ class _Executor:
         if member.side(target) is not None:
             raise _ItemError(f"the {target} side of {item.key} already exists")
         new_cell = evolve(moved, lines=moved.lines)
-        self._insert_mirrored(member, source, target, moved.part, new_cell)
+        self.insert_mirrored(member, source, target, moved.part, new_cell)
 
     def mirror_remove(self, item: DiffItem, gone: Lang) -> None:
         present = _other(gone)
@@ -530,14 +451,14 @@ class _Executor:
                     f"the surviving {present} side of {item.key} moved off base "
                     f"since the diff — re-run report"
                 )
-        self._stream_remove(present, cell.part, member)
-        self._set_side(member, present, None)
+        self.stream_remove(present, cell.part, member)
+        self.set_side(member, present, None)
 
     def mirror_tags(self, item: DiffItem, source: Lang) -> None:
         _, moved = self._moved_cell(item, source)
         twin_member, twin_cell = self._locate_twin(item, _other(source))
         new_header = set_header_tags(twin_cell.header, moved.tags)
-        self._set_side(
+        self.set_side(
             twin_member,
             _other(source),
             evolve(twin_cell, lines=(new_header, *twin_cell.lines[1:]), tags=moved.tags),
@@ -554,7 +475,7 @@ class _Executor:
         if twin_cell.slide_id is not None:
             raise _ItemError(f"the {unstamped} side of {item.key} already carries an id")
         new_header = twin_cell.header.rstrip() + f' slide_id="{idd_cell.slide_id}"'
-        self._set_side(
+        self.set_side(
             member,
             unstamped,
             evolve(
@@ -568,7 +489,7 @@ class _Executor:
         _, moved = self._moved_cell(item, source)
         twin_member, twin_cell = self._locate_twin(item, _other(source))
         new_header = _set_for_slide(twin_cell.header, moved.for_slide)
-        self._set_side(
+        self.set_side(
             twin_member,
             _other(source),
             evolve(
@@ -609,8 +530,8 @@ class _Executor:
         if target_part == "companion" and self.preambles.get((twin_lang, "companion")) is None:
             mirror = self.preambles.get((moved_side, "companion"))
             self.preambles[(twin_lang, "companion")] = mirror if mirror is not None else ()
-        self._stream_remove(twin_lang, twin.part, member)
-        self._insert_mirrored(member, moved_side, twin_lang, target_part, new_cell)
+        self.stream_remove(twin_lang, twin.part, member)
+        self.insert_mirrored(member, moved_side, twin_lang, target_part, new_cell)
 
     def propagate_preamble(self, item: DiffItem, source: Lang) -> None:
         part = item.key.rsplit("/", 2)[1]  # pos:~preamble/<part>/0
@@ -648,10 +569,10 @@ class _Executor:
 
     def _pool_members(self, group: str, kind: str, lang: Lang) -> list[Member]:
         members: list[tuple[int, Member]] = []
-        for member, owner_group in _iter_with_groups(self.deck):
+        for member, owner_group in iter_with_groups(self.deck):
             if member.key.scheme != "pos" or member.kind != kind:
                 continue
-            if _member_group_token(member, owner_group) != group:
+            if member_group_token(member, owner_group) != group:
                 continue
             cell = member.side(lang)
             if cell is not None:
@@ -706,10 +627,10 @@ class _Executor:
     def _mirror_scope_order(self, group: str, part: str, source: Lang) -> None:
         target = _other(source)
         scope: dict[Lang, list[Member]] = {"de": [], "en": []}
-        for member, owner_group in _iter_with_groups(self.deck):
+        for member, owner_group in iter_with_groups(self.deck):
             if member.key.scheme != "id":
                 continue
-            if _member_group_token(member, owner_group) != group:
+            if member_group_token(member, owner_group) != group:
                 continue
             for lang in _SIDES:
                 cell = member.side(lang)
@@ -779,8 +700,8 @@ class _Executor:
         # Validate before mutating: a failed item must be a strict no-op.
         if not any(m is member for m in self.streams.get((source, cell.part), [])):
             raise _ItemError(f"the moved {source} cell of {item.key} is unlocatable")
-        self._stream_remove(target, cell.part, member)
-        self._insert_mirrored(member, source, target, cell.part, cell)
+        self.stream_remove(target, cell.part, member)
+        self.insert_mirrored(member, source, target, cell.part, cell)
 
 
 # ---------------------------------------------------------------------------
@@ -990,7 +911,7 @@ def _apply_body_decision(ex: _Executor, item: DiffItem, body: str) -> None:
     if item.action == "translate_edit":
         target = _decision_target_side(item)
         twin_member, twin_cell = ex._locate_twin(item, target)
-        ex._set_side(twin_member, target, evolve(twin_cell, lines=_replace_body(twin_cell, body)))
+        ex.set_side(twin_member, target, evolve(twin_cell, lines=_replace_body(twin_cell, body)))
         return
     if item.action == "translate_new":
         if member is None:
@@ -1010,7 +931,7 @@ def _apply_body_decision(ex: _Executor, item: DiffItem, body: str) -> None:
             lines=_replace_body(evolve(source_cell, lines=(header, *source_cell.lines[1:])), body),
             lang_attr=target if source_cell.lang_attr else None,
         )
-        ex._insert_mirrored(member, source, target, source_cell.part, new_cell)
+        ex.insert_mirrored(member, source, target, source_cell.part, new_cell)
         return
     if item.action in ("conflict_shared", "unify_choose_body", "remove_localized_side"):
         if member is None:
@@ -1027,14 +948,14 @@ def _apply_body_decision(ex: _Executor, item: DiffItem, body: str) -> None:
             header = swap_lang(source_cell.header, gone)
             base = evolve(source_cell, lines=(header, *source_cell.lines[1:]))
             new_cell = evolve(base, lines=_replace_body(base, body), lang_attr=gone)
-            ex._insert_mirrored(member, surviving, gone, source_cell.part, new_cell)
+            ex.insert_mirrored(member, surviving, gone, source_cell.part, new_cell)
             return
         for lang in _SIDES:
             holder = ex._holder(item, lang)
             cell = holder.side(lang) if holder is not None else None
             if holder is None or cell is None:
                 raise _ItemError(f"the {lang} side of {item.key} is missing")
-            ex._set_side(holder, lang, evolve(cell, lines=_replace_body(cell, body)))
+            ex.set_side(holder, lang, evolve(cell, lines=_replace_body(cell, body)))
         return
     raise _ItemError(f"'{item.action}' does not accept a body answer")
 
@@ -1066,7 +987,7 @@ def _apply_choice_decision(ex: _Executor, item: DiffItem, choice: str) -> None:
         if action == "unify_choose_body":
             _, chosen = ex._moved_cell(item, side)
             twin_holder, twin = ex._locate_twin(item, _other(side))
-            ex._set_side(
+            ex.set_side(
                 twin_holder, _other(side), evolve(twin, lines=_replace_body(twin, chosen.body))
             )
             return
@@ -1074,7 +995,7 @@ def _apply_choice_decision(ex: _Executor, item: DiffItem, choice: str) -> None:
             _, chosen = ex._moved_cell(item, side)
             twin_holder, twin = ex._locate_twin(item, _other(side))
             header = _set_for_slide(twin.header, chosen.for_slide)
-            ex._set_side(
+            ex.set_side(
                 twin_holder,
                 _other(side),
                 evolve(twin, lines=(header, *twin.lines[1:]), for_slide=chosen.for_slide),
@@ -1101,8 +1022,8 @@ def _apply_choice_decision(ex: _Executor, item: DiffItem, choice: str) -> None:
         cell = holder.side(survivor) if holder is not None else None
         if holder is None or cell is None:
             raise _ItemError(f"{item.key} has no remaining cell to remove")
-        ex._stream_remove(survivor, cell.part, holder)
-        ex._set_side(holder, survivor, None)
+        ex.stream_remove(survivor, cell.part, holder)
+        ex.set_side(holder, survivor, None)
         return
     if choice == "keep":
         # remove_vs_edit: keep the edited survivor and re-add it on the twin.
@@ -1247,7 +1168,7 @@ def apply_deck(
                         item.detail,
                     )
                 )
-        except _ItemError as exc:
+        except DeckWriteError as exc:
             status = "rejected" if decision is not None else "failed"
             unresolved_items.append(item)
             outcome.results.append(ItemResult(item.key, item.action, status, str(exc)))
@@ -1294,32 +1215,12 @@ def apply_deck(
         return outcome
 
     if changed:
-        writes: list[tuple[Path, str]] = []
-        paths = {
-            ("de", "deck"): bundle.de_path,
-            ("en", "deck"): bundle.en_path,
-            ("de", "companion"): bundle.de_companion_path,
-            ("en", "companion"): bundle.en_companion_path,
-        }
-        for file_key in sorted(changed, key=str):
-            text = finals[file_key]
-            path = paths.get(file_key)
-            if text is None:
-                continue  # never delete a file; layout removals empty it instead
-            if path is None:
-                path = _new_companion_path(bundle, file_key[0])
-            writes.append((path, text))
-        from clm.infrastructure.utils.path_utils import atomic_write_all
-
         try:
-            for path, _text in writes:
-                path.parent.mkdir(parents=True, exist_ok=True)
-            atomic_write_all(writes)
+            outcome.written_paths = write_changed_files(bundle, finals, changed)
         except OSError as exc:
             outcome.error = f"write failed: {exc}"
             return outcome
         outcome.wrote = True
-        outcome.written_paths = [p for p, _ in writes]
 
     # Ledger updates for landed items — renames/migrations first, then the rest.
     fresh = snapshot_deck(final_deck, provenance="apply", commit=commit)
@@ -1355,11 +1256,3 @@ def _incoherent_pool_confirms(
             cold_by_pool.setdefault(pool, set()).add(item.key)
     confirmed = {key for key, decision in decisions.items() if decision.choice == "confirm"}
     return {pool for pool, keys in cold_by_pool.items() if not keys <= confirmed}
-
-
-def _new_companion_path(bundle: LoadedBundle, lang: Lang) -> Path:
-    """Where a newly created companion file goes (standard subdir layout)."""
-    from clm.slides.voiceover_tools import COMPANION_SUBDIR, companion_name
-
-    deck_path = bundle.de_path if lang == "de" else bundle.en_path
-    return deck_path.parent / COMPANION_SUBDIR / companion_name(deck_path)

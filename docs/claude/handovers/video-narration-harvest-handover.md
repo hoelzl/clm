@@ -1,6 +1,6 @@
 # Handover: Video Narration Harvest (agent-first rebuild)
 
-**Status**: planning complete, implementation NOT started
+**Status**: Phase 1 implemented (v3 utility extraction); Phases 2–4 TODO
 **Last updated**: 2026-07-04
 **Canonical design source**: `docs/proposals/video-narration-harvest.md`
 (merged via PR #541, decisions folded in via PR #542). Read that proposal
@@ -70,17 +70,25 @@ pivot), #520 (sync-engine-v3), #501 (separated companions);
 
 ## 3. Phase Breakdown
 
-- **Phase 1 [TODO] — v3 utility extraction** (no behavior change).
-  Extract from `src/clm/slides/sync_diff.py` into a sync-free module
-  (working name `src/clm/slides/doc_identity.py`): `content_fingerprint`,
-  `baseline_from_deck` (general structural snapshot), `_iter_with_groups`/
-  `_member_group_token` (the privates `doc_apply.py:61-69` and
-  `doc_ledger.py` import today). Extract from `doc_apply.py` a sync-free
-  write surface: "given a `BilingualDeck` + member edits, emit and
-  atomically write the ≤4 files" without ledger/differ imports. Update
-  `tests/cli/test_sync_import_cleanliness.py` expectations. Acceptance:
-  differ/ledger/apply keep passing; new module importable without pulling
-  in `sync_diff`.
+- **Phase 1 [DONE] — v3 utility extraction** (no behavior change).
+  Landed as two new sync-free modules:
+  - `src/clm/slides/doc_identity.py`: `content_fingerprint`,
+    `pair_signature`, `body_fingerprint`, `lines_fingerprint`,
+    `MemberBaseline`/`DeckBaseline`, `iter_with_groups`,
+    `member_group_token`, `baseline_from_deck`. `sync_diff` imports from it
+    (aliasing the old private names) and keeps re-exporting the public four
+    in `__all__`; `doc_ledger` and `sync_shadow` now import from
+    `doc_identity` directly.
+  - `src/clm/slides/doc_write.py`: `DeckEmitter` (stream view + `emit`/
+    `emit_all` + `set_side`/`stream_remove`/`insert_mirrored`),
+    `DeckWriteError`, `new_companion_path`, `write_changed_files`.
+    `doc_apply._Executor` now subclasses `DeckEmitter` (its `_ItemError`
+    subclasses `DeckWriteError`); the apply write tail calls
+    `write_changed_files`.
+  - Tests: `tests/slides/test_doc_write.py` (byte-identity emission,
+    mutation round-trip, atomic multi-file + minted companion);
+    `tests/cli/test_sync_import_cleanliness.py` extended — the new modules
+    must import neither `sync_diff` nor `doc_ledger` nor the v2 core.
 - **Phase 2 [TODO] — `clm harvest report`** (read-only; can land during v3
   dogfooding). New group + verb wrapping the deterministic pipeline
   (`transcribe`→`detect`→`match`→`align`, cached via
@@ -113,8 +121,9 @@ pivot), #520 (sync-engine-v3), #501 (separated companions);
 - Proposal written, decisions resolved, merged to master
   (`docs/proposals/video-narration-harvest.md`; PRs #541 merged, #542
   merged/auto-merge armed 2026-07-04).
-- **No implementation code exists.** Epic issue: **#546** (phases, settled
-  decisions, and the Phase-3 gate mirrored there).
+- **Phase 1 implemented** (`doc_identity.py` + `doc_write.py`, see §3); no
+  harvest-facing code yet. Epic issue: **#546** (phases, settled decisions,
+  and the Phase-3 gate mirrored there).
 - Blocker for Phase 3 (and arguably 4): sync-engine-v3 must survive its
   **dogfood week on PythonCourses** first (see
   `docs/claude/sync-v3-handover.md`; v3 Phase 4 = flip default, delete v2).
@@ -126,23 +135,24 @@ pivot), #520 (sync-engine-v3), #501 (separated companions);
 
 ## 5. Next Steps
 
-Start **Phase 1**. Prerequisites: none (independent of v3 dogfooding; it
-only moves code). Steps: read `sync_diff.py` fingerprint/snapshot helpers
-(`content_fingerprint`/`_pair_sig`/`_body_fp` ~:153-192,
-`baseline_from_deck` ~:294-347) and the imports at `doc_apply.py:47-70`,
-`doc_ledger.py:47-48`; carve out `doc_identity.py`; then the sync-free
-write surface from `doc_apply` (`emit_all` ~:395, `atomic_write_all`
-~:1312, `_new_companion_path` ~:1360). Gotchas:
+Phase 1 is done (see §3). Next is **Phase 2 — `clm harvest report`**
+(read-only; can land during v3 dogfooding): new CLI group wrapping the
+deterministic pipeline, per-slide JSON keyed by `MemberKey`, reading decks
+through `load_bundle`. Phase 3 stays gated on the v3 dogfood week.
+Gotchas that remain live:
 - `tests/cli/test_sync_import_cleanliness.py` pins the v3 import graph
-  (model must not import v2; facade imports only v3 core) — extend, don't
-  fight it.
+  (model must not import v2; facade imports only v3 core; `doc_identity`/
+  `doc_write` must stay differ/ledger-free) — extend, don't fight it.
 - v2 and v3 coexist behind `CLM_SYNC_ENGINE`; touch only v3 modules.
-- Line numbers here are from the 2026-07-04 investigation; re-verify, the
-  v3 modules are actively changing during dogfooding.
+- The v3 modules are actively changing during dogfooding; re-verify line
+  numbers and shapes before building on them.
 
 ## 6. Key Files & Architecture
 
-Nothing created yet. The map (from the 2026-07-04 investigation):
+Created by Phase 1: `src/clm/slides/doc_identity.py` (identity/snapshot),
+`src/clm/slides/doc_write.py` (emitter + atomic write surface),
+`tests/slides/test_doc_write.py`. The rest of the map (from the 2026-07-04
+investigation):
 
 - **v3 model (reuse)**: `src/clm/slides/bilingual_doc.py` (model: `Member`,
   `MemberKey`, `SideCell`, `BilingualDeck`, `Observation`,
