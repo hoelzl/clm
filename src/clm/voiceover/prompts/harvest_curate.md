@@ -30,8 +30,17 @@ Rules (these replace the old embedded-model merge — apply them yourself):
    groups, in order of return). They often revisit or correct earlier
    statements — weigh them accordingly; a later revisit wins over an earlier
    statement it contradicts.
+7. **Multiple narrative cells.** A slide often carries several narrative
+   cells — typically one per code cell, each sitting next to what it
+   narrates (`inputs.baseline` lists them in document order with their
+   `member` handles). Distribute the narration accordingly: address each
+   existing cell by its `member` handle in a separate `updates` entry, and
+   only touch the cells the transcript actually concerns. To add a new
+   narrative cell, use `"member": null` — with `"after": "<member handle>"`
+   to place it right after an existing narrative cell, or omit `after` to
+   append it at the end of the slide group.
 
 Answer with the JSON shape given in `answer_schema`, echoing `item`, `kind`,
-`baseline_fingerprint`, and `video_fingerprint` from this task document.
+`baseline_fingerprints`, and `video_fingerprint` from this task document.
 Then submit it with `clm harvest accept DECK --answer FILE` (add `--record`
 to bank the write into the sync ledger).

@@ -479,7 +479,10 @@ def harvest_accept_cmd(
         click.echo(json.dumps(outcome.to_payload(), indent=2, ensure_ascii=False))
     else:
         state = "dry-run: would write" if dry_run else "wrote"
-        click.echo(f"accepted {outcome.item} → member {outcome.member} ({state})")
+        touched = ", ".join(
+            f"{m['member']}{' (new)' if m['created'] else ''}" for m in outcome.members
+        )
+        click.echo(f"accepted {outcome.item} → {touched} ({state})")
         for path in outcome.written_paths:
             click.echo(f"  {path}")
         if outcome.recorded:
