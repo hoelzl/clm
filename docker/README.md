@@ -66,8 +66,14 @@ From the repository root:
 
 ### Notebook Worker
 
-- Base: CUDA-enabled image (nvidia/cuda:13.1.0-cudnn8-runtime-ubuntu22.04)
+Two variants, each multi-architecture (linux/amd64 and linux/arm64):
+
+- **lite** — base `python:3.12-slim`; scientific stack, no ML/GPU libraries.
+- **full** — ML stack. On amd64 the base is `nvidia/cuda:12.6.1-cudnn-runtime-ubuntu24.04`
+  (CUDA/PyTorch, GPU-accelerated). On arm64 (Apple Silicon) there is no CUDA
+  base image, so it reuses `python:3.12-slim` and installs CPU PyTorch wheels;
+  GPU-only packages with no aarch64 wheel (e.g. `fastembed-gpu`) are skipped.
 - Package manager: uv (modern Python package installer)
 - External deps: .NET SDK, Deno, IJava
-- Python deps: PyTorch, FastAI, Jupyter, scientific stack
+- Python deps: PyTorch, FastAI, Jupyter, scientific stack (full variant)
 - Jupyter kernels: Python, C++, C#, Java, TypeScript

@@ -136,7 +136,8 @@ docker build -f docker/notebook/Dockerfile \
 
 #### Full Variant (GPU/ML)
 
-**Best for:** Deep learning courses, CUDA-accelerated processing.
+**Best for:** Deep learning courses, CUDA-accelerated processing (amd64); ML
+courses on Apple Silicon (arm64, CPU-only).
 
 **Image Tags:**
 - `docker.io/mhoelzl/clm-notebook-processor:1.19.0` (default)
@@ -144,7 +145,9 @@ docker build -f docker/notebook/Dockerfile \
 - `docker.io/mhoelzl/clm-notebook-processor:latest`
 - `docker.io/mhoelzl/clm-notebook-processor:full`
 
-**Base Image:** `nvidia/cuda:12.4.1-cudnn9-runtime-ubuntu22.04`
+**Base Image:**
+- amd64: `nvidia/cuda:12.6.1-cudnn-runtime-ubuntu24.04` (CUDA, GPU)
+- arm64: `python:3.12-slim` (no CUDA base image exists for arm64; CPU PyTorch)
 
 **Build:**
 ```bash
@@ -158,13 +161,16 @@ docker build -f docker/notebook/Dockerfile -t docker.io/mhoelzl/clm-notebook-pro
 
 **What's Included:**
 - Everything in lite, plus:
-- PyTorch 2.8+ with CUDA 12.4 support
+- PyTorch 2.8+ (CUDA 12.6 wheels on amd64; CPU wheels on arm64)
 - FastAI, numba, skorch
-- Full GPU acceleration
+- GPU acceleration on amd64
 
-**Estimated Size:** ~10GB
+**What's NOT included on arm64:**
+- `fastembed-gpu` (no aarch64 `onnxruntime-gpu` wheel)
 
-**Platforms:** linux/amd64 only (NVIDIA CUDA requirement)
+**Estimated Size:** ~10GB (amd64)
+
+**Platforms:** linux/amd64 (CUDA/GPU) and linux/arm64 (CPU-only ML)
 
 #### Common Features (Both Variants)
 
@@ -188,9 +194,10 @@ docker build -f docker/notebook/Dockerfile -t docker.io/mhoelzl/clm-notebook-pro
 |----------|---------------------|
 | General programming courses | `lite` |
 | Data science (no deep learning) | `lite` |
-| Apple Silicon Mac | `lite` |
-| PyTorch/FastAI courses | `full` |
-| GPU-accelerated notebooks | `full` |
+| Apple Silicon Mac (no GPU needed) | `lite` |
+| PyTorch/FastAI courses (amd64 with GPU) | `full` |
+| PyTorch/FastAI courses on Apple Silicon (CPU) | `full` |
+| GPU-accelerated notebooks (amd64 only) | `full` |
 | Minimal image size | `lite` |
 
 ## Build Process
@@ -322,9 +329,10 @@ docker buildx version  # Verify BuildKit is available
 
 **Common Issues:**
 
-1. **CUDA/PyTorch compatibility (full variant only):**
-   - Verify CUDA 12.4 is supported by PyTorch version
-   - Check PyTorch index URL: `https://download.pytorch.org/whl/cu124`
+1. **CUDA/PyTorch compatibility (full variant, amd64 only):**
+   - Verify CUDA 12.6 is supported by PyTorch version
+   - Check PyTorch index URL: `https://download.pytorch.org/whl/cu126`
+   - On arm64 there is no CUDA: the full variant installs CPU PyTorch from PyPI
 
 2. **xeus-cpp installation:**
    - Requires micromamba (not available via pip)
@@ -334,9 +342,11 @@ docker buildx version  # Verify BuildKit is available
    - Full variant uses Ubuntu PPA
    - Lite variant uses Microsoft's Debian package
 
-4. **ARM64 build fails for full variant:**
-   - Full variant only supports amd64 (NVIDIA CUDA requirement)
-   - Use lite variant for ARM64/Apple Silicon
+4. **ARM64 / Apple Silicon builds:**
+   - All three images now build on linux/arm64.
+   - The notebook `full` variant is CPU-only on arm64 (no `nvidia/cuda` arm64
+     image); GPU acceleration requires amd64. `fastembed-gpu` is skipped on
+     arm64 (no aarch64 wheel).
 
 ### PlantUML Worker Issues
 
@@ -403,7 +413,9 @@ docker buildx build \
   .
 ```
 
-**Note:** Full notebook variant requires CUDA, which limits it to amd64 only.
+**Note:** All three images build on both linux/amd64 and linux/arm64. The
+notebook `full` variant is GPU-accelerated on amd64 (CUDA/PyTorch) and
+CPU-only on arm64 (no CUDA base image exists for arm64).
 
 ### Custom Base Images
 

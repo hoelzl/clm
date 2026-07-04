@@ -4,7 +4,10 @@
 #
 # This Dockerfile supports two variants:
 #   - lite: Smaller image using python:3.12-slim base (multi-arch: amd64, arm64)
-#   - full: Larger image with CUDA/PyTorch using nvidia/cuda base (amd64 only)
+#   - full: ML/GPU stack. On amd64 this uses an nvidia/cuda base (CUDA/PyTorch,
+#     GPU-accelerated). On arm64 (e.g. Apple Silicon) there is no CUDA base, so
+#     it reuses the python:3.12-slim base and installs the CPU PyTorch wheels;
+#     GPU-only packages with no aarch64 wheel (e.g. fastembed-gpu) are skipped.
 #
 # Build lite version (cross-platform, no GPU):
 #   docker build --build-arg VARIANT=lite -t docker.io/mhoelzl/clm-notebook-processor:lite .
@@ -20,6 +23,10 @@
 #
 
 ARG VARIANT=full
+# Automatic BuildKit arg: "amd64" on x86_64 hosts, "arm64" on Apple Silicon.
+# Declared at global scope so it is visible in the base-full FROM selector
+# below (a stage-scope ARG cannot be used in a FROM line).
+ARG TARGETARCH
 
 #=============================================================================
 # BASE IMAGES - Different base for each variant
@@ -63,9 +70,11 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         # Required for .NET on Debian
         libicu-dev
 
-# Full base: NVIDIA CUDA (amd64 only, with GPU support)
-# Note: Python will be installed via micromamba in the common stage
-FROM nvidia/cuda:12.6.1-cudnn-runtime-ubuntu24.04 AS base-full
+# Full base (amd64): NVIDIA CUDA (with GPU support).
+# Note: Python will be installed via micromamba in the common stage.
+# nvidia/cuda publishes no arm64 manifest, so this stage is amd64-only; the
+# arm64 full variant is routed to base-full-arm64 below.
+FROM nvidia/cuda:12.6.1-cudnn-runtime-ubuntu24.04 AS base-full-amd64
 
 WORKDIR /app
 
@@ -100,6 +109,17 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         build-essential \
     && add-apt-repository ppa:dotnet/backports
 
+# Full base (arm64): there is no nvidia/cuda arm64 image. For Apple Silicon
+# (and other arm64 hosts) the full variant reuses the multi-arch base-lite
+# (python:3.12-slim + its apt stack); the ML stack is added in packages-full
+# using CPU PyTorch wheels. This keeps a single, known-good arm64 base and
+# avoids duplicating the base-lite apt layer.
+FROM base-lite AS base-full-arm64
+
+# Select the full base by build platform: amd64 -> CUDA, arm64 -> python slim.
+# TARGETARCH is declared at global scope (see top of file).
+FROM base-full-${TARGETARCH} AS base-full
+
 #=============================================================================
 # COMMON SETUP - Install tools and kernels (applied to selected base)
 #=============================================================================
@@ -107,6 +127,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 FROM base-${VARIANT} AS common
 
 ARG DOCKER_PATH=docker/notebook
+# Re-declare TARGETARCH so the arch-aware fetches below resolve per platform.
+ARG TARGETARCH
 
 # Install .NET SDK 10.0 using the official install script
 # Note: .NET 9 has a known issue with dotnet-interactive installation
@@ -131,13 +153,19 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 # into tar when the redirect served them, causing two consecutive CI
 # failures during the 1.3.2 release. Bump by checking
 # https://github.com/mamba-org/micromamba-releases/releases and updating
-# both the version tag and SHA below.
+# the version tag plus BOTH checksums below (one per architecture).
 ARG MICROMAMBA_VERSION=2.5.0-2
-ARG MICROMAMBA_SHA256=c04571cfb0750e5432d530a3068b8fcd232ebed3133358e056e59a90b9852b00
+ARG MICROMAMBA_SHA256_AMD64=c04571cfb0750e5432d530a3068b8fcd232ebed3133358e056e59a90b9852b00
+ARG MICROMAMBA_SHA256_ARM64=a64db0d7a82107c8d64357cf035fb8f9dbbe2fc48f48b302cbc8ba1590974e20
 RUN set -eu && \
+    if [ "${TARGETARCH}" = "arm64" ]; then \
+        MICROMAMBA_SHA256="${MICROMAMBA_SHA256_ARM64}"; MICROMAMBA_ARCH="linux-aarch64"; \
+    else \
+        MICROMAMBA_SHA256="${MICROMAMBA_SHA256_AMD64}"; MICROMAMBA_ARCH="linux-64"; \
+    fi && \
     curl --fail --location --retry 5 --retry-delay 5 --retry-all-errors \
         --output /usr/local/bin/micromamba \
-        "https://github.com/mamba-org/micromamba-releases/releases/download/${MICROMAMBA_VERSION}/micromamba-linux-64" && \
+        "https://github.com/mamba-org/micromamba-releases/releases/download/${MICROMAMBA_VERSION}/micromamba-${MICROMAMBA_ARCH}" && \
     echo "${MICROMAMBA_SHA256}  /usr/local/bin/micromamba" | sha256sum -c - && \
     chmod +x /usr/local/bin/micromamba && \
     /usr/local/bin/micromamba shell init -s bash --root-prefix /opt/conda && \
@@ -146,12 +174,20 @@ RUN set -eu && \
 # Install Python 3.12 and xeus-cpp (C++ kernel) via micromamba
 # xeus-cpp cannot be installed via pip, so we use micromamba for it
 # We also install Python here to have a clean, managed environment
-RUN /usr/local/bin/micromamba install -y -n base -c conda-forge \
-    python=3.12 \
-    xeus-cpp>=0.8 \
-    xtensor>=0.25 \
-    xtensor-blas>=0.21 \
-    libstdcxx-devel_linux-64 && \
+#
+# The libstdcxx-devel sysroot package name encodes the target arch
+# (libstdcxx-devel_linux-64 for x86_64, libstdcxx-devel_linux-aarch64 for
+# arm64); install the one matching TARGETARCH. xeus-cpp / xtensor /
+# xtensor-blas are arch-neutral names that conda resolves per-platform.
+RUN set -eu && \
+    if [ "${TARGETARCH}" = "arm64" ]; then LIBSTDCXX_DEVEL="libstdcxx-devel_linux-aarch64"; \
+    else LIBSTDCXX_DEVEL="libstdcxx-devel_linux-64"; fi && \
+    /usr/local/bin/micromamba install -y -n base -c conda-forge \
+        python=3.12 \
+        xeus-cpp>=0.8 \
+        xtensor>=0.25 \
+        xtensor-blas>=0.21 \
+        "${LIBSTDCXX_DEVEL}" && \
     /usr/local/bin/micromamba clean -a -y
 
 # Set up PATH to use micromamba's Python
@@ -173,14 +209,20 @@ RUN dotnet tool install -g --no-cache Microsoft.dotnet-interactive && \
 # Fetched from the pinned GitHub release and SHA-256-verified rather than
 # vendored in-tree, so the 50 MB archive stays out of git LFS (see the
 # micromamba block above for the same pattern and rationale). Bump by
-# checking https://github.com/denoland/deno/releases and updating both the
-# version tag and SHA below.
+# checking https://github.com/denoland/deno/releases and updating the version
+# tag plus BOTH checksums below (one per architecture).
 ARG DENO_VERSION=2.1.1
-ARG DENO_SHA256=cbc1b6728040f715e879a3a0c36e462bd09c37b634eb79d04df0bc8bdb07d6c6
+ARG DENO_SHA256_AMD64=cbc1b6728040f715e879a3a0c36e462bd09c37b634eb79d04df0bc8bdb07d6c6
+ARG DENO_SHA256_ARM64=51beb65156a8a8e0d26b64a619e57e9fdf4d14741cf246abe8a79de39b5c18c5
 RUN set -eu && \
+    if [ "${TARGETARCH}" = "arm64" ]; then \
+        DENO_SHA256="${DENO_SHA256_ARM64}"; DENO_ARCH="aarch64-unknown-linux-gnu"; \
+    else \
+        DENO_SHA256="${DENO_SHA256_AMD64}"; DENO_ARCH="x86_64-unknown-linux-gnu"; \
+    fi && \
     curl --fail --location --retry 5 --retry-delay 5 --retry-all-errors \
         --output deno.zip \
-        "https://github.com/denoland/deno/releases/download/v${DENO_VERSION}/deno-x86_64-unknown-linux-gnu.zip" && \
+        "https://github.com/denoland/deno/releases/download/v${DENO_VERSION}/deno-${DENO_ARCH}.zip" && \
     echo "${DENO_SHA256}  deno.zip" | sha256sum -c - && \
     unzip deno.zip -d deno-bin && \
     rm deno.zip && \
@@ -252,16 +294,30 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # Full variant: Everything from lite + ML/GPU libraries
 FROM common AS packages-full
 
+# Re-declare TARGETARCH so the arch-gated installs below resolve per platform.
+ARG TARGETARCH
+
 # Install Python packages using uv
 # Split into multiple steps for better caching and to handle large downloads
 
 # Step 1: PyTorch ecosystem (large downloads, needs longer timeout)
-# CUDA 12.6 support from PyTorch index
+# On amd64 we pull CUDA 12.6 wheels from the PyTorch index (GPU-accelerated).
+# On arm64 there is no CUDA wheel, so we install the CPU wheels from PyPI
+# (torch 2.8+ publishes aarch64 manylinux wheels). Same package names, no
+# extra index URL on arm64.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    UV_HTTP_TIMEOUT=600 uv pip install --python /opt/conda/bin/python --extra-index-url https://download.pytorch.org/whl/cu126 \
-        'torch>=2.8.0' \
-        'torchvision>=0.21.0' \
-        'torchaudio>=2.8.0'
+    set -eu && \
+    if [ "${TARGETARCH}" = "arm64" ]; then \
+        UV_HTTP_TIMEOUT=600 uv pip install --python /opt/conda/bin/python \
+            'torch>=2.8.0' \
+            'torchvision>=0.21.0' \
+            'torchaudio>=2.8.0'; \
+    else \
+        UV_HTTP_TIMEOUT=600 uv pip install --python /opt/conda/bin/python --extra-index-url https://download.pytorch.org/whl/cu126 \
+            'torch>=2.8.0' \
+            'torchvision>=0.21.0' \
+            'torchaudio>=2.8.0'; \
+    fi
 
 # Step 2: Jupyter and notebook processing
 RUN --mount=type=cache,target=/root/.cache/uv \
@@ -306,6 +362,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         'httpx'
 
 # Step 6: LLM/RAG
+# fastembed-gpu (which depends on onnxruntime-gpu) has no aarch64 wheel, so it
+# is installed in the arch-gated step below rather than here.
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --python /opt/conda/bin/python \
         'langchain>=1.2.7' \
@@ -318,13 +376,20 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         'langgraph>=0.2.0' \
         'qdrant-client>=1.13.0' \
         'langchain-qdrant' \
-        'fastembed-gpu>=0.6.0' \
         'openai>=2.8.1' \
         'tiktoken>=0.9.0' \
         'ragas' \
         'pypdf>=6.3.2' \
         'pymediawiki>=0.7.5' \
         'bm25s[core]>=0.3.2.post1'
+
+# Step 6b: GPU-only embedding backend (amd64 only).
+# fastembed-gpu -> onnxruntime-gpu, neither of which publishes aarch64 wheels.
+# Skipped on arm64; the CPU embedding stack from Step 6 remains available.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    if [ "${TARGETARCH}" != "arm64" ]; then \
+        uv pip install --python /opt/conda/bin/python 'fastembed-gpu>=0.6.0'; \
+    fi
 
 # Step 7: Additional ML packages (image generation, transformers, visualization)
 RUN --mount=type=cache,target=/root/.cache/uv \
