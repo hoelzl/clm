@@ -16,7 +16,7 @@ from clm.core.utils.execution_utils import (
 from clm.core.utils.text_utils import Text
 from clm.infrastructure.backends.local_ops_backend import LocalOpsBackend
 from clm.infrastructure.messaging.base_classes import Payload
-from clm.infrastructure.operation import Operation
+from clm.infrastructure.operation import Concurrently, NoOperation, Operation
 
 # DATA_DIR is defined in tests/conftest.py and available as a fixture
 # For direct use, we compute it here
@@ -266,6 +266,52 @@ async def test_course_dir_groups_copy(course_1_spec, tmp_path):
             )
 
     assert set(tmp_path.glob("**/*")) == expected
+
+
+async def test_dir_group_copy_deduped_for_explicit_targets(course_1_spec, tmp_path):
+    """Explicit targets collapse the public/speaker split to a single path.
+
+    With both is_speaker variants requested (a target whose kinds span
+    public and speaker, e.g. {code-along, trainer}), only one copy
+    operation may remain — two concurrent copytrees of the same tree to
+    the same destination race and fail with WinError 32 on Windows.
+    """
+    course = Course.from_spec(course_1_spec, DATA_DIR, tmp_path)
+    dir_group = course.dir_groups[0]
+
+    op = await dir_group.get_processing_operation(
+        output_root=tmp_path,
+        languages=frozenset({"de"}),
+        is_speaker_options=[False, True],
+        skip_toplevel=True,
+    )
+    assert isinstance(op, Concurrently)
+    assert len(op.operations) == 1
+
+    # Without skip_toplevel the public/speaker paths differ, so both
+    # operations are kept.
+    op = await dir_group.get_processing_operation(
+        output_root=tmp_path,
+        languages=frozenset({"de"}),
+        is_speaker_options=[False, True],
+        skip_toplevel=False,
+    )
+    assert isinstance(op, Concurrently)
+    assert len(op.operations) == 2
+
+
+async def test_dir_group_copy_deduped_across_calls_with_shared_keys(course_1_spec, tmp_path):
+    """A shared seen_copy_keys set collapses repeated dir-groups entirely."""
+    course = Course.from_spec(course_1_spec, DATA_DIR, tmp_path)
+    dir_group = course.dir_groups[0]
+    seen: set = set()
+
+    first = await dir_group.get_processing_operation(output_root=tmp_path, seen_copy_keys=seen)
+    second = await dir_group.get_processing_operation(output_root=tmp_path, seen_copy_keys=seen)
+
+    assert isinstance(first, Concurrently)
+    assert len(first.operations) == 4  # 2 languages x public/speaker
+    assert isinstance(second, NoOperation)
 
 
 async def test_count_stage_operations_returns_correct_counts(course_1_spec, tmp_path):

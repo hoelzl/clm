@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import shutil
 import sys
 from abc import ABC
@@ -49,6 +50,32 @@ from clm.infrastructure.utils.path_utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _copy2_if_changed(src, dst, *, follow_symlinks=True):
+    """``shutil.copy2`` that skips the write when ``dst`` already matches ``src``.
+
+    "Matches" means equal size and equal mtime (nanosecond resolution) —
+    the rsync-style quick check. Because ``copy2`` preserves the source
+    mtime via ``copystat``, an unchanged source compares equal on every
+    subsequent build, so rebuilds don't rewrite identical dir-group trees
+    (needless SSD wear for e.g. a vendored Catch2). Content is not hashed:
+    a file whose bytes changed without touching size or mtime is not
+    detected, the same trade-off rsync's default mode makes.
+
+    Signature is ``copytree``-compatible so it can be passed as
+    ``copy_function``.
+    """
+    try:
+        src_stat = os.stat(src, follow_symlinks=follow_symlinks)
+        dst_stat = os.stat(dst, follow_symlinks=follow_symlinks)
+    except OSError:
+        pass
+    else:
+        if src_stat.st_size == dst_stat.st_size and src_stat.st_mtime_ns == dst_stat.st_mtime_ns:
+            logger.debug(f"Skipping unchanged file '{src}' -> {dst}")
+            return dst
+    return shutil.copy2(src, dst, follow_symlinks=follow_symlinks)
 
 
 @define
@@ -235,7 +262,7 @@ class LocalOpsBackend(Backend, ABC):
                     if item.is_file():
                         dest = copy_data.output_dir / item.name
                         logger.debug(f"Copying root file '{item}' to {dest}")
-                        shutil.copy2(item, dest)
+                        _copy2_if_changed(item, dest)
             else:
                 warning_msg = (
                     f"Base directory does not exist: {copy_data.base_path}\n"
@@ -281,6 +308,7 @@ class LocalOpsBackend(Backend, ABC):
                     source_dir,
                     output_dir,
                     dirs_exist_ok=True,
+                    copy_function=_copy2_if_changed,
                     ignore=shutil.ignore_patterns(
                         *SKIP_DIRS_FOR_OUTPUT, *SKIP_DIRS_PATTERNS, *SKIP_OUTPUT_FILE_GLOBS
                     ),
@@ -291,7 +319,7 @@ class LocalOpsBackend(Backend, ABC):
                     if item.is_file():
                         dest = output_dir / item.name
                         logger.debug(f"Copying file '{item}' to {dest}")
-                        shutil.copy2(item, dest)
+                        _copy2_if_changed(item, dest)
 
         return warnings
 

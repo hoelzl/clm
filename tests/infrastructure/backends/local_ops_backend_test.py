@@ -1,3 +1,4 @@
+import shutil
 from pathlib import Path
 
 from clm.infrastructure.backends.local_ops_backend import LocalOpsBackend
@@ -62,6 +63,43 @@ async def test_copy_dir_group(tmp_path):
     assert not (output_dir / "dir_1/build/foo.txt").exists()
     assert not (output_dir / "dir_1/.git/data.bin").exists()
     assert not (output_dir / "dir_1/.clm").exists()
+
+
+async def test_copy_dir_group_skips_unchanged_files(tmp_path, monkeypatch):
+    """A rebuild must not rewrite dir-group files whose size and mtime match.
+
+    Rewriting an unchanged vendored tree (e.g. Catch2) on every build is
+    needless SSD wear; copy2 preserves the source mtime, so the size+mtime
+    quick check holds on every subsequent build.
+    """
+    input_files = ["dir_1/file_1.txt", "dir_2/subdir/file_2.txt"]
+    copy_data, output_dir = build_copy_data(tmp_path, input_files)
+
+    async with PytestLocalOpsBackend() as unit:
+        await unit.copy_dir_group_to_output(copy_data)
+    assert (output_dir / "dir_1/file_1.txt").exists()
+
+    real_copy2 = shutil.copy2
+    copied: list[str] = []
+
+    def counting_copy2(src, dst, *, follow_symlinks=True):
+        copied.append(Path(src).name)
+        return real_copy2(src, dst, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(shutil, "copy2", counting_copy2)
+
+    # Second run over identical sources: no file is written again.
+    async with PytestLocalOpsBackend() as unit:
+        await unit.copy_dir_group_to_output(copy_data)
+    assert copied == []
+
+    # A modified source is copied again.
+    changed = tmp_path / "input/dir_1/file_1.txt"
+    changed.write_text("changed content")
+    async with PytestLocalOpsBackend() as unit:
+        await unit.copy_dir_group_to_output(copy_data)
+    assert copied == ["file_1.txt"]
+    assert (output_dir / "dir_1/file_1.txt").read_text() == "changed content"
 
 
 def build_copy_data(tmp_dir, input_files):
