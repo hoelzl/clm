@@ -1,1 +1,0 @@
-- Fixed the CI docs-only skip never firing: the `changes` job's `dorny/paths-filter` exclusion list used the default "match any pattern" semantics, so every changed file matched at least one negation and the full test/lint/docker pipeline ran even for pure documentation changes. Setting `predicate-quantifier: every` makes the docs-only detection work as originally intended.

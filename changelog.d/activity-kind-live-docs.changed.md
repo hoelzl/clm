@@ -1,1 +1,0 @@
-- Documented `"live"` (live session with no video) as an example `<activity>` `kind` in the `spec-files` info topic and the `ActivitySpec` docstring. The attribute was always free-form; no behavior change.
