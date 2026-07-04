@@ -25,8 +25,8 @@ Problems solved:
 - "Voiceover" is overloaded: text-layer tooling (`extract`/`inline`/
   companions) vs. the video pipeline collide on `extract`, `sync`, `report`.
 
-References: proposal (above); #366 (agent-first sync pivot), #520
-(sync-engine-v3), #501 (separated companions);
+References: **epic #546**; proposal (above); #366 (agent-first sync
+pivot), #520 (sync-engine-v3), #501 (separated companions);
 `docs/claude/voiceover-design.md` (original pipeline design);
 `docs/claude/sync-v3-handover.md` (v3 state).
 
@@ -113,8 +113,8 @@ References: proposal (above); #366 (agent-first sync pivot), #520
 - Proposal written, decisions resolved, merged to master
   (`docs/proposals/video-narration-harvest.md`; PRs #541 merged, #542
   merged/auto-merge armed 2026-07-04).
-- **No implementation code exists.** No issue filed yet for the epic —
-  consider filing one referencing the proposal before Phase 1.
+- **No implementation code exists.** Epic issue: **#546** (phases, settled
+  decisions, and the Phase-3 gate mirrored there).
 - Blocker for Phase 3 (and arguably 4): sync-engine-v3 must survive its
   **dogfood week on PythonCourses** first (see
   `docs/claude/sync-v3-handover.md`; v3 Phase 4 = flip default, delete v2).
