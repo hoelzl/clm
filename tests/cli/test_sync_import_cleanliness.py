@@ -95,6 +95,7 @@ def test_v3_doc_modules_import_no_v2_sync_core():
         import sys
         import clm.slides.bilingual_doc, clm.slides.doc_lenses, clm.slides.sync_diff
         import clm.slides.doc_ledger, clm.slides.doc_apply
+        import clm.slides.doc_identity, clm.slides.doc_write
 
         for mod in (
             "clm.slides.sync_plan",
@@ -102,6 +103,32 @@ def test_v3_doc_modules_import_no_v2_sync_core():
             "clm.slides.sync_code",
         ):
             assert mod not in sys.modules, f"{mod} must not load from the v3 doc modules"
+        print("OK")
+        """
+    )
+    assert probe.returncode == 0, probe.stderr or probe.stdout
+    assert probe.stdout.strip().endswith("OK")
+
+
+def test_doc_identity_and_doc_write_import_no_sync_engine():
+    # Harvest Phase 1 (#546): the identity/snapshot layer and the write
+    # surface are the pieces `clm harvest` builds on, so they must be
+    # importable without pulling in the v3 differ or the ledger (let alone
+    # the v2 core) — otherwise "sync-free consumer of the deck model" is a
+    # fiction. Same fresh-subprocess mechanism as above.
+    probe = _run_probe(
+        """
+        import sys
+        import clm.slides.doc_identity, clm.slides.doc_write
+
+        for mod in (
+            "clm.slides.sync_diff",
+            "clm.slides.doc_ledger",
+            "clm.slides.sync_plan",
+            "clm.slides.sync_apply",
+            "clm.slides.sync_code",
+        ):
+            assert mod not in sys.modules, f"{mod} must not load from doc_identity/doc_write"
         print("OK")
         """
     )

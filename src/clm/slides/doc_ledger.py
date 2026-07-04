@@ -20,7 +20,7 @@ Phase 4 deletes the v1 sections with the v2 core.
 
 * A member with **no entry is cold** — the differ reports it ``unverified``
   with a framed verification task, never a silent assumption. This is what
-  :attr:`~clm.slides.sync_diff.DeckBaseline.complete` ``= False`` encodes.
+  :attr:`~clm.slides.doc_identity.DeckBaseline.complete` ``= False`` encodes.
 * **Stale = fingerprint mismatch** — fail-safe by construction: a drifted
   member produces a re-check item.
 * ``hash_version`` gates every entry: an entry recorded under an older
@@ -45,7 +45,7 @@ from pathlib import Path
 from attrs import define, field, frozen
 
 from clm.slides.bilingual_doc import BilingualDeck, Lang
-from clm.slides.sync_diff import DeckBaseline, MemberBaseline, baseline_from_deck
+from clm.slides.doc_identity import DeckBaseline, MemberBaseline, baseline_from_deck
 
 __all__ = [
     "LEDGER_FILENAME",
@@ -67,7 +67,7 @@ __all__ = [
 #: with the v1 payload preserved; schema 2 carries both engines' sections.
 SCHEMA_VERSION = 2
 
-#: Version of the v3 fingerprint functions (:func:`~clm.slides.sync_diff.content_fingerprint`
+#: Version of the v3 fingerprint functions (:func:`~clm.slides.doc_identity.content_fingerprint`
 #: and friends). Bump when the hashing form changes; entries recorded under an
 #: older version drop to cold at load (§5's lazy migration rule, #458).
 LEDGER_HASH_VERSION = 1
@@ -87,7 +87,7 @@ _SIDES: tuple[Lang, Lang] = ("de", "en")
 class LedgerMember:
     """One member's recorded §5 entry: the engine view plus trust metadata.
 
-    ``entry`` is the exact :class:`~clm.slides.sync_diff.MemberBaseline` the
+    ``entry`` is the exact :class:`~clm.slides.doc_identity.MemberBaseline` the
     differ compares against — fingerprints per side, tags, owner-free
     signatures. ``provenance`` records *who* asserted the verification
     (``apply`` / ``accept`` / ``record`` / ``agent`` / ``semantic:<model>``),
@@ -107,7 +107,7 @@ class LedgerMember:
 class DeckLedger:
     """The recorded state of one deck bundle inside its topic ledger.
 
-    Mirrors :class:`~clm.slides.sync_diff.DeckBaseline` (members + order
+    Mirrors :class:`~clm.slides.doc_identity.DeckBaseline` (members + order
     context) with per-member trust metadata. Order context is recorded when
     the corresponding scope was verified (a full ``record``, or an applied
     order item) — a scope with no recorded order simply contributes no order

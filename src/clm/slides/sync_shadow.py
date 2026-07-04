@@ -36,6 +36,7 @@ from pathlib import Path
 from attrs import define, field
 
 from clm.notebooks.slide_parser import comment_token_for_path
+from clm.slides.doc_identity import baseline_from_deck
 from clm.slides.doc_lenses import load_bundle, parse_bundle
 from clm.slides.pairing import (
     derive_split_pair,
@@ -43,7 +44,7 @@ from clm.slides.pairing import (
     find_split_slide_files_recursive,
     iter_split_pairs,
 )
-from clm.slides.sync_diff import DeckDiff, baseline_from_deck, diff_deck
+from clm.slides.sync_diff import DeckDiff, diff_deck
 from clm.slides.voiceover_tools import COMPANION_SUBDIR, companion_name
 
 logger = logging.getLogger(__name__)
