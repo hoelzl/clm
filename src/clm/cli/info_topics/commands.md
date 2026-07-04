@@ -20,7 +20,8 @@ The CLI is organised into a small top-level surface (the everyday verbs:
 authoring tools), `course` (course/spec structure: decks, targets, topics,
 includes, readiness gate), `query` (read-only introspection for scripting),
 `export` (rendered course documents), `calendar`
-(cohort viewing calendars), `voiceover`, and the infrastructure groups
+(cohort viewing calendars), `voiceover`, `harvest` (recover narration from
+recorded videos), and the infrastructure groups
 (`db`, `docker`, `git`, `jobs`, `workers`, `zip`, ...). The reference below
 uses the canonical (group-qualified) names. Older flat names were removed
 in CLM 1.8 and the remaining single-command groups (`topic`, `spec`,
@@ -3839,6 +3840,78 @@ clm export agent-guide --stdout             # preview without writing
 clm export agent-guide --with-issues        # also embed open agent-impact issues
 clm export agent-guide --check              # staleness gate (CI / pre-commit)
 ```
+
+### `clm harvest` (CLM {version}+)
+
+Recover spoken narration from recorded videos into slide decks — the
+agent-first rebuild of the video side of `clm voiceover` (epic #546). The
+deterministic tier (ASR, transition detection, OCR matching, alignment) is
+engine-owned, cached, and model-free; curation and translation judgment
+belong to the driving agent. Requires `clm[voiceover]` extra.
+
+Bare `clm harvest DECK VIDEO…` runs the read-only default verb `report`.
+
+**Group-level cache flags** (same artifact cache as `clm voiceover`):
+
+| Option | Description |
+|--------|-------------|
+| `--cache-root PATH` | Override the cache location (default: `<deck dir>/.clm/voiceover-cache`) |
+| `--no-cache` | Disable the artifact cache for this invocation |
+| `--refresh-cache` | Force recomputation and overwrite existing cache entries |
+
+The diagnostics `transcribe`, `detect`, `identify`, `identify-rev`,
+`cache`, and `trace` are also registered under `clm harvest` — they are the
+same commands documented under `clm voiceover` below (the old names remain
+until the harvest cutover phase deletes them).
+
+#### `clm harvest report`
+
+Run the full deterministic tier (cached) and report, slide by slide, what
+the recording said and how it relates to the deck's existing voiceover.
+Read-only; no model; no API key. Also the human dry-run.
+
+```
+clm harvest report SLIDES VIDEO... --lang {de|en} [OPTIONS]
+```
+
+`SLIDES` must be the recorded-language half of a split pair; the whole
+bundle (both deck halves + voiceover companions) is loaded through the v3
+document model, so every item is keyed by the slide's member handle
+(`id:<slide_id>`). A non-normalized bundle (e.g. id-less slides) is refused
+with exit 2 and a `clm slides normalize` hint.
+
+| Option | Description |
+|--------|-------------|
+| `--lang TEXT` | The recorded (spoken) language, `de` or `en` (required) |
+| `--json` | Emit the JSON report envelope instead of the human summary |
+| `--transcript PATH` | Skip ASR; load a precomputed transcript JSON (single-video only) |
+| `--alignment PATH` | Skip ASR, detection, and matching; load a precomputed alignment (single-video only) |
+| `--whisper-model TEXT` | Whisper model size (default: `large-v3`) |
+| `--backend TEXT` | Transcription backend (default: `faster-whisper`) |
+| `--device [auto\|cuda\|cpu]` | Device for ASR (default: `auto`) |
+
+Each per-slide item carries: the member `key` (`id:<slide_id>`, or `null`
+with a normalize note), the slide `title` and pipeline `slide_index`, the
+aligned `transcript` (segments plus `**[Revisited]**` backtracking groups),
+the existing `voiceover` baseline on **both** language sides (inline or
+companion, with per-cell member keys), and a purely **structural** novelty
+`class`:
+
+| Class | Meaning |
+|-------|---------|
+| `no_existing_vo` | Speech was assigned to the slide and the recorded side has no voiceover yet |
+| `transcript_adds_material` | Speech assigned AND a voiceover exists — whether it truly adds anything is the agent's judgment |
+| `covered` | A voiceover exists; the recording contributed no speech for this slide |
+| `unmatched_slide` | No voiceover and no speech (shown silently, or never shown) |
+
+Transcript segments the aligner could not assign to any slide are listed
+separately under `unmatched_speech`. The envelope also records the video
+`fingerprint` that keys the artifact cache (and, in later phases, the
+ledger provenance `harvest:<fingerprint>`).
+
+**Exit codes:** `0` nothing to harvest (all covered/silent) · `1`
+actionable items (new material or unmatched speech) · `2` error
+(unreadable deck, non-normalized bundle, bad inputs).
 
 ### `clm voiceover`
 
