@@ -288,8 +288,8 @@ deck on disk, never resolved and never built — so a certification listing has
 ```
 
 The `<de>`/`<en>` text (required) is shown in the Video column; the Topic column
-is left blank (`—`). `kind` (optional: `"project"`, `"exam"`, …) and `id` are
-informational. An activity-only day satisfies the `--check-workdays` coverage
+is left blank (`—`). `kind` (optional, free-form: `"project"`, `"exam"`,
+`"live"` for a live session with no video, …) and `id` are informational. An activity-only day satisfies the `--check-workdays` coverage
 check and is **not** flagged as an empty day. A subsection may mix `<topic>` and
 `<activity>` children; activity rows render after the day's decks.
 
