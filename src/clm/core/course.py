@@ -882,6 +882,13 @@ class Course(NotebookMixin):
         that should be available in all output directories, including both
         public and speaker directories as appropriate for each target.
         """
+        # Shared across all dir-groups and targets so that copies of the
+        # same sources to the same destination are launched only once —
+        # e.g. an explicit target with both public and speaker kinds, where
+        # the two is_speaker variants collapse to one output path, or a
+        # dir-group repeated in the spec. Concurrent duplicate copytrees
+        # race on Windows (WinError 32 sharing violations).
+        seen_copy_keys: set = set()
         async with TaskGroup() as tg:
             for dir_group in self.dir_groups:
                 for target in self.output_targets:
@@ -908,6 +915,7 @@ class Course(NotebookMixin):
                         languages=target.languages,
                         is_speaker_options=is_speaker_options,
                         skip_toplevel=target.is_explicit,
+                        seen_copy_keys=seen_copy_keys,
                     )
                     tg.create_task(op.execute(backend))
 

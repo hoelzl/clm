@@ -95,12 +95,38 @@ class DirGroup:
             for dir_ in self.relative_paths
         )
 
+    def _copy_key(
+        self,
+        is_speaker: bool,
+        lang: str,
+        output_root: Path | None,
+        skip_toplevel: bool,
+    ) -> tuple:
+        """Identity of a copy operation's effect on disk.
+
+        Two operations with the same key copy the same sources to the same
+        destination, so all but one are redundant — and running them
+        concurrently makes ``shutil.copytree`` race against itself, which on
+        Windows raises WinError 32 (sharing violation). The key deliberately
+        includes the sources: operations writing *different* content to the
+        same destination are a spec conflict, not a duplicate, and must stay
+        visible to the output-write registry's conflict detection.
+        """
+        return (
+            self.output_path(is_speaker, lang, output_root, skip_toplevel=skip_toplevel),
+            self.source_dirs,
+            self.relative_paths,
+            self.base_path,
+            self.recursive,
+        )
+
     async def get_processing_operation(
         self,
         output_root: Path | None = None,
         languages: frozenset[str] | None = None,
         is_speaker_options: list[bool] | None = None,
         skip_toplevel: bool = False,
+        seen_copy_keys: set | None = None,
     ) -> "Operation":
         """Get the operation to copy this directory group.
 
@@ -113,6 +139,16 @@ class DirGroup:
                                If None, defaults to [False, True] for both public and speaker.
             skip_toplevel: If True, skip the "public"/"speaker" directory prefix.
                           Used for explicitly specified output targets.
+            seen_copy_keys: Mutable set used to deduplicate copy operations
+                           that would write the same sources to the same
+                           destination. Pass one shared set across all
+                           dir-groups of a build to also collapse duplicates
+                           between dir-groups; if None, deduplication is
+                           limited to this call. Deduplication matters for
+                           explicit output targets, where the public/speaker
+                           split collapses to a single path and both
+                           is_speaker variants would otherwise copy the same
+                           tree concurrently.
         """
         from clm.core.operations.copy_dir_group import CopyDirGroupOperation
         from clm.infrastructure.operation import Concurrently, NoOperation
@@ -123,19 +159,30 @@ class DirGroup:
         # Default to both public and speaker if not specified
         speaker_options = is_speaker_options if is_speaker_options is not None else [False, True]
 
-        operations = tuple(
-            CopyDirGroupOperation(
-                dir_group=self,
-                lang=lang,
-                is_speaker=is_speaker,
-                output_root=output_root,
-                skip_toplevel=skip_toplevel,
-            )
-            for lang in langs_to_copy
-            for is_speaker in speaker_options
-        )
+        if seen_copy_keys is None:
+            seen_copy_keys = set()
+
+        operations = []
+        for lang in sorted(langs_to_copy):
+            for is_speaker in speaker_options:
+                key = self._copy_key(is_speaker, lang, output_root, skip_toplevel)
+                if key in seen_copy_keys:
+                    logger.debug(
+                        f"Skipping duplicate dir-group copy of '{self.name[lang]}' to {key[0]}"
+                    )
+                    continue
+                seen_copy_keys.add(key)
+                operations.append(
+                    CopyDirGroupOperation(
+                        dir_group=self,
+                        lang=lang,
+                        is_speaker=is_speaker,
+                        output_root=output_root,
+                        skip_toplevel=skip_toplevel,
+                    )
+                )
 
         if not operations:
             return NoOperation()
 
-        return Concurrently(operations)
+        return Concurrently(tuple(operations))
