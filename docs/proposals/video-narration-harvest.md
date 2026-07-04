@@ -1,7 +1,10 @@
 # Proposal: Agent-First Video Narration Harvest
 
-**Status**: proposal (pre-design exploration)
+**Status**: proposal (pre-design exploration; open questions resolved by
+maintainer 2026-07-04, see §8)
 **Date**: 2026-07-04
+**Compatibility**: none required — the feature currently has a single user;
+no deprecated aliases, no legacy write paths, direct cutover.
 **Related**: #366 (agent-first sync pivot), #520 (sync-engine-v3), #501
 (separated voiceover companions), `docs/claude/voiceover-design.md` (original
 video pipeline design)
@@ -203,6 +206,21 @@ The existing diagnostics survive unchanged under the same group:
 verb operating on historical revisions; its `--dry-run`-by-default behavior
 already matches the philosophy.
 
+### Answer schema: bullet lists
+
+Voiceovers are written as bullet lists so the speaker can keep track of
+where they are while recording. The `answer_schema` makes that the primary
+shape: an answer is, per language side, an ordered list of bullet strings
+(markdown inline formatting allowed within a bullet, no nested block
+structure), plus a `dropped` list echoing transcript passages the agent
+chose to discard (the audit trail that replaces today's
+`dropped_from_transcript`). A structured list is also the simplest thing
+for the agent to produce and for the validator to check — bullet-level
+identity survives JSON round-trips, whereas free markdown would need
+re-parsing and invites formatting drift. Rendering bullets into the member
+body (comment prefixes, blank-line policy) is the engine's job at `accept`
+time, reusing the existing cell-spacing rules.
+
 ### Validators (deterministic, engine-owned)
 
 `accept` validates at minimum: answer matches the schema; the target member
@@ -240,10 +258,14 @@ Recommended name: **`clm harvest`**. Alternatives considered:
 conceptually with git terminology and the `port` verb), anything under
 `recordings` (already means the OBS/Auphonic audio production workflow).
 
-Migration: `clm voiceover sync` et al. remain as deprecated aliases for one
-minor release, then removed (fits the existing breaking-release cadence).
-The text-layer verbs (`voiceover extract/inline/inline-notes`) stay put for
-now; folding them under `clm slides` is a separate, optional cleanup.
+Migration: **direct cutover, no deprecated aliases.** The feature has a
+single user, so the video-side verbs move to `clm harvest` in one release
+and the old names are deleted outright. `port` and `compare` (and
+`compare-from-inventory`) move into the harvest group as well — they are
+video-side tooling and keeping them under `voiceover` would perpetuate the
+overload. The text-layer verbs (`voiceover extract/inline/inline-notes`)
+stay put for now; folding them under `clm slides` is a separate, optional
+cleanup.
 
 ## 6. Single-language recordings and translation
 
@@ -298,9 +320,11 @@ The one hard requirement this imposes: an `accept` that writes one side must
 leave the pair in a state `slides sync report` classifies correctly as
 "DE edited, EN needs translation" rather than as corruption — i.e. harvest
 writes must go through the v3 model and (when `--record` is used) mark only
-the written side's trust, never blessing the stale twin. This is a design
-constraint on the ledger-recording step, to be pinned down in the detailed
-design.
+the written side's trust, never blessing the stale twin. Harvest-originated
+ledger entries carry a **harvest-specific provenance**,
+`harvest:<video-fingerprint>` (the same fingerprint that keys the artifact
+cache), so a later `sync report` can explain *why* the sides diverge and
+trace the write back to the exact recording.
 
 ## 7. Sequencing
 
@@ -312,20 +336,31 @@ design.
 3. **`task` / `accept`** writing through the v3 model, with validators,
    ledger `--record`, and the single-side/bilingual answer contract (§6).
    Gated on confidence in v3 (after the dogfood week).
-4. **Rename + migrate**: `clm harvest` group, deprecated aliases,
+4. **Rename + cut over**: `clm harvest` group (including `port`/`compare`/
+   `compare-from-inventory`), old video-side `voiceover` verbs deleted,
    `voiceover sync` → `harvest autopilot`, MCP renames, `clm info
-   harvest-agents`, user-guide update.
+   harvest-agents`, user-guide update. No deprecated aliases.
 
-## 8. Open questions
+## 8. Resolved decisions (maintainer, 2026-07-04)
 
-- Exact `answer_schema` shapes for `curate` vs `translate` tasks (bullet
-  list vs. free markdown; how `**[Revisited]**` segments are presented).
-- Whether `harvest report`'s novelty classification needs a cheap textual
-  similarity heuristic (deterministic) or stays purely structural
-  (VO present/absent + transcript matched/unmatched), leaving "adds
-  material?" wholly to the agent. Leaning structural-only: keep the engine
-  honest about what it can know without a model.
-- Ledger semantics for one-sided harvest writes (§6): record under a
-  harvest-specific provenance (`harvest:<video-fingerprint>`) so
-  `sync report` can explain *why* the sides diverge?
-- Whether `port`/`compare` join the harvest group or stay as-is initially.
+Formerly the open-questions list; all four are settled:
+
+- **Answer schema = bullet lists** (§4). Voiceovers are authored as bullet
+  lists so the speaker can track their position while recording; the schema
+  is a per-language ordered list of bullet strings plus a `dropped` audit
+  list. Rendering into the cell body is the engine's job. Remaining detail
+  for the design phase: how `**[Revisited]**` transcript segments are
+  presented inside a `curate` task's inputs.
+- **Novelty classification stays purely structural** (VO present/absent +
+  transcript matched/unmatched). No textual-similarity heuristic: it would
+  have unexpected failure modes and grow ever more complex chasing them.
+  "Does the transcript add material?" is wholly the agent's judgment.
+- **Harvest-specific ledger provenance**: `harvest:<video-fingerprint>`
+  (§6).
+- **`port`, `compare`, and `compare-from-inventory` move into the harvest
+  group** (§5) — the cleaner cut, and with no backward-compatibility
+  obligation there is no reason to stage it.
+
+Additionally: **no backward compatibility anywhere in this proposal.** The
+feature has one user; direct cutover, no deprecated aliases, no legacy
+write-path retention beyond what `autopilot` deliberately keeps.
