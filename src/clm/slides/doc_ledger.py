@@ -39,7 +39,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from attrs import define, field, frozen
+from attrs import define, evolve, field, frozen
 
 from clm.slides.bilingual_doc import BilingualDeck, Lang
 from clm.slides.doc_identity import DeckBaseline, MemberBaseline, baseline_from_deck
@@ -56,6 +56,7 @@ __all__ = [
     "deck_key_for",
     "ledger_path_for",
     "load",
+    "preserve_unchanged_member",
     "record_deck_snapshot",
     "save",
 ]
@@ -295,12 +296,24 @@ def _to_json(ledger: TopicLedger) -> str:
     return json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
 
 
-def save(ledger: TopicLedger, path: Path) -> None:
-    """Write the ledger atomically (canonical JSON), creating ``.clm/``."""
+def save(ledger: TopicLedger, path: Path) -> bool:
+    """Write the ledger atomically (canonical JSON), creating ``.clm/``.
+
+    Skips the write entirely — and returns ``False`` — when the canonical
+    serialization is byte-identical to the file already on disk: a repo-wide
+    ``record`` sweep must be write-free on clean pairs (issue #555).
+    """
     from clm.infrastructure.utils.path_utils import atomic_write_bytes
 
+    payload = _to_json(ledger).encode("utf-8")
+    try:
+        if path.is_file() and path.read_bytes() == payload:
+            return False
+    except OSError:
+        pass  # unreadable existing file: fall through to the atomic write
     path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_bytes(path, _to_json(ledger).encode("utf-8"))
+    atomic_write_bytes(path, payload)
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -358,6 +371,22 @@ def snapshot_deck(
     )
 
 
+def preserve_unchanged_member(prev: LedgerMember | None, new: LedgerMember) -> LedgerMember:
+    """Keep ``prev`` when re-recording it would change nothing but the commit stamp.
+
+    ``confirmed_commit`` means "the commit at which this state was last
+    *actually* established" — so an entry whose recorded state (baseline,
+    provenance, trust state, hash version) is identical to what a re-record
+    would write keeps its original stamp, and a repo-wide ``record`` sweep of
+    clean pairs rewrites nothing (issue #555). Any real field change — content
+    fingerprints, an explicit ``--provenance`` switch, a hash-version bump —
+    still records fresh.
+    """
+    if prev is not None and evolve(prev, confirmed_commit=new.confirmed_commit) == new:
+        return prev
+    return new
+
+
 def record_deck_snapshot(
     ledger: TopicLedger,
     deck_key: str,
@@ -389,6 +418,11 @@ def record_deck_snapshot(
     old = ledger.decks.get(deck_key)
     migrations = _detect_key_migrations(old, fresh) if old is not None else {}
     if member_keys is None:
+        if old is not None:
+            fresh.members = {
+                key: preserve_unchanged_member(old.members.get(key), lm)
+                for key, lm in fresh.members.items()
+            }
         ledger.decks[deck_key] = fresh
         return len(fresh.members), migrations
     target = old if old is not None else DeckLedger()
@@ -404,7 +438,7 @@ def record_deck_snapshot(
         for old_key, new_key in migrations.items():
             if new_key == key:
                 target.members.pop(old_key, None)
-        target.members[key] = lm
+        target.members[key] = preserve_unchanged_member(target.members.get(key), lm)
         recorded += 1
     ledger.decks[deck_key] = target
     return recorded, {k: v for k, v in migrations.items() if v in member_keys}
@@ -458,12 +492,13 @@ def _detect_key_migrations(old: DeckLedger, fresh: DeckLedger) -> dict[str, str]
 def rerecord_pool(target: DeckLedger, fresh: DeckLedger, group: str, kind: str) -> int:
     """Replace every ``pos:<group>/<kind>/*`` entry with the fresh pool state."""
     prefix = f"pos:{group}/{kind}/"
-    for key in [k for k in target.members if k.startswith(prefix)]:
-        del target.members[key]
+    old_pool = {
+        key: target.members.pop(key) for key in [k for k in target.members if k.startswith(prefix)]
+    }
     copied = 0
     for key, lm in fresh.members.items():
         if key.startswith(prefix):
-            target.members[key] = lm
+            target.members[key] = preserve_unchanged_member(old_pool.get(key), lm)
             copied += 1
     return copied
 

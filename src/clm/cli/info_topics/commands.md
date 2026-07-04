@@ -1905,6 +1905,17 @@ stale entries and performs the pos→id key migration when a cell gained an id
 who asserted the verification: `record` (default), `agent`, or
 `semantic:<model>`.
 
+**Re-recording is git-idempotent (CLM {version}).** A member whose recorded
+state (fingerprints, provenance, trust state, hash version) is unchanged keeps
+its existing `confirmed_commit`, and a ledger whose canonical serialization is
+byte-identical is not rewritten at all — so a repo-wide
+`clm slides sync record DIR` over clean pairs leaves `git status` clean instead
+of bumping every committed ledger to the current HEAD. `confirmed_commit`
+therefore means "the commit at which this state was last *actually*
+established". The `--json` envelope reports the per-pair `ledger_changed`
+boolean and a top-level `unchanged` pair count; the text output appends
+`(unchanged)` for a write-free pair.
+
 ### `clm slides translate`
 
 *Added in CLM {version}. Alias: `clm slides bootstrap`.*

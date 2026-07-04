@@ -54,6 +54,7 @@ from clm.slides.doc_ledger import (
     DeckLedger,
     LedgerMember,
     TopicLedger,
+    preserve_unchanged_member,
     record_group_order,
     record_order_scope,
     record_preamble_scope,
@@ -800,12 +801,15 @@ def _upsert(target: DeckLedger, fresh: DeckLedger, key: str, provenance: str) ->
     if lm is None:
         target.members.pop(key, None)
         return
-    target.members[key] = LedgerMember(
-        entry=lm.entry,
-        provenance=provenance,
-        state=lm.state,
-        hash_version=lm.hash_version,
-        confirmed_commit=lm.confirmed_commit,
+    target.members[key] = preserve_unchanged_member(
+        target.members.get(key),
+        LedgerMember(
+            entry=lm.entry,
+            provenance=provenance,
+            state=lm.state,
+            hash_version=lm.hash_version,
+            confirmed_commit=lm.confirmed_commit,
+        ),
     )
 
 
