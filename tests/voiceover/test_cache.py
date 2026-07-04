@@ -11,6 +11,7 @@ from clm.voiceover.cache import (
     AlignmentsCache,
     CachePolicy,
     DetectConfig,
+    MultiVideoKey,
     SlidesKey,
     TimelinesCache,
     TranscribeConfig,
@@ -25,6 +26,7 @@ from clm.voiceover.cache import (
     iter_entries,
     prune,
     resolve_cache_root,
+    video_key_for,
 )
 
 
@@ -73,6 +75,73 @@ class TestSlidesKey:
         p.write_text("x = 1\n", encoding="utf-8")
         key = SlidesKey.from_path(p)
         assert key == SlidesKey.from_text("x = 1\n")
+
+
+class TestMultiVideoKey:
+    def test_hash_covers_every_part_in_order(self, tmp_path):
+        a = tmp_path / "a.mp4"
+        b = tmp_path / "b.mp4"
+        a.write_bytes(b"part a")
+        b.write_bytes(b"part b")
+        key_ab = MultiVideoKey.from_paths([a, b])
+        key_ba = MultiVideoKey.from_paths([b, a])
+        assert key_ab.hash == MultiVideoKey.from_paths([a, b]).hash  # stable
+        assert key_ab.hash != key_ba.hash  # order-sensitive
+        assert len(key_ab.hash) == 16
+
+    def test_hash_changes_when_any_part_changes(self, tmp_path):
+        import os
+
+        a = tmp_path / "a.mp4"
+        b = tmp_path / "b.mp4"
+        a.write_bytes(b"part a")
+        b.write_bytes(b"part b")
+        before = MultiVideoKey.from_paths([a, b]).hash
+        b.write_bytes(b"part b, re-rendered longer")
+        os.utime(b, ns=(1, 1))
+        assert MultiVideoKey.from_paths([a, b]).hash != before
+
+    def test_video_key_for_dispatch(self, tmp_path):
+        a = tmp_path / "a.mp4"
+        b = tmp_path / "b.mp4"
+        a.write_bytes(b"part a")
+        b.write_bytes(b"part b")
+        assert isinstance(video_key_for(a), VideoKey)
+        assert isinstance(video_key_for([a]), VideoKey)
+        assert isinstance(video_key_for([a, b]), MultiVideoKey)
+
+    def test_multi_part_timeline_cache_round_trip(self, tmp_path):
+        from clm.voiceover.cache import CachePolicy, cached_timeline
+        from clm.voiceover.matcher import TimelineEntry
+
+        a = tmp_path / "a.mp4"
+        b = tmp_path / "b.mp4"
+        a.write_bytes(b"part a")
+        b.write_bytes(b"part b")
+        slides = tmp_path / "slides_t.de.py"
+        slides.write_text("# %% [markdown]\n# x\n", encoding="utf-8")
+        policy = CachePolicy(cache_root=tmp_path / "cache")
+        timeline = [TimelineEntry(slide_index=1, start_time=0.0, end_time=5.0, match_score=90.0)]
+        calls = []
+
+        def compute():
+            calls.append(1)
+            return timeline
+
+        first, hit1 = cached_timeline(
+            [a, b], slides, policy=policy, timeline_fn=compute, cfg={"lang": "de"}
+        )
+        second, hit2 = cached_timeline(
+            [a, b], slides, policy=policy, timeline_fn=compute, cfg={"lang": "de"}
+        )
+        assert (hit1, hit2) == (False, True)
+        assert len(calls) == 1
+        assert second[0].slide_index == 1
+        # A different part order is a different recording -> a miss.
+        _, hit3 = cached_timeline(
+            [b, a], slides, policy=policy, timeline_fn=compute, cfg={"lang": "de"}
+        )
+        assert hit3 is False
 
 
 class TestTranscribeConfig:

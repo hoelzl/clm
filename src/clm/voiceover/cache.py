@@ -47,7 +47,7 @@ import json
 import logging
 import os
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Generic, TypeVar
@@ -90,6 +90,37 @@ class VideoKey:
             usedforsecurity=False,
         )
         return h.hexdigest()[:16]
+
+
+@dataclass(frozen=True)
+class MultiVideoKey:
+    """Composite fingerprint for a multi-part recording.
+
+    The hash covers every part's :class:`VideoKey` hash in order — any part
+    changing (or the part order changing) invalidates the entry. The same
+    hash is the harvest ``video_fingerprint`` for multi-part videos, so the
+    cache key and the ledger provenance stay one identity.
+    """
+
+    parts: tuple[VideoKey, ...]
+
+    @classmethod
+    def from_paths(cls, paths: Sequence[str | Path]) -> MultiVideoKey:
+        return cls(parts=tuple(VideoKey.from_path(p) for p in paths))
+
+    @property
+    def hash(self) -> str:
+        joined = "|".join(part.hash for part in self.parts)
+        return hashlib.sha1(joined.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
+
+
+def video_key_for(paths: str | Path | Sequence[str | Path]) -> VideoKey | MultiVideoKey:
+    """The cache key for one video or an ordered multi-part recording."""
+    if isinstance(paths, (str, Path)):
+        return VideoKey.from_path(paths)
+    if len(paths) == 1:
+        return VideoKey.from_path(paths[0])
+    return MultiVideoKey.from_paths(paths)
 
 
 @dataclass(frozen=True)
@@ -333,10 +364,10 @@ class TimelinesCache(_JsonCache):
         )
 
     @staticmethod
-    def _compose_key(video: VideoKey, slides: SlidesKey) -> str:
+    def _compose_key(video: VideoKey | MultiVideoKey, slides: SlidesKey) -> str:
         return f"{video.hash}_{slides.hash}"
 
-    def get(self, video: VideoKey, slides: SlidesKey, cfg: dict[str, Any]):
+    def get(self, video: VideoKey | MultiVideoKey, slides: SlidesKey, cfg: dict[str, Any]):
         entry = self._load(self._compose_key(video, slides))
         if entry is None:
             return None
@@ -357,7 +388,7 @@ class TimelinesCache(_JsonCache):
 
     def put(
         self,
-        video: VideoKey,
+        video: VideoKey | MultiVideoKey,
         slides: SlidesKey,
         cfg: dict[str, Any],
         timeline,
@@ -386,10 +417,10 @@ class AlignmentsCache(_JsonCache):
         )
 
     @staticmethod
-    def _compose_key(video: VideoKey, slides: SlidesKey) -> str:
+    def _compose_key(video: VideoKey | MultiVideoKey, slides: SlidesKey) -> str:
         return f"{video.hash}_{slides.hash}"
 
-    def get(self, video: VideoKey, slides: SlidesKey, cfg: dict[str, Any]):
+    def get(self, video: VideoKey | MultiVideoKey, slides: SlidesKey, cfg: dict[str, Any]):
         entry = self._load(self._compose_key(video, slides))
         if entry is None:
             return None
@@ -410,7 +441,7 @@ class AlignmentsCache(_JsonCache):
 
     def put(
         self,
-        video: VideoKey,
+        video: VideoKey | MultiVideoKey,
         slides: SlidesKey,
         cfg: dict[str, Any],
         alignment,
@@ -712,7 +743,7 @@ def cached_detect(
 
 
 def cached_timeline(
-    video_path: str | Path,
+    video_path: str | Path | Sequence[str | Path],
     slide_path: str | Path,
     *,
     policy: CachePolicy,
@@ -728,14 +759,14 @@ def cached_timeline(
     if not policy.enabled:
         return timeline_fn(), False
 
-    video_key = VideoKey.from_path(video_path)
+    video_key = video_key_for(video_path)
     slides_key = SlidesKey.from_path(slide_path)
     cache = TimelinesCache(policy.resolve_root(base_dir))
 
     if not policy.refresh:
         hit = cache.get(video_key, slides_key, cfg)
         if hit is not None:
-            logger.info("Timeline cache hit for %s", Path(video_path).name)
+            logger.info("Timeline cache hit (%s)", video_key.hash)
             return hit, True
 
     timeline = timeline_fn()
@@ -744,7 +775,7 @@ def cached_timeline(
 
 
 def cached_alignment(
-    video_path: str | Path,
+    video_path: str | Path | Sequence[str | Path],
     slide_path: str | Path,
     *,
     policy: CachePolicy,
@@ -756,14 +787,14 @@ def cached_alignment(
     if not policy.enabled:
         return alignment_fn(), False
 
-    video_key = VideoKey.from_path(video_path)
+    video_key = video_key_for(video_path)
     slides_key = SlidesKey.from_path(slide_path)
     cache = AlignmentsCache(policy.resolve_root(base_dir))
 
     if not policy.refresh:
         hit = cache.get(video_key, slides_key, cfg)
         if hit is not None:
-            logger.info("Alignment cache hit for %s", Path(video_path).name)
+            logger.info("Alignment cache hit (%s)", video_key.hash)
             return hit, True
 
     alignment = alignment_fn()

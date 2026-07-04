@@ -37,7 +37,6 @@ This module is engine-only: it emits, it never invokes a model.
 
 from __future__ import annotations
 
-import hashlib
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -101,19 +100,18 @@ class PipelineArtifacts:
 
 
 def video_fingerprint(video_paths: list[Path]) -> str:
-    """The fingerprint keying the artifact cache — and, later, the ledger
-    provenance ``harvest:<fingerprint>`` (proposal §6).
+    """The fingerprint keying the artifact cache — and the ledger provenance
+    ``harvest:<fingerprint>`` (proposal §6).
 
     Single video: the cache's :class:`~clm.voiceover.cache.VideoKey` hash
-    (path + mtime + size). Multiple parts: a stable hash over the ordered
-    per-part hashes.
+    (path + mtime + size). Multiple parts: the composite
+    :class:`~clm.voiceover.cache.MultiVideoKey` hash over the ordered
+    per-part hashes — the same key the timeline/alignment caches use, so
+    cache identity and provenance stay one thing.
     """
-    from clm.voiceover.cache import VideoKey
+    from clm.voiceover.cache import video_key_for
 
-    hashes = [VideoKey.from_path(p).hash for p in video_paths]
-    if len(hashes) == 1:
-        return hashes[0]
-    return hashlib.sha1("|".join(hashes).encode("utf-8")).hexdigest()[:16]
+    return video_key_for(video_paths).hash
 
 
 def run_pipeline(
@@ -131,11 +129,12 @@ def run_pipeline(
 ) -> PipelineArtifacts:
     """Run the deterministic tier (cached) up to the alignment.
 
-    The same stage order and cache wrappers ``clm voiceover sync`` uses:
-    per part transcribe + detect (cached), offset and merge, OCR match
-    (cached, single-part only), align (cached, single-part only). An
-    ``alignment_override`` short-circuits everything; a
-    ``transcript_override`` skips only ASR. Both are single-part only.
+    Per part: transcribe + detect (cached per part), offset and merge; then
+    OCR match and align, cached under the composite multi-part key when the
+    recording has several parts. An ``alignment_override`` short-circuits
+    everything (it encodes the final stitched alignment, so it applies to
+    multi-part recordings too); a ``transcript_override`` skips only ASR
+    and stays single-video only (it encodes one part's ASR output).
     """
     from clm.voiceover.aligner import align_transcript
     from clm.voiceover.cache import (
@@ -156,11 +155,8 @@ def run_pipeline(
 
     multi_part = len(video_paths) > 1
     if alignment_override is not None:
-        if multi_part:
-            raise HarvestUsageError(
-                "--alignment is incompatible with multi-part videos; "
-                "the override encodes a single pre-computed alignment."
-            )
+        # The override is the final per-slide alignment — it already encodes
+        # the stitched timeline, so it applies to multi-part recordings too.
         return PipelineArtifacts(
             alignment=alignment_override, timeline=None, transcript_language=None
         )
@@ -227,34 +223,28 @@ def run_pipeline(
             lang=lang,
         ).timeline
 
-    # Timeline/alignment caching is single-part only (composite multi-part
-    # keys are not modelled) — the same scoping `voiceover sync` applies.
-    if multi_part:
-        timeline = _run_match()
-    else:
-        timeline, _ = cached_timeline(
-            video_paths[0],
-            slides_path,
-            policy=policy,
-            base_dir=slides_path.parent,
-            timeline_fn=_run_match,
-            cfg={"lang": lang, "frame_offset": 1.0, "multi_part": multi_part},
-        )
+    # Timeline/alignment caching covers multi-part recordings via the
+    # composite MultiVideoKey (any part change/reorder invalidates).
+    timeline, _ = cached_timeline(
+        video_paths,
+        slides_path,
+        policy=policy,
+        base_dir=slides_path.parent,
+        timeline_fn=_run_match,
+        cfg={"lang": lang, "frame_offset": 1.0, "multi_part": multi_part},
+    )
 
     def _run_align():
         return align_transcript(merged_transcript, timeline)
 
-    if multi_part:
-        alignment = _run_align()
-    else:
-        alignment, _ = cached_alignment(
-            video_paths[0],
-            slides_path,
-            policy=policy,
-            base_dir=slides_path.parent,
-            alignment_fn=_run_align,
-            cfg={"lang": lang, "multi_part": multi_part},
-        )
+    alignment, _ = cached_alignment(
+        video_paths,
+        slides_path,
+        policy=policy,
+        base_dir=slides_path.parent,
+        alignment_fn=_run_align,
+        cfg={"lang": lang, "multi_part": multi_part},
+    )
 
     return PipelineArtifacts(
         alignment=alignment,

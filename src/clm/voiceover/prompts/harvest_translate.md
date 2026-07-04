@@ -17,7 +17,13 @@ Rules:
 4. Stay idiomatic in the target language; technical terms follow the deck's
    existing conventions.
 
+5. **Multiple narrative cells.** `inputs.baseline` lists every narrative
+   cell of the slide (document order) with its `member` handle and both
+   language sides. Translate each source cell in its own `updates` entry
+   addressed at that `member`; skip cells whose target side is already a
+   faithful translation.
+
 Answer with the JSON shape given in `answer_schema`, providing bullets for
 the **target** language side only, echoing `item`, `kind`,
-`baseline_fingerprint`, and `video_fingerprint` from this task document.
+`baseline_fingerprints`, and `video_fingerprint` from this task document.
 Then submit it with `clm harvest accept DECK --answer FILE [--record]`.

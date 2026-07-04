@@ -1,25 +1,31 @@
-"""``clm harvest accept`` — validate an answer and write it (#546 Phase 3).
+"""``clm harvest accept`` — validate an answer and write it (#546 Phase 3/4).
 
 The only write path of the harvest toolkit. An answer (the bullet-list
-document a ``harvest task`` framed, `validator "harvest-bullets"`) is
-validated — schema shape, single-cell body guards, baseline-fingerprint
-freshness against what ``task`` framed — and then lands through the v3
-model: an id-keyed member edit emitted and written atomically via the
-Phase-1 write surface (:mod:`clm.slides.doc_write`). Nothing is written on
-any validation failure; the mutated bundle is re-parsed before anything
-touches disk (the lens gate).
+document a ``harvest task`` framed, validator ``harvest-bullets``) is
+validated — schema shape, single-cell body guards, per-member
+baseline-fingerprint freshness against what ``task`` framed — and then
+lands through the v3 model: id-keyed member edits emitted and written
+atomically via the Phase-1 write surface (:mod:`clm.slides.doc_write`).
+Nothing is written on any validation failure; the mutated bundle is
+re-parsed before anything touches disk (the lens gate).
 
-``--record`` banks the write into the sync consistency ledger with
-provenance ``harvest:<video-fingerprint>`` under the §6 one-sided-trust
-semantics (proposal §6, the load-bearing invariant):
+Slides routinely carry several narrative cells (one per code cell), so an
+answer is a list of per-member ``updates``: each names an existing
+narrative member of the slide, or creates a new one (``"member": null``,
+optionally placed ``"after"`` an existing narrative member; default at the
+end of the slide group).
 
-* **bilingual answer** → the member's fresh both-side snapshot is recorded
+``--record`` banks each written member into the sync consistency ledger
+with provenance ``harvest:<video-fingerprint>`` under the §6
+one-sided-trust semantics (proposal §6, the load-bearing invariant):
+
+* **bilingual update** → the member's fresh both-side snapshot is recorded
   (the pair is clean; next ``slides sync report`` reads ``in_sync``);
-* **one-sided answer, member ends one-sided** → the fresh one-sided
+* **one-sided update, member ends one-sided** → the fresh one-sided
   snapshot is recorded — that entry is precisely what makes the next sync
   report frame ``translate_new`` for the twin (an unrecorded new member
   would only surface as an unframed ``verify_cold``);
-* **one-sided answer, twin body exists** → the written side's ledger
+* **one-sided update, twin body exists** → the written side's ledger
   fingerprint is **not** advanced (the existing entry is kept, or the
   pre-write state is recorded): the harvested side reads as "edited off
   base" and the next sync report frames ``translate_edit`` toward the twin.
@@ -61,6 +67,7 @@ __all__ = [
     "AcceptOutcome",
     "AcceptRejected",
     "Answer",
+    "Update",
     "accept_answer",
     "parse_answer",
 ]
@@ -75,13 +82,22 @@ class AcceptRejected(Exception):
 
 
 @define
+class Update:
+    """One per-member edit: an existing member's new bullets, or a new cell."""
+
+    member: str | None  # id:… handle, or None = create
+    bullets: dict[str, list[str]]  # side -> ordered bullet strings
+    after: str | None = None  # create only: place after this narrative member
+
+
+@define
 class Answer:
     """The validated bullet-list answer document."""
 
     item: str
     kind: str
-    baseline_fingerprint: dict[str, str | None]
-    bullets: dict[str, list[str]]  # side -> ordered bullet strings
+    baseline_fingerprints: dict[str, dict[str, str | None]]
+    updates: list[Update]
     dropped: list[str]
     video_fingerprint: str | None
 
@@ -90,8 +106,7 @@ class Answer:
 class AcceptOutcome:
     item: str
     applied: bool = False
-    created: bool = False
-    member: str | None = None  # the vo member's rendered key
+    members: list[dict[str, Any]] = field(factory=list)  # {"member","created"}
     written_paths: list[Path] = field(factory=list)
     recorded: bool = False
     record_refused: list[str] = field(factory=list)
@@ -104,8 +119,7 @@ class AcceptOutcome:
             "verb": "accept",
             "item": self.item,
             "applied": self.applied,
-            "created": self.created,
-            "member": self.member,
+            "members": self.members,
             "written": [str(p) for p in self.written_paths],
             "recorded": self.recorded,
             "record_refused": self.record_refused,
@@ -116,6 +130,27 @@ class AcceptOutcome:
 # ---------------------------------------------------------------------------
 # Answer validation (validator "harvest-bullets")
 # ---------------------------------------------------------------------------
+
+
+def _parse_bullets(bullets: Any, where: str) -> dict[str, list[str]]:
+    if not isinstance(bullets, dict) or not bullets or set(bullets) - {"de", "en"}:
+        raise AcceptRejected(f"{where}.bullets must map at least one of de/en to a bullet list")
+    parsed: dict[str, list[str]] = {}
+    for side, entries in bullets.items():
+        if not isinstance(entries, list) or not entries:
+            raise AcceptRejected(f"{where}.bullets.{side} must be a non-empty list of strings")
+        cleaned: list[str] = []
+        for i, bullet in enumerate(entries):
+            if not isinstance(bullet, str) or not bullet.strip():
+                raise AcceptRejected(f"{where}.bullets.{side}[{i}] must be a non-empty string")
+            if "\n" in bullet:
+                raise AcceptRejected(
+                    f"{where}.bullets.{side}[{i}] contains a newline — one bullet per "
+                    "string, markdown inline formatting only"
+                )
+            cleaned.append(_BULLET_PREFIX.sub("", bullet.strip()))
+        parsed[side] = cleaned
+    return parsed
 
 
 def parse_answer(payload: Any) -> Answer:
@@ -129,32 +164,46 @@ def parse_answer(payload: Any) -> Answer:
     kind = payload.get("kind")
     if kind not in ("curate", "translate"):
         raise AcceptRejected('\'kind\' must be "curate" or "translate"')
-    fingerprint = payload.get("baseline_fingerprint")
-    if not isinstance(fingerprint, dict) or set(fingerprint) - {"de", "en"}:
+    tokens = payload.get("baseline_fingerprints")
+    if not isinstance(tokens, dict):
         raise AcceptRejected(
-            "'baseline_fingerprint' must be the {de, en} object echoed from the task"
+            "'baseline_fingerprints' must be the per-member object echoed from the task"
         )
-    for side, value in fingerprint.items():
-        if value is not None and not isinstance(value, str):
-            raise AcceptRejected(f"baseline_fingerprint.{side} must be a string or null")
-    bullets = payload.get("bullets")
-    if not isinstance(bullets, dict) or not bullets or set(bullets) - {"de", "en"}:
-        raise AcceptRejected("'bullets' must map at least one of de/en to a bullet list")
-    parsed_bullets: dict[str, list[str]] = {}
-    for side, entries in bullets.items():
-        if not isinstance(entries, list) or not entries:
-            raise AcceptRejected(f"bullets.{side} must be a non-empty list of bullet strings")
-        cleaned: list[str] = []
-        for i, bullet in enumerate(entries):
-            if not isinstance(bullet, str) or not bullet.strip():
-                raise AcceptRejected(f"bullets.{side}[{i}] must be a non-empty string")
-            if "\n" in bullet:
+    fingerprints: dict[str, dict[str, str | None]] = {}
+    for key, sides in tokens.items():
+        if not isinstance(sides, dict) or set(sides) - {"de", "en"}:
+            raise AcceptRejected(f"baseline_fingerprints[{key!r}] must be a {{de, en}} object")
+        for side, value in sides.items():
+            if value is not None and not isinstance(value, str):
                 raise AcceptRejected(
-                    f"bullets.{side}[{i}] contains a newline — one bullet per string, "
-                    "markdown inline formatting only"
+                    f"baseline_fingerprints[{key!r}].{side} must be a string or null"
                 )
-            cleaned.append(_BULLET_PREFIX.sub("", bullet.strip()))
-        parsed_bullets[side] = cleaned
+        fingerprints[key] = {s: sides.get(s) for s in _SIDES}
+    raw_updates = payload.get("updates")
+    if not isinstance(raw_updates, list) or not raw_updates:
+        raise AcceptRejected("'updates' must be a non-empty list of per-member entries")
+    updates: list[Update] = []
+    seen_members: set[str] = set()
+    for i, entry in enumerate(raw_updates):
+        where = f"updates[{i}]"
+        if not isinstance(entry, dict):
+            raise AcceptRejected(f"{where} must be an object with 'member' and 'bullets'")
+        member = entry.get("member")
+        if member is not None and (not isinstance(member, str) or not member.startswith("id:")):
+            raise AcceptRejected(f"{where}.member must be an id:… handle or null (= create)")
+        if member is not None:
+            if member in seen_members:
+                raise AcceptRejected(f"{where}: duplicate update for member {member}")
+            seen_members.add(member)
+        after = entry.get("after")
+        if after is not None:
+            if member is not None:
+                raise AcceptRejected(f"{where}: 'after' is only valid when member is null")
+            if not isinstance(after, str) or not after.startswith("id:"):
+                raise AcceptRejected(f"{where}.after must be an existing member's id:… handle")
+        updates.append(
+            Update(member=member, bullets=_parse_bullets(entry.get("bullets"), where), after=after)
+        )
     dropped = payload.get("dropped")
     if not isinstance(dropped, list) or any(not isinstance(d, str) for d in dropped):
         raise AcceptRejected("'dropped' must be a list of strings (the audit trail; may be empty)")
@@ -164,8 +213,8 @@ def parse_answer(payload: Any) -> Answer:
     return Answer(
         item=item,
         kind=kind,
-        baseline_fingerprint={s: fingerprint.get(s) for s in _SIDES},
-        bullets=parsed_bullets,
+        baseline_fingerprints=fingerprints,
+        updates=updates,
         dropped=list(dropped),
         video_fingerprint=video_fingerprint,
     )
@@ -204,7 +253,7 @@ def _replace_body(cell: SideCell, body: str) -> tuple[str, ...]:
 
 
 # ---------------------------------------------------------------------------
-# Locating and mutating the voiceover member
+# Locating and mutating the voiceover members
 # ---------------------------------------------------------------------------
 
 
@@ -216,15 +265,20 @@ def _narrative_members(deck: BilingualDeck, slide_id: str) -> list[Member] | Non
 
 
 def _check_freshness(answer: Answer, members: list[Member]) -> None:
-    for side in _SIDES:
-        cells = [c for m in members if (c := m.side(side)) is not None]
-        current = content_fingerprint(cells[0]) if cells else None
-        framed = answer.baseline_fingerprint.get(side)
-        if current != framed:
-            raise AcceptRejected(
-                f"the {side} voiceover baseline changed since the task was framed "
-                "(fingerprint mismatch) — re-run `harvest task` and re-judge"
-            )
+    """The echoed per-member tokens must match the LIVE deck exactly —
+    including the member set itself (a narrative cell added or removed
+    since the task was framed is staleness, not a merge opportunity)."""
+    current: dict[str, dict[str, str | None]] = {}
+    for member in members:
+        current[member.key.render()] = {
+            side: content_fingerprint(cell) if (cell := member.side(side)) is not None else None
+            for side in _SIDES
+        }
+    if current != answer.baseline_fingerprints:
+        raise AcceptRejected(
+            "the slide's narrative cells changed since the task was framed "
+            "(baseline_fingerprints mismatch) — re-run `harvest task` and re-judge"
+        )
 
 
 def _deck_slide_ids(deck: BilingualDeck) -> set[str]:
@@ -237,13 +291,13 @@ def _deck_slide_ids(deck: BilingualDeck) -> set[str]:
     return ids
 
 
-def _mint_vo_id(deck: BilingualDeck, owner: str) -> str:
-    taken = _deck_slide_ids(deck)
+def _mint_vo_id(taken: set[str], owner: str) -> str:
     candidate = f"{owner}-vo"
     n = 2
     while candidate in taken:
         candidate = f"{owner}-vo{n}"
         n += 1
+    taken.add(candidate)
     return candidate
 
 
@@ -296,31 +350,40 @@ def _insert_new_member(
     member: Member,
     owner: str,
     part: Part,
+    after: Member | None,
 ) -> None:
-    """Place the new member's cells: companion cells append to the companion
-    stream; inline cells go right after the owner group's last cell."""
+    """Place the new member's cells per side: right after ``after`` when it
+    is present in that side's stream; otherwise after the owner group's last
+    cell (deck part) / appended (companion part)."""
     for side in _SIDES:
         cell = member.side(side)
         if cell is None:
             continue
         stream = emitter.streams.setdefault((side, part), [])
-        if part == "companion":
-            stream.append(member)
-        else:
-            anchor_pos = -1
-            for group in deck.groups:
-                if group.anchor_id != owner:
-                    continue
-                group_members = [
-                    m
-                    for m in group.all_members()
-                    if (c := m.side(side)) is not None and c.part == part
-                ]
-                positions = [
-                    i for i, m in enumerate(stream) if any(m is gm for gm in group_members)
-                ]
-                anchor_pos = max(positions) if positions else -1
-            stream.insert(anchor_pos + 1, member)
+        insert_at: int | None = None
+        if after is not None:
+            for i, m in enumerate(stream):
+                if m is after:
+                    insert_at = i + 1
+                    break
+        if insert_at is None:
+            if part == "companion":
+                insert_at = len(stream)
+            else:
+                insert_at = 0
+                for group in deck.groups:
+                    if group.anchor_id != owner:
+                        continue
+                    group_members = [
+                        m
+                        for m in group.all_members()
+                        if (c := m.side(side)) is not None and c.part == part
+                    ]
+                    positions = [
+                        i for i, m in enumerate(stream) if any(m is gm for gm in group_members)
+                    ]
+                    insert_at = (max(positions) + 1) if positions else 0
+        stream.insert(insert_at, member)
         emitter.mutated = True
 
 
@@ -352,16 +415,23 @@ def _entry_from_member(member: Member):
     )
 
 
-def _record_member(
+@define
+class _WrittenMember:
+    """What the record step needs about one landed update."""
+
+    key: str
+    final_member: Member
+    pre_member: Member | None  # None = created
+    bilingual: bool
+
+
+def _record_members(
     bundle: LoadedBundle,
+    written: list[_WrittenMember],
     *,
-    key: str,
-    final_member: Member,
-    pre_member: Member | None,
-    bilingual: bool,
     video_fingerprint: str,
 ) -> list[str]:
-    """Bank the write under ``harvest:<fp>`` provenance (§6 semantics).
+    """Bank the writes under ``harvest:<fp>`` provenance (§6 semantics).
 
     Returns structural-gate violation messages; non-empty means the ledger
     save was withheld (the files stay as written — fail-safe, like apply).
@@ -384,24 +454,26 @@ def _record_member(
     )
     provenance = f"harvest:{video_fingerprint}"
 
-    if bilingual or final_member.is_one_sided:
-        # Fresh snapshot: a bilingual answer records a clean pair (in_sync
-        # next report); a one-sided member records the one-sided entry that
-        # frames translate_new for the twin.
-        entry = _entry_from_member(final_member)
-    else:
-        # One side written while a twin body exists: never advance the
-        # written side's fingerprint — the mismatch IS the translate_edit
-        # framing; advancing it would silently bless the stale twin.
-        existing = target.members.get(key)
-        if existing is not None:
-            entry = existing.entry
-        elif pre_member is not None:
-            entry = _entry_from_member(pre_member)
-        else:  # pragma: no cover - created members are one-sided or bilingual
-            return ["cannot synthesize a pre-write baseline for the member"]
+    for item in written:
+        if item.bilingual or item.final_member.is_one_sided:
+            # Fresh snapshot: a bilingual update records a clean pair
+            # (in_sync next report); a one-sided member records the
+            # one-sided entry that frames translate_new for the twin.
+            entry = _entry_from_member(item.final_member)
+        else:
+            # One side written while a twin body exists: never advance the
+            # written side's fingerprint — the mismatch IS the
+            # translate_edit framing; advancing it would silently bless the
+            # stale twin.
+            existing = target.members.get(item.key)
+            if existing is not None:
+                entry = existing.entry
+            elif item.pre_member is not None:
+                entry = _entry_from_member(item.pre_member)
+            else:  # pragma: no cover - created members are one-sided or bilingual
+                return ["cannot synthesize a pre-write baseline for the member"]
+        target.members[item.key] = doc_ledger.LedgerMember(entry=entry, provenance=provenance)
 
-    target.members[key] = doc_ledger.LedgerMember(entry=entry, provenance=provenance)
     doc_ledger.save(ledger, ledger_path)
     return []
 
@@ -421,8 +493,8 @@ def accept_answer(
     """Validate ``answer`` against the live bundle and land it atomically.
 
     Raises :class:`AcceptRejected` (nothing written) on any validation
-    failure. With ``record``, banks the touched member into the sync ledger
-    under ``harvest:<video-fingerprint>`` provenance (§6 semantics).
+    failure. With ``record``, banks every touched member into the sync
+    ledger under ``harvest:<video-fingerprint>`` provenance (§6 semantics).
     """
     deck = bundle.outcome.deck
     if deck is None:
@@ -435,88 +507,113 @@ def accept_answer(
     members = _narrative_members(deck, slide_id)
     if members is None:
         raise AcceptRejected(f"no slide {answer.item} in the deck")
-    for side in _SIDES:
-        if side in answer.bullets and len([m for m in members if m.side(side) is not None]) > 1:
+    by_key = {m.key.render(): m for m in members}
+    for update in answer.updates:
+        if update.member is not None and update.member not in by_key:
             raise AcceptRejected(
-                f"slide {answer.item} has more than one narrative cell on the {side} "
-                "side — edit the files directly, then re-run report"
+                f"{update.member} is not a narrative member of slide {answer.item} "
+                f"(known: {', '.join(sorted(by_key)) or 'none'})"
+            )
+        if update.after is not None and update.after not in by_key:
+            raise AcceptRejected(
+                f"'after' target {update.after} is not a narrative member of slide {answer.item}"
             )
     _check_freshness(answer, members)
 
     comment_token = bundle.comment_token
-    bodies: dict[Lang, str] = {
-        side: _render_body(answer.bullets[side], comment_token)
-        for side in _SIDES
-        if side in answer.bullets
-    }
-    for body in bodies.values():
-        _guard_body(body, comment_token)
-
     emitter = DeckEmitter(deck=deck)
     originals = emitter.emit_all()
 
-    target_member = members[0] if members else None
-    pre_member = None
-    created = False
-    if target_member is not None:
-        pre_member = evolve_copy(target_member)
-        for side, body in bodies.items():
-            cell = target_member.side(side)
-            if cell is not None:
-                emitter.set_side(target_member, side, evolve(cell, lines=_replace_body(cell, body)))
-            else:
-                source: Lang = "en" if side == "de" else "de"
-                source_cell = target_member.side(source)
-                if source_cell is None:  # pragma: no cover - members carry >=1 side
-                    raise AcceptRejected(f"the member for {answer.item} carries no cells")
-                from clm.slides.sync_writeback import swap_lang
+    role, layout = _narrative_conventions(deck)
+    part: Part = "companion" if layout == "companion" else "deck"
+    taken = _deck_slide_ids(deck)
+    written: list[_WrittenMember] = []
+    outcome = AcceptOutcome(item=answer.item, dry_run=dry_run)
 
-                header = (
-                    swap_lang(source_cell.header, side)
-                    if source_cell.lang_attr
-                    else source_cell.header
+    for update in answer.updates:
+        bodies: dict[Lang, str] = {
+            side: _render_body(update.bullets[side], comment_token)
+            for side in _SIDES
+            if side in update.bullets
+        }
+        for body in bodies.values():
+            _guard_body(body, comment_token)
+        bilingual = len(bodies) == 2
+
+        if update.member is not None:
+            target_member = by_key[update.member]
+            pre_member = _detached_copy(target_member)
+            for side, body in bodies.items():
+                cell = target_member.side(side)
+                if cell is not None:
+                    emitter.set_side(
+                        target_member, side, evolve(cell, lines=_replace_body(cell, body))
+                    )
+                else:
+                    source: Lang = "en" if side == "de" else "de"
+                    source_cell = target_member.side(source)
+                    if source_cell is None:  # pragma: no cover - members carry >=1 side
+                        raise AcceptRejected(f"the member {update.member} carries no cells")
+                    from clm.slides.sync_writeback import swap_lang
+
+                    header = (
+                        swap_lang(source_cell.header, side)
+                        if source_cell.lang_attr
+                        else source_cell.header
+                    )
+                    base = evolve(source_cell, lines=(header, *source_cell.lines[1:]))
+                    new_cell = evolve(base, lines=_replace_body(base, body), lang_attr=side)
+                    emitter.insert_mirrored(target_member, source, side, source_cell.part, new_cell)
+            written.append(
+                _WrittenMember(
+                    key=target_member.key.render(),
+                    final_member=target_member,  # re-resolved after the re-parse
+                    pre_member=pre_member,
+                    bilingual=bilingual,
                 )
-                base = evolve(source_cell, lines=(header, *source_cell.lines[1:]))
-                new_cell = evolve(base, lines=_replace_body(base, body), lang_attr=side)
-                emitter.insert_mirrored(target_member, source, side, source_cell.part, new_cell)
-        member_key = target_member.key
-    else:
-        created = True
-        role, layout = _narrative_conventions(deck)
-        part: Part = "companion" if layout == "companion" else "deck"
-        vo_id = _mint_vo_id(deck, slide_id)
-        member_key = MemberKey.for_id(vo_id)
-        new_member = Member(
-            key=member_key,
-            kind="markdown",
-            role=role,
-            langness="localized",
-            layout=layout,
-            owner=MemberKey.for_id(slide_id),
-            de=None,
-            en=None,
-        )
-        for side, body in bodies.items():
-            emitter.set_side(
-                new_member,
-                side,
-                _new_side_cell(
-                    side=side,
-                    body=body,
-                    role=role,
-                    part=part,
-                    vo_id=vo_id,
-                    owner=slide_id,
-                    comment_token=comment_token,
-                ),
             )
-        _insert_new_member(emitter, deck, new_member, slide_id, part)
+            outcome.members.append({"member": target_member.key.render(), "created": False})
+        else:
+            vo_id = _mint_vo_id(taken, slide_id)
+            member_key = MemberKey.for_id(vo_id)
+            new_member = Member(
+                key=member_key,
+                kind="markdown",
+                role=role,
+                langness="localized",
+                layout=layout,
+                owner=MemberKey.for_id(slide_id),
+                de=None,
+                en=None,
+            )
+            for side, body in bodies.items():
+                emitter.set_side(
+                    new_member,
+                    side,
+                    _new_side_cell(
+                        side=side,
+                        body=body,
+                        role=role,
+                        part=part,
+                        vo_id=vo_id,
+                        owner=slide_id,
+                        comment_token=comment_token,
+                    ),
+                )
+            after = by_key[update.after] if update.after is not None else None
+            _insert_new_member(emitter, deck, new_member, slide_id, part, after)
+            written.append(
+                _WrittenMember(
+                    key=member_key.render(),
+                    final_member=new_member,
+                    pre_member=None,
+                    bilingual=bilingual,
+                )
+            )
+            outcome.members.append({"member": member_key.render(), "created": True})
 
     finals = emitter.emit_all()
     changed = {file_key for file_key in finals if finals[file_key] != originals[file_key]}
-    outcome = AcceptOutcome(
-        item=answer.item, created=created, member=member_key.render(), dry_run=dry_run
-    )
     if not changed:
         outcome.applied = True  # a byte-identical answer is a valid no-op
         return outcome
@@ -537,13 +634,15 @@ def accept_answer(
         raise AcceptRejected(
             f"the mutated bundle failed the re-parse gate ({reasons}) — nothing was written"
         )
-    final_member = next(
-        (m for m in parse.deck.members() if m.key.render() == member_key.render()), None
-    )
-    if final_member is None:
-        raise AcceptRejected(
-            "the written member did not survive the re-parse (writer bug) — nothing was written"
-        )
+    final_by_key = {m.key.render(): m for m in parse.deck.members()}
+    for item in written:
+        final = final_by_key.get(item.key)
+        if final is None:
+            raise AcceptRejected(
+                f"the written member {item.key} did not survive the re-parse "
+                "(writer bug) — nothing was written"
+            )
+        item.final_member = final
 
     if dry_run:
         outcome.applied = True
@@ -554,19 +653,14 @@ def accept_answer(
 
     if record:
         assert answer.video_fingerprint is not None
-        outcome.record_refused = _record_member(
-            bundle,
-            key=member_key.render(),
-            final_member=final_member,
-            pre_member=pre_member,
-            bilingual=len(answer.bullets) == 2,
-            video_fingerprint=answer.video_fingerprint,
+        outcome.record_refused = _record_members(
+            bundle, written, video_fingerprint=answer.video_fingerprint
         )
         outcome.recorded = not outcome.record_refused
     return outcome
 
 
-def evolve_copy(member: Member) -> Member:
+def _detached_copy(member: Member) -> Member:
     """A detached snapshot of a member's pre-write state (cells are frozen,
     the member shell is mutable — copy the shell)."""
     return Member(
