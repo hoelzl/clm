@@ -39,6 +39,15 @@ jobs:
         id: filter
         with:
           # ``code`` is true when at least one changed file is NOT docs-only.
+          #
+          # ``predicate-quantifier: every`` is essential: by default a file
+          # matches a filter when it matches ANY listed pattern, and every file
+          # matches at least one of these negations (nothing is simultaneously
+          # under docs/, under changelog.d/ AND a top-level *.md), which made
+          # ``code`` always true and ran the full pipeline for docs-only
+          # changes. With ``every``, a file counts as code only when it matches
+          # ALL negations, i.e. is none of the docs-only locations.
+          predicate-quantifier: every
           filters: |
             code:
               - '!docs/**'
