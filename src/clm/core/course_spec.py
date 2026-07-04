@@ -259,7 +259,8 @@ class ActivitySpec:
         text: The bilingual label shown in the Video column of the schedule
             (and as a bullet in the outline).
         kind: Optional free-form classifier (``"project"``, ``"exam"``,
-            ``"holiday"``, …) for styling/filtering. Never affects resolution.
+            ``"holiday"``, ``"live"`` for a live session with no video, …)
+            for styling/filtering. Never affects resolution.
         id: Optional, purely informational identifier.
     """
 
