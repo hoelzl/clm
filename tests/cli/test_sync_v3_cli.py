@@ -194,6 +194,45 @@ class TestSyncLoop:
         stderr = getattr(result, "stderr", "") or result.output
         assert "no twin half found" in stderr
 
+    def test_rerecord_sweep_is_write_free_on_clean_pairs(
+        self, cli_runner: CliRunner, tmp_path: Path
+    ):
+        # Issue #555: a repo-wide re-record must not bump confirmed_commit on
+        # unchanged members — the committed ledger stays byte-identical even
+        # though HEAD has moved since the first record.
+        import subprocess
+
+        de, _en = _write_pair(tmp_path)
+
+        def git(*args: str) -> None:
+            subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True, text=True)
+
+        git("init", "-q")
+        git("config", "user.email", "t@example.com")
+        git("config", "user.name", "T")
+        git("add", ".")
+        git("commit", "-q", "-m", "base")
+
+        first = cli_runner.invoke(slides_sync_group, ["record", str(de), "--json"])
+        assert first.exit_code == 0, first.output
+        ledger_path = tmp_path / ".clm" / "sync-ledger.json"
+        before = ledger_path.read_bytes()
+        assert _head_sha(tmp_path) in before.decode("utf-8")  # first record stamps HEAD
+
+        # Move HEAD without touching the pair, then re-record.
+        git("add", ".")
+        git("commit", "-q", "-m", "record")
+        (tmp_path / "other.txt").write_text("unrelated\n", encoding="utf-8")
+        git("add", ".")
+        git("commit", "-q", "-m", "move HEAD")
+
+        second = cli_runner.invoke(slides_sync_group, ["record", str(de), "--json"])
+        assert second.exit_code == 0, second.output
+        payload = _json_payload(second.output)
+        assert payload["unchanged"] == 1
+        assert payload["pairs"][0]["ledger_changed"] is False
+        assert ledger_path.read_bytes() == before
+
     def test_bare_deck_path_defaults_to_report(self, cli_runner: CliRunner, tmp_path: Path):
         de, _en = _write_pair(tmp_path)
         assert cli_runner.invoke(slides_sync_group, ["record", str(de)]).exit_code == 0

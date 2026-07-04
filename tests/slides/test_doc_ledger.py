@@ -194,6 +194,65 @@ class TestTrustSemantics:
         assert "id:s0-m" not in ledger.decks["slides_x"].members
 
 
+class TestIdempotentRerecord:
+    """Issue #555: re-recording an unchanged state never bumps ``confirmed_commit``.
+
+    ``confirmed_commit`` means "the commit at which this state was last
+    actually established" — a repo-wide ``record`` sweep over clean pairs must
+    leave every entry (and the file) byte-identical, or committed ledgers churn
+    in every PR.
+    """
+
+    def _record(self, ledger, de: str, en: str, *, commit: str, **kwargs) -> None:
+        doc_ledger.record_deck_snapshot(
+            ledger, "slides_x", _parse(de, en), provenance="record", commit=commit, **kwargs
+        )
+
+    def test_full_rerecord_of_an_identical_deck_preserves_every_entry(self):
+        ledger = doc_ledger.TopicLedger()
+        self._record(ledger, DE0, EN0, commit="c1")
+        before = dict(ledger.decks["slides_x"].members)
+        self._record(ledger, DE0, EN0, commit="c2")
+        after = ledger.decks["slides_x"].members
+        assert after == before
+        assert {lm.confirmed_commit for lm in after.values()} == {"c1"}
+
+    def test_changed_member_restamps_while_unchanged_siblings_keep_their_commit(self):
+        ledger = doc_ledger.TopicLedger()
+        self._record(ledger, DE0, EN0, commit="c1")
+        de = DE0.replace("DE Text", "DE Text NEU")
+        self._record(ledger, de, EN0, commit="c2")
+        members = ledger.decks["slides_x"].members
+        assert members["id:s0-m"].confirmed_commit == "c2"
+        assert members["id:s0"].confirmed_commit == "c1"
+
+    def test_provenance_change_is_a_real_change_and_records_fresh(self):
+        ledger = doc_ledger.TopicLedger()
+        self._record(ledger, DE0, EN0, commit="c1")
+        doc_ledger.record_deck_snapshot(
+            ledger, "slides_x", _parse(DE0, EN0), provenance="agent", commit="c2"
+        )
+        members = ledger.decks["slides_x"].members
+        assert all(lm.provenance == "agent" for lm in members.values())
+        assert {lm.confirmed_commit for lm in members.values()} == {"c2"}
+
+    def test_partial_rerecord_of_an_unchanged_member_preserves_its_entry(self):
+        ledger = doc_ledger.TopicLedger()
+        self._record(ledger, DE0, EN0, commit="c1")
+        self._record(ledger, DE0, EN0, commit="c2", member_keys={"id:s0-m"})
+        assert ledger.decks["slides_x"].members["id:s0-m"].confirmed_commit == "c1"
+
+    def test_save_skips_a_byte_identical_write(self, tmp_path: Path):
+        ledger = _recorded_ledger()
+        path = tmp_path / ".clm" / "sync-ledger.json"
+        assert doc_ledger.save(ledger, path) is True
+        assert doc_ledger.save(ledger, path) is False
+        de = _build(HEADER_DE, _slide("s0", "de", "Titel"), _shared_code("x"))
+        en = _build(HEADER_EN, _slide("s0", "en", "Title"), _shared_code("x"))
+        doc_ledger.record_deck_snapshot(ledger, "slides_x", _parse(de, en), provenance="record")
+        assert doc_ledger.save(ledger, path) is True
+
+
 class TestKeyMigration:
     def test_pos_to_id_migration_is_detected_and_logged(self):
         ledger = _recorded_ledger()

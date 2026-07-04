@@ -319,6 +319,9 @@ def run_record_v3(
                 "schema": 3,
                 "engine": "v3",
                 "recorded": sum(r.get("recorded", 0) for r in rows),
+                "unchanged": sum(
+                    1 for r in rows if "recorded" in r and not r.get("ledger_changed", True)
+                ),
                 "refused": refused,
                 "errors": errors,
                 "pairs": rows,
@@ -373,9 +376,10 @@ def _record_one(
         commit=_head_commit(bundle.de_path),
         member_keys=set(members) if members else None,
     )
-    doc_ledger.save(ledger, ledger_path)
+    changed = doc_ledger.save(ledger, ledger_path)
     row["recorded"] = recorded
     row["ledger"] = str(ledger_path)
+    row["ledger_changed"] = changed
     if members:
         deck_ledger = ledger.decks.get(deck_key)
         known = deck_ledger.members.keys() if deck_ledger is not None else set()
@@ -403,6 +407,7 @@ def _render_record_row(row: dict) -> None:
         for reason in row.get("reasons", []):
             click.echo(f"  - {reason}")
         return
-    click.echo(f"{name}: recorded {row['recorded']} member(s) -> {row['ledger']}")
+    suffix = "" if row.get("ledger_changed", True) else " (unchanged)"
+    click.echo(f"{name}: recorded {row['recorded']} member(s) -> {row['ledger']}{suffix}")
     for old, new in row.get("key_migrations", {}).items():
         click.echo(f"  key migrated {old} -> {new}")
