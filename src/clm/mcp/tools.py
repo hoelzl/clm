@@ -952,8 +952,9 @@ async def handle_inline_voiceover(
 
 
 # ---------------------------------------------------------------------------
-# voiceover_transcribe, voiceover_identify_rev, voiceover_compare,
-# voiceover_backfill_dry, voiceover_cache_list, voiceover_trace_show
+# harvest_transcribe, harvest_identify_rev, harvest_compare,
+# harvest_backfill_dry, harvest_cache_list, harvest_trace_show,
+# harvest_report, harvest_task
 # ---------------------------------------------------------------------------
 
 
@@ -963,7 +964,7 @@ def _resolve_under(data_dir: Path, p: str) -> Path:
     return target if target.is_absolute() else data_dir / target
 
 
-async def handle_voiceover_transcribe(
+async def handle_harvest_transcribe(
     video: str,
     data_dir: Path,
     *,
@@ -1041,7 +1042,7 @@ async def handle_voiceover_transcribe(
     return json.dumps(payload, indent=2, ensure_ascii=False)
 
 
-async def handle_voiceover_identify_rev(
+async def handle_harvest_identify_rev(
     slide_file: str,
     videos: list[str],
     data_dir: Path,
@@ -1065,7 +1066,7 @@ async def handle_voiceover_identify_rev(
         limit: Maximum commits to score.
         since: git-log ``--since`` filter.
         no_cache / refresh_cache / cache_root: see
-            :func:`handle_voiceover_transcribe`.
+            :func:`handle_harvest_transcribe`.
 
     Returns:
         JSON string with ``{slide_file, fingerprint_labels,
@@ -1110,7 +1111,7 @@ async def handle_voiceover_identify_rev(
     return json.dumps(payload, indent=2, ensure_ascii=False)
 
 
-async def handle_voiceover_compare(
+async def handle_harvest_compare(
     source: str,
     target: str,
     data_dir: Path,
@@ -1142,7 +1143,7 @@ async def handle_voiceover_compare(
     return json.dumps(report.to_json(), indent=2, ensure_ascii=False)
 
 
-async def handle_voiceover_backfill_dry(
+async def handle_harvest_backfill_dry(
     slide_file: str,
     videos: list[str],
     data_dir: Path,
@@ -1161,7 +1162,7 @@ async def handle_voiceover_backfill_dry(
 ) -> str:
     """Run the backfill pipeline in dry-run mode and return the diff.
 
-    Invokes ``clm voiceover backfill --dry-run`` as a subprocess so the
+    Invokes ``clm harvest backfill --dry-run`` as a subprocess so the
     full three-step composition (identify-rev → sync-at-rev →
     port) stays DRY. The working copy is never mutated.
 
@@ -1193,7 +1194,7 @@ async def handle_voiceover_backfill_dry(
         sys.executable,
         "-m",
         "clm.cli.main",
-        "voiceover",
+        "harvest",
         "backfill",
         str(sf),
         *[str(v) for v in vids],
@@ -1238,7 +1239,7 @@ async def handle_voiceover_backfill_dry(
     return json.dumps(payload, indent=2, ensure_ascii=False)
 
 
-async def handle_voiceover_cache_list(
+async def handle_harvest_cache_list(
     data_dir: Path,
     *,
     cache_root: str | None = None,
@@ -1272,7 +1273,7 @@ async def handle_voiceover_cache_list(
     return json.dumps(payload, indent=2)
 
 
-async def handle_voiceover_trace_show(
+async def handle_harvest_trace_show(
     path: str,
     data_dir: Path,
 ) -> str:
@@ -1296,6 +1297,239 @@ async def handle_voiceover_trace_show(
         "schema_tags": schema_tags,
         "entry_count": len(entries),
         "entries": entries,
+    }
+    return json.dumps(payload, indent=2, ensure_ascii=False)
+
+
+class _HarvestInputError(Exception):
+    """A harvest report cannot be assembled (message = the reason)."""
+
+
+def _assemble_harvest_report(
+    slides: str,
+    videos: list[str],
+    data_dir: Path,
+    *,
+    lang: str,
+    transcript: str | None,
+    alignment: str | None,
+    whisper_model: str,
+    backend: str,
+    device: str,
+    no_cache: bool,
+    refresh_cache: bool,
+    cache_root: str | None,
+):
+    """Run the deterministic harvest tier and join it with the deck bundle.
+
+    Mirrors the CLI's ``_load_bundle_or_exit`` + ``_build_report_data``
+    (``clm.cli.commands.harvest``), but raises :class:`_HarvestInputError`
+    instead of exiting so the MCP handlers can return ``{"error": ...}``.
+
+    Returns:
+        ``(bundle, report)`` — the loaded v3 bundle and the report envelope.
+    """
+    import click
+
+    from clm.cli.commands.voiceover import (
+        _load_alignment_override,
+        _load_transcript_override,
+    )
+    from clm.notebooks.slide_parser import parse_slides
+    from clm.slides.doc_lenses import DocLensError, load_bundle
+    from clm.voiceover.cache import CachePolicy
+    from clm.voiceover.harvest import HarvestUsageError, build_report, run_pipeline
+
+    slides_path = _resolve_under(data_dir, slides)
+    video_paths = [_resolve_under(data_dir, v) for v in videos]
+
+    try:
+        bundle = load_bundle(slides_path)
+    except DocLensError as exc:
+        raise _HarvestInputError(str(exc)) from exc
+    if bundle.outcome.deck is None:
+        refusal = bundle.outcome.refusal
+        reasons = "; ".join(f"[{r.code}] {r.detail}" for r in refusal.reasons) if refusal else ""
+        raise _HarvestInputError(
+            "the deck bundle is not normalized"
+            + (f": {reasons}" if reasons else "")
+            + " — run `clm slides normalize` on the pair first"
+        )
+
+    # The recorded-language view the OCR matcher and aligner key on.
+    slide_groups = parse_slides(slides_path, lang)
+
+    policy = CachePolicy(
+        enabled=not no_cache,
+        refresh=refresh_cache,
+        cache_root=Path(cache_root) if cache_root else None,
+    )
+
+    try:
+        transcript_override = (
+            _load_transcript_override(_resolve_under(data_dir, transcript)) if transcript else None
+        )
+        alignment_override = (
+            _load_alignment_override(_resolve_under(data_dir, alignment)) if alignment else None
+        )
+        artifacts = run_pipeline(
+            slides_path,
+            video_paths,
+            lang,
+            slide_groups,
+            policy=policy,
+            backend_name=backend,
+            whisper_model=whisper_model,
+            device=device,
+            transcript_override=transcript_override,
+            alignment_override=alignment_override,
+        )
+    except (click.UsageError, HarvestUsageError) as exc:
+        raise _HarvestInputError(str(exc)) from exc
+
+    report = build_report(bundle, slide_groups, artifacts, lang=lang, video_paths=video_paths)
+    return bundle, report
+
+
+async def handle_harvest_report(
+    slides: str,
+    videos: list[str],
+    data_dir: Path,
+    *,
+    lang: str,
+    transcript: str | None = None,
+    alignment: str | None = None,
+    whisper_model: str = "large-v3",
+    backend: str = "faster-whisper",
+    device: str = "auto",
+    no_cache: bool = False,
+    refresh_cache: bool = False,
+    cache_root: str | None = None,
+) -> str:
+    """What did the recording say, slide by slide? (read-only)
+
+    The MCP twin of ``clm harvest report --json``: runs the cached
+    deterministic tier (transcribe → detect → OCR-match → align) and joins
+    it with the v3 deck bundle. No model, no key, no writes.
+
+    Args:
+        slides: The recorded-language deck half (absolute or relative to
+            ``data_dir``).
+        videos: Recording video file paths.
+        data_dir: Root data directory.
+        lang: The recorded (spoken) language (``"de"`` or ``"en"``).
+        transcript: Load a precomputed transcript JSON from this path
+            instead of running ASR (single-video only).
+        alignment: Load a precomputed alignment JSON from this path,
+            skipping ASR, detection, and matching (single-video only).
+        whisper_model / backend / device: ASR knobs.
+        no_cache / refresh_cache / cache_root: see
+            :func:`handle_harvest_transcribe`.
+
+    Returns:
+        JSON string: the report envelope (``items`` keyed ``id:<slide>``,
+        ``unmatched_speech``, ``summary``, ``video_fingerprint``), or an
+        ``{"error": ...}`` object.
+    """
+    try:
+        _, report = _assemble_harvest_report(
+            slides,
+            videos,
+            data_dir,
+            lang=lang,
+            transcript=transcript,
+            alignment=alignment,
+            whisper_model=whisper_model,
+            backend=backend,
+            device=device,
+            no_cache=no_cache,
+            refresh_cache=refresh_cache,
+            cache_root=cache_root,
+        )
+    except _HarvestInputError as exc:
+        return json.dumps({"error": str(exc)}, indent=2, ensure_ascii=False)
+    return json.dumps(report, indent=2, ensure_ascii=False)
+
+
+async def handle_harvest_task(
+    slides: str,
+    videos: list[str],
+    data_dir: Path,
+    *,
+    lang: str,
+    slide: str | None = None,
+    kind: str = "curate",
+    transcript: str | None = None,
+    alignment: str | None = None,
+    whisper_model: str = "large-v3",
+    backend: str = "faster-whisper",
+    device: str = "auto",
+    no_cache: bool = False,
+    refresh_cache: bool = False,
+    cache_root: str | None = None,
+) -> str:
+    """Frame slide judgment tasks for the driving agent (read-only).
+
+    The MCP twin of ``clm harvest task``: assembles the same report as
+    :func:`handle_harvest_report`, then frames the curation/translation
+    judgment per slide (instructions + inputs + ``answer_schema`` +
+    freshness tokens). Writes go through ``clm harvest accept`` on the
+    CLI — by design there is no MCP write path.
+
+    Args:
+        slides: The recorded-language deck half (absolute or relative to
+            ``data_dir``).
+        videos: Recording video file paths.
+        data_dir: Root data directory.
+        lang: The recorded (spoken) language (``"de"`` or ``"en"``).
+        slide: Frame one slide (bare id or ``id:...`` handle). Omit to
+            frame every actionable item.
+        kind: ``"curate"`` (merge the recorded language) or
+            ``"translate"`` (frame the twin side).
+        transcript / alignment: precomputed-input overrides (see
+            :func:`handle_harvest_report`).
+        whisper_model / backend / device: ASR knobs.
+        no_cache / refresh_cache / cache_root: see
+            :func:`handle_harvest_transcribe`.
+
+    Returns:
+        JSON string ``{schema, tool, verb, video_fingerprint, tasks}``,
+        or an ``{"error": ...}`` object when the named slide cannot be
+        framed.
+    """
+    from clm.voiceover.harvest_task import TaskUnavailable, build_tasks
+
+    try:
+        bundle, report = _assemble_harvest_report(
+            slides,
+            videos,
+            data_dir,
+            lang=lang,
+            transcript=transcript,
+            alignment=alignment,
+            whisper_model=whisper_model,
+            backend=backend,
+            device=device,
+            no_cache=no_cache,
+            refresh_cache=refresh_cache,
+            cache_root=cache_root,
+        )
+    except _HarvestInputError as exc:
+        return json.dumps({"error": str(exc)}, indent=2, ensure_ascii=False)
+
+    deck = bundle.outcome.deck
+    assert deck is not None
+    try:
+        tasks = build_tasks(report, deck, kind=kind, slide=slide)
+    except TaskUnavailable as exc:
+        return json.dumps({"error": str(exc)}, indent=2, ensure_ascii=False)
+
+    payload = {
+        "schema": 1,
+        "tool": "harvest",
+        "verb": "task",
+        "video_fingerprint": report["video_fingerprint"],
+        "tasks": tasks,
     }
     return json.dumps(payload, indent=2, ensure_ascii=False)
 

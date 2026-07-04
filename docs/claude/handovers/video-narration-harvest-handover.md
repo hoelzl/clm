@@ -1,9 +1,11 @@
 # Handover: Video Narration Harvest (agent-first rebuild)
 
-**Status**: Phases 1–3 implemented (v3 extraction; `clm harvest report`;
-`task`/`accept`/`verify` — Phase 3 landed EARLY as a deliberate v3
-stress-test, back-out tag `pre-harvest-phase3`); Phase 4 (rename+cutover)
-TODO
+**Status**: ALL FOUR PHASES implemented (v3 extraction; `clm harvest
+report`; `task`/`accept`/`verify`; rename+cutover incl. multi-narrative
+answers and multi-part caching). Phases 3–4 landed EARLY, before the v3
+dogfood week, as a deliberate stress-test — back-out tags
+`pre-harvest-phase3` / `harvest-phase3` / `harvest-phase4` on master.
+Remaining: dogfood on real recordings.
 **Last updated**: 2026-07-04
 **Canonical design source**: `docs/proposals/video-narration-harvest.md`
 (merged via PR #541, decisions folded in via PR #542). Read that proposal
@@ -156,13 +158,31 @@ pivot), #520 (sync-engine-v3), #501 (separated companions);
     verify loop; the §6 classification tests assert the v3 differ's
     verdicts against the recorded ledger: `translate_new`,
     `translate_edit` de→en, bilingual → no item).
-- **Phase 4 [TODO] — rename + cutover**. `clm harvest` absorbs
-  `port`/`compare`/`compare-from-inventory`; `voiceover sync` →
-  `harvest autopilot`; delete old video-side `voiceover` verbs (no
-  aliases); MCP renames (`harvest_report`, `harvest_task` read-only;
-  accept stays CLI-only); new `clm info harvest-agents` topic modeled on
-  `sync-agents.md`; update `commands.md`, `migration.md`,
-  `docs/user-guide/voiceover.md` (rename/split into harvest doc).
+- **Phase 4 [DONE] — rename + cutover (+ two extensions)**. Landed as two
+  PRs (#551 extensions, then the cutover PR):
+  - **Extensions**: multi-narrative answers (task lists every narrative
+    cell with per-member `baseline_fingerprints`; answers are per-member
+    `updates` with `member: null` + optional `after` for creates;
+    set-level freshness; §6 record applied per written member) and
+    multi-part caching (`cache.MultiVideoKey` = ordered composite of part
+    hashes = the harvest fingerprint; `cached_timeline`/`cached_alignment`
+    take the part list; `--alignment` override works multi-part).
+  - **Cutover**: video verbs re-decorated as standalone Click commands in
+    `voiceover.py` (implementations stay in that module) and registered
+    ONLY on `harvest_group` (`_register_video_verbs`); `sync` →
+    `@click.command("autopilot")`; `voiceover report` →
+    `compare-report` (name clash with harvest report); the hidden
+    `debug voiceover-commits` group moved too (it feeds identify-rev).
+    `voiceover_group` keeps only extract/inline/inline-notes and lost its
+    cache flags. MCP: six tools renamed `harvest_*`, `backfill_dry`'s
+    subprocess now calls `harvest backfill`; NEW read-only `harvest_report`
+    + `harvest_task` (accept stays CLI-only); `EXPECTED_TOOLS` updated;
+    `tests/mcp/test_harvest_tools.py` replaces `test_voiceover_tools.py`.
+    New `clm info harvest-agents` topic (registered in `info.py` TOPICS);
+    `commands.md` video docs moved under `### clm harvest`; migration.md
+    rename table; user guide split (`docs/user-guide/harvest.md` new,
+    `voiceover.md` shrunk to the text layer). Tests re-pointed
+    (`harvest_group` + `autopilot`/`compare-report` verbs).
 
 ## 4. Current Status
 
@@ -186,14 +206,14 @@ pivot), #520 (sync-engine-v3), #501 (separated companions);
 
 ## 5. Next Steps
 
-Phases 1–3 are done (see §3; Phase 3 was pulled forward deliberately as a
-v3 stress-test — the user's call, hedged by tag `pre-harvest-phase3` on
-master and single-PR landing for easy revert). Next steps: **dogfood the
-harvest loop on real recordings** (this doubles as the v3 dogfood), then
-**Phase 4 — rename + cutover** (absorb `port`/`compare`/
-`compare-from-inventory`, `voiceover sync` → `harvest autopilot`, delete
-old video-side voiceover verbs, MCP renames, `clm info harvest-agents`
-topic, user-guide split). Gotchas that remain live:
+All four phases are done (see §3; Phases 3–4 were pulled forward
+deliberately as a v3 stress-test — the user's call, hedged by tags
+`pre-harvest-phase3`/`harvest-phase3`/`harvest-phase4` on master and
+per-phase PRs for easy revert). The one remaining step: **dogfood the
+harvest loop on real recordings** (this doubles as the v3 dogfood) —
+watch the §6 framing (`translate_new`/`translate_edit`, never `in_sync`,
+never corruption) and the task/answer ergonomics. Gotchas that remain
+live:
 - `tests/cli/test_sync_import_cleanliness.py` pins the v3 import graph
   (model must not import v2; facade imports only v3 core; `doc_identity`/
   `doc_write` must stay differ/ledger-free) — extend, don't fight it.

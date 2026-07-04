@@ -167,10 +167,10 @@ class TestSyncCliSignature:
     def test_help_shows_slides_first(self):
         from click.testing import CliRunner
 
-        from clm.cli.commands.voiceover import voiceover_group
+        from clm.cli.commands.harvest import harvest_group
 
         runner = CliRunner()
-        result = runner.invoke(voiceover_group, ["sync", "--help"])
+        result = runner.invoke(harvest_group, ["autopilot", "--help"])
         assert result.exit_code == 0
         # SLIDES should appear before VIDEOS in the usage line
         usage_line = result.output.split("\n")[0]
@@ -183,11 +183,11 @@ class TestSyncCliSignature:
     def test_sync_requires_at_least_one_video(self):
         from click.testing import CliRunner
 
-        from clm.cli.commands.voiceover import voiceover_group
+        from clm.cli.commands.harvest import harvest_group
 
         runner = CliRunner()
         # Only slides, no videos — should fail
-        result = runner.invoke(voiceover_group, ["sync", "slides.py", "--lang", "de"])
+        result = runner.invoke(harvest_group, ["autopilot", "slides.py", "--lang", "de"])
         assert result.exit_code != 0
 
 

@@ -2,6 +2,57 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## The `clm voiceover` video verbs moved to `clm harvest` (epic #546, {version})
+
+**Breaking.** The video side of `clm voiceover` (transcription, alignment,
+history-aware backfill, the one-shot LLM pipeline) now lives under
+`clm harvest`. This is a **clean break** — the old names were deleted, with
+no deprecation aliases:
+
+| Removed | Use instead |
+|---|---|
+| `clm voiceover sync …` | `clm harvest autopilot …` |
+| `clm voiceover transcribe …` | `clm harvest transcribe …` |
+| `clm voiceover detect …` | `clm harvest detect …` |
+| `clm voiceover identify …` | `clm harvest identify …` |
+| `clm voiceover identify-rev …` | `clm harvest identify-rev …` |
+| `clm voiceover sync-at-rev …` | `clm harvest sync-at-rev …` |
+| `clm voiceover port …` | `clm harvest port …` |
+| `clm voiceover compare …` | `clm harvest compare …` |
+| `clm voiceover compare-from-inventory …` | `clm harvest compare-from-inventory …` |
+| `clm voiceover report …` | `clm harvest compare-report …` |
+| `clm voiceover backfill …` | `clm harvest backfill …` |
+| `clm voiceover extract-training-data …` | `clm harvest extract-training-data …` |
+| `clm voiceover cache …` | `clm harvest cache …` |
+| `clm voiceover trace show …` | `clm harvest trace show …` |
+
+Two verbs changed name in the move: `sync` became **`autopilot`** (it is the
+legacy all-in-one pipeline with embedded models — key-gated, never run in CI;
+agents should drive the model-free `clm harvest report → task → accept`
+loop instead), and `report` became **`compare-report`** (so it does not
+clash with the primary `clm harvest report` verb). Everything else kept its
+name and options.
+
+`clm voiceover` **remains**, holding only the written-narration text layer:
+`extract`, `inline`, and `inline-notes`. The group also lost its
+`--cache-root` / `--no-cache` / `--refresh-cache` flags — the artifact cache
+belongs to `clm harvest` now (same on-disk location,
+`.clm/voiceover-cache/`).
+
+The MCP tools were renamed in lockstep, likewise with no aliases:
+`voiceover_transcribe` → `harvest_transcribe`, `voiceover_identify_rev` →
+`harvest_identify_rev`, `voiceover_compare` → `harvest_compare`,
+`voiceover_backfill_dry` → `harvest_backfill_dry`, `voiceover_cache_list` →
+`harvest_cache_list`, `voiceover_trace_show` → `harvest_trace_show`. Two new
+read-only tools, `harvest_report` and `harvest_task`, expose the agent loop
+(accepting an answer stays CLI-only via `clm harvest accept`). The
+text-layer tools `voiceover_extract` / `voiceover_inline` are unchanged.
+
+**Update course repos:** scripts, Makefiles, CI steps, agent prompts, and
+`<tasks>` blocks that call a removed `clm voiceover` video verb fail with
+*"No such command"* after upgrading — replace them with the `clm harvest`
+invocations above.
+
 ## The `[ml]` extra was removed — install the course-runtime stack in a course venv ({version})
 
 **Breaking.** The `[ml]` optional-dependency extra (PyTorch, FastAI,
@@ -289,7 +340,7 @@ names are gone, with no deprecation aliases:
 | `clm polish …` | `clm slides polish …` |
 | `clm delete-database …` | `clm db delete …` |
 | `clm export calendar …` | `clm calendar generate …` |
-| `clm voiceover port-voiceover …` | `clm voiceover port …` |
+| `clm voiceover port-voiceover …` | `clm voiceover port …` (now `clm harvest port …`) |
 
 `clm course gate` is unchanged. The whole cohort-calendar lifecycle now lives
 in one group: `clm calendar generate` → `check` → `status` → `push`.
@@ -793,7 +844,9 @@ tables, and agent prompts:
 | `validate_spec` + `validate_slides` | `validate` (single tool; dispatches on input type) |
 
 `course_outline` and the `voiceover_*` tool family are unchanged (already
-group-first / no verb group).
+group-first / no verb group). *(The video-side `voiceover_*` tools were later
+renamed `harvest_*` — see the harvest cutover section at the top of this
+guide.)*
 
 ## Slide format redesign: stable `slide_id`s (additive — no break)
 
@@ -1683,6 +1736,10 @@ reference and `clm info commands` for the `--only-sections` selector
 syntax.
 
 ## v1.2.0 to v1.2.1: Voiceover sync argument order change
+
+*(Historical note: the `clm voiceover sync` command described here is now
+`clm harvest autopilot` — see the harvest cutover section at the top of this
+guide.)*
 
 ### Breaking Change
 

@@ -248,7 +248,7 @@ class TestCompareCLI:
     def test_runs_and_emits_json(self, tmp_path: Path):
         from click.testing import CliRunner
 
-        from clm.cli.commands.voiceover import voiceover_group
+        from clm.cli.commands.harvest import harvest_group
 
         source = tmp_path / "old.py"
         target = tmp_path / "new.py"
@@ -280,7 +280,7 @@ class TestCompareCLI:
         runner = CliRunner()
         with patch("clm.infrastructure.llm.client._build_client", return_value=mock_client):
             result = runner.invoke(
-                voiceover_group,
+                harvest_group,
                 [
                     "compare",
                     str(source),
@@ -303,7 +303,7 @@ class TestCompareCLI:
     def test_writes_json_to_output(self, tmp_path: Path):
         from click.testing import CliRunner
 
-        from clm.cli.commands.voiceover import voiceover_group
+        from clm.cli.commands.harvest import harvest_group
 
         source = tmp_path / "old.py"
         target = tmp_path / "new.py"
@@ -318,7 +318,7 @@ class TestCompareCLI:
         runner = CliRunner()
         with patch("clm.infrastructure.llm.client._build_client", return_value=mock_client):
             result = runner.invoke(
-                voiceover_group,
+                harvest_group,
                 [
                     "compare",
                     str(source),

@@ -115,7 +115,7 @@ class TestSyncAtRevGuards:
     def test_rejects_output_equal_to_slide_file(self, repo: Path):
         from click.testing import CliRunner
 
-        from clm.cli.commands.voiceover import voiceover_group
+        from clm.cli.commands.harvest import harvest_group
 
         slides = repo / "slides.py"
         video = repo / "video.mp4"
@@ -123,7 +123,7 @@ class TestSyncAtRevGuards:
 
         runner = CliRunner()
         result = runner.invoke(
-            voiceover_group,
+            harvest_group,
             [
                 "sync-at-rev",
                 str(slides),
@@ -142,7 +142,7 @@ class TestSyncAtRevGuards:
     def test_rejects_unknown_rev(self, repo: Path):
         from click.testing import CliRunner
 
-        from clm.cli.commands.voiceover import voiceover_group
+        from clm.cli.commands.harvest import harvest_group
 
         slides = repo / "slides.py"
         video = repo / "video.mp4"
@@ -151,7 +151,7 @@ class TestSyncAtRevGuards:
 
         runner = CliRunner()
         result = runner.invoke(
-            voiceover_group,
+            harvest_group,
             [
                 "sync-at-rev",
                 str(slides),
@@ -172,7 +172,7 @@ class TestBackfillGuards:
     def test_dry_run_and_apply_are_mutually_exclusive(self, repo: Path):
         from click.testing import CliRunner
 
-        from clm.cli.commands.voiceover import voiceover_group
+        from clm.cli.commands.harvest import harvest_group
 
         slides = repo / "slides.py"
         video = repo / "video.mp4"
@@ -180,7 +180,7 @@ class TestBackfillGuards:
 
         runner = CliRunner()
         result = runner.invoke(
-            voiceover_group,
+            harvest_group,
             [
                 "backfill",
                 str(slides),
@@ -199,7 +199,7 @@ class TestBackfillGuards:
     def test_rejects_unknown_rev(self, repo: Path):
         from click.testing import CliRunner
 
-        from clm.cli.commands.voiceover import voiceover_group
+        from clm.cli.commands.harvest import harvest_group
 
         slides = repo / "slides.py"
         video = repo / "video.mp4"
@@ -207,7 +207,7 @@ class TestBackfillGuards:
 
         runner = CliRunner()
         result = runner.invoke(
-            voiceover_group,
+            harvest_group,
             [
                 "backfill",
                 str(slides),

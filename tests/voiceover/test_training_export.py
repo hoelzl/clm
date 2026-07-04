@@ -556,10 +556,10 @@ class TestExtractTrainingDataCLI:
     def test_help_text(self):
         from click.testing import CliRunner
 
-        from clm.cli.commands.voiceover import voiceover_group
+        from clm.cli.commands.harvest import harvest_group
 
         runner = CliRunner()
-        result = runner.invoke(voiceover_group, ["extract-training-data", "--help"])
+        result = runner.invoke(harvest_group, ["extract-training-data", "--help"])
         assert result.exit_code == 0
         assert "training" in result.output.lower()
         assert "--no-check-git" in result.output
@@ -568,7 +568,7 @@ class TestExtractTrainingDataCLI:
     def test_basic_invocation(self, tmp_path):
         from click.testing import CliRunner
 
-        from clm.cli.commands.voiceover import voiceover_group
+        from clm.cli.commands.harvest import harvest_group
 
         slide_file = tmp_path / "slides_test.py"
         slide_file.write_text(SLIDE_FILE_CONTENT, encoding="utf-8")
@@ -582,7 +582,7 @@ class TestExtractTrainingDataCLI:
             return_value=True,
         ):
             result = runner.invoke(
-                voiceover_group,
+                harvest_group,
                 [
                     "extract-training-data",
                     str(log_path),
@@ -604,7 +604,7 @@ class TestExtractTrainingDataCLI:
     def test_output_to_file(self, tmp_path):
         from click.testing import CliRunner
 
-        from clm.cli.commands.voiceover import voiceover_group
+        from clm.cli.commands.harvest import harvest_group
 
         slide_file = tmp_path / "slides_test.py"
         slide_file.write_text(SLIDE_FILE_CONTENT, encoding="utf-8")
@@ -615,7 +615,7 @@ class TestExtractTrainingDataCLI:
 
         runner = CliRunner()
         result = runner.invoke(
-            voiceover_group,
+            harvest_group,
             [
                 "extract-training-data",
                 str(log_path),
@@ -635,7 +635,7 @@ class TestExtractTrainingDataCLI:
     def test_no_results_message(self, tmp_path):
         from click.testing import CliRunner
 
-        from clm.cli.commands.voiceover import voiceover_group
+        from clm.cli.commands.harvest import harvest_group
 
         # Trace log referencing a slide file that doesn't exist
         entry = _make_trace_entry()
@@ -643,7 +643,7 @@ class TestExtractTrainingDataCLI:
 
         runner = CliRunner()
         result = runner.invoke(
-            voiceover_group,
+            harvest_group,
             [
                 "extract-training-data",
                 str(log_path),

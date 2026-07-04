@@ -9,8 +9,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from click.testing import CliRunner
 
+from clm.cli.commands.harvest import harvest_group
 from clm.cli.commands.slides.polish import polish
-from clm.cli.commands.voiceover import voiceover_group
 
 # ---------------------------------------------------------------------------
 # clm polish --polish-level
@@ -120,8 +120,8 @@ class TestVoiceoverSyncModeDeprecation:
             # This will fail (no actual voiceover deps) but the deprecation
             # warning should still be emitted during the option-processing phase.
             runner.invoke(
-                voiceover_group,
-                ["sync", str(slides), str(video), "--lang", "de", "--mode", "polished"],
+                harvest_group,
+                ["autopilot", str(slides), str(video), "--lang", "de", "--mode", "polished"],
                 catch_exceptions=True,
             )
 
@@ -144,9 +144,9 @@ class TestVoiceoverSyncModeDeprecation:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             runner.invoke(
-                voiceover_group,
+                harvest_group,
                 [
-                    "sync",
+                    "autopilot",
                     str(slides),
                     str(video),
                     "--lang",
@@ -175,9 +175,9 @@ class TestVoiceoverSyncModeDeprecation:
         with warnings.catch_warnings(record=True):
             warnings.simplefilter("always")
             result = runner.invoke(
-                voiceover_group,
+                harvest_group,
                 [
-                    "sync",
+                    "autopilot",
                     str(slides),
                     str(video),
                     "--lang",
@@ -204,9 +204,9 @@ class TestVoiceoverSyncModeDeprecation:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             runner.invoke(
-                voiceover_group,
+                harvest_group,
                 [
-                    "sync",
+                    "autopilot",
                     str(slides),
                     str(video),
                     "--lang",

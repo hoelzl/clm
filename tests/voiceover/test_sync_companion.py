@@ -337,7 +337,7 @@ class TestSyncCliCompanionFlag:
         """--no-companion should ignore a present companion file and route inline."""
         from click.testing import CliRunner
 
-        from clm.cli.commands.voiceover import voiceover_group
+        from clm.cli.commands.harvest import harvest_group
 
         slide_file = tmp_path / "slides_test.py"
         slide_file.write_text(SLIDES_WITH_IDS, encoding="utf-8")
@@ -357,9 +357,9 @@ class TestSyncCliCompanionFlag:
             with patch("clm.voiceover.timeline.build_parts", side_effect=SystemExit(77)):
                 runner = CliRunner()
                 result = runner.invoke(
-                    voiceover_group,
+                    harvest_group,
                     [
-                        "sync",
+                        "autopilot",
                         str(slide_file),
                         str(video_file),
                         "--lang",
@@ -375,10 +375,10 @@ class TestSyncCliCompanionFlag:
     def test_companion_flag_accepted(self, tmp_path: Path):
         from click.testing import CliRunner
 
-        from clm.cli.commands.voiceover import voiceover_group
+        from clm.cli.commands.harvest import harvest_group
 
         runner = CliRunner()
-        result = runner.invoke(voiceover_group, ["sync", "--help"])
+        result = runner.invoke(harvest_group, ["autopilot", "--help"])
 
         assert "--companion" in result.output
         assert "--no-companion" in result.output

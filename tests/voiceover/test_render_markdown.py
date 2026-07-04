@@ -106,7 +106,7 @@ class TestRenderMarkdown:
 
 class TestReportCommand:
     def test_markdown_output(self, tmp_path: Path):
-        from clm.cli.commands.voiceover import voiceover_group
+        from clm.cli.commands.harvest import harvest_group
 
         in_json = tmp_path / "r.json"
         out_md = tmp_path / "r.md"
@@ -114,8 +114,8 @@ class TestReportCommand:
 
         runner = CliRunner()
         result = runner.invoke(
-            voiceover_group,
-            ["report", str(in_json), "--format", "markdown", "-o", str(out_md)],
+            harvest_group,
+            ["compare-report", str(in_json), "--format", "markdown", "-o", str(out_md)],
         )
         assert result.exit_code == 0, result.output
         text = out_md.read_text(encoding="utf-8")
@@ -123,7 +123,7 @@ class TestReportCommand:
         assert "## Dropped in current slides" in text
 
     def test_json_passthrough(self, tmp_path: Path):
-        from clm.cli.commands.voiceover import voiceover_group
+        from clm.cli.commands.harvest import harvest_group
 
         in_json = tmp_path / "r.json"
         out_json = tmp_path / "out.json"
@@ -131,8 +131,8 @@ class TestReportCommand:
 
         runner = CliRunner()
         result = runner.invoke(
-            voiceover_group,
-            ["report", str(in_json), "--format", "json", "-o", str(out_json)],
+            harvest_group,
+            ["compare-report", str(in_json), "--format", "json", "-o", str(out_json)],
         )
         assert result.exit_code == 0, result.output
         roundtrip = json.loads(out_json.read_text(encoding="utf-8"))

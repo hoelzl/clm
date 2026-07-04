@@ -25,7 +25,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from click.testing import CliRunner
 
-from clm.cli.commands.voiceover import _merge_notes, voiceover_group
+from clm.cli.commands.harvest import harvest_group
+from clm.cli.commands.voiceover import _merge_notes
 from clm.notebooks.slide_parser import parse_slides
 from clm.voiceover.aligner import AlignmentResult, SlideNotes
 from clm.voiceover.merge import MergeResult, PropagationResult
@@ -414,9 +415,9 @@ class TestPropagateCliValidation:
 
         runner = CliRunner()
         result = runner.invoke(
-            voiceover_group,
+            harvest_group,
             [
-                "sync",
+                "autopilot",
                 str(slide_file),
                 str(video_file),
                 "--lang",
@@ -436,9 +437,9 @@ class TestPropagateCliValidation:
 
         runner = CliRunner()
         result = runner.invoke(
-            voiceover_group,
+            harvest_group,
             [
-                "sync",
+                "autopilot",
                 str(slide_file),
                 str(video_file),
                 "--lang",
@@ -454,5 +455,5 @@ class TestPropagateCliValidation:
 
     def test_propagate_to_accepted_in_help(self):
         runner = CliRunner()
-        result = runner.invoke(voiceover_group, ["sync", "--help"])
+        result = runner.invoke(harvest_group, ["autopilot", "--help"])
         assert "--propagate-to" in result.output

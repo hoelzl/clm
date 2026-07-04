@@ -17,6 +17,7 @@ import pytest
 from click.testing import CliRunner
 
 from clm.cli.commands import voiceover as voiceover_module
+from clm.cli.commands.harvest import harvest_group
 from clm.cli.commands.voiceover import (
     _display_merge_summary,
     _display_notes_summary,
@@ -26,7 +27,6 @@ from clm.cli.commands.voiceover import (
     _has_boundary,
     _parse_range,
     _polish_notes,
-    voiceover_group,
 )
 
 # ---------------------------------------------------------------------------
@@ -253,12 +253,12 @@ class TestEmitDryRunDiff:
 class TestVoiceoverGroupHelp:
     def test_group_help(self):
         runner = CliRunner()
-        result = runner.invoke(voiceover_group, ["--help"])
+        result = runner.invoke(harvest_group, ["--help"])
         assert result.exit_code == 0
 
     def test_sync_help(self):
         runner = CliRunner()
-        result = runner.invoke(voiceover_group, ["sync", "--help"])
+        result = runner.invoke(harvest_group, ["autopilot", "--help"])
         assert result.exit_code == 0
         assert "--mode" in result.output
         assert "--overwrite" in result.output
@@ -266,22 +266,22 @@ class TestVoiceoverGroupHelp:
 
     def test_transcribe_help(self):
         runner = CliRunner()
-        result = runner.invoke(voiceover_group, ["transcribe", "--help"])
+        result = runner.invoke(harvest_group, ["transcribe", "--help"])
         assert result.exit_code == 0
 
     def test_detect_help(self):
         runner = CliRunner()
-        result = runner.invoke(voiceover_group, ["detect", "--help"])
+        result = runner.invoke(harvest_group, ["detect", "--help"])
         assert result.exit_code == 0
 
     def test_identify_help(self):
         runner = CliRunner()
-        result = runner.invoke(voiceover_group, ["identify", "--help"])
+        result = runner.invoke(harvest_group, ["identify", "--help"])
         assert result.exit_code == 0
 
     def test_extract_training_data_help(self):
         runner = CliRunner()
-        result = runner.invoke(voiceover_group, ["extract-training-data", "--help"])
+        result = runner.invoke(harvest_group, ["extract-training-data", "--help"])
         assert result.exit_code == 0
 
 
@@ -299,9 +299,9 @@ class TestSyncUsageErrors:
 
         runner = CliRunner()
         result = runner.invoke(
-            voiceover_group,
+            harvest_group,
             [
-                "sync",
+                "autopilot",
                 str(slides),
                 str(video),
                 "--lang",
@@ -344,7 +344,7 @@ class TestTranscribeCommand:
 
         runner = CliRunner()
         result = runner.invoke(
-            voiceover_group,
+            harvest_group,
             ["--cache-root", str(tmp_path / "cache"), "transcribe", str(video), "--lang", "de"],
         )
 
@@ -366,7 +366,7 @@ class TestTranscribeCommand:
 
         runner = CliRunner()
         result = runner.invoke(
-            voiceover_group,
+            harvest_group,
             [
                 "--cache-root",
                 str(tmp_path / "cache"),
@@ -404,7 +404,7 @@ class TestDetectCommand:
         monkeypatch.setitem(sys.modules, "clm.voiceover.keyframes", fake_keyframes)
 
         runner = CliRunner()
-        result = runner.invoke(voiceover_group, ["--no-cache", "detect", str(video)])
+        result = runner.invoke(harvest_group, ["--no-cache", "detect", str(video)])
 
         assert result.exit_code == 0, result.output
         assert "1 transitions" in result.output
@@ -423,9 +423,7 @@ class TestDetectCommand:
         monkeypatch.setitem(sys.modules, "clm.voiceover.keyframes", fake_keyframes)
 
         runner = CliRunner()
-        result = runner.invoke(
-            voiceover_group, ["--no-cache", "detect", str(video), "-o", str(out)]
-        )
+        result = runner.invoke(harvest_group, ["--no-cache", "detect", str(video), "-o", str(out)])
 
         assert result.exit_code == 0
         data = json.loads(out.read_text())
@@ -472,7 +470,7 @@ class TestIdentifyCommand:
 
         runner = CliRunner()
         result = runner.invoke(
-            voiceover_group,
+            harvest_group,
             [
                 "--no-cache",
                 "identify",
@@ -506,7 +504,7 @@ class TestExtractTrainingDataCommand:
         monkeypatch.setitem(sys.modules, "clm.voiceover.training_export", fake_training)
 
         runner = CliRunner()
-        result = runner.invoke(voiceover_group, ["extract-training-data", str(trace_log)])
+        result = runner.invoke(harvest_group, ["extract-training-data", str(trace_log)])
 
         assert result.exit_code == 0, result.output
         assert "No training triples" in result.output
@@ -530,7 +528,7 @@ class TestExtractTrainingDataCommand:
 
         runner = CliRunner()
         result = runner.invoke(
-            voiceover_group,
+            harvest_group,
             ["extract-training-data", str(trace_log), "-o", str(out)],
         )
 
@@ -557,7 +555,7 @@ class TestExtractTrainingDataCommand:
 
         runner = CliRunner()
         result = runner.invoke(
-            voiceover_group,
+            harvest_group,
             ["extract-training-data", str(trace_log), "--no-check-git", "--tag", "notes"],
         )
 
@@ -576,7 +574,7 @@ class TestExtractTrainingDataCommand:
         monkeypatch.setitem(sys.modules, "clm.voiceover.training_export", fake_training)
 
         runner = CliRunner()
-        result = runner.invoke(voiceover_group, ["extract-training-data", str(trace_log)])
+        result = runner.invoke(harvest_group, ["extract-training-data", str(trace_log)])
 
         assert result.exit_code == 0, result.output
         assert '"slide_id": "a/1"' in result.output
