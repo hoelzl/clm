@@ -1,10 +1,8 @@
-"""CLI tests for the ``CLM_SYNC_ENGINE=v3`` verb dispatch (#520 Phase 3, §12.5).
+"""CLI tests for the sync verbs (#520; sole engine since the Phase 4 cutover).
 
-One dispatch point at the verb layer: ``report`` / ``apply`` switch to the v3
-engine under the env flag (v2 stays the default), ``record`` exists only
-there. The tests drive the full dogfood loop through the CLI — record →
-report clean → mutate → report flags → apply → report clean — and pin the
-envelope's stable booleans plus the flag hygiene in both directions.
+The tests drive the full loop through the CLI — record → report clean →
+mutate → report flags → apply → report clean — and pin the envelope's
+stable booleans.
 """
 
 from __future__ import annotations
@@ -57,52 +55,12 @@ def _json_payload(output: str) -> dict:
     return json.loads(output[start:])
 
 
-V3 = {"CLM_SYNC_ENGINE": "v3"}
-
-
-class TestDispatch:
-    def test_record_requires_the_v3_engine(self, cli_runner: CliRunner, tmp_path: Path):
-        de, _ = _write_pair(tmp_path)
-        result = cli_runner.invoke(slides_sync_group, ["record", str(de)])
-        assert result.exit_code != 0
-        assert "CLM_SYNC_ENGINE=v3" in result.output
-
-    def test_v3_only_apply_flags_are_rejected_under_v2(self, cli_runner: CliRunner, tmp_path: Path):
-        de, _ = _write_pair(tmp_path)
-        result = cli_runner.invoke(slides_sync_group, ["apply", str(de), "--dry-run"])
-        assert result.exit_code != 0
-        assert "CLM_SYNC_ENGINE=v3" in result.output
-
-    def test_v2_only_report_flags_are_rejected_under_v3(
-        self, cli_runner: CliRunner, tmp_path: Path
-    ):
-        de, _ = _write_pair(tmp_path)
-        result = cli_runner.invoke(
-            slides_sync_group, ["report", str(de), "--use-watermark"], env=V3
-        )
-        assert result.exit_code != 0
-        assert "v2 engine" in result.output
-
-    def test_report_under_v2_still_runs_the_v2_engine(
-        self, cli_runner: CliRunner, tmp_path: Path, monkeypatch
-    ):
-        # No env flag: the v2 path runs (its envelope has no "engine": "v3").
-        de, _ = _write_pair(tmp_path)
-        monkeypatch.setenv("CLM_JOBS_DB_PATH", str(tmp_path / "jobs.sqlite"))
-        result = cli_runner.invoke(slides_sync_group, ["report", str(de), "--json"])
-        if result.exit_code == 2:  # no git repo around tmp: v2 needs a baseline
-            assert "engine" not in (result.output or "")
-        else:
-            payload = _json_payload(result.output)
-            assert payload.get("engine") != "v3"
-
-
-class TestV3Loop:
+class TestSyncLoop:
     def test_record_report_mutate_apply_report(self, cli_runner: CliRunner, tmp_path: Path):
         de, en = _write_pair(tmp_path)
 
         # A never-recorded deck is cold: work pending (exit 1), agent needed.
-        cold = cli_runner.invoke(slides_sync_group, ["report", str(de), "--json"], env=V3)
+        cold = cli_runner.invoke(slides_sync_group, ["report", str(de), "--json"])
         assert cold.exit_code == 1, cold.output
         payload = _json_payload(cold.output)
         assert payload["schema"] == 3 and payload["engine"] == "v3"
@@ -112,47 +70,46 @@ class TestV3Loop:
         assert all(i["answers"] == ["confirm"] for i in payload["items"])
 
         # record blesses the current state (verify-gated).
-        record = cli_runner.invoke(slides_sync_group, ["record", str(de), "--json"], env=V3)
+        record = cli_runner.invoke(slides_sync_group, ["record", str(de), "--json"])
         assert record.exit_code == 0, record.output
         assert (tmp_path / ".clm" / "sync-ledger.json").is_file()
 
-        clean = cli_runner.invoke(slides_sync_group, ["report", str(de), "--json"], env=V3)
+        clean = cli_runner.invoke(slides_sync_group, ["report", str(de), "--json"])
         assert clean.exit_code == 0, clean.output
         assert _json_payload(clean.output)["is_clean"] is True
 
         # One shared edit -> one mechanical item -> apply propagates it.
         de.write_text(de.read_text(encoding="utf-8").replace("x = 1", "x = 42"), "utf-8")
-        flagged = cli_runner.invoke(slides_sync_group, ["report", str(de), "--json"], env=V3)
+        flagged = cli_runner.invoke(slides_sync_group, ["report", str(de), "--json"])
         assert flagged.exit_code == 1
         items = _json_payload(flagged.output)["items"]
         assert [i["action"] for i in items] == ["propagate_shared_edit"]
 
-        applied = cli_runner.invoke(slides_sync_group, ["apply", str(de), "--json"], env=V3)
+        applied = cli_runner.invoke(slides_sync_group, ["apply", str(de), "--json"])
         assert applied.exit_code == 0, applied.output
         assert "x = 42" in en.read_text(encoding="utf-8")
 
-        again = cli_runner.invoke(slides_sync_group, ["report", str(de), "--json"], env=V3)
+        again = cli_runner.invoke(slides_sync_group, ["report", str(de), "--json"])
         assert again.exit_code == 0, again.output
 
     def test_apply_decisions_from_stdin(self, cli_runner: CliRunner, tmp_path: Path):
         de, en = _write_pair(tmp_path)
-        assert cli_runner.invoke(slides_sync_group, ["record", str(de)], env=V3).exit_code == 0
+        assert cli_runner.invoke(slides_sync_group, ["record", str(de)]).exit_code == 0
         de.write_text(de.read_text(encoding="utf-8").replace("DE Text", "DE neu"), "utf-8")
         decisions = json.dumps({"decisions": [{"key": "id:s0-m", "body": "# EN new"}]})
         result = cli_runner.invoke(
             slides_sync_group,
             ["apply", str(de), "--decisions", "-", "--json"],
             input=decisions,
-            env=V3,
         )
         assert result.exit_code == 0, result.output
         assert "# EN new" in en.read_text(encoding="utf-8")
 
     def test_apply_residue_exits_one(self, cli_runner: CliRunner, tmp_path: Path):
         de, en = _write_pair(tmp_path)
-        assert cli_runner.invoke(slides_sync_group, ["record", str(de)], env=V3).exit_code == 0
+        assert cli_runner.invoke(slides_sync_group, ["record", str(de)]).exit_code == 0
         de.write_text(de.read_text(encoding="utf-8").replace("DE Text", "DE neu"), "utf-8")
-        result = cli_runner.invoke(slides_sync_group, ["apply", str(de), "--json"], env=V3)
+        result = cli_runner.invoke(slides_sync_group, ["apply", str(de), "--json"])
         assert result.exit_code == 1, result.output
         payload = _json_payload(result.output)
         assert payload["counts"]["pending"] == 1
@@ -167,7 +124,7 @@ class TestV3Loop:
             en.read_text(encoding="utf-8").replace('slide_id="s0-m"', 'slide_id="s0-x"'),
             "utf-8",
         )
-        result = cli_runner.invoke(slides_sync_group, ["record", str(de), "--json"], env=V3)
+        result = cli_runner.invoke(slides_sync_group, ["record", str(de), "--json"])
         assert result.exit_code == 1, result.output
         payload = _json_payload(result.output)
         assert payload["refused"] == 1
@@ -175,7 +132,7 @@ class TestV3Loop:
 
     def test_report_over_a_directory_aggregates(self, cli_runner: CliRunner, tmp_path: Path):
         _write_pair(tmp_path)
-        result = cli_runner.invoke(slides_sync_group, ["report", str(tmp_path), "--json"], env=V3)
+        result = cli_runner.invoke(slides_sync_group, ["report", str(tmp_path), "--json"])
         assert result.exit_code == 1, result.output
         payload = _json_payload(result.output)
         assert payload["engine"] == "v3"
@@ -186,7 +143,7 @@ class TestV3Loop:
         # ledger updates must still be saved — silently discarding them made
         # every confirmation a no-op.
         de, _en = _write_pair(tmp_path)
-        cold = cli_runner.invoke(slides_sync_group, ["report", str(de), "--json"], env=V3)
+        cold = cli_runner.invoke(slides_sync_group, ["report", str(de), "--json"])
         decisions = json.dumps(
             {
                 "decisions": [
@@ -199,13 +156,12 @@ class TestV3Loop:
             slides_sync_group,
             ["apply", str(de), "--decisions", "-", "--json"],
             input=decisions,
-            env=V3,
         )
         assert result.exit_code == 0, result.output
         payload = _json_payload(result.output)
         assert payload["ledger_recorded"] is True
         assert (tmp_path / ".clm" / "sync-ledger.json").is_file()
-        again = cli_runner.invoke(slides_sync_group, ["report", str(de), "--json"], env=V3)
+        again = cli_runner.invoke(slides_sync_group, ["report", str(de), "--json"])
         assert again.exit_code == 0, again.output
 
     def test_apply_never_records_a_structurally_corrupt_pair(
@@ -215,14 +171,14 @@ class TestV3Loop:
         # the structural gate refuses — apply may write its mechanical items,
         # but the ledger must not bless members of a corrupt pair.
         de, en = _write_pair(tmp_path)
-        assert cli_runner.invoke(slides_sync_group, ["record", str(de)], env=V3).exit_code == 0
+        assert cli_runner.invoke(slides_sync_group, ["record", str(de)]).exit_code == 0
         en.write_text(
             en.read_text(encoding="utf-8").replace('slide_id="s0-m"', 'slide_id="s0-x"'),
             "utf-8",
         )
         de.write_text(de.read_text(encoding="utf-8").replace("x = 1", "x = 42"), "utf-8")
         ledger_before = (tmp_path / ".clm" / "sync-ledger.json").read_text(encoding="utf-8")
-        result = cli_runner.invoke(slides_sync_group, ["apply", str(de), "--json"], env=V3)
+        result = cli_runner.invoke(slides_sync_group, ["apply", str(de), "--json"])
         assert result.exit_code != 0, result.output
         payload = _json_payload(result.output)
         assert payload["ledger_recorded"] is False
@@ -232,8 +188,64 @@ class TestV3Loop:
     def test_directory_sweep_warns_on_solo_halves(self, cli_runner: CliRunner, tmp_path: Path):
         _write_pair(tmp_path)
         (tmp_path / "slides_solo.de.py").write_text(DE, encoding="utf-8")
-        result = cli_runner.invoke(slides_sync_group, ["report", str(tmp_path), "--json"], env=V3)
+        result = cli_runner.invoke(slides_sync_group, ["report", str(tmp_path), "--json"])
         payload = _json_payload(result.output)
         assert any("slides_solo" in s for s in payload["skipped_solos"])
         stderr = getattr(result, "stderr", "") or result.output
         assert "no twin half found" in stderr
+
+    def test_bare_deck_path_defaults_to_report(self, cli_runner: CliRunner, tmp_path: Path):
+        de, _en = _write_pair(tmp_path)
+        assert cli_runner.invoke(slides_sync_group, ["record", str(de)]).exit_code == 0
+        result = cli_runner.invoke(slides_sync_group, [str(de), "--json"])
+        assert result.exit_code == 0, result.output
+        assert _json_payload(result.output)["is_clean"] is True
+
+
+class TestSinceView:
+    def test_since_diffs_against_the_ref_not_the_ledger(
+        self, cli_runner: CliRunner, tmp_path: Path
+    ):
+        # --since is a forensic VIEW (design §12.3): the baseline is the bundle
+        # at the ref; the ledger is neither consulted nor required.
+        import subprocess
+
+        de, en = _write_pair(tmp_path)
+
+        def git(*args: str) -> None:
+            subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True, text=True)
+
+        git("init", "-q")
+        git("config", "user.email", "t@example.com")
+        git("config", "user.name", "T")
+        git("add", ".")
+        git("commit", "-q", "-m", "base")
+
+        # No ledger, unchanged since HEAD -> the window view is clean even
+        # though the ledger view would report every member cold.
+        clean = cli_runner.invoke(
+            slides_sync_group, ["report", str(de), "--since", "HEAD", "--json"]
+        )
+        assert clean.exit_code == 0, clean.output
+        payload = _json_payload(clean.output)
+        assert payload["is_clean"] is True
+        assert payload["baseline"] == "since:" + _head_sha(tmp_path)
+
+        # A shared edit in the window shows up as exactly that item.
+        de.write_text(de.read_text(encoding="utf-8").replace("x = 1", "x = 42"), "utf-8")
+        flagged = cli_runner.invoke(
+            slides_sync_group, ["report", str(de), "--since", "HEAD", "--json"]
+        )
+        assert flagged.exit_code == 1, flagged.output
+        items = _json_payload(flagged.output)["items"]
+        assert [i["action"] for i in items] == ["propagate_shared_edit"]
+        # The view never wrote a ledger.
+        assert not (tmp_path / ".clm" / "sync-ledger.json").is_file()
+
+
+def _head_sha(cwd: Path) -> str:
+    import subprocess
+
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=cwd, check=True, capture_output=True, text=True
+    ).stdout.strip()

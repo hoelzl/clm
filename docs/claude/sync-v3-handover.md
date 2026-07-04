@@ -1,30 +1,44 @@
-Continue the sync v3 core replacement (#520) in hoelzl/clm — start **Phase 3**.
+Sync v3 core replacement (#520) — **COMPLETE through Phase 4 (cutover)**.
 
-**Task & goal**: Phases 0–2 are merged (PR #532 model+lenses, PR #534 differ+shadow).
-Phase 3 per `docs/claude/design/sync-total-identity-document-model.md` §11: per-item
-`apply --decisions` + `record` verb, promote the ledger to the §5 member-keyed schema
-(the ONLY trust store), and put the v3 engine behind `CLM_SYNC_ENGINE=v3` with one
-verb-layer dispatch point (§12.5). Exit: mutation oracle green through the v3 write
-path, then a real dogfood week on PythonCourses.
+**State (2026-07-04)**: Phases 0–4 are done. The document-model engine is the
+only sync engine: `clm slides sync {report,apply,verify,record}`, committed
+per-topic ledger (`<topic>/.clm/sync-ledger.json`) as the sole trust store,
+`report --since DATE|REF` as the bundle-at-ref forensic view. The v2 core
+(`sync_plan`/`sync_apply`/`sync_code`/`sync_task`/`sync_accept`/…), the
+watermark store (`SyncWatermarkCache` + friends), the sync-judge model
+clients, `sync_autopilot`, `clm slides watermark`, and the `CLM_SYNC_ENGINE`
+flag were deleted (PRs: #532 model+lenses, #534 differ+shadow, #537
+apply+ledger+dispatch, cutover PR — see `git log` / #520).
 
-**Done so far** (all merged to master):
-- `src/clm/slides/bilingual_doc.py` + `doc_lenses.py` — BilingualDeck model, parse/project lenses (byte-identity over the 644-pair corpus).
-- `src/clm/slides/sync_diff.py` — generic 3-way differ; `DeckBaseline(complete=False)` is the ledger-mode hook Phase 3 plugs into; closed mechanical/framed action registry; schema-3 envelope via `DeckDiff.to_payload()`.
-- `src/clm/slides/sync_shadow.py` + `clm slides sync shadow DECK|DIR --baseline REF` — v2-vs-v3 harness. W10 triage: `docs/claude/analysis/sync-v3-phase2-w10-replay.md` (per-deck-correct base → 2 genuine items, zero noise; the both-moved class is exactly what the ledger erases).
+**Where things live now**:
+- Engine: `clm/slides/{bilingual_doc,doc_lenses,doc_identity,sync_diff,
+  doc_ledger,doc_apply,doc_report,doc_write}.py`; CLI facade
+  `clm/cli/commands/slides/sync_v3.py`; verb layer `…/slides/sync.py`.
+- Shared git helpers (verify's HEAD read, --since's bundle-at-ref):
+  `clm/slides/git_text.py`.
+- MCP `slides_sync_report` and Studio `compute_lock`/sync-runner ride on
+  `doc_report.diff_bundle`.
+- `split`/`translate` seed the ledger on freshly-created pairs.
 
-**Next step(s)**:
-1. Read the memory topic `project_sync_assessment_2.md` (Phase 2 landmines) and design §5/§8/§12.5.
-2. Promote `src/clm/slides/sync_ledger.py` (today: schema 1, `(slide_id, role)`-keyed + idless map) to the §5 member-keyed entry `{member: MemberKey, langness, layout, fingerprints, tags_fp, provenance, hash_version}`; build `DeckBaseline` from it with `complete=False`.
-3. Per-item apply executor for the MECHANICAL_ACTIONS rows + `apply --decisions` (re-home the `sync_accept` guards as decision validators); writes go through `path_utils.atomic_write_all`, ≤4 files per deck.
-4. `record` verb (bless/accept collapsed) incl. the §7.3 pos→id key migration at record time; ledger seed from a verified pass.
-5. `CLM_SYNC_ENGINE` dispatch in `src/clm/cli/commands/slides/sync.py` (v2 default, v3 opt-in), envelope keeps `is_clean`/`needs_model`/`needs_agent` stable.
+**Remaining / follow-ups** (file issues if picked up):
+- Phase 5 options: MCP `sync_apply_decisions`, stable deck id, ledger
+  analytics.
+- The v2 evidence harnesses (`scripts/{edit_dynamics_harness,
+  sync_corpus_harness,sync_matrix_probes}.py` + their test drivers) were
+  deleted with the engine — their verdict catalogs encoded v2 auto-apply
+  semantics. If an edit-dynamics-style fault-injection sweep is wanted for
+  v3, it is a redesign over `report`/`apply --decisions` (frame-vs-silent
+  classification), not a port.
+- An optional human one-shot (`autopilot`-as-script over report→judge→apply)
+  was NOT rebuilt at cutover — the agent loop is the supported path.
+- Downstream: PythonCourses (and other course repos) agent guidelines must
+  drop task/accept/watermark wording; seed ledgers once via
+  `clm slides sync record slides/` from a verified state (see
+  `clm info migration`).
 
-**Gotchas / constraints**:
-- P8 is load-bearing: never emit/execute a mechanical action when the base carried a divergence, a pool has a deficit, or a twin is estranged — frame instead. `TestAdversarialReviewRegressions` in `tests/slides/test_sync_diff.py` pins these.
-- v3 modules must not import `sync_plan`/`sync_apply`/`sync_code` (probe: `tests/cli/test_sync_import_cleanliness.py`); v2 `report.in_sync` is an int cell COUNT, the verdict is `is_clean`.
-- Base orders are per-side and id-keyed-only (pos ordinals alias); `_pair_sig` strips slide_id+for_slide.
-- Update `src/clm/cli/info_topics/commands.md` for any CLI change; changelog via `changelog.d/` fragment, never `CHANGELOG.md [Unreleased]`.
-- Worktree rules: never switch to literal `master`; fresh branch off `origin/master` (e.g. `claude/sync-v3-phase3`); run `pre-commit`-gated commits, push triggers the fast suite; PR + `gh pr merge --merge --auto`.
-- Corpus gates run with the maintainer's PythonCourses checkout; cache-dir is cwd-anchored — run clm against course repos from their own cwd.
-
-**Verify with**: `pytest tests/slides/test_sync_diff.py tests/slides/test_sync_diff_matrix.py tests/slides/test_sync_diff_corpus.py tests/slides/test_sync_shadow.py -n 4` (fast), plus `pytest "tests/slides/test_sync_diff_corpus.py::TestRealCorpusSelfDiff" -m "" -n 0` and the `test_sync_corpus_noop/mutation` oracles once the write path exists.
+**Read before touching the engine**: memory topic `sync-assessment-2`,
+design `docs/claude/design/sync-total-identity-document-model.md`
+(§5 ledger, §6 diff, §7 transitions, §8 surface), and the LANDMINES in the
+memory topic (P8 frame-don't-mechanize, per-side id-keyed base orders,
+DiffItem twin convention, pool-scoped confirms, verify gate at the verb
+layer).

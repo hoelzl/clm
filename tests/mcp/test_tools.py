@@ -841,61 +841,83 @@ class TestSuggestSync:
 
 
 class TestSyncReport:
-    """`handle_sync_report` runs the split-pair engine and returns the tiered report.
+    """`handle_sync_report` runs the v3 engine and returns the schema-3 pair payload.
 
     This is the split-pair (two-file) analogue of `slides_suggest_sync`, exposing the
-    same `ReconciliationReport` the CLI `--dry-run` emits.
+    same member table `clm slides sync report --json` emits, diffed against the
+    committed per-topic ledger.
     """
 
-    @pytest.fixture(autouse=True)
-    def _isolate_cache(self, tmp_path, monkeypatch):
-        # Point watermark resolution at an empty dir so the report falls back to git
-        # HEAD / no-baseline deterministically — never the real project cache.
-        monkeypatch.setenv("CLM_CACHE_DIR", str(tmp_path / "empty_cache"))
+    _DE = (
+        '# %% [markdown] lang="de" tags=["slide"] slide_id="s1"\n# Hallo\n\n'
+        '# %% tags=["keep"]\nx = 1\n'
+    )
+    _EN = (
+        '# %% [markdown] lang="en" tags=["slide"] slide_id="s1"\n# Hello\n\n'
+        '# %% tags=["keep"]\nx = 1\n'
+    )
 
-    def _pair(self, tmp_path: Path, de: str, en: str) -> tuple[Path, Path]:
+    def _pair(self, tmp_path: Path) -> tuple[Path, Path]:
         de_path = tmp_path / "deck.de.py"
         en_path = tmp_path / "deck.en.py"
-        de_path.write_text(de, encoding="utf-8")
-        en_path.write_text(en, encoding="utf-8")
+        de_path.write_text(self._DE, encoding="utf-8")
+        en_path.write_text(self._EN, encoding="utf-8")
         return de_path, en_path
 
-    async def test_consistent_pair_is_clean(self, tmp_path):
-        de = '# %% [markdown] lang="de" tags=["slide"] slide_id="s1"\nHallo\n'
-        en = '# %% [markdown] lang="en" tags=["slide"] slide_id="s1"\nHello\n'
-        de_path, _ = self._pair(tmp_path, de, en)
-        data = json.loads(await handle_sync_report(str(de_path), tmp_path))
-        assert set(data) >= {
-            "mechanical",
-            "assisted",
-            "ambiguity",
-            "baseline_source",
-            "is_clean",
-            "needs_model",
-            "needs_agent",
-        }
-        assert data["is_clean"] is True
+    @staticmethod
+    def _record(de_path: Path, en_path: Path) -> None:
+        """Bless the current pair state in the committed topic ledger."""
+        from clm.slides import doc_ledger
+        from clm.slides.doc_lenses import load_bundle
 
-    async def test_idless_add_is_assisted_with_excerpt(self, tmp_path):
-        de = (
-            '# %% [markdown] lang="de" tags=["slide"] slide_id="s1"\nHallo\n\n'
-            '# %% [markdown] lang="de" tags=["slide"]\nEine neue Folie\n'
+        bundle = load_bundle(de_path, en_path)
+        path = doc_ledger.ledger_path_for(de_path)
+        ledger = doc_ledger.load(path)
+        doc_ledger.record_deck_snapshot(
+            ledger, doc_ledger.deck_key_for(de_path), bundle.outcome.deck, provenance="record"
         )
-        en = '# %% [markdown] lang="en" tags=["slide"] slide_id="s1"\nHello\n'
-        de_path, _ = self._pair(tmp_path, de, en)
+        doc_ledger.save(ledger, path)
+
+    async def test_recorded_pair_is_clean(self, tmp_path):
+        de_path, en_path = self._pair(tmp_path)
+        self._record(de_path, en_path)
         data = json.loads(await handle_sync_report(str(de_path), tmp_path))
-        assert [i["kind"] for i in data["assisted"]] == ["add"]
-        # Read-only / pre-apply: the source cell bytes are resolved for the agent.
-        assert "Eine neue Folie" in data["assisted"][0]["source_excerpt"]
+        assert data["schema"] == 3
+        assert data["engine"] == "v3"
+        assert data["is_clean"] is True
+        assert data["needs_model"] is False
+        assert data["needs_agent"] is False
+        assert data["de_path"] == str(de_path)
+        assert data["en_path"] == str(en_path)
+
+    async def test_unrecorded_pair_is_cold(self, tmp_path):
+        # A deck never recorded in the ledger reports every member cold —
+        # framed `verify_cold` items, never silently trusted.
+        de_path, _ = self._pair(tmp_path)
+        data = json.loads(await handle_sync_report(str(de_path), tmp_path))
+        assert data["is_clean"] is False
+        assert data["needs_agent"] is True
+        assert {i["action"] for i in data["items"]} == {"verify_cold"}
+        assert all(i["answers"] == ["confirm"] for i in data["items"])
+
+    async def test_localized_edit_needs_model(self, tmp_path):
+        de_path, en_path = self._pair(tmp_path)
+        self._record(de_path, en_path)
+        # Modify only the DE localized cell → one translate item, DE → EN.
+        de_path.write_text(self._DE.replace("# Hallo", "# Neues Hallo"), encoding="utf-8")
+        data = json.loads(await handle_sync_report(str(de_path), tmp_path))
+        assert data["is_clean"] is False
         assert data["needs_model"] is True
+        actions = {
+            (i["action"], i["direction"]) for i in data["items"] if i["outcome"] != "in_sync"
+        }
+        assert actions == {("translate_edit", "de_to_en")}
 
     async def test_stem_relative_path_resolution(self, tmp_path):
-        de = '# %% [markdown] lang="de" tags=["slide"] slide_id="s1"\nHallo\n'
-        en = '# %% [markdown] lang="en" tags=["slide"] slide_id="s1"\nHello\n'
-        self._pair(tmp_path, de, en)
+        self._pair(tmp_path)
         # The bilingual STEM (no .de/.en tag), passed relative — both halves derive.
         data = json.loads(await handle_sync_report("deck.py", tmp_path))
-        assert "is_clean" in data and "baseline_source" in data
+        assert data["schema"] == 3 and "is_clean" in data
 
     async def test_non_split_file_errors(self, tmp_path):
         lone = tmp_path / "bilingual.py"  # no .de/.en tag, no twin on disk

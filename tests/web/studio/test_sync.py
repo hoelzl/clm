@@ -28,8 +28,8 @@ class TestResolveSyncCommand:
     def test_pair_builds_sync_command(self, bilingual_service: StudioService, bilingual: Bilingual):
         cmd, de_id, en_id = bilingual_service.resolve_sync_command(bilingual.de_id)
         assert cmd[0] == sys.executable
-        assert cmd[1:5] == ["-m", "clm", "slides", "sync"]
-        assert cmd[-1] == "--yes"
+        assert cmd[1:6] == ["-m", "clm", "slides", "sync", "apply"]
+        assert cmd[-1] == str(bilingual.de_path)
         assert de_id == bilingual.de_id and en_id == bilingual.en_id
 
     def test_either_half_resolves_same_pair(

@@ -54,10 +54,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from clm.notebooks.slide_parser import comment_token_for_path
+from clm.slides.git_text import git_ref_text
 from clm.slides.raw_cells import split_cells
 from clm.slides.split import UnifyError, unify_texts
 from clm.slides.sync_companion import project_pair
-from clm.slides.sync_plan import _git_ref_text
 from clm.slides.sync_writeback import role_of
 
 
@@ -334,7 +334,7 @@ def verify_pair(de_path: Path, en_path: Path) -> VerifyResult:
 
     git_baseline = False
     for path, current, half in ((de_path, de_text, "DE"), (en_path, en_text, "EN")):
-        head_text = _git_ref_text(path, "HEAD")
+        head_text = git_ref_text(path, "HEAD")
         if head_text is None:
             continue
         git_baseline = True

@@ -82,7 +82,7 @@ class StaticSlideTranslator:
     """A deterministic translator for tests and offline runs.
 
     ``mapping`` keys on the exact ``source_body``; ``default`` is the fallback.
-    With neither, :meth:`translate` raises — mirroring ``StaticSyncJudge``.
+    With neither, :meth:`translate` raises — mirroring the other static test doubles.
     """
 
     default: str | None = None

@@ -2,6 +2,48 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## The sync v2 engine was removed — the document-model engine is the only engine (#520 Phase 4, {version})
+
+**Breaking.** `clm slides sync` now always runs the document-model engine
+(previously opt-in via `CLM_SYNC_ENGINE=v3`); the v2 engine — watermark
+baselines, the `task`/`accept` round-trip verbs, `autopilot`, `diagnose`,
+`shadow`, the `baseline` subgroup, and `clm slides watermark` — was
+**deleted**, with no deprecation aliases. The `CLM_SYNC_ENGINE` variable is
+ignored.
+
+| Removed | Use instead |
+|---|---|
+| `CLM_SYNC_ENGINE=v3` opt-in | nothing — the engine is the default (unset the variable) |
+| `sync task` / `sync accept` | `sync report --json` (framed items carry an `answers` vocabulary) + `sync apply --decisions FILE\|-` |
+| `sync autopilot` | drive the `report → decisions → apply → verify` loop with your agent |
+| `sync diagnose` | `sync report` states + `sync verify`; `clm slides reconcile-vo-ids` for narrative-id repair |
+| `sync shadow` | gone (it compared the two engines; there is one engine now) |
+| `sync baseline {show,bless,clear,prune}` / `clm slides watermark …` | the committed ledger: `sync record DECK\|DIR` to bless; the `.clm-cache` watermark DB is dead data and can be deleted |
+| `sync accept --record` / `baseline bless --ledger` | `sync record` (per `--member` or whole deck) |
+| `report`/`apply` `--baseline REF`, `--baseline-from`, `--use-watermark`, `--cache-dir`, `--ledger`, `--explain`, `apply --yes`/`--auto-heal` | the ledger is the only baseline; `report --since DATE\|REF` remains as a read-only forensic view |
+| v1 ledger sections (`slides`/`idless` in `.clm/sync-ledger.json`) | dropped on the next ledger write; the member-keyed `decks` section is the whole file |
+| `clm slides split --cache-dir` / `--no-watermark` | split records the pair in the committed ledger; `--no-record` skips it (`--no-watermark` still accepted as an alias) |
+| `clm slides translate --provider/--llm-model` (delegated-sync judge) | translate's twin-present path is now a read-only sync report; reconcile with the sync verbs |
+
+**One-time seeding.** The committed per-topic ledger
+(`<topic>/.clm/sync-ledger.json`) is the only trust store: a deck with no
+ledger entries reports every member **cold** (framed `verify_cold`, exit 1)
+instead of silently trusting a git baseline. Seed each course repo once from
+a verified state:
+
+```bash
+clm slides sync verify slides/   # must be green
+clm slides sync record slides/   # bank the verified state, commit the .clm/ ledgers
+```
+
+Also update any course-repo agent guidelines that mention the removed verbs —
+see the "Revising your repository guidelines" section of
+`clm info sync-agents`.
+
+The Studio phone editor's language lock now derives from the ledger too: an
+unseeded pair locks both languages until it is recorded, and the Studio sync
+button applies only mechanical items (framed items need the agent loop).
+
 ## The `clm voiceover` video verbs moved to `clm harvest` (epic #546, {version})
 
 **Breaking.** The video side of `clm voiceover` (transcription, alignment,

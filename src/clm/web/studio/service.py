@@ -328,13 +328,13 @@ class StudioService:
     # ----------------------------------------------------- bilingual lock (P3)
 
     def compute_lock(self, deck_id: str, path: Path) -> LockState:
-        """Derive the deck's bilingual lock from the structural sync watermark.
+        """Derive the deck's bilingual lock from the committed sync ledger (v3).
 
         A language is editable iff the *other* split half is **clean** relative to
-        the last synced baseline (design §3.5): editing one half marks the other
-        stale and locks it until a sync (or discard) makes both clean again. The
-        plan build is **read-only and LLM-free** (``provider_available=False``).
-        Returns an unlocked state for any deck with no split twin on disk.
+        the ledger baseline (design §3.5): editing one half marks the other stale
+        and locks it until a sync (or discard) makes both clean again. The diff is
+        **read-only and LLM-free**. Returns an unlocked state for any deck with no
+        split twin on disk.
         """
         from clm.slides.pairing import derive_split_twin, order_split_pair, split_lang_tag
 
@@ -348,32 +348,41 @@ class StudioService:
         de_path, en_path = ordered
         other_lang = "en" if lang == "de" else "de"
 
-        from clm.infrastructure.llm.cache import (
-            CACHE_DB_NAME,
-            SyncWatermarkCache,
-            resolve_cache_dir,
-        )
-        from clm.slides.sync_plan import build_sync_plan
+        from clm.slides.doc_lenses import DocLensError, load_bundle
+        from clm.slides.doc_report import diff_bundle
 
-        cache = SyncWatermarkCache(resolve_cache_dir() / CACHE_DB_NAME)
         try:
-            plan = build_sync_plan(de_path, en_path, watermark_cache=cache)
-        finally:
-            cache.close()
+            bundle = load_bundle(de_path, en_path)
+        except DocLensError as exc:
+            # An unparseable pair cannot be diffed — lock both halves rather
+            # than let a phone edit race an already-corrupt deck.
+            return LockState(
+                is_pair=True,
+                lang=lang,
+                other_lang=other_lang,
+                twin_deck_id=self._rel(twin),
+                editable=False,
+                locked_reason=f"The pair cannot be parsed: {exc}",
+                has_conflicts=True,
+                baseline="ledger",
+            )
+        diff = diff_bundle(bundle)
 
-        # ``direction`` names the half that drifted (the source). de->en ⇒ DE is
-        # dirty; en->de ⇒ EN is dirty. A conflict (both drifted) locks both.
-        de_dirty = any(p.direction == "de->en" for p in plan.proposals)
-        en_dirty = any(p.direction == "en->de" for p in plan.proposals)
-        has_conflicts = plan.count("conflict") > 0
+        # ``direction`` names the half that drifted (the source). de_to_en ⇒ DE
+        # is dirty; en_to_de ⇒ EN is dirty. Anything needing judgment (a framed
+        # conflict, a both-sided move, a normalize refusal, a cold member) locks
+        # both — the phone editor only ever rides on a mechanically-clean pair.
+        de_dirty = any(i.direction in ("de_to_en", "both") for i in diff.items)
+        en_dirty = any(i.direction in ("en_to_de", "both") for i in diff.items)
+        has_conflicts = diff.needs_agent
         this_dirty = de_dirty if lang == "de" else en_dirty
         other_dirty = en_dirty if lang == "de" else de_dirty
 
         editable = not other_dirty and not has_conflicts
         if has_conflicts:
             reason: str | None = (
-                "Both languages changed since the last sync — resolve on the "
-                "desktop with `clm slides sync`."
+                "The pair needs judgment (conflict, cold member, or normalize "
+                "refusal) — resolve on the desktop with `clm slides sync`."
             )
         elif other_dirty:
             reason = (
@@ -392,7 +401,7 @@ class StudioService:
             locked_reason=reason,
             other_stale=this_dirty,
             has_conflicts=has_conflicts,
-            baseline=plan.baseline_source,
+            baseline="ledger",
         )
 
     def _enforce_lock(self, deck_id: str, path: Path) -> None:
@@ -404,14 +413,16 @@ class StudioService:
     # --------------------------------------------- sync-to-other-language (P3b)
 
     def resolve_sync_command(self, deck_id: str) -> tuple[list[str], str, str]:
-        """Build the ``clm slides sync`` subprocess command for ``deck_id``'s pair.
+        """Build the ``clm slides sync apply`` subprocess command for ``deck_id``'s pair.
 
-        Returns ``(cmd, de_deck_id, en_deck_id)``. The command reconciles the
-        split DE/EN pair (direction decided per cell) and **writes both halves +
-        advances the watermark**, so the lock releases afterward. Raises
-        :class:`InvalidStructuralOpError` for a deck with no split twin (nothing
-        to sync). The subprocess inherits the serve cwd so it shares the
-        watermark cache with :meth:`compute_lock` (see ``sync_runner``).
+        Returns ``(cmd, de_deck_id, en_deck_id)``. The command applies every
+        **mechanical** item for the split DE/EN pair (direction decided per
+        member) and records each landed item in the committed ledger, so a
+        one-sided shared edit releases the lock afterward. Framed items
+        (translations, conflicts) are left as residue — exit code 1 — and keep
+        the lock; those need the agent/desktop workflow. Raises
+        :class:`InvalidStructuralOpError` for a deck with no split twin
+        (nothing to sync).
         """
         from clm.slides.pairing import derive_split_twin, order_split_pair, split_lang_tag
 
@@ -425,7 +436,7 @@ class StudioService:
         if ordered is None:
             raise InvalidStructuralOpError("not a valid split DE/EN pair")
         de_path, en_path = ordered
-        cmd = [sys.executable, "-m", "clm", "slides", "sync", str(de_path), "--yes"]
+        cmd = [sys.executable, "-m", "clm", "slides", "sync", "apply", str(de_path)]
         return cmd, self._rel(de_path), self._rel(en_path)
 
     # ------------------------------------------------------- tier-2 render (P4)

@@ -1,13 +1,9 @@
-"""The v3 engine facade for the sync verbs (#520 Phase 3, design §12.5).
+"""The engine facade for the sync verbs (#520; sole engine since Phase 4).
 
-One dispatch point per verb: ``clm.cli.commands.slides.sync`` resolves
-``CLM_SYNC_ENGINE`` (``v2`` default through Phase 3) and hands the whole verb
-to a runner here — no v2/v3 branching below the verb layer. This module
-drives only the v3 core (``doc_lenses`` / ``sync_diff`` / ``doc_ledger`` /
-``doc_apply``); the single v2-adjacent import is the *structural verify gate*
-on the ``record`` write path (``sync_verify``, a keep component that still
-imports v2 modules), loaded lazily inside the function so importing this
-module never pulls in the v2 core — pinned by the import-cleanliness test.
+``clm.cli.commands.slides.sync`` hands each verb to a runner here. This
+module drives only the document-model core (``doc_lenses`` / ``sync_diff`` /
+``doc_ledger`` / ``doc_apply``); the structural verify gate on the write
+paths (``sync_verify``) is loaded lazily inside the functions that need it.
 
 Verbs (design §8):
 
@@ -31,11 +27,12 @@ import click
 
 from clm.slides import doc_apply, doc_ledger
 from clm.slides.doc_lenses import DocLensError, LoadedBundle, load_bundle
+from clm.slides.doc_report import diff_bundle, diff_bundle_at_ref, pair_payload
 from clm.slides.pairing import (
     find_split_slide_files_recursive,
     iter_split_pairs,
 )
-from clm.slides.sync_diff import DeckDiff, diff_outcome
+from clm.slides.sync_diff import DeckDiff
 
 __all__ = ["run_apply_v3", "run_record_v3", "run_report_v3"]
 
@@ -68,33 +65,6 @@ def _load(de_path: Path, en_path: Path | None) -> LoadedBundle:
     return load_bundle(de_path, en_path)
 
 
-def _diff_bundle(bundle: LoadedBundle) -> DeckDiff:
-    ledger = doc_ledger.load(doc_ledger.ledger_path_for(bundle.de_path))
-    deck_ledger = ledger.decks.get(doc_ledger.deck_key_for(bundle.de_path))
-    base = doc_ledger.baseline_from_ledger(deck_ledger) if deck_ledger is not None else None
-    return diff_outcome(bundle.outcome, base)
-
-
-def _item_payloads(diff: DeckDiff) -> list[dict]:
-    """The §6.4 item rows, each framed item carrying its answer vocabulary."""
-    items = []
-    for item in diff.items:
-        payload = item.payload()
-        answers = doc_apply.decision_vocabulary(item.action)
-        if answers:
-            payload["answers"] = list(answers)
-        items.append(payload)
-    return items
-
-
-def _pair_payload(bundle: LoadedBundle, diff: DeckDiff) -> dict:
-    payload = diff.to_payload()
-    payload["items"] = _item_payloads(diff)
-    payload["de_path"] = str(bundle.de_path)
-    payload["en_path"] = str(bundle.en_path)
-    return payload
-
-
 def _render_pair(bundle: LoadedBundle, diff: DeckDiff) -> str:
     lines = [
         f"{bundle.de_path.name}: "
@@ -120,9 +90,21 @@ def _render_pair(bundle: LoadedBundle, diff: DeckDiff) -> str:
 # ---------------------------------------------------------------------------
 
 
-def run_report_v3(de_path: Path, en_path: Path | None, *, as_json: bool) -> int:
-    """The v3 read verb. Exit 0 clean / 1 work pending / 2 error."""
-    results: list[tuple[LoadedBundle, DeckDiff]] = []
+def run_report_v3(
+    de_path: Path,
+    en_path: Path | None,
+    *,
+    as_json: bool,
+    since_ref: str | None = None,
+) -> int:
+    """The v3 read verb. Exit 0 clean / 1 work pending / 2 error.
+
+    ``since_ref`` switches the baseline from the committed ledger to the
+    bundle at a git ref — the design-§12.3 forensic *view* ("what changed in
+    this window"), never a trust change: the ledger is neither consulted nor
+    written, and nothing else about the verb differs.
+    """
+    results: list[tuple[LoadedBundle, DeckDiff, list[str]]] = []
     errors: list[str] = []
     pairs, solos = _scope_pairs(de_path, en_path)
     _warn_solos(solos)
@@ -132,10 +114,21 @@ def run_report_v3(de_path: Path, en_path: Path | None, *, as_json: bool) -> int:
         except DocLensError as exc:
             errors.append(str(exc))
             continue
-        results.append((bundle, _diff_bundle(bundle)))
-    clean = all(diff.is_clean for _, diff in results) and not errors
+        if since_ref is not None:
+            diff, base_refusal = diff_bundle_at_ref(bundle, since_ref)
+        else:
+            diff, base_refusal = diff_bundle(bundle), []
+        results.append((bundle, diff, base_refusal))
+    clean = all(diff.is_clean for _, diff, _refusal in results) and not errors
     if as_json:
-        payloads = [_pair_payload(bundle, diff) for bundle, diff in results]
+        payloads = []
+        for bundle, diff, base_refusal in results:
+            payload = pair_payload(bundle, diff)
+            if since_ref is not None:
+                payload["baseline"] = f"since:{since_ref}"
+                if base_refusal:
+                    payload["base_refusal"] = base_refusal
+            payloads.append(payload)
         if not de_path.is_dir() and len(payloads) == 1 and not errors:
             _echo_json(payloads[0])
         else:
@@ -144,16 +137,23 @@ def run_report_v3(de_path: Path, en_path: Path | None, *, as_json: bool) -> int:
                     "schema": 3,
                     "engine": "v3",
                     "is_clean": clean,
-                    "needs_model": any(d.needs_model for _, d in results),
-                    "needs_agent": any(d.needs_agent for _, d in results) or bool(errors),
+                    "needs_model": any(d.needs_model for _, d, _r in results),
+                    "needs_agent": any(d.needs_agent for _, d, _r in results) or bool(errors),
                     "errors": errors,
                     "skipped_solos": [str(p) for p in solos],
                     "pairs": payloads,
                 }
             )
     else:
-        for bundle, diff in results:
+        for bundle, diff, base_refusal in results:
             click.echo(_render_pair(bundle, diff))
+            if base_refusal:
+                click.echo(
+                    f"  note: the bundle at {since_ref} refuses to parse "
+                    f"({', '.join(sorted(set(base_refusal)))}) — diffed against no base "
+                    "(every member cold)",
+                    err=True,
+                )
         for error in errors:
             click.echo(f"ERROR: {error}", err=True)
     if errors and not results:
@@ -199,7 +199,7 @@ def run_apply_v3(
                 click.echo(f"decision error: {error}", err=True)
             return 2
 
-    diff = _diff_bundle(bundle)
+    diff = diff_bundle(bundle)
     if diff.refusal is not None:
         message = diff.refusal.render()
         if as_json:

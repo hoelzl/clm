@@ -196,26 +196,6 @@ def _isolate_db_path_env():
                 os.environ[key] = value
 
 
-@pytest.fixture(autouse=True)
-def _isolate_sync_engine_env():
-    """Clear ``CLM_SYNC_ENGINE`` for the duration of every test.
-
-    A developer dogfooding the v3 sync engine sets ``CLM_SYNC_ENGINE=v3``
-    session-wide; without isolation that bleeds into every test that exercises
-    the v2 default path (v2-only flags like ``--cache-dir`` are rejected under
-    v3, so a dozen sync CLI tests fail locally while passing in CI). Tests that
-    target a specific engine set the variable explicitly via ``monkeypatch``,
-    which runs after this fixture and is unaffected. Mirrors
-    ``_isolate_db_path_env`` (PR #511).
-    """
-    saved = os.environ.pop("CLM_SYNC_ENGINE", None)
-    try:
-        yield
-    finally:
-        if saved is not None:
-            os.environ["CLM_SYNC_ENGINE"] = saved
-
-
 # ====================================================================
 # Tool Availability Detection
 # ====================================================================

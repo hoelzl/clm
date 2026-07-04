@@ -3,14 +3,15 @@
 Phase 2 of ``clm slides translate`` (Issue #232). Where Phase 1
 (:mod:`clm.slides.translate_deck`) is the pure, offline engine, this layer adds
 the side effects: resolving the twin path, the *idempotency dispatch* (twin
-absent → bootstrap; twin present → delegate to the incremental sync engine),
-EN-authority id minting, and the watermark seal that makes the next ``sync`` a
-clean no-op.
+absent → bootstrap; twin present → a READ-ONLY v3 sync diff, #520),
+EN-authority id minting, and the committed sync-ledger record that makes the
+next ``sync`` a clean no-op.
 
-The load-bearing properties under test are D2 (re-running converges to sync and
-never doubles the deck) and the parity invariants (the written pair round-trips
-and carries matching ``slide_id``\\ s). Everything is offline — driven through
-the ``SlideTranslator`` / ``SyncJudge`` protocols with the static fakes.
+The load-bearing properties under test are D2 (re-running converges to a
+read-only sync report and never doubles the deck) and the parity invariants
+(the written pair round-trips and carries matching ``slide_id``\\ s).
+Everything is offline — driven through the ``SlideTranslator`` protocol with
+the static fake.
 """
 
 from __future__ import annotations
@@ -19,8 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from clm.infrastructure.llm.cache import SyncWatermarkCache
-from clm.infrastructure.llm.ollama_client import StaticSyncJudge, SyncProposal
+from clm.slides import doc_ledger
 from clm.slides.raw_cells import split_cells
 from clm.slides.split import split_text, unify_texts
 from clm.slides.sync_translate import StaticSlideTranslator
@@ -99,8 +99,8 @@ def _cell_count(text: str) -> int:
     return len(cells)
 
 
-def _cache(tmp_path: Path) -> SyncWatermarkCache:
-    return SyncWatermarkCache(tmp_path / "clm-llm.sqlite")
+def _ledger_path(de_path: Path) -> Path:
+    return de_path.parent / ".clm" / "sync-ledger.json"
 
 
 def _write(path: Path, text: str) -> Path:
@@ -116,7 +116,8 @@ _IDLESS_DECK = (
 )
 # A deck that ends on a slide *pair* (no shared terminator) is trailing-blank
 # *asymmetric* after split — exercises the harder path through assign_ids +
-# watermark, where the generated half does not byte-match a hypothetical other.
+# the ledger record, where the generated half does not byte-match a hypothetical
+# other.
 _DECK_ASYMMETRIC = (
     HEADER_PREAMBLE
     + _slide_pair("intro", "Einleitung", "Introduction")
@@ -158,13 +159,7 @@ class TestBootstrapWritesTwin:
     def test_writes_valid_round_tripping_pair(self, tmp_path: Path):
         de, en = _split(_DECK)
         de_path = _write(tmp_path / "slides_x.de.py", de)
-        cache = _cache(tmp_path)
-        try:
-            result = bootstrap_deck(
-                de_path, translator=_mirror_translator(de, en), watermark_cache=cache
-            )
-        finally:
-            cache.close()
+        result = bootstrap_deck(de_path, translator=_mirror_translator(de, en))
 
         assert result.action == "bootstrapped"
         twin = tmp_path / "slides_x.en.py"
@@ -175,26 +170,25 @@ class TestBootstrapWritesTwin:
         # ... and the on-disk pair round-trips like any real split pair.
         de_text = de_path.read_text(encoding="utf-8")
         assert split_text(unify_texts(de_text, twin_text)) == (de_text, twin_text)
-        assert result.watermark_recorded is True
+        assert result.ledger_recorded is True
 
-    def test_records_watermark_for_the_pair(self, tmp_path: Path):
-        de, en = _split(_DECK)
-        de_path = _write(tmp_path / "slides_x.de.py", de)
-        cache = _cache(tmp_path)
-        try:
-            result = bootstrap_deck(
-                de_path, translator=_mirror_translator(de, en), watermark_cache=cache
-            )
-            assert cache.has_pair(str(result.de_path), str(result.en_path))
-        finally:
-            cache.close()
-
-    def test_no_cache_skips_watermark_but_still_writes(self, tmp_path: Path):
+    def test_records_ledger_for_the_pair(self, tmp_path: Path):
         de, en = _split(_DECK)
         de_path = _write(tmp_path / "slides_x.de.py", de)
         result = bootstrap_deck(de_path, translator=_mirror_translator(de, en))
+        assert result.ledger_recorded is True
+        ledger_file = _ledger_path(result.de_path)
+        assert ledger_file.is_file()
+        ledger = doc_ledger.load(ledger_file)
+        assert doc_ledger.deck_key_for(result.de_path) in ledger.decks
+
+    def test_record_ledger_false_skips_ledger_but_still_writes(self, tmp_path: Path):
+        de, en = _split(_DECK)
+        de_path = _write(tmp_path / "slides_x.de.py", de)
+        result = bootstrap_deck(de_path, translator=_mirror_translator(de, en), record_ledger=False)
         assert result.action == "bootstrapped"
-        assert result.watermark_recorded is False
+        assert result.ledger_recorded is False
+        assert not _ledger_path(result.de_path).exists()
         assert (tmp_path / "slides_x.en.py").read_text(encoding="utf-8") == en
 
     def test_asymmetric_deck_round_trips_and_is_idempotent(self, tmp_path: Path):
@@ -204,28 +198,15 @@ class TestBootstrapWritesTwin:
         de, en = _split(_DECK_ASYMMETRIC)
         de_path = _write(tmp_path / "slides_x.de.py", de)
         twin = tmp_path / "slides_x.en.py"
-        cache = _cache(tmp_path)
-        try:
-            first = bootstrap_deck(
-                de_path, translator=_mirror_translator(de, en), watermark_cache=cache
-            )
-            de_text = de_path.read_text(encoding="utf-8")
-            en_text = twin.read_text(encoding="utf-8")
-            # The written pair round-trips like any real split pair.
-            assert split_text(unify_texts(de_text, en_text)) == (de_text, en_text)
-            second = bootstrap_deck(
-                de_path,
-                translator=_mirror_translator(de, en),
-                judge=StaticSyncJudge(
-                    default_proposal=SyncProposal(verdict="in_sync", proposed_text="")
-                ),
-                watermark_cache=cache,
-            )
-        finally:
-            cache.close()
+        first = bootstrap_deck(de_path, translator=_mirror_translator(de, en))
+        de_text = de_path.read_text(encoding="utf-8")
+        en_text = twin.read_text(encoding="utf-8")
+        # The written pair round-trips like any real split pair.
+        assert split_text(unify_texts(de_text, en_text)) == (de_text, en_text)
+        second = bootstrap_deck(de_path, translator=_mirror_translator(de, en))
         assert first.action == "bootstrapped"
         assert second.action == "synced"
-        assert second.plan is not None and second.plan.proposals == []
+        assert second.diff is not None and second.diff.is_clean
         assert twin.read_text(encoding="utf-8") == en_text  # not doubled
 
     def test_reverse_direction_en_source_writes_de(self, tmp_path: Path):
@@ -278,29 +259,17 @@ class TestIdParity:
 
     def test_idless_source_twice_is_a_sync_noop(self, tmp_path: Path):
         # The interesting idempotency case: minting rewrites BOTH halves on the
-        # first run, so the watermark must capture the post-mint state for the
+        # first run, so the ledger must capture the post-mint state for the
         # second run to see no change (not re-mint, not double).
         de, en = _split(_IDLESS_DECK)
         de_path = _write(tmp_path / "slides_x.de.py", de)
         twin = tmp_path / "slides_x.en.py"
-        cache = _cache(tmp_path)
-        try:
-            bootstrap_deck(de_path, translator=_mirror_translator(de, en), watermark_cache=cache)
-            de_after = de_path.read_text(encoding="utf-8")
-            en_after = twin.read_text(encoding="utf-8")
-            second = bootstrap_deck(
-                de_path,
-                translator=_mirror_translator(de, en),
-                judge=StaticSyncJudge(
-                    default_proposal=SyncProposal(verdict="in_sync", proposed_text="")
-                ),
-                watermark_cache=cache,
-            )
-        finally:
-            cache.close()
+        bootstrap_deck(de_path, translator=_mirror_translator(de, en))
+        de_after = de_path.read_text(encoding="utf-8")
+        en_after = twin.read_text(encoding="utf-8")
+        second = bootstrap_deck(de_path, translator=_mirror_translator(de, en))
         assert second.action == "synced"
-        assert second.apply_result is not None and not second.apply_result.has_errors
-        assert second.plan is not None and second.plan.proposals == []
+        assert second.diff is not None and second.diff.is_clean
         # Both halves untouched by the second run (no re-mint, no doubling).
         assert de_path.read_text(encoding="utf-8") == de_after
         assert twin.read_text(encoding="utf-8") == en_after
@@ -316,61 +285,46 @@ class TestIdempotencyByDelegation:
         de, en = _split(_DECK)
         de_path = _write(tmp_path / "slides_x.de.py", de)
         twin = tmp_path / "slides_x.en.py"
-        cache = _cache(tmp_path)
-        try:
-            first = bootstrap_deck(
-                de_path, translator=_mirror_translator(de, en), watermark_cache=cache
-            )
-            assert first.action == "bootstrapped"
-            after_first = twin.read_text(encoding="utf-8")
-            cells_after_first = _cell_count(after_first)
+        first = bootstrap_deck(de_path, translator=_mirror_translator(de, en))
+        assert first.action == "bootstrapped"
+        after_first = twin.read_text(encoding="utf-8")
+        cells_after_first = _cell_count(after_first)
 
-            # Second run: twin now exists -> must degrade to incremental sync,
-            # not re-translate. With the watermark recorded, sync sees no change.
-            second = bootstrap_deck(
-                de_path,
-                translator=_mirror_translator(de, en),
-                judge=StaticSyncJudge(
-                    default_proposal=SyncProposal(verdict="in_sync", proposed_text="")
-                ),
-                watermark_cache=cache,
-            )
-        finally:
-            cache.close()
+        # Second run: twin now exists -> must degrade to the read-only v3 sync
+        # diff, not re-translate. With the ledger recorded, the diff is clean.
+        second = bootstrap_deck(de_path, translator=_mirror_translator(de, en))
 
         assert second.action == "synced"
-        assert second.apply_result is not None
-        assert not second.apply_result.has_errors
-        assert second.apply_result.deferred == 0
-        assert second.apply_result.applied == 0  # nothing to do
-        assert second.plan is not None and second.plan.proposals == []
+        assert second.diff is not None and second.diff.is_clean
+        assert second.diff_error is None
+        assert second.ledger_recorded is False  # the sync path records nothing
         # The deck was not doubled or otherwise rewritten.
         after_second = twin.read_text(encoding="utf-8")
         assert after_second == after_first
         assert _cell_count(after_second) == cells_after_first
 
-    def test_present_twin_in_sync_delegates_without_doubling(self, tmp_path: Path):
-        # Both halves already on disk, in parity, no prior watermark: a translate
-        # must route through sync and report clean rather than re-bootstrap.
+    def test_present_twin_without_ledger_reports_cold_without_doubling(self, tmp_path: Path):
+        # Both halves already on disk, in parity, but no ledger entry: a translate
+        # must route through the read-only diff and report the cold members
+        # (never silently trusted) rather than re-bootstrap or write anything.
         de, en = _split(_DECK)
         de_path = _write(tmp_path / "slides_x.de.py", de)
         _write(tmp_path / "slides_x.en.py", en)
-        cache = _cache(tmp_path)
-        try:
-            result = bootstrap_deck(
-                de_path,
-                translator=_mirror_translator(de, en),
-                judge=StaticSyncJudge(
-                    default_proposal=SyncProposal(verdict="in_sync", proposed_text="")
-                ),
-                watermark_cache=cache,
-            )
-        finally:
-            cache.close()
+        result = bootstrap_deck(de_path, translator=_mirror_translator(de, en))
         assert result.action == "synced"
-        assert result.apply_result is not None
-        assert not result.apply_result.has_errors
+        assert result.diff is not None
+        assert not result.diff.is_clean  # cold members, no baseline
         assert (tmp_path / "slides_x.en.py").read_text(encoding="utf-8") == en
+        assert de_path.read_text(encoding="utf-8") == de  # nothing written
+
+    def test_present_twin_needs_no_translator(self, tmp_path: Path):
+        # The read-only diff path builds no LLM client at all.
+        de, en = _split(_DECK)
+        de_path = _write(tmp_path / "slides_x.de.py", de)
+        _write(tmp_path / "slides_x.en.py", en)
+        result = bootstrap_deck(de_path)
+        assert result.action == "synced"
+        assert result.diff is not None
 
 
 # ---------------------------------------------------------------------------
@@ -527,22 +481,11 @@ class TestVoiceoverCompanion:
 
     def test_rerun_via_sync_does_not_touch_companion(self, tmp_path: Path):
         # First run bootstraps deck + companion; second run sees the deck twin and
-        # delegates to sync, which must not re-translate or double the companion.
+        # runs the read-only diff, which must not re-translate or double the companion.
         de_path, target, translator = self._setup(tmp_path)
-        cache = _cache(tmp_path)
-        try:
-            bootstrap_deck(de_path, translator=translator, watermark_cache=cache)
-            comp_after_first = target.read_text(encoding="utf-8")
-            second = bootstrap_deck(
-                de_path,
-                translator=translator,
-                judge=StaticSyncJudge(
-                    default_proposal=SyncProposal(verdict="in_sync", proposed_text="")
-                ),
-                watermark_cache=cache,
-            )
-        finally:
-            cache.close()
+        bootstrap_deck(de_path, translator=translator)
+        comp_after_first = target.read_text(encoding="utf-8")
+        second = bootstrap_deck(de_path, translator=translator)
         assert second.action == "synced"
         assert second.companion is None  # sync path owns no companion lifecycle
         assert target.read_text(encoding="utf-8") == comp_after_first  # not doubled

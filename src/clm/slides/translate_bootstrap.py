@@ -14,18 +14,17 @@ delegation**:
 * **twin absent** (or empty, or ``--force``) → run the bootstrap engine, write
   the new half, mint EN-authority shared ``slide_id``\\ s across the freshly
   written pair (:func:`~clm.slides.assign_ids.assign_ids_in_split_pair`), and
-  record the structural watermark so the next ``sync`` is a clean no-op;
-* **twin present** → do **not** bootstrap; delegate straight to
-  :func:`~clm.slides.sync_plan.build_sync_plan` +
-  :func:`~clm.slides.sync_apply.apply_plan`, exactly as ``clm slides sync``
-  wires them. Re-running therefore converges to incremental sync by
-  construction — it never re-translates the whole deck and never doubles it.
+  record the pair in the committed sync ledger so the next ``sync`` is a clean
+  no-op;
+* **twin present** → do **not** bootstrap; run the read-only v3 sync diff
+  (#520) over the pair and report it. A clean pair is a no-op; a pair with
+  pending items points at the ``clm slides sync`` verbs (``report`` / ``apply``
+  / ``record``) instead of re-translating — the deck is never doubled.
 
-This module is pure orchestration over injected dependencies (the translator,
-edit judge, recoverer, verifier and caches) — it neither builds an LLM client
-nor loads ``.env``; the CLI (Phase 4) owns provider/key wiring and the cache
-lifecycle. That keeps the whole dispatch offline-testable through the
-``SlideTranslator`` / ``SyncJudge`` protocols.
+This module is pure orchestration over injected dependencies (the translator)
+— it neither builds an LLM client nor loads ``.env``; the CLI owns
+provider/key wiring and the cache lifecycle. That keeps the whole dispatch
+offline-testable through the ``SlideTranslator`` protocol.
 """
 
 from __future__ import annotations
@@ -38,18 +37,10 @@ from typing import TYPE_CHECKING, Literal
 from clm.notebooks.slide_parser import comment_token_for_path
 from clm.slides.assign_ids import AssignOptions, AssignResult, assign_ids_in_split_pair
 from clm.slides.pairing import split_lang_tag
-from clm.slides.sync_apply import ApplyResult, _record_watermark, apply_plan
-from clm.slides.sync_plan import SyncPlan, build_sync_plan
 from clm.slides.translate_deck import TranslateDeckResult, translate_deck_text
 
 if TYPE_CHECKING:
-    from clm.infrastructure.llm.cache import (
-        SyncAlignmentCache,
-        SyncCorrespondenceCache,
-        SyncWatermarkCache,
-    )
-    from clm.infrastructure.llm.ollama_client import SyncJudge
-    from clm.slides.sync_recover import AlignmentRecoverer, CorrespondenceVerifier
+    from clm.slides.sync_diff import DeckDiff
     from clm.slides.sync_translate import SlideTranslator
 
 logger = logging.getLogger(__name__)
@@ -127,11 +118,11 @@ class BootstrapResult:
     """Outcome of one :func:`bootstrap_deck` call.
 
     ``action`` is ``"bootstrapped"`` when a new half was synthesized or
-    ``"synced"`` when an existing twin routed the call to the incremental sync
-    engine. The per-path detail (``deck`` / ``assign`` for a bootstrap;
-    ``plan`` / ``apply_result`` for a sync) is whichever path ran. ``companion``
-    records the voiceover companion translated alongside a bootstrap (``None``
-    when the source has no companion, or on the sync path).
+    ``"synced"`` when an existing twin routed the call to the read-only sync
+    diff. The per-path detail (``deck`` / ``assign`` for a bootstrap; ``diff``
+    for a sync) is whichever path ran. ``companion`` records the voiceover
+    companion translated alongside a bootstrap (``None`` when the source has
+    no companion, or on the sync path).
     """
 
     action: BootstrapAction
@@ -143,9 +134,9 @@ class BootstrapResult:
     target_lang: str
     deck: TranslateDeckResult | None = None
     assign: AssignResult | None = None
-    plan: SyncPlan | None = None
-    apply_result: ApplyResult | None = None
-    watermark_recorded: bool = False
+    diff: DeckDiff | None = None
+    diff_error: str | None = None
+    ledger_recorded: bool = False
     companion: CompanionResult | None = None
 
     @property
@@ -228,28 +219,19 @@ def bootstrap_deck(
     source_path: Path,
     *,
     target_lang: str | None = None,
-    translator: SlideTranslator,
-    judge: SyncJudge | None = None,
-    watermark_cache: SyncWatermarkCache | None = None,
-    recoverer: AlignmentRecoverer | None = None,
-    alignment_cache: SyncAlignmentCache | None = None,
-    verifier: CorrespondenceVerifier | None = None,
-    correspondence_cache: SyncCorrespondenceCache | None = None,
-    provider_available: bool = False,
+    translator: SlideTranslator | None = None,
+    record_ledger: bool = True,
     force: bool = False,
 ) -> BootstrapResult:
-    """Bootstrap the other-language half of ``source_path`` — or sync if it exists.
+    """Bootstrap the other-language half of ``source_path`` — or diff if it exists.
 
     The dispatch (design decision D2): when the twin is **absent** (or empty, or
     ``force``) synthesize it with the Phase 1 engine, mint EN-authority shared
-    ids over the new pair, and record the watermark; when the twin is **present**
-    delegate to the incremental sync engine. The caller owns the cache lifecycle
-    (open / close) exactly as ``clm slides sync`` does — this function never
-    closes a cache it was handed.
+    ids over the new pair, and record the pair in the committed sync ledger;
+    when the twin is **present** run the read-only v3 sync diff and report it —
+    the deck is never re-translated and never doubled.
 
-    ``translator`` drives both the whole-deck bootstrap and sync's new-slide
-    path; ``judge`` (plus the optional recoverer / verifier / caches) is only
-    consulted on the sync-delegation path. Raises
+    ``translator`` drives the whole-deck bootstrap. Raises
     :class:`TranslateBootstrapError` for an unbootstrappable source and
     :class:`~clm.slides.translate_deck.TranslateDeckError` if the engine cannot
     produce a valid half.
@@ -257,22 +239,17 @@ def bootstrap_deck(
     paths = derive_bootstrap_paths(source_path, target_lang)
 
     if paths.twin_exists and not force:
-        # Twin already on disk → this is no longer a cold start. Converge to plain
-        # incremental sync rather than re-translate (and never double the deck).
-        return _delegate_to_sync(
-            paths,
-            judge=judge,
-            translator=translator,
-            watermark_cache=watermark_cache,
-            recoverer=recoverer,
-            alignment_cache=alignment_cache,
-            verifier=verifier,
-            correspondence_cache=correspondence_cache,
-            provider_available=provider_available,
-        )
+        # Twin already on disk → this is no longer a cold start. Report the v3
+        # sync diff rather than re-translate (and never double the deck).
+        return _report_sync_state(paths)
 
+    if translator is None:
+        raise TranslateBootstrapError(
+            f"{paths.twin_path.name} does not exist yet — bootstrapping it needs a "
+            "translator (an API key), which this call did not provide."
+        )
     return _bootstrap_new_twin(
-        paths, translator=translator, watermark_cache=watermark_cache, force=force
+        paths, translator=translator, record_ledger=record_ledger, force=force
     )
 
 
@@ -280,7 +257,7 @@ def _bootstrap_new_twin(
     paths: BootstrapPaths,
     *,
     translator: SlideTranslator,
-    watermark_cache: SyncWatermarkCache | None,
+    record_ledger: bool,
     force: bool,
 ) -> BootstrapResult:
     """Synthesize, write and seal the missing-language half (and its companion).
@@ -290,8 +267,8 @@ def _bootstrap_new_twin(
     disk yet, so a translation failure leaves no half-written deck) → write the
     deck twin → write the companion twin → mint EN-authority shared ids across
     **both** deck halves (also fills the source half if it was id-less, so the
-    pair is never born id-less) → record the watermark from the final, id'd files
-    so the next ``sync`` is a clean no-op.
+    pair is never born id-less) → record the ledger baseline from the final,
+    id'd files so the next ``sync`` is a clean no-op.
     """
     source_text = paths.source_path.read_text(encoding="utf-8")
     comment_token = comment_token_for_path(paths.source_path)
@@ -335,13 +312,13 @@ def _bootstrap_new_twin(
             paths.en_path,
         )
 
-    watermark_recorded = False
-    if watermark_cache is not None:
+    ledger_recorded = False
+    if record_ledger:
         # Record both decks' post-mint state as the sync baseline — load-bearing
-        # for D2 (without it the next `sync` re-diffs off git HEAD and may
-        # re-propose). Reads the files back from disk, so it sees the id'd halves.
-        _record_watermark(watermark_cache, paths.de_path, paths.en_path)
-        watermark_recorded = True
+        # for D2 (without it the next `sync` sees every member as cold). Reads
+        # the files back from disk, so it sees the id'd halves. Best-effort: a
+        # ledger hiccup must never fail a bootstrap that already wrote the pair.
+        ledger_recorded = _record_pair_in_ledger(paths.de_path, paths.en_path)
 
     return BootstrapResult(
         action="bootstrapped",
@@ -353,9 +330,47 @@ def _bootstrap_new_twin(
         target_lang=paths.target_lang,
         deck=deck,
         assign=assign,
-        watermark_recorded=watermark_recorded,
+        ledger_recorded=ledger_recorded,
         companion=companion,
     )
+
+
+def _record_pair_in_ledger(de_path: Path, en_path: Path) -> bool:
+    """Record the freshly-written pair in the committed sync ledger (best-effort).
+
+    Same write path as ``clm slides sync record``. Returns ``False`` (with a
+    warning logged) instead of raising — the bootstrap already wrote the pair,
+    and an unrecordable pair merely cold-starts the next sync.
+    """
+    try:
+        from clm.slides import doc_ledger
+        from clm.slides.doc_lenses import load_bundle
+
+        bundle = load_bundle(de_path, en_path)
+        if bundle.outcome.refusal is not None:
+            reasons = "; ".join(f"[{r.code}] {r.detail}" for r in bundle.outcome.refusal.reasons)
+            logger.warning(
+                "bootstrap pair %s / %s not recorded in the sync ledger "
+                "(run `clm slides sync record` after normalizing): %s",
+                de_path.name,
+                en_path.name,
+                reasons,
+            )
+            return False
+        assert bundle.outcome.deck is not None
+        ledger_path = doc_ledger.ledger_path_for(bundle.de_path)
+        ledger = doc_ledger.load(ledger_path)
+        doc_ledger.record_deck_snapshot(
+            ledger,
+            doc_ledger.deck_key_for(bundle.de_path),
+            bundle.outcome.deck,
+            provenance="record",
+        )
+        doc_ledger.save(ledger, ledger_path)
+    except Exception:  # noqa: BLE001 - the bootstrap itself already succeeded
+        logger.warning("could not record %s / %s in the sync ledger", de_path.name, en_path.name)
+        return False
+    return True
 
 
 def _translate_companion(
@@ -403,41 +418,24 @@ def _translate_companion(
     )
 
 
-def _delegate_to_sync(
-    paths: BootstrapPaths,
-    *,
-    judge: SyncJudge | None,
-    translator: SlideTranslator,
-    watermark_cache: SyncWatermarkCache | None,
-    recoverer: AlignmentRecoverer | None,
-    alignment_cache: SyncAlignmentCache | None,
-    verifier: CorrespondenceVerifier | None,
-    correspondence_cache: SyncCorrespondenceCache | None,
-    provider_available: bool,
-) -> BootstrapResult:
-    """Route a present-twin run through the incremental sync engine.
+def _report_sync_state(paths: BootstrapPaths) -> BootstrapResult:
+    """Report the present-twin pair's v3 sync state (read-only).
 
-    Mirrors the apply branch of ``slides_sync_cmd`` so a second ``translate`` (or
-    a ``translate`` of a deck whose twin already exists) behaves identically to
-    ``clm slides sync`` — incremental, watermark-driven, never re-translating the
-    whole deck.
+    A second ``translate`` (or a ``translate`` of a deck whose twin already
+    exists) never re-translates: it diffs the pair against the committed ledger
+    and hands reconciliation to the ``clm slides sync`` verbs. ``diff`` is
+    ``None`` (with ``diff_error`` set) when the pair cannot be parsed.
     """
-    plan = build_sync_plan(
-        paths.de_path,
-        paths.en_path,
-        watermark_cache=watermark_cache,
-        provider_available=provider_available,
-    )
-    apply_result = apply_plan(
-        plan,
-        judge=judge,
-        translator=translator,
-        watermark_cache=watermark_cache,
-        recoverer=recoverer,
-        alignment_cache=alignment_cache,
-        verifier=verifier,
-        correspondence_cache=correspondence_cache,
-    )
+    from clm.slides.doc_lenses import DocLensError, load_bundle
+    from clm.slides.doc_report import diff_bundle
+
+    diff: DeckDiff | None = None
+    diff_error: str | None = None
+    try:
+        bundle = load_bundle(paths.de_path, paths.en_path)
+        diff = diff_bundle(bundle)
+    except DocLensError as exc:
+        diff_error = str(exc)
     return BootstrapResult(
         action="synced",
         source_path=paths.source_path,
@@ -446,7 +444,6 @@ def _delegate_to_sync(
         en_path=paths.en_path,
         source_lang=paths.source_lang,
         target_lang=paths.target_lang,
-        plan=plan,
-        apply_result=apply_result,
-        watermark_recorded=apply_result.watermark_recorded,
+        diff=diff,
+        diff_error=diff_error,
     )

@@ -281,7 +281,7 @@ def _key_paths_section() -> str:
             "(this file is committed and read elsewhere) — run `clm config locate` "
             "for the values on a given machine. The portable rules:",
             "",
-            "- **LLM cache** (sync watermarks, summaries, translations): defaults "
+            "- **LLM cache** (summaries, translations): defaults "
             f"to `<repo>/.clm-cache/{CACHE_DB_NAME}`. Override with `--cache-dir` "
             "or `$CLM_CACHE_DIR`.",
             "- **Git worktrees**: a *relative* `cache_dir` is anchored to the "

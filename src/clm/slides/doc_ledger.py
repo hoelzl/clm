@@ -8,13 +8,12 @@ fingerprints, tags, provenance, and the hash-function version — plus the
 per-deck order context (id-keyed member order, group order, preamble
 fingerprints) the differ needs to judge ``order`` outcomes.
 
-**Coexistence with the v1 ledger (Phase 3 only).** Through Phase 3 the v2
-engine remains the default and keeps its ``(slide_id, role)``-keyed sections in
-the same file. The file therefore carries a schema-2 envelope holding *both*:
-the v1 ``slides`` / ``idless`` sections (opaque to this module — preserved
-verbatim on save) and the v3 ``decks`` section (opaque to ``sync_ledger`` —
-preserved verbatim there). Neither engine can clobber the other's trust.
-Phase 4 deletes the v1 sections with the v2 core.
+**v1 sections (deleted at the Phase 4 cutover).** Through Phase 3 the file
+carried a coexistence envelope holding both the v1 engine's ``(slide_id,
+role)``-keyed ``slides`` / ``idless`` sections and the v3 ``decks`` section.
+With the v2 engine removed, ``load`` still accepts schema-1/2 files but the
+v1 sections are **dropped on the next save** — the ``decks`` store is the
+whole file.
 
 **Trust semantics (§5).**
 
@@ -30,11 +29,9 @@ Phase 4 deletes the v1 sections with the v2 core.
   per-topic merge local and line-mergeable (drop-to-``unverified`` on a
   genuine same-member conflict).
 
-This module is part of the v3 core: pure storage + snapshot plumbing, no
-imports from the v2 sync core (``sync_plan`` / ``sync_apply`` / ``sync_code``)
-— enforced by the import-cleanliness test (design §12.5). The structural
-verify gate on the write path lives at the verb layer (the CLI ``record`` /
-``apply`` runners), because ``sync_verify`` still imports v2 modules.
+This module is pure storage + snapshot plumbing. The structural verify gate
+on the write path lives at the verb layer (the CLI ``record`` / ``apply``
+runners).
 """
 
 from __future__ import annotations
@@ -63,8 +60,9 @@ __all__ = [
     "save",
 ]
 
-#: The v3 envelope schema. Schema 1 files (v1-only) load as an empty v3 store
-#: with the v1 payload preserved; schema 2 carries both engines' sections.
+#: The envelope schema. Schema 1 files (v1-only, pre-cutover) load as an
+#: empty store; schema 2 is the current form. Legacy v1 ``slides`` /
+#: ``idless`` sections in either are ignored and dropped on the next save.
 SCHEMA_VERSION = 2
 
 #: Version of the v3 fingerprint functions (:func:`~clm.slides.doc_identity.content_fingerprint`
@@ -72,13 +70,9 @@ SCHEMA_VERSION = 2
 #: older version drop to cold at load (§5's lazy migration rule, #458).
 LEDGER_HASH_VERSION = 1
 
-#: Same committed location the v1 ledger established (issue #448 / #453);
-#: duplicated here (not imported) so Phase 4 can delete ``sync_ledger`` whole.
+#: Same committed location the v1 ledger established (issue #448 / #453).
 LEDGER_SUBDIR = ".clm"
 LEDGER_FILENAME = "sync-ledger.json"
-
-#: The v1 sections this module must round-trip untouched.
-_V1_KEYS = ("slides", "idless")
 
 _SIDES: tuple[Lang, Lang] = ("de", "en")
 
@@ -125,11 +119,9 @@ class DeckLedger:
 
 @define
 class TopicLedger:
-    """The whole per-topic file: v3 deck sections + the opaque v1 payload."""
+    """The whole per-topic file: the deck sections."""
 
     decks: dict[str, DeckLedger] = field(factory=dict)
-    #: v1 ``slides`` / ``idless`` sections, preserved verbatim (never read).
-    v1_payload: dict[str, object] = field(factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -273,9 +265,10 @@ def _deck_from_json(rec: dict) -> DeckLedger:
 def load(path: Path) -> TopicLedger:
     """Read a topic ledger; absent/malformed degrades to empty (fail-safe cold).
 
-    Accepts schema 1 (a v1-only file: empty v3 store, v1 sections preserved)
-    and schema 2 (the coexistence envelope). Anything else is treated as
-    empty — the deck cold-starts, never crashes and never trusts.
+    Accepts schema 1 (a pre-cutover v1-only file: empty store) and schema 2.
+    Legacy v1 ``slides`` / ``idless`` sections are ignored — they disappear on
+    the next save. Anything else is treated as empty — the deck cold-starts,
+    never crashes and never trusts.
     """
     if not path.is_file():
         return TopicLedger()
@@ -285,9 +278,7 @@ def load(path: Path) -> TopicLedger:
         return TopicLedger()
     if not isinstance(data, dict) or data.get("schema") not in (1, SCHEMA_VERSION):
         return TopicLedger()
-    ledger = TopicLedger(
-        v1_payload={k: data[k] for k in _V1_KEYS if k in data},
-    )
+    ledger = TopicLedger()
     decks = data.get("decks", {})
     if isinstance(decks, dict):
         for deck_key, rec in decks.items():
@@ -301,7 +292,6 @@ def _to_json(ledger: TopicLedger) -> str:
         "schema": SCHEMA_VERSION,
         "decks": {key: _deck_to_json(deck) for key, deck in sorted(ledger.decks.items())},
     }
-    payload.update(ledger.v1_payload)
     return json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
 
 

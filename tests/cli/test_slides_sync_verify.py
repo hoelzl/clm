@@ -1,7 +1,7 @@
-"""Tests for ``clm slides sync --verify`` — the deterministic structural check.
+"""Tests for ``clm slides sync verify`` — the deterministic structural check.
 
-``--verify`` answers "did an edit corrupt the split pair?" (structural safety),
-NOT "is it in sync?" (``--dry-run``) or "is the translation good?" (a semantic
+``verify`` answers "did an edit corrupt the split pair?" (structural safety),
+NOT "is it in sync?" (``report``) or "is the translation good?" (a semantic
 call). It reuses :func:`unify_texts` for byte-identity / header / alignment,
 adds an explicit ``de_id == en_id`` set-symmetry + duplicate-id check (which
 unify does not enforce), and warns on an id'd cell dropped vs git HEAD. Exit
@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from clm.cli.commands.slides.sync import slides_sync_cmd
+from clm.cli.commands.slides.sync import slides_sync_group
 from clm.slides.sync_verify import (
     VerifyViolation,
     dropped_id_violations,
@@ -217,7 +217,7 @@ class TestDroppedIdViolations:
 class TestVerifyCli:
     def test_valid_pair_passes(self, cli_runner, tmp_path):
         de_path, _en = _write(tmp_path, _valid_de(), _valid_en())
-        res = cli_runner.invoke(slides_sync_cmd, ["--verify", str(de_path)])
+        res = cli_runner.invoke(slides_sync_group, ["verify", str(de_path)])
         assert res.exit_code == 0, res.output
         assert "PASS" in res.output
 
@@ -225,20 +225,20 @@ class TestVerifyCli:
         de = _half(_md("de", "s1", "Hallo"), _shared("print(1)"))
         en = _half(_md("en", "s1", "Hello"), _shared("print(2)"))
         de_path, _en = _write(tmp_path, de, en)
-        res = cli_runner.invoke(slides_sync_cmd, ["--verify", str(de_path)])
+        res = cli_runner.invoke(slides_sync_group, ["verify", str(de_path)])
         assert res.exit_code == 2
         assert "FAIL" in res.output
         assert "shared cell content diverges" in res.output
 
     def test_mismatched_id_fails(self, cli_runner, tmp_path):
         de_path, _en = _write(tmp_path, _md("de", "s1", "Hallo"), _md("en", "s2", "Hello"))
-        res = cli_runner.invoke(slides_sync_cmd, ["--verify", str(de_path)])
+        res = cli_runner.invoke(slides_sync_group, ["verify", str(de_path)])
         assert res.exit_code == 2
         assert "id-asymmetry" in res.output
 
     def test_json_output(self, cli_runner, tmp_path):
         de_path, _en = _write(tmp_path, _md("de", "s1", "Hallo"), _md("en", "s2", "Hello"))
-        res = cli_runner.invoke(slides_sync_cmd, ["--verify", "--json", str(de_path)])
+        res = cli_runner.invoke(slides_sync_group, ["verify", "--json", str(de_path)])
         payload = json.loads(res.output[res.output.find("{") :])
         assert payload["mode"] == "verify"
         assert payload["exit_code"] == 2
@@ -250,7 +250,7 @@ class TestVerifyCli:
     def test_single_half_resolves_twin(self, cli_runner, tmp_path):
         # Passing only the .de half resolves the .en twin from disk.
         _write(tmp_path, _valid_de(), _valid_en())
-        res = cli_runner.invoke(slides_sync_cmd, ["--verify", str(tmp_path / "slides_a.de.py")])
+        res = cli_runner.invoke(slides_sync_group, ["verify", str(tmp_path / "slides_a.de.py")])
         assert res.exit_code == 0, res.output
 
 
@@ -258,7 +258,7 @@ class TestVerifyBatch:
     def test_directory_sweep(self, cli_runner, tmp_path):
         _write(tmp_path, _valid_de(), _valid_en(), stem="slides_ok")
         _write(tmp_path, _md("de", "s1", "Hallo"), _md("en", "s2", "Hello"), stem="slides_bad")
-        res = cli_runner.invoke(slides_sync_cmd, ["--verify", str(tmp_path)])
+        res = cli_runner.invoke(slides_sync_group, ["verify", str(tmp_path)])
         assert res.exit_code == 2  # worst over pairs
         assert "verified 2 pair(s)" in res.output
         assert "1 valid" in res.output
@@ -266,21 +266,14 @@ class TestVerifyBatch:
     def test_directory_all_valid(self, cli_runner, tmp_path):
         _write(tmp_path, _valid_de(), _valid_en(), stem="slides_x")
         _write(tmp_path, _valid_de(), _valid_en(), stem="slides_y")
-        res = cli_runner.invoke(slides_sync_cmd, ["--verify", str(tmp_path)])
+        res = cli_runner.invoke(slides_sync_group, ["verify", str(tmp_path)])
         assert res.exit_code == 0, res.output
 
 
-class TestVerifyMutualExclusion:
-    @pytest.mark.parametrize("flag", ["--dry-run", "--explain", "--interactive", "--rebaseline"])
-    def test_conflicts(self, cli_runner, tmp_path, flag):
-        de_path, _en = _write(tmp_path, _valid_de(), _valid_en())
-        res = cli_runner.invoke(slides_sync_cmd, ["--verify", flag, str(de_path)])
-        assert res.exit_code == 2
-        assert "mutually exclusive" in (res.output + (res.stderr or "")).lower()
-
+class TestVerifyJsonFlag:
     def test_json_is_allowed(self, cli_runner, tmp_path):
         de_path, _en = _write(tmp_path, _valid_de(), _valid_en())
-        res = cli_runner.invoke(slides_sync_cmd, ["--verify", "--json", str(de_path)])
+        res = cli_runner.invoke(slides_sync_group, ["verify", "--json", str(de_path)])
         assert res.exit_code == 0, res.output
 
 
@@ -316,7 +309,7 @@ class TestNoDropVsGit:
         de_path.write_text(_md("de", "s1", "a"), encoding="utf-8")
         en_path.write_text(_md("en", "s1", "A"), encoding="utf-8")
 
-        res = cli_runner.invoke(slides_sync_cmd, ["--verify", "--json", str(de_path)])
+        res = cli_runner.invoke(slides_sync_group, ["verify", "--json", str(de_path)])
         payload = json.loads(res.output[res.output.find("{") :])
         pair = payload["pairs"][0]
         assert pair["git_baseline"] is True

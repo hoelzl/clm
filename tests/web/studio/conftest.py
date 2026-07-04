@@ -34,15 +34,34 @@ DECK_SOURCE = dedent(
 
 DECK_REL = "module_100_basics/topic_010_intro/slides_intro.de.py"
 
-# The EN twin of DECK_SOURCE: same slide_ids/roles, English bodies, shared code.
-DECK_SOURCE_EN = dedent(
+# The bilingual pair used by the lock/sync tests. The v3 doc lenses require
+# every slide_id to be UNIQUE per side (a duplicate id is a normalize refusal
+# that locks the pair), so — unlike DECK_SOURCE — the notes cell carries its
+# own id here.
+BILINGUAL_SOURCE_DE = dedent(
+    """\
+    # %% [markdown] lang="de" tags=["slide"] slide_id="intro-welcome"
+    # Willkommen
+    #
+    # Schön, dass du da bist.
+
+    # %% [markdown] lang="de" tags=["notes"] slide_id="intro-notes"
+    # Sprechernotizen hier.
+
+    # %%
+    print("hello")
+    """
+)
+
+# The EN twin: same slide_ids/roles, English bodies, shared code.
+BILINGUAL_SOURCE_EN = dedent(
     """\
     # %% [markdown] lang="en" tags=["slide"] slide_id="intro-welcome"
     # Welcome
     #
     # Glad you're here.
 
-    # %% [markdown] lang="en" tags=["notes"] slide_id="intro-welcome"
+    # %% [markdown] lang="en" tags=["notes"] slide_id="intro-notes"
     # Speaker notes here.
 
     # %%
@@ -112,16 +131,37 @@ class Bilingual:
         return self.slides_dir / self.en_id
 
 
+def record_pair(de_path: Path, en_path: Path) -> None:
+    """Bless the pair's current state in the committed topic ledger (v3).
+
+    The ledger is the only trust store for the bilingual lock: a never-recorded
+    pair is all-cold (every member ``verify_cold``) and locks both halves, so
+    tests seed it via the same recipe as ``clm slides sync record``.
+    """
+    from clm.slides import doc_ledger
+    from clm.slides.doc_lenses import load_bundle
+
+    bundle = load_bundle(de_path, en_path)
+    path = doc_ledger.ledger_path_for(de_path)
+    ledger = doc_ledger.load(path)
+    doc_ledger.record_deck_snapshot(
+        ledger, doc_ledger.deck_key_for(de_path), bundle.outcome.deck, provenance="record"
+    )
+    doc_ledger.save(ledger, path)
+
+
 @pytest.fixture()
-def bilingual(course: Course, monkeypatch) -> Bilingual:
+def bilingual(course: Course) -> Bilingual:
     """A DE/EN split twin pair (reuses ``course`` for spec + the .de.py half).
 
-    Isolates the sync watermark cache to a tmp dir via ``CLM_CACHE_DIR`` so the
-    lock derivation never reads or writes a developer's real cache.
+    The pair is NOT recorded in the sync ledger — it starts cold (both halves
+    locked). Tests that need an editable pair call :func:`record_pair` first.
+    The DE half is rewritten with the v3-parseable bilingual source (unique
+    slide_ids per side; DECK_SOURCE's shared notes id is a v3 refusal).
     """
-    monkeypatch.setenv("CLM_CACHE_DIR", str(course.slides_dir.parent / ".clm-cache"))
+    course.deck_path.write_text(BILINGUAL_SOURCE_DE, encoding="utf-8")
     en = course.slides_dir / DECK_REL_EN
-    en.write_text(DECK_SOURCE_EN, encoding="utf-8")
+    en.write_text(BILINGUAL_SOURCE_EN, encoding="utf-8")
     return Bilingual(
         spec_path=course.spec_path,
         slides_dir=course.slides_dir,

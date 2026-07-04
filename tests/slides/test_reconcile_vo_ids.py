@@ -266,27 +266,39 @@ class TestCli:
 
 class TestUnblocksSync:
     def test_reconciled_pair_syncs_without_change(self, tmp_path: Path):
-        from clm.infrastructure.llm.cache import SyncWatermarkCache
-        from clm.slides.sync_apply import _record_watermark, apply_plan
-        from clm.slides.sync_plan import build_sync_plan
-        from clm.slides.sync_translate import StaticSlideTranslator
+        from clm.slides import doc_ledger
+        from clm.slides.doc_lenses import load_bundle
+        from clm.slides.doc_report import diff_bundle
 
-        # Asymmetric pair (DE id-less, EN id'd). Reconcile to id-less, then sync.
+        # Asymmetric pair (DE id-less, EN id'd with the voiceover's OWN id).
+        # Reconcile to ids (the v3 engine's canonical narrative form — an
+        # id-less voiceover refuses to parse), then sync.
         de_path, en_path = _write_pair(
             tmp_path,
             _deck(_title("de"), _code("de", "print(1)", "c1"), _vo("de", "# Hallo")),
-            _deck(_title("en"), _code("en", "print(1)", "c1"), _vo("en", "# Hello", sid="intro")),
+            _deck(
+                _title("en"), _code("en", "print(1)", "c1"), _vo("en", "# Hello", sid="intro-vo")
+            ),
         )
-        assert CliRunner().invoke(reconcile_vo_ids_cmd, [str(de_path)]).exit_code == 0
+        res = CliRunner().invoke(reconcile_vo_ids_cmd, [str(de_path), "--to", TO_IDS])
+        assert res.exit_code == 0, res.output
 
-        db = tmp_path / "clm-llm.sqlite"
-        wm = SyncWatermarkCache(db)
-        _record_watermark(wm, de_path, en_path)
-        plan = build_sync_plan(de_path, en_path, watermark_cache=wm)
-        result = apply_plan(
-            plan, judge=None, translator=StaticSlideTranslator(default="<<XL>>"), watermark_cache=wm
+        # The reconciled pair parses and records cleanly (same write path as
+        # `clm slides sync record`), and the subsequent v3 diff is a no-op —
+        # no spurious add/edit after reconciliation.
+        bundle = load_bundle(de_path, en_path)
+        assert bundle.outcome.refusal is None
+        assert bundle.outcome.deck is not None
+        ledger_path = doc_ledger.ledger_path_for(bundle.de_path)
+        ledger = doc_ledger.load(ledger_path)
+        doc_ledger.record_deck_snapshot(
+            ledger,
+            doc_ledger.deck_key_for(bundle.de_path),
+            bundle.outcome.deck,
+            provenance="record",
         )
-        wm.close()
-        assert plan.is_noop  # no spurious add/edit after reconciliation
-        assert result.errors == []
+        doc_ledger.save(ledger, ledger_path)
+
+        diff = diff_bundle(load_bundle(de_path, en_path))
+        assert diff.is_clean, [(i.action, i.key) for i in diff.items]
         assert en_path.read_text().count('tags=["voiceover"]') == 1  # not doubled

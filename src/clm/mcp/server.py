@@ -312,24 +312,23 @@ def create_server(data_dir: Path) -> FastMCP:
 
     @mcp.tool()
     async def slides_sync_report(file: str) -> str:
-        """Tiered reconciliation report for a split DE/EN deck pair (the agent contract).
+        """Per-member sync report for a split DE/EN deck pair (the agent contract).
 
-        Runs the same deterministic engine as ``clm slides sync --dry-run`` on a
-        *split* pair (``<deck>.de.<ext>`` + ``<deck>.en.<ext>``) and returns its work
-        partitioned into the three tiers an agent acts on differently:
+        Runs the same engine as ``clm slides sync report --json`` on a *split*
+        pair (``<deck>.de.<ext>`` + ``<deck>.en.<ext>``): the pair's ≤4 files
+        (halves + voiceover companions) parse into one bilingual deck, whose
+        members are diffed 3-way against the committed per-topic ledger
+        (``<topic>/.clm/sync-ledger.json`` — the only trust store). Each item
+        row names its member ``key``, an ``outcome``/``action``, the drift
+        ``direction``, and — for framed actions (translations, conflicts, cold
+        members) — the ``answers`` vocabulary a decision document may use with
+        ``clm slides sync apply --decisions``. Mechanical actions are the rows
+        ``clm slides sync apply`` executes deterministically.
 
-        - ``mechanical`` — the engine applies these deterministically with no model
-          (move / remove / retag / a verbatim neutral-cell propagation); trust them.
-        - ``assisted`` — a scoped model task the engine has framed (translate a new
-          slide, reconcile an id'd-cell edit, confirm a cold-pair correspondence);
-          each item carries the source (and, for an edit, target) cell bytes so you
-          can act without re-reading the file.
-        - ``ambiguity`` — the engine refuses to guess (a both-sided conflict, a
-          structural issue); your judgement, stated as *what* is ambiguous.
-
-        The block also exposes ``is_clean`` / ``needs_model`` / ``needs_agent``.
-        Read-only: nothing is written and no model is called. This is the split-pair
-        analogue of ``slides_suggest_sync`` (which targets a single bilingual file).
+        The payload also exposes ``is_clean`` / ``needs_model`` / ``needs_agent``.
+        Read-only: nothing is written (not even the ledger) and no model is
+        called. This is the split-pair analogue of ``slides_suggest_sync``
+        (which targets a single bilingual file).
 
         Args:
             file: A deck half (``<deck>.de.<ext>`` / ``<deck>.en.<ext>``) or the
