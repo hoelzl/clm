@@ -9,6 +9,122 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 Unreleased changes are collected as fragment files in [`changelog.d/`](changelog.d/)
 and folded into this file by `scripts/collect_changelog.py` at release time.
 
+## [1.20.0] - 2026-07-04
+
+### Added
+
+- New `clm harvest` command group (epic #546 Phase 2) — the agent-first
+  rebuild of the video→voiceover feature. Its read-only default verb
+  `clm harvest report DECK VIDEO… --lang de|en` runs the cached
+  deterministic pipeline (transcribe → transition detect → OCR match →
+  align) and emits per-slide JSON keyed by the v3 member handle
+  (`id:<slide_id>`), with the aligned transcript, the existing voiceover
+  baseline on both language sides, and a structural novelty class
+  (`no_existing_vo` | `transcript_adds_material` | `covered` |
+  `unmatched_slide`, plus `unmatched_speech` per unassigned segment).
+  Exit codes 0/1/2; `--transcript`/`--alignment` injection skips ASR. The
+  diagnostics `transcribe`/`detect`/`identify`/`identify-rev`/`cache`/
+  `trace` are re-homed under the group (the `clm voiceover` names remain
+  until the Phase-4 cutover).
+
+- `clm harvest task` / `accept` / `verify` (epic #546 Phase 3) — the
+  judgment half of the agent-first harvest toolkit. `task` frames one
+  slide's curation or translation as a JSON document (caller instructions,
+  baseline + transcript inputs incl. `revisited_segments`, bullet-list
+  `answer_schema`, per-side `baseline_fingerprint` + `video_fingerprint`
+  freshness tokens). `accept` validates the answer (schema, freshness,
+  single-cell guards, v3 re-parse gate) and writes the id-keyed member edit
+  atomically through the v3 model, creating the voiceover member (minted
+  `slide_id`, `for_slide` owner, deck-convention layout) when absent;
+  `--record` banks it into the sync ledger with provenance
+  `harvest:<video-fingerprint>` under one-sided-trust semantics, so a
+  one-language write surfaces in the next `clm slides sync report` as
+  `translate_new`/`translate_edit` — never as `in_sync` (the stale twin is
+  never blessed) and never as corruption. `verify` runs the v3 lens gate +
+  the shared structural gate, listing one-sided narrative members as
+  `pending_twins` instead of failing them.
+
+### Changed
+
+- **BREAKING** — `clm slides sync` now always runs the document-model engine
+  (#520 Phase 4): the `CLM_SYNC_ENGINE` opt-in flag is gone, the committed
+  per-topic ledger (`<topic>/.clm/sync-ledger.json`) is the only trust store,
+  and the verb surface is exactly `report` / `apply` / `verify` / `record`.
+  `report --since DATE|REF` stays as a read-only forensic view (now diffing
+  the whole ≤4-file bundle at the resolved ref). Seed existing repos once with
+  `clm slides sync record DIR` from a verified state; see `clm info migration`.
+- `clm slides split` and `clm slides translate` record freshly-created pairs
+  in the committed sync ledger instead of the removed watermark cache
+  (`split --no-record` skips it; `--no-watermark` is kept as an alias, while
+  `split --cache-dir` and `translate --provider/--llm-model` were removed).
+  `translate` over an existing twin now reports the pair's sync state
+  read-only instead of running a model-driven incremental sync.
+- The Studio language lock and sync button run on the ledger engine: an
+  unseeded pair locks both languages until `sync record`, and the sync
+  subprocess applies only mechanical items (framed items keep the lock and
+  need the agent loop).
+- The MCP `slides_sync_report` tool returns the schema-3 member table
+  (mechanical/framed actions with per-item `answers` vocabulary) instead of
+  the v2 tiered report.
+
+- Carved the sync-free identity/snapshot layer (`clm.slides.doc_identity`:
+  `content_fingerprint`, `pair_signature`, `baseline_from_deck`,
+  `iter_with_groups`, `member_group_token`) and the sync-free write surface
+  (`clm.slides.doc_write`: `DeckEmitter`, `write_changed_files`,
+  `new_companion_path`) out of the v3 sync differ/executor, so non-sync
+  consumers of the bilingual deck model (the upcoming `clm harvest` toolkit,
+  epic #546 Phase 1) can import identity and write files without pulling in
+  `sync_diff` or the ledger. No behavior change; `sync_diff` re-exports the
+  moved names.
+
+- **BREAKING — harvest cutover (epic #546 Phase 4, no aliases).** The
+  video side of `clm voiceover` moved to `clm harvest`: `voiceover sync` →
+  `harvest autopilot` (the legacy embedded-LLM one-shot; agents use the
+  `report → task → accept` loop instead); `transcribe`, `detect`,
+  `identify`, `identify-rev`, `sync-at-rev`, `port`, `compare`,
+  `compare-from-inventory`, `backfill`, `extract-training-data`, `cache`,
+  `trace`, and the hidden `debug` group moved keeping their names;
+  `voiceover report` → `harvest compare-report`. `clm voiceover` retains
+  only the text-layer verbs (`extract`, `inline`, `inline-notes`) and lost
+  its cache flags. MCP tools renamed accordingly (`voiceover_transcribe` →
+  `harvest_transcribe` etc.), and two read-only MCP tools were added:
+  `harvest_report` and `harvest_task` (`accept` stays CLI-only). New
+  `clm info harvest-agents` topic documents the canonical agent loop;
+  `docs/user-guide/harvest.md` carries the video-pipeline user guide.
+
+- Documented `"live"` (live session with no video) as an example `<activity>` `kind` in the `spec-files` info topic and the `ActivitySpec` docstring. The attribute was always free-form; no behavior change.
+
+### Removed
+
+- **BREAKING** — the sync v2 engine was deleted (#520 Phase 4): the
+  `task` / `accept` / `autopilot` / `diagnose` / `shadow` verbs, the
+  `sync baseline` subgroup and `clm slides watermark`, the watermark/baseline
+  flags (`--baseline`, `--baseline-from`, `--use-watermark`, `--cache-dir`,
+  `--ledger`, `--explain`, `apply --yes/--auto-heal`), the v2 core modules
+  (`sync_plan` / `sync_apply` / `sync_code` and friends), the embedded
+  OpenRouter/Ollama sync-judge clients with their prompt/caches
+  (`SyncCache`, `SyncAlignmentCache`, `SyncCorrespondenceCache`,
+  `SyncSnapshotCache`, `SyncWatermarkCache`), and the legacy v1 sections of
+  `.clm/sync-ledger.json` (dropped on the next ledger write). Replacements:
+  `report --json` + `apply --decisions` for the task/accept round-trip,
+  `record` for bless/accept-record, the agent loop for autopilot. The stale
+  `.clm-cache/clm-llm.sqlite` watermark tables are dead data and can be
+  deleted.
+
+### Fixed
+
+- Fixed the CI docs-only skip never firing: the `changes` job's `dorny/paths-filter` exclusion list used the default "match any pattern" semantics, so every changed file matched at least one negation and the full test/lint/docker pipeline ran even for pure documentation changes. Setting `predicate-quantifier: every` makes the docs-only detection work as originally intended.
+
+- **Docker images build on OSX/arm64 (Apple Silicon).** The `drawio`,
+  `notebook:lite`, and `notebook:full` Dockerfiles no longer hardcode
+  x86_64-only fetched assets — they select the architecture-correct
+  `.deb`/binary and SHA-256 via BuildKit's `TARGETARCH`, so `clm docker build`
+  succeeds on linux/arm64. The notebook `full` variant is GPU-accelerated
+  (CUDA/PyTorch) on amd64 and CPU-only on arm64, where it reuses the
+  `python:3.12-slim` base (no `nvidia/cuda` arm64 image exists) and skips
+  GPU-only packages without an aarch64 wheel (`fastembed-gpu`). amd64 builds
+  are unchanged.
+
 ## [1.19.0] - 2026-07-03
 
 ### Added

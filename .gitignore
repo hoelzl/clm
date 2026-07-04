@@ -288,3 +288,4 @@ tests/test-data/_volatile_specs/
 # `clm slides assign-ids --llm-suggest`, `clm slides coverage`, etc.)
 .clm-cache/
 clm-http-replay-traces*/
+clm_telemetry.db
