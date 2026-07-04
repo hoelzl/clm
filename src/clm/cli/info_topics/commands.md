@@ -3850,6 +3850,12 @@ engine-owned, cached, and model-free; curation and translation judgment
 belong to the driving agent. Requires `clm[voiceover]` extra.
 
 Bare `clm harvest DECK VIDEO…` runs the read-only default verb `report`.
+The canonical agent loop:
+
+```
+harvest report → (task → judge → accept [--record])* → verify
+              → clm slides sync report      (twin translation continues there)
+```
 
 **Group-level cache flags** (same artifact cache as `clm voiceover`):
 
@@ -3912,6 +3918,75 @@ ledger provenance `harvest:<fingerprint>`).
 **Exit codes:** `0` nothing to harvest (all covered/silent) · `1`
 actionable items (new material or unmatched speech) · `2` error
 (unreadable deck, non-normalized bundle, bad inputs).
+
+#### `clm harvest task` (CLM {version}+)
+
+Frame one slide's judgment as a JSON task document for the driving agent.
+Read-only; no model.
+
+```
+clm harvest task SLIDES VIDEO... --lang {de|en} [--slide ID] [--kind curate|translate]
+```
+
+Takes the same pipeline/cache/injection options as `report`. Each task
+carries: caller `instructions` (the curation rules the old embedded-model
+merge applied — preserve baseline bullets, integrate substantive additions,
+filter recording noise into the `dropped` audit list), structured `inputs`
+(baseline voiceover on both sides, the aligned transcript with its
+`revisited_segments` backtracking groups, slide content), the bullet-list
+`answer_schema` (validator `harvest-bullets`), and the freshness tokens the
+answer must echo: per-side `baseline_fingerprint` plus `video_fingerprint`.
+`--kind curate` merges the recorded language; `--kind translate` frames the
+twin side from the already-curated source. Omitting `--slide` frames every
+actionable item. A slide with more than one narrative cell per side is
+refused (ambiguous — edit the files directly).
+
+**Exit codes:** `0` tasks emitted (possibly zero in the sweep) · `2` error /
+the named slide cannot be framed.
+
+#### `clm harvest accept` (CLM {version}+)
+
+Validate a bullet-list answer and write it through the v3 model — the
+**only** write path of the harvest toolkit.
+
+```
+clm harvest accept SLIDES --answer FILE|- [--slide ID] [--record] [--dry-run] [--json]
+```
+
+Validation (all-or-nothing; nothing is written on failure): answer schema
+shape; per-side `baseline_fingerprint` freshness against the live deck (a
+concurrent edit rejects, never overwrites); single-cell body guards; the
+mutated bundle must re-parse through the v3 lens. Bullets render into the
+deck's `#\n# - …` narrative cell style; a missing voiceover member is
+created (own minted `slide_id`, `for_slide` owner, companion or inline
+following the deck's convention) and the ≤4 files land atomically.
+
+A one-language answer writes that side only: the pair becomes a deliberate,
+representable divergence that the next `clm slides sync report` frames as
+translation work. `--record` banks the touched member into the sync ledger
+(`.clm/sync-ledger.json`) with provenance `harvest:<video-fingerprint>`
+under one-sided-trust semantics: a bilingual answer records the clean pair;
+a one-sided member records its one-sided entry (framing `translate_new`);
+a one-sided write over an existing twin never advances the written side's
+fingerprint (framing `translate_edit`) — the stale twin is never silently
+blessed. The ledger save is gated on the structural verify; a refused gate
+leaves the files written and reports the reasons.
+
+**Exit codes:** `0` applied (and recorded if requested) · `1` applied but
+the ledger record was refused by the structural gate · `2` rejected/error.
+
+#### `clm harvest verify` (CLM {version}+)
+
+Structural post-check on the pair: the v3 lens gate (the whole bundle must
+parse back) plus the deck-half structural gate the sync write verbs use.
+One-sided narrative members are **not** failures — they are listed as
+`pending_twins` (translation work for the `clm slides sync` loop).
+
+```
+clm harvest verify SLIDES [--json]
+```
+
+**Exit codes:** `0` pass (pending twins allowed) · `2` structural errors.
 
 ### `clm voiceover`
 

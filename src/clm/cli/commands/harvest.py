@@ -8,11 +8,20 @@ module carries the group plus the Phase-2 surface:
 * ``report`` (the default verb) — run the cached deterministic tier and
   emit per-slide JSON keyed by v3 ``MemberKey``, with a structural novelty
   class per slide. Read-only; no model; no key.
+* ``task`` — frame one slide's curation/translation judgment for the
+  driving agent (instructions + inputs + answer_schema + freshness
+  tokens). Read-only.
+* ``accept`` — validate a bullet-list answer and write it through the v3
+  model (id-keyed member edit, atomic ≤4-file write); ``--record`` banks
+  it into the sync ledger under ``harvest:<video-fingerprint>``
+  provenance with the §6 one-sided-trust semantics. The only write path.
+* ``verify`` — the structural post-check, delegating to the same engine
+  as ``clm slides sync verify``.
 * the re-homed diagnostics ``transcribe`` / ``detect`` / ``identify`` /
   ``identify-rev`` / ``cache`` / ``trace`` (shared with ``clm voiceover``
   until the Phase-4 cutover deletes the old names).
 
-``task`` / ``accept`` / ``verify`` / ``autopilot`` arrive in Phases 3–4.
+``autopilot`` (the embedded-model one-shot) arrives in Phase 4.
 """
 
 from __future__ import annotations
@@ -75,12 +84,20 @@ def harvest_group(ctx, cache_root, no_cache, refresh_cache):
     Bare `clm harvest DECK VIDEO…` == `clm harvest report DECK VIDEO…`.
     Verbs:
       report        what did the recording say, slide by slide? (read-only)
+      task          frame one slide's curation/translation judgment (read-only)
+      accept        validate a bullet-list answer + write it (the only write path)
+      verify        structural post-check on the pair (same engine as sync verify)
       transcribe    ASR only: dump the transcript (diagnostic)
       detect        slide-transition detection only (diagnostic)
       identify      which slides appear in a video? (diagnostic)
       identify-rev  which git revision of a deck was recorded? (diagnostic)
       cache         inspect/prune the artifact cache
       trace         inspect merge trace logs
+
+    \b
+    The agent loop:
+      harvest report → (task → judge → accept [--record])* → verify
+      → clm slides sync report   (twin translation continues there)
 
     The deterministic tier (ASR, transition detection, OCR matching,
     alignment) is engine-owned, cached, and model-free; curation and
@@ -99,6 +116,130 @@ def harvest_group(ctx, cache_root, no_cache, refresh_cache):
 
 
 # ---------------------------------------------------------------------------
+# Shared plumbing for the pipeline-driven verbs (report, task)
+# ---------------------------------------------------------------------------
+
+
+def _pipeline_options(f):
+    """The option stack `report` and `task` share (video → alignment inputs)."""
+    options = [
+        click.option(
+            "--lang",
+            required=True,
+            type=click.Choice(["de", "en"]),
+            help="The recorded (spoken) language; SLIDES must be that half of the pair.",
+        ),
+        click.option(
+            "--transcript",
+            "transcript_override",
+            type=click.Path(exists=True, path_type=Path),
+            default=None,
+            help="Skip ASR and load a precomputed transcript from PATH "
+            "(JSON from `clm harvest transcribe -o`). Single-video only.",
+        ),
+        click.option(
+            "--alignment",
+            "alignment_override",
+            type=click.Path(exists=True, path_type=Path),
+            default=None,
+            help="Skip ASR, detection, and matching; load a precomputed alignment "
+            "from PATH (cache artifact shape). Single-video only.",
+        ),
+        click.option(
+            "--whisper-model",
+            default="large-v3",
+            show_default=True,
+            help="Whisper model size for ASR.",
+        ),
+        click.option(
+            "--backend",
+            "backend_name",
+            default="faster-whisper",
+            show_default=True,
+            help="Transcription backend.",
+        ),
+        click.option(
+            "--device",
+            default="auto",
+            show_default=True,
+            type=click.Choice(["auto", "cuda", "cpu"]),
+            help="Device for ASR.",
+        ),
+    ]
+    for option in reversed(options):
+        f = option(f)
+    return f
+
+
+def _load_bundle_or_exit(slides: Path):
+    """The v3 deck bundle: both languages + companions, the identity source."""
+    from clm.slides.doc_lenses import DocLensError, load_bundle
+
+    try:
+        bundle = load_bundle(slides)
+    except DocLensError as exc:
+        click.echo(f"error: {exc}", err=True)
+        sys.exit(2)
+    if bundle.outcome.deck is None:
+        refusal = bundle.outcome.refusal
+        click.echo("error: the deck bundle is not normalized:", err=True)
+        if refusal is not None:
+            for reason in refusal.reasons:
+                click.echo(f"  [{reason.code}] {reason.detail}", err=True)
+        click.echo("run `clm slides normalize` on the pair first.", err=True)
+        sys.exit(2)
+    return bundle
+
+
+def _build_report_data(
+    ctx,
+    bundle,
+    slides: Path,
+    videos: tuple[str, ...],
+    lang: str,
+    transcript_override: Path | None,
+    alignment_override: Path | None,
+    whisper_model: str,
+    backend_name: str,
+    device: str,
+) -> dict:
+    from clm.cli.commands.voiceover import (
+        _expand_video_args,
+        _load_alignment_override,
+        _load_transcript_override,
+    )
+    from clm.notebooks.slide_parser import parse_slides
+    from clm.voiceover.cache import CachePolicy
+    from clm.voiceover.harvest import HarvestUsageError, build_report, run_pipeline
+
+    policy: CachePolicy = ctx.obj.get("cache_policy", CachePolicy())
+    video_paths = _expand_video_args(videos)
+
+    # The recorded-language view the OCR matcher and aligner key on.
+    slide_groups = parse_slides(slides, lang)
+
+    transcript = _load_transcript_override(transcript_override) if transcript_override else None
+    alignment = _load_alignment_override(alignment_override) if alignment_override else None
+    try:
+        artifacts = run_pipeline(
+            slides,
+            video_paths,
+            lang,
+            slide_groups,
+            policy=policy,
+            backend_name=backend_name,
+            whisper_model=whisper_model,
+            device=device,
+            transcript_override=transcript,
+            alignment_override=alignment,
+        )
+    except HarvestUsageError as exc:
+        raise click.UsageError(str(exc)) from exc
+
+    return build_report(bundle, slide_groups, artifacts, lang=lang, video_paths=video_paths)
+
+
+# ---------------------------------------------------------------------------
 # report — the read-only default verb
 # ---------------------------------------------------------------------------
 
@@ -106,49 +247,8 @@ def harvest_group(ctx, cache_root, no_cache, refresh_cache):
 @harvest_group.command("report")
 @click.argument("slides", type=click.Path(exists=True, path_type=Path))
 @click.argument("videos", nargs=-1, required=True, type=str)
-@click.option(
-    "--lang",
-    required=True,
-    type=click.Choice(["de", "en"]),
-    help="The recorded (spoken) language; SLIDES must be that half of the pair.",
-)
+@_pipeline_options
 @click.option("--json", "as_json", is_flag=True, help="Emit the JSON report envelope.")
-@click.option(
-    "--transcript",
-    "transcript_override",
-    type=click.Path(exists=True, path_type=Path),
-    default=None,
-    help="Skip ASR and load a precomputed transcript from PATH "
-    "(JSON from `clm harvest transcribe -o`). Single-video only.",
-)
-@click.option(
-    "--alignment",
-    "alignment_override",
-    type=click.Path(exists=True, path_type=Path),
-    default=None,
-    help="Skip ASR, detection, and matching; load a precomputed alignment "
-    "from PATH (cache artifact shape). Single-video only.",
-)
-@click.option(
-    "--whisper-model",
-    default="large-v3",
-    show_default=True,
-    help="Whisper model size for ASR.",
-)
-@click.option(
-    "--backend",
-    "backend_name",
-    default="faster-whisper",
-    show_default=True,
-    help="Transcription backend.",
-)
-@click.option(
-    "--device",
-    default="auto",
-    show_default=True,
-    type=click.Choice(["auto", "cuda", "cpu"]),
-    help="Device for ASR.",
-)
 @click.pass_context
 def harvest_report_cmd(
     ctx,
@@ -180,66 +280,303 @@ def harvest_report_cmd(
 
     No model, no key, no writes — also the human dry-run.
     """
-    from clm.cli.commands.voiceover import (
-        _expand_video_args,
-        _load_alignment_override,
-        _load_transcript_override,
+    from clm.voiceover.harvest import report_exit_code
+
+    bundle = _load_bundle_or_exit(slides)
+    report = _build_report_data(
+        ctx,
+        bundle,
+        slides,
+        videos,
+        lang,
+        transcript_override,
+        alignment_override,
+        whisper_model,
+        backend_name,
+        device,
     )
-    from clm.notebooks.slide_parser import parse_slides
-    from clm.slides.doc_lenses import DocLensError, load_bundle
-    from clm.voiceover.cache import CachePolicy
-    from clm.voiceover.harvest import (
-        HarvestUsageError,
-        build_report,
-        report_exit_code,
-        run_pipeline,
-    )
-
-    policy: CachePolicy = ctx.obj.get("cache_policy", CachePolicy())
-    video_paths = _expand_video_args(videos)
-
-    # The v3 deck bundle: both languages + companions, the identity source.
-    try:
-        bundle = load_bundle(slides)
-    except DocLensError as exc:
-        click.echo(f"error: {exc}", err=True)
-        sys.exit(2)
-    if bundle.outcome.deck is None:
-        refusal = bundle.outcome.refusal
-        click.echo("error: the deck bundle is not normalized:", err=True)
-        if refusal is not None:
-            for reason in refusal.reasons:
-                click.echo(f"  [{reason.code}] {reason.detail}", err=True)
-        click.echo("run `clm slides normalize` on the pair first.", err=True)
-        sys.exit(2)
-
-    # The recorded-language view the OCR matcher and aligner key on.
-    slide_groups = parse_slides(slides, lang)
-
-    transcript = _load_transcript_override(transcript_override) if transcript_override else None
-    alignment = _load_alignment_override(alignment_override) if alignment_override else None
-    try:
-        artifacts = run_pipeline(
-            slides,
-            video_paths,
-            lang,
-            slide_groups,
-            policy=policy,
-            backend_name=backend_name,
-            whisper_model=whisper_model,
-            device=device,
-            transcript_override=transcript,
-            alignment_override=alignment,
-        )
-    except HarvestUsageError as exc:
-        raise click.UsageError(str(exc)) from exc
-
-    report = build_report(bundle, slide_groups, artifacts, lang=lang, video_paths=video_paths)
     if as_json:
         click.echo(json.dumps(report, indent=2, ensure_ascii=False))
     else:
         _print_human_report(report)
     sys.exit(report_exit_code(report))
+
+
+# ---------------------------------------------------------------------------
+# task — frame the judgment for the driving agent (read-only)
+# ---------------------------------------------------------------------------
+
+
+@harvest_group.command("task")
+@click.argument("slides", type=click.Path(exists=True, path_type=Path))
+@click.argument("videos", nargs=-1, required=True, type=str)
+@_pipeline_options
+@click.option(
+    "--slide",
+    default=None,
+    help="Frame one slide (bare id or id:… handle). Omit to frame every actionable item.",
+)
+@click.option(
+    "--kind",
+    type=click.Choice(["curate", "translate"]),
+    default="curate",
+    show_default=True,
+    help="curate = merge the recorded language; translate = frame the twin side.",
+)
+@click.pass_context
+def harvest_task_cmd(
+    ctx,
+    slides: Path,
+    videos: tuple[str, ...],
+    lang: str,
+    slide: str | None,
+    kind: str,
+    transcript_override: Path | None,
+    alignment_override: Path | None,
+    whisper_model: str,
+    backend_name: str,
+    device: str,
+):
+    """Frame one slide's judgment as a task document (read-only).
+
+    Emits JSON task document(s): caller instructions (the curation rules the
+    old embedded-model merge applied), structured inputs (baseline voiceover
+    on both sides, the aligned transcript with its revisited groups, slide
+    content), the bullet-list `answer_schema`, and the freshness tokens
+    (`baseline_fingerprint`, `video_fingerprint`) that `accept` re-checks.
+
+    \b
+    Exit codes: 0 tasks emitted (possibly zero in the sweep) · 2 error /
+    the named slide cannot be framed.
+    """
+    from clm.voiceover.harvest_task import TaskUnavailable, build_tasks
+
+    bundle = _load_bundle_or_exit(slides)
+    report = _build_report_data(
+        ctx,
+        bundle,
+        slides,
+        videos,
+        lang,
+        transcript_override,
+        alignment_override,
+        whisper_model,
+        backend_name,
+        device,
+    )
+    deck = bundle.outcome.deck
+    assert deck is not None
+    try:
+        tasks = build_tasks(report, deck, kind=kind, slide=slide)
+    except TaskUnavailable as exc:
+        click.echo(f"error: {exc}", err=True)
+        sys.exit(2)
+    click.echo(
+        json.dumps(
+            {
+                "schema": 1,
+                "tool": "harvest",
+                "verb": "task",
+                "video_fingerprint": report["video_fingerprint"],
+                "tasks": tasks,
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+    )
+    sys.exit(0)
+
+
+# ---------------------------------------------------------------------------
+# accept — the only write path
+# ---------------------------------------------------------------------------
+
+
+@harvest_group.command("accept")
+@click.argument("slides", type=click.Path(exists=True, path_type=Path))
+@click.option(
+    "--answer",
+    "answer_src",
+    required=True,
+    help="The answer document: a file path, or '-' for stdin.",
+)
+@click.option("--slide", default=None, help="Safety check: must match the answer's item.")
+@click.option(
+    "--record",
+    is_flag=True,
+    help="Bank the written member into the sync ledger under "
+    "harvest:<video-fingerprint> provenance (one-sided trust semantics).",
+)
+@click.option("--dry-run", is_flag=True, help="Validate and report; write nothing.")
+@click.option("--json", "as_json", is_flag=True, help="Emit the JSON outcome envelope.")
+def harvest_accept_cmd(
+    slides: Path,
+    answer_src: str,
+    slide: str | None,
+    record: bool,
+    dry_run: bool,
+    as_json: bool,
+):
+    """Validate a bullet-list answer and write it through the v3 model.
+
+    Validates the answer against the task's schema and the LIVE deck
+    (baseline-fingerprint freshness — a concurrent edit rejects, never
+    overwrites), renders the bullets into the voiceover cell body, and lands
+    the member edit atomically (both halves + companions as needed). A
+    one-language answer writes that side only — the pair becomes a
+    deliberate divergence the `clm slides sync` loop resolves as translation
+    work. Writes nothing on any validation failure.
+
+    \b
+    Exit codes: 0 applied (and recorded, if requested) · 1 applied but the
+    ledger record was refused by the structural gate · 2 rejected / error.
+    """
+    from clm.voiceover.harvest_accept import AcceptRejected, accept_answer, parse_answer
+
+    if answer_src == "-":
+        raw = click.get_text_stream("stdin").read()
+    else:
+        answer_path = Path(answer_src)
+        if not answer_path.exists():
+            raise click.UsageError(f"answer file not found: {answer_src}")
+        raw = answer_path.read_text(encoding="utf-8")
+    try:
+        payload = json.loads(raw)
+    except ValueError as exc:
+        raise click.UsageError(f"the answer is not valid JSON: {exc}") from exc
+
+    bundle = _load_bundle_or_exit(slides)
+    try:
+        parsed = parse_answer(payload)
+        if slide is not None:
+            handle = slide if slide.startswith("id:") else f"id:{slide}"
+            if handle != parsed.item:
+                raise AcceptRejected(
+                    f"--slide {handle} does not match the answer's item {parsed.item}"
+                )
+        outcome = accept_answer(bundle, parsed, record=record, dry_run=dry_run)
+    except AcceptRejected as exc:
+        if as_json:
+            click.echo(
+                json.dumps(
+                    {
+                        "schema": 1,
+                        "tool": "harvest",
+                        "verb": "accept",
+                        "applied": False,
+                        "outcome": "rejected",
+                        "reason": str(exc),
+                    },
+                    indent=2,
+                    ensure_ascii=False,
+                )
+            )
+        else:
+            click.echo(f"rejected: {exc}", err=True)
+        sys.exit(2)
+
+    if as_json:
+        click.echo(json.dumps(outcome.to_payload(), indent=2, ensure_ascii=False))
+    else:
+        state = "dry-run: would write" if dry_run else "wrote"
+        click.echo(f"accepted {outcome.item} → member {outcome.member} ({state})")
+        for path in outcome.written_paths:
+            click.echo(f"  {path}")
+        if outcome.recorded:
+            click.echo("  ledger: recorded")
+        for message in outcome.record_refused:
+            click.echo(f"  ledger withheld: {message}", err=True)
+    sys.exit(1 if outcome.record_refused else 0)
+
+
+# ---------------------------------------------------------------------------
+# verify — the structural post-check
+# ---------------------------------------------------------------------------
+
+
+@harvest_group.command("verify")
+@click.argument("slides", type=click.Path(exists=True, path_type=Path))
+@click.option("--json", "as_json", is_flag=True, help="Emit the JSON verdict.")
+def harvest_verify_cmd(slides: Path, as_json: bool):
+    """Structural post-check on the pair (v3 lens + the shared write gate).
+
+    Runs the v3 lens gate (the whole bundle must parse back — refusals are
+    corruption) plus the deck-half structural gate `sync record`/`apply`
+    use. One-sided narrative members are NOT failures: a harvest write to
+    one language side is a representable pending state the `clm slides
+    sync` loop resolves as translation work — they are listed as
+    `pending_twin` items. (The v2 `sync verify` projects companions and
+    reads that same state as an id-asymmetry error, which is exactly the
+    "corruption" misreading harvest must avoid — §6.)
+
+    \b
+    Exit codes: 0 pass (pending twins allowed) · 2 structural errors.
+    """
+    from clm.slides.doc_lenses import DocLensError, load_bundle
+    from clm.slides.sync_verify import structural_gate
+
+    try:
+        bundle = load_bundle(slides)
+    except DocLensError as exc:
+        click.echo(f"error: {exc}", err=True)
+        sys.exit(2)
+
+    errors: list[str] = []
+    pending: list[dict] = []
+    if bundle.outcome.deck is None:
+        refusal = bundle.outcome.refusal
+        if refusal is not None:
+            errors.extend(f"[{r.code}] {r.detail}" for r in refusal.reasons)
+        else:  # pragma: no cover - a refusal always carries reasons
+            errors.append("the bundle did not parse")
+    else:
+        errors.extend(
+            f"[{v.kind}] {v.message}"
+            for v in structural_gate(
+                bundle.de_path.read_text(encoding="utf-8"),
+                bundle.en_path.read_text(encoding="utf-8"),
+                bundle.comment_token,
+            )
+        )
+        for member in bundle.outcome.deck.members():
+            if member.role in ("voiceover", "notes") and member.is_one_sided:
+                present = "de" if member.de is not None else "en"
+                pending.append(
+                    {
+                        "member": member.key.render(),
+                        "present": present,
+                        "missing": "en" if present == "de" else "de",
+                    }
+                )
+
+    ok = not errors
+    if as_json:
+        click.echo(
+            json.dumps(
+                {
+                    "schema": 1,
+                    "tool": "harvest",
+                    "verb": "verify",
+                    "de": str(bundle.de_path),
+                    "en": str(bundle.en_path),
+                    "ok": ok,
+                    "errors": errors,
+                    "pending_twins": pending,
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+    else:
+        click.echo(f"{'PASS' if ok else 'FAIL'}  {bundle.de_path} / {bundle.en_path}")
+        for message in errors:
+            click.echo(f"  [error] {message}")
+        for item in pending:
+            click.echo(
+                f"  [pending] {item['member']}: {item['missing']} twin awaits "
+                "translation (run the `clm slides sync` loop)"
+            )
+    sys.exit(0 if ok else 2)
 
 
 def _print_human_report(report: dict) -> None:
