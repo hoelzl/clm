@@ -281,6 +281,8 @@ def _narrative_by_group(deck) -> dict[str, list[Member]]:
 
 
 def _voiceover_payload(members: list[Member], side: Lang) -> dict[str, Any]:
+    from clm.slides.doc_identity import content_fingerprint
+
     cells = []
     for member in members:
         cell = member.side(side)
@@ -292,6 +294,8 @@ def _voiceover_payload(members: list[Member], side: Lang) -> dict[str, Any]:
                 "role": member.role,
                 "layout": member.layout,
                 "text": cell.body,
+                # The freshness token `task` frames and `accept` re-checks.
+                "fingerprint": content_fingerprint(cell),
             }
         )
     present = any(c["text"].strip() for c in cells)

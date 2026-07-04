@@ -1,7 +1,9 @@
 # Handover: Video Narration Harvest (agent-first rebuild)
 
-**Status**: Phases 1–2 implemented (v3 extraction; `clm harvest report`);
-Phases 3–4 TODO (Phase 3 gated on the v3 dogfood week)
+**Status**: Phases 1–3 implemented (v3 extraction; `clm harvest report`;
+`task`/`accept`/`verify` — Phase 3 landed EARLY as a deliberate v3
+stress-test, back-out tag `pre-harvest-phase3`); Phase 4 (rename+cutover)
+TODO
 **Last updated**: 2026-07-04
 **Canonical design source**: `docs/proposals/video-narration-harvest.md`
 (merged via PR #541, decisions folded in via PR #542). Read that proposal
@@ -114,15 +116,46 @@ pivot), #520 (sync-engine-v3), #501 (separated companions);
     round-trips pinning every class, exit codes, default verb incl. after
     group options, refusal → exit 2, re-homed diagnostics). Docs:
     `commands.md` §`clm harvest`.
-- **Phase 3 [TODO] — `task` / `accept` / `verify`** (gated on v3 confidence
-  — see Blockers). `task --kind curate|translate` framing (instructions =
-  today's `src/clm/voiceover/prompts/merge_*.md` content restated as
-  caller instructions; bullet-list `answer_schema`; named validator).
-  `accept`: validate (schema; baseline-hash freshness vs. what `task`
-  framed; `de_id==en_id`; shared-cell byte-identity — reuse sync
-  validators), then id-keyed member write through the Phase-1 write
-  surface; `--record` with `harvest:<fp>` provenance, one-sided-trust
-  semantics. `verify` delegates to `clm slides sync verify`.
+- **Phase 3 [DONE — landed EARLY, before the v3 dogfood week, as a
+  deliberate stress-test; back-out = revert the PR merge or reset to tag
+  `pre-harvest-phase3`]** — `task` / `accept` / `verify`. Landed as:
+  - `src/clm/voiceover/harvest_task.py` — `build_tasks(report, deck,
+    kind, slide)`: instructions from the new
+    `prompts/harvest_curate.md`/`harvest_translate.md` (merge/propagate
+    rules restated for the caller); bullet-list `ANSWER_SCHEMA`
+    (validator `harvest-bullets`); freshness tokens = per-side
+    `baseline_fingerprint` (the report's per-cell `content_fingerprint`,
+    added to report items) + `video_fingerprint`; >1 narrative cell per
+    side ⇒ `TaskUnavailable` (P8). `revisited_segments` presented as
+    structured groups with instruction 6 explaining their semantics.
+  - `src/clm/voiceover/harvest_accept.py` — `parse_answer` (precise
+    per-field rejections) + `accept_answer`: freshness re-check against
+    the LIVE bundle; bullets rendered `#\n# - …`; existing member body
+    replaced via the doc_apply `_replace_body` rule; missing side added
+    via `swap_lang` + `insert_mirrored`; missing member created (minted
+    `<owner>-vo` id, deck-majority role/layout, companion appends /
+    inline inserts after the owner group) and written via the Phase-1
+    `DeckEmitter`/`write_changed_files` after the re-parse gate.
+  - **The §6 ledger semantics** (`_record_member`, provenance
+    `harvest:<fp>`, gated on `structural_gate`): bilingual answer →
+    fresh both-side entry (next sync report: `in_sync`); one-sided
+    member → fresh one-sided entry (→ framed `translate_new`; without
+    the record it would be unframed `verify_cold`); one-sided write over
+    an existing twin → the written side's fingerprint is NOT advanced
+    (existing entry kept / pre-write state synthesized → framed
+    `translate_edit`). LedgerMember has no per-side trust field — the
+    fingerprint mismatch IS the "twin owes translation" representation;
+    advancing both fps is the forbidden silent-bless state.
+  - `verify` is **v3-native**, NOT a `sync verify` delegate: the v2
+    `verify_pair` projects companions and reads a one-sided narrative
+    member as an `id-asymmetry` ERROR — exactly the corruption
+    misreading §6 forbids. Harvest verify = lens gate + deck-half
+    `structural_gate` + one-sided narrative members listed as
+    `pending_twins` (exit 0).
+  - Tests: `tests/cli/test_harvest_task_accept.py` (report→task→accept→
+    verify loop; the §6 classification tests assert the v3 differ's
+    verdicts against the recorded ledger: `translate_new`,
+    `translate_edit` de→en, bilingual → no item).
 - **Phase 4 [TODO] — rename + cutover**. `clm harvest` absorbs
   `port`/`compare`/`compare-from-inventory`; `voiceover sync` →
   `harvest autopilot`; delete old video-side `voiceover` verbs (no
@@ -136,10 +169,12 @@ pivot), #520 (sync-engine-v3), #501 (separated companions);
 - Proposal written, decisions resolved, merged to master
   (`docs/proposals/video-narration-harvest.md`; PRs #541 merged, #542
   merged/auto-merge armed 2026-07-04).
-- **Phases 1–2 implemented** (`doc_identity.py` + `doc_write.py`;
-  `clm harvest report` + re-homed diagnostics, see §3). Epic issue:
-  **#546** (phases, settled decisions, and the Phase-3 gate mirrored
-  there).
+- **Phases 1–3 implemented** (`doc_identity.py` + `doc_write.py`;
+  `clm harvest report` + re-homed diagnostics; `task`/`accept`/`verify`,
+  see §3). Epic issue: **#546**. Phase 3 landed BEFORE the v3 dogfood week
+  finished (user decision, as a stress-test): master is tagged
+  `pre-harvest-phase3` right before it, and the phase is one PR, so
+  back-out = `git revert -m 1 <merge>` or comparison against the tag.
 - Blocker for Phase 3 (and arguably 4): sync-engine-v3 must survive its
   **dogfood week on PythonCourses** first (see
   `docs/claude/sync-v3-handover.md`; v3 Phase 4 = flip default, delete v2).
@@ -151,15 +186,14 @@ pivot), #520 (sync-engine-v3), #501 (separated companions);
 
 ## 5. Next Steps
 
-Phases 1–2 are done (see §3). Next is **Phase 3 — `task` / `accept` /
-`verify`**, which stays **gated on the v3 dogfood week** (see Blockers in
-§4); do not start it before v3 confidence is established. When it opens:
-`task --kind curate|translate` framing (instructions from
-`src/clm/voiceover/prompts/merge_*.md` restated as caller instructions;
-bullet-list `answer_schema`), `accept` writing through the Phase-1
-`doc_write` surface, `--record` with `harvest:<fp>` provenance (the
-fingerprint `harvest.py:video_fingerprint` already computes), one-sided
-trust semantics (§8 of this doc / proposal §6). Gotchas that remain live:
+Phases 1–3 are done (see §3; Phase 3 was pulled forward deliberately as a
+v3 stress-test — the user's call, hedged by tag `pre-harvest-phase3` on
+master and single-PR landing for easy revert). Next steps: **dogfood the
+harvest loop on real recordings** (this doubles as the v3 dogfood), then
+**Phase 4 — rename + cutover** (absorb `port`/`compare`/
+`compare-from-inventory`, `voiceover sync` → `harvest autopilot`, delete
+old video-side voiceover verbs, MCP renames, `clm info harvest-agents`
+topic, user-guide split). Gotchas that remain live:
 - `tests/cli/test_sync_import_cleanliness.py` pins the v3 import graph
   (model must not import v2; facade imports only v3 core; `doc_identity`/
   `doc_write` must stay differ/ledger-free) — extend, don't fight it.
@@ -174,7 +208,11 @@ Created by Phase 1: `src/clm/slides/doc_identity.py` (identity/snapshot),
 `tests/slides/test_doc_write.py`. Created by Phase 2:
 `src/clm/voiceover/harvest.py` (report engine),
 `src/clm/cli/commands/harvest.py` (group + report + re-homed diagnostics),
-`tests/cli/test_harvest_cli.py`. The rest of the map (from the 2026-07-04
+`tests/cli/test_harvest_cli.py`. Created by Phase 3:
+`src/clm/voiceover/harvest_task.py`, `harvest_accept.py`,
+`prompts/harvest_curate.md`, `prompts/harvest_translate.md`,
+`tests/cli/test_harvest_task_accept.py` (+ `task`/`accept`/`verify` verbs
+in the CLI module). The rest of the map (from the 2026-07-04
 investigation):
 
 - **v3 model (reuse)**: `src/clm/slides/bilingual_doc.py` (model: `Member`,
