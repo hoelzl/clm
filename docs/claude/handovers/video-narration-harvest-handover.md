@@ -1,6 +1,7 @@
 # Handover: Video Narration Harvest (agent-first rebuild)
 
-**Status**: Phase 1 implemented (v3 utility extraction); Phases 2–4 TODO
+**Status**: Phases 1–2 implemented (v3 extraction; `clm harvest report`);
+Phases 3–4 TODO (Phase 3 gated on the v3 dogfood week)
 **Last updated**: 2026-07-04
 **Canonical design source**: `docs/proposals/video-narration-harvest.md`
 (merged via PR #541, decisions folded in via PR #542). Read that proposal
@@ -89,16 +90,30 @@ pivot), #520 (sync-engine-v3), #501 (separated companions);
     mutation round-trip, atomic multi-file + minted companion);
     `tests/cli/test_sync_import_cleanliness.py` extended — the new modules
     must import neither `sync_diff` nor `doc_ledger` nor the v2 core.
-- **Phase 2 [TODO] — `clm harvest report`** (read-only; can land during v3
-  dogfooding). New group + verb wrapping the deterministic pipeline
-  (`transcribe`→`detect`→`match`→`align`, cached via
-  `src/clm/voiceover/cache.py`), emitting per-slide JSON: `MemberKey`,
-  video language, transcript segment(s), both-language VO baseline,
-  structural novelty class (`no_existing_vo` | `transcript_adds_material`
-  → *structural only, see decision 6* | `covered` | `unmatched_speech` |
-  `unmatched_slide`). Reads the deck through `load_bundle`
-  (`doc_lenses.py`). Existing diagnostics (`transcribe`/`detect`/
-  `identify`/`identify-rev`/`cache`/`trace`) re-home under the group.
+- **Phase 2 [DONE] — `clm harvest report`** (read-only). Landed as:
+  - `src/clm/voiceover/harvest.py` — engine: `run_pipeline` (the cached
+    deterministic tier, mirroring `voiceover sync`'s stage order + cache
+    scoping, with `--transcript`/`--alignment` short-circuits),
+    `build_report` (joins alignment×deck; the index→`slide_id`→
+    `id:<slide_id>` identity seam), `classify_slide` (structural 2×2:
+    speech assigned × VO present on the recorded side), `video_fingerprint`
+    (single = `VideoKey.hash`; multi-part = sha1 over ordered part hashes —
+    this is the future `harvest:<fp>` provenance), `report_exit_code`.
+  - `src/clm/cli/commands/harvest.py` — lazily registered top-level group
+    (`main.py` `lazy_subcommands` + `optional_subcommands` +
+    `_OPTIONAL_COMPAT_EXPORTS`); `report` is the default verb (resolved in
+    `resolve_command`, NOT sync's `parse_args` prepend — the group carries
+    cache flags and a prepend would fire on `--no-cache`); group-level
+    cache flags mirror `voiceover_group`; diagnostics re-registered as the
+    SAME Click command objects imported from `voiceover.py` (old names stay
+    until Phase 4).
+  - Aligned notes pointing at slide indices absent from the parsed deck
+    (stale injected alignment / slides deleted since recording) fold into
+    `unmatched_speech` — never dropped silently.
+  - Tests: `tests/cli/test_harvest_cli.py` (injected-alignment CLI
+    round-trips pinning every class, exit codes, default verb incl. after
+    group options, refusal → exit 2, re-homed diagnostics). Docs:
+    `commands.md` §`clm harvest`.
 - **Phase 3 [TODO] — `task` / `accept` / `verify`** (gated on v3 confidence
   — see Blockers). `task --kind curate|translate` framing (instructions =
   today's `src/clm/voiceover/prompts/merge_*.md` content restated as
@@ -121,9 +136,10 @@ pivot), #520 (sync-engine-v3), #501 (separated companions);
 - Proposal written, decisions resolved, merged to master
   (`docs/proposals/video-narration-harvest.md`; PRs #541 merged, #542
   merged/auto-merge armed 2026-07-04).
-- **Phase 1 implemented** (`doc_identity.py` + `doc_write.py`, see §3); no
-  harvest-facing code yet. Epic issue: **#546** (phases, settled decisions,
-  and the Phase-3 gate mirrored there).
+- **Phases 1–2 implemented** (`doc_identity.py` + `doc_write.py`;
+  `clm harvest report` + re-homed diagnostics, see §3). Epic issue:
+  **#546** (phases, settled decisions, and the Phase-3 gate mirrored
+  there).
 - Blocker for Phase 3 (and arguably 4): sync-engine-v3 must survive its
   **dogfood week on PythonCourses** first (see
   `docs/claude/sync-v3-handover.md`; v3 Phase 4 = flip default, delete v2).
@@ -135,11 +151,15 @@ pivot), #520 (sync-engine-v3), #501 (separated companions);
 
 ## 5. Next Steps
 
-Phase 1 is done (see §3). Next is **Phase 2 — `clm harvest report`**
-(read-only; can land during v3 dogfooding): new CLI group wrapping the
-deterministic pipeline, per-slide JSON keyed by `MemberKey`, reading decks
-through `load_bundle`. Phase 3 stays gated on the v3 dogfood week.
-Gotchas that remain live:
+Phases 1–2 are done (see §3). Next is **Phase 3 — `task` / `accept` /
+`verify`**, which stays **gated on the v3 dogfood week** (see Blockers in
+§4); do not start it before v3 confidence is established. When it opens:
+`task --kind curate|translate` framing (instructions from
+`src/clm/voiceover/prompts/merge_*.md` restated as caller instructions;
+bullet-list `answer_schema`), `accept` writing through the Phase-1
+`doc_write` surface, `--record` with `harvest:<fp>` provenance (the
+fingerprint `harvest.py:video_fingerprint` already computes), one-sided
+trust semantics (§8 of this doc / proposal §6). Gotchas that remain live:
 - `tests/cli/test_sync_import_cleanliness.py` pins the v3 import graph
   (model must not import v2; facade imports only v3 core; `doc_identity`/
   `doc_write` must stay differ/ledger-free) — extend, don't fight it.
@@ -151,7 +171,10 @@ Gotchas that remain live:
 
 Created by Phase 1: `src/clm/slides/doc_identity.py` (identity/snapshot),
 `src/clm/slides/doc_write.py` (emitter + atomic write surface),
-`tests/slides/test_doc_write.py`. The rest of the map (from the 2026-07-04
+`tests/slides/test_doc_write.py`. Created by Phase 2:
+`src/clm/voiceover/harvest.py` (report engine),
+`src/clm/cli/commands/harvest.py` (group + report + re-homed diagnostics),
+`tests/cli/test_harvest_cli.py`. The rest of the map (from the 2026-07-04
 investigation):
 
 - **v3 model (reuse)**: `src/clm/slides/bilingual_doc.py` (model: `Member`,
