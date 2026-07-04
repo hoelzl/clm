@@ -20,8 +20,9 @@ The CLI is organised into a small top-level surface (the everyday verbs:
 authoring tools), `course` (course/spec structure: decks, targets, topics,
 includes, readiness gate), `query` (read-only introspection for scripting),
 `export` (rendered course documents), `calendar`
-(cohort viewing calendars), `voiceover`, `harvest` (recover narration from
-recorded videos), and the infrastructure groups
+(cohort viewing calendars), `voiceover` (the written-narration text layer:
+companion extract/inline), `harvest` (recover narration from recorded
+videos), and the infrastructure groups
 (`db`, `docker`, `git`, `jobs`, `workers`, `zip`, ...). The reference below
 uses the canonical (group-qualified) names. Older flat names were removed
 in CLM 1.8 and the remaining single-command groups (`topic`, `spec`,
@@ -2939,7 +2940,16 @@ clm slides suggest-sync slides_intro.py
 clm slides suggest-sync slides_intro.py --source-language de --json
 ```
 
-### `clm voiceover extract`
+### `clm voiceover`
+
+The written-narration **text layer**: move voiceover cells between a deck and
+its companion `voiceover_*.<ext>` file. Since the CLM {version} harvest
+cutover the group holds only `extract`, `inline`, and `inline-notes` — every
+video-side verb (transcription, alignment, backfill, the one-shot pipeline)
+lives under `clm harvest` (see below), and the group-level artifact-cache
+flags moved there with them.
+
+#### `clm voiceover extract`
 
 *Removed in CLM 1.8: the flat alias `clm extract-voiceover` no longer exists — use this group-qualified form.*
 
@@ -3052,7 +3062,7 @@ clm voiceover extract slides_intro.py --dry-run
 clm voiceover extract slides_intro.de.py --force
 ```
 
-### `clm voiceover inline`
+#### `clm voiceover inline`
 
 *Removed in CLM 1.8: the flat alias `clm inline-voiceover` no longer exists — use this group-qualified form.*
 
@@ -3100,7 +3110,7 @@ clm voiceover inline slides_intro.py
 clm voiceover inline slides_intro.py --dry-run
 ```
 
-### `clm voiceover inline-notes`
+#### `clm voiceover inline-notes`
 
 Migration helper (CLM {version}): move **speaker-notes** cells from companions
 back inline into their decks, leaving the `voiceover` cells in the companion.
@@ -3176,15 +3186,18 @@ clm mcp [OPTIONS]
 | `--data-dir DIR` | Course data directory (default: `CLM_DATA_DIR` or cwd) |
 | `--log-level TEXT` | Log level (DEBUG/INFO/WARNING/ERROR/CRITICAL) for host and worker logging. Overrides `CLM_LOGGING__LOG_LEVEL` / `[logging] log_level`; defaults to `INFO` when unset. |
 
-The MCP server exposes 16 tools over stdio transport. Tool names mirror the
+The MCP server exposes 20 tools over stdio transport. Tool names mirror the
 CLI verb-group structure (group-first); the flat pre-1.8 names
-(`resolve_topic`, `validate_slides`, …) were renamed in CLM 1.8.
+(`resolve_topic`, `validate_slides`, …) were renamed in CLM 1.8, and the
+video-side `voiceover_*` tools were renamed `harvest_*` in the CLM {version}
+harvest cutover (no aliases — see `clm info migration`).
 
 | Tool | Description |
 |------|-------------|
 | `topic_resolve` | Resolve topic ID or glob pattern to filesystem path |
 | `slides_search` | Fuzzy search across topic names and slide titles |
 | `course_outline` | Generate structured JSON course outline |
+| `course_context` | Rendered agent-context document for a course (see `clm export context`) |
 | `validate` | Validate a course spec (`.xml`) or slide files; dispatches on input type (override with the `kind` parameter). Replaces the former `validate_spec` + `validate_slides`. |
 | `slides_normalize` | Apply mechanical fixes (tag migration, interleaving, slide IDs) |
 | `slides_language_view` | Extract single-language view with line annotations |
@@ -3193,12 +3206,14 @@ CLI verb-group structure (group-first); the flat pre-1.8 names
 | `voiceover_extract` | Move voiceover cells to a companion file; on a split half auto-pairs both companions (`both`/`single` params, `"paired"` JSON) |
 | `voiceover_inline` | Merge voiceover cells back from companion file |
 | `authoring_rules` | Look up merged authoring rules for a course |
-| `voiceover_transcribe` | Transcribe a video through the voiceover artifact cache |
-| `voiceover_identify_rev` | Identify which historical revision a recording was made against |
-| `voiceover_compare` | Compare voiceover content between two slide files |
-| `voiceover_backfill_dry` | Preview a backfill (identify-rev → sync-at-rev → port) without writing |
-| `voiceover_cache_list` | List entries in the voiceover artifact cache |
-| `voiceover_trace_show` | Read a voiceover merge-trace log and return entries as JSON |
+| `harvest_report` | Read-only harvest report for a deck + recording(s) — the same envelope as `clm harvest report --json` (accepting an answer is CLI-only: `clm harvest accept`) |
+| `harvest_task` | Frame a slide's curation/translation judgment as a JSON task — read-only twin of `clm harvest task` |
+| `harvest_transcribe` | Transcribe a video through the harvest artifact cache |
+| `harvest_identify_rev` | Identify which historical revision a recording was made against |
+| `harvest_compare` | Compare voiceover content between two slide files |
+| `harvest_backfill_dry` | Preview a backfill (identify-rev → sync-at-rev → port) without writing |
+| `harvest_cache_list` | List entries in the harvest artifact cache |
+| `harvest_trace_show` | Read a merge-trace log and return entries as JSON |
 
 All tools accept paths relative to the data directory or as absolute paths.
 Most return JSON; `slides_language_view` returns annotated plain text.
@@ -3844,7 +3859,8 @@ clm export agent-guide --check              # staleness gate (CI / pre-commit)
 ### `clm harvest` (CLM {version}+)
 
 Recover spoken narration from recorded videos into slide decks — the
-agent-first rebuild of the video side of `clm voiceover` (epic #546). The
+agent-first rebuild of the video side of the old `clm voiceover` group
+(epic #546). The
 deterministic tier (ASR, transition detection, OCR matching, alignment) is
 engine-owned, cached, and model-free; curation and translation judgment
 belong to the driving agent. Requires `clm[voiceover]` extra.
@@ -3857,7 +3873,7 @@ harvest report → (task → judge → accept [--record])* → verify
               → clm slides sync report      (twin translation continues there)
 ```
 
-**Group-level cache flags** (same artifact cache as `clm voiceover`):
+**Group-level cache flags** (accepted by every `harvest` subcommand):
 
 | Option | Description |
 |--------|-------------|
@@ -3865,10 +3881,19 @@ harvest report → (task → judge → accept [--record])* → verify
 | `--no-cache` | Disable the artifact cache for this invocation |
 | `--refresh-cache` | Force recomputation and overwrite existing cache entries |
 
-The diagnostics `transcribe`, `detect`, `identify`, `identify-rev`,
-`cache`, and `trace` are also registered under `clm harvest` — they are the
-same commands documented under `clm voiceover` below (the old names remain
-until the harvest cutover phase deletes them).
+The cache stores intermediate pipeline artifacts (transcripts, transitions,
+timelines, alignments) keyed by video and slide-file fingerprints, so repeat
+invocations skip the expensive ASR/detection steps when inputs are unchanged.
+Manage the cache with `clm harvest cache list/prune/clear`.
+
+Since the CLM {version} harvest cutover, the video-side verbs live **only**
+here: the one-shot `autopilot` (formerly `clm voiceover sync`), the
+diagnostics `transcribe`, `detect`, `identify`, `identify-rev`, `cache`, and
+`trace`, and the history tools `sync-at-rev`, `port`, `compare`,
+`compare-report` (formerly `clm voiceover report`), `compare-from-inventory`,
+`backfill`, and `extract-training-data`. The old `clm voiceover` names were
+deleted, not aliased — see `clm info migration`. `clm voiceover` keeps only
+the text-layer verbs `extract` / `inline` / `inline-notes`.
 
 #### `clm harvest report`
 
@@ -3988,38 +4013,26 @@ clm harvest verify SLIDES [--json]
 
 **Exit codes:** `0` pass (pending twins allowed) · `2` structural errors.
 
-### `clm voiceover`
+#### `clm harvest autopilot`
 
-Synchronize video recordings with slide files to generate speaker notes.
-Requires `clm[voiceover]` extra.
+The legacy all-in-one pipeline **with embedded models** — formerly
+`clm voiceover sync`, renamed in the CLM {version} harvest cutover.
+Transcribes one or more video parts, detects transitions, matches slides,
+and merges voiceover cells in the .py file in a single shot. By default,
+existing voiceover content is preserved and transcript additions are merged
+in using a single-pass LLM call that also filters recording noise
+(greetings, self-corrections, code-typing dictation). Use `--overwrite` to
+replace existing voiceover cells instead of merging.
 
-**Group-level cache flags** (accepted by every `voiceover` subcommand):
-
-| Option | Description |
-|--------|-------------|
-| `--cache-root PATH` | Override the cache location (default: `./.clm/voiceover-cache`) |
-| `--no-cache` | Disable the artifact cache for this invocation |
-| `--refresh-cache` | Force recomputation and overwrite existing cache entries |
-
-The cache stores intermediate pipeline artifacts (transcripts, transitions,
-timelines, alignments) keyed by video and slide-file fingerprints, so
-repeat invocations skip the expensive ASR/detection steps when inputs are
-unchanged. Manage the cache with `clm voiceover cache list/prune/clear`.
-
-#### `clm voiceover sync`
-
-Full pipeline: transcribe one or more video parts, detect transitions, match
-slides, and merge voiceover cells in the .py file. By default, existing
-voiceover content is preserved and transcript additions are merged in using
-a single-pass LLM call that also filters recording noise (greetings,
-self-corrections, code-typing dictation). Use `--overwrite` to replace
-existing voiceover cells instead of merging.
+Autopilot is **key-gated** (the merge needs an LLM API key) and never runs
+in CI. Agents should prefer the model-free loop `report → task → accept`
+documented above; autopilot is the no-agent one-shot for humans.
 
 Multiple video parts are processed independently and merged into a single
 timeline using running offsets — no on-disk concatenation.
 
 ```
-clm voiceover sync SLIDES VIDEO... --lang {de|en} [OPTIONS]
+clm harvest autopilot SLIDES VIDEO... --lang {de|en} [OPTIONS]
 ```
 
 **Note:** The argument order is `SLIDES` first, then one or more `VIDEO` files.
@@ -4055,11 +4068,11 @@ between arguments is preserved.
 
 **Companion-file merge (auto-detected):**
 - If a `voiceover_*.<ext>` companion file (as produced by `clm voiceover extract`)
-  exists next to `SLIDES`, sync reads baseline voiceover from the companion
+  exists next to `SLIDES`, autopilot reads baseline voiceover from the companion
   (keyed by `for_slide` → `slide_id`) and writes merged output back to the
   companion. The slide file itself is left untouched.
 - Companion mode requires a stable `slide_id` on every slide being merged.
-  If any slide is missing one, sync errors out with the exact fix command
+  If any slide is missing one, autopilot errors out with the exact fix command
   (run `clm voiceover extract` to auto-generate ids, or pass `--no-companion`
   to merge inline).
 - `--no-companion` forces inline merge even if a companion exists; `--companion`
@@ -4104,17 +4117,17 @@ between arguments is preserved.
 
 ```bash
 # Translate the merge changes into English voiceover cells too.
-clm voiceover sync slides.py "Teil *.mp4" --lang de --propagate-to en
+clm harvest autopilot slides.py "Teil *.mp4" --lang de --propagate-to en
 # Dry-run emits both the de diff and the en diff.
-clm voiceover sync slides.py "Teil *.mp4" --lang de --propagate-to en --dry-run
+clm harvest autopilot slides.py "Teil *.mp4" --lang de --propagate-to en --dry-run
 ```
 
-#### `clm voiceover transcribe`
+#### `clm harvest transcribe`
 
 Extract transcript from a video file.
 
 ```
-clm voiceover transcribe VIDEO [OPTIONS]
+clm harvest transcribe VIDEO [OPTIONS]
 ```
 
 | Option | Description |
@@ -4125,24 +4138,24 @@ clm voiceover transcribe VIDEO [OPTIONS]
 | `--device [auto\|cpu\|cuda]` | Device for transcription (default: `auto`) |
 | `-o, --output PATH` | Output file |
 
-#### `clm voiceover detect`
+#### `clm harvest detect`
 
 Detect slide transitions in a video using frame differencing.
 
 ```
-clm voiceover detect VIDEO [OPTIONS]
+clm harvest detect VIDEO [OPTIONS]
 ```
 
 | Option | Description |
 |--------|-------------|
 | `-o, --output PATH` | Output file |
 
-#### `clm voiceover identify`
+#### `clm harvest identify`
 
 Match video frames to slides using OCR + fuzzy matching.
 
 ```
-clm voiceover identify VIDEO SLIDES --lang {de|en} [OPTIONS]
+clm harvest identify VIDEO SLIDES --lang {de|en} [OPTIONS]
 ```
 
 | Option | Description |
@@ -4150,7 +4163,7 @@ clm voiceover identify VIDEO SLIDES --lang {de|en} [OPTIONS]
 | `--lang TEXT` | Video language (`de` or `en`) (required) |
 | `-o, --output PATH` | Output file |
 
-#### `clm voiceover identify-rev`
+#### `clm harvest identify-rev`
 
 Identify which historical revision of a slide file a recording was made
 against. Walks the git history of the slide file, builds a fingerprint
@@ -4160,10 +4173,10 @@ Revisions at the boundary of a narrative-heavy commit run (likely
 recording-session markers) receive a multiplicative prior.
 
 Used standalone as a diagnostic, or as the first step of the backfill
-pipeline before `clm voiceover sync` is run against a specific revision.
+pipeline before `clm harvest autopilot` is run against a specific revision.
 
 ```
-clm voiceover identify-rev SLIDE_FILE VIDEO... --lang {de|en} [OPTIONS]
+clm harvest identify-rev SLIDE_FILE VIDEO... --lang {de|en} [OPTIONS]
 ```
 
 | Option | Description |
@@ -4176,18 +4189,18 @@ clm voiceover identify-rev SLIDE_FILE VIDEO... --lang {de|en} [OPTIONS]
 
 If the top-ranked revision scores below ~0.6 the command prints a
 warning suggesting you force a specific revision downstream. Re-using
-the transitions cache (written by `detect`/`sync`/`identify`) keeps
+the transitions cache (written by `detect`/`autopilot`/`identify`) keeps
 repeated runs fast.
 
-#### `clm voiceover sync-at-rev`
+#### `clm harvest sync-at-rev`
 
 Middle step of the backfill pipeline. Exports SLIDE_FILE as it existed
 at `--rev` to a scratch location via `git show` (never touches the
-working tree) and runs the full `sync` pipeline against that historical
+working tree) and runs the full `autopilot` pipeline against that historical
 version plus the supplied VIDEO parts. Output is written to `--output`.
 
 ```
-clm voiceover sync-at-rev SLIDE_FILE VIDEO... --rev SHA -o PATH --lang {de|en} [OPTIONS]
+clm harvest sync-at-rev SLIDE_FILE VIDEO... --rev SHA -o PATH --lang {de|en} [OPTIONS]
 ```
 
 | Option | Description |
@@ -4209,10 +4222,10 @@ clm voiceover sync-at-rev SLIDE_FILE VIDEO... --rev SHA -o PATH --lang {de|en} [
 | `--alignment PATH` | Skip ASR + detection + matching; load alignment JSON |
 | `--scratch-dir PATH` | Use this directory for the exported slide file (default: fresh `.clm/voiceover-backfill/<topic>-<ts>/`) |
 
-Use `clm voiceover backfill` to chain Step 1 (identify-rev), this
+Use `clm harvest backfill` to chain Step 1 (identify-rev), this
 command (Step 2), and Step 3 (port) in one shot.
 
-#### `clm voiceover backfill`
+#### `clm harvest backfill`
 
 One-shot wrapper that extracts voiceover content from old recordings
 onto the current SLIDE_FILE. Chains `identify-rev` → `sync-at-rev` →
@@ -4221,7 +4234,7 @@ onto the current SLIDE_FILE. Chains `identify-rev` → `sync-at-rev` →
 `--apply` is required to mutate the working-copy SLIDE_FILE.
 
 ```
-clm voiceover backfill SLIDE_FILE VIDEO... --lang {de|en} [OPTIONS]
+clm harvest backfill SLIDE_FILE VIDEO... --lang {de|en} [OPTIONS]
 ```
 
 | Option | Description |
@@ -4254,10 +4267,10 @@ also copied to
 above the timestamped scratch) so the "just show me the most recent
 diff" lookup is a predictable read.
 
-#### `clm voiceover port`
+#### `clm harvest port`
 
 Port polished voiceover content from one slide file onto another,
-file-to-file. Typical use: after running `clm voiceover sync` against
+file-to-file. Typical use: after running `clm harvest autopilot` against
 a historical revision exported to a scratch location, port the
 resulting voiceover cells onto the current HEAD slide file.
 
@@ -4269,7 +4282,7 @@ present on the target; baseline content is preserved unless directly
 contradicted.
 
 ```
-clm voiceover port SOURCE TARGET --lang {de|en} [OPTIONS]
+clm harvest port SOURCE TARGET --lang {de|en} [OPTIONS]
 ```
 
 | Option | Description |
@@ -4280,11 +4293,11 @@ clm voiceover port SOURCE TARGET --lang {de|en} [OPTIONS]
 | `--model TEXT` | Override the LLM model (default: `anthropic/claude-sonnet-4-6`) |
 | `--api-base TEXT` | Override the LLM API base URL |
 
-Prefer `clm voiceover backfill` when you want one-shot extraction plus
+Prefer `clm harvest backfill` when you want one-shot extraction plus
 porting in a single command with automatic git-revision detection;
 `port` is the file-to-file primitive that `backfill` composes.
 
-#### `clm voiceover compare`
+#### `clm harvest compare`
 
 Evaluate bullet-level differences between two slide-file revisions
 without modifying either one. Read-only sibling to `port`:
@@ -4295,7 +4308,7 @@ or for reviewing how voiceover drifted between two hand-edited
 revisions.
 
 ```
-clm voiceover compare SOURCE TARGET --lang {de|en} [OPTIONS]
+clm harvest compare SOURCE TARGET --lang {de|en} [OPTIONS]
 ```
 
 | Option | Description |
@@ -4316,7 +4329,7 @@ with per-slide outcomes. `--format markdown` renders the same data
 as a human-readable report (summary table + per-bucket sections
 grouped by `dropped` / `added` / `rewritten` / `manual_review`).
 
-#### `clm voiceover compare-from-inventory`
+#### `clm harvest compare-from-inventory`
 
 Compare a slide file against its historical recording, using a
 `video_to_slide_mapping.json` inventory to locate the video(s).
@@ -4324,7 +4337,7 @@ Composes `identify-rev` → `sync-at-rev` → `compare` into one call so
 per-topic shell wrappers are unnecessary.
 
 ```
-clm voiceover compare-from-inventory SLIDE_FILE --inventory PATH --lang {de|en} [OPTIONS]
+clm harvest compare-from-inventory SLIDE_FILE --inventory PATH --lang {de|en} [OPTIONS]
 ```
 
 | Option | Description |
@@ -4350,14 +4363,16 @@ is resolved against the directory containing the inventory JSON.
 Multi-part recordings (several inventory rows pointing at the same
 slide file) are passed to `sync-at-rev` in inventory order.
 
-#### `clm voiceover report`
+#### `clm harvest compare-report`
 
 Re-render a saved `compare --json` report in a different format
 without re-running the LLM judge. The JSON is the canonical artifact;
-this command just reshapes it.
+this command just reshapes it. Renamed from `clm voiceover report` in the
+CLM {version} harvest cutover so it does not clash with the primary
+`clm harvest report` verb.
 
 ```
-clm voiceover report REPORT.json [OPTIONS]
+clm harvest compare-report REPORT.json [OPTIONS]
 ```
 
 | Option | Description |
@@ -4365,14 +4380,14 @@ clm voiceover report REPORT.json [OPTIONS]
 | `--format {markdown,json,table}` | Output format (default: `markdown`) |
 | `-o, --output PATH` | Write the rendered report to this path (default: stdout) |
 
-#### `clm voiceover extract-training-data`
+#### `clm harvest extract-training-data`
 
 Extract training data from a voiceover merge trace log. Reads a JSONL trace
-log produced by `clm voiceover sync` and correlates each entry with the
+log produced by `clm harvest autopilot` and correlates each entry with the
 current slide file state to produce training triples suitable for fine-tuning.
 
 ```
-clm voiceover extract-training-data TRACE_LOG [OPTIONS]
+clm harvest extract-training-data TRACE_LOG [OPTIONS]
 ```
 
 | Option | Description |
@@ -4386,14 +4401,14 @@ Output fields per JSONL line: `input.baseline`, `input.transcript`,
 `llm_output`, `human_final`, `delta_vs_llm` (empty = no hand edits, valid
 positive training example).
 
-#### `clm voiceover cache`
+#### `clm harvest cache`
 
 Inspect and manage the voiceover artifact cache.
 
 ```
-clm voiceover cache list
-clm voiceover cache prune --max-age-days DAYS
-clm voiceover cache clear [--yes]
+clm harvest cache list
+clm harvest cache prune --max-age-days DAYS
+clm harvest cache clear [--yes]
 ```
 
 `list` groups entries by kind (`transcripts`, `transitions`, `timelines`,
@@ -4401,13 +4416,13 @@ clm voiceover cache clear [--yes]
 older than the given number of days. `clear` removes every entry (prompts
 for confirmation unless `--yes` is passed).
 
-#### `clm voiceover trace show`
+#### `clm harvest trace show`
 
 Render a trace log (`.clm/voiceover-traces/<stem>-<ts>.jsonl`) in a
 human-readable summary table, or dump the raw entries with `--json`.
 
 ```
-clm voiceover trace show PATH [--json]
+clm harvest trace show PATH [--json]
 ```
 
 The trace log schema is documented in `docs/claude/voiceover-design.md`
@@ -4416,36 +4431,36 @@ The trace log schema is documented in `docs/claude/voiceover-design.md`
 Examples:
 
 ```bash
-clm voiceover sync slides.py video.mp4 --lang de
-clm voiceover sync slides.py video.mp4 --lang de --dry-run
-clm voiceover sync slides.py "Teil 1.mp4" "Teil 2.mp4" "Teil 3.mp4" --lang de
-clm voiceover sync slides.py "Teil *.mp4" --lang de
-clm voiceover sync slides.py video.mp4 --lang de --overwrite
-clm voiceover sync slides.py video.mp4 --lang de --overwrite --mode verbatim
-clm voiceover sync slides.py video.mp4 --lang de --slides-range 5-20 --dry-run
-clm voiceover sync slides.py video.mp4 --lang de --no-companion
-clm voiceover extract-training-data .clm/voiceover-traces/slides_intro-20260412-012020.jsonl
-clm voiceover extract-training-data trace.jsonl -o training.jsonl --no-check-git
-clm voiceover transcribe video.mp4 --lang de -o transcript.txt
-clm voiceover detect video.mp4 -o transitions.txt
-clm voiceover identify video.mp4 slides.py --lang de
-clm voiceover identify-rev slides.py part1.mp4 part2.mp4 --lang de
-clm voiceover identify-rev slides.py recording.mp4 --lang en --top 10 --json
-clm voiceover port /tmp/slides-at-abc123.py slides.py --lang de --dry-run
-clm voiceover port old.py new.py --lang en
-clm voiceover sync-at-rev slides.py video.mp4 --rev abc1234 --lang de -o /tmp/synced.py
-clm voiceover backfill slides.py video.mp4 --lang de --auto
-clm voiceover backfill slides.py video.mp4 --lang en --rev abc1234 --apply
-clm voiceover compare /tmp/slides-at-abc123.py slides.py --lang de
-clm voiceover compare old.py new.py --lang en --json -o report.json
-clm voiceover compare old.py new.py --lang en --format markdown -o report.md
-clm voiceover compare-from-inventory slides/foo/slides.py \
+clm harvest autopilot slides.py video.mp4 --lang de
+clm harvest autopilot slides.py video.mp4 --lang de --dry-run
+clm harvest autopilot slides.py "Teil 1.mp4" "Teil 2.mp4" "Teil 3.mp4" --lang de
+clm harvest autopilot slides.py "Teil *.mp4" --lang de
+clm harvest autopilot slides.py video.mp4 --lang de --overwrite
+clm harvest autopilot slides.py video.mp4 --lang de --overwrite --mode verbatim
+clm harvest autopilot slides.py video.mp4 --lang de --slides-range 5-20 --dry-run
+clm harvest autopilot slides.py video.mp4 --lang de --no-companion
+clm harvest extract-training-data .clm/voiceover-traces/slides_intro-20260412-012020.jsonl
+clm harvest extract-training-data trace.jsonl -o training.jsonl --no-check-git
+clm harvest transcribe video.mp4 --lang de -o transcript.txt
+clm harvest detect video.mp4 -o transitions.txt
+clm harvest identify video.mp4 slides.py --lang de
+clm harvest identify-rev slides.py part1.mp4 part2.mp4 --lang de
+clm harvest identify-rev slides.py recording.mp4 --lang en --top 10 --json
+clm harvest port /tmp/slides-at-abc123.py slides.py --lang de --dry-run
+clm harvest port old.py new.py --lang en
+clm harvest sync-at-rev slides.py video.mp4 --rev abc1234 --lang de -o /tmp/synced.py
+clm harvest backfill slides.py video.mp4 --lang de --auto
+clm harvest backfill slides.py video.mp4 --lang en --rev abc1234 --apply
+clm harvest compare /tmp/slides-at-abc123.py slides.py --lang de
+clm harvest compare old.py new.py --lang en --json -o report.json
+clm harvest compare old.py new.py --lang en --format markdown -o report.md
+clm harvest compare-from-inventory slides/foo/slides.py \
     --inventory planning/video_to_slide_mapping.json --lang de --json -o report.json
-clm voiceover report report.json -o report.md
-clm voiceover cache list
-clm voiceover cache prune --max-age-days 30
-clm voiceover --no-cache sync slides.py video.mp4 --lang de
-clm voiceover trace show .clm/voiceover-traces/slides_intro-20260412-012020.jsonl
+clm harvest compare-report report.json -o report.md
+clm harvest cache list
+clm harvest cache prune --max-age-days 30
+clm harvest --no-cache autopilot slides.py video.mp4 --lang de
+clm harvest trace show .clm/voiceover-traces/slides_intro-20260412-012020.jsonl
 ```
 
 ### `clm slides polish`

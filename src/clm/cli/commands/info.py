@@ -59,6 +59,11 @@ TOPICS: dict[str, TopicInfo] = {
         "Agent workflow for `clm slides sync`: dry-run report tiers, realign residue, --verify",
         "sync-agents.md",
     ),
+    "harvest-agents": TopicInfo(
+        "harvest-agents",
+        "Agent workflow for `clm harvest`: report -> task -> accept loop for video narration",
+        "harvest-agents.md",
+    ),
 }
 
 

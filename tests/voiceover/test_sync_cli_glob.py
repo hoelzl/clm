@@ -13,7 +13,8 @@ from unittest.mock import patch
 import pytest
 from click.testing import CliRunner
 
-from clm.cli.commands.voiceover import _expand_video_args, voiceover_group
+from clm.cli.commands.harvest import harvest_group
+from clm.cli.commands.voiceover import _expand_video_args
 
 
 class TestExpandVideoArgs:
@@ -135,9 +136,9 @@ class TestSyncCliGlobIntegration:
         with patch("clm.voiceover.timeline.build_parts", side_effect=fake_build_parts):
             runner = CliRunner()
             result = runner.invoke(
-                voiceover_group,
+                harvest_group,
                 [
-                    "sync",
+                    "autopilot",
                     str(slide_file),
                     "Teil *.mp4",
                     "--lang",
@@ -155,9 +156,9 @@ class TestSyncCliGlobIntegration:
 
         runner = CliRunner()
         result = runner.invoke(
-            voiceover_group,
+            harvest_group,
             [
-                "sync",
+                "autopilot",
                 str(slide_file),
                 "nomatch*.mp4",
                 "--lang",
@@ -176,9 +177,9 @@ class TestSyncCliGlobIntegration:
 
         runner = CliRunner()
         result = runner.invoke(
-            voiceover_group,
+            harvest_group,
             [
-                "sync",
+                "autopilot",
                 str(slide_file),
                 "missing.mp4",
                 "--lang",

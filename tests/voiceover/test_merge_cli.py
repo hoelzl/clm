@@ -11,7 +11,8 @@ from unittest.mock import patch
 import pytest
 from click.testing import CliRunner
 
-from clm.cli.commands.voiceover import sync, voiceover_group
+from clm.cli.commands.harvest import harvest_group
+from clm.cli.commands.voiceover import sync
 
 
 class TestVerbatimMergeError:
@@ -28,9 +29,9 @@ class TestVerbatimMergeError:
 
         runner = CliRunner()
         result = runner.invoke(
-            voiceover_group,
+            harvest_group,
             [
-                "sync",
+                "autopilot",
                 str(slide_file),
                 str(video_file),
                 "--lang",
@@ -56,9 +57,9 @@ class TestVerbatimMergeError:
 
         runner = CliRunner()
         result = runner.invoke(
-            voiceover_group,
+            harvest_group,
             [
-                "sync",
+                "autopilot",
                 str(slide_file),
                 str(video_file),
                 "--lang",
@@ -85,9 +86,9 @@ class TestSyncOverwriteFlag:
         runner = CliRunner()
         # Just check that the flag is accepted (pipeline will fail on video)
         result = runner.invoke(
-            voiceover_group,
+            harvest_group,
             [
-                "sync",
+                "autopilot",
                 str(slide_file),
                 str(video_file),
                 "--lang",
@@ -107,9 +108,9 @@ class TestSyncOverwriteFlag:
 
         runner = CliRunner()
         result = runner.invoke(
-            voiceover_group,
+            harvest_group,
             [
-                "sync",
+                "autopilot",
                 str(slide_file),
                 str(video_file),
                 "--lang",
@@ -125,10 +126,10 @@ class TestSyncHelpText:
 
     def test_help_mentions_merge(self):
         runner = CliRunner()
-        result = runner.invoke(voiceover_group, ["sync", "--help"])
+        result = runner.invoke(harvest_group, ["autopilot", "--help"])
         assert "--overwrite" in result.output
 
     def test_help_mentions_overwrite(self):
         runner = CliRunner()
-        result = runner.invoke(voiceover_group, ["sync", "--help"])
+        result = runner.invoke(harvest_group, ["autopilot", "--help"])
         assert "Overwrite" in result.output or "overwrite" in result.output

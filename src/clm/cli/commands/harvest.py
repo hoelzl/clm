@@ -85,17 +85,22 @@ def harvest_group(ctx, cache_root, no_cache, refresh_cache):
     Verbs:
       report        what did the recording say, slide by slide? (read-only)
       task          frame one slide's curation/translation judgment (read-only)
-      accept        validate a bullet-list answer + write it (the only write path)
-      verify        structural post-check on the pair (same engine as sync verify)
+      accept        validate a bullet-list answer + write it (the agent write path)
+      verify        structural post-check on the pair
+      autopilot     legacy all-in-one WITH embedded models (agent-less humans)
+      backfill      identify-rev → sync-at-rev → port over historical revisions
+      port          transfer voiceover between slide files (LLM merge)
+      compare       LLM diff of voiceover between two slide files
       transcribe    ASR only: dump the transcript (diagnostic)
       detect        slide-transition detection only (diagnostic)
       identify      which slides appear in a video? (diagnostic)
       identify-rev  which git revision of a deck was recorded? (diagnostic)
+      sync-at-rev   run autopilot against a historical revision (scratch output)
       cache         inspect/prune the artifact cache
       trace         inspect merge trace logs
 
     \b
-    The agent loop:
+    The agent loop (see `clm info harvest-agents`):
       harvest report → (task → judge → accept [--record])* → verify
       → clm slides sync report   (twin translation continues there)
 
@@ -607,26 +612,49 @@ def _print_human_report(report: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Re-homed diagnostics (shared with `clm voiceover` until the Phase-4 cutover)
+# The video-side verbs (implementations live in clm.cli.commands.voiceover —
+# the module keeps the code; this group is their only registration since the
+# Phase-4 cutover, no aliases)
 # ---------------------------------------------------------------------------
 
 
-def _register_diagnostics() -> None:
+def _register_video_verbs() -> None:
     from clm.cli.commands.voiceover import (
+        backfill_cmd,
         cache_group,
+        compare_cmd,
+        compare_from_inventory_cmd,
+        debug_group,
         detect,
+        extract_training_data,
         identify,
         identify_rev_cmd,
+        port_voiceover_cmd,
+        report_cmd,
+        sync,
+        sync_at_rev_cmd,
         trace_group,
         transcribe,
     )
 
-    harvest_group.add_command(transcribe)
-    harvest_group.add_command(detect)
-    harvest_group.add_command(identify)
-    harvest_group.add_command(identify_rev_cmd, name="identify-rev")
-    harvest_group.add_command(cache_group, name="cache")
-    harvest_group.add_command(trace_group, name="trace")
+    for command in (
+        sync,  # @click.command("autopilot") — the embedded-model one-shot
+        transcribe,
+        detect,
+        identify,
+        identify_rev_cmd,
+        sync_at_rev_cmd,
+        port_voiceover_cmd,
+        compare_cmd,
+        report_cmd,  # @click.command("compare-report")
+        compare_from_inventory_cmd,
+        backfill_cmd,
+        extract_training_data,
+        cache_group,
+        trace_group,
+        debug_group,
+    ):
+        harvest_group.add_command(command)
 
 
-_register_diagnostics()
+_register_video_verbs()

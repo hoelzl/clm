@@ -20,6 +20,14 @@ from clm.mcp.tools import (
     handle_course_outline,
     handle_extract_voiceover,
     handle_get_language_view,
+    handle_harvest_backfill_dry,
+    handle_harvest_cache_list,
+    handle_harvest_compare,
+    handle_harvest_identify_rev,
+    handle_harvest_report,
+    handle_harvest_task,
+    handle_harvest_trace_show,
+    handle_harvest_transcribe,
     handle_inline_voiceover,
     handle_normalize_slides,
     handle_resolve_topic,
@@ -28,12 +36,6 @@ from clm.mcp.tools import (
     handle_sync_report,
     handle_validate_slides,
     handle_validate_spec,
-    handle_voiceover_backfill_dry,
-    handle_voiceover_cache_list,
-    handle_voiceover_compare,
-    handle_voiceover_identify_rev,
-    handle_voiceover_trace_show,
-    handle_voiceover_transcribe,
 )
 
 logger = logging.getLogger(__name__)
@@ -416,7 +418,7 @@ def create_server(data_dir: Path) -> FastMCP:
         )
 
     @mcp.tool()
-    async def voiceover_transcribe(
+    async def harvest_transcribe(
         video: str,
         lang: str | None = None,
         backend: str = "faster-whisper",
@@ -432,7 +434,7 @@ def create_server(data_dir: Path) -> FastMCP:
         computes + caches on miss.  Returns a JSON summary (segment
         count, duration, first/last segment) — not the full transcript,
         to keep MCP round-trips small.  For the full transcript, call
-        ``clm voiceover transcribe`` from the shell.
+        ``clm harvest transcribe`` from the shell.
 
         Args:
             video: Path to the video (absolute or relative to data_dir).
@@ -444,7 +446,7 @@ def create_server(data_dir: Path) -> FastMCP:
             refresh_cache: Force recompute + overwrite cache.
             cache_root: Override ``.clm/voiceover-cache`` location.
         """
-        return await handle_voiceover_transcribe(
+        return await handle_harvest_transcribe(
             video,
             data_dir,
             lang=lang,
@@ -457,7 +459,7 @@ def create_server(data_dir: Path) -> FastMCP:
         )
 
     @mcp.tool()
-    async def voiceover_identify_rev(
+    async def harvest_identify_rev(
         slide_file: str,
         videos: list[str],
         lang: str,
@@ -483,9 +485,9 @@ def create_server(data_dir: Path) -> FastMCP:
             limit: Maximum commits to score (most recent first).
             since: git-log ``--since`` filter (e.g. "6 months ago").
             no_cache / refresh_cache / cache_root: cache controls
-                (see ``voiceover_transcribe``).
+                (see ``harvest_transcribe``).
         """
-        return await handle_voiceover_identify_rev(
+        return await handle_harvest_identify_rev(
             slide_file,
             videos,
             data_dir,
@@ -499,7 +501,7 @@ def create_server(data_dir: Path) -> FastMCP:
         )
 
     @mcp.tool()
-    async def voiceover_compare(
+    async def harvest_compare(
         source: str,
         target: str,
         lang: str,
@@ -511,7 +513,7 @@ def create_server(data_dir: Path) -> FastMCP:
         For each matched slide pair, the LLM labels every bullet as
         ``covered`` / ``rewritten`` / ``added`` / ``dropped`` /
         ``manual_review``.  Neither file is modified.  ``source`` is
-        usually produced by ``clm voiceover sync-at-rev`` against the
+        usually produced by ``clm harvest sync-at-rev`` against the
         recording's identified revision; ``target`` is the current HEAD.
 
         Args:
@@ -521,7 +523,7 @@ def create_server(data_dir: Path) -> FastMCP:
             model: Override the judge LLM model.
             api_base: Override the LLM API base URL.
         """
-        return await handle_voiceover_compare(
+        return await handle_harvest_compare(
             source,
             target,
             data_dir,
@@ -531,7 +533,7 @@ def create_server(data_dir: Path) -> FastMCP:
         )
 
     @mcp.tool()
-    async def voiceover_backfill_dry(
+    async def harvest_backfill_dry(
         slide_file: str,
         videos: list[str],
         lang: str,
@@ -548,7 +550,7 @@ def create_server(data_dir: Path) -> FastMCP:
     ) -> str:
         """Preview a backfill: identify-rev → sync-at-rev → port (no writes).
 
-        Runs ``clm voiceover backfill --dry-run`` as a subprocess and
+        Runs ``clm harvest backfill --dry-run`` as a subprocess and
         returns its stdout/stderr plus the unified-diff preview.  The
         working-copy slide file is never mutated; ``--apply`` is
         intentionally CLI-only.
@@ -563,7 +565,7 @@ def create_server(data_dir: Path) -> FastMCP:
             top / tag / whisper_model / backend / device / model /
                 api_base: passed through to backfill.
         """
-        return await handle_voiceover_backfill_dry(
+        return await handle_harvest_backfill_dry(
             slide_file,
             videos,
             data_dir,
@@ -581,17 +583,17 @@ def create_server(data_dir: Path) -> FastMCP:
         )
 
     @mcp.tool()
-    async def voiceover_cache_list(cache_root: str | None = None) -> str:
+    async def harvest_cache_list(cache_root: str | None = None) -> str:
         """List entries in the voiceover artifact cache.
 
         Args:
             cache_root: Override the default ``.clm/voiceover-cache``
                 location.  Omit to use the project default.
         """
-        return await handle_voiceover_cache_list(data_dir, cache_root=cache_root)
+        return await handle_harvest_cache_list(data_dir, cache_root=cache_root)
 
     @mcp.tool()
-    async def voiceover_trace_show(path: str) -> str:
+    async def harvest_trace_show(path: str) -> str:
         """Read a voiceover trace log and return its entries as JSON.
 
         Trace logs live under ``.clm/voiceover-traces/*.jsonl`` and
@@ -602,7 +604,122 @@ def create_server(data_dir: Path) -> FastMCP:
             path: Path to the trace JSONL file (absolute or relative to
                 the data directory).
         """
-        return await handle_voiceover_trace_show(path, data_dir)
+        return await handle_harvest_trace_show(path, data_dir)
+
+    @mcp.tool()
+    async def harvest_report(
+        slides: str,
+        videos: list[str],
+        lang: str,
+        transcript: str | None = None,
+        alignment: str | None = None,
+        whisper_model: str = "large-v3",
+        backend: str = "faster-whisper",
+        device: str = "auto",
+        no_cache: bool = False,
+        refresh_cache: bool = False,
+        cache_root: str | None = None,
+    ) -> str:
+        """What did the recording say, slide by slide? (read-only)
+
+        The MCP twin of ``clm harvest report --json``: runs the cached
+        deterministic tier (transcribe → detect transitions → OCR-match →
+        align) over the videos and joins the result with the v3 deck
+        bundle — one item per slide, keyed ``id:<slide_id>``, with the
+        aligned transcript, the voiceover baseline on both language sides,
+        and a structural novelty class (no_existing_vo |
+        transcript_adds_material | covered | unmatched_slide), plus
+        unmatched_speech per unassigned segment. No model, no key, no
+        writes.
+
+        Args:
+            slides: The recorded-language deck half (absolute or relative
+                to the data directory).
+            videos: Recording video file paths.
+            lang: The recorded (spoken) language ("de" or "en").
+            transcript: Skip ASR: load a precomputed transcript JSON
+                (from ``clm harvest transcribe -o``). Single-video only.
+            alignment: Skip ASR, detection, and matching: load a
+                precomputed alignment JSON (cache artifact shape).
+                Single-video only.
+            whisper_model / backend / device: ASR knobs.
+            no_cache / refresh_cache / cache_root: cache controls
+                (see ``harvest_transcribe``).
+        """
+        return await handle_harvest_report(
+            slides,
+            videos,
+            data_dir,
+            lang=lang,
+            transcript=transcript,
+            alignment=alignment,
+            whisper_model=whisper_model,
+            backend=backend,
+            device=device,
+            no_cache=no_cache,
+            refresh_cache=refresh_cache,
+            cache_root=cache_root,
+        )
+
+    @mcp.tool()
+    async def harvest_task(
+        slides: str,
+        videos: list[str],
+        lang: str,
+        slide: str | None = None,
+        kind: str = "curate",
+        transcript: str | None = None,
+        alignment: str | None = None,
+        whisper_model: str = "large-v3",
+        backend: str = "faster-whisper",
+        device: str = "auto",
+        no_cache: bool = False,
+        refresh_cache: bool = False,
+        cache_root: str | None = None,
+    ) -> str:
+        """Frame slide judgment tasks for the driving agent (read-only).
+
+        The MCP twin of ``clm harvest task``: assembles the same report as
+        ``harvest_report``, then frames per-slide curation/translation
+        judgment as task documents — caller instructions, structured
+        inputs (baseline voiceover on both sides, the aligned transcript,
+        slide content), the bullet-list ``answer_schema``, and the
+        freshness tokens (``baseline_fingerprints``,
+        ``video_fingerprint``). Read-only: writes go through
+        ``clm harvest accept`` on the CLI — by design there is no MCP
+        write path.
+
+        Args:
+            slides: The recorded-language deck half (absolute or relative
+                to the data directory).
+            videos: Recording video file paths.
+            lang: The recorded (spoken) language ("de" or "en").
+            slide: Frame one slide (bare id or ``id:...`` handle). Omit
+                to frame every actionable item.
+            kind: "curate" (merge the recorded language) or "translate"
+                (frame the twin side).
+            transcript / alignment: precomputed-input overrides (see
+                ``harvest_report``).
+            whisper_model / backend / device: ASR knobs.
+            no_cache / refresh_cache / cache_root: cache controls
+                (see ``harvest_transcribe``).
+        """
+        return await handle_harvest_task(
+            slides,
+            videos,
+            data_dir,
+            lang=lang,
+            slide=slide,
+            kind=kind,
+            transcript=transcript,
+            alignment=alignment,
+            whisper_model=whisper_model,
+            backend=backend,
+            device=device,
+            no_cache=no_cache,
+            refresh_cache=refresh_cache,
+            cache_root=cache_root,
+        )
 
     return mcp
 

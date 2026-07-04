@@ -153,4 +153,5 @@ class TestLoadTopicContent:
         assert "slide-format" in TOPICS
         assert "releases" in TOPICS
         assert "sync-agents" in TOPICS
-        assert len(TOPICS) == 8
+        assert "harvest-agents" in TOPICS
+        assert len(TOPICS) == 9

@@ -1,6 +1,7 @@
 """Voiceover command for synchronizing video recordings with slide speaker notes.
 
-This module provides the ``clm voiceover`` command group with subcommands
+This module provides the ``clm voiceover`` text-layer group plus the
+video-side command implementations registered under ``clm harvest``, with subcommands
 for the full sync pipeline and individual diagnostic steps.
 
 Requires the ``[voiceover]`` extra.
@@ -83,44 +84,21 @@ console = Console()
 
 
 @click.group("voiceover")
-@click.option(
-    "--cache-root",
-    type=click.Path(path_type=Path),
-    default=None,
-    help="Override the cache location (default: ./.clm/voiceover-cache).",
-)
-@click.option(
-    "--no-cache",
-    is_flag=True,
-    default=False,
-    help="Disable the artifact cache for this invocation.",
-)
-@click.option(
-    "--refresh-cache",
-    is_flag=True,
-    default=False,
-    help="Force recomputation and overwrite existing cache entries.",
-)
-@click.pass_context
-def voiceover_group(ctx, cache_root, no_cache, refresh_cache):
-    """Video-to-speaker-notes synchronization.
+def voiceover_group():
+    """The written-narration text layer of slide decks.
 
-    Transcribe a video recording and align the transcript to slides,
-    then insert or update voiceover/notes cells in the .py slide file.
+    \b
+    Verbs:
+      extract       move voiceover cells from a deck into its companion file
+      inline        merge companion voiceover cells back into the deck
+      inline-notes  migrate notes cells from companions back inline
 
-    Requires: pip install clm[voiceover]
+    Recovering narration from recorded videos lives under `clm harvest`
+    (report / task / accept / autopilot and the pipeline diagnostics).
     """
-    from clm.voiceover.cache import CachePolicy
-
-    ctx.ensure_object(dict)
-    ctx.obj["cache_policy"] = CachePolicy(
-        enabled=not no_cache,
-        refresh=refresh_cache,
-        cache_root=cache_root,
-    )
 
 
-@voiceover_group.command()
+@click.command("autopilot")
 @click.argument("slides", type=click.Path(exists=True, path_type=Path))
 @click.argument("videos", nargs=-1, required=True, type=str)
 @click.option("--lang", required=True, type=click.Choice(["de", "en"]), help="Video language.")
@@ -175,7 +153,7 @@ def voiceover_group(ctx, cache_root, no_cache, refresh_cache):
     default=None,
     help=(
         "Skip ASR and load a precomputed transcript from PATH (JSON produced "
-        "by `clm voiceover transcribe -o ...`). Must be a single-part JSON; "
+        "by `clm harvest transcribe -o ...`). Must be a single-part JSON; "
         "combine with a single VIDEO argument."
     ),
 )
@@ -239,11 +217,14 @@ def sync(
     propagate_to,
     layout,
 ):
-    """Synchronize speaker notes from one or more video recordings.
+    """The legacy all-in-one WITH embedded models (agent-less humans only).
 
     Transcribes each VIDEO part, detects slide transitions, matches them
     to SLIDES, and merges voiceover cells in the .py file (preserving
-    existing content). Use --overwrite to replace instead of merge.
+    existing content) using an embedded LLM call for the curation
+    judgment. Key-gated; never run this in CI. Driving agents use the
+    read-only loop instead: `harvest report` → `task` → `accept`
+    (see `clm info harvest-agents`).
 
     Multiple video parts are processed independently and merged into a
     single timeline using running offsets. Part ordering is authoritative
@@ -251,11 +232,10 @@ def sync(
 
     \b
     Examples:
-        clm voiceover sync slides.py video.mp4 --lang de
-        clm voiceover sync slides.py "Teil 1.mp4" "Teil 2.mp4" --lang de
-        clm voiceover sync slides.py "Teil *.mp4" --lang de
-        clm voiceover sync slides.py video.mp4 --lang de --overwrite
-        clm voiceover sync slides.py video.mp4 --lang de --no-companion
+        clm harvest autopilot slides.py video.mp4 --lang de
+        clm harvest autopilot slides.py "Teil 1.mp4" "Teil 2.mp4" --lang de
+        clm harvest autopilot slides.py video.mp4 --lang de --overwrite
+        clm harvest autopilot slides.py video.mp4 --lang de --no-companion
     """
     import warnings
 
@@ -1265,7 +1245,7 @@ def _print_diff_and_rewrite_warnings(
                 )
 
 
-@voiceover_group.command()
+@click.command()
 @click.argument("video", type=click.Path(exists=True, path_type=Path))
 @click.option("--lang", default=None, help="Language hint (e.g. 'de', 'en').")
 @click.option("--whisper-model", default="large-v3", help="Whisper model size.")
@@ -1323,7 +1303,7 @@ def transcribe(ctx, video, lang, whisper_model, backend_name, device, output):
         console.print_json(json.dumps(data, ensure_ascii=False))
 
 
-@voiceover_group.command()
+@click.command()
 @click.argument("video", type=click.Path(exists=True, path_type=Path))
 @click.option("-o", "--output", type=click.Path(path_type=Path), default=None)
 @click.pass_context
@@ -1371,7 +1351,7 @@ def detect(ctx, video, output):
         console.print(table)
 
 
-@voiceover_group.command()
+@click.command()
 @click.argument("video", type=click.Path(exists=True, path_type=Path))
 @click.argument("slides", type=click.Path(exists=True, path_type=Path))
 @click.option("--lang", required=True, type=click.Choice(["de", "en"]))
@@ -1454,7 +1434,7 @@ def identify(ctx, video, slides, lang, output):
         console.print(table)
 
 
-@voiceover_group.command("identify-rev")
+@click.command("identify-rev")
 @click.argument("slide_file", type=click.Path(exists=True, path_type=Path))
 @click.argument("videos", nargs=-1, required=True, type=click.Path(exists=True, path_type=Path))
 @click.option("--lang", required=True, type=click.Choice(["de", "en"]))
@@ -1493,12 +1473,12 @@ def identify_rev_cmd(ctx, slide_file, videos, lang, top, since, limit, as_json):
     recording-session markers) receive a multiplicative prior.
 
     Useful as a standalone diagnostic before running the full backfill
-    pipeline, or when handing a revision to `clm voiceover sync` manually.
+    pipeline, or when handing a revision to `clm harvest autopilot` manually.
 
     \b
     Examples:
-        clm voiceover identify-rev slides/topic_045/slides.py part1.mp4 part2.mp4 --lang de
-        clm voiceover identify-rev slides/topic_045/slides.py recording.mp4 --lang en --top 10
+        clm harvest identify-rev slides/topic_045/slides.py part1.mp4 part2.mp4 --lang de
+        clm harvest identify-rev slides/topic_045/slides.py recording.mp4 --lang en --top 10
     """
     from clm.voiceover.cache import CachePolicy
     from clm.voiceover.identify import identify_rev
@@ -1576,7 +1556,7 @@ def identify_rev_cmd(ctx, slide_file, videos, lang, top, since, limit, as_json):
         )
 
 
-@voiceover_group.command("sync-at-rev")
+@click.command("sync-at-rev")
 @click.argument("slide_file", type=click.Path(exists=True, path_type=Path))
 @click.argument("videos", nargs=-1, required=True, type=click.Path(exists=True, path_type=Path))
 @click.option(
@@ -1660,7 +1640,7 @@ def sync_at_rev_cmd(
     alignment_override,
     scratch_dir,
 ):
-    """Run ``clm voiceover sync`` against SLIDE_FILE as it existed at --rev.
+    """Run ``clm harvest autopilot`` against SLIDE_FILE as it existed at --rev.
 
     Exports the historical version of SLIDE_FILE to a scratch location
     via ``git show`` (never touches the working tree) and then runs the
@@ -1670,14 +1650,14 @@ def sync_at_rev_cmd(
     Typical use is the middle step of the backfill pipeline:
 
     \b
-    1. ``clm voiceover identify-rev`` suggests a SHA
-    2. ``clm voiceover sync-at-rev --rev <sha> -o scratch.py`` produces
+    1. ``clm harvest identify-rev`` suggests a SHA
+    2. ``clm harvest sync-at-rev --rev <sha> -o scratch.py`` produces
        voiceover cells against the historical slides
-    3. ``clm voiceover port scratch.py slide.py`` ports forward
+    3. ``clm harvest port scratch.py slide.py`` ports forward
 
     \b
     Examples:
-        clm voiceover sync-at-rev slides.py video.mp4 --rev abc1234 \\
+        clm harvest sync-at-rev slides.py video.mp4 --rev abc1234 \\
             --lang de -o /tmp/slides-at-abc1234-with-voiceover.py
     """
     import warnings
@@ -1749,7 +1729,7 @@ def sync_at_rev_cmd(
     )
 
 
-@voiceover_group.command("port")
+@click.command("port")
 @click.argument("source", type=click.Path(exists=True, path_type=Path))
 @click.argument("target", type=click.Path(exists=True, path_type=Path))
 @click.option("--lang", required=True, type=click.Choice(["de", "en"]), help="Slide language.")
@@ -1772,9 +1752,9 @@ def sync_at_rev_cmd(
 def port_voiceover_cmd(source, target, lang, dry_run, tag, model, api_base):
     """Port voiceover from SOURCE slide file onto TARGET slide file.
 
-    File-to-file transfer with no git involvement — use `clm voiceover
+    File-to-file transfer with no git involvement — use `clm harvest
     backfill` when you want history-aware extraction. SOURCE typically
-    comes from `clm voiceover sync-at-rev` against an older revision;
+    comes from `clm harvest sync-at-rev` against an older revision;
     TARGET is the current HEAD version.
 
     Slide matching uses slide_id as the primary key, falling back to
@@ -1785,8 +1765,8 @@ def port_voiceover_cmd(source, target, lang, dry_run, tag, model, api_base):
 
     \b
     Examples:
-        clm voiceover port /tmp/slides-at-abc123.py slides.py --lang de
-        clm voiceover port old.py new.py --lang en --dry-run
+        clm harvest port /tmp/slides-at-abc123.py slides.py --lang de
+        clm harvest port old.py new.py --lang en --dry-run
     """
     notes_map = _port_voiceover_notes(
         source=source,
@@ -1935,7 +1915,7 @@ def _emit_unified_diff(target: Path, original_text: str, updated_text: str) -> N
             console.print(line)
 
 
-@voiceover_group.command("compare")
+@click.command("compare")
 @click.argument("source", type=click.Path(exists=True, path_type=Path))
 @click.argument("target", type=click.Path(exists=True, path_type=Path))
 @click.option("--lang", required=True, type=click.Choice(["de", "en"]), help="Slide language.")
@@ -1973,7 +1953,7 @@ def compare_cmd(source, target, lang, as_json, fmt, output, model, api_base):
     """Evaluate voiceover differences between SOURCE and TARGET slide files.
 
     Read-only sibling to ``port``. SOURCE typically comes
-    from ``clm voiceover sync-at-rev`` against an older revision;
+    from ``clm harvest sync-at-rev`` against an older revision;
     TARGET is the current HEAD version. For each matched slide pair,
     the LLM labels every bullet as ``covered`` / ``rewritten`` /
     ``added`` / ``dropped`` / ``manual_review``. Neither file is
@@ -1981,8 +1961,8 @@ def compare_cmd(source, target, lang, as_json, fmt, output, model, api_base):
 
     \b
     Examples:
-        clm voiceover compare /tmp/slides-at-abc123.py slides.py --lang de
-        clm voiceover compare old.py new.py --lang en --json -o report.json
+        clm harvest compare /tmp/slides-at-abc123.py slides.py --lang de
+        clm harvest compare old.py new.py --lang en --json -o report.json
     """
     if as_json and fmt is not None and fmt != "json":
         raise click.UsageError(
@@ -2041,7 +2021,7 @@ def _emit_compare_report(
         console.print(f"\n[bold green]Wrote report to {output}[/bold green]")
 
 
-@voiceover_group.command("report")
+@click.command("compare-report")
 @click.argument("report_json", type=click.Path(exists=True, path_type=Path))
 @click.option(
     "--format",
@@ -2059,7 +2039,7 @@ def _emit_compare_report(
     help="Write the rendered report to this path (default: stdout).",
 )
 def report_cmd(report_json, fmt, output):
-    """Re-render a saved ``clm voiceover compare --json`` report.
+    """Re-render a saved ``clm harvest compare --json`` report.
 
     The JSON report is the canonical artifact; this command renders it
     in whichever format is convenient (default: Markdown).  Use this
@@ -2068,8 +2048,8 @@ def report_cmd(report_json, fmt, output):
 
     \b
     Examples:
-        clm voiceover compare old.py new.py --lang de --json -o report.json
-        clm voiceover report report.json -o report.md
+        clm harvest compare old.py new.py --lang de --json -o report.json
+        clm harvest compare-report report.json -o report.md
     """
     from clm.voiceover.compare import render_markdown
 
@@ -2236,7 +2216,7 @@ def _compare_report_lines(report: CompareReport) -> list[str]:
     return lines
 
 
-@voiceover_group.command("compare-from-inventory")
+@click.command("compare-from-inventory")
 @click.argument("slide_file", type=click.Path(exists=True, path_type=Path))
 @click.option(
     "--inventory",
@@ -2353,7 +2333,7 @@ def compare_from_inventory_cmd(
 
     \b
     Examples:
-        clm voiceover compare-from-inventory \\
+        clm harvest compare-from-inventory \\
             slides/module_550_ml_azav/topic_016_web_services_intro_azav/slides_010v_web_services_intro.py \\
             --inventory ../PythonCourses/planning/video_to_slide_mapping.json \\
             --lang de --json -o report.json
@@ -2464,7 +2444,7 @@ def compare_from_inventory_cmd(
             shutil.rmtree(scratch, ignore_errors=True)
 
 
-@voiceover_group.command("backfill")
+@click.command("backfill")
 @click.argument("slide_file", type=click.Path(exists=True, path_type=Path))
 @click.argument("videos", nargs=-1, required=True, type=click.Path(exists=True, path_type=Path))
 @click.option("--lang", required=True, type=click.Choice(["de", "en"]), help="Video language.")
@@ -2565,9 +2545,9 @@ def backfill_cmd(
 
     \b
     Examples:
-        clm voiceover backfill slides.py video.mp4 --lang de --auto
-        clm voiceover backfill slides.py video.mp4 --lang en --rev abc1234
-        clm voiceover backfill slides.py "Teil 1.mp4" "Teil 2.mp4" \\
+        clm harvest backfill slides.py video.mp4 --lang de --auto
+        clm harvest backfill slides.py video.mp4 --lang en --rev abc1234
+        clm harvest backfill slides.py "Teil 1.mp4" "Teil 2.mp4" \\
             --lang de --auto --apply
     """
     import shutil
@@ -2762,7 +2742,7 @@ def _backfill_identify_rev(
     return picked.rev
 
 
-@voiceover_group.command("extract-training-data")
+@click.command("extract-training-data")
 @click.argument("trace_log", type=click.Path(exists=True, path_type=Path))
 @click.option(
     "--base-dir",
@@ -2785,7 +2765,7 @@ def _backfill_identify_rev(
 def extract_training_data(trace_log, base_dir, tag, no_check_git, output):
     """Extract training data from a voiceover merge trace log.
 
-    Reads a JSONL trace log produced by `clm voiceover sync` and
+    Reads a JSONL trace log produced by `clm harvest autopilot` and
     correlates each entry with the current slide file state to produce
     training triples. Each output line contains the LLM merge input,
     output, and the human-edited final version.
@@ -2800,9 +2780,9 @@ def extract_training_data(trace_log, base_dir, tag, no_check_git, output):
 
     \b
     Examples:
-        clm voiceover extract-training-data .clm/voiceover-traces/slides_intro-20260412-012020.jsonl
-        clm voiceover extract-training-data trace.jsonl -o training.jsonl
-        clm voiceover extract-training-data trace.jsonl --no-check-git
+        clm harvest extract-training-data .clm/voiceover-traces/slides_intro-20260412-012020.jsonl
+        clm harvest extract-training-data trace.jsonl -o training.jsonl
+        clm harvest extract-training-data trace.jsonl --no-check-git
     """
     from clm.voiceover.training_export import extract_training_data as do_extract
 
@@ -2849,7 +2829,7 @@ def _parse_range(range_str: str) -> tuple[int, int]:
 
 
 def _load_transcript_override(path: Path):
-    """Load a JSON transcript produced by ``clm voiceover transcribe -o``.
+    """Load a JSON transcript produced by ``clm harvest transcribe -o``.
 
     Accepts both the flat CLI output format (``{"language", "duration",
     "segments": [...]}``) and the canonical ``Transcript.to_dict()`` form,
@@ -2962,7 +2942,7 @@ def _display_notes_summary(notes_map: dict[int, str], slide_groups: list):
     console.print(table)
 
 
-@voiceover_group.group("cache")
+@click.group("cache")
 def cache_group():
     """Inspect and manage the voiceover artifact cache.
 
@@ -3050,7 +3030,7 @@ def cache_clear_cmd(ctx, yes):
     console.print(f"[green]Removed {removed} cache entries from {root}.[/green]")
 
 
-@voiceover_group.group("trace")
+@click.group("trace")
 def trace_group():
     """Inspect voiceover merge trace logs.
 
@@ -3116,7 +3096,7 @@ def trace_show_cmd(path, as_json):
     console.print(table)
 
 
-@voiceover_group.group("debug", hidden=True)
+@click.group("debug", hidden=True)
 def debug_group():
     """Diagnostic tools (unstable; hidden from --help).
 
@@ -3124,7 +3104,7 @@ def debug_group():
     (e.g. the backfill / identify-rev pipeline). They are authoring-tool
     development aids, not part of the stable CLI surface, and may change
     or be removed without notice. Invoke by name explicitly:
-    ``clm voiceover debug <subcommand>``.
+    ``clm harvest debug <subcommand>``.
     """
 
 
@@ -3175,8 +3155,8 @@ def voiceover_commits_cmd(slide_file, since, limit, threshold, floor, as_json):
 
     \b
     Examples:
-        clm voiceover debug voiceover-commits slides/topic_045/slides.py
-        clm voiceover debug voiceover-commits slides/topic_045/slides.py \\
+        clm harvest debug voiceover-commits slides/topic_045/slides.py
+        clm harvest debug voiceover-commits slides/topic_045/slides.py \\
             --since '6 months ago' --threshold 0.6
     """
     from clm.voiceover.narrative_commits import NarrativeRun, scan_slide_file

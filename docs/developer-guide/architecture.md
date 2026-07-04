@@ -297,7 +297,7 @@ definition is mechanical:
 - `clm <group> <cmd>` → `commands/<group>/<cmd>.py` for package groups
   (`slides/`, `course/`, `export/`; dashes become underscores), or
   `commands/<group>.py` when the whole group is one cohesive module
-  (`calendar.py`, `db.py`, `git.py`, `voiceover.py`, ...)
+  (`calendar.py`, `db.py`, `git.py`, `harvest.py`, `voiceover.py`, ...)
 
 Each group registers its own subcommands where it is defined;
 `main.py` is the single manifest that assembles the top level.
@@ -1101,9 +1101,12 @@ drive slide authoring. Entry points: `server.create_server(data_dir)` /
 
 ### `clm.voiceover` (video → speaker notes)
 
-Video-to-speaker-notes pipeline used by `clm voiceover sync`/`transcribe`/
-`detect`/`identify`. Pluggable transcription backends (faster-whisper default,
-Cohere, Granite). Requires `[voiceover]`.
+Video-to-speaker-notes pipeline used by the `clm harvest` group
+(`report`/`task`/`accept`, `autopilot`, `transcribe`/`detect`/`identify`, …).
+The CLI surface moved from `clm voiceover` to `clm harvest` in the epic-#546
+cutover, but the Python package keeps its `clm.voiceover` name and layout.
+Pluggable transcription backends (faster-whisper default, Cohere, Granite).
+Requires `[voiceover]`.
 
 - `transcribe` — Whisper ASR with backend Protocol.
 - `keyframes` — frame extraction and transition detection.

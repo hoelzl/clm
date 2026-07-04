@@ -35,12 +35,14 @@ EXPECTED_TOOLS = {
     "voiceover_extract",
     "voiceover_inline",
     "authoring_rules",
-    "voiceover_transcribe",
-    "voiceover_identify_rev",
-    "voiceover_compare",
-    "voiceover_backfill_dry",
-    "voiceover_cache_list",
-    "voiceover_trace_show",
+    "harvest_transcribe",
+    "harvest_identify_rev",
+    "harvest_compare",
+    "harvest_backfill_dry",
+    "harvest_cache_list",
+    "harvest_trace_show",
+    "harvest_report",
+    "harvest_task",
 }
 
 
