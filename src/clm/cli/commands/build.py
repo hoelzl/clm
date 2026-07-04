@@ -1471,6 +1471,11 @@ async def process_course_with_backend(
             # totals (and any output_path_conflict warnings) appear
             # exactly once per build.
             build_reporter.report_output_writes(backend.output_write_registry)
+            summary = build_reporter.finish_build()
+            # Run the sweep after finish_build: show_summary stops the
+            # Rich live progress display, so the "Sweeping stale output
+            # files..." notice prints below the summary instead of being
+            # pushed above the still-active progress bar.
             _maybe_run_sweep(
                 config=config,
                 root_dirs=root_dirs,
@@ -1478,7 +1483,6 @@ async def process_course_with_backend(
                 build_reporter=build_reporter,
                 only_sections_mode=only_sections_mode,
             )
-            summary = build_reporter.finish_build()
             build_reporter.cleanup()
         return summary
 
