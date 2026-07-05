@@ -52,16 +52,40 @@ from clm.infrastructure.utils.path_utils import (
 logger = logging.getLogger(__name__)
 
 
+def _files_byte_equal(src, dst, *, chunk_size=1 << 20) -> bool:
+    """Compare two files' contents chunk by chunk.
+
+    Deliberately not ``filecmp.cmp``: its module-level cache is keyed by
+    (paths, size, mtime) — exactly the signature that collides in the case
+    this comparison exists to disambiguate (issue #562).
+    """
+    with open(src, "rb") as f1, open(dst, "rb") as f2:
+        while True:
+            b1 = f1.read(chunk_size)
+            b2 = f2.read(chunk_size)
+            if b1 != b2:
+                return False
+            if not b1:
+                return True
+
+
 def _copy2_if_changed(src, dst, *, follow_symlinks=True):
     """``shutil.copy2`` that skips the write when ``dst`` already matches ``src``.
 
-    "Matches" means equal size and equal mtime (nanosecond resolution) —
-    the rsync-style quick check. Because ``copy2`` preserves the source
-    mtime via ``copystat``, an unchanged source compares equal on every
-    subsequent build, so rebuilds don't rewrite identical dir-group trees
-    (needless SSD wear for e.g. a vendored Catch2). Content is not hashed:
-    a file whose bytes changed without touching size or mtime is not
-    detected, the same trade-off rsync's default mode makes.
+    The rsync-style quick check (equal size + mtime in nanosecond
+    resolution) is only a pre-filter; a skip additionally requires the
+    contents to compare byte-equal. Two *different* sources can collide on
+    size and mtime tick — e.g. overlapping dir-groups writing the same
+    destination, whose copy operations are deliberately kept for conflict
+    detection — and skipping on the quick check alone then leaves the
+    first writer's bytes in place and masks the conflict, because
+    dir-group registration hashes the destination (issue #562).
+
+    Because ``copy2`` preserves the source mtime via ``copystat``, an
+    unchanged source passes the pre-filter on every subsequent build, so
+    rebuilds still don't rewrite identical dir-group trees (needless SSD
+    wear for e.g. a vendored Catch2) — they only re-read them, which is
+    cheap and page-cached.
 
     Signature is ``copytree``-compatible so it can be passed as
     ``copy_function``.
@@ -69,12 +93,15 @@ def _copy2_if_changed(src, dst, *, follow_symlinks=True):
     try:
         src_stat = os.stat(src, follow_symlinks=follow_symlinks)
         dst_stat = os.stat(dst, follow_symlinks=follow_symlinks)
-    except OSError:
-        pass
-    else:
-        if src_stat.st_size == dst_stat.st_size and src_stat.st_mtime_ns == dst_stat.st_mtime_ns:
+        if (
+            src_stat.st_size == dst_stat.st_size
+            and src_stat.st_mtime_ns == dst_stat.st_mtime_ns
+            and _files_byte_equal(src, dst)
+        ):
             logger.debug(f"Skipping unchanged file '{src}' -> {dst}")
             return dst
+    except OSError:
+        pass
     return shutil.copy2(src, dst, follow_symlinks=follow_symlinks)
 
 

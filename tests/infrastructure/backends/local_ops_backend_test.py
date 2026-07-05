@@ -102,6 +102,61 @@ async def test_copy_dir_group_skips_unchanged_files(tmp_path, monkeypatch):
     assert (output_dir / "dir_1/file_1.txt").read_text() == "changed content"
 
 
+async def test_copy_dir_group_size_mtime_collision_still_copies(tmp_path):
+    """A different-content source that collides on size+mtime must be copied.
+
+    Regression test for issue #562: two overlapping dir-group writers whose
+    sources have equal size and equal st_mtime_ns (realistic for files
+    created in the same instant) were conflated by the rsync-style quick
+    check — the second copy was silently skipped, leaving the first
+    writer's bytes in place and masking conflict detection (which hashes
+    the destination). The quick check is only a pre-filter now; a skip
+    requires byte-equal contents.
+    """
+    import os
+
+    src_a = tmp_path / "src_a"
+    src_b = tmp_path / "src_b"
+    src_a.mkdir()
+    src_b.mkdir()
+    file_a = src_a / "shared.txt"
+    file_b = src_b / "shared.txt"
+    file_a.write_text("version A")
+    file_b.write_text("version B")  # same size as "version A"
+    # Force the exact st_mtime_ns collision the flaky failures hit by chance.
+    stat_a = os.stat(file_a)
+    os.utime(file_b, ns=(stat_a.st_atime_ns, stat_a.st_mtime_ns))
+
+    output_dir = tmp_path / "out"
+    cd_a = CopyDirGroupData(
+        name="a",
+        source_dirs=(src_a,),
+        relative_paths=(Path("grp"),),
+        lang="en",
+        output_dir=output_dir,
+        recursive=False,
+    )
+    cd_b = CopyDirGroupData(
+        name="b",
+        source_dirs=(src_b,),
+        relative_paths=(Path("grp"),),
+        lang="en",
+        output_dir=output_dir,
+        recursive=False,
+    )
+
+    async with PytestLocalOpsBackend() as unit:
+        await unit.copy_dir_group_to_output(cd_a)
+        await unit.copy_dir_group_to_output(cd_b)
+
+        # Last writer wins on disk, and the registry sees the conflict.
+        assert (output_dir / "grp" / "shared.txt").read_text() == "version B"
+        assert unit.output_write_registry.total_conflicts == 1
+        conflicts = unit.output_write_registry.conflict_entries
+        assert conflicts[0].first_writer_source == file_a
+        assert conflicts[0].last_writer_source == file_b
+
+
 def build_copy_data(tmp_dir, input_files):
     input_dir = tmp_dir / "input"
     input_dir.mkdir(parents=True)
