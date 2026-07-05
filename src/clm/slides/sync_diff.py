@@ -647,7 +647,14 @@ class _Differ:
         """A current member with no base entry: add (snapshot) / cold (ledger)."""
         assert self.base is not None
         handle = member.key.render()
-        if not self.base.complete:
+        if not self.base.complete and not member.is_one_sided:
+            # A two-sided member with no ledger entry is COLD (design §5):
+            # confirm records trust, and both sides are present to confirm.
+            # A ONE-SIDED un-ledgered member is an insert that still needs a
+            # twin, so it must fall through to the translate_new / copy_new_shared
+            # branches below even in ledger mode — verify_cold offers only
+            # `confirm`, which apply rejects for a one-sided member, leaving no
+            # decision-document path to resolve it (issue #566).
             self.emit(
                 handle,
                 "unverified",
@@ -2176,9 +2183,15 @@ class _Differ:
 
         assert self.base is not None
         if not self.base.complete:
-            # Ledger mode: a pos member with no entry is COLD, never a
-            # mechanical add/copy (design §5 — the id-keyed path's rule,
-            # mirrored here).
+            # Ledger mode: a POSITIONAL (un-id'd) member with no entry is COLD,
+            # never a mechanical add/copy (design §5). Unlike the id-keyed path
+            # (which frames a one-sided insert translate_new / copy_new_shared,
+            # issue #566), a positional one-sided insert cannot be mirrored
+            # mechanically: ordinal aliasing pairs it with a *different* twin
+            # cell at the same slot, so the executor cannot locate the empty
+            # target — mint a slide_id to resolve it (the id-keyed path then
+            # grows the twin). Framing it cold keeps apply from emitting an
+            # unappliable mechanical row.
             for member in {id(m): m for m in matched_pairs + de_solo + en_solo}.values():
                 self.emit(
                     member.key.render(),

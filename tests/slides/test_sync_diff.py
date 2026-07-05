@@ -920,6 +920,48 @@ class TestAdversarialReviewRegressions:
         assert {i.action for i in diff.items} == {"verify_cold"}
         assert {i.outcome for i in diff.items} == {"unverified"}
 
+    def test_ledger_mode_one_sided_localized_add_is_translate_new_not_cold(self):
+        """issue #566: a NEW one-sided localized cell in a ledgered deck must be
+        framed ``translate_new`` (grow the twin), NOT ``verify_cold`` — whose
+        only answer, ``confirm``, apply rejects for a one-sided member, leaving
+        no decision-document path to resolve it. Two-sided cold members stay
+        ``verify_cold`` (both sides present to confirm)."""
+        base = _snapshot(DE0, EN0)
+        base.complete = False
+        de = DE0.replace(
+            '# %% [markdown] lang="de" slide_id="s0-m"',
+            _localized("s0-n", "de", "Neu").rstrip("\n") + "\n\n"
+            '# %% [markdown] lang="de" slide_id="s0-m"',
+        )
+        item = _only_item(_diff(base, de, EN0))  # EN unchanged → one-sided
+        assert (item.outcome, item.action) == ("add", "translate_new")
+        assert item.direction == "de_to_en"
+        assert item.key == "id:s0-n"
+
+    def test_ledger_mode_one_sided_idd_shared_add_is_copy_new_shared_not_cold(self):
+        """issue #566: a NEW one-sided *id-keyed* shared code cell in a ledgered
+        deck is ``copy_new_shared`` (verbatim to the twin), not a ``verify_cold``
+        dead end. (An un-id'd positional insert stays cold — ordinal aliasing
+        makes mechanical mirroring unsafe; mint a slide_id to resolve it.)"""
+        base = _snapshot(DE0, EN0)
+        base.complete = False
+        new = '# %% tags=["keep"] slide_id="z-cell"\nz = 9\n\n'
+        de = DE0.replace('# %% tags=["keep"]\nx = 1', new + '# %% tags=["keep"]\nx = 1')
+        item = _only_item(_diff(base, de, EN0))  # EN unchanged → one-sided
+        assert (item.outcome, item.action) == ("add", "copy_new_shared")
+        assert item.direction == "de_to_en"
+        assert item.key == "id:z-cell"
+
+    def test_ledger_mode_one_sided_unidd_positional_add_stays_cold(self):
+        """Un-id'd positional one-sided insert in a ledgered deck stays
+        ``verify_cold``: it cannot be mechanically mirrored (ordinal aliasing),
+        so the engine keeps it cold rather than emit an unappliable copy."""
+        base = _snapshot(DE0, EN0)
+        base.complete = False
+        de = DE0.replace('# %% tags=["keep"]\nx = 1', '# %%\nnew = 0\n\n# %% tags=["keep"]\nx = 1')
+        item = _only_item(_diff(base, de, EN0))
+        assert item.action == "verify_cold"
+
     def test_slide_id_containing_slash_does_not_crash(self):
         """MAJOR: '/' is legal in slide ids; pos-key parsing must rsplit."""
         de = _build(

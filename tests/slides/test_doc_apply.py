@@ -168,23 +168,82 @@ class TestMechanicalRows:
         assert deck.de_path.read_text(encoding="utf-8") == before
         deck.assert_converged()
 
-    def test_a_brand_new_member_is_cold_in_ledger_mode(self, tmp_path: Path):
-        # Design §5: a member with no ledger entry is UNVERIFIED, never a
-        # mechanical copy — the agent confirms (or records) it explicitly.
+    def test_two_sided_brand_new_member_is_cold_in_ledger_mode(self, tmp_path: Path):
+        # Design §5: a TWO-sided member with no ledger entry is UNVERIFIED, never
+        # a mechanical copy — both sides are present, so the agent confirms (or
+        # records) it explicitly rather than the engine trusting it silently.
         deck = _deck(tmp_path)
+        new = _shared_code("z", 9)  # new, between x and y — added on BOTH sides
         deck.write_de(
             HEADER_DE,
             _slide("s0", "de", "Titel"),
             _shared_code("x"),
-            _shared_code("z", 9),  # new, between x and y
+            new,
             _shared_code("y", 2),
             _localized("s0-m", "de", "DE Text"),
+        )
+        deck.write_en(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            _shared_code("x"),
+            new,
+            _shared_code("y", 2),
+            _localized("s0-m", "en", "EN text"),
         )
         _, diff = deck.diff()
         assert [(i.action) for i in diff.items] == ["verify_cold"]
         outcome = deck.apply()
         assert not outcome.wrote
         assert outcome.count("pending") == 1
+
+    def test_one_sided_new_idd_shared_cell_grows_the_twin_in_ledger_mode(self, tmp_path: Path):
+        # issue #566: a ONE-sided new *id-keyed* shared cell in a ledgered deck
+        # is copy_new_shared (mechanical verbatim copy to the twin), NOT a
+        # verify_cold dead end — verify_cold's only answer, `confirm`, is
+        # rejected for a one-sided member, so it could never be resolved. The
+        # slide_id lets the executor place the twin (positional inserts alias).
+        deck = _deck(tmp_path)
+        idd = '# %% tags=["keep"] slide_id="z-cell"\nz = 9\n\n'
+        deck.write_de(
+            HEADER_DE,
+            _slide("s0", "de", "Titel"),
+            _shared_code("x"),
+            idd,  # new on DE only, between x and y
+            _shared_code("y", 2),
+            _localized("s0-m", "de", "DE Text"),
+        )
+        _, diff = deck.diff()
+        assert [i.action for i in diff.items] == ["copy_new_shared"]
+        outcome = deck.apply()
+        assert outcome.all_applied, outcome.to_payload()
+        en = deck.en_path.read_text(encoding="utf-8")
+        assert en.index("x = 1") < en.index("z = 9") < en.index("y = 2")
+        assert 'slide_id="z-cell"' in en
+        deck.assert_converged()
+
+    def test_one_sided_new_localized_slide_translates_into_the_twin(self, tmp_path: Path):
+        # issue #566 headline path: add a slide in one language, answer
+        # translate_new with the target-language body, and the engine mints the
+        # twin (with the shared slide_id) — no hand-authoring of both halves.
+        deck = _deck(tmp_path)
+        deck.write_de(
+            HEADER_DE,
+            _slide("s0", "de", "Titel"),
+            _shared_code("x"),
+            _shared_code("y", 2),
+            _localized("s0-n", "de", "Neu"),  # new localized slide, DE only
+            _localized("s0-m", "de", "DE Text"),
+        )
+        _, diff = deck.diff()
+        assert [(i.action, i.direction) for i in diff.items] == [("translate_new", "de_to_en")]
+        item = diff.items[0]
+        outcome = deck.apply(decisions={item.key: doc_apply.Decision(item.key, body="# New")})
+        assert outcome.all_applied, outcome.to_payload()
+        en = deck.en_path.read_text(encoding="utf-8")
+        assert 'slide_id="s0-n"' in en
+        assert "# New" in en
+        assert en.index("# New") < en.index("# EN text")
+        deck.assert_converged()
 
     def test_copy_new_shared_completes_a_recorded_pending_twin(self, tmp_path: Path):
         deck = _deck(tmp_path)
@@ -406,12 +465,18 @@ class TestDecisions:
         deck.assert_converged()
 
     def test_confirm_on_a_one_sided_member_is_rejected(self, tmp_path: Path):
+        # issue #566: a one-sided new member is framed translate_new (grow the
+        # twin), not verify_cold — so `confirm` is not a valid answer for it and
+        # is rejected at the vocabulary gate. The agent supplies a `body`
+        # instead; there is no confirm-a-one-sided-member dead end anymore.
         deck = _deck(tmp_path)
         deck.write_de(*DE_PARTS, _localized("s0-new", "de", "Neu"))
+        _, diff = deck.diff()
+        assert [(i.key, i.action) for i in diff.items] == [("id:s0-new", "translate_new")]
         outcome = deck.apply(_decision("id:s0-new", choice="confirm"))
         result = next(r for r in outcome.results if r.key == "id:s0-new")
         assert result.status == "rejected"
-        assert "one-sided" in result.reason
+        assert "translate_new" in result.reason
 
     def test_remove_vs_edit_keep_readds_the_survivor(self, tmp_path: Path):
         deck = _deck(tmp_path)
