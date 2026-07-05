@@ -85,11 +85,25 @@ One JSON document answers any subset of framed items:
 }
 ```
 
-- `body` — the produced text for translate/verify items. It is validated
-  through the accept-gates: a body smuggling a cell delimiter, touching the
-  wrong cell kind, or answering a stale handle is **rejected individually
-  with a reason** while every valid answer still lands. Nothing already
-  applied is lost.
+- `body` — the produced text for translate/verify items. **Format:** the cell
+  body *without* its `# %%` delimiter line, but *with* the jupytext `# `
+  comment prefixes on each line (a markdown cell is prefixed comment lines; a
+  code cell is bare source). A body carrying a delimiter line is rejected. For
+  a localized markdown slide whose source (DE) reads
+
+  ```
+  # %% [markdown] lang="de" slide_id="intro-motivation"
+  #
+  # # Motivation
+  ```
+
+  the `translate_new` answer that mints the EN twin is
+  `{"key": "id:intro-motivation", "body": "#\n# # Motivation (EN)"}` — note the
+  leading `#\n`, matching the source's comment lines, and no `# %%` line. Bodies
+  are validated through the accept-gates: a body smuggling a cell delimiter,
+  touching the wrong cell kind, or answering a stale handle is **rejected
+  individually with a reason** while every valid answer still lands. Nothing
+  already applied is lost.
 - `choice` — one of the item's `answers` (e.g. `confirm`, `de`, `en`).
 
 Feed it to `apply` (`-` reads stdin):
@@ -108,8 +122,9 @@ trusted.
 ## Cold members and `record`
 
 A brand-new checkout, a never-synced deck, or a deck whose ledger entries
-predate a fingerprint-function bump reports members as `verify_cold`. Two
-ways to converge:
+predate a fingerprint-function bump reports **two-sided** members (both halves
+present) as `verify_cold` — the engine will not silently trust a pair it has
+never recorded. Two ways to converge:
 
 - **Per item**: answer `{"key": …, "choice": "confirm"}` in a decision
   document after you have checked the pair is genuinely in sync. Pool-scoped
@@ -122,6 +137,26 @@ ways to converge:
 
 `clm slides split` and `clm slides translate` record freshly-created pairs
 automatically, so a normal authoring flow starts warm.
+
+## Adding a slide in one language (the twin does not exist yet)
+
+Author a new cell on one half only — a new markdown slide (with a fresh
+`slide_id`) or a new **id-keyed** shared code cell — and `report` frames it so
+the engine grows the missing twin; you never hand-author both halves:
+
+- A new **localized** cell (or a per-language header) → `translate_new`. Answer
+  with the target-language `body`; `apply` inserts the twin and mints the
+  shared `slide_id` on it.
+- A new **shared** id-keyed cell → `copy_new_shared` (mechanical). `apply`
+  copies it verbatim to the twin — no answer needed.
+
+This works because the `slide_id` lets `apply` place the twin unambiguously. A
+new **un-id'd positional** cell (a `# %%` code cell with no `slide_id`) inserted
+among existing cells is instead reported `verify_cold`: its ordinal aliases a
+*different* cell on the other half, so the engine cannot mirror it mechanically.
+**Mint a `slide_id`** on the new cell (e.g. `clm slides assign-ids`, or add one
+by hand) and re-`report` — it then frames `translate_new` / `copy_new_shared`
+and the twin is created for you.
 
 ## The forensic window — `report --since`
 
