@@ -64,12 +64,13 @@ for framed items — an **`answers` list naming exactly the decision shapes
 fork/unify/id-stamp transitions. Trust them; review with `git diff`.
 
 **Framed actions** (answer them): `translate_edit` / `translate_new` (produce
-the target-language body), `verify_translation` (both sides moved — confirm
-or supply a body), `conflict_shared` / `remove_vs_edit` / `unify_choose_body`
-/ `order_decision` / `conflict_preamble` (choose a side), `verify_cold`
-(confirm the member is genuinely in sync), `ambiguous_alignment` (mint ids /
-choose), and the normalize-refusal deck item (run `clm slides normalize`,
-then re-report).
+the target-language body — or answer `translate_edit` with `keep_twin` when
+your edit did not change what the twin should say), `verify_translation` (both
+sides moved — confirm or supply a body), `conflict_shared` / `remove_vs_edit`
+/ `unify_choose_body` / `order_decision` / `conflict_preamble` (choose a side),
+`verify_cold` (confirm the member is genuinely in sync), `ambiguous_alignment`
+(mint ids / choose), and the normalize-refusal deck item (run
+`clm slides normalize`, then re-report).
 
 ## The decision document
 
@@ -104,7 +105,10 @@ One JSON document answers any subset of framed items:
   touching the wrong cell kind, or answering a stale handle is **rejected
   individually with a reason** while every valid answer still lands. Nothing
   already applied is lost.
-- `choice` — one of the item's `answers` (e.g. `confirm`, `de`, `en`).
+- `choice` — one of the item's `answers` (e.g. `confirm`, `de`, `en`,
+  `keep_twin`). For a `translate_edit` whose edit left the twin a faithful
+  rendering, `{"key": …, "choice": "keep_twin"}` records the new baseline and
+  keeps the existing twin verbatim — no need to re-supply an unchanged body.
 
 Feed it to `apply` (`-` reads stdin):
 
