@@ -885,8 +885,8 @@ class SqliteBackend(LocalOpsBackend):
         # tests) read processed_files right after wait_for_completion. The
         # writer thread stays alive for the next stage; it is stopped in
         # shutdown. This is where any backlog the writer could not keep up with
-        # during the stage is absorbed, with a progress line so it is not a
-        # silent pause.
+        # during the stage is absorbed; the live progress bar's spinner covers
+        # the pause (a console notice here would render above the pinned bar).
         await self._drain_result_cache_writes()
 
         # Stop progress tracking and log summary
@@ -1373,13 +1373,20 @@ class SqliteBackend(LocalOpsBackend):
         if the background writer fell behind, joining inline here would freeze
         the loop — and therefore the progress bar — at the end of every stage
         (three times per stage with the default shared/trainer/speaker targets).
+
+        No console notice here: the Rich live progress display is still active
+        at this point, so a print would render above the pinned stage bar and
+        interleave with the build output (same bug as the sweep notice, fixed
+        in build.py). The bar's spinner covers the pause; the "Finishing N
+        result-cache write(s)..." notice is shown by _stop_result_cache_writer
+        instead, which runs in the shutdown phase after the summary.
         """
         q = self._result_cache_queue
         if q is None:
             return
         pending = q.qsize()
         if pending:
-            self._show_progress(f"Finishing {pending} result-cache write(s)...")
+            logger.info(f"Draining {pending} queued result-cache write(s)")
         await asyncio.to_thread(q.join)
 
     def _stop_result_cache_writer(self) -> None:
@@ -1388,6 +1395,11 @@ class SqliteBackend(LocalOpsBackend):
         q = self._result_cache_queue
         if thread is None or q is None:
             return
+        pending = q.qsize()
+        if pending:
+            # Shutdown phase: the build summary is already on screen, so this
+            # prints below it like the other cleanup notices.
+            self._show_progress(f"Finishing {pending} result-cache write(s)...")
         q.join()
         q.put(None)  # sentinel: tells the loop to exit
         thread.join(timeout=30.0)
