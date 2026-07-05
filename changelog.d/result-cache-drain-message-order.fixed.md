@@ -1,0 +1,1 @@
+- The "Finishing N result-cache write(s)..." notice no longer interleaves with the live stage progress bar mid-build; it is now emitted during backend shutdown (after the build summary), consistent with the other cleanup notices. The end-of-stage drain itself is unchanged and is covered by the progress bar's spinner.
