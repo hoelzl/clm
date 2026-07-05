@@ -694,6 +694,53 @@ class TestMigrateDatabase:
 
         conn.close()
 
+    def test_migrate_v9_to_v10_adds_execution_mode_column(self, tmp_path):
+        """Migration from v9 to v10 adds the jobs.execution_mode column.
+
+        The column tags a job with the worker execution mode it requires
+        ('docker'/'direct'), so a Direct worker never claims a job that
+        needs the Docker image's toolchain.
+        """
+        db_path = tmp_path / "test.db"
+        conn = sqlite3.connect(str(db_path))
+
+        # Minimal v9 jobs table without execution_mode.
+        conn.execute("""
+            CREATE TABLE jobs (
+                id INTEGER PRIMARY KEY,
+                job_type TEXT NOT NULL,
+                status TEXT NOT NULL,
+                completed_at TIMESTAMP
+            )
+        """)
+        conn.execute(
+            "CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TIMESTAMP)"
+        )
+        conn.execute("INSERT INTO schema_version (version) VALUES (9)")
+        conn.commit()
+
+        migrate_database(conn, 9, 10)
+
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+        assert "execution_mode" in columns
+        assert get_schema_version(conn) == 10
+
+        conn.close()
+
+    def test_migrate_v9_to_v10_handles_existing_column(self, tmp_path):
+        """v9→v10 migration is a no-op when execution_mode already exists."""
+        db_path = tmp_path / "test.db"
+        # A freshly initialized DB already has the column via SCHEMA_SQL.
+        init_database(db_path)
+
+        conn = sqlite3.connect(str(db_path))
+        try:
+            migrate_database(conn, 9, 10)  # Should not raise
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+            assert "execution_mode" in columns
+        finally:
+            conn.close()
+
     def test_init_database_adds_v9_indexes_to_existing_v8_db(self, tmp_path):
         """init_database upgrades a pre-v9 database in place.
 

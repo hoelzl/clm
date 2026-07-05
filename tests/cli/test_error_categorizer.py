@@ -214,6 +214,47 @@ class TestNotebookErrorCategorization:
         assert error.error_type == "user"
         assert error.category == "missing_module"
 
+    def test_missing_kernel_is_configuration_error(self):
+        """A missing Jupyter kernelspec is an environment problem, not a
+        notebook bug — it must be a configuration error so it is neither
+        blamed on the file nor persisted to the error cache (user errors
+        replay on every cached build until the cache is wiped)."""
+        error = ErrorCategorizer.categorize_job_error(
+            job_type="notebook",
+            input_file="slides_020_workshop.en.cpp",
+            error_message=(
+                "Notebook execution failed: slides_020_workshop.en.cpp\n"
+                "  Cell: #3\n"
+                "  Error: NoSuchKernel: No such kernel named xcpp20"
+            ),
+            job_payload={},
+        )
+
+        assert error.error_type == "configuration"
+        assert error.category == "missing_kernel"
+        assert "kernel" in error.actionable_guidance.lower()
+
+    def test_missing_kernel_structured_error_is_configuration_error(self):
+        """NoSuchKernel arriving via the structured notebook_error_class field
+        (worker-enhanced JSON errors) is categorized the same way."""
+        import json
+
+        error = ErrorCategorizer.categorize_job_error(
+            job_type="notebook",
+            input_file="deck.cpp",
+            error_message=json.dumps(
+                {
+                    "error_message": "Notebook execution failed: deck.cpp",
+                    "notebook_error_class": "NoSuchKernel",
+                    "notebook_error_message": "No such kernel named xcpp20",
+                }
+            ),
+            job_payload={},
+        )
+
+        assert error.error_type == "configuration"
+        assert error.category == "missing_kernel"
+
 
 class TestPlantumlErrorCategorization:
     """Tests for PlantUML error categorization."""

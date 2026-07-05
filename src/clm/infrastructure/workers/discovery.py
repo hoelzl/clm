@@ -180,18 +180,30 @@ class WorkerDiscovery:
 
         return True
 
-    def count_healthy_workers(self, worker_type: str) -> int:
+    def count_healthy_workers(self, worker_type: str, execution_mode: str | None = None) -> int:
         """Count healthy workers of a specific type.
 
         Args:
             worker_type: Worker type to count
+            execution_mode: When given ('docker' or 'direct'), count only
+                workers running in that mode. A build that wants Docker
+                workers must not treat another build's Direct workers as
+                satisfying its requirement — they lack the Docker image's
+                toolchain (e.g. the xeus-cpp kernel).
 
         Returns:
             Number of healthy workers
         """
         workers = self.discover_workers(worker_type=worker_type, status_filter=["idle", "busy"])
 
-        return sum(1 for w in workers if w.is_healthy)
+        return sum(
+            1
+            for w in workers
+            if w.is_healthy
+            and (
+                execution_mode is None or ("docker" if w.is_docker else "direct") == execution_mode
+            )
+        )
 
     def get_worker_summary(self) -> dict[str, dict[str, int]]:
         """Get summary of workers by type and status.

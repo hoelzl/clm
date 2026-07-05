@@ -114,6 +114,7 @@ class JobQueue:
         payload: dict[str, Any],
         priority: int = 0,
         correlation_id: str | None = None,
+        execution_mode: str | None = None,
     ) -> int:
         """Add a new job to the queue.
 
@@ -125,6 +126,12 @@ class JobQueue:
             payload: Job-specific parameters as dictionary
             priority: Job priority (higher = more urgent)
             correlation_id: Optional correlation ID for tracing
+            execution_mode: Worker execution mode this job requires
+                ('docker' or 'direct'); None lets any worker of the matching
+                job_type claim it. A Docker-mode build tags its jobs so a
+                Direct worker from a concurrent build sharing the same jobs
+                DB can never claim them (it may lack the required toolchain,
+                e.g. the xeus-cpp kernel).
 
         Returns:
             Job ID
@@ -134,8 +141,8 @@ class JobQueue:
             """
             INSERT INTO jobs (
                 job_type, status, input_file, output_file,
-                content_hash, payload, priority, correlation_id
-            ) VALUES (?, 'pending', ?, ?, ?, ?, ?, ?)
+                content_hash, payload, priority, correlation_id, execution_mode
+            ) VALUES (?, 'pending', ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 job_type,
@@ -145,6 +152,7 @@ class JobQueue:
                 json.dumps(payload),
                 priority,
                 correlation_id,
+                execution_mode,
             ),
         )
         # No commit() needed - connection is in autocommit mode
@@ -221,7 +229,12 @@ class JobQueue:
             (output_file, content_hash, json.dumps(result_metadata)),
         )
 
-    def get_next_job(self, job_type: str, worker_id: int | None = None) -> Job | None:
+    def get_next_job(
+        self,
+        job_type: str,
+        worker_id: int | None = None,
+        execution_mode: str | None = None,
+    ) -> Job | None:
         """Get next pending job for the given type.
 
         This method atomically retrieves and marks a job as processing.
@@ -229,6 +242,11 @@ class JobQueue:
         Args:
             job_type: Type of job to retrieve
             worker_id: Optional worker ID to assign the job to
+            execution_mode: Execution mode of the claiming worker ('docker' or
+                'direct'). When given, only jobs tagged with the same mode (or
+                untagged jobs) are claimed, so a Direct worker never picks up
+                a job that requires the Docker image's toolchain and vice
+                versa. None preserves the legacy claim-anything behaviour.
 
         Returns:
             Job object if available, None otherwise
@@ -238,15 +256,27 @@ class JobQueue:
         # Use explicit transaction to atomically get and update job
         conn.execute("BEGIN IMMEDIATE")
         try:
-            cursor = conn.execute(
-                """
-                SELECT * FROM jobs
-                WHERE status = 'pending' AND job_type = ? AND attempts < max_attempts
-                ORDER BY priority DESC, created_at ASC
-                LIMIT 1
-                """,
-                (job_type,),
-            )
+            if execution_mode is None:
+                cursor = conn.execute(
+                    """
+                    SELECT * FROM jobs
+                    WHERE status = 'pending' AND job_type = ? AND attempts < max_attempts
+                    ORDER BY priority DESC, created_at ASC
+                    LIMIT 1
+                    """,
+                    (job_type,),
+                )
+            else:
+                cursor = conn.execute(
+                    """
+                    SELECT * FROM jobs
+                    WHERE status = 'pending' AND job_type = ? AND attempts < max_attempts
+                    AND (execution_mode IS NULL OR execution_mode = ?)
+                    ORDER BY priority DESC, created_at ASC
+                    LIMIT 1
+                    """,
+                    (job_type, execution_mode),
+                )
             row = cursor.fetchone()
 
             if not row:

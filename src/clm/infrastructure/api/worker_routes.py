@@ -95,7 +95,15 @@ async def claim_job(request: Request, body: JobClaimRequest):
     job_queue = get_job_queue(request)
 
     try:
-        job = job_queue.get_next_job(body.job_type, body.worker_id)
+        # Only Docker workers reach the queue through this API (Direct workers
+        # open the SQLite file themselves), so default a missing mode — sent
+        # by pre-mode worker images — to "docker". This keeps mode-tagged
+        # claiming effective even with older container images.
+        job = job_queue.get_next_job(
+            body.job_type,
+            body.worker_id,
+            execution_mode=body.execution_mode or "docker",
+        )
 
         if job is None:
             return JobClaimResponse(job=None)

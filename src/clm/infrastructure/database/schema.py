@@ -8,7 +8,7 @@ workers.
 import sqlite3
 from pathlib import Path
 
-DATABASE_VERSION = 9
+DATABASE_VERSION = 10
 
 SCHEMA_SQL = """
 -- Jobs table (replaces message queue)
@@ -40,6 +40,13 @@ CREATE TABLE IF NOT EXISTS jobs (
 
     -- Result data (v6) - stores warnings and other result metadata as JSON
     result TEXT,
+
+    -- Required worker execution mode (v10): 'docker' or 'direct'. NULL means
+    -- any worker of the matching job_type may claim the job. Prevents a
+    -- Direct-mode worker (e.g. from a concurrent build sharing this jobs DB)
+    -- from stealing jobs that need a toolchain only the Docker image has,
+    -- such as the xeus-cpp C++ kernel.
+    execution_mode TEXT,
 
     FOREIGN KEY (worker_id) REFERENCES workers(id)
 );
@@ -424,4 +431,17 @@ def migrate_database(conn: sqlite3.Connection, from_version: int, to_version: in
 
             INSERT OR IGNORE INTO schema_version (version) VALUES (9);
         """)
+        conn.commit()
+
+    # Migration from v9 to v10: jobs carry the execution mode they require
+    # ('docker'/'direct', NULL = any) so workers of the other mode never
+    # claim them. See the column comment in SCHEMA_SQL.
+    if from_version < 10 <= to_version:
+        try:
+            conn.execute("ALTER TABLE jobs ADD COLUMN execution_mode TEXT")
+        except sqlite3.OperationalError as e:
+            # Column might already exist (fresh SCHEMA_SQL ran first)
+            if "duplicate column name" not in str(e).lower():
+                raise
+        conn.execute("INSERT OR IGNORE INTO schema_version (version) VALUES (10)")
         conn.commit()

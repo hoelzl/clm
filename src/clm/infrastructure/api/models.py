@@ -30,6 +30,14 @@ class JobClaimRequest(BaseModel):
 
     worker_id: int = Field(..., description="ID of the worker claiming the job")
     job_type: str = Field(..., description="Type of job to claim: notebook, plantuml, drawio")
+    execution_mode: str | None = Field(
+        default=None,
+        description=(
+            "Execution mode of the claiming worker ('docker' or 'direct'). "
+            "Only the Docker executor points workers at this API, so the "
+            "server treats a missing value (older worker images) as 'docker'."
+        ),
+    )
 
 
 class JobData(BaseModel):

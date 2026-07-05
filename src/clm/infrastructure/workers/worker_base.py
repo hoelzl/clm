@@ -223,6 +223,10 @@ class Worker(ABC):
 
         # Determine mode and create appropriate job queue
         self._api_mode = api_url is not None
+        # The worker's own execution mode, used to claim only jobs tagged for
+        # it (or untagged ones). REST API mode is used exclusively by Docker
+        # workers; everything else runs directly on the host.
+        self.execution_mode = "docker" if self._api_mode else "direct"
         if self._api_mode:
             from clm.infrastructure.api.job_queue_adapter import ApiJobQueue
 
@@ -645,8 +649,12 @@ class Worker(ABC):
                 if self._check_parent_and_exit_if_dead():
                     break
 
-                # Get next job
-                job = self.job_queue.get_next_job(self.worker_type, self.worker_id)
+                # Get next job (claiming only jobs untagged or tagged with
+                # this worker's execution mode, so e.g. a Direct worker never
+                # takes a job that needs the Docker image's toolchain)
+                job = self.job_queue.get_next_job(
+                    self.worker_type, self.worker_id, execution_mode=self.execution_mode
+                )
 
                 if job is None:
                     # No jobs available, update heartbeat (throttled) and wait

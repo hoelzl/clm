@@ -72,7 +72,7 @@ class TestGetNextJob:
 
         adapter.get_next_job("notebook", worker_id=99)
 
-        fake_client.claim_job.assert_called_once_with(99, "notebook")
+        fake_client.claim_job.assert_called_once_with(99, "notebook", execution_mode=None)
 
     def test_raises_if_no_worker_id(self, fake_client: MagicMock) -> None:
         q = ApiJobQueue("http://host", worker_id=None)

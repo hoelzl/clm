@@ -202,6 +202,33 @@ class ErrorCategorizer:
         match_text = f"{error_message} {error_class} {cat_error_class} {cat_error_message}"
 
         # Categorize based on error patterns
+        #
+        # A missing Jupyter kernelspec is an environment problem, never the
+        # notebook's fault — the notebook merely names the kernel it needs.
+        # Classifying it as "configuration" also keeps it out of the
+        # processing_issues error cache (user errors are persisted and
+        # replayed on cache hits), so fixing the environment actually fixes
+        # the next build instead of replaying a stale failure. Checked first:
+        # the enhanced message may embed other error-class tokens.
+        if "NoSuchKernel" in match_text or "No such kernel" in match_text:
+            return BuildError(
+                error_type="configuration",
+                category="missing_kernel",
+                severity="error",
+                file_path=input_file,
+                message=error_message,
+                actionable_guidance=(
+                    "The Jupyter kernel this notebook needs is not installed in the "
+                    "environment that executed it. Install the kernelspec there, or "
+                    "run the build with Docker workers ('clm build --workers=docker'), "
+                    "whose image ships the course kernels (e.g. xcpp20 for C++). "
+                    "For a kernel-free build use 'clm build --no-html'."
+                ),
+                job_id=job_id,
+                correlation_id=correlation_id,
+                details=details,
+            )
+
         if any(
             err in match_text
             for err in ["SyntaxError", "NameError", "IndentationError", "TypeError"]

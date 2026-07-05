@@ -113,6 +113,66 @@ def test_get_next_job_by_type(job_queue):
     assert job.job_type == "drawio"
 
 
+def test_get_next_job_execution_mode_filtering(job_queue):
+    """Mode-tagged jobs are only claimed by workers of the same mode.
+
+    A job tagged 'docker' must never be handed to a Direct worker — the
+    scenario behind the spurious NoSuchKernel(xcpp20) failures, where a
+    concurrent Direct-mode build's workers stole a Docker build's C++ jobs.
+    """
+    docker_job_id = job_queue.add_job(
+        job_type="notebook",
+        input_file="deck.cpp",
+        output_file="deck.html",
+        content_hash="abc123",
+        payload={},
+        execution_mode="docker",
+    )
+
+    # A Direct worker asking for notebook jobs must NOT get the docker job
+    assert job_queue.get_next_job("notebook", execution_mode="direct") is None
+
+    # A Docker worker gets it
+    job = job_queue.get_next_job("notebook", execution_mode="docker")
+    assert job is not None
+    assert job.id == docker_job_id
+
+
+def test_get_next_job_untagged_claimable_by_any_mode(job_queue):
+    """Untagged jobs (legacy / mode-agnostic) go to workers of any mode."""
+    job_queue.add_job(
+        job_type="notebook",
+        input_file="a.py",
+        output_file="a.html",
+        content_hash="h1",
+        payload={},
+    )
+    job_queue.add_job(
+        job_type="notebook",
+        input_file="b.py",
+        output_file="b.html",
+        content_hash="h2",
+        payload={},
+    )
+
+    assert job_queue.get_next_job("notebook", execution_mode="direct") is not None
+    assert job_queue.get_next_job("notebook", execution_mode="docker") is not None
+
+
+def test_get_next_job_without_mode_claims_tagged_jobs(job_queue):
+    """A claimer that passes no mode keeps the legacy claim-anything behaviour."""
+    job_queue.add_job(
+        job_type="notebook",
+        input_file="deck.cpp",
+        output_file="deck.html",
+        content_hash="abc123",
+        payload={},
+        execution_mode="docker",
+    )
+
+    assert job_queue.get_next_job("notebook") is not None
+
+
 def test_get_next_job_priority(job_queue):
     """Test that jobs are retrieved by priority."""
     # Add low priority job

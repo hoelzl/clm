@@ -40,12 +40,20 @@ class ApiJobQueue:
         """Close the API client."""
         self._client.close()
 
-    def get_next_job(self, job_type: str, worker_id: int | None = None) -> Job | None:
+    def get_next_job(
+        self,
+        job_type: str,
+        worker_id: int | None = None,
+        execution_mode: str | None = None,
+    ) -> Job | None:
         """Get next pending job for the given type.
 
         Args:
             job_type: Type of job to retrieve
             worker_id: Worker ID to assign the job to
+            execution_mode: Execution mode of the claiming worker. Forwarded
+                to the API; the server defaults a missing value to 'docker'
+                since only Docker workers use this adapter.
 
         Returns:
             Job object if available, None otherwise
@@ -55,7 +63,7 @@ class ApiJobQueue:
             raise ValueError("worker_id must be set")
 
         try:
-            job_info = self._client.claim_job(wid, job_type)
+            job_info = self._client.claim_job(wid, job_type, execution_mode=execution_mode)
 
             if job_info is None:
                 return None
