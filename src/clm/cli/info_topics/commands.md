@@ -1299,17 +1299,20 @@ count parity, per-pair tag/type consistency, and DE/EN adjacency) are
 split half legitimately carries cells of only one language, so these
 checks would otherwise report a false `DE/EN cell count mismatch` on every
 converted deck (issue #160). The per-file `slide_id` integrity checks (and
-the `format` / `tags` groups) still run on split files unchanged, and the
-cross-file shared-cell parity diff between a `.de.py` / `.en.py` pair is
-still applied when validating a directory or course spec. Since CLM
-{version} the cross-file **`slide_id` parity** check (issue #162) is applied
-the same way — and additionally on a single-file validate when the twin
-exists on disk, so the pre-commit gate and the PostToolUse path catch a
-divergent join key. The companion **`for_slide` parity** check (the
-both-language voiceover compatibility check) is applied alongside it, so a
-split deck's `voiceover_X.de.py` / `voiceover_X.en.py` companions can't
-silently narrate different slide sets. Bilingual decks (no `.de` / `.en`
-suffix) are unaffected — the full pairing check still runs.
+the `format` / `tags` groups) still run on split files unchanged. The
+cross-file pair checks — **shared-cell byte parity**, **tag-set parity**,
+the **`slide_id` parity** detective (issue #162), and the companion
+**`for_slide` parity** check (the both-language voiceover compatibility
+check) — run when validating a directory or course spec, and since CLM
+{version} the **full suite also runs on a single-file validate** when the
+twin exists on disk (previously only the two #162 detectives did), so a
+standalone `clm validate x.de.py` can no longer report OK while the pair's
+shared cells or tags have silently diverged. **`--quick` deliberately skips
+all cross-file checks**: it is designed for PostToolUse hooks that fire
+mid-edit, where transient pair divergence (DE edited, EN not yet synced) is
+expected — use a non-quick single-file, directory, or course validate to
+check pair parity. Bilingual decks (no `.de` / `.en` suffix) are
+unaffected — the full pairing check still runs.
 
 Since CLM {version}, the `tags` check group also verifies **workshop
 scope** (issue #78). The `partial` output kind leaves a workshop's code
@@ -2200,7 +2203,8 @@ clm slides unify slides_intro.de.py slides_intro.en.py --report-only
 
 Divergent shared cells fail with `error: shared cell content
 diverges …`. The same divergence is surfaced by
-`clm validate <topic_dir>` and refused at build time — see
+`clm validate <topic_dir>` (and, since CLM {version}, by a non-quick
+single-file `clm validate` on either half) and refused at build time — see
 "Split-source build routing" under `clm build` above for the
 build-time gate.
 

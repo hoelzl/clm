@@ -1530,6 +1530,134 @@ class TestSplitTagParity:
         result = validate_directory(topic, checks=["pairing"])
         assert self._tag_warnings(result) == []
 
+    def test_single_file_with_twin_catches_tag_mismatch(self, tmp_path):
+        # The single-file path (CLI standalone / MCP / pre-commit gate) runs
+        # tag parity against the twin, same as a directory run.
+        _write_slide(
+            tmp_path,
+            "slides_a.de.py",
+            """\
+            # %% [markdown] lang="de" tags=["subslide", "keep"] slide_id="vec"
+            # ## Vektoren
+            """,
+        )
+        _write_slide(
+            tmp_path,
+            "slides_a.en.py",
+            """\
+            # %% [markdown] lang="en" tags=["subslide"] slide_id="vec"
+            # ## Vectors
+            """,
+        )
+        result = validate_file(tmp_path / "slides_a.de.py", checks=["pairing"])
+        warnings = self._tag_warnings(result)
+        assert len(warnings) == 1
+        assert "only on DE: ['keep']" in warnings[0].message
+        # Symmetric: validating the EN half catches it too.
+        result_en = validate_file(tmp_path / "slides_a.en.py", checks=["pairing"])
+        assert len(self._tag_warnings(result_en)) == 1
+
+
+class TestSingleFileSharedCellParity:
+    """Shared-cell byte parity on the single-file validate path.
+
+    A standalone ``clm validate x.de.py`` (non-quick) runs the full cross-file
+    pair suite against the twin when it exists on disk — including the
+    shared-cell byte-parity check that previously ran only at directory/course
+    scope, so a green single-file validate could hide silently divergent
+    DE/EN build output.
+    """
+
+    @staticmethod
+    def _parity_errors(result):
+        return [
+            f
+            for f in result.findings
+            if f.severity == "error" and "shared cell" in f.message.lower()
+        ]
+
+    def _divergent_pair(self, parent):
+        _write_slide(
+            parent,
+            "slides_intro.de.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"] slide_id="intro"
+            # ## Einführung
+
+            # %% tags=["keep"]
+            x = 1
+            """,
+        )
+        _write_slide(
+            parent,
+            "slides_intro.en.py",
+            """\
+            # %% [markdown] lang="en" tags=["slide"] slide_id="intro"
+            # ## Introduction
+
+            # %% tags=["keep"]
+            x = 99
+            """,
+        )
+
+    def test_single_file_with_twin_catches_divergent_shared_cell(self, tmp_path):
+        self._divergent_pair(tmp_path)
+        result = validate_file(tmp_path / "slides_intro.de.py", checks=["pairing"])
+        assert len(self._parity_errors(result)) == 1
+        # Symmetric: validating the EN half catches it too.
+        result_en = validate_file(tmp_path / "slides_intro.en.py", checks=["pairing"])
+        assert len(self._parity_errors(result_en)) == 1
+
+    def test_single_file_identical_shared_cells_are_clean(self, tmp_path):
+        _write_slide(
+            tmp_path,
+            "slides_intro.de.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"] slide_id="intro"
+            # ## Einführung
+
+            # %% tags=["keep"]
+            x = 1
+            """,
+        )
+        _write_slide(
+            tmp_path,
+            "slides_intro.en.py",
+            """\
+            # %% [markdown] lang="en" tags=["slide"] slide_id="intro"
+            # ## Introduction
+
+            # %% tags=["keep"]
+            x = 1
+            """,
+        )
+        result = validate_file(tmp_path / "slides_intro.de.py", checks=["pairing"])
+        assert self._parity_errors(result) == []
+
+    def test_single_file_without_twin_is_silent(self, tmp_path):
+        p = _write_slide(
+            tmp_path,
+            "slides_intro.de.py",
+            """\
+            # %% [markdown] lang="de" tags=["slide"] slide_id="intro"
+            # ## Einführung
+
+            # %% tags=["keep"]
+            x = 1
+            """,
+        )
+        result = validate_file(p, checks=["pairing"])
+        assert self._parity_errors(result) == []
+
+    def test_quick_mode_still_skips_pair_checks(self, tmp_path):
+        # --quick (the PostToolUse hook path) deliberately excludes cross-file
+        # checks: it fires mid-edit, where transient divergence is expected.
+        from clm.slides.validator import validate_quick
+
+        self._divergent_pair(tmp_path)
+        result = validate_quick(tmp_path / "slides_intro.de.py")
+        assert self._parity_errors(result) == []
+
 
 class TestCheckOrdering:
     """DE/EN adjacency checks (canonical layout)."""
