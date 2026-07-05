@@ -2171,8 +2171,9 @@ def validate_file(
             marker (#178, see ``marker_opt_in``).
         cross_file_parity: When ``True`` (the default for standalone callers —
             the CLI single-file path, MCP, the pre-commit gate) and ``path`` is
-            a split half whose twin exists on disk, run the #162 cross-file
-            parity detectives against the twin: ``slide_id`` set/order parity on
+            a split half whose twin exists on disk, run the full cross-file
+            pair suite against the twin: shared-cell byte parity and tag-set
+            parity, plus the #162 detectives — ``slide_id`` set/order parity on
             the deck, and ``for_slide`` set parity on the voiceover companions
             (the both-language voiceover compatibility check). Directory/course
             entrypoints pass ``False`` and run those once at their own scope
@@ -2218,8 +2219,8 @@ def validate_file(
     if "pairing" in check_set:
         # Split halves (``*.de.py`` / ``*.en.py``) carry a single language,
         # so the bilingual DE/EN count/adjacency checks don't apply — see
-        # _check_pairing (issue #160). Cross-file parity is validated by the
-        # directory/course entrypoints via _check_shared_cell_parity.
+        # _check_pairing (issue #160). Cross-file parity against the twin
+        # runs below when cross_file_parity is set.
         is_split = split_lang_suffix(path) is not None
         findings.extend(_check_pairing(cells, file_str, is_split=is_split))
         # A voiceover companion duplicated across both layouts (voiceover/ +
@@ -2234,13 +2235,18 @@ def validate_file(
         # has no DE/EN pairs to compare).
         if not is_split:
             findings.extend(_check_workshop_tag_symmetry(cells, file_str))
-        # #162 detective: when validating a split half standalone and its twin
-        # exists on disk, check cross-file slide_id parity (the join key). A
-        # directory/course run handles this once at that scope instead
-        # (cross_file_parity=False) so the finding is not duplicated per file.
+        # When validating a split half standalone and its twin exists on disk,
+        # run the full cross-file pair suite against the twin: shared-cell byte
+        # parity and tag-set parity (the directory/course pair checks), plus
+        # the #162 detectives — slide_id parity (the join key) and companion
+        # for_slide parity. A directory/course run handles all four once at
+        # that scope instead (cross_file_parity=False) so the findings are not
+        # duplicated per file.
         if cross_file_parity and is_split:
             pair = split_twin_pair(path)
             if pair is not None:
+                findings.extend(_check_shared_cell_parity(*pair))
+                findings.extend(_check_split_tag_parity(*pair))
                 findings.extend(_check_split_slide_id_parity(*pair))
                 findings.extend(_check_split_companion_for_slide_parity(*pair))
     if "code_export" in check_set and path.suffix == ".cpp":
