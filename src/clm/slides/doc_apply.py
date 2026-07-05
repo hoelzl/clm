@@ -109,7 +109,7 @@ class Decision:
 #: shapes each accepts. Everything else is agent-manual in Phase 3: edit the
 #: files, re-run ``report``, then ``record``.
 _DECISION_VOCABULARY: dict[str, tuple[str, ...]] = {
-    "translate_edit": ("body",),
+    "translate_edit": ("body", "keep_twin"),
     "translate_new": ("body",),
     "verify_translation": ("confirm",),
     "verify_cold": ("confirm",),
@@ -1036,6 +1036,19 @@ def _apply_choice_decision(ex: _Executor, item: DiffItem, choice: str) -> None:
                 f"{item.key} names no removed side — reconcile manually (edit + record)"
             )
         ex.copy_new(item, _other(item.side))
+        return
+    if choice == "keep_twin":
+        # translate_edit only: the edited side did not change what the twin
+        # should say, so record the new (edited) baseline and keep the existing
+        # twin verbatim instead of re-supplying an unchanged body. A
+        # translate_edit member always carries both sides; nothing mutates — a
+        # pure ledger record, like confirm (issue #566, minor #1).
+        de_holder = ex._holder(item, "de")
+        en_holder = ex._holder(item, "en")
+        de_cell = de_holder.side("de") if de_holder is not None else None
+        en_cell = en_holder.side("en") if en_holder is not None else None
+        if de_cell is None or en_cell is None:
+            raise _ItemError("keep_twin needs both sides present — supply the twin body instead")
         return
     raise _ItemError(f"unsupported choice {choice!r}")
 

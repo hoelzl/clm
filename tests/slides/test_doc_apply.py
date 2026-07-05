@@ -414,6 +414,21 @@ class TestDecisions:
         assert "# EN text NEW" in deck.en_path.read_text(encoding="utf-8")
         deck.assert_converged()
 
+    def test_translate_edit_keep_twin_records_without_retyping(self, tmp_path: Path):
+        # issue #566 (minor #1): a one-sided prose edit whose twin is still a
+        # faithful rendering is accepted with keep_twin — the new baseline is
+        # recorded and the twin kept verbatim, with no unchanged body re-typed.
+        deck = _deck(tmp_path)
+        deck.edit_de("DE Text", "DE Text (verfeinert)")
+        _, diff = deck.diff()
+        assert [(i.key, i.action) for i in diff.items] == [("id:s0-m", "translate_edit")]
+        en_before = deck.en_path.read_text(encoding="utf-8")
+        outcome = deck.apply(_decision("id:s0-m", choice="keep_twin"))
+        assert outcome.all_applied, outcome.to_payload()
+        assert not outcome.wrote  # the twin is untouched; only the ledger moves
+        assert deck.en_path.read_text(encoding="utf-8") == en_before
+        deck.assert_converged()
+
     def test_conflict_choice_propagates_the_chosen_side(self, tmp_path: Path):
         deck = _deck(tmp_path)
         deck.edit_de("x = 1", "x = 111")
