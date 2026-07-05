@@ -347,6 +347,73 @@ class TestMechanicalRows:
 
 
 # ---------------------------------------------------------------------------
+# Separated voiceover companions (issue #570)
+# ---------------------------------------------------------------------------
+
+
+def _vo_cell(slug: str, for_slide: str, lang: str, text: str) -> str:
+    return (
+        f'# %% [markdown] lang="{lang}" tags=["voiceover"] '
+        f'slide_id="{slug}" for_slide="{for_slide}"\n#\n# - {text}\n\n'
+    )
+
+
+class TestSeparatedVoiceoverCompanion:
+    """The harvest → sync handoff: ``clm harvest accept`` writes a one-sided
+    (DE-only) separated voiceover companion and records it, deferring the EN
+    twin. The ordinary sync loop must then be able to *create* the missing EN
+    companion — ``report`` frames each DE-only cell ``translate_new`` and
+    ``apply`` with a target-language body mints the companion file. Before the
+    fix the executor inverted the direction and rejected every member with
+    ``the en source cell … is missing``.
+    """
+
+    def _companion_deck(self, tmp_path: Path) -> _Deck:
+        """A split deck whose only voiceover lives in a DE-only companion in the
+        ``voiceover/`` subdir — the state left by ``harvest accept`` DE-only."""
+        de = _build(HEADER_DE, _slide("s0", "de", "Titel"))
+        en = _build(HEADER_EN, _slide("s0", "en", "Title"))
+        deck = _Deck(tmp_path, de, en)
+        vo_dir = tmp_path / "voiceover"
+        vo_dir.mkdir()
+        (vo_dir / "voiceover_t.de.py").write_text(
+            _build(_vo_cell("s0-vo", "s0", "de", "Hallo Welt")), encoding="utf-8"
+        )
+        deck.record()  # baseline knows the standing one-sided companion cell
+        return deck
+
+    def test_report_frames_de_only_companion_translate_new(self, tmp_path: Path):
+        deck = self._companion_deck(tmp_path)
+        _, diff = deck.diff()
+        assert [(i.action, i.direction, i.key) for i in diff.items] == [
+            ("translate_new", "de_to_en", "id:s0-vo")
+        ]
+        # ``side`` names the side that exists (the translate source), uniformly
+        # across the translate_new emitters (the normalized convention).
+        assert diff.items[0].side == "de"
+
+    def test_apply_mints_the_missing_en_companion(self, tmp_path: Path):
+        deck = self._companion_deck(tmp_path)
+        _, diff = deck.diff()
+        item = diff.items[0]
+        outcome = deck.apply(
+            decisions={item.key: doc_apply.Decision(item.key, body="# - Hello World")}
+        )
+        assert outcome.all_applied, outcome.to_payload()
+
+        en_comp = tmp_path / "voiceover" / "voiceover_t.en.py"
+        assert en_comp.exists(), "the EN companion file was not created"
+        en_text = en_comp.read_text(encoding="utf-8")
+        assert 'lang="en"' in en_text
+        assert 'slide_id="s0-vo"' in en_text
+        assert 'for_slide="s0"' in en_text
+        assert "Hello World" in en_text
+        # The EN *deck* is untouched — narration stays in the companion.
+        assert "voiceover" not in deck.en_path.read_text(encoding="utf-8")
+        deck.assert_converged()
+
+
+# ---------------------------------------------------------------------------
 # Per-item independence and safety
 # ---------------------------------------------------------------------------
 
