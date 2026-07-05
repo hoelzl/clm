@@ -216,23 +216,31 @@ class WorkerApiClient:
         logger.info(f"Registered as {worker_type} worker {worker_id} via REST API")
         return worker_id
 
-    def claim_job(self, worker_id: int, job_type: str) -> JobInfo | None:
+    def claim_job(
+        self, worker_id: int, job_type: str, execution_mode: str | None = None
+    ) -> JobInfo | None:
         """Claim next available job.
 
         Args:
             worker_id: ID of the worker claiming the job
             job_type: Type of job to claim
+            execution_mode: Execution mode of the claiming worker ('docker' or
+                'direct'). The server defaults a missing value to 'docker'
+                because only Docker workers use this API.
 
         Returns:
             JobInfo if a job was claimed, None if no jobs available
         """
+        json_data: dict[str, Any] = {
+            "worker_id": worker_id,
+            "job_type": job_type,
+        }
+        if execution_mode is not None:
+            json_data["execution_mode"] = execution_mode
         response = self._request_with_retry(
             "POST",
             "/api/worker/jobs/claim",
-            json_data={
-                "worker_id": worker_id,
-                "job_type": job_type,
-            },
+            json_data=json_data,
         )
 
         data = response.json()

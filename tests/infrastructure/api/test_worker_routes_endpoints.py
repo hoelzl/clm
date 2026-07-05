@@ -144,6 +144,52 @@ class TestClaimJobEndpoint:
         assert data["job"] is not None
         assert data["job"]["id"] == job_id
 
+    def test_claim_defaults_to_docker_mode(self, client: TestClient, db_path: Path) -> None:
+        """The route claims as a Docker worker when the body omits the mode.
+
+        Only Docker workers use this API, so a job tagged 'direct' (another
+        build's host-only job) must never be handed out here, while a job
+        tagged 'docker' is claimable even by older worker images that do
+        not send execution_mode yet.
+        """
+        queue = JobQueue(db_path)
+        try:
+            conn = queue._get_conn()
+            conn.execute(
+                """
+                INSERT INTO jobs (
+                    job_type, input_file, output_file, content_hash,
+                    payload, status, priority, attempts, execution_mode
+                ) VALUES ('notebook', 'a.py', 'a.html', 'h1', '{}', 'pending', 0, 0, 'direct')
+                """
+            )
+            cursor = conn.execute(
+                """
+                INSERT INTO jobs (
+                    job_type, input_file, output_file, content_hash,
+                    payload, status, priority, attempts, execution_mode
+                ) VALUES ('notebook', 'b.cpp', 'b.html', 'h2', '{}', 'pending', 0, 0, 'docker')
+                """
+            )
+            docker_job_id = cursor.lastrowid
+            cursor = conn.execute(
+                "INSERT INTO workers (worker_type, container_id, status) VALUES (?, ?, 'idle')",
+                ("notebook", "c1"),
+            )
+            worker_id = cursor.lastrowid
+        finally:
+            queue.close()
+
+        response = client.post(
+            "/api/worker/jobs/claim",
+            json={"worker_id": worker_id, "job_type": "notebook"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["job"] is not None
+        assert data["job"]["id"] == docker_job_id  # docker-tagged, not the direct one
+
     def test_claim_returns_500_on_error(self, client: TestClient) -> None:
         with patch(
             "clm.infrastructure.database.job_queue.JobQueue.get_next_job",

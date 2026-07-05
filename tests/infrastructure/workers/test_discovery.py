@@ -435,6 +435,49 @@ class TestCountHealthyWorkers:
 
         assert count == 1  # Only the one with recent heartbeat
 
+    def test_count_filters_by_execution_mode(self, worker_discovery, mock_job_queue, make_db_row):
+        """Only workers of the requested execution mode count.
+
+        A Docker-mode build must not treat another build's Direct workers
+        (registered in a shared jobs DB) as satisfying its requirement —
+        they lack the Docker image's toolchain (e.g. the xcpp20 kernel).
+        """
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        now = datetime.now(timezone.utc)
+        mock_cursor.fetchall.return_value = [
+            # Direct workers use the 'direct-' executor-ID prefix
+            make_db_row(
+                db_id=1,
+                worker_type="notebook",
+                container_id="direct-notebook-1-abc",
+                status="idle",
+                last_heartbeat=now,
+            ),
+            make_db_row(
+                db_id=2,
+                worker_type="notebook",
+                container_id="direct-notebook-2-def",
+                status="idle",
+                last_heartbeat=now,
+            ),
+            # Docker worker (container hash, no 'direct-' prefix)
+            make_db_row(
+                db_id=3,
+                worker_type="notebook",
+                container_id="0a1b2c3d4e5f",
+                status="idle",
+                last_heartbeat=now,
+            ),
+        ]
+        mock_conn.execute.return_value = mock_cursor
+        mock_job_queue._get_conn.return_value = mock_conn
+
+        assert worker_discovery.count_healthy_workers("notebook", execution_mode="docker") == 1
+        assert worker_discovery.count_healthy_workers("notebook", execution_mode="direct") == 2
+        # No mode → legacy count-everything behaviour
+        assert worker_discovery.count_healthy_workers("notebook") == 3
+
 
 class TestDatetimeCompatibility:
     """Test datetime compatibility between DiscoveredWorker and CLI operations.

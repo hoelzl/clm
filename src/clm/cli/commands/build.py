@@ -1934,6 +1934,15 @@ async def main_build(
                 explain_rebuilds=config.explain_rebuilds,
                 image_registry=course.image_registry,
                 telemetry_store=telemetry_store,
+                # Tag every submitted job with the execution mode this build
+                # resolved for its worker type, so only matching-mode workers
+                # claim it. Without this, a Direct worker from a concurrent
+                # build sharing the jobs DB could take e.g. a C++ notebook
+                # job and fail with NoSuchKernel (xcpp20 lives only in the
+                # Docker image).
+                worker_execution_modes={
+                    c.worker_type: c.execution_mode for c in worker_config.get_all_worker_configs()
+                },
             )
 
             async with backend:

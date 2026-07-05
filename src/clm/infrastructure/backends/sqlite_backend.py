@@ -82,6 +82,14 @@ class SqliteBackend(LocalOpsBackend):
     # jobs: the structured error JSON) and reports passed-only-after-retry
     # decks to the build summary's flake list.
     telemetry_store: Optional["ExecutionTelemetryStore"] = None
+    # Per-job-type worker execution mode ('docker'/'direct') from this build's
+    # resolved worker config. Jobs are tagged with it on submission so only
+    # workers of that mode claim them — a Direct worker from a concurrent
+    # build sharing the same jobs DB must never take a job that needs the
+    # Docker image's toolchain (e.g. the xeus-cpp kernel; the cause of the
+    # spurious "No such kernel named xcpp20" failures). An empty dict leaves
+    # jobs untagged (legacy behaviour, used by tests).
+    worker_execution_modes: dict[str, str] = field(factory=dict)
 
     # Background result-cache writer (lazy). Retiring a completed job by reading
     # its output back, pickling it, and committing the blob to the cache DB is
@@ -444,6 +452,7 @@ class SqliteBackend(LocalOpsBackend):
             content_hash=payload.content_hash(),
             payload=payload_dict,
             correlation_id=correlation_id,
+            execution_mode=self.worker_execution_modes.get(job_type),
         )
         return ("submitted", job_id)
 
@@ -1130,6 +1139,9 @@ class SqliteBackend(LocalOpsBackend):
 
         A worker is considered available if:
         - It matches the requested job_type
+        - It matches this build's execution mode for the job type (when the
+          backend knows one) — a Direct worker cannot service jobs tagged
+          for Docker, so it must not count as available for them
         - Its status is 'idle' or 'busy' (not 'hung' or 'dead')
         - It has sent a heartbeat within the last 30 seconds
 
@@ -1148,15 +1160,29 @@ class SqliteBackend(LocalOpsBackend):
 
         conn = self.job_queue._get_conn()
 
+        # Same direct/docker discriminator WorkerDiscovery uses: Direct
+        # executor IDs are 'direct-<type>-<uuid>'; anything else (Docker
+        # container IDs, 'docker-<type>-<uuid>' pre-registrations) is Docker.
+        required_mode = self.worker_execution_modes.get(job_type)
+        if required_mode is None:
+            mode_clause = ""
+            mode_params: tuple[str, ...] = ()
+        else:
+            mode_clause = (
+                "AND (CASE WHEN container_id LIKE 'direct-%' THEN 'direct' ELSE 'docker' END) = ?"
+            )
+            mode_params = (required_mode,)
+
         # First check for activated workers (idle or busy with recent heartbeat)
         cursor = conn.execute(
-            """
+            f"""
             SELECT COUNT(*) FROM workers
             WHERE worker_type = ?
             AND status IN ('idle', 'busy')
             AND last_heartbeat > datetime('now', '-30 seconds')
+            {mode_clause}
             """,
-            (job_type,),
+            (job_type, *mode_params),
         )
         row = cursor.fetchone()
         activated_count = row[0] if row else 0
@@ -1167,12 +1193,13 @@ class SqliteBackend(LocalOpsBackend):
         # Check if there are pre-registered workers waiting to activate
         if wait_for_activation:
             cursor = conn.execute(
-                """
+                f"""
                 SELECT COUNT(*) FROM workers
                 WHERE worker_type = ?
                 AND status = 'created'
+                {mode_clause}
                 """,
-                (job_type,),
+                (job_type, *mode_params),
             )
             row = cursor.fetchone()
             created_count = row[0] if row else 0
@@ -1189,13 +1216,14 @@ class SqliteBackend(LocalOpsBackend):
 
                 while (time.time() - start_time) < timeout:
                     cursor = conn.execute(
-                        """
+                        f"""
                         SELECT COUNT(*) FROM workers
                         WHERE worker_type = ?
                         AND status IN ('idle', 'busy')
                         AND last_heartbeat > datetime('now', '-30 seconds')
+                        {mode_clause}
                         """,
-                        (job_type,),
+                        (job_type, *mode_params),
                     )
                     row = cursor.fetchone()
                     activated_count = row[0] if row else 0

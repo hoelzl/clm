@@ -154,12 +154,17 @@ class WorkerLifecycleManager:
             required_config = self.config.get_worker_config(worker_type)
             required_count = required_config.count
 
-            healthy_count = self.discovery.count_healthy_workers(worker_type)
+            # Only workers of the required execution mode count: a Docker-mode
+            # build must not be satisfied by Direct workers another build
+            # registered in a shared jobs DB (they lack the image's toolchain).
+            healthy_count = self.discovery.count_healthy_workers(
+                worker_type, execution_mode=required_config.execution_mode
+            )
 
             if healthy_count < required_count:
                 logger.info(
-                    f"Need {required_count} {worker_type} worker(s), "
-                    f"found {healthy_count} healthy worker(s)"
+                    f"Need {required_count} {required_config.execution_mode} {worker_type} "
+                    f"worker(s), found {healthy_count} healthy worker(s)"
                 )
                 return True
 
@@ -298,7 +303,11 @@ class WorkerLifecycleManager:
         adjusted = []
 
         for config in configs:
-            healthy_count = self.discovery.count_healthy_workers(config.worker_type)
+            # Mode-aware: only same-mode workers can be reused (see
+            # should_start_workers).
+            healthy_count = self.discovery.count_healthy_workers(
+                config.worker_type, execution_mode=config.execution_mode
+            )
             needed_count = max(0, config.count - healthy_count)
 
             if needed_count > 0:
@@ -375,8 +384,14 @@ class WorkerLifecycleManager:
                 worker_type=config.worker_type, status_filter=["idle", "busy"]
             )
 
-            # Take up to config.count healthy workers
-            healthy_workers = [w for w in discovered if w.is_healthy][: config.count]
+            # Take up to config.count healthy workers of the REQUIRED
+            # execution mode — mirroring should_start_workers, a Direct
+            # worker never counts as a reused Docker worker or vice versa.
+            healthy_workers = [
+                w
+                for w in discovered
+                if w.is_healthy and ("docker" if w.is_docker else "direct") == config.execution_mode
+            ][: config.count]
 
             for worker in healthy_workers:
                 info = WorkerInfo(
