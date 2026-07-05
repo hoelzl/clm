@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from attr import Factory
@@ -34,13 +35,18 @@ class Section(NotebookMixin):
         key derived from :func:`clm.infrastructure.utils.path_utils.slide_family_key`
         keys each split pair under its bilingual companion's filename so
         the assignment is stable regardless of iteration order.
+
+        The key is scoped to the notebook's parent directory: split
+        companions always live next to each other, but unrelated topics
+        may reuse the same file name (e.g. several ``workshop.py``
+        folders in one section), and those must each get their own slot.
         """
         from clm.infrastructure.utils.path_utils import slide_family_key
 
-        family_number: dict[str, int] = {}
+        family_number: dict[tuple[Path, str], int] = {}
         next_index = 1
         for nb in self.notebooks:
-            key = slide_family_key(nb.path) or nb.path.name
+            key = (nb.path.parent, slide_family_key(nb.path) or nb.path.name)
             if key not in family_number:
                 family_number[key] = next_index
                 next_index += 1
