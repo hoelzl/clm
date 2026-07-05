@@ -187,6 +187,16 @@ inconsistently across languages) is **refused** with a normalize hint
 (`clm voiceover inline` / `extract`). An orphaned companion cell is refused
 rather than dropped.
 
+A **one-sided (DE-only) separated voiceover companion** — the state left by
+`clm harvest accept` when the EN twin is deferred, i.e. the deck twin
+(`slides_x.en.py`) already exists but `voiceover/voiceover_x.en.py` does not —
+is framed `translate_new` (`direction: de_to_en`, answer with the EN `body`).
+Answering `apply` with that `body` **creates the missing EN companion file**
+and writes the cell (minting the shared `slide_id`/`for_slide`, same as harvest
+mints cells); the EN deck stays untouched — narration remains in the companion.
+No hand-authoring of `voiceover_x.en.py` is needed: the documented harvest →
+sync handoff closes through the ordinary loop.
+
 ## Non-shell agents — the MCP tool
 
 `slides_sync_report` (MCP) returns the same schema-3 pair payload as

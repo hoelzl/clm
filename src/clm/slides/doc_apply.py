@@ -875,7 +875,10 @@ def _drop_unresolved_from_pools(
 
 
 def _decision_target_side(item: DiffItem) -> Lang:
-    """The side a body answer lands on: the twin of the moved/present side."""
+    """The side a ``translate_edit`` body answer lands on: the twin of the
+    moved/present side. (``translate_new`` derives its target from the
+    one-sided member directly — see :func:`_apply_body_decision` — because the
+    reporters set ``side`` inconsistently for that action, #570.)"""
     if item.side is not None:
         return _other(item.side)
     if item.member is not None and item.member.is_one_sided:
@@ -920,13 +923,20 @@ def _apply_body_decision(ex: _Executor, item: DiffItem, body: str) -> None:
     if item.action == "translate_new":
         if member is None:
             raise _ItemError("item carries no member")
-        target = _decision_target_side(item)
+        # A ``translate_new`` mints the *absent* twin, so the target is the
+        # member's missing side — derived from the member itself, never from
+        # ``item.side``. The reporters disagree on what ``side`` means here
+        # (``_classify_new`` sets the present side; ``_classify_localized`` /
+        # ``_classify_fork`` set the missing side), so trusting it inverts the
+        # direction for a standing one-sided member — the harvest → sync handoff
+        # for a separated voiceover companion (issue #570).
+        if not member.is_one_sided:
+            raise _ItemError("cannot mint a twin: both sides already exist — answer with a choice")
+        target = "de" if member.de is None else "en"
         source = _other(target)
         source_cell = member.side(source)
         if source_cell is None:
             raise _ItemError(f"the {source} source cell of {item.key} is missing")
-        if member.side(target) is not None:
-            raise _ItemError(f"the {target} side of {item.key} already exists")
         header = (
             swap_lang(source_cell.header, target) if source_cell.lang_attr else (source_cell.header)
         )

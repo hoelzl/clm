@@ -1282,7 +1282,11 @@ class _Differ:
             return
         if member.is_one_sided:
             # The side was already missing at base: still a pending twin.
+            # ``side`` names the side that *exists* (the translate source),
+            # consistent with the other ``translate_new`` emitters; the
+            # executor mints the absent twin from the member itself (#570).
             missing: Lang = "de" if member.de is None else "en"
+            present: Lang = "en" if missing == "de" else "de"
             self.emit(
                 handle,
                 "add",
@@ -1290,7 +1294,7 @@ class _Differ:
                 "en_to_de" if missing == "de" else "de_to_en",
                 f"the {missing} twin body is still pending",
                 group=group,
-                side=missing,
+                side=present,
                 member=member,
                 base=entry,
             )
@@ -1511,7 +1515,9 @@ class _Differ:
                 "en_to_de" if missing == "de" else "de_to_en",
                 f"fork of a shared member: the {missing} variant body is missing",
                 group=group,
-                side=missing,
+                # ``side`` names the side that exists (the translate source),
+                # consistent with the other ``translate_new`` emitters (#570).
+                side=marked,
                 member=member,
                 base=entry,
             )
