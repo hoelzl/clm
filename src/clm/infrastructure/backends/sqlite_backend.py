@@ -218,11 +218,22 @@ class SqliteBackend(LocalOpsBackend):
         job_type = service_to_job_type.get(service_name, "unknown")
 
         # Check database cache first (processed_files table with full Result objects)
+        #
+        # ``force_execution`` carries the execution-cache warmup decision to the
+        # SQLite job-cache probe in ``_submit_job_blocking``. When
+        # ``_can_replay_from_cache`` returns False it is steering a
+        # Recording/Speaker HTML payload with a cold ``executed_notebooks`` cache
+        # off the replay path to force a worker run that repopulates that cache.
+        # The job cache would otherwise short-circuit the very run with a
+        # ``jobcache_hit`` and leave the execution cache cold (issue #579), so we
+        # propagate the decision instead of letting it be silently defeated.
+        force_execution = False
         if not self.ignore_db and self.db_manager:
             result = self.db_manager.get_result(
                 payload.input_file, payload.content_hash(), payload.output_metadata()
             )
-            if result and self._can_replay_from_cache(payload):
+            can_replay = self._can_replay_from_cache(payload)
+            if result and can_replay:
                 # In incremental mode, skip writing cached results to disk
                 # (they should already exist from a previous build)
                 if self.incremental:
@@ -313,6 +324,14 @@ class SqliteBackend(LocalOpsBackend):
 
                 return True
 
+            # Replay was blocked to warm a cold ``executed_notebooks`` cache
+            # (Recording/Speaker HTML producer). Suppress the downstream
+            # job-cache probe too, so the forced worker run is not pre-empted by
+            # a ``jobcache_hit`` and the execution cache actually gets
+            # repopulated (issue #579).
+            if not can_replay:
+                force_execution = True
+
             # Cache MISS on the stored result. When rebuild explanation is
             # enabled, run one extra read-only probe to log why. Only for a
             # genuine ``result is None`` miss — the ``result`` truthy but
@@ -346,6 +365,7 @@ class SqliteBackend(LocalOpsBackend):
             self._submit_job_blocking,
             payload,
             job_type,
+            force_execution,
         )
         if profiler.enabled:
             profiler.record_submit_offload(profiler_now() - _offload_t0)
@@ -424,13 +444,22 @@ class SqliteBackend(LocalOpsBackend):
         )
         return False
 
-    def _submit_job_blocking(self, payload: Payload, job_type: str) -> tuple[str, int | None]:
+    def _submit_job_blocking(
+        self, payload: Payload, job_type: str, force_execution: bool = False
+    ) -> tuple[str, int | None]:
         """Synchronous job-submission tail, run off the event loop.
 
         Performs the SQLite job-cache probe, the worker-availability wait, the
         payload JSON serialization, and the jobs-DB INSERT. Returns
         ``("jobcache_hit", None)`` when a stored output already satisfies the
         request, or ``("submitted", job_id)`` when a new job was enqueued.
+
+        ``force_execution`` suppresses the job-cache probe so a worker always
+        runs. The caller sets it when the execution-cache warmup guard has
+        already decided this payload must execute to repopulate
+        ``executed_notebooks`` (Recording/Speaker HTML with a cold execution
+        cache); without it the job cache would short-circuit the very run the
+        guard forced and leave the execution cache cold (issue #579).
 
         Runs on a :attr:`_submit_executor` thread, so it must touch ONLY
         thread-safe resources: ``JobQueue`` keeps a per-thread SQLite connection
@@ -443,8 +472,9 @@ class SqliteBackend(LocalOpsBackend):
         assert self.job_queue is not None
 
         # SQLite job cache: a stored result whose output is already on disk
-        # needs no worker run. Same --ignore-cache gate as the DB cache above.
-        if not self.ignore_db:
+        # needs no worker run. Same --ignore-cache gate as the DB cache above,
+        # plus the issue #579 warmup override that forces a run past the cache.
+        if not self.ignore_db and not force_execution:
             cached = self.job_queue.check_cache(str(payload.output_file), payload.content_hash())
             if cached:
                 logger.debug(f"SQLite cache hit for {payload.output_file}")
@@ -545,10 +575,10 @@ class SqliteBackend(LocalOpsBackend):
 
         if cached_nb is None:
             logger.info(
-                f"Recording HTML processed-files cache hit for "
-                f"'{payload.input_file}' but executed_notebooks has no entry "
-                f"for this content; running worker to repopulate the "
-                f"execution cache so Stage 4 consumers can reuse it."
+                f"Recording HTML execution cache is cold for "
+                f"'{payload.input_file}' (executed_notebooks has no entry for "
+                f"this content); running worker to repopulate it so Stage 4 "
+                f"consumers can reuse it instead of re-executing."
             )
             return False
         return True
