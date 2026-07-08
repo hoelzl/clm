@@ -367,6 +367,32 @@ class SqliteBackend(LocalOpsBackend):
                     job_type,
                     detail="output already on disk, no execution",
                 )
+            # Register the already-on-disk output so the end-of-build stray
+            # sweep keeps it. The sweep deletes any output not in
+            # output_write_registry; without this a job-cache hit leaves the
+            # valid cached file unregistered and the sweep removes it (issue
+            # #577 — recording/speaker HTML for unchanged topics vanished on
+            # incremental rebuilds). Mirrors the executed-job registration and
+            # the DB-cache path above: the "cache replay is observationally
+            # equivalent to execution" invariant (issue #321) must include the
+            # write registry, not just issue replay and hit reporting.
+            registry_output_path = Path(payload.output_file)
+            if not registry_output_path.is_absolute():
+                registry_output_path = self.workspace_path / registry_output_path
+            if registry_output_path.exists():
+                registry_source = Path(payload.input_file)
+                if is_image_path(registry_source):
+                    self.image_registry.record_output_write(registry_output_path)
+                try:
+                    self.output_write_registry.record_write(
+                        registry_output_path,
+                        content_source=registry_output_path,
+                        source=registry_source,
+                    )
+                except Exception as reg_exc:
+                    logger.debug(
+                        f"Could not register cached output {registry_output_path}: {reg_exc}"
+                    )
             return True
 
         # outcome == "submitted": the job is in the jobs DB. Register it for the

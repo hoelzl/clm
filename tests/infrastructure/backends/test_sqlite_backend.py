@@ -1125,6 +1125,75 @@ async def test_recording_html_cache_replay_blocked_when_executed_notebooks_cold(
 
 
 @pytest.mark.asyncio
+async def test_recording_html_jobcache_hit_registers_output_for_sweep(
+    temp_db, temp_workspace, temp_cache_db
+):
+    """A SQLite job-cache hit must register its on-disk output (issue #577).
+
+    Recording HTML with a cold executed_notebooks cache is steered off the
+    registering DB-cache replay path and into job submission. When the job
+    cache reports the output is already on disk, ``_submit_job_blocking``
+    returns ``jobcache_hit`` and no worker runs — but the file must still be
+    recorded in ``output_write_registry``. Otherwise the end-of-build stray
+    sweep (which deletes any output not in the registry) removes the valid
+    cached file, as seen with speaker/recording HTML for unchanged topics
+    disappearing on incremental rebuilds.
+    """
+    from clm.infrastructure.messaging.base_classes import Result
+
+    class MockResult(Result):
+        data: bytes = b"<html>cached</html>"
+
+        def result_bytes(self) -> bytes:
+            return self.data
+
+        def output_metadata(self) -> str:
+            return "recording:python:en:html"
+
+    backend = SqliteBackend(
+        db_path=temp_db,
+        workspace_path=temp_workspace,
+        ignore_db=False,
+        skip_worker_check=True,
+    )
+
+    try:
+        mock_result = MockResult(
+            correlation_id="test",
+            output_file="output/test.html",
+            input_file="test.py",
+            content_hash="abc123",
+        )
+        backend.db_manager = _make_mock_db_manager(temp_cache_db, mock_result)
+
+        operation = MockOperation(service_name_value="notebook-processor")
+        payload = _make_recording_html_payload()
+
+        # The cached output already exists on disk from a prior build.
+        output_path = temp_workspace / payload.output_file
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"<html>cached</html>")
+
+        # Force the SQLite job cache to report a hit so _submit_job_blocking
+        # short-circuits to jobcache_hit instead of enqueuing a worker job.
+        assert backend.job_queue is not None
+        backend.job_queue.check_cache = Mock(return_value={"hit": True})
+
+        await backend.execute_operation(operation, payload)
+
+        # jobcache_hit path: no worker job submitted, cached file preserved.
+        assert len(backend.active_jobs) == 0
+        assert output_path.exists()
+
+        # Regression: the on-disk output is now in the write registry, so the
+        # stray-file sweep treats it as live and keeps it.
+        assert output_path in backend.output_write_registry.entries
+    finally:
+        backend.active_jobs.clear()
+        await backend.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_recording_html_cache_replay_proceeds_when_executed_notebooks_warm(
     temp_db, temp_workspace, temp_cache_db
 ):
