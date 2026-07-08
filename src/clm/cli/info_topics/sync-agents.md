@@ -142,6 +142,18 @@ never recorded. Two ways to converge:
 `clm slides split` and `clm slides translate` record freshly-created pairs
 automatically, so a normal authoring flow starts warm.
 
+**Renaming a `slide_id` is a common way to fall cold — do not do it by hand.**
+The ledger keys trust by `id:<slide_id>`, and the only key migration the engine
+recovers is `pos: → id:` (an id-less cell gaining an id). A hand `id: → id:`
+rename therefore reads as a cold add on the new id (and a `record_remove` on the
+old one), so a cell you *renamed and edited* in one go reports `verify_cold` —
+whose `confirm` would bank the existing, now-stale twin. Use
+`clm slides rename-id DECK OLD NEW`: it rewrites the id (and every `for_slide`
+owner reference) on both halves and **migrates** the ledger baseline key
+(carrying the recorded fingerprints, never re-hashing). A pure rename then
+reports clean; a rename you did alongside an edit reports `translate_edit`
+against the carried baseline — so the stale twin is never silently confirmed.
+
 ## Adding a slide in one language (the twin does not exist yet)
 
 Author a new cell on one half only — a new markdown slide (with a fresh

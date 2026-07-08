@@ -23,6 +23,7 @@ from clm.cli.commands.slides.language_view import language_view_cmd  # noqa: E40
 from clm.cli.commands.slides.normalize import normalize_slides_cmd  # noqa: E402
 from clm.cli.commands.slides.reconcile_vo_ids import reconcile_vo_ids_cmd  # noqa: E402
 from clm.cli.commands.slides.referenced_by import referenced_by_cmd  # noqa: E402
+from clm.cli.commands.slides.rename_id import rename_id_cmd  # noqa: E402
 from clm.cli.commands.slides.rules import authoring_rules_cmd  # noqa: E402
 from clm.cli.commands.slides.search import search_slides_cmd  # noqa: E402
 from clm.cli.commands.slides.slug_report import slug_report_cmd  # noqa: E402
@@ -42,6 +43,7 @@ slides_group.add_command(language_view_cmd, name="language-view")
 slides_group.add_command(suggest_sync_cmd, name="suggest-sync")
 slides_group.add_command(slides_sync_group, name="sync")
 slides_group.add_command(reconcile_vo_ids_cmd, name="reconcile-vo-ids")
+slides_group.add_command(rename_id_cmd, name="rename-id")
 slides_group.add_command(slides_translate_cmd, name="translate")
 # `bootstrap` is the cold-start direction of `translate`; keep it
 # invocable but list the command only once in --help.
