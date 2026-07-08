@@ -170,6 +170,7 @@ def db_prune(
                     failed_days=failed_days,
                     cancelled_days=cancelled_days,
                     events_days=events_days,
+                    cache_versions=cache_versions,
                 )
                 for key, count in result.items():
                     if count > 0:

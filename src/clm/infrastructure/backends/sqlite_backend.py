@@ -1076,6 +1076,7 @@ class SqliteBackend(LocalOpsBackend):
                     failed_days=retention_config.failed_jobs_retention_days,
                     cancelled_days=retention_config.cancelled_jobs_retention_days,
                     events_days=retention_config.worker_events_retention_days,
+                    cache_versions=retention_config.cache_versions_to_keep,
                 )
 
                 total_jobs_cleaned = sum(jobs_cleanup.values())
