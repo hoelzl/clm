@@ -1130,25 +1130,25 @@ async def test_recording_html_jobcache_hit_registers_output_for_sweep(
 ):
     """A SQLite job-cache hit must register its on-disk output (issue #577).
 
-    Recording HTML with a cold executed_notebooks cache is steered off the
-    registering DB-cache replay path and into job submission. When the job
-    cache reports the output is already on disk, ``_submit_job_blocking``
-    returns ``jobcache_hit`` and no worker runs — but the file must still be
-    recorded in ``output_write_registry``. Otherwise the end-of-build stray
-    sweep (which deletes any output not in the registry) removes the valid
-    cached file, as seen with speaker/recording HTML for unchanged topics
-    disappearing on incremental rebuilds.
+    When ``_submit_job_blocking`` returns ``jobcache_hit`` and no worker runs,
+    the already-on-disk output must still be recorded in
+    ``output_write_registry``. Otherwise the end-of-build stray sweep (which
+    deletes any output not in the registry) removes the valid cached file, as
+    seen with speaker/recording HTML for unchanged topics disappearing on
+    incremental rebuilds.
+
+    Post-#579, Recording HTML with a *cold* execution cache no longer reaches
+    ``jobcache_hit`` at all — it is forced to execute to warm
+    ``executed_notebooks`` (see the dedicated test below). The jobcache_hit
+    path is still reachable for Recording HTML whose execution cache is *warm*
+    but whose ``processed_files`` row is absent (e.g. pruned by
+    ``cache_versions_to_keep`` while ``executed_notebooks`` persisted); that is
+    the scenario exercised here, and the #577 registration invariant must still
+    hold for it.
     """
-    from clm.infrastructure.messaging.base_classes import Result
+    from nbformat.v4 import new_code_cell, new_notebook
 
-    class MockResult(Result):
-        data: bytes = b"<html>cached</html>"
-
-        def result_bytes(self) -> bytes:
-            return self.data
-
-        def output_metadata(self) -> str:
-            return "recording:python:en:html"
+    from clm.infrastructure.database.executed_notebook_cache import ExecutedNotebookCache
 
     backend = SqliteBackend(
         db_path=temp_db,
@@ -1158,16 +1158,25 @@ async def test_recording_html_jobcache_hit_registers_output_for_sweep(
     )
 
     try:
-        mock_result = MockResult(
-            correlation_id="test",
-            output_file="output/test.html",
-            input_file="test.py",
-            content_hash="abc123",
-        )
-        backend.db_manager = _make_mock_db_manager(temp_cache_db, mock_result)
+        # processed_files MISS (get_result -> None) so the replay short-circuit
+        # is skipped and submission is reached.
+        backend.db_manager = _make_mock_db_manager(temp_cache_db, None)
 
         operation = MockOperation(service_name_value="notebook-processor")
         payload = _make_recording_html_payload()
+
+        # WARM executed_notebooks: _can_replay_from_cache returns True, so the
+        # execution-cache warmup override does NOT force a run and the job cache
+        # is allowed to short-circuit.
+        nb = new_notebook(cells=[new_code_cell("x = 1")])
+        with ExecutedNotebookCache(temp_cache_db) as nb_cache:
+            nb_cache.store(
+                input_file=payload.input_file,
+                content_hash=payload.execution_cache_hash(),
+                language=payload.language,
+                prog_lang=payload.prog_lang,
+                executed_notebook=nb,
+            )
 
         # The cached output already exists on disk from a prior build.
         output_path = temp_workspace / payload.output_file
@@ -1188,6 +1197,72 @@ async def test_recording_html_jobcache_hit_registers_output_for_sweep(
         # Regression: the on-disk output is now in the write registry, so the
         # stray-file sweep treats it as live and keeps it.
         assert output_path in backend.output_write_registry.entries
+    finally:
+        backend.active_jobs.clear()
+        await backend.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_recording_html_cold_exec_cache_forces_worker_past_jobcache(
+    temp_db, temp_workspace, temp_cache_db
+):
+    """A cold execution cache forces a worker run even on a job-cache hit (#579).
+
+    This is the core #579 scenario: Recording HTML for an *unchanged* topic, so
+    ``processed_files`` hits, the output is already on disk, and the SQLite job
+    cache would report a hit — but ``executed_notebooks`` is cold. The execution
+    cache warmup guard must win over both caches: a worker is submitted to
+    repopulate ``executed_notebooks`` (so Stage 4 consumers replay instead of
+    re-executing), and the job-cache probe is suppressed rather than
+    short-circuiting the run with ``jobcache_hit``.
+    """
+    from clm.infrastructure.messaging.base_classes import Result
+
+    class MockResult(Result):
+        data: bytes = b"<html>cached</html>"
+
+        def result_bytes(self) -> bytes:
+            return self.data
+
+        def output_metadata(self) -> str:
+            return "recording:python:en:html"
+
+    backend = SqliteBackend(
+        db_path=temp_db,
+        workspace_path=temp_workspace,
+        ignore_db=False,
+        skip_worker_check=True,
+    )
+
+    try:
+        # processed_files HIT (unchanged content) ...
+        mock_result = MockResult(
+            correlation_id="test",
+            output_file="output/test.html",
+            input_file="test.py",
+            content_hash="abc123",
+        )
+        backend.db_manager = _make_mock_db_manager(temp_cache_db, mock_result)
+
+        operation = MockOperation(service_name_value="notebook-processor")
+        payload = _make_recording_html_payload()
+
+        # ... and the output already on disk, so the job cache would hit too.
+        output_path = temp_workspace / payload.output_file
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"<html>cached</html>")
+
+        # executed_notebooks is deliberately NOT seeded -> cold execution cache.
+        # Spy on the job cache so we can assert it is never consulted.
+        assert backend.job_queue is not None
+        backend.job_queue.check_cache = Mock(return_value={"hit": True})
+
+        await backend.execute_operation(operation, payload)
+
+        # A worker was submitted to warm executed_notebooks ...
+        assert len(backend.active_jobs) == 1
+        # ... and the job-cache probe was suppressed, not short-circuited.
+        backend.job_queue.check_cache.assert_not_called()
     finally:
         backend.active_jobs.clear()
         await backend.shutdown()

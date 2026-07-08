@@ -74,9 +74,9 @@ async def test_submission_runs_off_the_event_loop_thread(backend):
     seen: dict[str, threading.Thread] = {}
     real = SqliteBackend._submit_job_blocking
 
-    def spy(self, payload, job_type):
+    def spy(self, payload, job_type, force_execution=False):
         seen["thread"] = threading.current_thread()
-        return real(self, payload, job_type)
+        return real(self, payload, job_type, force_execution)
 
     try:
         with patch.object(SqliteBackend, "_submit_job_blocking", spy):
