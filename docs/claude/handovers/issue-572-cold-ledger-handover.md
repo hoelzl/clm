@@ -1,8 +1,8 @@
 # Issue #572 — cold-ledger stale-twin — handover
 
-**Status:** plan approved; implementing as two PRs. PR 1 = Phase A
-(`clm slides rename-id`). PR 2 = Phase B (`body`/`keep_twin` on id-keyed
-two-sided `verify_cold`) + Phase C-3a (reworded cold detail).
+**Status:** BOTH PRs shipped. PR 1 = Phase A (`clm slides rename-id`, PR #573,
+merged). PR 2 = Phase B (`body` + `side` on id-keyed two-sided `verify_cold`) +
+Phase C-3a (reworded cold detail) — implemented; see "PR 2 as built" below.
 
 **Issue:** On a split DE/EN deck whose per-topic ledger is cold for the current
 `slide_id`s, an id-keyed cell whose EN source was **edited** is framed
@@ -77,6 +77,37 @@ check cannot exist on a cold cell anyway (no baseline by construction).
 - `changelog.d/572-*.added.md` / `.changed.md`.
 - Info Topics Maintenance Rule: `rename-id` is a new CLI command → update
   `commands.md`.
+
+## PR 2 as built (what actually shipped vs the plan)
+
+- **Answer = `body` + `side`, NOT `keep_twin`.** `verify_cold` vocabulary is
+  now `("confirm", "body")`. `keep_twin` was *dropped* from scope: on a cold
+  member it is exactly `confirm` in ledger effect (both bank as-is), so adding
+  it would be a confusing synonym. `--strict-cold` also dropped (as planned).
+- **`Decision.side`** (`"de"`/`"en"`) added + parsed + validated in
+  `parse_decisions` (must accompany a `body`; must be de/en). Threaded into
+  `_apply_body_decision(..., side=...)`. Rejected on any non-`verify_cold` body
+  answer (translate_edit etc. derive their own target) — checked in
+  `_execute_decision`.
+- **Scoped to id-keyed** at the executor: the `verify_cold` branch of
+  `_apply_body_decision` refuses a `pos:` key with a mint-a-slide_id hint.
+- **Report honesty:** new `doc_apply.item_answers(item)` is key-aware — drops
+  `body` from a *positional* `verify_cold`'s advertised answers. `doc_report`
+  uses it instead of `decision_vocabulary`.
+- **Blocker 1 (pool-coherence) resolved by construction, not by widening the
+  guard.** Because a `body` is rejected on any `pos:` member, it can never land
+  a wholesale `rerecord_pool`; an id-keyed body has no pool. Widening
+  `_incoherent_pool_confirms` to count body/keep_twin would have *reintroduced*
+  the silent-bless bug (it would mark a pool coherent while the body is rejected
+  downstream). A comment on that function documents "do not widen."
+- **Blocker 3 (`side` wire schema)** handled as above.
+- Tests: `tests/slides/test_doc_apply.py::TestColdBodyRecovery` +
+  `TestDecisionParsing`; `tests/cli/test_sync_v3_cli.py::…test_cold_body_recovery_fixes_a_stale_twin`.
+  Existing `["confirm"]`-only assertions updated (test_sync_v3_cli, mcp/test_tools)
+  to the key-aware expectation.
+- Docs: `sync-agents.md` (framed actions, `side` field, cold-members section),
+  `commands.md` (apply decisions doc + rename-id cross-ref), changelog fragment
+  `572-cold-body-recovery.added.md`.
 
 Full plan: this repo did not commit the working plan; the reasoning is captured
 above and in the PR descriptions.

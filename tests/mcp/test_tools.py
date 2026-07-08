@@ -898,7 +898,11 @@ class TestSyncReport:
         assert data["is_clean"] is False
         assert data["needs_agent"] is True
         assert {i["action"] for i in data["items"]} == {"verify_cold"}
-        assert all(i["answers"] == ["confirm"] for i in data["items"])
+        # id-keyed cold members also advertise `body` (inline stale-twin recovery,
+        # issue #572); positional ones stay confirm-only (no addressable id).
+        for i in data["items"]:
+            expected = ["confirm", "body"] if i["key"].startswith("id:") else ["confirm"]
+            assert i["answers"] == expected, i
 
     async def test_localized_edit_needs_model(self, tmp_path):
         de_path, en_path = self._pair(tmp_path)

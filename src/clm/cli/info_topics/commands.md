@@ -1663,9 +1663,12 @@ Rename a `slide_id` from `OLD` to `NEW` across **both** halves of a split deck
 footgun: the v3 sync engine keys trust by `id:<slide_id>` and only recovers a
 `pos: → id:` (id-less → id'd) migration, so a hand `id: → id:` rename drops the
 member's ledger baseline to **cold**. A later edit of the renamed cell then reports
-`verify_cold` (whose only answer, `confirm`, banks the *existing* — possibly stale —
-twin), instead of a `translate_edit` that would re-translate it. This command does
-the rename the safe way so the deck never resets to cold (issue #572).
+`verify_cold` rather than a `translate_edit` against a live baseline — and a bare
+`confirm` on it banks the *existing*, now-stale twin. (A cold `verify_cold` does
+accept an inline `body`/`side` recovery — see `apply` below — but that puts the
+freshness judgment back on you; the rename kept the baseline warm so the engine
+frames the edit for you.) This command does the rename the safe way so the deck
+never resets to cold (issue #572).
 
 ```bash
 clm slides rename-id PATH OLD NEW [EN_PATH]
@@ -1911,8 +1914,12 @@ clm slides sync apply DECK [--decisions FILE|-] [--member KEY]... [--dry-run] [-
 Writes, **per item**: every mechanical row executes deterministically; framed
 rows execute only with a valid decision from the `--decisions` JSON document
 (`{"decisions": [{"key": "id:…", "choice": "confirm"} | {"key": "id:…",
-"body": "…"}]}`, `-` reads stdin). Each answer is validated individually — a
-body smuggling a cell delimiter, a wrong choice, or a stale handle is rejected
+"body": "…"}]}`, `-` reads stdin). A row may add `"side": "de"|"en"` **only**
+alongside a `body` on a two-sided `verify_cold` item — it names the stale twin
+to overwrite, turning cold recovery into one pass instead of hand-editing the
+file then `confirm`-ing (issue #572); `side` is rejected on any other action.
+Each answer is validated individually — a body smuggling a cell delimiter, a
+wrong choice, a `side` where it is meaningless, or a stale handle is rejected
 with a reason while the valid answers still land. The mutated bundle is
 re-parsed before anything touches disk and written atomically (≤4 files);
 every landed item is recorded into the ledger, **gated on the structural

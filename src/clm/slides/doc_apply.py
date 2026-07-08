@@ -79,6 +79,7 @@ __all__ = [
     "ItemResult",
     "apply_deck",
     "decision_vocabulary",
+    "item_answers",
     "parse_decisions",
 ]
 
@@ -98,11 +99,18 @@ def _other(lang: Lang) -> Lang:
 
 @frozen
 class Decision:
-    """One agent answer to a framed item, keyed by the member handle."""
+    """One agent answer to a framed item, keyed by the member handle.
+
+    ``side`` (``"de"`` / ``"en"``) is only meaningful alongside a ``body`` on a
+    two-sided ``verify_cold`` item: it names the stale twin to overwrite with
+    the supplied text. Every other framed action derives its target side from
+    the item itself, so ``side`` there is rejected as a mistake.
+    """
 
     key: str
     choice: str | None = None
     body: str | None = None
+    side: str | None = None
 
 
 #: Framed actions this executor can resolve from a decision, with the answer
@@ -112,7 +120,7 @@ _DECISION_VOCABULARY: dict[str, tuple[str, ...]] = {
     "translate_edit": ("body", "keep_twin"),
     "translate_new": ("body",),
     "verify_translation": ("confirm",),
-    "verify_cold": ("confirm",),
+    "verify_cold": ("confirm", "body"),
     "conflict_shared": ("de", "en", "body"),
     "pending_divergence": ("de", "en"),
     "remove_vs_edit": ("remove", "keep"),
@@ -127,6 +135,22 @@ _DECISION_VOCABULARY: dict[str, tuple[str, ...]] = {
 def decision_vocabulary(action: str) -> tuple[str, ...]:
     """The answer shapes ``apply --decisions`` accepts for a framed action."""
     return _DECISION_VOCABULARY.get(action, ())
+
+
+def item_answers(item: DiffItem) -> tuple[str, ...]:
+    """The key-aware answer vocabulary the report advertises for one item.
+
+    Identical to :func:`decision_vocabulary` except for ``verify_cold``: a
+    ``body`` recovery targets a named ``side`` and can only be placed on an
+    **id-keyed** two-sided member. A *positional* cold member has no stable
+    id to address and its ordinal aliases a neighboring slot, so it accepts
+    only ``confirm`` (or: mint a ``slide_id`` and re-report). Advertising
+    ``body`` there would be a lie the executor then rejects.
+    """
+    answers = decision_vocabulary(item.action)
+    if item.action == "verify_cold" and not item.key.startswith("id:"):
+        return tuple(a for a in answers if a != "body")
+    return answers
 
 
 def parse_decisions(payload: object) -> tuple[dict[str, Decision], list[str]]:
@@ -146,6 +170,7 @@ def parse_decisions(payload: object) -> tuple[dict[str, Decision], list[str]]:
             continue
         choice = row.get("choice")
         body = row.get("body")
+        side = row.get("side")
         if choice is not None and not isinstance(choice, str):
             errors.append(f"decision #{i} ({row['key']}): 'choice' must be a string")
             continue
@@ -155,10 +180,16 @@ def parse_decisions(payload: object) -> tuple[dict[str, Decision], list[str]]:
         if (choice is None) == (body is None):
             errors.append(f"decision #{i} ({row['key']}): give exactly one of 'choice' or 'body'")
             continue
+        if side is not None and side not in ("de", "en"):
+            errors.append(f"decision #{i} ({row['key']}): 'side' must be 'de' or 'en'")
+            continue
+        if side is not None and body is None:
+            errors.append(f"decision #{i} ({row['key']}): 'side' only accompanies a 'body' answer")
+            continue
         if row["key"] in decisions:
             errors.append(f"decision #{i} ({row['key']}): duplicate key")
             continue
-        decisions[row["key"]] = Decision(key=row["key"], choice=choice, body=body)
+        decisions[row["key"]] = Decision(key=row["key"], choice=choice, body=body, side=side)
     return decisions, errors
 
 
@@ -900,10 +931,15 @@ def _execute_decision(
             raise _ItemError(
                 f"'{item.action}' does not accept a body answer (allowed: {', '.join(allowed)})"
             )
+        if decision.side is not None and item.action != "verify_cold":
+            raise _ItemError(
+                f"'side' is only meaningful on a two-sided verify_cold body answer, "
+                f"not on '{item.action}' (which derives its target side itself)"
+            )
         error = _validate_body(decision.body, comment_token)
         if error:
             raise _ItemError(error)
-        _apply_body_decision(ex, item, decision.body)
+        _apply_body_decision(ex, item, decision.body, side=decision.side)
         return
     choice = decision.choice or ""
     if choice not in allowed:
@@ -913,8 +949,42 @@ def _execute_decision(
     _apply_choice_decision(ex, item, choice)
 
 
-def _apply_body_decision(ex: _Executor, item: DiffItem, body: str) -> None:
+def _apply_body_decision(
+    ex: _Executor, item: DiffItem, body: str, *, side: str | None = None
+) -> None:
     member = item.member
+    if item.action == "verify_cold":
+        # Cold recovery (issue #572): the agent read both bodies, judged the
+        # named twin stale, and supplies the corrected text — a one-pass fix
+        # instead of hand-editing the file then `confirm`-ing the stale twin.
+        # Scoped to id-keyed two-sided members: a positional cold member has
+        # no addressable id and its ordinal aliases a neighboring slot, so it
+        # cannot take a body (mint a slide_id and re-report). Because the target
+        # is always id-keyed, it is never in a `pos:` pool — the pool-coherence
+        # guard (which blesses pool siblings wholesale) is untouched here.
+        if not item.key.startswith("id:"):
+            raise _ItemError(
+                "a positional cold member cannot take a body — confirm the pool "
+                "(after checking the pair is in sync), or mint a slide_id and "
+                "re-report so the twin can be framed"
+            )
+        if member is None or member.is_one_sided:
+            raise _ItemError(
+                "cold body recovery needs a two-sided member — supply the missing "
+                "twin with translate_new instead"
+            )
+        if side is None:
+            raise _ItemError(
+                "a verify_cold body answer must name the 'side' to overwrite "
+                "(the stale twin: 'de' or 'en')"
+            )
+        target: Lang = side  # type: ignore[assignment]
+        holder = ex._holder(item, target)
+        cell = holder.side(target) if holder is not None else None
+        if holder is None or cell is None:
+            raise _ItemError(f"the {target} side of {item.key} is missing")
+        ex.set_side(holder, target, evolve(cell, lines=_replace_body(cell, body)))
+        return
     if item.action == "translate_edit":
         target = _decision_target_side(item)
         twin_member, twin_cell = ex._locate_twin(item, target)
@@ -1273,7 +1343,15 @@ def apply_deck(
 def _incoherent_pool_confirms(
     diff: DeckDiff, decisions: dict[str, Decision]
 ) -> set[tuple[str, str]]:
-    """Pools where only *some* cold members received a confirm decision."""
+    """Pools where only *some* cold members received a confirm decision.
+
+    Keyed strictly on ``choice == "confirm"`` — the only answer a *positional*
+    cold member accepts. A ``body`` (issue #572) is rejected on a positional
+    member (:func:`_apply_body_decision`), so it never lands a wholesale
+    ``rerecord_pool``; counting it as a resolving answer here would bless the
+    pool while the body itself is rejected downstream — the exact silent-bless
+    bug this guard exists to prevent. Do not widen it to body/keep_twin.
+    """
     cold_by_pool: dict[tuple[str, str], set[str]] = {}
     for item in diff.items:
         if item.action not in ("verify_cold", "verify_translation"):
