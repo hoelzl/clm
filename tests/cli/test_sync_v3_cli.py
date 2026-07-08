@@ -67,7 +67,11 @@ class TestSyncLoop:
         assert payload["is_clean"] is False
         assert payload["needs_agent"] is True
         assert {i["action"] for i in payload["items"]} == {"verify_cold"}
-        assert all(i["answers"] == ["confirm"] for i in payload["items"])
+        # id-keyed cold members also advertise `body` (inline stale-twin recovery,
+        # issue #572); positional ones stay confirm-only (no addressable id).
+        for i in payload["items"]:
+            expected = ["confirm", "body"] if i["key"].startswith("id:") else ["confirm"]
+            assert i["answers"] == expected, i
 
         # record blesses the current state (verify-gated).
         record = cli_runner.invoke(slides_sync_group, ["record", str(de), "--json"])
@@ -104,6 +108,45 @@ class TestSyncLoop:
         )
         assert result.exit_code == 0, result.output
         assert "# EN new" in en.read_text(encoding="utf-8")
+
+    def test_cold_body_recovery_fixes_a_stale_twin(self, cli_runner: CliRunner, tmp_path: Path):
+        # Issue #572: on a cold deck an id-keyed member whose EN was rewritten
+        # (DE twin now stale) is framed verify_cold — which now also offers a
+        # `body` answer. Supplying it with `side` overwrites the stale twin in
+        # one pass instead of `confirm` banking the stale German.
+        de, en = _write_pair(tmp_path)
+        # The DE twin of s0-m is a stale placeholder relative to the EN body.
+        de.write_text(
+            de.read_text(encoding="utf-8").replace("# DE Text", "# *(placeholder)*"), "utf-8"
+        )
+
+        report = _json_payload(
+            cli_runner.invoke(slides_sync_group, ["report", str(de), "--json"]).output
+        )
+        s0m = next(i for i in report["items"] if i["key"] == "id:s0-m")
+        assert s0m["action"] == "verify_cold"
+        assert s0m["answers"] == ["confirm", "body"]
+
+        # Fix the stale DE twin inline; confirm the rest of the cold pairs.
+        rows = []
+        for item in report["items"]:
+            if item["key"] == "id:s0-m":
+                rows.append({"key": item["key"], "body": "# DE frisch übersetzt", "side": "de"})
+            else:
+                rows.append({"key": item["key"], "choice": "confirm"})
+        applied = cli_runner.invoke(
+            slides_sync_group,
+            ["apply", str(de), "--decisions", "-", "--json"],
+            input=json.dumps({"decisions": rows}),
+        )
+        assert applied.exit_code == 0, applied.output
+        de_text = de.read_text(encoding="utf-8")
+        assert "# DE frisch übersetzt" in de_text
+        assert "placeholder" not in de_text
+
+        clean = cli_runner.invoke(slides_sync_group, ["report", str(de), "--json"])
+        assert clean.exit_code == 0, clean.output
+        assert _json_payload(clean.output)["is_clean"] is True
 
     def test_apply_residue_exits_one(self, cli_runner: CliRunner, tmp_path: Path):
         de, en = _write_pair(tmp_path)

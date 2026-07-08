@@ -468,8 +468,14 @@ class TestPerItem:
 # ---------------------------------------------------------------------------
 
 
-def _decision(key: str, *, choice: str | None = None, body: str | None = None):
-    return {key: doc_apply.Decision(key=key, choice=choice, body=body)}
+def _decision(
+    key: str,
+    *,
+    choice: str | None = None,
+    body: str | None = None,
+    side: str | None = None,
+):
+    return {key: doc_apply.Decision(key=key, choice=choice, body=body, side=side)}
 
 
 class TestDecisions:
@@ -605,6 +611,125 @@ class TestDecisions:
         assert outcome.all_applied, outcome.to_payload()
         assert "y = 99" not in deck.de_path.read_text(encoding="utf-8")
         deck.assert_converged()
+
+
+class TestColdBodyRecovery:
+    """Issue #572: a `body` answer fixes a stale twin on a two-sided
+    `verify_cold` member in one pass, instead of `confirm` banking it stale."""
+
+    def _cold_member_with_stale_de(self, tmp_path: Path) -> _Deck:
+        # Record the base, then add a NEW id member whose DE twin is a stale
+        # placeholder while EN carries the real content — the shape the issue
+        # describes (a renamed/edited cell that fell cold with a stale twin).
+        deck = _deck(tmp_path)
+        deck.write_de(*DE_PARTS, _localized("s0-new", "de", "*(placeholder)*"))
+        deck.write_en(*EN_PARTS, _localized("s0-new", "en", "Real EN content"))
+        _, diff = deck.diff()
+        assert [(i.key, i.action) for i in diff.items] == [("id:s0-new", "verify_cold")]
+        return deck
+
+    def test_body_overwrites_the_named_stale_twin(self, tmp_path: Path):
+        deck = self._cold_member_with_stale_de(tmp_path)
+        outcome = deck.apply(_decision("id:s0-new", body="# Echte DE-Übersetzung", side="de"))
+        assert outcome.all_applied, outcome.to_payload()
+        assert outcome.wrote
+        de_text = deck.de_path.read_text(encoding="utf-8")
+        assert "# Echte DE-Übersetzung" in de_text
+        assert "*(placeholder)*" not in de_text
+        # The other half is untouched, and the fixed pair records clean.
+        assert "Real EN content" in deck.en_path.read_text(encoding="utf-8")
+        deck.assert_converged()
+
+    def test_body_answer_advertised_only_for_id_keyed_cold(self, tmp_path: Path):
+        deck = _deck(tmp_path)
+        deck.write_de(*DE_PARTS, _localized("s0-new", "de", "Neu"))
+        deck.write_en(*EN_PARTS, _localized("s0-new", "en", "New"))
+        _, diff = deck.diff()
+        (item,) = diff.items
+        assert doc_apply.item_answers(item) == ("confirm", "body")
+
+    def test_body_without_side_is_rejected(self, tmp_path: Path):
+        deck = self._cold_member_with_stale_de(tmp_path)
+        before = deck.de_path.read_text(encoding="utf-8")
+        outcome = deck.apply(_decision("id:s0-new", body="# irgendwas"))
+        result = next(r for r in outcome.results if r.key == "id:s0-new")
+        assert result.status == "rejected"
+        assert "side" in result.reason
+        assert deck.de_path.read_text(encoding="utf-8") == before
+
+    def test_confirm_still_records_the_pair_as_is(self, tmp_path: Path):
+        # `confirm` remains valid — it banks both sides verbatim (the caller
+        # judged them in sync). This is the pre-#572 behavior, still available.
+        deck = self._cold_member_with_stale_de(tmp_path)
+        outcome = deck.apply(_decision("id:s0-new", choice="confirm"))
+        assert outcome.all_applied, outcome.to_payload()
+        assert not outcome.wrote
+        deck.assert_converged()
+
+    def test_body_on_a_positional_cold_member_is_rejected(self, tmp_path: Path):
+        # A new un-id'd shared code cell inserted among existing cells falls
+        # cold positionally (its ordinal aliases a neighbor); it has no
+        # addressable id, so a body is refused (mint a slide_id instead).
+        deck = _deck(tmp_path)
+        new = _shared_code("z", 9)  # new, between x and y — added on BOTH sides
+        deck.write_de(
+            HEADER_DE,
+            _slide("s0", "de", "Titel"),
+            _shared_code("x"),
+            new,
+            _shared_code("y", 2),
+            _localized("s0-m", "de", "DE Text"),
+        )
+        deck.write_en(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            _shared_code("x"),
+            new,
+            _shared_code("y", 2),
+            _localized("s0-m", "en", "EN text"),
+        )
+        _, diff = deck.diff()
+        cold = [i for i in diff.items if i.action == "verify_cold" and i.key.startswith("pos:")]
+        assert cold, [(i.key, i.action) for i in diff.items]
+        item = cold[0]
+        assert doc_apply.item_answers(item) == ("confirm",)
+        outcome = deck.apply(_decision(item.key, body="z = 9", side="de"))
+        result = next(r for r in outcome.results if r.key == item.key)
+        assert result.status == "rejected"
+        assert "positional" in result.reason
+
+    def test_side_on_a_translate_edit_body_is_rejected(self, tmp_path: Path):
+        deck = _deck(tmp_path)
+        deck.edit_de("DE Text", "DE Text NEU")
+        _, diff = deck.diff()
+        assert [(i.key, i.action) for i in diff.items] == [("id:s0-m", "translate_edit")]
+        outcome = deck.apply(_decision("id:s0-m", body="# EN new", side="en"))
+        result = next(r for r in outcome.results if r.key == "id:s0-m")
+        assert result.status == "rejected"
+        assert "side" in result.reason
+
+
+class TestDecisionParsing:
+    def test_side_must_be_de_or_en(self):
+        decisions, errors = doc_apply.parse_decisions(
+            {"decisions": [{"key": "id:x", "body": "b", "side": "left"}]}
+        )
+        assert not decisions
+        assert any("'side' must be 'de' or 'en'" in e for e in errors)
+
+    def test_side_requires_a_body(self):
+        decisions, errors = doc_apply.parse_decisions(
+            {"decisions": [{"key": "id:x", "choice": "confirm", "side": "de"}]}
+        )
+        assert not decisions
+        assert any("only accompanies a 'body'" in e for e in errors)
+
+    def test_valid_side_body_parses(self):
+        decisions, errors = doc_apply.parse_decisions(
+            {"decisions": [{"key": "id:x", "body": "b", "side": "de"}]}
+        )
+        assert not errors
+        assert decisions["id:x"].side == "de"
 
 
 # ---------------------------------------------------------------------------

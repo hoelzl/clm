@@ -65,7 +65,7 @@ def item_payloads(diff: DeckDiff) -> list[dict]:
     items = []
     for item in diff.items:
         payload = item.payload()
-        answers = doc_apply.decision_vocabulary(item.action)
+        answers = doc_apply.item_answers(item)
         if answers:
             payload["answers"] = list(answers)
         items.append(payload)

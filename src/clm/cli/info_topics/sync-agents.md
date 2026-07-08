@@ -68,7 +68,9 @@ the target-language body — or answer `translate_edit` with `keep_twin` when
 your edit did not change what the twin should say), `verify_translation` (both
 sides moved — confirm or supply a body), `conflict_shared` / `remove_vs_edit`
 / `unify_choose_body` / `order_decision` / `conflict_preamble` (choose a side),
-`verify_cold` (confirm the member is genuinely in sync), `ambiguous_alignment`
+`verify_cold` (confirm the member is in sync — or, on an **id-keyed** member,
+supply a `body` + `side` to overwrite a stale twin in the same pass),
+`ambiguous_alignment`
 (mint ids / choose), and the normalize-refusal deck item (run
 `clm slides normalize`, then re-report).
 
@@ -109,6 +111,11 @@ One JSON document answers any subset of framed items:
   `keep_twin`). For a `translate_edit` whose edit left the twin a faithful
   rendering, `{"key": …, "choice": "keep_twin"}` records the new baseline and
   keeps the existing twin verbatim — no need to re-supply an unchanged body.
+- `side` — `"de"` or `"en"`, **only** alongside a `body` on a two-sided
+  `verify_cold` item: it names the stale twin to overwrite. `{"key":
+  "id:intro", "body": "# frische Übersetzung", "side": "de"}` replaces the DE
+  cell and records the fixed pair — cold recovery in one pass. Every other
+  action derives its target side itself, so a `side` there is rejected.
 
 Feed it to `apply` (`-` reads stdin):
 
@@ -131,9 +138,16 @@ present) as `verify_cold` — the engine will not silently trust a pair it has
 never recorded. Two ways to converge:
 
 - **Per item**: answer `{"key": …, "choice": "confirm"}` in a decision
-  document after you have checked the pair is genuinely in sync. Pool-scoped
-  coherence applies to `pos:` handles: confirm the whole `(group, kind)`
-  pool's cold items in one document (a lone positional confirm is rejected).
+  document after you have checked the pair is genuinely in sync. `confirm`
+  banks **both sides as-is** — it makes no freshness guarantee, so read both
+  bodies first. If the twin is **stale** (e.g. the source was edited while the
+  ledger was cold), do not `confirm`: on an **id-keyed** member, answer with a
+  `body` + `side` naming the stale twin (`{"key": "id:x", "body": "…", "side":
+  "de"}`) to overwrite it in the same pass. A *positional* cold member has no
+  addressable id and takes only `confirm` (mint a `slide_id` first if its twin
+  is stale). Pool-scoped coherence applies to `pos:` handles: confirm the whole
+  `(group, kind)` pool's cold items in one document (a lone positional confirm
+  is rejected).
 - **Wholesale**: `clm slides sync record DECK|DIR` after a verified pass —
   bless/accept collapsed into one verb, gated on the structural verify, with
   `--provenance agent` (or `semantic:<model>` when a model attested the
