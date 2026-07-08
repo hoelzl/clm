@@ -468,8 +468,14 @@ auto-starts the worker when a course opts in.
 
 ## Caching Strategy
 
+> **Canonical reference: [`caching.md`](caching.md).** The summary below is a
+> quick orientation; the full picture — the *three* caches, their distinct keys,
+> what invalidates them, the retention policy, and the interactions that have
+> produced real bugs (#321, #577, #579, #580) — lives in the caching guide.
+
 **Content-Based Caching**:
-- Each file's content is hashed (SHA-256)
+- Each file's content is hashed (SHA-256), folding in the template fingerprint
+  (incl. the clm version), the worker-image identity, and sibling files
 - Before processing, check if output file + content hash exists in cache
 - If cache hit: skip processing, use cached result
 - If cache miss: process file, store result in cache
@@ -479,10 +485,14 @@ auto-starts the worker when a course opts in.
 - Faster incremental builds
 - Especially important for slow operations (notebook execution, PlantUML rendering)
 
-**Cache Tables**:
-- `results_cache` - Stores cached results
-- Indexed by (output_file, content_hash)
-- Tracks access count and last accessed time
+**Three caches across two DB files** (see [`caching.md`](caching.md) for keys,
+readers/writers, and trim policies):
+- `results_cache` (`clm_jobs.db`) — the job-level scheduling short-circuit,
+  keyed `(output_file, content_hash)`
+- `processed_files` (`clm_cache.db`) — the operation result cache, keyed
+  `(file_path, content_hash, output_metadata)`
+- `executed_notebooks` (`clm_cache.db`) — the execution cache, keyed by the
+  kind-agnostic `execution_cache_hash()`; Recording/Speaker HTML is its producer
 
 ## Configuration
 

@@ -5,6 +5,7 @@ Welcome to the CLM developer documentation! This guide is for developers who wan
 ## Quick Links
 
 - **[Architecture](architecture.md)** - System architecture and design
+- **[Caching Layers](caching.md)** - The three caches, their keys, invalidation, retention, and interactions
 - **[Building](building.md)** - Building Docker services
 - **[Testing](testing.md)** - Testing strategy and practices
 - **[Releasing](releasing.md)** - Release procedure (docs → tests → CI → PyPI)
