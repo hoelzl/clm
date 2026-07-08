@@ -321,6 +321,88 @@ def test_cache_access_tracking(job_queue):
     assert row[0] == 3
 
 
+def test_prune_old_cache_versions_keeps_newest_per_output_file(job_queue):
+    """results_cache is trimmed to the newest N rows per output_file (#580).
+
+    A changed deck's content hash yields a *new* results_cache row (the table is
+    ``UNIQUE(output_file, content_hash)`` written with ``INSERT OR REPLACE``),
+    and nothing in the build path used to remove the superseded rows.
+    ``prune_old_cache_versions`` keeps only the newest ``retain_count`` per
+    output file and drops the rest, without touching unrelated outputs.
+    """
+    conn = job_queue._get_conn()
+
+    # Three successive content hashes for the same output (deck edited twice),
+    # plus one row for a second output that must be left intact.
+    for i, content_hash in enumerate(["h_old", "h_mid", "h_new"]):
+        job_queue.add_to_cache("deck_a.html", content_hash, {"v": i})
+        # Stamp created_at so "newest" is unambiguous regardless of clock
+        # granularity; the real code orders by created_at DESC, id DESC.
+        conn.execute(
+            "UPDATE results_cache SET created_at = ? WHERE output_file = ? AND content_hash = ?",
+            (f"2026-01-0{i + 1} 00:00:00", "deck_a.html", content_hash),
+        )
+    job_queue.add_to_cache("deck_b.html", "b_only", {"v": 0})
+
+    deleted = job_queue.prune_old_cache_versions(retain_count=1)
+
+    assert deleted == 2  # h_old and h_mid dropped; h_new + b_only kept
+
+    # deck_a keeps only its newest hash; the superseded ones are gone.
+    assert job_queue.check_cache("deck_a.html", "h_new") is not None
+    assert job_queue.check_cache("deck_a.html", "h_mid") is None
+    assert job_queue.check_cache("deck_a.html", "h_old") is None
+    # The unrelated output is untouched.
+    assert job_queue.check_cache("deck_b.html", "b_only") is not None
+
+
+def test_prune_old_cache_versions_respects_retain_count(job_queue):
+    """retain_count controls how many versions survive per output_file (#580)."""
+    conn = job_queue._get_conn()
+    for i in range(5):
+        job_queue.add_to_cache("deck.html", f"h{i}", {"v": i})
+        conn.execute(
+            "UPDATE results_cache SET created_at = ? WHERE content_hash = ?",
+            (f"2026-01-0{i + 1} 00:00:00", f"h{i}"),
+        )
+
+    deleted = job_queue.prune_old_cache_versions(retain_count=2)
+
+    assert deleted == 3
+    # The two newest survive; older versions are pruned.
+    assert job_queue.check_cache("deck.html", "h4") is not None
+    assert job_queue.check_cache("deck.html", "h3") is not None
+    assert job_queue.check_cache("deck.html", "h2") is None
+
+
+def test_prune_old_cache_versions_warm_tree_is_noop(job_queue):
+    """A warm rebuild (one row per output) prunes nothing (#580)."""
+    job_queue.add_to_cache("a.html", "ha", {})
+    job_queue.add_to_cache("b.html", "hb", {})
+
+    assert job_queue.prune_old_cache_versions(retain_count=1) == 0
+    assert job_queue.check_cache("a.html", "ha") is not None
+    assert job_queue.check_cache("b.html", "hb") is not None
+
+
+def test_cleanup_all_trims_results_cache_only_when_opted_in(job_queue):
+    """cleanup_all sweeps results_cache only when cache_versions is given (#580)."""
+    for i in range(3):
+        job_queue.add_to_cache("deck.html", f"h{i}", {"v": i})
+
+    # Without the opt-in, the results cache is left untouched (pre-#580 behaviour).
+    result = job_queue.cleanup_all()
+    assert "cache_versions" not in result
+    assert job_queue.check_cache("deck.html", "h0") is not None
+
+    # With cache_versions, the sweep trims to the newest N and reports the count.
+    result = job_queue.cleanup_all(cache_versions=1)
+    assert result["cache_versions"] == 2
+    # id DESC tiebreaker keeps the last-inserted hash.
+    assert job_queue.check_cache("deck.html", "h2") is not None
+    assert job_queue.check_cache("deck.html", "h0") is None
+
+
 def test_max_attempts(job_queue):
     """Test that jobs stop being retrieved after max attempts."""
     job_id = job_queue.add_job(

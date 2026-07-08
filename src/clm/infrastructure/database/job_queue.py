@@ -900,6 +900,56 @@ class JobQueue:
 
         return len(orphaned_ids)
 
+    def prune_old_cache_versions(self, retain_count: int = 1) -> int:
+        """Trim ``results_cache`` to the newest ``retain_count`` rows per output file.
+
+        The table is keyed ``UNIQUE(output_file, content_hash)`` and written with
+        ``INSERT OR REPLACE``, so a row is replaced only when *both* columns
+        match. Whenever a deck's content hash changes — an edit, a new clm
+        version, a different worker image, a touched sibling file, all folded
+        into the hash (#321) — the next build inserts a *new* row and the
+        previous row for the same ``output_file`` is left behind. Nothing in the
+        build path removed it: ``cleanup_all`` cleaned only ``jobs`` /
+        ``worker_events``, and ``clear_orphaned_cache_entries`` only drops rows
+        whose output file is gone from disk (never the stale-hash case). So the
+        table grew without bound (issue #580).
+
+        This mirrors :meth:`DatabaseManager.prune_old_versions` for the
+        ``processed_files`` cache: keep the most recent ``retain_count`` rows per
+        ``output_file`` indefinitely (no age-based expiry) and delete the
+        superseded ones. A warm rebuild of an unchanged tree holds exactly one
+        row per output file, so nothing current is ever removed.
+
+        Args:
+            retain_count: Number of versions to keep per ``output_file``.
+
+        Returns:
+            Number of cache rows deleted.
+        """
+        conn = self._get_conn()
+        cursor = conn.execute(
+            """
+            DELETE FROM results_cache
+            WHERE id NOT IN (
+                SELECT id FROM (
+                    SELECT id, ROW_NUMBER() OVER (
+                        PARTITION BY output_file
+                        ORDER BY created_at DESC, id DESC
+                    ) AS rn
+                    FROM results_cache
+                )
+                WHERE rn <= ?
+            )
+            """,
+            (retain_count,),
+        )
+        deleted = cursor.rowcount
+        if deleted > 0:
+            logger.info(
+                f"Pruned {deleted} old results_cache rows (keeping {retain_count} per file)"
+            )
+        return deleted
+
     def remove_entries_for_missing_input_files(self, dry_run: bool = False) -> dict[str, int]:
         """Delete terminal jobs that reference non-existent input files.
 
@@ -956,6 +1006,7 @@ class JobQueue:
         failed_days: int | None = None,
         cancelled_days: int | None = 1,
         events_days: int = 30,
+        cache_versions: int | None = None,
     ) -> dict[str, int]:
         """Perform comprehensive cleanup of old entries.
 
@@ -964,6 +1015,9 @@ class JobQueue:
             failed_days: Days to keep failed jobs (None = keep indefinitely)
             cancelled_days: Days to keep cancelled jobs (None = keep indefinitely)
             events_days: Days to keep worker events
+            cache_versions: Number of ``results_cache`` versions to keep per
+                output file (None = skip the results-cache sweep, keeping the
+                pre-#580 behaviour for callers that do not opt in)
 
         Returns:
             Dictionary with counts of deleted entries by type
@@ -975,6 +1029,8 @@ class JobQueue:
             "worker_events": self.clear_old_worker_events(events_days),
             "hung_jobs_reset": self.reset_hung_jobs(),
         }
+        if cache_versions is not None:
+            result["cache_versions"] = self.prune_old_cache_versions(cache_versions)
 
         total = sum(result.values())
         if total > 0:
