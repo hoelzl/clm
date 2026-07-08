@@ -9,6 +9,133 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 Unreleased changes are collected as fragment files in [`changelog.d/`](changelog.d/)
 and folded into this file by `scripts/collect_changelog.py` at release time.
 
+## [1.21.0] - 2026-07-08
+
+### Added
+
+- **Sync v3: a `translate_edit` item now accepts a `keep_twin` answer.** When a
+  one-sided edit leaves the other language's cell a faithful rendering (e.g. you
+  refined the German prose and the English is already correct), answer
+  `{"key": …, "choice": "keep_twin"}` to record the new baseline and keep the
+  twin verbatim — instead of re-supplying the unchanged twin body as a `body`
+  answer. Documented in `clm info sync-agents`. (#566)
+
+- **Inline stale-twin recovery on cold cells.** A two-sided `verify_cold` item
+  on an **id-keyed** member now accepts a `body` answer in the sync decisions
+  document, alongside a new `side` (`"de"`/`"en"`) field naming the twin to
+  overwrite: `{"key": "id:x", "body": "…", "side": "de"}`. Previously the only
+  answer was `confirm`, which banks **both sides as-is** — so a cell that fell
+  cold with a *stale* twin (e.g. its source was edited while the ledger was
+  cold) could only be fixed by hand-editing the file and then confirming.
+  Supplying the corrected twin inline makes cold recovery a one-pass operation,
+  consistent with `translate_edit`. Positional cold members (no addressable id)
+  still take only `confirm` — mint a `slide_id` first if their twin is stale.
+  See `clm info sync-agents` / `clm info commands`. (#572)
+
+- **`clm slides rename-id DECK OLD NEW`** — rename a `slide_id` across both
+  halves of a split deck **and** the committed sync ledger, atomically. Renaming
+  a `slide_id` by hand dropped the member's v3 ledger baseline to *cold* (the
+  engine keys trust by `id:<slide_id>` and only recovers `pos: → id:`
+  migrations), so a cell renamed **and** edited in one go reported `verify_cold`
+  — whose only answer, `confirm`, banks the existing, now-stale twin. The new
+  command rewrites the id (and every `for_slide` owner reference) on both halves
+  and *migrates* the ledger baseline key (carrying the recorded fingerprints,
+  never re-hashing): a pure rename then reports clean, and a rename done
+  alongside an edit reports `translate_edit` against the carried baseline, so the
+  stale twin can never be confirmed unnoticed. Refuses a rename that would create
+  a duplicate id. See `clm info commands` / `clm info sync-agents`. (#572)
+
+### Changed
+
+- Dir-group copies now skip files whose size and mtime already match the
+  source (rsync-style quick check) instead of rewriting the whole tree on
+  every build. Large vendored trees (e.g. Catch2) no longer cause needless
+  SSD writes on rebuilds.
+
+### Fixed
+
+- `clm slides sync record` no longer rewrites `confirmed_commit` on members
+  whose recorded state is unchanged, and no longer rewrites a ledger file whose
+  content is byte-identical — a repo-wide record sweep over clean pairs now
+  leaves `git status` clean instead of dirtying every committed
+  `<topic>/.clm/sync-ledger.json` (previously ~500-file churn). The same
+  preservation applies to `apply`'s per-item ledger updates. The record `--json`
+  envelope gains a per-pair `ledger_changed` boolean and a top-level `unchanged`
+  count ([#555](https://github.com/hoelzl/clm/issues/555)).
+
+- Dir-group copies no longer skip a write when a *different* source coincidentally matches the destination's size and mtime (e.g. overlapping dir-groups writing files created in the same instant). The rsync-style quick check introduced for skip-unchanged rebuilds is now only a pre-filter: skipping additionally requires the contents to compare byte-equal, so stale content can't be left behind and conflicting writers are reliably detected again (#562).
+
+- Fixed `--workers=docker` builds silently executing notebook jobs on host
+  (Direct-mode) workers started by a concurrent build sharing the same jobs
+  database, which failed C++ decks with `NoSuchKernel: xcpp20` (the kernel
+  only exists in the Docker image). Three coordinated changes: worker reuse
+  is now execution-mode-aware (a Docker-mode build never counts another
+  build's Direct workers as sufficient), jobs are tagged with the execution
+  mode they require (jobs-DB schema v10) so only matching-mode workers claim
+  them, and the worker-availability check counts only matching-mode workers.
+- A missing Jupyter kernelspec (`NoSuchKernel`) is now reported as a
+  **configuration** error instead of a user error. Besides the correct label
+  and actionable guidance, this keeps the failure out of the persistent
+  error cache, so fixing the environment (e.g. rebuilding the Docker image)
+  is no longer masked by a replayed stale error.
+
+- **Sync v3: a new one-sided *id-keyed* cell is now framed `translate_new` /
+  `copy_new_shared` in ledger mode, not a dead-end `verify_cold`.** Previously,
+  adding a slide (with a fresh `slide_id`) or an id-keyed shared code cell to one
+  language half of a ledgered deck reported the cell `verify_cold` — whose only
+  answer, `confirm`, `apply` rejects for a one-sided member ("cannot confirm a
+  one-sided member") — so the twin had to be hand-authored. The engine now
+  routes a one-sided un-ledgered *id-keyed* member to `translate_new` (answer
+  with the target-language body; the twin and shared `slide_id` are minted for
+  you) or `copy_new_shared` (mechanical verbatim copy). Two-sided cold members
+  still frame `verify_cold`. Un-id'd positional inserts stay `verify_cold`
+  because ordinal aliasing makes mechanical mirroring unsafe — mint a `slide_id`
+  to resolve. `clm info sync-agents` now documents the add-in-one-language flow
+  and the decision-`body` format. (#566)
+
+- `clm slides sync apply` can now create a missing separated **EN voiceover
+  companion** from a `translate_new` decision. A one-sided (DE-only) companion
+  — the state `clm harvest accept` leaves when the EN twin is deferred — is
+  framed `translate_new` by `report`, but `apply` previously rejected every
+  member with `the en source cell of id:<slide-id> is missing`: the executor
+  derived the translation *target* from the framed item's `side`, whose meaning
+  differed between the reporters (a *standing* one-sided member reports the
+  *missing* side, a fresh add reports the *present* side), inverting the
+  direction. `translate_new` now mints the absent twin from the member itself,
+  so answering with the EN `body` writes `voiceover/voiceover_x.en.py` (minting
+  the shared `slide_id`/`for_slide`) and leaves the EN deck untouched — the
+  documented harvest → sync handoff closes through the ordinary loop instead of
+  requiring the companion to be hand-authored ([#570](https://github.com/hoelzl/clm/issues/570)).
+
+- Fixed a build crash (`shutil.Error` / WinError 32 sharing violation on
+  Windows) in the final dir-group copy: for explicit output targets whose
+  kinds span both public and speaker (e.g. `{code-along, trainer}`), the
+  public/speaker split collapses to a single output path, but two copy
+  operations were still launched and raced `shutil.copytree` against each
+  other on the same destination files. Dir-group copy operations are now
+  deduplicated by (destination, sources) across the whole build, which also
+  covers dir-groups repeated in a course spec.
+
+- The "Finishing N result-cache write(s)..." notice no longer interleaves with the live stage progress bar mid-build; it is now emitted during backend shutdown (after the build summary), consistent with the other cleanup notices. The end-of-stage drain itself is unchanged and is covered by the progress bar's spinner.
+
+- Fixed section notebook numbering assigning the same number to notebooks
+  with identical file names from different topic folders (e.g. several
+  `workshop.*.py` decks in one section all rendered as `03 …`). The numbering
+  key is now scoped to the notebook's parent directory; split companions
+  (`*.de.py` / `*.en.py`) in the same folder still share one slot.
+
+- Fixed the "Sweeping stale output files..." notice printing above the still-active stage progress bar: the stray-file sweep now runs after the build summary, so the notice appears below it.
+
+- **`clm validate` on a single split half now runs the full cross-file pair
+  suite** when the twin exists on disk: shared-cell byte parity and tag-set
+  parity now run alongside the existing `slide_id` / voiceover `for_slide`
+  parity detectives (#162). Previously those two checks ran only at
+  directory/course scope, so `clm validate x.de.py` could report OK while the
+  pair's shared cells had silently diverged — producing divergent DE/EN build
+  output. `--quick` (the PostToolUse-hook path) still skips all cross-file
+  checks by design: it fires mid-edit, where transient pair divergence is
+  expected.
+
 ## [1.20.0] - 2026-07-04
 
 ### Added

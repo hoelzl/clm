@@ -1,1 +1,0 @@
-- Fixed the "Sweeping stale output files..." notice printing above the still-active stage progress bar: the stray-file sweep now runs after the build summary, so the notice appears below it.
