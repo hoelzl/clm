@@ -180,6 +180,7 @@ When you need information, go to its canonical home rather than guessing:
 | Course spec XML format (version-accurate) | `clm info spec-files` |
 | Breaking-change migrations | `clm info migration` |
 | System architecture, module overview | `docs/developer-guide/architecture.md` |
+| Caching layers (keys, invalidation, retention, interactions) | `docs/developer-guide/caching.md` |
 | Per-version feature history | `CHANGELOG.md` |
 | Environment variables & config | `docs/user-guide/configuration.md` |
 | Installation & optional extras | `docs/user-guide/installation.md` |
@@ -234,6 +235,11 @@ practical consequences:
   `//db/...` double-slash prefix on Windows to defeat this.
 - `.venv/Scripts/python.exe` is the project interpreter on Windows
   (`.venv/bin/python` on Unix).
+- Worktrees accumulate under `.claude/worktrees/` from finished issues and
+  sessions. `python scripts/prune_merged_worktrees.py` reports which are already
+  merged into `origin/master` (report-only; add `--fetch` to refresh the base,
+  `--delete` to remove the clean ones — it never force-removes a dirty or locked
+  worktree).
 
 ## Troubleshooting Quick Hits
 
@@ -242,9 +248,14 @@ practical consequences:
 2. **Worker issues**: run `python diagnose_workers.py`.
 3. **Import errors**: ensure `pip install -e .` was run in the correct
    environment.
+4. **Unchanged decks rebuilding / "no cached data available"**: run
+   `clm cache explain <deck> --spec <course.xml>` (same DB/output paths as the
+   build). It is almost always cache-*key* invalidation — a clm upgrade, a
+   `direct`↔`docker` worker switch, or CRLF drift in a sibling file — not
+   retention eviction. See `docs/developer-guide/caching.md`.
 
 ---
 
 **Repository**: https://github.com/hoelzl/clm/ | **Issues**: https://github.com/hoelzl/clm/issues
 
-**Last Updated**: 2026-06-23
+**Last Updated**: 2026-07-08
