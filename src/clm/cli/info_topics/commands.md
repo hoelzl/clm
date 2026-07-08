@@ -1654,6 +1654,51 @@ clm slides reconcile-vo-ids slides_pe_03b_few_shot.de.py --to ids
 clm slides reconcile-vo-ids slides/module_410_ai_dev/
 ```
 
+### `clm slides rename-id`
+
+*Added in CLM {version}.*
+
+Rename a `slide_id` from `OLD` to `NEW` across **both** halves of a split deck
+**and** the committed sync ledger, atomically. Renaming a `slide_id` by hand is a
+footgun: the v3 sync engine keys trust by `id:<slide_id>` and only recovers a
+`pos: → id:` (id-less → id'd) migration, so a hand `id: → id:` rename drops the
+member's ledger baseline to **cold**. A later edit of the renamed cell then reports
+`verify_cold` (whose only answer, `confirm`, banks the *existing* — possibly stale —
+twin), instead of a `translate_edit` that would re-translate it. This command does
+the rename the safe way so the deck never resets to cold (issue #572).
+
+```bash
+clm slides rename-id PATH OLD NEW [EN_PATH]
+```
+
+`PATH` is one half of a split pair (`<deck>.de.<ext>` / `<deck>.en.<ext>` — the twin
+is found on disk) or both halves passed explicitly. It rewrites the `slide_id` (and
+every `for_slide` owner reference) on both halves and **migrates** the ledger
+baseline key — *migrates*, never re-fingerprints, so the recorded content hashes are
+carried under the new key. Consequently:
+
+- A pure rename (no content change) reports **clean** afterward — not cold.
+- A rename you did *together with* an edit reports `translate_edit` on the next
+  `clm slides sync report` (the carried baseline no longer matches the edited body),
+  so the stale twin can never be banked unnoticed by a cold `confirm`.
+
+| Option | Effect |
+|---|---|
+| `--report-only`, `--dry-run` | Report what would change without modifying files or the ledger. |
+| `--json` | Emit a JSON report. |
+
+It refuses (exit 2) if `NEW` already exists as a `slide_id` in the pair (that would
+create a duplicate id), if no cell carries `OLD`, if `OLD == NEW`, or if `NEW`
+contains whitespace or a double-quote. A deck with no recorded baseline (never
+`record`ed) still has its files rewritten — there is simply nothing to migrate.
+
+```bash
+# Preview the rename across both halves + the ledger
+clm slides rename-id slides_pe_03a_chain_of_thought.de.py old-slug new-slug --dry-run
+# Apply it
+clm slides rename-id slides_pe_03a_chain_of_thought.de.py old-slug new-slug
+```
+
 ### `clm slides slug-report`
 
 *Added in CLM {version}.*
