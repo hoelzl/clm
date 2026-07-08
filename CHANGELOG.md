@@ -9,6 +9,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 Unreleased changes are collected as fragment files in [`changelog.d/`](changelog.d/)
 and folded into this file by `scripts/collect_changelog.py` at release time.
 
+## [1.21.1] - 2026-07-08
+
+### Added
+
+- **Developer caching guide.** `docs/developer-guide/caching.md` documents CLM's three cache layers (`results_cache`, `processed_files`, `executed_notebooks`), the two DB files, the `content_hash` / `execution_cache_hash` composition and what invalidates them, the newest-N-indefinitely retention policy, the build-time consultation order, the Stage-4 execution-cache warmup guard, and the interactions behind issues #321/#577/#579/#580.
+- **`scripts/prune_merged_worktrees.py`.** Reports (and, with `--delete`, removes) git worktrees whose branch is already merged into a base ref — report-only by default, never force-removing a dirty or locked worktree.
+
+### Fixed
+
+- **Incremental rebuilds no longer delete cached recording/speaker HTML.** A
+  SQLite job-cache hit (`jobcache_hit`) served the output from disk without
+  recording it in the output-write registry, so the end-of-build stray-file
+  sweep treated the valid cached file as an orphan and removed it. This bit
+  recording/speaker HTML for unchanged topics on incremental Docker-backend
+  rebuilds (notebooks and `shared`/`trainer` HTML were unaffected). The
+  job-cache-hit path now registers its on-disk output, matching the
+  database-cache and executed-job paths. (#577)
+
+- **Recording/Speaker HTML now actually warms the execution cache on incremental rebuilds.** When `executed_notebooks` was cold for a recording deck, the Stage-4 producer guard steered the payload off the `processed_files` replay to force a worker run that repopulates the execution cache — but the SQLite job cache then short-circuited that very run with a `jobcache_hit`, so `executed_notebooks` stayed cold and every Stage-4 consumer (Completed/Trainer/Partial HTML) fell back to redundant direct execution of the notebook. The warmup decision is now carried through to the job-cache probe (`_submit_job_blocking`), which is suppressed for exactly those payloads so the worker runs and repopulates the execution cache. (#579)
+
+- **The job-level results cache no longer grows without bound.** Each time a deck's content hash changed (an edit, a new clm version, a different worker image, or a touched sibling file — all folded into the hash), a build inserted a fresh `results_cache` row and left the superseded one behind forever, because the table is keyed `UNIQUE(output_file, content_hash)` and nothing in the build path trimmed it. Build-end cleanup now sweeps `results_cache` to the newest `cache_versions_to_keep` rows per output file — the same "retain newest N indefinitely, no age-based expiry" policy the `processed_files` cache already uses — via a new `JobQueue.prune_old_cache_versions`. `clm db cleanup` applies it too. (#580)
+
 ## [1.21.0] - 2026-07-08
 
 ### Added
