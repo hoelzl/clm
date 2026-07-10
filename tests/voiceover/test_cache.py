@@ -152,15 +152,52 @@ class TestTranscribeConfig:
         assert TranscribeConfig.normalize_device("auto") == "auto"
 
 
-class TestResolveCacheRoot:
-    def test_default_uses_cwd(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        root = resolve_cache_root()
-        assert root == tmp_path / CACHE_DIRNAME
+def _mark_project_root(path: Path) -> None:
+    """Give *path* a project-root marker so the walk-up stops there."""
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "pyproject.toml").write_text("[tool.other]\n", encoding="utf-8")
 
-    def test_explicit_base_dir(self, tmp_path):
-        root = resolve_cache_root(tmp_path)
-        assert root == tmp_path / CACHE_DIRNAME
+
+class TestResolveCacheRoot:
+    """The default root is shared and deck-independent (issue #568)."""
+
+    def test_default_uses_cwd_project_root(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CLM_CACHE_DIR", raising=False)
+        _mark_project_root(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        assert resolve_cache_root() == tmp_path / ".clm-cache" / "voiceover"
+
+    def test_base_dir_walks_up_to_project_root(self, tmp_path, monkeypatch):
+        # The deck dir anchors the walk-up; the root's shared cache wins, so
+        # every deck in the project resolves to the SAME location.
+        monkeypatch.delenv("CLM_CACHE_DIR", raising=False)
+        _mark_project_root(tmp_path)
+        deck_a = tmp_path / "slides" / "module_410" / "topic_010"
+        deck_b = tmp_path / "slides" / "module_550" / "topic_010_azav"
+        deck_a.mkdir(parents=True)
+        deck_b.mkdir(parents=True)
+        shared = tmp_path / ".clm-cache" / "voiceover"
+        assert resolve_cache_root(deck_a) == shared
+        assert resolve_cache_root(deck_b) == shared
+
+    def test_env_override(self, tmp_path, monkeypatch):
+        target = tmp_path / "from-env"
+        monkeypatch.setenv("CLM_CACHE_DIR", str(target))
+        assert resolve_cache_root(tmp_path) == target / "voiceover"
+
+    def test_pyproject_cache_dir(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CLM_CACHE_DIR", raising=False)
+        (tmp_path / "pyproject.toml").write_text(
+            '[tool.clm]\ncache_dir = "custom-cache"\n', encoding="utf-8"
+        )
+        deck = tmp_path / "slides" / "topic_010"
+        deck.mkdir(parents=True)
+        assert resolve_cache_root(deck) == tmp_path / "custom-cache" / "voiceover"
+
+    def test_legacy_cache_root_is_per_deck(self, tmp_path):
+        from clm.voiceover.cache import legacy_cache_root
+
+        assert legacy_cache_root(tmp_path) == tmp_path / CACHE_DIRNAME
 
 
 class TestTranscriptsCache:
@@ -440,9 +477,13 @@ class TestCachePolicy:
         policy = CachePolicy(cache_root=override)
         assert policy.resolve_root(Path("/some/other/base")) == override
 
-    def test_resolve_root_falls_back_to_base_dir(self, tmp_path):
+    def test_resolve_root_defaults_to_shared_root(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CLM_CACHE_DIR", raising=False)
+        _mark_project_root(tmp_path)
+        deck = tmp_path / "slides" / "topic_010"
+        deck.mkdir(parents=True)
         policy = CachePolicy()
-        assert policy.resolve_root(tmp_path) == tmp_path / CACHE_DIRNAME
+        assert policy.resolve_root(deck) == tmp_path / ".clm-cache" / "voiceover"
 
 
 class TestCachedTranscribe:
@@ -621,6 +662,203 @@ class TestCachedTimelineAndAlignment:
         _, hit = cached_alignment(video, slides, policy=policy, alignment_fn=fake_align, cfg=cfg)
         assert hit is True
         assert calls["n"] == 1
+
+
+class TestLegacyPromotion:
+    """Pre-#568 per-deck entries are found on a miss and promoted."""
+
+    @staticmethod
+    def _transcript():
+        from clm.voiceover.transcribe import Transcript, TranscriptSegment
+
+        return Transcript(
+            segments=[TranscriptSegment(start=0.0, end=1.0, text="hi")],
+            language="de",
+            duration=1.0,
+        )
+
+    @staticmethod
+    def _seed_legacy_transcript(deck_dir: Path, video: Path, transcript) -> None:
+        from clm.voiceover.cache import legacy_cache_root
+
+        cfg = TranscribeConfig(
+            backend="faster-whisper", model="large-v3", language="de", device_class="cpu"
+        )
+        TranscriptsCache(legacy_cache_root(deck_dir)).put(
+            VideoKey.from_path(video), cfg, transcript
+        )
+
+    def test_transcript_promoted_from_per_deck_cache(self, tmp_path):
+        video = _touch_video(tmp_path)
+        deck = tmp_path / "topic_010"
+        deck.mkdir()
+        self._seed_legacy_transcript(deck, video, self._transcript())
+        shared = tmp_path / "shared-cache"
+        policy = CachePolicy(cache_root=shared)
+
+        def must_not_run():
+            raise AssertionError("legacy hit must not re-transcribe")
+
+        kwargs = {
+            "policy": policy,
+            "base_dir": deck,
+            "transcribe_fn": must_not_run,
+            "backend_name": "faster-whisper",
+            "model_size": "large-v3",
+            "language": "de",
+            "device": "cpu",
+        }
+        transcript, hit = cached_transcribe(video, **kwargs)
+        assert hit is True
+        assert transcript.segments[0].text == "hi"
+        # Promoted: the shared root now holds the entry itself.
+        key = VideoKey.from_path(video)
+        assert (shared / "transcripts" / f"{key.hash}.json").is_file()
+        _, hit2 = cached_transcribe(video, **kwargs)
+        assert hit2 is True
+
+    def test_refresh_skips_legacy_probe(self, tmp_path):
+        video = _touch_video(tmp_path)
+        deck = tmp_path / "topic_010"
+        deck.mkdir()
+        self._seed_legacy_transcript(deck, video, self._transcript())
+        calls = {"n": 0}
+
+        def fresh():
+            calls["n"] += 1
+            return self._transcript()
+
+        cached_transcribe(
+            video,
+            policy=CachePolicy(cache_root=tmp_path / "shared-cache", refresh=True),
+            base_dir=deck,
+            transcribe_fn=fresh,
+            backend_name="faster-whisper",
+            model_size="large-v3",
+            language="de",
+            device="cpu",
+        )
+        assert calls["n"] == 1
+
+    def test_no_probe_when_legacy_is_primary(self, tmp_path):
+        from clm.voiceover.cache import legacy_cache_root
+
+        # --cache-root pointing AT the old per-deck location: no self-probe,
+        # plain read works.
+        video = _touch_video(tmp_path)
+        deck = tmp_path / "topic_010"
+        deck.mkdir()
+        self._seed_legacy_transcript(deck, video, self._transcript())
+        _, hit = cached_transcribe(
+            video,
+            policy=CachePolicy(cache_root=legacy_cache_root(deck)),
+            base_dir=deck,
+            transcribe_fn=lambda: (_ for _ in ()).throw(AssertionError("must hit")),
+            backend_name="faster-whisper",
+            model_size="large-v3",
+            language="de",
+            device="cpu",
+        )
+        assert hit is True
+
+    def test_detect_promoted_from_per_deck_cache(self, tmp_path):
+        from clm.voiceover.cache import legacy_cache_root
+        from clm.voiceover.keyframes import TransitionEvent
+
+        video = _touch_video(tmp_path)
+        deck = tmp_path / "topic_010"
+        deck.mkdir()
+        cfg = DetectConfig(sample_fps=2.0, threshold_factor=3.0, percentile=95.0, merge_window=3.0)
+        events = [TransitionEvent(timestamp=5.0, peak_diff=0.4, confidence=2.0, num_frames=2)]
+        TransitionsCache(legacy_cache_root(deck)).put(VideoKey.from_path(video), cfg, events)
+
+        loaded, hit = cached_detect(
+            video,
+            policy=CachePolicy(cache_root=tmp_path / "shared-cache"),
+            base_dir=deck,
+            detect_fn=lambda: (_ for _ in ()).throw(AssertionError("must hit legacy")),
+        )
+        assert hit is True
+        assert loaded[0].timestamp == 5.0
+
+    def test_timeline_and_alignment_promoted(self, tmp_path):
+        from clm.voiceover.aligner import AlignmentResult, SlideNotes
+        from clm.voiceover.cache import legacy_cache_root
+        from clm.voiceover.matcher import TimelineEntry
+
+        video = _touch_video(tmp_path)
+        deck = tmp_path / "topic_010"
+        deck.mkdir()
+        slides = deck / "slides.py"
+        slides.write_text("x = 1\n", encoding="utf-8")
+        video_key = VideoKey.from_path(video)
+        slides_key = SlidesKey.from_path(slides)
+        legacy = legacy_cache_root(deck)
+        tl_cfg = {"lang": "de"}
+        al_cfg = {"bias": 0.4}
+        TimelinesCache(legacy).put(
+            video_key,
+            slides_key,
+            tl_cfg,
+            [TimelineEntry(slide_index=1, start_time=0.0, end_time=5.0, match_score=90.0)],
+        )
+        AlignmentsCache(legacy).put(
+            video_key,
+            slides_key,
+            al_cfg,
+            AlignmentResult(
+                slide_notes={1: SlideNotes(slide_index=1, segments=["hi"])},
+                unassigned_segments=[],
+            ),
+        )
+
+        policy = CachePolicy(cache_root=tmp_path / "shared-cache")
+
+        def boom():
+            raise AssertionError("must hit legacy")
+
+        timeline, tl_hit = cached_timeline(
+            video, slides, policy=policy, base_dir=deck, timeline_fn=boom, cfg=tl_cfg
+        )
+        alignment, al_hit = cached_alignment(
+            video, slides, policy=policy, base_dir=deck, alignment_fn=boom, cfg=al_cfg
+        )
+        assert (tl_hit, al_hit) == (True, True)
+        assert timeline[0].slide_index == 1
+        assert alignment.slide_notes[1].segments == ["hi"]
+
+
+class TestForkedDecksShareCache:
+    def test_second_deck_hits_first_decks_transcript(self, tmp_path, monkeypatch):
+        """The issue #568 scenario: a forked deck reuses the original's ASR."""
+        from clm.voiceover.transcribe import Transcript
+
+        monkeypatch.delenv("CLM_CACHE_DIR", raising=False)
+        _mark_project_root(tmp_path)
+        deck_a = tmp_path / "slides" / "module_410" / "topic_010"
+        deck_b = tmp_path / "slides" / "module_550" / "topic_010_azav"
+        deck_a.mkdir(parents=True)
+        deck_b.mkdir(parents=True)
+        video = _touch_video(tmp_path, name="recording.mp4")
+        calls = {"n": 0}
+
+        def fake_transcribe():
+            calls["n"] += 1
+            return Transcript(segments=[], language="de", duration=1.0)
+
+        kwargs = {
+            "policy": CachePolicy(),
+            "transcribe_fn": fake_transcribe,
+            "backend_name": "faster-whisper",
+            "model_size": "large-v3",
+            "language": "de",
+            "device": "cpu",
+        }
+        _, hit_a = cached_transcribe(video, base_dir=deck_a, **kwargs)
+        _, hit_b = cached_transcribe(video, base_dir=deck_b, **kwargs)
+        assert (hit_a, hit_b) == (False, True)
+        assert calls["n"] == 1
+        assert (tmp_path / ".clm-cache" / "voiceover" / "transcripts").is_dir()
 
 
 @pytest.fixture(autouse=True)

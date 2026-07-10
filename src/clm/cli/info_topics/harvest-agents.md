@@ -105,9 +105,16 @@ That is the audit trail replacing the old embedded-model
 
 ## Caching and fingerprints
 
-All deterministic stages cache under `<deck dir>/.clm/voiceover-cache/`
-(group flags `--no-cache` / `--refresh-cache` / `--cache-root`). Re-running
-`report`/`task` after the first pass is cheap. Multi-part recordings
+All deterministic stages cache in a **shared, deck-independent** root:
+`<shared-cache-dir>/voiceover/`, where the shared cache dir resolves like
+the LLM cache (`$CLM_CACHE_DIR` → `tool.clm.cache_dir` → `<project-root>/
+.clm-cache/`; group flags `--no-cache` / `--refresh-cache` / `--cache-root`).
+Video-keyed entries (transcripts, transitions) are therefore computed once
+per recording and shared by every deck — forking or moving a deck does NOT
+re-run ASR. Entries under the older per-deck
+`<deck dir>/.clm/voiceover-cache/` are found on a miss and promoted into the
+shared root automatically. Re-running `report`/`task` after the first pass
+is cheap. Multi-part recordings
 (`VIDEO…` in order, or a quoted glob) share one composite fingerprint —
 the same value that keys the cache and the ledger provenance. For tests
 and replays, `--alignment FILE` injects a precomputed alignment (works for

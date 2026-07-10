@@ -3394,13 +3394,18 @@ harvest report → (task → judge → accept [--record])* → verify
 
 | Option | Description |
 |--------|-------------|
-| `--cache-root PATH` | Override the cache location (default: `<deck dir>/.clm/voiceover-cache`) |
+| `--cache-root PATH` | Override the cache location (default: `<shared-cache-dir>/voiceover/`, where the shared cache dir resolves like the LLM cache: `$CLM_CACHE_DIR` → `tool.clm.cache_dir` in `pyproject.toml` → `<project-root>/.clm-cache/`) |
 | `--no-cache` | Disable the artifact cache for this invocation |
 | `--refresh-cache` | Force recomputation and overwrite existing cache entries |
 
 The cache stores intermediate pipeline artifacts (transcripts, transitions,
 timelines, alignments) keyed by video and slide-file fingerprints, so repeat
 invocations skip the expensive ASR/detection steps when inputs are unchanged.
+The cache root is **shared and deck-independent**: video-keyed entries
+(transcripts, transitions) are computed once per recording and reused by
+every deck in the project — including forked/moved decks. On a miss, the
+older per-deck `<deck dir>/.clm/voiceover-cache/` location is probed and a
+hit is promoted into the shared root, so existing caches keep working.
 Manage the cache with `clm harvest cache list/prune/clear`.
 
 Since the CLM {version} harvest cutover, the video-side verbs live **only**

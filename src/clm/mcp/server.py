@@ -429,7 +429,7 @@ def create_server(data_dir: Path) -> FastMCP:
     ) -> str:
         """Transcribe a video via the artifact cache and return a summary.
 
-        Reads the cache at ``.clm/voiceover-cache/transcripts/`` first;
+        Reads the shared voiceover cache's ``transcripts/`` first;
         computes + caches on miss.  Returns a JSON summary (segment
         count, duration, first/last segment) — not the full transcript,
         to keep MCP round-trips small.  For the full transcript, call
@@ -443,7 +443,7 @@ def create_server(data_dir: Path) -> FastMCP:
             device: "auto" | "cpu" | "cuda".
             no_cache: Disable cache reads (writes still happen).
             refresh_cache: Force recompute + overwrite cache.
-            cache_root: Override ``.clm/voiceover-cache`` location.
+            cache_root: Override the shared voiceover cache root.
         """
         return await handle_harvest_transcribe(
             video,
@@ -586,7 +586,7 @@ def create_server(data_dir: Path) -> FastMCP:
         """List entries in the voiceover artifact cache.
 
         Args:
-            cache_root: Override the default ``.clm/voiceover-cache``
+            cache_root: Override the default shared voiceover cache root
                 location.  Omit to use the project default.
         """
         return await handle_harvest_cache_list(data_dir, cache_root=cache_root)

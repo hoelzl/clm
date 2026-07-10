@@ -41,6 +41,12 @@ SKIP_DIRS_FOR_COURSE = frozenset(
         # the ``.http-cassette.yaml`` pattern). Also makes ``is_private_dir_name``'s
         # dot-prefix rule consistent — ``.clm`` already matches that shape.
         ".clm",
+        # The shared cache root (LLM cache + the deck-independent voiceover
+        # artifact cache, issue #568). Its default home is the project root —
+        # outside any topic walk — but ``[tool.clm] cache_dir`` may place it
+        # anywhere, so exclude it by name like ``.clm`` (no carve-outs: nothing
+        # under it is ever a build input).
+        ".clm-cache",
         ".git",
         ".idea",
         ".idea",

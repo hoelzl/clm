@@ -165,7 +165,7 @@ def voiceover_group():
     help=(
         "Skip ASR, detection, and matching; load a precomputed alignment "
         "from PATH. The alignment JSON is produced by a prior sync run "
-        "(cached under .clm/voiceover-cache/alignments/)."
+        "(cached under the shared cache dir's voiceover/alignments/)."
     ),
 )
 @click.option(
@@ -2851,7 +2851,7 @@ def _load_alignment_override(path: Path):
     """Load a precomputed :class:`AlignmentResult` from JSON.
 
     Expects the shape written by :func:`clm.voiceover.cache._encode_alignment`
-    (as stored under ``.clm/voiceover-cache/alignments/``). Accepts either
+    (as stored under the cache root's ``alignments/``). Accepts either
     the inner artifact object or the full cache payload (with ``artifact``
     wrapper).
     """
@@ -2947,11 +2947,13 @@ def cache_group():
     """Inspect and manage the voiceover artifact cache.
 
     The cache speeds up repeat runs of ``transcribe``/``detect``/
-    ``identify``/``sync`` by persisting their intermediate outputs under
-    ``.clm/voiceover-cache/``. Entries are keyed by cheap fingerprints of
-    the video (path+mtime+size) and slide file (content hash), and stale
-    entries are harmless — they become misses automatically when the
-    corresponding inputs change.
+    ``identify``/``autopilot`` by persisting their intermediate outputs in
+    the shared, deck-independent cache root (the shared cache dir's
+    ``voiceover/`` subdir — see ``--cache-root`` on the group). Entries are
+    keyed by cheap fingerprints of the video (path+mtime+size) and slide
+    file (content hash), so forked/moved decks share the video-keyed
+    entries; stale entries are harmless — they become misses automatically
+    when the corresponding inputs change.
     """
 
 

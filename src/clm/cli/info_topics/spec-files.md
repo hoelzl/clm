@@ -1110,7 +1110,7 @@ layouts). Within it, CLM distinguishes three kinds of file:
 | **Core source** | `slides_*.<ext>` (incl. split `slides_*.de.<ext>` / `slides_*.en.<ext>`) | processed into notebooks/HTML |
 | **Output companions** | `img/`, `drawio/`, loose data files | **yes**, verbatim |
 | **Authoring sidecars** | `voiceover_*.<ext>`, `*.http-cassette.yaml` | **no** |
-| **Build-internal tree** | `.clm/` — committed: `cassettes/` (replay input), `sync-ledger.json`; ignored scratch: `voiceover-cache/`, `voiceover-backfill/`, `voiceover-traces/`, `config.toml` | **no** — `.clm/cassettes/` is a build *input* (read at runtime) but never copied to output; the rest is fully ignored everywhere |
+| **Build-internal tree** | `.clm/` — committed: `cassettes/` (replay input), `sync-ledger.json`; ignored scratch: legacy `voiceover-cache/`, `voiceover-backfill/`, `voiceover-traces/`, `config.toml`. Likewise `.clm-cache/` (the shared LLM + voiceover cache root, usually at the project root) is fully ignored wherever it appears | **no** — `.clm/cassettes/` is a build *input* (read at runtime) but never copied to output; the rest is fully ignored everywhere |
 
 The authoring sidecars may live either next to the slides or collected into
 per-type subdirectories so the topic directory stays focused on the editable

@@ -2,6 +2,28 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## The voiceover artifact cache moved to a shared, deck-independent root (#568, {version})
+
+**Behavior change, no action required.** `clm harvest` used to cache its
+deterministic stages (ASR transcripts, transition detection, timelines,
+alignments) under `<deck dir>/.clm/voiceover-cache/` — per deck directory, so
+forking or moving a deck re-transcribed identical videos from scratch. The
+cache now lives in one **shared root**: `<shared-cache-dir>/voiceover/`,
+where the shared cache dir resolves exactly like the LLM cache
+(`$CLM_CACHE_DIR` → `tool.clm.cache_dir` in the project's `pyproject.toml` →
+`<project-root>/.clm-cache/`, anchored at the project root discovered by
+walking up from the deck directory). Video-keyed entries are computed once
+per recording and reused by every deck in the repository.
+
+Existing per-deck caches keep working: on a shared-root miss, the old
+`<deck dir>/.clm/voiceover-cache/` location is probed read-only and a hit is
+promoted (copied) into the shared root. Once a course repo's harvests run
+clean, the leftover per-deck `voiceover-cache/` directories can be deleted.
+An explicit `--cache-root PATH` still overrides everything, and
+`clm harvest cache list/prune/clear` now operates on the shared root. If the
+repo's `.gitignore` does not already ignore `.clm-cache/` (the LLM cache's
+default home since 1.16), add it.
+
 ## The sync v2 engine was removed — the document-model engine is the only engine (#520 Phase 4, {version})
 
 **Breaking.** `clm slides sync` now always runs the document-model engine
@@ -78,8 +100,8 @@ name and options.
 `clm voiceover` **remains**, holding only the written-narration text layer:
 `extract`, `inline`, and `inline-notes`. The group also lost its
 `--cache-root` / `--no-cache` / `--refresh-cache` flags — the artifact cache
-belongs to `clm harvest` now (same on-disk location,
-`.clm/voiceover-cache/`).
+belongs to `clm harvest` now (since #568 in a shared root; see the cache
+relocation section above).
 
 The MCP tools were renamed in lockstep, likewise with no aliases:
 `voiceover_transcribe` → `harvest_transcribe`, `voiceover_identify_rev` →

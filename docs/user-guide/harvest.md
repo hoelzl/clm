@@ -138,7 +138,7 @@ offsets; part ordering is authoritative.
 | `-o`, `--output` | *(in-place)* | Write to a different output file |
 | `--keep-audio` | off | Keep the extracted WAV file |
 | `--transcript` | *(none)* | Skip ASR and load a precomputed transcript JSON (from `clm harvest transcribe -o ...`). Single-part only; combine with a single video argument |
-| `--alignment` | *(none)* | Skip ASR, detection, and matching; load a precomputed alignment JSON from a prior run (cached under `.clm/voiceover-cache/alignments/`) |
+| `--alignment` | *(none)* | Skip ASR, detection, and matching; load a precomputed alignment JSON from a prior run (cached under the shared cache root's `alignments/`) |
 | `--companion` / `--no-companion` | *(auto)* | Force companion-file merge on/off. Default: auto-detect whether a `voiceover_*.py` companion exists next to SLIDES |
 | `--propagate-to` | *(none)* | After merging `--lang`, translate the changes into the given target language (`de` or `en`) and update its voiceover cells. Must differ from `--lang`; cannot combine with `--overwrite` |
 | `--layout` | *(auto)* | Where to create a NEW companion: `subdir` (`voiceover/` folder) or `sibling` (next to SLIDES). Default: auto-detect an existing `voiceover/` folder, else sibling. Ignored when a companion already exists |
@@ -206,7 +206,15 @@ clm harvest identify video.mp4 slides.py --lang de
 ### Cache and traces
 
 Every expensive intermediate (transcripts, transitions, timelines,
-alignments) is cached under `.clm/voiceover-cache/`; manage it with
+alignments) is cached in a **shared, deck-independent** root:
+`<shared-cache-dir>/voiceover/`, where the shared cache dir resolves like
+the LLM cache (`$CLM_CACHE_DIR` → `tool.clm.cache_dir` in the project's
+`pyproject.toml` → `<project-root>/.clm-cache/`). Entries keyed by the video
+alone (transcripts, transitions) are computed once per recording and reused
+by every deck in the repository — forking or moving a deck does not re-run
+ASR (issue #568). Entries in the older per-deck
+`<deck dir>/.clm/voiceover-cache/` location are found on a miss and promoted
+into the shared root automatically. Manage the cache with
 `clm harvest cache list/prune/clear`. LLM merge calls are trace-logged under
 `.clm/voiceover-traces/`; inspect a log with `clm harvest trace show PATH`.
 The group-level flags `--cache-root`, `--no-cache`, and `--refresh-cache`

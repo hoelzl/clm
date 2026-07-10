@@ -1,9 +1,10 @@
 # Open-Issue Triage & Execution Plan (2026-07-10) — Handover
 
-**Status**: Triage COMPLETE; execution IN PROGRESS — Phases 1–3 DONE
-(#600, #539, #524/#382/#362), next up Phase 4 (#568). This document is the
-source of truth for working through the open-issue backlog in priority
-order. Update phase statuses here as issues land.
+**Status**: Triage COMPLETE; execution IN PROGRESS — Phases 1–4 DONE
+(#600, #539, #524/#382/#362, #568), next up Phase 5 (#559, needs a
+quiet-repo window). This document is the source of truth for working through
+the open-issue backlog in priority order. Update phase statuses here as
+issues land.
 
 ## 1. Feature Overview
 
@@ -221,7 +222,25 @@ at `output_spec.py:413-423`); `clm slides normalize` symmetrization and
 `src/clm/slides/workshop_scope.py` may also key on cell type — check before
 changing.
 
-### Phase 4 [TODO] — #568: shared ASR transcript cache (before next harvest round)
+### Phase 4 [DONE] — #568: shared ASR transcript cache (before next harvest round)
+
+**Resolution (2026-07-11)**: implemented as the handover's second option,
+generalized — the **whole** voiceover cache root (all four stages, not just
+transcripts) moved from `<deck dir>/.clm/voiceover-cache/` to a shared
+`<shared-cache-dir>/voiceover/`, where the shared cache dir resolves exactly
+like the LLM cache (`$CLM_CACHE_DIR` → `tool.clm.cache_dir` →
+`<project-root>/.clm-cache/`). Safe because timeline/alignment keys already
+include the slides hash; transitions sharing (part of fix 2's benefit) falls
+out for free. Root discovery walks up from the **deck directory** via a new
+`start=` anchor on `describe_cache_dir` (keeps worktree re-anchoring active,
+unlike an explicit `repo_root`). Legacy per-deck entries are probed
+read-only on a shared-root miss and **promoted** into the shared root
+(automates the issue's manual-copy workaround; existing GPU transcripts
+survive the move; `--refresh-cache` skips the probe). `.clm-cache` added to
+`SKIP_DIRS_FOR_COURSE` per the gotcha below. Docs: commands/harvest-agents/
+migration/spec-files info topics, harvest.md + configuration.md user guides,
+changelog fragment. Fixes 2–4 remain deferred. Shipped from worktree
+`starry-nibbling-swing`.
 
 **Problem**: harvest caches ASR transcripts under
 `<deck dir>/.clm/voiceover-cache/transcripts/<video-fingerprint>.json` —
@@ -297,18 +316,23 @@ OpenAI-compatible client, zero new deps) or close as status-quo.
   PR #604, #524 via PR #607, #382 closed as pre-shipped (1.15.0), #362 via
   PR #608 (maintainer picked Option A). Resolution details live in each
   phase's block in §3.
+- **Phase 4 DONE** (2026-07-11): #568 fix 1 — shared deck-independent
+  voiceover cache with legacy promotion (see the Phase 4 resolution block).
+  Fixes 2–4 of the issue stay open as deferred follow-ups.
 - **#605** (bilingual dir-group `<name>` silently dropped — filed out of
   Phase 2) was fixed in parallel by another session via PR #606.
-- No blockers, no pending decisions. Remaining: Phase 4 (#568), Phase 5
-  (#559, needs a quiet-repo window), Phase 6 design tier (#383+#381 —
-  start with a verify-then-close pass, see the Phase 3 resolution note —
-  plus #484, #167).
+- No blockers, no pending decisions. Remaining: Phase 5 (#559, needs a
+  quiet-repo window), Phase 6 design tier (#383+#381 — start with a
+  verify-then-close pass, see the Phase 3 resolution note — plus #484,
+  #167).
 
 ## 5. Next Steps
 
-**Phases 1 (#600), 2 (#539), and 3 (#524/#382/#362) are DONE — start
-Phase 4 (#568 shared ASR transcript cache, fix 1 only; read the
-`project_video_narration_harvest` memory topic first).** The plan below
+**Phases 1–4 are DONE — next is Phase 5 (#559 CI matrix split), which
+needs a quiet-repo window (no PRs in flight) because the "Require CI green"
+ruleset must be updated atomically with the workflow's job renames.** After
+that, Phase 6a (#383+#381) should START with a verify-then-close pass
+against commit 90518611 (see the Phase 3 resolution note). The plan below
 documents how Phase 1 was executed (kept for reference):
 
 1. Read memory topics `project_sync_one_sided_cold` and
@@ -330,7 +354,7 @@ documents how Phase 1 was executed (kept for reference):
 
 ## 6. Key Files & Architecture
 
-Files identified during triage (issue → key sites); Phases 1–3 touched
+Files identified during triage (issue → key sites); Phases 1–4 touched
 their listed sites — see each phase's resolution block for what changed:
 
 - `#600` → sync v3 engine under `src/clm/` (search `ambiguous_alignment`);
@@ -348,10 +372,13 @@ their listed sites — see each phase's resolution block for what changed:
   `src/clm/workers/notebook/output_spec.py:39-64` (`find_workshop_ranges`),
   `src/clm/slides/workshop_scope.py`, `src/clm/slides/validator.py`,
   `src/clm/slides/normalizer.py`
-- `#568` → voiceover cache layout under `<deck>/.clm/voiceover-cache/`
-  (subdirs `transcripts/`, `transitions/`, `timelines/`, `alignments/`);
-  harvest code under `src/clm/voiceover/` / `src/clm/cli/commands/`
-  (`clm harvest`); LLM cache's `cache_dir` config as the pattern to copy
+- `#568` → `src/clm/voiceover/cache.py` (`resolve_cache_root` shared
+  resolution, `legacy_cache_root`, `_legacy_cache` promotion),
+  `src/clm/infrastructure/llm/cache.py` (`describe_cache_dir` `start=`
+  anchor), `src/clm/infrastructure/utils/path_utils.py` (`.clm-cache` in
+  `SKIP_DIRS_FOR_COURSE`); legacy per-deck layout was
+  `<deck>/.clm/voiceover-cache/` (subdirs `transcripts/`, `transitions/`,
+  `timelines/`, `alignments/` — still probed read-only)
 - `#559` → `.github/workflows/ci.yml` + the GitHub "Require CI green"
   ruleset (repo settings, must change atomically)
 - `#484` → `src/clm/infrastructure/backends/sqlite_backend.py`
@@ -381,7 +408,12 @@ sync-engine changes get a §13 amendments-log row.
   script-level (exact-match check test); #362 needs `find_workshop_ranges`
   tests for the chosen semantics; #559's "test" is CI itself — watch the
   first PR after the ruleset swap carefully.
-- Nothing implemented yet, so no test state to report.
+- Phase 4 (#568) shipped with resolution-tier tests (env / pyproject /
+  walk-up), legacy-promotion tests for all four artifact kinds, and a
+  fork-scenario test (`TestForkedDecksShareCache`) in
+  `tests/voiceover/test_cache.py`, plus a `start=` anchor test in
+  `tests/infrastructure/llm/test_cache_dir_resolution.py`; fast suite green
+  (8436 passed).
 
 ## 8. Session Notes
 

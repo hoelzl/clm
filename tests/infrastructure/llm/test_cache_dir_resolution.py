@@ -105,6 +105,19 @@ class TestSubdirWalkUp:
         # Anchored to the discovered root (repo), NOT the subdir → repo's sibling.
         assert res.path.resolve() == (tmp_path / "shared-cache").resolve()
 
+    def test_start_anchor_walks_up_without_chdir(self, tmp_path: Path, monkeypatch, git_available):
+        # start= anchors the walk-up at a path argument instead of cwd (the
+        # voiceover cache passes the deck directory, issue #568), while
+        # keeping repo_root=None so worktree detection stays active.
+        monkeypatch.delenv("CLM_CACHE_DIR", raising=False)
+        repo = tmp_path / "repo"
+        _init_repo(repo, cache_dir_value="../shared-cache")
+        sub = repo / "slides" / "module_410" / "topic_031"
+        sub.mkdir(parents=True)
+        res = describe_cache_dir(start=sub)
+        assert res.source == "pyproject"
+        assert res.path.resolve() == (tmp_path / "shared-cache").resolve()
+
     def test_default_anchors_to_root_from_subdir(self, tmp_path: Path, monkeypatch, git_available):
         # No [tool.clm] cache_dir → the default <root>/.clm-cache must anchor to
         # the discovered root, never creating a stray <subdir>/.clm-cache (#477).

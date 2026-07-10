@@ -967,7 +967,7 @@ async def handle_harvest_transcribe(
         device: ``"auto" | "cpu" | "cuda"``.
         no_cache: Disable cache reads (writes still happen).
         refresh_cache: Force recompute + overwrite cache entry.
-        cache_root: Override ``.clm/voiceover-cache`` location.
+        cache_root: Override the shared voiceover cache root.
 
     Returns:
         JSON string with ``{cache_hit, language, duration_sec, segments,
@@ -1226,7 +1226,7 @@ async def handle_harvest_cache_list(
 
     Args:
         data_dir: Root data directory.
-        cache_root: Override the default ``.clm/voiceover-cache``.
+        cache_root: Override the default shared voiceover cache root.
 
     Returns:
         JSON string with ``{root, total_bytes, entries: [...]}``.
