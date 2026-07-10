@@ -13,7 +13,13 @@ from clm.slides import doc_apply, doc_ledger
 from clm.slides.doc_lenses import LoadedBundle
 from clm.slides.sync_diff import DeckDiff, diff_outcome
 
-__all__ = ["diff_bundle", "diff_bundle_at_ref", "item_payloads", "pair_payload"]
+__all__ = [
+    "cold_sweep_hint",
+    "diff_bundle",
+    "diff_bundle_at_ref",
+    "item_payloads",
+    "pair_payload",
+]
 
 
 def diff_bundle(bundle: LoadedBundle) -> DeckDiff:
@@ -61,15 +67,35 @@ def diff_bundle_at_ref(bundle: LoadedBundle, ref: str) -> tuple[DeckDiff, list[s
 
 
 def item_payloads(diff: DeckDiff) -> list[dict]:
-    """The §6.4 item rows, each framed item carrying its answer vocabulary."""
+    """The §6.4 item rows, each item carrying its answer vocabulary.
+
+    ``answers`` is present on **every** item — ``[]`` on mechanical rows
+    (nothing to answer; ``apply`` executes them) — so consumers can filter
+    with ``item["answers"]`` without guarding a missing key. Agent drivers
+    provably crashed on the key's absence before this was guaranteed.
+    """
     items = []
     for item in diff.items:
         payload = item.payload()
-        answers = doc_apply.item_answers(item)
-        if answers:
-            payload["answers"] = list(answers)
+        payload["answers"] = list(doc_apply.item_answers(item))
         items.append(payload)
     return items
+
+
+def cold_sweep_hint(diff: DeckDiff) -> str | None:
+    """A next-step hint when the whole report is cold (never-recorded deck).
+
+    An all-``verify_cold`` report is the seeding case, and the efficient
+    answer is the ``record`` verb, not a hand-built confirm-all decision
+    document — agents reliably scripted the latter when nothing said so.
+    """
+    if diff.items and all(item.action == "verify_cold" for item in diff.items):
+        return (
+            "every member is cold (no ledger entry) — for a freshly authored or "
+            "never-recorded deck, review the pair and bank it wholesale with "
+            "`clm slides sync record DECK` instead of confirming per item"
+        )
+    return None
 
 
 def pair_payload(bundle: LoadedBundle, diff: DeckDiff) -> dict:
@@ -78,4 +104,7 @@ def pair_payload(bundle: LoadedBundle, diff: DeckDiff) -> dict:
     payload["items"] = item_payloads(diff)
     payload["de_path"] = str(bundle.de_path)
     payload["en_path"] = str(bundle.en_path)
+    hint = cold_sweep_hint(diff)
+    if hint is not None:
+        payload["hint"] = hint
     return payload

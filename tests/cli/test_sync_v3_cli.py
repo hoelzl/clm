@@ -51,8 +51,11 @@ def _write_pair(tmp_path: Path) -> tuple[Path, Path]:
 
 
 def _json_payload(output: str) -> dict:
+    # raw_decode: the runner may append stderr lines (e.g. apply's rejected
+    # summary) after the JSON document — parse the object, ignore the rest.
     start = output.index("{")
-    return json.loads(output[start:])
+    payload, _end = json.JSONDecoder().raw_decode(output[start:])
+    return payload
 
 
 class TestSyncLoop:
@@ -72,6 +75,8 @@ class TestSyncLoop:
         for i in payload["items"]:
             expected = ["confirm", "body"] if i["key"].startswith("id:") else ["confirm"]
             assert i["answers"] == expected, i
+        # An all-cold report is the seeding case — it says so.
+        assert "sync record" in payload["hint"]
 
         # record blesses the current state (verify-gated).
         record = cli_runner.invoke(slides_sync_group, ["record", str(de), "--json"])
@@ -86,8 +91,14 @@ class TestSyncLoop:
         de.write_text(de.read_text(encoding="utf-8").replace("x = 1", "x = 42"), "utf-8")
         flagged = cli_runner.invoke(slides_sync_group, ["report", str(de), "--json"])
         assert flagged.exit_code == 1
-        items = _json_payload(flagged.output)["items"]
+        payload = _json_payload(flagged.output)
+        items = payload["items"]
         assert [i["action"] for i in items] == ["propagate_shared_edit"]
+        # Mechanical items carry answers == [] (present, never missing) so
+        # agent drivers can filter on item["answers"] without a key guard.
+        assert items[0]["answers"] == []
+        # A mixed/mechanical report carries no cold-seeding hint.
+        assert "hint" not in payload
 
         applied = cli_runner.invoke(slides_sync_group, ["apply", str(de), "--json"])
         assert applied.exit_code == 0, applied.output
@@ -147,6 +158,24 @@ class TestSyncLoop:
         clean = cli_runner.invoke(slides_sync_group, ["report", str(de), "--json"])
         assert clean.exit_code == 0, clean.output
         assert _json_payload(clean.output)["is_clean"] is True
+
+    def test_rejected_decision_is_summarized_on_stderr(self, cli_runner: CliRunner, tmp_path: Path):
+        # Blanket-confirming a translate_edit is the classic wrong answer —
+        # the rejection must be loud (stderr, with the reason), not just a
+        # counts entry an agent's JSON filter can skip past.
+        de, en = _write_pair(tmp_path)
+        assert cli_runner.invoke(slides_sync_group, ["record", str(de)]).exit_code == 0
+        de.write_text(de.read_text(encoding="utf-8").replace("DE Text", "DE neu"), "utf-8")
+        result = cli_runner.invoke(
+            slides_sync_group,
+            ["apply", str(de), "--decisions", "-", "--json"],
+            input=json.dumps({"decisions": [{"key": "id:s0-m", "choice": "confirm"}]}),
+        )
+        assert result.exit_code == 1, result.output
+        assert _json_payload(result.output)["counts"]["rejected"] == 1
+        stderr = getattr(result, "stderr", "") or result.output
+        assert "decision(s) rejected" in stderr
+        assert "id:s0-m" in stderr
 
     def test_apply_residue_exits_one(self, cli_runner: CliRunner, tmp_path: Path):
         de, en = _write_pair(tmp_path)

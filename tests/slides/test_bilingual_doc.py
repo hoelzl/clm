@@ -111,3 +111,20 @@ class TestNormalizeRefusal:
         assert "normalize" in text
         assert "duplicate_id" in text
         assert "idless_localized" in text
+
+    def test_render_appends_remediation_hint_once_per_code(self):
+        # duplicate_id names its fix (rename-id) — normalize cannot fix it —
+        # and the hint appears once even for multiple reasons with the code.
+        refusal = NormalizeRefusal(
+            reasons=[
+                RefusalReason(code="duplicate_id", detail="id x twice"),
+                RefusalReason(code="duplicate_id", detail="id y twice"),
+            ]
+        )
+        assert refusal.render().count("clm slides rename-id") == 1
+
+    def test_render_no_hint_for_codes_normalize_fixes(self):
+        refusal = NormalizeRefusal(
+            reasons=[RefusalReason(code="idless_localized", detail="line 7")]
+        )
+        assert "hint:" not in refusal.render()

@@ -489,6 +489,10 @@ def sync_report_cmd(
     the committed per-topic ledger; a member with no ledger entry is **cold**
     (frame ``verify_cold``), never silently trusted. ``--since DATE|REF``
     switches to the forensic git-window view. Works over a directory.
+
+    \b
+    Exit 1 means "work pending", not failure. Agent loop + JSON reference:
+    `clm info sync-agents`.
     """
     from clm.cli.commands.slides.sync_v3 import run_report_v3
 
@@ -546,6 +550,11 @@ def sync_record_cmd(
     (a corrupt pair is refused, nothing written). A full record sweeps stale
     entries and performs the §7.3 pos→id key migration (logged); ``--member``
     upserts just the named handles. Works over a directory.
+
+    \b
+    This is the efficient answer to an all-cold report (a freshly authored or
+    never-recorded deck) — no per-item confirm document needed. Agent loop:
+    `clm info sync-agents`.
     """
     from clm.cli.commands.slides.sync_v3 import run_record_v3
 
@@ -571,8 +580,11 @@ def sync_record_cmd(
     metavar="FILE|-",
     help=(
         "A JSON decision document answering framed report items per member "
-        "handle ('-' reads stdin). Invalid answers are rejected per item; "
-        "valid ones land."
+        'handle (\'-\' reads stdin). Shape: {"decisions": [{"key": "id:intro", '
+        '"choice": "confirm"}, {"key": "id:x", "body": "..."}]}. A body is the '
+        "cell text WITHOUT its '# %%' delimiter line, WITH the '# ' comment "
+        "prefixes. Invalid answers are rejected per item; valid ones land. "
+        "Reference: `clm info sync-agents`."
     ),
 )
 @click.option(
@@ -610,6 +622,7 @@ def sync_apply_cmd(
     \b
     Needs no API key. Review writes with `git diff`; confirm soundness with
     `clm slides sync verify`. Exit 0 all-applied / 1 residue / 2 error.
+    Decision-document shape and body format: `clm info sync-agents`.
     """
     from clm.cli.commands.slides.sync_v3 import run_apply_v3
 

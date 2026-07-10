@@ -235,6 +235,19 @@ class RefusalReason:
     member: MemberKey | None = None
 
 
+#: Remediation hints per refusal code, appended to the rendered refusal.
+#: The header line's remedy (`normalize --stamp-ids`) covers the id-less
+#: codes; codes it cannot fix name their own fix here, so a refusal is never
+#: a dead end for the driving agent.
+REFUSAL_HINTS: dict[str, str] = {
+    "duplicate_id": (
+        "rename colliding slide_ids with `clm slides rename-id DECK OLD NEW` "
+        "(rewrites both halves and migrates the sync-ledger key; `normalize` "
+        "cannot fix duplicates)"
+    ),
+}
+
+
 @define
 class NormalizeRefusal:
     """A framed "run normalize first" refusal for a whole deck (design §3.2).
@@ -248,6 +261,10 @@ class NormalizeRefusal:
     def render(self) -> str:
         lines = ["deck is not normalized — run `clm slides normalize --stamp-ids` first:"]
         lines += [f"  - [{r.code}] {r.detail}" for r in self.reasons]
+        for code in dict.fromkeys(r.code for r in self.reasons):
+            hint = REFUSAL_HINTS.get(code)
+            if hint:
+                lines.append(f"  hint: {hint}")
         return "\n".join(lines)
 
 

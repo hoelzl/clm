@@ -162,7 +162,16 @@ def parse_decisions(payload: object) -> tuple[dict[str, Decision], list[str]]:
     errors: list[str] = []
     rows = payload.get("decisions") if isinstance(payload, dict) else payload
     if not isinstance(rows, list):
-        return {}, ["decision document must be a list or {'decisions': [...]}"]
+        # The first schema error an agent ever sees — teach the whole shape at
+        # once instead of one field name per round-trip.
+        return {}, [
+            "decision document must be a list or {'decisions': [...]} — e.g. "
+            '{"decisions": [{"key": "id:intro", "choice": "confirm"}, '
+            '{"key": "id:motivation", "body": "# the translated cell body"}]}; '
+            "each item's accepted answers are in report --json (`answers`), "
+            "and a body is the cell text WITHOUT its '# %%' delimiter line — "
+            "see `clm info sync-agents`"
+        ]
     decisions: dict[str, Decision] = {}
     for i, row in enumerate(rows):
         if not isinstance(row, dict) or not isinstance(row.get("key"), str):

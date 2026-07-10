@@ -27,7 +27,12 @@ import click
 
 from clm.slides import doc_apply, doc_ledger
 from clm.slides.doc_lenses import DocLensError, LoadedBundle, load_bundle
-from clm.slides.doc_report import diff_bundle, diff_bundle_at_ref, pair_payload
+from clm.slides.doc_report import (
+    cold_sweep_hint,
+    diff_bundle,
+    diff_bundle_at_ref,
+    pair_payload,
+)
 from clm.slides.pairing import (
     find_split_slide_files_recursive,
     iter_split_pairs,
@@ -77,11 +82,14 @@ def _render_pair(bundle: LoadedBundle, diff: DeckDiff) -> str:
     if diff.refusal is not None:
         lines.append("  " + diff.refusal.render().replace("\n", "\n  "))
     for item in diff.items:
-        answers = doc_apply.decision_vocabulary(item.action)
+        answers = doc_apply.item_answers(item)
         suffix = f"  [answers: {', '.join(answers)}]" if answers else ""
         lines.append(
             f"  {item.outcome}/{item.action} {item.key} ({item.direction}) {item.detail}{suffix}"
         )
+    hint = cold_sweep_hint(diff)
+    if hint is not None:
+        lines.append(f"  hint: {hint}")
     return "\n".join(lines)
 
 
@@ -264,6 +272,17 @@ def run_apply_v3(
                 "recorded into the ledger; fix the pair, then `sync record`",
                 err=True,
             )
+    rejected = [r for r in outcome.results if r.status == "rejected"]
+    if rejected:
+        # Stderr in both modes: agents parsing --json counts alone provably
+        # committed with rejections unnoticed. Keep it one line per item.
+        click.echo(
+            f"{len(rejected)} decision(s) rejected — each item's accepted answers "
+            "come from report --json (its `answers` list); see `clm info sync-agents`:",
+            err=True,
+        )
+        for result in rejected:
+            click.echo(f"  {result.key} ({result.action}): {result.reason}", err=True)
     if outcome.error is not None:
         return 2
     return 0 if outcome.all_applied and not verify_violations else 1

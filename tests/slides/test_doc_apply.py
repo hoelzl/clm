@@ -710,6 +710,16 @@ class TestColdBodyRecovery:
 
 
 class TestDecisionParsing:
+    def test_wrong_top_level_shape_error_teaches_the_schema(self):
+        # The first error an agent sees must show the whole document shape —
+        # agents provably guessed field names one rejection at a time.
+        decisions, errors = doc_apply.parse_decisions({"id:x": "confirm"})
+        assert not decisions
+        assert len(errors) == 1
+        assert '{"key": "id:intro", "choice": "confirm"}' in errors[0]
+        assert "clm info sync-agents" in errors[0]
+        assert "'# %%'" in errors[0]  # the body-format trap, stated up front
+
     def test_side_must_be_de_or_en(self):
         decisions, errors = doc_apply.parse_decisions(
             {"decisions": [{"key": "id:x", "body": "b", "side": "left"}]}
