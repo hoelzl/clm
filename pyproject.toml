@@ -506,10 +506,13 @@ dev = [
 ]
 
 [tool.uv]
-# Only allow packages published before this date (supply-chain safety).
-# Update with: python scripts/update_exclude_newer.py
+# Only allow packages published before this instant (supply-chain safety).
+# Update with: python scripts/update_exclude_newer.py [DATE]
 # (also refreshes uv.lock; see scripts/check_exclude_newer.py for drift check)
-exclude-newer = "2026-05-28"
+# Must stay in uv's canonical `<date>T00:00:00Z` form and exactly equal
+# uv.lock's [options].exclude-newer, or `uv sync --locked` rejects the
+# lockfile on a clean checkout (issue #524).
+exclude-newer = "2026-05-29T00:00:00Z"
 
 # NOTE: there is deliberately no `[tool.uv] conflicts` block. It previously
 # forked the `jupyterlite` extra (whose `empack` caps `click<8.2`) away from

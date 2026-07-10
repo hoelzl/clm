@@ -123,15 +123,15 @@ jobs:
         # Install the EXACT versions from uv.lock so CI matches a developer's
         # local `uv sync` (issue #516 follow-up: the old fresh `uv pip install`
         # resolved a different Click than the lock, hiding environment drift).
-        # `--frozen` (not `--locked`): install the lock as-is without a freshness
-        # re-check — the `[tool.uv].exclude-newer` bare date normalizes to a
-        # slightly different timestamp across uv versions, which would make
-        # `--locked` spuriously reject an otherwise-valid lock. Same extra set as
-        # before via explicit `--extra` + `--no-default-groups` (the `dev` extra
-        # carries the pytest stack), so the only change is the version source.
+        # `--locked` fails fast when the lockfile is stale — safe now that
+        # pyproject pins exclude-newer as a full canonical timestamp, so uv's
+        # bare-date normalization can no longer drift across versions
+        # (issue #524). Same extra set as before via explicit `--extra` +
+        # `--no-default-groups` (the `dev` extra carries the pytest stack),
+        # so the only change is the version source.
         # `replay` keeps the HTTP-replay cassette tests running instead of
         # importorskip-skipping. ML/jupyterlite stay out by design.
-        uv sync --frozen --python ${{ matrix.python-version }} --no-default-groups \
+        uv sync --locked --python ${{ matrix.python-version }} --no-default-groups \
           --extra all-workers --extra summarize --extra recordings --extra slides \
           --extra mcp --extra replay --extra dev --extra tui --extra web
 
@@ -217,11 +217,11 @@ jobs:
     - name: Install dependencies
       if: needs.changes.outputs.code == 'true'
       run: |
-        # From the lockfile (see the test job; `--frozen` for the same reason),
+        # From the lockfile (see the test job; `--locked` for the same reason),
         # same extra set as before so lint/type-check sees the exact versions
         # developers do. The `dev` extra carries ruff + mypy; the worker extras
         # give mypy the imports to resolve.
-        uv sync --frozen --python 3.12 --no-default-groups \
+        uv sync --locked --python 3.12 --no-default-groups \
           --extra dev --extra tui --extra web --extra notebook --extra summarize \
           --extra recordings --extra slides --extra mcp
 
@@ -298,9 +298,9 @@ jobs:
 
     - name: Install dependencies
       run: |
-        # From the lockfile (see the test job; `--frozen` for the same reason),
+        # From the lockfile (see the test job; `--locked` for the same reason),
         # same extra set as before.
-        uv sync --frozen --python 3.12 --no-default-groups \
+        uv sync --locked --python 3.12 --no-default-groups \
           --extra all-workers --extra recordings --extra dev --extra tui --extra web
 
     - name: Run Docker integration tests

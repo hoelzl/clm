@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
 """Verify that pyproject.toml and uv.lock agree on exclude-newer.
 
-Exits 0 when ``[tool.uv].exclude-newer`` in pyproject.toml matches the
-date prefix of ``[options].exclude-newer`` in uv.lock; exits 1 with a
-clear remediation message when they drift apart.
+Exits 0 when ``[tool.uv].exclude-newer`` in pyproject.toml is **exactly
+equal** to ``[options].exclude-newer`` in uv.lock; exits 1 with a clear
+remediation message when they drift apart.
+
+Exact equality matters: uv compares the timestamps exactly, so a
+date-prefix match (the check's original behavior) passes locally while
+``uv lock --check`` / ``uv sync --locked`` still reject the lockfile as
+stale (issue #524). Both files must hold uv's canonical
+``<date>T00:00:00Z`` form, which ``scripts/update_exclude_newer.py``
+writes.
 
 Wired into ``.pre-commit-config.yaml`` so a commit that bumps the pin in
 pyproject.toml without refreshing uv.lock is rejected before it can
@@ -55,18 +62,21 @@ def check(pyproject_path: Path, lock_path: Path) -> tuple[bool, str]:
     pyproject_pin = _read_pyproject_pin(pyproject_path)
     lock_pin = _read_lock_pin(lock_path)
 
-    # pyproject stores e.g. "2026-04-20"; uv.lock stores e.g.
-    # "2026-04-20T22:00:00Z". Compare the date prefix.
-    if lock_pin.startswith(pyproject_pin):
+    # Exact comparison: uv itself compares the timestamps exactly, so
+    # anything short of equality (e.g. a bare date whose prefix matches)
+    # still fails `uv lock --check` / `uv sync --locked` (issue #524).
+    if lock_pin == pyproject_pin:
         return True, ""
 
     return False, (
         f"pyproject.toml [tool.uv].exclude-newer is {pyproject_pin!r} but "
         f"uv.lock [options].exclude-newer is {lock_pin!r}.\n"
-        "These must agree; otherwise 'uv run' will silently re-lock the "
-        "working tree on the next invocation.\n"
-        "Fix: run 'uv lock' (or 'python scripts/update_exclude_newer.py "
-        "<date>') and commit the resulting uv.lock alongside pyproject.toml."
+        "These must be exactly equal (uv's canonical '<date>T00:00:00Z' "
+        "form); otherwise 'uv run' will silently re-lock the working tree "
+        "on the next invocation and 'uv sync --locked' rejects the lock.\n"
+        "Fix: run 'python scripts/update_exclude_newer.py <date>' (writes "
+        "the canonical form and re-locks) and commit the resulting uv.lock "
+        "alongside pyproject.toml."
     )
 
 

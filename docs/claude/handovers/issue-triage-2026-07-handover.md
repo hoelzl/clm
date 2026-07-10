@@ -139,7 +139,12 @@ destination for a target.
 **Acceptance**: a spec with the same `<subdir>` under two same-named
 dir-groups builds cleanly; stress-repeat passes on Windows; validate warns.
 
-### Phase 3 [TODO] — Quick-win batch (3 small PRs, one session)
+### Phase 3 [IN PROGRESS] — Quick-win batch (3 small PRs, one session)
+
+**#362 decision (2026-07-10, maintainer)**: Option A — honor `end-workshop`
+on any cell type with end-**exclusive** semantics (the tagged cell is NOT
+part of the workshop), plus allowlist + info-topic updates documenting that
+tagging the workshop's last code cell excludes it.
 
 **3a — #524: uv.lock exclude-newer timestamp mismatch.** Three
 representations are in play: pyproject bare date `2026-05-28`; uv.lock
