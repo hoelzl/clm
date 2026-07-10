@@ -962,6 +962,43 @@ class TestAdversarialReviewRegressions:
         item = _only_item(_diff(base, de, EN0))
         assert item.action == "verify_cold"
 
+    def test_replacing_positional_cell_with_idd_cells_frames_stamp_vs_new(self):
+        """issue #600: replacing an un-id'd positional cell with new id'd cells
+        on ONE side must frame every affected row ``stamp_vs_new`` (which
+        carries the ``treat_as_new`` answer) — not ``ambiguous_alignment``,
+        whose empty answer vocabulary dead-ends the decision-document loop."""
+        base = _snapshot(DE0, EN0)
+        base.complete = False
+        en = EN0.replace(
+            '# %% tags=["keep"]\ny = 2\n',
+            '# %% tags=["keep"] slide_id="y-assign"\ny = 3\n\n# %% slide_id="y-check"\ny\n',
+        )
+        diff = _diff(base, DE0, en)
+        assert {(i.key, i.outcome, i.action) for i in diff.items} == {
+            ("id:y-assign", "conflict", "stamp_vs_new"),
+            ("id:y-check", "conflict", "stamp_vs_new"),
+            ("pos:s0/code/1", "conflict", "stamp_vs_new"),
+        }, [(i.key, i.outcome, i.action) for i in diff.items]
+        by_key = {i.key: i for i in diff.items}
+        # The pos-view row names the gone side — the anchor a mirrored
+        # removal needs; the id-view rows name their present (source) side.
+        assert by_key["pos:s0/code/1"].side == "en"
+        assert by_key["id:y-assign"].side == "en"
+
+    def test_conflicting_stamp_shape_stays_ambiguous_alignment(self):
+        """The rival-id shapes must NOT gain ``stamp_vs_new``'s treat_as_new
+        answer: copying a cell that already claimed a base entry under a
+        different id would duplicate content (#600 scope guard)."""
+        shared = "# %% [markdown]\n# Shared text\n\n"
+        de = _build(HEADER_DE, _slide("s0", "de", "T"), shared)
+        en = _build(HEADER_EN, _slide("s0", "en", "T"), shared)
+        base = _snapshot(de, en)
+        de2 = de.replace("# %% [markdown]\n# Shared", '# %% [markdown] slide_id="ida"\n# Shared')
+        en2 = en.replace("# %% [markdown]\n# Shared", '# %% [markdown] slide_id="idb"\n# Shared')
+        diff = _diff(base, de2, en2)
+        assert diff.items
+        assert {i.action for i in diff.items} == {"ambiguous_alignment"}
+
     def test_slide_id_containing_slash_does_not_crash(self):
         """MAJOR: '/' is legal in slide ids; pos-key parsing must rsplit."""
         de = _build(

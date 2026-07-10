@@ -129,6 +129,7 @@ _DECISION_VOCABULARY: dict[str, tuple[str, ...]] = {
     "conflict_owner": ("de", "en"),
     "conflict_preamble": ("de", "en"),
     "order_decision": ("de", "en"),
+    "stamp_vs_new": ("treat_as_new",),
 }
 
 
@@ -364,6 +365,21 @@ _PHASES: dict[str, int] = {
     "propagate_preamble": 5,
     "conflict_preamble": 5,
 }
+
+
+def _item_phase(item: DiffItem) -> int:
+    """The execution phase of one item.
+
+    ``stamp_vs_new`` is the one action whose resolution spans two phases: the
+    id-view row inserts (a ``treat_as_new`` grows the twin — phase 1, with the
+    other inserts) while the pos-view row removes (phase 2, with the other
+    removes) — so the grown twin is placed before its superseded positional
+    neighbor disappears.
+    """
+    if item.action == "stamp_vs_new":
+        return 1 if item.key.startswith("id:") else 2
+    return _PHASES.get(item.action, 9)
+
 
 #: Mechanical rows that are pure ledger records (no file mutation).
 _RECORD_ONLY = frozenset(
@@ -1126,6 +1142,24 @@ def _apply_choice_decision(ex: _Executor, item: DiffItem, choice: str) -> None:
             )
         ex.copy_new(item, _other(item.side))
         return
+    if choice == "treat_as_new":
+        # stamp_vs_new (#600): the agent judged the suspected stamped-edit to
+        # be a genuine add/remove instead. The id-view row (the new id'd cell)
+        # grows the twin verbatim — the copy_new_shared path it would have
+        # taken without the pool deficit; the pos-view row (the vanished
+        # positional base cell) mirrors the removal. ``item.side`` names the
+        # source side (id view) / the gone side (pos view) at emission.
+        if item.side is None:
+            raise _ItemError(f"{item.key} names no side — reconcile manually (edit + record)")
+        if item.key.startswith("id:"):
+            if item.member is None or not item.member.is_one_sided:
+                raise _ItemError(
+                    f"the one-sided shape of {item.key} no longer holds — re-run report"
+                )
+            ex.copy_new(item, item.side)
+            return
+        ex.mirror_remove(item, item.side)
+        return
     if choice == "keep_twin":
         # translate_edit only: the edited side did not change what the twin
         # should say, so record the new (edited) baseline and keep the existing
@@ -1222,7 +1256,7 @@ def apply_deck(
     # to be confirmed in the same document.
     incoherent_pools = _incoherent_pool_confirms(diff, decisions)
 
-    ordered = sorted(enumerate(diff.items), key=lambda e: (_PHASES.get(e[1].action, 9), e[0]))
+    ordered = sorted(enumerate(diff.items), key=lambda e: (_item_phase(e[1]), e[0]))
     landed: list[tuple[DiffItem, str]] = []  # (item, provenance)
     unresolved_items: list[DiffItem] = []  # pending / rejected / failed
     seen_decisions: set[str] = set()

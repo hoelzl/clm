@@ -1954,6 +1954,8 @@ already agree — ledger-only), the §7.3 transitions (`record_fork`,
 propagation. **Framed actions** (need a decision): `translate_edit`,
 `translate_new`, `verify_translation`, `conflict_shared`,
 `pending_divergence`, `remove_vs_edit`, `unify_choose_body`, `order_decision`,
+`stamp_vs_new` (a suspected id-stamp of a vanished positional cell — answer
+`treat_as_new` to grow the twin / mirror the removal),
 `ambiguous_alignment`, `verify_cold`, and friends. Every JSON item carries an
 `answers` list — the decision shapes `apply --decisions` accepts for it, `[]`
 on mechanical items (nothing to answer) — plus the full current cell bytes

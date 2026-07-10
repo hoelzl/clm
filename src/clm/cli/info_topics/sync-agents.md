@@ -75,8 +75,12 @@ sides moved — confirm or supply a body), `conflict_shared` / `remove_vs_edit`
 / `unify_choose_body` / `order_decision` / `conflict_preamble` (choose a side),
 `verify_cold` (confirm the member is in sync — or, on an **id-keyed** member,
 supply a `body` + `side` to overwrite a stale twin in the same pass),
-`ambiguous_alignment`
-(mint ids / choose), and the normalize-refusal deck item (run
+`stamp_vs_new` (a new id'd cell appeared while a positional cell of the same
+pool vanished on that side — answer `treat_as_new` when the id'd cell really
+is new; see "Replacing a positional cell" below), `ambiguous_alignment`
+(genuinely ambiguous residue — rival id stamps, both sides adding different
+content into one pool; carries **no** answers: reconcile by editing, minting
+ids, then re-report), and the normalize-refusal deck item (run
 `clm slides normalize`, then re-report).
 
 ## The decision document
@@ -228,6 +232,29 @@ among existing cells is instead reported `verify_cold`: its ordinal aliases a
 **Mint a `slide_id`** on the new cell (e.g. `clm slides assign-ids`, or add one
 by hand) and re-`report` — it then frames `translate_new` / `copy_new_shared`
 and the twin is created for you.
+
+## Replacing a positional cell with id-keyed cells — `stamp_vs_new`
+
+Replacing an un-id'd positional cell with one or more new `slide_id`-keyed
+cells on ONE half (e.g. a display-only `df.drop_duplicates()` cell replaced by
+an assign-back + check pair) frames every affected row `stamp_vs_new`: the
+engine cannot tell whether the positional cell was *removed* (and the id'd
+cells are genuinely new) or *stamped with an id and edited* — mechanically
+copying could duplicate it, mechanically removing could delete real content.
+The answer vocabulary is `treat_as_new`:
+
+- On the new id'd cell's row (`id:…`), `{"choice": "treat_as_new"}` copies it
+  verbatim to the twin — the normal `copy_new_shared` path it would have taken
+  without the suspicion.
+- On the vanished positional cell's row (`pos:…`), `{"choice": "treat_as_new"}`
+  mirrors the removal onto the surviving half. It is rejected if that survivor
+  was *also* edited (removal would lose the edit) — reconcile that shape by
+  editing the files.
+
+Answer all the affected rows in one document and the whole replacement lands in
+one `apply` pass. If the cell really was stamped-and-edited (the same cell, now
+carrying an id), do NOT answer `treat_as_new` — stamp the twin cell with the
+same `slide_id` by hand (the halves then pair id-keyed) and re-`report`.
 
 ## The forensic window — `report --since`
 

@@ -469,6 +469,15 @@ clm slides sync autopilot DECK|DIR [--model ...]            # a SCRIPT over repo
   one principle ("what can be addressed, and what can be trusted"); a
   proposal for a **fourth** shape-conditional answer set on any single action
   is the P8 alarm — redesign the action instead of conditioning it further.
+  `stamp_vs_new` (#600) is that rule applied: the one *resolvable*
+  `ambiguous_alignment` shape (a new id'd cell while a positional cell of the
+  same pool is unaccounted on that side — both the id-view and the pos-view
+  row) became its own framed action with a uniform `treat_as_new` answer
+  (grow the twin verbatim / mirror the removal; an edited survivor rejects),
+  instead of conditioning `ambiguous_alignment`'s answers by shape.
+  `ambiguous_alignment` itself stays answerless — its remaining shapes
+  (rival id stamps, both-sides-added pool collisions, multi-candidate
+  pending twins) are genuinely manual.
 - **One baseline rule everywhere.** Every verb trusts the ledger; `--since REF`
   is a forensic *view* on `report` (show me git-window changes annotated with
   trust state), not a trust change. `provider_available`, `--use-watermark`,
@@ -637,3 +646,4 @@ row here (or an edit to the section it refines) has skipped the checklist.
 | #570 — `DiffItem.side` means the *present/source* side on every `translate_new` emitter; executor derives the mint target from the member | none (implementation consistency; one field, one meaning — P6 spirit) | inconsistency removal |
 | #572 — `clm slides rename-id` = the second sanctioned key migration; fingerprint-inferred `id:→id:` migration **rejected** | §7.3 | design extension (explicit, never inferred) |
 | #572 — `body`+`side` recovery on cold id-keyed two-sided members; cold-`confirm` caveat documented | §6.2, §8, §9 | P8(c) extension + honest-residue entry |
+| #600 — `stamp_vs_new` framed action: the "new id'd cell while a positional pool cell is unaccounted" shapes (id-view + pos-view rows) split out of `ambiguous_alignment`, with a `treat_as_new` answer (grow the twin / mirror the removal) | §8 | new framed kind via the §8 watch-item's "redesign the action" route — `ambiguous_alignment` stays answerless |

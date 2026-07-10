@@ -709,6 +709,74 @@ class TestColdBodyRecovery:
         assert "side" in result.reason
 
 
+class TestStampVsNew:
+    """Issue #600: replacing an un-id'd positional cell with new id'd cells on
+    one side frames every affected row ``stamp_vs_new`` with a ``treat_as_new``
+    answer — the loop resolves through one decision document instead of
+    dead-ending on an empty vocabulary."""
+
+    def _replace_pos_cell_on_en(self, tmp_path: Path) -> _Deck:
+        deck = _deck(tmp_path)
+        deck.edit_en(
+            '# %% tags=["keep"]\ny = 2\n',
+            '# %% tags=["keep"] slide_id="y-assign"\ny = 3\n\n# %% slide_id="y-check"\ny\n',
+        )
+        return deck
+
+    def test_treat_as_new_grows_twins_and_mirrors_the_removal(self, tmp_path: Path):
+        deck = self._replace_pos_cell_on_en(tmp_path)
+        _, diff = deck.diff()
+        assert {(i.key, i.action) for i in diff.items} == {
+            ("id:y-assign", "stamp_vs_new"),
+            ("id:y-check", "stamp_vs_new"),
+            ("pos:s0/code/1", "stamp_vs_new"),
+        }, [(i.key, i.action, i.detail) for i in diff.items]
+        # The report advertises exactly what the executor accepts — never [].
+        assert all(doc_apply.item_answers(i) == ("treat_as_new",) for i in diff.items)
+        decisions = {
+            i.key: doc_apply.Decision(key=i.key, choice="treat_as_new") for i in diff.items
+        }
+        outcome = deck.apply(decisions)
+        assert outcome.all_applied, outcome.to_payload()
+        de = deck.de_path.read_text(encoding="utf-8")
+        assert '# %% tags=["keep"] slide_id="y-assign"\ny = 3\n' in de
+        assert '# %% slide_id="y-check"\ny\n' in de
+        assert "y = 2" not in de  # the superseded positional cell is gone
+        deck.assert_converged()
+
+    def test_partial_answering_still_converges(self, tmp_path: Path):
+        # Answering only the id-view rows grows the twins; the vanished
+        # positional cell then resolves mechanically on the next pass.
+        deck = self._replace_pos_cell_on_en(tmp_path)
+        outcome = deck.apply(
+            {
+                key: doc_apply.Decision(key=key, choice="treat_as_new")
+                for key in ("id:y-assign", "id:y-check")
+            }
+        )
+        assert _statuses(outcome)["pos:s0/code/1"] == "pending"
+        _, diff = deck.diff()
+        assert [(i.key, i.action) for i in diff.items] == [("pos:s0/code/1", "mirror_remove")]
+        outcome = deck.apply()
+        assert outcome.all_applied, outcome.to_payload()
+        assert "y = 2" not in deck.de_path.read_text(encoding="utf-8")
+        deck.assert_converged()
+
+    def test_treat_as_new_rejected_when_the_survivor_moved_off_base(self, tmp_path: Path):
+        # The surviving positional twin carries an edit: removing it would
+        # silently lose content, so the pos-view treat_as_new must fail the
+        # item instead (P8: never guess).
+        deck = self._replace_pos_cell_on_en(tmp_path)
+        deck.edit_de("y = 2", "y = 99")
+        _, diff = deck.diff()
+        pos_item = next(i for i in diff.items if i.key == "pos:s0/code/1")
+        assert pos_item.action == "stamp_vs_new"
+        outcome = deck.apply(_decision(pos_item.key, choice="treat_as_new"))
+        result = next(r for r in outcome.results if r.key == pos_item.key)
+        assert result.status == "rejected"
+        assert "y = 99" in deck.de_path.read_text(encoding="utf-8")
+
+
 class TestDecisionParsing:
     def test_wrong_top_level_shape_error_teaches_the_schema(self):
         # The first error an agent sees must show the whole document shape —
