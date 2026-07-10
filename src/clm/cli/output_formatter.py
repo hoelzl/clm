@@ -407,19 +407,24 @@ class DefaultOutputFormatter(OutputFormatter):
             self._is_started = False
 
         # Status symbol and message
-        if summary.has_errors():
-            status_symbol = "✗"
-            status_color = "red"
-            status_text = "with errors"
+        if summary.aborted:
+            self.console.print(
+                f"\n[bold red]✗ Build aborted[/bold red] after {summary.duration:.1f}s\n"
+            )
         else:
-            status_symbol = "✓"
-            status_color = "green"
-            status_text = "successfully"
+            if summary.has_errors():
+                status_symbol = "✗"
+                status_color = "red"
+                status_text = "with errors"
+            else:
+                status_symbol = "✓"
+                status_color = "green"
+                status_text = "successfully"
 
-        self.console.print(
-            f"\n[bold {status_color}]{status_symbol} Build completed {status_text}[/bold {status_color}] "
-            f"in {summary.duration:.1f}s\n"
-        )
+            self.console.print(
+                f"\n[bold {status_color}]{status_symbol} Build completed {status_text}[/bold {status_color}] "
+                f"in {summary.duration:.1f}s\n"
+            )
 
         # Summary statistics
         self.console.print("[bold]Summary:[/bold]")
@@ -709,19 +714,24 @@ class VerboseOutputFormatter(DefaultOutputFormatter):
             self._is_started = False
 
         # Status symbol and message
-        if summary.has_errors():
-            status_symbol = "✗"
-            status_color = "red"
-            status_text = "with errors"
+        if summary.aborted:
+            self.console.print(
+                f"\n[bold red]✗ Build aborted[/bold red] after {summary.duration:.1f}s\n"
+            )
         else:
-            status_symbol = "✓"
-            status_color = "green"
-            status_text = "successfully"
+            if summary.has_errors():
+                status_symbol = "✗"
+                status_color = "red"
+                status_text = "with errors"
+            else:
+                status_symbol = "✓"
+                status_color = "green"
+                status_text = "successfully"
 
-        self.console.print(
-            f"\n[bold {status_color}]{status_symbol} Build completed {status_text}[/bold {status_color}] "
-            f"in {summary.duration:.1f}s\n"
-        )
+            self.console.print(
+                f"\n[bold {status_color}]{status_symbol} Build completed {status_text}[/bold {status_color}] "
+                f"in {summary.duration:.1f}s\n"
+            )
 
         # Summary statistics
         self.console.print("[bold]Summary:[/bold]")
@@ -874,7 +884,15 @@ class QuietOutputFormatter(OutputFormatter):
 
     def show_summary(self, summary: BuildSummary) -> None:
         """Display minimal summary."""
-        if summary.has_errors():
+        if summary.aborted:
+            self.console.print(
+                f"\nBuild aborted after {summary.duration:.1f}s",
+                style="red bold",
+            )
+            from clm.infrastructure.logging.log_paths import get_log_dir
+
+            self.console.print(f"See logs: {get_log_dir()}", style="dim")
+        elif summary.has_errors():
             self.console.print(
                 f"\nBuild failed with {len(summary.errors)} errors in {summary.duration:.1f}s",
                 style="red bold",
@@ -961,12 +979,15 @@ class JSONOutputFormatter(OutputFormatter):
     def show_summary(self, summary: BuildSummary) -> None:
         """Output final JSON to stdout."""
         # Determine final status
-        if summary.has_fatal_errors():
+        if summary.aborted:
+            self.output_data["status"] = "aborted"
+        elif summary.has_fatal_errors():
             self.output_data["status"] = "fatal"
         elif summary.has_errors():
             self.output_data["status"] = "failed"
         else:
             self.output_data["status"] = "success"
+        self.output_data["aborted"] = summary.aborted
 
         # Add summary data
         self.output_data["duration_seconds"] = summary.duration
