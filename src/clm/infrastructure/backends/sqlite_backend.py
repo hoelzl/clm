@@ -90,6 +90,13 @@ class SqliteBackend(LocalOpsBackend):
     # spurious "No such kernel named xcpp20" failures). An empty dict leaves
     # jobs untagged (legacy behaviour, used by tests).
     worker_execution_modes: dict[str, str] = field(factory=dict)
+    # The owning WorkerLifecycleManager session (issue #597). Pre-registered
+    # worker rows are stamped with their session_id (issue #594), and the
+    # activation-timeout dead-marking must not condemn another session's
+    # still-starting workers — only rows this session owns (or unowned legacy
+    # rows) may be marked dead. None (tests, legacy callers) restricts the
+    # dead-marking to the execution-mode filter only.
+    worker_session_id: str | None = None
 
     # Background result-cache writer (lazy). Retiring a completed job by reading
     # its output back, pickling it, and committing the blob to the cache DB is
@@ -1306,14 +1313,29 @@ class SqliteBackend(LocalOpsBackend):
                 logger.warning(
                     f"Timeout waiting for {job_type} workers to activate after {timeout}s"
                 )
+                # Scope the dead-marking like the availability queries above
+                # (issue #597): without the mode filter, a Direct-mode build
+                # timing out on its own workers condemned a concurrent
+                # Docker-mode build's still-starting pre-registrations (>30s
+                # old is plausible for a cold Docker image pull). Ownership
+                # narrows it further — only this session's workers (or
+                # unowned legacy rows) are ours to declare startup casualties.
+                if self.worker_session_id is None:
+                    ownership_clause = ""
+                    ownership_params: tuple[str, ...] = ()
+                else:
+                    ownership_clause = "AND (session_id = ? OR session_id IS NULL)"
+                    ownership_params = (self.worker_session_id,)
                 cursor = conn.execute(
-                    """
+                    f"""
                     UPDATE workers SET status = 'dead'
                     WHERE worker_type = ?
                     AND status = 'created'
                     AND started_at < datetime('now', '-30 seconds')
+                    {mode_clause}
+                    {ownership_clause}
                     """,
-                    (job_type,),
+                    (job_type, *mode_params, *ownership_params),
                 )
                 if cursor.rowcount:
                     conn.commit()
