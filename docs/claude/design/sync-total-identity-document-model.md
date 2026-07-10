@@ -1,7 +1,8 @@
 # Sync v3: Total Identity over One Document — Target-Model Design Note
 
 **Status**: Design agreed with the maintainer — §12 decisions settled 2026-07-02;
-ready for Phase 0
+phases 0–4 shipped (v3 is the only engine since 1.20.0); amended 2026-07-10
+with the post-cutover refinements (§13)
 **Author**: Claude (Fable 5), with the maintainer
 **Date**: 2026-07-01 (decisions recorded 2026-07-02)
 **Issue**: [#520](https://github.com/hoelzl/clm/issues/520) (umbrella)
@@ -249,6 +250,19 @@ entry := {
   framed verification task (structural pairing evidence attached; the #448
   trust rungs — assume / structural / agent / semantic — survive as *task
   framing and provenance labels*, not as engine tiers).
+  *Refinement (#566, 2026-07-05):* the cold rule applies to **two-sided**
+  members — both bodies exist, their relationship is unknown, and `confirm`
+  can record trust over them. A never-recorded **one-sided** member is an
+  *add* (§6.2's add row), not cold: there is no twin whose trust could be
+  asserted, and framing it cold is a dead end (`confirm` is rejected on a
+  one-sided member). It falls through to `translate_new` (localized/header —
+  framed) or `copy_new_shared` (shared — mechanical, safe because it can only
+  fill an empty slot, never overwrite). Exception: a one-sided **positional**
+  (un-id'd) member stays cold, because ordinal aliasing pairs it with a
+  *different* twin cell at the same slot and the executor cannot locate the
+  empty target — minting a `slide_id` routes it through the id-keyed add path.
+  Where §5's cold rule and §6.2's add row overlap ("one-sided and
+  un-ledgered"), sidedness decides: two-sided → cold, one-sided → add.
 - **Stale = fingerprint mismatch**, which is fail-safe: it produces a re-check
   item, never silent trust. `hash_version` migrates entries lazily (re-verify
   on version bump), the #458 lesson encoded.
@@ -279,11 +293,11 @@ comparison.
 |---|---|---|
 | `in-sync` | fingerprints match recorded | nothing |
 | `mechanical` | one side moved off base, resolution is deterministic | apply does it: shared verbatim copy, tag mirror, id-stamp twin, order mirror, companion-layout mirror, remove mirror |
-| `edit` | one side moved off base, other side needs judgment (localized twin) | framed task: translate/adapt, with both bodies + base attached |
+| `edit` | one side moved off base, other side needs judgment (localized twin) | framed task: translate/adapt, with both bodies + base attached; answers: twin `body`, or `keep_twin` when the twin is still a faithful rendering — a pure ledger record (#566) |
 | `add` / `remove` | member present/absent vs base on one side | verbatim (shared) or framed translate (localized) / mirrored remove; removals of verified content always surfaced, never silent |
 | `conflict` | both sides moved off base and differ | framed decision (de-wins / en-wins / merged body / "it's a fork" §7), full excerpts by construction |
 | `transition` | class change (§7): fork, unify, id-stamp, relayout | mechanical when complete, framed when transitional |
-| `unverified` | no ledger entry (cold) | framed verification task |
+| `unverified` | no ledger entry (cold), **two-sided** (§5 — a one-sided un-ledgered member frames as `add`) | framed verification task; answers: `confirm` (banks both sides as-is, §9), plus `body`+`side` naming the stale twin on an id-keyed member (#572) |
 | `order` | group-level member-sequence divergence | sequence diff over MemberKeys; mechanical when one side moved, decision when both |
 
 Direction is decided **per member** by which side's fingerprint moved off base
@@ -377,7 +391,24 @@ Base class **localized** (two bodies):
   none on the twin: mechanical `stamp twin` item (the #443 shape, reduced to a
   one-row transition). Observed id on a previously positional member: the key
   migrates `pos:… → id:…` in the ledger entry *at record time*, an explicit,
-  logged rename of the key — the single place key migration is allowed.
+  logged rename of the key — one of exactly **two** places key migration is
+  allowed.
+- **Id-rename (id'd → differently id'd) — the second sanctioned migration
+  (#572, 2026-07-08).** A deliberate `slide_id` rename goes through
+  `clm slides rename-id DECK OLD NEW`, which rewrites the id (and every
+  `for_slide` owner reference) on **both** halves and migrates the ledger key
+  in the same step — carrying the recorded fingerprints, never re-hashing —
+  so a rename done alongside an edit still frames `translate_edit` against
+  the carried baseline, never a stale cold-`confirm`. Renaming a group anchor
+  cascades into the group's `pos:` keys and order scopes
+  (`doc_ledger.rename_group_scopes`). Key migration is never **inferred**:
+  teaching the differ to recover hand `id:→id:` renames by content
+  fingerprint was adversarially reviewed and **rejected** (#572) — it
+  re-enters inference into identity (P1/P2) and mis-migrates on the
+  boilerplate/blank-cell fingerprint collisions that are the norm in decks,
+  creating a new silent-failure class. Do not re-propose it. A hand rename
+  that bypasses the command drops the member to cold; recovery is §5's cold
+  path (`confirm`, or `body`+`side` for a stale twin).
 - **Relayout (inline ↔ companion).** A voiceover member's `layout` flips;
   content identity is untouched. Mechanical mirror to the twin (both languages
   keep the per-deck invariant), entry updates `layout`.
@@ -427,6 +458,17 @@ clm slides sync autopilot DECK|DIR [--model ...]            # a SCRIPT over repo
   reasons, valid ones land, nothing already applied is lost, and the ledger
   records each landed item. Handles survive replanning because they are
   values, not positions.
+- **Answer vocabularies are per-item and shape-aware**
+  (`doc_apply.item_answers`): `translate_edit` takes a twin `body` or
+  `keep_twin` (#566); `verify_cold` takes `confirm`, plus `body` with a
+  `side` naming the stale twin — id-keyed two-sided members only (#572); a
+  positional cold member takes only `confirm` (ordinal aliasing, §5). The
+  report advertises exactly what the executor will accept — advertising an
+  answer the executor then rejects is a defect. *Watch-item:* `verify_cold`'s
+  answer set already varies by member shape in three ways, all derivable from
+  one principle ("what can be addressed, and what can be trusted"); a
+  proposal for a **fourth** shape-conditional answer set on any single action
+  is the P8 alarm — redesign the action instead of conditioning it further.
 - **One baseline rule everywhere.** Every verb trusts the ledger; `--since REF`
   is a forensic *view* on `report` (show me git-window changes annotated with
   trust state), not a trust change. `provider_available`, `--use-watermark`,
@@ -458,6 +500,13 @@ clm slides sync autopilot DECK|DIR [--model ...]            # a SCRIPT over repo
 - **Shared-member reorder + one-sided edit within one group** remains the one
   place positional identity can be ambiguous (§3.3); ceiling = one framed
   decision, permanently resolvable by minting an id.
+- **Cold `confirm` carries no freshness guarantee.** Confirming a
+  never-recorded member banks both sides as-is — cold means there is no
+  baseline to check freshness against, so no engine check is possible; the
+  judgment that both sides are faithful is the agent's. `rename-id` (§7.3)
+  removes the most common way a warm member fell cold; a known-stale twin on
+  a cold id-keyed member is recovered in one pass with the `body`+`side`
+  answer (#572).
 
 ---
 
@@ -570,3 +619,21 @@ exist and are being reused, not rebuilt.
    - Downstream invocations never change names: the same verbs mean the same
      thing before and after cutover — the env flag only exists during the
      transition window and is removed with v2.
+
+---
+
+## 13. Post-cutover amendments (audited 2026-07-10)
+
+Every post-cutover change to the engine was audited against P1–P8 on
+2026-07-10; all conform, and the refinements below are now part of the design.
+Per P8, keep this note current: a change that lands in the engine without a
+row here (or an edit to the section it refines) has skipped the checklist.
+
+| Change | Sections amended | Nature |
+|---|---|---|
+| #555 — git-idempotent `record` (`confirmed_commit` preserved on unchanged members; byte-identical ledger writes skipped) | none (P5 untouched; `confirmed_commit` = "commit at which this state was last actually established") | pure idempotence fix |
+| #566 — one-sided un-ledgered members frame `add`, not cold; positional exception | §5, §6.2 | design clarification (resolved the §5/§6.2 overlap by sidedness) |
+| #566 — `keep_twin` answer on `translate_edit` | §6.2, §8 | P8(c) extension: new answer in an existing framed kind |
+| #570 — `DiffItem.side` means the *present/source* side on every `translate_new` emitter; executor derives the mint target from the member | none (implementation consistency; one field, one meaning — P6 spirit) | inconsistency removal |
+| #572 — `clm slides rename-id` = the second sanctioned key migration; fingerprint-inferred `id:→id:` migration **rejected** | §7.3 | design extension (explicit, never inferred) |
+| #572 — `body`+`side` recovery on cold id-keyed two-sided members; cold-`confirm` caveat documented | §6.2, §8, §9 | P8(c) extension + honest-residue entry |
