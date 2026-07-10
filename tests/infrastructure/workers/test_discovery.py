@@ -15,6 +15,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from clm.infrastructure.workers.discovery import (
+    MANAGED_BY_BUILD,
+    MANAGED_BY_PERSISTENT,
     DiscoveredWorker,
     WorkerDiscovery,
 )
@@ -49,6 +51,8 @@ def make_db_row():
         jobs_processed=0,
         jobs_failed=0,
         started_at=None,
+        session_id=None,
+        managed_by=None,
     ):
         if last_heartbeat is None:
             last_heartbeat = datetime.now(timezone.utc).isoformat()
@@ -75,6 +79,8 @@ def make_db_row():
             jobs_processed,
             jobs_failed,
             started_at_str,
+            session_id,
+            managed_by,
         )
 
     return _make_row
@@ -477,6 +483,101 @@ class TestCountHealthyWorkers:
         assert worker_discovery.count_healthy_workers("notebook", execution_mode="direct") == 2
         # No mode → legacy count-everything behaviour
         assert worker_discovery.count_healthy_workers("notebook") == 3
+
+
+class TestWorkerOwnership:
+    """Worker reuse ownership (issue #594).
+
+    Another build's auto-stopped workers are DELETEd from the jobs DB the
+    moment that build exits; a build that counted them as reusable is
+    stranded with zero workers at its first non-cached submission. Only
+    unowned, persistent, or same-session workers may be reused.
+    """
+
+    def test_is_reusable_by_semantics(self):
+        now = datetime.now(timezone.utc)
+
+        def make_worker(session_id, managed_by):
+            return DiscoveredWorker(
+                db_id=1,
+                worker_type="notebook",
+                executor_id="direct-1",
+                status="idle",
+                last_heartbeat=now,
+                jobs_processed=0,
+                jobs_failed=0,
+                started_at=now,
+                is_docker=False,
+                is_healthy=True,
+                session_id=session_id,
+                managed_by=managed_by,
+            )
+
+        # Another session's build-owned worker: never reusable
+        other = make_worker("session-other", MANAGED_BY_BUILD)
+        assert other.is_reusable_by("session-mine") is False
+
+        # My own build-owned worker: reusable by me
+        mine = make_worker("session-mine", MANAGED_BY_BUILD)
+        assert mine.is_reusable_by("session-mine") is True
+
+        # Deliberately persistent worker (auto_stop=false): reusable by anyone
+        persistent = make_worker("session-other", MANAGED_BY_PERSISTENT)
+        assert persistent.is_reusable_by("session-mine") is True
+
+        # Legacy self-registered worker (no ownership marker): reusable
+        legacy = make_worker(None, None)
+        assert legacy.is_reusable_by("session-mine") is True
+
+        # Build-owned worker with no session recorded: not reusable (a
+        # marker without an owner cannot be proven to be ours)
+        orphan_marker = make_worker(None, MANAGED_BY_BUILD)
+        assert orphan_marker.is_reusable_by("session-mine") is False
+
+    def test_count_excludes_other_sessions_build_workers(
+        self, worker_discovery, mock_job_queue, make_db_row
+    ):
+        """count_healthy_workers(reusable_for_session=...) must not count
+        another build's auto-stopped workers."""
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        now = datetime.now(timezone.utc)
+        mock_cursor.fetchall.return_value = [
+            make_db_row(
+                db_id=1,
+                status="idle",
+                last_heartbeat=now,
+                session_id="session-other",
+                managed_by=MANAGED_BY_BUILD,
+            ),
+            make_db_row(
+                db_id=2,
+                status="idle",
+                last_heartbeat=now,
+                session_id="session-mine",
+                managed_by=MANAGED_BY_BUILD,
+            ),
+            make_db_row(
+                db_id=3,
+                status="idle",
+                last_heartbeat=now,
+                session_id="session-other",
+                managed_by=MANAGED_BY_PERSISTENT,
+            ),
+            # Legacy row without ownership marker
+            make_db_row(db_id=4, status="idle", last_heartbeat=now),
+        ]
+        mock_conn.execute.return_value = mock_cursor
+        mock_job_queue._get_conn.return_value = mock_conn
+
+        # Own worker + persistent worker + legacy worker are reusable;
+        # the other session's build-owned worker is not.
+        assert (
+            worker_discovery.count_healthy_workers("notebook", reusable_for_session="session-mine")
+            == 3
+        )
+        # Without the ownership filter the legacy behaviour is unchanged.
+        assert worker_discovery.count_healthy_workers("notebook") == 4
 
 
 class TestDatetimeCompatibility:
