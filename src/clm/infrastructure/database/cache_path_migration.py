@@ -29,18 +29,36 @@ prefix changes). The ``results_cache.output_file`` rewrite in ``clm_jobs.db`` is
 the analogous, deliberately-separate operation for moves that change output
 locations; it is not implemented here.
 
-Collision handling
-==================
+Overlapping mappings and collision handling
+===========================================
+
+The rewrite is **two-phase and order-independent** (issue #587): every
+mapping's rows are first parked on a unique sentinel path, then landed on
+their destinations. A naive sequential ``UPDATE old → new`` would let a later
+mapping re-migrate an earlier mapping's result whenever the set overlaps
+(``new₁ == old₂`` — a chain, or two paths swapping names in a batch
+restructure), silently piling rows onto the wrong path and, worse, letting the
+UNIQUE-collision check delete rows that were themselves about to move away.
+Parking first means each row moves exactly once and collisions are judged
+against the *final* state.
 
 Only ``executed_notebooks`` carries a ``UNIQUE(input_file, content_hash,
-language, prog_lang)`` constraint. A rewrite ``old → new`` collides only when a
-row already exists at ``new`` with the **same** ``content_hash`` — i.e. an
-equivalent executed notebook (same content ⇒ same cached payload). Such a
-migrated duplicate is simply dropped (counted as ``collisions_dropped``); the
-surviving destination row serves the identical hit. ``processed_files`` /
-``processing_issues`` have no UNIQUE constraint, so their rewrite is a plain
-``UPDATE``; any transient duplicate versions are trimmed by the ordinary
-newest-N build-end prune.
+language, prog_lang)`` constraint. After parking, a landing collides only when
+a row that was **never mapped away** already sits at ``new`` with the same
+``content_hash`` — i.e. an equivalent executed notebook (same content ⇒ same
+cached payload). Such a migrated duplicate is dropped (counted as
+``collisions_dropped``); the surviving destination row serves the identical
+hit. ``processed_files`` / ``processing_issues`` have no UNIQUE constraint, so
+their landing is a plain ``UPDATE``; any transient duplicate versions are
+trimmed by the ordinary newest-N build-end prune.
+
+``processing_issues`` rows additionally get the ``file_path`` **embedded in
+their ``issue_json`` payload** re-pointed (issue #588) — the column alone is
+not enough, because cached errors/warnings are re-reported from that JSON and
+would otherwise name the old, no-longer-existing path. The pickled ``Result``
+in ``processed_files`` also embeds its original ``input_file``, but that copy
+is inert: the replay path consumes only the freshly computed payload paths
+plus ``result_bytes()``, so it is deliberately left untouched.
 
 The whole rewrite runs in one transaction (``BEGIN IMMEDIATE`` … ``COMMIT``);
 ``dry_run`` performs the identical work and ``ROLLBACK``s, so the reported
@@ -49,6 +67,7 @@ counts always match what a real run would do. Run it while no build is active.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sqlite3
@@ -244,6 +263,58 @@ def plan_dir_rename(
 # ---------------------------------------------------------------------------
 
 
+#: Sentinel paths park rows between the two rewrite phases. NUL bytes cannot
+#: appear in a real filesystem path, so a sentinel can never alias stored data.
+_SENTINEL_PREFIX = "\x00clm-cache-path-migration:"
+
+
+def _sentinel(index: int) -> str:
+    return f"{_SENTINEL_PREFIX}{index}\x00"
+
+
+def _rewrite_issue_json(issue_json: str, old: str, new: str) -> str | None:
+    """Return ``issue_json`` with its embedded ``file_path`` re-pointed from
+    ``old`` to ``new``, or ``None`` if there is nothing to rewrite.
+
+    ``BuildError`` / ``BuildWarning`` are stored as ``json.dumps(asdict(...))``
+    with a top-level ``file_path`` (issue #588). Free-text ``message`` content
+    is left alone — rewriting paths inside prose is not reliably possible —
+    and malformed JSON is left untouched rather than destroyed.
+    """
+    try:
+        data = json.loads(issue_json)
+    except ValueError:
+        return None
+    field = data.get("file_path")
+    if not isinstance(field, str):
+        return None
+    rewritten = _rewrite_under(field, old, new)
+    if rewritten is None or rewritten == field:
+        return None
+    data["file_path"] = rewritten
+    return json.dumps(data)
+
+
+def _rewrite_parked_issue_payloads(
+    conn: sqlite3.Connection, sentinel: str, mapping: PathMapping
+) -> None:
+    """Re-point the ``file_path`` embedded in parked ``processing_issues``
+    rows' ``issue_json`` — the column rewrite alone would leave cached
+    errors/warnings reporting the old, no-longer-existing path on replay
+    (issue #588)."""
+    rows = conn.execute(
+        "SELECT id, issue_json FROM processing_issues WHERE file_path = ?",
+        (sentinel,),
+    ).fetchall()
+    for row_id, issue_json in rows:
+        updated = _rewrite_issue_json(issue_json, mapping.old, mapping.new)
+        if updated is not None:
+            conn.execute(
+                "UPDATE processing_issues SET issue_json = ? WHERE id = ?",
+                (updated, row_id),
+            )
+
+
 def _migrate_table(
     conn: sqlite3.Connection,
     table: str,
@@ -251,21 +322,40 @@ def _migrate_table(
     mappings: Sequence[PathMapping],
 ) -> TableMigration:
     dims = _UNIQUE_CONTENT_DIMS.get(table)
+    # Phase 1: park every mapping's rows on a unique sentinel so no later
+    # UPDATE can observe (and re-migrate) an earlier mapping's result. This
+    # makes the rewrite order-independent and correct for overlapping mapping
+    # sets — a chain (a→b, b→c) or a swap (a→b, b→a) moves every row exactly
+    # once (issue #587).
+    parked: list[tuple[str, PathMapping]] = []
+    for index, m in enumerate(mappings):
+        sentinel = _sentinel(index)
+        moved = conn.execute(
+            f"UPDATE {table} SET {column} = ? WHERE {column} = ?",  # noqa: S608
+            (sentinel, m.old),
+        ).rowcount
+        if moved:
+            parked.append((sentinel, m))
+    # Phase 2: land the parked rows. Rows now sitting at a destination path
+    # are exactly the rows that were never mapped away, so the UNIQUE-collision
+    # check judges against the final state instead of a mid-rewrite one.
     rewritten = 0
     collisions = 0
-    for m in mappings:
+    for sentinel, m in parked:
         if dims:
-            # Drop old-path rows that would violate UNIQUE against a row already
+            # Drop parked rows that would violate UNIQUE against a row already
             # sitting at the new path (same content_hash ⇒ equivalent payload).
             dim_match = " AND ".join(f"t2.{d} = {table}.{d}" for d in dims)
             del_sql = (
                 f"DELETE FROM {table} WHERE {column} = ? AND EXISTS ("  # noqa: S608
                 f"SELECT 1 FROM {table} AS t2 WHERE t2.{column} = ? AND {dim_match})"
             )
-            collisions += conn.execute(del_sql, (m.old, m.new)).rowcount
+            collisions += conn.execute(del_sql, (sentinel, m.new)).rowcount
+        if table == "processing_issues":
+            _rewrite_parked_issue_payloads(conn, sentinel, m)
         upd = conn.execute(
             f"UPDATE {table} SET {column} = ? WHERE {column} = ?",  # noqa: S608
-            (m.new, m.old),
+            (m.new, sentinel),
         )
         rewritten += upd.rowcount
     return TableMigration(table=table, rows_rewritten=rewritten, collisions_dropped=collisions)
@@ -279,10 +369,13 @@ def migrate_cache_paths(
 ) -> CacheMigrationReport:
     """Rewrite ``old → new`` input paths across the three ``clm_cache.db`` tables.
 
-    Self-mappings (``old == new``) are ignored. If the DB does not exist or there
-    is nothing to rewrite, returns an empty report without creating the file.
-    ``dry_run`` performs the identical work then rolls back, so its counts equal
-    a real run's. The whole rewrite is a single transaction.
+    Overlapping mapping sets (one mapping's ``new`` equal to another's ``old`` —
+    chains, swaps) are safe and order-independent: rows are parked on sentinel
+    paths first, so each row moves exactly once (issue #587). Self-mappings
+    (``old == new``) are ignored. If the DB does not exist or there is nothing
+    to rewrite, returns an empty report without creating the file. ``dry_run``
+    performs the identical work then rolls back, so its counts equal a real
+    run's. The whole rewrite is a single transaction.
     """
     cache_db_path = Path(cache_db_path)
     mapping_list = [m for m in mappings if m.old != m.new]

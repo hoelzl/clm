@@ -290,6 +290,125 @@ def test_sibling_topic_rows_are_not_touched(cache_db, tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Overlapping mapping sets — chains and swaps (issue #587)
+# ---------------------------------------------------------------------------
+
+
+def test_chained_mappings_move_each_row_exactly_once(cache_db, tmp_path):
+    x = tmp_path / "topic_010_a" / "s.py"
+    y = tmp_path / "topic_020_b" / "s.py"
+    z = tmp_path / "topic_030_c" / "s.py"
+    _seed_processed(cache_db, x, content_hash="hX")
+    _seed_processed(cache_db, y, content_hash="hY")
+
+    # Chain: x→y while y→z. A sequential rewrite would drag x's row on to z.
+    migrate_cache_paths(cache_db, [PathMapping(str(x), str(y)), PathMapping(str(y), str(z))])
+
+    with DatabaseManager(cache_db) as m:
+        assert m.get_result(str(y), "hX", _META) is not None  # moved once, not twice
+        assert m.get_result(str(z), "hY", _META) is not None
+        assert m.get_result(str(x), "hX", _META) is None
+        assert m.get_result(str(z), "hX", _META) is None  # the double-migration symptom
+
+
+def test_chained_mappings_are_order_independent(cache_db, tmp_path):
+    x = tmp_path / "topic_010_a" / "s.py"
+    y = tmp_path / "topic_020_b" / "s.py"
+    z = tmp_path / "topic_030_c" / "s.py"
+    _seed_processed(cache_db, x, content_hash="hX")
+    _seed_processed(cache_db, y, content_hash="hY")
+
+    # Same chain as above, mappings supplied in the reverse order.
+    migrate_cache_paths(cache_db, [PathMapping(str(y), str(z)), PathMapping(str(x), str(y))])
+
+    with DatabaseManager(cache_db) as m:
+        assert m.get_result(str(y), "hX", _META) is not None
+        assert m.get_result(str(z), "hY", _META) is not None
+        assert m.get_result(str(z), "hX", _META) is None
+
+
+def test_swap_mappings_preserve_both_executed_rows(cache_db, tmp_path):
+    x = tmp_path / "topic_010_a" / "s.py"
+    y = tmp_path / "topic_020_b" / "s.py"
+    # Same (content_hash, language, prog_lang) at both paths: a mid-rewrite
+    # collision check would delete one row even though both are live.
+    _seed_executed(cache_db, x, content_hash="h")
+    _seed_executed(cache_db, y, content_hash="h")
+
+    report = migrate_cache_paths(
+        cache_db, [PathMapping(str(x), str(y)), PathMapping(str(y), str(x))]
+    )
+
+    exec_report = next(t for t in report.tables if t.table == "executed_notebooks")
+    assert exec_report.collisions_dropped == 0
+    assert exec_report.rows_rewritten == 2
+    with ExecutedNotebookCache(cache_db) as c:
+        assert c.get(str(x), "h", "en", "python") is not None
+        assert c.get(str(y), "h", "en", "python") is not None
+
+
+def test_chain_does_not_count_mapped_away_row_as_collision(cache_db, tmp_path):
+    x = tmp_path / "topic_010_a" / "s.py"
+    y = tmp_path / "topic_020_b" / "s.py"
+    z = tmp_path / "topic_030_c" / "s.py"
+    _seed_executed(cache_db, x, content_hash="h")
+    _seed_executed(cache_db, y, content_hash="h")
+
+    # y's row leaves for z, so x's row landing on y must NOT be dropped.
+    report = migrate_cache_paths(
+        cache_db, [PathMapping(str(x), str(y)), PathMapping(str(y), str(z))]
+    )
+
+    exec_report = next(t for t in report.tables if t.table == "executed_notebooks")
+    assert exec_report.collisions_dropped == 0
+    assert exec_report.rows_rewritten == 2
+    with ExecutedNotebookCache(cache_db) as c:
+        assert c.get(str(y), "h", "en", "python") is not None
+        assert c.get(str(z), "h", "en", "python") is not None
+        assert c.get(str(x), "h", "en", "python") is None
+
+
+# ---------------------------------------------------------------------------
+# Embedded issue_json paths (issue #588)
+# ---------------------------------------------------------------------------
+
+
+def test_issue_json_embedded_file_path_is_rewritten(cache_db, tmp_path):
+    old = tmp_path / "topic_100" / "s.py"
+    new = tmp_path / "topic_040" / "s.py"
+    _seed_issues(cache_db, old)
+
+    migrate_cache_paths(cache_db, [PathMapping(str(old), str(new))])
+
+    with DatabaseManager(cache_db) as m:
+        errs, warns = m.get_issues(str(new), "h1", _META)
+    assert errs[0].file_path == str(new)
+    assert warns[0].file_path == str(new)
+
+
+def test_issue_json_unrelated_file_path_is_untouched(cache_db, tmp_path):
+    old = tmp_path / "topic_100" / "s.py"
+    new = tmp_path / "topic_040" / "s.py"
+    other = tmp_path / "elsewhere" / "other.py"
+    _seed_issues(cache_db, old)
+    # Make the embedded path differ from the column value: it must survive
+    # unchanged when it does not match the mapping.
+    with sqlite3.connect(str(cache_db)) as conn:
+        conn.execute(
+            "UPDATE processing_issues SET issue_json = "
+            "json_set(issue_json, '$.file_path', ?) WHERE issue_type = 'warning'",
+            (str(other),),
+        )
+
+    migrate_cache_paths(cache_db, [PathMapping(str(old), str(new))])
+
+    with DatabaseManager(cache_db) as m:
+        errs, warns = m.get_issues(str(new), "h1", _META)
+    assert errs[0].file_path == str(new)
+    assert warns[0].file_path == str(other)
+
+
+# ---------------------------------------------------------------------------
 # Edge cases
 # ---------------------------------------------------------------------------
 
