@@ -399,9 +399,17 @@ observable outcome, not just row counts. `results_cache.output_file`
 (`clm_jobs.db`) is the deliberately-separate analogue for output-moving ops and is
 **not** part of this unit (a topic renumber does not move outputs).
 
-**Still to wire (Phase 1 remainder):** the `clm course renumber` command that
-computes spec-order numbering, does the two-phase `git mv`, and calls this
-migrator; plus its `--report-only`/`--json` surface.
+**Phase 1 complete:** `clm course renumber` is wired
+(`src/clm/core/course_renumber.py` + `src/clm/cli/commands/course/renumber.py`):
+spec-order numbering via `iter_topic_bindings` (the same contract build/
+validate/normalize share), two-phase move (park on interim names, then land)
+through `git mv` with a plain-rename fallback, one batched
+`migrate_cache_paths` transaction, `--report-only`/`--json`, and all five
+§5.1 validation guards (canonical-name skip, orphan collision abort,
+ambiguity abort, jobs-DB active-build guard with `--force`, DB paths taken
+from the `clm` entry point's resolution — never guessed). Missing spec topics
+are reported, and the report names the ordering spec. Docs:
+`commands.md` info topic + `changelog.d/589-course-renumber.added.md`.
 
 ---
 
