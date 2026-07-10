@@ -7,6 +7,7 @@ from clm.core.course_spec import (
     DEFAULT_OUTPUT_TARGET_SPECS,
     CourseSpec,
     CourseSpecError,
+    DirGroupSpec,
     GitHubSpec,
     TopicSpec,
     parse_multilang,
@@ -942,6 +943,100 @@ def test_parse_dictionaries(course_1_xml):
     assert dir_groups[2].path == "root-files"
     assert dir_groups[2].subdirs == []
     assert dir_groups[2].include_root_files is False
+
+
+class TestDirGroupBilingualName:
+    """Regression tests for issue #605.
+
+    A bilingual ``<dir-group>`` ``<name>`` used to parse as
+    ``Text(de="", en="")`` because only the element's direct text was
+    read — and an empty name means "course output root", so the whole
+    group was silently copied to the root of every output target.
+    """
+
+    @staticmethod
+    def _parse(xml: str) -> DirGroupSpec:
+        from xml.etree import ElementTree as ETree
+
+        return DirGroupSpec.from_element(ETree.fromstring(xml))
+
+    def test_bilingual_name(self):
+        spec = self._parse(
+            """
+            <dir-group>
+                <name><de>Beispiele</de><en>Examples</en></name>
+                <path>examples</path>
+            </dir-group>
+            """
+        )
+        assert spec.name == Text(de="Beispiele", en="Examples")
+
+    def test_bilingual_name_with_formatting_whitespace(self):
+        spec = self._parse(
+            """
+            <dir-group>
+                <name>
+                    <de>Beispiele</de>
+                    <en>Examples</en>
+                </name>
+                <path>examples</path>
+            </dir-group>
+            """
+        )
+        assert spec.name == Text(de="Beispiele", en="Examples")
+
+    def test_single_language_falls_back_to_other(self):
+        spec = self._parse(
+            """
+            <dir-group>
+                <name><de>Beispiele</de></name>
+                <path>examples</path>
+            </dir-group>
+            """
+        )
+        assert spec.name == Text(de="Beispiele", en="Beispiele")
+
+    def test_simple_name_is_stripped(self):
+        spec = self._parse(
+            """
+            <dir-group>
+                <name> Examples </name>
+                <path>examples</path>
+            </dir-group>
+            """
+        )
+        assert spec.name == Text(de="Examples", en="Examples")
+
+    def test_unknown_child_element_is_an_error(self):
+        with pytest.raises(CourseSpecError, match=r"<fr>"):
+            self._parse(
+                """
+                <dir-group>
+                    <name><de>Beispiele</de><fr>Exemples</fr></name>
+                    <path>examples</path>
+                </dir-group>
+                """
+            )
+
+    def test_text_mixed_with_children_is_an_error(self):
+        with pytest.raises(CourseSpecError, match="cannot mix text"):
+            self._parse(
+                """
+                <dir-group>
+                    <name>Examples<de>Beispiele</de></name>
+                    <path>examples</path>
+                </dir-group>
+                """
+            )
+
+
+def test_parse_multilang_accepts_simple_text():
+    """The dual bilingual-or-simple convention applies to all multilang
+    elements, not just dir-group names (issue #605)."""
+    from xml.etree import ElementTree as ETree
+
+    root = ETree.fromstring("<course><name>My Course</name></course>")
+    assert parse_multilang(root, "name") == Text(de="My Course", en="My Course")
 
 
 class TestParseDirGroupsDisabledSections:

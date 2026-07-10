@@ -19,7 +19,7 @@ class Text:
         return cast(str, getattr(self, item))
 
     @classmethod
-    def from_string(cls, text):
+    def from_string(cls, text: str) -> "Text":
         return cls(de=text, en=text)
 
 
