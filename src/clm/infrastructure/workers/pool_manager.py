@@ -26,6 +26,10 @@ from clm.infrastructure.api.server import (
     start_worker_api_server,
 )
 from clm.infrastructure.database.job_queue import JobQueue
+from clm.infrastructure.workers.discovery import (
+    MANAGED_BY_BUILD,
+    MANAGED_BY_PERSISTENT,
+)
 from clm.infrastructure.workers.worker_executor import (
     DirectWorkerExecutor,
     DockerWorkerExecutor,
@@ -120,6 +124,8 @@ class WorkerPoolManager:
         cache_db_path: Path | None = None,
         data_dir: Path | None = None,
         notebook_kernel_python: str = "",
+        session_id: str | None = None,
+        workers_shareable: bool = False,
     ):
         """Initialize worker pool manager.
 
@@ -137,6 +143,13 @@ class WorkerPoolManager:
             notebook_kernel_python: Resolved interpreter for the Direct notebook
                 kernel (Wave 2b); "" = clm's own env. Forwarded to the direct
                 executor; Docker mode ignores it.
+            session_id: Owning lifecycle session; stamped on each worker row
+                so other builds sharing the jobs DB can tell whose workers
+                they are (issue #594).
+            workers_shareable: True when the workers will be left running
+                after the owning build exits (auto_stop=false) and may be
+                reused by other builds; False (default) marks them
+                build-owned, never reusable by another session.
         """
         self.db_path = db_path
         self.workspace_path = workspace_path
@@ -146,6 +159,8 @@ class WorkerPoolManager:
         self.log_level = log_level
         self.cache_db_path = cache_db_path
         self.notebook_kernel_python = notebook_kernel_python
+        self.session_id = session_id
+        self.workers_shareable = workers_shareable
 
         # Determine max startup concurrency
         if max_startup_concurrency is None:
@@ -616,13 +631,21 @@ class WorkerPoolManager:
         # Get parent process ID for orphan detection
         parent_pid = os.getpid()
 
+        # Ownership marker (issue #594): build-owned workers are DELETEd when
+        # the owning build exits, so other builds sharing the jobs DB must
+        # never count them as reusable. Activation only flips status
+        # created -> idle, so the marker written here survives for the
+        # worker's whole life.
+        managed_by = MANAGED_BY_PERSISTENT if self.workers_shareable else MANAGED_BY_BUILD
+
         conn = self.job_queue._get_conn()
         cursor = conn.execute(
             """
-            INSERT INTO workers (worker_type, container_id, status, parent_pid)
-            VALUES (?, ?, 'created', ?)
+            INSERT INTO workers (worker_type, container_id, status, parent_pid,
+                                 session_id, managed_by)
+            VALUES (?, ?, 'created', ?, ?, ?)
             """,
-            (worker_type, container_id, parent_pid),
+            (worker_type, container_id, parent_pid, self.session_id, managed_by),
         )
         db_worker_id = cursor.lastrowid
         assert db_worker_id is not None, "INSERT should always return a valid lastrowid"
@@ -630,7 +653,8 @@ class WorkerPoolManager:
 
         logger.debug(
             f"Pre-registered {worker_type} worker {db_worker_id} "
-            f"(container_id: {container_id}, parent_pid: {parent_pid})"
+            f"(container_id: {container_id}, parent_pid: {parent_pid}, "
+            f"session_id: {self.session_id}, managed_by: {managed_by})"
         )
 
         return db_worker_id, container_id

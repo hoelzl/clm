@@ -1112,6 +1112,48 @@ class TestWorkerPreRegistration:
 
             manager.close()
 
+    def test_pre_register_worker_stamps_ownership(self, db_path, workspace_path):
+        """Pre-registration must stamp session_id and managed_by (issue #594).
+
+        Build-owned workers (the default) are marked 'build' so other builds
+        sharing the jobs DB never count them as reusable; shareable workers
+        (auto_stop=false) are marked 'persistent'.
+        """
+        from clm.infrastructure.workers.discovery import (
+            MANAGED_BY_BUILD,
+            MANAGED_BY_PERSISTENT,
+        )
+
+        with patch("docker.from_env"):
+            owned = WorkerPoolManager(
+                db_path=db_path,
+                workspace_path=workspace_path,
+                worker_configs=[],
+                session_id="session-owner",
+            )
+            worker_id, _ = owned._pre_register_worker("notebook", "direct")
+            conn = owned.job_queue._get_conn()
+            row = conn.execute(
+                "SELECT session_id, managed_by FROM workers WHERE id = ?", (worker_id,)
+            ).fetchone()
+            assert tuple(row) == ("session-owner", MANAGED_BY_BUILD)
+            owned.close()
+
+            shareable = WorkerPoolManager(
+                db_path=db_path,
+                workspace_path=workspace_path,
+                worker_configs=[],
+                session_id="session-sharer",
+                workers_shareable=True,
+            )
+            worker_id, _ = shareable._pre_register_worker("notebook", "direct")
+            conn = shareable.job_queue._get_conn()
+            row = conn.execute(
+                "SELECT session_id, managed_by FROM workers WHERE id = ?", (worker_id,)
+            ).fetchone()
+            assert tuple(row) == ("session-sharer", MANAGED_BY_PERSISTENT)
+            shareable.close()
+
     def test_pre_register_worker_includes_parent_pid(self, db_path, workspace_path):
         """Test _pre_register_worker stores parent_pid for orphan detection."""
         import os

@@ -264,6 +264,33 @@ class TestShouldStartWorkers:
 
         assert manager.should_start_workers() is False
 
+    def test_reuse_counts_only_workers_reusable_by_this_session(
+        self, db_path, workspace_path, mock_config
+    ):
+        """Reuse must ignore other builds' auto-stopped workers (issue #594).
+
+        should_start_workers must pass its own session id to
+        count_healthy_workers so another build's build-owned workers — which
+        vanish when that build exits — never satisfy this build's needs.
+        """
+        mock_config.auto_start = True
+        mock_config.reuse_workers = True
+
+        with patch("clm.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
+            manager = WorkerLifecycleManager(
+                config=mock_config,
+                db_path=db_path,
+                workspace_path=workspace_path,
+            )
+            counter = MagicMock(return_value=1)
+            manager.discovery.count_healthy_workers = counter
+
+        manager.should_start_workers()
+
+        assert counter.call_count > 0
+        for call in counter.call_args_list:
+            assert call.kwargs["reusable_for_session"] == manager.session_id
+
 
 class TestStartManagedWorkers:
     """Test start_managed_workers method."""
@@ -286,6 +313,35 @@ class TestStartManagedWorkers:
                 manager.start_managed_workers()
 
                 mock_pool.assert_called_once()
+
+    def test_start_managed_workers_marks_ownership(self, db_path, workspace_path, mock_config):
+        """Pool manager must receive this session's id and the ownership mode.
+
+        auto_stop=True → workers are build-owned (not shareable); their rows
+        are DELETEd when this build exits, so no other build may reuse them.
+        auto_stop=False → workers outlive the build and are shareable
+        (issue #594).
+        """
+        for auto_stop, expected_shareable in [(True, False), (False, True)]:
+            mock_config.auto_stop = auto_stop
+            with patch("clm.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
+                with patch(
+                    "clm.infrastructure.workers.lifecycle_manager.WorkerPoolManager"
+                ) as mock_pool:
+                    mock_pool_instance = MagicMock()
+                    mock_pool_instance.workers = {}
+                    mock_pool.return_value = mock_pool_instance
+
+                    manager = WorkerLifecycleManager(
+                        config=mock_config,
+                        db_path=db_path,
+                        workspace_path=workspace_path,
+                    )
+                    manager.start_managed_workers()
+
+                    kwargs = mock_pool.call_args.kwargs
+                    assert kwargs["session_id"] == manager.session_id
+                    assert kwargs["workers_shareable"] is expected_shareable
 
     def test_start_managed_workers_starts_pools(self, db_path, workspace_path, mock_config):
         """Should call start_pools on pool manager."""

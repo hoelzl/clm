@@ -157,8 +157,14 @@ class WorkerLifecycleManager:
             # Only workers of the required execution mode count: a Docker-mode
             # build must not be satisfied by Direct workers another build
             # registered in a shared jobs DB (they lack the image's toolchain).
+            # And only workers this session may reuse count: another build's
+            # auto-stopped workers are DELETEd when that build exits, so
+            # counting them here strands this build with zero workers at its
+            # first non-cached submission (issue #594).
             healthy_count = self.discovery.count_healthy_workers(
-                worker_type, execution_mode=required_config.execution_mode
+                worker_type,
+                execution_mode=required_config.execution_mode,
+                reusable_for_session=self.session_id,
             )
 
             if healthy_count < required_count:
@@ -198,7 +204,10 @@ class WorkerLifecycleManager:
         # Log pool starting
         self.event_logger.log_pool_starting(worker_configs, total_workers)
 
-        # Create pool manager
+        # Create pool manager. Workers started with auto_stop are owned by
+        # this session (torn down when the build exits, never reusable by
+        # other builds); with auto_stop disabled they outlive the build and
+        # are marked shareable (issue #594).
         self.pool_manager = WorkerPoolManager(
             db_path=self.db_path,
             workspace_path=self.workspace_path,
@@ -208,6 +217,8 @@ class WorkerLifecycleManager:
             log_level=logging.getLevelName(logger.getEffectiveLevel()),
             cache_db_path=self.cache_db_path,
             notebook_kernel_python=self.notebook_kernel_python,
+            session_id=self.session_id,
+            workers_shareable=not self.config.auto_stop,
         )
 
         # Update discovery to use pool_manager's executors for accurate health checks
@@ -303,10 +314,12 @@ class WorkerLifecycleManager:
         adjusted = []
 
         for config in configs:
-            # Mode-aware: only same-mode workers can be reused (see
-            # should_start_workers).
+            # Mode-aware and ownership-aware: only same-mode workers this
+            # session may reuse count (see should_start_workers, issue #594).
             healthy_count = self.discovery.count_healthy_workers(
-                config.worker_type, execution_mode=config.execution_mode
+                config.worker_type,
+                execution_mode=config.execution_mode,
+                reusable_for_session=self.session_id,
             )
             needed_count = max(0, config.count - healthy_count)
 
@@ -386,11 +399,15 @@ class WorkerLifecycleManager:
 
             # Take up to config.count healthy workers of the REQUIRED
             # execution mode — mirroring should_start_workers, a Direct
-            # worker never counts as a reused Docker worker or vice versa.
+            # worker never counts as a reused Docker worker or vice versa,
+            # and another session's build-owned workers are off limits
+            # (issue #594).
             healthy_workers = [
                 w
                 for w in discovered
-                if w.is_healthy and ("docker" if w.is_docker else "direct") == config.execution_mode
+                if w.is_healthy
+                and ("docker" if w.is_docker else "direct") == config.execution_mode
+                and w.is_reusable_by(self.session_id)
             ][: config.count]
 
             for worker in healthy_workers:

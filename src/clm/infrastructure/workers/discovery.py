@@ -10,6 +10,17 @@ from clm.infrastructure.workers.worker_executor import WorkerExecutor
 
 logger = logging.getLogger(__name__)
 
+# Ownership markers stored in workers.managed_by (issue #594). A build whose
+# lifecycle manager will auto-stop its workers tags them MANAGED_BY_BUILD:
+# they are torn down (rows DELETEd) the moment that build exits, so another
+# build must never count them as reusable — reusing them is a race that
+# strands the borrowing build with zero workers mid-build. Workers a build
+# deliberately leaves running (auto_stop=false) are tagged
+# MANAGED_BY_PERSISTENT and stay reusable, as do legacy self-registered rows
+# (managed_by IS NULL).
+MANAGED_BY_BUILD = "build"
+MANAGED_BY_PERSISTENT = "persistent"
+
 
 @dataclass
 class DiscoveredWorker:
@@ -25,6 +36,20 @@ class DiscoveredWorker:
     started_at: datetime
     is_docker: bool
     is_healthy: bool
+    session_id: str | None = None
+    managed_by: str | None = None
+
+    def is_reusable_by(self, session_id: str | None) -> bool:
+        """Whether a session may count this worker toward its own needs.
+
+        Another session's build-owned worker (managed_by = MANAGED_BY_BUILD)
+        vanishes when that build exits, so it is only reusable by the session
+        that owns it. Everything else — persistent workers and legacy rows
+        with no ownership marker — is fair game (issue #594).
+        """
+        if self.managed_by != MANAGED_BY_BUILD:
+            return True
+        return self.session_id is not None and self.session_id == session_id
 
 
 class WorkerDiscovery:
@@ -75,7 +100,8 @@ class WorkerDiscovery:
         query = """
             SELECT
                 id, worker_type, container_id, status,
-                last_heartbeat, jobs_processed, jobs_failed, started_at
+                last_heartbeat, jobs_processed, jobs_failed, started_at,
+                session_id, managed_by
             FROM workers
         """
 
@@ -120,6 +146,8 @@ class WorkerDiscovery:
                 started_at=started_at,
                 is_docker=is_docker,
                 is_healthy=False,  # Will be set by health check
+                session_id=row[8],
+                managed_by=row[9],
             )
 
             workers.append(worker)
@@ -180,7 +208,12 @@ class WorkerDiscovery:
 
         return True
 
-    def count_healthy_workers(self, worker_type: str, execution_mode: str | None = None) -> int:
+    def count_healthy_workers(
+        self,
+        worker_type: str,
+        execution_mode: str | None = None,
+        reusable_for_session: str | None = None,
+    ) -> int:
         """Count healthy workers of a specific type.
 
         Args:
@@ -190,6 +223,11 @@ class WorkerDiscovery:
                 workers must not treat another build's Direct workers as
                 satisfying its requirement — they lack the Docker image's
                 toolchain (e.g. the xeus-cpp kernel).
+            reusable_for_session: When given, count only workers this session
+                may reuse (see DiscoveredWorker.is_reusable_by): another
+                build's auto-stopped workers are excluded because they vanish
+                when that build exits (issue #594). None = no ownership
+                filtering.
 
         Returns:
             Number of healthy workers
@@ -203,6 +241,7 @@ class WorkerDiscovery:
             and (
                 execution_mode is None or ("docker" if w.is_docker else "direct") == execution_mode
             )
+            and (reusable_for_session is None or w.is_reusable_by(reusable_for_session))
         )
 
     def get_worker_summary(self) -> dict[str, dict[str, int]]:
