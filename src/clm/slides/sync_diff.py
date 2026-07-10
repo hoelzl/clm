@@ -1880,13 +1880,19 @@ class _Differ:
         if "missing" in states:
             gone: Lang = "de" if de_state == "missing" else "en"
             other_state = en_state if gone == "de" else de_state
-            if self._stamped_candidate_exists(group, entry.kind, gone):
+            suspected_stamp = self._stamped_candidate_exists(group, entry.kind, gone)
+            if suspected_stamp and other_state == "same":
                 # An unmatched one-sided id'd cell exists on the "removed"
                 # side: the cell was plausibly stamped (and edited), not
                 # removed — a mechanical removal could delete real content.
                 # `treat_as_new` resolves it as a genuine removal (mirrors it,
                 # #600); a stamped-edit is reconciled manually. ``side`` names
-                # the gone side, the anchor a mirrored removal needs.
+                # the gone side, the anchor a mirrored removal needs. Only the
+                # untouched-survivor shape gets this framing: an edited
+                # survivor would deterministically reject the mirrored removal
+                # (mirror_remove's off-base guard), so advertising
+                # treat_as_new there would be an answer apply can never
+                # accept — that shape frames remove_vs_edit below instead.
                 self.emit(
                     handle,
                     "conflict",
@@ -1915,12 +1921,20 @@ class _Differ:
                     base=entry,
                 )
             else:
+                detail = f"removed on the {gone} side but edited on the twin"
+                if suspected_stamp:
+                    detail += (
+                        f"; the {gone} side also gained an unmatched id'd cell — "
+                        f"possibly this cell stamped and edited: if so, stamp the "
+                        f"surviving twin with the same slide_id by hand and "
+                        f"re-run report instead of answering"
+                    )
                 self.emit(
                     handle,
                     "conflict",
                     "remove_vs_edit",
                     "both",
-                    f"removed on the {gone} side but edited on the twin",
+                    detail,
                     group=group,
                     side=gone,
                     member=member,

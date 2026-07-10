@@ -779,18 +779,45 @@ def _pool_scope(item: DiffItem) -> tuple[str, str] | None:
     return None
 
 
+#: Framed actions whose pos-view evidence is a two-sided base entry facing a
+#: one-sided survivor. While one is unresolved, its pool must NOT be
+#: re-recorded wholesale: the fresh snapshot only knows the one-sided present
+#: state, and :func:`_drop_unresolved_from_pools` then erases even that — the
+#: only record that the gone side ever existed would vanish, silently
+#: downgrading the pending conflict to mechanical duplication/resurrection on
+#: the next report. (For two-sided members the drop-to-cold fail-safe is
+#: sound; one-sided evidence has no cold state to fall back to.)
+_POOL_FREEZING_ACTIONS = frozenset({"stamp_vs_new", "remove_vs_edit"})
+
+
+def _frozen_pools(unresolved_items: list[DiffItem]) -> set[tuple[str, str]]:
+    """Pools whose ledger entries must stay untouched this pass (#600)."""
+    frozen: set[tuple[str, str]] = set()
+    for item in unresolved_items:
+        if item.action not in _POOL_FREEZING_ACTIONS:
+            continue
+        pool = _pool_scope(item)
+        if pool is not None:
+            frozen.add(pool)
+    return frozen
+
+
 def _record_item(
     target: DeckLedger,
     fresh: DeckLedger,
     item: DiffItem,
     *,
     provenance: str,
+    frozen_pools: set[tuple[str, str]],
 ) -> set[tuple[str, str]]:
     """Update the ledger for one landed item (surgical, never wholesale).
 
     Returns the ``(group, kind)`` pools that were re-recorded wholesale, so
     the caller can un-bless the pool siblings that still carry unresolved
-    items (:func:`_drop_unresolved_from_pools`).
+    items (:func:`_drop_unresolved_from_pools`). Pools in ``frozen_pools``
+    are never re-recorded (nor patched — renumbered ordinals make a per-entry
+    patch unsafe): the landed item simply stays unrecorded and re-frames
+    mechanically once the pool's pending conflicts are answered.
     """
     key = item.key
     action = item.action
@@ -817,6 +844,8 @@ def _record_item(
             body = key.split(":", 1)[1]
             group, tail, _ = body.rsplit("/", 2)
             kind = tail[len("pool.") :]
+            if (group, kind) in frozen_pools:
+                return set()
             rerecord_pool(target, fresh, group, kind)
             return {(group, kind)}
         if "/order." in key:
@@ -836,6 +865,8 @@ def _record_item(
     if action in ("record_remove", "mirror_remove", "remove_vs_edit", "remove_localized_side"):
         pool = _pool_scope(item)
         if pool is not None:
+            if pool in frozen_pools:
+                return set()
             rerecord_pool(target, fresh, *pool)
             return {pool}
         if key not in fresh.members:
@@ -846,6 +877,8 @@ def _record_item(
 
     pool = _pool_scope(item)
     if pool is not None:
+        if pool in frozen_pools:
+            return set()
         rerecord_pool(target, fresh, *pool)
         return {pool}
     _upsert(target, fresh, key, provenance)
@@ -1366,9 +1399,12 @@ def apply_deck(
     fresh = snapshot_deck(final_deck, provenance="apply", commit=commit)
     target = ledger.decks.setdefault(deck_key, DeckLedger())
     priority = {"record_group_rename": 0, "record_key_migration": 1}
+    frozen_pools = _frozen_pools(unresolved_items)
     rerecorded_pools: set[tuple[str, str]] = set()
     for item, provenance in sorted(landed, key=lambda e: priority.get(e[0].action, 2)):
-        rerecorded_pools |= _record_item(target, fresh, item, provenance=provenance)
+        rerecorded_pools |= _record_item(
+            target, fresh, item, provenance=provenance, frozen_pools=frozen_pools
+        )
     # Never bless the unresolved: a wholesale pool re-record must not trust
     # siblings whose framed items were left pending/rejected/failed.
     unresolved_members = [

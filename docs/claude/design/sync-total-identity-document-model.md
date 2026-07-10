@@ -473,8 +473,12 @@ clm slides sync autopilot DECK|DIR [--model ...]            # a SCRIPT over repo
   `ambiguous_alignment` shape (a new id'd cell while a positional cell of the
   same pool is unaccounted on that side — both the id-view and the pos-view
   row) became its own framed action with a uniform `treat_as_new` answer
-  (grow the twin verbatim / mirror the removal; an edited survivor rejects),
-  instead of conditioning `ambiguous_alignment`'s answers by shape.
+  (grow the twin verbatim / mirror the removal), instead of conditioning
+  `ambiguous_alignment`'s answers by shape. The pos-view row is only emitted
+  while the survivor sits on base: an *edited* survivor would
+  deterministically reject the mirrored removal, so that shape frames
+  `remove_vs_edit` (whose answers land) with the suspicion in the detail —
+  the report never advertises an answer apply is guaranteed to refuse.
   `ambiguous_alignment` itself stays answerless — its remaining shapes
   (rival id stamps, both-sides-added pool collisions, multi-candidate
   pending twins) are genuinely manual.
@@ -647,3 +651,4 @@ row here (or an edit to the section it refines) has skipped the checklist.
 | #572 — `clm slides rename-id` = the second sanctioned key migration; fingerprint-inferred `id:→id:` migration **rejected** | §7.3 | design extension (explicit, never inferred) |
 | #572 — `body`+`side` recovery on cold id-keyed two-sided members; cold-`confirm` caveat documented | §6.2, §8, §9 | P8(c) extension + honest-residue entry |
 | #600 — `stamp_vs_new` framed action: the "new id'd cell while a positional pool cell is unaccounted" shapes (id-view + pos-view rows) split out of `ambiguous_alignment`, with a `treat_as_new` answer (grow the twin / mirror the removal) | §8 | new framed kind via the §8 watch-item's "redesign the action" route — `ambiguous_alignment` stays answerless |
+| #600 follow-up (adversarial review of #602) — pos-view `stamp_vs_new` only emitted while the survivor sits on base (edited survivor frames `remove_vs_edit` with the suspicion in the detail); pools carrying an unresolved `stamp_vs_new`/`remove_vs_edit` item are frozen during apply's ledger re-record so a partial answer cannot erase a sibling's removal evidence | §8 | defect fixes: "never advertise an answer apply must refuse" + one-sided evidence has no cold state to fall back to |

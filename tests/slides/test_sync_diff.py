@@ -985,6 +985,30 @@ class TestAdversarialReviewRegressions:
         assert by_key["pos:s0/code/1"].side == "en"
         assert by_key["id:y-assign"].side == "en"
 
+    def test_edited_survivor_with_stamp_suspicion_frames_remove_vs_edit(self):
+        """#602 adversarial review: an edited survivor deterministically
+        rejects a mirrored removal, so the pos-view row must not advertise
+        ``treat_as_new`` as its only answer (an unbreakable report→reject
+        loop). The shape frames ``remove_vs_edit`` — whose remove/keep answers
+        both land — with the stamp suspicion spelled out in the detail."""
+        base = _snapshot(DE0, EN0)
+        base.complete = False
+        en = EN0.replace(
+            '# %% tags=["keep"]\ny = 2\n',
+            '# %% tags=["keep"] slide_id="y-assign"\ny = 3\n\n# %% slide_id="y-check"\ny\n',
+        )
+        de = DE0.replace("y = 2", "y = 99")
+        diff = _diff(base, de, en)
+        by_key = {i.key: i for i in diff.items}
+        pos = by_key["pos:s0/code/1"]
+        assert pos.action == "remove_vs_edit", (pos.action, pos.detail)
+        assert pos.side == "en"
+        assert "unmatched id'd cell" in pos.detail
+        # The id-view rows keep the stamp_vs_new framing — copying them to
+        # the twin stays answerable regardless of the survivor's edit.
+        assert by_key["id:y-assign"].action == "stamp_vs_new"
+        assert by_key["id:y-check"].action == "stamp_vs_new"
+
     def test_conflicting_stamp_shape_stays_ambiguous_alignment(self):
         """The rival-id shapes must NOT gain ``stamp_vs_new``'s treat_as_new
         answer: copying a cell that already claimed a base entry under a
