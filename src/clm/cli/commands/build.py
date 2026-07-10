@@ -1952,6 +1952,11 @@ async def main_build(
                 worker_execution_modes={
                     c.worker_type: c.execution_mode for c in worker_config.get_all_worker_configs()
                 },
+                # Scope the activation-timeout dead-marking to workers this
+                # build's lifecycle session owns (issue #597) — a timeout on
+                # our own workers must not condemn a concurrent build's
+                # still-starting pre-registrations in a shared jobs DB.
+                worker_session_id=lifecycle_manager.session_id,
             )
 
             async with backend:

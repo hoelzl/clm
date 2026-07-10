@@ -157,17 +157,23 @@ def _seed_activated_worker(db_path: Path, worker_type: str = "notebook") -> int:
         conn.close()
 
 
-def _seed_created_worker(db_path: Path, worker_type: str = "notebook") -> int:
+def _seed_created_worker(
+    db_path: Path,
+    worker_type: str = "notebook",
+    *,
+    container_id: str | None = None,
+    session_id: str | None = None,
+) -> int:
     _container_id_counter[0] += 1
-    cid = f"pending-{worker_type}-{_container_id_counter[0]}"
+    cid = container_id or f"pending-{worker_type}-{_container_id_counter[0]}"
     conn = sqlite3.connect(db_path)
     try:
         cur = conn.execute(
             """
-            INSERT INTO workers (worker_type, container_id, status)
-            VALUES (?, ?, 'created')
+            INSERT INTO workers (worker_type, container_id, status, session_id)
+            VALUES (?, ?, 'created', ?)
             """,
-            (worker_type, cid),
+            (worker_type, cid, session_id),
         )
         conn.commit()
         return cur.lastrowid  # type: ignore[return-value]
@@ -637,6 +643,90 @@ async def test_activation_timeout_spares_freshly_created_workers(temp_db, temp_w
         finally:
             conn.close()
         assert row[0] == "created"
+    finally:
+        await backend.shutdown()
+
+
+def _age_worker(db_path: Path, worker_id: int, seconds: int = 120) -> None:
+    """Backdate started_at so the worker qualifies for the stuck check (> 30s)."""
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "UPDATE workers SET started_at = datetime('now', ?) WHERE id = ?",
+            (f"-{seconds} seconds", worker_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _run_activation_wait_to_timeout(backend, job_type: str = "notebook") -> int:
+    """Drive the activation wait loop with a fake clock so it times out instantly."""
+    fake_now = [time.time()]
+
+    def fast_sleep(seconds):
+        fake_now[0] += seconds
+
+    with (
+        patch(
+            "clm.infrastructure.backends.sqlite_backend.time.sleep",
+            side_effect=fast_sleep,
+        ),
+        patch(
+            "clm.infrastructure.backends.sqlite_backend.time.time",
+            side_effect=lambda: fake_now[0],
+        ),
+    ):
+        return backend._get_available_workers(job_type)
+
+
+def _worker_status(db_path: Path, worker_id: int) -> str:
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute("SELECT status FROM workers WHERE id = ?", (worker_id,)).fetchone()
+        return row[0]
+    finally:
+        conn.close()
+
+
+@pytest.mark.asyncio
+async def test_activation_timeout_dead_marking_respects_execution_mode(temp_db, temp_workspace):
+    """Issue #597: a Direct-mode build timing out on its own workers must not
+    condemn a concurrent Docker-mode build's still-starting pre-registrations
+    ('created', >30s old — plausible for a cold Docker image pull)."""
+    direct_id = _seed_created_worker(temp_db, container_id="direct-notebook-own")
+    docker_id = _seed_created_worker(temp_db, container_id="docker-notebook-other")
+    _age_worker(temp_db, direct_id)
+    _age_worker(temp_db, docker_id)
+
+    backend = _backend(temp_db, temp_workspace, worker_execution_modes={"notebook": "direct"})
+    try:
+        assert _run_activation_wait_to_timeout(backend) == 0
+
+        assert _worker_status(temp_db, direct_id) == "dead"
+        assert _worker_status(temp_db, docker_id) == "created"
+    finally:
+        await backend.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_activation_timeout_dead_marking_respects_ownership(temp_db, temp_workspace):
+    """Issue #597: with a lifecycle session attached, the timeout only
+    dead-marks workers this session owns — plus unowned legacy rows, which
+    keep the issue-#348 fail-fast — never another session's workers."""
+    own_id = _seed_created_worker(temp_db, session_id="session-A")
+    other_id = _seed_created_worker(temp_db, session_id="session-B")
+    legacy_id = _seed_created_worker(temp_db, session_id=None)
+    for worker_id in (own_id, other_id, legacy_id):
+        _age_worker(temp_db, worker_id)
+
+    backend = _backend(temp_db, temp_workspace, worker_session_id="session-A")
+    try:
+        assert _run_activation_wait_to_timeout(backend) == 0
+
+        assert _worker_status(temp_db, own_id) == "dead"
+        assert _worker_status(temp_db, legacy_id) == "dead"
+        assert _worker_status(temp_db, other_id) == "created"
     finally:
         await backend.shutdown()
 
