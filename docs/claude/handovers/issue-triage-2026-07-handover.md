@@ -55,7 +55,20 @@ dogfooding work.
 Phases are execution waves, not strict dependencies — waves 2–5 can be
 reordered if priorities shift. Everything is currently [TODO].
 
-### Phase 1 [TODO] — #600: sync `ambiguous_alignment` dead end (ACTIVE PRIORITY)
+### Phase 1 [DONE] — #600: sync `ambiguous_alignment` dead end (ACTIVE PRIORITY)
+
+**Resolution (2026-07-10)**: implemented as a NEW framed action `stamp_vs_new`
+(not answers on `ambiguous_alignment` itself — the design note's §8 watch-item
+prescribes "redesign the action" over shape-conditional vocabularies, and the
+rival-id-stamp shape is structurally indistinguishable from the resolvable
+shape, so advertising `treat_as_new` on `ambiguous_alignment` would offer a
+content-duplicating answer there). Both the id-view and pos-view rows frame
+`stamp_vs_new` with answer `treat_as_new`: grows the twin verbatim (id row) /
+mirrors the removal (pos row, rejected if the survivor moved off base).
+`treat_as_stamped_edit` was NOT added — binding is ambiguous when several id'd
+cells claim one base (the issue's own 2-for-1 case); the manual stamp-by-hand
+path covers it. Partial answering converges (tested). §13 amendments row
+added. Shipped on branch `claude/issue-600-stamp-vs-new`.
 
 **Problem**: Replacing an un-id'd positional cell with new `slide_id`-keyed
 cells makes `clm slides sync report` frame each new cell AND the vanished
@@ -240,7 +253,9 @@ OpenAI-compatible client, zero new deps) or close as status-quo.
 
 ## 5. Next Steps
 
-**Start Phase 1 (#600).** Concretely:
+**Phase 1 (#600) is DONE — start Phase 2 (#539: duplicate dir-group
+destination copytree race).** The plan below documents how Phase 1 was
+executed (kept for reference):
 
 1. Read memory topics `project_sync_one_sided_cold` and
    `project_sync_v3_design_audit`, plus the sync v3 design note (find via

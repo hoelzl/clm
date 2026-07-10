@@ -164,6 +164,7 @@ FRAMED_ACTIONS = frozenset(
         "kind_mismatch",  # paired sides disagree about cell kind
         "order_decision",  # both sides reordered differently
         "ambiguous_alignment",  # §3.3 residue: dup-fp reorder + edit
+        "stamp_vs_new",  # suspected stamp: new id'd cell vs unaccounted pool cell (#600)
         "conflict_preamble",  # preambles moved differently on both sides
         "verify_cold",  # no baseline entry (ledger mode)
     }
@@ -714,15 +715,19 @@ class _Differ:
                 # A base cell of this pool is unaccounted for on this side:
                 # the "new" id'd cell is plausibly that cell, stamped AND
                 # edited. A mechanical copy could duplicate it on apply —
-                # frame instead (P8).
+                # frame instead (P8). `treat_as_new` resolves it as a genuine
+                # add (verbatim copy to the twin, #600); a stamped-edit is
+                # reconciled manually.
                 self.emit(
                     handle,
                     "conflict",
-                    "ambiguous_alignment",
+                    "stamp_vs_new",
                     "both",
                     f"new id'd cell on the {side} side while a positional base "
                     f"cell of this pool is unaccounted for — possibly the same "
-                    f"cell stamped and edited; reconcile before copying",
+                    f"cell stamped and edited; answer treat_as_new if it is a "
+                    f"genuinely new cell (copies it to the twin), or reconcile "
+                    f"the stamped edit manually",
                     group=group,
                     side=side,
                     member=member,
@@ -1879,15 +1884,21 @@ class _Differ:
                 # An unmatched one-sided id'd cell exists on the "removed"
                 # side: the cell was plausibly stamped (and edited), not
                 # removed — a mechanical removal could delete real content.
+                # `treat_as_new` resolves it as a genuine removal (mirrors it,
+                # #600); a stamped-edit is reconciled manually. ``side`` names
+                # the gone side, the anchor a mirrored removal needs.
                 self.emit(
                     handle,
                     "conflict",
-                    "ambiguous_alignment",
+                    "stamp_vs_new",
                     "both",
                     f"the {gone} side lost this positional cell while gaining an "
                     f"unmatched id'd cell — possibly the same cell stamped and "
-                    f"edited; reconcile before removing",
+                    f"edited; answer treat_as_new if the cell was genuinely "
+                    f"removed (mirrors the removal), or reconcile the stamped "
+                    f"edit manually",
                     group=group,
+                    side=gone,
                     member=member,
                     base=entry,
                 )
