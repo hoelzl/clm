@@ -1328,9 +1328,10 @@ def _check_shared_cell_parity(de_path: Path, en_path: Path) -> list[Finding]:
                 ),
                 suggestion=(
                     "Shared (no-lang) cells must appear in the same order "
-                    "in both '.de.py' and '.en.py'. Re-run "
-                    "`clm slides unify` followed by `clm slides split` to "
-                    "regenerate consistent split companions."
+                    "in both '.de.py' and '.en.py'. Run `clm slides sync "
+                    "report` to see the divergence per member and `sync "
+                    "apply` to reconcile; regenerate via `clm slides unify` "
+                    "+ `clm slides split` only if the pair no longer aligns."
                 ),
             )
         )
@@ -1353,8 +1354,11 @@ def _check_shared_cell_parity(de_path: Path, en_path: Path) -> list[Finding]:
                 ),
                 suggestion=(
                     "Shared cells must be byte-identical between the DE "
-                    "and EN companions. Reconcile the edit manually or "
-                    "regenerate via `clm slides unify` + `clm slides split`."
+                    "and EN companions. Propagate the edit with "
+                    "`clm slides sync report` + `sync apply` (mechanical "
+                    "for shared cells, no model); fall back to "
+                    "`clm slides unify` + `clm slides split` only if the "
+                    "pair no longer aligns at all."
                 ),
             )
         )

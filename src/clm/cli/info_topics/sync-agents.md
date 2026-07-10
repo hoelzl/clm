@@ -54,9 +54,14 @@ Branch on the stable booleans rather than scanning the lists:
 
 Each item row carries `key` (the member handle), `outcome`, `action`,
 `direction` (`de_to_en` / `en_to_de` / `both` / `none`), `detail`, the full
-current cell bytes for both sides (so you never re-read files to act), and —
-for framed items — an **`answers` list naming exactly the decision shapes
-`apply --decisions` accepts** for that item.
+current cell bytes for both sides under **`de` and `en`** (those exact key
+names — so you never re-read files to act), and an **`answers` list naming
+exactly the decision shapes `apply --decisions` accepts** for that item.
+`answers` is present on every item; `[]` means mechanical (nothing to
+answer — `apply` executes it). Note the `de`/`en` excerpts **include** the
+`# %%` header line; a `body` answer must **not** (see below). A report whose
+items are *all* `verify_cold` also carries a top-level `hint` — that is the
+seeding case; use `record`, not a confirm-all document (see "Cold members").
 
 **Mechanical actions** (no decision needed — `apply` executes them):
 `propagate_shared_edit`, `copy_new_shared`, `mirror_remove`, `mirror_tags`,
@@ -130,6 +135,36 @@ everything and writes nothing. Every landed item is recorded into the ledger,
 structurally corrupt stay on disk for review, but nothing is recorded as
 trusted.
 
+### Reading the apply result (`--json`)
+
+The envelope (keys verbatim — do not guess `applied`/`results`/`outcome`,
+they do not exist):
+
+```json
+{
+  "schema": 3, "engine": "v3",
+  "dry_run": false,
+  "error": null,
+  "wrote": true, "written": ["…/slides_x.en.py"],
+  "counts": {"applied": 4, "recorded": 2, "pending": 1,
+             "rejected": 1, "failed": 0, "skipped": 0},
+  "items": [
+    {"key": "id:intro", "action": "translate_edit",
+     "status": "applied", "reason": ""},
+    {"key": "id:setup", "action": "verify_cold",
+     "status": "rejected", "reason": "…why…"}
+  ],
+  "ledger_recorded": true,
+  "verify_violations": []
+}
+```
+
+**Always check `counts.rejected` (and each rejected item's `reason`) before
+moving on** — rejections are also echoed to stderr. `pending` = framed items
+you did not answer (exit 1, not an error). `ledger_recorded: false` with
+`verify_violations` means writes landed but nothing was trusted — fix the
+pair, then `record`.
+
 ## Cold members and `record`
 
 A brand-new checkout, a never-synced deck, or a deck whose ledger entries
@@ -152,6 +187,12 @@ never recorded. Two ways to converge:
   bless/accept collapsed into one verb, gated on the structural verify, with
   `--provenance agent` (or `semantic:<model>` when a model attested the
   translation quality).
+
+**Rule of thumb: when a report is *all* `verify_cold` (the report says so in
+a `hint`), use `record`, not a confirm-all decision document.** They assert
+the same trust; `record` is one command instead of a scripted
+report→build-JSON→apply pipeline. Reserve per-item `confirm` for the mixed
+case where cold items sit next to real work.
 
 `clm slides split` and `clm slides translate` record freshly-created pairs
 automatically, so a normal authoring flow starts warm.
@@ -228,6 +269,50 @@ sync handoff closes through the ordinary loop.
 `slides_sync_report` (MCP) returns the same schema-3 pair payload as
 `report --json`, including the `answers` vocabulary per framed item.
 Writing decisions currently requires the CLI `apply --decisions`.
+
+## Working patterns for agents
+
+Patterns proven in real sessions (the sessions that used them had zero
+rejected decisions; the sessions that improvised did not):
+
+- **Generate the decision document with a script, from the report JSON** —
+  never by hand-escaping JSON in a shell string. The report items carry
+  everything you need:
+
+  ```python
+  import json, subprocess
+  rep = json.loads(subprocess.run(
+      ["clm", "slides", "sync", "report", DECK, "--json"],
+      capture_output=True, text=True).stdout)
+  decisions = []
+  for it in rep["items"]:
+      if not it["answers"]:            # [] = mechanical, apply handles it
+          continue
+      # your judgment per item: a translated body, confirm, keep_twin, de/en …
+      decisions.append({"key": it["key"], "choice": "confirm"})
+  print(json.dumps({"decisions": decisions}))
+  ```
+
+- **Feed decisions via stdin** (`apply DECK --decisions - --json`) — it
+  sidesteps every temp-file/path/quoting problem (Windows `/tmp`, unset
+  env vars, MSYS path mangling all produced real failures).
+- **Answer by `answers`, never blanket-confirm**: a `translate_edit` offers
+  `body`/`keep_twin` — a `confirm` on it is rejected. Branch on each item's
+  `answers` list.
+- **Always `--dry-run` first** on a nontrivial decision document; it
+  validates every answer without writing.
+- **Many `translate_new` bodies at once** (e.g. a whole deck authored in one
+  language): answering each in JSON works but is heavy. The sanctioned bulk
+  alternative is `clm slides translate DECK.en.py` to bootstrap the missing
+  half wholesale (it records the ledger), then review and reconcile the
+  drifts through the normal loop (`keep_twin` for cells your review left
+  unchanged).
+- **Parallel sweeps**: `report --json` writes to stdout — in a fan-out,
+  capture each deck's output under a deck-derived filename (generic names
+  like `report1.json` collided and mixed decks up in real runs), and verify
+  `de_path` in the payload matches the deck you asked about.
+- **Exit codes are states, not failures**: `report` exits 1 whenever work is
+  pending — a read-only command doing its job. Treat only 2 as an error.
 
 ## Quick reference
 

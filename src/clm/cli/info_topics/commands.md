@@ -1954,10 +1954,12 @@ already agree — ledger-only), the §7.3 transitions (`record_fork`,
 propagation. **Framed actions** (need a decision): `translate_edit`,
 `translate_new`, `verify_translation`, `conflict_shared`,
 `pending_divergence`, `remove_vs_edit`, `unify_choose_body`, `order_decision`,
-`ambiguous_alignment`, `verify_cold`, and friends. Each framed JSON item
-carries an `answers` list naming the decision shapes `apply --decisions`
-accepts for it, plus the full current cell bytes so an agent can answer
-without re-reading files.
+`ambiguous_alignment`, `verify_cold`, and friends. Every JSON item carries an
+`answers` list — the decision shapes `apply --decisions` accepts for it, `[]`
+on mechanical items (nothing to answer) — plus the full current cell bytes
+(`de` / `en`) so an agent can answer without re-reading files. A report whose
+items are all `verify_cold` (a never-recorded deck) carries a top-level
+`hint` pointing at `sync record`, the wholesale seeding verb.
 
 `--since DATE|REF` — the **forensic view**: diff against the bundle at a git
 ref instead of the ledger ("what changed in this window?"). A ref is used
@@ -1987,7 +1989,11 @@ verify** (a pair failing verify keeps its file writes — review with
 `git diff` — but records nothing). `--member KEY` limits the pass to the named
 handles; `--dry-run` executes and validates everything, writes nothing. Exit
 `0` all-applied / `1` residue / `2` error. Needs no API key; single deck only
-(run `report` over a directory to find work).
+(run `report` over a directory to find work). The `--json` result carries
+`counts` (`applied` / `recorded` / `pending` / `rejected` / `failed` /
+`skipped`), per-item `items[].status` + `reason`, `ledger_recorded`, and
+`verify_violations`; rejected decisions are additionally echoed to stderr in
+both output modes. Full envelope example: `clm info sync-agents`.
 
 #### `clm slides sync verify`
 
