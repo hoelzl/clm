@@ -955,6 +955,66 @@ clm course orphans course-specs/ --clean-checkpoints             # report + dele
 clm course orphans course-specs/ --slides-dir ../other/slides --json
 ```
 
+### `clm course renumber`
+
+*Added in CLM {version}.*
+
+Renumber `topic_NNN_<suffix>` directories so their ordinal prefixes ascend in
+the course spec's topic order — **without losing any cached build state**. The
+ordinal is a sort key only (topic identity is the suffix), so specs,
+cross-references (`clm:<id>`), output paths, and sync ledgers are all
+untouched by construction; the command rewrites the input-path lookup columns
+of `clm_cache.db` in the same run, so the next build replays every cached
+result and executed notebook instead of re-executing.
+
+```
+clm course renumber [OPTIONS] [MODULE]
+```
+
+`MODULE` restricts the renumber to one module directory (e.g.
+`module_550_ml_azav`); without it, every module the spec references is
+renumbered. Directory moves go through `git mv` when the tree is a git work
+tree (history-preserving; sidecars like `.clm/` ledgers and `cassettes/` ride
+along with the physical rename).
+
+| Option | Description |
+|--------|-------------|
+| `--spec FILE` | **Required.** Course spec whose topic order defines the numbering. |
+| `--data-dir DIR` | Course data directory (contains `slides/`). Default: inferred from `--spec`. |
+| `--start N` | First ordinal (default `10`). |
+| `--step K` | Ordinal increment (default `10` — leaves gaps for future inserts). |
+| `--width W` | Zero-pad width. Default: preserve the module's widest existing ordinal. |
+| `--report-only` / `--dry-run` | Print the full change set — renames, skips, and dry-run cache-row counts — without touching anything. |
+| `--json` | Emit a JSON report (`modules[].renames/unchanged/skipped`, `missing_topics`, `cache`). |
+| `--no-cache-migrate` | Skip the `clm_cache.db` rewrite (moved topics re-execute once on the next build). |
+| `--force` | Proceed even when the jobs database shows pending/processing jobs. |
+
+Safety guards (the command fails closed, exit `2`, without touching anything):
+
+- Only canonical `topic_<digits>_<suffix>` names are renamed. A non-canonical
+  name (e.g. `topic_extras_bonus`) would silently **change its topic id** if
+  renumbered — such topics are skipped and listed in the report.
+- Entries on disk that the spec does not reference (orphans) are never touched;
+  a planned name colliding with one aborts the run.
+- Ambiguous topic resolution (same id in several modules without a `module=`
+  binding) aborts — fix the ambiguity first.
+- A build that appears active (pending/processing jobs) aborts unless
+  `--force` is given.
+- Spec-referenced topics missing from the slides tree are reported (the
+  renumber never silently covers less than the spec).
+
+The report names the spec that defined the order; in repos where several specs
+reference the same module, pick the spec whose order should win (build outputs
+are unaffected either way — output ordering is per-spec, not per-directory).
+
+Examples:
+
+```bash
+clm course renumber module_550_ml_azav --spec course-specs/ml.xml --report-only
+clm course renumber module_550_ml_azav --spec course-specs/ml.xml
+clm course renumber --spec course-specs/ml.xml --start 10 --step 10 --json
+```
+
 ### `clm course gate`
 
 Run the mechanical conversion passes over a course and report **readiness** —
