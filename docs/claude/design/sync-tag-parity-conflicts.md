@@ -153,6 +153,30 @@ Cases that keep their current behavior:
 - tags cross-side **equal** (even if off-base) → no tag row; whichever
   content/record row resolves the member records them.
 
+**Fork-time tag check.** `record_fork` is the one mechanical row that
+upgrades a member from one shared fingerprint to per-language fingerprints,
+so it is the one row that can *legitimize* cross-side divergent bytes —
+including a tag divergence — as a trusted baseline. (Its counterpart is
+safe: `record_unify` requires byte-equal content fingerprints, and tags are
+inside the fingerprint, so divergent tags land on `unify_choose_body`
+instead. The shared-path rows all enforce byte identity or copy whole
+cells.) Leaving this to the baseline-carried branch would work but has a
+conditional guarantee — "caught one report later" assumes a report pass
+happens, while the committed ledger advertises the divergence as verified in
+the meantime — and it destroys direction information the differ still has at
+fork time (the base entry holds the *shared* tag set, so a one-sided move is
+still attributable). Therefore `_check_tags` also runs on the fork-complete
+branch of `_classify_fork`, comparing each half's tags against the base
+shared tag set:
+
+- exactly one half's tags moved → co-emit mechanical `mirror_tags` alongside
+  `record_fork`. Two *mechanical* rows on one key have no decision-keying
+  collision (that problem only exists for two framed rows); both land in the
+  same pass and a tag-consistent state is banked immediately.
+- both halves moved differently → co-emit framed `conflict_tags`; F2's
+  unresolved-key guard then defers `record_fork`'s `_upsert` automatically,
+  so the divergent state is never banked and the member re-frames next pass.
+
 ### F2 — apply/recording: never bless a member with unresolved rows
 
 1. **Unresolved-key guard** (fixes S3, required for F1's co-emission): in
@@ -235,11 +259,14 @@ Attacks run against the design, and their resolutions:
   `item.member`/`item.twin`, so a guard in `_apply_choice_decision` observes
   the same-pass tag mirror. One-pass resolution works when the agent confirms
   alongside the mechanical mirror.
-- **"`record_fork` banks divergent tags."** True: a completed fork whose
-  halves carry different tags records as-is. *Mitigated, not prevented*: the
-  next report's baseline-carried branch frames it as `conflict_tags` — caught
-  one pass later, never silent-forever. Tightening `record_fork` itself is
-  possible follow-up, not required for the invariant.
+- **"`record_fork` banks divergent tags."** Initially accepted as residue
+  ("the baseline-carried branch catches it one report later"), then
+  *promoted into F1 scope* on a second look: the one-pass-later guarantee is
+  conditional on a report pass actually happening while the committed ledger
+  advertises the divergence as verified, the banking destroys the direction
+  attribution the differ still has at fork time, and closing the hole rides
+  entirely on machinery F1/F2 already build (see F1's fork-time tag check —
+  a few lines in `_classify_fork` plus two tests). *Closed.*
 - **"The verify_cold guard breaks legacy onboarding."** Confirming a cold
   member with committed tag asymmetry now rejects, and in a positional pool
   the pool-coherence rule leaves the whole pool unrecorded. *Intended*:
@@ -292,5 +319,12 @@ Attacks run against the design, and their resolutions:
    unchanged (old baseline), next report frames a clean `verify_translation`.
 7. **Verify**: tag-parity warning surfaces on a mismatched pair; exit code
    unchanged; `structural_gate` (error subset) unaffected.
-8. **Matrix/property tests**: extend the §7.4 walk with the tag axis; adjust
-   the per-mutation item ceiling.
+8. **Fork, one-sided tag move**: complete fork where one half changed its
+   tags off the shared base → `mirror_tags` + `record_fork` co-emit; one
+   apply pass lands both; the banked entry has matching per-side tags.
+9. **Fork, divergent tag moves**: complete fork where both halves changed
+   tags differently → `conflict_tags` (framed) + `record_fork`; with the
+   conflict unanswered, the ledger entry is unchanged (nothing banked); after
+   answering `de`/`en`, the next pass records a tag-consistent fork.
+10. **Matrix/property tests**: extend the §7.4 walk with the tag axis; adjust
+    the per-mutation item ceiling.
