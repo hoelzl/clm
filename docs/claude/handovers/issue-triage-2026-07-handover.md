@@ -139,12 +139,39 @@ destination for a target.
 **Acceptance**: a spec with the same `<subdir>` under two same-named
 dir-groups builds cleanly; stress-repeat passes on Windows; validate warns.
 
-### Phase 3 [IN PROGRESS] — Quick-win batch (3 small PRs, one session)
+### Phase 3 [DONE] — Quick-win batch (3 small PRs, one session)
 
-**#362 decision (2026-07-10, maintainer)**: Option A — honor `end-workshop`
-on any cell type with end-**exclusive** semantics (the tagged cell is NOT
-part of the workshop), plus allowlist + info-topic updates documenting that
-tagging the workshop's last code cell excludes it.
+**Resolution (2026-07-10)**:
+
+- **3a (#524)**: shipped (PR #607) — combined the issue's directions 2+3.
+  pyproject.toml pins the full canonical `2026-05-29T00:00:00Z` (exact
+  normalization of the old bare date, cutoff unchanged), uv.lock re-locked
+  (one-line diff), `update_exclude_newer.py` canonicalizes bare dates to
+  `<date+1>T00:00:00Z` (full timestamps pass through),
+  `check_exclude_newer.py` is exact-equality, and CI moved back from
+  `uv sync --frozen` to `--locked` in all three jobs. The profile half
+  needed NO change: `Sync-UvExcludeNewer` is parked (`disabled.ps1`, not
+  loaded) and already mirrors the pyproject value verbatim.
+- **3b (#382)**: closed as **already shipped** — the minimum fix (warning in
+  `GitHubSpec._warn_on_unrecognized_children`, migration info-topic note,
+  tests in `tests/cli/test_git_ops.py`) landed in commit 90518611 and was
+  released in clm 1.15.0 (2026-06-21); the issue was simply never closed.
+  NOTE for Phase 6a: that same commit claims #381 and #383 too (default
+  shared/trainer/speaker structure, per-tier remote-path) — Phase 6a should
+  START with a verify-then-close pass against those issues' asks instead of
+  a fresh design effort.
+- **3c (#362)**: maintainer picked **Option A** — `end-workshop` is honored
+  on any cell type with end-**exclusive** semantics (the tagged cell is NOT
+  part of the workshop; tagging the workshop's last code cell excludes it,
+  which for the issue's `keep`-tagged assertion cells renders identically).
+  Both range scanners changed (`workers/notebook/output_spec.py` +
+  `slides/workshop_scope.py`); openers stay markdown-only; tag moved into
+  `EXPECTED_GENERIC_TAGS`; validator extends the orphan warning to code
+  cells; slide-format/spec-files info topics document the exclusion nuance.
+  Known edge (accepted): per-language *paired* code cells tagged
+  asymmetrically aren't covered by normalize/validate symmetry (those only
+  pair headings) — conventionally code cells are shared, so split builds
+  see the tag in both halves.
 
 **3a — #524: uv.lock exclude-newer timestamp mismatch.** Three
 representations are in play: pyproject bare date `2026-05-28`; uv.lock
@@ -273,9 +300,10 @@ OpenAI-compatible client, zero new deps) or close as status-quo.
 
 ## 5. Next Steps
 
-**Phases 1 (#600) and 2 (#539) are DONE — start Phase 3 (quick-win batch:
-#524, #382, #362; note the pending #362 Option A/B decision).** The plan
-below documents how Phase 1 was executed (kept for reference):
+**Phases 1 (#600), 2 (#539), and 3 (#524/#382/#362) are DONE — start
+Phase 4 (#568 shared ASR transcript cache, fix 1 only; read the
+`project_video_narration_harvest` memory topic first).** The plan below
+documents how Phase 1 was executed (kept for reference):
 
 1. Read memory topics `project_sync_one_sided_cold` and
    `project_sync_v3_design_audit`, plus the sync v3 design note (find via

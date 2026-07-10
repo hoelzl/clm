@@ -115,14 +115,31 @@ class TestFindWorkshopRanges:
         ]
         assert find_workshop_ranges(cells) == [(0, 2), (2, 4)]
 
-    def test_end_workshop_on_code_cell_ignored(self):
-        """``end-workshop`` only matters on markdown cells."""
+    def test_end_workshop_on_code_cell_closes_range(self):
+        """``end-workshop`` closes the range from any cell type (issue
+        #362) — many workshops end with a code cell (final solution or
+        assertion). The close stays exclusive: the tagged code cell itself
+        is OUTSIDE the workshop."""
         cells = [
             _Cell("markdown", ["subslide", "workshop"]),
-            _Cell("code", ["end-workshop"]),
+            _Cell("code", []),
+            _Cell("code", ["keep", "end-workshop"]),
             _Cell("code", []),
         ]
-        assert find_workshop_ranges(cells) == [(0, 3)]
+        assert find_workshop_ranges(cells) == [(0, 2)]
+        ranges = find_workshop_ranges(cells)
+        assert is_in_workshop(1, ranges) is True
+        assert is_in_workshop(2, ranges) is False  # the tagged cell is excluded
+
+    def test_end_workshop_on_code_cell_before_any_workshop_ignored(self):
+        """An orphan ``end-workshop`` code cell has no effect on the
+        partition (the validator warns about it separately)."""
+        cells = [
+            _Cell("code", ["end-workshop"]),
+            _Cell("markdown", ["subslide", "workshop"]),
+            _Cell("code", []),
+        ]
+        assert find_workshop_ranges(cells) == [(1, 3)]
 
     def test_orphan_end_workshop_ignored(self):
         """``end-workshop`` with no preceding workshop has no effect on

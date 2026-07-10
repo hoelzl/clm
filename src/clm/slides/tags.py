@@ -20,7 +20,7 @@ answer       Solution text (cleared in code-along, shown in completed/speaker)
 notes        Brief speaker hints (speaker output only)
 voiceover    Text to read aloud (speaker output only)
 workshop     Marks the heading cell of a workshop section (structural metadata)
-end-workshop Marks the first cell after a workshop, ending its scope (markdown only)
+end-workshop Marks the first cell after a workshop, ending its scope (any cell type)
 private      Cell visible only in private documents
 del          Cell deleted from all outputs
 nodataurl    Prevents data-URL inlining for images
@@ -45,21 +45,23 @@ CODE_CONTENT_TAGS: frozenset[str] = frozenset({"keep", "start", "completed"})
 
 # --- Structural metadata tags ---
 # Tags that carry structural meaning but don't affect output processing.
-# ``workshop`` and ``end-workshop`` only matter on markdown cells; the latter
-# is therefore intentionally absent from EXPECTED_GENERIC_TAGS / CODE tag sets.
+# ``workshop`` opens a range only on markdown cells; ``end-workshop`` closes
+# one on ANY cell type (issue #362) — many workshops end with a code cell
+# (the final solution or assertion). The close is exclusive: the tagged cell
+# itself is outside the workshop.
 STRUCTURAL_TAGS: frozenset[str] = frozenset({"workshop", "end-workshop"})
 
 # --- Per-cell-type valid tag sets ---
 # These are the complete sets used by get_invalid_code_tags / get_invalid_markdown_tags.
 
 EXPECTED_GENERIC_TAGS: frozenset[str] = frozenset(
-    SLIDE_TAGS | PRIVATE_TAGS | frozenset({"workshop", "alt", "completed", "del"})
+    SLIDE_TAGS | PRIVATE_TAGS | STRUCTURAL_TAGS | frozenset({"alt", "completed", "del"})
 )
 
 EXPECTED_CODE_TAGS: frozenset[str] = frozenset(CODE_CONTENT_TAGS | EXPECTED_GENERIC_TAGS)
 
 EXPECTED_MARKDOWN_TAGS: frozenset[str] = frozenset(
-    frozenset({"notes", "voiceover", "answer", "nodataurl", "end-workshop"}) | EXPECTED_GENERIC_TAGS
+    frozenset({"notes", "voiceover", "answer", "nodataurl"}) | EXPECTED_GENERIC_TAGS
 )
 
 # --- Convenience: all recognized tags ---

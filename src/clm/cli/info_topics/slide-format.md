@@ -71,8 +71,8 @@ is also valid; `clm slides normalize --operations interleaving` converts to cano
 
 | Tag | Meaning |
 |---|---|
-| `workshop` | Marks the heading cell that opens a workshop section |
-| `end-workshop` | Marks the first cell after the workshop scope |
+| `workshop` | Marks the heading cell that opens a workshop section (markdown only) |
+| `end-workshop` | Marks the first cell **after** the workshop scope — valid on any cell type (since {version}). The tagged cell is *outside* the workshop: tagging the workshop's final code cell excludes that cell from the range (it renders completed, not blanked; identical output for `keep`-tagged cells). |
 | `answer` | Solution text; cleared in code-along output |
 | `private` | Visible only in trainer/speaker output |
 | `del` | Removed from all outputs |
