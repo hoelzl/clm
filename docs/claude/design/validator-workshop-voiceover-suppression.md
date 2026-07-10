@@ -14,9 +14,10 @@ The `voiceover` review check in the slide validator currently expects every
 slide, subslide, and code cell in a file to be covered by a voiceover cell.
 That assumption is wrong for **workshops**.
 
-In CLM, a workshop is a stretch of cells bounded by markdown cells tagged
-`workshop` (inclusive, start) and `end-workshop` (exclusive, end) — see
-`src/clm/slides/workshop_scope.py`. Workshops are trainer-driven exercise
+In CLM, a workshop is a stretch of cells starting at a markdown cell tagged
+`workshop` (inclusive) and ending at the next cell tagged `end-workshop`
+(exclusive; any cell type since issue #362 — markdown-only when this doc was
+written) — see `src/clm/slides/workshop_scope.py`. Workshops are trainer-driven exercise
 blocks: the trainer narrates them live during the lecture, so the
 *authoring convention* is **not to attach voiceover to cells inside a
 workshop**. Only the workshop's opening heading carries a voiceover
