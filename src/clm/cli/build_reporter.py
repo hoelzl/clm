@@ -69,6 +69,11 @@ class BuildReporter:
         # exit independent of the --fail-on-error policy.
         self._timed_out: bool = False
 
+        # Set when stage processing raised and the exception is propagating
+        # past the summary (issue #596). Carried into BuildSummary.aborted so
+        # renderers show a failure headline instead of "completed successfully".
+        self._aborted: bool = False
+
         # Output-write registry summary, populated by
         # :meth:`report_output_writes` shortly before ``finish_build``.
         self._output_dedup_count: int = 0
@@ -301,6 +306,45 @@ class BuildReporter:
         """
         self._timed_out = True
 
+    def mark_aborted(self, exc: BaseException) -> None:
+        """Flag the build as aborted by a propagating exception (issue #596).
+
+        Called from the stage-processing exception handler *before* the
+        exception is re-raised, so the summary rendered by the ``finally``
+        block reports a failure instead of "Build completed successfully".
+
+        Also records the exception as a fatal infrastructure error: it then
+        appears in the summary's error count (submission-time failures
+        previously never did, unlike execution failures) and — because the
+        stale-output sweep skips itself when errors were recorded — keeps an
+        aborted build's incomplete write registry from sweeping away valid
+        outputs of prior successful builds.
+        """
+        self._aborted = True
+        messages = [f"{type(exc).__name__}: {exc}"]
+        # ``BaseExceptionGroup`` is a builtin on the supported runtimes but
+        # ruff's py310 target flags the bare name (same workaround as
+        # ``_contains_jobs_pending_timeout`` in the build command).
+        import builtins
+
+        group_type = getattr(builtins, "BaseExceptionGroup", None)
+        if group_type is not None and isinstance(exc, group_type):
+            messages.extend(f"{type(sub).__name__}: {sub}" for sub in exc.exceptions[:5])
+        self.errors.append(
+            BuildError(
+                error_type="infrastructure",
+                category="build_aborted",
+                severity="fatal",
+                file_path="",
+                message="\n".join(messages),
+                actionable_guidance=(
+                    "The build was aborted before all stages completed; the "
+                    "output tree is incomplete. See the traceback below for "
+                    "the underlying failure."
+                ),
+            )
+        )
+
     def report_warning(self, warning: BuildWarning) -> None:
         """Report a warning (display if appropriate, always collect).
 
@@ -479,6 +523,7 @@ class BuildReporter:
             flaky_files=sorted(self._flaky_files.values(), key=lambda f: f.file_path),
             rebuild_reasons=dict(self._rebuild_reasons),
             timed_out=self._timed_out,
+            aborted=self._aborted,
         )
 
         # Display summary

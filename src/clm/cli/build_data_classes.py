@@ -205,6 +205,11 @@ class BuildSummary:
     timed-out build must always exit non-zero, independent of the
     ``--fail-on-error`` policy, because pending jobs mean the output tree is
     incomplete."""
+    aborted: bool = False
+    """True when stage processing raised and the exception is propagating
+    past the summary (issue #596) — e.g. a job-submission failure such as
+    "No workers available". The build did not complete, so renderers must
+    show a failure headline instead of "Build completed successfully"."""
 
     @property
     def failed_files(self) -> int:
@@ -253,10 +258,14 @@ class BuildSummary:
 
     def __str__(self) -> str:
         """Human-readable summary representation."""
-        status = "✗" if self.has_errors() else "✓"
-        status_text = "with errors" if self.has_errors() else "successfully"
+        if self.aborted:
+            headline = f"✗ Build aborted after {self.duration:.1f}s"
+        elif self.has_errors():
+            headline = f"✗ Build completed with errors in {self.duration:.1f}s"
+        else:
+            headline = f"✓ Build completed successfully in {self.duration:.1f}s"
 
-        parts = [f"{status} Build completed {status_text} in {self.duration:.1f}s"]
+        parts = [headline]
         parts.append("")
         parts.append("Summary:")
         parts.append(f"  {self.total_files} files processed")

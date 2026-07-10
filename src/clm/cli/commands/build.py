@@ -1462,6 +1462,15 @@ async def process_course_with_backend(
                         "tree is incomplete; see the error summary."
                     )
                 else:
+                    # Issue #596: the finally block below still renders the
+                    # summary while this exception propagates. Without an
+                    # explicit abort mark it printed "✓ Build completed
+                    # successfully" (with 0 errors) for a failed build, and
+                    # the stale-output sweep ran against an incomplete write
+                    # registry. mark_aborted flips the summary to a failure
+                    # and records a fatal error, which also makes the sweep
+                    # skip itself.
+                    build_reporter.mark_aborted(exc)
                     raise
 
         finally:
