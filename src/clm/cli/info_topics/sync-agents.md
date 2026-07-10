@@ -247,14 +247,19 @@ The answer vocabulary is `treat_as_new`:
   verbatim to the twin — the normal `copy_new_shared` path it would have taken
   without the suspicion.
 - On the vanished positional cell's row (`pos:…`), `{"choice": "treat_as_new"}`
-  mirrors the removal onto the surviving half. It is rejected if that survivor
-  was *also* edited (removal would lose the edit) — reconcile that shape by
-  editing the files.
+  mirrors the removal onto the surviving half. This row only appears while the
+  survivor is untouched; if it was *also* edited (removal would lose the
+  edit), the row frames `remove_vs_edit` instead — answer `remove` (delete the
+  edited survivor) or `keep` (re-add it on the other half), with the stamp
+  suspicion repeated in the row's detail.
 
 Answer all the affected rows in one document and the whole replacement lands in
-one `apply` pass. If the cell really was stamped-and-edited (the same cell, now
-carrying an id), do NOT answer `treat_as_new` — stamp the twin cell with the
-same `slide_id` by hand (the halves then pair id-keyed) and re-`report`.
+one `apply` pass. Partial answers are safe: while any row of a pool is still
+unanswered, the pool's ledger entries stay frozen, so the remaining rows keep
+their framing on the next `report` (already-landed slots re-frame as
+mechanical records). If the cell really was stamped-and-edited (the same cell,
+now carrying an id), do NOT answer `treat_as_new` — stamp the twin cell with
+the same `slide_id` by hand (the halves then pair id-keyed) and re-`report`.
 
 ## The forensic window — `report --since`
 

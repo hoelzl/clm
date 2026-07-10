@@ -762,19 +762,84 @@ class TestStampVsNew:
         assert "y = 2" not in deck.de_path.read_text(encoding="utf-8")
         deck.assert_converged()
 
-    def test_treat_as_new_rejected_when_the_survivor_moved_off_base(self, tmp_path: Path):
-        # The surviving positional twin carries an edit: removing it would
-        # silently lose content, so the pos-view treat_as_new must fail the
-        # item instead (P8: never guess).
+    def test_edited_survivor_frames_remove_vs_edit_instead_of_a_dead_end(self, tmp_path: Path):
+        # #602 adversarial review: the surviving positional twin carries an
+        # edit, so a mirrored removal is deterministically rejected — the
+        # report must not advertise treat_as_new as the row's only answer.
+        # The shape frames remove_vs_edit instead (remove/keep both land),
+        # with the stamp suspicion spelled out in the detail.
         deck = self._replace_pos_cell_on_en(tmp_path)
         deck.edit_de("y = 2", "y = 99")
         _, diff = deck.diff()
         pos_item = next(i for i in diff.items if i.key == "pos:s0/code/1")
-        assert pos_item.action == "stamp_vs_new"
-        outcome = deck.apply(_decision(pos_item.key, choice="treat_as_new"))
-        result = next(r for r in outcome.results if r.key == pos_item.key)
-        assert result.status == "rejected"
-        assert "y = 99" in deck.de_path.read_text(encoding="utf-8")
+        assert pos_item.action == "remove_vs_edit", (pos_item.action, pos_item.detail)
+        assert "unmatched id'd cell" in pos_item.detail
+        assert doc_apply.item_answers(pos_item) == ("remove", "keep")
+        decisions = {
+            "id:y-assign": doc_apply.Decision(key="id:y-assign", choice="treat_as_new"),
+            "id:y-check": doc_apply.Decision(key="id:y-check", choice="treat_as_new"),
+            "pos:s0/code/1": doc_apply.Decision(key="pos:s0/code/1", choice="remove"),
+        }
+        outcome = deck.apply(decisions)
+        assert outcome.all_applied, outcome.to_payload()
+        de = deck.de_path.read_text(encoding="utf-8")
+        assert "y = 99" not in de  # the deliberate removal landed
+        assert '# %% tags=["keep"] slide_id="y-assign"\ny = 3\n' in de
+        deck.assert_converged()
+
+    def test_partial_pool_answer_keeps_the_sibling_suspicion(self, tmp_path: Path):
+        # #602 adversarial review: landing treat_as_new on ONE pool slot must
+        # not re-record the pool wholesale — that would erase the two-sided
+        # base entries evidencing the OTHER slot's suspicion, silently
+        # downgrading it to mechanical duplication on the next report.
+        deck = _deck(tmp_path)
+        deck.edit_en(
+            '# %% tags=["keep"]\nx = 1\n',
+            '# %% tags=["keep"] slide_id="x-new"\nx = 10\n',
+        )
+        deck.edit_en(
+            '# %% tags=["keep"]\ny = 2\n',
+            '# %% tags=["keep"] slide_id="y-new"\ny = 20\n',
+        )
+        _, diff = deck.diff()
+        assert {(i.key, i.action) for i in diff.items} == {
+            ("id:x-new", "stamp_vs_new"),
+            ("id:y-new", "stamp_vs_new"),
+            ("pos:s0/code/0", "stamp_vs_new"),
+            ("pos:s0/code/1", "stamp_vs_new"),
+        }, [(i.key, i.action, i.detail) for i in diff.items]
+        # Answer only the x rows; the y suspicion is left pending.
+        outcome = deck.apply(
+            {
+                key: doc_apply.Decision(key=key, choice="treat_as_new")
+                for key in ("id:x-new", "pos:s0/code/0")
+            }
+        )
+        statuses = _statuses(outcome)
+        assert statuses["id:x-new"] == "applied"
+        assert statuses["pos:s0/code/0"] == "applied"
+        assert statuses["pos:s0/code/1"] == "pending"
+        # The next report must still frame y as a suspected stamp (never as a
+        # mechanical copy plus a resurrected "new" cell).
+        _, diff = deck.diff()
+        actions = {i.key: i.action for i in diff.items}
+        assert actions["id:y-new"] == "stamp_vs_new"
+        assert actions["pos:s0/code/1"] == "stamp_vs_new"
+        # x's landed slot re-frames as a mechanical removal record (the frozen
+        # pool deferred its ledger update) and everything converges once the
+        # remaining suspicion is answered.
+        assert actions.get("pos:s0/code/0") == "record_remove"
+        outcome = deck.apply(
+            {
+                key: doc_apply.Decision(key=key, choice="treat_as_new")
+                for key in ("id:y-new", "pos:s0/code/1")
+            }
+        )
+        assert outcome.all_applied, outcome.to_payload()
+        de = deck.de_path.read_text(encoding="utf-8")
+        assert de.count("x = 10") == 1 and de.count("y = 20") == 1
+        assert "x = 1\n" not in de and "y = 2\n" not in de
+        deck.assert_converged()
 
 
 class TestDecisionParsing:
