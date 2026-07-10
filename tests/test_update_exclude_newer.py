@@ -52,7 +52,10 @@ class _RecordingRun:
 
 
 class TestEditPhase:
-    def test_explicit_date_is_written(self, fake_pyproject, monkeypatch):
+    def test_explicit_date_is_canonicalized(self, fake_pyproject, monkeypatch):
+        # A bare date means "allow the whole day", so the pin becomes the
+        # next UTC midnight — the exact form uv normalizes a bare date to
+        # (issue #524).
         monkeypatch.setattr(sys, "argv", ["update_exclude_newer.py", "2026-04-20"])
         monkeypatch.setattr(update_exclude_newer.shutil, "which", lambda _: "/usr/bin/uv")
         monkeypatch.setattr(update_exclude_newer.subprocess, "run", _RecordingRun())
@@ -60,9 +63,44 @@ class TestEditPhase:
         rc = update_exclude_newer.main()
 
         assert rc == 0
-        assert 'exclude-newer = "2026-04-20"' in fake_pyproject.read_text()
+        assert 'exclude-newer = "2026-04-21T00:00:00Z"' in fake_pyproject.read_text()
 
-    def test_default_is_14_days_ago(self, fake_pyproject, monkeypatch):
+    def test_month_rollover_is_handled(self, fake_pyproject, monkeypatch):
+        monkeypatch.setattr(sys, "argv", ["update_exclude_newer.py", "2026-04-30"])
+        monkeypatch.setattr(update_exclude_newer.shutil, "which", lambda _: "/usr/bin/uv")
+        monkeypatch.setattr(update_exclude_newer.subprocess, "run", _RecordingRun())
+
+        rc = update_exclude_newer.main()
+
+        assert rc == 0
+        assert 'exclude-newer = "2026-05-01T00:00:00Z"' in fake_pyproject.read_text()
+
+    def test_full_timestamp_is_passed_through(self, fake_pyproject, monkeypatch):
+        monkeypatch.setattr(sys, "argv", ["update_exclude_newer.py", "2026-04-20T12:30:00Z"])
+        monkeypatch.setattr(update_exclude_newer.shutil, "which", lambda _: "/usr/bin/uv")
+        monkeypatch.setattr(update_exclude_newer.subprocess, "run", _RecordingRun())
+
+        rc = update_exclude_newer.main()
+
+        assert rc == 0
+        assert 'exclude-newer = "2026-04-20T12:30:00Z"' in fake_pyproject.read_text()
+
+    def test_invalid_argument_is_rejected(self, fake_pyproject, monkeypatch, capsys):
+        monkeypatch.setattr(sys, "argv", ["update_exclude_newer.py", "not-a-date"])
+        monkeypatch.setattr(
+            update_exclude_newer.subprocess,
+            "run",
+            lambda *a, **kw: pytest.fail("uv lock must not run for an invalid argument"),
+        )
+
+        rc = update_exclude_newer.main()
+
+        assert rc == 1
+        assert "not-a-date" in capsys.readouterr().err
+        # pyproject must be untouched.
+        assert 'exclude-newer = "2025-12-01"' in fake_pyproject.read_text()
+
+    def test_default_is_14_days_ago_canonicalized(self, fake_pyproject, monkeypatch):
         from datetime import date, timedelta
 
         monkeypatch.setattr(sys, "argv", ["update_exclude_newer.py"])
@@ -72,8 +110,9 @@ class TestEditPhase:
         rc = update_exclude_newer.main()
 
         assert rc == 0
-        expected = (date.today() - timedelta(days=14)).isoformat()
-        assert f'exclude-newer = "{expected}"' in fake_pyproject.read_text()
+        # 14 days ago, canonicalized to the following UTC midnight.
+        expected = (date.today() - timedelta(days=13)).isoformat()
+        assert f'exclude-newer = "{expected}T00:00:00Z"' in fake_pyproject.read_text()
 
     def test_missing_pin_in_pyproject_returns_error(self, tmp_path, monkeypatch):
         pyproject = tmp_path / "pyproject.toml"
@@ -124,7 +163,7 @@ class TestUvLockPhase:
         assert rc == 2
         # pyproject was still updated — but the user must be told the lockfile
         # is now stale so they can recover.
-        assert 'exclude-newer = "2026-04-20"' in fake_pyproject.read_text()
+        assert 'exclude-newer = "2026-04-21T00:00:00Z"' in fake_pyproject.read_text()
         err = capsys.readouterr().err
         assert "uv.lock" in err
         assert "stale" in err.lower()
