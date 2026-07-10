@@ -379,6 +379,7 @@ def describe_cache_dir(
     *,
     cli_override: Path | None = None,
     repo_root: Path | None = None,
+    start: Path | None = None,
 ) -> CacheDirResolution:
     """Resolve the LLM cache directory and report its provenance (pure).
 
@@ -391,13 +392,17 @@ def describe_cache_dir(
 
     ``repo_root`` defaults to the **discovered project root** —
     :func:`clm.infrastructure.utils.path_utils.find_project_root` walks up from
-    the current working directory to the nearest ``pyproject.toml`` /
-    ``.clm/config.toml`` / ``.git`` (like ``git`` / ``uv`` / ``ruff``), so the
-    cache resolves to the same place no matter which subdirectory the command
-    was invoked from (issue #477). Without the walk-up, running from a topic
-    subdir treated the subdir as the root: it missed ``[tool.clm] cache_dir``
-    and created a stray ``<subdir>/.clm-cache``. This function has **no side
-    effects** — it does not create the directory.
+    ``start`` (default: the current working directory) to the nearest
+    ``pyproject.toml`` / ``.clm/config.toml`` / ``.git`` (like ``git`` / ``uv`` /
+    ``ruff``), so the cache resolves to the same place no matter which
+    subdirectory the command was invoked from (issue #477). Without the
+    walk-up, running from a topic subdir treated the subdir as the root: it
+    missed ``[tool.clm] cache_dir`` and created a stray ``<subdir>/.clm-cache``.
+    Pass ``start`` when the anchor is a *path argument* rather than cwd (the
+    voiceover cache walks up from the deck directory, issue #568); unlike an
+    explicit ``repo_root``, a ``start`` anchor keeps the git-worktree
+    re-anchoring below active. This function has **no side effects** — it does
+    not create the directory.
 
     Git-worktree anchoring: a *relative* ``[tool.clm] cache_dir`` (e.g.
     ``../shared-cache``) is normally joined to ``repo_root``. But in a git
@@ -425,7 +430,7 @@ def describe_cache_dir(
     # ``repo_root`` opts out and anchors to that root verbatim (library callers /
     # tests). The worktree re-anchoring of a relative value below then runs with
     # the correct root (the worktree checkout root, not a subdir).
-    root = repo_root or find_project_root()
+    root = repo_root or find_project_root(start)
     pyproject = root / "pyproject.toml"
     if pyproject.is_file():
         configured = _read_pyproject_cache_dir(pyproject)

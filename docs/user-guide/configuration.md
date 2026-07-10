@@ -160,6 +160,7 @@ default is):
 | `CLM_CACHE_DB_PATH` | Cache database path (persistent — processed-file results) | `clm_cache.db` |
 | `CLM_JOBS_DB_PATH` | Job-queue database path (jobs, workers, events). Ephemeral: only needs to survive a single `clm` run, so it can live on a RAM disk (e.g. `Z:\clm_jobs.db`) to spare the SSD. `clm status` / `clm monitor` honor it too, so they inspect the same DB a redirected build wrote. **Direct worker mode only** — a host RAM-disk path is not visible inside Docker workers. | `clm_jobs.db` |
 | `CLM_TELEMETRY_DB_PATH` | Execution-telemetry database (per-deck kernel crash/flake history). Kept separate from the cache DB so clearing the cache never erases the history. | `clm_telemetry.db` next to the cache DB |
+| `CLM_CACHE_DIR` | Shared cache directory holding the LLM cache (translations, title suggestions, coverage verdicts) and, since #568, the voiceover artifact cache (`voiceover/` subdir: ASR transcripts, transitions, timelines, alignments). Resolution: `--cache-dir`/`--cache-root` flag → this variable → `tool.clm.cache_dir` in `pyproject.toml` → `<project-root>/.clm-cache/`. | `<project-root>/.clm-cache/` |
 
 > The database paths are **not** part of the `[…]` config-file model. They are
 > resolved from the global CLI options / the `CLM_*_DB_PATH` env vars above. (The

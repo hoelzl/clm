@@ -62,7 +62,8 @@ class _DefaultVerbGroup(LazyGroup):
     "--cache-root",
     type=click.Path(path_type=Path),
     default=None,
-    help="Override the cache location (default: <deck dir>/.clm/voiceover-cache).",
+    help="Override the cache location (default: the shared cache dir's voiceover/ "
+    "subdir — CLM_CACHE_DIR, [tool.clm] cache_dir, or <project-root>/.clm-cache/).",
 )
 @click.option(
     "--no-cache",

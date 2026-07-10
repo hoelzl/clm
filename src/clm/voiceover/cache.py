@@ -7,10 +7,21 @@ Re-running the pipeline with the same inputs is expensive (especially ASR on
 multi-GB videos) but should produce identical results, which makes these
 artifacts good cache candidates.
 
-This module provides a local filesystem cache layered under the working
-directory's ``.clm/voiceover-cache/`` tree. Keys are derived from cheap
-fingerprints (path + mtime + size for videos; normalized source hash for
-slide files) so cache writes/reads stay fast even on large inputs.
+This module provides a local filesystem cache in a **shared, deck-independent
+root** (issue #568): ``<cache-dir>/voiceover/``, where ``<cache-dir>`` follows
+the LLM cache's resolution (``CLM_CACHE_DIR`` → ``[tool.clm] cache_dir`` →
+``<project-root>/.clm-cache/``), anchored at the project root discovered by
+walking up from the deck directory. Keys are derived from cheap fingerprints
+(path + mtime + size for videos; normalized source hash for slide files) so
+cache writes/reads stay fast even on large inputs — and, because a video's
+fingerprint is independent of any deck, forked/moved decks harvesting the
+same recording share every video-keyed entry instead of re-running ASR.
+
+Entries written by pre-#568 versions live in the per-deck
+``<deck dir>/.clm/voiceover-cache/`` tree; on a miss in the shared root the
+helpers below probe that legacy location and promote a hit into the shared
+root, so existing transcripts survive the layout change without manual
+copying.
 
 The cache is consulted at four points:
 
@@ -25,7 +36,7 @@ error — callers may cache alternate configurations side by side.
 
 Usage::
 
-    cache_root = resolve_cache_root()                   # .clm/voiceover-cache/
+    cache_root = resolve_cache_root()                   # <cache-dir>/voiceover/
     video_key = VideoKey.from_path(video_path)
     slides_key = SlidesKey.from_path(slide_path)
     tx_cfg = TranscribeConfig(backend="faster-whisper", model="large-v3",
@@ -54,7 +65,10 @@ from typing import Any, Generic, TypeVar
 
 logger = logging.getLogger(__name__)
 
+#: Pre-#568 per-deck cache location, still probed (read-only) as a fallback.
 CACHE_DIRNAME = ".clm/voiceover-cache"
+#: Subdirectory of the shared cache dir holding the voiceover artifact cache.
+SHARED_CACHE_SUBDIR = "voiceover"
 CACHE_SUBDIRS = ("transcripts", "transitions", "timelines", "alignments")
 
 
@@ -190,7 +204,25 @@ class DetectConfig:
 
 
 def resolve_cache_root(base_dir: str | Path | None = None) -> Path:
-    """Resolve the default cache root under ``base_dir`` (or cwd)."""
+    """Resolve the default **shared** cache root (issue #568).
+
+    Deck-independent: mirrors the LLM cache's directory treatment
+    (``CLM_CACHE_DIR`` env var → ``[tool.clm] cache_dir`` in the project's
+    ``pyproject.toml`` → ``<project-root>/.clm-cache/``) with a
+    ``voiceover/`` subdirectory. The project root is discovered by walking
+    up from ``base_dir`` (the deck directory in pipeline calls) or cwd, so
+    every deck in a course repository — including forks/moves — resolves to
+    the one shared cache and video-keyed entries (transcripts, transitions)
+    are computed once per recording.
+    """
+    from clm.infrastructure.llm.cache import describe_cache_dir
+
+    start = Path(base_dir) if base_dir is not None else None
+    return describe_cache_dir(start=start).path / SHARED_CACHE_SUBDIR
+
+
+def legacy_cache_root(base_dir: str | Path | None = None) -> Path:
+    """The pre-#568 per-deck cache root under ``base_dir`` (or cwd)."""
     base = Path(base_dir) if base_dir is not None else Path.cwd()
     return base / CACHE_DIRNAME
 
@@ -644,7 +676,8 @@ class CachePolicy:
 
     - ``enabled=False`` bypasses the cache entirely (no reads, no writes).
     - ``refresh=True`` forces a miss on read but still writes the new result.
-    - ``cache_root`` overrides the default ``.clm/voiceover-cache/`` location.
+    - ``cache_root`` overrides the default shared location (see
+      :func:`resolve_cache_root`).
     """
 
     enabled: bool = True
@@ -659,6 +692,25 @@ class CachePolicy:
         if self.cache_root is not None:
             return self.cache_root
         return resolve_cache_root(base_dir)
+
+
+def _legacy_cache(cache_cls, primary_root: Path, base_dir: str | Path | None):
+    """The pre-#568 per-deck cache to probe after a shared-root miss, or None.
+
+    Only probes when a deck anchor is known, the legacy tree actually has
+    entries of this kind, and the legacy root isn't the primary root itself
+    (an explicit ``--cache-root`` pointed at the old location). A hit is
+    promoted into the shared root by the caller, so the probe pays off once
+    per entry.
+    """
+    if base_dir is None:
+        return None
+    root = legacy_cache_root(base_dir)
+    if not (root / cache_cls.subdir).is_dir():
+        return None
+    if root.resolve() == primary_root.resolve():
+        return None
+    return cache_cls(root)
 
 
 def cached_transcribe(
@@ -689,13 +741,25 @@ def cached_transcribe(
         return transcribe_fn(), False
 
     video_key = VideoKey.from_path(video_path)
-    cache = TranscriptsCache(policy.resolve_root(base_dir))
+    root = policy.resolve_root(base_dir)
+    cache = TranscriptsCache(root)
 
     if not policy.refresh:
         hit = cache.get(video_key, cfg)
         if hit is not None:
             logger.info("Transcript cache hit for %s", Path(video_path).name)
             return hit, True
+        legacy = _legacy_cache(TranscriptsCache, root, base_dir)
+        if legacy is not None:
+            hit = legacy.get(video_key, cfg)
+            if hit is not None:
+                cache.put(video_key, cfg, hit)
+                logger.info(
+                    "Transcript cache hit for %s (promoted from per-deck cache %s)",
+                    Path(video_path).name,
+                    legacy.directory,
+                )
+                return hit, True
 
     transcript = transcribe_fn()
     cache.put(video_key, cfg, transcript)
@@ -729,13 +793,25 @@ def cached_detect(
         return detect_fn(), False
 
     video_key = VideoKey.from_path(video_path)
-    cache = TransitionsCache(policy.resolve_root(base_dir))
+    root = policy.resolve_root(base_dir)
+    cache = TransitionsCache(root)
 
     if not policy.refresh:
         hit = cache.get(video_key, cfg)
         if hit is not None:
             logger.info("Transitions cache hit for %s", Path(video_path).name)
             return hit, True
+        legacy = _legacy_cache(TransitionsCache, root, base_dir)
+        if legacy is not None:
+            hit = legacy.get(video_key, cfg)
+            if hit is not None:
+                cache.put(video_key, cfg, hit)
+                logger.info(
+                    "Transitions cache hit for %s (promoted from per-deck cache %s)",
+                    Path(video_path).name,
+                    legacy.directory,
+                )
+                return hit, True
 
     events = detect_fn()
     cache.put(video_key, cfg, events)
@@ -761,13 +837,25 @@ def cached_timeline(
 
     video_key = video_key_for(video_path)
     slides_key = SlidesKey.from_path(slide_path)
-    cache = TimelinesCache(policy.resolve_root(base_dir))
+    root = policy.resolve_root(base_dir)
+    cache = TimelinesCache(root)
 
     if not policy.refresh:
         hit = cache.get(video_key, slides_key, cfg)
         if hit is not None:
             logger.info("Timeline cache hit (%s)", video_key.hash)
             return hit, True
+        legacy = _legacy_cache(TimelinesCache, root, base_dir)
+        if legacy is not None:
+            hit = legacy.get(video_key, slides_key, cfg)
+            if hit is not None:
+                cache.put(video_key, slides_key, cfg, hit)
+                logger.info(
+                    "Timeline cache hit (%s, promoted from per-deck cache %s)",
+                    video_key.hash,
+                    legacy.directory,
+                )
+                return hit, True
 
     timeline = timeline_fn()
     cache.put(video_key, slides_key, cfg, timeline)
@@ -789,13 +877,25 @@ def cached_alignment(
 
     video_key = video_key_for(video_path)
     slides_key = SlidesKey.from_path(slide_path)
-    cache = AlignmentsCache(policy.resolve_root(base_dir))
+    root = policy.resolve_root(base_dir)
+    cache = AlignmentsCache(root)
 
     if not policy.refresh:
         hit = cache.get(video_key, slides_key, cfg)
         if hit is not None:
             logger.info("Alignment cache hit (%s)", video_key.hash)
             return hit, True
+        legacy = _legacy_cache(AlignmentsCache, root, base_dir)
+        if legacy is not None:
+            hit = legacy.get(video_key, slides_key, cfg)
+            if hit is not None:
+                cache.put(video_key, slides_key, cfg, hit)
+                logger.info(
+                    "Alignment cache hit (%s, promoted from per-deck cache %s)",
+                    video_key.hash,
+                    legacy.directory,
+                )
+                return hit, True
 
     alignment = alignment_fn()
     cache.put(video_key, slides_key, cfg, alignment)
