@@ -1,6 +1,7 @@
 # Open-Issue Triage & Execution Plan (2026-07-10) — Handover
 
-**Status**: Triage COMPLETE; execution NOT STARTED. This document is the
+**Status**: Triage COMPLETE; execution IN PROGRESS — Phases 1–3 DONE
+(#600, #539, #524/#382/#362), next up Phase 4 (#568). This document is the
 source of truth for working through the open-issue backlog in priority
 order. Update phase statuses here as issues land.
 
@@ -292,11 +293,16 @@ OpenAI-compatible client, zero new deps) or close as status-quo.
   PRs #357/#358).
 - **#501 CLOSED** with evidence comment (phases shipped via PRs
   #505/#510/#513/#515/#518).
-- **No implementation started** on any of the 11 remaining issues; no
-  merged commit on master references #568/#559/#539/#524 (verified via
-  `git log --grep`).
-- No blockers. One decision pending from the maintainer: #362 semantics
-  (Option A vs B in Phase 3c).
+- **Phases 1–3 DONE** (all 2026-07-10): #600 via PRs #602/#603, #539 via
+  PR #604, #524 via PR #607, #382 closed as pre-shipped (1.15.0), #362 via
+  PR #608 (maintainer picked Option A). Resolution details live in each
+  phase's block in §3.
+- **#605** (bilingual dir-group `<name>` silently dropped — filed out of
+  Phase 2) was fixed in parallel by another session via PR #606.
+- No blockers, no pending decisions. Remaining: Phase 4 (#568), Phase 5
+  (#559, needs a quiet-repo window), Phase 6 design tier (#383+#381 —
+  start with a verify-then-close pass, see the Phase 3 resolution note —
+  plus #484, #167).
 
 ## 5. Next Steps
 
@@ -322,12 +328,10 @@ documents how Phase 1 was executed (kept for reference):
    `changelog.d/`, add a §13 amendments-log row, ship via the standard
    worktree → PR flow (`/ship-a-pr` skill).
 
-Prerequisite for Phase 3c only: ask the maintainer to pick #362 Option A
-or B.
-
 ## 6. Key Files & Architecture
 
-No code modified yet. Files identified during triage (issue → key sites):
+Files identified during triage (issue → key sites); Phases 1–3 touched
+their listed sites — see each phase's resolution block for what changed:
 
 - `#600` → sync v3 engine under `src/clm/` (search `ambiguous_alignment`);
   decision-doc apply path in `src/clm/cli/commands/slides/sync.py`
