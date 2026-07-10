@@ -526,6 +526,16 @@ Copy additional directories (e.g., code examples) to output.
 </dir-group>
 ```
 
+#### Duplicate destinations
+
+Each destination directory is copied at most once per build: when the same
+source resolves to the same destination through several `<dir-group>`s
+(e.g. the same `<subdir>` listed under two same-named groups), the
+duplicate copies are skipped. Two dir-groups copying *different* sources
+to the same destination are a spec conflict — the surviving content would
+be nondeterministic. `clm validate` warns about both shapes
+(`duplicate_dir_group_destination`).
+
 ### `<include>`
 
 Splice a shared source directory or file from elsewhere in the course root

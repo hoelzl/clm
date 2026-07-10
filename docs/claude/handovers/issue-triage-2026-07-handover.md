@@ -102,7 +102,22 @@ cells on one side) resolves through `report` → decision doc → `apply
   slide_id parity into the other half, then `record_remove` +`confirm`) —
   the fix should not break that path.
 
-### Phase 2 [TODO] — #539: duplicate dir-group destination copytree race
+### Phase 2 [DONE] — #539: duplicate dir-group destination copytree race
+
+**Resolution (2026-07-10)**: the whole-group dedup had already landed on
+master (commit `318bfdd5`, the PR #556/#563 arc) but did NOT cover the
+issue's actual shape — two same-named dir-groups that merely *overlap* in
+one `<subdir>` produce different whole-group keys and still raced. Fixed by
+making the dedup per copied directory (`DirGroup._without_seen_copies`:
+one key per `(destination dir, source dir, recursive)` pair plus one per
+root-file batch; the operation gets an `attrs.evolve`d dir-group with only
+the not-yet-covered pairs). Different-source-same-destination pairs are
+deliberately NOT deduped (spec conflict — stays visible to the write
+registry), but `clm validate` now warns about both shapes as
+`duplicate_dir_group_destination` (`_validate_dir_group_destinations` in
+`src/clm/slides/spec_validator.py`). Note: dir-group `<name>` parsing is
+monolingual (`element_text` ignores `<de>/<en>` children), so per-language
+collisions are currently unreachable via real specs.
 
 **Problem**: Two `<dir-group>`s resolving to the same output destination →
 two concurrent `shutil.copytree(src, same_dest, dirs_exist_ok=True)` per
@@ -253,9 +268,9 @@ OpenAI-compatible client, zero new deps) or close as status-quo.
 
 ## 5. Next Steps
 
-**Phase 1 (#600) is DONE — start Phase 2 (#539: duplicate dir-group
-destination copytree race).** The plan below documents how Phase 1 was
-executed (kept for reference):
+**Phases 1 (#600) and 2 (#539) are DONE — start Phase 3 (quick-win batch:
+#524, #382, #362; note the pending #362 Option A/B decision).** The plan
+below documents how Phase 1 was executed (kept for reference):
 
 1. Read memory topics `project_sync_one_sided_cold` and
    `project_sync_v3_design_audit`, plus the sync v3 design note (find via

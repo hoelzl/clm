@@ -2,7 +2,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from attrs import frozen
+from attrs import evolve, frozen
 
 from clm.core.course_spec import DirGroupSpec
 from clm.core.utils.text_utils import Text
@@ -95,29 +95,60 @@ class DirGroup:
             for dir_ in self.relative_paths
         )
 
-    def _copy_key(
+    def _without_seen_copies(
         self,
         is_speaker: bool,
         lang: str,
         output_root: Path | None,
         skip_toplevel: bool,
-    ) -> tuple:
-        """Identity of a copy operation's effect on disk.
+        seen_copy_keys: set,
+    ) -> "DirGroup | None":
+        """Drop the copy targets of this variant already covered by an earlier one.
 
-        Two operations with the same key copy the same sources to the same
-        destination, so all but one are redundant — and running them
-        concurrently makes ``shutil.copytree`` race against itself, which on
-        Windows raises WinError 32 (sharing violation). The key deliberately
-        includes the sources: operations writing *different* content to the
-        same destination are a spec conflict, not a duplicate, and must stay
-        visible to the output-write registry's conflict detection.
+        Deduplication is per copied directory (and per root-file batch), not
+        per dir-group: two dir-groups that merely *overlap* in one ``<subdir>``
+        resolving to the same destination must not both copy that subdir —
+        concurrent ``shutil.copytree`` calls on the same destination race,
+        which on Windows aborts the build with WinError 32 sharing violations
+        (issue #539). Each key deliberately includes the source: operations
+        writing *different* content to the same destination are a spec
+        conflict, not a duplicate, and must stay visible to the output-write
+        registry's conflict detection (``clm validate`` warns about them as
+        ``duplicate_dir_group_destination``).
+
+        Returns this dir-group with only the not-yet-covered copy targets
+        (``self`` when nothing was covered), or ``None`` when every target is
+        already covered and no operation is needed.
         """
-        return (
-            self.output_path(is_speaker, lang, output_root, skip_toplevel=skip_toplevel),
-            self.source_dirs,
-            self.relative_paths,
-            self.base_path,
-            self.recursive,
+        output_path = self.output_path(is_speaker, lang, output_root, skip_toplevel=skip_toplevel)
+
+        base_path = self.base_path
+        if base_path is not None:
+            root_key = ("root-files", output_path, base_path)
+            if root_key in seen_copy_keys:
+                base_path = None
+            else:
+                seen_copy_keys.add(root_key)
+
+        kept_sources: list[Path] = []
+        kept_relative: list[Path] = []
+        for source_dir, relative_path in zip(self.source_dirs, self.relative_paths, strict=True):
+            dir_key = ("dir", output_path / relative_path, source_dir, self.recursive)
+            if dir_key in seen_copy_keys:
+                continue
+            seen_copy_keys.add(dir_key)
+            kept_sources.append(source_dir)
+            kept_relative.append(relative_path)
+
+        if base_path is None and not kept_sources:
+            return None
+        if base_path == self.base_path and len(kept_sources) == len(self.source_dirs):
+            return self
+        return evolve(
+            self,
+            source_dirs=tuple(kept_sources),
+            relative_paths=tuple(kept_relative),
+            base_path=base_path,
         )
 
     async def get_processing_operation(
@@ -140,15 +171,17 @@ class DirGroup:
             skip_toplevel: If True, skip the "public"/"speaker" directory prefix.
                           Used for explicitly specified output targets.
             seen_copy_keys: Mutable set used to deduplicate copy operations
-                           that would write the same sources to the same
+                           that would write the same source to the same
                            destination. Pass one shared set across all
                            dir-groups of a build to also collapse duplicates
                            between dir-groups; if None, deduplication is
-                           limited to this call. Deduplication matters for
-                           explicit output targets, where the public/speaker
-                           split collapses to a single path and both
-                           is_speaker variants would otherwise copy the same
-                           tree concurrently.
+                           limited to this call. Deduplication is per copied
+                           directory, so it matters both for explicit output
+                           targets (the public/speaker split collapses to a
+                           single path and both is_speaker variants would
+                           otherwise copy the same tree concurrently) and for
+                           dir-groups that overlap in a single <subdir>
+                           (issue #539).
         """
         from clm.core.operations.copy_dir_group import CopyDirGroupOperation
         from clm.infrastructure.operation import Concurrently, NoOperation
@@ -165,16 +198,15 @@ class DirGroup:
         operations = []
         for lang in sorted(langs_to_copy):
             for is_speaker in speaker_options:
-                key = self._copy_key(is_speaker, lang, output_root, skip_toplevel)
-                if key in seen_copy_keys:
-                    logger.debug(
-                        f"Skipping duplicate dir-group copy of '{self.name[lang]}' to {key[0]}"
-                    )
+                remaining = self._without_seen_copies(
+                    is_speaker, lang, output_root, skip_toplevel, seen_copy_keys
+                )
+                if remaining is None:
+                    logger.debug(f"Skipping fully duplicate dir-group copy of '{self.name[lang]}'")
                     continue
-                seen_copy_keys.add(key)
                 operations.append(
                     CopyDirGroupOperation(
-                        dir_group=self,
+                        dir_group=remaining,
                         lang=lang,
                         is_speaker=is_speaker,
                         output_root=output_root,

@@ -267,6 +267,118 @@ class TestMissingDirGroup:
         assert result.findings == []
 
 
+class TestDuplicateDirGroupDestination:
+    """Two <dir-group>s resolving to the same output destination (issue #539)."""
+
+    SECTIONS = """\
+            <sections><section>
+              <name><de>S</de><en>S</en></name>
+              <topics><topic>intro</topic></topics>
+            </section></sections>"""
+
+    def _validate(self, tmp_path, dir_groups_xml: str, *, dirs: list[str]):
+        _make_topic(tmp_path, "module_100_basics", "topic_010_intro")
+        for d in dirs:
+            (tmp_path / d).mkdir(parents=True, exist_ok=True)
+        spec_file = _write_spec(tmp_path, self.SECTIONS, dir_groups_xml=dir_groups_xml)
+        return validate_spec(spec_file, tmp_path / "slides")
+
+    def test_same_subdir_in_two_same_named_groups_warns_redundant(self, tmp_path):
+        result = self._validate(
+            tmp_path,
+            """\
+            <dir-groups>
+              <dir-group>
+                <name>Code</name>
+                <path>examples</path>
+                <subdirs><subdir>Demo</subdir><subdir>Alpha</subdir></subdirs>
+              </dir-group>
+              <dir-group>
+                <name>Code</name>
+                <path>examples</path>
+                <subdirs><subdir>Demo</subdir><subdir>Beta</subdir></subdirs>
+              </dir-group>
+            </dir-groups>""",
+            dirs=["examples"],
+        )
+
+        dups = [f for f in result.findings if f.type == "duplicate_dir_group_destination"]
+        assert len(dups) == 1
+        f = dups[0]
+        assert f.severity == "warning"
+        assert "Code/Demo" in f.message
+        assert "copies it only once" in f.message
+
+    def test_same_dest_different_sources_warns_conflict(self, tmp_path):
+        result = self._validate(
+            tmp_path,
+            """\
+            <dir-groups>
+              <dir-group>
+                <name>Code</name>
+                <path>examples</path>
+                <subdirs><subdir>Demo</subdir></subdirs>
+              </dir-group>
+              <dir-group>
+                <name>Code</name>
+                <path>more-examples</path>
+                <subdirs><subdir>Demo</subdir></subdirs>
+              </dir-group>
+            </dir-groups>""",
+            dirs=["examples", "more-examples"],
+        )
+
+        dups = [f for f in result.findings if f.type == "duplicate_dir_group_destination"]
+        assert len(dups) == 1
+        f = dups[0]
+        assert f.severity == "warning"
+        assert "different sources" in f.message
+        assert "examples/Demo" in f.message
+        assert "more-examples/Demo" in f.message
+
+    def test_whole_dir_groups_with_same_name_warn(self, tmp_path):
+        result = self._validate(
+            tmp_path,
+            """\
+            <dir-groups>
+              <dir-group>
+                <name>Extras</name>
+                <path>div/extras</path>
+              </dir-group>
+              <dir-group>
+                <name>Extras</name>
+                <path>div/more-extras</path>
+              </dir-group>
+            </dir-groups>""",
+            dirs=["div/extras", "div/more-extras"],
+        )
+
+        dups = [f for f in result.findings if f.type == "duplicate_dir_group_destination"]
+        assert len(dups) == 1
+        assert "different sources" in dups[0].message
+
+    def test_distinct_destinations_are_clean(self, tmp_path):
+        result = self._validate(
+            tmp_path,
+            """\
+            <dir-groups>
+              <dir-group>
+                <name>Code</name>
+                <path>examples</path>
+                <subdirs><subdir>Demo</subdir></subdirs>
+              </dir-group>
+              <dir-group>
+                <name>Bonus</name>
+                <path>examples</path>
+                <subdirs><subdir>Demo</subdir></subdirs>
+              </dir-group>
+            </dir-groups>""",
+            dirs=["examples"],
+        )
+
+        assert result.findings == []
+
+
 class TestCombinedFindings:
     """Multiple issues in a single spec."""
 

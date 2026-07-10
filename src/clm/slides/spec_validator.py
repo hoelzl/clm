@@ -2,7 +2,8 @@
 
 Checks a course specification XML file for consistency against the
 filesystem (unresolved topics, ambiguous topics, duplicate references,
-missing dir-group paths) and returns structured findings.
+missing dir-group paths, dir-group destination collisions) and returns
+structured findings.
 """
 
 from __future__ import annotations
@@ -76,6 +77,7 @@ def validate_spec(
     - Ambiguous topics (same ID in multiple modules)
     - Duplicate topic references within the spec
     - Missing dir-group paths
+    - Dir-group destination collisions (issue #539)
     - Empty sections
     - ``<include>`` source missing / shadowed / inside a topic dir
     - ``<include>`` dependencies (info) and section-level inheritance (info)
@@ -287,6 +289,9 @@ def validate_spec(
                 )
             )
 
+    # Dir-group destination collisions (issue #539).
+    _validate_dir_group_destinations(spec=spec, findings=findings)
+
     # <include> checks (see docs/claude/design/shared-source-includes-and-output-dedup.md).
     _validate_includes(
         spec=spec,
@@ -364,6 +369,78 @@ def _validate_tasks(
                         message=f"Task '{task.name}', step {i}: {error}",
                     )
                 )
+
+
+def _validate_dir_group_destinations(
+    *,
+    spec: CourseSpec,
+    findings: list[SpecFinding],
+) -> None:
+    """Warn when several ``<dir-group>`` declarations write to one destination.
+
+    The build deduplicates *identical* copies (same source directory to the
+    same destination), so those are merely redundant declarations. Two
+    dir-groups copying *different* sources to the same destination, however,
+    merge their trees nondeterministically: files present in both sources
+    are written by concurrently racing copytrees (historically WinError 32
+    build aborts on Windows — issue #539) and the surviving content depends
+    on scheduling.
+
+    Destinations are compared per language (``<name>`` may be bilingual); a
+    collision that is identical for both languages is reported once.
+    """
+    # (dest, sorted sources) -> languages in which the collision occurs.
+    collisions: dict[tuple[str, tuple[str, ...]], set[str]] = {}
+
+    for lang in ("de", "en"):
+        dest_map: dict[str, list[str]] = {}
+        for dg in spec.dictionaries:
+            name = dg.name[lang]
+            if dg.subdirs:
+                for subdir in dg.subdirs:
+                    dest = f"{name}/{subdir}" if name else subdir
+                    dest_map.setdefault(dest, []).append(f"{dg.path}/{subdir}")
+            elif dg.recursive:
+                # Whole-directory copy: the destination is the group dir itself.
+                dest_map.setdefault(name or ".", []).append(dg.path)
+            # Non-recursive groups without subdirs copy no directories, only
+            # root files; whether those collide depends on the file names on
+            # disk, which is out of scope for a spec-level check.
+
+        for dest, sources in dest_map.items():
+            if len(sources) > 1:
+                collisions.setdefault((dest, tuple(sorted(sources))), set()).add(lang)
+
+    for (dest, colliding), langs in collisions.items():
+        lang_note = "" if langs == {"de", "en"} else f" (language: {next(iter(langs))})"
+        unique_sources = sorted(set(colliding))
+        if len(unique_sources) == 1:
+            message = (
+                f"Output destination '{dest}'{lang_note} is declared by "
+                f"{len(colliding)} <dir-group> entries copying the same source "
+                f"'{unique_sources[0]}'; the build copies it only once."
+            )
+            suggestion = "Remove the redundant <subdir> / <dir-group> declaration."
+        else:
+            message = (
+                f"Multiple <dir-group>s copy different sources "
+                f"({', '.join(unique_sources)}) to the same output destination "
+                f"'{dest}'{lang_note}; files present in more than one source "
+                f"are copied concurrently and the surviving content is "
+                f"nondeterministic."
+            )
+            suggestion = (
+                "Give the dir-groups distinct <name>s, or rename the "
+                "colliding <subdir>s so each destination has one source."
+            )
+        findings.append(
+            SpecFinding(
+                severity="warning",
+                type="duplicate_dir_group_destination",
+                message=message,
+                suggestion=suggestion,
+            )
+        )
 
 
 def _validate_subsections(

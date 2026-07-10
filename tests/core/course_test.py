@@ -314,6 +314,97 @@ async def test_dir_group_copy_deduped_across_calls_with_shared_keys(course_1_spe
     assert isinstance(second, NoOperation)
 
 
+async def test_dir_group_copy_dedup_is_per_destination_dir(course_1_spec, tmp_path):
+    """Two dir-groups overlapping in one <subdir> dedupe only the shared copy.
+
+    The issue #539 shape: the same example project is listed as a <subdir>
+    of two same-named dir-groups. The groups are not identical, so a
+    whole-group dedup key misses them, and the shared subdir used to be
+    copied twice concurrently — racing copytrees abort the build on
+    Windows with WinError 32.
+    """
+    from clm.core.dir_group import DirGroup
+
+    course = Course.from_spec(course_1_spec, DATA_DIR, tmp_path)
+    full = course.dir_groups[0]  # Code/Solutions: Example_1, Example_3
+    base = DirGroup(
+        name=full.name,
+        source_dirs=full.source_dirs[:1],
+        relative_paths=full.relative_paths[:1],
+        course=course,
+    )
+    seen: set = set()
+
+    first = await base.get_processing_operation(
+        output_root=tmp_path,
+        languages=frozenset({"de"}),
+        is_speaker_options=[False],
+        seen_copy_keys=seen,
+    )
+    # `full` shares Example_1 with `base` and adds Example_3.
+    second = await full.get_processing_operation(
+        output_root=tmp_path,
+        languages=frozenset({"de"}),
+        is_speaker_options=[False],
+        seen_copy_keys=seen,
+    )
+
+    # The first group is untouched; the second keeps only the subdir that
+    # is not already covered.
+    assert isinstance(first, Concurrently)
+    assert first.operations[0].dir_group is base
+    assert isinstance(second, Concurrently)
+    filtered = second.operations[0].dir_group
+    assert filtered.source_dirs == full.source_dirs[1:]
+    assert filtered.relative_paths == full.relative_paths[1:]
+
+    # Executing both operations still produces the complete merged tree.
+    async with PytestLocalOpsBackend() as backend:
+        async with TaskGroup() as tg:
+            tg.create_task(first.execute(backend))
+            tg.create_task(second.execute(backend))
+
+    out = tmp_path / "public" / "Mein Kurs-de" / "Code" / "Solutions"
+    assert (out / "Example_1" / "example-1.txt").is_file()
+    assert (out / "Example_3" / "example-3.txt").is_file()
+
+
+async def test_dir_group_copy_same_dest_different_source_not_deduped(course_1_spec, tmp_path):
+    """Different sources to the same destination are a conflict, not a duplicate.
+
+    They must stay visible to the output-write registry's conflict
+    detection, so the dedup key includes the source directory.
+    """
+    from clm.core.dir_group import DirGroup
+
+    course = Course.from_spec(course_1_spec, DATA_DIR, tmp_path)
+    base = course.dir_groups[0]
+    conflicting = DirGroup(
+        name=base.name,
+        source_dirs=(DATA_DIR / "code/other-solutions/Example_1",),
+        relative_paths=(base.relative_paths[0],),
+        course=course,
+    )
+    seen: set = set()
+
+    first = await base.get_processing_operation(
+        output_root=tmp_path,
+        languages=frozenset({"de"}),
+        is_speaker_options=[False],
+        seen_copy_keys=seen,
+    )
+    second = await conflicting.get_processing_operation(
+        output_root=tmp_path,
+        languages=frozenset({"de"}),
+        is_speaker_options=[False],
+        seen_copy_keys=seen,
+    )
+
+    assert isinstance(first, Concurrently)
+    assert isinstance(second, Concurrently)
+    assert second.operations[0].dir_group is conflicting
+
+
 async def test_count_stage_operations_returns_correct_counts(course_1_spec, tmp_path):
     """Test that count_stage_operations counts operations, not just files.
 
