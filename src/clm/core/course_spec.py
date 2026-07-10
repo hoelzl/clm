@@ -450,6 +450,49 @@ def element_text(element: ETree.Element, tag: str) -> str:
     return ""
 
 
+_MULTILANG_TAGS = frozenset({"de", "en"})
+
+
+def parse_multilang_element(element: ETree.Element | None, *, context: str) -> Text:
+    """Parse an element holding either a bilingual or a simple text value.
+
+    Spec elements like ``<name>`` accept two shapes:
+
+    - bilingual: ``<name><de>Beispiele</de><en>Examples</en></name>``
+    - simple text: ``<name>Examples</name>`` (used for both languages)
+
+    When only one of ``<de>``/``<en>`` is given, the other language falls
+    back to it — mirroring the simple form, where a single value serves
+    both languages. Any other child element, or non-whitespace text mixed
+    with ``<de>``/``<en>`` children, is a :class:`CourseSpecError`:
+    silently dropping it would change output locations without warning
+    (issue #605). A missing element parses as an empty ``Text``.
+    """
+    if element is None:
+        return Text(de="", en="")
+    children = list(element)
+    if not children:
+        return Text.from_string((element.text or "").strip())
+    unknown = sorted({child.tag for child in children} - _MULTILANG_TAGS)
+    if unknown:
+        raise CourseSpecError(
+            f"{context}: unsupported child element(s) "
+            f"{', '.join(f'<{tag}>' for tag in unknown)}. "
+            f"Expected <de>/<en> children or plain text."
+        )
+    stray_text = (element.text or "") + "".join(child.tail or "" for child in children)
+    if stray_text.strip():
+        raise CourseSpecError(
+            f"{context}: cannot mix text ({stray_text.strip()!r}) with "
+            f"<de>/<en> child elements. Use either plain text or "
+            f"<de>/<en> children, not both."
+        )
+    values = {child.tag: (child.text or "") for child in children}
+    de = values.get("de", values.get("en", ""))
+    en = values.get("en", values.get("de", ""))
+    return Text(de=de, en=en)
+
+
 def _parse_bool_attr(value: str | None, *, attr_name: str) -> bool:
     if value is None:
         return False
@@ -860,7 +903,7 @@ class DirGroupSpec:
         topic_id: str | None = None,
     ):
         subdirs = find_subdirs(element)
-        name = Text.from_string(element_text(element, "name"))
+        name = parse_multilang_element(element.find("name"), context="<dir-group>/<name>")
         include_root_files = element.get("include-root-files", "").lower() == "true"
         recursive = element.get("recursive", "").lower() != "false"
         return cls(
@@ -2572,10 +2615,10 @@ class CourseSpec:
         # Parse author (simple text element, defaults handled by attrs)
         author = element_text(root, "author") or "Dr. Matthias Hölzl"
 
-        # Parse organization (bilingual element)
+        # Parse organization (bilingual or simple text element)
         org_elem = root.find("organization")
         if org_elem is not None:
-            organization = Text(**{child.tag: (child.text or "") for child in org_elem})
+            organization = parse_multilang_element(org_elem, context="<organization>")
         else:
             organization = Text(de="Coding-Akademie München", en="Coding-Academy Munich")
 
@@ -2601,7 +2644,4 @@ class CourseSpec:
 
 
 def parse_multilang(root: ETree.Element, tag: str) -> Text:
-    element = root.find(tag)
-    if element is None:
-        return Text(de="", en="")
-    return Text(**{child.tag: (child.text or "") for child in element})
+    return parse_multilang_element(root.find(tag), context=f"<{tag}>")

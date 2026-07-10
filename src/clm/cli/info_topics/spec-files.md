@@ -39,6 +39,13 @@ They use XML format and are typically named `course.xml`.
 
 ## Required Elements
 
+Bilingual elements (`<name>`, `<description>`, `<certificate>`,
+`<organization>`, section names, dir-group names) all follow the same
+**bilingual-or-simple** convention: either `<de>`/`<en>` children or
+plain text used for both languages. When only one of `<de>`/`<en>` is
+given, the other language falls back to it; any other child element (or
+text mixed with `<de>`/`<en>` children) is a spec error.
+
 ### `<name>`
 
 Bilingual course name with `<de>` and `<en>` children.
@@ -503,6 +510,18 @@ Copy additional directories (e.g., code examples) to output.
 | `<subdirs>` | No | Specific subdirectories to copy (omit to copy all) |
 | `include-root-files` | No | Also copy files from base path (default: `false`) |
 | `recursive` | No | Recurse into subdirectories (default: `true`) |
+
+`<name>` accepts both shapes of the bilingual-or-simple convention:
+
+```xml
+<name>Examples</name>                            <!-- same name for both languages -->
+<name><de>Beispiele</de><en>Examples</en></name> <!-- per-language names -->
+```
+
+If only one of `<de>`/`<en>` is given, the other language falls back to
+it. Any other child element, or text mixed with `<de>`/`<en>` children,
+is a spec error (before CLM {version}, such names were silently read as
+empty, dumping the group at the output root).
 
 #### Selective subdirectories with root files
 
