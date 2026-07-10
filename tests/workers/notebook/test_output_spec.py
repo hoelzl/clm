@@ -791,6 +791,27 @@ class TestPartialOutput:
         assert POST_WORKSHOP_TAG not in cells[3]["metadata"]["tags"]
         assert POST_WORKSHOP_TAG not in cells[4]["metadata"]["tags"]
 
+    def test_annotate_cells_respects_end_workshop_on_code_cell(self, make_cell):
+        """``end-workshop`` on a code cell closes the workshop (issue #362) —
+        many workshops end with a final solution or assertion code cell. The
+        close stays exclusive: the tagged code cell itself is OUTSIDE the
+        workshop (rendered completed, not blanked — identical output when it
+        carries ``keep``, as the issue's assertion cells do)."""
+        cells = [
+            make_cell("markdown", ["subslide", "workshop"], "## Workshop"),
+            make_cell("code", [], "answer = ..."),
+            make_cell("code", ["keep", "end-workshop"], "assert answer == 42"),
+            make_cell("markdown", ["slide"], "# Next topic"),
+            make_cell("code", [], "more_demo = 1"),
+        ]
+        PartialOutput().annotate_cells(cells)
+        assert POST_WORKSHOP_TAG in cells[0]["metadata"]["tags"]
+        assert POST_WORKSHOP_TAG in cells[1]["metadata"]["tags"]
+        # The end-workshop code cell itself is OUTSIDE the workshop.
+        assert POST_WORKSHOP_TAG not in cells[2]["metadata"]["tags"]
+        assert POST_WORKSHOP_TAG not in cells[3]["metadata"]["tags"]
+        assert POST_WORKSHOP_TAG not in cells[4]["metadata"]["tags"]
+
     def test_annotate_cells_handles_multiple_workshops(self, make_cell):
         """Two separate workshops with explicit ends — only their interiors
         get the synthetic tag; the cells in between are untouched."""

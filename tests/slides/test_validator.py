@@ -424,22 +424,42 @@ class TestCheckTags:
         tag_errors = [f for f in result.findings if "nrecognized" in f.message]
         assert tag_errors == []
 
-    def test_end_workshop_on_code_cell_warns(self, tmp_path):
-        """``end-workshop`` is markdown-only, so it warns on a code cell."""
+    def test_end_workshop_on_code_cell_is_valid(self, tmp_path):
+        """``end-workshop`` is valid on a code cell (issue #362) — many
+        workshops end with a final solution or assertion code cell. The
+        issue's exact repro must be warning-free."""
         p = _write_slide(
             tmp_path,
             "slides_end_ws_code.py",
             """\
-            # %% [markdown] lang="de" tags=["subslide", "workshop"]
+            # %% [markdown] lang="de" tags=["slide", "workshop"]
             # ## Workshop
 
+            # %% tags=["end-workshop"]
+            x = 42
+            """,
+        )
+        result = validate_file(p, checks=["tags"])
+        assert [f for f in result.findings if "end-workshop" in f.message] == []
+
+    def test_orphan_end_workshop_on_code_cell_warns(self, tmp_path):
+        """Now that code cells can close a workshop, an orphan
+        ``end-workshop`` code cell (no preceding workshop) gets the same
+        no-effect warning markdown cells always got."""
+        p = _write_slide(
+            tmp_path,
+            "slides_orphan_end_code.py",
+            """\
             # %% tags=["end-workshop"]
             x = 1
             """,
         )
         result = validate_file(p, checks=["tags"])
-        warnings = [f for f in result.findings if f.severity == "warning"]
-        assert any("end-workshop" in w.message and "code" in w.message for w in warnings)
+        warnings = [
+            w for w in result.findings if w.severity == "warning" and "end-workshop" in w.message
+        ]
+        assert len(warnings) == 1
+        assert "no preceding" in warnings[0].message
 
     def test_valid_start_completed_pair(self, tmp_path):
         p = _write_slide(

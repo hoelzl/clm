@@ -11,20 +11,24 @@ at one of:
 
 It ends — exclusively — at the first of:
 
-* the next markdown cell tagged ``end-workshop``,
+* the next cell of *any* type tagged ``end-workshop``,
 * the next workshop opener (a new workshop begins), or
 * end-of-notebook.
 
 The cell carrying ``end-workshop`` is therefore *outside* the workshop:
-trainers add the tag to the heading that starts the next non-workshop
-section. A workshop without a closing ``end-workshop`` extends to EOF, which
+trainers add the tag either to the heading that starts the next non-workshop
+section, or (issue #362) to the first cell after the exercise when the
+workshop ends mid-section — e.g. a final assertion code cell can carry it,
+at the cost of excluding *that* cell from the workshop (it renders completed
+rather than blanked, which for a ``keep``-tagged assertion is identical).
+A workshop without a closing ``end-workshop`` extends to EOF, which
 preserves the legacy single-workshop behaviour.
 
-Both opener forms and ``end-workshop`` are recognized only on markdown cells;
-the same tags or slide_ids on a code cell are ignored for boundary detection.
-The slide_id-prefix opener additionally requires a ``slide`` or ``subslide``
-tag so that voiceover / notes cells that share the announcement slide's id
-do not fragment the range.
+Both opener forms are recognized only on markdown cells; the same tags or
+slide_ids on a code cell never *open* a range. ``end-workshop`` closes a
+range from any cell type. The slide_id-prefix opener additionally requires
+a ``slide`` or ``subslide`` tag so that voiceover / notes cells that share
+the announcement slide's id do not fragment the range.
 """
 
 from __future__ import annotations
@@ -72,8 +76,6 @@ def find_workshop_ranges(cells: Sequence[_CellLike]) -> list[tuple[int, int]]:
     ranges: list[tuple[int, int]] = []
     open_start: int | None = None
     for i, cell in enumerate(cells):
-        if cell.cell_type != "markdown":
-            continue
         if _is_workshop_opener(cell):
             if open_start is not None:
                 ranges.append((open_start, i))

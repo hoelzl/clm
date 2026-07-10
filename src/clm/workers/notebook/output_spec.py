@@ -40,19 +40,19 @@ def find_workshop_ranges(cells: Iterable[Cell]) -> list[tuple[int, int]]:
     """Return ``[(start_inclusive, end_exclusive), ...]`` for each workshop.
 
     A workshop starts at a markdown cell tagged ``workshop`` and ends —
-    exclusively — at the next markdown cell tagged ``end-workshop`` or the
-    next ``workshop`` markdown cell, or at end-of-notebook. Shared between
-    the per-cell filter path (``PartialOutput.annotate_cells``) and the
-    Partial HTML cache-reuse post-processor in the notebook processor.
+    exclusively — at the next cell of *any* type tagged ``end-workshop``
+    (issue #362: many workshops end with a code cell), the next ``workshop``
+    markdown cell, or end-of-notebook. Only markdown cells open a range;
+    the cell carrying ``end-workshop`` is itself outside the workshop.
+    Shared between the per-cell filter path (``PartialOutput.annotate_cells``)
+    and the Partial HTML cache-reuse post-processor in the notebook processor.
     """
     cells_list = list(cells)
     ranges: list[tuple[int, int]] = []
     open_start: int | None = None
     for i, cell in enumerate(cells_list):
-        if cell.get("cell_type") != "markdown":
-            continue
         tags = cell.get("metadata", {}).get("tags", [])
-        if "workshop" in tags:
+        if cell.get("cell_type") == "markdown" and "workshop" in tags:
             if open_start is not None:
                 ranges.append((open_start, i))
             open_start = i
@@ -416,10 +416,11 @@ class PartialOutput(OutputSpec):
     The kind is intended for students to follow demonstrations with the
     instructor's worked code in place, while workshop exercises remain
     blank for them to complete. A workshop range starts at a markdown
-    cell tagged ``workshop`` and ends at the next ``end-workshop``
-    markdown cell (exclusive), the next ``workshop`` heading, or
-    end-of-notebook — whichever comes first. Cells inside any workshop
-    range are treated as code-along; everything else is completed.
+    cell tagged ``workshop`` and ends at the next ``end-workshop`` cell
+    of any type (exclusive — the tagged cell is outside the workshop),
+    the next ``workshop`` heading, or end-of-notebook — whichever comes
+    first. Cells inside any workshop range are treated as code-along;
+    everything else is completed.
     """
 
     def get_target_subdir_fragment(self) -> str:

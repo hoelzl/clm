@@ -417,20 +417,22 @@ def _check_tags(cells: list[Cell], file_path: str) -> list[Finding]:
     # ``lang`` attribute share a single bucket keyed by ``None``.
     pending_starts: dict[str | None, Cell] = {}
 
-    # Flag orphan ``end-workshop`` markdown cells that appear BEFORE any
-    # ``workshop`` heading in the file — those have no effect on the
-    # partition and almost always indicate a typo. After at least one
-    # workshop has been opened, additional ``end-workshop`` markers are
-    # tolerated: bilingual slide pairs typically carry the tag on both the
-    # DE and EN heading cells, and the second one (after the first has
-    # already closed the workshop) is harmless.
+    # Flag orphan ``end-workshop`` cells (any cell type — issue #362 allows
+    # the tag on code cells too) that appear BEFORE any ``workshop`` heading
+    # in the file — those have no effect on the partition and almost always
+    # indicate a typo. Only markdown cells open a workshop, so only they set
+    # ``seen_workshop``. After at least one workshop has been opened,
+    # additional ``end-workshop`` markers are tolerated: bilingual slide
+    # pairs typically carry the tag on both the DE and EN heading cells, and
+    # the second one (after the first has already closed the workshop) is
+    # harmless.
     seen_workshop = False
     for cell in cells:
         meta = cell.metadata
-        if meta.is_j2 or meta.cell_type != "markdown":
+        if meta.is_j2:
             continue
         cell_tags = meta.tags
-        if "workshop" in cell_tags:
+        if meta.cell_type == "markdown" and "workshop" in cell_tags:
             seen_workshop = True
         elif "end-workshop" in cell_tags and not seen_workshop:
             findings.append(
