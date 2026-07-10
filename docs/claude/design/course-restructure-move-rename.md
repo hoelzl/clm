@@ -179,6 +179,29 @@ Options:
 - `--report-only` / `--json` — dry-run, same contract as `rename-id`.
 - `--no-cache-migrate` — skip the DB rewrite (accept a one-time re-execution).
 
+**Validation requirements (issue #589)** — hard guards the command MUST
+implement, found in adversarial review after Phase-1 core landed:
+
+1. **Only rename canonical `topic_<digits>_<suffix>` dirs.**
+   `simplify_ordered_name` blindly drops the first two `_`-parts, so a
+   non-canonical dir like `topic_extras_bonus` has id `bonus`; renumbering it
+   to `topic_045_extras_bonus` silently *changes its id* to `extras_bonus`,
+   breaking spec refs, `clm:` links, and every id-keyed store. Match against
+   `topic_(\d+)_(.+)` and loudly skip (or refuse on) anything else.
+2. **Leave orphan topic dirs untouched** (on disk, not referenced by the
+   spec), and validate that no newly assigned name collides with one.
+3. **Say which spec defines the order.** Repos carry several specs that may
+   reference the same module in different orders (outputs are unaffected —
+   ordering is per-spec — but the report should name the ordering spec and
+   ideally warn when another spec disagrees).
+4. **Refuse (or `--force`) while a build is active** — the migrator's "run
+   while no build is active" contract is not self-enforcing, and the
+   filesystem `git mv` mid-build is the bigger hazard.
+5. **Resolve `clm_cache.db` exactly like the build does**
+   (`--cache-db-path` / `CLM_CACHE_DB_PATH` / config), never an assumed
+   project-root default — migrating the wrong DB is a silent no-op followed
+   by a full re-execution.
+
 ### 5.2 `clm course mv` — general single move/rename
 
 ```
@@ -361,6 +384,14 @@ core of every later phase) right in isolation.
   interchangeable payload); `dry_run` does the identical work then rolls back so
   its counts equal a real run's.
 - `migrate_dir_rename(...)` — the `plan` + `migrate` convenience.
+- **Hardened post-merge (issues #587/#588):** the rewrite is two-phase
+  (park on sentinels, then land), making it order-independent and safe for
+  *overlapping* mapping sets — chains (`a→b, b→c`) and swaps (`a→b, b→a`) —
+  which the later phases (`--slides`, `mv`, `restructure`) can legitimately
+  produce; and `processing_issues.issue_json`'s embedded `file_path` is
+  re-pointed along with the column, so cached errors/warnings stop naming
+  the pre-rename path on replay. (The pickled `Result.input_file` is
+  verified inert on the replay path and deliberately left alone.)
 
 The tests seed rows through the *real* cache managers and assert a live cache
 **hit at the new path / miss at the old** after migration — verifying the
