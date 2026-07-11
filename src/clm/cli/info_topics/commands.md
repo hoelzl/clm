@@ -1422,6 +1422,15 @@ workshop tag insertion, DE/EN interleaving, slide ID auto-generation, **cell spa
 (`cell_spacing`), **preamble-code wrapping** (`preamble_code`), and — since CLM
 {version} — **placeholder-start demotion** (`placeholder_start`).
 
+Since CLM {version} the `interleaving` operation (within-file DE/EN adjacency
+reorder plus the `count_mismatch`/`similarity_failure` review items) is
+**skipped on language-split halves** (`*.de.py` / `*.en.py`) — a
+single-language file can never satisfy a within-file DE/EN correspondence
+check, so every half produced a guaranteed `count_mismatch` review and exit 2
+(issue #611). The other operations still run; cross-half DE/EN parity is
+owned by `clm slides sync verify`. This makes `normalize --dry-run` usable as
+a scripted drift gate on split decks (exit 0 when clean).
+
 The `placeholder_start` operation (since CLM {version}) fixes a recurring
 workshop mis-tag (issue #233): a code cell tagged `start` whose entire body is
 a solution placeholder (`# Your solution here`, `pass`, `...`) followed by a
