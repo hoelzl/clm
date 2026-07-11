@@ -132,6 +132,89 @@ class TestBuildOnlySectionsCli:
         assert result.exit_code != 0
 
 
+class TestOnlySectionsRepeatedFlags:
+    """Regression tests for issue #616.
+
+    ``--only-sections`` was a plain single-value option, so repeated
+    flags were accepted but silently kept only the *last* occurrence —
+    a green build that never built the earlier sections. The option is
+    now ``multiple=True`` and all occurrences accumulate.
+
+    These tests capture the token list that actually reaches the build
+    config by stubbing ``initialize_paths_and_course`` (the first
+    consumer of the parsed config) — exactly the boundary where the
+    earlier occurrences used to vanish.
+    """
+
+    def _invoke_capturing_selection(self, tmp_path, monkeypatch, args):
+        spec_file = tmp_path / "spec.xml"
+        spec_file.write_text(THREE_SECTION_XML)
+        captured: dict[str, list[str] | None] = {}
+
+        def fake_initialize(config):
+            captured["selected_sections"] = config.selected_sections
+            raise SystemExit(0)
+
+        monkeypatch.setattr(
+            "clm.cli.commands.build.initialize_paths_and_course",
+            fake_initialize,
+        )
+        runner = CliRunner()
+        result = runner.invoke(cli, ["build", str(spec_file), *args])
+        return result, captured
+
+    def test_repeated_flags_accumulate(self, tmp_path, monkeypatch):
+        """Two occurrences → both token lists survive, in order."""
+        result, captured = self._invoke_capturing_selection(
+            tmp_path,
+            monkeypatch,
+            ["--only-sections", "w01", "--only-sections", "w03"],
+        )
+        assert result.exit_code == 0
+        assert captured["selected_sections"] == ["w01", "w03"]
+
+    def test_repeated_flags_mix_with_comma_form(self, tmp_path, monkeypatch):
+        """Comma-separated values inside each occurrence still split."""
+        result, captured = self._invoke_capturing_selection(
+            tmp_path,
+            monkeypatch,
+            ["--only-sections", "w01,w02", "--only-sections", "w03"],
+        )
+        assert result.exit_code == 0
+        assert captured["selected_sections"] == ["w01", "w02", "w03"]
+
+    def test_single_flag_comma_form_unchanged(self, tmp_path, monkeypatch):
+        """The documented single-flag comma form keeps working."""
+        result, captured = self._invoke_capturing_selection(
+            tmp_path,
+            monkeypatch,
+            ["--only-sections", "w01,w02"],
+        )
+        assert result.exit_code == 0
+        assert captured["selected_sections"] == ["w01", "w02"]
+
+    def test_no_flag_means_full_build(self, tmp_path, monkeypatch):
+        """Without the flag the config carries no section selection
+        (``multiple=True`` yields ``()``, which must not be mistaken
+        for an empty selection error)."""
+        result, captured = self._invoke_capturing_selection(tmp_path, monkeypatch, [])
+        assert result.exit_code == 0
+        assert captured["selected_sections"] is None
+
+    def test_repeated_flags_with_empty_occurrence_rejected(self, tmp_path, monkeypatch):
+        """An empty value in *any* occurrence is an error, not a silent
+        partial selection."""
+        result, captured = self._invoke_capturing_selection(
+            tmp_path,
+            monkeypatch,
+            ["--only-sections", "w01", "--only-sections", ""],
+        )
+        assert result.exit_code != 0
+        assert "selected_sections" not in captured
+        combined = result.output + (str(result.exception) if result.exception else "")
+        assert "empty or whitespace-only value" in combined
+
+
 # ---------------------------------------------------------------------------
 # Course.from_spec + section_selection — the filter cascade
 # ---------------------------------------------------------------------------
