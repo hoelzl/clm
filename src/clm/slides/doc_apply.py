@@ -225,6 +225,85 @@ def _validate_body(body: str, comment_token: str) -> str | None:
     return None
 
 
+def _is_macro_cell(cell: SideCell) -> bool:
+    """A single-line j2 cell (e.g. the ``id:title`` header macro).
+
+    Its j2 line is simultaneously the cell's boundary AND its whole content,
+    so the generic body guards/writer cannot apply: any valid replacement
+    text *is* a boundary line, and a "body" written after ``lines[0]`` would
+    be a raw appended line, not a title change (issue #609).
+    """
+    return cell.cell_type == "j2" and all(line == "" for line in cell.lines[1:])
+
+
+_MACRO_QUOTED_ARG_RE = re.compile(r'"[^"]*"')
+
+
+def _macro_header_from_body(cell: SideCell, body: str, comment_token: str, *, bare_ok: bool) -> str:
+    """The replacement j2 line for a macro cell, from a decision ``body``.
+
+    Accepts the full j2 line verbatim (``# {{ header_de("...") }}``) or —
+    when ``bare_ok`` and the existing line carries a quoted argument — the
+    bare replacement text, which is spliced into that argument. ``bare_ok``
+    is off for the create-a-new-cell paths (translate_new,
+    remove_localized_side): there the template line is derived from the
+    *other* side, so splicing bare text would silently keep the wrong
+    language's macro name.
+    """
+    line = body.rstrip("\n")
+    if not line.strip():
+        raise _ItemError("the answer body is empty")
+    if "\n" in line:
+        raise _ItemError(
+            "this member is a single-line j2 macro cell — supply just the one "
+            f"replacement line ('{comment_token} {{{{ ... }}}}') or the bare "
+            "replacement text for its quoted argument"
+        )
+    if line.startswith(comment_token + " %%"):
+        raise _ItemError(
+            f"a '{comment_token} %%' delimiter cannot replace a j2 macro line — "
+            "supply the full j2 line or the bare replacement text"
+        )
+    if is_cell_boundary(line, comment_token):
+        return line
+    if not bare_ok:
+        raise _ItemError(
+            "this answer mints a new j2 macro cell — supply the full "
+            f"'{comment_token} {{{{ ... }}}}' line (bare text cannot name the "
+            "macro to wrap it in)"
+        )
+    if '"' in line:
+        raise _ItemError(
+            "bare replacement text for a j2 macro argument cannot contain '\"' — "
+            "supply the full j2 line instead"
+        )
+    header, n = _MACRO_QUOTED_ARG_RE.subn(lambda _m: f'"{line}"', cell.header, count=1)
+    if n == 0:
+        raise _ItemError(
+            "the existing j2 macro line has no quoted argument to replace — "
+            "supply the full j2 line instead"
+        )
+    return header
+
+
+def _replacement_lines(
+    cell: SideCell, body: str, comment_token: str, *, bare_ok: bool = True
+) -> tuple[str, ...]:
+    """Validated replacement ``lines`` for one target cell from a ``body``.
+
+    Normal cells keep their header line and take the body below it (after
+    the smuggling guards); single-line j2 macro cells replace the j2 line
+    itself (issue #609 — see :func:`_macro_header_from_body`).
+    """
+    if _is_macro_cell(cell):
+        header = _macro_header_from_body(cell, body, comment_token, bare_ok=bare_ok)
+        return (header, *cell.lines[1:])
+    error = _validate_body(body, comment_token)
+    if error:
+        raise _ItemError(error)
+    return _replace_body(cell, body)
+
+
 # ---------------------------------------------------------------------------
 # Results
 # ---------------------------------------------------------------------------
@@ -994,9 +1073,13 @@ def _execute_decision(
                 f"'side' is only meaningful on a two-sided verify_cold body answer, "
                 f"not on '{item.action}' (which derives its target side itself)"
             )
-        error = _validate_body(decision.body, comment_token)
-        if error:
-            raise _ItemError(error)
+        # A j2-kind member may be a single-line macro cell whose only valid
+        # replacement text IS a boundary line — its validation is
+        # target-aware and lives in _replacement_lines (issue #609).
+        if not any(h is not None and h.kind == "j2" for h in (item.member, item.twin)):
+            error = _validate_body(decision.body, comment_token)
+            if error:
+                raise _ItemError(error)
         _apply_body_decision(ex, item, decision.body, side=decision.side)
         return
     choice = decision.choice or ""
@@ -1041,12 +1124,18 @@ def _apply_body_decision(
         cell = holder.side(target) if holder is not None else None
         if holder is None or cell is None:
             raise _ItemError(f"the {target} side of {item.key} is missing")
-        ex.set_side(holder, target, evolve(cell, lines=_replace_body(cell, body)))
+        ex.set_side(
+            holder, target, evolve(cell, lines=_replacement_lines(cell, body, ex.comment_token))
+        )
         return
     if item.action == "translate_edit":
         target = _decision_target_side(item)
         twin_member, twin_cell = ex._locate_twin(item, target)
-        ex.set_side(twin_member, target, evolve(twin_cell, lines=_replace_body(twin_cell, body)))
+        ex.set_side(
+            twin_member,
+            target,
+            evolve(twin_cell, lines=_replacement_lines(twin_cell, body, ex.comment_token)),
+        )
         return
     if item.action == "translate_new":
         if member is None:
@@ -1068,9 +1157,10 @@ def _apply_body_decision(
         header = (
             swap_lang(source_cell.header, target) if source_cell.lang_attr else (source_cell.header)
         )
+        template = evolve(source_cell, lines=(header, *source_cell.lines[1:]))
         new_cell = evolve(
             source_cell,
-            lines=_replace_body(evolve(source_cell, lines=(header, *source_cell.lines[1:])), body),
+            lines=_replacement_lines(template, body, ex.comment_token, bare_ok=False),
             lang_attr=target if source_cell.lang_attr else None,
         )
         ex.insert_mirrored(member, source, target, source_cell.part, new_cell)
@@ -1089,15 +1179,26 @@ def _apply_body_decision(
                 raise _ItemError(f"the shape of {item.key} no longer holds — re-run report")
             header = swap_lang(source_cell.header, gone)
             base = evolve(source_cell, lines=(header, *source_cell.lines[1:]))
-            new_cell = evolve(base, lines=_replace_body(base, body), lang_attr=gone)
+            new_cell = evolve(
+                base,
+                lines=_replacement_lines(base, body, ex.comment_token, bare_ok=False),
+                lang_attr=gone,
+            )
             ex.insert_mirrored(member, surviving, gone, source_cell.part, new_cell)
             return
+        # Compute every side's replacement before the first mutation: a failed
+        # item must be a strict no-op (never leave one side rewritten).
+        updates: list[tuple[Member, Lang, SideCell]] = []
         for lang in _SIDES:
             holder = ex._holder(item, lang)
             cell = holder.side(lang) if holder is not None else None
             if holder is None or cell is None:
                 raise _ItemError(f"the {lang} side of {item.key} is missing")
-            ex.set_side(holder, lang, evolve(cell, lines=_replace_body(cell, body)))
+            updates.append(
+                (holder, lang, evolve(cell, lines=_replacement_lines(cell, body, ex.comment_token)))
+            )
+        for holder, lang, new_cell in updates:
+            ex.set_side(holder, lang, new_cell)
         return
     raise _ItemError(f"'{item.action}' does not accept a body answer")
 
