@@ -12,13 +12,17 @@ jobs:
   # test/lint/docker pipeline. Docs-only changes (design notes, READMEs,
   # changelog fragments) skip the expensive jobs to save CI minutes.
   #
-  # IMPORTANT: "Test on Python 3.12", "Test on Python 3.13" and
+  # IMPORTANT: the six "Test on Python 3.1x (suite)" jobs and
   # "Lint and type check" are *required* status checks (see the "Require CI
   # green" ruleset). A required check that never reports leaves the PR stuck
   # "Expected — waiting for status". So those jobs must always RUN and report
   # success — we gate their individual steps on ``needs.changes.outputs.code``
   # rather than skipping the whole job. The non-required docker job may be
   # skipped wholesale.
+  #
+  # Required checks are matched by job NAME, so renaming a test job (or
+  # changing the matrix dimensions) requires updating the ruleset in the same
+  # breath (issue #559 landed the python-version × suite split this way).
   #
   # The doc-only globs are deliberately narrow: ``src/clm/cli/info_topics/*.md``
   # and other markdown shipped under ``src/`` are covered by tests, so a blanket
@@ -55,7 +59,10 @@ jobs:
               - '!*.md'
 
   test:
-    name: Test on Python ${{ matrix.python-version }}
+    # The suites run as parallel jobs instead of sequential steps (issue #559):
+    # per-job setup is ~40 s with warm caches, so the split costs ~3 machine-
+    # minutes and cuts the test wall clock from ~7 to ~4 minutes.
+    name: Test on Python ${{ matrix.python-version }} (${{ matrix.suite }})
     needs: changes
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -63,6 +70,7 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.12", "3.13"]
+        suite: [unit, integration, e2e]
 
     steps:
     - name: Checkout code
@@ -162,23 +170,25 @@ jobs:
         git config --global user.email "ci@github.actions"
         git config --global user.name "GitHub Actions CI"
 
+    # One suite per job; each 3.12 job uploads its own coverage report and
+    # Codecov merges the uploads per commit (no --cov-append stitching).
     - name: Run unit tests
-      if: needs.changes.outputs.code == 'true'
+      if: needs.changes.outputs.code == 'true' && matrix.suite == 'unit'
       run: |
         uv run --no-sync pytest -v -m "not slow and not integration and not e2e and not docker" --timeout=120 --cov=src/clm --cov-report=xml --cov-report=term
 
     - name: Run integration tests
-      if: needs.changes.outputs.code == 'true'
+      if: needs.changes.outputs.code == 'true' && matrix.suite == 'integration'
       run: |
-        uv run --no-sync pytest -v -m "integration and not docker and not slow" --timeout=240 --log-cli-level=INFO --cov=src/clm --cov-append --cov-report=xml --cov-report=term
+        uv run --no-sync pytest -v -m "integration and not docker and not slow" --timeout=240 --log-cli-level=INFO --cov=src/clm --cov-report=xml --cov-report=term
       env:
         CLM_ENABLE_TEST_LOGGING: "1"
         CLM_LOG_LEVEL: INFO
 
     - name: Run E2E tests
-      if: needs.changes.outputs.code == 'true'
+      if: needs.changes.outputs.code == 'true' && matrix.suite == 'e2e'
       run: |
-        uv run --no-sync pytest -v -m "e2e and not docker and not slow" --timeout=600 --log-cli-level=INFO --cov=src/clm --cov-append --cov-report=xml --cov-report=term
+        uv run --no-sync pytest -v -m "e2e and not docker and not slow" --timeout=600 --log-cli-level=INFO --cov=src/clm --cov-report=xml --cov-report=term
       env:
         CLM_E2E_TIMEOUT: 600  # 10 minutes timeout for E2E tests (allows multi-build tests)
         CLM_ENABLE_TEST_LOGGING: "1"
