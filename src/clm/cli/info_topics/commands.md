@@ -1955,7 +1955,11 @@ propagation. **Framed actions** (need a decision): `translate_edit`,
 `translate_new`, `verify_translation`, `conflict_shared`,
 `pending_divergence`, `remove_vs_edit`, `unify_choose_body`, `order_decision`,
 `stamp_vs_new` (a suspected id-stamp of a vanished positional cell — answer
-`treat_as_new` to grow the twin / mirror the removal),
+`treat_as_new` to grow the twin / mirror the removal), `conflict_tags` (the
+twins' tag sets diverged with no attributable direction — answer `de`/`en` to
+mirror **only that side's tag set** onto the twin, bodies untouched; while it
+is framed it suppresses the member's other rows — body, layout, and owner —
+which re-frame on the next report once the tags are reconciled),
 `ambiguous_alignment`, `verify_cold`, and friends. Every JSON item carries an
 `answers` list — the decision shapes `apply --decisions` accepts for it, `[]`
 on mechanical items (nothing to answer) — plus the full current cell bytes
@@ -1986,14 +1990,22 @@ Each answer is validated individually — a body smuggling a cell delimiter, a
 wrong choice, a `side` where it is meaningless, or a stale handle is rejected
 with a reason while the valid answers still land. The mutated bundle is
 re-parsed before anything touches disk and written atomically (≤4 files);
-every landed item is recorded into the ledger, **gated on the structural
-verify** (a pair failing verify keeps its file writes — review with
-`git diff` — but records nothing). `--member KEY` limits the pass to the named
+landed items are recorded into the ledger **on fully resolved members only**,
+**gated on the structural verify** (a pair failing verify keeps its file
+writes — review with `git diff` — but records nothing). A landed row on a
+member that still carries an unresolved sibling item — or an answered
+`conflict_tags`, which records nothing and defers the same-key recordings so
+suppressed body drift is never banked (a divergent-tags fork therefore banks
+on the *next* pass) — keeps its file mutation but defers its ledger write:
+record-only rows report status `deferred`, file-mutating rows stay `applied`
+with the reason suffix `(recording deferred: unresolved sibling item on this
+member)`. `--member KEY` limits the pass to the named
 handles; `--dry-run` executes and validates everything, writes nothing. Exit
 `0` all-applied / `1` residue / `2` error. Needs no API key; single deck only
 (run `report` over a directory to find work). The `--json` result carries
-`counts` (`applied` / `recorded` / `pending` / `rejected` / `failed` /
-`skipped`), per-item `items[].status` + `reason`, `ledger_recorded`, and
+`counts` (`applied` / `recorded` / `deferred` / `pending` / `rejected` /
+`failed` / `skipped`), per-item `items[].status` + `reason`,
+`ledger_recorded`, and
 `verify_violations`; rejected decisions are additionally echoed to stderr in
 both output modes. Full envelope example: `clm info sync-agents`.
 
@@ -2008,7 +2020,9 @@ nothing**. Confirms the pair is a valid split: it unifies back into one
 bilingual source (byte-identical shared cells, matching header, clean
 alignment), the `de_id == en_id` symmetry holds, and no `(slide_id, role)`
 key is duplicated within a half; warns (never fails) on an id'd cell dropped
-vs git `HEAD`. Exit `0` = structurally sound, `2` = corrupt. Answers *"did
+vs git `HEAD` and on a cross-side tag-parity mismatch (twin cells whose tag
+sets differ — tags are language-independent, and `report` frames the fix as a
+tag row). Exit `0` = structurally sound, `2` = corrupt. Answers *"did
 this edit corrupt the pair?"*, not *"is it in sync?"* — run it in CI freely.
 The same checks gate every ledger write (`record`, and `apply`'s ledger
 updates), so a corrupt pair can never be recorded as trusted.

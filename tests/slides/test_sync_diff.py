@@ -12,6 +12,7 @@ individually so a classification regression names the broken row.
 
 from __future__ import annotations
 
+import attrs
 import pytest
 
 from clm.slides.bilingual_doc import BilingualDeck
@@ -1039,3 +1040,214 @@ class TestAdversarialReviewRegressions:
         diff = _diff(base, de.replace("x = 1", "x = 2"), en)
         item = _only_item(diff)
         assert item.action == "propagate_shared_edit"
+
+
+class TestTagParity:
+    """Cross-side tag parity as an orthogonal aspect row (issue #615).
+
+    Tags are language-independent and mirror across the twins (§3.1); the
+    differ checks the pair invariant on localized members (and headers)
+    regardless of body drift, instead of only in the narrow bodies-at-base
+    states that let #615's one-sided tag edit vanish into the body row.
+    """
+
+    DE_M = '# %% [markdown] lang="de" slide_id="s0-m"'
+    EN_M = '# %% [markdown] lang="en" slide_id="s0-m"'
+
+    def test_615_tag_edit_plus_body_drift_coemits_mirror_and_verify(self):
+        """The #615 shape: both bodies off base + a one-sided DE tag edit
+        must frame BOTH aspects — never fold the tag delta into the body
+        row where confirm would bank the divergence."""
+        base = _snapshot(DE0, EN0)
+        de = DE0.replace(self.DE_M, self.DE_M.replace(" slide_id", ' tags=["notes"] slide_id'))
+        de = de.replace("# DE Text", "# DE Text v2")
+        en = EN0.replace("# EN text", "# EN text v2")
+        diff = _diff(base, de, en)
+        assert {(i.key, i.action) for i in diff.items} == {
+            ("id:s0-m", "mirror_tags"),
+            ("id:s0-m", "verify_translation"),
+        }, [(i.key, i.action) for i in diff.items]
+        mirror = next(i for i in diff.items if i.action == "mirror_tags")
+        assert (mirror.outcome, mirror.direction, mirror.side) == ("mechanical", "de_to_en", "de")
+
+    def test_baseline_carried_tag_divergence_frames_conflict_tags(self):
+        """The post-#615-damage state: the ledger itself carries
+        de_tags != en_tags and nothing moved — never in_sync again."""
+        de = DE0.replace(self.DE_M, self.DE_M.replace(" slide_id", ' tags=["notes"] slide_id'))
+        base = _snapshot(de, EN0)  # baseline banks the divergence
+        item = _only_item(_diff(base, de, EN0))  # unchanged input
+        assert (item.outcome, item.action) == ("conflict", "conflict_tags")
+        assert item.direction == "none"
+        assert item.key == "id:s0-m"
+
+    def test_both_sides_tags_moved_differently_is_conflict_tags_not_shared(self):
+        """S2 regression: conflict_shared's propagate/body answers copy
+        whole cells — body-destroying on a localized pair. The framed tag
+        row must be conflict_tags."""
+        base = _snapshot(DE0, EN0)
+        de = DE0.replace(self.DE_M, self.DE_M.replace(" slide_id", ' tags=["notes"] slide_id'))
+        en = EN0.replace(self.EN_M, self.EN_M.replace(" slide_id", ' tags=["alt"] slide_id'))
+        item = _only_item(_diff(base, de, en))
+        assert (item.outcome, item.action) == ("conflict", "conflict_tags")
+        assert item.direction == "both"
+
+    def test_conflict_tags_suppresses_the_framed_body_row(self):
+        """Two framed rows on one key cannot both be answered (decision
+        documents are keyed by handle alone): the framed conflict_tags
+        suppresses verify_translation this pass; the body row re-frames
+        once the tags are reconciled."""
+        base = _snapshot(DE0, EN0)
+        de = DE0.replace(self.DE_M, self.DE_M.replace(" slide_id", ' tags=["notes"] slide_id'))
+        de = de.replace("# DE Text", "# DE Text v2")
+        en = EN0.replace(self.EN_M, self.EN_M.replace(" slide_id", ' tags=["alt"] slide_id'))
+        en = en.replace("# EN text", "# EN text v2")
+        item = _only_item(_diff(base, de, en))
+        assert (item.outcome, item.action) == ("conflict", "conflict_tags")
+        assert item.direction == "both"
+
+    def test_fork_with_one_sided_tag_move_coemits_mirror_tags(self):
+        """record_fork legitimizes cross-side bytes as a trusted baseline —
+        a one-sided tag move off the shared base is still attributable at
+        fork time and mirrors mechanically alongside the fork record."""
+        base = _snapshot(DE0, EN0)
+        de = DE0.replace(
+            '# %% tags=["keep"]\ny = 2', '# %% lang="de" tags=["alt"] slide_id="y-cell"\ny = 2'
+        )
+        en = EN0.replace(
+            '# %% tags=["keep"]\ny = 2', '# %% lang="en" tags=["keep"] slide_id="y-cell"\ny = 2'
+        )
+        diff = _diff(base, de, en)
+        assert {(i.key, i.action) for i in diff.items} == {
+            ("id:y-cell", "mirror_tags"),
+            ("id:y-cell", "record_fork"),
+        }, [(i.key, i.action) for i in diff.items]
+        mirror = next(i for i in diff.items if i.action == "mirror_tags")
+        assert (mirror.outcome, mirror.direction, mirror.side) == ("mechanical", "de_to_en", "de")
+
+    def test_fork_with_divergent_tag_moves_coemits_conflict_tags(self):
+        base = _snapshot(DE0, EN0)
+        de = DE0.replace(
+            '# %% tags=["keep"]\ny = 2', '# %% lang="de" tags=["alt"] slide_id="y-cell"\ny = 2'
+        )
+        en = EN0.replace(
+            '# %% tags=["keep"]\ny = 2', '# %% lang="en" tags=["other"] slide_id="y-cell"\ny = 2'
+        )
+        diff = _diff(base, de, en)
+        assert {(i.key, i.action) for i in diff.items} == {
+            ("id:y-cell", "conflict_tags"),
+            ("id:y-cell", "record_fork"),
+        }, [(i.key, i.action) for i in diff.items]
+        conflict = next(i for i in diff.items if i.action == "conflict_tags")
+        assert (conflict.outcome, conflict.direction) == ("conflict", "both")
+
+    def test_none_recorded_tags_count_as_moved_and_frame_conflict_tags(self):
+        """A ledger entry whose tag fields predate tag recording (None)
+        must never be trusted as a baseline: with a cross-side divergence
+        no direction is attributable — framed, not silently mechanical."""
+        base = _snapshot(DE0, EN0)
+        base.members["id:s0-m"] = attrs.evolve(base.members["id:s0-m"], de_tags=None, en_tags=None)
+        de = DE0.replace(self.DE_M, self.DE_M.replace(" slide_id", ' tags=["notes"] slide_id'))
+        item = _only_item(_diff(base, de, EN0))
+        assert (item.outcome, item.action) == ("conflict", "conflict_tags")
+
+    @pytest.mark.parametrize("none_side", ["de", "en"])
+    def test_one_sided_none_tag_base_frames_instead_of_wiping_the_recorded_side(
+        self, none_side: str
+    ):
+        """Adversarial-review regression: ONE side's recorded tag base is
+        None (e.g. a pending twin that landed without tags) while the other
+        side carries recorded tags. The None base counts as MOVED but must
+        never become a mechanical mirror SOURCE — that mirror would wipe
+        the recorded side's tags (notes/voiceover route audiences). No
+        trusted source — framed, direction none."""
+        de = (
+            DE0.replace(self.DE_M, self.DE_M.replace(" slide_id", ' tags=["notes"] slide_id'))
+            if none_side == "en"
+            else DE0
+        )
+        en = (
+            EN0.replace(self.EN_M, self.EN_M.replace(" slide_id", ' tags=["notes"] slide_id'))
+            if none_side == "de"
+            else EN0
+        )
+        assert 'tags=["notes"]' in de + en  # exactly one side carries recorded tags
+        base = _snapshot(de, en)
+        base.members["id:s0-m"] = attrs.evolve(
+            base.members["id:s0-m"], **{f"{none_side}_tags": None}
+        )
+        item = _only_item(_diff(base, de, en))  # unchanged input
+        assert (item.outcome, item.action) == ("conflict", "conflict_tags")
+        assert item.direction == "none"
+        assert "incomplete recorded tag baseline" in item.detail
+
+    HZ = '# %% [markdown] tags=["alt"]\n# HZ\n\n'
+
+    def test_pool_baseline_carried_tag_divergence_frames_conflict_tags(self):
+        """The pool analogue of the damaged #615 end state: a warm id-less
+        localized header slot whose RECORDED baseline itself carries
+        de_tags != en_tags must frame conflict_tags — never in_sync."""
+        de = _build(self.HZ, HEADER_DE, _slide("s0", "de", "Titel"))
+        en = _build(
+            self.HZ.replace('tags=["alt"]', 'tags=["beta"]'),
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+        )
+        base = _snapshot(de, en)  # the baseline banks the divergence
+        item = _only_item(_diff(base, de, en))  # unchanged input
+        assert (item.outcome, item.action) == ("conflict", "conflict_tags")
+        assert item.direction == "none"
+        assert item.key == "pos:~header/markdown/0"
+
+    def test_pool_both_sides_tags_moved_differently_frames_conflict_tags(self):
+        """Both sides of a warm id-less header slot moved their tags off
+        the recorded base, differently: no safe mirror source (P8)."""
+        de = _build(self.HZ, HEADER_DE, _slide("s0", "de", "Titel"))
+        en = _build(self.HZ, HEADER_EN, _slide("s0", "en", "Title"))
+        base = _snapshot(de, en)
+        de2 = de.replace('tags=["alt"]', 'tags=["beta"]')
+        en2 = en.replace('tags=["alt"]', 'tags=["gamma"]')
+        item = _only_item(_diff(base, de2, en2))
+        assert (item.outcome, item.action) == ("conflict", "conflict_tags")
+        assert item.direction == "both"
+        assert item.key == "pos:~header/markdown/0"
+
+    def test_tuple_order_only_difference_normalizes_without_conflict(self):
+        """Parity is judged on tag SETS: a one-sided reorder of the same
+        tags stays on the bodies-at-base normalization path."""
+        tagged_de = self.DE_M.replace(" slide_id", ' tags=["notes", "alt"] slide_id')
+        tagged_en = self.EN_M.replace(" slide_id", ' tags=["notes", "alt"] slide_id')
+        de = DE0.replace(self.DE_M, tagged_de)
+        en = EN0.replace(self.EN_M, tagged_en)
+        base = _snapshot(de, en)
+        de2 = de.replace('tags=["notes", "alt"]', 'tags=["alt", "notes"]')
+        item = _only_item(_diff(base, de2, en))
+        assert (item.outcome, item.action) == ("mechanical", "mirror_tags")
+        assert item.direction == "de_to_en"
+
+    def test_contrast_case_bodies_at_base_one_sided_tag_edit_mirrors(self):
+        """The issue's contrast case keeps its behavior: a tag edit with
+        both bodies at base is one mechanical mirror_tags, nothing else."""
+        base = _snapshot(DE0, EN0)
+        de = DE0.replace(self.DE_M, self.DE_M.replace(" slide_id", ' tags=["notes"] slide_id'))
+        item = _only_item(_diff(base, de, EN0))
+        assert (item.outcome, item.action) == ("mechanical", "mirror_tags")
+        assert (item.direction, item.side) == ("de_to_en", "de")
+
+    def test_pool_header_slot_tag_move_emits_pool_mirror_tags_row(self):
+        """The pool path (id-less localized per-language header slot): a
+        one-sided tag move splits the cross-side parse pairing, so the
+        slot's sides live on different members — the row carries the
+        DE-carrier as member and the EN-carrier as twin."""
+        hz = '# %% [markdown] tags=["notes"]\n# HZ\n\n'
+        de = _build(hz, HEADER_DE, _slide("s0", "de", "Titel"))
+        en = _build(hz, HEADER_EN, _slide("s0", "en", "Title"))
+        base = _snapshot(de, en)
+        de2 = de.replace('tags=["notes"]\n# HZ', 'tags=["voiceover"]\n# HZ')
+        item = _only_item(_diff(base, de2, en))
+        assert (item.outcome, item.action) == ("mechanical", "mirror_tags")
+        assert item.key == "pos:~header/markdown/0"
+        assert (item.direction, item.side) == ("de_to_en", "de")
+        assert item.member is not None and item.member.de is not None
+        assert item.twin is not None and item.twin.en is not None  # pair_twin convention
+        assert item.member.de.tags == ("voiceover",)
+        assert item.twin.en.tags == ("notes",)

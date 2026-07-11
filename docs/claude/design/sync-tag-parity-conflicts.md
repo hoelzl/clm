@@ -1,6 +1,8 @@
 # Sync v3: Tag Parity as a First-Class Diff Aspect (Issue #615)
 
-**Status**: designed, not yet implemented.
+**Status**: implemented (branch `claude/issue-615-tag-parity-design`). A
+post-implementation adversarial multi-agent review confirmed 11 findings, all
+closed — see "Post-implementation review" in §5.
 **Issue**: [#615](https://github.com/hoelzl/clm/issues/615) — `confirm` on a
 `verify_translation` item banks a one-sided tag edit; `report` goes silent
 while `validate` flags the pair.
@@ -110,7 +112,14 @@ difference, tags included, keeps them in `pending_divergence` /
 `conflict_shared`, and every shared resolution copies whole cells). Per-side
 "tags moved" means `base tags is None or current ≠ base` (a `None` base —
 e.g. the just-landed variant of the `verify_translation` "landed" branch —
-counts as moved, never as trusted).
+counts as moved, never as trusted). A `None` base counts as *moved* but is
+**never a mechanical mirror source**: when either side's recorded tag base is
+`None` and the cross-side sets differ, the "unmoved" side's only evidence
+would be the missing field itself, so the row frames `conflict_tags`
+(direction `none`, detail "cross-side tag divergence with an incomplete
+recorded tag baseline …") rather than mirroring — a never-recorded side must
+not silently wipe the recorded side's audience-routing tags
+(`notes`/`voiceover`).
 
 Decision table, evaluated only when the **current cross-side tag sets
 differ**:
@@ -176,6 +185,11 @@ shared tag set:
 - both halves moved differently → co-emit framed `conflict_tags`; F2's
   unresolved-key guard then defers `record_fork`'s `_upsert` automatically,
   so the divergent state is never banked and the member re-frames next pass.
+  This holds even when the `conflict_tags` is **answered in the same pass**:
+  an answered `conflict_tags` records nothing and marks its key unresolved
+  for recording purposes (F2), so the co-landed `record_fork` reports
+  `deferred` and the tag-consistent fork is banked on the **next** pass, not
+  the same one.
 
 ### F2 — apply/recording: never bless a member with unresolved rows
 
@@ -206,9 +220,16 @@ shared tag set:
 
 ### F3 — verify: add a `tag-parity` check
 
-Add a tag-parity violation kind to `sync_verify.structural_violations`
-(pairing by `(slide_id, role)` for id'd cells, positionally for the id-less
-remainder — mirroring the validator's approach), at **warning** severity:
+Add a tag-parity violation kind to `sync_verify.structural_violations`, with
+a **three-tier** pairing scheme (as shipped in
+`sync_verify.tag_parity_violations`): (1) id'd cells pair by
+`(slide_id, role)`, the engine's keying unit; (2) role-key orphans fall back
+to **per-`slide_id` positional** pairing — load-bearing, because the
+`notes`→`voiceover` edit *changes the derived role*, so a two-tier scheme
+would pair neither side and miss exactly the flagship #615 case; (3) the
+id-less remainder pairs positionally across the halves. A tier whose
+positional stream lengths differ is skipped silently (that is a structural
+asymmetry, not tag parity). Severity is **warning**:
 
 - `validate`'s finding is itself a warning; verify then *agrees* with validate
   (the issue's third expectation) instead of passing silently.
@@ -297,6 +318,48 @@ Attacks run against the design, and their resolutions:
   J2/preamble scopes: carry no tags. Validator remains the backstop for
   anything the member model cannot pair.
 
+### Post-implementation review
+
+An adversarial multi-agent review of the shipped implementation confirmed 11
+findings (5 code defects, the rest documentation); all are closed. The code
+findings, and how they resolved:
+
+1. **`None` baseline as mirror source** (`_check_tags`): a `None` recorded
+   tag base counted as MOVED, which made the *other* side look like a trusted
+   mirror source — mirroring from a never-recorded side would wipe recorded
+   audience-routing tags. Now, when either side's base tags are `None` and
+   the cross-side sets differ, the row frames `conflict_tags` (direction
+   `none`, "incomplete recorded tag baseline — no trusted mirror source").
+2. **Framed `conflict_tags` vs layout/owner rows** (`_classify_matched`):
+   the suppression rule originally spared the layout/owner aspect checks —
+   but a framed `conflict_owner` shares `conflict_tags`' exact `de`/`en`
+   vocabulary on the same handle, so one decision would silently execute
+   *both* mirrors. `_check_tags` now runs first, and a framed
+   `conflict_tags` suppresses the layout/owner checks too; they re-frame
+   next pass.
+3. **Pool residue mis-framing** (`_classify_pool_slot_localized`): the pass
+   after a `conflict_tags` answer leaves a pool slot with cross-side sets
+   EQUAL but a tag tuple off its recorded base — bodies at base. Without the
+   pool twin of `_tags_only_change`, that state mis-framed as
+   `translate_edit` and could never converge mechanically. A new
+   bodies-at-base residue branch emits `mirror_tags` (one mover) or
+   `record_tags` (identical both-sided move).
+4. **Answered `conflict_tags` did not defer same-key recordings**
+   (`apply_deck`): a co-landed same-key row (`conflict_owner`,
+   `record_fork`) would `_upsert` the fresh snapshot and bank the body drift
+   the suppression rule had hidden. An ANSWERED `conflict_tags` key now joins
+   `unresolved_keys` for the recording loop; its member/twin also feed
+   `_drop_unresolved_from_pools`, and `_sweep_migrated_pos` skips deferred
+   keys (a landed `stamp_twin_id` with a pending framed sibling keeps its
+   `pos:` baseline). Consequence: a divergent-tags fork banks on the next
+   pass (`record_fork` reports `deferred`), not the same pass.
+5. **Honest deferral statuses** (`ItemResult`/`ApplyOutcome`): a deferred
+   record-only row now reports a new status `deferred` (in the `--json`
+   counts enumeration) instead of a false `recorded`; a file-mutating
+   deferred row keeps `applied` with the reason suffix
+   "(recording deferred: unresolved sibling item on this member)". A landed
+   `conflict_tags` row itself gets no suffix — it records nothing by design.
+
 ## 6. Test plan
 
 1. **#615 end-to-end repro**: localized member, both bodies off base, DE tags
@@ -324,7 +387,9 @@ Attacks run against the design, and their resolutions:
    apply pass lands both; the banked entry has matching per-side tags.
 9. **Fork, divergent tag moves**: complete fork where both halves changed
    tags differently → `conflict_tags` (framed) + `record_fork`; with the
-   conflict unanswered, the ledger entry is unchanged (nothing banked); after
-   answering `de`/`en`, the next pass records a tag-consistent fork.
+   conflict unanswered, the ledger entry is unchanged (nothing banked);
+   answering `de`/`en` mirrors the tag line but still defers the co-landed
+   `record_fork` (status `deferred`, nothing banked that pass) — the **next**
+   pass records a tag-consistent fork.
 10. **Matrix/property tests**: extend the §7.4 walk with the tag axis; adjust
     the per-mutation item ceiling.
