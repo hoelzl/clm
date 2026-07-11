@@ -1,8 +1,11 @@
 # Open-Issue Triage & Execution Plan (2026-07-10) — Handover
 
-**Status**: Triage COMPLETE; execution IN PROGRESS — Phases 1–4 DONE
-(#600, #539, #524/#382/#362, #568), next up Phase 5 (#559, needs a
-quiet-repo window). This document is the source of truth for working through
+**Status**: Triage COMPLETE; execution IN PROGRESS — Phases 1–5 DONE
+(#600, #539, #524/#382/#362, #568, #559). Six issues filed after the
+2026-07-10 triage were folded in on 2026-07-11 as Phases 7–8 (see §3a);
+next up **Phase 7 (#609/#610/#615 sync agent-loop regressions + #611
+quick win)**, then Phase 8 (#620/#617 build reliability), then Phase 6
+(design tier). This document is the source of truth for working through
 the open-issue backlog in priority order. Update phase statuses here as
 issues land.
 
@@ -261,19 +264,97 @@ frame stride) to follow-up issues.
 v3-native-verify LANDMINES; `.clm/` is fully skipped as build input
 (PR #432) — a repo-level shared cache dir must get the same treatment.
 
-### Phase 5 [TODO] — #559: CI matrix split (needs a quiet-repo window)
+### Phase 5 [DONE] — #559: CI matrix split (needs a quiet-repo window)
 
-Split the sequential unit→integration→e2e steps into a
-`python-version × suite` matrix (6 jobs). Measured: per-job setup is ~40 s
-(warm caches), so the split costs ~3 machine-min and cuts PR wall clock
-~7.5 → ~5.5 min. **The critical gotcha: required status checks are matched
-by job NAME.** "Test on Python 3.12/3.13" are required in the "Require CI
-green" ruleset; the matrix renames them, so the **ruleset must be updated
-atomically with the workflow** (six entries) or every PR sticks on
-"Expected — waiting for status". Also: preserve the docs-only skip pattern
-(gate *steps* on `needs.changes.outputs.code`, jobs always report success)
-for all six jobs; coverage stitching is fine (Codecov merges uploads).
-Execute when no PRs are in flight.
+**Resolution (2026-07-11)**: shipped via PR #622 in a quiet-repo window
+(zero other PRs in flight). The test job's matrix is now
+`python-version × suite` (unit/integration/e2e → 6 jobs); each suite step
+gates on `matrix.suite` **and** `needs.changes.outputs.code`, preserving
+the docs-only skip pattern (required jobs always run and report).
+`--cov-append` stitching removed — each 3.12 suite job uploads its own
+report and Codecov merges per commit. The "Require CI green" ruleset
+(id 17358657) was updated via `gh api PUT` while the PR's CI ran — the new
+job names report from the PR branch's workflow, so pushing the PR first
+and swapping the ruleset before merge is the safe ordering. Measured on
+the PR run: unit 4m22s is the longest test leg, total wall clock bounded
+by Docker Integration Tests at 5m30s (down from ~7.5 min) — matching the
+issue's prediction. `release.yml` needed no change (it gates on the CI
+workflow *run* conclusion, not job names). Follow-up levers (unit-suite
+duration, Docker image registry caching) remain out of scope per the issue.
+
+**Original plan (kept for reference)**: split the sequential
+unit→integration→e2e steps into a `python-version × suite` matrix (6 jobs).
+Measured: per-job setup is ~40 s (warm caches), so the split costs
+~3 machine-min and cuts PR wall clock ~7.5 → ~5.5 min. **The critical
+gotcha: required status checks are matched by job NAME.** "Test on Python
+3.12/3.13" are required in the "Require CI green" ruleset; the matrix
+renames them, so the **ruleset must be updated atomically with the
+workflow** (six entries) or every PR sticks on "Expected — waiting for
+status".
+
+## 3a. Post-Triage Issues (folded in 2026-07-11)
+
+Six issues were filed after the 2026-07-10 triage, all from active
+dogfooding (PythonCourses ML-AZAV sync/build, CppCourses migration).
+Re-prioritized against the remaining backlog using the original triage's
+logic — agent-loop dead ends and destructive defaults outrank
+intrinsically bigger work. **Execution order: Phase 7 → Phase 8 →
+Phase 6.** (#614 is deferred like the rest of #568's fixes 2–4 that it
+tracks: schedule it just before the next big harvest round.)
+
+### Phase 7 [TODO] — Sync agent-loop regressions + normalize gate (#609, #610, #615, #611)
+
+The same workstream that made #600 rank first: these block or corrupt the
+agent sync loop being dogfooded daily. Suggested order within the phase:
+
+- **#609 (first — hard dead end)**: `sync apply` on an `id:title`
+  `translate_edit` rejects EVERY `body` answer with a spurious `# %%`
+  delimiter error (the body contains none); `keep_twin` is the only
+  accepted answer, which defeats the purpose. Dead end of the same
+  severity class as #600. Labels: bug, area:sync, agent-impact,
+  has-workaround.
+- **#610 (destructive)**: inserting a new id-keyed slide *before* a run of
+  un-id'd positional shared cells moves them into the new group on one
+  half only → twin framed `mirror_remove` (mechanical apply DELETES the
+  twin's untouched cells) + one-sided `verify_cold`. Related to but
+  distinct from #600/`stamp_vs_new` (there the cells were replaced; here
+  only the group boundary moved). A plain `apply` is data-destroying —
+  rank above everything non-dead-end.
+- **#615 (silent divergence)**: `confirm` on a `verify_translation` item
+  banks a one-sided tag edit (DE `voiceover` vs EN `notes`); report goes
+  silent and `sync verify` PASSes while `clm validate` flags the pair —
+  sync and validate disagree about what "in sync" means. Correctness gap,
+  not a dead end.
+- **#611 (quick win, can be its own small PR)**: `normalize --dry-run` on
+  language-split halves emits a within-file DE/EN `count_mismatch` review
+  per half (100% noise, exit 2), making it unusable as a scripted drift
+  gate. Fix is to skip like `clm validate` already does (same
+  `.de.py`/`.en.py` signal). Labels: bug, area:slides, agent-impact.
+
+**Gotchas**: all of Phase 1's sync-engine gotchas apply (memory topics
+`project_sync_one_sided_cold`, `project_sync_v3_design_audit`; §13
+amendments-log row for ANY engine change). #609/#610 have documented
+workarounds in their issue bodies — as with #600, the workaround is the
+oracle for what the fixed flow should converge to.
+
+### Phase 8 [TODO] — Build reliability: job/session ownership (#620, #617)
+
+Investigate together — likely the same #564/#594/#599 family, and #617's
+diagnostic even names the suspected race.
+
+- **#620**: `jobs` rows carry no session ownership, so workers claim a
+  killed/concurrent build's pending jobs and fail them with
+  `is not in the subpath of` path errors attributed to innocent slide
+  files (a killed Docker build deterministically poisons the next one).
+  This is the residual half of #564's gap: #564 filtered claiming by
+  `execution_mode`, #594/#599 added ownership for *workers*, jobs still
+  have none. Fix direction is clear (session/build id on job rows +
+  claim filter).
+- **#617**: intermittent `worker died mid-job (orphaned at pool
+  shutdown)` failing a batch of jobs mid-stage in a single uninterrupted
+  Direct-mode build (8 of 38 jobs in the observed run; byte-identical
+  re-run clean). Root cause unknown — may fall out of (or be illuminated
+  by) the #620 ownership work, which is why they share a phase.
 
 ### Phase 6 [TODO] — Design-tier work (when capacity allows)
 
@@ -319,20 +400,28 @@ OpenAI-compatible client, zero new deps) or close as status-quo.
 - **Phase 4 DONE** (2026-07-11): #568 fix 1 — shared deck-independent
   voiceover cache with legacy promotion (see the Phase 4 resolution block).
   Fixes 2–4 of the issue stay open as deferred follow-ups.
+- **Phase 5 DONE** (2026-07-11): #559 via PR #622; "Require CI green"
+  ruleset swapped to the six matrix job names in the same window (see the
+  Phase 5 resolution block). Measured result: PR wall clock now bounded by
+  the 5.5-min Docker job.
 - **#605** (bilingual dir-group `<name>` silently dropped — filed out of
   Phase 2) was fixed in parallel by another session via PR #606.
-- No blockers, no pending decisions. Remaining: Phase 5 (#559, needs a
-  quiet-repo window), Phase 6 design tier (#383+#381 — start with a
-  verify-then-close pass, see the Phase 3 resolution note — plus #484,
-  #167).
+- **Post-triage issues folded in** (2026-07-11): #609, #610, #611, #615
+  (sync/normalize — Phase 7), #617, #620 (build reliability — Phase 8),
+  #614 (deferred harvest follow-up, tracks #568 fixes 2–4). See §3a.
+- No blockers, no pending decisions. Remaining, in priority order:
+  Phase 7 (#609/#610/#615/#611), Phase 8 (#620/#617), Phase 6 design tier
+  (#383+#381 — start with a verify-then-close pass, see the Phase 3
+  resolution note — plus #484, #167), #614 before the next harvest round.
 
 ## 5. Next Steps
 
-**Phases 1–4 are DONE — next is Phase 5 (#559 CI matrix split), which
-needs a quiet-repo window (no PRs in flight) because the "Require CI green"
-ruleset must be updated atomically with the workflow's job renames.** After
-that, Phase 6a (#383+#381) should START with a verify-then-close pass
-against commit 90518611 (see the Phase 3 resolution note). The plan below
+**Phases 1–5 are DONE — next is Phase 7 (§3a): #609 first (hard apply
+dead end), then #610 (destructive mechanical apply), then #615, with #611
+as a separable quick-win PR.** Then Phase 8 (#620/#617 job-ownership
+work, investigated together), then Phase 6a (#383+#381 — START with a
+verify-then-close pass against commit 90518611, see the Phase 3 resolution
+note). Schedule #614 just before the next big harvest round. The plan below
 documents how Phase 1 was executed (kept for reference):
 
 1. Read memory topics `project_sync_one_sided_cold` and
@@ -380,7 +469,19 @@ their listed sites — see each phase's resolution block for what changed:
   `<deck>/.clm/voiceover-cache/` (subdirs `transcripts/`, `transitions/`,
   `timelines/`, `alignments/` — still probed read-only)
 - `#559` → `.github/workflows/ci.yml` + the GitHub "Require CI green"
-  ruleset (repo settings, must change atomically)
+  ruleset (id 17358657; updated via `gh api PUT` alongside PR #622)
+- `#609/#610/#615` (Phase 7) → sync v3 engine under `src/clm/` (the #609
+  delimiter check is in the apply/decision-validation path of
+  `src/clm/cli/commands/slides/sync.py` or the engine it calls; #610 is
+  group-anchoring/keying territory; #615 is the `confirm` banking path) —
+  not re-located during this fold-in, start from the issues' repro output
+- `#611` (Phase 7) → `src/clm/slides/normalizer.py` review pass; copy the
+  split-file exemption from `src/clm/slides/validator.py`
+- `#620/#617` (Phase 8) → job claiming in
+  `src/clm/infrastructure/backends/sqlite_backend.py` and the jobs schema
+  (no session column today); `worker_base._convert_path_to_container()`
+  is where #620's misattributed error surfaces; #594/#599 PRs are the
+  pattern for the ownership half already done for workers
 - `#484` → `src/clm/infrastructure/backends/sqlite_backend.py`
   (`_execute_operation_impl`, poll loop `record_write` at ~:564),
   `src/clm/core/output_write_registry.py` (:292,294 hash-in-critical-section)
