@@ -34,6 +34,7 @@ from clm.core.topic_resolver import (
     find_slide_files_recursive,
     matches_for_binding,
 )
+from clm.infrastructure.utils.path_utils import split_lang_suffix
 from clm.notebooks.slide_parser import comment_token_for_path, parse_cell_header
 from clm.slides.pairing import build_slide_groups
 from clm.slides.raw_cells import RawCell as _RawCell
@@ -1025,7 +1026,13 @@ def normalize_file(
         all_changes.extend(_apply_workshop_tags(cells, file_str))
         all_changes.extend(_apply_workshop_symmetry(cells, file_str))
 
-    if "interleaving" in op_set:
+    # The interleaving pass judges within-file DE/EN correspondence (adjacency
+    # reorder + count/similarity review items). A language-split half
+    # (``*.de.py`` / ``*.en.py``) carries one language only, so every review it
+    # could emit is structural noise (a guaranteed ``count_mismatch`` per half,
+    # exit 2) — skipped on the same signal the validator's bilingual pairing
+    # checks use; cross-half parity is owned by ``clm slides sync`` (#611).
+    if "interleaving" in op_set and split_lang_suffix(path) is None:
         cells, interleave_changes, interleave_reviews = _apply_interleaving(
             cells,
             file_str,
