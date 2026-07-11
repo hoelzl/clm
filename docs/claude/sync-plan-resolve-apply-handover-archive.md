@@ -1,3 +1,19 @@
+<!-- HANDOVER-ARCHIVE — fully retired on 2026-07-11 -->
+
+# Handover Archive: Sync Resolve-then-Apply Redesign (#216)
+
+> ⚠️ **FULLY RETIRED HANDOVER — NOT ACTIVE**
+>
+> This document archives a handover whose work is fully complete or has
+> been abandoned. **There is no active handover document.** It must
+> **not** be used with `/resume-feature`, `/implement-next-phase`, or
+> similar commands that expect an active work plan.
+>
+> If you need to resume related work, start a fresh handover.
+
+> **Retirement note (2026-07-11):** All three phases shipped on the v2 engine. The remaining Phase-2 deferred follow-ups (id-migration recoverer, `sync_code` structural translate) are **moot**: the entire v2 sync core (`sync_plan.py`, `sync_apply.py`, `sync_code`, …) was deleted by the Sync v3 core replacement (#520, cutover 2026-07-04). The resolve-then-apply *principles* live on in the v3 design; the code this handover describes no longer exists.
+
+---
 # Handover: Sync Resolve-then-Apply redesign (#216)
 
 **Branch:** `claude/sync-plan-resolve-apply-redesign` (off `master` @ `1a105f6`)

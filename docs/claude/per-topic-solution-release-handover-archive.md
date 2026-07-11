@@ -1,3 +1,17 @@
+<!-- HANDOVER-ARCHIVE — fully retired on 2026-07-11 -->
+
+# Handover Archive: Per-Topic Solution Release (issue #208)
+
+> ⚠️ **FULLY RETIRED HANDOVER — NOT ACTIVE**
+>
+> This document archives a handover whose work is fully complete or has
+> been abandoned. **There is no active handover document.** It must
+> **not** be used with `/resume-feature`, `/implement-next-phase`, or
+> similar commands that expect an active work plan.
+>
+> If you need to resume related work, start a fresh handover.
+
+---
 # Handover: Per-Topic Solution Release (issue #208)
 
 **Branch**: `worktree-logical-jingling-fiddle` ·
