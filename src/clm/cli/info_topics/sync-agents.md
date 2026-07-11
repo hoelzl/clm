@@ -73,6 +73,9 @@ the target-language body — or answer `translate_edit` with `keep_twin` when
 your edit did not change what the twin should say), `verify_translation` (both
 sides moved — confirm or supply a body), `conflict_shared` / `remove_vs_edit`
 / `unify_choose_body` / `order_decision` / `conflict_preamble` (choose a side),
+`conflict_tags` (the twins' tag sets diverged with no attributable direction —
+answer `de` or `en`; mirrors **only the chosen side's tag set** onto the twin,
+bodies untouched — see "Tag parity" below),
 `verify_cold` (confirm the member is in sync — or, on an **id-keyed** member,
 supply a `body` + `side` to overwrite a stale twin in the same pass),
 `stamp_vs_new` (a new id'd cell appeared while a positional cell of the same
@@ -86,6 +89,49 @@ same untouched cells under a new anchor — mirror the inserted slide on the
 twin (e.g. answer its `translate_new`), then re-report; carries **no**
 answers: reconcile by editing, minting ids, then re-report), and the
 normalize-refusal deck item (run `clm slides normalize`, then re-report).
+
+## Tag parity (tags are language-independent)
+
+Cell tags mirror across the twins — a tag set is never per-language. The
+differ checks this as its own aspect, orthogonal to the body rows (the same
+way layout and owner changes get their own rows):
+
+- **One side's tags moved off base** → mechanical `mirror_tags`, even when
+  the bodies drifted too: a one-sided tag edit that coincides with body drift
+  co-frames a `mirror_tags` row *next to* the framed body row on the same
+  key. `apply` mirrors the tag set; you answer the body row as usual.
+- **Both sides' tags moved apart, or the ledger itself carries a cross-side
+  tag divergence** (e.g. banked by a pre-fix confirm) → framed
+  `conflict_tags`. Answer `de` or `en`; the chosen side's **tag set only** is
+  mirrored onto the twin — bodies are untouched.
+- **Sequencing**: a framed `conflict_tags` suppresses **every other row** on
+  that member for the pass — the framed body row *and* the layout/owner rows
+  alike (two framed rows on one key cannot both be answered, and a framed
+  `conflict_owner` shares `conflict_tags`' exact `de`/`en` vocabulary — one
+  decision would silently execute both mirrors). The report shows the tag
+  conflict first. Answer it, then **re-run `report`** — the suppressed rows
+  re-frame once the tags are reconciled. Convergence is two passes, and the
+  report is never silent in between.
+- **Recording deferral**: a landed `conflict_tags` records **nothing** by
+  design (its resolution mutates one tag line; the member re-frames and
+  records on the next pass) — and it also defers the ledger recording of
+  every *other* row that landed on the same key in that pass, so the
+  suppressed body drift is never banked alongside it. A deferred
+  **record-only** row reports status `deferred` (nothing was banked; it
+  re-frames next report); a deferred **file-mutating** row keeps status
+  `applied` with the reason suffix
+  `(recording deferred: unresolved sibling item on this member)` — the file
+  write stays, the ledger baseline does not move. Consequence: answering a
+  divergent-tags *fork*'s `conflict_tags` lands the tag mirror immediately,
+  but the co-emitted `record_fork` reports `deferred` and the fork banks on
+  the **next** pass.
+- **Confirm guard**: `confirm` — on `verify_translation` *and* `verify_cold`
+  — and `keep_twin` on `translate_edit` are **rejected while the member's
+  current DE/EN tag sets differ**; the rejection reason names both tag sets.
+  Answer the tag item (or align the tag lines by hand), then re-report. A
+  `confirm`/`keep_twin` answered in the same document as a co-framed
+  mechanical `mirror_tags` still lands in one pass — the mirror executes
+  first and the guard sees the reconciled state.
 
 ## The decision document
 
@@ -131,6 +177,8 @@ One JSON document answers any subset of framed items:
   `keep_twin`). For a `translate_edit` whose edit left the twin a faithful
   rendering, `{"key": …, "choice": "keep_twin"}` records the new baseline and
   keeps the existing twin verbatim — no need to re-supply an unchanged body.
+  On a `conflict_tags` item, `de`/`en` names the side whose **tag set** wins —
+  only the tag line is mirrored; bodies stay untouched.
 - `side` — `"de"` or `"en"`, **only** alongside a `body` on a two-sided
   `verify_cold` item: it names the stale twin to overwrite. `{"key":
   "id:intro", "body": "# frische Übersetzung", "side": "de"}` replaces the DE
@@ -145,10 +193,15 @@ clm slides sync apply DECK --decisions - --json < decisions.json
 ```
 
 `--member KEY` restricts a pass to named handles; `--dry-run` validates
-everything and writes nothing. Every landed item is recorded into the ledger,
-**gated on the structural verify** — file writes from a pass that ends
-structurally corrupt stay on disk for review, but nothing is recorded as
-trusted.
+everything and writes nothing. Landed items are recorded into the ledger
+**on fully resolved members only**, and the recording is **gated on the
+structural verify** — file writes from a pass that ends structurally corrupt
+stay on disk for review, but nothing is recorded as trusted. A landed row on
+a member that still carries an unresolved sibling item (pending, rejected,
+failed — or an answered `conflict_tags`, which re-frames by design) keeps its
+file mutation, but its ledger recording is **deferred**: the entry stays at
+its old baseline and the member re-frames on the next report (see "Tag
+parity" for the statuses this produces).
 
 ### Reading the apply result (`--json`)
 
@@ -161,7 +214,7 @@ they do not exist):
   "dry_run": false,
   "error": null,
   "wrote": true, "written": ["…/slides_x.en.py"],
-  "counts": {"applied": 4, "recorded": 2, "pending": 1,
+  "counts": {"applied": 4, "recorded": 2, "deferred": 0, "pending": 1,
              "rejected": 1, "failed": 0, "skipped": 0},
   "items": [
     {"key": "id:intro", "action": "translate_edit",
@@ -176,9 +229,13 @@ they do not exist):
 
 **Always check `counts.rejected` (and each rejected item's `reason`) before
 moving on** — rejections are also echoed to stderr. `pending` = framed items
-you did not answer (exit 1, not an error). `ledger_recorded: false` with
-`verify_violations` means writes landed but nothing was trusted — fix the
-pair, then `record`.
+you did not answer (exit 1, not an error). `deferred` = a record-only row
+whose ledger write was deferred because the member still carries an
+unresolved sibling item — nothing was banked; it re-frames on the next
+report. (A *file-mutating* row in the same situation stays `applied`, with
+the reason suffix `(recording deferred: unresolved sibling item on this
+member)`.) `ledger_recorded: false` with `verify_violations` means writes
+landed but nothing was trusted — fix the pair, then `record`.
 
 ## Cold members and `record`
 
@@ -190,10 +247,13 @@ never recorded. Two ways to converge:
 - **Per item**: answer `{"key": …, "choice": "confirm"}` in a decision
   document after you have checked the pair is genuinely in sync. `confirm`
   banks **both sides as-is** — it makes no freshness guarantee, so read both
-  bodies first. If the twin is **stale** (e.g. the source was edited while the
-  ledger was cold), do not `confirm`: on an **id-keyed** member, answer with a
-  `body` + `side` naming the stale twin (`{"key": "id:x", "body": "…", "side":
-  "de"}`) to overwrite it in the same pass. A *positional* cold member has no
+  bodies first — and it is **rejected while the twins' tag sets diverge**
+  (tags are language-independent): align the tag lines, or answer the framed
+  tag item, then re-report. If the twin is **stale** (e.g. the source was
+  edited while the ledger was cold), do not `confirm`: on an **id-keyed**
+  member, answer with a `body` + `side` naming the stale twin
+  (`{"key": "id:x", "body": "…", "side": "de"}`) to overwrite it in the same
+  pass. A *positional* cold member has no
   addressable id and takes only `confirm` (mint a `slide_id` first if its twin
   is stale). Pool-scoped coherence applies to `pos:` handles: confirm the whole
   `(group, kind)` pool's cold items in one document (a lone positional confirm
@@ -284,10 +344,11 @@ to scope a review; use the normal loop to reconcile.
 
 The deterministic structural gate (no model, no ledger): the pair unifies
 back into one bilingual source, `de_id == en_id` symmetry holds, no
-`(slide_id, role)` key is duplicated; warns on an id'd cell dropped vs git
-`HEAD`. Run it after every write batch and freely in CI. A green verify means
-the edit did not *corrupt* the deck — translation quality stays your
-judgment.
+`(slide_id, role)` key is duplicated; warns (never fails) on an id'd cell
+dropped vs git `HEAD` and on a cross-side **tag-parity** mismatch (twin cells
+whose tag sets differ — the state `report` frames as a tag row). Run it after
+every write batch and freely in CI. A green verify means the edit did not
+*corrupt* the deck — translation quality stays your judgment.
 
 ## Asymmetric voiceover/notes companions are alerted, not guessed
 

@@ -127,6 +127,7 @@ _DECISION_VOCABULARY: dict[str, tuple[str, ...]] = {
     "remove_localized_side": ("remove", "body"),
     "unify_choose_body": ("de", "en", "body"),
     "conflict_owner": ("de", "en"),
+    "conflict_tags": ("de", "en"),
     "conflict_preamble": ("de", "en"),
     "order_decision": ("de", "en"),
     "stamp_vs_new": ("treat_as_new",),
@@ -317,6 +318,9 @@ class ItemResult:
     action: str
     #: applied  — a file mutation landed (and was recorded)
     #: recorded — a ledger-only record landed
+    #: deferred — a record-only row whose ledger write was deferred because
+    #:            the member still carries an unresolved sibling item (#615);
+    #:            nothing happened — the row re-frames on the next report
     #: pending  — framed item without a decision (untouched residue)
     #: rejected — a supplied decision failed validation (nothing changed)
     #: failed   — a mechanical row the executor could not resolve safely
@@ -366,7 +370,15 @@ class ApplyOutcome:
             "written": [str(p) for p in self.written_paths],
             "counts": {
                 status: self.count(status)
-                for status in ("applied", "recorded", "pending", "rejected", "failed", "skipped")
+                for status in (
+                    "applied",
+                    "recorded",
+                    "deferred",
+                    "pending",
+                    "rejected",
+                    "failed",
+                    "skipped",
+                )
             },
             "items": [r.payload() for r in self.results],
         }
@@ -431,6 +443,7 @@ _PHASES: dict[str, int] = {
     "pending_divergence": 0,
     "unify_choose_body": 0,
     "conflict_owner": 0,
+    "conflict_tags": 0,
     "verify_translation": 0,
     "verify_cold": 0,
     "copy_new_shared": 1,
@@ -904,6 +917,13 @@ def _record_item(
     key = item.key
     action = item.action
 
+    if action == "conflict_tags":
+        # A conflict_tags resolution records NOTHING (#615 F2): it mutates
+        # one header line; the member re-frames and records on the next
+        # pass. Recording here would bless bodies the framed row's
+        # co-emission rule suppressed — those never reach unresolved_items,
+        # so the unresolved-key guard in apply_deck cannot see them.
+        return set()
     if action in ("record_key_migration",):
         if item.base is not None:
             target.members.pop(item.base.key, None)
@@ -1206,6 +1226,22 @@ def _apply_body_decision(
     raise _ItemError(f"'{item.action}' does not accept a body answer")
 
 
+def _reject_divergent_tags(de_cell: SideCell, en_cell: SideCell) -> None:
+    """The confirm tag guard (#615 F2, belt-and-braces for S4 and any
+    future classification gap): a pure ledger record must never bank a
+    cross-side tag divergence. Safe in-pass: ``set_side`` mutates the
+    member in place, so a same-pass ``mirror_tags`` (phase 0, emitted
+    before the body row) is visible here and a co-answered ``confirm``
+    still lands in one pass."""
+    if set(de_cell.tags) != set(en_cell.tags):
+        raise _ItemError(
+            f"tag sets diverge cross-side (de: {list(de_cell.tags)}, "
+            f"en: {list(en_cell.tags)}) — tags are language-independent — "
+            f"answer the tag item (or align the tag lines manually), then "
+            f"re-run report"
+        )
+
+
 def _apply_choice_decision(ex: _Executor, item: DiffItem, choice: str) -> None:
     action = item.action
     if choice == "confirm":
@@ -1224,9 +1260,15 @@ def _apply_choice_decision(ex: _Executor, item: DiffItem, choice: str) -> None:
                 "cannot confirm a member mid-transition (the sides disagree about "
                 "lang attributes) — complete or revert the transition first"
             )
+        _reject_divergent_tags(de_cell, en_cell)
         return  # confirmation is a pure ledger record; nothing mutates
     if choice in ("de", "en"):
         side: Lang = choice  # type: ignore[assignment]
+        if action == "conflict_tags":
+            # Mirror ONLY the tag set from the chosen side (#615) — never a
+            # whole-cell propagate, which would overwrite a translated body.
+            ex.mirror_tags(item_with_side(item, side), side)
+            return
         if action in ("conflict_shared", "pending_divergence"):
             ex.propagate(item_with_side(item, side), side)
             return
@@ -1309,6 +1351,7 @@ def _apply_choice_decision(ex: _Executor, item: DiffItem, choice: str) -> None:
         en_cell = en_holder.side("en") if en_holder is not None else None
         if de_cell is None or en_cell is None:
             raise _ItemError("keep_twin needs both sides present — supply the twin body instead")
+        _reject_divergent_tags(de_cell, en_cell)
         return
     raise _ItemError(f"unsupported choice {choice!r}")
 
@@ -1505,20 +1548,69 @@ def apply_deck(
     priority = {"record_group_rename": 0, "record_key_migration": 1}
     frozen_pools = _frozen_pools(unresolved_items)
     rerecorded_pools: set[tuple[str, str]] = set()
+    # Never bless a member with unresolved rows (#615 F2, fixes S3): a
+    # landed row on a member whose framed sibling row is still pending /
+    # rejected / failed must not record the member's fresh snapshot — that
+    # would bank the unverified drifted state wholesale. The file mutation
+    # stays; the ledger entry keeps its old baseline and the member
+    # re-frames on the next report.
+    unresolved_keys = {i.key for i in unresolved_items}
+    # An ANSWERED conflict_tags is unresolved for recording purposes too
+    # (adversarial review of #615): its resolution mutates one header line
+    # and the member re-frames next pass — but the framed body row it
+    # suppressed at the differ was never emitted, so it is in no
+    # unresolved list. Without this, a co-landed same-key row (e.g. a
+    # conflict_owner answered by the very same handle-keyed decision)
+    # would _upsert the fresh snapshot and bank the suppressed body drift.
+    unresolved_keys |= {item.key for item, _ in landed if item.action == "conflict_tags"}
     for item, provenance in sorted(landed, key=lambda e: priority.get(e[0].action, 2)):
+        if item.key in unresolved_keys:
+            if item.action == "conflict_tags":
+                continue  # records nothing BY DESIGN — no deferral suffix
+            deferral = " (recording deferred: unresolved sibling item on this member)"
+            for i, result in enumerate(outcome.results):
+                if (
+                    result.key == item.key
+                    and result.action == item.action
+                    and result.status in ("applied", "recorded")
+                    and not result.reason.endswith(deferral)
+                ):
+                    # ItemResult is frozen — replace by index; (key, action)
+                    # matching because keys repeat across a member's rows.
+                    # A record-only row that landed nothing at all must not
+                    # read "recorded" — downstream agents key on the status
+                    # (design F2.1: honest status, not just an amended
+                    # reason).
+                    status = "deferred" if result.status == "recorded" else result.status
+                    outcome.results[i] = ItemResult(
+                        result.key, result.action, status, result.reason + deferral
+                    )
+                    break
+            continue
         rerecorded_pools |= _record_item(
             target, fresh, item, provenance=provenance, frozen_pools=frozen_pools
         )
     # Never bless the unresolved: a wholesale pool re-record must not trust
-    # siblings whose framed items were left pending/rejected/failed.
+    # siblings whose framed items were left pending/rejected/failed — nor
+    # the slot of an answered conflict_tags (which re-frames next pass).
     unresolved_members = [
         holder
         for item in unresolved_items
         for holder in (item.member, item.twin)
         if holder is not None
+    ] + [
+        holder
+        for item, _ in landed
+        if item.action == "conflict_tags"
+        for holder in (item.member, item.twin)
+        if holder is not None
     ]
     _drop_unresolved_from_pools(target, rerecorded_pools, unresolved_members)
-    _sweep_migrated_pos(target, landed)
+    # The stale-pos: sweep must not touch members whose recording was
+    # deferred above — the "stale" entry IS their surviving old baseline
+    # (adversarial review of #615: a landed stamp_twin_id with a pending
+    # framed sibling would otherwise lose the divergence's only record).
+    _sweep_migrated_pos(target, [e for e in landed if e[0].key not in unresolved_keys])
     outcome.ledger_changed = True
     return outcome
 

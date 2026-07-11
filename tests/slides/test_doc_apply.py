@@ -1231,3 +1231,425 @@ class TestReviewRegressions:
         assert "a_mac" not in en  # the surviving EN half of slot A was removed
         assert 'b_mac("B de")' in de  # slot B's DE cell was NEVER touched
         assert 'b_mac("B en!")' in en  # slot B's edited EN cell survived
+
+
+# ---------------------------------------------------------------------------
+# Cross-side tag parity (issue #615)
+# ---------------------------------------------------------------------------
+
+
+def _ledger_entry(deck: _Deck, key: str):
+    ledger = doc_ledger.load(doc_ledger.ledger_path_for(deck.de_path))
+    return ledger.decks[doc_ledger.deck_key_for(deck.de_path)].members[key].entry
+
+
+class TestTagParity:
+    """Issue #615: cross-side tag parity is a first-class diff aspect.
+
+    Tags are language-independent and mirror across the twins, but the
+    localized path used to compare each side only against its own recorded
+    fingerprint — a one-sided tag edit coinciding with body drift was
+    silently banked by ``confirm``, leaving report clean while ``validate``
+    flagged the pair forever. These are the apply-level round trips for the
+    F1 (``conflict_tags`` / ``mirror_tags`` aspect rows) + F2 (recording
+    guards) fixes.
+    """
+
+    DE_PLAIN = '# %% [markdown] lang="de" slide_id="s0-m"'
+    DE_TAGGED = '# %% [markdown] lang="de" tags=["voiceover"] slide_id="s0-m"'
+
+    def _divergent_baseline_deck(self, tmp_path: Path) -> _Deck:
+        """A recorded baseline that ITSELF carries the cross-side divergence —
+        the damaged end state #615 used to leave behind."""
+        deck = _Deck(
+            tmp_path,
+            _build(
+                HEADER_DE,
+                _slide("s0", "de", "Titel"),
+                _shared_code("x"),
+                '# %% [markdown] lang="de" tags=["notes"] slide_id="s0-m"\n# DE Text\n\n',
+            ),
+            _build(
+                HEADER_EN,
+                _slide("s0", "en", "Title"),
+                _shared_code("x"),
+                '# %% [markdown] lang="en" tags=["voiceover"] slide_id="s0-m"\n# EN text\n\n',
+            ),
+        )
+        deck.record()
+        return deck
+
+    def test_615_confirm_lands_the_mirrored_tags_in_one_pass(self, tmp_path: Path):
+        # The issue's exact shape: both bodies drifted off base AND the DE
+        # side carries a one-sided tag edit. The tag aspect is its own
+        # mechanical row; `confirm` answers the body row in the SAME pass
+        # (the guard sees the in-pass mirror) and the banked entry is in
+        # tag parity — never the silently-divergent #615 end state.
+        deck = _deck(tmp_path)
+        deck.edit_de(self.DE_PLAIN, self.DE_TAGGED)
+        deck.edit_de("DE Text", "DE Text NEU")
+        deck.edit_en("EN text", "EN text NEW")
+        _, diff = deck.diff()
+        assert {(i.key, i.action) for i in diff.items} == {
+            ("id:s0-m", "mirror_tags"),
+            ("id:s0-m", "verify_translation"),
+        }, [(i.key, i.action, i.detail) for i in diff.items]
+        outcome = deck.apply(_decision("id:s0-m", choice="confirm"))
+        assert outcome.all_applied, outcome.to_payload()
+        en = deck.en_path.read_text(encoding="utf-8")
+        assert 'tags=["voiceover"]' in en  # the tag line mirrored...
+        assert "EN text NEW" in en  # ...and the EN body was untouched
+        entry = _ledger_entry(deck, "id:s0-m")
+        assert entry.de_tags == entry.en_tags == ("voiceover",)
+        deck.assert_converged()
+
+    def test_confirm_on_a_cold_member_with_divergent_tags_is_rejected(self, tmp_path: Path):
+        # S4: a cold two-sided member has no baseline, so no tag row can be
+        # framed for it — the confirm guard is the only thing standing
+        # between the agent and banking a report-silent divergence.
+        deck = _deck(tmp_path)
+        deck.write_de(
+            *DE_PARTS,
+            '# %% [markdown] lang="de" tags=["notes"] slide_id="s0-new"\n# Neu\n\n',
+        )
+        deck.write_en(*EN_PARTS, _localized("s0-new", "en", "New"))
+        _, diff = deck.diff()
+        assert [(i.key, i.action) for i in diff.items] == [("id:s0-new", "verify_cold")]
+        outcome = deck.apply(_decision("id:s0-new", choice="confirm"))
+        result = next(r for r in outcome.results if r.key == "id:s0-new")
+        assert result.status == "rejected"
+        assert "tag sets diverge cross-side" in result.reason
+        _, diff = deck.diff()
+        assert not diff.is_clean  # nothing was banked
+
+    def test_baseline_carried_divergence_frames_conflict_tags_and_converges(self, tmp_path: Path):
+        deck = self._divergent_baseline_deck(tmp_path)
+        _, diff = deck.diff()
+        assert [(i.key, i.action, i.direction) for i in diff.items] == [
+            ("id:s0-m", "conflict_tags", "none")
+        ], [(i.key, i.action, i.detail) for i in diff.items]
+        assert "the recorded baseline itself carries" in diff.items[0].detail
+        entry_before = _ledger_entry(deck, "id:s0-m")
+        outcome = deck.apply(_decision("id:s0-m", choice="de"))
+        assert outcome.all_applied, outcome.to_payload()
+        assert outcome.wrote  # the EN tag line was mirrored...
+        assert 'tags=["notes"]' in deck.en_path.read_text(encoding="utf-8")
+        # ...but NOTHING was recorded this pass — the old baseline stands.
+        assert _ledger_entry(deck, "id:s0-m") == entry_before
+        assert entry_before.en_tags == ("voiceover",)
+        # Second pass: the move is now attributable (EN off base, DE at base)
+        # — an idempotent mechanical mirror that lands and records.
+        _, diff = deck.diff()
+        assert [(i.key, i.action, i.direction) for i in diff.items] == [
+            ("id:s0-m", "mirror_tags", "en_to_de")
+        ], [(i.key, i.action, i.detail) for i in diff.items]
+        assert deck.apply().all_applied
+        deck.assert_converged()
+
+    def test_landed_mirror_tags_never_blesses_the_pending_body_row(self, tmp_path: Path):
+        # S3: the mechanical tag mirror lands while the framed body row is
+        # unanswered — recording is deferred, the ledger entry stays at its
+        # old baseline, and the member re-frames next pass.
+        deck = _deck(tmp_path)
+        deck.edit_de(self.DE_PLAIN, self.DE_TAGGED)
+        deck.edit_de("DE Text", "DE Text NEU")
+        entry_before = _ledger_entry(deck, "id:s0-m")
+        _, diff = deck.diff()
+        assert {(i.key, i.action) for i in diff.items} == {
+            ("id:s0-m", "mirror_tags"),
+            ("id:s0-m", "translate_edit"),
+        }, [(i.key, i.action, i.detail) for i in diff.items]
+        outcome = deck.apply()  # no decision: the body row stays pending
+        results = [r for r in outcome.results if r.key == "id:s0-m"]
+        assert sorted(r.status for r in results) == ["applied", "pending"]
+        landed = next(r for r in results if r.status == "applied")
+        assert "recording deferred" in landed.reason
+        assert 'tags=["voiceover"]' in deck.en_path.read_text(encoding="utf-8")
+        assert _ledger_entry(deck, "id:s0-m") == entry_before
+        # Next pass: the mirrored twin's fingerprint is off base too, so the
+        # pair frames as one verify_translation whose confirm converges.
+        _, diff = deck.diff()
+        assert [(i.key, i.action, i.direction) for i in diff.items] == [
+            ("id:s0-m", "verify_translation", "both")
+        ], [(i.key, i.action, i.detail) for i in diff.items]
+        outcome = deck.apply(_decision("id:s0-m", choice="confirm"))
+        assert outcome.all_applied, outcome.to_payload()
+        deck.assert_converged()
+
+    FORK_CELL = '# %% [markdown] tags=["keep"] slide_id="s0-f"\n# gemeinsam\n\n'
+
+    def _forking_deck(self, tmp_path: Path, *, en_tags: str = "voiceover") -> _Deck:
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("s0", "de", "Titel"), self.FORK_CELL, _shared_code("x")),
+            _build(HEADER_EN, _slide("s0", "en", "Title"), self.FORK_CELL, _shared_code("x")),
+        )
+        deck.record()
+        deck.edit_de(
+            '# %% [markdown] tags=["keep"] slide_id="s0-f"\n# gemeinsam',
+            '# %% [markdown] lang="de" tags=["notes"] slide_id="s0-f"\n# DE Gabel',
+        )
+        deck.edit_en(
+            '# %% [markdown] tags=["keep"] slide_id="s0-f"\n# gemeinsam',
+            f'# %% [markdown] lang="en" tags=["{en_tags}"] slide_id="s0-f"\n# EN fork',
+        )
+        return deck
+
+    def test_fork_with_divergent_tag_moves_banks_nothing_until_answered(self, tmp_path: Path):
+        # F1 fork-time tag check: record_fork is the one row that could
+        # legitimize divergent tags as a trusted per-language baseline, so
+        # both halves moving their tags differently co-emits a framed
+        # conflict_tags — and F2's unresolved-key guard defers the upsert.
+        deck = self._forking_deck(tmp_path)
+        _, diff = deck.diff()
+        assert {(i.key, i.action) for i in diff.items} == {
+            ("id:s0-f", "conflict_tags"),
+            ("id:s0-f", "record_fork"),
+        }, [(i.key, i.action, i.detail) for i in diff.items]
+        tag_item = next(i for i in diff.items if i.action == "conflict_tags")
+        assert tag_item.direction == "both"
+        assert "the forking halves carry divergent tag sets" in tag_item.detail
+        entry_before = _ledger_entry(deck, "id:s0-f")
+        outcome = deck.apply()  # conflict unanswered
+        landed = next(r for r in outcome.results if r.status != "pending")
+        assert "recording deferred" in landed.reason
+        assert _ledger_entry(deck, "id:s0-f") == entry_before  # nothing banked
+        # Answering the conflict mirrors the tag line, but an ANSWERED
+        # conflict_tags still defers same-key recordings (the review's
+        # critical finding: a co-landed row must never bank state a framed
+        # tag row's co-emission rule may have suppressed) — record_fork
+        # reports "deferred" and the tag-consistent fork banks on the NEXT
+        # pass, exactly as the design's fork test plan words it.
+        outcome = deck.apply(_decision("id:s0-f", choice="de"))
+        fork_result = next(r for r in outcome.results if r.action == "record_fork")
+        assert fork_result.status == "deferred", outcome.to_payload()
+        assert "recording deferred" in fork_result.reason
+        en = deck.en_path.read_text(encoding="utf-8")
+        assert 'tags=["notes"]' in en  # the DE tag set mirrored...
+        assert "EN fork" in en  # ...and the forked EN body survived
+        assert _ledger_entry(deck, "id:s0-f") == entry_before  # not yet banked
+        outcome = deck.apply()  # second pass: the clean fork records
+        assert outcome.all_applied, outcome.to_payload()
+        entry = _ledger_entry(deck, "id:s0-f")
+        assert entry.langness == "localized"
+        assert entry.de_tags == entry.en_tags == ("notes",)
+        deck.assert_converged()
+
+    def test_conflict_tags_answer_mirrors_only_the_tag_line(self, tmp_path: Path):
+        # S2 executor regression: the de/en answer must mirror the TAG SET
+        # only — never a whole-cell propagate that would overwrite the
+        # twin's translated body with the other language.
+        deck = self._divergent_baseline_deck(tmp_path)
+        outcome = deck.apply(_decision("id:s0-m", choice="en"))
+        assert outcome.all_applied, outcome.to_payload()
+        de = deck.de_path.read_text(encoding="utf-8")
+        assert 'tags=["voiceover"]' in de  # the EN tag set landed on DE
+        assert "# DE Text" in de  # the translated body was untouched
+        assert "EN text" not in de  # no whole-cell copy
+        en = deck.en_path.read_text(encoding="utf-8")
+        assert "# EN text" in en
+        assert "DE Text" not in en
+
+    def test_body_answer_lands_on_a_twin_carrying_the_mirrored_tags(self, tmp_path: Path):
+        # S1: a one-sided DE tag+body edit resolves in ONE pass — the
+        # mechanical mirror_tags executes before the translate_edit body
+        # answer (same ordered loop), so the EN cell comes out with BOTH
+        # the mirrored tags and the new body, and the banked entry is in
+        # tag parity — never the silently-divergent #615 end state.
+        deck = _deck(tmp_path)
+        deck.edit_de(self.DE_PLAIN, self.DE_TAGGED)
+        deck.edit_de("DE Text", "DE Text NEU")
+        _, diff = deck.diff()
+        assert {(i.key, i.action) for i in diff.items} == {
+            ("id:s0-m", "mirror_tags"),
+            ("id:s0-m", "translate_edit"),
+        }, [(i.key, i.action, i.detail) for i in diff.items]
+        outcome = deck.apply(_decision("id:s0-m", body="# EN text NEW"))
+        assert outcome.all_applied, outcome.to_payload()
+        en = deck.en_path.read_text(encoding="utf-8")
+        header_line = next(line for line in en.splitlines() if 'slide_id="s0-m"' in line)
+        assert 'tags=["voiceover"]' in header_line  # the mirrored tags...
+        assert "# EN text NEW" in en  # ...AND the answered body, one cell
+        entry = _ledger_entry(deck, "id:s0-m")
+        assert entry.de_tags == entry.en_tags == ("voiceover",)
+        deck.assert_converged()
+
+    def test_fork_with_one_sided_tag_move_lands_in_one_pass(self, tmp_path: Path):
+        # F1 fork-time tag check, mechanical half: only the DE half changed
+        # its tags off the shared base, so the move is still attributable —
+        # mirror_tags co-emits with record_fork and BOTH land in one pass
+        # (two mechanical rows on one key have no decision-keying collision;
+        # no deferral).
+        deck = self._forking_deck(tmp_path, en_tags="keep")
+        _, diff = deck.diff()
+        assert {(i.key, i.action) for i in diff.items} == {
+            ("id:s0-f", "mirror_tags"),
+            ("id:s0-f", "record_fork"),
+        }, [(i.key, i.action, i.detail) for i in diff.items]
+        outcome = deck.apply()
+        assert outcome.all_applied, outcome.to_payload()
+        fork_result = next(r for r in outcome.results if r.action == "record_fork")
+        assert fork_result.status == "recorded", outcome.to_payload()
+        en = deck.en_path.read_text(encoding="utf-8")
+        assert 'tags=["notes"]' in en  # the DE tag set mirrored...
+        assert "EN fork" in en  # ...and the forked EN body survived
+        entry = _ledger_entry(deck, "id:s0-f")
+        assert entry.langness == "localized"
+        assert entry.de_tags == entry.en_tags == ("notes",)
+        deck.assert_converged()
+
+    def test_conflict_tags_suppresses_conflict_owner_until_answered(self, tmp_path: Path):
+        # Adversarial review of #615: a framed conflict_owner shares
+        # conflict_tags' exact de/en vocabulary on the same handle — one
+        # decision would silently execute BOTH mirrors. The framed tag row
+        # must suppress the owner AND body rows this pass; the answer
+        # mirrors only the tag line; the suppressed aspects re-frame next.
+        de = _build(HEADER_DE, _slide("s0", "de", "Titel"), _slide("s1", "de", "Zwei"))
+        en = _build(HEADER_EN, _slide("s0", "en", "Title"), _slide("s1", "en", "Two"))
+        deck = _Deck(tmp_path, de, en)
+        vo_dir = tmp_path / "voiceover"
+        vo_dir.mkdir()
+        de_comp = vo_dir / "voiceover_t.de.py"
+        en_comp = vo_dir / "voiceover_t.en.py"
+        de_comp.write_text(
+            _build(
+                '# %% [markdown] lang="de" tags=["notes"] slide_id="s0-vo" '
+                'for_slide="s0"\n#\n# - DE Notiz\n\n'
+            ),
+            encoding="utf-8",
+        )
+        en_comp.write_text(
+            _build(
+                '# %% [markdown] lang="en" tags=["notes"] slide_id="s0-vo" '
+                'for_slide="s0"\n#\n# - EN note\n\n'
+            ),
+            encoding="utf-8",
+        )
+        deck.record()
+        # DE: owner AND tags AND body all move; EN: tags and body move
+        # differently — every aspect of the member diverges cross-side.
+        de_comp.write_text(
+            de_comp.read_text(encoding="utf-8")
+            .replace('tags=["notes"]', 'tags=["voiceover"]')
+            .replace('for_slide="s0"', 'for_slide="s1"')
+            .replace("- DE Notiz", "- DE Notiz v2"),
+            encoding="utf-8",
+        )
+        en_comp.write_text(
+            en_comp.read_text(encoding="utf-8")
+            .replace('tags=["notes"]', 'tags=["alt"]')
+            .replace("- EN note", "- EN note v2"),
+            encoding="utf-8",
+        )
+        _, diff = deck.diff()
+        assert [(i.key, i.action, i.direction) for i in diff.items] == [
+            ("id:s0-vo", "conflict_tags", "both")
+        ], [(i.key, i.action, i.detail) for i in diff.items]
+        entry_before = _ledger_entry(deck, "id:s0-vo")
+        outcome = deck.apply(_decision("id:s0-vo", choice="de"))
+        assert outcome.all_applied, outcome.to_payload()
+        en_after = en_comp.read_text(encoding="utf-8")
+        assert 'tags=["voiceover"]' in en_after  # ONLY the tag line mirrored
+        assert 'for_slide="s0"' in en_after  # the owner was NOT mirrored
+        assert "- EN note v2" in en_after  # the body was untouched
+        assert _ledger_entry(deck, "id:s0-vo") == entry_before  # nothing recorded
+        _, diff = deck.diff()  # next pass: the suppressed aspects re-frame
+        assert {(i.key, i.action) for i in diff.items} == {
+            ("id:s0-vo", "conflict_owner"),
+            ("id:s0-vo", "verify_translation"),
+        }, [(i.key, i.action, i.detail) for i in diff.items]
+
+    HZ_A = '# %% [markdown] tags=["alt"]\n# HZ A\n\n'
+    HZ_B = '# %% [markdown] tags=["alt"]\n# HZ B\n\n'
+
+    def test_pool_conflict_tags_answer_touches_only_the_target_slot(self, tmp_path: Path):
+        # The pool path end-to-end: answering the pos:-keyed conflict_tags
+        # mirrors ONE slot's tag line (the neighboring slot byte-identical),
+        # records nothing that pass, and the NEXT pass converges through the
+        # pool residue branch (record_tags — the pool twin of
+        # _tags_only_change) instead of mis-framing translate_edit.
+        deck = _Deck(
+            tmp_path,
+            _build(self.HZ_A, self.HZ_B, HEADER_DE, _slide("s0", "de", "Titel")),
+            _build(self.HZ_A, self.HZ_B, HEADER_EN, _slide("s0", "en", "Title")),
+        )
+        deck.record()
+        deck.edit_de('tags=["alt"]\n# HZ A', 'tags=["beta"]\n# HZ A')
+        deck.edit_en('tags=["alt"]\n# HZ A', 'tags=["gamma"]\n# HZ A')
+        _, diff = deck.diff()
+        assert [(i.key, i.action, i.direction) for i in diff.items] == [
+            ("pos:~header/markdown/0", "conflict_tags", "both")
+        ], [(i.key, i.action, i.detail) for i in diff.items]
+        slot_a_before = _ledger_entry(deck, "pos:~header/markdown/0")
+        slot_b_before = _ledger_entry(deck, "pos:~header/markdown/1")
+        de_before = deck.de_path.read_text(encoding="utf-8")
+        en_before = deck.en_path.read_text(encoding="utf-8")
+        outcome = deck.apply(_decision("pos:~header/markdown/0", choice="de"))
+        assert outcome.all_applied, outcome.to_payload()
+        # ONLY the target slot's EN tag line changed — byte-precise.
+        assert deck.de_path.read_text(encoding="utf-8") == de_before
+        assert deck.en_path.read_text(encoding="utf-8") == en_before.replace(
+            'tags=["gamma"]', 'tags=["beta"]'
+        )
+        # ...and NOTHING was recorded this pass.
+        assert _ledger_entry(deck, "pos:~header/markdown/0") == slot_a_before
+        assert _ledger_entry(deck, "pos:~header/markdown/1") == slot_b_before
+        # Next pass: the slot's tags-only movement is mechanical (the pool
+        # residue branch), never a translate_edit of an untouched body.
+        _, diff = deck.diff()
+        assert [(i.key, i.action, i.direction) for i in diff.items] == [
+            ("pos:~header/markdown/0", "record_tags", "both")
+        ], [(i.key, i.action, i.detail) for i in diff.items]
+        assert deck.apply().all_applied
+        deck.assert_converged()
+
+    def test_deferred_stamp_keeps_the_divergent_pos_baseline(self, tmp_path: Path):
+        # _sweep_migrated_pos regression (adversarial review of #615): a
+        # shared positional cell RECORDED with a base-carried cross-side
+        # divergence gets a slide_id stamped on the DE side only. The stamp
+        # is mechanical and lands, but the pending_divergence row on the
+        # same member stays pending — recording defers, and the migration
+        # sweep must NOT destroy the pos: entry: it IS the surviving old
+        # baseline evidencing the divergence.
+        deck = _Deck(
+            tmp_path,
+            _build(
+                HEADER_DE,
+                _slide("s0", "de", "Titel"),
+                '# %% tags=["keep", "alt"]\nx = 1\n\n',  # header (tags) diverge...
+                _localized("s0-m", "de", "DE Text"),
+            ),
+            _build(
+                HEADER_EN,
+                _slide("s0", "en", "Title"),
+                '# %% tags=["keep"]\nx = 1\n\n',  # ...the bodies are identical
+                _localized("s0-m", "en", "EN text"),
+            ),
+        )
+        deck.record()  # the baseline banks the in-flight divergence
+        deck.edit_de(
+            '# %% tags=["keep", "alt"]\nx = 1',
+            '# %% tags=["keep", "alt"] slide_id="x-cell"\nx = 1',
+        )
+        _, diff = deck.diff()
+        assert {(i.key, i.action) for i in diff.items} == {
+            ("id:x-cell", "stamp_twin_id"),
+            ("id:x-cell", "pending_divergence"),
+        }, [(i.key, i.action, i.detail) for i in diff.items]
+        outcome = deck.apply()  # no decisions: the divergence stays pending
+        results = {r.action: r for r in outcome.results}
+        assert results["stamp_twin_id"].status == "applied"
+        assert "recording deferred" in results["stamp_twin_id"].reason
+        assert results["pending_divergence"].status == "pending"
+        assert 'slide_id="x-cell"' in deck.en_path.read_text(encoding="utf-8")
+        ledger = doc_ledger.load(doc_ledger.ledger_path_for(deck.de_path))
+        members = ledger.decks["slides_t"].members
+        assert "pos:s0/code/0" in members, sorted(members)  # the baseline SURVIVED
+        entry = members["pos:s0/code/0"].entry
+        assert entry.de_fp != entry.en_fp  # ...still carrying the divergence
+        assert "id:x-cell" not in members  # the stamp banked nothing yet
+        _, diff = deck.diff()  # the divergence is still framed, never silent
+        assert not diff.is_clean
+        assert any(i.action == "pending_divergence" for i in diff.items), [
+            (i.key, i.action, i.detail) for i in diff.items
+        ]

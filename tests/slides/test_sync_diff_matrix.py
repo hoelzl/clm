@@ -20,7 +20,7 @@ Three structural guarantees, each preventing a distinct regression class:
 from __future__ import annotations
 
 import pytest
-from attrs import fields
+from attrs import evolve, fields
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
@@ -191,6 +191,94 @@ def test_action_registries_are_disjoint_and_closed():
     assert not (MECHANICAL_ACTIONS & FRAMED_ACTIONS)
     matrix_rows = {row for *_, row in _MATRIX} - {"normalize_refusal"}
     assert matrix_rows <= MECHANICAL_ACTIONS | FRAMED_ACTIONS
+    # The tag-parity aspect rows (#615) never appear in the transition
+    # matrix (they are orthogonal to langness transitions), so the walk
+    # above cannot police their registration — assert it explicitly.
+    tag_axis_rows = {row for *_, rows in _TAG_AXIS for row in rows}
+    assert tag_axis_rows <= MECHANICAL_ACTIONS | FRAMED_ACTIONS
+    assert "mirror_tags" in MECHANICAL_ACTIONS
+    assert "conflict_tags" in FRAMED_ACTIONS
+
+
+# ---------------------------------------------------------------------------
+# 1b. The tag-divergence axis (#615)
+# ---------------------------------------------------------------------------
+
+# A focused walk over the tag-parity aspect rows: shape {localized-id'd,
+# complete-fork} × move {one-sided, divergent, baseline-carried}. Unlike the
+# §7.4 matrix walk this asserts the expected *set* of rows (the fork cases
+# legitimately co-emit with record_fork). Bodies stay at base throughout —
+# the aspect row must fully account for the tag delta.
+
+_TAG_AXIS: list[tuple[str, str, frozenset[str]]] = [
+    ("localized", "one_sided", frozenset({"mirror_tags"})),
+    ("localized", "divergent", frozenset({"conflict_tags"})),
+    ("localized", "baseline_carried", frozenset({"conflict_tags"})),
+    ("fork", "one_sided", frozenset({"mirror_tags", "record_fork"})),
+    ("fork", "divergent", frozenset({"conflict_tags", "record_fork"})),
+    ("fork", "baseline_carried", frozenset({"conflict_tags", "record_fork"})),
+]
+
+
+def _tag_cell(lang: str | None, tags: tuple[str, ...], body: str) -> str:
+    tag_attr = "[" + ", ".join(f'"{t}"' for t in tags) + "]"
+    lang_attr = f' lang="{lang}"' if lang is not None else ""
+    return f'# %% [markdown]{lang_attr} tags={tag_attr} slide_id="cell-x"\n# {body}\n\n'
+
+
+@pytest.mark.parametrize(
+    ("shape", "move", "expected_actions"),
+    _TAG_AXIS,
+    ids=[f"{c[0]}-{c[1]}" for c in _TAG_AXIS],
+)
+def test_tag_divergence_axis_maps_to_expected_row_set(
+    shape: str, move: str, expected_actions: frozenset[str]
+):
+    if shape == "localized":
+        base_de = _tag_cell("de", ("notes",), "DE body")
+        base_en_tags = ("alt",) if move == "baseline_carried" else ("notes",)
+        base_en = _tag_cell("en", base_en_tags, "EN body")
+        cur_de = base_de if move == "baseline_carried" else _tag_cell("de", ("alt",), "DE body")
+        cur_en = _tag_cell("en", ("voiceover",), "EN body") if move == "divergent" else base_en
+    else:
+        base_de = base_en = _tag_cell(None, ("notes",), "shared body")
+        en_tags = ("notes",) if move == "one_sided" else ("voiceover",)
+        cur_de = _tag_cell("de", ("alt",), "shared body")
+        cur_en = _tag_cell("en", en_tags, "shared body")
+
+    base_outcome = parse_bundle(*_bundle("inline", base_de, base_en))
+    assert base_outcome.deck is not None, (
+        base_outcome.refusal.render() if base_outcome.refusal else "?"
+    )
+    base = baseline_from_deck(base_outcome.deck)
+    if shape == "fork" and move == "baseline_carried":
+        # A real shared base always records one tag tuple on both sides, so
+        # the unattributable state is the pre-tag-recording ledger shape:
+        # entries whose tag fields predate recording (``None`` = moved).
+        key = next(k for k in base.members if "cell-x" in k)
+        base.members[key] = evolve(base.members[key], de_tags=None, en_tags=None)
+
+    diff = diff_outcome(parse_bundle(*_bundle("inline", cur_de, cur_en)), base)
+    assert diff.refusal is None, diff.refusal.render() if diff.refusal else "?"
+    rows = [(i.outcome, i.action, i.key, i.direction, i.detail) for i in diff.items]
+    assert {i.action for i in diff.items} == set(expected_actions), rows
+    assert len(diff.items) == len(expected_actions), rows
+
+    by_action = {i.action: i for i in diff.items}
+    if "mirror_tags" in by_action:
+        item = by_action["mirror_tags"]
+        assert item.outcome == "mechanical"
+        assert item.direction == "de_to_en"  # the DE half is the mover throughout
+        assert item.side == "de"
+    if "conflict_tags" in by_action:
+        item = by_action["conflict_tags"]
+        assert item.outcome == "conflict"
+        assert item.side is None  # the answer names the side, not the row
+        if shape == "fork":
+            assert item.direction == "both"  # fork-time divergence is never baseline-blessed
+        else:
+            assert item.direction == ("none" if move == "baseline_carried" else "both")
+    assert all(i.action in MECHANICAL_ACTIONS | FRAMED_ACTIONS for i in diff.items)
 
 
 # ---------------------------------------------------------------------------
