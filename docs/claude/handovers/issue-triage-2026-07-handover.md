@@ -1,13 +1,12 @@
 # Open-Issue Triage & Execution Plan (2026-07-10) — Handover
 
 **Status**: Triage COMPLETE; execution IN PROGRESS — Phases 1–5 DONE
-(#600, #539, #524/#382/#362, #568, #559). Six issues filed after the
-2026-07-10 triage were folded in on 2026-07-11 as Phases 7–8 (see §3a);
-next up **Phase 7 (#609/#610/#615 sync agent-loop regressions + #611
-quick win)**, then Phase 8 (#620/#617 build reliability), then Phase 6
-(design tier). This document is the source of truth for working through
-the open-issue backlog in priority order. Update phase statuses here as
-issues land.
+(#600, #539, #524/#382/#362, #568, #559); Phase 7 DONE except #615
+(#609/#610/#611 via PRs #624/#625/#626 on 2026-07-11; #615 is owned by
+another session — see the Phase 7 block). Next up **Phase 8 (#620/#617
+build reliability)**, then Phase 6 (design tier). This document is the
+source of truth for working through the open-issue backlog in priority
+order. Update phase statuses here as issues land.
 
 ## 1. Feature Overview
 
@@ -302,10 +301,45 @@ intrinsically bigger work. **Execution order: Phase 7 → Phase 8 →
 Phase 6.** (#614 is deferred like the rest of #568's fixes 2–4 that it
 tracks: schedule it just before the next big harvest round.)
 
-### Phase 7 [TODO] — Sync agent-loop regressions + normalize gate (#609, #610, #615, #611)
+### Phase 7 [DONE except #615] — Sync agent-loop regressions + normalize gate (#609, #610, #615, #611)
 
-The same workstream that made #600 rank first: these block or corrupt the
-agent sync loop being dogfooded daily. Suggested order within the phase:
+**Resolution (2026-07-11)**: #609, #610, #611 shipped (PRs #624, #625,
+#626); **#615 deliberately left untouched** — another session owns it (its
+branch `claude/issue-615-tag-parity-design` carries a root-cause analysis
+and design; no fix landed as of this session's end, issue still OPEN).
+Check #615 before starting Phase 8; if abandoned, its design branch is the
+starting point.
+
+- **#609 (PR #624)**: root cause — the `id:title` member is a *single-line
+  j2 macro cell*: its `# {{ header_de(…) }}` line is simultaneously the
+  cell boundary AND the whole content, so `_validate_body`'s delimiter
+  guard rejected every valid answer, and `_replace_body` (which preserves
+  `lines[0]`) explains the observed raw-line append. Fix: target-aware
+  `_replacement_lines` in `doc_apply.py` — on a macro cell the `body`
+  replaces the j2 line in place, accepting the full line or bare title
+  text (spliced into the macro's quoted argument; bare form disabled on
+  mint-a-new-cell paths which can't derive the right macro name). Also
+  hardened the `conflict_shared`/`unify_choose_body` body path to compute
+  both sides before mutating. §13 row added.
+- **#610 (PR #625)**: implemented the issue's option 3 (minimum guard).
+  Differ post-pass `_reframe_group_split_removals`: a pos-keyed
+  `mirror_remove` whose gone-side base fp matches a one-sided cold cell of
+  another group on that side is reframed as answerless
+  `ambiguous_alignment` (+ a `suspected_group_split` observation) — the
+  detail tells the agent to mirror the inserted slide (answer its
+  `translate_new`) and re-report, which converges losslessly (tested).
+  `ambiguous_alignment` joined `_POOL_FREEZING_ACTIONS` so a landing
+  sibling row can't erase the two-sided base evidence. Options 1/2
+  (fingerprint re-binding / apply-order re-evaluation) remain open as
+  possible follow-ups. §13 row added.
+- **#611 (PR #626)**: normalize's `interleaving` operation (the source of
+  the within-file DE/EN `count_mismatch`/`similarity_failure` reviews AND
+  the adjacency reorder — all meaningless in a single-language file) is
+  skipped on split halves via `split_lang_suffix`, the validator's own
+  signal; all other operations still run. `--dry-run` exits 0 on clean
+  split decks.
+
+Original phase plan (kept for reference):
 
 - **#609 (first — hard dead end)**: `sync apply` on an `id:title`
   `translate_edit` rejects EVERY `body` answer with a spurious `# %%`
@@ -409,20 +443,25 @@ OpenAI-compatible client, zero new deps) or close as status-quo.
 - **Post-triage issues folded in** (2026-07-11): #609, #610, #611, #615
   (sync/normalize — Phase 7), #617, #620 (build reliability — Phase 8),
   #614 (deferred harvest follow-up, tracks #568 fixes 2–4). See §3a.
+- **Phase 7 DONE except #615** (2026-07-11): #609 via PR #624, #610 via
+  PR #625, #611 via PR #626 (resolution details in the Phase 7 block).
+  #615 is owned by another session (design branch
+  `claude/issue-615-tag-parity-design`); still OPEN at session end.
 - No blockers, no pending decisions. Remaining, in priority order:
-  Phase 7 (#609/#610/#615/#611), Phase 8 (#620/#617), Phase 6 design tier
-  (#383+#381 — start with a verify-then-close pass, see the Phase 3
-  resolution note — plus #484, #167), #614 before the next harvest round.
+  #615 (other session; verify before Phase 8), Phase 8 (#620/#617),
+  Phase 6 design tier (#383+#381 — start with a verify-then-close pass,
+  see the Phase 3 resolution note — plus #484, #167), #614 before the
+  next harvest round.
 
 ## 5. Next Steps
 
-**Phases 1–5 are DONE — next is Phase 7 (§3a): #609 first (hard apply
-dead end), then #610 (destructive mechanical apply), then #615, with #611
-as a separable quick-win PR.** Then Phase 8 (#620/#617 job-ownership
-work, investigated together), then Phase 6a (#383+#381 — START with a
-verify-then-close pass against commit 90518611, see the Phase 3 resolution
-note). Schedule #614 just before the next big harvest round. The plan below
-documents how Phase 1 was executed (kept for reference):
+**Phases 1–5 and 7 (minus #615) are DONE — next is Phase 8 (§3a):
+#620/#617 job-ownership work, investigated together.** First check
+whether #615 landed (another session owns it; branch
+`claude/issue-615-tag-parity-design`). Then Phase 6a (#383+#381 — START
+with a verify-then-close pass against commit 90518611, see the Phase 3
+resolution note). Schedule #614 just before the next big harvest round.
+The plan below documents how Phase 1 was executed (kept for reference):
 
 1. Read memory topics `project_sync_one_sided_cold` and
    `project_sync_v3_design_audit`, plus the sync v3 design note (find via
