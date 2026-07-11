@@ -912,6 +912,106 @@ class TestTitleMacroBody:
         deck.assert_converged()
 
 
+class TestGroupSplitGuard:
+    """Issue #610: an id-keyed slide inserted before a run of un-id'd
+    positional shared cells moves them into the new slide's group on that
+    half only. The old pool's ``mirror_remove`` rows (which a mechanical
+    apply would execute, DELETING the twin's untouched cells) must be
+    reframed as answerless conflicts until the insert is mirrored.
+    """
+
+    CODE = (_shared_code("x"), _shared_code("y", 2), _shared_code("z", 3))
+
+    def _split_deck(self, tmp_path: Path) -> _Deck:
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("s0", "de", "Titel"), *self.CODE),
+            _build(HEADER_EN, _slide("s0", "en", "Title"), *self.CODE),
+        )
+        deck.record()
+        # EN inserts a new id-keyed slide BEFORE the run of positional cells:
+        # on EN they now belong to group s1, on DE they stay in group s0.
+        deck.write_en(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            _slide("s1", "en", "Setup"),
+            *self.CODE,
+        )
+        return deck
+
+    def test_group_split_is_never_framed_as_mechanical_removal(self, tmp_path: Path):
+        deck = self._split_deck(tmp_path)
+        _, diff = deck.diff()
+        actions = {(i.key, i.action) for i in diff.items}
+        assert ("id:s1", "translate_new") in actions
+        assert not any(a == "mirror_remove" for _, a in actions), actions
+        reframed = [i for i in diff.items if i.action == "ambiguous_alignment"]
+        assert len(reframed) == 3
+        assert all("group split" in i.detail for i in reframed)
+        assert any(o.kind == "suspected_group_split" for o in diff.observations)
+
+    def test_mechanical_apply_deletes_nothing(self, tmp_path: Path):
+        deck = self._split_deck(tmp_path)
+        de_before = deck.de_path.read_text(encoding="utf-8")
+        outcome = deck.apply()
+        assert outcome.error is None
+        assert deck.de_path.read_text(encoding="utf-8") == de_before
+        for name in ("x = 1", "y = 2", "z = 3"):
+            assert name in deck.de_path.read_text(encoding="utf-8")
+
+    def test_mirroring_the_insert_then_confirming_converges(self, tmp_path: Path):
+        # The issue's documented workaround, now driven through decisions:
+        # grow the twin slide (translate_new body), re-report — the framing
+        # flips to record_remove + two-sided verify_cold — confirm the pool.
+        deck = self._split_deck(tmp_path)
+        outcome = deck.apply(_decision("id:s1", body="#\n# # Einrichtung"))
+        assert _statuses(outcome)["id:s1"] == "applied", outcome.to_payload()
+        _, diff = deck.diff()
+        actions = {(i.key, i.action) for i in diff.items}
+        assert not any(a in ("mirror_remove", "ambiguous_alignment") for _, a in actions), actions
+        cold = [i.key for i in diff.items if i.action == "verify_cold"]
+        assert sorted(cold) == ["pos:s1/code/0", "pos:s1/code/1", "pos:s1/code/2"]
+        confirms = {key: doc_apply.Decision(key=key, choice="confirm") for key in cold}
+        outcome = deck.apply(confirms)
+        assert outcome.all_applied, outcome.to_payload()
+        deck.assert_converged()
+        for name in ("x = 1", "y = 2", "z = 3"):
+            assert name in deck.de_path.read_text(encoding="utf-8")
+
+    def test_partial_split_keeps_the_base_evidence_frozen(self, tmp_path: Path):
+        # A landing sibling row (propagate) must not re-record the old pool
+        # wholesale while the reframed removal is unresolved — the two-sided
+        # base entry is the only record the gone side ever existed.
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("s0", "de", "Titel"), *self.CODE),
+            _build(HEADER_EN, _slide("s0", "en", "Title"), *self.CODE),
+        )
+        deck.record()
+        # EN inserts s1 before z only; DE edits x (a propagate that lands).
+        deck.write_en(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            _shared_code("x"),
+            _shared_code("y", 2),
+            _slide("s1", "en", "Setup"),
+            _shared_code("z", 3),
+        )
+        deck.edit_de("x = 1", "x = 111")
+        _, diff = deck.diff()
+        reframed = [i for i in diff.items if i.action == "ambiguous_alignment"]
+        assert [i.key for i in reframed] == ["pos:s0/code/2"]
+        outcome = deck.apply()
+        assert outcome.error is None
+        ledger = doc_ledger.load(doc_ledger.ledger_path_for(deck.de_path))
+        entries = ledger.decks["slides_t"].members
+        z_entry = entries.get("pos:s0/code/2")
+        assert z_entry is not None, sorted(entries)
+        assert z_entry.entry.de_fp is not None and z_entry.entry.en_fp is not None
+        # z itself is untouched on DE.
+        assert "z = 3" in deck.de_path.read_text(encoding="utf-8")
+
+
 class TestDecisionParsing:
     def test_wrong_top_level_shape_error_teaches_the_schema(self):
         # The first error an agent sees must show the whole document shape —

@@ -45,7 +45,7 @@ from collections import Counter
 from difflib import SequenceMatcher
 from typing import Literal
 
-from attrs import define, field, frozen
+from attrs import define, evolve, field, frozen
 
 from clm.slides.bilingual_doc import (
     ORPHAN_GROUP,
@@ -435,11 +435,87 @@ class _Differ:
             )
 
     def _finish(self) -> DeckDiff:
+        split_observations = self._reframe_group_split_removals()
         return DeckDiff(
             items=self.items,
             in_sync_count=self.in_sync,
-            observations=list(self.current.observations),
+            observations=list(self.current.observations) + split_observations,
         )
+
+    def _reframe_group_split_removals(self) -> list[Observation]:
+        """Issue #610: never mirror a removal that looks like a group split.
+
+        An id-keyed slide inserted on one half *before* a run of un-id'd
+        positional cells moves those cells into the new slide's group on
+        that half only. Per-pool alignment then sees the old pool lose its
+        cells on that side (→ ``mirror_remove``, which would DELETE the
+        twin's untouched cells) while the new group's pool gains the same
+        cells one-sided (→ cold). When a removal's gone-side base
+        fingerprint matches a one-sided cold cell of another group on that
+        same side, the removal is reframed as an answerless conflict: mirror
+        the inserted slide on the twin (e.g. answer its ``translate_new``),
+        then re-report — the re-grouped pools frame safely.
+        """
+        cold_groups_by_fp: dict[tuple[Lang, str], set[str]] = {}
+        for item in self.items:
+            if item.action != "verify_cold" or not item.key.startswith("pos:"):
+                continue
+            member = item.member
+            if member is None or not member.is_one_sided or item.group is None:
+                continue
+            side: Lang = "de" if member.de is not None else "en"
+            cell = member.side(side)
+            assert cell is not None
+            fp = content_fingerprint(cell)
+            cold_groups_by_fp.setdefault((side, fp), set()).add(item.group)
+        if not cold_groups_by_fp:
+            return []
+        observations: dict[tuple[str, str, Lang], int] = {}
+        for i, item in enumerate(self.items):
+            if item.action != "mirror_remove" or not item.key.startswith("pos:"):
+                continue
+            if item.base is None or item.side is None or item.group is None:
+                continue
+            gone = item.side
+            gone_fp = item.base.side_fp(gone)
+            if gone_fp is None:
+                continue
+            rivals = sorted(
+                g for g in cold_groups_by_fp.get((gone, gone_fp), set()) if g != item.group
+            )
+            if not rivals:
+                continue
+            rival = rivals[0]
+            self.items[i] = evolve(
+                item,
+                outcome="conflict",
+                action="ambiguous_alignment",
+                direction="both",
+                detail=(
+                    f"positional member gone from the {gone} side, but an identical "
+                    f"un-ledgered cell sits in group {rival!r} on that side — likely "
+                    f"a group split (a slide inserted before this run of cells moved "
+                    f"them into its group), and a mechanical removal would delete the "
+                    f"twin's untouched cells; mirror the inserted slide on the twin "
+                    f"(e.g. answer its translate_new), then re-report"
+                ),
+            )
+            observations[(item.group, rival, gone)] = (
+                observations.get((item.group, rival, gone), 0) + 1
+            )
+        return [
+            Observation(
+                kind="suspected_group_split",
+                side=side,
+                detail=(
+                    f"group {old!r} lost {count} member(s) on the {side} side whose "
+                    f"bodies match un-ledgered one-sided members of group {new!r} — "
+                    f"likely a group split; mirror the inserted slide on the twin "
+                    f"before applying"
+                ),
+            )
+            for (old, new, side), count in sorted(observations.items())
+        ]
 
     # -- group renames ------------------------------------------------------
 
