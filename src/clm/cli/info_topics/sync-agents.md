@@ -116,6 +116,13 @@ One JSON document answers any subset of framed items:
   touching the wrong cell kind, or answering a stale handle is **rejected
   individually with a reason** while every valid answer still lands. Nothing
   already applied is lost.
+
+  **Exception — single-line j2 macro members** (e.g. `id:title`, the deck's
+  header macro): the cell is one j2 line, so the `body` answer is either the
+  full replacement line (`# {{ header_de("Neuer Titel") }}`) or the bare
+  replacement text (`Neuer Titel`), which is spliced into the existing
+  macro's quoted argument. The line is replaced in place; multi-line bodies
+  and `# %%` lines are rejected.
 - `choice` — one of the item's `answers` (e.g. `confirm`, `de`, `en`,
   `keep_twin`). For a `translate_edit` whose edit left the twin a faithful
   rendering, `{"key": …, "choice": "keep_twin"}` records the new baseline and

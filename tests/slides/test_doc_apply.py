@@ -842,6 +842,76 @@ class TestStampVsNew:
         deck.assert_converged()
 
 
+class TestTitleMacroBody:
+    """Issue #609: a body answer on the ``id:title`` header-macro member.
+
+    The title cell is a single j2 line — simultaneously the cell boundary and
+    the whole content — so the generic delimiter guard rejected EVERY valid
+    answer (dead end; ``keep_twin`` was the only accepted answer) and the
+    generic writer would have appended the text as a raw line instead of
+    replacing the macro line.
+    """
+
+    def _edited(self, tmp_path: Path) -> _Deck:
+        deck = _deck(tmp_path)
+        deck.edit_en('header_en("Title EN")', 'header_en("Weather Agent: Real Data")')
+        _, diff = deck.diff()
+        assert ("id:title", "translate_edit") in [(i.key, i.action) for i in diff.items]
+        return deck
+
+    def test_full_macro_line_replaces_the_twin_title(self, tmp_path: Path):
+        deck = self._edited(tmp_path)
+        outcome = deck.apply(
+            _decision("id:title", body='# {{ header_de("Wetter-Agent: Echte Daten") }}\n')
+        )
+        assert outcome.all_applied, outcome.to_payload()
+        de_text = deck.de_path.read_text(encoding="utf-8")
+        assert '# {{ header_de("Wetter-Agent: Echte Daten") }}\n' in de_text
+        assert "Titel DE" not in de_text  # replaced, not appended alongside
+        deck.assert_converged()
+
+    def test_bare_title_text_is_spliced_into_the_macro(self, tmp_path: Path):
+        deck = self._edited(tmp_path)
+        outcome = deck.apply(_decision("id:title", body="Wetter-Agent: Echte Daten"))
+        assert outcome.all_applied, outcome.to_payload()
+        de_text = deck.de_path.read_text(encoding="utf-8")
+        assert '# {{ header_de("Wetter-Agent: Echte Daten") }}' in de_text
+        assert "Titel DE" not in de_text
+        deck.assert_converged()
+
+    def test_multi_line_body_is_rejected_byte_unchanged(self, tmp_path: Path):
+        deck = self._edited(tmp_path)
+        before = deck.de_path.read_text(encoding="utf-8")
+        outcome = deck.apply(_decision("id:title", body="Neuer Titel\n# und noch eine Zeile"))
+        result = next(r for r in outcome.results if r.key == "id:title")
+        assert result.status == "rejected"
+        assert "single-line j2 macro" in result.reason
+        assert deck.de_path.read_text(encoding="utf-8") == before
+
+    def test_percent_delimiter_is_still_rejected(self, tmp_path: Path):
+        deck = self._edited(tmp_path)
+        before = deck.de_path.read_text(encoding="utf-8")
+        outcome = deck.apply(_decision("id:title", body='# %% [markdown] slide_id="evil"'))
+        result = next(r for r in outcome.results if r.key == "id:title")
+        assert result.status == "rejected"
+        assert deck.de_path.read_text(encoding="utf-8") == before
+
+    def test_bare_text_with_quotes_is_rejected(self, tmp_path: Path):
+        deck = self._edited(tmp_path)
+        outcome = deck.apply(_decision("id:title", body='Wetter "Agent"'))
+        result = next(r for r in outcome.results if r.key == "id:title")
+        assert result.status == "rejected"
+        assert "full j2 line" in result.reason
+
+    def test_keep_twin_still_works_on_the_title(self, tmp_path: Path):
+        deck = self._edited(tmp_path)
+        de_before = deck.de_path.read_text(encoding="utf-8")
+        outcome = deck.apply(_decision("id:title", choice="keep_twin"))
+        assert outcome.all_applied, outcome.to_payload()
+        assert deck.de_path.read_text(encoding="utf-8") == de_before
+        deck.assert_converged()
+
+
 class TestDecisionParsing:
     def test_wrong_top_level_shape_error_teaches_the_schema(self):
         # The first error an agent sees must show the whole document shape —
@@ -1035,13 +1105,16 @@ class TestReviewRegressions:
         payload = item.payload()
         assert 'b_mac("B de")' in payload["de"]
         assert 'b_mac("B en!")' in payload["en"]
-        # A j2 header line is itself a cell boundary, so a body answer is
-        # structurally rejected — never a wrong-cell write, byte-unchanged.
-        before = deck.de_path.read_text(encoding="utf-8")
+        # A body answer on the shifted slot must land on the slot's OWN DE
+        # cell (the holder rule) — never a neighboring slot's. Since #609 the
+        # macro-cell writer replaces the j2 line in place.
         outcome = deck.apply(_decision(item.key, body='# {{ b_mac("B de!") }}'))
         result = next(r for r in outcome.results if r.key == item.key)
-        assert result.status == "rejected"
-        assert deck.de_path.read_text(encoding="utf-8") == before
+        assert result.status == "applied", outcome.to_payload()
+        de_text = deck.de_path.read_text(encoding="utf-8")
+        assert '# {{ b_mac("B de!") }}' in de_text
+        assert 'a_mac("B de!")' not in de_text  # the neighbor slot is untouched
+        assert 'header_de("Titel DE")' in de_text
 
     def test_shifted_pairing_remove_decision_touches_only_the_survivor(self, tmp_path: Path):
         deck = self._shifted_deck(tmp_path)
