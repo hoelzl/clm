@@ -866,7 +866,10 @@ def _pool_scope(item: DiffItem) -> tuple[str, str] | None:
 #: downgrading the pending conflict to mechanical duplication/resurrection on
 #: the next report. (For two-sided members the drop-to-cold fail-safe is
 #: sound; one-sided evidence has no cold state to fall back to.)
-_POOL_FREEZING_ACTIONS = frozenset({"stamp_vs_new", "remove_vs_edit"})
+#: ``ambiguous_alignment`` joined for the #610 group-split shape: its
+#: reframed removal rows likewise carry a two-sided base entry whose gone
+#: side survives only as the base fingerprint.
+_POOL_FREEZING_ACTIONS = frozenset({"stamp_vs_new", "remove_vs_edit", "ambiguous_alignment"})
 
 
 def _frozen_pools(unresolved_items: list[DiffItem]) -> set[tuple[str, str]]:

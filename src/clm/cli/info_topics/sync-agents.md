@@ -79,9 +79,13 @@ supply a `body` + `side` to overwrite a stale twin in the same pass),
 pool vanished on that side — answer `treat_as_new` when the id'd cell really
 is new; see "Replacing a positional cell" below), `ambiguous_alignment`
 (genuinely ambiguous residue — rival id stamps, both sides adding different
-content into one pool; carries **no** answers: reconcile by editing, minting
-ids, then re-report), and the normalize-refusal deck item (run
-`clm slides normalize`, then re-report).
+content into one pool, or a suspected **group split**: an id-keyed slide
+inserted before a run of un-id'd positional cells moved them into its group
+on one half, so the "removals" the other half would mirror are really the
+same untouched cells under a new anchor — mirror the inserted slide on the
+twin (e.g. answer its `translate_new`), then re-report; carries **no**
+answers: reconcile by editing, minting ids, then re-report), and the
+normalize-refusal deck item (run `clm slides normalize`, then re-report).
 
 ## The decision document
 
