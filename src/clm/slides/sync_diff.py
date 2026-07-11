@@ -500,9 +500,9 @@ class _Differ:
                     f"(e.g. answer its translate_new), then re-report"
                 ),
             )
-            observations[(item.group, rival, gone)] = observations.get(
-                (item.group, rival, gone), 0
-            ) + 1
+            observations[(item.group, rival, gone)] = (
+                observations.get((item.group, rival, gone), 0) + 1
+            )
         return [
             Observation(
                 kind="suspected_group_split",
