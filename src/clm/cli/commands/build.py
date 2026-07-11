@@ -1717,12 +1717,15 @@ async def main_build(
 
     selected_targets = [t.strip() for t in targets.split(",") if t.strip()] if targets else None
 
-    # Parse --only-sections tokens. An empty value after stripping is an
-    # error, not a silent fallthrough to full build. Resolution happens in
+    # Parse --only-sections tokens. The option is repeatable (issue #616:
+    # repeated flags used to silently keep only the last occurrence), so
+    # `only_sections` is a tuple of raw values whose comma-separated tokens
+    # all accumulate. An empty value after stripping is an error, not a
+    # silent fallthrough to full build. Resolution happens in
     # initialize_paths_and_course once the spec has been loaded.
     selected_sections: list[str] | None = None
-    if only_sections is not None:
-        tokens = [t.strip() for t in only_sections.split(",")]
+    if only_sections:
+        tokens = [t.strip() for value in only_sections for t in value.split(",")]
         if not any(tokens) or not all(tokens):
             raise click.UsageError(
                 "--only-sections received an empty or whitespace-only value. "
@@ -2202,10 +2205,11 @@ async def main_build(
 @click.option(
     "--only-sections",
     type=str,
-    default=None,
+    multiple=True,
     help=(
         "Comma-separated selector tokens; rebuilds only those sections "
         "and leaves unselected section output directories untouched. "
+        "May be given multiple times; all occurrences accumulate. "
         "Bare tokens try id → 1-based index → case-insensitive substring "
         "match on either the German or English name. Use 'id:', 'idx:', "
         "or 'name:' prefixes to force a specific strategy. "

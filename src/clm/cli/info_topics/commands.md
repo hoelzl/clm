@@ -55,7 +55,7 @@ Key options:
 | `--clean` | Wipe each output root and regenerate from scratch (legacy flow; preserves nested `.git/`). Use for emergency recovery from a corrupted output tree. The default no longer wipes — see "Git-friendly output writes" below. |
 | `--no-sweep` | Disable the post-build stray-file sweep. Useful when iterating on a single section and you don't want orphans from other sections deleted. |
 | `--incremental` | Keep directories, only write newly processed files (skip cached ones). Implies `--no-sweep`. |
-| `--only-sections TEXT` | Comma-separated selector tokens; rebuild only those sections and leave unselected section output untouched. Dir-group processing is skipped in this mode. See "Iterating on a single section" below. |
+| `--only-sections TEXT` | Comma-separated selector tokens; rebuild only those sections and leave unselected section output untouched. May be given multiple times; all occurrences accumulate. Dir-group processing is skipped in this mode. See "Iterating on a single section" below. |
 | `--workers [direct\|docker]` | Worker execution mode |
 | `--notebook-workers N` | Number of notebook workers |
 | `--plantuml-workers N` | Number of PlantUML workers |
@@ -141,6 +141,10 @@ Selector syntax (comma-separated tokens):
 - Section indices are 1-based and count **all** sections in declared
   order, including disabled ones — toggling `enabled="false"` does not
   renumber the sections that follow.
+- The flag is **repeatable**: `--only-sections w03 --only-sections w04`
+  selects both sections, exactly like `--only-sections w03,w04`
+  (CLM {version}+; earlier versions silently kept only the last
+  occurrence).
 
 Selector errors:
 
