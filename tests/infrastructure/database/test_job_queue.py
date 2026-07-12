@@ -173,6 +173,151 @@ def test_get_next_job_without_mode_claims_tagged_jobs(job_queue):
     assert job_queue.get_next_job("notebook") is not None
 
 
+def _register_worker(job_queue, session_id, container_id, execution_mode="direct"):
+    """Insert a worker row so get_next_job can resolve its owning session.
+
+    Session-ownership claiming (issue #620) keys off the claiming worker's own
+    ``workers.session_id``, so these tests must materialise a worker row.
+    """
+    conn = job_queue._get_conn()
+    cursor = conn.execute(
+        """
+        INSERT INTO workers (worker_type, container_id, status, session_id, execution_mode)
+        VALUES ('notebook', ?, 'idle', ?, ?)
+        """,
+        (container_id, session_id, execution_mode),
+    )
+    worker_id = cursor.lastrowid
+    assert worker_id is not None
+    return worker_id
+
+
+def test_add_job_stamps_session_id(job_queue):
+    """add_job records the owning build session on the job row (issue #620)."""
+    job_id = job_queue.add_job(
+        job_type="notebook",
+        input_file="test.py",
+        output_file="test.ipynb",
+        content_hash="abc123",
+        payload={},
+        session_id="session-A",
+    )
+
+    job = job_queue.get_job(job_id)
+    assert job is not None
+    assert job.session_id == "session-A"
+
+
+def test_get_next_job_session_ownership(job_queue):
+    """A worker claims only jobs stamped with its own build session (issue #620).
+
+    A killed or concurrent build's still-pending jobs belong to a different
+    session and reference a workspace this worker cannot address; letting it
+    claim them makes it fail an innocent slide file with "is not in the subpath
+    of".
+    """
+    job_a = job_queue.add_job(
+        job_type="notebook",
+        input_file="a.py",
+        output_file="a.ipynb",
+        content_hash="a",
+        payload={},
+        session_id="session-A",
+    )
+
+    # A worker owned by session B must NOT claim session A's job.
+    worker_b = _register_worker(job_queue, "session-B", "container-b")
+    assert job_queue.get_next_job("notebook", worker_id=worker_b) is None
+
+    # A worker owned by session A claims it.
+    worker_a = _register_worker(job_queue, "session-A", "container-a")
+    claimed = job_queue.get_next_job("notebook", worker_id=worker_a)
+    assert claimed is not None
+    assert claimed.id == job_a
+
+
+def test_get_next_job_untagged_session_claimable_by_any_worker(job_queue):
+    """A job with no owning session (legacy / tests) is claimable by any worker."""
+    job_queue.add_job(
+        job_type="notebook",
+        input_file="a.py",
+        output_file="a.ipynb",
+        content_hash="a",
+        payload={},
+        # No session_id — legacy / unowned job.
+    )
+
+    worker_b = _register_worker(job_queue, "session-B", "container-b")
+    assert job_queue.get_next_job("notebook", worker_id=worker_b) is not None
+
+
+def test_get_next_job_sessionless_claimer_is_unrestricted(job_queue):
+    """A claimer with no resolvable session claims any job, session-owned or not.
+
+    worker_id=None (no worker row) and a worker row whose session_id is NULL
+    both fall back to pre-#620 claim-anything behaviour, so a build whose
+    workers happen to be unstamped can never deadlock on its own jobs.
+    """
+    job_queue.add_job(
+        job_type="notebook",
+        input_file="a.py",
+        output_file="a.ipynb",
+        content_hash="a",
+        payload={},
+        session_id="session-A",
+    )
+    job_queue.add_job(
+        job_type="notebook",
+        input_file="b.py",
+        output_file="b.ipynb",
+        content_hash="b",
+        payload={},
+        session_id="session-A",
+    )
+
+    # No worker row at all → unrestricted.
+    assert job_queue.get_next_job("notebook") is not None
+    # A worker row with a NULL session → also unrestricted.
+    legacy_worker = _register_worker(job_queue, None, "container-legacy")
+    assert job_queue.get_next_job("notebook", worker_id=legacy_worker) is not None
+
+
+def test_get_next_job_worker_claims_own_and_null_but_not_foreign(job_queue):
+    """A session-owned worker sees its own + NULL jobs, never another session's."""
+    own = job_queue.add_job(
+        job_type="notebook",
+        input_file="own.py",
+        output_file="own.ipynb",
+        content_hash="own",
+        payload={},
+        session_id="session-A",
+    )
+    legacy = job_queue.add_job(
+        job_type="notebook",
+        input_file="legacy.py",
+        output_file="legacy.ipynb",
+        content_hash="legacy",
+        payload={},
+    )
+    foreign = job_queue.add_job(
+        job_type="notebook",
+        input_file="foreign.py",
+        output_file="foreign.ipynb",
+        content_hash="foreign",
+        payload={},
+        session_id="session-B",
+    )
+
+    worker_a = _register_worker(job_queue, "session-A", "container-a")
+    claimed_ids = set()
+    while (job := job_queue.get_next_job("notebook", worker_id=worker_a)) is not None:
+        claimed_ids.add(job.id)
+
+    assert own in claimed_ids
+    assert legacy in claimed_ids
+    assert foreign not in claimed_ids
+
+
 def test_get_next_job_priority(job_queue):
     """Test that jobs are retrieved by priority."""
     # Add low priority job

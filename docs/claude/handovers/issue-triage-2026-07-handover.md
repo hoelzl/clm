@@ -1,12 +1,14 @@
 # Open-Issue Triage & Execution Plan (2026-07-10) — Handover
 
 **Status**: Triage COMPLETE; execution IN PROGRESS — Phases 1–5 DONE
-(#600, #539, #524/#382/#362, #568, #559); Phase 7 DONE except #615
-(#609/#610/#611 via PRs #624/#625/#626 on 2026-07-11; #615 is owned by
-another session — see the Phase 7 block). Next up **Phase 8 (#620/#617
-build reliability)**, then Phase 6 (design tier). This document is the
-source of truth for working through the open-issue backlog in priority
-order. Update phase statuses here as issues land.
+(#600, #539, #524/#382/#362, #568, #559); **Phase 7 fully DONE**
+(#609/#610/#611 via PRs #624/#625/#626 on 2026-07-11; #615 landed via
+PR #628, merged 2026-07-11 — see the Phase 7 block); **Phase 8 #620 DONE**
+(job session ownership, 2026-07-12 — see the Phase 8 block). Next up
+**Phase 8 #617** (own-pool teardown orphaning), then Phase 6 (design
+tier). This document is the source of truth for working through the
+open-issue backlog in priority order. Update phase statuses here as issues
+land.
 
 ## 1. Feature Overview
 
@@ -301,14 +303,24 @@ intrinsically bigger work. **Execution order: Phase 7 → Phase 8 →
 Phase 6.** (#614 is deferred like the rest of #568's fixes 2–4 that it
 tracks: schedule it just before the next big harvest round.)
 
-### Phase 7 [DONE except #615] — Sync agent-loop regressions + normalize gate (#609, #610, #615, #611)
+### Phase 7 [DONE] — Sync agent-loop regressions + normalize gate (#609, #610, #615, #611)
 
-**Resolution (2026-07-11)**: #609, #610, #611 shipped (PRs #624, #625,
-#626); **#615 deliberately left untouched** — another session owns it (its
-branch `claude/issue-615-tag-parity-design` carries a root-cause analysis
-and design; no fix landed as of this session's end, issue still OPEN).
-Check #615 before starting Phase 8; if abandoned, its design branch is the
-starting point.
+**Resolution (2026-07-11)**: all four shipped. #609, #610, #611 via PRs
+#624, #625, #626; **#615 via PR #628** (merged 2026-07-11 from branch
+`claude/issue-615-tag-parity-design`, which another session had scoped as a
+root-cause analysis + design, then completed to a full fix). #615 fix
+(four layers): tag parity is now an orthogonal aspect row in the v3 differ
+— one attributable mover frames a mechanical `mirror_tags`; both-moved /
+baseline-carried / incomplete-baseline divergences frame a new
+`conflict_tags` (mirrors only the chosen side's tag set, suppresses the
+member's other rows for the pass); apply/ledger never blesses members with
+unresolved sibling rows (new honest `deferred` record status);
+`sync verify` gains a non-gating `tag-parity` warning with three-tier
+pairing; `sync-agents`/`commands` info topics + design doc
+`docs/claude/design/sync-tag-parity-conflicts.md` + changelog fragment.
+Decks damaged by the old banking behavior re-frame automatically — no
+ledger migration. Shipped with 38 new tests + a post-implementation
+adversarial multi-agent review (11 findings fixed).
 
 - **#609 (PR #624)**: root cause — the `id:title` member is a *single-line
   j2 macro cell*: its `# {{ header_de(…) }}` line is simultaneously the
@@ -371,19 +383,38 @@ amendments-log row for ANY engine change). #609/#610 have documented
 workarounds in their issue bodies — as with #600, the workaround is the
 oracle for what the fixed flow should converge to.
 
-### Phase 8 [TODO] — Build reliability: job/session ownership (#620, #617)
+### Phase 8 [IN PROGRESS — #620 DONE, #617 TODO] — Build reliability: job/session ownership (#620, #617)
+
+**#620 DONE (2026-07-12)**: implemented exactly the planned fix direction —
+session id on job rows + claim filter — as its own PR. Schema v11 adds
+`jobs.session_id`; `add_job` stamps it and the backend forwards its
+`worker_session_id` (already wired from `lifecycle_manager.session_id`) on
+every submit; `get_next_job` resolves the claiming worker's own
+`workers.session_id` and filters `(session_id IS NULL OR session_id = ?)`.
+The one filter site covers **both** claim paths (Direct `worker_base`,
+Docker `worker_routes`) since both pass `worker_id` and the query runs
+host-side. A worker with no resolvable session stays unrestricted (legacy /
+tests), so a build can never deadlock on its own jobs; a killed/concurrent
+build's residue (different session) is simply never claimed and sits
+harmless. The issue's **optional** extras were deliberately deferred: fix #2
+(requeue an unmappable job instead of failing it — largely moot once foreign
+jobs aren't claimed, and a naive requeue risks silent retry loops) and fix #3
+(dead-session sweep — unsafe without real dead-session detection). Shipped
+with schema-migration, session-filter, and backend-wiring tests (the schema
+version-canary in `test_worker_heartbeats.py` bumped to 11). **#617 (own-pool
+teardown orphaning) is next — investigate as its own PR.**
 
 Investigate together — likely the same #564/#594/#599 family, and #617's
 diagnostic even names the suspected race.
 
-- **#620**: `jobs` rows carry no session ownership, so workers claim a
-  killed/concurrent build's pending jobs and fail them with
+- **#620 [DONE]**: `jobs` rows carried no session ownership, so workers claimed a
+  killed/concurrent build's pending jobs and failed them with
   `is not in the subpath of` path errors attributed to innocent slide
-  files (a killed Docker build deterministically poisons the next one).
-  This is the residual half of #564's gap: #564 filtered claiming by
-  `execution_mode`, #594/#599 added ownership for *workers*, jobs still
-  have none. Fix direction is clear (session/build id on job rows +
-  claim filter).
+  files (a killed Docker build deterministically poisoned the next one).
+  This was the residual half of #564's gap: #564 filtered claiming by
+  `execution_mode`, #594/#599 added ownership for *workers*, jobs had
+  none. Fixed by stamping jobs with the owning build session and filtering
+  claims by it (see the resolution note above).
 - **#617**: intermittent `worker died mid-job (orphaned at pool
   shutdown)` failing a batch of jobs mid-stage in a single uninterrupted
   Direct-mode build (8 of 38 jobs in the observed run; byte-identical
@@ -443,22 +474,26 @@ OpenAI-compatible client, zero new deps) or close as status-quo.
 - **Post-triage issues folded in** (2026-07-11): #609, #610, #611, #615
   (sync/normalize — Phase 7), #617, #620 (build reliability — Phase 8),
   #614 (deferred harvest follow-up, tracks #568 fixes 2–4). See §3a.
-- **Phase 7 DONE except #615** (2026-07-11): #609 via PR #624, #610 via
-  PR #625, #611 via PR #626 (resolution details in the Phase 7 block).
-  #615 is owned by another session (design branch
-  `claude/issue-615-tag-parity-design`); still OPEN at session end.
+- **Phase 7 fully DONE** (2026-07-11): #609 via PR #624, #610 via
+  PR #625, #611 via PR #626, **#615 via PR #628** (resolution details in
+  the Phase 7 block). All four issues CLOSED.
+- **Phase 8 #620 DONE** (2026-07-12): job session ownership — schema v11
+  `jobs.session_id`, stamp on submit, session-filtered claim (resolution
+  details in the Phase 8 block). #617 still open.
 - No blockers, no pending decisions. Remaining, in priority order:
-  #615 (other session; verify before Phase 8), Phase 8 (#620/#617),
-  Phase 6 design tier (#383+#381 — start with a verify-then-close pass,
-  see the Phase 3 resolution note — plus #484, #167), #614 before the
-  next harvest round.
+  Phase 8 **#617** (own-pool teardown orphaning — investigate as its own
+  PR), Phase 6 design tier (#383+#381 — start with a verify-then-close
+  pass, see the Phase 3 resolution note — plus #484, #167), #614 before
+  the next harvest round.
 
 ## 5. Next Steps
 
-**Phases 1–5 and 7 (minus #615) are DONE — next is Phase 8 (§3a):
-#620/#617 job-ownership work, investigated together.** First check
-whether #615 landed (another session owns it; branch
-`claude/issue-615-tag-parity-design`). Then Phase 6a (#383+#381 — START
+**Phases 1–5 and 7 are DONE; Phase 8 #620 is DONE — next is Phase 8
+#617** (own-pool teardown orphaning: a build's own in-flight jobs marked
+`worker died mid-job (orphaned at pool shutdown)` mid-stage in an
+uninterrupted Direct build). Investigate the `mark_orphaned_jobs_failed`
+timing vs. pool teardown across stage boundaries; ship as its own PR (the
+#620 ownership work may illuminate it). Then Phase 6a (#383+#381 — START
 with a verify-then-close pass against commit 90518611, see the Phase 3
 resolution note). Schedule #614 just before the next big harvest round.
 The plan below documents how Phase 1 was executed (kept for reference):
@@ -516,11 +551,21 @@ their listed sites — see each phase's resolution block for what changed:
   not re-located during this fold-in, start from the issues' repro output
 - `#611` (Phase 7) → `src/clm/slides/normalizer.py` review pass; copy the
   split-file exemption from `src/clm/slides/validator.py`
-- `#620/#617` (Phase 8) → job claiming in
-  `src/clm/infrastructure/backends/sqlite_backend.py` and the jobs schema
-  (no session column today); `worker_base._convert_path_to_container()`
-  is where #620's misattributed error surfaces; #594/#599 PRs are the
-  pattern for the ownership half already done for workers
+- `#620` (Phase 8, DONE) → `src/clm/infrastructure/database/schema.py`
+  (`jobs.session_id` column + v10→v11 migration, `DATABASE_VERSION`),
+  `src/clm/infrastructure/database/job_queue.py` (`add_job` stamp +
+  `get_next_job` session-filter, `Job.session_id`),
+  `src/clm/infrastructure/backends/sqlite_backend.py` (`_submit_job_blocking`
+  forwards `worker_session_id`). Tests: `tests/infrastructure/database/
+  test_job_queue.py` + `test_schema.py`, `tests/infrastructure/backends/
+  test_sqlite_backend_resilience.py`; version-canary bumped in
+  `test_worker_heartbeats.py`
+- `#617` (Phase 8, TODO) → `job_queue.mark_orphaned_jobs_failed`
+  (`ORPHAN_ERROR_MESSAGE`) and its caller
+  `WorkerLifecycleManager.stop_managed_workers` — trace teardown timing vs.
+  stage boundaries; `worker_base._convert_path_to_container()` was where
+  #620's misattributed error surfaced (kept here for the #617 investigator);
+  #594/#599 PRs are the ownership pattern
 - `#484` → `src/clm/infrastructure/backends/sqlite_backend.py`
   (`_execute_operation_impl`, poll loop `record_write` at ~:564),
   `src/clm/core/output_write_registry.py` (:292,294 hash-in-critical-section)
