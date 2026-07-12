@@ -598,16 +598,26 @@ class TestStopManagedWorkers:
             config={},
         )
 
+    # Session the orphan tests run under: the manager is constructed with it
+    # and _seed_inflight_job stamps it on the jobs rows, because the teardown
+    # sweep is session-scoped (only a build's own in-flight jobs are reaped).
+    SESSION_ID = "test-orphan-session"
+
     @staticmethod
-    def _seed_inflight_job(db_path, input_file: str) -> int:
+    def _seed_inflight_job(db_path, input_file: str, session_id: str | None = None) -> int:
         """Insert a jobs row that looks like a worker claimed it and died.
 
         The real code path would go through JobQueue.get_next_job, but
         building a full worker+jobs fixture is overkill for this test.
         An explicit INSERT keeps the setup obvious and matches the shape
-        the orphan query looks for.
+        the orphan query looks for. ``session_id`` defaults to the class
+        SESSION_ID so the row belongs to the manager under test; pass a
+        different value to simulate a concurrent build's job.
         """
         from clm.infrastructure.database.job_queue import JobQueue
+
+        if session_id is None:
+            session_id = TestStopManagedWorkers.SESSION_ID
 
         jq = JobQueue(db_path)
         try:
@@ -616,14 +626,14 @@ class TestStopManagedWorkers:
                 """
                 INSERT INTO jobs (
                     job_type, status, input_file, output_file, content_hash,
-                    payload, started_at, worker_id
+                    payload, started_at, worker_id, session_id
                 )
                 VALUES (
                     'notebook', 'processing', ?, 'out.ipynb', 'hash',
-                    '{}', CURRENT_TIMESTAMP, 42
+                    '{}', CURRENT_TIMESTAMP, 42, ?
                 )
                 """,
-                (input_file,),
+                (input_file, session_id),
             )
             job_id = cursor.lastrowid
             assert job_id is not None
@@ -670,6 +680,7 @@ class TestStopManagedWorkers:
                 config=mock_config,
                 db_path=db_path,
                 workspace_path=workspace_path,
+                session_id=self.SESSION_ID,
             )
             manager.pool_manager = MagicMock()
 
@@ -704,20 +715,37 @@ class TestStopManagedWorkers:
     ):
         """stop_managed_workers returns the orphaned jobs so the build can fold
         them into the summary/exit policy instead of silently banking them in
-        the jobs DB (issue #617)."""
+        the jobs DB (issue #617). A concurrent build's in-flight job must NOT
+        appear in the returned orphans (session-scoped sweep, #597/#620)."""
+        from clm.infrastructure.database.job_queue import JobQueue
+
         orphan_id = self._seed_inflight_job(db_path, "orphaned/example.py")
+        foreign_id = self._seed_inflight_job(
+            db_path, "foreign/other-build.py", session_id="some-other-session"
+        )
 
         with patch("clm.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
             manager = WorkerLifecycleManager(
                 config=mock_config,
                 db_path=db_path,
                 workspace_path=workspace_path,
+                session_id=self.SESSION_ID,
             )
             manager.pool_manager = MagicMock()
             orphans = manager.stop_managed_workers([self._make_worker_info()])
 
         assert [o["id"] for o in orphans] == [orphan_id]
         assert orphans[0]["input_file"] == "orphaned/example.py"
+
+        # The foreign session's in-flight job was neither reaped nor reported.
+        jq = JobQueue(db_path)
+        try:
+            foreign_row = jq.get_job(foreign_id)
+        finally:
+            jq.close()
+        assert foreign_row is not None
+        assert foreign_row.status == "processing"
+        assert foreign_row.error is None
 
     def test_stop_returns_empty_list_on_clean_shutdown(self, db_path, workspace_path, mock_config):
         """A clean shutdown (no in-flight jobs) returns an empty list, not None,
@@ -743,6 +771,7 @@ class TestStopManagedWorkers:
                 config=mock_config,
                 db_path=db_path,
                 workspace_path=workspace_path,
+                session_id=self.SESSION_ID,
             )
             manager.pool_manager = MagicMock()
 

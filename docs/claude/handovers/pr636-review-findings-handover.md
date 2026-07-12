@@ -1,7 +1,7 @@
 # Handover: PR #636 Adversarial-Review Findings (worker liveness follow-ups)
 
-**Status**: Phases 1+2 DONE (2026-07-12, PR A — monitor correctness); next is
-Phase 3 (session-scope `mark_orphaned_jobs_failed`), then Phases 4+5.
+**Status**: Phases 1+2 DONE (2026-07-12, PR A #639, merged); Phase 3 DONE
+(2026-07-12, PR B — orphan sweep session scoping); next is Phases 4+5 (PR C).
 This document is the source of truth for addressing the five findings from the
 post-merge adversarial review of PR #636 (the issue #617 fix, merged as
 `f96f8ab6` / commit `d5467df7`).
@@ -145,7 +145,22 @@ SQLite UTC `datetime('now', ...)`, host-TZ-independent) with a shared
   alive); a dead process is still reaped within one cycle; the Docker hung
   heuristic still fires for a genuinely stale+idle-CPU busy container.
 
-### Phase 3 [TODO] — Session-scope `mark_orphaned_jobs_failed` (Finding 3, MEDIUM)
+### Phase 3 [DONE] — Session-scope `mark_orphaned_jobs_failed` (Finding 3, MEDIUM)
+
+**Resolution (2026-07-12)**: implemented as planned (PR B, branch
+`claude/pr636-phase3-orphan-sweep-scope`). `mark_orphaned_jobs_failed` takes
+an optional `session_id`; when given, the orphan SELECT adds strict
+`AND session_id = ?` (NULL-session rows are left to the unscoped maintenance
+sweep — `clm workers` reap is unchanged). `stop_managed_workers` passes
+`self.session_id` (always non-None). The predicted gotcha was real:
+`_seed_inflight_job` seeded NULL session_ids, so it now stamps a fixed
+`SESSION_ID` that the orphan tests also pass to the manager ctor. New tests:
+scoped-reaps-only-own-session, scoped-ignores-NULL-session-rows,
+unscoped-reaps-all; the returns-orphans lifecycle test gained a
+foreign-session row that must be neither reaped nor reported. Nuance: a
+NULL-session job claimed by a build's worker now survives that build's
+teardown sweep (intentional; the unscoped reap cleans it up). Original plan
+below kept for reference.
 
 - **What**: `JobQueue.mark_orphaned_jobs_failed`
   (`src/clm/infrastructure/database/job_queue.py:415-` , SELECT at :451-459)
@@ -244,18 +259,23 @@ SQLite UTC `datetime('now', ...)`, host-TZ-independent) with a shared
   early paths — none of those need changes. **Phases 1+2 implemented**
   (2026-07-12) on branch `claude/pr636-findings-monitor-correctness` (PR A:
   `src/clm/infrastructure/workers/pool_manager.py` + its tests + changelog
-  fragment `changelog.d/617-monitor-tz-and-busy-heartbeat.fixed.md`); see the
-  phase resolution notes.
-- **In progress**: nothing (PR A in review/auto-merge).
+  fragment `changelog.d/617-monitor-tz-and-busy-heartbeat.fixed.md`) — merged
+  as PR #639. **Phase 3 implemented** (2026-07-12) on branch
+  `claude/pr636-phase3-orphan-sweep-scope` (PR B: `job_queue.py`,
+  `lifecycle_manager.py`, their tests, fragment
+  `changelog.d/617-orphan-sweep-session-scope.fixed.md`); see the phase
+  resolution notes.
+- **In progress**: nothing (PR B in review/auto-merge).
 - **Blockers / open questions**:
   - Phase 2 design choice (unconditional process check vs. background
     heartbeat thread) — recommendation is the former; confirm with maintainer
     only if they push back in PR review.
   - Phase 5.2 (reused-worker gap): accept-and-document vs. new issue —
     default to accept-and-document.
-- **Tests**: repo suite green at `f96f8ab6` (PR #636's CI passed). NOTE: the
-  new monitor test is latently host-TZ-dependent (see Phase 1) — it passes
-  here and on CI but would fail west of UTC; that is itself part of Finding 1.
+- **Tests**: repo suite green through PR #639; Phase 3 slice
+  (`test_job_queue.py`, `test_lifecycle_manager.py`, `test_workers_reap.py`)
+  green with ruff + mypy clean. The formerly host-TZ-dependent monitor test
+  was fixed in Phase 1.
 - **Worktree note**: review was done in worktree `ancient-painting-charm`,
   whose branch `worktree-ancient-painting-charm` was reset to `origin/master`
   (`f96f8ab6`). Start fix work by branching off it:
@@ -264,9 +284,9 @@ SQLite UTC `datetime('now', ...)`, host-TZ-independent) with a shared
 
 ## 5. Next Steps
 
-**Start Phase 3** (session-scope `mark_orphaned_jobs_failed`) — see the Phase 3
-block for the full plan; branch fresh off `origin/master` once PR A has
-merged. Then Phases 4+5 as PR C.
+**Start Phase 4** (honest orphan exit message) together with Phase 5 as PR C —
+see the Phase 4/5 blocks for the full plans; branch fresh off `origin/master`
+once PR B has merged.
 
 ## 6. Key Files & Architecture
 

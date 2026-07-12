@@ -288,10 +288,14 @@ class WorkerLifecycleManager:
         # race with us) and before log_pool_stopped() so the orphan count
         # can be included in the pool_stopped event metadata. Without this
         # pass, orphans would stay stuck in "processing" status forever and
-        # ``clm status`` would silently under-report failures.
+        # ``clm status`` would silently under-report failures. Scoped to this
+        # manager's session so a concurrent build's in-flight jobs in a shared
+        # jobs DB are never reaped or reported here (#597/#620 ownership rule).
         orphans: list[dict[str, Any]] = []
         try:
-            orphans = self.event_logger.job_queue.mark_orphaned_jobs_failed()
+            orphans = self.event_logger.job_queue.mark_orphaned_jobs_failed(
+                session_id=self.session_id
+            )
         except Exception as exc:
             # Never let orphan detection break pool teardown — downstream
             # cleanup (log_pool_stopped, managed_workers clearing) must
