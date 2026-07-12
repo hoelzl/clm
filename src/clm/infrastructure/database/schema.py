@@ -8,7 +8,7 @@ workers.
 import sqlite3
 from pathlib import Path
 
-DATABASE_VERSION = 10
+DATABASE_VERSION = 11
 
 SCHEMA_SQL = """
 -- Jobs table (replaces message queue)
@@ -47,6 +47,16 @@ CREATE TABLE IF NOT EXISTS jobs (
     -- from stealing jobs that need a toolchain only the Docker image has,
     -- such as the xeus-cpp C++ kernel.
     execution_mode TEXT,
+
+    -- Owning build session (v11): the session_id of the WorkerLifecycleManager
+    -- that submitted this job, mirroring workers.session_id (issue #594). A
+    -- worker claims only jobs whose session matches its own (plus NULL legacy
+    -- jobs), so a killed or concurrent build's still-pending jobs — which
+    -- reference a workspace this worker cannot address — are never stolen and
+    -- failed with "is not in the subpath of" against an innocent slide file
+    -- (issue #620). NULL means any worker of the matching job_type/mode may
+    -- claim it (legacy / tests).
+    session_id TEXT,
 
     FOREIGN KEY (worker_id) REFERENCES workers(id)
 );
@@ -444,4 +454,19 @@ def migrate_database(conn: sqlite3.Connection, from_version: int, to_version: in
             if "duplicate column name" not in str(e).lower():
                 raise
         conn.execute("INSERT OR IGNORE INTO schema_version (version) VALUES (10)")
+        conn.commit()
+
+    # Migration from v10 to v11: jobs carry the owning build session
+    # (session_id) so a worker claims only its own session's jobs (or NULL
+    # legacy jobs) and never steals a killed/concurrent build's pending jobs
+    # that reference a workspace it cannot address. See the column comment in
+    # SCHEMA_SQL and issue #620.
+    if from_version < 11 <= to_version:
+        try:
+            conn.execute("ALTER TABLE jobs ADD COLUMN session_id TEXT")
+        except sqlite3.OperationalError as e:
+            # Column might already exist (fresh SCHEMA_SQL ran first)
+            if "duplicate column name" not in str(e).lower():
+                raise
+        conn.execute("INSERT OR IGNORE INTO schema_version (version) VALUES (11)")
         conn.commit()

@@ -516,6 +516,11 @@ class SqliteBackend(LocalOpsBackend):
             payload=payload_dict,
             correlation_id=correlation_id,
             execution_mode=self.worker_execution_modes.get(job_type),
+            # Stamp the owning build session so only this build's workers claim
+            # the job (issue #620). Mirrors the worker-row session stamping the
+            # same lifecycle manager applies (issue #594); None (tests, legacy
+            # callers) leaves the job claimable by any worker.
+            session_id=self.worker_session_id,
         )
         return ("submitted", job_id)
 

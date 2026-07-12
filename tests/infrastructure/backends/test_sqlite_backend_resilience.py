@@ -732,6 +732,29 @@ async def test_activation_timeout_dead_marking_respects_ownership(temp_db, temp_
 
 
 @pytest.mark.asyncio
+async def test_submitted_job_is_stamped_with_worker_session_id(temp_db, temp_workspace):
+    """Issue #620: the backend stamps its build session onto every submitted
+    job, so only this build's own workers can claim it — a killed or concurrent
+    build's workers (a different session) never drain and fail it against an
+    innocent slide file."""
+    backend = _backend(temp_db, temp_workspace, worker_session_id="session-A")
+    try:
+        status, job_id = backend._submit_job_blocking(_MockPayload(), "notebook")
+        assert status == "submitted"
+        assert job_id is not None
+
+        queue = JobQueue(temp_db)
+        try:
+            job = queue.get_job(job_id)
+            assert job is not None
+            assert job.session_id == "session-A"
+        finally:
+            queue.close()
+    finally:
+        await backend.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_get_available_workers_no_queue(temp_db, temp_workspace):
     backend = _backend(temp_db, temp_workspace)
     try:
