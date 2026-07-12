@@ -81,7 +81,8 @@ supply a `body` + `side` to overwrite a stale twin in the same pass),
 `stamp_vs_new` (a new id'd cell appeared while a positional cell of the same
 pool vanished on that side — answer `treat_as_new` when the id'd cell really
 is new; see "Replacing a positional cell" below), `remove_vs_split` (a
-removal whose vanished cell is byte-identical to an un-ledgered one-sided
+removal whose vanished cell is byte-identical — or body-identical, when
+only header attrs/tags changed — to an un-ledgered one-sided
 cell of another group — either a suspected **group split**: an id-keyed
 slide inserted before a run of un-id'd positional cells moved them into its
 group on one half, so the "removals" the other half would mirror are really

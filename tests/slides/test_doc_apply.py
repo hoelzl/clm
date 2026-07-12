@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 from attrs import evolve
 
-from clm.slides import doc_apply, doc_ledger
+from clm.slides import doc_apply, doc_ledger, sync_diff
 from clm.slides.bilingual_doc import SideCell
 from clm.slides.doc_lenses import LoadedBundle, load_bundle
 from clm.slides.sync_diff import DeckDiff, DiffItem, diff_outcome
@@ -1227,6 +1227,117 @@ class TestRemoveVsSplit:
         assert len(obs) == 1, [(o.kind, o.detail) for o in diff.observations]
         assert "similar" in obs[0].detail
         assert "'s1'" in obs[0].detail
+
+    def test_attr_only_change_on_moved_cells_still_reframes(self, tmp_path: Path):
+        # #630 adversarial review: content_fingerprint covers header attrs,
+        # so a moved cell that merely gained a tag dodged the exact guard
+        # and apply deleted the twin's cell. The gone side's recorded BODY
+        # fingerprint is still exact evidence and must reframe.
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("s0", "de", "Titel"), _shared_code("marker", 5)),
+            _build(HEADER_EN, _slide("s0", "en", "Title"), _shared_code("marker", 5)),
+        )
+        deck.record()
+        deck.write_en(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            _slide("s1", "en", "Setup"),
+            _shared_code("marker", 5, tags="changed"),
+        )
+        _, diff = deck.diff()
+        row = next(i for i in diff.items if i.key == "pos:s0/code/0")
+        assert row.action == "remove_vs_split", (row.action, row.detail)
+        assert "'s1'" in row.detail
+
+    def test_diverged_base_has_no_similarity_proxy(self, tmp_path: Path):
+        # #630 adversarial review: when the shared base recorded different
+        # bytes per side, the surviving twin's body says nothing about what
+        # vanished — the similar-bodies scan must stay silent instead of
+        # comparing wrong-side text.
+        de_cell = '# %% tags=["keep"]\nshared_setup = 111\nprint(shared_setup)\n\n'
+        en_cell = '# %% tags=["keep"]\nshared_setup = 222\nprint(shared_setup)\n\n'
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("s0", "de", "Titel"), de_cell),
+            _build(HEADER_EN, _slide("s0", "en", "Title"), en_cell),
+        )
+        deck.record()
+        deck.write_en(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            _slide("s1", "en", "Setup"),
+            '# %% tags=["keep"]\nshared_setup = 223\nprint(shared_setup)\n\n',
+        )
+        _, diff = deck.diff()
+        row = next(i for i in diff.items if i.key == "pos:s0/code/0")
+        assert row.action == "mirror_remove", (row.action, row.detail)
+        assert not [o for o in diff.observations if o.kind == "suspected_group_split"]
+
+    def test_exact_match_does_not_hide_the_similar_split_target(self, tmp_path: Path):
+        # #630 adversarial review: a coincidental byte-match in one group
+        # must not suppress the similar-bodies evidence naming the real
+        # (edited) split target — the agent would inspect only the named
+        # group, answer remove, and delete the split-away cells.
+        big = '# %% tags=["keep"]\nsetup_block = compute(1, 2)\nprint(setup_block)\n\n'
+        edited = '# %% tags=["keep"]\nsetup_block = compute(1, 3)\nprint(setup_block)\n\n'
+        deck = _Deck(
+            tmp_path,
+            _build(
+                HEADER_DE,
+                _slide("s0", "de", "Titel"),
+                big,
+                _slide("sB", "de", "Zweite"),
+                _shared_code("q", 7),
+            ),
+            _build(
+                HEADER_EN,
+                _slide("s0", "en", "Title"),
+                big,
+                _slide("sB", "en", "Second"),
+                _shared_code("q", 7),
+            ),
+        )
+        deck.record()
+        # EN: s0's cell is split into the new slide sN with an edit, while
+        # the unrelated group sB independently gains a byte-identical copy.
+        deck.write_en(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            _slide("sN", "en", "Neu"),
+            edited,
+            _slide("sB", "en", "Second"),
+            _shared_code("q", 7),
+            big,
+        )
+        _, diff = deck.diff()
+        row = next(i for i in diff.items if i.key == "pos:s0/code/0")
+        assert row.action == "remove_vs_split"
+        assert "'sB'" in row.detail
+        similar = [
+            o
+            for o in diff.observations
+            if o.kind == "suspected_group_split" and "similar" in o.detail
+        ]
+        assert similar, [(o.kind, o.detail) for o in diff.observations]
+        assert "'sN'" in similar[0].detail
+
+    def test_body_similarity_is_budgeted_and_memoized(self):
+        # #630 adversarial review: ratio() is quadratic and reorganized
+        # decks compare many pairs — the scan caches verdicts and stops
+        # matching once the full-ratio budget is spent (warn-only feature,
+        # best-effort by design).
+        sim = sync_diff._BodySimilarity()
+        base = "line one\nline two\nline three\nline four\nline five"
+        close = base.replace("five", "5ive")
+        assert sim.similar(base, base) is True  # equality costs no budget
+        sim._budget = 1
+        assert sim.similar(close, base) is True  # spends the last budget
+        assert sim._budget == 0
+        assert sim.similar(close, base) is True  # cached, no budget needed
+        other = base.replace("two", "2wo")
+        assert sim.similar(other, base) is False  # budget exhausted
+        assert sim.similar("x" * 3000, "x" * 3000) is False  # oversized skipped
 
 
 class TestDecisionParsing:
