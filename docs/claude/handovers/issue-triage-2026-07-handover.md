@@ -5,10 +5,12 @@
 (#609/#610/#611 via PRs #624/#625/#626 on 2026-07-11; #615 landed via
 PR #628, merged 2026-07-11 — see the Phase 7 block); **Phase 8 DONE**
 (#620 job session ownership + #617 orphan-pool-shutdown, 2026-07-12 — see
-the Phase 8 block). Next up **Phase 6 (design tier)** — start with the
-#383+#381 verify-then-close pass. This document is the source of truth for
-working through the open-issue backlog in priority order. Update phase
-statuses here as issues land.
+the Phase 8 block); **Phase 6a DONE** (#383 + #381 closed as pre-shipped in
+clm 1.15.0 via commit `90518611`, 2026-07-12 — a verify-then-close pass, see
+the Phase 6 block). Next up **Phase 6b (#484)** — offload cache-hit replay off
+the event loop. This document is the source of truth for working through the
+open-issue backlog in priority order. Update phase statuses here as issues
+land.
 
 ## 1. Feature Overview
 
@@ -445,9 +447,9 @@ diagnostic even names the suspected race.
   recovery; fixed by wiring the session-scoped health monitor plus three
   hardening layers (see the resolution note above).
 
-### Phase 6 [TODO] — Design-tier work (when capacity allows)
+### Phase 6 [IN PROGRESS] — Design-tier work (when capacity allows)
 
-**6a — #383 + #381: output-structure defaults cluster.** Make
+**6a [DONE] — #383 + #381: output-structure defaults cluster.** Make
 shared/trainer/speaker (access-control-by-path) the default when a spec has
 no `<output-targets>`; default participant kinds to code-along+completed
 (subsumes closed #380); revisit remote-template default
@@ -459,6 +461,25 @@ always emits `speaker/` but `clm git` skips it unless
 vs `OutputTarget.default_target()` ALL_KINDS). **Breaking default change**:
 write a design doc in `docs/claude/design/` first; needs migration info
 topic + downstream course-repo coordination.
+
+**Resolution (2026-07-12)**: verify-then-close pass — **NO code change**.
+Both #383 and #381 turned out to be already fully shipped by commit
+`90518611` ("feat(output): default to shared/trainer/speaker structure (#380,
+#381, #382, #383)", released in clm **1.15.0**) and merely never closed — the
+same implemented-but-never-closed pattern as #382 in Phase 3, exactly as this
+handover predicted. Verified in current `origin/master`:
+`DEFAULT_OUTPUT_TARGET_SPECS` (`course_spec.py:1105`; `shared`=
+{code-along, completed} / `trainer`={code-along, completed, trainer} /
+`speaker`={recording}) is applied via the new `CourseSpec.effective_output_targets`
+property (`:1993`), consumed uniformly by `clm build`, `clm git`, and
+`clm zip`; `derive_remote_url` defaults to `{repository_base}/{remote_path}/{repo}`
+when a remote-path is set (`:802-803`) and requires `<repository-base>` only
+when the active template actually references `{repository_base}` (`:810`);
+`find_output_repos` (`git.py:387-414`) always **lists** the speaker tier with
+its remote gated by `<include-speaker>`, dissolving the #381 asymmetry. #380 is
+also fully subsumed (already CLOSED — no `partial` by default). Both issues
+closed with evidence comments citing `90518611`. No design doc / migration /
+changelog was needed (the change and its migration note shipped with 1.15.0).
 
 **6b — #484: offload cache-hit replay off the event loop.** Follow-up to
 PR #482's freeze fix. The full "split, don't lock" design is written in the
@@ -507,18 +528,25 @@ OpenAI-compatible client, zero new deps) or close as status-quo.
   liveness recovery, `reset_hung_jobs` started_at clear, shielded submit
   registration, teardown orphans folded into the summary/exit). Resolution
   details in the Phase 8 block.
+- **Phase 6a DONE** (2026-07-12): #383 + #381 closed as already-shipped —
+  both were fully implemented by commit `90518611` (clm 1.15.0) and never
+  closed. Verify-then-close pass, no code change; evidence comments posted.
+  See the Phase 6 resolution block.
 - No blockers, no pending decisions. Remaining, in priority order:
-  Phase 6 design tier (#383+#381 — start with a verify-then-close pass,
-  see the Phase 3 resolution note — plus #484, #167), #614 before the next
-  harvest round.
+  Phase 6b (#484) then Phase 6c (#167) of the design tier; #614 before the
+  next harvest round.
 
 ## 5. Next Steps
 
-**Phases 1–5, 7, and 8 are DONE — next is Phase 6a (#383+#381)**, which
-should START with a verify-then-close pass against commit 90518611 (see the
-Phase 3 resolution note) rather than a fresh design effort, then #484 and
-#167. Schedule #614 just before the next big harvest round. The plan below
-documents how Phase 1 was executed (kept for reference):
+**Phases 1–5, 7, 8, and 6a are DONE — next is Phase 6b (#484)**: offload
+cache-hit replay off the event loop (thread-safe cache reader + heavy pure
+work on the submit thread; avoid the coarse `OutputWriteRegistry` lock that
+would re-introduce the stall — the full "split, don't lock" design is written
+in the issue). After that, Phase 6c (#167, the timeboxed LLM model-selection
+spike). Schedule #614 just before the next big harvest round. (Phase 6a was a
+verify-then-close pass: #383 + #381 were already shipped in clm 1.15.0 via
+commit 90518611 and are now closed — see the Phase 6 resolution block.) The
+plan below documents how Phase 1 was executed (kept for reference):
 
 1. Read memory topics `project_sync_one_sided_cold` and
    `project_sync_v3_design_audit`, plus the sync v3 design note (find via
@@ -597,10 +625,13 @@ their listed sites — see each phase's resolution block for what changed:
 - `#484` → `src/clm/infrastructure/backends/sqlite_backend.py`
   (`_execute_operation_impl`, poll loop `record_write` at ~:564),
   `src/clm/core/output_write_registry.py` (:292,294 hash-in-critical-section)
-- `#383/#381` → `src/clm/core/output_target.py` (`default_target`,
-  ALL_KINDS), `src/clm/infrastructure/utils/path_utils.py:413`
-  (PRIVATE_KINDS), `src/clm/cli/commands/git.py:381-383`
-  (`find_output_repos` speaker skip), `src/clm/core/course_spec.py`
+- `#383/#381` (Phase 6a, DONE — pre-shipped in `90518611`/v1.15.0) →
+  `src/clm/core/course_spec.py` (`DEFAULT_OUTPUT_TARGET_SPECS:1105`,
+  `effective_output_targets:1993`, `derive_remote_url:732` with the
+  `{repository_base}`-only-when-referenced guard at `:810`),
+  `src/clm/cli/commands/git.py` (`find_output_repos:315`, default-tier
+  enumeration at `:387-414`), `src/clm/core/output_target.py`
+  (`default_target` is now a convenience, no longer the no-targets path)
 
 **Conventions to continue**: every behavior/CLI/spec change updates the
 matching `src/clm/cli/info_topics/*.md`; changelog via `changelog.d/`
