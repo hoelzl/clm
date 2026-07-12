@@ -1431,6 +1431,13 @@ check, so every half produced a guaranteed `count_mismatch` review and exit 2
 owned by `clm slides sync verify`. This makes `normalize --dry-run` usable as
 a scripted drift gate on split decks (exit 0 when clean).
 
+The skip is silent on a default run, but an **explicit** request — `--operations
+interleaving` (or any explicit list naming it) on a split half — reports it
+(since CLM {version}, issue #631): human output prints a `[SKIPPED] <file>: …`
+line and `--json` carries a `notices` array (`file`, `operation`, `message`).
+Notices are informational only — status stays `clean` and the exit code is
+unchanged.
+
 The `placeholder_start` operation (since CLM {version}) fixes a recurring
 workshop mis-tag (issue #233): a code cell tagged `start` whose entire body is
 a solution placeholder (`# Your solution here`, `pass`, `...`) followed by a

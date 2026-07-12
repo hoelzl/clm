@@ -70,12 +70,27 @@ class ReviewItem:
 
 
 @dataclass
+class Notice:
+    """An explicitly requested operation that was intentionally skipped (#631).
+
+    Purely informational: notices never affect :attr:`NormalizationResult.status`
+    or the CLI exit code — they only keep an explicit request from looking like
+    a silent no-op.
+    """
+
+    file: str
+    operation: str
+    message: str
+
+
+@dataclass
 class NormalizationResult:
     """Result of normalizing one or more slide files."""
 
     files_modified: int = 0
     changes: list[Change] = field(default_factory=list)
     review_items: list[ReviewItem] = field(default_factory=list)
+    notices: list[Notice] = field(default_factory=list)
 
     @property
     def status(self) -> str:
@@ -1006,6 +1021,7 @@ def normalize_file(
 
     all_changes: list[Change] = []
     all_review: list[ReviewItem] = []
+    all_notices: list[Notice] = []
 
     # Apply operations in deterministic order. Preamble-code wrapping runs first
     # so every later pass (interleaving, slide_ids, cell_spacing) sees the
@@ -1032,15 +1048,30 @@ def normalize_file(
     # could emit is structural noise (a guaranteed ``count_mismatch`` per half,
     # exit 2) — skipped on the same signal the validator's bilingual pairing
     # checks use; cross-half parity is owned by ``clm slides sync`` (#611).
-    if "interleaving" in op_set and split_lang_suffix(path) is None:
-        cells, interleave_changes, interleave_reviews = _apply_interleaving(
-            cells,
-            file_str,
-            canonicalize_start_completed=canonicalize_start_completed,
-            confirmed_pairings=confirmed_pairings,
-        )
-        all_changes.extend(interleave_changes)
-        all_review.extend(interleave_reviews)
+    if "interleaving" in op_set:
+        if split_lang_suffix(path) is None:
+            cells, interleave_changes, interleave_reviews = _apply_interleaving(
+                cells,
+                file_str,
+                canonicalize_start_completed=canonicalize_start_completed,
+                confirmed_pairings=confirmed_pairings,
+            )
+            all_changes.extend(interleave_changes)
+            all_review.extend(interleave_reviews)
+        elif operations is not None and "interleaving" in operations:
+            # #631: the skip is silent on a default run, but an EXPLICITLY
+            # requested interleaving pass must say why nothing happened.
+            all_notices.append(
+                Notice(
+                    file=file_str,
+                    operation="interleaving",
+                    message=(
+                        "interleaving skipped: language-split half — a "
+                        "single-language file has no within-file DE/EN pairs; "
+                        "cross-half parity is owned by `clm slides sync`"
+                    ),
+                )
+            )
 
     if "slide_ids" in op_set:
         slide_id_changes, slide_id_reviews = _apply_slide_ids(cells, path, assign_options)
@@ -1063,6 +1094,7 @@ def normalize_file(
         files_modified=1 if modified else 0,
         changes=all_changes,
         review_items=all_review,
+        notices=all_notices,
     )
 
 
@@ -1111,6 +1143,7 @@ def normalize_files(
         combined.files_modified += result.files_modified
         combined.changes.extend(result.changes)
         combined.review_items.extend(result.review_items)
+        combined.notices.extend(result.notices)
 
     return combined
 
@@ -1146,5 +1179,6 @@ def normalize_course(
                 combined.files_modified += result.files_modified
                 combined.changes.extend(result.changes)
                 combined.review_items.extend(result.review_items)
+                combined.notices.extend(result.notices)
 
     return combined
