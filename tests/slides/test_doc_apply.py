@@ -1340,6 +1340,69 @@ class TestRemoveVsSplit:
         assert sim.similar("x" * 3000, "x" * 3000) is False  # oversized skipped
 
 
+class TestGroupSplitInterleave:
+    """Regression tests for #646: when ≥2 id'd slides are interleaved into a
+    single run of id-less shared cells, mirroring the inserts on the twin
+    must keep each shared cell under the slide it moved into. The buggy
+    writer anchored each insert after the nearest mirrored predecessor
+    only, so the second insert landed directly after the first and the
+    twin's shared cells clumped after all the inserted slides.
+    """
+
+    def _interleaved_deck(self, tmp_path: Path) -> _Deck:
+        code = (_shared_code("x"), _shared_code("y", 2), _shared_code("z", 3))
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("s0", "de", "Titel"), *code),
+            _build(HEADER_EN, _slide("s0", "en", "Title"), *code),
+        )
+        deck.record()
+        # EN interleaves TWO new id'd slides into the run: m1 before y
+        # (splitting y into group m1), m2 before z (splitting z into m2).
+        deck.write_en(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            _shared_code("x"),
+            _slide("m1", "en", "Middle 1"),
+            _shared_code("y", 2),
+            _slide("m2", "en", "Middle 2"),
+            _shared_code("z", 3),
+        )
+        return deck
+
+    def test_twin_keeps_the_shared_cells_interleaved(self, tmp_path: Path):
+        deck = self._interleaved_deck(tmp_path)
+        outcome = deck.apply(
+            _decision("id:m1", body="#\n# # Mitte 1") | _decision("id:m2", body="#\n# # Mitte 2")
+        )
+        statuses = _statuses(outcome)
+        assert statuses["id:m1"] == "applied", outcome.to_payload()
+        assert statuses["id:m2"] == "applied", outcome.to_payload()
+        de = deck.de_path.read_text(encoding="utf-8")
+        markers = ("x = 1", "# Mitte 1", "y = 2", "# Mitte 2", "z = 3")
+        order = [de.index(m) for m in markers]
+        assert order == sorted(order), de
+
+    def test_interleaved_split_converges_after_confirming(self, tmp_path: Path):
+        # The full #630 resolution loop, with two inserts: mirror both
+        # slides, re-report (framing flips to verify_cold under the new
+        # groups), confirm — and the deck converges with the DE cells in
+        # the EN order.
+        deck = self._interleaved_deck(tmp_path)
+        deck.apply(
+            _decision("id:m1", body="#\n# # Mitte 1") | _decision("id:m2", body="#\n# # Mitte 2")
+        )
+        _, diff = deck.diff()
+        actions = {(i.key, i.action) for i in diff.items}
+        assert not any(a in ("mirror_remove", "remove_vs_split") for _, a in actions), actions
+        cold = [i.key for i in diff.items if i.action == "verify_cold"]
+        assert sorted(cold) == ["pos:m1/code/0", "pos:m2/code/0"]
+        confirms = {key: doc_apply.Decision(key=key, choice="confirm") for key in cold}
+        outcome = deck.apply(confirms)
+        assert outcome.all_applied, outcome.to_payload()
+        deck.assert_converged()
+
+
 class TestDecisionParsing:
     def test_wrong_top_level_shape_error_teaches_the_schema(self):
         # The first error an agent sees must show the whole document shape —
