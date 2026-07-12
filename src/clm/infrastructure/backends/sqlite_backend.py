@@ -396,8 +396,25 @@ class SqliteBackend(LocalOpsBackend):
         # is cancelled mid-await: the submit thread's INSERT is not cancellable
         # once started, so the active_jobs registration must be equally
         # uncancellable or the row is stranded (issue #617). On the happy path
-        # this is equivalent to awaiting the coroutine directly.
-        outcome, job_id = await asyncio.shield(_submit_and_track())
+        # this is equivalent to awaiting the coroutine directly. The task is
+        # created explicitly with a done-callback that retrieves its exception:
+        # when the caller is cancelled and the shielded task *then* raises,
+        # nobody awaits it, and asyncio would log "exception was never
+        # retrieved" at teardown.
+        submit_task = asyncio.ensure_future(_submit_and_track())
+
+        def _retrieve_abandoned_exception(task: asyncio.Task) -> None:
+            if task.cancelled():
+                return
+            exc = task.exception()
+            if exc is not None:
+                # On the non-cancelled path the shield await re-raises this
+                # to the caller too; retrieving it here only silences the
+                # abandoned-task warning, it does not swallow the error.
+                logger.debug(f"Shielded job submission raised: {exc!r}")
+
+        submit_task.add_done_callback(_retrieve_abandoned_exception)
+        outcome, job_id = await asyncio.shield(submit_task)
         if profiler.enabled:
             profiler.record_submit_offload(profiler_now() - _offload_t0)
 

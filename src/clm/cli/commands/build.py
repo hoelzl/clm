@@ -1702,6 +1702,33 @@ def _record_teardown_orphans(summary: BuildSummary, orphans: list[dict[str, Any]
     summary.timed_out = True
 
 
+def _format_exit_failure(summary: BuildSummary) -> str:
+    """Compose the exit-time failure message for a ``timed_out`` summary.
+
+    ``summary.timed_out`` is set by two distinct paths: a genuine per-stage
+    worker-job timeout (issue #143), and :func:`_record_teardown_orphans`,
+    which reuses the flag as its exit-forcing mechanism (issue #617). Orphans
+    are appended *after* finish_build rendered the summary, so for them the
+    generic "timed out … see the error summary above" message is wrong on
+    both counts — nothing about them appears above, and they did not time
+    out. Name the orphaned inputs directly instead.
+    """
+    orphans = [e for e in summary.errors if e.category == "orphaned_job"]
+    if orphans:
+        files = ", ".join(e.file_path for e in orphans)
+        return (
+            f"\nBuild failed: {len(orphans)} worker job(s) were orphaned at "
+            f"pool shutdown (worker died mid-job) and produced no output: "
+            f"{files}. The output tree is incomplete; re-run the build. "
+            f"See issue #617."
+        )
+    return (
+        "\nBuild failed: one or more worker jobs timed out and did "
+        "not complete. The output tree is incomplete. See the error "
+        "summary above."
+    )
+
+
 async def main_build(
     ctx,
     spec_file,
@@ -2659,13 +2686,11 @@ def build(
     # independent of --fail-on-error. Pending jobs mean the output tree is
     # incomplete, so the build must never look successful. This is checked
     # before the --fail-on-error gate because it is unconditional.
+    # Teardown orphans reuse the timed_out flag as their exit-forcing
+    # mechanism but need a different message — _format_exit_failure
+    # distinguishes the two cases (issue #617 follow-up).
     if summary is not None and summary.timed_out:
-        click.echo(
-            "\nBuild failed: one or more worker jobs timed out and did "
-            "not complete. The output tree is incomplete. See the error "
-            "summary above.",
-            err=True,
-        )
+        click.echo(_format_exit_failure(summary), err=True)
         sys.exit(1)
 
     resolved_fail_on_error = _resolve_fail_on_error(fail_on_error, resolved_http_replay_mode)

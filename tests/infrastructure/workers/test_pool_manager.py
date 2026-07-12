@@ -600,6 +600,32 @@ def test_pool_manager_start_monitoring(db_path, workspace_path, worker_configs):
         manager.monitor_thread.join(timeout=1)
 
 
+def test_stop_pools_joins_monitor_promptly_despite_long_interval(
+    db_path, workspace_path, worker_configs
+):
+    """stop_pools() must stop and join the monitor thread even when the check
+    interval far exceeds the 5s join timeout: the stop event interrupts the
+    between-cycle wait (#617/#636 follow-up, Finding 5.1). Before the fix the
+    join timed out and the daemon thread lingered up to one interval."""
+    with patch("docker.from_env"):
+        manager = WorkerPoolManager(
+            db_path=db_path, workspace_path=workspace_path, worker_configs=worker_configs
+        )
+
+    manager.start_monitoring(check_interval=300)
+    assert manager.monitor_thread is not None
+    assert manager.monitor_thread.is_alive()
+
+    start = time.time()
+    manager.stop_pools()
+    elapsed = time.time() - start
+
+    assert not manager.monitor_thread.is_alive(), (
+        "monitor thread still alive after stop_pools() — the between-cycle wait was not interrupted"
+    )
+    assert elapsed < 5, f"stop_pools took {elapsed:.1f}s — join must not time out"
+
+
 def _seed_busy_worker(
     db_path, session_id, container_id, *, heartbeat_age_seconds=120, execution_mode="direct"
 ):
