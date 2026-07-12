@@ -738,8 +738,21 @@ class _Differ:
         matches by body fingerprint on either side, because a fork always
         rewrites the header (the new ``lang=`` attribute is exactly the
         §7.3 intent channel) while a pure fork keeps the bodies.
+
+        A stamp necessarily takes the cell OUT of the positional pool, so a
+        migration is only plausible when the pool is missing a cell on every
+        side this member populates. Without that guard, a brand-new id'd
+        cell byte-identical to a positional cell still present in the pool
+        would steal that cell's base entry and be misframed as a one-sided
+        removal — ``apply`` then deletes the freshly-authored cell from its
+        authoring side (issue #644).
         """
         assert self.base is not None
+        for side in _SIDES:
+            if member.side(side) is not None and not self._pool_side_deficit(
+                group, member.kind, side
+            ):
+                return None
         base_group = self._base_group_for(group)
         fps = self._member_fps(member)
         body_fps = {_body_fp(cell) for cell in (member.de, member.en) if cell is not None}

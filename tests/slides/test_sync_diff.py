@@ -1010,6 +1010,54 @@ class TestAdversarialReviewRegressions:
         assert by_key["id:y-assign"].action == "stamp_vs_new"
         assert by_key["id:y-check"].action == "stamp_vs_new"
 
+    def test_644_new_id_cell_byte_identical_to_pos_cell_is_copy_new_shared(self):
+        """Regression test for #644: a brand-new one-sided id-keyed cell whose
+        body is byte-identical to a pos cell still present on BOTH sides must
+        frame ``copy_new_shared`` — not steal that cell's base entry via the
+        §7.3 key migration and conclude ``mirror_remove`` (which would delete
+        the freshly-authored cell from its authoring side on apply)."""
+        base = _snapshot(DE0, EN0)
+        base.complete = False
+        new = '# %% tags=["keep"] slide_id="y-bonus"\ny = 2\n\n'
+        en = EN0.replace(_shared_code("y", 2), _shared_code("y", 2) + new)
+        diff = _diff(base, DE0, en)
+        by_key = {i.key: i for i in diff.items}
+        item = by_key.get("id:y-bonus")
+        assert item is not None, [(i.key, i.action) for i in diff.items]
+        assert (item.outcome, item.action) == ("add", "copy_new_shared"), (
+            item.outcome,
+            item.action,
+            item.detail,
+        )
+        assert item.direction == "en_to_de"
+        # The untouched positional `y = 2` twin keeps its own entry — no churn.
+        assert not any(i.key.startswith("pos:") for i in diff.items), [
+            (i.key, i.action) for i in diff.items
+        ]
+
+    def test_644_de_side_authoring_mirror_case(self):
+        """#644 neighbor: same shape authored on the DE side."""
+        base = _snapshot(DE0, EN0)
+        base.complete = False
+        new = '# %% tags=["keep"] slide_id="x-bonus"\nx = 1\n\n'
+        de = DE0.replace(_shared_code("x"), _shared_code("x") + new)
+        diff = _diff(base, de, EN0)
+        by_key = {i.key: i for i in diff.items}
+        item = by_key.get("id:x-bonus")
+        assert item is not None, [(i.key, i.action) for i in diff.items]
+        assert (item.outcome, item.action) == ("add", "copy_new_shared")
+        assert item.direction == "de_to_en"
+
+    def test_644_true_id_stamp_still_migrates_when_pos_cell_left_the_pool(self):
+        """#644 guard must not break the genuine §7.3 stamp: when the pos cell
+        actually left the pool (stamped in place on both sides) the key still
+        migrates."""
+        base = _snapshot(DE0, EN0)
+        de = DE0.replace('# %% tags=["keep"]\nx = 1', '# %% tags=["keep"] slide_id="x-cell"\nx = 1')
+        en = EN0.replace('# %% tags=["keep"]\nx = 1', '# %% tags=["keep"] slide_id="x-cell"\nx = 1')
+        item = _only_item(_diff(base, de, en))
+        assert (item.outcome, item.action) == ("transition", "record_key_migration")
+
     def test_conflicting_stamp_shape_stays_ambiguous_alignment(self):
         """The rival-id shapes must NOT gain ``stamp_vs_new``'s treat_as_new
         answer: copying a cell that already claimed a base entry under a
