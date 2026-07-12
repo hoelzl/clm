@@ -835,13 +835,28 @@ class WorkerPoolManager:
         while self.running:
             try:
                 conn = self.job_queue._get_conn()
-                cursor = conn.execute(
-                    """
-                    SELECT id, worker_type, container_id, status, last_heartbeat
-                    FROM workers
-                    WHERE status IN ('busy', 'idle')
-                    """
-                )
+                # Scope health checks to THIS pool's own session (issue #617,
+                # mirroring the #597/#620 ownership rule). The monitor marks
+                # unresponsive workers 'dead', which the build's completion loop
+                # then requeues jobs from; without the session filter a build
+                # would reap a concurrent build's workers in a shared jobs DB.
+                if self.session_id is not None:
+                    cursor = conn.execute(
+                        """
+                        SELECT id, worker_type, container_id, status, last_heartbeat
+                        FROM workers
+                        WHERE status IN ('busy', 'idle') AND session_id = ?
+                        """,
+                        (self.session_id,),
+                    )
+                else:
+                    cursor = conn.execute(
+                        """
+                        SELECT id, worker_type, container_id, status, last_heartbeat
+                        FROM workers
+                        WHERE status IN ('busy', 'idle')
+                        """
+                    )
 
                 # Increment stats check counter for throttling
                 stats_check_counter += 1
@@ -865,14 +880,15 @@ class WorkerPoolManager:
                         executor_type = "direct" if is_direct else "docker"
 
                         if executor_type not in self.executors:
-                            logger.warning(
-                                f"No executor available for type {executor_type}, "
-                                f"marking worker as dead"
+                            # A missing executor is NOT evidence the worker died
+                            # — this pool simply has no executor of that mode to
+                            # check it (e.g. a legacy/foreign row that slipped the
+                            # session filter). Skip it rather than reap a worker
+                            # we cannot verify (issue #617).
+                            logger.debug(
+                                f"No {executor_type} executor in this pool to check "
+                                f"worker {worker_id}; skipping (not ours to reap)."
                             )
-                            conn.execute(
-                                "UPDATE workers SET status = 'dead' WHERE id = ?", (worker_id,)
-                            )
-                            conn.commit()
                             continue
 
                         executor = self.executors[executor_type]

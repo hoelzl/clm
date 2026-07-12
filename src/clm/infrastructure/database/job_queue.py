@@ -683,13 +683,18 @@ class JobQueue:
         cursor = conn.execute(
             """
             UPDATE jobs
-            SET status = 'pending', worker_id = NULL
+            SET status = 'pending', worker_id = NULL, started_at = NULL
             WHERE status = 'processing'
             AND started_at < datetime('now', '-' || ? || ' seconds')
             """,
             (timeout_seconds,),
         )
         # No commit() needed - connection is in autocommit mode
+        # started_at is cleared (like _cleanup_dead_worker_jobs) so a
+        # legitimately-requeued job is a clean 'pending' row again. Leaving
+        # started_at set made mark_orphaned_jobs_failed (which reaps
+        # started_at-set, non-terminal rows) later mis-stamp it as an orphan
+        # (issue #617).
         return cursor.rowcount
 
     def clear_old_completed_jobs(self, days: int = 7) -> int:

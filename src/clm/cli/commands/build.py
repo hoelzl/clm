@@ -11,7 +11,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from time import time
-from typing import Literal
+from typing import Any, Literal
 
 import click
 from attrs import evolve
@@ -1664,6 +1664,44 @@ async def watch_and_rebuild(course: Course, backend, config: BuildConfig):
         observer.join()
 
 
+def _record_teardown_orphans(summary: BuildSummary, orphans: list[dict[str, Any]]) -> None:
+    """Fold pool-teardown orphan jobs into an already-finalized build summary.
+
+    ``JobQueue.mark_orphaned_jobs_failed`` runs at pool teardown — after
+    ``finish_build`` has rendered the summary — so its orphans would otherwise
+    never influence the exit policy, and the build could exit 0 with a
+    silently-incomplete output tree. Each orphan becomes an infrastructure
+    ``BuildError`` and the summary is marked timed-out, giving the same
+    unconditional non-zero exit a per-stage job timeout gets (issue #617).
+    """
+    from clm.cli.build_data_classes import BuildError
+
+    for orphan in orphans:
+        summary.errors.append(
+            BuildError(
+                error_type="infrastructure",
+                category="orphaned_job",
+                severity="error",
+                file_path=str(orphan.get("input_file", "unknown")),
+                message=(
+                    "Worker died mid-job and the job was orphaned when the "
+                    "worker pool stopped; the output for this file was not "
+                    "produced."
+                ),
+                actionable_guidance=(
+                    "A worker process stopped before finishing this job (a "
+                    "mid-build crash or a shutdown race), so the job never "
+                    "completed. Re-run the build; the input file is not at "
+                    "fault. See issue #617."
+                ),
+                job_id=orphan.get("id"),
+            )
+        )
+    # Orphaned jobs mean the output tree is incomplete — force an unconditional
+    # non-zero exit, matching how a per-stage worker-job timeout is treated.
+    summary.timed_out = True
+
+
 async def main_build(
     ctx,
     spec_file,
@@ -1979,8 +2017,17 @@ async def main_build(
             output_formatter.show_startup_message("Stopping workers...")
             logger.info("Stopping managed workers...")
             try:
-                lifecycle_manager.stop_managed_workers(started_workers)
+                orphaned_jobs = lifecycle_manager.stop_managed_workers(started_workers)
                 logger.info(f"Stopped {len(started_workers)} worker(s)")
+                # Orphans are discovered only after the pool stops — i.e. after
+                # finish_build already rendered the summary. Fold them into the
+                # summary here so they still drive the exit policy instead of
+                # being silently banked in the jobs DB (issue #617). Orphaned
+                # jobs mean the output tree is incomplete, so mark the summary
+                # timed-out for an unconditional non-zero exit, matching the
+                # per-stage-timeout policy.
+                if orphaned_jobs and summary is not None:
+                    _record_teardown_orphans(summary, orphaned_jobs)
             except Exception as e:
                 logger.error(f"Failed to stop workers: {e}", exc_info=True)
         if mitm_manager is not None:

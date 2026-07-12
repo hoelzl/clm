@@ -1035,3 +1035,36 @@ def test_mark_orphaned_jobs_failed_ignores_pending_without_started_at(job_queue)
     stats = job_queue.get_job_stats()
     assert stats["pending"] == 1
     assert stats["failed"] == 0
+
+
+def test_reset_hung_jobs_clears_started_at(job_queue):
+    """A hung job reset to pending must have started_at cleared, so the teardown
+    orphan sweep never mis-stamps a legitimately-requeued job as an orphan
+    (issue #617). Before the fix, reset_hung_jobs left started_at set."""
+    job_id = job_queue.add_job(
+        job_type="notebook",
+        input_file="hung.py",
+        output_file="hung.ipynb",
+        content_hash="hung",
+        payload={},
+    )
+    # Claim it (sets started_at, status='processing'), then backdate started_at
+    # past the hung window so reset_hung_jobs picks it up.
+    job_queue.get_next_job("notebook")
+    conn = job_queue._get_conn()
+    conn.execute(
+        "UPDATE jobs SET started_at = datetime('now', '-3600 seconds') WHERE id = ?",
+        (job_id,),
+    )
+
+    assert job_queue.reset_hung_jobs(timeout_seconds=600) == 1
+
+    job = job_queue.get_job(job_id)
+    assert job is not None
+    assert job.status == "pending"
+    assert job.started_at is None
+    assert job.worker_id is None
+
+    # The requeued job must NOT be reaped as an orphan by the teardown sweep.
+    assert job_queue.mark_orphaned_jobs_failed() == []
+    assert job_queue.get_job(job_id).status == "pending"

@@ -699,6 +699,38 @@ class TestStopManagedWorkers:
         assert "orphaned/example.py" in orphan_warnings[0].message
         assert f"#{orphan_id}" in orphan_warnings[0].message
 
+    def test_stop_returns_orphans_for_the_build_to_surface(
+        self, db_path, workspace_path, mock_config
+    ):
+        """stop_managed_workers returns the orphaned jobs so the build can fold
+        them into the summary/exit policy instead of silently banking them in
+        the jobs DB (issue #617)."""
+        orphan_id = self._seed_inflight_job(db_path, "orphaned/example.py")
+
+        with patch("clm.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
+            manager = WorkerLifecycleManager(
+                config=mock_config,
+                db_path=db_path,
+                workspace_path=workspace_path,
+            )
+            manager.pool_manager = MagicMock()
+            orphans = manager.stop_managed_workers([self._make_worker_info()])
+
+        assert [o["id"] for o in orphans] == [orphan_id]
+        assert orphans[0]["input_file"] == "orphaned/example.py"
+
+    def test_stop_returns_empty_list_on_clean_shutdown(self, db_path, workspace_path, mock_config):
+        """A clean shutdown (no in-flight jobs) returns an empty list, not None,
+        so the build's `if orphans:` guard is safe (issue #617)."""
+        with patch("clm.infrastructure.workers.lifecycle_manager.DirectWorkerExecutor"):
+            manager = WorkerLifecycleManager(
+                config=mock_config,
+                db_path=db_path,
+                workspace_path=workspace_path,
+            )
+            manager.pool_manager = MagicMock()
+            assert manager.stop_managed_workers([self._make_worker_info()]) == []
+
     def test_stop_passes_orphan_metadata_to_log_pool_stopped(
         self, db_path, workspace_path, mock_config
     ):

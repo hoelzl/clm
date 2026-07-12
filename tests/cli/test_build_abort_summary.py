@@ -152,3 +152,31 @@ class TestWiring:
             "renders 'Build completed successfully' for a failed build and "
             "runs the stale-output sweep on an incomplete write registry."
         )
+
+
+class TestRecordTeardownOrphans:
+    """Pool-teardown orphans must reach the exit policy even though they are
+    discovered after finish_build has rendered the summary (issue #617)."""
+
+    def test_orphans_are_recorded_as_errors_and_force_nonzero_exit(self):
+        from clm.cli.commands.build import _record_teardown_orphans
+
+        summary = BuildSummary(duration=1.0, total_files=3)
+        assert summary.timed_out is False
+        assert summary.errors == []
+
+        orphans = [
+            {"id": 7, "input_file": "slides/a.de.py", "status": "processing", "worker_id": 3},
+            {"id": 8, "input_file": "slides/a.en.py", "status": "pending", "worker_id": 4},
+        ]
+        _record_teardown_orphans(summary, orphans)
+
+        # Marked timed-out so the CLI exits non-zero unconditionally (an
+        # incomplete output tree), matching the per-stage-timeout policy.
+        assert summary.timed_out is True
+        assert len(summary.errors) == 2
+        categories = {e.category for e in summary.errors}
+        assert categories == {"orphaned_job"}
+        assert {e.job_id for e in summary.errors} == {7, 8}
+        assert {e.error_type for e in summary.errors} == {"infrastructure"}
+        assert any("a.de.py" in e.file_path for e in summary.errors)
