@@ -1,5 +1,6 @@
 """Tests for pool_manager module."""
 
+import logging
 import tempfile
 import threading
 import time
@@ -359,23 +360,36 @@ def test_pool_manager_get_worker_stats(db_path, workspace_path, worker_configs):
 
 
 def test_pool_manager_is_heartbeat_stale():
-    """Test heartbeat staleness detection."""
-    from datetime import datetime, timedelta
+    """Heartbeat staleness must be computed in UTC, independent of the host
+    timezone. SQLite CURRENT_TIMESTAMP writes naive UTC strings; comparing them
+    against local time made every heartbeat look hours stale east of UTC and
+    never stale west of it (silently disabling the monitor there) — the
+    PR #636 review's Finding 1."""
+    from datetime import datetime, timedelta, timezone
 
     with patch("docker.from_env"):
         manager = WorkerPoolManager(
             db_path=Path("dummy.db"), workspace_path=Path("/tmp"), worker_configs=[]
         )
 
-        # Fresh heartbeat
-        now = datetime.now()
-        fresh_heartbeat = now.isoformat()
-        assert not manager._is_heartbeat_stale(fresh_heartbeat, 30)
+        now_utc = datetime.now(timezone.utc)
 
-        # Stale heartbeat (40 seconds ago)
-        stale_time = now - timedelta(seconds=40)
-        stale_heartbeat = stale_time.isoformat()
-        assert manager._is_heartbeat_stale(stale_heartbeat, 30)
+        # Fresh naive-UTC heartbeat, in SQLite's "YYYY-MM-DD HH:MM:SS" shape.
+        fresh = now_utc.strftime("%Y-%m-%d %H:%M:%S")
+        assert not manager._is_heartbeat_stale(fresh, 30)
+
+        # Stale naive-UTC heartbeat (40 seconds ago).
+        stale = (now_utc - timedelta(seconds=40)).strftime("%Y-%m-%d %H:%M:%S")
+        assert manager._is_heartbeat_stale(stale, 30)
+
+        # Timezone-aware timestamps are honored as-is.
+        aware_fresh = now_utc.isoformat()
+        assert not manager._is_heartbeat_stale(aware_fresh, 30)
+        aware_stale = (now_utc - timedelta(seconds=40)).isoformat()
+        assert manager._is_heartbeat_stale(aware_stale, 30)
+
+        # Unparseable timestamps are treated as stale.
+        assert manager._is_heartbeat_stale("not-a-timestamp", 30)
 
 
 def test_pool_manager_calculate_cpu_percent():
@@ -586,17 +600,22 @@ def test_pool_manager_start_monitoring(db_path, workspace_path, worker_configs):
         manager.monitor_thread.join(timeout=1)
 
 
-def _seed_stale_busy_direct_worker(db_path, session_id, container_id):
-    """Insert a busy direct worker with a stale heartbeat (issue #617 tests)."""
+def _seed_busy_worker(
+    db_path, session_id, container_id, *, heartbeat_age_seconds=120, execution_mode="direct"
+):
+    """Insert a busy worker with a heartbeat aged by the given amount
+    (issue #617 / PR #636-review tests). SQLite datetime('now') is UTC, the
+    same clock CURRENT_TIMESTAMP heartbeats use, so these tests are
+    host-timezone-independent."""
     jq = JobQueue(db_path)
     try:
         cur = jq._get_conn().execute(
             """
             INSERT INTO workers (worker_type, container_id, status, session_id,
                                  execution_mode, last_heartbeat)
-            VALUES ('notebook', ?, 'busy', ?, 'direct', datetime('now', '-120 seconds'))
+            VALUES ('notebook', ?, 'busy', ?, ?, datetime('now', ? || ' seconds'))
             """,
-            (container_id, session_id),
+            (container_id, session_id, execution_mode, str(-heartbeat_age_seconds)),
         )
         worker_id = cur.lastrowid
         assert worker_id is not None
@@ -637,22 +656,117 @@ def test_monitor_health_reaps_only_own_session_dead_workers(
     dead_executor.is_worker_running.return_value = False
     manager.executors["direct"] = dead_executor
 
-    own = _seed_stale_busy_direct_worker(db_path, "session-A", "direct-own")
-    foreign = _seed_stale_busy_direct_worker(db_path, "session-B", "direct-foreign")
+    own = _seed_busy_worker(db_path, "session-A", "direct-own")
+    foreign = _seed_busy_worker(db_path, "session-B", "direct-foreign")
 
+    _run_monitor_until(manager, lambda: _worker_status(db_path, own) == "dead")
+
+    assert _worker_status(db_path, own) == "dead"
+    assert _worker_status(db_path, foreign) == "busy"
+
+
+def _run_monitor_until(manager, condition, timeout=5.0):
+    """Run _monitor_health in a thread until `condition()` or timeout."""
     manager.running = True
     thread = threading.Thread(target=manager._monitor_health, args=(0.05,), daemon=True)
     thread.start()
     try:
-        deadline = time.time() + 5.0
-        while time.time() < deadline and _worker_status(db_path, own) != "dead":
+        deadline = time.time() + timeout
+        while time.time() < deadline and not condition():
             time.sleep(0.05)
     finally:
         manager.running = False
         thread.join(timeout=2)
 
-    assert _worker_status(db_path, own) == "dead"
-    assert _worker_status(db_path, foreign) == "busy"
+
+def test_monitor_health_reaps_dead_worker_with_fresh_heartbeat(
+    db_path, workspace_path, worker_configs
+):
+    """The liveness check must not be gated on heartbeat staleness: a worker
+    whose process is gone is reaped even while its last heartbeat is recent
+    (PR #636 review, Finding 2 — liveness is checked unconditionally)."""
+    with patch("docker.from_env"):
+        manager = WorkerPoolManager(
+            db_path=db_path,
+            workspace_path=workspace_path,
+            worker_configs=worker_configs,
+            session_id="session-A",
+        )
+
+    dead_executor = MagicMock()
+    dead_executor.is_worker_running.return_value = False
+    manager.executors["direct"] = dead_executor
+
+    worker = _seed_busy_worker(db_path, "session-A", "direct-own", heartbeat_age_seconds=0)
+
+    _run_monitor_until(manager, lambda: _worker_status(db_path, worker) == "dead")
+
+    assert _worker_status(db_path, worker) == "dead"
+
+
+def test_monitor_health_leaves_live_busy_worker_alone(
+    db_path, workspace_path, worker_configs, caplog
+):
+    """A busy worker on a long job stops heartbeating (heartbeats are only
+    sent while idle), so a stale heartbeat with a live process is the NORMAL
+    mid-job state: the worker must not be marked dead or hung, and the
+    staleness must not spam WARNING logs (PR #636 review, Finding 2)."""
+    with patch("docker.from_env"):
+        manager = WorkerPoolManager(
+            db_path=db_path,
+            workspace_path=workspace_path,
+            worker_configs=worker_configs,
+            session_id="session-A",
+        )
+
+    live_executor = MagicMock()
+    live_executor.is_worker_running.return_value = True
+    manager.executors["direct"] = live_executor
+
+    worker = _seed_busy_worker(db_path, "session-A", "direct-own", heartbeat_age_seconds=120)
+
+    with caplog.at_level(logging.WARNING, logger="clm.infrastructure.workers.pool_manager"):
+        # Let several monitor cycles run; the condition never becomes true.
+        _run_monitor_until(manager, lambda: _worker_status(db_path, worker) != "busy", timeout=0.5)
+
+    assert _worker_status(db_path, worker) == "busy"
+    assert live_executor.is_worker_running.called
+    stale_warnings = [
+        r for r in caplog.records if "stale heartbeat" in r.message and r.levelno >= logging.WARNING
+    ]
+    assert stale_warnings == []
+
+
+def test_monitor_health_marks_stale_zero_cpu_docker_worker_hung(
+    db_path, workspace_path, worker_configs
+):
+    """The Docker hung heuristic must survive the Finding-2 restructuring: a
+    busy container with a stale heartbeat and ~zero CPU is still marked
+    'hung' (stats are throttled to every 5th cycle, so give it a few)."""
+    with patch("docker.from_env"):
+        manager = WorkerPoolManager(
+            db_path=db_path,
+            workspace_path=workspace_path,
+            worker_configs=worker_configs,
+            session_id="session-A",
+        )
+
+    docker_executor = MagicMock()
+    docker_executor.is_worker_running.return_value = True
+    docker_executor.get_worker_stats.return_value = {"cpu_percent": 0.0}
+    manager.executors["docker"] = docker_executor
+
+    worker = _seed_busy_worker(
+        db_path,
+        "session-A",
+        "container-abc123",
+        heartbeat_age_seconds=120,
+        execution_mode="docker",
+    )
+
+    _run_monitor_until(manager, lambda: _worker_status(db_path, worker) == "hung")
+
+    assert _worker_status(db_path, worker) == "hung"
 
 
 @pytest.mark.slow
