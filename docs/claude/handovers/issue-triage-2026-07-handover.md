@@ -7,10 +7,12 @@ PR #628, merged 2026-07-11 — see the Phase 7 block); **Phase 8 DONE**
 (#620 job session ownership + #617 orphan-pool-shutdown, 2026-07-12 — see
 the Phase 8 block); **Phase 6a DONE** (#383 + #381 closed as pre-shipped in
 clm 1.15.0 via commit `90518611`, 2026-07-12 — a verify-then-close pass, see
-the Phase 6 block). Next up **Phase 6b (#484)** — offload cache-hit replay off
-the event loop. This document is the source of truth for working through the
-open-issue backlog in priority order. Update phase statuses here as issues
-land.
+the Phase 6 block); **Phase 6b (#484) DEFERRED pending measurement**
+(2026-07-12 — the issue is trigger-gated on an observed/measured hit-heavy
+stall that has not been reproduced; see the Phase 6b resolution note). Next
+actionable is **Phase 6c (#167)**. This document is the source of truth for
+working through the open-issue backlog in priority order. Update phase
+statuses here as issues land.
 
 ## 1. Feature Overview
 
@@ -491,6 +493,33 @@ across submit thread and poll loop, re-introducing the stall. Not currently
 biting (semaphore caps stalls ~1 s) — do as scheduled tech debt or when a
 hit-heavy-rebuild stall is observed.
 
+**DEFERRED pending measurement (2026-07-12)**: re-evaluated before implementing
+and parked, because the issue gates itself on evidence we do not have. Issue
+#484's own "Trigger / acceptance" says to act *only if a real hit-heavy rebuild
+shows the poll-loop gap creeping back up* — measured with `CLM_PROFILE_BUILD=1`,
+watching the `worst stall` / `max gap` lines and the `… ON-LOOP` submission cost
+— and that **if `worst stall` stays ~1 s on hit-heavy runs, this is not worth
+doing.** Neither precondition is met: no such stall has been observed, and no
+measurement has been taken; the `SUBMISSION_CONCURRENCY=8` semaphore already
+caps the burst at ~1 s. Implementing now would be speculative optimization on
+the build's hottest path — it *adds* complexity (a third thread-affine SQLite
+reader connection with a close-on-the-right-thread teardown, a split
+off-loop/on-loop replay, and a behavior-*equivalence* argument that DEDUP-skip ≡
+`is_destination_identical`-skip) rather than removing it, for latency headroom
+that is not currently needed. Note the synthetic harness
+`scripts/profile_build_stall.py` runs `--no-html` with small siblings, so it
+exercises the *submission* stall, **not** the multi-MB cache-hit-replay path
+that is #484's trigger — the acceptance measurement must come from a real
+warm-cache rebuild of a large-notebook course (e.g. a second build of
+PythonCourses ML-AZAV) with `CLM_PROFILE_BUILD=1`.
+
+**To un-defer**: run that warm-cache hit-heavy rebuild with `CLM_PROFILE_BUILD=1`
+and read the `[build-profile]` summary. If `worst stall` stays ~1 s and the
+`… ON-LOOP` replay cost is small → close #484 with that evidence (its own "not
+worth doing" clause). If it is creeping up → implement the "split, don't lock"
+design (fully written in the issue; key files listed in §6 under `#484`), using
+the captured numbers as the before/after baseline.
+
 **6c — #167: LLM model-selection spike.** Timebox ~half a day. Recommended
 outcome: option 2 (purpose→model registry over the existing
 OpenAI-compatible client, zero new deps) or close as status-quo.
@@ -532,18 +561,23 @@ OpenAI-compatible client, zero new deps) or close as status-quo.
   both were fully implemented by commit `90518611` (clm 1.15.0) and never
   closed. Verify-then-close pass, no code change; evidence comments posted.
   See the Phase 6 resolution block.
+- **Phase 6b (#484) DEFERRED pending measurement** (2026-07-12): re-evaluated
+  before implementing and parked per the issue's own trigger gate — no
+  observed/measured hit-heavy stall, and the semaphore caps it at ~1 s. See
+  the Phase 6b resolution note for the gate and how to measure it.
 - No blockers, no pending decisions. Remaining, in priority order:
-  Phase 6b (#484) then Phase 6c (#167) of the design tier; #614 before the
-  next harvest round.
+  Phase 6c (#167) of the design tier; #614 before the next harvest round.
+  Phase 6b (#484) is gated on a measurement (above), not scheduled.
 
 ## 5. Next Steps
 
-**Phases 1–5, 7, 8, and 6a are DONE — next is Phase 6b (#484)**: offload
-cache-hit replay off the event loop (thread-safe cache reader + heavy pure
-work on the submit thread; avoid the coarse `OutputWriteRegistry` lock that
-would re-introduce the stall — the full "split, don't lock" design is written
-in the issue). After that, Phase 6c (#167, the timeboxed LLM model-selection
-spike). Schedule #614 just before the next big harvest round. (Phase 6a was a
+**Phases 1–5, 7, 8, and 6a are DONE; Phase 6b (#484) is DEFERRED pending
+measurement (2026-07-12) — the next actionable is Phase 6c (#167)**, the
+timeboxed LLM model-selection spike. Phase 6b stays parked until a real
+hit-heavy rebuild is measured (see the Phase 6b resolution note for the exact
+trigger gate and how to measure it); if the measurement shows the stall
+creeping back up, its "split, don't lock" design is fully written in the issue.
+Schedule #614 just before the next big harvest round. (Phase 6a was a
 verify-then-close pass: #383 + #381 were already shipped in clm 1.15.0 via
 commit 90518611 and are now closed — see the Phase 6 resolution block.) The
 plan below documents how Phase 1 was executed (kept for reference):
