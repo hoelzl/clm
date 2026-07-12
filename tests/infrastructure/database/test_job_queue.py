@@ -903,7 +903,7 @@ def test_remove_missing_skips_pending_jobs(job_queue, tmp_path):
 # ============================================================================
 
 
-def _claim(job_queue, worker_id: int = 1) -> Job:
+def _claim(job_queue, worker_id: int = 1, session_id: str | None = None) -> Job:
     """Add a pending job and immediately claim it, returning the in-flight Job."""
     job_queue.add_job(
         job_type="notebook",
@@ -911,6 +911,7 @@ def _claim(job_queue, worker_id: int = 1) -> Job:
         output_file=f"test-{worker_id}.ipynb",
         content_hash=f"hash-{worker_id}",
         payload={},
+        session_id=session_id,
     )
     claimed = job_queue.get_next_job(worker_id=worker_id, job_type="notebook")
     assert claimed is not None, "get_next_job should claim the pending job we just added"
@@ -1035,6 +1036,45 @@ def test_mark_orphaned_jobs_failed_ignores_pending_without_started_at(job_queue)
     stats = job_queue.get_job_stats()
     assert stats["pending"] == 1
     assert stats["failed"] == 0
+
+
+def test_mark_orphaned_jobs_failed_scoped_reaps_only_own_session(job_queue):
+    """A session-scoped sweep must only reap its own session's in-flight jobs.
+
+    Concurrent builds A and B share a jobs DB; when A tears down first it must
+    not fail B's genuinely in-flight jobs (#597/#620 ownership rule)."""
+    job_a = _claim(job_queue, worker_id=10, session_id="session-a")
+    job_b = _claim(job_queue, worker_id=11, session_id="session-b")
+
+    orphans = job_queue.mark_orphaned_jobs_failed(session_id="session-a")
+
+    assert [o["id"] for o in orphans] == [job_a.id]
+    assert job_queue.get_job(job_a.id).status == "failed"
+    # B's in-flight job is untouched — still processing, no error stamped.
+    row_b = job_queue.get_job(job_b.id)
+    assert row_b.status == "processing"
+    assert row_b.error is None
+
+
+def test_mark_orphaned_jobs_failed_scoped_ignores_null_session_rows(job_queue):
+    """Strict scoping: rows with NULL session_id are left to the unscoped
+    maintenance sweep (``clm workers`` reap), not claimed by a build."""
+    job_null = _claim(job_queue, worker_id=12, session_id=None)
+
+    orphans = job_queue.mark_orphaned_jobs_failed(session_id="session-a")
+
+    assert orphans == []
+    assert job_queue.get_job(job_null.id).status == "processing"
+
+
+def test_mark_orphaned_jobs_failed_unscoped_reaps_all_sessions(job_queue):
+    """Without a session_id the sweep keeps its original cross-session reach."""
+    job_a = _claim(job_queue, worker_id=13, session_id="session-a")
+    job_null = _claim(job_queue, worker_id=14, session_id=None)
+
+    orphans = job_queue.mark_orphaned_jobs_failed()
+
+    assert {o["id"] for o in orphans} == {job_a.id, job_null.id}
 
 
 def test_reset_hung_jobs_clears_started_at(job_queue):

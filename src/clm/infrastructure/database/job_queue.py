@@ -412,7 +412,7 @@ class JobQueue:
     # free-form sentence.
     ORPHAN_ERROR_MESSAGE = "worker died mid-job (orphaned at pool shutdown)"
 
-    def mark_orphaned_jobs_failed(self) -> list[dict[str, Any]]:
+    def mark_orphaned_jobs_failed(self, session_id: str | None = None) -> list[dict[str, Any]]:
         """Detect and fail any jobs that were in flight when the pool stopped.
 
         An "orphan" is a row in the ``jobs`` table that was claimed by a
@@ -436,6 +436,16 @@ class JobQueue:
         At that point no worker is alive, so there is no race with a
         worker that is about to commit its own terminal update.
 
+        Args:
+            session_id: When given, only jobs stamped with this
+                ``jobs.session_id`` are considered — a build tearing down
+                must not reap a concurrent build's in-flight jobs in a
+                shared jobs DB (the #597/#620 ownership rule, mirroring
+                the health monitor's session scoping). ``None`` keeps the
+                unscoped sweep for maintenance callers (``clm workers``
+                reap), which also covers legacy rows whose
+                ``session_id`` is NULL.
+
         Returns:
             List of dicts describing each orphan row that was marked
             failed, in the shape ``{"id": int, "input_file": str,
@@ -448,8 +458,7 @@ class JobQueue:
         conn = self._get_conn()
         conn.execute("BEGIN IMMEDIATE")
         try:
-            cursor = conn.execute(
-                """
+            query = """
                 SELECT id, input_file, status, worker_id
                 FROM jobs
                 WHERE started_at IS NOT NULL
@@ -457,7 +466,11 @@ class JobQueue:
                   AND cancelled_at IS NULL
                   AND status IN ('processing', 'pending')
                 """
-            )
+            params: tuple[Any, ...] = ()
+            if session_id is not None:
+                query += " AND session_id = ?"
+                params = (session_id,)
+            cursor = conn.execute(query, params)
             rows = cursor.fetchall()
 
             if not rows:
