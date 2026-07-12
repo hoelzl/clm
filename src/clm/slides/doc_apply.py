@@ -131,6 +131,7 @@ _DECISION_VOCABULARY: dict[str, tuple[str, ...]] = {
     "conflict_preamble": ("de", "en"),
     "order_decision": ("de", "en"),
     "stamp_vs_new": ("treat_as_new",),
+    "remove_vs_split": ("remove",),
 }
 
 
@@ -459,6 +460,7 @@ _PHASES: dict[str, int] = {
     "translate_new": 1,
     "remove_vs_edit": 1,
     "mirror_remove": 2,
+    "remove_vs_split": 2,
     "remove_localized_side": 2,
     "mirror_layout": 3,
     "mirror_order": 4,
@@ -888,10 +890,13 @@ def _pool_scope(item: DiffItem) -> tuple[str, str] | None:
 #: downgrading the pending conflict to mechanical duplication/resurrection on
 #: the next report. (For two-sided members the drop-to-cold fail-safe is
 #: sound; one-sided evidence has no cold state to fall back to.)
-#: ``ambiguous_alignment`` joined for the #610 group-split shape: its
-#: reframed removal rows likewise carry a two-sided base entry whose gone
-#: side survives only as the base fingerprint.
-_POOL_FREEZING_ACTIONS = frozenset({"stamp_vs_new", "remove_vs_edit", "ambiguous_alignment"})
+#: ``remove_vs_split`` joined for the #610 group-split shape: its reframed
+#: removal rows likewise carry a two-sided base entry whose gone side
+#: survives only as the base fingerprint. The freeze is gated to that
+#: dedicated action (#630 F2) — keying it on ``ambiguous_alignment``, as
+#: #625 briefly did, changed the recording behavior of every unrelated
+#: pre-existing emitter of that action.
+_POOL_FREEZING_ACTIONS = frozenset({"stamp_vs_new", "remove_vs_edit", "remove_vs_split"})
 
 
 def _frozen_pools(unresolved_items: list[DiffItem]) -> set[tuple[str, str]]:
@@ -973,7 +978,13 @@ def _record_item(
         part = key.split(":", 1)[1].rsplit("/", 2)[1]
         record_preamble_scope(target, fresh, part)
         return set()
-    if action in ("record_remove", "mirror_remove", "remove_vs_edit", "remove_localized_side"):
+    if action in (
+        "record_remove",
+        "mirror_remove",
+        "remove_vs_edit",
+        "remove_localized_side",
+        "remove_vs_split",
+    ):
         pool = _pool_scope(item)
         if pool is not None:
             if pool in frozen_pools:
@@ -1314,6 +1325,14 @@ def _apply_choice_decision(ex: _Executor, item: DiffItem, choice: str) -> None:
             raise _ItemError(
                 f"{item.key} names no removed side — reconcile manually (edit + record)"
             )
+        if action == "remove_vs_split":
+            # The agent judged the byte-match a coincidental duplicate, not a
+            # group split (#630): execute the removal the guard blocked, with
+            # mirror_remove's survivor-on-base check intact (the row was
+            # framed off an unchanged twin — a twin that moved since must
+            # re-frame, never be deleted).
+            ex.mirror_remove(item, item.side)
+            return
         survivor = _other(item.side)
         holder = ex._holder(item, survivor)
         cell = holder.side(survivor) if holder is not None else None

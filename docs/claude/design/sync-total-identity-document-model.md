@@ -479,9 +479,12 @@ clm slides sync autopilot DECK|DIR [--model ...]            # a SCRIPT over repo
   deterministically reject the mirrored removal, so that shape frames
   `remove_vs_edit` (whose answers land) with the suspicion in the detail —
   the report never advertises an answer apply is guaranteed to refuse.
-  `ambiguous_alignment` itself stays answerless — its remaining shapes
-  (rival id stamps, both-sides-added pool collisions, multi-candidate
-  pending twins) are genuinely manual.
+  `remove_vs_split` (#610/#630) is the same route again: the suspected
+  group-split reframe became its own framed action with a uniform `remove`
+  answer for the coincidental-duplicate case (the split case stays manual:
+  mirror the inserted slide, then re-report). `ambiguous_alignment` itself
+  stays answerless — its remaining shapes (rival id stamps, both-sides-added
+  pool collisions, multi-candidate pending twins) are genuinely manual.
 - **One baseline rule everywhere.** Every verb trusts the ledger; `--since REF`
   is a forensic *view* on `report` (show me git-window changes annotated with
   trust state), not a trust change. `provider_available`, `--use-watermark`,
@@ -654,3 +657,4 @@ row here (or an edit to the section it refines) has skipped the checklist.
 | #600 follow-up (adversarial review of #602) — pos-view `stamp_vs_new` only emitted while the survivor sits on base (edited survivor frames `remove_vs_edit` with the suspicion in the detail); pools carrying an unresolved `stamp_vs_new`/`remove_vs_edit` item are frozen during apply's ledger re-record so a partial answer cannot erase a sibling's removal evidence | §8 | defect fixes: "never advertise an answer apply must refuse" + one-sided evidence has no cold state to fall back to |
 | #609 — target-aware `body` writer/validation for single-line j2 macro cells (`id:title` etc.): the j2 line is the cell's boundary AND content, so the generic delimiter guard rejected every valid answer and the generic writer would append instead of replace; a `body` now replaces the j2 line in place (full-line form, or bare text spliced into the macro's quoted argument — bare form disabled on the mint-a-new-cell paths, which cannot derive the right macro name) | §8 | defect fix: "never advertise an answer apply must refuse" (the report advertised `body` on `translate_edit id:title`) |
 | #610 — group-split guard: a pos-keyed `mirror_remove` whose gone-side base fp matches a one-sided cold cell of another group on that side is reframed (post-pass) as answerless `ambiguous_alignment` with a `suspected_group_split` observation — an id-keyed slide inserted before a run of un-id'd cells moves them into its group on one half, and mechanically mirroring the "removals" would delete the twin's untouched cells; `ambiguous_alignment` joins the #600 pool-freezing set (its reframed rows carry two-sided base evidence whose gone side survives only as the base fp) | §6.2, §8 | defect fix: a mechanical row that silently defaults to data loss; resolution = mirror the inserted slide on the twin, then re-report |
+| #630 — `remove_vs_split` framed action: the #610 group-split reframe split out of `ambiguous_alignment` (the #600 route again) with a `remove` answer — the fingerprint-only heuristic also blocks a genuine deletion that coincides with a byte-identical one-sided cold cell elsewhere (repeated boilerplate), and the answerless reframe left that case with no in-tool resolution; the pool freeze is gated to `remove_vs_split` (keying it on `ambiguous_alignment` had re-gated five unrelated pre-existing emitters), the detail/observation name every rival group, and a warn-only similar-bodies observation flags the residual move+edit shape the byte guard cannot see | §6.2, §8 | new framed kind via the §8 "redesign the action" route — `ambiguous_alignment` stays answerless |

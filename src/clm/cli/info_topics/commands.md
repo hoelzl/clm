@@ -1975,7 +1975,10 @@ propagation. **Framed actions** (need a decision): `translate_edit`,
 `translate_new`, `verify_translation`, `conflict_shared`,
 `pending_divergence`, `remove_vs_edit`, `unify_choose_body`, `order_decision`,
 `stamp_vs_new` (a suspected id-stamp of a vanished positional cell — answer
-`treat_as_new` to grow the twin / mirror the removal), `conflict_tags` (the
+`treat_as_new` to grow the twin / mirror the removal), `remove_vs_split` (a
+removal that may be a group split — answer `remove` when it is a genuine
+deletion whose bytes merely coincide with another group's new one-sided cell,
+otherwise mirror the inserted slide on the twin and re-report), `conflict_tags` (the
 twins' tag sets diverged with no attributable direction — answer `de`/`en` to
 mirror **only that side's tag set** onto the twin, bodies untouched; while it
 is framed it suppresses the member's other rows — body, layout, and owner —
