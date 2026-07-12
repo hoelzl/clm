@@ -3,12 +3,12 @@
 **Status**: Triage COMPLETE; execution IN PROGRESS — Phases 1–5 DONE
 (#600, #539, #524/#382/#362, #568, #559); **Phase 7 fully DONE**
 (#609/#610/#611 via PRs #624/#625/#626 on 2026-07-11; #615 landed via
-PR #628, merged 2026-07-11 — see the Phase 7 block); **Phase 8 #620 DONE**
-(job session ownership, 2026-07-12 — see the Phase 8 block). Next up
-**Phase 8 #617** (own-pool teardown orphaning), then Phase 6 (design
-tier). This document is the source of truth for working through the
-open-issue backlog in priority order. Update phase statuses here as issues
-land.
+PR #628, merged 2026-07-11 — see the Phase 7 block); **Phase 8 DONE**
+(#620 job session ownership + #617 orphan-pool-shutdown, 2026-07-12 — see
+the Phase 8 block). Next up **Phase 6 (design tier)** — start with the
+#383+#381 verify-then-close pass. This document is the source of truth for
+working through the open-issue backlog in priority order. Update phase
+statuses here as issues land.
 
 ## 1. Feature Overview
 
@@ -383,7 +383,30 @@ amendments-log row for ANY engine change). #609/#610 have documented
 workarounds in their issue bodies — as with #600, the workaround is the
 oracle for what the fixed flow should converge to.
 
-### Phase 8 [IN PROGRESS — #620 DONE, #617 TODO] — Build reliability: job/session ownership (#620, #617)
+### Phase 8 [DONE] — Build reliability: job/session ownership (#620, #617)
+
+**#617 DONE (2026-07-12, "Full" scope)**: root cause (via a dedicated
+investigation) — nothing marked a *busy* worker dead, so a worker that died or
+hung mid-job left its job stuck in `processing`; the completion loop's
+dead-worker requeue (`_cleanup_dead_worker_jobs`, gated on `workers.status =
+'dead'`) never fired, and the job lingered until the teardown
+`mark_orphaned_jobs_failed` sweep stamped it. The dormant `WorkerPoolManager`
+health monitor was never started in the build path. Fixed in four layers:
+(1) **liveness recovery** — `start_managed_workers` now starts the health
+monitor (`start_monitoring`), scoped to the build's own `session_id` (mirrors
+#597/#620; never reaps a concurrent build's workers, and only marks dead on a
+real `is_worker_running` process check — the missing-executor branch now skips
+instead of killing); a dead worker's in-flight job is then requeued for retry.
+(2) **`reset_hung_jobs`** now clears `started_at`/`worker_id` so a
+legitimately-requeued job is never mis-stamped an orphan by the teardown scan.
+(3) **submit race** — job submission registers the job in `active_jobs` under
+`asyncio.shield`, so a cancelled submission can't leave a worker-claimable but
+untracked row. (4) **reporting** — `stop_managed_workers` returns its orphans;
+`main_build` folds any into the summary (`_record_teardown_orphans`) and marks
+it timed-out, forcing a non-zero exit instead of silently banking them. Tests:
+monitor session-scoping (`test_pool_manager`), `reset_hung` started_at
+(`test_job_queue`), stop-returns-orphans (`test_lifecycle_manager`),
+`_record_teardown_orphans` (`test_build_abort_summary`). Shipped as its own PR.
 
 **#620 DONE (2026-07-12)**: implemented exactly the planned fix direction —
 session id on job rows + claim filter — as its own PR. Schema v11 adds
@@ -415,11 +438,12 @@ diagnostic even names the suspected race.
   `execution_mode`, #594/#599 added ownership for *workers*, jobs had
   none. Fixed by stamping jobs with the owning build session and filtering
   claims by it (see the resolution note above).
-- **#617**: intermittent `worker died mid-job (orphaned at pool
+- **#617 [DONE]**: intermittent `worker died mid-job (orphaned at pool
   shutdown)` failing a batch of jobs mid-stage in a single uninterrupted
   Direct-mode build (8 of 38 jobs in the observed run; byte-identical
-  re-run clean). Root cause unknown — may fall out of (or be illuminated
-  by) the #620 ownership work, which is why they share a phase.
+  re-run clean). Root cause was the absence of any busy-worker liveness
+  recovery; fixed by wiring the session-scoped health monitor plus three
+  hardening layers (see the resolution note above).
 
 ### Phase 6 [TODO] — Design-tier work (when capacity allows)
 
@@ -477,26 +501,24 @@ OpenAI-compatible client, zero new deps) or close as status-quo.
 - **Phase 7 fully DONE** (2026-07-11): #609 via PR #624, #610 via
   PR #625, #611 via PR #626, **#615 via PR #628** (resolution details in
   the Phase 7 block). All four issues CLOSED.
-- **Phase 8 #620 DONE** (2026-07-12): job session ownership — schema v11
-  `jobs.session_id`, stamp on submit, session-filtered claim (resolution
-  details in the Phase 8 block). #617 still open.
+- **Phase 8 DONE** (2026-07-12): #620 job session ownership (schema v11
+  `jobs.session_id`, stamp on submit, session-filtered claim) + #617
+  orphan-pool-shutdown (session-scoped health monitor for busy-worker
+  liveness recovery, `reset_hung_jobs` started_at clear, shielded submit
+  registration, teardown orphans folded into the summary/exit). Resolution
+  details in the Phase 8 block.
 - No blockers, no pending decisions. Remaining, in priority order:
-  Phase 8 **#617** (own-pool teardown orphaning — investigate as its own
-  PR), Phase 6 design tier (#383+#381 — start with a verify-then-close
-  pass, see the Phase 3 resolution note — plus #484, #167), #614 before
-  the next harvest round.
+  Phase 6 design tier (#383+#381 — start with a verify-then-close pass,
+  see the Phase 3 resolution note — plus #484, #167), #614 before the next
+  harvest round.
 
 ## 5. Next Steps
 
-**Phases 1–5 and 7 are DONE; Phase 8 #620 is DONE — next is Phase 8
-#617** (own-pool teardown orphaning: a build's own in-flight jobs marked
-`worker died mid-job (orphaned at pool shutdown)` mid-stage in an
-uninterrupted Direct build). Investigate the `mark_orphaned_jobs_failed`
-timing vs. pool teardown across stage boundaries; ship as its own PR (the
-#620 ownership work may illuminate it). Then Phase 6a (#383+#381 — START
-with a verify-then-close pass against commit 90518611, see the Phase 3
-resolution note). Schedule #614 just before the next big harvest round.
-The plan below documents how Phase 1 was executed (kept for reference):
+**Phases 1–5, 7, and 8 are DONE — next is Phase 6a (#383+#381)**, which
+should START with a verify-then-close pass against commit 90518611 (see the
+Phase 3 resolution note) rather than a fresh design effort, then #484 and
+#167. Schedule #614 just before the next big harvest round. The plan below
+documents how Phase 1 was executed (kept for reference):
 
 1. Read memory topics `project_sync_one_sided_cold` and
    `project_sync_v3_design_audit`, plus the sync v3 design note (find via
@@ -560,12 +582,18 @@ their listed sites — see each phase's resolution block for what changed:
   test_job_queue.py` + `test_schema.py`, `tests/infrastructure/backends/
   test_sqlite_backend_resilience.py`; version-canary bumped in
   `test_worker_heartbeats.py`
-- `#617` (Phase 8, TODO) → `job_queue.mark_orphaned_jobs_failed`
-  (`ORPHAN_ERROR_MESSAGE`) and its caller
-  `WorkerLifecycleManager.stop_managed_workers` — trace teardown timing vs.
-  stage boundaries; `worker_base._convert_path_to_container()` was where
-  #620's misattributed error surfaced (kept here for the #617 investigator);
-  #594/#599 PRs are the ownership pattern
+- `#617` (Phase 8, DONE) → `src/clm/infrastructure/workers/pool_manager.py`
+  (`_monitor_health` session-scoped + skip-on-missing-executor),
+  `src/clm/infrastructure/workers/lifecycle_manager.py`
+  (`start_managed_workers` starts the monitor; `stop_managed_workers` returns
+  its orphans), `src/clm/infrastructure/database/job_queue.py`
+  (`reset_hung_jobs` clears `started_at`),
+  `src/clm/infrastructure/backends/sqlite_backend.py` (shielded submit
+  registration), `src/clm/cli/commands/build.py` (`_record_teardown_orphans`
+  + the `main_build` finally wiring). The existing `_cleanup_dead_worker_jobs`
+  requeue (already in the completion loop, gated on `workers.status='dead'`)
+  is what the monitor now feeds. Tests in `test_pool_manager.py`,
+  `test_lifecycle_manager.py`, `test_job_queue.py`, `test_build_abort_summary.py`
 - `#484` → `src/clm/infrastructure/backends/sqlite_backend.py`
   (`_execute_operation_impl`, poll loop `record_write` at ~:564),
   `src/clm/core/output_write_registry.py` (:292,294 hash-in-critical-section)

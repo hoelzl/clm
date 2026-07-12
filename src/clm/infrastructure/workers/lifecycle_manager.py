@@ -228,6 +228,16 @@ class WorkerLifecycleManager:
         # Start pools
         self.pool_manager.start_pools()
 
+        # Start health monitoring (issue #617). A worker that dies mid-job
+        # otherwise leaves its job stuck in 'processing' — nothing marked a
+        # busy worker dead, so the completion loop's dead-worker requeue never
+        # fired and the job lingered until the teardown orphan sweep stamped it
+        # "worker died mid-job (orphaned at pool shutdown)". The monitor detects
+        # the death by process liveness, marks the worker 'dead', and the build
+        # loop then requeues the job for retry on another worker. It scans only
+        # this session's workers and is stopped/joined by stop_pools().
+        self.pool_manager.start_monitoring()
+
         # Collect worker info for tracking
         self.managed_workers = self._collect_worker_info()
 
@@ -238,23 +248,30 @@ class WorkerLifecycleManager:
         logger.info(f"Started {len(self.managed_workers)} managed worker(s)")
         return self.managed_workers
 
-    def stop_managed_workers(self, workers: list[WorkerInfo]) -> None:
+    def stop_managed_workers(self, workers: list[WorkerInfo]) -> list[dict[str, Any]]:
         """Stop managed workers.
 
         Args:
             workers: List of workers to stop
+
+        Returns:
+            The list of in-flight jobs orphaned at pool stop (each a dict as
+            returned by :meth:`JobQueue.mark_orphaned_jobs_failed`). Empty on a
+            clean shutdown. The build surfaces a non-empty result so orphans
+            discovered at teardown still reach the summary and exit policy
+            (issue #617) rather than being silently banked in the jobs DB.
         """
         if not self.config.auto_stop:
             logger.info("Auto-stop is disabled, keeping workers running")
-            return
+            return []
 
         if not workers:
             logger.debug("No workers to stop")
-            return
+            return []
 
         if not self.pool_manager:
             logger.debug("No pool manager to stop")
-            return
+            return []
 
         start_time = time.time()
 
@@ -301,6 +318,8 @@ class WorkerLifecycleManager:
         # Clear tracked workers if they match
         if self.managed_workers == workers:
             self.managed_workers.clear()
+
+        return orphans
 
     def _adjust_configs_for_reuse(self, configs: list[WorkerConfig]) -> list[WorkerConfig]:
         """Adjust worker counts based on existing healthy workers.

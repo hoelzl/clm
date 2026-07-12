@@ -586,6 +586,75 @@ def test_pool_manager_start_monitoring(db_path, workspace_path, worker_configs):
         manager.monitor_thread.join(timeout=1)
 
 
+def _seed_stale_busy_direct_worker(db_path, session_id, container_id):
+    """Insert a busy direct worker with a stale heartbeat (issue #617 tests)."""
+    jq = JobQueue(db_path)
+    try:
+        cur = jq._get_conn().execute(
+            """
+            INSERT INTO workers (worker_type, container_id, status, session_id,
+                                 execution_mode, last_heartbeat)
+            VALUES ('notebook', ?, 'busy', ?, 'direct', datetime('now', '-120 seconds'))
+            """,
+            (container_id, session_id),
+        )
+        worker_id = cur.lastrowid
+        assert worker_id is not None
+        return worker_id
+    finally:
+        jq.close()
+
+
+def _worker_status(db_path, worker_id):
+    jq = JobQueue(db_path)
+    try:
+        row = (
+            jq._get_conn()
+            .execute("SELECT status FROM workers WHERE id = ?", (worker_id,))
+            .fetchone()
+        )
+        return row[0] if row else None
+    finally:
+        jq.close()
+
+
+def test_monitor_health_reaps_only_own_session_dead_workers(
+    db_path, workspace_path, worker_configs
+):
+    """The health monitor marks a worker dead only when its process is gone,
+    and only for THIS session's workers — never a concurrent build's in a
+    shared jobs DB (issue #617; mirrors the #597/#620 ownership rule)."""
+    with patch("docker.from_env"):
+        manager = WorkerPoolManager(
+            db_path=db_path,
+            workspace_path=workspace_path,
+            worker_configs=worker_configs,
+            session_id="session-A",
+        )
+
+    # A direct executor that reports every process as no longer running.
+    dead_executor = MagicMock()
+    dead_executor.is_worker_running.return_value = False
+    manager.executors["direct"] = dead_executor
+
+    own = _seed_stale_busy_direct_worker(db_path, "session-A", "direct-own")
+    foreign = _seed_stale_busy_direct_worker(db_path, "session-B", "direct-foreign")
+
+    manager.running = True
+    thread = threading.Thread(target=manager._monitor_health, args=(0.05,), daemon=True)
+    thread.start()
+    try:
+        deadline = time.time() + 5.0
+        while time.time() < deadline and _worker_status(db_path, own) != "dead":
+            time.sleep(0.05)
+    finally:
+        manager.running = False
+        thread.join(timeout=2)
+
+    assert _worker_status(db_path, own) == "dead"
+    assert _worker_status(db_path, foreign) == "busy"
+
+
 @pytest.mark.slow
 def test_pool_manager_parallel_startup_performance(db_path, workspace_path):
     """Test that parallel startup is significantly faster than sequential would be."""

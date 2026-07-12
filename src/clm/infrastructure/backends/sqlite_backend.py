@@ -367,13 +367,37 @@ class SqliteBackend(LocalOpsBackend):
         # thread-safe (the DB result-cache replay above, db_manager.get_result,
         # stays on the loop for the same reason).
         _offload_t0 = profiler_now() if profiler.enabled else 0.0
-        outcome, job_id = await asyncio.get_running_loop().run_in_executor(
-            self._ensure_submit_executor(),
-            self._submit_job_blocking,
-            payload,
-            job_type,
-            force_execution,
-        )
+
+        async def _submit_and_track() -> tuple[str, int | None]:
+            outcome_, job_id_ = await asyncio.get_running_loop().run_in_executor(
+                self._ensure_submit_executor(),
+                self._submit_job_blocking,
+                payload,
+                job_type,
+                force_execution,
+            )
+            # Register the job in active_jobs INSIDE this shielded coroutine, so
+            # a cancellation of the caller (e.g. a sibling submission op raising
+            # and tearing down the stage TaskGroup) can never leave the
+            # just-INSERTed, worker-claimable 'pending' row untracked. An
+            # untracked row is never waited on, lingers in 'processing', and is
+            # stamped "worker died mid-job (orphaned at pool shutdown)" by the
+            # teardown sweep (issue #617). A jobcache_hit has no DB row to track.
+            if outcome_ == "submitted" and job_id_ is not None:
+                self.active_jobs[job_id_] = {
+                    "job_type": job_type,
+                    "input_file": str(payload.input_file),
+                    "output_file": str(payload.output_file),
+                    "correlation_id": getattr(payload, "correlation_id", None),
+                }
+            return outcome_, job_id_
+
+        # shield() lets the submit+register run to completion even if the caller
+        # is cancelled mid-await: the submit thread's INSERT is not cancellable
+        # once started, so the active_jobs registration must be equally
+        # uncancellable or the row is stranded (issue #617). On the happy path
+        # this is equivalent to awaiting the coroutine directly.
+        outcome, job_id = await asyncio.shield(_submit_and_track())
         if profiler.enabled:
             profiler.record_submit_offload(profiler_now() - _offload_t0)
 
@@ -422,16 +446,11 @@ class SqliteBackend(LocalOpsBackend):
                     )
             return True
 
-        # outcome == "submitted": the job is in the jobs DB. Register it for the
-        # poll loop and report it — all loop-confined state.
+        # outcome == "submitted": the job is in the jobs DB and already
+        # registered in active_jobs by the shielded submit above. Report it —
+        # all loop-confined state.
         assert job_id is not None
         correlation_id = getattr(payload, "correlation_id", None)
-        self.active_jobs[job_id] = {
-            "job_type": job_type,
-            "input_file": str(payload.input_file),
-            "output_file": str(payload.output_file),
-            "correlation_id": correlation_id,
-        }
 
         # Track in progress tracker
         if self.progress_tracker:
