@@ -583,6 +583,10 @@ def _normalization_result_to_dict(result: NormalizationResult) -> dict:
             }
             for r in result.review_items
         ]
+    if result.notices:
+        d["notices"] = [
+            {"file": n.file, "operation": n.operation, "message": n.message} for n in result.notices
+        ]
     return d
 
 

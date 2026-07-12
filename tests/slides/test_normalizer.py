@@ -628,6 +628,44 @@ class TestInterleaving:
             assert result.review_items == [], (name, result.review_items)
             assert result.status == "clean"
 
+    def test_explicit_interleaving_on_split_half_emits_skip_notice(self, tmp_path):
+        # Regression test for #631: an EXPLICIT `--operations interleaving`
+        # request on a language-split half must not be a silent no-op — the
+        # skip is surfaced as a notice (status/exit code stay clean, #611).
+        text = '# %% [markdown] lang="de" tags=["slide"]\n# # Folie 1\n'
+        path = _write_slide(tmp_path / "slides_test.de.py", text)
+        result = normalize_file(path, operations=["interleaving"], dry_run=True)
+
+        assert result.review_items == []
+        assert result.status == "clean"
+        assert len(result.notices) == 1, result.notices
+        notice = result.notices[0]
+        assert notice.operation == "interleaving"
+        assert notice.file == str(path)
+        assert "split half" in notice.message
+
+    def test_default_run_on_split_half_emits_no_notice(self, tmp_path):
+        # #631: only an explicit request gets the notice — a default run (or
+        # explicit `all`) over split decks stays quiet, as intended by #611.
+        text = '# %% [markdown] lang="de" tags=["slide"]\n# # Folie 1\n'
+        path = _write_slide(tmp_path / "slides_test.de.py", text)
+        for ops in (None, ["all"]):
+            result = normalize_file(path, operations=ops, dry_run=True)
+            assert result.notices == [], (ops, result.notices)
+
+    def test_explicit_interleaving_on_bilingual_file_emits_no_notice(self, tmp_path):
+        # #631: the notice fires only when the pass is actually skipped.
+        text = (
+            '# %% [markdown] lang="de" tags=["slide"]\n'
+            "# # Folie\n"
+            "\n"
+            '# %% [markdown] lang="en" tags=["slide"]\n'
+            "# # Slide\n"
+        )
+        path = _write_slide(tmp_path / "slides_test.py", text)
+        result = normalize_file(path, operations=["interleaving"], dry_run=True)
+        assert result.notices == []
+
     def test_split_half_still_runs_other_operations(self, tmp_path):
         # Only the DE/EN interleaving pass is exempt on split halves — the
         # mechanical single-file passes must still run.

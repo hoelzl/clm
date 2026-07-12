@@ -30,6 +30,30 @@ class TestNormalizeSlidesCmd:
         assert result.exit_code == 0
         assert "No changes needed" in result.output
 
+    def test_explicit_interleaving_on_split_half_reports_skip(self, tmp_path):
+        # Regression test for #631: `--operations interleaving` on a split half
+        # is intentionally skipped (#611) but must SAY so — exit 0 either way.
+        path = _write_slide(
+            tmp_path / "slides_test.de.py",
+            '# %% [markdown] lang="de" tags=["slide"]\n# # Folie\n',
+        )
+        runner = CliRunner()
+        result = runner.invoke(normalize_slides_cmd, [str(path), "--operations", "interleaving"])
+        assert result.exit_code == 0, result.output
+        assert "[SKIPPED]" in result.output
+        assert "split half" in result.output
+
+        as_json = runner.invoke(
+            normalize_slides_cmd, [str(path), "--operations", "interleaving", "--json"]
+        )
+        assert as_json.exit_code == 0, as_json.output
+        data = json.loads(as_json.output)
+        assert data["status"] == "clean"
+        notices = data["notices"]
+        assert len(notices) == 1
+        assert notices[0]["operation"] == "interleaving"
+        assert "split half" in notices[0]["message"]
+
     def test_confirm_pairs_applies_interleave_and_converges(self, tmp_path):
         # #236 agent flow over the CLI: --json worklist → --confirm-pairs (stdin) →
         # reordered + exit 0 → a plain re-run is clean.
