@@ -1,6 +1,7 @@
 # Handover: PR #636 Adversarial-Review Findings (worker liveness follow-ups)
 
-**Status**: Not started — findings identified 2026-07-12, no fixes implemented yet.
+**Status**: Phases 1+2 DONE (2026-07-12, PR A — monitor correctness); next is
+Phase 3 (session-scope `mark_orphaned_jobs_failed`), then Phases 4+5.
 This document is the source of truth for addressing the five findings from the
 post-merge adversarial review of PR #636 (the issue #617 fix, merged as
 `f96f8ab6` / commit `d5467df7`).
@@ -72,7 +73,15 @@ summary table. That is acceptable; Phase 4 only fixes the wording/visibility.
 
 ## 3. Phase Breakdown
 
-### Phase 1 [TODO] — Fix the timezone bug in `_is_heartbeat_stale` (Finding 1, HIGH) — **ACTIVE PHASE**
+### Phase 1 [DONE] — Fix the timezone bug in `_is_heartbeat_stale` (Finding 1, HIGH)
+
+**Resolution (2026-07-12)**: naive timestamps are now tagged UTC
+(`replace(tzinfo=timezone.utc)`) and compared against
+`datetime.now(timezone.utc)`; tz-aware timestamps honored as-is; parse errors
+still stale. The pre-existing `test_pool_manager_is_heartbeat_stale` (which
+seeded *local* naive timestamps and was itself tz-dependent) was rewritten
+host-TZ-independent with naive-UTC, tz-aware, and malformed cases. Original
+plan below kept for reference.
 
 - **What**: `_is_heartbeat_stale`
   (`src/clm/infrastructure/workers/pool_manager.py:946-963`) parses the UTC DB
@@ -102,7 +111,19 @@ summary table. That is acceptable; Phase 4 only fixes the wording/visibility.
   `datetime.now(timezone.utc)` and force-tags the parsed value with
   `timezone.utc` at `discovery.py:135` — that is the correct pattern to copy).
 
-### Phase 2 [TODO] — Stop gating liveness on heartbeats busy workers never send (Finding 2, MEDIUM)
+### Phase 2 [DONE] — Stop gating liveness on heartbeats busy workers never send (Finding 2, MEDIUM)
+
+**Resolution (2026-07-12)**: took the recommended direction. `_monitor_health`
+now runs `is_worker_running` unconditionally per cycle (executor-type
+resolution and the missing-executor skip moved ahead of it); stale-heartbeat
+logging is DEBUG for `busy` workers, WARNING for others; the Docker stats pull
+is gated on staleness AND the every-5th-cycle throttle, and the hung heuristic
+(CPU<1% + busy) is unchanged. New tests: dead-worker-with-fresh-heartbeat is
+reaped; live busy worker with stale heartbeat stays `busy` with zero WARNING
+lines; stale zero-CPU docker worker still goes `hung`. Helper generalized to
+`_seed_busy_worker(..., heartbeat_age_seconds=, execution_mode=)` (seeded via
+SQLite UTC `datetime('now', ...)`, host-TZ-independent) with a shared
+`_run_monitor_until` runner. Original plan below kept for reference.
 
 - **What**: once Phase 1 makes staleness *accurate*, every busy worker on a
   >30s job legitimately trips the stale gate each 10s cycle:
@@ -217,11 +238,15 @@ summary table. That is acceptable; Phase 4 only fixes the wording/visibility.
 ## 4. Current Status
 
 - **Completed**: adversarial review of merged PR #636 (2026-07-12), all five
-  findings verified directly against the code at `f96f8ab6` (no fixes
-  written). The review confirmed what *does* hold up: `reset_hung_jobs`
-  clearing, shield semantics, missing-executor skip, and `stop_managed_workers`
-  returning `[]` on all early paths — none of those need changes.
-- **In progress**: nothing.
+  findings verified directly against the code at `f96f8ab6`. The review
+  confirmed what *does* hold up: `reset_hung_jobs` clearing, shield semantics,
+  missing-executor skip, and `stop_managed_workers` returning `[]` on all
+  early paths — none of those need changes. **Phases 1+2 implemented**
+  (2026-07-12) on branch `claude/pr636-findings-monitor-correctness` (PR A:
+  `src/clm/infrastructure/workers/pool_manager.py` + its tests + changelog
+  fragment `changelog.d/617-monitor-tz-and-busy-heartbeat.fixed.md`); see the
+  phase resolution notes.
+- **In progress**: nothing (PR A in review/auto-merge).
 - **Blockers / open questions**:
   - Phase 2 design choice (unconditional process check vs. background
     heartbeat thread) — recommendation is the former; confirm with maintainer
@@ -239,21 +264,9 @@ summary table. That is acceptable; Phase 4 only fixes the wording/visibility.
 
 ## 5. Next Steps
 
-**Start Phase 1.** Concretely:
-
-1. `git switch -c claude/pr636-review-findings-phase1` (or per-phase naming).
-2. Fix `_is_heartbeat_stale` (`pool_manager.py:946-963`) to compare in UTC —
-   copy the pattern at `discovery.py:135,183`
-   (`datetime.fromisoformat(...).replace(tzinfo=timezone.utc)` vs
-   `datetime.now(timezone.utc)`).
-3. Add host-TZ-independent unit tests for `_is_heartbeat_stale` in
-   `tests/infrastructure/workers/test_pool_manager.py`.
-4. Re-run `test_monitor_health_reaps_only_own_session_dead_workers` and the
-   monitor start/stop tests; then continue into Phase 2 in the same PR.
-5. Gotchas: do not change the DB write side (UTC in DB is load-bearing for
-   `_get_available_workers`); `datetime.fromisoformat` accepts SQLite's
-   space-separated format on Python ≥3.11 (project floor is 3.12 — fine);
-   parse errors must still return `True` (stale) as today.
+**Start Phase 3** (session-scope `mark_orphaned_jobs_failed`) — see the Phase 3
+block for the full plan; branch fresh off `origin/master` once PR A has
+merged. Then Phases 4+5 as PR C.
 
 ## 6. Key Files & Architecture
 
