@@ -1,7 +1,9 @@
 # Handover: PR #636 Adversarial-Review Findings (worker liveness follow-ups)
 
-**Status**: Phases 1+2 DONE (2026-07-12, PR A #639, merged); Phase 3 DONE
-(2026-07-12, PR B — orphan sweep session scoping); next is Phases 4+5 (PR C).
+**Status**: ALL PHASES DONE (2026-07-12). PR A #639 (Phases 1+2, monitor
+correctness, merged), PR B #641 (Phase 3, orphan sweep session scoping,
+merged), PR C (Phases 4+5, orphan exit message + polish). Once PR C merges,
+this handover is complete and can be retired.
 This document is the source of truth for addressing the five findings from the
 post-merge adversarial review of PR #636 (the issue #617 fix, merged as
 `f96f8ab6` / commit `d5467df7`).
@@ -185,7 +187,20 @@ below kept for reference.
   keep passing; the manager's session_id comes from `mock_config`/ctor, so
   trace how `WorkerLifecycleManager.session_id` is populated first.
 
-### Phase 4 [TODO] — Honest orphan exit message (Finding 4, LOW)
+### Phase 4 [DONE] — Honest orphan exit message (Finding 4, LOW)
+
+**Resolution (2026-07-12)**: implemented per plan (PR C, branch
+`claude/pr636-phase45-orphan-reporting-polish`). New pure helper
+`_format_exit_failure(summary)` in `build.py` partitions `summary.errors` for
+`category == "orphaned_job"`: orphans get a dedicated message naming the
+count and input files ("orphaned at pool shutdown … produced no output");
+otherwise the original timed-out message is kept verbatim. The exit block
+calls the helper; `timed_out = True` remains the exit-forcing mechanism and
+the #90/#143 exit-policy ordering is untouched. Tests in
+`test_build_abort_summary.py` (`TestFormatExitFailure`) cover both branches.
+Limitation accepted: when a genuine timeout AND orphans co-occur, the message
+mentions only the orphans (the flag can't distinguish; both exit 1). Original
+plan below kept for reference.
 
 - **What**: the exit block at `src/clm/cli/commands/build.py:2662-2669` prints
   "one or more worker jobs **timed out** … See the error summary **above**"
@@ -210,7 +225,23 @@ below kept for reference.
   `_format_exit_failure(summary) -> str` makes this testable without a CLI
   run).
 
-### Phase 5 [TODO] — Minor loose ends (Finding 5, LOW)
+### Phase 5 [DONE] — Minor loose ends (Finding 5, LOW)
+
+**Resolution (2026-07-12)**: all three items shipped with Phase 4 (PR C).
+(1) Event approach taken: `WorkerPoolManager._monitor_stop_event` is waited
+on between monitor cycles (`wait(check_interval)` replaces `time.sleep`),
+set in `stop_pools`/`_emergency_stop`, cleared in `start_monitoring`; the
+5s join now succeeds, making the lifecycle_manager comment true as written.
+Test: `test_stop_pools_joins_monitor_promptly_despite_long_interval`
+(300s interval, join must not time out). (2) Reused-worker gap: accepted and
+documented via a comment at the reuse early-return in
+`lifecycle_manager.py` (monitoring foreign-session workers would violate the
+ownership rule); note posted to issue #617. (3) Shield noise: submission task
+is created via `asyncio.ensure_future` with a done-callback that retrieves
+and debug-logs the exception, then `asyncio.shield(task)` is awaited. Tests:
+abandoned-after-cancel exception is retrieved (caplog on the DEBUG line);
+non-cancelled path still propagates the raise. Original plan below kept for
+reference.
 
 1. **Monitor join guarantee overstated**: `stop_pools`
    (`pool_manager.py:1044-1056`) joins the monitor with `timeout=5` while the
@@ -263,9 +294,14 @@ below kept for reference.
   as PR #639. **Phase 3 implemented** (2026-07-12) on branch
   `claude/pr636-phase3-orphan-sweep-scope` (PR B: `job_queue.py`,
   `lifecycle_manager.py`, their tests, fragment
-  `changelog.d/617-orphan-sweep-session-scope.fixed.md`); see the phase
-  resolution notes.
-- **In progress**: nothing (PR B in review/auto-merge).
+  `changelog.d/617-orphan-sweep-session-scope.fixed.md`) — merged as PR #641.
+  **Phases 4+5 implemented** (2026-07-12) on branch
+  `claude/pr636-phase45-orphan-reporting-polish` (PR C: `build.py`,
+  `pool_manager.py`, `lifecycle_manager.py`, `sqlite_backend.py`, their
+  tests, fragment
+  `changelog.d/617-orphan-message-and-monitor-polish.fixed.md`); see the
+  phase resolution notes.
+- **In progress**: nothing (PR C in review/auto-merge).
 - **Blockers / open questions**:
   - Phase 2 design choice (unconditional process check vs. background
     heartbeat thread) — recommendation is the former; confirm with maintainer
@@ -284,9 +320,10 @@ below kept for reference.
 
 ## 5. Next Steps
 
-**Start Phase 4** (honest orphan exit message) together with Phase 5 as PR C —
-see the Phase 4/5 blocks for the full plans; branch fresh off `origin/master`
-once PR B has merged.
+None — all five findings are addressed. Once PR C merges, retire this
+handover (`/retire-handover`) or archive it; the only open follow-up is the
+accepted-and-documented reused-worker liveness gap (Phase 5.2), tracked by
+the note on issue #617.
 
 ## 6. Key Files & Architecture
 

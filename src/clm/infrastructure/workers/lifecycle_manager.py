@@ -196,6 +196,13 @@ class WorkerLifecycleManager:
 
         if not worker_configs:
             logger.info("No workers to start (sufficient workers already running)")
+            # Known gap, accepted (#617 follow-up, Finding 5.2): on this path
+            # no pool_manager is created, so the health monitor never runs and
+            # a reused worker that dies mid-job is only caught by the teardown
+            # orphan sweep, not requeued mid-build. Monitoring cannot help
+            # anyway: reused workers belong to another session (or are
+            # shareable), and the monitor deliberately scans only its own
+            # session's workers (#597/#620 ownership rule).
             # Return information about existing healthy workers
             return self._collect_reused_worker_info()
 

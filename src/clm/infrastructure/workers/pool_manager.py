@@ -173,6 +173,11 @@ class WorkerPoolManager:
         self.executors: dict[str, WorkerExecutor] = {}  # execution_mode -> executor
         self.running = True
         self.monitor_thread: threading.Thread | None = None
+        # Interrupts the monitor loop's between-cycle wait so stop_pools()
+        # can actually join the thread promptly (the wait is check_interval
+        # seconds — longer than the join timeout — so a plain sleep made the
+        # join time out and the daemon thread linger up to one interval).
+        self._monitor_stop_event = threading.Event()
 
         # Worker API server for Docker communication (started when needed)
         self._api_server: WorkerApiServer | None = None
@@ -817,6 +822,7 @@ class WorkerPoolManager:
             logger.warning("Monitor thread already running")
             return
 
+        self._monitor_stop_event.clear()
         self.monitor_thread = threading.Thread(
             target=self._monitor_health, args=(check_interval,), daemon=True
         )
@@ -954,11 +960,11 @@ class WorkerPoolManager:
                             f"Error checking worker {worker_id} health: {e}", exc_info=True
                         )
 
-                time.sleep(check_interval)
+                self._monitor_stop_event.wait(check_interval)
 
             except Exception as e:
                 logger.error(f"Health monitoring error: {e}", exc_info=True)
-                time.sleep(check_interval)
+                self._monitor_stop_event.wait(check_interval)
 
         logger.info("Health monitor stopped")
 
@@ -1071,6 +1077,10 @@ class WorkerPoolManager:
 
         logger.info("Stopping worker pools")
         self.running = False
+        # Wake the monitor loop out of its between-cycle wait so the join
+        # below completes promptly instead of timing out against a sleep
+        # that outlasts it.
+        self._monitor_stop_event.set()
 
         # Disable atexit cleanup since we're doing graceful shutdown
         _atexit_cleanup_disabled = True
@@ -1126,6 +1136,7 @@ class WorkerPoolManager:
         called during interpreter shutdown when logging is unavailable.
         """
         self.running = False
+        self._monitor_stop_event.set()
 
         # Don't wait for monitor thread - we're exiting anyway
 
