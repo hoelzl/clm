@@ -1,9 +1,25 @@
+<!-- HANDOVER-ARCHIVE — fully retired on 2026-07-12 -->
+
+# Handover Archive: PR #636 Adversarial-Review Findings (worker liveness follow-ups)
+
+> ⚠️ **FULLY RETIRED HANDOVER — NOT ACTIVE**
+>
+> This document archives a handover whose work is fully complete or has
+> been abandoned. **There is no active handover document.** It must
+> **not** be used with `/resume-feature`, `/implement-next-phase`, or
+> similar commands that expect an active work plan.
+>
+> If you need to resume related work, start a fresh handover.
+
+---
+
+## Fully retired on 2026-07-12
+
 # Handover: PR #636 Adversarial-Review Findings (worker liveness follow-ups)
 
 **Status**: ALL PHASES DONE (2026-07-12). PR A #639 (Phases 1+2, monitor
-correctness, merged), PR B #641 (Phase 3, orphan sweep session scoping,
-merged), PR C (Phases 4+5, orphan exit message + polish). Once PR C merges,
-this handover is complete and can be retired.
+correctness), PR B #641 (Phase 3, orphan sweep session scoping), PR C #642
+(Phases 4+5, orphan exit message + polish) — all merged. Retired 2026-07-12.
 This document is the source of truth for addressing the five findings from the
 post-merge adversarial review of PR #636 (the issue #617 fix, merged as
 `f96f8ab6` / commit `d5467df7`).
@@ -268,7 +284,13 @@ reference.
    a done-callback that retrieves and debug-logs the exception when the task
    was abandoned, then `await asyncio.shield(task)`.
 
-### Phase 6 [TODO] — Ship
+### Phase 6 [DONE] — Ship
+
+**Resolution (2026-07-12)**: shipped exactly as packaged below — PR A #639
+(Phases 1+2), PR B #641 (Phase 3), PR C #642 (Phases 4+5), all merged to
+master with changelog fragments and green CI. No separate GitHub issues were
+filed for Findings 1–3; traceability runs through the PR descriptions, which
+reference #617/#636 and this handover. No `clm info` topics needed updates.
 
 - One PR per phase is overkill; suggested packaging: **PR A** = Phases 1+2
   (monitor correctness — one coherent story), **PR B** = Phase 3 (orphan sweep
