@@ -80,15 +80,20 @@ bodies untouched — see "Tag parity" below),
 supply a `body` + `side` to overwrite a stale twin in the same pass),
 `stamp_vs_new` (a new id'd cell appeared while a positional cell of the same
 pool vanished on that side — answer `treat_as_new` when the id'd cell really
-is new; see "Replacing a positional cell" below), `ambiguous_alignment`
-(genuinely ambiguous residue — rival id stamps, both sides adding different
-content into one pool, or a suspected **group split**: an id-keyed slide
-inserted before a run of un-id'd positional cells moved them into its group
-on one half, so the "removals" the other half would mirror are really the
-same untouched cells under a new anchor — mirror the inserted slide on the
-twin (e.g. answer its `translate_new`), then re-report; carries **no**
-answers: reconcile by editing, minting ids, then re-report), and the
-normalize-refusal deck item (run `clm slides normalize`, then re-report).
+is new; see "Replacing a positional cell" below), `remove_vs_split` (a
+removal whose vanished cell is byte-identical — or body-identical, when
+only header attrs/tags changed — to an un-ledgered one-sided
+cell of another group — either a suspected **group split**: an id-keyed
+slide inserted before a run of un-id'd positional cells moved them into its
+group on one half, so the "removals" the other half would mirror are really
+the same untouched cells under a new anchor — mirror the inserted slide on
+the twin (e.g. answer its `translate_new`), then re-report; or a genuine
+deletion that merely coincides with a duplicate cell elsewhere — answer
+`remove` to execute it), `ambiguous_alignment` (genuinely ambiguous residue
+— rival id stamps, both sides adding different content into one pool;
+carries **no** answers: reconcile by editing, minting ids, then re-report),
+and the normalize-refusal deck item (run `clm slides normalize`, then
+re-report).
 
 ## Tag parity (tags are language-independent)
 

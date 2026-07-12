@@ -166,10 +166,82 @@ FRAMED_ACTIONS = frozenset(
         "order_decision",  # both sides reordered differently
         "ambiguous_alignment",  # §3.3 residue: dup-fp reorder + edit
         "stamp_vs_new",  # suspected stamp: new id'd cell vs unaccounted pool cell (#600)
+        "remove_vs_split",  # removal vs suspected group split (#610/#630)
         "conflict_preamble",  # preambles moved differently on both sides
         "verify_cold",  # no baseline entry (ledger mode)
     }
 )
+
+#: #630 F3 (warn-only): a removed shared cell whose twin body is this close
+#: to a one-sided cold body of another group gets a suspected-group-split
+#: observation — it may be a split whose moved cells were also edited, which
+#: the byte-identity guard cannot see. Tiny bodies (separators, one-liners)
+#: are skipped: they collide by construction. The scan is best-effort by
+#: design (it feeds a warning, never a blocking verdict), so oversized
+#: bodies are skipped and the number of full quadratic ``ratio()``
+#: computations per report is capped.
+_SPLIT_SIMILARITY_RATIO = 0.9
+_SPLIT_SIMILARITY_MIN_CHARS = 10
+_SPLIT_SIMILARITY_MAX_CHARS = 2000
+_SPLIT_SIMILARITY_BUDGET = 2000
+
+
+class _BodySimilarity:
+    """Memoized, budgeted near-match check for the #630 F3 scan.
+
+    ``SequenceMatcher.ratio()`` is quadratic in body length and a
+    reorganized deck compares many removals against many one-sided cold
+    cells, so verdicts are cached per body pair (boilerplate decks repeat
+    the same few bodies) and the pass stops running full ratios once the
+    budget is spent — further pairs simply stop matching.
+    """
+
+    def __init__(self) -> None:
+        self._cache: dict[tuple[str, str], bool] = {}
+        self._budget = _SPLIT_SIMILARITY_BUDGET
+
+    def similar(self, a: str, b: str) -> bool:
+        if len(a.strip()) < _SPLIT_SIMILARITY_MIN_CHARS:
+            return False
+        if len(b.strip()) < _SPLIT_SIMILARITY_MIN_CHARS:
+            return False
+        if len(a) > _SPLIT_SIMILARITY_MAX_CHARS or len(b) > _SPLIT_SIMILARITY_MAX_CHARS:
+            return False
+        key = (a, b)
+        cached = self._cache.get(key)
+        if cached is not None:
+            return cached
+        verdict = False
+        if a == b:
+            verdict = True
+        elif self._budget > 0:
+            matcher = SequenceMatcher(a=a, b=b, autojunk=False)
+            if (
+                matcher.real_quick_ratio() >= _SPLIT_SIMILARITY_RATIO
+                and matcher.quick_ratio() >= _SPLIT_SIMILARITY_RATIO
+            ):
+                self._budget -= 1
+                verdict = matcher.ratio() >= _SPLIT_SIMILARITY_RATIO
+        self._cache[key] = verdict
+        return verdict
+
+
+def _split_observations(
+    counts: dict[tuple[str, tuple[str, ...], Lang], int], *, match: str, advice: str
+) -> list[Observation]:
+    """The per-(old group, rival groups, side) ``suspected_group_split`` rows."""
+    return [
+        Observation(
+            kind="suspected_group_split",
+            side=side,
+            detail=(
+                f"group {old!r} lost {count} member(s) on the {side} side whose "
+                f"bodies {match} un-ledgered one-sided members of group(s) "
+                f"{', '.join(repr(g) for g in new)} — {advice}"
+            ),
+        )
+        for (old, new, side), count in sorted(counts.items())
+    ]
 
 
 def _pair_twin(de_member: Member | None, en_member: Member | None) -> Member | None:
@@ -444,7 +516,7 @@ class _Differ:
         )
 
     def _reframe_group_split_removals(self) -> list[Observation]:
-        """Issue #610: never mirror a removal that looks like a group split.
+        """Issue #610/#630: never *mechanically* mirror a suspected group split.
 
         An id-keyed slide inserted on one half *before* a run of un-id'd
         positional cells moves those cells into the new slide's group on
@@ -452,12 +524,27 @@ class _Differ:
         cells on that side (→ ``mirror_remove``, which would DELETE the
         twin's untouched cells) while the new group's pool gains the same
         cells one-sided (→ cold). When a removal's gone-side base
-        fingerprint matches a one-sided cold cell of another group on that
-        same side, the removal is reframed as an answerless conflict: mirror
-        the inserted slide on the twin (e.g. answer its ``translate_new``),
-        then re-report — the re-grouped pools frame safely.
+        fingerprint — or, for moved cells whose header attrs/tags changed,
+        its gone-side base *body* fingerprint — matches a one-sided cold
+        cell of another group on that same side, the removal is reframed as
+        a ``remove_vs_split`` decision (#630): answer ``remove`` when it
+        really is a deletion (the match is a coincidental duplicate —
+        repeated boilerplate cells are common), or mirror the inserted
+        slide on the twin (e.g. answer its ``translate_new``) and re-report
+        — the re-grouped pools then frame safely.
+
+        The byte-identity heuristic is deliberately broad: a false positive
+        costs one ``remove`` answer, a false negative deletes content. A
+        split whose moved cells were *also edited* escapes it — those still
+        mirror mechanically, so a similar-bodies observation flags them for
+        review before apply (#630 F3, warn-only: near-identical cells are
+        too common in course decks to block on similarity). The similarity
+        scan also runs for reframed rows, so an exact match in one group
+        cannot hide a similar match naming the real split target.
         """
         cold_groups_by_fp: dict[tuple[Lang, str], set[str]] = {}
+        cold_groups_by_body_fp: dict[tuple[Lang, str], set[str]] = {}
+        cold_bodies: dict[Lang, list[tuple[str, str]]] = {}
         for item in self.items:
             if item.action != "verify_cold" or not item.key.startswith("pos:"):
                 continue
@@ -469,9 +556,17 @@ class _Differ:
             assert cell is not None
             fp = content_fingerprint(cell)
             cold_groups_by_fp.setdefault((side, fp), set()).add(item.group)
+            if len(cell.body.strip()) >= _SPLIT_SIMILARITY_MIN_CHARS:
+                # Tiny bodies (separators, one-liners) collide by
+                # construction — body-only evidence starts above the same
+                # floor the similarity scan uses.
+                cold_groups_by_body_fp.setdefault((side, _body_fp(cell)), set()).add(item.group)
+            cold_bodies.setdefault(side, []).append((item.group, cell.body))
         if not cold_groups_by_fp:
             return []
-        observations: dict[tuple[str, str, Lang], int] = {}
+        split_counts: dict[tuple[str, tuple[str, ...], Lang], int] = {}
+        edited_counts: dict[tuple[str, tuple[str, ...], Lang], int] = {}
+        similarity = _BodySimilarity()
         for i, item in enumerate(self.items):
             if item.action != "mirror_remove" or not item.key.startswith("pos:"):
                 continue
@@ -481,42 +576,95 @@ class _Differ:
             gone_fp = item.base.side_fp(gone)
             if gone_fp is None:
                 continue
-            rivals = sorted(
-                g for g in cold_groups_by_fp.get((gone, gone_fp), set()) if g != item.group
+            rival_set = set(cold_groups_by_fp.get((gone, gone_fp), ()))
+            gone_body_fp = item.base.de_body_fp if gone == "de" else item.base.en_body_fp
+            if gone_body_fp is not None:
+                # A moved cell whose header attrs/tags changed breaks the
+                # content fingerprint but not the body one — still exact
+                # gone-side evidence, still a reframe.
+                rival_set |= cold_groups_by_body_fp.get((gone, gone_body_fp), set())
+            rivals = tuple(sorted(g for g in rival_set if g != item.group))
+            similar = tuple(
+                g
+                for g in self._similar_rival_groups(
+                    item, gone, cold_bodies.get(gone, []), similarity
+                )
+                if g not in rival_set
             )
+            if similar:
+                key = (item.group, similar, gone)
+                edited_counts[key] = edited_counts.get(key, 0) + 1
             if not rivals:
                 continue
-            rival = rivals[0]
+            named = ", ".join(repr(g) for g in rivals)
             self.items[i] = evolve(
                 item,
                 outcome="conflict",
-                action="ambiguous_alignment",
+                action="remove_vs_split",
                 direction="both",
                 detail=(
-                    f"positional member gone from the {gone} side, but an identical "
-                    f"un-ledgered cell sits in group {rival!r} on that side — likely "
-                    f"a group split (a slide inserted before this run of cells moved "
-                    f"them into its group), and a mechanical removal would delete the "
-                    f"twin's untouched cells; mirror the inserted slide on the twin "
-                    f"(e.g. answer its translate_new), then re-report"
+                    f"positional member gone from the {gone} side, but a cell with "
+                    f"identical bytes (or an identical body) sits un-ledgered in "
+                    f"group(s) {named} on that side — either a genuine deletion "
+                    f"coinciding with a duplicate cell, or a group split (a slide "
+                    f"inserted before this run of cells moved them into its group) "
+                    f"where a mechanical removal would delete the twin's untouched "
+                    f"cells; answer remove if the cell should really go, otherwise "
+                    f"mirror the inserted slide on the twin (e.g. answer its "
+                    f"translate_new), then re-report"
                 ),
             )
-            observations[(item.group, rival, gone)] = (
-                observations.get((item.group, rival, gone), 0) + 1
-            )
-        return [
-            Observation(
-                kind="suspected_group_split",
-                side=side,
-                detail=(
-                    f"group {old!r} lost {count} member(s) on the {side} side whose "
-                    f"bodies match un-ledgered one-sided members of group {new!r} — "
-                    f"likely a group split; mirror the inserted slide on the twin "
-                    f"before applying"
-                ),
-            )
-            for (old, new, side), count in sorted(observations.items())
-        ]
+            key = (item.group, rivals, gone)
+            split_counts[key] = split_counts.get(key, 0) + 1
+        return _split_observations(
+            split_counts,
+            match="match",
+            advice=(
+                "likely a group split; mirror the inserted slide on the twin "
+                "before applying (or answer remove on a genuine deletion)"
+            ),
+        ) + _split_observations(
+            edited_counts,
+            match="are similar (not identical) to",
+            advice=(
+                "possibly a group split whose moved cells were also edited — the "
+                "byte-identity guard cannot see it, so check these cells before "
+                "applying a mechanical removal or answering remove (#630)"
+            ),
+        )
+
+    def _similar_rival_groups(
+        self,
+        item: DiffItem,
+        gone: Lang,
+        cold_cells: list[tuple[str, str]],
+        similarity: _BodySimilarity,
+    ) -> tuple[str, ...]:
+        """Rival groups holding a *similar* one-sided cold body (#630 F3).
+
+        The ledger retains no base bytes for the gone side, but a
+        ``mirror_remove`` verdict requires the surviving twin to sit on base
+        (an edited survivor frames ``remove_vs_edit``) — so when the shared
+        base recorded the SAME bytes on both sides, the twin's current body
+        is a byte-proxy for what vanished. A slot whose base was already
+        diverged (``de_fp != en_fp``) has no usable proxy and is skipped:
+        comparing wrong-side text would produce arbitrary verdicts.
+        """
+        entry = item.base
+        if entry is None or entry.langness != "shared" or entry.de_fp != entry.en_fp:
+            return ()
+        member = item.member
+        present: Lang = "en" if gone == "de" else "de"
+        cell = member.side(present) if member is not None else None
+        if cell is None:
+            return ()
+        groups: set[str] = set()
+        for group, body in cold_cells:
+            if group == item.group or group in groups:
+                continue
+            if similarity.similar(body, cell.body):
+                groups.add(group)
+        return tuple(sorted(groups))
 
     # -- group renames ------------------------------------------------------
 

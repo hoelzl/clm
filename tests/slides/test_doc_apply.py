@@ -15,10 +15,10 @@ from pathlib import Path
 import pytest
 from attrs import evolve
 
-from clm.slides import doc_apply, doc_ledger
+from clm.slides import doc_apply, doc_ledger, sync_diff
 from clm.slides.bilingual_doc import SideCell
 from clm.slides.doc_lenses import LoadedBundle, load_bundle
-from clm.slides.sync_diff import DeckDiff, diff_outcome
+from clm.slides.sync_diff import DeckDiff, DiffItem, diff_outcome
 
 HEADER_DE = "# j2 from 'macros.j2' import header_de\n# {{ header_de(\"Titel DE\") }}\n\n"
 HEADER_EN = "# j2 from 'macros.j2' import header_en\n# {{ header_en(\"Title EN\") }}\n\n"
@@ -978,7 +978,8 @@ class TestGroupSplitGuard:
     positional shared cells moves them into the new slide's group on that
     half only. The old pool's ``mirror_remove`` rows (which a mechanical
     apply would execute, DELETING the twin's untouched cells) must be
-    reframed as answerless conflicts until the insert is mirrored.
+    reframed as ``remove_vs_split`` decisions (#630) until the insert is
+    mirrored — or the removal is explicitly answered ``remove``.
     """
 
     CODE = (_shared_code("x"), _shared_code("y", 2), _shared_code("z", 3))
@@ -1006,9 +1007,10 @@ class TestGroupSplitGuard:
         actions = {(i.key, i.action) for i in diff.items}
         assert ("id:s1", "translate_new") in actions
         assert not any(a == "mirror_remove" for _, a in actions), actions
-        reframed = [i for i in diff.items if i.action == "ambiguous_alignment"]
+        reframed = [i for i in diff.items if i.action == "remove_vs_split"]
         assert len(reframed) == 3
         assert all("group split" in i.detail for i in reframed)
+        assert all(doc_apply.item_answers(i) == ("remove",) for i in reframed)
         assert any(o.kind == "suspected_group_split" for o in diff.observations)
 
     def test_mechanical_apply_deletes_nothing(self, tmp_path: Path):
@@ -1029,7 +1031,7 @@ class TestGroupSplitGuard:
         assert _statuses(outcome)["id:s1"] == "applied", outcome.to_payload()
         _, diff = deck.diff()
         actions = {(i.key, i.action) for i in diff.items}
-        assert not any(a in ("mirror_remove", "ambiguous_alignment") for _, a in actions), actions
+        assert not any(a in ("mirror_remove", "remove_vs_split") for _, a in actions), actions
         cold = [i.key for i in diff.items if i.action == "verify_cold"]
         assert sorted(cold) == ["pos:s1/code/0", "pos:s1/code/1", "pos:s1/code/2"]
         confirms = {key: doc_apply.Decision(key=key, choice="confirm") for key in cold}
@@ -1060,7 +1062,7 @@ class TestGroupSplitGuard:
         )
         deck.edit_de("x = 1", "x = 111")
         _, diff = deck.diff()
-        reframed = [i for i in diff.items if i.action == "ambiguous_alignment"]
+        reframed = [i for i in diff.items if i.action == "remove_vs_split"]
         assert [i.key for i in reframed] == ["pos:s0/code/2"]
         outcome = deck.apply()
         assert outcome.error is None
@@ -1071,6 +1073,271 @@ class TestGroupSplitGuard:
         assert z_entry.entry.de_fp is not None and z_entry.entry.en_fp is not None
         # z itself is untouched on DE.
         assert "z = 3" in deck.de_path.read_text(encoding="utf-8")
+
+
+class TestRemoveVsSplit:
+    """Issue #630: the #610 guard is fingerprint-only, so a genuine removal
+    that coincides with a byte-identical one-sided add elsewhere is blocked
+    too. The reframed row must be answerable in-tool (F1), the pool freeze
+    must not re-gate unrelated ``ambiguous_alignment`` shapes (F2), an
+    edited split must at least warn (F3), and every rival group must be
+    named (F4).
+    """
+
+    BOILER = _shared_code("b", 9)
+
+    def _coincidence_deck(self, tmp_path: Path) -> _Deck:
+        """A genuine removal + a coincidental identical one-sided add.
+
+        EN deletes the boilerplate cell from slide s0 and independently adds
+        the same boilerplate to the pre-existing slide s1 (EN half first) —
+        no slide was inserted, nothing moved groups; DE is untouched.
+        """
+        deck = _Deck(
+            tmp_path,
+            _build(
+                HEADER_DE,
+                _slide("s0", "de", "Titel"),
+                self.BOILER,
+                _shared_code("x"),
+                _slide("s1", "de", "Zweite"),
+                _shared_code("q", 7),
+            ),
+            _build(
+                HEADER_EN,
+                _slide("s0", "en", "Title"),
+                self.BOILER,
+                _shared_code("x"),
+                _slide("s1", "en", "Second"),
+                _shared_code("q", 7),
+            ),
+        )
+        deck.record()
+        deck.write_en(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            _shared_code("x"),
+            _slide("s1", "en", "Second"),
+            _shared_code("q", 7),
+            self.BOILER,
+        )
+        return deck
+
+    def test_coincidental_duplicate_row_advertises_a_remove_answer(self, tmp_path: Path):
+        # Regression test for #630 F1: the reframed removal advertised no
+        # answers at all — a dead end the decision document could not resolve.
+        deck = self._coincidence_deck(tmp_path)
+        _, diff = deck.diff()
+        rows = [i for i in diff.items if i.action == "remove_vs_split"]
+        assert len(rows) == 1, [(i.key, i.action) for i in diff.items]
+        assert doc_apply.item_answers(rows[0]) == ("remove",)
+        assert "remove" in rows[0].detail
+
+    def test_answering_remove_executes_the_blocked_removal(self, tmp_path: Path):
+        # Regression test for #630 F1: the in-tool escape — answer `remove`,
+        # the genuine deletion lands, the coincidental cell is untouched.
+        deck = self._coincidence_deck(tmp_path)
+        _, diff = deck.diff()
+        row = next(i for i in diff.items if i.action == "remove_vs_split")
+        outcome = deck.apply(_decision(row.key, choice="remove"))
+        assert _statuses(outcome)[row.key] == "applied", outcome.to_payload()
+        assert "b = 9" not in deck.de_path.read_text(encoding="utf-8")
+        assert "b = 9" in deck.en_path.read_text(encoding="utf-8")
+        _, diff = deck.diff()
+        leftover = {(i.key, i.action) for i in diff.items}
+        assert all(a == "verify_cold" for _, a in leftover), leftover
+
+    def test_every_rival_group_is_named(self, tmp_path: Path):
+        # Regression test for #630 F4: only the lexicographically-first
+        # rival group was named, which can point the user at the wrong slide.
+        deck = _Deck(
+            tmp_path,
+            _build(
+                HEADER_DE,
+                _slide("s0", "de", "Titel"),
+                self.BOILER,
+                _slide("s1", "de", "Zweite"),
+                _shared_code("q", 7),
+                _slide("s2", "de", "Dritte"),
+                _shared_code("r", 8),
+            ),
+            _build(
+                HEADER_EN,
+                _slide("s0", "en", "Title"),
+                self.BOILER,
+                _slide("s1", "en", "Second"),
+                _shared_code("q", 7),
+                _slide("s2", "en", "Third"),
+                _shared_code("r", 8),
+            ),
+        )
+        deck.record()
+        deck.write_en(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            _slide("s1", "en", "Second"),
+            _shared_code("q", 7),
+            self.BOILER,
+            _slide("s2", "en", "Third"),
+            _shared_code("r", 8),
+            self.BOILER,
+        )
+        _, diff = deck.diff()
+        row = next(i for i in diff.items if i.action == "remove_vs_split")
+        assert "'s1'" in row.detail and "'s2'" in row.detail, row.detail
+
+    def test_pool_freezing_is_gated_to_the_split_action(self):
+        # Regression test for #630 F2: pre-existing `ambiguous_alignment`
+        # emitters (rival id stamps, both-sides-added pools) must keep their
+        # pre-#625 recording behavior — only the group-split reframe freezes
+        # its pool.
+        row = DiffItem(
+            key="pos:s0/code/0",
+            outcome="conflict",
+            action="ambiguous_alignment",
+            direction="both",
+            detail="",
+        )
+        assert doc_apply._frozen_pools([row]) == set()
+        assert doc_apply._frozen_pools([evolve(row, action="remove_vs_split")]) == {("s0", "code")}
+
+    SETUP = '# %% tags=["keep"]\nresult = compute(1, 2)\nprint(result)\n\n'
+    EDITED = '# %% tags=["keep"]\nresult = compute(1, 3)\nprint(result)\n\n'
+
+    def test_edited_split_warns_with_a_similar_bodies_observation(self, tmp_path: Path):
+        # Regression test for #630 F3 (warn-only): a split whose moved cell
+        # was ALSO edited escapes the byte-identity guard — the removal stays
+        # mechanical, but the report must flag the near-match for review.
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("s0", "de", "Titel"), self.SETUP),
+            _build(HEADER_EN, _slide("s0", "en", "Title"), self.SETUP),
+        )
+        deck.record()
+        deck.write_en(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            _slide("s1", "en", "Setup"),
+            self.EDITED,
+        )
+        _, diff = deck.diff()
+        actions = {(i.key, i.action) for i in diff.items}
+        assert ("pos:s0/code/0", "mirror_remove") in actions, actions
+        obs = [o for o in diff.observations if o.kind == "suspected_group_split"]
+        assert len(obs) == 1, [(o.kind, o.detail) for o in diff.observations]
+        assert "similar" in obs[0].detail
+        assert "'s1'" in obs[0].detail
+
+    def test_attr_only_change_on_moved_cells_still_reframes(self, tmp_path: Path):
+        # #630 adversarial review: content_fingerprint covers header attrs,
+        # so a moved cell that merely gained a tag dodged the exact guard
+        # and apply deleted the twin's cell. The gone side's recorded BODY
+        # fingerprint is still exact evidence and must reframe.
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("s0", "de", "Titel"), _shared_code("marker", 5)),
+            _build(HEADER_EN, _slide("s0", "en", "Title"), _shared_code("marker", 5)),
+        )
+        deck.record()
+        deck.write_en(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            _slide("s1", "en", "Setup"),
+            _shared_code("marker", 5, tags="changed"),
+        )
+        _, diff = deck.diff()
+        row = next(i for i in diff.items if i.key == "pos:s0/code/0")
+        assert row.action == "remove_vs_split", (row.action, row.detail)
+        assert "'s1'" in row.detail
+
+    def test_diverged_base_has_no_similarity_proxy(self, tmp_path: Path):
+        # #630 adversarial review: when the shared base recorded different
+        # bytes per side, the surviving twin's body says nothing about what
+        # vanished — the similar-bodies scan must stay silent instead of
+        # comparing wrong-side text.
+        de_cell = '# %% tags=["keep"]\nshared_setup = 111\nprint(shared_setup)\n\n'
+        en_cell = '# %% tags=["keep"]\nshared_setup = 222\nprint(shared_setup)\n\n'
+        deck = _Deck(
+            tmp_path,
+            _build(HEADER_DE, _slide("s0", "de", "Titel"), de_cell),
+            _build(HEADER_EN, _slide("s0", "en", "Title"), en_cell),
+        )
+        deck.record()
+        deck.write_en(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            _slide("s1", "en", "Setup"),
+            '# %% tags=["keep"]\nshared_setup = 223\nprint(shared_setup)\n\n',
+        )
+        _, diff = deck.diff()
+        row = next(i for i in diff.items if i.key == "pos:s0/code/0")
+        assert row.action == "mirror_remove", (row.action, row.detail)
+        assert not [o for o in diff.observations if o.kind == "suspected_group_split"]
+
+    def test_exact_match_does_not_hide_the_similar_split_target(self, tmp_path: Path):
+        # #630 adversarial review: a coincidental byte-match in one group
+        # must not suppress the similar-bodies evidence naming the real
+        # (edited) split target — the agent would inspect only the named
+        # group, answer remove, and delete the split-away cells.
+        big = '# %% tags=["keep"]\nsetup_block = compute(1, 2)\nprint(setup_block)\n\n'
+        edited = '# %% tags=["keep"]\nsetup_block = compute(1, 3)\nprint(setup_block)\n\n'
+        deck = _Deck(
+            tmp_path,
+            _build(
+                HEADER_DE,
+                _slide("s0", "de", "Titel"),
+                big,
+                _slide("sB", "de", "Zweite"),
+                _shared_code("q", 7),
+            ),
+            _build(
+                HEADER_EN,
+                _slide("s0", "en", "Title"),
+                big,
+                _slide("sB", "en", "Second"),
+                _shared_code("q", 7),
+            ),
+        )
+        deck.record()
+        # EN: s0's cell is split into the new slide sN with an edit, while
+        # the unrelated group sB independently gains a byte-identical copy.
+        deck.write_en(
+            HEADER_EN,
+            _slide("s0", "en", "Title"),
+            _slide("sN", "en", "Neu"),
+            edited,
+            _slide("sB", "en", "Second"),
+            _shared_code("q", 7),
+            big,
+        )
+        _, diff = deck.diff()
+        row = next(i for i in diff.items if i.key == "pos:s0/code/0")
+        assert row.action == "remove_vs_split"
+        assert "'sB'" in row.detail
+        similar = [
+            o
+            for o in diff.observations
+            if o.kind == "suspected_group_split" and "similar" in o.detail
+        ]
+        assert similar, [(o.kind, o.detail) for o in diff.observations]
+        assert "'sN'" in similar[0].detail
+
+    def test_body_similarity_is_budgeted_and_memoized(self):
+        # #630 adversarial review: ratio() is quadratic and reorganized
+        # decks compare many pairs — the scan caches verdicts and stops
+        # matching once the full-ratio budget is spent (warn-only feature,
+        # best-effort by design).
+        sim = sync_diff._BodySimilarity()
+        base = "line one\nline two\nline three\nline four\nline five"
+        close = base.replace("five", "5ive")
+        assert sim.similar(base, base) is True  # equality costs no budget
+        sim._budget = 1
+        assert sim.similar(close, base) is True  # spends the last budget
+        assert sim._budget == 0
+        assert sim.similar(close, base) is True  # cached, no budget needed
+        other = base.replace("two", "2wo")
+        assert sim.similar(other, base) is False  # budget exhausted
+        assert sim.similar("x" * 3000, "x" * 3000) is False  # oversized skipped
 
 
 class TestDecisionParsing:
