@@ -12,9 +12,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from attrs import evolve
 
 from clm.slides import doc_apply, doc_ledger
+from clm.slides.bilingual_doc import SideCell
 from clm.slides.doc_lenses import LoadedBundle, load_bundle
 from clm.slides.sync_diff import DeckDiff, diff_outcome
 
@@ -903,6 +905,17 @@ class TestTitleMacroBody:
         assert result.status == "rejected"
         assert "full j2 line" in result.reason
 
+    def test_bare_text_with_backslash_is_rejected(self, tmp_path: Path):
+        """Regression test for #629 (F2): '\\' can escape out of the j2
+        string literal, so bare text carrying one must be rejected."""
+        deck = self._edited(tmp_path)
+        before = deck.de_path.read_text(encoding="utf-8")
+        outcome = deck.apply(_decision("id:title", body="Wetter\\Agent"))
+        result = next(r for r in outcome.results if r.key == "id:title")
+        assert result.status == "rejected"
+        assert "full j2 line" in result.reason
+        assert deck.de_path.read_text(encoding="utf-8") == before
+
     def test_keep_twin_still_works_on_the_title(self, tmp_path: Path):
         deck = self._edited(tmp_path)
         de_before = deck.de_path.read_text(encoding="utf-8")
@@ -910,6 +923,54 @@ class TestTitleMacroBody:
         assert outcome.all_applied, outcome.to_payload()
         assert deck.de_path.read_text(encoding="utf-8") == de_before
         deck.assert_converged()
+
+
+class TestMacroHeaderFromBody:
+    """Regression tests for #629: the bare-text splice must target exactly
+    one quoted macro argument (F1) and reject characters that could escape
+    the j2 string literal (F2).
+
+    The bilingual two-argument form ``header("De", "En")`` is not reachable
+    through the two-sided decision pipeline today (a byte-identical shared
+    title carries no divergence), so these pin the writer directly.
+    """
+
+    def _cell(self, header: str) -> SideCell:
+        return SideCell(
+            lines=(header, ""),
+            index=0,
+            line_number=1,
+            part="deck",
+            lang_attr=None,
+            tags=(),
+            slide_id=None,
+            for_slide=None,
+            vo_anchor=None,
+            cell_type="j2",
+        )
+
+    def _splice(self, header: str, body: str) -> str:
+        return doc_apply._macro_header_from_body(self._cell(header), body, "#", bare_ok=True)
+
+    def test_single_argument_macro_splices_bare_text(self):
+        header = self._splice('# {{ header_de("Titel DE") }}', "Neuer Titel")
+        assert header == '# {{ header_de("Neuer Titel") }}'
+
+    def test_two_argument_macro_rejects_bare_text(self):
+        with pytest.raises(doc_apply._ItemError, match="multiple quoted arguments"):
+            self._splice('# {{ header("Titel DE", "Title EN") }}', "Neuer Titel")
+
+    def test_two_argument_macro_accepts_the_full_j2_line(self):
+        line = '# {{ header("Neu DE", "New EN") }}'
+        assert self._splice('# {{ header("Titel DE", "Title EN") }}', line) == line
+
+    def test_zero_argument_macro_rejects_bare_text(self):
+        with pytest.raises(doc_apply._ItemError, match="no quoted argument"):
+            self._splice("# {{ clear_page() }}", "Neuer Titel")
+
+    def test_bare_text_with_backslash_is_rejected(self):
+        with pytest.raises(doc_apply._ItemError, match="full j2 line"):
+            self._splice('# {{ header_de("Titel DE") }}', "Neuer\\Titel")
 
 
 class TestGroupSplitGuard:

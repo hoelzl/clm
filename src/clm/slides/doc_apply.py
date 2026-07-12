@@ -241,11 +241,15 @@ _MACRO_QUOTED_ARG_RE = re.compile(r'"[^"]*"')
 
 
 def _macro_header_from_body(cell: SideCell, body: str, comment_token: str, *, bare_ok: bool) -> str:
-    """The replacement j2 line for a macro cell, from a decision ``body``.
+    r"""The replacement j2 line for a macro cell, from a decision ``body``.
 
     Accepts the full j2 line verbatim (``# {{ header_de("...") }}``) or —
-    when ``bare_ok`` and the existing line carries a quoted argument — the
-    bare replacement text, which is spliced into that argument. ``bare_ok``
+    when ``bare_ok`` and the existing line carries exactly one quoted
+    argument — the bare replacement text, which is spliced into that
+    argument. Bare text must be a single line without ``"`` or ``\`` (the
+    characters that could terminate or escape out of the j2 string
+    literal); with zero or multiple quoted arguments the splice target is
+    absent or ambiguous, so only the full j2 line is accepted. ``bare_ok``
     is off for the create-a-new-cell paths (translate_new,
     remove_localized_side): there the template line is derived from the
     *other* side, so splicing bare text would silently keep the wrong
@@ -273,18 +277,23 @@ def _macro_header_from_body(cell: SideCell, body: str, comment_token: str, *, ba
             f"'{comment_token} {{{{ ... }}}}' line (bare text cannot name the "
             "macro to wrap it in)"
         )
-    if '"' in line:
+    if '"' in line or "\\" in line:
         raise _ItemError(
-            "bare replacement text for a j2 macro argument cannot contain '\"' — "
-            "supply the full j2 line instead"
+            "bare replacement text for a j2 macro argument cannot contain "
+            "'\"' or '\\' — supply the full j2 line instead"
         )
-    header, n = _MACRO_QUOTED_ARG_RE.subn(lambda _m: f'"{line}"', cell.header, count=1)
-    if n == 0:
+    n_args = len(_MACRO_QUOTED_ARG_RE.findall(cell.header))
+    if n_args == 0:
         raise _ItemError(
             "the existing j2 macro line has no quoted argument to replace — "
             "supply the full j2 line instead"
         )
-    return header
+    if n_args > 1:
+        raise _ItemError(
+            "the existing j2 macro line has multiple quoted arguments — bare "
+            "text is ambiguous here; supply the full j2 line instead"
+        )
+    return _MACRO_QUOTED_ARG_RE.sub(lambda _m: f'"{line}"', cell.header, count=1)
 
 
 def _replacement_lines(
