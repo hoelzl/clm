@@ -74,8 +74,9 @@ class ImageRegistry:
         _output_paths: Absolute output paths the build has written image bytes to.
             Tracked separately from ``_images`` (which is keyed by source) so the
             stray-file sweep can include image destinations in its "expected"
-            set. ``OutputWriteRegistry`` deliberately skips ``img/`` paths, so
-            without this tracking the sweep would treat every image as stray.
+            set. The sweep consults this registry rather than
+            ``OutputWriteRegistry``, so without this tracking it would treat
+            every image as stray.
     """
 
     _images: dict[str, Path] = Factory(dict)

@@ -1159,6 +1159,16 @@ class Course(NotebookMixin):
             for file in topic.files:
                 for new_file in file.source_outputs:
                     topic.add_file(new_file)
+                    # ``add_file`` is a no-op when the path is already in the
+                    # topic — which is exactly what happens for a generated
+                    # image that is committed to the repo, since the directory
+                    # scan picked it up first and classified it as a plain
+                    # pre-existing image. Mark it here regardless, so the copy
+                    # is scheduled after the conversion instead of racing it.
+                    added = topic.file_for_path(new_file)
+                    mark = getattr(added, "mark_generated", None)
+                    if mark is not None:
+                        mark()
                     logger.debug(f"Added source output file: {new_file}")
 
     def _collect_images(self):
