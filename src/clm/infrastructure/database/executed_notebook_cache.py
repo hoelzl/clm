@@ -19,6 +19,8 @@ import sqlite3
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+from clm.infrastructure.database.journal_mode import configure_connection
+
 if TYPE_CHECKING:
     from nbformat import NotebookNode
 
@@ -56,10 +58,8 @@ class ExecutedNotebookCache:
 
     def __enter__(self) -> "ExecutedNotebookCache":
         self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
-        # Enable WAL mode for better concurrency
-        self.conn.execute("PRAGMA journal_mode=WAL")
-        self.conn.execute("PRAGMA synchronous=NORMAL")
-        self.conn.execute("PRAGMA busy_timeout=30000")
+        # WAL locally for concurrency; DELETE when the cache lives on a share.
+        configure_connection(self.conn, self.db_path)
         self._init_table()
         return self
 

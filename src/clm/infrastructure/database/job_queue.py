@@ -14,6 +14,8 @@ from pathlib import Path
 from sqlite3 import Connection
 from typing import Any, cast
 
+from clm.infrastructure.database.journal_mode import configure_connection
+
 logger = logging.getLogger(__name__)
 
 
@@ -94,15 +96,18 @@ class JobQueue:
                 timeout=30.0,
                 isolation_level=None,  # Enable autocommit mode for simple operations
             )
-            # The WAL/synchronous=NORMAL pragmas set in init_database run on a
-            # throwaway connection; journal_mode=WAL persists in the DB file but
-            # synchronous is PER-CONNECTION and otherwise reverts to the default
-            # FULL here, fsyncing on every commit. On this hot path (each
-            # add_job INSERT, each worker get_next_job/status UPDATE, every
-            # poll-loop write) that per-commit fsync is pure latency. NORMAL is
-            # safe under WAL: at worst the last committed transaction is lost on
-            # power failure, never corruption — fine for a rebuildable queue.
-            self._local.conn.execute("PRAGMA synchronous=NORMAL")
+            # The pragmas set in init_database run on a throwaway connection;
+            # journal_mode persists in the DB file but synchronous is
+            # PER-CONNECTION and otherwise reverts to the default FULL here,
+            # fsyncing on every commit. On this hot path (each add_job INSERT,
+            # each worker get_next_job/status UPDATE, every poll-loop write)
+            # that per-commit fsync is pure latency. NORMAL is safe under WAL:
+            # at worst the last committed transaction is lost on power failure,
+            # never corruption — fine for a rebuildable queue. On a
+            # network-hosted database configure_connection ignores the
+            # preference and uses DELETE + FULL, which is the only safe
+            # combination there.
+            configure_connection(self._local.conn, self.db_path, synchronous="NORMAL")
             self._local.conn.row_factory = sqlite3.Row
         return cast(Connection, self._local.conn)
 
