@@ -52,6 +52,9 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
+# Redirected pytest output (`pytest > test_results.txt`); a stale copy was
+# committed once and lingered for months.
+test_results.txt
 
 # Translations
 *.mo
