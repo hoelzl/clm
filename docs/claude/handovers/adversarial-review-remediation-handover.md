@@ -6,7 +6,9 @@
 nondeterminism" — was investigated ahead of schedule and is now resolved; see
 the correction in Phase 7 item 1. It was partly a false alarm (the named causes
 were fixed back in PR #76) and partly a real, *different* bug that only showed
-up on re-measurement (PR #661).
+up on re-measurement (PR #661). That investigation also spun out **#664**
+(separate generated images from hand-authored assets), which is explicitly
+scheduled *after* Phase 7 — see §7.
 
 Remediation plan for the adversarial review of 2026-07-24. Findings, evidence
 and reproduction details live in **`docs/claude/adversarial-review-2026-07-24.md`** —
@@ -531,11 +533,28 @@ and green. This is the maintainer's explicit condition on D10.
      normalizes hex addresses under `--include-html`. Run it before building
      goldens; goldens over nondeterministic output produce flapping tests,
      which get muted, which returns you to Phase 1's problem.
-   - **Known and deliberately unfixed**: the build renders diagrams *into the
-     source tree* (`ImageFile.img_path` → `<topic>/img/<stem>.png`), so a build
-     leaves the course repo dirty. Output is deterministic regardless, but a
-     golden suite that also snapshots the *source* tree will see churn. Whether
-     builds should be read-only w.r.t. source is an open design question.
+   - **Sub-task, do this first: derive the generated-image ignore set.** The
+     build renders diagrams *into the source tree*
+     (`ImageFile.img_path` → `<topic>/img/<stem>.png`), so a build leaves the
+     course repo dirty and any golden that also snapshots the *source* tree sees
+     churn. Output is deterministic regardless — this is only about which files
+     a golden should look at.
+     Do **not** solve it with a hand-maintained skip list, and do **not** wait
+     for the directory split in #664. The generated set is already computable
+     exactly from the course model: the union of `CourseFile.source_outputs`
+     over the course's files. That is the same authoritative signal PR #661 used
+     to fix the stage misclassification, so reusing it keeps one definition of
+     "generated" rather than two that can drift apart. Small change, no repo
+     migration, unblocks the goldens immediately.
+   - **Accepted design, not a defect**: the build writes into the source tree at
+     all — diagram renders, HTTP cassettes, sync ledgers. That is deliberate; it
+     is what lets another machine rebuild from the same network traces and
+     ledger state. Do not "fix" it by making builds read-only w.r.t. source
+     without a decision from the maintainer; it would break the cassette and
+     ledger workflows. The narrower, agreed improvement is #664 — stop the build
+     and the human sharing one directory — which is **scheduled after this phase
+     precisely because a golden suite makes it verifiable** (a correct move
+     produces a byte-identical output tree).
 2. **Layer-boundary contract tests.** Pin what core exposes, what a backend must
    implement, and what the worker Pydantic boundary accepts — *before* moving
    anything beneath them. These stay valuable afterward as the executable
@@ -675,3 +694,12 @@ so the maintainer can object:
   fixes it.
 - `docs/developer-guide/caching.md`, `docs/developer-guide/testing.md` — context
   for Phases 5 and 1 respectively.
+
+### Work spun out of this plan
+
+- **#664** — separate generated diagram images from hand-authored assets in the
+  source tree. Grew out of the Phase 7 nondeterminism investigation but is *not*
+  a prerequisite: the golden suite only needs the derived ignore set (Phase 7
+  item 1). #664 is deliberately sequenced **after** this phase, because a
+  byte-comparable output tree is what makes the migration verifiable. Do not
+  pull it forward.
