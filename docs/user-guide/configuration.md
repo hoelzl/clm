@@ -167,6 +167,37 @@ default is):
 > pre-1.19 `[paths]` config section and its `CLM_PATHS__*` variables never
 > actually relocated the databases a command opened and have been removed.)
 
+#### Databases on network shares
+
+Pointing any of the `CLM_*_DB_PATH` variables at a network location — a UNC
+path such as `\\server\share\clm_jobs.db`, or a mapped network drive — changes
+how CLM opens the database.
+
+Locally, CLM uses SQLite's WAL journaling, which lets readers and writers work
+without blocking each other. WAL keeps its index in a memory-mapped `-shm`
+file, and that mapping is **not coherent between machines**: SQLite documents
+WAL over a network filesystem as unsupported. In practice two machines sharing
+a WAL jobs database can each believe they claimed the same job, and interleaved
+checkpoints can corrupt the file.
+
+Since 1.22.1, CLM detects network-hosted databases and opens them with DELETE
+journaling, `synchronous=FULL` and a longer lock timeout instead. This is
+slower than WAL but safe over a share; local databases are unaffected.
+
+If CLM cannot move a network-hosted database out of WAL mode it stops with an
+explanatory error rather than continuing unsafely. That almost always means
+another CLM process — often on another machine — still has the database open;
+close it and retry, or point the variable at a local path.
+
+> **Note**: a RAM disk mounted as a local drive letter is *local* storage and
+> keeps WAL. Only genuinely network-backed paths change behaviour.
+>
+> Sharing a jobs database between machines is safe as far as journaling goes,
+> but it is not a fully supported topology yet — see
+> `docs/claude/handovers/adversarial-review-remediation-handover.md` for the
+> planned move to worker-API-mediated access, where exactly one machine owns
+> the file.
+
 ### External Tools
 
 | Variable | Description |

@@ -9,6 +9,49 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 Unreleased changes are collected as fragment files in [`changelog.d/`](changelog.d/)
 and folded into this file by `scripts/collect_changelog.py` at release time.
 
+## [1.22.1] - 2026-07-25
+
+### Fixed
+
+- **SQLite databases on network shares no longer use WAL journaling.** WAL's
+  index lives in a memory-mapped `-shm` file that is not coherent across
+  machines, which SQLite documents as unsupported on network filesystems. With
+  a jobs database shared over SMB (a supported CLM setup — see the mode-tagged
+  job claiming added in 1.19), that broke the atomicity of job claiming, so two
+  machines could each believe they had claimed the same job, and interleaved
+  checkpoints could corrupt the database file. CLM now detects network-hosted
+  databases (UNC paths, Windows mapped network drives, and network mount types
+  on POSIX) and uses DELETE journaling with `synchronous=FULL` and a longer
+  busy timeout for them; local databases keep WAL and are unaffected. If a
+  network-hosted database cannot be moved off WAL — normally because another
+  machine still has it open — CLM now fails with an explanatory error instead
+  of continuing unsafely. Journal configuration for every CLM database moved
+  into one place so that connections can no longer disagree about the mode.
+  This is an interim measure: cross-machine access will move to the worker API
+  so that exactly one machine owns the file.
+
+- **`slides sync`**: mirroring a group split with **two or more** id'd slides
+  interleaved into one run of id-less shared cells no longer clumps the
+  inserted slides adjacently on the twin (with the shared cells trailing after
+  all of them). The writer's mirrored insert now skips past target-only cells
+  whose content matches the source cells the insert was placed after, so each
+  shared cell stays under the slide it moved into (#646).
+
+### Security
+
+- **Cassettes are no longer parsed with an unsafe YAML loader.** HTTP-replay
+  cassettes were deserialized with PyYAML's `CLoader`, whose constructor chain
+  reaches `UnsafeConstructor` before `SafeConstructor`, so a YAML tag such as
+  `!!python/object/apply` executed during parsing — before any schema check
+  could reject the document. Cassettes are tracked files in course repositories
+  (`.gitignore` deliberately un-ignores `.clm/cassettes/`) and are parsed
+  host-side by `clm build`, so a one-line edit arriving in a pull request could
+  run arbitrary code as the user running the build. CLM now uses `CSafeLoader`
+  (`SafeLoader` without libyaml). The v1 cassette format uses only scalars,
+  maps, sequences and `!!binary`, all of which the safe loader supports, so no
+  existing cassette becomes unreadable. **Upgrading is recommended for anyone
+  who builds course repositories they do not fully control.**
+
 ## [1.22.0] - 2026-07-12
 
 ### Added
