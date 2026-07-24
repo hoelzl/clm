@@ -2,6 +2,12 @@
 
 **Created**: 2026-07-24 | **Status**: Phase 0 DONE (released 1.22.1); Phase 1 next | **Owner**: unassigned
 
+**2026-07-25 update**: one of Phase 7's prerequisites — "fix the known build
+nondeterminism" — was investigated ahead of schedule and is now resolved; see
+the correction in Phase 7 item 1. It was partly a false alarm (the named causes
+were fixed back in PR #76) and partly a real, *different* bug that only showed
+up on re-measurement (PR #661).
+
 Remediation plan for the adversarial review of 2026-07-24. Findings, evidence
 and reproduction details live in **`docs/claude/adversarial-review-2026-07-24.md`** —
 this document does not repeat them; it says what to *do*, in what order, under
@@ -506,12 +512,30 @@ and green. This is the maintainer's explicit condition on D10.
 1. **Golden end-to-end build characterization suite.** Reference courses built
    end-to-end, full output trees snapshotted, asserted byte-identical across a
    refactor.
-   - **Prerequisite within the prerequisite**: the known build nondeterminism
-     must be fixed or normalized first — jupytext `cell_metadata_filter`
-     set-ordering, and the PNG race between static and PlantUML on a shared path
-     (both recorded in project memory). Goldens over nondeterministic output
-     produce flapping tests, which get muted, which returns you to Phase 1's
-     problem.
+   - **Prerequisite within the prerequisite — RESOLVED 2026-07-25.** This
+     originally read "the known build nondeterminism must be fixed first". That
+     was written from a stale memory index line; the two sources it named
+     (jupytext `cell_metadata_filter` set-ordering, and the output-path race
+     between a static image and a PlantUML render) were already fixed in PR #76
+     back in 2026-05. **Correcting the record**: re-measuring did surface a
+     *third*, still-live source, now fixed in PR #661 — generated images that
+     are committed to the course repo were misclassified as static and copied
+     in stage 1, racing the DrawIO/PlantUML conversion that overwrites the same
+     source path. Two `--ignore-cache` builds of `test-spec-1` differed in 24 of
+     288 files before that fix; they are byte-identical after it.
+   - **Do not re-derive this from memory — measure.** The harness already
+     exists and is what found the third source: `clm build SPEC --snapshot DIR
+     --ignore-cache`, then `clm build SPEC -o OTHER --verify-against DIR
+     --ignore-cache`. It skips `.html` by default (live-kernel execution output
+     is inherently nondeterministic — `random.*`, ASLR object reprs) and
+     normalizes hex addresses under `--include-html`. Run it before building
+     goldens; goldens over nondeterministic output produce flapping tests,
+     which get muted, which returns you to Phase 1's problem.
+   - **Known and deliberately unfixed**: the build renders diagrams *into the
+     source tree* (`ImageFile.img_path` → `<topic>/img/<stem>.png`), so a build
+     leaves the course repo dirty. Output is deterministic regardless, but a
+     golden suite that also snapshots the *source* tree will see churn. Whether
+     builds should be read-only w.r.t. source is an open design question.
 2. **Layer-boundary contract tests.** Pin what core exposes, what a backend must
    implement, and what the worker Pydantic boundary accepts — *before* moving
    anything beneath them. These stay valuable afterward as the executable
