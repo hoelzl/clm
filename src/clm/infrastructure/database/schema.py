@@ -8,6 +8,8 @@ workers.
 import sqlite3
 from pathlib import Path
 
+from clm.infrastructure.database.journal_mode import configure_connection
+
 DATABASE_VERSION = 10
 
 SCHEMA_SQL = """
@@ -187,15 +189,10 @@ def init_database(db_path: Path) -> None:
     conn = sqlite3.connect(str(db_path), check_same_thread=False)
 
     try:
-        # Enable WAL mode for better concurrency
-        # WAL mode allows readers and writers to operate concurrently without blocking
-        # This is essential for CLM's architecture with multiple concurrent workers
-        conn.execute("PRAGMA journal_mode=WAL")
-
-        # Optimize WAL mode for high write concurrency
-        conn.execute("PRAGMA synchronous=NORMAL")  # Good balance of safety and performance
-        conn.execute("PRAGMA wal_autocheckpoint=1000")  # Checkpoint every 1000 pages
-        conn.execute("PRAGMA busy_timeout=30000")  # 30 second timeout for lock acquisition
+        # WAL for local databases (readers and writers stop blocking each other,
+        # which is what makes concurrent workers viable), DELETE for
+        # network-hosted ones, where WAL is unsafe. See journal_mode module.
+        configure_connection(conn, db_path)
 
         # Enable foreign keys
         conn.execute("PRAGMA foreign_keys=ON")

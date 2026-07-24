@@ -41,12 +41,19 @@ import yaml
 
 # Use the libYAML versions when available (vcrpy did the same; output is
 # identical, libyaml is just faster).
+#
+# The loader MUST be a *safe* one. Cassettes are tracked files in course repos
+# (.gitignore un-ignores .clm/cassettes/), so they arrive through pull requests
+# and are parsed host-side by `clm build`. CLoader/Loader resolve
+# `!!python/object/apply` during parsing — i.e. before any schema check here can
+# run — which made a one-line cassette edit arbitrary code execution as the
+# user running the build.
 try:
     from yaml import CDumper as _Dumper
-    from yaml import CLoader as _Loader
+    from yaml import CSafeLoader as _Loader
 except ImportError:  # pragma: no cover — PyYAML without libyaml
     from yaml import Dumper as _Dumper
-    from yaml import Loader as _Loader
+    from yaml import SafeLoader as _Loader
 
 try:  # brotli is optional, exactly as in vcrpy (mitmproxy ships it)
     import brotli
@@ -315,8 +322,13 @@ def serialize_cassette(cassette_dict: dict) -> str:
 
 
 def deserialize_cassette(cassette_string: str) -> tuple[list[Request], list[dict]]:
-    """Parse v1 YAML into ``(requests, responses)`` lists."""
-    data = yaml.load(cassette_string, Loader=_Loader)  # noqa: S506 — trusted repo files
+    """Parse v1 YAML into ``(requests, responses)`` lists.
+
+    Cassettes are untrusted input: they are committed to course repositories and
+    reach a maintainer's machine through pull requests. ``_Loader`` is a safe
+    loader for that reason — see the import block at the top of this module.
+    """
+    data = yaml.load(cassette_string, Loader=_Loader)
     if isinstance(data, list) and data and "request" in data[0]:
         raise ValueError(
             "This cassette uses the pre-1.0 vcrpy format, which CLM has never "

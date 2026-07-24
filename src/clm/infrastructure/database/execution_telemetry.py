@@ -33,6 +33,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from clm.infrastructure.database.journal_mode import configure_connection
+
 logger = logging.getLogger(__name__)
 
 # Default file name; resolved next to the cache database by the CLI entry
@@ -108,8 +110,7 @@ class ExecutionTelemetryStore:
     def _connect(self) -> sqlite3.Connection:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(self.db_path, timeout=30.0)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=30000")
+        configure_connection(conn, self.db_path)
         if not self._initialized:
             conn.executescript(_SCHEMA)
             conn.commit()
