@@ -14,10 +14,13 @@ the call sites (the backend's copy hook and the notebook-output writer)
 which call :meth:`OutputWriteRegistry.record_write` and act on the
 returned :class:`WriteOutcome`.
 
-Image paths (anything under an ``img/`` segment) are intentionally not
-handled here — the existing :class:`clm.core.image_registry.ImageRegistry`
-remains the sole reporter for image collisions. Use :func:`is_image_path`
-to test a source path before deciding which registry to use.
+Image paths (anything under an ``img/`` segment) *are* recorded here: only
+this registry compares content at the output destination, so leaving images
+out made a static ``img/X.png`` and a ``pu/X.pu`` rendering to the same
+output path silently last-writer-wins. :class:`clm.core.image_registry.
+ImageRegistry` keeps its own job — collisions between equal *source*
+relative paths across topics in shared mode — and :func:`is_image_path`
+says which sources it additionally wants to hear about.
 """
 
 from __future__ import annotations
@@ -85,12 +88,13 @@ def _hash_file(path: Path) -> str:
 
 
 def is_image_path(source_path: Path) -> bool:
-    """Return ``True`` iff this source is owned by :class:`ImageRegistry`.
+    """Return ``True`` iff this source is *also* tracked by :class:`ImageRegistry`.
 
-    The new registry skips these paths so the existing ``image_collision``
-    warning channel remains the sole reporter for image-path conflicts.
-    Mirrors :func:`clm.core.image_registry.get_relative_img_path`'s detection
-    rule (presence of an ``img`` segment in the path).
+    Not an exclusion test: callers record image writes in both registries.
+    This one selects the sources that additionally need an
+    ``ImageRegistry.record_output_write`` call. Mirrors
+    :func:`clm.core.image_registry.get_relative_img_path`'s detection rule
+    (presence of an ``img`` segment in the path).
     """
     return "img" in source_path.parts
 

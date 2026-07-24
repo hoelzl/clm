@@ -48,6 +48,10 @@ class DuplicatedImageFile(CourseFile):
     # Track whether source file existed when this object was created
     # This determines which execution stage to use
     _source_exists_at_load: bool = field(default=True, init=False)
+    # Set by Course._add_source_output_files when some DrawIO/PlantUML source
+    # in this course renders to this path. Authoritative: unlike the existence
+    # check below it stays correct for generated images that are *committed*.
+    _is_generated: bool = field(default=False, init=False)
 
     @classmethod
     def _from_path(cls, course, file: Path, topic) -> "DuplicatedImageFile":
@@ -57,18 +61,28 @@ class DuplicatedImageFile(CourseFile):
         object.__setattr__(instance, "_source_exists_at_load", file.exists())
         return instance
 
+    def mark_generated(self) -> None:
+        """Record that a diagram source in this course renders to this path."""
+        object.__setattr__(self, "_is_generated", True)
+
     @property
     def execution_stage(self) -> int:
-        """Determine execution stage based on whether source exists.
+        """Determine execution stage based on whether the image is generated.
 
         Pre-existing images run in FIRST_EXECUTION_STAGE so they're available early.
         Generated images (from DrawIO/PlantUML) run in COPY_GENERATED_IMAGES_STAGE
         which is after conversions complete.
+
+        Absence used to be the only signal, which silently broke for generated
+        PNGs that are *committed* to the course repo (the common case — course
+        repos check them in so GitHub renders the notebooks). Those exist at
+        load time, so they were copied in stage 1 concurrently with the
+        conversion overwriting the very same source path: whichever finished
+        last decided the bytes, making build output differ run to run.
         """
-        if self._source_exists_at_load:
-            return FIRST_EXECUTION_STAGE
-        else:
+        if self._is_generated or not self._source_exists_at_load:
             return COPY_GENERATED_IMAGES_STAGE
+        return FIRST_EXECUTION_STAGE
 
     async def get_processing_operation(
         self,
