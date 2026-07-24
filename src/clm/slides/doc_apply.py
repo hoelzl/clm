@@ -127,9 +127,11 @@ _DECISION_VOCABULARY: dict[str, tuple[str, ...]] = {
     "remove_localized_side": ("remove", "body"),
     "unify_choose_body": ("de", "en", "body"),
     "conflict_owner": ("de", "en"),
+    "conflict_tags": ("de", "en"),
     "conflict_preamble": ("de", "en"),
     "order_decision": ("de", "en"),
     "stamp_vs_new": ("treat_as_new",),
+    "remove_vs_split": ("remove",),
 }
 
 
@@ -225,6 +227,94 @@ def _validate_body(body: str, comment_token: str) -> str | None:
     return None
 
 
+def _is_macro_cell(cell: SideCell) -> bool:
+    """A single-line j2 cell (e.g. the ``id:title`` header macro).
+
+    Its j2 line is simultaneously the cell's boundary AND its whole content,
+    so the generic body guards/writer cannot apply: any valid replacement
+    text *is* a boundary line, and a "body" written after ``lines[0]`` would
+    be a raw appended line, not a title change (issue #609).
+    """
+    return cell.cell_type == "j2" and all(line == "" for line in cell.lines[1:])
+
+
+_MACRO_QUOTED_ARG_RE = re.compile(r'"[^"]*"')
+
+
+def _macro_header_from_body(cell: SideCell, body: str, comment_token: str, *, bare_ok: bool) -> str:
+    r"""The replacement j2 line for a macro cell, from a decision ``body``.
+
+    Accepts the full j2 line verbatim (``# {{ header_de("...") }}``) or —
+    when ``bare_ok`` and the existing line carries exactly one quoted
+    argument — the bare replacement text, which is spliced into that
+    argument. Bare text must be a single line without ``"`` or ``\`` (the
+    characters that could terminate or escape out of the j2 string
+    literal); with zero or multiple quoted arguments the splice target is
+    absent or ambiguous, so only the full j2 line is accepted. ``bare_ok``
+    is off for the create-a-new-cell paths (translate_new,
+    remove_localized_side): there the template line is derived from the
+    *other* side, so splicing bare text would silently keep the wrong
+    language's macro name.
+    """
+    line = body.rstrip("\n")
+    if not line.strip():
+        raise _ItemError("the answer body is empty")
+    if "\n" in line:
+        raise _ItemError(
+            "this member is a single-line j2 macro cell — supply just the one "
+            f"replacement line ('{comment_token} {{{{ ... }}}}') or the bare "
+            "replacement text for its quoted argument"
+        )
+    if line.startswith(comment_token + " %%"):
+        raise _ItemError(
+            f"a '{comment_token} %%' delimiter cannot replace a j2 macro line — "
+            "supply the full j2 line or the bare replacement text"
+        )
+    if is_cell_boundary(line, comment_token):
+        return line
+    if not bare_ok:
+        raise _ItemError(
+            "this answer mints a new j2 macro cell — supply the full "
+            f"'{comment_token} {{{{ ... }}}}' line (bare text cannot name the "
+            "macro to wrap it in)"
+        )
+    if '"' in line or "\\" in line:
+        raise _ItemError(
+            "bare replacement text for a j2 macro argument cannot contain "
+            "'\"' or '\\' — supply the full j2 line instead"
+        )
+    n_args = len(_MACRO_QUOTED_ARG_RE.findall(cell.header))
+    if n_args == 0:
+        raise _ItemError(
+            "the existing j2 macro line has no quoted argument to replace — "
+            "supply the full j2 line instead"
+        )
+    if n_args > 1:
+        raise _ItemError(
+            "the existing j2 macro line has multiple quoted arguments — bare "
+            "text is ambiguous here; supply the full j2 line instead"
+        )
+    return _MACRO_QUOTED_ARG_RE.sub(lambda _m: f'"{line}"', cell.header, count=1)
+
+
+def _replacement_lines(
+    cell: SideCell, body: str, comment_token: str, *, bare_ok: bool = True
+) -> tuple[str, ...]:
+    """Validated replacement ``lines`` for one target cell from a ``body``.
+
+    Normal cells keep their header line and take the body below it (after
+    the smuggling guards); single-line j2 macro cells replace the j2 line
+    itself (issue #609 — see :func:`_macro_header_from_body`).
+    """
+    if _is_macro_cell(cell):
+        header = _macro_header_from_body(cell, body, comment_token, bare_ok=bare_ok)
+        return (header, *cell.lines[1:])
+    error = _validate_body(body, comment_token)
+    if error:
+        raise _ItemError(error)
+    return _replace_body(cell, body)
+
+
 # ---------------------------------------------------------------------------
 # Results
 # ---------------------------------------------------------------------------
@@ -238,6 +328,9 @@ class ItemResult:
     action: str
     #: applied  — a file mutation landed (and was recorded)
     #: recorded — a ledger-only record landed
+    #: deferred — a record-only row whose ledger write was deferred because
+    #:            the member still carries an unresolved sibling item (#615);
+    #:            nothing happened — the row re-frames on the next report
     #: pending  — framed item without a decision (untouched residue)
     #: rejected — a supplied decision failed validation (nothing changed)
     #: failed   — a mechanical row the executor could not resolve safely
@@ -287,7 +380,15 @@ class ApplyOutcome:
             "written": [str(p) for p in self.written_paths],
             "counts": {
                 status: self.count(status)
-                for status in ("applied", "recorded", "pending", "rejected", "failed", "skipped")
+                for status in (
+                    "applied",
+                    "recorded",
+                    "deferred",
+                    "pending",
+                    "rejected",
+                    "failed",
+                    "skipped",
+                )
             },
             "items": [r.payload() for r in self.results],
         }
@@ -352,12 +453,14 @@ _PHASES: dict[str, int] = {
     "pending_divergence": 0,
     "unify_choose_body": 0,
     "conflict_owner": 0,
+    "conflict_tags": 0,
     "verify_translation": 0,
     "verify_cold": 0,
     "copy_new_shared": 1,
     "translate_new": 1,
     "remove_vs_edit": 1,
     "mirror_remove": 2,
+    "remove_vs_split": 2,
     "remove_localized_side": 2,
     "mirror_layout": 3,
     "mirror_order": 4,
@@ -787,7 +890,13 @@ def _pool_scope(item: DiffItem) -> tuple[str, str] | None:
 #: downgrading the pending conflict to mechanical duplication/resurrection on
 #: the next report. (For two-sided members the drop-to-cold fail-safe is
 #: sound; one-sided evidence has no cold state to fall back to.)
-_POOL_FREEZING_ACTIONS = frozenset({"stamp_vs_new", "remove_vs_edit"})
+#: ``remove_vs_split`` joined for the #610 group-split shape: its reframed
+#: removal rows likewise carry a two-sided base entry whose gone side
+#: survives only as the base fingerprint. The freeze is gated to that
+#: dedicated action (#630 F2) — keying it on ``ambiguous_alignment``, as
+#: #625 briefly did, changed the recording behavior of every unrelated
+#: pre-existing emitter of that action.
+_POOL_FREEZING_ACTIONS = frozenset({"stamp_vs_new", "remove_vs_edit", "remove_vs_split"})
 
 
 def _frozen_pools(unresolved_items: list[DiffItem]) -> set[tuple[str, str]]:
@@ -822,6 +931,13 @@ def _record_item(
     key = item.key
     action = item.action
 
+    if action == "conflict_tags":
+        # A conflict_tags resolution records NOTHING (#615 F2): it mutates
+        # one header line; the member re-frames and records on the next
+        # pass. Recording here would bless bodies the framed row's
+        # co-emission rule suppressed — those never reach unresolved_items,
+        # so the unresolved-key guard in apply_deck cannot see them.
+        return set()
     if action in ("record_key_migration",):
         if item.base is not None:
             target.members.pop(item.base.key, None)
@@ -862,7 +978,13 @@ def _record_item(
         part = key.split(":", 1)[1].rsplit("/", 2)[1]
         record_preamble_scope(target, fresh, part)
         return set()
-    if action in ("record_remove", "mirror_remove", "remove_vs_edit", "remove_localized_side"):
+    if action in (
+        "record_remove",
+        "mirror_remove",
+        "remove_vs_edit",
+        "remove_localized_side",
+        "remove_vs_split",
+    ):
         pool = _pool_scope(item)
         if pool is not None:
             if pool in frozen_pools:
@@ -994,9 +1116,13 @@ def _execute_decision(
                 f"'side' is only meaningful on a two-sided verify_cold body answer, "
                 f"not on '{item.action}' (which derives its target side itself)"
             )
-        error = _validate_body(decision.body, comment_token)
-        if error:
-            raise _ItemError(error)
+        # A j2-kind member may be a single-line macro cell whose only valid
+        # replacement text IS a boundary line — its validation is
+        # target-aware and lives in _replacement_lines (issue #609).
+        if not any(h is not None and h.kind == "j2" for h in (item.member, item.twin)):
+            error = _validate_body(decision.body, comment_token)
+            if error:
+                raise _ItemError(error)
         _apply_body_decision(ex, item, decision.body, side=decision.side)
         return
     choice = decision.choice or ""
@@ -1041,12 +1167,18 @@ def _apply_body_decision(
         cell = holder.side(target) if holder is not None else None
         if holder is None or cell is None:
             raise _ItemError(f"the {target} side of {item.key} is missing")
-        ex.set_side(holder, target, evolve(cell, lines=_replace_body(cell, body)))
+        ex.set_side(
+            holder, target, evolve(cell, lines=_replacement_lines(cell, body, ex.comment_token))
+        )
         return
     if item.action == "translate_edit":
         target = _decision_target_side(item)
         twin_member, twin_cell = ex._locate_twin(item, target)
-        ex.set_side(twin_member, target, evolve(twin_cell, lines=_replace_body(twin_cell, body)))
+        ex.set_side(
+            twin_member,
+            target,
+            evolve(twin_cell, lines=_replacement_lines(twin_cell, body, ex.comment_token)),
+        )
         return
     if item.action == "translate_new":
         if member is None:
@@ -1068,9 +1200,10 @@ def _apply_body_decision(
         header = (
             swap_lang(source_cell.header, target) if source_cell.lang_attr else (source_cell.header)
         )
+        template = evolve(source_cell, lines=(header, *source_cell.lines[1:]))
         new_cell = evolve(
             source_cell,
-            lines=_replace_body(evolve(source_cell, lines=(header, *source_cell.lines[1:])), body),
+            lines=_replacement_lines(template, body, ex.comment_token, bare_ok=False),
             lang_attr=target if source_cell.lang_attr else None,
         )
         ex.insert_mirrored(member, source, target, source_cell.part, new_cell)
@@ -1089,17 +1222,44 @@ def _apply_body_decision(
                 raise _ItemError(f"the shape of {item.key} no longer holds — re-run report")
             header = swap_lang(source_cell.header, gone)
             base = evolve(source_cell, lines=(header, *source_cell.lines[1:]))
-            new_cell = evolve(base, lines=_replace_body(base, body), lang_attr=gone)
+            new_cell = evolve(
+                base,
+                lines=_replacement_lines(base, body, ex.comment_token, bare_ok=False),
+                lang_attr=gone,
+            )
             ex.insert_mirrored(member, surviving, gone, source_cell.part, new_cell)
             return
+        # Compute every side's replacement before the first mutation: a failed
+        # item must be a strict no-op (never leave one side rewritten).
+        updates: list[tuple[Member, Lang, SideCell]] = []
         for lang in _SIDES:
             holder = ex._holder(item, lang)
             cell = holder.side(lang) if holder is not None else None
             if holder is None or cell is None:
                 raise _ItemError(f"the {lang} side of {item.key} is missing")
-            ex.set_side(holder, lang, evolve(cell, lines=_replace_body(cell, body)))
+            updates.append(
+                (holder, lang, evolve(cell, lines=_replacement_lines(cell, body, ex.comment_token)))
+            )
+        for holder, lang, new_cell in updates:
+            ex.set_side(holder, lang, new_cell)
         return
     raise _ItemError(f"'{item.action}' does not accept a body answer")
+
+
+def _reject_divergent_tags(de_cell: SideCell, en_cell: SideCell) -> None:
+    """The confirm tag guard (#615 F2, belt-and-braces for S4 and any
+    future classification gap): a pure ledger record must never bank a
+    cross-side tag divergence. Safe in-pass: ``set_side`` mutates the
+    member in place, so a same-pass ``mirror_tags`` (phase 0, emitted
+    before the body row) is visible here and a co-answered ``confirm``
+    still lands in one pass."""
+    if set(de_cell.tags) != set(en_cell.tags):
+        raise _ItemError(
+            f"tag sets diverge cross-side (de: {list(de_cell.tags)}, "
+            f"en: {list(en_cell.tags)}) — tags are language-independent — "
+            f"answer the tag item (or align the tag lines manually), then "
+            f"re-run report"
+        )
 
 
 def _apply_choice_decision(ex: _Executor, item: DiffItem, choice: str) -> None:
@@ -1120,9 +1280,15 @@ def _apply_choice_decision(ex: _Executor, item: DiffItem, choice: str) -> None:
                 "cannot confirm a member mid-transition (the sides disagree about "
                 "lang attributes) — complete or revert the transition first"
             )
+        _reject_divergent_tags(de_cell, en_cell)
         return  # confirmation is a pure ledger record; nothing mutates
     if choice in ("de", "en"):
         side: Lang = choice  # type: ignore[assignment]
+        if action == "conflict_tags":
+            # Mirror ONLY the tag set from the chosen side (#615) — never a
+            # whole-cell propagate, which would overwrite a translated body.
+            ex.mirror_tags(item_with_side(item, side), side)
+            return
         if action in ("conflict_shared", "pending_divergence"):
             ex.propagate(item_with_side(item, side), side)
             return
@@ -1159,6 +1325,14 @@ def _apply_choice_decision(ex: _Executor, item: DiffItem, choice: str) -> None:
             raise _ItemError(
                 f"{item.key} names no removed side — reconcile manually (edit + record)"
             )
+        if action == "remove_vs_split":
+            # The agent judged the byte-match a coincidental duplicate, not a
+            # group split (#630): execute the removal the guard blocked, with
+            # mirror_remove's survivor-on-base check intact (the row was
+            # framed off an unchanged twin — a twin that moved since must
+            # re-frame, never be deleted).
+            ex.mirror_remove(item, item.side)
+            return
         survivor = _other(item.side)
         holder = ex._holder(item, survivor)
         cell = holder.side(survivor) if holder is not None else None
@@ -1205,6 +1379,7 @@ def _apply_choice_decision(ex: _Executor, item: DiffItem, choice: str) -> None:
         en_cell = en_holder.side("en") if en_holder is not None else None
         if de_cell is None or en_cell is None:
             raise _ItemError("keep_twin needs both sides present — supply the twin body instead")
+        _reject_divergent_tags(de_cell, en_cell)
         return
     raise _ItemError(f"unsupported choice {choice!r}")
 
@@ -1401,20 +1576,69 @@ def apply_deck(
     priority = {"record_group_rename": 0, "record_key_migration": 1}
     frozen_pools = _frozen_pools(unresolved_items)
     rerecorded_pools: set[tuple[str, str]] = set()
+    # Never bless a member with unresolved rows (#615 F2, fixes S3): a
+    # landed row on a member whose framed sibling row is still pending /
+    # rejected / failed must not record the member's fresh snapshot — that
+    # would bank the unverified drifted state wholesale. The file mutation
+    # stays; the ledger entry keeps its old baseline and the member
+    # re-frames on the next report.
+    unresolved_keys = {i.key for i in unresolved_items}
+    # An ANSWERED conflict_tags is unresolved for recording purposes too
+    # (adversarial review of #615): its resolution mutates one header line
+    # and the member re-frames next pass — but the framed body row it
+    # suppressed at the differ was never emitted, so it is in no
+    # unresolved list. Without this, a co-landed same-key row (e.g. a
+    # conflict_owner answered by the very same handle-keyed decision)
+    # would _upsert the fresh snapshot and bank the suppressed body drift.
+    unresolved_keys |= {item.key for item, _ in landed if item.action == "conflict_tags"}
     for item, provenance in sorted(landed, key=lambda e: priority.get(e[0].action, 2)):
+        if item.key in unresolved_keys:
+            if item.action == "conflict_tags":
+                continue  # records nothing BY DESIGN — no deferral suffix
+            deferral = " (recording deferred: unresolved sibling item on this member)"
+            for i, result in enumerate(outcome.results):
+                if (
+                    result.key == item.key
+                    and result.action == item.action
+                    and result.status in ("applied", "recorded")
+                    and not result.reason.endswith(deferral)
+                ):
+                    # ItemResult is frozen — replace by index; (key, action)
+                    # matching because keys repeat across a member's rows.
+                    # A record-only row that landed nothing at all must not
+                    # read "recorded" — downstream agents key on the status
+                    # (design F2.1: honest status, not just an amended
+                    # reason).
+                    status = "deferred" if result.status == "recorded" else result.status
+                    outcome.results[i] = ItemResult(
+                        result.key, result.action, status, result.reason + deferral
+                    )
+                    break
+            continue
         rerecorded_pools |= _record_item(
             target, fresh, item, provenance=provenance, frozen_pools=frozen_pools
         )
     # Never bless the unresolved: a wholesale pool re-record must not trust
-    # siblings whose framed items were left pending/rejected/failed.
+    # siblings whose framed items were left pending/rejected/failed — nor
+    # the slot of an answered conflict_tags (which re-frames next pass).
     unresolved_members = [
         holder
         for item in unresolved_items
         for holder in (item.member, item.twin)
         if holder is not None
+    ] + [
+        holder
+        for item, _ in landed
+        if item.action == "conflict_tags"
+        for holder in (item.member, item.twin)
+        if holder is not None
     ]
     _drop_unresolved_from_pools(target, rerecorded_pools, unresolved_members)
-    _sweep_migrated_pos(target, landed)
+    # The stale-pos: sweep must not touch members whose recording was
+    # deferred above — the "stale" entry IS their surviving old baseline
+    # (adversarial review of #615: a landed stamp_twin_id with a pending
+    # framed sibling would otherwise lose the divergence's only record).
+    _sweep_migrated_pos(target, [e for e in landed if e[0].key not in unresolved_keys])
     outcome.ledger_changed = True
     return outcome
 

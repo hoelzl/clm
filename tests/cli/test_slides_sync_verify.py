@@ -4,8 +4,10 @@
 NOT "is it in sync?" (``report``) or "is the translation good?" (a semantic
 call). It reuses :func:`unify_texts` for byte-identity / header / alignment,
 adds an explicit ``de_id == en_id`` set-symmetry + duplicate-id check (which
-unify does not enforce), and warns on an id'd cell dropped vs git HEAD. Exit
-0 = valid (warnings allowed), 2 = structural corruption.
+unify does not enforce), warns on a cross-side tag-set mismatch between paired
+cells (Issue #615 — tags are language-independent), and warns on an id'd cell
+dropped vs git HEAD. Exit 0 = valid (warnings allowed), 2 = structural
+corruption.
 """
 
 from __future__ import annotations
@@ -24,6 +26,7 @@ from clm.slides.sync_verify import (
     dropped_id_violations,
     structural_gate,
     structural_violations,
+    tag_parity_violations,
     verify_pair,
 )
 
@@ -39,6 +42,18 @@ def _md(lang: str, sid: str, body: str) -> str:
 def _vo(lang: str, sid: str, body: str) -> str:
     """An inline voiceover companion — shares its slide's ``slide_id`` under role ``voiceover``."""
     return f'# %% [markdown] lang="{lang}" tags=["voiceover"] slide_id="{sid}"\n{body}\n'
+
+
+def _md_tags(lang: str, sid: str, tags: list[str], body: str) -> str:
+    """A localized markdown cell with an explicit tag list (tag-parity tests)."""
+    block = ", ".join(f'"{t}"' for t in tags)
+    return f'# %% [markdown] lang="{lang}" tags=[{block}] slide_id="{sid}"\n{body}\n'
+
+
+def _idless_code(lang: str, tags: list[str], body: str) -> str:
+    """An id-less localized code cell — pairs positionally, not by id."""
+    block = ", ".join(f'"{t}"' for t in tags)
+    return f'# %% lang="{lang}" tags=[{block}]\n{body}\n'
 
 
 def _shared(body: str) -> str:
@@ -130,6 +145,74 @@ class TestStructuralViolations:
         de = _half(_md("de", "s1", "Hallo"), '# %% lang="de"\nx = 1\n')
         en = _half(_md("en", "s1", "Hello"), '# %% lang="en"\nx = 1\n')
         assert structural_violations(de, en, "#") == []
+
+
+class TestTagParityViolations:
+    """Issue #615 — the cross-side tag-parity warning (tags are language-independent)."""
+
+    def test_idd_pair_with_mismatched_tags_warns(self):
+        # Same (slide_id, role) on both halves, but DE carries an extra tag.
+        de = _md_tags("de", "s1", ["slide", "alt"], "Hallo")
+        en = _md_tags("en", "s1", ["slide"], "Hello")
+        vs = structural_violations(de, en, "#")
+        assert [(v.kind, v.severity, v.slide_id) for v in vs] == [("tag-parity", "warning", "s1")]
+        msg = vs[0].message
+        assert "['alt', 'slide']" in msg  # DE tags, sorted
+        assert "['slide']" in msg  # EN tags, sorted
+        assert "'s1'" in msg
+        assert "language-independent" in msg
+
+    def test_role_changing_tag_edit_is_caught(self):
+        # The flagship #615 edit: the DE companion's notes → voiceover. The role is
+        # DERIVED from the tags, so the (slide_id, role) keys no longer match; the
+        # per-slide positional fallback must still pair and flag the twins.
+        de = _half(_md("de", "s1", "Hallo"), _md_tags("de", "s1", ["voiceover"], "# Sprechtext"))
+        en = _half(_md("en", "s1", "Hello"), _md_tags("en", "s1", ["notes"], "# Voiceover"))
+        vs = structural_violations(de, en, "#")
+        assert [(v.kind, v.severity, v.slide_id) for v in vs] == [("tag-parity", "warning", "s1")]
+        assert "['voiceover']" in vs[0].message
+        assert "['notes']" in vs[0].message
+
+    def test_matching_tags_in_different_order_is_clean(self):
+        # Tag parity compares SETS — serialization order is not doctrine.
+        de = _md_tags("de", "s1", ["alt", "slide"], "Hallo")
+        en = _md_tags("en", "s1", ["slide", "alt"], "Hello")
+        assert structural_violations(de, en, "#") == []
+
+    def test_idless_positional_mismatch_warns(self):
+        # Id-less localized code pairs positionally within the id-less remainder.
+        de = _half(_md("de", "s1", "Hallo"), _idless_code("de", ["keep"], "x = 1"))
+        en = _half(_md("en", "s1", "Hello"), _idless_code("en", ["alt"], "x = 1"))
+        vs = tag_parity_violations(de, en, "#")
+        assert [(v.kind, v.severity, v.slide_id) for v in vs] == [("tag-parity", "warning", None)]
+        assert "id-less cell #1" in vs[0].message
+        assert "['keep']" in vs[0].message
+        assert "['alt']" in vs[0].message
+
+    def test_idless_remainder_length_mismatch_is_silent(self):
+        # DE has two id-less cells, EN one: the positional part is skipped silently
+        # (a count mismatch is a structural concern owned by the unify check).
+        de = _half(
+            _md("de", "s1", "Hallo"),
+            _idless_code("de", ["keep"], "x = 1"),
+            _idless_code("de", ["alt"], "y = 2"),
+        )
+        en = _half(_md("en", "s1", "Hello"), _idless_code("en", ["other"], "x = 1"))
+        assert tag_parity_violations(de, en, "#") == []
+
+    def test_missing_twin_is_not_a_tag_question(self):
+        # s2 exists only in EN: no pair to compare — id-asymmetry owns that state.
+        de = _md("de", "s1", "Hallo")
+        en = _half(_md("en", "s1", "Hello"), _md_tags("en", "s2", ["slide", "alt"], "World"))
+        assert tag_parity_violations(de, en, "#") == []
+
+    def test_gate_is_neutral_to_tag_parity(self):
+        # Warning severity by design: the write gate (error subset) must not refuse
+        # to record a pair over a tag mismatch the apply pass is reconciling.
+        de = _md_tags("de", "s1", ["slide", "alt"], "Hallo")
+        en = _md_tags("en", "s1", ["slide"], "Hello")
+        assert structural_gate(de, en, "#") == []
+        assert structural_gate(de, en, "#", slide_id="s1") == []
 
 
 class TestStructuralGate:
@@ -246,6 +329,34 @@ class TestVerifyCli:
         pair = payload["pairs"][0]
         assert pair["ok"] is False
         assert {v["kind"] for v in pair["violations"]} == {"id-asymmetry"}
+
+    def test_tag_parity_warning_passes_and_renders(self, cli_runner, tmp_path):
+        # A tag mismatch is a warning: surfaced in the output, exit code unaffected.
+        de = _md_tags("de", "s1", ["slide", "alt"], "Hallo")
+        en = _md_tags("en", "s1", ["slide"], "Hello")
+        de_path, _en = _write(tmp_path, de, en)
+        res = cli_runner.invoke(slides_sync_group, ["verify", str(de_path)])
+        assert res.exit_code == 0, res.output
+        assert "PASS" in res.output
+        assert "1 warning" in res.output
+        assert "warning [tag-parity]" in res.output
+        assert "['alt', 'slide']" in res.output
+        assert "['slide']" in res.output
+
+    def test_tag_parity_warning_in_json(self, cli_runner, tmp_path):
+        de = _md_tags("de", "s1", ["slide", "alt"], "Hallo")
+        en = _md_tags("en", "s1", ["slide"], "Hello")
+        de_path, _en = _write(tmp_path, de, en)
+        res = cli_runner.invoke(slides_sync_group, ["verify", "--json", str(de_path)])
+        payload = json.loads(res.output[res.output.find("{") :])
+        assert payload["exit_code"] == 0
+        pair = payload["pairs"][0]
+        assert pair["ok"] is True  # a warning never fails the gate
+        violations = pair["violations"]
+        assert [(v["kind"], v["severity"], v["slide_id"]) for v in violations] == [
+            ("tag-parity", "warning", "s1")
+        ]
+        assert "language-independent" in violations[0]["message"]
 
     def test_single_half_resolves_twin(self, cli_runner, tmp_path):
         # Passing only the .de half resolves the .en twin from disk.

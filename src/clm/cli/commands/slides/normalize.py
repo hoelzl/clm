@@ -412,6 +412,11 @@ def _resolve_slides_dir(data_dir: Path | None, spec_file: Path) -> Path:
 def _print_human_readable(result: NormalizationResult, dry_run: bool) -> None:
     prefix = "[DRY RUN] " if dry_run else ""
 
+    # #631: explicitly requested operations that were intentionally skipped —
+    # informational only, no effect on status or exit code.
+    for n in result.notices:
+        click.echo(f"[SKIPPED] {n.file}: {n.message}")
+
     if not result.changes and not result.review_items:
         click.echo(f"{prefix}No changes needed.")
         return
@@ -455,5 +460,9 @@ def _result_to_dict(result: NormalizationResult) -> dict:
                 if v is not None
             }
             for r in result.review_items
+        ]
+    if result.notices:
+        d["notices"] = [
+            {"file": n.file, "operation": n.operation, "message": n.message} for n in result.notices
         ]
     return d

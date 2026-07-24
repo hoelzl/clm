@@ -16,7 +16,7 @@ import time
 import uuid
 import weakref
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
 
@@ -173,6 +173,11 @@ class WorkerPoolManager:
         self.executors: dict[str, WorkerExecutor] = {}  # execution_mode -> executor
         self.running = True
         self.monitor_thread: threading.Thread | None = None
+        # Interrupts the monitor loop's between-cycle wait so stop_pools()
+        # can actually join the thread promptly (the wait is check_interval
+        # seconds — longer than the join timeout — so a plain sleep made the
+        # join time out and the daemon thread linger up to one interval).
+        self._monitor_stop_event = threading.Event()
 
         # Worker API server for Docker communication (started when needed)
         self._api_server: WorkerApiServer | None = None
@@ -817,6 +822,7 @@ class WorkerPoolManager:
             logger.warning("Monitor thread already running")
             return
 
+        self._monitor_stop_event.clear()
         self.monitor_thread = threading.Thread(
             target=self._monitor_health, args=(check_interval,), daemon=True
         )
@@ -835,13 +841,28 @@ class WorkerPoolManager:
         while self.running:
             try:
                 conn = self.job_queue._get_conn()
-                cursor = conn.execute(
-                    """
-                    SELECT id, worker_type, container_id, status, last_heartbeat
-                    FROM workers
-                    WHERE status IN ('busy', 'idle')
-                    """
-                )
+                # Scope health checks to THIS pool's own session (issue #617,
+                # mirroring the #597/#620 ownership rule). The monitor marks
+                # unresponsive workers 'dead', which the build's completion loop
+                # then requeues jobs from; without the session filter a build
+                # would reap a concurrent build's workers in a shared jobs DB.
+                if self.session_id is not None:
+                    cursor = conn.execute(
+                        """
+                        SELECT id, worker_type, container_id, status, last_heartbeat
+                        FROM workers
+                        WHERE status IN ('busy', 'idle') AND session_id = ?
+                        """,
+                        (self.session_id,),
+                    )
+                else:
+                    cursor = conn.execute(
+                        """
+                        SELECT id, worker_type, container_id, status, last_heartbeat
+                        FROM workers
+                        WHERE status IN ('busy', 'idle')
+                        """
+                    )
 
                 # Increment stats check counter for throttling
                 stats_check_counter += 1
@@ -853,21 +874,37 @@ class WorkerPoolManager:
                     status = row[3]
                     last_heartbeat = row[4]
 
-                    # Check if heartbeat is stale (no update in 30 seconds)
-                    if self._is_heartbeat_stale(last_heartbeat, 30):
-                        logger.warning(
-                            f"Worker {worker_id} ({worker_type}) has stale heartbeat "
-                            f"(last: {last_heartbeat})"
+                    # Determine executor type and get executor
+                    is_direct = executor_id.startswith("direct-")
+                    executor_type = "direct" if is_direct else "docker"
+
+                    if executor_type not in self.executors:
+                        # A missing executor is NOT evidence the worker died
+                        # — this pool simply has no executor of that mode to
+                        # check it (e.g. a legacy/foreign row that slipped the
+                        # session filter). Skip it rather than reap a worker
+                        # we cannot verify (issue #617).
+                        logger.debug(
+                            f"No {executor_type} executor in this pool to check "
+                            f"worker {worker_id}; skipping (not ours to reap)."
                         )
+                        continue
 
-                        # Determine executor type and get executor
-                        is_direct = executor_id.startswith("direct-")
-                        executor_type = "direct" if is_direct else "docker"
+                    executor = self.executors[executor_type]
 
-                        if executor_type not in self.executors:
-                            logger.warning(
-                                f"No executor available for type {executor_type}, "
-                                f"marking worker as dead"
+                    try:
+                        # Liveness first, and unconditionally: workers only
+                        # update their heartbeat while idle-polling or when
+                        # returning to idle, so a busy worker's heartbeat goes
+                        # stale on any job longer than the threshold. Gating
+                        # the process check on staleness would either skip dead
+                        # workers (fresh heartbeat, just died) or do nothing
+                        # extra — the check is cheap (process poll / container
+                        # inspect), so run it every cycle.
+                        if not executor.is_worker_running(executor_id):
+                            logger.error(
+                                f"Worker {worker_id} ({executor_type}) is not running, "
+                                f"marking as dead"
                             )
                             conn.execute(
                                 "UPDATE workers SET status = 'dead' WHERE id = ?", (worker_id,)
@@ -875,55 +912,59 @@ class WorkerPoolManager:
                             conn.commit()
                             continue
 
-                        executor = self.executors[executor_type]
-
-                        # Check if worker process/container is still running
-                        try:
-                            if not executor.is_worker_running(executor_id):
-                                logger.error(
-                                    f"Worker {worker_id} ({executor_type}) is not running, "
-                                    f"marking as dead"
-                                )
-                                conn.execute(
-                                    "UPDATE workers SET status = 'dead' WHERE id = ?", (worker_id,)
-                                )
-                                conn.commit()
-                                continue
-
-                            # Get worker stats (throttled to every 5th check to reduce Docker API calls)
-                            # This reduces overhead by 80% while still detecting hung workers
-                            stats = None
-                            if stats_check_counter % 5 == 0:
-                                stats = executor.get_worker_stats(executor_id)
-
-                            if stats and executor_type == "docker":
-                                cpu_percent = stats.get("cpu_percent", 0.0)
-
-                                # If CPU < 1% and status is busy, worker is likely hung
-                                if cpu_percent < 1.0 and status == "busy":
-                                    logger.error(
-                                        f"Worker {worker_id} appears hung "
-                                        f"(CPU: {cpu_percent:.1f}%, status: busy)"
-                                    )
-                                    conn.execute(
-                                        "UPDATE workers SET status = 'hung' WHERE id = ?",
-                                        (worker_id,),
-                                    )
-                                    conn.commit()
-
-                                    # Optionally restart hung workers
-                                    # self._restart_worker(worker_id, executor_id, worker_type)
-
-                        except Exception as e:
-                            logger.error(
-                                f"Error checking worker {worker_id} health: {e}", exc_info=True
+                        # A stale heartbeat on a BUSY worker is the normal
+                        # state mid-job (see above), so it is only worth DEBUG;
+                        # an IDLE worker heartbeats every couple of seconds, so
+                        # staleness there is a real anomaly and stays WARNING.
+                        heartbeat_stale = self._is_heartbeat_stale(last_heartbeat, 30)
+                        if heartbeat_stale:
+                            log = logger.debug if status == "busy" else logger.warning
+                            log(
+                                f"Worker {worker_id} ({worker_type}, {status}) has "
+                                f"stale heartbeat (last: {last_heartbeat})"
                             )
 
-                time.sleep(check_interval)
+                        # Hung detection (Docker only): a busy container with a
+                        # stale heartbeat AND ~zero CPU is likely wedged. Stats
+                        # are throttled to every 5th check to reduce Docker API
+                        # calls, and only fetched when the staleness gate is
+                        # open — a fresh heartbeat proves the worker is fine.
+                        stats = None
+                        if (
+                            heartbeat_stale
+                            and executor_type == "docker"
+                            and stats_check_counter % 5 == 0
+                        ):
+                            stats = executor.get_worker_stats(executor_id)
+
+                        if stats and executor_type == "docker":
+                            cpu_percent = stats.get("cpu_percent", 0.0)
+
+                            # If CPU < 1% and status is busy, worker is likely hung
+                            if cpu_percent < 1.0 and status == "busy":
+                                logger.error(
+                                    f"Worker {worker_id} appears hung "
+                                    f"(CPU: {cpu_percent:.1f}%, status: busy)"
+                                )
+                                conn.execute(
+                                    "UPDATE workers SET status = 'hung' WHERE id = ?",
+                                    (worker_id,),
+                                )
+                                conn.commit()
+
+                                # Optionally restart hung workers
+                                # self._restart_worker(worker_id, executor_id, worker_type)
+
+                    except Exception as e:
+                        logger.error(
+                            f"Error checking worker {worker_id} health: {e}", exc_info=True
+                        )
+
+                self._monitor_stop_event.wait(check_interval)
 
             except Exception as e:
                 logger.error(f"Health monitoring error: {e}", exc_info=True)
-                time.sleep(check_interval)
+                self._monitor_stop_event.wait(check_interval)
 
         logger.info("Health monitor stopped")
 
@@ -939,8 +980,13 @@ class WorkerPoolManager:
         """
         try:
             heartbeat_time = datetime.fromisoformat(last_heartbeat)
-            now = datetime.now()
-            age = (now - heartbeat_time).total_seconds()
+            if heartbeat_time.tzinfo is None:
+                # SQLite CURRENT_TIMESTAMP writes naive UTC strings; comparing
+                # against local time made every heartbeat look hours stale east
+                # of UTC and *never* stale west of it (which silently disabled
+                # the monitor there).
+                heartbeat_time = heartbeat_time.replace(tzinfo=timezone.utc)
+            age = (datetime.now(timezone.utc) - heartbeat_time).total_seconds()
             return age > threshold_seconds
         except Exception as e:
             logger.error(f"Error parsing heartbeat timestamp: {e}")
@@ -1031,6 +1077,10 @@ class WorkerPoolManager:
 
         logger.info("Stopping worker pools")
         self.running = False
+        # Wake the monitor loop out of its between-cycle wait so the join
+        # below completes promptly instead of timing out against a sleep
+        # that outlasts it.
+        self._monitor_stop_event.set()
 
         # Disable atexit cleanup since we're doing graceful shutdown
         _atexit_cleanup_disabled = True
@@ -1086,6 +1136,7 @@ class WorkerPoolManager:
         called during interpreter shutdown when logging is unavailable.
         """
         self.running = False
+        self._monitor_stop_event.set()
 
         # Don't wait for monitor thread - we're exiting anyway
 

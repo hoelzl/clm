@@ -142,6 +142,66 @@ async def test_submission_does_not_starve_the_event_loop(backend):
 
 
 @pytest.mark.asyncio
+async def test_abandoned_shielded_submission_exception_is_retrieved(backend, caplog):
+    """When the caller is cancelled and the shielded submission task then
+    raises, the done-callback must retrieve the exception (debug-logging it)
+    so asyncio never emits "exception was never retrieved" at teardown
+    (#617/#636 follow-up, Finding 5.3)."""
+    import logging
+
+    release = threading.Event()
+
+    def failing_submit(self, payload, job_type, force_execution=False):
+        release.wait(5)
+        raise RuntimeError("submit exploded after the caller was cancelled")
+
+    try:
+        with patch.object(SqliteBackend, "_submit_job_blocking", failing_submit):
+            with caplog.at_level(
+                logging.DEBUG, logger="clm.infrastructure.backends.sqlite_backend"
+            ):
+                op_task = asyncio.ensure_future(
+                    backend.execute_operation(_MockOperation(), _MockPayload())
+                )
+                await asyncio.sleep(0.05)  # let the submission start and block
+                op_task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await op_task
+
+                # Now let the abandoned shielded task raise, and wait for the
+                # done-callback to retrieve and log the exception.
+                release.set()
+                for _ in range(100):
+                    if any(
+                        "Shielded job submission raised" in rec.message for rec in caplog.records
+                    ):
+                        break
+                    await asyncio.sleep(0.02)
+
+        assert any("Shielded job submission raised" in rec.message for rec in caplog.records), (
+            "the abandoned shielded task's exception was never retrieved"
+        )
+    finally:
+        await backend.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_submission_exception_still_propagates_to_caller(backend):
+    """Retrieving the exception in the done-callback must not swallow it on
+    the normal (non-cancelled) path — the caller still sees the raise."""
+
+    def failing_submit(self, payload, job_type, force_execution=False):
+        raise RuntimeError("submit exploded")
+
+    try:
+        with patch.object(SqliteBackend, "_submit_job_blocking", failing_submit):
+            with pytest.raises(RuntimeError, match="submit exploded"):
+                await backend.execute_operation(_MockOperation(), _MockPayload())
+    finally:
+        await backend.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_submission_semaphore_gate_is_installed(backend):
     """execute_operation is gated by a bounded concurrency semaphore."""
     await backend.execute_operation(_MockOperation(), _MockPayload())

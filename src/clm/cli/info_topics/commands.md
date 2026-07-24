@@ -1422,6 +1422,22 @@ workshop tag insertion, DE/EN interleaving, slide ID auto-generation, **cell spa
 (`cell_spacing`), **preamble-code wrapping** (`preamble_code`), and — since CLM
 {version} — **placeholder-start demotion** (`placeholder_start`).
 
+Since CLM {version} the `interleaving` operation (within-file DE/EN adjacency
+reorder plus the `count_mismatch`/`similarity_failure` review items) is
+**skipped on language-split halves** (`*.de.py` / `*.en.py`) — a
+single-language file can never satisfy a within-file DE/EN correspondence
+check, so every half produced a guaranteed `count_mismatch` review and exit 2
+(issue #611). The other operations still run; cross-half DE/EN parity is
+owned by `clm slides sync verify`. This makes `normalize --dry-run` usable as
+a scripted drift gate on split decks (exit 0 when clean).
+
+The skip is silent on a default run, but an **explicit** request — `--operations
+interleaving` (or any explicit list naming it) on a split half — reports it
+(since CLM {version}, issue #631): human output prints a `[SKIPPED] <file>: …`
+line and `--json` carries a `notices` array (`file`, `operation`, `message`).
+Notices are informational only — status stays `clean` and the exit code is
+unchanged.
+
 The `placeholder_start` operation (since CLM {version}) fixes a recurring
 workshop mis-tag (issue #233): a code cell tagged `start` whose entire body is
 a solution placeholder (`# Your solution here`, `pass`, `...`) followed by a
@@ -1959,7 +1975,14 @@ propagation. **Framed actions** (need a decision): `translate_edit`,
 `translate_new`, `verify_translation`, `conflict_shared`,
 `pending_divergence`, `remove_vs_edit`, `unify_choose_body`, `order_decision`,
 `stamp_vs_new` (a suspected id-stamp of a vanished positional cell — answer
-`treat_as_new` to grow the twin / mirror the removal),
+`treat_as_new` to grow the twin / mirror the removal), `remove_vs_split` (a
+removal that may be a group split — answer `remove` when it is a genuine
+deletion whose bytes merely coincide with another group's new one-sided cell,
+otherwise mirror the inserted slide on the twin and re-report), `conflict_tags` (the
+twins' tag sets diverged with no attributable direction — answer `de`/`en` to
+mirror **only that side's tag set** onto the twin, bodies untouched; while it
+is framed it suppresses the member's other rows — body, layout, and owner —
+which re-frame on the next report once the tags are reconciled),
 `ambiguous_alignment`, `verify_cold`, and friends. Every JSON item carries an
 `answers` list — the decision shapes `apply --decisions` accepts for it, `[]`
 on mechanical items (nothing to answer) — plus the full current cell bytes
@@ -1988,16 +2011,27 @@ to overwrite, turning cold recovery into one pass instead of hand-editing the
 file then `confirm`-ing (issue #572); `side` is rejected on any other action.
 Each answer is validated individually — a body smuggling a cell delimiter, a
 wrong choice, a `side` where it is meaningless, or a stale handle is rejected
-with a reason while the valid answers still land. The mutated bundle is
+with a reason while the valid answers still land. A single-line j2 macro
+member (e.g. `id:title`) takes its `body` as the full replacement j2 line or
+as bare text spliced into the macro's quoted argument — the line is replaced
+in place (issue #609). The mutated bundle is
 re-parsed before anything touches disk and written atomically (≤4 files);
-every landed item is recorded into the ledger, **gated on the structural
-verify** (a pair failing verify keeps its file writes — review with
-`git diff` — but records nothing). `--member KEY` limits the pass to the named
+landed items are recorded into the ledger **on fully resolved members only**,
+**gated on the structural verify** (a pair failing verify keeps its file
+writes — review with `git diff` — but records nothing). A landed row on a
+member that still carries an unresolved sibling item — or an answered
+`conflict_tags`, which records nothing and defers the same-key recordings so
+suppressed body drift is never banked (a divergent-tags fork therefore banks
+on the *next* pass) — keeps its file mutation but defers its ledger write:
+record-only rows report status `deferred`, file-mutating rows stay `applied`
+with the reason suffix `(recording deferred: unresolved sibling item on this
+member)`. `--member KEY` limits the pass to the named
 handles; `--dry-run` executes and validates everything, writes nothing. Exit
 `0` all-applied / `1` residue / `2` error. Needs no API key; single deck only
 (run `report` over a directory to find work). The `--json` result carries
-`counts` (`applied` / `recorded` / `pending` / `rejected` / `failed` /
-`skipped`), per-item `items[].status` + `reason`, `ledger_recorded`, and
+`counts` (`applied` / `recorded` / `deferred` / `pending` / `rejected` /
+`failed` / `skipped`), per-item `items[].status` + `reason`,
+`ledger_recorded`, and
 `verify_violations`; rejected decisions are additionally echoed to stderr in
 both output modes. Full envelope example: `clm info sync-agents`.
 
@@ -2012,7 +2046,9 @@ nothing**. Confirms the pair is a valid split: it unifies back into one
 bilingual source (byte-identical shared cells, matching header, clean
 alignment), the `de_id == en_id` symmetry holds, and no `(slide_id, role)`
 key is duplicated within a half; warns (never fails) on an id'd cell dropped
-vs git `HEAD`. Exit `0` = structurally sound, `2` = corrupt. Answers *"did
+vs git `HEAD` and on a cross-side tag-parity mismatch (twin cells whose tag
+sets differ — tags are language-independent, and `report` frames the fix as a
+tag row). Exit `0` = structurally sound, `2` = corrupt. Answers *"did
 this edit corrupt the pair?"*, not *"is it in sync?"* — run it in CI freely.
 The same checks gate every ledger write (`record`, and `apply`'s ledger
 updates), so a corrupt pair can never be recorded as trusted.

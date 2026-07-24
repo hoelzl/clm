@@ -152,3 +152,67 @@ class TestWiring:
             "renders 'Build completed successfully' for a failed build and "
             "runs the stale-output sweep on an incomplete write registry."
         )
+
+
+class TestRecordTeardownOrphans:
+    """Pool-teardown orphans must reach the exit policy even though they are
+    discovered after finish_build has rendered the summary (issue #617)."""
+
+    def test_orphans_are_recorded_as_errors_and_force_nonzero_exit(self):
+        from clm.cli.commands.build import _record_teardown_orphans
+
+        summary = BuildSummary(duration=1.0, total_files=3)
+        assert summary.timed_out is False
+        assert summary.errors == []
+
+        orphans = [
+            {"id": 7, "input_file": "slides/a.de.py", "status": "processing", "worker_id": 3},
+            {"id": 8, "input_file": "slides/a.en.py", "status": "pending", "worker_id": 4},
+        ]
+        _record_teardown_orphans(summary, orphans)
+
+        # Marked timed-out so the CLI exits non-zero unconditionally (an
+        # incomplete output tree), matching the per-stage-timeout policy.
+        assert summary.timed_out is True
+        assert len(summary.errors) == 2
+        categories = {e.category for e in summary.errors}
+        assert categories == {"orphaned_job"}
+        assert {e.job_id for e in summary.errors} == {7, 8}
+        assert {e.error_type for e in summary.errors} == {"infrastructure"}
+        assert any("a.de.py" in e.file_path for e in summary.errors)
+
+
+class TestFormatExitFailure:
+    """The exit-time failure message must distinguish teardown orphans from
+    genuine per-stage timeouts (#617/#636 follow-up, Finding 4): orphans are
+    appended after finish_build rendered the summary, so 'timed out … see the
+    error summary above' is wrong on both counts for them."""
+
+    def test_orphans_produce_dedicated_message_naming_the_files(self):
+        from clm.cli.commands.build import _format_exit_failure, _record_teardown_orphans
+
+        summary = BuildSummary(duration=1.0, total_files=3)
+        orphans = [
+            {"id": 7, "input_file": "slides/a.de.py", "status": "processing", "worker_id": 3},
+            {"id": 8, "input_file": "slides/a.en.py", "status": "pending", "worker_id": 4},
+        ]
+        _record_teardown_orphans(summary, orphans)
+
+        message = _format_exit_failure(summary)
+
+        assert "orphaned" in message
+        assert "2 worker job(s)" in message
+        assert "slides/a.de.py" in message
+        assert "slides/a.en.py" in message
+        assert "timed out" not in message
+
+    def test_genuine_timeout_keeps_the_timeout_message(self):
+        from clm.cli.commands.build import _format_exit_failure
+
+        summary = BuildSummary(duration=1.0, total_files=3, timed_out=True)
+
+        message = _format_exit_failure(summary)
+
+        assert "timed out" in message
+        assert "See the error summary above" in message
+        assert "orphaned" not in message

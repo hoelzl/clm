@@ -2,7 +2,7 @@
 
 **Branch**: `worktree-logical-jingling-fiddle` ·
 **Issue**: [#208](https://github.com/hoelzl/clm/issues/208) ·
-**Parent handover** (the shipped 5-step feature): `docs/claude/per-topic-solution-release-handover.md`
+**Parent handover** (the shipped 5-step feature, retired 2026-07-11): `docs/claude/per-topic-solution-release-handover-archive.md`
 
 The 5-step #208 plan is **complete and pushed** (provenance manifest → release
 engine → spec channels + `clm git`/`clm release` push → multi-cohort tests →

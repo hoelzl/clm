@@ -37,6 +37,18 @@ different roles by design (that is the standard pattern, not a collision). An
 asymmetric id, or a duplicated ``(slide_id, role)`` key, is a corruption unify
 cannot see.
 
+**Tag-parity check — warning (Issue #615).** Tags are language-independent, so a
+cell and its cross-language twin must carry the same tag *set* (order-insensitive
+— serialization order is not doctrine). A one-sided tag edit that coincides with
+body drift is invisible to unify (localized twins are *allowed* to differ) and can
+be banked by the sync engine's baseline-only view; verify surfaces it here, in
+agreement with ``clm validate``'s ``_check_split_tag_parity``. It is a **warning**
+by design: validate's own finding is a warning, error severity would hard-fail CI
+on pre-existing committed asymmetries, and — because :func:`structural_gate` is
+the *error* subset — an error would make the write gate refuse to record a pair
+the apply pass is in the middle of reconciling. A tag mismatch does not corrupt
+pairing or unification, so it does not belong in the gate.
+
 **Secondary check — no accidental drop vs the git pre-edit version.** A
 ``slide_id`` present in the committed (HEAD) half but gone from the working tree
 is a candidate *accidental* drop. Because a deliberate slide removal is
@@ -55,7 +67,7 @@ from pathlib import Path
 
 from clm.notebooks.slide_parser import comment_token_for_path
 from clm.slides.git_text import git_ref_text
-from clm.slides.raw_cells import split_cells
+from clm.slides.raw_cells import RawCell, split_cells
 from clm.slides.split import UnifyError, unify_texts
 from clm.slides.sync_companion import project_pair
 from clm.slides.sync_writeback import role_of
@@ -67,15 +79,19 @@ class VerifyViolation:
 
     ``error`` — a corruption the pair cannot be trusted with (a ``UnifyError``);
     fails the gate (exit 2). ``warning`` — flagged but not fatal (a candidate
-    accidental drop); informational, the exit code is unaffected.
+    accidental drop, or a cross-side tag-set mismatch); informational, the exit
+    code is unaffected.
     """
 
     severity: str  # "error" | "warning"
-    kind: str  # "unify" | "dropped-id"
+    # error kinds: "unify" | "id-asymmetry" | "duplicate-id"
+    # warning kinds: "tag-parity" | "dropped-id"
+    kind: str
     message: str
     slide_id: str | None = None
     # The cell role this finding is keyed to, when the check is per-(slide_id, role)
-    # (only ``duplicate-id`` today). ``None`` means role-agnostic — a slide-level
+    # (``duplicate-id``, and ``tag-parity`` when the twins matched on the role key).
+    # ``None`` means role-agnostic — a slide-level
     # finding (``id-asymmetry``) or a whole-deck one (``unify``). Used by
     # :func:`structural_gate` to scope a per-slide write gate; it is *not* part of
     # the CLI ``verify`` output (the JSON/human serializers enumerate fields
@@ -111,13 +127,15 @@ class VerifyResult:
 def structural_violations(de_text: str, en_text: str, comment_token: str) -> list[VerifyViolation]:
     """All structural-corruption findings for a pair (every check, enumerated).
 
-    Combines three deterministic checks: (1) :func:`unify_texts` as the
+    Combines four deterministic checks: (1) :func:`unify_texts` as the
     byte-identity / header / alignment oracle (its first ``UnifyError`` is surfaced
     verbatim — the message names the offending DE/EN line); (2) slide_id **set
     symmetry** between the halves (the ``de_id == en_id`` invariant unify does not
-    enforce); (3) **no duplicate** slide_id within a half. Unlike unify (which stops
-    at the first mismatch), the id checks enumerate every offender so the caller can
-    fix them in one pass.
+    enforce); (3) **no duplicate** slide_id within a half; (4) cross-side **tag
+    parity** between paired cells — a *warning* (Issue #615), so it surfaces in
+    verify output but never enters :func:`structural_gate`'s error subset. Unlike
+    unify (which stops at the first mismatch), the id and tag checks enumerate
+    every offender so the caller can fix them in one pass.
     """
     violations: list[VerifyViolation] = []
     try:
@@ -132,7 +150,136 @@ def structural_violations(de_text: str, en_text: str, comment_token: str) -> lis
     )
     violations.extend(_duplicate_id_violations(de_keys, "DE"))
     violations.extend(_duplicate_id_violations(en_keys, "EN"))
+    violations.extend(tag_parity_violations(de_text, en_text, comment_token))
     return violations
+
+
+def tag_parity_violations(de_text: str, en_text: str, comment_token: str) -> list[VerifyViolation]:
+    """Warn on every cross-side tag-set mismatch between paired cells (Issue #615).
+
+    Tags are language-independent: a cell and its cross-language twin must carry
+    the same tag **set** (order-insensitive — serialization order is not doctrine).
+    Pairing is two-tier for id'd cells and positional for the rest:
+
+    1. **Role-keyed** — id'd cells pair by ``(slide_id, role)``, the engine's
+       keying unit (:func:`role_of`). Duplicated keys within a half pair by first
+       occurrence (the duplication itself is ``duplicate-id``'s concern).
+    2. **Per-slide positional fallback** — the role is *derived from the tags*,
+       so the flagship #615 edit (``notes`` → ``voiceover`` on one half) moves the
+       cell to a new key and tier 1 cannot see it. Id'd cells left unmatched by
+       tier 1 pair positionally with the other half's unmatched cells under the
+       same ``slide_id``.
+    3. **Id-less remainder** — id-less non-j2 cells pair positionally across the
+       two remainder streams.
+
+    Whenever a positional stream's lengths differ (tier 2 per-``slide_id``, or
+    tier 3 whole-remainder), that tier is skipped silently rather than mis-paired
+    across the offset — a count mismatch is a *structural* problem owned by the
+    unify / id-symmetry checks (the same doctrine as the validator's
+    ``_check_split_tag_parity``). Severity is ``warning`` by design (see the
+    module docstring): the finding surfaces in verify output but never reaches
+    :func:`structural_gate`'s error subset, so it cannot block a write gate.
+    """
+    _de_preamble, de_cells = split_cells(de_text, comment_token)
+    _en_preamble, en_cells = split_cells(en_text, comment_token)
+    de_nonj2 = [c for c in de_cells if not c.metadata.is_j2]
+    en_nonj2 = [c for c in en_cells if not c.metadata.is_j2]
+
+    def _first_by_key(cells: list[RawCell]) -> dict[tuple[str, str | None], RawCell]:
+        keyed: dict[tuple[str, str | None], RawCell] = {}
+        for cell in cells:
+            sid = cell.metadata.slide_id
+            if sid:
+                keyed.setdefault((sid, role_of(cell.metadata)), cell)
+        return keyed
+
+    de_keyed = _first_by_key(de_nonj2)
+    en_keyed = _first_by_key(en_nonj2)
+
+    violations: list[VerifyViolation] = []
+
+    # Tier 1 — (slide_id, role) keyed twins. Dicts preserve document order.
+    for (sid, role), de_cell in de_keyed.items():
+        en_cell = en_keyed.get((sid, role))
+        if en_cell is None:
+            continue  # no twin under this key — tier 2 / id-asymmetry territory
+        role_label = role if role is not None else "no-role"
+        violations.extend(
+            _tag_mismatch(
+                de_cell,
+                en_cell,
+                subject=f"slide_id {sid!r} (role {role_label!r})",
+                slide_id=sid,
+                role=role,
+            )
+        )
+
+    # Tier 2 — per-slide_id positional pairing of the cells tier 1 left unmatched
+    # (a role-changing tag edit lands here). Skipped silently per slide_id when
+    # the leftover counts differ — that is a structural asymmetry, not tag parity.
+    de_leftover: dict[str, list[RawCell]] = {}
+    en_leftover: dict[str, list[RawCell]] = {}
+    for (sid, role), cell in de_keyed.items():
+        if (sid, role) not in en_keyed:
+            de_leftover.setdefault(sid, []).append(cell)
+    for (sid, role), cell in en_keyed.items():
+        if (sid, role) not in de_keyed:
+            en_leftover.setdefault(sid, []).append(cell)
+    for sid, de_orphans in de_leftover.items():
+        en_orphans = en_leftover.get(sid, [])
+        if len(de_orphans) != len(en_orphans):
+            continue
+        for de_cell, en_cell in zip(de_orphans, en_orphans, strict=True):
+            violations.extend(
+                _tag_mismatch(
+                    de_cell, en_cell, subject=f"slide_id {sid!r}", slide_id=sid, role=None
+                )
+            )
+
+    # Tier 3 — the id-less remainder streams, positionally. Skipped silently on a
+    # length mismatch (structural mismatch is another check's concern).
+    de_idless = [c for c in de_nonj2 if not c.metadata.slide_id]
+    en_idless = [c for c in en_nonj2 if not c.metadata.slide_id]
+    if len(de_idless) == len(en_idless):
+        for i, (de_cell, en_cell) in enumerate(zip(de_idless, en_idless, strict=True)):
+            violations.extend(
+                _tag_mismatch(
+                    de_cell,
+                    en_cell,
+                    subject=f"id-less cell #{i + 1} (positional pairing of the id-less cells)",
+                    slide_id=None,
+                    role=None,
+                )
+            )
+    return violations
+
+
+def _tag_mismatch(
+    de_cell: RawCell,
+    en_cell: RawCell,
+    *,
+    subject: str,
+    slide_id: str | None,
+    role: str | None,
+) -> list[VerifyViolation]:
+    """The ``tag-parity`` warning for one paired cell, or ``[]`` when the sets match."""
+    de_tags = set(de_cell.metadata.tags)
+    en_tags = set(en_cell.metadata.tags)
+    if de_tags == en_tags:
+        return []
+    return [
+        VerifyViolation(
+            severity="warning",
+            kind="tag-parity",
+            message=(
+                f"{subject} has mismatched tags: DE {sorted(de_tags)} vs "
+                f"EN {sorted(en_tags)} — tags are language-independent and must "
+                "mirror across the DE/EN twins"
+            ),
+            slide_id=slide_id,
+            role=role,
+        )
+    ]
 
 
 def structural_gate(

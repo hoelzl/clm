@@ -100,7 +100,7 @@ jobs:
           set -euo pipefail
           echo "Waiting for the 'CI' workflow to complete on $SHA ..."
           # 80 polls x 30s = 40 min, comfortably longer than the full matrix
-          # (test x3 + lint + docker integration).
+          # (test x6 + lint + docker integration).
           for attempt in $(seq 1 80); do
             runs=$(gh api "repos/$REPO/actions/runs?head_sha=$SHA&per_page=100" \
               --jq '[.workflow_runs[] | select(.name=="CI")]')

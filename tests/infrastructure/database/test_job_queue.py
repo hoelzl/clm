@@ -173,6 +173,151 @@ def test_get_next_job_without_mode_claims_tagged_jobs(job_queue):
     assert job_queue.get_next_job("notebook") is not None
 
 
+def _register_worker(job_queue, session_id, container_id, execution_mode="direct"):
+    """Insert a worker row so get_next_job can resolve its owning session.
+
+    Session-ownership claiming (issue #620) keys off the claiming worker's own
+    ``workers.session_id``, so these tests must materialise a worker row.
+    """
+    conn = job_queue._get_conn()
+    cursor = conn.execute(
+        """
+        INSERT INTO workers (worker_type, container_id, status, session_id, execution_mode)
+        VALUES ('notebook', ?, 'idle', ?, ?)
+        """,
+        (container_id, session_id, execution_mode),
+    )
+    worker_id = cursor.lastrowid
+    assert worker_id is not None
+    return worker_id
+
+
+def test_add_job_stamps_session_id(job_queue):
+    """add_job records the owning build session on the job row (issue #620)."""
+    job_id = job_queue.add_job(
+        job_type="notebook",
+        input_file="test.py",
+        output_file="test.ipynb",
+        content_hash="abc123",
+        payload={},
+        session_id="session-A",
+    )
+
+    job = job_queue.get_job(job_id)
+    assert job is not None
+    assert job.session_id == "session-A"
+
+
+def test_get_next_job_session_ownership(job_queue):
+    """A worker claims only jobs stamped with its own build session (issue #620).
+
+    A killed or concurrent build's still-pending jobs belong to a different
+    session and reference a workspace this worker cannot address; letting it
+    claim them makes it fail an innocent slide file with "is not in the subpath
+    of".
+    """
+    job_a = job_queue.add_job(
+        job_type="notebook",
+        input_file="a.py",
+        output_file="a.ipynb",
+        content_hash="a",
+        payload={},
+        session_id="session-A",
+    )
+
+    # A worker owned by session B must NOT claim session A's job.
+    worker_b = _register_worker(job_queue, "session-B", "container-b")
+    assert job_queue.get_next_job("notebook", worker_id=worker_b) is None
+
+    # A worker owned by session A claims it.
+    worker_a = _register_worker(job_queue, "session-A", "container-a")
+    claimed = job_queue.get_next_job("notebook", worker_id=worker_a)
+    assert claimed is not None
+    assert claimed.id == job_a
+
+
+def test_get_next_job_untagged_session_claimable_by_any_worker(job_queue):
+    """A job with no owning session (legacy / tests) is claimable by any worker."""
+    job_queue.add_job(
+        job_type="notebook",
+        input_file="a.py",
+        output_file="a.ipynb",
+        content_hash="a",
+        payload={},
+        # No session_id — legacy / unowned job.
+    )
+
+    worker_b = _register_worker(job_queue, "session-B", "container-b")
+    assert job_queue.get_next_job("notebook", worker_id=worker_b) is not None
+
+
+def test_get_next_job_sessionless_claimer_is_unrestricted(job_queue):
+    """A claimer with no resolvable session claims any job, session-owned or not.
+
+    worker_id=None (no worker row) and a worker row whose session_id is NULL
+    both fall back to pre-#620 claim-anything behaviour, so a build whose
+    workers happen to be unstamped can never deadlock on its own jobs.
+    """
+    job_queue.add_job(
+        job_type="notebook",
+        input_file="a.py",
+        output_file="a.ipynb",
+        content_hash="a",
+        payload={},
+        session_id="session-A",
+    )
+    job_queue.add_job(
+        job_type="notebook",
+        input_file="b.py",
+        output_file="b.ipynb",
+        content_hash="b",
+        payload={},
+        session_id="session-A",
+    )
+
+    # No worker row at all → unrestricted.
+    assert job_queue.get_next_job("notebook") is not None
+    # A worker row with a NULL session → also unrestricted.
+    legacy_worker = _register_worker(job_queue, None, "container-legacy")
+    assert job_queue.get_next_job("notebook", worker_id=legacy_worker) is not None
+
+
+def test_get_next_job_worker_claims_own_and_null_but_not_foreign(job_queue):
+    """A session-owned worker sees its own + NULL jobs, never another session's."""
+    own = job_queue.add_job(
+        job_type="notebook",
+        input_file="own.py",
+        output_file="own.ipynb",
+        content_hash="own",
+        payload={},
+        session_id="session-A",
+    )
+    legacy = job_queue.add_job(
+        job_type="notebook",
+        input_file="legacy.py",
+        output_file="legacy.ipynb",
+        content_hash="legacy",
+        payload={},
+    )
+    foreign = job_queue.add_job(
+        job_type="notebook",
+        input_file="foreign.py",
+        output_file="foreign.ipynb",
+        content_hash="foreign",
+        payload={},
+        session_id="session-B",
+    )
+
+    worker_a = _register_worker(job_queue, "session-A", "container-a")
+    claimed_ids = set()
+    while (job := job_queue.get_next_job("notebook", worker_id=worker_a)) is not None:
+        claimed_ids.add(job.id)
+
+    assert own in claimed_ids
+    assert legacy in claimed_ids
+    assert foreign not in claimed_ids
+
+
 def test_get_next_job_priority(job_queue):
     """Test that jobs are retrieved by priority."""
     # Add low priority job
@@ -758,7 +903,7 @@ def test_remove_missing_skips_pending_jobs(job_queue, tmp_path):
 # ============================================================================
 
 
-def _claim(job_queue, worker_id: int = 1) -> Job:
+def _claim(job_queue, worker_id: int = 1, session_id: str | None = None) -> Job:
     """Add a pending job and immediately claim it, returning the in-flight Job."""
     job_queue.add_job(
         job_type="notebook",
@@ -766,6 +911,7 @@ def _claim(job_queue, worker_id: int = 1) -> Job:
         output_file=f"test-{worker_id}.ipynb",
         content_hash=f"hash-{worker_id}",
         payload={},
+        session_id=session_id,
     )
     claimed = job_queue.get_next_job(worker_id=worker_id, job_type="notebook")
     assert claimed is not None, "get_next_job should claim the pending job we just added"
@@ -890,3 +1036,75 @@ def test_mark_orphaned_jobs_failed_ignores_pending_without_started_at(job_queue)
     stats = job_queue.get_job_stats()
     assert stats["pending"] == 1
     assert stats["failed"] == 0
+
+
+def test_mark_orphaned_jobs_failed_scoped_reaps_only_own_session(job_queue):
+    """A session-scoped sweep must only reap its own session's in-flight jobs.
+
+    Concurrent builds A and B share a jobs DB; when A tears down first it must
+    not fail B's genuinely in-flight jobs (#597/#620 ownership rule)."""
+    job_a = _claim(job_queue, worker_id=10, session_id="session-a")
+    job_b = _claim(job_queue, worker_id=11, session_id="session-b")
+
+    orphans = job_queue.mark_orphaned_jobs_failed(session_id="session-a")
+
+    assert [o["id"] for o in orphans] == [job_a.id]
+    assert job_queue.get_job(job_a.id).status == "failed"
+    # B's in-flight job is untouched — still processing, no error stamped.
+    row_b = job_queue.get_job(job_b.id)
+    assert row_b.status == "processing"
+    assert row_b.error is None
+
+
+def test_mark_orphaned_jobs_failed_scoped_ignores_null_session_rows(job_queue):
+    """Strict scoping: rows with NULL session_id are left to the unscoped
+    maintenance sweep (``clm workers`` reap), not claimed by a build."""
+    job_null = _claim(job_queue, worker_id=12, session_id=None)
+
+    orphans = job_queue.mark_orphaned_jobs_failed(session_id="session-a")
+
+    assert orphans == []
+    assert job_queue.get_job(job_null.id).status == "processing"
+
+
+def test_mark_orphaned_jobs_failed_unscoped_reaps_all_sessions(job_queue):
+    """Without a session_id the sweep keeps its original cross-session reach."""
+    job_a = _claim(job_queue, worker_id=13, session_id="session-a")
+    job_null = _claim(job_queue, worker_id=14, session_id=None)
+
+    orphans = job_queue.mark_orphaned_jobs_failed()
+
+    assert {o["id"] for o in orphans} == {job_a.id, job_null.id}
+
+
+def test_reset_hung_jobs_clears_started_at(job_queue):
+    """A hung job reset to pending must have started_at cleared, so the teardown
+    orphan sweep never mis-stamps a legitimately-requeued job as an orphan
+    (issue #617). Before the fix, reset_hung_jobs left started_at set."""
+    job_id = job_queue.add_job(
+        job_type="notebook",
+        input_file="hung.py",
+        output_file="hung.ipynb",
+        content_hash="hung",
+        payload={},
+    )
+    # Claim it (sets started_at, status='processing'), then backdate started_at
+    # past the hung window so reset_hung_jobs picks it up.
+    job_queue.get_next_job("notebook")
+    conn = job_queue._get_conn()
+    conn.execute(
+        "UPDATE jobs SET started_at = datetime('now', '-3600 seconds') WHERE id = ?",
+        (job_id,),
+    )
+
+    assert job_queue.reset_hung_jobs(timeout_seconds=600) == 1
+
+    job = job_queue.get_job(job_id)
+    assert job is not None
+    assert job.status == "pending"
+    assert job.started_at is None
+    assert job.worker_id is None
+
+    # The requeued job must NOT be reaped as an orphan by the teardown sweep.
+    assert job_queue.mark_orphaned_jobs_failed() == []
+    assert job_queue.get_job(job_id).status == "pending"

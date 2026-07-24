@@ -196,6 +196,13 @@ class WorkerLifecycleManager:
 
         if not worker_configs:
             logger.info("No workers to start (sufficient workers already running)")
+            # Known gap, accepted (#617 follow-up, Finding 5.2): on this path
+            # no pool_manager is created, so the health monitor never runs and
+            # a reused worker that dies mid-job is only caught by the teardown
+            # orphan sweep, not requeued mid-build. Monitoring cannot help
+            # anyway: reused workers belong to another session (or are
+            # shareable), and the monitor deliberately scans only its own
+            # session's workers (#597/#620 ownership rule).
             # Return information about existing healthy workers
             return self._collect_reused_worker_info()
 
@@ -228,6 +235,16 @@ class WorkerLifecycleManager:
         # Start pools
         self.pool_manager.start_pools()
 
+        # Start health monitoring (issue #617). A worker that dies mid-job
+        # otherwise leaves its job stuck in 'processing' — nothing marked a
+        # busy worker dead, so the completion loop's dead-worker requeue never
+        # fired and the job lingered until the teardown orphan sweep stamped it
+        # "worker died mid-job (orphaned at pool shutdown)". The monitor detects
+        # the death by process liveness, marks the worker 'dead', and the build
+        # loop then requeues the job for retry on another worker. It scans only
+        # this session's workers and is stopped/joined by stop_pools().
+        self.pool_manager.start_monitoring()
+
         # Collect worker info for tracking
         self.managed_workers = self._collect_worker_info()
 
@@ -238,23 +255,30 @@ class WorkerLifecycleManager:
         logger.info(f"Started {len(self.managed_workers)} managed worker(s)")
         return self.managed_workers
 
-    def stop_managed_workers(self, workers: list[WorkerInfo]) -> None:
+    def stop_managed_workers(self, workers: list[WorkerInfo]) -> list[dict[str, Any]]:
         """Stop managed workers.
 
         Args:
             workers: List of workers to stop
+
+        Returns:
+            The list of in-flight jobs orphaned at pool stop (each a dict as
+            returned by :meth:`JobQueue.mark_orphaned_jobs_failed`). Empty on a
+            clean shutdown. The build surfaces a non-empty result so orphans
+            discovered at teardown still reach the summary and exit policy
+            (issue #617) rather than being silently banked in the jobs DB.
         """
         if not self.config.auto_stop:
             logger.info("Auto-stop is disabled, keeping workers running")
-            return
+            return []
 
         if not workers:
             logger.debug("No workers to stop")
-            return
+            return []
 
         if not self.pool_manager:
             logger.debug("No pool manager to stop")
-            return
+            return []
 
         start_time = time.time()
 
@@ -271,10 +295,14 @@ class WorkerLifecycleManager:
         # race with us) and before log_pool_stopped() so the orphan count
         # can be included in the pool_stopped event metadata. Without this
         # pass, orphans would stay stuck in "processing" status forever and
-        # ``clm status`` would silently under-report failures.
+        # ``clm status`` would silently under-report failures. Scoped to this
+        # manager's session so a concurrent build's in-flight jobs in a shared
+        # jobs DB are never reaped or reported here (#597/#620 ownership rule).
         orphans: list[dict[str, Any]] = []
         try:
-            orphans = self.event_logger.job_queue.mark_orphaned_jobs_failed()
+            orphans = self.event_logger.job_queue.mark_orphaned_jobs_failed(
+                session_id=self.session_id
+            )
         except Exception as exc:
             # Never let orphan detection break pool teardown — downstream
             # cleanup (log_pool_stopped, managed_workers clearing) must
@@ -301,6 +329,8 @@ class WorkerLifecycleManager:
         # Clear tracked workers if they match
         if self.managed_workers == workers:
             self.managed_workers.clear()
+
+        return orphans
 
     def _adjust_configs_for_reuse(self, configs: list[WorkerConfig]) -> list[WorkerConfig]:
         """Adjust worker counts based on existing healthy workers.

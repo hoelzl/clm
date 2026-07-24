@@ -45,7 +45,7 @@ from collections import Counter
 from difflib import SequenceMatcher
 from typing import Literal
 
-from attrs import define, field, frozen
+from attrs import define, evolve, field, frozen
 
 from clm.slides.bilingual_doc import (
     ORPHAN_GROUP,
@@ -160,15 +160,88 @@ FRAMED_ACTIONS = frozenset(
         "fork_pending_twin",  # §7.2 fork in progress (one side marked)
         "unify_pending_twin",  # §7.2 unify in progress (one attr removed)
         "conflict_owner",  # owner references disagree
+        "conflict_tags",  # cross-side tag divergence — mirror from the chosen side (#615)
         "broken_owner",  # owner matches no anchor
         "kind_mismatch",  # paired sides disagree about cell kind
         "order_decision",  # both sides reordered differently
         "ambiguous_alignment",  # §3.3 residue: dup-fp reorder + edit
         "stamp_vs_new",  # suspected stamp: new id'd cell vs unaccounted pool cell (#600)
+        "remove_vs_split",  # removal vs suspected group split (#610/#630)
         "conflict_preamble",  # preambles moved differently on both sides
         "verify_cold",  # no baseline entry (ledger mode)
     }
 )
+
+#: #630 F3 (warn-only): a removed shared cell whose twin body is this close
+#: to a one-sided cold body of another group gets a suspected-group-split
+#: observation — it may be a split whose moved cells were also edited, which
+#: the byte-identity guard cannot see. Tiny bodies (separators, one-liners)
+#: are skipped: they collide by construction. The scan is best-effort by
+#: design (it feeds a warning, never a blocking verdict), so oversized
+#: bodies are skipped and the number of full quadratic ``ratio()``
+#: computations per report is capped.
+_SPLIT_SIMILARITY_RATIO = 0.9
+_SPLIT_SIMILARITY_MIN_CHARS = 10
+_SPLIT_SIMILARITY_MAX_CHARS = 2000
+_SPLIT_SIMILARITY_BUDGET = 2000
+
+
+class _BodySimilarity:
+    """Memoized, budgeted near-match check for the #630 F3 scan.
+
+    ``SequenceMatcher.ratio()`` is quadratic in body length and a
+    reorganized deck compares many removals against many one-sided cold
+    cells, so verdicts are cached per body pair (boilerplate decks repeat
+    the same few bodies) and the pass stops running full ratios once the
+    budget is spent — further pairs simply stop matching.
+    """
+
+    def __init__(self) -> None:
+        self._cache: dict[tuple[str, str], bool] = {}
+        self._budget = _SPLIT_SIMILARITY_BUDGET
+
+    def similar(self, a: str, b: str) -> bool:
+        if len(a.strip()) < _SPLIT_SIMILARITY_MIN_CHARS:
+            return False
+        if len(b.strip()) < _SPLIT_SIMILARITY_MIN_CHARS:
+            return False
+        if len(a) > _SPLIT_SIMILARITY_MAX_CHARS or len(b) > _SPLIT_SIMILARITY_MAX_CHARS:
+            return False
+        key = (a, b)
+        cached = self._cache.get(key)
+        if cached is not None:
+            return cached
+        verdict = False
+        if a == b:
+            verdict = True
+        elif self._budget > 0:
+            matcher = SequenceMatcher(a=a, b=b, autojunk=False)
+            if (
+                matcher.real_quick_ratio() >= _SPLIT_SIMILARITY_RATIO
+                and matcher.quick_ratio() >= _SPLIT_SIMILARITY_RATIO
+            ):
+                self._budget -= 1
+                verdict = matcher.ratio() >= _SPLIT_SIMILARITY_RATIO
+        self._cache[key] = verdict
+        return verdict
+
+
+def _split_observations(
+    counts: dict[tuple[str, tuple[str, ...], Lang], int], *, match: str, advice: str
+) -> list[Observation]:
+    """The per-(old group, rival groups, side) ``suspected_group_split`` rows."""
+    return [
+        Observation(
+            kind="suspected_group_split",
+            side=side,
+            detail=(
+                f"group {old!r} lost {count} member(s) on the {side} side whose "
+                f"bodies {match} un-ledgered one-sided members of group(s) "
+                f"{', '.join(repr(g) for g in new)} — {advice}"
+            ),
+        )
+        for (old, new, side), count in sorted(counts.items())
+    ]
 
 
 def _pair_twin(de_member: Member | None, en_member: Member | None) -> Member | None:
@@ -435,11 +508,163 @@ class _Differ:
             )
 
     def _finish(self) -> DeckDiff:
+        split_observations = self._reframe_group_split_removals()
         return DeckDiff(
             items=self.items,
             in_sync_count=self.in_sync,
-            observations=list(self.current.observations),
+            observations=list(self.current.observations) + split_observations,
         )
+
+    def _reframe_group_split_removals(self) -> list[Observation]:
+        """Issue #610/#630: never *mechanically* mirror a suspected group split.
+
+        An id-keyed slide inserted on one half *before* a run of un-id'd
+        positional cells moves those cells into the new slide's group on
+        that half only. Per-pool alignment then sees the old pool lose its
+        cells on that side (→ ``mirror_remove``, which would DELETE the
+        twin's untouched cells) while the new group's pool gains the same
+        cells one-sided (→ cold). When a removal's gone-side base
+        fingerprint — or, for moved cells whose header attrs/tags changed,
+        its gone-side base *body* fingerprint — matches a one-sided cold
+        cell of another group on that same side, the removal is reframed as
+        a ``remove_vs_split`` decision (#630): answer ``remove`` when it
+        really is a deletion (the match is a coincidental duplicate —
+        repeated boilerplate cells are common), or mirror the inserted
+        slide on the twin (e.g. answer its ``translate_new``) and re-report
+        — the re-grouped pools then frame safely.
+
+        The byte-identity heuristic is deliberately broad: a false positive
+        costs one ``remove`` answer, a false negative deletes content. A
+        split whose moved cells were *also edited* escapes it — those still
+        mirror mechanically, so a similar-bodies observation flags them for
+        review before apply (#630 F3, warn-only: near-identical cells are
+        too common in course decks to block on similarity). The similarity
+        scan also runs for reframed rows, so an exact match in one group
+        cannot hide a similar match naming the real split target.
+        """
+        cold_groups_by_fp: dict[tuple[Lang, str], set[str]] = {}
+        cold_groups_by_body_fp: dict[tuple[Lang, str], set[str]] = {}
+        cold_bodies: dict[Lang, list[tuple[str, str]]] = {}
+        for item in self.items:
+            if item.action != "verify_cold" or not item.key.startswith("pos:"):
+                continue
+            member = item.member
+            if member is None or not member.is_one_sided or item.group is None:
+                continue
+            side: Lang = "de" if member.de is not None else "en"
+            cell = member.side(side)
+            assert cell is not None
+            fp = content_fingerprint(cell)
+            cold_groups_by_fp.setdefault((side, fp), set()).add(item.group)
+            if len(cell.body.strip()) >= _SPLIT_SIMILARITY_MIN_CHARS:
+                # Tiny bodies (separators, one-liners) collide by
+                # construction — body-only evidence starts above the same
+                # floor the similarity scan uses.
+                cold_groups_by_body_fp.setdefault((side, _body_fp(cell)), set()).add(item.group)
+            cold_bodies.setdefault(side, []).append((item.group, cell.body))
+        if not cold_groups_by_fp:
+            return []
+        split_counts: dict[tuple[str, tuple[str, ...], Lang], int] = {}
+        edited_counts: dict[tuple[str, tuple[str, ...], Lang], int] = {}
+        similarity = _BodySimilarity()
+        for i, item in enumerate(self.items):
+            if item.action != "mirror_remove" or not item.key.startswith("pos:"):
+                continue
+            if item.base is None or item.side is None or item.group is None:
+                continue
+            gone = item.side
+            gone_fp = item.base.side_fp(gone)
+            if gone_fp is None:
+                continue
+            rival_set = set(cold_groups_by_fp.get((gone, gone_fp), ()))
+            gone_body_fp = item.base.de_body_fp if gone == "de" else item.base.en_body_fp
+            if gone_body_fp is not None:
+                # A moved cell whose header attrs/tags changed breaks the
+                # content fingerprint but not the body one — still exact
+                # gone-side evidence, still a reframe.
+                rival_set |= cold_groups_by_body_fp.get((gone, gone_body_fp), set())
+            rivals = tuple(sorted(g for g in rival_set if g != item.group))
+            similar = tuple(
+                g
+                for g in self._similar_rival_groups(
+                    item, gone, cold_bodies.get(gone, []), similarity
+                )
+                if g not in rival_set
+            )
+            if similar:
+                key = (item.group, similar, gone)
+                edited_counts[key] = edited_counts.get(key, 0) + 1
+            if not rivals:
+                continue
+            named = ", ".join(repr(g) for g in rivals)
+            self.items[i] = evolve(
+                item,
+                outcome="conflict",
+                action="remove_vs_split",
+                direction="both",
+                detail=(
+                    f"positional member gone from the {gone} side, but a cell with "
+                    f"identical bytes (or an identical body) sits un-ledgered in "
+                    f"group(s) {named} on that side — either a genuine deletion "
+                    f"coinciding with a duplicate cell, or a group split (a slide "
+                    f"inserted before this run of cells moved them into its group) "
+                    f"where a mechanical removal would delete the twin's untouched "
+                    f"cells; answer remove if the cell should really go, otherwise "
+                    f"mirror the inserted slide on the twin (e.g. answer its "
+                    f"translate_new), then re-report"
+                ),
+            )
+            key = (item.group, rivals, gone)
+            split_counts[key] = split_counts.get(key, 0) + 1
+        return _split_observations(
+            split_counts,
+            match="match",
+            advice=(
+                "likely a group split; mirror the inserted slide on the twin "
+                "before applying (or answer remove on a genuine deletion)"
+            ),
+        ) + _split_observations(
+            edited_counts,
+            match="are similar (not identical) to",
+            advice=(
+                "possibly a group split whose moved cells were also edited — the "
+                "byte-identity guard cannot see it, so check these cells before "
+                "applying a mechanical removal or answering remove (#630)"
+            ),
+        )
+
+    def _similar_rival_groups(
+        self,
+        item: DiffItem,
+        gone: Lang,
+        cold_cells: list[tuple[str, str]],
+        similarity: _BodySimilarity,
+    ) -> tuple[str, ...]:
+        """Rival groups holding a *similar* one-sided cold body (#630 F3).
+
+        The ledger retains no base bytes for the gone side, but a
+        ``mirror_remove`` verdict requires the surviving twin to sit on base
+        (an edited survivor frames ``remove_vs_edit``) — so when the shared
+        base recorded the SAME bytes on both sides, the twin's current body
+        is a byte-proxy for what vanished. A slot whose base was already
+        diverged (``de_fp != en_fp``) has no usable proxy and is skipped:
+        comparing wrong-side text would produce arbitrary verdicts.
+        """
+        entry = item.base
+        if entry is None or entry.langness != "shared" or entry.de_fp != entry.en_fp:
+            return ()
+        member = item.member
+        present: Lang = "en" if gone == "de" else "de"
+        cell = member.side(present) if member is not None else None
+        if cell is None:
+            return ()
+        groups: set[str] = set()
+        for group, body in cold_cells:
+            if group == item.group or group in groups:
+                continue
+            if similarity.similar(body, cell.body):
+                groups.add(group)
+        return tuple(sorted(groups))
 
     # -- group renames ------------------------------------------------------
 
@@ -513,8 +738,21 @@ class _Differ:
         matches by body fingerprint on either side, because a fork always
         rewrites the header (the new ``lang=`` attribute is exactly the
         §7.3 intent channel) while a pure fork keeps the bodies.
+
+        A stamp necessarily takes the cell OUT of the positional pool, so a
+        migration is only plausible when the pool is missing a cell on every
+        side this member populates. Without that guard, a brand-new id'd
+        cell byte-identical to a positional cell still present in the pool
+        would steal that cell's base entry and be misframed as a one-sided
+        removal — ``apply`` then deletes the freshly-authored cell from its
+        authoring side (issue #644).
         """
         assert self.base is not None
+        for side in _SIDES:
+            if member.side(side) is not None and not self._pool_side_deficit(
+                group, member.kind, side
+            ):
+                return None
         base_group = self._base_group_for(group)
         fps = self._member_fps(member)
         body_fps = {_body_fp(cell) for cell in (member.de, member.en) if cell is not None}
@@ -772,6 +1010,29 @@ class _Differ:
         handle = entry.key if entry.key.startswith("id:") else member.key.render()
         migrated = self.key_migrations.get(entry.key)
 
+        # Cross-side tag parity (#615) — an orthogonal aspect row like the
+        # layout/owner checks below, but only on the localized path: shared
+        # members keep their byte-identity rows (``cross_divergent`` below
+        # already forces a tag delta past the shortcut into
+        # :meth:`_classify_shared`). Checked BEFORE the owner-only shortcut —
+        # a baseline-carried localized tag divergence classifies in_sync
+        # through that shortcut (and through the not-moved branches below).
+        tags_verdict: str | None = None
+        if member.role == "header" or entry.role == "header" or entry.langness == "localized":
+            tags_verdict = self._check_tags(member, group, entry, handle)
+        if tags_verdict == "framed":
+            # Decision documents are keyed by member handle alone — two
+            # framed rows on one key cannot both be answered, and a framed
+            # ``conflict_owner`` even shares ``conflict_tags``' exact de/en
+            # vocabulary (one decision would silently execute BOTH mirrors —
+            # adversarial review of #615). So a framed ``conflict_tags``
+            # suppresses every other row for this member this pass — the
+            # layout/owner checks and the content classification alike; they
+            # re-frame on the next report once the tags are reconciled
+            # (sequencing over parallelism; converges in two passes).
+            # Mechanical rows never consult the decision document, so a
+            # mechanical ``mirror_tags`` co-emits freely below.
+            return
         # Layout transitions (§7.3 relayout) — orthogonal to content rows.
         self._check_layout(member, group, entry, handle)
         self._check_owner(member, group, entry, handle)
@@ -833,14 +1094,15 @@ class _Differ:
         base_class = entry.langness
         observed = self._observed_langness(member)
 
+        tags_mirrored = tags_verdict == "mechanical"
         if member.role == "header" or entry.role == "header":
             # Headers (and the title anchor) are per-language BY DESIGN —
             # their langness never transitions, whatever the lang attrs say.
-            self._classify_localized(member, group, entry, handle)
+            self._classify_localized(member, group, entry, handle, tags_mirrored=tags_mirrored)
         elif base_class == "shared" and observed == "shared":
             self._classify_shared(member, group, entry, handle)
         elif base_class == "localized" and observed == "localized":
-            self._classify_localized(member, group, entry, handle)
+            self._classify_localized(member, group, entry, handle, tags_mirrored=tags_mirrored)
         elif base_class == "shared":
             self._classify_fork(member, group, entry, handle)
         else:
@@ -974,6 +1236,104 @@ class _Differ:
                     member=member,
                     base=entry,
                 )
+
+    def _check_tags(
+        self,
+        member: Member,
+        group: str,
+        entry: MemberBaseline,
+        handle: str,
+        *,
+        de_cell: SideCell | None = None,
+        en_cell: SideCell | None = None,
+        twin: Member | None = None,
+    ) -> str | None:
+        """Cross-side tag parity as an orthogonal aspect row (issue #615).
+
+        Tags are language-independent and mirror across the twins (§3.1),
+        but the localized path compares each side only against its own
+        recorded fingerprint — a tag delta coinciding with body drift (or
+        carried at the baseline) used to be silently subsumed by the body
+        row. Modeled on :meth:`_check_layout`/:meth:`_check_owner`; parity
+        is judged on tag *sets* (the validator's policy — a tuple-order-only
+        difference stays with the bodies-at-base normalization path).
+
+        Per-side "moved" is ``base tags is None or current != base``: a
+        ``None`` recorded tag baseline counts as *moved*, never as trusted
+        (the just-landed variant and pre-tag-recording ledger states).
+        Returns ``"mechanical"`` / ``"framed"`` when a row was emitted,
+        ``None`` otherwise. ``de_cell``/``en_cell``/``twin`` let the pool
+        path pass a slot whose two sides live on different parsed members.
+        """
+        de = de_cell if de_cell is not None else member.de
+        en = en_cell if en_cell is not None else member.en
+        if de is None or en is None:
+            return None  # one-sided: no cross-side pair to check
+        if set(de.tags) == set(en.tags):
+            return None
+        de_moved = entry.de_tags is None or de.tags != entry.de_tags
+        en_moved = entry.en_tags is None or en.tags != entry.en_tags
+        attributable = entry.de_tags is not None and entry.en_tags is not None
+        if not attributable:
+            # A None recorded tag baseline counts as MOVED but never as a
+            # mechanical mirror SOURCE (adversarial review of #615): the
+            # "unmoved" side's evidence would be the missing field itself,
+            # and mirroring from a never-recorded side silently wipes the
+            # recorded side's tags (notes/voiceover route audiences). No
+            # trusted source — framed.
+            direction: Direction = "none"
+            detail = (
+                f"cross-side tag divergence with an incomplete recorded tag "
+                f"baseline (de: {list(de.tags)}, en: {list(en.tags)}) — no "
+                f"trusted mirror source; answer de or en to mirror that "
+                f"side's tag set"
+            )
+        elif de_moved != en_moved:
+            moved_side: Lang = "de" if de_moved else "en"
+            moved_cell = de if de_moved else en
+            twin_cell = en if de_moved else de
+            self.emit(
+                handle,
+                "mechanical",
+                "mirror_tags",
+                "de_to_en" if de_moved else "en_to_de",
+                f"tag set changed on the {moved_side} side "
+                f"({list(twin_cell.tags)} → {list(moved_cell.tags)})",
+                group=group,
+                side=moved_side,
+                member=member,
+                base=entry,
+                twin=twin,
+            )
+            return "mechanical"
+        elif de_moved:  # both moved, differently — no safe source side (P8)
+            direction = "both"
+            detail = (
+                f"tag sets moved differently on both sides "
+                f"(de: {list(de.tags)}, en: {list(en.tags)}) — tags are "
+                f"language-independent; answer de or en to mirror that "
+                f"side's tag set"
+            )
+        else:  # neither moved: the recorded baseline carries the divergence
+            direction = "none"
+            detail = (
+                f"the recorded baseline itself carries this cross-side tag "
+                f"divergence (de: {list(de.tags)}, en: {list(en.tags)}) — no "
+                f"direction is inferable; answer de or en to mirror that "
+                f"side's tag set"
+            )
+        self.emit(
+            handle,
+            "conflict",
+            "conflict_tags",
+            direction,
+            detail,
+            group=group,
+            member=member,
+            base=entry,
+            twin=twin,
+        )
+        return "framed"
 
     # -- §7.2 base class shared -------------------------------------------------
 
@@ -1273,7 +1633,13 @@ class _Differ:
     # -- base class localized ---------------------------------------------------
 
     def _classify_localized(
-        self, member: Member, group: str, entry: MemberBaseline, handle: str
+        self,
+        member: Member,
+        group: str,
+        entry: MemberBaseline,
+        handle: str,
+        *,
+        tags_mirrored: bool = False,
     ) -> None:
         de_fp, en_fp = self._member_fps(member)
         moved_de = member.de is not None and de_fp != entry.de_fp
@@ -1329,8 +1695,12 @@ class _Differ:
             self.in_sync += 1
             return
         # A tags-only change is mechanical even on localized members: tag
-        # sets mirror across languages (§3.1), bodies do not.
-        if self._tags_only_change(member, entry, moved_de, moved_en):
+        # sets mirror across languages (§3.1), bodies do not. Cross-side
+        # tag divergence is :meth:`_check_tags`' aspect row (#615);
+        # ``tags_mirrored`` short-circuits the body row when that row
+        # already covers the whole move (tags sit inside the content
+        # fingerprint, so a tags-only move still reads as "moved" here).
+        if self._tags_only_change(member, entry, handle, group, tags_mirrored=tags_mirrored):
             return
         if moved_de and moved_en:
             self.emit(
@@ -1359,8 +1729,24 @@ class _Differ:
         )
 
     def _tags_only_change(
-        self, member: Member, entry: MemberBaseline, moved_de: bool, moved_en: bool
+        self,
+        member: Member,
+        entry: MemberBaseline,
+        handle: str,
+        group: str,
+        *,
+        tags_mirrored: bool = False,
     ) -> bool:
+        """The bodies-at-base residue of a tag move (cross-side sets EQUAL).
+
+        Every cross-side-divergent tag state is :meth:`_check_tags`' aspect
+        row (#615 — its old ``conflict_shared`` answer executed a whole-cell
+        propagate, body-destroying on a localized pair). What remains here:
+        an identical move on both sides (``record_tags``), a tuple-order-only
+        one-sided move (``mirror_tags`` normalization), and the short-circuit
+        for a move :meth:`_check_tags` already mirrored — all with the bodies
+        at their per-side baselines, so no body row is owed.
+        """
         de, en = member.de, member.en
         if de is None or en is None:
             return False
@@ -1368,11 +1754,16 @@ class _Differ:
         en_body_same = entry.en_body_fp is not None and _body_fp(en) == entry.en_body_fp
         if not (de_body_same and en_body_same):
             return False
+        if tags_mirrored:
+            # The mechanical mirror_tags already covers the whole move: the
+            # content fingerprints moved through the tag line alone.
+            return True
         de_tags_moved = entry.de_tags is not None and de.tags != entry.de_tags
         en_tags_moved = entry.en_tags is not None and en.tags != entry.en_tags
         if not (de_tags_moved or en_tags_moved):
             return False
-        handle = entry.key
+        if set(de.tags) != set(en.tags):
+            return False  # _check_tags' territory (framed rows suppress us)
         if de_tags_moved and en_tags_moved:
             if de.tags == en.tags:
                 self.emit(
@@ -1381,20 +1772,12 @@ class _Differ:
                     "record_tags",
                     "both",
                     f"tag set changed identically on both sides → {list(de.tags)}",
+                    group=group,
                     member=member,
                     base=entry,
                 )
                 return True
-            self.emit(
-                handle,
-                "conflict",
-                "conflict_shared",
-                "both",
-                f"tag sets moved differently (de: {list(de.tags)}, en: {list(en.tags)})",
-                member=member,
-                base=entry,
-            )
-            return True
+            return False  # sets equal, tuples ordered differently — framed below
         moved_side: Lang = "de" if de_tags_moved else "en"
         moved_cell = de if de_tags_moved else en
         self.emit(
@@ -1403,6 +1786,7 @@ class _Differ:
             "mirror_tags",
             "de_to_en" if de_tags_moved else "en_to_de",
             f"tag set changed on the {moved_side} side → {list(moved_cell.tags)}",
+            group=group,
             side=moved_side,
             member=member,
             base=entry,
@@ -1527,6 +1911,52 @@ class _Differ:
                 base=entry,
             )
             return
+        # Fork-time tag parity (#615): record_fork is the one mechanical row
+        # that upgrades a member to per-language fingerprints and can thereby
+        # legitimize cross-side divergent bytes — tags included — as a
+        # trusted baseline. Check the halves' tags against the base SHARED
+        # tag set first, while a one-sided move is still attributable. A
+        # framed conflict_tags co-emitting with record_fork is safe: the
+        # apply-side unresolved-key guard defers record_fork's upsert.
+        de, en = member.de, member.en
+        if de is not None and en is not None and set(de.tags) != set(en.tags):
+            base_tags = (
+                entry.de_tags
+                if entry.de_tags is not None and entry.de_tags == entry.en_tags
+                else None
+            )
+            de_moved = base_tags is None or de.tags != base_tags
+            en_moved = base_tags is None or en.tags != base_tags
+            if de_moved != en_moved:
+                moved_side: Lang = "de" if de_moved else "en"
+                moved_cell = de if de_moved else en
+                twin_cell = en if de_moved else de
+                self.emit(
+                    handle,
+                    "mechanical",
+                    "mirror_tags",
+                    "de_to_en" if de_moved else "en_to_de",
+                    f"tag set changed on the {moved_side} side "
+                    f"({list(twin_cell.tags)} → {list(moved_cell.tags)})",
+                    group=group,
+                    side=moved_side,
+                    member=member,
+                    base=entry,
+                )
+            else:  # both moved differently, or no attributable shared base
+                self.emit(
+                    handle,
+                    "conflict",
+                    "conflict_tags",
+                    "both",
+                    f"the forking halves carry divergent tag sets "
+                    f"(de: {list(de.tags)}, en: {list(en.tags)}) — tags are "
+                    f"language-independent; answer de or en to mirror that "
+                    f"side's tag set",
+                    group=group,
+                    member=member,
+                    base=entry,
+                )
         self.emit(
             handle,
             "transition",
@@ -1839,6 +2269,14 @@ class _Differ:
             )
             return
         if de_state == "same" and en_state == "same":
+            if entry.langness == "localized":
+                # Neither side moved, but the recorded baseline may itself
+                # carry a cross-side tag divergence (#615) — the localized
+                # analogue of the shared pending_divergence row below.
+                self._classify_pool_slot_localized(
+                    group, entry, de_state, en_state, de_member, en_member
+                )
+                return
             if (
                 entry.langness == "shared"
                 and entry.de_fp is not None
@@ -2157,7 +2595,88 @@ class _Differ:
                 base=entry,
             )
             return
+        # Cross-side tag parity (#615): the same decision table as
+        # :meth:`_check_tags`, over the slot's cells (which may live on
+        # different parsed members — the emits carry ``twin`` per the pool
+        # side convention so the executor acts on the right cells).
+        de_cell = de_member.de if de_member is not None else None
+        en_cell = en_member.en if en_member is not None else None
+        tags_verdict: str | None = None
+        if de_cell is not None and en_cell is not None:
+            assert member is not None  # both cells present ⇒ a carrier exists
+            tags_verdict = self._check_tags(
+                member,
+                group,
+                entry,
+                handle,
+                de_cell=de_cell,
+                en_cell=en_cell,
+                twin=pair_twin,
+            )
         moved = [lang for lang, state in (("de", de_state), ("en", en_state)) if state == "changed"]
+        if tags_verdict == "framed":
+            # Same-key framed rows cannot both be answered: the framed
+            # conflict_tags suppresses the slot's framed body rows this
+            # pass; they re-frame once the tags are reconciled (#615).
+            return
+        if not moved:
+            # Reached via the same/same dispatch: nothing but (possibly)
+            # the baseline-carried tag divergence handled above.
+            if tags_verdict is None:
+                self.in_sync += 1
+            return
+        de_body_same = (
+            entry.de_body_fp is not None
+            and de_cell is not None
+            and _body_fp(de_cell) == entry.de_body_fp
+        )
+        en_body_same = (
+            entry.en_body_fp is not None
+            and en_cell is not None
+            and _body_fp(en_cell) == entry.en_body_fp
+        )
+        if tags_verdict == "mechanical" and de_body_same and en_body_same:
+            return  # a tags-only move — the mirror covers the whole delta
+        if tags_verdict is None and de_body_same and en_body_same:
+            # The pool twin of :meth:`_tags_only_change` (adversarial review
+            # of #615): cross-side sets EQUAL but a tag tuple moved off its
+            # recorded base — e.g. the pass after a ``conflict_tags`` answer
+            # mirrored a slot's tag line. Without this, the slot's tags-only
+            # movement mis-frames as ``translate_edit`` (a model rewrite of
+            # an untouched header body) and the slot can never mechanically
+            # converge.
+            assert de_cell is not None and en_cell is not None
+            de_tags_moved = entry.de_tags is not None and de_cell.tags != entry.de_tags
+            en_tags_moved = entry.en_tags is not None and en_cell.tags != entry.en_tags
+            if de_tags_moved and en_tags_moved and de_cell.tags == en_cell.tags:
+                self.emit(
+                    handle,
+                    "mechanical",
+                    "record_tags",
+                    "both",
+                    f"tag set changed identically on both sides → {list(de_cell.tags)}",
+                    group=group,
+                    member=member,
+                    base=entry,
+                    twin=pair_twin,
+                )
+                return
+            if de_tags_moved != en_tags_moved:
+                moved_side: Lang = "de" if de_tags_moved else "en"
+                moved_cell = de_cell if de_tags_moved else en_cell
+                self.emit(
+                    handle,
+                    "mechanical",
+                    "mirror_tags",
+                    "de_to_en" if de_tags_moved else "en_to_de",
+                    f"tag set changed on the {moved_side} side → {list(moved_cell.tags)}",
+                    group=group,
+                    side=moved_side,
+                    member=member,
+                    base=entry,
+                    twin=pair_twin,
+                )
+                return
         if len(moved) == 2:
             self.emit(
                 handle,

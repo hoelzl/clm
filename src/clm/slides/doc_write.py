@@ -36,6 +36,7 @@ from pathlib import Path
 from attrs import define, field
 
 from clm.slides.bilingual_doc import BilingualDeck, Lang, Member, SideCell
+from clm.slides.doc_identity import content_fingerprint
 from clm.slides.doc_lenses import LoadedBundle
 
 __all__ = [
@@ -133,6 +134,15 @@ class DeckEmitter:
         Walk backwards from the member's position in the *source* stream to
         the nearest member that also has a cell in the target stream; insert
         right after it (or at the top of the file when none precedes it).
+
+        Source-only members between that predecessor and the inserted member
+        may be the source's copies of target-only cells sitting just past the
+        insertion point — the group-split shape (#646): a slide inserted into
+        a run of id-less shared cells re-homes the run's tail on the source
+        side while the twin's copies stay un-paired. The insert additionally
+        skips past each such target-only cell whose content matches one of
+        the interposed source cells, so ≥2 interleaved inserts keep the
+        source's ordering instead of clumping after the predecessor.
         """
         source_stream = self.streams.get((source, part), [])
         target_stream = self.streams.setdefault((target, part), [])
@@ -141,13 +151,31 @@ class DeckEmitter:
         except StopIteration:
             raise DeckWriteError("the source cell is not in its own stream (writer bug)") from None
         insert_at = 0
-        for prev in reversed(source_stream[:pos]):
+        anchor = -1
+        for k in range(pos - 1, -1, -1):
+            prev = source_stream[k]
             for j, m in enumerate(target_stream):
                 if m is prev:
                     insert_at = j + 1
+                    anchor = k
                     break
             if insert_at:
                 break
+        interposed: list[str] = []
+        for m in source_stream[anchor + 1 : pos]:
+            cell = m.side(source)
+            if cell is not None and m.side(target) is None:
+                interposed.append(content_fingerprint(cell))
+        while interposed and insert_at < len(target_stream):
+            candidate = target_stream[insert_at]
+            cell = candidate.side(target)
+            if candidate.side(source) is not None or cell is None:
+                break
+            fp = content_fingerprint(cell)
+            if fp not in interposed:
+                break
+            interposed.remove(fp)
+            insert_at += 1
         target_stream.insert(insert_at, member)
         self.set_side(member, target, new_cell)
 

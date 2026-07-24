@@ -741,6 +741,53 @@ class TestMigrateDatabase:
         finally:
             conn.close()
 
+    def test_migrate_v10_to_v11_adds_session_id_column(self, tmp_path):
+        """Migration from v10 to v11 adds the jobs.session_id column.
+
+        The column stamps a job with the owning build session so a worker
+        claims only its own session's jobs (issue #620).
+        """
+        db_path = tmp_path / "test.db"
+        conn = sqlite3.connect(str(db_path))
+
+        # Minimal v10 jobs table without session_id.
+        conn.execute("""
+            CREATE TABLE jobs (
+                id INTEGER PRIMARY KEY,
+                job_type TEXT NOT NULL,
+                status TEXT NOT NULL,
+                execution_mode TEXT,
+                completed_at TIMESTAMP
+            )
+        """)
+        conn.execute(
+            "CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TIMESTAMP)"
+        )
+        conn.execute("INSERT INTO schema_version (version) VALUES (10)")
+        conn.commit()
+
+        migrate_database(conn, 10, 11)
+
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+        assert "session_id" in columns
+        assert get_schema_version(conn) == 11
+
+        conn.close()
+
+    def test_migrate_v10_to_v11_handles_existing_column(self, tmp_path):
+        """v10→v11 migration is a no-op when session_id already exists."""
+        db_path = tmp_path / "test.db"
+        # A freshly initialized DB already has the column via SCHEMA_SQL.
+        init_database(db_path)
+
+        conn = sqlite3.connect(str(db_path))
+        try:
+            migrate_database(conn, 10, 11)  # Should not raise
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+            assert "session_id" in columns
+        finally:
+            conn.close()
+
     def test_init_database_adds_v9_indexes_to_existing_v8_db(self, tmp_path):
         """init_database upgrades a pre-v9 database in place.
 

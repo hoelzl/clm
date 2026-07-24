@@ -9,6 +9,288 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 Unreleased changes are collected as fragment files in [`changelog.d/`](changelog.d/)
 and folded into this file by `scripts/collect_changelog.py` at release time.
 
+## [1.22.0] - 2026-07-12
+
+### Added
+
+- `clm course renumber` — renumber `topic_NNN_` directories to match the course
+  spec's topic order **without losing cached build state**: directories move via
+  two-phase `git mv` and the `clm_cache.db` input-path columns are rewritten in
+  the same run, so the next build replays every cached result instead of
+  re-executing. Fails closed on non-canonical topic names (renumbering them
+  would change their topic id), orphan collisions, ambiguous topic resolution,
+  and active builds; `--report-only`/`--json` preview the full change set
+  including dry-run cache-row counts (#589).
+
+### Changed
+
+- The `end-workshop` tag is now honored on **any** cell type, not just
+  markdown ([#362](https://github.com/hoelzl/clm/issues/362)): many workshops
+  end with a code cell (the final solution or assertion), and tagging that
+  cell previously was a silent no-op that `clm validate` (correctly) warned
+  about. Both workshop range scanners (notebook build and slide tooling) now
+  close a range at an `end-workshop` cell of any type; workshop *openers*
+  remain markdown-only. The close stays **exclusive** — the tagged cell is
+  outside the workshop, so tagging the workshop's final code cell excludes
+  that cell from the range (it renders completed instead of blanked; for a
+  `keep`-tagged assertion cell the output is identical either way). The
+  validator accepts `end-workshop` on code cells and extends the
+  orphan-`end-workshop` warning to them.
+
+- CI now runs the unit/integration/e2e suites as a `python-version × suite`
+  matrix (6 parallel jobs) instead of sequential steps, cutting PR wall clock
+  from ~7.5 to ~5.5 minutes. The "Require CI green" ruleset's required checks
+  were updated to the six new job names (#559).
+
+- The `clm harvest` voiceover artifact cache is now **shared and
+  deck-independent** (#568). It moved from the per-deck
+  `<deck dir>/.clm/voiceover-cache/` to `<shared-cache-dir>/voiceover/`,
+  where the shared cache dir resolves like the LLM cache (`$CLM_CACHE_DIR` →
+  `tool.clm.cache_dir` → `<project-root>/.clm-cache/`). Video-keyed entries
+  (ASR transcripts, transition detection) are computed once per recording and
+  reused by every deck in the repository, so forked/moved decks no longer
+  re-transcribe identical videos. Existing per-deck caches are probed on a
+  miss and promoted into the shared root automatically; `--cache-root` still
+  overrides everything.
+
+- `clm slides sync` agent ergonomics, driven by a transcript audit of 11 real
+  agent sessions: the first decision-document error now teaches the full JSON
+  shape (with the body format) instead of one field per round-trip; `apply
+  --help`'s `--decisions` shows the schema inline; every report item now
+  carries `answers` (`[]` = mechanical) so drivers need no missing-key guard;
+  an all-cold report emits a `hint` pointing at `sync record` (text + JSON);
+  rejected decisions are echoed to stderr in both output modes with their
+  reasons; `duplicate_id` refusals name `clm slides rename-id` as the fix;
+  `report`/`apply`/`record --help` point at `clm info sync-agents`; and
+  `clm validate`'s shared-cell-drift suggestions now recommend `sync
+  report`/`apply` over the legacy `unify` + `split` round-trip. The
+  `sync-agents` info topic gains the apply-result JSON envelope, the
+  report field names, a confirm-all-vs-`record` rule, and a "working
+  patterns for agents" section (stdin decisions, script-generated decision
+  documents, answers-aware batching, parallel-sweep capture discipline).
+
+- `clm slides normalize`: an explicit `--operations interleaving` on a
+  language-split half (`*.de.py` / `*.en.py`) is no longer a silent no-op —
+  the intentional skip (#611) is now reported as a `[SKIPPED]` line (a
+  `notices` array in `--json`), without affecting status or exit code (#631).
+
+### Fixed
+
+- Pin `[tool.uv].exclude-newer` as uv's canonical `<date>T00:00:00Z` timestamp
+  instead of a bare date, so `uv lock --check` / `uv sync --locked` accept the
+  committed lockfile on a clean checkout ([#524](https://github.com/hoelzl/clm/issues/524)).
+  `scripts/update_exclude_newer.py` now canonicalizes a bare-date argument to
+  the next UTC midnight (and passes a full timestamp through unchanged),
+  `scripts/check_exclude_newer.py` requires exact equality between
+  pyproject.toml and uv.lock (the old date-prefix comparison let the drift
+  reach CI), and CI installs with `uv sync --locked` again, restoring
+  fail-fast lockfile-drift detection.
+
+- Dir-group copy deduplication is now per destination directory instead of
+  per dir-group, so two `<dir-group>`s that overlap in a single `<subdir>` no
+  longer copy it twice concurrently (the racing `copytree` calls aborted
+  otherwise-complete Windows builds with WinError 32 at the final dir-group
+  stage). `clm validate` now warns (`duplicate_dir_group_destination`) when
+  several dir-groups resolve to the same output destination — both for
+  redundant duplicates and for conflicting sources (#539).
+
+- Fixed intermittent `RuntimeError: No workers available to process 'notebook' jobs`
+  mid-build (issue #594). Worker reuse could count another build's auto-stopped
+  workers in a shared jobs DB as reusable; when that build exited, its workers were
+  deleted and the borrowing build was stranded with zero workers at its first
+  non-cached submission. Managed workers are now stamped with their owning session
+  (`workers.session_id`) and an ownership marker (`workers.managed_by`): a build
+  only reuses its own workers, deliberately persistent workers (`auto_stop=false`),
+  or unmarked externally started workers.
+
+- A build whose stage processing raised (e.g. "No workers available") no
+  longer prints "✓ Build completed successfully" with a clean summary while
+  the exception propagates (#596). The summary now shows "✗ Build aborted"
+  (JSON output: `"status": "aborted"` plus an `aborted` flag), the failure is
+  counted as a fatal infrastructure error, and — because errors were
+  recorded — the stale-output sweep skips itself instead of running against
+  the aborted build's incomplete write registry.
+
+- The activation-timeout dead-marking in the SQLite backend is now scoped by
+  execution mode and session ownership (#597). Previously, a Direct-mode
+  build timing out on its own workers could mark a concurrent Docker-mode
+  build's still-starting pre-registrations (`status='created'`, over 30s old
+  — plausible for a cold Docker image pull) as dead in a shared jobs DB,
+  making that build fail with "No workers available" through no fault of its
+  own. The UPDATE now applies the same mode discriminator as the surrounding
+  availability queries and only dead-marks workers the build's own lifecycle
+  session registered (unowned legacy rows keep the issue-#348 fail-fast).
+
+- **Sync: replacing an un-id'd positional cell with new `slide_id`-keyed cells
+  no longer dead-ends the decision loop** (#600). The two "suspected stamp"
+  shapes — a new id'd cell appearing while a positional base cell of the same
+  pool is unaccounted for, and the vanished positional cell itself — are now
+  framed as a new `stamp_vs_new` action carrying a `treat_as_new` answer
+  (previously `ambiguous_alignment` with an empty `answers` vocabulary, which
+  no decision document could resolve). Answering `treat_as_new` grows the
+  twin for the new id'd cell and mirrors the vanished positional cell's
+  removal in one `apply --decisions` pass; the stamped-and-edited reading is
+  still reconciled manually, and the genuinely ambiguous
+  `ambiguous_alignment` shapes (rival id stamps, both-sides-added pools)
+  remain answerless by design.
+
+- **Sync**: two defects found by the adversarial review of the `stamp_vs_new`
+  action (#600, PR #602). The vanished-cell (`pos:…`) row is no longer emitted
+  when the surviving twin was also edited — its only advertised answer
+  (`treat_as_new` → mirrored removal) was deterministically rejected by the
+  off-base guard, an unbreakable report→answer→reject loop; the shape now
+  frames `remove_vs_edit` (whose `remove`/`keep` answers land) with the stamp
+  suspicion in the row's detail. And answering `treat_as_new` on only *some*
+  rows of a pool no longer erases the ledger evidence behind the pool's other
+  suspected-stamp rows: pools that still carry an unresolved
+  `stamp_vs_new`/`remove_vs_edit` item are frozen during apply's ledger
+  re-record, so the remaining suspicion keeps its framing on the next report
+  instead of silently downgrading to mechanical cell duplication.
+
+- Bilingual `<dir-group>` names (`<name><de>…</de><en>…</en></name>`) are now
+  honored instead of silently parsing as empty — previously such a group's
+  content was copied to the root of every output target (#605). All bilingual
+  spec elements (course/section names, `<description>`, `<certificate>`,
+  `<organization>`, dir-group names) now share one bilingual-or-simple parser:
+  plain text applies to both languages, a single `<de>`/`<en>` child falls
+  back to the other language, and unknown child elements or text mixed with
+  `<de>`/`<en>` children raise a spec error instead of being dropped.
+
+- `clm slides sync apply`: a `body` answer on a single-line j2 macro member
+  (e.g. the `id:title` header macro) no longer dead-ends with a spurious
+  `# %%` delimiter rejection. The answer now replaces the macro line in
+  place and accepts either the full j2 line
+  (`# {{ header_de("Neuer Titel") }}`) or the bare replacement text, which
+  is spliced into the macro's quoted argument (#609).
+
+- `clm slides sync`: inserting a new id-keyed slide before a run of un-id'd
+  positional shared cells on one half no longer frames the twin's untouched
+  cells as mechanical `mirror_remove` rows (a plain `sync apply` deleted
+  them). The suspected group split is now reframed as an answerless
+  conflict with a `suspected_group_split` report observation; mirroring the
+  inserted slide on the twin (e.g. answering its `translate_new`) and
+  re-reporting resolves it losslessly. Pools carrying such an unresolved
+  item are frozen during apply's ledger re-record so a landing sibling row
+  cannot erase the removal evidence (#610).
+
+- `clm slides normalize`: the `interleaving` operation (within-file DE/EN
+  adjacency reorder + `count_mismatch`/`similarity_failure` reviews) is now
+  skipped on language-split halves (`*.de.py` / `*.en.py`), matching the
+  validator's split-file exemption. Every split half used to produce a
+  guaranteed-noise `count_mismatch` review and exit 2, making
+  `normalize --dry-run` unusable as a drift gate on split decks (#611).
+
+- **Sync: a one-sided tag edit can no longer be silently banked by resolving
+  the body row it coincides with** (#615). Previously a tag change folded into
+  a `verify_translation` / `translate_edit` resolution (or a `verify_cold`
+  confirm) left the twins' tag sets diverged, with `sync report` silent while
+  `clm validate` kept warning. Tag parity is now a first-class diff aspect:
+  a one-sided tag move co-frames a mechanical `mirror_tags` row next to the
+  body row; a divergence with no attributable direction — both sides' tags
+  moved apart, or a divergence already banked in a ledger — frames a new
+  `conflict_tags` action (answer `de`/`en`; mirrors only the chosen side's
+  tag set onto the twin, bodies untouched); `confirm` on `verify_translation`
+  and `verify_cold` is rejected while the tag sets diverge; `apply` no longer
+  records a member that still carries an unresolved sibling item — deferred
+  record-only rows report the new `deferred` status (in the `--json` counts),
+  deferred file-mutating rows keep `applied` with a
+  "recording deferred" reason suffix; and
+  `clm slides sync verify` now surfaces cross-side tag-parity mismatches as a
+  warning (never failing the structural gate).
+
+- `clm build --only-sections` is now repeatable: passing the flag multiple
+  times accumulates all selector tokens instead of silently keeping only the
+  last occurrence (which made a "build sections X, Y, Z" verification pass on
+  a build that had only built Z). The single-flag comma-separated form keeps
+  working, and an empty value in any occurrence is still rejected (#616).
+
+- Fixed the worker health monitor's heartbeat staleness check comparing the
+  UTC database timestamp against local time (follow-up to issue #617 /
+  PR #636). West of UTC every heartbeat looked perpetually fresh, silently
+  disabling the mid-build worker-liveness recovery; east of UTC everything
+  always looked stale, spamming warnings. Staleness is now computed in UTC.
+  The monitor also no longer gates its process-liveness check on heartbeat
+  staleness: busy workers only heartbeat between jobs, so a stale heartbeat is
+  the normal mid-job state — liveness is now checked unconditionally each
+  cycle, stale-heartbeat log lines are DEBUG for busy workers (still WARNING
+  for idle ones), and the Docker zero-CPU "hung" heuristic still requires a
+  stale heartbeat before pulling container stats.
+
+- The build's exit message now distinguishes teardown-orphaned jobs from
+  per-stage timeouts: instead of the misleading "one or more worker jobs
+  timed out … see the error summary above", orphaned jobs get a dedicated
+  message naming the affected input files (#617/#636 follow-up, Finding 4).
+- `stop_pools()` now interrupts the health monitor's between-cycle wait via a
+  stop event, so the monitor thread is actually joined at teardown instead of
+  lingering up to one check interval (#617/#636 follow-up, Finding 5.1).
+- A job submission abandoned by a cancelled caller no longer triggers
+  asyncio's "exception was never retrieved" warning at teardown; the shielded
+  task's exception is retrieved and debug-logged (#617/#636 follow-up,
+  Finding 5.3).
+
+- Fixed intermittent `worker died mid-job (orphaned at pool shutdown)` failures
+  in an otherwise uninterrupted build (issue #617). When a worker process died
+  or hung mid-job, nothing marked a *busy* worker dead, so the completion loop's
+  dead-worker requeue never fired and the job lingered in `processing` until the
+  teardown sweep stamped it an orphan — misattributed to an innocent slide file.
+  The worker health monitor is now started for the build pool (scoped to the
+  build's own session), so a worker whose process is gone is detected and its
+  in-flight job is requeued for retry on another worker. In addition:
+  `reset_hung_jobs` now clears `started_at` so a legitimately-requeued job is
+  never mis-stamped as an orphan; job submission registers the job for the
+  completion poll under `asyncio.shield`, so a cancelled submission can never
+  leave a worker-claimable but untracked row; and any orphan still discovered at
+  teardown is folded into the build summary (and forces a non-zero exit) instead
+  of being silently banked in the jobs DB.
+
+- The teardown orphan sweep (`mark_orphaned_jobs_failed`) is now scoped to the
+  build's own session: a build finishing first in a shared jobs DB no longer
+  marks a concurrent build's in-flight jobs as failed, nor folds them into its
+  own summary and exit code (#617/#636 follow-up, Finding 3). Maintenance
+  callers (`clm workers` reap) keep the unscoped sweep.
+
+- Fixed a killed or concurrent build poisoning another build's jobs (issue
+  #620). Jobs in the shared jobs DB carried no session ownership, so a worker
+  would claim any pending same-type/same-mode job — including one submitted by a
+  different build whose workspace it cannot address — and fail it in Docker mode
+  with `... is not in the subpath of ...`, misattributed to an innocent slide
+  file. Jobs are now stamped with their owning build session (`jobs.session_id`,
+  mirroring the `workers.session_id` ownership added in #594): a worker claims
+  only its own session's jobs plus unowned (`NULL`) legacy jobs, and a worker
+  with no session stays unrestricted so a build can never deadlock on its own
+  jobs.
+
+- Hardened the sync-apply j2 macro body writer (#629, follow-up to #609/#624):
+  bare replacement text is now rejected when the macro line carries zero or
+  multiple quoted arguments (previously only the first argument of a
+  multi-argument macro would have been rewritten, silently keeping the rest),
+  and bare text containing a backslash — which could escape out of the j2
+  string literal — is rejected alongside `"`.
+
+- **Sync**: the #610 group-split guard no longer dead-ends legitimate
+  removals (#630). A blocked removal is now framed as the new
+  `remove_vs_split` action with a `remove` answer — a genuine deletion that
+  merely coincides with a byte-identical cell in another group can be
+  resolved through the decision document instead of manual file edits; the
+  conflict detail and `suspected_group_split` observation name **every**
+  rival group. The apply-time pool freeze is gated to `remove_vs_split`, so
+  unrelated pre-existing `ambiguous_alignment` shapes (rival id stamps,
+  both-sides-added pools) keep their prior recording behavior. The guard now
+  also matches on the gone side's recorded **body** fingerprint, so a split
+  whose moved cells only changed header attrs/tags is still blocked. A split
+  whose moved cells were *also edited* still mirrors mechanically, but the
+  report now emits a warn-only similar-bodies `suspected_group_split`
+  observation for it (also alongside an exact match in a different group,
+  so a coincidental duplicate cannot hide the real split target).
+
+- **sync v3**: a brand-new one-sided id-keyed shared cell whose body is
+  byte-identical to an un-id'd positional cell still present in the pool was
+  misframed as mechanical `mirror_remove` — `apply` then deleted the
+  freshly-authored cell from its authoring side. The §7.3 pos→id key
+  migration now requires the positional pool to actually be missing a cell
+  on every side the id'd member populates, so the new cell frames
+  `copy_new_shared` as documented (#644).
+
 ## [1.21.1] - 2026-07-08
 
 ### Added

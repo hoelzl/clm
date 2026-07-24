@@ -40,6 +40,7 @@ class Job:
     correlation_id: str | None = None
     cancelled_at: datetime | None = None
     cancelled_by: str | None = None
+    session_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert job to dictionary."""
@@ -120,6 +121,7 @@ class JobQueue:
         priority: int = 0,
         correlation_id: str | None = None,
         execution_mode: str | None = None,
+        session_id: str | None = None,
     ) -> int:
         """Add a new job to the queue.
 
@@ -137,6 +139,10 @@ class JobQueue:
                 Direct worker from a concurrent build sharing the same jobs
                 DB can never claim them (it may lack the required toolchain,
                 e.g. the xeus-cpp kernel).
+            session_id: Owning build session (the submitting
+                WorkerLifecycleManager's session_id). Stamped so only workers
+                of the same session claim the job; None lets any worker claim
+                it (legacy / tests). See :meth:`get_next_job` and issue #620.
 
         Returns:
             Job ID
@@ -146,8 +152,9 @@ class JobQueue:
             """
             INSERT INTO jobs (
                 job_type, status, input_file, output_file,
-                content_hash, payload, priority, correlation_id, execution_mode
-            ) VALUES (?, 'pending', ?, ?, ?, ?, ?, ?, ?)
+                content_hash, payload, priority, correlation_id, execution_mode,
+                session_id
+            ) VALUES (?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 job_type,
@@ -158,6 +165,7 @@ class JobQueue:
                 priority,
                 correlation_id,
                 execution_mode,
+                session_id,
             ),
         )
         # No commit() needed - connection is in autocommit mode
@@ -261,27 +269,39 @@ class JobQueue:
         # Use explicit transaction to atomically get and update job
         conn.execute("BEGIN IMMEDIATE")
         try:
-            if execution_mode is None:
-                cursor = conn.execute(
-                    """
-                    SELECT * FROM jobs
-                    WHERE status = 'pending' AND job_type = ? AND attempts < max_attempts
-                    ORDER BY priority DESC, created_at ASC
-                    LIMIT 1
-                    """,
-                    (job_type,),
-                )
-            else:
-                cursor = conn.execute(
-                    """
-                    SELECT * FROM jobs
-                    WHERE status = 'pending' AND job_type = ? AND attempts < max_attempts
-                    AND (execution_mode IS NULL OR execution_mode = ?)
-                    ORDER BY priority DESC, created_at ASC
-                    LIMIT 1
-                    """,
-                    (job_type, execution_mode),
-                )
+            # Session ownership (issue #620): resolve the claiming worker's own
+            # build session from its workers row, then hand it only jobs stamped
+            # with that same session (plus NULL legacy jobs). This stops a worker
+            # from draining a killed or concurrent build's still-pending jobs —
+            # which reference a workspace it cannot address and would fail with
+            # "is not in the subpath of" against an innocent slide file. A worker
+            # with no session (worker_id None, or a self-registered / legacy
+            # worker row whose session_id is NULL) is left unrestricted, so a
+            # build whose workers happen to be unstamped can never deadlock on
+            # its own jobs.
+            worker_session_id: str | None = None
+            if worker_id is not None:
+                worker_row = conn.execute(
+                    "SELECT session_id FROM workers WHERE id = ?", (worker_id,)
+                ).fetchone()
+                if worker_row is not None:
+                    worker_session_id = worker_row["session_id"]
+
+            conditions = ["status = 'pending'", "job_type = ?", "attempts < max_attempts"]
+            params: list[Any] = [job_type]
+            if execution_mode is not None:
+                conditions.append("(execution_mode IS NULL OR execution_mode = ?)")
+                params.append(execution_mode)
+            if worker_session_id is not None:
+                conditions.append("(session_id IS NULL OR session_id = ?)")
+                params.append(worker_session_id)
+
+            where_clause = " AND ".join(conditions)
+            cursor = conn.execute(
+                f"SELECT * FROM jobs WHERE {where_clause} "  # noqa: S608 — literal predicates, bound params
+                "ORDER BY priority DESC, created_at ASC LIMIT 1",
+                params,
+            )
             row = cursor.fetchone()
 
             if not row:
@@ -315,6 +335,7 @@ class JobQueue:
                 priority=row["priority"],
                 worker_id=worker_id,
                 correlation_id=row["correlation_id"] if "correlation_id" in row.keys() else None,
+                session_id=row["session_id"] if "session_id" in row.keys() else None,
             )
 
             logger.info(
@@ -396,7 +417,7 @@ class JobQueue:
     # free-form sentence.
     ORPHAN_ERROR_MESSAGE = "worker died mid-job (orphaned at pool shutdown)"
 
-    def mark_orphaned_jobs_failed(self) -> list[dict[str, Any]]:
+    def mark_orphaned_jobs_failed(self, session_id: str | None = None) -> list[dict[str, Any]]:
         """Detect and fail any jobs that were in flight when the pool stopped.
 
         An "orphan" is a row in the ``jobs`` table that was claimed by a
@@ -420,6 +441,16 @@ class JobQueue:
         At that point no worker is alive, so there is no race with a
         worker that is about to commit its own terminal update.
 
+        Args:
+            session_id: When given, only jobs stamped with this
+                ``jobs.session_id`` are considered — a build tearing down
+                must not reap a concurrent build's in-flight jobs in a
+                shared jobs DB (the #597/#620 ownership rule, mirroring
+                the health monitor's session scoping). ``None`` keeps the
+                unscoped sweep for maintenance callers (``clm workers``
+                reap), which also covers legacy rows whose
+                ``session_id`` is NULL.
+
         Returns:
             List of dicts describing each orphan row that was marked
             failed, in the shape ``{"id": int, "input_file": str,
@@ -432,8 +463,7 @@ class JobQueue:
         conn = self._get_conn()
         conn.execute("BEGIN IMMEDIATE")
         try:
-            cursor = conn.execute(
-                """
+            query = """
                 SELECT id, input_file, status, worker_id
                 FROM jobs
                 WHERE started_at IS NOT NULL
@@ -441,7 +471,11 @@ class JobQueue:
                   AND cancelled_at IS NULL
                   AND status IN ('processing', 'pending')
                 """
-            )
+            params: tuple[Any, ...] = ()
+            if session_id is not None:
+                query += " AND session_id = ?"
+                params = (session_id,)
+            cursor = conn.execute(query, params)
             rows = cursor.fetchall()
 
             if not rows:
@@ -518,6 +552,7 @@ class JobQueue:
             if row["cancelled_at"]
             else None,
             cancelled_by=row["cancelled_by"] if "cancelled_by" in row.keys() else None,
+            session_id=row["session_id"] if "session_id" in row.keys() else None,
         )
 
     def get_job_statuses_batch(self, job_ids: list[int]) -> dict[int, tuple[str, str | None]]:
@@ -647,6 +682,7 @@ class JobQueue:
                     correlation_id=row["correlation_id"]
                     if "correlation_id" in row.keys()
                     else None,
+                    session_id=row["session_id"] if "session_id" in row.keys() else None,
                 )
             )
 
@@ -665,13 +701,18 @@ class JobQueue:
         cursor = conn.execute(
             """
             UPDATE jobs
-            SET status = 'pending', worker_id = NULL
+            SET status = 'pending', worker_id = NULL, started_at = NULL
             WHERE status = 'processing'
             AND started_at < datetime('now', '-' || ? || ' seconds')
             """,
             (timeout_seconds,),
         )
         # No commit() needed - connection is in autocommit mode
+        # started_at is cleared (like _cleanup_dead_worker_jobs) so a
+        # legitimately-requeued job is a clean 'pending' row again. Leaving
+        # started_at set made mark_orphaned_jobs_failed (which reaps
+        # started_at-set, non-terminal rows) later mis-stamp it as an orphan
+        # (issue #617).
         return cursor.rowcount
 
     def clear_old_completed_jobs(self, days: int = 7) -> int:

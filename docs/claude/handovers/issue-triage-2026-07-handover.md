@@ -1,10 +1,18 @@
 # Open-Issue Triage & Execution Plan (2026-07-10) — Handover
 
-**Status**: Triage COMPLETE; execution IN PROGRESS — Phases 1–4 DONE
-(#600, #539, #524/#382/#362, #568), next up Phase 5 (#559, needs a
-quiet-repo window). This document is the source of truth for working through
-the open-issue backlog in priority order. Update phase statuses here as
-issues land.
+**Status**: Triage COMPLETE; execution IN PROGRESS — Phases 1–5 DONE
+(#600, #539, #524/#382/#362, #568, #559); **Phase 7 fully DONE**
+(#609/#610/#611 via PRs #624/#625/#626 on 2026-07-11; #615 landed via
+PR #628, merged 2026-07-11 — see the Phase 7 block); **Phase 8 DONE**
+(#620 job session ownership + #617 orphan-pool-shutdown, 2026-07-12 — see
+the Phase 8 block); **Phase 6a DONE** (#383 + #381 closed as pre-shipped in
+clm 1.15.0 via commit `90518611`, 2026-07-12 — a verify-then-close pass, see
+the Phase 6 block); **Phase 6b (#484) DEFERRED pending measurement**
+(2026-07-12 — the issue is trigger-gated on an observed/measured hit-heavy
+stall that has not been reproduced; see the Phase 6b resolution note). Next
+actionable is **Phase 6c (#167)**. This document is the source of truth for
+working through the open-issue backlog in priority order. Update phase
+statuses here as issues land.
 
 ## 1. Feature Overview
 
@@ -261,23 +269,189 @@ frame stride) to follow-up issues.
 v3-native-verify LANDMINES; `.clm/` is fully skipped as build input
 (PR #432) — a repo-level shared cache dir must get the same treatment.
 
-### Phase 5 [TODO] — #559: CI matrix split (needs a quiet-repo window)
+### Phase 5 [DONE] — #559: CI matrix split (needs a quiet-repo window)
 
-Split the sequential unit→integration→e2e steps into a
-`python-version × suite` matrix (6 jobs). Measured: per-job setup is ~40 s
-(warm caches), so the split costs ~3 machine-min and cuts PR wall clock
-~7.5 → ~5.5 min. **The critical gotcha: required status checks are matched
-by job NAME.** "Test on Python 3.12/3.13" are required in the "Require CI
-green" ruleset; the matrix renames them, so the **ruleset must be updated
-atomically with the workflow** (six entries) or every PR sticks on
-"Expected — waiting for status". Also: preserve the docs-only skip pattern
-(gate *steps* on `needs.changes.outputs.code`, jobs always report success)
-for all six jobs; coverage stitching is fine (Codecov merges uploads).
-Execute when no PRs are in flight.
+**Resolution (2026-07-11)**: shipped via PR #622 in a quiet-repo window
+(zero other PRs in flight). The test job's matrix is now
+`python-version × suite` (unit/integration/e2e → 6 jobs); each suite step
+gates on `matrix.suite` **and** `needs.changes.outputs.code`, preserving
+the docs-only skip pattern (required jobs always run and report).
+`--cov-append` stitching removed — each 3.12 suite job uploads its own
+report and Codecov merges per commit. The "Require CI green" ruleset
+(id 17358657) was updated via `gh api PUT` while the PR's CI ran — the new
+job names report from the PR branch's workflow, so pushing the PR first
+and swapping the ruleset before merge is the safe ordering. Measured on
+the PR run: unit 4m22s is the longest test leg, total wall clock bounded
+by Docker Integration Tests at 5m30s (down from ~7.5 min) — matching the
+issue's prediction. `release.yml` needed no change (it gates on the CI
+workflow *run* conclusion, not job names). Follow-up levers (unit-suite
+duration, Docker image registry caching) remain out of scope per the issue.
 
-### Phase 6 [TODO] — Design-tier work (when capacity allows)
+**Original plan (kept for reference)**: split the sequential
+unit→integration→e2e steps into a `python-version × suite` matrix (6 jobs).
+Measured: per-job setup is ~40 s (warm caches), so the split costs
+~3 machine-min and cuts PR wall clock ~7.5 → ~5.5 min. **The critical
+gotcha: required status checks are matched by job NAME.** "Test on Python
+3.12/3.13" are required in the "Require CI green" ruleset; the matrix
+renames them, so the **ruleset must be updated atomically with the
+workflow** (six entries) or every PR sticks on "Expected — waiting for
+status".
 
-**6a — #383 + #381: output-structure defaults cluster.** Make
+## 3a. Post-Triage Issues (folded in 2026-07-11)
+
+Six issues were filed after the 2026-07-10 triage, all from active
+dogfooding (PythonCourses ML-AZAV sync/build, CppCourses migration).
+Re-prioritized against the remaining backlog using the original triage's
+logic — agent-loop dead ends and destructive defaults outrank
+intrinsically bigger work. **Execution order: Phase 7 → Phase 8 →
+Phase 6.** (#614 is deferred like the rest of #568's fixes 2–4 that it
+tracks: schedule it just before the next big harvest round.)
+
+### Phase 7 [DONE] — Sync agent-loop regressions + normalize gate (#609, #610, #615, #611)
+
+**Resolution (2026-07-11)**: all four shipped. #609, #610, #611 via PRs
+#624, #625, #626; **#615 via PR #628** (merged 2026-07-11 from branch
+`claude/issue-615-tag-parity-design`, which another session had scoped as a
+root-cause analysis + design, then completed to a full fix). #615 fix
+(four layers): tag parity is now an orthogonal aspect row in the v3 differ
+— one attributable mover frames a mechanical `mirror_tags`; both-moved /
+baseline-carried / incomplete-baseline divergences frame a new
+`conflict_tags` (mirrors only the chosen side's tag set, suppresses the
+member's other rows for the pass); apply/ledger never blesses members with
+unresolved sibling rows (new honest `deferred` record status);
+`sync verify` gains a non-gating `tag-parity` warning with three-tier
+pairing; `sync-agents`/`commands` info topics + design doc
+`docs/claude/design/sync-tag-parity-conflicts.md` + changelog fragment.
+Decks damaged by the old banking behavior re-frame automatically — no
+ledger migration. Shipped with 38 new tests + a post-implementation
+adversarial multi-agent review (11 findings fixed).
+
+- **#609 (PR #624)**: root cause — the `id:title` member is a *single-line
+  j2 macro cell*: its `# {{ header_de(…) }}` line is simultaneously the
+  cell boundary AND the whole content, so `_validate_body`'s delimiter
+  guard rejected every valid answer, and `_replace_body` (which preserves
+  `lines[0]`) explains the observed raw-line append. Fix: target-aware
+  `_replacement_lines` in `doc_apply.py` — on a macro cell the `body`
+  replaces the j2 line in place, accepting the full line or bare title
+  text (spliced into the macro's quoted argument; bare form disabled on
+  mint-a-new-cell paths which can't derive the right macro name). Also
+  hardened the `conflict_shared`/`unify_choose_body` body path to compute
+  both sides before mutating. §13 row added.
+- **#610 (PR #625)**: implemented the issue's option 3 (minimum guard).
+  Differ post-pass `_reframe_group_split_removals`: a pos-keyed
+  `mirror_remove` whose gone-side base fp matches a one-sided cold cell of
+  another group on that side is reframed as answerless
+  `ambiguous_alignment` (+ a `suspected_group_split` observation) — the
+  detail tells the agent to mirror the inserted slide (answer its
+  `translate_new`) and re-report, which converges losslessly (tested).
+  `ambiguous_alignment` joined `_POOL_FREEZING_ACTIONS` so a landing
+  sibling row can't erase the two-sided base evidence. Options 1/2
+  (fingerprint re-binding / apply-order re-evaluation) remain open as
+  possible follow-ups. §13 row added.
+- **#611 (PR #626)**: normalize's `interleaving` operation (the source of
+  the within-file DE/EN `count_mismatch`/`similarity_failure` reviews AND
+  the adjacency reorder — all meaningless in a single-language file) is
+  skipped on split halves via `split_lang_suffix`, the validator's own
+  signal; all other operations still run. `--dry-run` exits 0 on clean
+  split decks.
+
+Original phase plan (kept for reference):
+
+- **#609 (first — hard dead end)**: `sync apply` on an `id:title`
+  `translate_edit` rejects EVERY `body` answer with a spurious `# %%`
+  delimiter error (the body contains none); `keep_twin` is the only
+  accepted answer, which defeats the purpose. Dead end of the same
+  severity class as #600. Labels: bug, area:sync, agent-impact,
+  has-workaround.
+- **#610 (destructive)**: inserting a new id-keyed slide *before* a run of
+  un-id'd positional shared cells moves them into the new group on one
+  half only → twin framed `mirror_remove` (mechanical apply DELETES the
+  twin's untouched cells) + one-sided `verify_cold`. Related to but
+  distinct from #600/`stamp_vs_new` (there the cells were replaced; here
+  only the group boundary moved). A plain `apply` is data-destroying —
+  rank above everything non-dead-end.
+- **#615 (silent divergence)**: `confirm` on a `verify_translation` item
+  banks a one-sided tag edit (DE `voiceover` vs EN `notes`); report goes
+  silent and `sync verify` PASSes while `clm validate` flags the pair —
+  sync and validate disagree about what "in sync" means. Correctness gap,
+  not a dead end.
+- **#611 (quick win, can be its own small PR)**: `normalize --dry-run` on
+  language-split halves emits a within-file DE/EN `count_mismatch` review
+  per half (100% noise, exit 2), making it unusable as a scripted drift
+  gate. Fix is to skip like `clm validate` already does (same
+  `.de.py`/`.en.py` signal). Labels: bug, area:slides, agent-impact.
+
+**Gotchas**: all of Phase 1's sync-engine gotchas apply (memory topics
+`project_sync_one_sided_cold`, `project_sync_v3_design_audit`; §13
+amendments-log row for ANY engine change). #609/#610 have documented
+workarounds in their issue bodies — as with #600, the workaround is the
+oracle for what the fixed flow should converge to.
+
+### Phase 8 [DONE] — Build reliability: job/session ownership (#620, #617)
+
+**#617 DONE (2026-07-12, "Full" scope)**: root cause (via a dedicated
+investigation) — nothing marked a *busy* worker dead, so a worker that died or
+hung mid-job left its job stuck in `processing`; the completion loop's
+dead-worker requeue (`_cleanup_dead_worker_jobs`, gated on `workers.status =
+'dead'`) never fired, and the job lingered until the teardown
+`mark_orphaned_jobs_failed` sweep stamped it. The dormant `WorkerPoolManager`
+health monitor was never started in the build path. Fixed in four layers:
+(1) **liveness recovery** — `start_managed_workers` now starts the health
+monitor (`start_monitoring`), scoped to the build's own `session_id` (mirrors
+#597/#620; never reaps a concurrent build's workers, and only marks dead on a
+real `is_worker_running` process check — the missing-executor branch now skips
+instead of killing); a dead worker's in-flight job is then requeued for retry.
+(2) **`reset_hung_jobs`** now clears `started_at`/`worker_id` so a
+legitimately-requeued job is never mis-stamped an orphan by the teardown scan.
+(3) **submit race** — job submission registers the job in `active_jobs` under
+`asyncio.shield`, so a cancelled submission can't leave a worker-claimable but
+untracked row. (4) **reporting** — `stop_managed_workers` returns its orphans;
+`main_build` folds any into the summary (`_record_teardown_orphans`) and marks
+it timed-out, forcing a non-zero exit instead of silently banking them. Tests:
+monitor session-scoping (`test_pool_manager`), `reset_hung` started_at
+(`test_job_queue`), stop-returns-orphans (`test_lifecycle_manager`),
+`_record_teardown_orphans` (`test_build_abort_summary`). Shipped as its own PR.
+
+**#620 DONE (2026-07-12)**: implemented exactly the planned fix direction —
+session id on job rows + claim filter — as its own PR. Schema v11 adds
+`jobs.session_id`; `add_job` stamps it and the backend forwards its
+`worker_session_id` (already wired from `lifecycle_manager.session_id`) on
+every submit; `get_next_job` resolves the claiming worker's own
+`workers.session_id` and filters `(session_id IS NULL OR session_id = ?)`.
+The one filter site covers **both** claim paths (Direct `worker_base`,
+Docker `worker_routes`) since both pass `worker_id` and the query runs
+host-side. A worker with no resolvable session stays unrestricted (legacy /
+tests), so a build can never deadlock on its own jobs; a killed/concurrent
+build's residue (different session) is simply never claimed and sits
+harmless. The issue's **optional** extras were deliberately deferred: fix #2
+(requeue an unmappable job instead of failing it — largely moot once foreign
+jobs aren't claimed, and a naive requeue risks silent retry loops) and fix #3
+(dead-session sweep — unsafe without real dead-session detection). Shipped
+with schema-migration, session-filter, and backend-wiring tests (the schema
+version-canary in `test_worker_heartbeats.py` bumped to 11). **#617 (own-pool
+teardown orphaning) is next — investigate as its own PR.**
+
+Investigate together — likely the same #564/#594/#599 family, and #617's
+diagnostic even names the suspected race.
+
+- **#620 [DONE]**: `jobs` rows carried no session ownership, so workers claimed a
+  killed/concurrent build's pending jobs and failed them with
+  `is not in the subpath of` path errors attributed to innocent slide
+  files (a killed Docker build deterministically poisoned the next one).
+  This was the residual half of #564's gap: #564 filtered claiming by
+  `execution_mode`, #594/#599 added ownership for *workers*, jobs had
+  none. Fixed by stamping jobs with the owning build session and filtering
+  claims by it (see the resolution note above).
+- **#617 [DONE]**: intermittent `worker died mid-job (orphaned at pool
+  shutdown)` failing a batch of jobs mid-stage in a single uninterrupted
+  Direct-mode build (8 of 38 jobs in the observed run; byte-identical
+  re-run clean). Root cause was the absence of any busy-worker liveness
+  recovery; fixed by wiring the session-scoped health monitor plus three
+  hardening layers (see the resolution note above).
+
+### Phase 6 [IN PROGRESS] — Design-tier work (when capacity allows)
+
+**6a [DONE] — #383 + #381: output-structure defaults cluster.** Make
 shared/trainer/speaker (access-control-by-path) the default when a spec has
 no `<output-targets>`; default participant kinds to code-along+completed
 (subsumes closed #380); revisit remote-template default
@@ -290,6 +464,25 @@ vs `OutputTarget.default_target()` ALL_KINDS). **Breaking default change**:
 write a design doc in `docs/claude/design/` first; needs migration info
 topic + downstream course-repo coordination.
 
+**Resolution (2026-07-12)**: verify-then-close pass — **NO code change**.
+Both #383 and #381 turned out to be already fully shipped by commit
+`90518611` ("feat(output): default to shared/trainer/speaker structure (#380,
+#381, #382, #383)", released in clm **1.15.0**) and merely never closed — the
+same implemented-but-never-closed pattern as #382 in Phase 3, exactly as this
+handover predicted. Verified in current `origin/master`:
+`DEFAULT_OUTPUT_TARGET_SPECS` (`course_spec.py:1105`; `shared`=
+{code-along, completed} / `trainer`={code-along, completed, trainer} /
+`speaker`={recording}) is applied via the new `CourseSpec.effective_output_targets`
+property (`:1993`), consumed uniformly by `clm build`, `clm git`, and
+`clm zip`; `derive_remote_url` defaults to `{repository_base}/{remote_path}/{repo}`
+when a remote-path is set (`:802-803`) and requires `<repository-base>` only
+when the active template actually references `{repository_base}` (`:810`);
+`find_output_repos` (`git.py:387-414`) always **lists** the speaker tier with
+its remote gated by `<include-speaker>`, dissolving the #381 asymmetry. #380 is
+also fully subsumed (already CLOSED — no `partial` by default). Both issues
+closed with evidence comments citing `90518611`. No design doc / migration /
+changelog was needed (the change and its migration note shipped with 1.15.0).
+
 **6b — #484: offload cache-hit replay off the event loop.** Follow-up to
 PR #482's freeze fix. The full "split, don't lock" design is written in the
 issue: thread-safe cache reader (per-thread `DatabaseManager`), heavy pure
@@ -299,6 +492,33 @@ about**: a coarse `OutputWriteRegistry` lock would serialize file-hashing
 across submit thread and poll loop, re-introducing the stall. Not currently
 biting (semaphore caps stalls ~1 s) — do as scheduled tech debt or when a
 hit-heavy-rebuild stall is observed.
+
+**DEFERRED pending measurement (2026-07-12)**: re-evaluated before implementing
+and parked, because the issue gates itself on evidence we do not have. Issue
+#484's own "Trigger / acceptance" says to act *only if a real hit-heavy rebuild
+shows the poll-loop gap creeping back up* — measured with `CLM_PROFILE_BUILD=1`,
+watching the `worst stall` / `max gap` lines and the `… ON-LOOP` submission cost
+— and that **if `worst stall` stays ~1 s on hit-heavy runs, this is not worth
+doing.** Neither precondition is met: no such stall has been observed, and no
+measurement has been taken; the `SUBMISSION_CONCURRENCY=8` semaphore already
+caps the burst at ~1 s. Implementing now would be speculative optimization on
+the build's hottest path — it *adds* complexity (a third thread-affine SQLite
+reader connection with a close-on-the-right-thread teardown, a split
+off-loop/on-loop replay, and a behavior-*equivalence* argument that DEDUP-skip ≡
+`is_destination_identical`-skip) rather than removing it, for latency headroom
+that is not currently needed. Note the synthetic harness
+`scripts/profile_build_stall.py` runs `--no-html` with small siblings, so it
+exercises the *submission* stall, **not** the multi-MB cache-hit-replay path
+that is #484's trigger — the acceptance measurement must come from a real
+warm-cache rebuild of a large-notebook course (e.g. a second build of
+PythonCourses ML-AZAV) with `CLM_PROFILE_BUILD=1`.
+
+**To un-defer**: run that warm-cache hit-heavy rebuild with `CLM_PROFILE_BUILD=1`
+and read the `[build-profile]` summary. If `worst stall` stays ~1 s and the
+`… ON-LOOP` replay cost is small → close #484 with that evidence (its own "not
+worth doing" clause). If it is creeping up → implement the "split, don't lock"
+design (fully written in the issue; key files listed in §6 under `#484`), using
+the captured numbers as the before/after baseline.
 
 **6c — #167: LLM model-selection spike.** Timebox ~half a day. Recommended
 outcome: option 2 (purpose→model registry over the existing
@@ -319,21 +539,48 @@ OpenAI-compatible client, zero new deps) or close as status-quo.
 - **Phase 4 DONE** (2026-07-11): #568 fix 1 — shared deck-independent
   voiceover cache with legacy promotion (see the Phase 4 resolution block).
   Fixes 2–4 of the issue stay open as deferred follow-ups.
+- **Phase 5 DONE** (2026-07-11): #559 via PR #622; "Require CI green"
+  ruleset swapped to the six matrix job names in the same window (see the
+  Phase 5 resolution block). Measured result: PR wall clock now bounded by
+  the 5.5-min Docker job.
 - **#605** (bilingual dir-group `<name>` silently dropped — filed out of
   Phase 2) was fixed in parallel by another session via PR #606.
-- No blockers, no pending decisions. Remaining: Phase 5 (#559, needs a
-  quiet-repo window), Phase 6 design tier (#383+#381 — start with a
-  verify-then-close pass, see the Phase 3 resolution note — plus #484,
-  #167).
+- **Post-triage issues folded in** (2026-07-11): #609, #610, #611, #615
+  (sync/normalize — Phase 7), #617, #620 (build reliability — Phase 8),
+  #614 (deferred harvest follow-up, tracks #568 fixes 2–4). See §3a.
+- **Phase 7 fully DONE** (2026-07-11): #609 via PR #624, #610 via
+  PR #625, #611 via PR #626, **#615 via PR #628** (resolution details in
+  the Phase 7 block). All four issues CLOSED.
+- **Phase 8 DONE** (2026-07-12): #620 job session ownership (schema v11
+  `jobs.session_id`, stamp on submit, session-filtered claim) + #617
+  orphan-pool-shutdown (session-scoped health monitor for busy-worker
+  liveness recovery, `reset_hung_jobs` started_at clear, shielded submit
+  registration, teardown orphans folded into the summary/exit). Resolution
+  details in the Phase 8 block.
+- **Phase 6a DONE** (2026-07-12): #383 + #381 closed as already-shipped —
+  both were fully implemented by commit `90518611` (clm 1.15.0) and never
+  closed. Verify-then-close pass, no code change; evidence comments posted.
+  See the Phase 6 resolution block.
+- **Phase 6b (#484) DEFERRED pending measurement** (2026-07-12): re-evaluated
+  before implementing and parked per the issue's own trigger gate — no
+  observed/measured hit-heavy stall, and the semaphore caps it at ~1 s. See
+  the Phase 6b resolution note for the gate and how to measure it.
+- No blockers, no pending decisions. Remaining, in priority order:
+  Phase 6c (#167) of the design tier; #614 before the next harvest round.
+  Phase 6b (#484) is gated on a measurement (above), not scheduled.
 
 ## 5. Next Steps
 
-**Phases 1–4 are DONE — next is Phase 5 (#559 CI matrix split), which
-needs a quiet-repo window (no PRs in flight) because the "Require CI green"
-ruleset must be updated atomically with the workflow's job renames.** After
-that, Phase 6a (#383+#381) should START with a verify-then-close pass
-against commit 90518611 (see the Phase 3 resolution note). The plan below
-documents how Phase 1 was executed (kept for reference):
+**Phases 1–5, 7, 8, and 6a are DONE; Phase 6b (#484) is DEFERRED pending
+measurement (2026-07-12) — the next actionable is Phase 6c (#167)**, the
+timeboxed LLM model-selection spike. Phase 6b stays parked until a real
+hit-heavy rebuild is measured (see the Phase 6b resolution note for the exact
+trigger gate and how to measure it); if the measurement shows the stall
+creeping back up, its "split, don't lock" design is fully written in the issue.
+Schedule #614 just before the next big harvest round. (Phase 6a was a
+verify-then-close pass: #383 + #381 were already shipped in clm 1.15.0 via
+commit 90518611 and are now closed — see the Phase 6 resolution block.) The
+plan below documents how Phase 1 was executed (kept for reference):
 
 1. Read memory topics `project_sync_one_sided_cold` and
    `project_sync_v3_design_audit`, plus the sync v3 design note (find via
@@ -380,14 +627,45 @@ their listed sites — see each phase's resolution block for what changed:
   `<deck>/.clm/voiceover-cache/` (subdirs `transcripts/`, `transitions/`,
   `timelines/`, `alignments/` — still probed read-only)
 - `#559` → `.github/workflows/ci.yml` + the GitHub "Require CI green"
-  ruleset (repo settings, must change atomically)
+  ruleset (id 17358657; updated via `gh api PUT` alongside PR #622)
+- `#609/#610/#615` (Phase 7) → sync v3 engine under `src/clm/` (the #609
+  delimiter check is in the apply/decision-validation path of
+  `src/clm/cli/commands/slides/sync.py` or the engine it calls; #610 is
+  group-anchoring/keying territory; #615 is the `confirm` banking path) —
+  not re-located during this fold-in, start from the issues' repro output
+- `#611` (Phase 7) → `src/clm/slides/normalizer.py` review pass; copy the
+  split-file exemption from `src/clm/slides/validator.py`
+- `#620` (Phase 8, DONE) → `src/clm/infrastructure/database/schema.py`
+  (`jobs.session_id` column + v10→v11 migration, `DATABASE_VERSION`),
+  `src/clm/infrastructure/database/job_queue.py` (`add_job` stamp +
+  `get_next_job` session-filter, `Job.session_id`),
+  `src/clm/infrastructure/backends/sqlite_backend.py` (`_submit_job_blocking`
+  forwards `worker_session_id`). Tests: `tests/infrastructure/database/
+  test_job_queue.py` + `test_schema.py`, `tests/infrastructure/backends/
+  test_sqlite_backend_resilience.py`; version-canary bumped in
+  `test_worker_heartbeats.py`
+- `#617` (Phase 8, DONE) → `src/clm/infrastructure/workers/pool_manager.py`
+  (`_monitor_health` session-scoped + skip-on-missing-executor),
+  `src/clm/infrastructure/workers/lifecycle_manager.py`
+  (`start_managed_workers` starts the monitor; `stop_managed_workers` returns
+  its orphans), `src/clm/infrastructure/database/job_queue.py`
+  (`reset_hung_jobs` clears `started_at`),
+  `src/clm/infrastructure/backends/sqlite_backend.py` (shielded submit
+  registration), `src/clm/cli/commands/build.py` (`_record_teardown_orphans`
+  + the `main_build` finally wiring). The existing `_cleanup_dead_worker_jobs`
+  requeue (already in the completion loop, gated on `workers.status='dead'`)
+  is what the monitor now feeds. Tests in `test_pool_manager.py`,
+  `test_lifecycle_manager.py`, `test_job_queue.py`, `test_build_abort_summary.py`
 - `#484` → `src/clm/infrastructure/backends/sqlite_backend.py`
   (`_execute_operation_impl`, poll loop `record_write` at ~:564),
   `src/clm/core/output_write_registry.py` (:292,294 hash-in-critical-section)
-- `#383/#381` → `src/clm/core/output_target.py` (`default_target`,
-  ALL_KINDS), `src/clm/infrastructure/utils/path_utils.py:413`
-  (PRIVATE_KINDS), `src/clm/cli/commands/git.py:381-383`
-  (`find_output_repos` speaker skip), `src/clm/core/course_spec.py`
+- `#383/#381` (Phase 6a, DONE — pre-shipped in `90518611`/v1.15.0) →
+  `src/clm/core/course_spec.py` (`DEFAULT_OUTPUT_TARGET_SPECS:1105`,
+  `effective_output_targets:1993`, `derive_remote_url:732` with the
+  `{repository_base}`-only-when-referenced guard at `:810`),
+  `src/clm/cli/commands/git.py` (`find_output_repos:315`, default-tier
+  enumeration at `:387-414`), `src/clm/core/output_target.py`
+  (`default_target` is now a convenience, no longer the no-targets path)
 
 **Conventions to continue**: every behavior/CLI/spec change updates the
 matching `src/clm/cli/info_topics/*.md`; changelog via `changelog.d/`

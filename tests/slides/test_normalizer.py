@@ -608,6 +608,73 @@ class TestInterleaving:
         assert result.review_items[0].issue == "count_mismatch"
         assert result.review_items[0].details["category"] == "markdown"
 
+    def test_split_half_emits_no_within_file_review(self, tmp_path):
+        # Issue #611: a language-split half carries one language only, so the
+        # within-file DE/EN interleaving reviews are structural noise (every
+        # half is a guaranteed count_mismatch). Skipped on the same signal
+        # the validator uses; cross-half parity is owned by sync verify.
+        text = (
+            '# %% [markdown] lang="de" tags=["slide"]\n'
+            "# # Folie 1\n"
+            "\n"
+            '# %% [markdown] lang="de" tags=["subslide"]\n'
+            "# ## Details\n"
+        )
+        for name in ("slides_test.de.py", "slides_test.en.py"):
+            path = _write_slide(
+                tmp_path / name, text.replace('"de"', '"en"') if name.endswith(".en.py") else text
+            )
+            result = normalize_file(path, operations=["interleaving"], dry_run=True)
+            assert result.review_items == [], (name, result.review_items)
+            assert result.status == "clean"
+
+    def test_explicit_interleaving_on_split_half_emits_skip_notice(self, tmp_path):
+        # Regression test for #631: an EXPLICIT `--operations interleaving`
+        # request on a language-split half must not be a silent no-op — the
+        # skip is surfaced as a notice (status/exit code stay clean, #611).
+        text = '# %% [markdown] lang="de" tags=["slide"]\n# # Folie 1\n'
+        path = _write_slide(tmp_path / "slides_test.de.py", text)
+        result = normalize_file(path, operations=["interleaving"], dry_run=True)
+
+        assert result.review_items == []
+        assert result.status == "clean"
+        assert len(result.notices) == 1, result.notices
+        notice = result.notices[0]
+        assert notice.operation == "interleaving"
+        assert notice.file == str(path)
+        assert "split half" in notice.message
+
+    def test_default_run_on_split_half_emits_no_notice(self, tmp_path):
+        # #631: only an explicit request gets the notice — a default run (or
+        # explicit `all`) over split decks stays quiet, as intended by #611.
+        text = '# %% [markdown] lang="de" tags=["slide"]\n# # Folie 1\n'
+        path = _write_slide(tmp_path / "slides_test.de.py", text)
+        for ops in (None, ["all"]):
+            result = normalize_file(path, operations=ops, dry_run=True)
+            assert result.notices == [], (ops, result.notices)
+
+    def test_explicit_interleaving_on_bilingual_file_emits_no_notice(self, tmp_path):
+        # #631: the notice fires only when the pass is actually skipped.
+        text = (
+            '# %% [markdown] lang="de" tags=["slide"]\n'
+            "# # Folie\n"
+            "\n"
+            '# %% [markdown] lang="en" tags=["slide"]\n'
+            "# # Slide\n"
+        )
+        path = _write_slide(tmp_path / "slides_test.py", text)
+        result = normalize_file(path, operations=["interleaving"], dry_run=True)
+        assert result.notices == []
+
+    def test_split_half_still_runs_other_operations(self, tmp_path):
+        # Only the DE/EN interleaving pass is exempt on split halves — the
+        # mechanical single-file passes must still run.
+        text = '# %% [markdown] lang="de" tags=["notes"]\n# Hinweis\n'
+        path = _write_slide(tmp_path / "slides_test.de.py", text)
+        result = normalize_file(path)
+        assert result.review_items == []
+        assert any(c.operation == "cell_spacing" for c in result.changes), result.changes
+
     def test_similarity_failure_produces_review_item(self, tmp_path):
         """Tag mismatch between paired cells produces a review item."""
         text = (
