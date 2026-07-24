@@ -14,6 +14,7 @@ adjudicates. Raw structured agent output was converted to markdown mechanically.
 
 | File | Slice | Contents |
 |---|---|---|
+| [00-kickoff-brief.md](00-kickoff-brief.md) | **Input, not output** | The self-contained brief the reviewers were given: the three-bucket verdict frame (sound / sound-core / flawed), the anti-bias rules, and the evidentiary bar. Reusable as a template for reviewing another subsystem |
 | [01-engine-sync-plan-core.md](01-engine-sync-plan-core.md) | Engine core: `sync_plan.py` | Full read of the 4,829-line classifier/plan module — data model, identity schemes, pipeline, plan-patching passes |
 | [02-engine-sync-apply.md](02-engine-sync-apply.md) | Engine core: `sync_apply.py` + plan walker | Full read of the 4,399-line apply module — decision overlays, ordering invariants, idempotency, partial-success paths |
 | [03-identity-model.md](03-identity-model.md) | Identity & alignment model | pairing.py, anchor_primitives.py, sync_semantic.py, sync_companion.py, sync_code.py, reconcile_vo_ids.py — the coexisting identity schemes |
