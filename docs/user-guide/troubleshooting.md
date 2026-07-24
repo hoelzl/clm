@@ -534,6 +534,41 @@ Error: database disk image is malformed
 2. **Prevent corruption**:
    - Don't kill processes forcefully (use Ctrl+C)
    - Let workers shut down gracefully
+   - Don't put a database on a network share used by more than one machine at
+     a time — see below
+
+### Database on a Network Share Is Still in WAL Mode
+
+**Symptoms**:
+```
+Error: \\server\share\clm_jobs.db is on a network share and is still in WAL
+mode. WAL is unsafe over a network filesystem: ...
+```
+
+**Cause**: WAL journaling keeps its index in a memory-mapped `-shm` file, which
+is not coherent between machines. CLM opens network-hosted databases with
+DELETE journaling instead (since 1.22.1), but it cannot switch a database that
+another connection currently holds open — and that other connection is usually
+the problem itself: a second machine using the same file.
+
+**Solutions**:
+
+1. **Close the other users**: stop every other `clm` process using that
+   database — including on other machines — and retry. `clm status` will tell
+   you what a given machine thinks is running.
+
+2. **Use a local database**: point `CLM_JOBS_DB_PATH` at local storage. A RAM
+   disk on a local drive letter counts as local and keeps the faster WAL mode.
+
+3. **If nothing else holds it**, the database is stale from an earlier crash.
+   The jobs database is ephemeral — only needs to survive one `clm` run — so
+   deleting it is safe:
+   ```bash
+   rm \\server\share\clm_jobs.db
+   ```
+
+See [Databases on network shares](configuration.md#databases-on-network-shares)
+for the full explanation.
 
 ## Docker Issues
 
