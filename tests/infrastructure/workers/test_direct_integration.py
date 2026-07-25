@@ -28,6 +28,49 @@ print("Hello, World!")
 """
 
 
+# A heartbeat far enough in the past that no staleness threshold can call it
+# fresh, and unambiguous regardless of the UTC-vs-local skew in the health
+# checks (finding C8).
+ANCIENT_TIMESTAMP = "1970-01-01 00:00:00"
+
+# Image tags CLM's DrawIO worker may be published under: the CI-built test tag
+# first, then the published image. Mirrors ``tests/e2e/test_e2e_lifecycle.py``.
+DRAWIO_IMAGE_CANDIDATES = [
+    "clm-drawio-converter:test",
+    "docker.io/mhoelzl/clm-drawio-converter:latest",
+]
+
+
+def _docker_daemon_available() -> bool:
+    """Return True when a Docker daemon answers a ping."""
+    try:
+        import docker
+
+        docker.from_env().ping()
+        return True
+    except Exception:
+        return False
+
+
+def _find_docker_image(candidates: list[str]) -> str | None:
+    """Return the first locally-present image tag from *candidates*."""
+    try:
+        import docker
+
+        client = docker.from_env()
+        client.ping()
+    except Exception:
+        return None
+
+    for tag in candidates:
+        try:
+            client.images.get(tag)
+            return tag
+        except Exception:
+            continue
+    return None
+
+
 def _submit_notebook_job(
     job_queue: JobQueue,
     input_file: Path,
@@ -473,29 +516,29 @@ class TestMixedModeIntegration:
     def test_mixed_worker_modes(self, db_path, workspace_path):
         """Test running both Docker and direct workers simultaneously.
 
-        Note: This test will skip Docker workers if Docker is not available.
+        The image tag used to be hard-coded to ``drawio-converter:latest``,
+        which has not been a tag CLM builds since the images gained their
+        ``clm-`` prefix. The docker client then tried to *pull* it and the test
+        died on ``ImageNotFound``. Resolve the tag the same way the e2e
+        lifecycle test does — and skip outright when no image is present rather
+        than degrading to a direct-only run, since mixed mode is the subject.
         """
-        configs = [WorkerConfig(worker_type="notebook", count=1, execution_mode="direct")]
-
-        # Try to add Docker worker if Docker is available
-        try:
-            import docker
-
-            docker_client = docker.from_env()
-            docker_client.ping()
-
-            # Docker is available, add docker worker
-            configs.append(
-                WorkerConfig(
-                    worker_type="drawio",
-                    count=1,
-                    execution_mode="docker",
-                    image="drawio-converter:latest",
-                )
+        drawio_image = _find_docker_image(DRAWIO_IMAGE_CANDIDATES)
+        if drawio_image is None:
+            pytest.skip(
+                f"No DrawIO worker image available (looked for "
+                f"{', '.join(DRAWIO_IMAGE_CANDIDATES)}). Run: clm docker build"
             )
-            has_docker = True
-        except Exception:
-            has_docker = False
+
+        configs = [
+            WorkerConfig(worker_type="notebook", count=1, execution_mode="direct"),
+            WorkerConfig(
+                worker_type="drawio",
+                count=1,
+                execution_mode="docker",
+                image=drawio_image,
+            ),
+        ]
 
         manager = WorkerPoolManager(
             db_path=db_path, workspace_path=workspace_path, worker_configs=configs
@@ -503,13 +546,8 @@ class TestMixedModeIntegration:
 
         try:
             manager.start_pools()
-            # Wait for at least the direct worker to activate; docker workers
-            # take longer and we tolerate either outcome below.
-            _wait_for_registered_workers(
-                manager,
-                expected_count=2 if has_docker else 1,
-                timeout=30.0,
-            )
+            # Docker workers take longer to activate than direct ones.
+            _wait_for_registered_workers(manager, expected_count=2, timeout=60.0)
 
             # Check database
             conn = manager.job_queue._get_conn()
@@ -518,47 +556,50 @@ class TestMixedModeIntegration:
             )
             workers = cursor.fetchall()
 
-            # Should have at least the direct worker
-            assert len(workers) >= 1
-
-            # Check direct worker
             direct_workers = [w for w in workers if w[1].startswith("direct-")]
             assert len(direct_workers) == 1
             assert direct_workers[0][0] == "notebook"
 
-            if has_docker:
-                # Check docker worker
-                docker_workers = [w for w in workers if not w[1].startswith("direct-")]
-                assert len(docker_workers) == 1
-                assert docker_workers[0][0] == "drawio"
+            docker_workers = [w for w in workers if not w[1].startswith("direct-")]
+            assert len(docker_workers) == 1
+            assert docker_workers[0][0] == "drawio"
 
         finally:
             manager.stop_pools()
 
     def test_stale_worker_cleanup_mixed_mode(self, db_path, workspace_path):
         """Test that stale worker cleanup handles both modes correctly."""
-        # Check if Docker is available
-        try:
-            import docker
-
-            docker_client = docker.from_env()
-            docker_client.ping()
-        except Exception:
+        if not _docker_daemon_available():
             pytest.skip("Docker daemon not available")
 
-        # Manually insert stale workers of both types
+        # Manually insert stale workers of both types.
+        #
+        # ``last_heartbeat`` must be set explicitly: the column defaults to
+        # CURRENT_TIMESTAMP, so rows inserted without it are *fresh*, not
+        # stale. ``WorkerDiscovery`` has no executor for a hand-inserted direct
+        # worker and falls back to heartbeat age, so the "stale" direct worker
+        # was judged healthy and kept — the assertion below then failed on a
+        # test that had never actually created the state it names.
         conn = JobQueue(db_path)._get_conn()
 
         # Add stale direct worker
         conn.execute(
-            "INSERT INTO workers (worker_type, container_id, status) VALUES (?, ?, ?)",
-            ("notebook", "direct-notebook-0-stale123", "idle"),
+            "INSERT INTO workers (worker_type, container_id, status, last_heartbeat, started_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                "notebook",
+                "direct-notebook-0-stale123",
+                "idle",
+                ANCIENT_TIMESTAMP,
+                ANCIENT_TIMESTAMP,
+            ),
         )
 
         # Add stale docker worker (non-existent container)
         conn.execute(
-            "INSERT INTO workers (worker_type, container_id, status) VALUES (?, ?, ?)",
-            ("drawio", "nonexistent-container-id", "idle"),
+            "INSERT INTO workers (worker_type, container_id, status, last_heartbeat, started_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("drawio", "nonexistent-container-id", "idle", ANCIENT_TIMESTAMP, ANCIENT_TIMESTAMP),
         )
 
         conn.commit()
