@@ -111,13 +111,14 @@ def check_plantuml_available() -> bool:
         except (subprocess.CalledProcessError, FileNotFoundError):
             return False
 
-    # Check default paths
+    # Check default paths. The second entry pointed at
+    # ``services/plantuml-converter/`` — the pre-PR-#239 vendored location,
+    # which no longer exists (finding T10). In practice the root
+    # ``tests/conftest.py`` sets ``PLANTUML_JAR`` before this runs, so this is
+    # a belt-and-braces fallback; it should still name a real path.
     default_paths = [
-        Path("/app/plantuml.jar"),
-        Path(__file__).parent.parent.parent
-        / "services"
-        / "plantuml-converter"
-        / "plantuml-1.2024.6.jar",
+        Path("/app/plantuml.jar"),  # container layout
+        Path(__file__).parents[2] / "docker" / "plantuml" / "plantuml-1.2024.6.jar",
     ]
     for path in default_paths:
         if path.exists():
@@ -216,6 +217,30 @@ def validate_course_output_structure(output_dir: Path, dir_name: str):
 
     logger.info(f"Validated output structure for {dir_name}")
     return shared_dir
+
+
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+
+
+def _assert_rendered_pngs(images: list[Path], search_root: Path, renderer: str) -> None:
+    """Assert a diagram renderer actually produced usable PNGs.
+
+    The PlantUML and DrawIO e2e tests used to ``logger.info`` the image count
+    and assert nothing (finding T5), so they passed even when the converter
+    produced no output at all — the only thing they really verified was that
+    the build did not hang. Checking the PNG signature as well as the count
+    means a zero-byte or truncated render fails here rather than surfacing as
+    a broken image in a deck.
+    """
+    assert images, (
+        f"{renderer} produced no PNG images under {search_root}. "
+        f"Files present: {sorted(p.name for p in search_root.rglob('*') if p.is_file())}"
+    )
+    for image in images:
+        data = image.read_bytes()
+        assert data.startswith(PNG_MAGIC), (
+            f"{renderer} output {image} is not a PNG ({len(data)} bytes, starts with {data[:8]!r})"
+        )
 
 
 def count_notebooks_in_dir(directory: Path) -> int:
@@ -1134,12 +1159,17 @@ async def test_course_4_single_plantuml_e2e(e2e_course_4, sqlite_backend_with_pl
     de_dir = validate_course_output_structure(output_dir, "Einfaches PlantUML-de")
     en_dir = validate_course_output_structure(output_dir, "Simple PlantUML-en")
 
-    # Check that plantuml images were generated
+    # Check that plantuml images were generated. These used to be logged and
+    # never asserted, so the test passed even when the converter produced
+    # nothing at all — the only thing it really checked was that the build did
+    # not hang (finding T5).
     de_images = list(de_dir.rglob("*.png"))
     logger.info(f"Found {len(de_images)} German images (from plantuml)")
+    _assert_rendered_pngs(de_images, de_dir, "plantuml")
 
     en_images = list(en_dir.rglob("*.png"))
     logger.info(f"Found {len(en_images)} English images (from plantuml)")
+    _assert_rendered_pngs(en_images, en_dir, "plantuml")
 
     logger.info("Course 4 (single plantuml) E2E test completed successfully")
 
@@ -1177,12 +1207,15 @@ async def test_course_5_single_drawio_e2e(e2e_course_5, sqlite_backend_with_draw
     de_dir = validate_course_output_structure(output_dir, "Einfaches Drawio-de")
     en_dir = validate_course_output_structure(output_dir, "Simple Drawio-en")
 
-    # Check that draw.io images were generated
+    # Check that draw.io images were generated. Same log-but-never-assert gap
+    # as the PlantUML test above (finding T5).
     de_images = list(de_dir.rglob("*.png"))
     logger.info(f"Found {len(de_images)} German images (from draw.io)")
+    _assert_rendered_pngs(de_images, de_dir, "draw.io")
 
     en_images = list(en_dir.rglob("*.png"))
     logger.info(f"Found {len(en_images)} English images (from draw.io)")
+    _assert_rendered_pngs(en_images, en_dir, "draw.io")
 
     logger.info("Course 5 (single draw.io) E2E test completed successfully")
 

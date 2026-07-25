@@ -33,6 +33,13 @@ from tests.fixtures.mock_workers import MockWorker, MockWorkerConfig, MockWorker
 # regression — which fails deterministically on every retry — red. ``-rR`` in
 # addopts makes any retry visible; a test that reruns often wants a root-cause
 # fix, not more retries.
+#
+# ``AssertionError`` is deliberately NOT in this list (finding T6). An
+# intermittent race in the claim/registration loop manifests as an assertion
+# that holds on the retry, so retrying on it would hide exactly the class of
+# production bug these tests exist to catch. Environment flakes — a locked
+# SQLite file, a denied unlink, a starved poll — raise their own exception
+# types, which stay listed.
 pytestmark = [
     pytest.mark.serial("workerpool"),
     pytest.mark.flaky(
@@ -41,7 +48,6 @@ pytestmark = [
         only_rerun=[
             "OSError",
             "PermissionError",
-            "AssertionError",
             "OperationalError",
             "TimeoutError",
         ],

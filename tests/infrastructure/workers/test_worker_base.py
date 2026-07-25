@@ -22,13 +22,19 @@ from clm.infrastructure.workers.worker_base import Worker
 # red, and ``-rR`` in addopts surfaces any retry). See the same marker on
 # ``test_lifecycle_mock.py`` for the rationale; do not widen it without fixing
 # the underlying contention.
+#
+# ``AssertionError`` is deliberately NOT in this list (finding T6). These tests
+# exercise the real claim/heartbeat loop, and an intermittent race in that loop
+# manifests as exactly one thing: an assertion that holds on the retry. Retrying
+# on it turns the suite's only signal for that class of production bug into
+# noise. Environment flakes — a locked SQLite file, a denied unlink, a starved
+# poll — raise their own exception types, which stay listed.
 pytestmark = pytest.mark.flaky(
     reruns=2,
     reruns_delay=1,
     only_rerun=[
         "OSError",
         "PermissionError",
-        "AssertionError",
         "OperationalError",
         "TimeoutError",
     ],
