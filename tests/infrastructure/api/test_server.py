@@ -57,26 +57,11 @@ def reset_singleton():
         server_module._server_instance = None
 
 
-def _free_port() -> int:
-    """Bind to port 0, read the assigned port, release it.
-
-    NOTE: this has a time-of-check/time-of-use gap — the socket is closed before
-    the returned port is used, so another xdist worker can grab the same
-    ephemeral port in between (WinError 10048). Only the real-uvicorn
-    integration test (which actually binds) needs a genuinely-free port and
-    accepts that risk (it is ``serial``, so it does not race). The fake-uvicorn
-    lifecycle tests never open a socket (``FakeUvicornServer.run`` just sleeps),
-    so they use ``_DUMMY_PORT`` instead and avoid the race entirely.
-    """
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
-# A fixed, never-bound port for the fake-uvicorn tests. ``FakeUvicornServer``
-# does not open a socket, so the value is arbitrary and can safely be shared
-# across xdist workers without an ephemeral-port collision.
-_DUMMY_PORT = 59999
+# ``start()`` binds its sockets eagerly, on the caller's thread, before the
+# uvicorn thread runs — so even the fake-uvicorn tests open a real socket now.
+# Port 0 lets the OS pick a free one and ``start()`` writes the assignment back
+# to ``server.port``, which is collision-proof under xdist by construction.
+_EPHEMERAL_PORT = 0
 
 
 # ---------------------------------------------------------------------------
@@ -97,7 +82,7 @@ class TestConstruction:
         assert server.port == 9999
 
     def test_url_and_docker_url(self, db_path: Path) -> None:
-        server = WorkerApiServer(db_path, host="0.0.0.0", port=8888)
+        server = WorkerApiServer(db_path, host="0.0.0.0", port=8888, token="shared-secret")
         assert server.url == "http://0.0.0.0:8888"
         assert server.docker_url == "http://host.docker.internal:8888"
 
@@ -116,7 +101,10 @@ class TestCreateApp:
         data = response.json()
         assert data["status"] == "ok"
         assert data["api_version"] == "1.0"
-        assert data["database"] == str(db_path)
+        # The database path is deliberately not published: /health is the one
+        # unauthenticated route, and the path names a host filesystem (and, on
+        # a share, a server name).
+        assert "database" not in data
 
 
 # ---------------------------------------------------------------------------
@@ -139,8 +127,11 @@ class FakeUvicornServer:
         self.fail_to_start = fail_to_start
         self.ran = False
 
-    def run(self) -> None:
+    def run(self, sockets: list[object] | None = None) -> None:
+        # ``WorkerApiServer`` binds the sockets itself and hands them over,
+        # so the real ``uvicorn.Server.run`` signature includes them.
         self.ran = True
+        self.sockets = sockets
         if self.fail_to_start:
             # Simulate crashing during startup, before the parent's
             # ``_started`` event is already set.
@@ -155,7 +146,7 @@ class TestStartAndStop:
     def test_start_and_stop_cycle(self, db_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(server_module.uvicorn, "Server", FakeUvicornServer)
 
-        server = WorkerApiServer(db_path, host="127.0.0.1", port=_DUMMY_PORT)
+        server = WorkerApiServer(db_path, host="127.0.0.1", port=_EPHEMERAL_PORT)
 
         assert server.start(timeout=2.0) is True
         assert server.is_running is True
@@ -171,7 +162,7 @@ class TestStartAndStop:
     def test_start_is_idempotent(self, db_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(server_module.uvicorn, "Server", FakeUvicornServer)
 
-        server = WorkerApiServer(db_path, host="127.0.0.1", port=_DUMMY_PORT)
+        server = WorkerApiServer(db_path, host="127.0.0.1", port=_EPHEMERAL_PORT)
         assert server.start(timeout=2.0) is True
 
         # Second start should be a no-op and return True.
@@ -198,7 +189,7 @@ class TestStartAndStop:
         monkeypatch.setattr(server_module.uvicorn, "Server", NeverStartsServer)
 
         # Patch _run_server to *not* set the started event.
-        server = WorkerApiServer(db_path, host="127.0.0.1", port=_DUMMY_PORT)
+        server = WorkerApiServer(db_path, host="127.0.0.1", port=_EPHEMERAL_PORT)
 
         original_run = server._run_server
 
@@ -231,7 +222,7 @@ class TestIsRunning:
         as soon as ``_shutdown_requested`` is set."""
         monkeypatch.setattr(server_module.uvicorn, "Server", FakeUvicornServer)
 
-        server = WorkerApiServer(db_path, host="127.0.0.1", port=_DUMMY_PORT)
+        server = WorkerApiServer(db_path, host="127.0.0.1", port=_EPHEMERAL_PORT)
         server.start(timeout=2.0)
         try:
             assert server.is_running is True
@@ -249,7 +240,7 @@ class TestStopWarnsOnStubbornThread:
     ) -> None:
         monkeypatch.setattr(server_module.uvicorn, "Server", FakeUvicornServer)
 
-        server = WorkerApiServer(db_path, host="127.0.0.1", port=_DUMMY_PORT)
+        server = WorkerApiServer(db_path, host="127.0.0.1", port=_EPHEMERAL_PORT)
         server.start(timeout=2.0)
 
         # Swap the thread with one that ignores the shutdown signal.
@@ -346,8 +337,7 @@ class TestRealUvicornStartup:
     """
 
     def test_real_server_serves_health(self, db_path: Path) -> None:
-        port = _free_port()
-        server = WorkerApiServer(db_path, host="127.0.0.1", port=port)
+        server = WorkerApiServer(db_path, host="127.0.0.1", port=_EPHEMERAL_PORT)
 
         assert server.start(timeout=10.0) is True
         try:

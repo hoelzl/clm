@@ -343,7 +343,7 @@ class TestExecutedNotebookCacheClient:
             "prog_lang": "python",
         }
 
-    def test_get_returns_pickle_bytes_on_hit(
+    def test_get_returns_payload_bytes_on_hit(
         self, client: WorkerApiClient, patched_request: MagicMock
     ) -> None:
         # httpx auto-decompresses gzip Content-Encoding into ``.content`` for
@@ -409,7 +409,7 @@ class TestExecutedNotebookCacheClient:
             json_payload={"acknowledged": True, "bytes_stored": 5}
         )
 
-        client.store_executed_notebook(pickle_bytes=b"hello", **self._key())
+        client.store_executed_notebook(payload=b"hello", **self._key())
 
         call = patched_request.call_args
         assert call[0] == ("POST", "/api/worker/cache/executed_notebook")
@@ -430,7 +430,7 @@ class TestExecutedNotebookCacheClient:
         )
         patched_request.return_value = response
 
-        client.store_executed_notebook(pickle_bytes=b"hi", **self._key())
+        client.store_executed_notebook(payload=b"hi", **self._key())
 
 
 class TestRetryLoop:

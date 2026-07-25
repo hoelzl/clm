@@ -9,16 +9,20 @@ Worker REST API instead of a local SQLite connection.
 The host's :class:`WorkerApiServer` exposes
 ``GET /api/worker/cache/executed_notebook`` and
 ``POST /api/worker/cache/executed_notebook`` for these reads/writes; the
-on-the-wire payload is gzip-compressed pickle bytes.
+on-the-wire payload is gzip-compressed nbformat JSON.
 """
 
 from __future__ import annotations
 
 import logging
-import pickle
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from clm.infrastructure.api.client import WorkerApiClient
+from clm.infrastructure.notebook_serialization import (
+    NotebookSerializationError,
+    deserialize_notebook,
+    serialize_notebook,
+)
 
 if TYPE_CHECKING:
     from nbformat import NotebookNode
@@ -56,19 +60,19 @@ class ApiExecutedNotebookCache:
         Returns ``None`` on cache miss or transport failure — both are
         treated as "fall back to direct execution" by the caller.
         """
-        pickle_bytes = self._client.get_executed_notebook(
+        payload = self._client.get_executed_notebook(
             input_file=input_file,
             content_hash=content_hash,
             language=language,
             prog_lang=prog_lang,
         )
-        if pickle_bytes is None:
+        if payload is None:
             return None
         try:
-            return cast("NotebookNode", pickle.loads(pickle_bytes))
-        except Exception as e:
+            return deserialize_notebook(payload)
+        except NotebookSerializationError as e:
             logger.warning(
-                f"Failed to unpickle executed_notebook for {input_file} "
+                f"Failed to parse executed_notebook for {input_file} "
                 f"({language}, {prog_lang}); treating as cache miss: {e}"
             )
             return None
@@ -83,15 +87,22 @@ class ApiExecutedNotebookCache:
     ) -> None:
         """Send an executed notebook to the host's cache.
 
-        Pickles the notebook locally and ships the bytes via the REST API.
+        Serializes the notebook locally and ships the bytes via the REST API.
         Failures are logged inside ``WorkerApiClient.store_executed_notebook``
-        but do not raise — caching is best-effort.
+        but do not raise — caching is best-effort, and so is a notebook that
+        will not serialize.
         """
-        pickle_bytes = pickle.dumps(executed_notebook)
+        try:
+            payload = serialize_notebook(executed_notebook)
+        except NotebookSerializationError as e:
+            logger.warning(
+                f"Not caching executed_notebook for {input_file} ({language}, {prog_lang}): {e}"
+            )
+            return
         self._client.store_executed_notebook(
             input_file=input_file,
             content_hash=content_hash,
             language=language,
             prog_lang=prog_lang,
-            pickle_bytes=pickle_bytes,
+            payload=payload,
         )
