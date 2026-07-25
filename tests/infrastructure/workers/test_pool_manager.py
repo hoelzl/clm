@@ -12,6 +12,7 @@ import pytest
 from clm.infrastructure.database.job_queue import JobQueue
 from clm.infrastructure.database.schema import init_database
 from clm.infrastructure.workers.pool_manager import WorkerConfig, WorkerPoolManager
+from tests.infrastructure.workers.conftest import FAKE_API_URL
 
 
 @pytest.fixture(autouse=True)
@@ -19,9 +20,9 @@ def mock_worker_api_server():
     """Prevent tests from starting a real uvicorn server.
 
     ``WorkerPoolManager.start_pools`` unconditionally starts
-    ``WorkerApiServer`` (binding uvicorn to 0.0.0.0:8765) whenever any of
-    its worker configs use the ``docker`` execution mode. Under pytest-xdist
-    -n auto this causes port collisions across worker processes
+    ``WorkerApiServer`` (binding uvicorn to the default port on loopback)
+    whenever any of its worker configs use the ``docker`` execution mode. Under
+    pytest-xdist -n auto this causes port collisions across worker processes
     (``OSError: [WinError 10048]``) which surface as
     ``PytestUnhandledThreadExceptionWarning: SystemExit: 1`` and, under
     worse timing, can fail tests outright. These tests don't need a real
@@ -30,8 +31,8 @@ def mock_worker_api_server():
     with patch("clm.infrastructure.workers.pool_manager.start_worker_api_server") as mock_start:
         mock_server = MagicMock()
         mock_server.is_running = True
-        mock_server.docker_url = "http://host.docker.internal:8765"
-        mock_server.url = "http://0.0.0.0:8765"
+        mock_server.docker_url = FAKE_API_URL
+        mock_server.url = "http://127.0.0.1:54321"
         mock_start.return_value = mock_server
         yield mock_start
 
@@ -244,9 +245,9 @@ def test_pool_manager_start_worker_with_correct_params(db_path, workspace_path):
         assert call_args.kwargs["mem_limit"] == "2g"
         assert call_args.kwargs["network"] == "custom-network"
         assert call_args.kwargs["environment"]["WORKER_TYPE"] == "test"
-        # Workers now use CLM_API_URL for REST API communication instead of direct SQLite
-        assert "CLM_API_URL" in call_args.kwargs["environment"]
-        assert "host.docker.internal:8765" in call_args.kwargs["environment"]["CLM_API_URL"]
+        # Workers now use CLM_API_URL for REST API communication instead of direct
+        # SQLite — carrying the running server's port, whatever it turned out to be.
+        assert call_args.kwargs["environment"]["CLM_API_URL"] == FAKE_API_URL
 
 
 def test_pool_manager_stop_pools(db_path, workspace_path, worker_configs):

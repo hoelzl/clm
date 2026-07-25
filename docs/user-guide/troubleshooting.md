@@ -678,6 +678,34 @@ process.
    and on every participating machine. See
    [Worker API (Docker mode)](configuration.md#worker-api-docker-mode).
 
+### Worker API Port Is Already in Use
+
+**Symptoms**: either a warning, and the build carries on:
+```
+Worker API port 8765 is already in use — another CLM build, or something else,
+is listening on it. Using 127.0.0.1:53127 for this build instead
+```
+or, when the port was pinned, the build stops with
+`OSError: [WinError 10048]` / `OSError: [Errno 98] Address already in use`.
+
+**Cause**: something else holds the port. The default `8765` is preferred, not
+required — each container is told the real port via `CLM_API_URL` — so CLM
+moves to a free one and only warns. A port you pinned with
+`CLM_WORKER_API_PORT` is treated as a requirement, so a collision is an error
+rather than something to route around.
+
+**Solutions**:
+
+1. **If the warning is all you see**: nothing to do. Note the port from the log
+   if you want to `curl` the API's `/health`.
+2. **If you pinned the port**: find the holder — `netstat -ano | findstr :8765`
+   on Windows, `ss -lptn 'sport = :8765'` on Linux — and stop it, or pick
+   another port. A leftover `clm` process from an aborted build is a common
+   holder; it exits with its build, so a stale one means the build did not shut
+   down cleanly.
+3. **If several builds share the machine**: set `CLM_WORKER_API_PORT=0` to let
+   the OS assign a free port to each one.
+
 ## Getting More Help
 
 ### Enable Debug Logging

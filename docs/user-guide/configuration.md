@@ -346,11 +346,18 @@ opening the jobs database directly. It is **not** a public service:
 - Every route requires an `Authorization: Bearer <token>` header. The token is
   generated fresh for each build and injected into every container as
   `CLM_API_TOKEN`, so nothing needs configuring in the normal case.
+- The port is likewise not something you have to manage. `8765` is the
+  preferred port, not a required one: each container is told where to call back
+  via `CLM_API_URL`, so if `8765` is already taken — a second build on the same
+  machine, or an unrelated service — the build logs a warning and uses a free
+  port instead of failing. Pin it with `CLM_WORKER_API_PORT` when something
+  outside CLM needs to know the number.
 
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `CLM_API_TOKEN` | Bearer token for the Worker API. Set on the **host** it pins the token instead of generating one, which is what coordinator mode requires. Set in a **worker** (CLM does this for you when starting a container) it is the token the worker presents. | (generated per build) |
 | `CLM_WORKER_API_HOST` | Bind address for the Worker API. Setting it to anything beyond loopback and the Docker bridge — e.g. `0.0.0.0` — is **coordinator mode**: other machines can reach this build's queue and executed-notebook cache. It therefore also requires `CLM_API_TOKEN`, and CLM refuses to start without one. | (loopback + Docker bridge) |
+| `CLM_WORKER_API_PORT` | Port for the Worker API, **required** rather than preferred: if it is taken the build fails instead of moving. Use it when a firewall rule, a coordinator-mode peer, or your own tooling has to know the port. `0` asks the OS for any free port — useful when several builds share a machine. | `8765`, or a free port if that is taken |
 
 Coordinator mode is the supported path for letting a second machine take part
 in a build. Do not reach for it to work around a connectivity problem in
