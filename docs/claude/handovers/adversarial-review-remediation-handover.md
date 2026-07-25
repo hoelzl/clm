@@ -269,8 +269,14 @@ verified by deliberately breaking a test once. — **All met.**
 - **T2's failure route is verified, not assumed.** `.github/workflows/nightly.yml`
   files/updates a `nightly-failure` issue and has `workflow_dispatch`, so the
   alert path was exercised by dispatching it against a throwaway branch carrying
-  one deliberately failing `slow` test. Chosen over an emailed Actions failure
-  because the maintainer works from the issue tracker.
+  one deliberately failing `slow` test: the run failed, the `Report failure` job
+  succeeded, and it filed the issue with the run URL, commit and trigger. A
+  second dispatch confirmed the dedup path — it comments on the existing open
+  issue rather than filing a second one, so an outage produces one issue, not
+  one per night. (Both the issue and the throwaway branch were cleaned up
+  afterwards.) Chosen over an emailed Actions failure because the maintainer
+  works from the issue tracker; say so if you would rather have it the other
+  way.
 - **The slow tier is cheap**: 37 tests, 78s locally at `-n 4`. It was never
   excluded for cost.
 - **T9 partially deferred, deliberately.** Its "constructor-echo tests" half is
