@@ -84,8 +84,19 @@ def _split_reference(reference: str) -> tuple[str, str, str]:
     return "/".join(prefix), name, tag
 
 
+# Both spellings of "this workflow builds this tag": the ``-t`` flag of a plain
+# ``docker build``, and the ``tags:`` input of ``docker/build-push-action``.
+# Both are matched so the guard survives a workflow switching between them — it
+# already had to once, when the builds moved to build-push-action for layer
+# caching, and the anchor test below is what caught it.
+WORKFLOW_TAG = re.compile(
+    r"(?:-t\s+|^\s*tags:\s*)([A-Za-z0-9._/-]+:[A-Za-z0-9._-]+)\s*$",
+    re.MULTILINE,
+)
+
+
 def _ci_built_tags() -> set[str]:
-    """Locally-built image tags, read out of the workflow ``-t`` arguments.
+    """Locally-built image tags, read out of the workflow files.
 
     Parsed from the workflows rather than hard-coded, so a rename of a CI tag
     changes both sides at once and this test cannot drift into agreeing with
@@ -93,9 +104,7 @@ def _ci_built_tags() -> set[str]:
     """
     tags: set[str] = set()
     for workflow in WORKFLOWS:
-        for match in re.finditer(
-            r"-t\s+([A-Za-z0-9._/-]+:[A-Za-z0-9._-]+)", workflow.read_text(encoding="utf-8")
-        ):
+        for match in WORKFLOW_TAG.finditer(workflow.read_text(encoding="utf-8")):
             tags.add(match.group(1))
     return tags
 
@@ -104,10 +113,11 @@ def test_workflows_build_the_expected_local_tags() -> None:
     """The workflows must build one local tag per worker image.
 
     Anchors the other tests: if this set ever empties (a workflow rename, a
-    parsing change), they would silently stop checking anything.
+    change of build action, a parsing change), they would silently stop
+    checking anything.
     """
     tags = _ci_built_tags()
-    assert tags, f"no `docker build -t` tags found in {[w.name for w in WORKFLOWS]}"
+    assert tags, f"no locally-built image tags found in {[w.name for w in WORKFLOWS]}"
 
     repositories = {_split_reference(tag)[1] for tag in tags}
     assert repositories == CLM_REPOSITORIES, (

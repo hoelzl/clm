@@ -136,13 +136,47 @@ ARG TARGETARCH
 # See: https://github.com/dotnet/interactive/issues/3951
 # This works across different Linux distributions without libicu version conflicts
 # Note: DOTNET_ROOT and PATH are set in the base images
-RUN curl -sSL https://dot.net/v1/dotnet-install.sh -o dotnet-install.sh && \
-    chmod +x dotnet-install.sh && \
-    ./dotnet-install.sh --channel 10.0 --install-dir /root/.dotnet && \
-    rm dotnet-install.sh
+#
+# Retried at two levels. ``curl --retry-all-errors`` covers the fetch of the
+# installer itself; the surrounding loop covers ``dotnet-install.sh``, which
+# does its OWN downloads and has no retry flag of its own. That inner download
+# is the one that actually failed in CI:
+#
+#   #13 ERROR: process "/bin/sh -c curl -sSL https://dot.net/... &&
+#       ./dotnet-install.sh ..." did not complete successfully: exit code: 18
+#
+# Exit 18 is CURLE_PARTIAL_FILE — a truncated transfer, not a bad URL. It is
+# the single largest source of the Docker job's infra flake, which is why that
+# job is not a required status check.
+RUN set -eu; \
+    ok=0; \
+    for attempt in 1 2 3; do \
+        if curl --fail --location --silent --show-error \
+                --retry 5 --retry-delay 5 --retry-all-errors \
+                https://dot.net/v1/dotnet-install.sh -o dotnet-install.sh \
+           && chmod +x dotnet-install.sh \
+           && ./dotnet-install.sh --channel 10.0 --install-dir /root/.dotnet; then \
+            ok=1; \
+            break; \
+        fi; \
+        echo "dotnet install attempt ${attempt}/3 failed; retrying in 15s" >&2; \
+        rm -f dotnet-install.sh; \
+        sleep 15; \
+    done; \
+    rm -f dotnet-install.sh; \
+    [ "${ok}" -eq 1 ]
 
-# Install uv (modern Python package installer)
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+# Install uv (modern Python package installer).
+#
+# Downloaded to a file and then executed, rather than piped straight into
+# ``sh``. In a ``curl | sh`` pipeline the exit status is the shell's, so a
+# truncated download runs a truncated script and can still succeed — the same
+# partial-transfer failure mode as the dotnet installer above, but silent.
+RUN curl --fail --location --silent --show-error \
+        --retry 5 --retry-delay 5 --retry-all-errors \
+        https://astral.sh/uv/install.sh -o /tmp/uv-install.sh \
+    && sh /tmp/uv-install.sh \
+    && rm -f /tmp/uv-install.sh
 
 # Install micromamba for Python environment management.
 # This provides a clean Python installation without PEP 668 restrictions.
