@@ -479,9 +479,13 @@ cache path; SSTI proof-of-concept from the review no longer executes.
   Diagnosing a stale image is one command:
   `docker run --rm --entrypoint python <image> -c "import inspect; from clm.infrastructure.api import client; print('CLM_API_TOKEN' in inspect.getsource(client))"`.
 
-- **Do not add a `full`-variant build to CI.** The decisive numbers are size,
-  not time: `full` is **22.9 GB** against `lite`'s **6.3 GB** (measured with
-  `docker image inspect`). `load: true` on a 23 GB image does not fit a standard
+- **Do not add a `full`-variant build to CI.** The decisive number is size:
+  `full` is **23 GB** against `lite`'s **6.3 GB** (`docker images`, freshly built
+  from this tree). Time says the same thing — a cold `full` build on the dev
+  machine took **~80 min** (fresh buildx builder, so layer cache and the uv
+  cache-mount both started empty, the CI cache-miss analogue; it overlapped with
+  other work, so treat it as an order of magnitude, not a stopwatch) and **6.5
+  min** to rebuild warm. `load: true` on a 23 GB image does not fit a standard
   GitHub runner's disk without clearing it first, and its layers alone would
   exceed the repository's 10 GB Actions-cache budget — evicting the uv caches the
   other jobs depend on, which the workflow's own comment already worries about at
@@ -509,20 +513,40 @@ for both, no new image):
   actually did — breaks every deck in a language at once, and this fails in
   seconds with the name in the message, for every language rather than only C++.
 
+**The matrix is now all five shipped languages** (`test_language_docker_execution.py`,
+renamed from the C++-only module): Python, C++, C#, Java and TypeScript each get a
+percent deck written with that language's own comment token, executed through a
+real container, asserted on a value the code *computes*. **All five pass**, in
+**88s** for the whole module — the .NET and Java kernels are slower to start than
+xeus-cpp but well inside budget. A `test_every_shipped_language_has_an_execution_case`
+guard fails if the case list and the `prog_lang` config drift, so deleting a case
+to make a failure go away is not quiet.
+
+**Rust: measured, and the recommendation is no.** A probe image on top of
+`lite-test` (2026-07-25) installed a Rust toolchain and `evcxr_jupyter`:
+
+| | cost |
+|---|---|
+| Layers added | **+856 MB** — toolchain 642 MB, cmake+pkg-config (for evcxr's zmq) 171 MB, evcxr itself 36 MB |
+| Build time added | **+4 min** — rustup 80s, `cargo install --locked evcxr_jupyter` 97s (compiles rust-analyzer's crates), apt 22s, export 41s |
+| New external hosts at image-build time | rustup.rs and crates.io — and `ci.yml`'s own comment names external fetches as *the* flake source |
+
+conda-forge has **no** `evcxr_jupyter` package (checked), so compiling from source
+is the only route; there is no cheap version of this. And the image is only half
+the work: the Rust config was never finished — `line_comment_for("rust")` returns
+`#` and its jupytext format is `md`, neither of which round-trips a `.rs` percent
+deck. With no Rust courses in existence, the choice is between leaving the config
+as a dead entry (pinned by `KNOWN_MISSING_KERNELS`, which is where a future
+decision will be visible) or deleting `_rust_config` outright. Deleting is
+tempting but is a user-visible removal, so it wants a deliberate call rather than
+a drive-by.
+
 **Still uncovered, in rough value order:**
-1. **C#, Java, TypeScript execute nowhere in CI.** The images ship
-   `.net-csharp`, `java` and `deno`; CLM configures all three; no test runs a
-   deck in any of them. The C++ test is ~40 lines of harness — parameterising it
-   over the four languages is the cheapest large win available here, and
-   CSharpCourses is a live downstream repo.
-2. **`rust` is configured but no image installs a Rust kernel**, so a Rust deck
-   in Docker mode fails `NoSuchKernel`. Pinned as the single expected hole in
-   `KNOWN_MISSING_KERNELS`; decide whether to install it or drop the config.
-3. **No full `clm build` of a non-Python course spec.** Output targets, code
+1. **No full `clm build` of a non-Python course spec.** Output targets, code
    extraction, per-language directories and the CMake export are unit-tested but
    never exercised together for C++. An e2e fixture course with one C++ topic
-   would cover the shape a course repo actually uses.
-4. **`clm kernel-triage` is the real-world signal** (it re-runs `evaluate="no"`
+   would cover the shape a course repo actually uses. This is now the top gap.
+2. **`clm kernel-triage` is the real-world signal** (it re-runs `evaluate="no"`
    decks and telemetry-flagged flakes against the current kernel) but needs the
    maintainer's CppCourses checkout, so it is the same "private corpus" case as
    the sync full-corpus gates in Phase 1 — a nightly with a course checkout, not
