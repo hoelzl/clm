@@ -1,21 +1,28 @@
-name: Nightly slow tests
+name: Nightly full suite
 
-# The ``slow`` marker is a "runs nowhere" tier (finding T2 of the 2026-07-24
-# adversarial review): every non-docker step in ci.yml excludes it, and the
-# local default in pyproject excludes it too. ~37 tests carry it, including
-# the *only* proof that a cached notebook replays byte-identically to a direct
-# execution (test_cache_equivalence.py — the guard against silently wrong
-# output), the worker-reuse-across-builds e2e tests covering the PR #595 bug,
-# and all 18 real-subprocess CLI tests.
+# A FLAKE AND ROT DETECTOR, not a coverage backstop.
 #
-# This runs them once a day instead of lengthening PR CI (decision D12).
+# This started life (finding T2 / decision D12) as the home for the ``slow``
+# marker, which ci.yml excluded from every step — so ~37 tests, including the
+# only proof that a cached notebook replays byte-identically to a direct
+# execution, ran nowhere at all. That tier now runs on every PR as a fourth
+# parallel matrix suite, because it costs machine-minutes but no wall clock.
 #
-# WHERE FAILURES SURFACE: the ``report-failure`` job below files a GitHub
-# issue labelled ``nightly-failure``, or comments on the existing open one.
-# That is deliberate and load-bearing — a nightly job nobody reads is worse
-# than no nightly job, because it manufactures the feeling of coverage. Do not
-# remove that job without replacing it with a route the maintainer actually
-# reads.
+# What survives here is the job PR CI structurally *cannot* do: run the
+# **whole** suite — docker included — against **unchanged** master, repeatedly.
+# A PR run tells you "this change is fine". Thirty runs of identical code tell
+# you "this test is 3% flaky", which is how a contention regression like issue
+# #163 surfaces before it wastes someone's afternoon.
+#
+# (Dependency drift, the other usual nightly justification, barely applies
+# here: CI installs from uv.lock with UV_EXCLUDE_NEWER pinned, so nothing moves
+# underneath us.)
+#
+# WHERE FAILURES SURFACE: the ``report-failure`` job files a GitHub issue
+# labelled ``nightly-failure``, or comments on the existing open one. That is
+# deliberate and load-bearing — a nightly job nobody reads is worse than no
+# nightly job, because it manufactures the feeling of coverage. Do not remove
+# it without replacing it with a route the maintainer actually reads.
 
 on:
   schedule:
@@ -26,20 +33,23 @@ on:
 
 # Never run two nightlies at once (a manual dispatch during a scheduled run).
 concurrency:
-  group: nightly-slow
+  group: nightly-full
   cancel-in-progress: false
 
 jobs:
-  slow:
-    name: Slow tier (Python ${{ matrix.python-version }})
+  full:
+    # Everything except the docker tier, in one process rather than the four
+    # parallel suites PR CI uses: a single run is a truer flake measurement,
+    # and wall clock does not matter at 03:17.
+    name: Full suite, no docker (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        # One interpreter is enough for a regression net that runs daily; the
-        # PR matrix already covers 3.12 + 3.13 for everything else. Widen this
-        # only if a slow-tier failure ever turns out to be version-specific.
+        # One interpreter is enough for a daily flake sweep; the PR matrix
+        # already covers 3.12 + 3.13. Widen only if a flake ever turns out to
+        # be version-specific.
         python-version: ["3.12"]
 
     steps:
@@ -104,78 +114,100 @@ jobs:
         git config --global user.email "ci@github.actions"
         git config --global user.name "GitHub Actions CI"
 
-    - name: Run slow tests
+    - name: Run full suite (no docker)
       run: |
-        uv run --no-sync pytest -v -m "slow and not docker" --timeout=900 --log-cli-level=INFO
+        uv run --no-sync pytest -v -m "not docker" --timeout=900 --log-cli-level=INFO
       env:
         CLM_E2E_TIMEOUT: 900
         CLM_ENABLE_TEST_LOGGING: "1"
         CLM_LOG_LEVEL: INFO
 
+  docker:
+    # The tier that is NOT a required check on PRs, so a regression in it can
+    # reach master (it did — PR #667 was green and broke this job). Running it
+    # nightly means a red docker tier surfaces as an issue within a day even if
+    # nobody looks at the merge commit's CI.
+    name: Docker tier
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v7
+      with:
+        lfs: true
+
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: "3.12"
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v4
+
+    - name: Build notebook-processor:lite-test Docker image
+      run: |
+        docker build \
+          -f docker/notebook/Dockerfile \
+          --build-arg VARIANT=lite \
+          --build-arg DOCKER_PATH=docker/notebook \
+          -t clm-notebook-processor:lite-test \
+          .
+
+    - name: Build plantuml-converter:test Docker image
+      run: |
+        docker build \
+          -f docker/plantuml/Dockerfile \
+          --build-arg DOCKER_PATH=docker/plantuml \
+          -t clm-plantuml-converter:test \
+          .
+
+    - name: Build drawio-converter:test Docker image
+      run: |
+        docker build \
+          -f docker/drawio/Dockerfile \
+          --build-arg DOCKER_PATH=docker/drawio \
+          -t clm-drawio-converter:test \
+          .
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+      with:
+        version: "latest"
+
+    - name: Install dependencies
+      run: |
+        uv sync --locked --python 3.12 --no-default-groups \
+          --extra all-workers --extra recordings --extra dev --extra tui --extra web
+
+    - name: Run Docker integration tests
+      run: |
+        uv run --no-sync pytest -v -n0 -m "docker" --timeout=600 --log-cli-level=INFO
+      env:
+        CLM_E2E_TIMEOUT: 600
+        CLM_ENABLE_TEST_LOGGING: "1"
+        CLM_LOG_LEVEL: INFO
+
   report-failure:
     name: Report failure
-    needs: slow
+    needs: [full, docker]
     if: failure()
     runs-on: ubuntu-latest
     permissions:
       issues: write
     steps:
-      - name: File or update the nightly-failure issue
-        uses: actions/github-script@v8
+      - name: Checkout code
+        uses: actions/checkout@v7
         with:
-          script: |
-            const LABEL = 'nightly-failure';
-            const TITLE = 'Nightly slow-tier tests are failing';
-            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-            const body = [
-              `The nightly \`pytest -m "slow and not docker"\` run failed.`,
-              ``,
-              `- Run: ${runUrl}`,
-              `- Commit: ${context.sha}`,
-              `- Trigger: ${context.eventName}`,
-              ``,
-              `The slow tier is excluded from PR CI by design (decision D12 of the`,
-              `2026-07-24 adversarial review remediation plan), so nothing else`,
-              `covers these tests — notably \`test_cache_equivalence.py\`, the only`,
-              `proof that a cached notebook replays byte-identically to a direct`,
-              `execution.`,
-            ].join('\n');
+          lfs: false
 
-            // The label must exist before it can be applied.
-            try {
-              await github.rest.issues.getLabel({
-                owner: context.repo.owner, repo: context.repo.repo, name: LABEL,
-              });
-            } catch (e) {
-              await github.rest.issues.createLabel({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                name: LABEL,
-                color: 'b60205',
-                description: 'A scheduled nightly run failed',
-              });
-            }
-
-            // One open issue per outage, not one per night.
-            const existing = await github.rest.issues.listForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              state: 'open',
-              labels: LABEL,
-              per_page: 1,
-            });
-
-            if (existing.data.length > 0) {
-              const number = existing.data[0].number;
-              await github.rest.issues.createComment({
-                owner: context.repo.owner, repo: context.repo.repo,
-                issue_number: number, body,
-              });
-              core.notice(`Commented on existing nightly-failure issue #${number}`);
-            } else {
-              const created = await github.rest.issues.create({
-                owner: context.repo.owner, repo: context.repo.repo,
-                title: TITLE, body, labels: [LABEL],
-              });
-              core.notice(`Filed nightly-failure issue #${created.data.number}`);
-            }
+      - uses: ./.github/actions/report-failure
+        with:
+          label: nightly-failure
+          title: Nightly full-suite run is failing
+          label-description: A scheduled nightly run failed
+          context: >-
+            This runs the whole suite, docker tier included, against unchanged
+            master. A failure here with no corresponding change on master means
+            a **flaky test**, not a regression — check whether the same test
+            failed on earlier nights before hunting for a cause in the code.
