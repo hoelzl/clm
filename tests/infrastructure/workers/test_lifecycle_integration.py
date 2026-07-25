@@ -71,10 +71,11 @@ def check_worker_module_available(module_name: str) -> bool:
         return False
 
 
-# Check availability of worker modules
+# Check availability of worker modules. Only the notebook worker is exercised
+# here (every config below sets ``plantuml_count``/``drawio_count`` to 0), so
+# only that flag exists — the drawio/plantuml flags that used to sit here were
+# never read, and pointed at pre-rename top-level module names.
 NOTEBOOK_WORKER_AVAILABLE = check_worker_module_available("clm.workers.notebook")
-DRAWIO_WORKER_AVAILABLE = check_worker_module_available("drawio_converter")
-PLANTUML_WORKER_AVAILABLE = check_worker_module_available("plantuml_converter")
 
 # Skip all integration tests if notebook worker is not available
 pytestmark = pytest.mark.skipif(
