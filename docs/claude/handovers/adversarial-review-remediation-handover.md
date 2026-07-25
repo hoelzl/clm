@@ -1,6 +1,6 @@
 # Adversarial Review Remediation — Handover
 
-**Created**: 2026-07-24 | **Status**: Phase 0 DONE (released 1.22.1); Phase 1 next | **Owner**: unassigned
+**Created**: 2026-07-24 | **Status**: Phases 0–1 DONE; Phase 2 next | **Owner**: unassigned
 
 **2026-07-25 update**: one of Phase 7's prerequisites — "fix the known build
 nondeterminism" — was investigated ahead of schedule and is now resolved; see
@@ -165,7 +165,13 @@ CI green for the tagged commit.
 
 ---
 
-### Phase 1 — Test resurrection  ▸ STATUS: not started
+### Phase 1 — Test resurrection  ▸ STATUS: DONE
+
+> **Completed 2026-07-25.** Seven PRs, one per item, all merged:
+> #667 (T1), #668 (T1 fallout), #669 (T4), #670 (T5/T6/T10), #671 (T7),
+> #672 (T8), #673 (T2/D12), plus this one for T9 and the close-out.
+> Notes and surprises below — read them before Phase 5, which touches the
+> code T1 resurrected.
 
 **Goal**: stop flying blind. This is cheap, high-yield, and every later phase
 depends on it — especially Phase 5, which modifies the exact code the dead tests
@@ -222,7 +228,66 @@ covered.
 **Acceptance**: 8 previously-dead tests run and pass (or have issues filed for
 genuine bugs they exposed); no test in `tests/cli/test_cli_integration.py`
 passes when the build is broken; nightly workflow green and its failure route
-verified by deliberately breaking a test once.
+verified by deliberately breaking a test once. — **All met.**
+
+**Notes from the implementation (2026-07-25)**
+
+- **T1's two-string fix was two strings; the fallout was not.** Un-skipping the
+  module surfaced *three* further stale things the permanent skip had hidden:
+  1. `test_direct_worker_processes_job` and `test_high_concurrency_notebook_workers`
+     submitted `payload={"kernel": "python3", "timeout": 60}`, which stopped
+     being a valid notebook payload when `NotebookPayload` gained its required
+     `kind`/`prog_lang`/`language`/`format` descriptors. Every such job failed
+     validation. Now built from a real `NotebookPayload`.
+  2. `TestMixedModeIntegration` is `docker`-marked, so it did not run in the PR
+     matrix — it broke **master's Docker job** after #667 merged, and needed the
+     follow-up #668. Its image tag was `drawio-converter:latest`, dead since the
+     `clm-` prefix; and its "stale" worker rows were inserted without
+     `last_heartbeat`, so they defaulted to *fresh* and cleanup correctly kept
+     them. **If you un-skip anything else, check what it does under `-m docker`
+     before merging** — that job is not a required check, so a green PR proves
+     nothing about it.
+  3. High-concurrency jobs all shared one content hash; identical sources are
+     served from the executed-notebook cache after the first job, which would
+     have turned a concurrency test into a cache-lookup test.
+- **Guard against recurrence**: `tests/infrastructure/workers/test_worker_module_probes.py`
+  asserts every module name used by a `find_spec` skip guard actually resolves.
+  A stale probe is invisible in a report — "skipped" reads as "not applicable
+  here", not "permanently dead". That is the whole reason T1 survived so long.
+- **T4 found repo pollution, not just weak assertions.** The CLI integration
+  tests left `--cache-db-path` at its default, which `main.py:_anchor_default`
+  anchors to the *project root* — so every run wrote a ~4.6 MB `clm_cache.db`
+  into the working tree (gitignored, hence invisible in `git status`) and shared
+  it across xdist workers.
+- **T8 exposed a bug in its own neutralizer.** `_neutralise_pool_size_cap`
+  exempted itself with `"test_pool_size_cap" in nodeid` — a bare substring, so
+  the new `test_pool_size_cap_interaction.py` was also exempted, saw the *real*
+  host caps, and passed on a 32-core dev box while failing on the 2-core runner.
+  Now matched on `test_pool_size_cap.py`. **Watch for this shape elsewhere**:
+  nodeid substring matching in a conftest fixture is a silent-scope-creep
+  hazard.
+- **T2's failure route is verified, not assumed.** `.github/workflows/nightly.yml`
+  files/updates a `nightly-failure` issue and has `workflow_dispatch`, so the
+  alert path was exercised by dispatching it against a throwaway branch carrying
+  one deliberately failing `slow` test. Chosen over an emailed Actions failure
+  because the maintainer works from the issue tracker.
+- **The slow tier is cheap**: 37 tests, 78s locally at `-n 4`. It was never
+  excluded for cost.
+- **T9 partially deferred, deliberately.** Its "constructor-echo tests" half is
+  fixed (`TestBuildDataClasses` now asserts the rendered `__str__` a user
+  actually reads, instead of reading back its own constructor arguments). Its
+  other half — the sync full-corpus gates being triple-gated to manual-only — is
+  **not fixable in CI**: `TestRealCorpusSelfDiff` needs the maintainer's private
+  PythonCourses checkout (`CLM_SYNC_CORPUS_DIR`, else a hard-coded local path).
+  The nightly job runs it, and it will report `skipped` there until that corpus
+  is reachable from CI. The bundled-fixture gate in the same file does run in
+  the fast suite. Nothing to fix; recorded so the next reader does not re-derive
+  it.
+- **Phase 5 inherits live tests now.** `test_direct_worker_health_monitoring` is
+  the one place `start_monitoring()` runs outside a `__main__` demo. It passes on
+  a CEST host *despite* C8 (UTC `CURRENT_TIMESTAMP` vs local `datetime.now()`)
+  only because a stale heartbeat merely warns for direct workers — hung-marking
+  is Docker-only. Do not read its green as evidence against C8.
 
 ---
 
