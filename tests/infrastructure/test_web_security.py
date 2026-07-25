@@ -25,6 +25,7 @@ from clm.infrastructure.web_security import (
     host_is_allowed,
     install_web_security,
     normalize_origin,
+    remote_access_warning,
 )
 
 
@@ -47,6 +48,11 @@ class TestExtractHost:
         """Starlette's own splitter yields ``"["`` here, locking out IPv6 loopback."""
         assert extract_host("[::1]:8000") == "::1"
         assert extract_host("[fe80::1]") == "fe80::1"
+
+    def test_trailing_dot_fqdn_is_the_same_host(self):
+        """``http://localhost./`` is a legal URL and the dot reaches the header."""
+        assert extract_host("localhost.:8008") == "localhost"
+        assert extract_host("box.ts.net.") == "box.ts.net"
 
 
 class TestDefaultAllowedHosts:
@@ -71,9 +77,38 @@ class TestDefaultAllowedHosts:
     def test_star_disables_the_check(self):
         assert default_allowed_hosts("0.0.0.0", ["*"]) == ["*"]
 
+
+class TestHostIsAllowed:
     def test_wildcard_suffix_matches_subdomains(self):
         assert host_is_allowed("box.ts.net", ["*.ts.net"])
         assert not host_is_allowed("boxts.net", ["*.ts.net"])
+        assert not host_is_allowed("ts.net", ["*.ts.net"])
+
+    def test_exact_match(self):
+        assert host_is_allowed("localhost", ["localhost"])
+        assert not host_is_allowed("localhost.evil.example", ["localhost"])
+
+
+class TestRemoteAccessWarning:
+    """A bind address that promises more reach than the allowlist can deliver."""
+
+    def test_loopback_bind_is_silent(self):
+        assert remote_access_warning("127.0.0.1") is None
+        assert remote_access_warning("localhost") is None
+
+    @pytest.mark.parametrize("host", ["0.0.0.0", "::"])
+    def test_wildcard_bind_warns(self, host: str):
+        message = remote_access_warning(host)
+        assert message is not None
+        assert "--allowed-host" in message
+
+    def test_explicit_allowed_host_silences_it(self):
+        assert remote_access_warning("0.0.0.0", ["box.ts.net"]) is None
+
+    def test_specific_non_loopback_bind_warns_about_names(self):
+        message = remote_access_warning("192.168.1.5")
+        assert message is not None
+        assert "192.168.1.5" in message
 
 
 class TestNormalizeOrigin:
@@ -92,6 +127,11 @@ class TestNormalizeOrigin:
     @pytest.mark.parametrize("origin", ["null", "", "   ", "not-a-url", "http://"])
     def test_unusable_origins_are_none(self, origin: str):
         assert normalize_origin(origin) is None
+
+    def test_ipv6_keeps_its_brackets(self):
+        """Otherwise the result is the ambiguous ``http://::1:8008``."""
+        assert normalize_origin("http://[::1]:8008") == "http://[::1]:8008"
+        assert normalize_origin("http://[::1]") == "http://[::1]"
 
 
 class TestCheckRequestOrigin:
@@ -143,6 +183,15 @@ class TestCheckRequestOrigin:
         """``tailscale serve`` forwards ``https://…`` to a plain-HTTP upstream."""
         headers = self._headers(origin="https://box.ts.net", host="box.ts.net")
         assert check_request_origin(headers) is None
+
+    def test_portless_host_still_refuses_an_origin_on_another_port(self):
+        """A dev server on :3000 must not drive a dashboard reached as bare ``localhost``.
+
+        The portless-``Host`` branch exists for the TLS-proxy case above; it
+        must not degrade into "any port on this hostname".
+        """
+        headers = self._headers(origin="http://localhost:3000", host="localhost")
+        assert check_request_origin(headers) is not None
 
     def test_explicitly_allowed_origin_passes(self):
         headers = self._headers(origin="https://studio.example", host="127.0.0.1:8008")

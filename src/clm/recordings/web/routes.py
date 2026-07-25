@@ -224,6 +224,16 @@ def _build_deck_provenance(request: Request, section_name: str, deck_name: str, 
 #: the C layer beneath ``open()``.
 _PATH_UNSAFE_CHARS = ("/", "\\", ":", "\x00")
 
+#: Windows device names, which resolve to the device rather than to a file
+#: **whatever extension follows** — ``NUL.json`` is the null device, so a state
+#: write against it is silently discarded rather than stored. Matching is
+#: case-insensitive and ignores the extension, exactly as Windows does.
+_WINDOWS_RESERVED_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{i}" for i in range(1, 10)}
+    | {f"LPT{i}" for i in range(1, 10)}
+)
+
 
 def _validate_name(value: str, *, field: str) -> str:
     """Return ``value`` if it is safe to use as a single path component.
@@ -239,20 +249,40 @@ def _validate_name(value: str, *, field: str) -> str:
     leaves a lone ``..`` intact.
 
     Rejecting is the right answer rather than rewriting: these values name
-    something the UI already knows exists, so anything containing a separator
-    is a bug or an attack, not a user with an unusual course name.
+    something the UI already knows exists, so anything unusable as a filename
+    is a bug or an attack, not a user with an eccentric course name.
+
+    Beyond containment, this also refuses names that would produce a *silently
+    broken* file rather than an escape — control characters (which make the
+    write raise, and the raise is swallowed by design in
+    ``_on_state_mutation``) and Windows device names (which make the write go
+    to the device and vanish). Failing the request is the honest answer.
 
     Raises:
         HTTPException: 400 when ``value`` is empty, is a relative-path
-            component (``.`` / ``..``), or contains a separator.
+            component (``.`` / ``..``), contains a separator or a control
+            character, or names a Windows device.
     """
     if not value or not value.strip():
         raise HTTPException(status_code=400, detail=f"{field} must not be empty")
-    if value.strip(". ") == "":
+
+    def _reject() -> None:
         raise HTTPException(status_code=400, detail=f"Invalid {field}: {value!r}")
+
+    if value.strip(". ") == "":
+        _reject()
     for char in _PATH_UNSAFE_CHARS:
         if char in value:
-            raise HTTPException(status_code=400, detail=f"Invalid {field}: {value!r}")
+            _reject()
+    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
+        _reject()
+    # Windows also strips trailing dots and spaces, so "deck." and "deck "
+    # both open "deck" — two different requests writing one file.
+    if value != value.rstrip(". "):
+        _reject()
+    stem = value.split(".", 1)[0].strip().upper()
+    if stem in _WINDOWS_RESERVED_NAMES:
+        _reject()
     return value
 
 
@@ -633,6 +663,12 @@ async def process_file(request: Request):
     third-party service. Its sibling ``/open-explorer`` already did exactly
     this check; the omission here was inconsistent, not deliberate.
 
+    Validation runs over the **whole** batch before anything is submitted. A
+    one-pass loop that refused mid-way would already have started an Auphonic
+    upload for the earlier entries, and then abandon the response — leaving a
+    job running that the user was never told about and the lectures panel
+    never refreshed to show.
+
     Status codes:
     - 400: no path given, or a path outside the recordings root.
     - 200: submitted (missing files are skipped with a notice, as before).
@@ -648,19 +684,19 @@ async def process_file(request: Request):
 
     job_manager = _get_job_manager(request)
     root = _Path(request.app.state.recordings_root).resolve()
-    submitted = 0
+
+    # Pass 1 — resolve and contain. Nothing is submitted until every path in
+    # the batch has been judged.
+    accepted: list[_Path] = []
     for raw_path in raw_paths:
         path = _Path(str(raw_path))
-        if not path.exists():
-            logger.warning("Skipping missing file: {}", raw_path)
-            _push_notice(request, "warning", f"Skipped missing file: {path.name}")
-            continue
-        # resolve() after the existence check so a missing file keeps its
-        # friendlier "skipped" path rather than turning into a hard 400.
         try:
             resolved = path.resolve(strict=True)
-        except OSError as exc:  # pragma: no cover - raced deletion
-            logger.warning("Skipping unresolvable file {}: {}", raw_path, exc)
+        except OSError:
+            # Missing (or unresolvable) stays a skip-with-notice rather than a
+            # hard failure: a file can vanish between the page render and the
+            # click, and that is not the user's mistake.
+            logger.warning("Skipping missing file: {}", raw_path)
             _push_notice(request, "warning", f"Skipped missing file: {path.name}")
             continue
         try:
@@ -671,7 +707,14 @@ async def process_file(request: Request):
                 status_code=400,
                 detail="Path is outside the recordings root",
             ) from exc
-        path = resolved
+        if not resolved.is_file():
+            logger.warning("Refused to process {} — not a file", resolved)
+            raise HTTPException(status_code=400, detail="Path is not a file")
+        accepted.append(resolved)
+
+    # Pass 2 — submit.
+    submitted = 0
+    for path in accepted:
         try:
             # submit_async returns immediately; the actual blocking
             # backend.submit (Auphonic upload, etc.) runs on a worker
@@ -679,7 +722,7 @@ async def process_file(request: Request):
             job_manager.submit_async(path, options=ProcessingOptions())
             submitted += 1
         except Exception as exc:
-            logger.warning("Failed to submit {}: {}", raw_path, exc)
+            logger.warning("Failed to submit {}: {}", path, exc)
             _push_notice(request, "error", f"Failed to submit {path.name}: {exc}")
     if submitted:
         _push_notice(

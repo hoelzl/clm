@@ -667,6 +667,7 @@ def serve_recordings(
         console.print("[red]uvicorn is required. It should be a core CLM dependency.[/red]")
         raise SystemExit(1) from exc
 
+    from clm.infrastructure.web_security import remote_access_warning
     from clm.recordings.web.app import create_app
 
     # Resolve OBS settings from CLI args or CLM config
@@ -700,6 +701,13 @@ def serve_recordings(
     )
 
     url = f"http://{host if host != '0.0.0.0' else 'localhost'}:{port}"
+
+    # A wildcard bind promises remote access the Host allowlist cannot deliver
+    # on its own; say so here rather than letting the user discover it as a
+    # wall of 400s from another machine.
+    reach_warning = remote_access_warning(host, allowed_host)
+    if reach_warning:
+        console.print(f"[yellow]Note:[/yellow] {reach_warning}")
 
     if not no_browser:
         import webbrowser
@@ -752,7 +760,41 @@ def _configure_recordings_event_log(root_dir: Path) -> None:
             "{thread.name} | {name}:{function}:{line} - {message}"
         ),
     )
+    _forward_web_security_logs_to_loguru()
     console.print(f"[dim]Event log: {log_path}[/dim]")
+
+
+def _forward_web_security_logs_to_loguru() -> None:
+    """Route :mod:`clm.infrastructure.web_security` refusals into the event log.
+
+    That module is app-agnostic and so uses stdlib ``logging``, while the rest
+    of the recordings stack uses loguru — and only loguru has the
+    ``events.log`` sink. Without this bridge, a refused ``Host`` or a refused
+    cross-origin action would be the one class of event missing from the
+    forensic record, which is precisely the class you go looking for after an
+    incident.
+
+    Scoped to that single logger rather than installed on the root: a global
+    intercept would re-route every library's logging as a side effect of
+    starting the dashboard.
+    """
+    import logging as _logging
+
+    from loguru import logger as _loguru
+
+    from clm.infrastructure import web_security
+
+    class _ToLoguru(_logging.Handler):
+        def emit(self, record: _logging.LogRecord) -> None:
+            _loguru.bind(stdlib=record.name).opt(depth=0, exception=record.exc_info).log(
+                record.levelname, record.getMessage()
+            )
+
+    target = _logging.getLogger(web_security.__name__)
+    if any(isinstance(h, _ToLoguru) for h in target.handlers):
+        return
+    target.addHandler(_ToLoguru())
+    target.setLevel(_logging.INFO)
 
 
 def _get_obs_config() -> tuple[str, int, str]:

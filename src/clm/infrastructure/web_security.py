@@ -1,11 +1,10 @@
 """Browser-facing containment for CLM's local web apps.
 
-CLM ships two HTTP apps that a user runs on their own machine — the
-recordings dashboard (``clm recordings serve``) and the dashboard/Studio
-(``clm serve``). Both bind loopback by default, and both used to treat "the
-request arrived on the socket" as "the user asked for this". A web page open
-in the same browser can send a request to ``http://127.0.0.1:8008`` without
-any cooperation from the app, so that assumption is wrong twice over:
+Its one caller today is the **recordings dashboard** (``clm recordings
+serve``), which has no login at all: it treated "the request arrived on the
+socket" as "the user asked for this". A web page open in the same browser can
+send a request to ``http://127.0.0.1:8008`` without any cooperation from the
+app, so that assumption is wrong twice over:
 
 **CSRF.** A page on ``https://evil.example`` can auto-submit a form at any of
 the dashboard's ``POST`` routes. No token, no cookie, no user interaction —
@@ -38,6 +37,12 @@ not an oversight. Requests carrying *neither* ``Origin`` nor
 ``curl``, a script, or a test client looks like, and none of them are the
 threat model. Every browser CLM's dashboards support sends ``Origin`` on a
 cross-origin form post.
+
+Written to be app-agnostic because ``clm serve`` needs the same two guards
+(its dashboard API is unauthenticated, and its WebSocket accepts anyone) — but
+until that is wired, nothing here should be read as a claim about it. CLM's
+third HTTP app, the Worker API in :mod:`clm.infrastructure.api`, protects
+itself differently: a per-build bearer token on every route.
 
 Why hand-rolled rather than Starlette's ``TrustedHostMiddleware``: that one
 derives the host as ``header.split(":")[0]``, which turns ``[::1]:8000`` into
@@ -92,9 +97,14 @@ def extract_host(host_header: str) -> str:
             return value[1:end].lower()
         return value.lower()
     if value.count(":") == 1:
-        return value.rsplit(":", 1)[0].lower()
-    # No port, or a bare (invalid) IPv6 literal — either way, use it verbatim.
-    return value.lower()
+        host = value.rsplit(":", 1)[0].lower()
+    else:
+        # No port, or a bare (invalid) IPv6 literal — either way, use it verbatim.
+        host = value.lower()
+    # ``http://localhost./`` is a legal URL (an explicitly-absolute FQDN) and
+    # the browser sends the dot through. Treat it as the same host rather than
+    # 400-ing somebody who typed a legitimate address.
+    return host[:-1] if host.endswith(".") and len(host) > 1 else host
 
 
 def normalize_host_pattern(pattern: str) -> str:
@@ -137,6 +147,46 @@ def default_allowed_hosts(bind_host: str | None = None, extra: Iterable[str] = (
     return hosts
 
 
+def remote_access_warning(bind_host: str | None, extra: Iterable[str] = ()) -> str | None:
+    """Return a warning when the bind address promises more reach than the allowlist.
+
+    Binding ``0.0.0.0`` says "I want other machines to reach this", but the
+    host allowlist has no way to learn the *name* those machines will use, so
+    every one of their requests gets ``400 Invalid host header``. Without this
+    warning the symptom is a dashboard that appears to start normally and then
+    refuses everything remote, with the explanation only in a server log the
+    user is not watching.
+
+    Args:
+        bind_host: The address about to be bound.
+        extra: Operator-supplied allowed hosts.
+
+    Returns:
+        A message to print, or ``None`` when the configuration is coherent.
+    """
+    extras = [e for e in extra if e]
+    if extras:
+        return None
+    if not bind_host:
+        return None
+    host = normalize_host_pattern(bind_host)
+    if host in LOOPBACK_HOSTS:
+        return None
+    if host in ("0.0.0.0", "::"):
+        return (
+            f"Binding {bind_host} exposes this server to the network, but it will "
+            f"only answer to {', '.join(LOOPBACK_HOSTS)} — every request from "
+            f"another machine gets '400 Invalid host header'. Add "
+            f"--allowed-host <name-or-ip> for each address you will use to reach it "
+            f"(or --allowed-host '*' to accept any)."
+        )
+    return (
+        f"This server will answer to {host} and loopback only. If you reach it "
+        f"under a different name (a hostname rather than the bare address), add "
+        f"--allowed-host <name>."
+    )
+
+
 def host_is_allowed(host: str, allowed: Sequence[str]) -> bool:
     """True when ``host`` matches one of the ``allowed`` patterns.
 
@@ -167,6 +217,11 @@ def normalize_origin(origin: str) -> str | None:
         return None
     scheme = parts.scheme.lower()
     host = parts.hostname.lower()
+    if ":" in host:
+        # ``urlsplit`` strips the brackets off an IPv6 literal; putting them
+        # back keeps the result a parseable authority rather than the
+        # ambiguous ``http://::1:8008``.
+        host = f"[{host}]"
     try:
         port = parts.port
     except ValueError:
@@ -212,9 +267,13 @@ def _origin_matches_host(origin: str, host_header: str) -> bool:
     if origin_host != target_host:
         return False
     if not target_port_str:
-        # No port in Host means the default port for the scheme the client
-        # used; we cannot know it, so host equality is as far as we can go.
-        return True
+        # No port in Host means the client used the default port for whatever
+        # scheme it spoke, and we cannot see the scheme through a proxy. Accept
+        # only an origin that is *itself* on a default port: that keeps the
+        # ``tailscale serve`` case (Origin https://box.ts.net / Host box.ts.net)
+        # working, while refusing a dev server on localhost:3000 driving a
+        # dashboard reached as plain ``localhost``.
+        return origin_port is None
     return origin_port_str == target_port_str
 
 
@@ -290,7 +349,19 @@ class TrustedHostMiddleware:
             host,
             self.allowed_hosts,
         )
-        await _reject(scope, receive, send, status_code=400, detail="Invalid host header")
+        # The remediation belongs in the *body*: the person hitting this is
+        # looking at a browser, not at the server's log.
+        await _reject(
+            scope,
+            receive,
+            send,
+            status_code=400,
+            detail=(
+                f"Invalid host header: {host!r}.\n"
+                f"This server only answers to: {', '.join(self.allowed_hosts)}.\n"
+                f"Restart it with --allowed-host {host or '<name>'} to accept this name."
+            ),
+        )
 
 
 class OriginGuardMiddleware:
@@ -349,7 +420,14 @@ async def _reject(
     status_code: int,
     detail: str,
 ) -> None:
-    """Answer ``scope`` with a refusal, in whichever protocol it speaks."""
+    """Answer ``scope`` with a refusal, in whichever protocol it speaks.
+
+    ``status_code`` and ``detail`` apply to HTTP only. A refused handshake has
+    no equivalent: both refusals close with 1008 (policy violation), so a
+    WebSocket client cannot tell a bad ``Host`` from a bad ``Origin``. That is
+    deliberate — the distinction is in the server log, and the client is by
+    definition one we are refusing to talk to.
+    """
     if scope["type"] == "websocket":
         # ASGI lets a handshake be refused by closing before accepting; uvicorn
         # turns that into an HTTP 403. The connect message has to be consumed

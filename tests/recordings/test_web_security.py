@@ -98,7 +98,12 @@ class TestProcessPathContainment:
     def test_a_batch_is_refused_whole_if_any_path_escapes(
         self, client: TestClient, recording_root: Path, tmp_path: Path
     ):
-        """A good path alongside a bad one must not smuggle the bad one through."""
+        """Nothing at all is submitted when any entry in the batch escapes.
+
+        Validation runs as its own pass for exactly this reason: refusing
+        mid-loop would already have started an upload for the entries before
+        the bad one, while returning an error that says nothing about it.
+        """
         good = recording_root / "to-process" / "lecture--RAW.mkv"
         good.write_bytes(b"video")
         secret = tmp_path / "id_rsa"
@@ -108,10 +113,36 @@ class TestProcessPathContainment:
             response = client.post("/process", data={"raw_path": [str(good), str(secret)]})
 
         assert response.status_code == 400
-        # The good file may or may not have been submitted before the bad one
-        # was reached, but the secret never is.
-        for call in submit.call_args_list:
-            assert Path(call.args[0]) != secret.resolve()
+        submit.assert_not_called()
+
+    def test_a_directory_is_refused(self, client: TestClient, recording_root: Path):
+        """A directory resolves and is contained, but is not something to upload."""
+        with patch("clm.recordings.workflow.job_manager.JobManager.submit_async") as submit:
+            response = client.post(
+                "/process", data={"raw_path": str(recording_root / "to-process")}
+            )
+
+        assert response.status_code == 400
+        assert "not a file" in response.text
+        submit.assert_not_called()
+
+    def test_a_symlink_out_of_the_root_is_refused(
+        self, client: TestClient, recording_root: Path, tmp_path: Path
+    ):
+        """Containment is judged after resolution, not on the literal path."""
+        secret = tmp_path / "id_rsa"
+        secret.write_text("PRIVATE KEY", encoding="utf-8")
+        link = recording_root / "to-process" / "innocent--RAW.mkv"
+        try:
+            link.symlink_to(secret)
+        except (OSError, NotImplementedError):
+            pytest.skip("symlinks unavailable (Windows without developer mode)")
+
+        with patch("clm.recordings.workflow.job_manager.JobManager.submit_async") as submit:
+            response = client.post("/process", data={"raw_path": str(link)})
+
+        assert response.status_code == 400
+        submit.assert_not_called()
 
     def test_a_file_under_the_root_is_still_submitted(
         self, client: TestClient, recording_root: Path
@@ -141,7 +172,23 @@ class TestDeckIdentityValidation:
 
     @pytest.mark.parametrize(
         "course_slug",
-        ["../../../evil", "..", ".", "a/b", "a\\b", "C:evil", "nul\x00byte"],
+        [
+            "../../../evil",
+            "..",
+            ".",
+            "a/b",
+            "a\\b",
+            "C:evil",
+            "nul\x00byte",
+            "ctrl\x01char",
+            "trailing.",
+            "trailing ",
+            # Windows device names ignore the extension, so ``NUL.json`` is the
+            # null device: the state write succeeds and the data disappears.
+            "NUL",
+            "nul",
+            "COM1",
+        ],
     )
     def test_arm_refuses_an_unsafe_course_slug(self, client: TestClient, course_slug: str):
         response = client.post(
@@ -155,12 +202,12 @@ class TestDeckIdentityValidation:
         assert response.status_code == 400
 
     def test_arm_refuses_a_blank_course_slug(self, client: TestClient):
-        """422 is FastAPI's own answer for a blank required field — also a refusal."""
         response = client.post(
             "/arm",
             data={"course_slug": "  ", "section_name": "section", "deck_name": "deck"},
         )
-        assert response.status_code in (400, 422)
+        assert response.status_code == 400
+        assert "must not be empty" in response.text
 
     def test_state_file_is_never_written_outside_the_config_dir(self, client: TestClient):
         """The concrete escape: ``get_state_path`` joins the slug unsanitized."""
@@ -176,18 +223,29 @@ class TestDeckIdentityValidation:
         assert response.status_code == 400
         save.assert_not_called()
 
-    @pytest.mark.parametrize("field", ["section_name", "deck_name"])
-    def test_record_refuses_traversal_in_any_component(self, client: TestClient, field: str):
+    @pytest.mark.parametrize("route", ["/record", "/advance"])
+    @pytest.mark.parametrize("field", ["course_slug", "section_name", "deck_name"])
+    def test_action_routes_refuse_traversal_in_any_component(
+        self, client: TestClient, route: str, field: str
+    ):
         data = {"course_slug": "course", "section_name": "section", "deck_name": "deck"}
         data[field] = ".."
-        response = client.post("/record", data=data)
+        response = client.post(route, data=data)
         assert response.status_code == 400
 
     def test_take_panel_refuses_traversal(self, client: TestClient):
-        response = client.get("/decks/course/section/../takes")
-        # Either the router does not match the traversed path, or the handler
-        # rejects it — both are containment; what must not happen is a 200.
-        assert response.status_code in (400, 404, 405)
+        """Percent-encoded, so the traversal survives client-side normalization.
+
+        A literal ``..`` segment is collapsed by httpx before the request is
+        sent, which would make this test pass with the validation deleted.
+        """
+        response = client.get("/decks/course/section/%2e%2e/takes")
+        assert response.status_code == 400
+        assert "deck_name" in response.text
+
+    def test_restore_refuses_traversal(self, client: TestClient):
+        response = client.post("/decks/course/section/%2e%2e/takes/1/restore")
+        assert response.status_code == 400
 
     def test_a_normal_deck_name_still_works(self, client: TestClient):
         """Names with spaces, dots and parentheses are ordinary here."""
@@ -199,7 +257,7 @@ class TestDeckIdentityValidation:
                 "deck_name": "topic_100_intro (part 1).py",
             },
         )
-        assert response.status_code != 400
+        assert response.status_code == 200
 
 
 class TestCrossOriginContainment:
@@ -216,12 +274,20 @@ class TestCrossOriginContainment:
         response = client.post("/disarm", headers={"Origin": "https://evil.example"})
         assert response.status_code == 403
 
+    @pytest.mark.parametrize("method", ["put", "patch", "delete"])
+    def test_every_unsafe_method_is_guarded(self, client: TestClient, method: str):
+        """Pins the SAFE_METHODS complement — not just POST."""
+        response = getattr(client, method)("/disarm", headers={"Origin": "https://evil.example"})
+        assert response.status_code == 403
+
     def test_the_dashboards_own_htmx_post_is_served(self, client: TestClient):
         response = client.post(
             "/disarm",
             headers={"Origin": LOCAL_URL, "Sec-Fetch-Site": "same-origin"},
         )
-        assert response.status_code != 403
+        # 409 is the session's own "nothing armed" answer — the point is that
+        # the request reached the handler at all.
+        assert response.status_code in (200, 409)
 
     def test_reading_the_dashboard_is_never_blocked(self, client: TestClient):
         assert client.get("/").status_code == 200
@@ -242,3 +308,40 @@ class TestCrossOriginContainment:
             )
         client = TestClient(application, base_url="http://box.ts.net")
         assert client.get("/").status_code == 200
+
+    def test_a_wildcard_host_pattern_is_served(self, recording_root: Path):
+        """``*.ts.net`` has to survive the middleware's own normalization."""
+        from clm.recordings.web.app import create_app
+
+        with patch("clm.recordings.workflow.obs.ObsClient"):
+            application = create_app(
+                recordings_root=recording_root,
+                allowed_hosts=["*.ts.net"],
+            )
+        assert TestClient(application, base_url="http://box.ts.net").get("/").status_code == 200
+        assert TestClient(application, base_url="http://evilts.net").get("/").status_code == 400
+
+    def test_an_opted_in_origin_can_drive_actions(self, recording_root: Path):
+        """``--allowed-origin`` end-to-end, not just through the unit helper."""
+        from clm.recordings.web.app import create_app
+
+        with patch("clm.recordings.workflow.obs.ObsClient"):
+            application = create_app(
+                recordings_root=recording_root,
+                allowed_hosts=["box.ts.net"],
+                allowed_origins=["https://proxy.example"],
+            )
+        client = TestClient(application, base_url="http://box.ts.net")
+
+        allowed = client.post("/disarm", headers={"Origin": "https://proxy.example"})
+        assert allowed.status_code != 403
+
+        refused = client.post("/disarm", headers={"Origin": "https://other.example"})
+        assert refused.status_code == 403
+
+    def test_the_400_body_says_how_to_fix_it(self, app):
+        """The user hitting this is looking at a browser, not at the server log."""
+        rebound = TestClient(app, base_url="http://evil.example:8008")
+        response = rebound.get("/")
+        assert response.status_code == 400
+        assert "--allowed-host" in response.text
