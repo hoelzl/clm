@@ -342,3 +342,42 @@ jobs:
         CLM_E2E_TIMEOUT: 600
         CLM_ENABLE_TEST_LOGGING: "1"
         CLM_LOG_LEVEL: INFO
+
+  # ------------------------------------------------------------------
+  # A red master must be impossible to miss.
+  #
+  # "Docker Integration Tests" is deliberately NOT a required status check
+  # (its image builds fetch from four external hosts and flake ~12% of the
+  # time on registry timeouts and partial transfers). That is a reasonable
+  # trade, but it has a sharp edge: a PR can be green and still break master,
+  # which is exactly what happened when PR #667 un-skipped a module containing
+  # docker-marked tests. Nothing surfaced it until someone happened to look.
+  #
+  # This job closes that gap for EVERY job in the workflow, not just docker:
+  # any failure on a push to the default branch files (or comments on) an
+  # issue within minutes. It never runs for pull requests — a red PR is
+  # already visible to the person who opened it.
+  # ------------------------------------------------------------------
+  report-master-failure:
+    name: Report master failure
+    needs: [changes, test, lint, docker-test]
+    if: failure() && github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          lfs: false
+
+      - uses: ./.github/actions/report-failure
+        with:
+          label: master-red
+          title: CI is failing on master
+          label-description: A post-merge CI run on master failed
+          context: >-
+            At least one job failed on `master` after a merge. Note that the
+            **Docker Integration Tests** job is not a required status check, so
+            a failure there can reach `master` through a fully green PR — check
+            it explicitly before assuming the required suites are at fault.
