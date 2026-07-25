@@ -7,7 +7,6 @@ This module tests the PlantUML conversion functionality including:
 - Error handling
 """
 
-import os
 import re
 import sys
 from pathlib import Path
@@ -21,32 +20,24 @@ def _can_import_plantuml():
     """Check if plantuml_converter can be imported."""
     try:
         # The module validates JAR path at import time
-        from clm.workers.plantuml import plantuml_converter
+        from clm.workers.plantuml import plantuml_converter  # noqa: F401
 
         return True
     except (FileNotFoundError, ImportError):
         return False
 
 
-# Try to find the PlantUML JAR
-def _find_plantuml_jar():
-    """Find PlantUML JAR in known locations."""
-    possible_paths = [
-        Path(__file__).parents[4] / "docker" / "plantuml" / "plantuml-1.2024.6.jar",
-        Path(__file__).parents[4] / "plantuml-1.2024.6.jar",
-    ]
-    for path in possible_paths:
-        if path.exists():
-            return str(path)
-    return None
-
-
-# Set the environment variable if needed
-_jar_path = _find_plantuml_jar()
-if _jar_path and not _can_import_plantuml():
-    os.environ["PLANTUML_JAR"] = _jar_path
-
-# Now try to import
+# ``PLANTUML_JAR`` is resolved once, in the root ``tests/conftest.py``
+# (``PLANTUML_JAR_CANDIDATES``), which pytest imports before any test module.
+#
+# This module used to mutate ``os.environ["PLANTUML_JAR"]`` at *import* time
+# from its own candidate list — whose paths were one directory level too high
+# (``parents[4]``, i.e. above the repository) and therefore never matched
+# anyway. Under xdist that arrangement made PlantUML availability depend on
+# collection order: whether this module happened to be imported before another
+# module that reads the variable (finding T10). Discovery now happens in
+# exactly one place and no test module writes to the environment at import
+# time.
 HAS_PLANTUML = _can_import_plantuml()
 
 # Skip module if PlantUML not available

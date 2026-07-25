@@ -427,17 +427,32 @@ COURSE_2_XML = """
 DATA_DIR = Path(__file__).parent / "test-data"
 
 
+# Repository root (this file lives in ``<repo>/tests/``).
+REPO_ROOT = Path(__file__).parent.parent
+
+# Where the PlantUML JAR lives in a checkout. The old discovery path pointed at
+# ``tests/services/plantuml-converter/`` — the pre-PR-#239 vendored location,
+# which no longer exists, so this fallback silently found nothing and local
+# availability depended on an import-time ``os.environ`` mutation in
+# ``tests/workers/plantuml/test_plantuml_converter.py`` (finding T10). That
+# made PlantUML availability ordering-dependent under xdist. This is now the
+# single fallback, and the test module no longer touches the environment.
+PLANTUML_JAR_CANDIDATES = [
+    REPO_ROOT / "docker" / "plantuml" / "plantuml-1.2024.6.jar",
+]
+
+
 # Configure external tool paths at module load time
 # This ensures they're available before test collection
 def _setup_external_tools():
     """Set up environment variables for external tools if not already set."""
     # PlantUML JAR path
     if "PLANTUML_JAR" not in os.environ:
-        repo_root = Path(__file__).parent
-        plantuml_jar = repo_root / "services" / "plantuml-converter" / "plantuml-1.2024.6.jar"
-        if plantuml_jar.exists():
-            os.environ["PLANTUML_JAR"] = str(plantuml_jar)
-            logging.info(f"PLANTUML_JAR set to: {plantuml_jar}")
+        for plantuml_jar in PLANTUML_JAR_CANDIDATES:
+            if plantuml_jar.exists():
+                os.environ["PLANTUML_JAR"] = str(plantuml_jar)
+                logging.info(f"PLANTUML_JAR set to: {plantuml_jar}")
+                break
 
     # Draw.io executable path
     if "DRAWIO_EXECUTABLE" not in os.environ:
