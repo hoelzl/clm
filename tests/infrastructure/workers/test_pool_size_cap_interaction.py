@@ -15,6 +15,12 @@ runs after the autouse fixture, so ``monkeypatch.setenv`` wins) and asserts the
 clamp reaches ``WorkerLifecycleManager.start_managed_workers`` — i.e. that a
 spec asking for more workers than the operator cap allows starts the capped
 number, loudly.
+
+Deliberately an *operator* cap (``CLM_MAX_WORKERS``) rather than the CPU/RAM
+caps: those depend on the host, so asserting on them would make the test pass
+on a 32-core dev box and fail on a 2-core CI runner. The neutraliser's
+128-worker pinning stays in force here, which is exactly the regime the rest of
+the suite runs under.
 """
 
 import logging
@@ -64,6 +70,18 @@ def test_no_clamp_without_an_operator_cap(monkeypatch):
     Without this, the test above would also pass if the resolver had started
     returning 1 for some unrelated reason.
     """
+    from clm.infrastructure.workers import pool_size_cap
+
+    # This module relies on the autouse neutraliser pinning the host caps, so
+    # the assertion below is about the *operator* cap and nothing else. Say so
+    # explicitly: if the exemption match in ``_neutralise_pool_size_cap`` ever
+    # swallows this module again, the failure names the cause instead of
+    # reading as a mysterious off-by-one on a small runner.
+    assert pool_size_cap._compute_cpu_cap() >= REQUESTED_WORKERS, (
+        "the autouse pool-size neutraliser is not in force for this module — "
+        "check the exemption match in tests/conftest.py::_neutralise_pool_size_cap"
+    )
+
     monkeypatch.delenv("CLM_MAX_WORKERS", raising=False)
     config = load_worker_config(_worker_overrides(REQUESTED_WORKERS))
 

@@ -865,7 +865,13 @@ def _neutralise_pool_size_cap(monkeypatch, request):
       suite could not observe what happens when the clamp actually engages on
       the path that uses it.
     """
-    if "test_pool_size_cap" in request.node.nodeid:
+    # Match the module FILE, not a bare substring. The old check was
+    # ``"test_pool_size_cap" in nodeid``, which silently exempted any module
+    # whose name merely started that way — including
+    # ``test_pool_size_cap_interaction.py``, which then saw the *real* host CPU
+    # and RAM caps and became environment-dependent (3 requested workers
+    # resolved to 3 on a 32-core dev box and to 2 on a 2-core CI runner).
+    if "test_pool_size_cap.py" in request.node.nodeid:
         return
 
     monkeypatch.setattr(
