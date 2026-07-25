@@ -27,18 +27,19 @@ from clm.infrastructure.database.job_queue import JobQueue
 from clm.infrastructure.database.schema import init_database
 from clm.infrastructure.workers.config_loader import load_worker_config
 from clm.infrastructure.workers.lifecycle_manager import WorkerLifecycleManager
+from tests.docker_image_helpers import (
+    docker_available,
+    find_drawio_image,
+    find_notebook_image,
+)
 
 
+# Image discovery and the daemon probe live in ``tests/docker_image_helpers.py``
+# so every Docker-marked test agrees on which image to use. These tests used to
+# hardcode a *published* DrawIO tag, which meant they ran against Docker Hub
+# rather than against the image this checkout builds.
 def _is_docker_available() -> bool:
-    """Check if Docker daemon is available."""
-    try:
-        import docker
-
-        client = docker.from_env()
-        client.ping()
-        return True
-    except Exception:
-        return False
+    return docker_available()
 
 
 # Skip all tests in this module if Docker is not available
@@ -122,34 +123,7 @@ def docker_test_env(tmp_path):
 
 
 def _find_notebook_docker_image() -> str | None:
-    """Find the best available notebook Docker image for testing.
-
-    Checks for images in order of preference:
-    1. clm-notebook-processor:lite-test (CI-built test image)
-    2. docker.io/mhoelzl/clm-notebook-processor:lite (locally built via clm docker build)
-    3. docker.io/mhoelzl/clm-notebook-processor:latest (locally built via clm docker build)
-    4. clm-notebook-processor:full (CI-built full image)
-    5. docker.io/mhoelzl/clm-notebook-processor:full (locally built full image)
-    """
-    try:
-        import docker
-
-        client = docker.from_env()
-        for tag in [
-            "clm-notebook-processor:lite-test",
-            "docker.io/mhoelzl/clm-notebook-processor:lite",
-            "docker.io/mhoelzl/clm-notebook-processor:latest",
-            "clm-notebook-processor:full",
-            "docker.io/mhoelzl/clm-notebook-processor:full",
-        ]:
-            try:
-                client.images.get(tag)
-                return tag
-            except docker.errors.ImageNotFound:
-                continue
-        return None
-    except Exception:
-        return None
+    return find_notebook_image()
 
 
 @pytest.fixture
@@ -489,35 +463,7 @@ class TestDockerPathConversionIntegration:
 
 
 def _find_drawio_docker_image() -> str | None:
-    """Find the best available DrawIO Docker image for testing.
-
-    Same preference order as ``_find_notebook_docker_image``, and for the same
-    reason: newest-built first. These tests used to *hardcode* the published
-    ``mhoelzl/clm-drawio-converter:latest``, which meant they ran against
-    whatever was last pulled from Docker Hub rather than against the image the
-    working tree builds — so a host-side change to the worker protocol failed
-    here as "job stayed pending" with the real cause (an image predating the
-    change) invisible. The CI-built ``:test`` tag now wins.
-
-    1. clm-drawio-converter:test (CI-built test image)
-    2. docker.io/mhoelzl/clm-drawio-converter:latest (published)
-    """
-    try:
-        import docker
-
-        client = docker.from_env()
-        for tag in [
-            "clm-drawio-converter:test",
-            "docker.io/mhoelzl/clm-drawio-converter:latest",
-        ]:
-            try:
-                client.images.get(tag)
-                return tag
-            except docker.errors.ImageNotFound:
-                continue
-        return None
-    except Exception:
-        return None
+    return find_drawio_image()
 
 
 @pytest.fixture
