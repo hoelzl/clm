@@ -332,6 +332,32 @@ The CI pipeline runs three test suites in order:
    pytest -m "e2e and not docker"
    ```
 
+Each of the three runs on Python 3.12 and 3.13 as separate jobs. A fourth,
+non-required job builds the Docker images and runs `-m "docker"`.
+
+### The nightly `slow` tier
+
+`slow` is excluded from every PR-CI step *and* from the local default, so a
+`slow` test would otherwise run nowhere at all. `.github/workflows/nightly.yml`
+runs it once a day:
+
+```bash
+pytest -m "slow and not docker"
+```
+
+~37 tests, including the only proof that a cached notebook replays
+byte-identically to a direct execution (`tests/workers/notebook/test_cache_equivalence.py`),
+the worker-reuse-across-builds e2e tests, and all 18 real-subprocess CLI tests.
+
+**Failures file a GitHub issue** labelled `nightly-failure` — or comment on the
+existing open one, so an outage produces one issue rather than one per night.
+That routing is the point of the job: a nightly nobody reads manufactures the
+feeling of coverage without providing any. `workflow_dispatch` is enabled, so
+the run (and its failure route) can be exercised on demand.
+
+Marker choice, restated: if you want a test kept off the per-commit gate but
+still run on every PR, mark it `integration`, **not** `slow`.
+
 ### CI Environment Setup
 
 The GitHub Actions runner includes:
