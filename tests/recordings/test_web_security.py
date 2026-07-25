@@ -269,6 +269,11 @@ class TestDeckIdentityValidation:
             # spec: 33 of its 39 section names contain a colon. Validating
             # these as if they were filenames took out the whole Lectures page.
             "Woche 01: Einführung, LLMs und Python in JupyterLite",
+            # And this one carries a *slash* — sanitize_file_name replaces it
+            # with "_", so it never becomes a separator. Found by driving the
+            # dashboard with all 22 section names from the real spec after the
+            # colon fix; three hand-picked examples had missed it.
+            "Woche 12: Datenanalyse mit pandas (+ ML-/Metrik-Kostprobe)",
             "Week 04: Chatbots in Practice -- CLI, Gradio, Streaming",
             "Woche 02: Python-Setup, Webservices und erste LLM-API",
         ],

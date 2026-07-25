@@ -266,36 +266,42 @@ def _validate_component(value: str, *, field: str) -> str:
     For ``section_name`` and ``deck_name``, which are titles the user wrote.
     They reach the filesystem only through
     :func:`~clm.core.utils.text_utils.sanitize_file_name`, which deletes
-    ``; ! ? " ' :`` and replaces ``/ \\ $ # % & < > * = ^ € |`` — so the only
-    question left is containment, and the answer must not depend on the value
-    reading like a tidy filename. "Woche 01: Einführung, LLMs und Python in
-    JupyterLite" is a real section name.
+    ``; ! ? " ' :`` and replaces ``/ \\ $ # % & < > * = ^ € |`` with ``_``.
 
-    Both forms are checked. The raw value must not carry a separator (some
-    scanners join it before sanitizing), and the *sanitized* value must not
-    come out as ``.``/``..`` — ``":..:"`` sanitizes to ``..``, which would
-    escape the recordings root even though the raw value looks harmless.
+    So the question is **not** whether the value looks like a tidy filename —
+    it is whether its *sanitized* form can escape. Judging the raw value is a
+    false positive, and an expensive one: real section names are
+    "Woche 01: Einführung, LLMs und Python in JupyterLite" and "Woche 12:
+    Datenanalyse mit pandas (+ ML-/Metrik-Kostprobe)". The first carries a
+    colon, the second a slash, and both are perfectly safe by the time they
+    reach disk.
+
+    What the sanitizer does *not* neutralize is dots: ``":..:"`` sanitizes to
+    ``..``, which escapes the recordings root while looking harmless raw. Nor
+    does it strip null bytes or control characters, which produce an
+    unusable path rather than a wrong one.
 
     Raises:
-        HTTPException: 400 when ``value`` is blank, is a relative-path
-            component before or after sanitizing, or contains a separator,
-            a null byte or a control character.
+        HTTPException: 400 when ``value`` is blank, contains a null byte or a
+            control character, or sanitizes to nothing, to ``.``/``..``, or to
+            anything still carrying a separator.
     """
     from clm.core.utils.text_utils import sanitize_file_name
 
     if not value or not value.strip():
         raise HTTPException(status_code=400, detail=f"{field} must not be empty")
-    if _is_relative_component(value):
-        _reject_name(value, field)
-    for char in _CONTAINMENT_UNSAFE_CHARS:
-        if char in value:
-            _reject_name(value, field)
     if any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
         _reject_name(value, field)
 
     sanitized = sanitize_file_name(value)
     if not sanitized.strip() or _is_relative_component(sanitized):
         _reject_name(value, field)
+    # Belt and braces: the sanitizer replaces both separators today, and this
+    # holds it to that. If it ever stops, this fails closed instead of quietly
+    # letting a component become a path.
+    for char in _CONTAINMENT_UNSAFE_CHARS:
+        if char in sanitized:
+            _reject_name(value, field)
     return value
 
 
