@@ -80,14 +80,14 @@ class TestWorkerConfig:
             worker_type="notebook",
             count=2,
             execution_mode="docker",
-            image="notebook-processor:latest",
+            image="clm-notebook-processor:latest",
             memory_limit="1g",
         )
 
         assert config.worker_type == "notebook"
         assert config.count == 2
         assert config.execution_mode == "docker"
-        assert config.image == "notebook-processor:latest"
+        assert config.image == "clm-notebook-processor:latest"
         assert config.memory_limit == "1g"
         assert config.max_job_time == 600  # default
 
@@ -519,7 +519,7 @@ class TestDockerWorkerExecutor:
             worker_type="notebook",
             count=1,
             execution_mode="docker",
-            image="notebook-processor:latest",
+            image="clm-notebook-processor:latest",
             memory_limit="1g",
         )
 
@@ -533,7 +533,7 @@ class TestDockerWorkerExecutor:
         call_args = mock_client.containers.run.call_args
 
         # Check image (now passed as kwargs since we use **run_kwargs)
-        assert call_args.kwargs["image"] == "notebook-processor:latest"
+        assert call_args.kwargs["image"] == "clm-notebook-processor:latest"
 
         # Check environment
         env = call_args.kwargs["environment"]
@@ -569,7 +569,7 @@ class TestDockerWorkerExecutor:
             worker_type="notebook",
             count=1,
             execution_mode="docker",
-            image="notebook-processor:latest",
+            image="clm-notebook-processor:latest",
         )
 
         # Start worker
@@ -606,7 +606,7 @@ class TestDockerWorkerExecutor:
             worker_type="notebook",
             count=1,
             execution_mode="docker",
-            image="notebook-processor:latest",
+            image="clm-notebook-processor:latest",
         )
 
         # Start worker
