@@ -315,48 +315,75 @@ CLM uses GitHub Actions for continuous integration. The CI workflow runs on ever
 
 ### What Tests Run on CI?
 
-The CI pipeline runs three test suites in order:
+Every PR runs **four** suites, as parallel jobs on a `python-version × suite`
+matrix (3.12 and 3.13):
 
-1. **Unit Tests**: Fast tests without external dependencies
-   ```bash
-   pytest -m "not slow and not integration and not e2e and not docker"
-   ```
+| Suite | Selector |
+|---|---|
+| `unit` | `-m "not slow and not integration and not e2e and not docker"` |
+| `integration` | `-m "integration and not docker and not slow"` |
+| `e2e` | `-m "e2e and not docker and not slow"` |
+| `slow` | `-m "slow and not docker"` |
 
-2. **Integration Tests**: Tests with workers and full setup (excluding Docker)
-   ```bash
-   pytest -m "integration and not docker"
-   ```
+The four selectors partition cleanly — nothing runs twice. All eight jobs plus
+`Lint and type check` are **required** status checks.
 
-3. **E2E Tests**: Full end-to-end course conversion tests (excluding Docker)
-   ```bash
-   pytest -m "e2e and not docker"
-   ```
+A ninth job builds the Docker images and runs `-m "docker"`. It is **not**
+required: the image builds fetch base images plus deno / ijava / dotnet / the
+DrawIO `.deb` from four external hosts, and that has produced a ~12% infra
+failure rate (Docker Hub timeouts, partial `curl` transfers) unrelated to any
+change. Consequence worth internalising: **a green PR proves nothing about the
+Docker tier**, and a Docker regression can reach `master`. Before merging
+anything that un-skips a test module or touches worker/image wiring, check what
+it does under `-m docker`.
 
-Each of the three runs on Python 3.12 and 3.13 as separate jobs. A fourth,
-non-required job builds the Docker images and runs `-m "docker"`.
+> **Adding or renaming a suite?** Required checks are matched by job *name*, so
+> a matrix change must be paired with an update to the "Require CI green"
+> ruleset in the same breath. A required check that never reports leaves every
+> PR stuck on "Expected — waiting for status".
 
-### The nightly `slow` tier
+#### Why `slow` is on PR CI and not nightly-only
 
-`slow` is excluded from every PR-CI step *and* from the local default, so a
-`slow` test would otherwise run nowhere at all. `.github/workflows/nightly.yml`
-runs it once a day:
+It used to be excluded everywhere — from all three CI steps *and* the local
+default — so ~37 tests ran nowhere at all, including the only proof that a
+cached notebook replays byte-identically to a direct execution
+(`tests/workers/notebook/test_cache_equivalence.py`), the
+worker-reuse-across-builds e2e tests, and all 18 real-subprocess CLI tests.
 
-```bash
-pytest -m "slow and not docker"
-```
+It was never excluded for cost: the tier is 37 tests in ~78 s at `-n 4`. As a
+*parallel* job it adds machine-minutes but no wall clock — the `unit` job runs
+~4.5 min and the Docker job ~6.5 min.
 
-~37 tests, including the only proof that a cached notebook replays
-byte-identically to a direct execution (`tests/workers/notebook/test_cache_equivalence.py`),
-the worker-reuse-across-builds e2e tests, and all 18 real-subprocess CLI tests.
+Marker choice, restated: `integration` keeps a test off the per-commit gate but
+on every PR. `slow` now also runs on every PR, so the two differ only in which
+job they land in — pick by what the test *is*, not by where you want it to run.
+
+### The nightly full-suite run
+
+`.github/workflows/nightly.yml` is a **flake and rot detector**, not a coverage
+backstop. It runs the whole suite against *unchanged* `master`: `-m "not docker"`
+in one job, and the Docker tier (images built from scratch) in another.
+
+That is the one thing PR CI structurally cannot do. A PR run tells you "this
+change is fine"; thirty runs of identical code tell you "this test is 3% flaky",
+which is how a contention regression like issue #163 surfaces before it wastes
+someone's afternoon. It also means a red Docker tier — not a required check —
+surfaces within a day even if nobody inspects the merge commit's CI.
+
+(Dependency drift, the other usual nightly justification, barely applies here:
+CI installs from `uv.lock` with `UV_EXCLUDE_NEWER` pinned, so nothing moves
+underneath us.)
 
 **Failures file a GitHub issue** labelled `nightly-failure` — or comment on the
 existing open one, so an outage produces one issue rather than one per night.
 That routing is the point of the job: a nightly nobody reads manufactures the
-feeling of coverage without providing any. `workflow_dispatch` is enabled, so
-the run (and its failure route) can be exercised on demand.
+feeling of coverage without providing any. The mechanism lives in the
+`.github/actions/report-failure` composite action. `workflow_dispatch` is
+enabled, so the run and its failure route can be exercised on demand.
 
-Marker choice, restated: if you want a test kept off the per-commit gate but
-still run on every PR, mark it `integration`, **not** `slow`.
+When triaging a nightly failure, check first whether the same test failed on
+earlier nights. `master` did not change between runs, so a first-time failure
+with no corresponding merge is a **flake**, not a regression.
 
 ### CI Environment Setup
 

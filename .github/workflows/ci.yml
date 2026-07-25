@@ -12,7 +12,7 @@ jobs:
   # test/lint/docker pipeline. Docs-only changes (design notes, READMEs,
   # changelog fragments) skip the expensive jobs to save CI minutes.
   #
-  # IMPORTANT: the six "Test on Python 3.1x (suite)" jobs and
+  # IMPORTANT: the eight "Test on Python 3.1x (suite)" jobs and
   # "Lint and type check" are *required* status checks (see the "Require CI
   # green" ruleset). A required check that never reports leaves the PR stuck
   # "Expected — waiting for status". So those jobs must always RUN and report
@@ -22,7 +22,8 @@ jobs:
   #
   # Required checks are matched by job NAME, so renaming a test job (or
   # changing the matrix dimensions) requires updating the ruleset in the same
-  # breath (issue #559 landed the python-version × suite split this way).
+  # breath (issue #559 landed the python-version × suite split this way;
+  # adding the ``slow`` suite widened it from six jobs to eight).
   #
   # The doc-only globs are deliberately narrow: ``src/clm/cli/info_topics/*.md``
   # and other markdown shipped under ``src/`` are covered by tests, so a blanket
@@ -62,6 +63,12 @@ jobs:
     # The suites run as parallel jobs instead of sequential steps (issue #559):
     # per-job setup is ~40 s with warm caches, so the split costs ~3 machine-
     # minutes and cuts the test wall clock from ~7 to ~4 minutes.
+    #
+    # ``slow`` joined the matrix rather than staying nightly-only (finding T2 /
+    # decision D12, revisited): the tier is 37 tests / ~78 s at -n 4, so as a
+    # PARALLEL job it costs machine-minutes but no wall clock — the unit job is
+    # ~4.5 min and the docker job ~6.5 min, both longer. It was never excluded
+    # for cost. The other three suites keep ``not slow``, so nothing runs twice.
     name: Test on Python ${{ matrix.python-version }} (${{ matrix.suite }})
     needs: changes
     runs-on: ubuntu-latest
@@ -70,7 +77,7 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.12", "3.13"]
-        suite: [unit, integration, e2e]
+        suite: [unit, integration, e2e, slow]
 
     steps:
     - name: Checkout code
@@ -191,6 +198,21 @@ jobs:
         uv run --no-sync pytest -v -m "e2e and not docker and not slow" --timeout=600 --log-cli-level=INFO --cov=src/clm --cov-report=xml --cov-report=term
       env:
         CLM_E2E_TIMEOUT: 600  # 10 minutes timeout for E2E tests (allows multi-build tests)
+        CLM_ENABLE_TEST_LOGGING: "1"
+        CLM_LOG_LEVEL: INFO
+
+    # The tier the other three exclude. Contains the only proof that a cached
+    # notebook replays byte-identically to a direct execution
+    # (test_cache_equivalence.py), the worker-reuse-across-builds e2e tests
+    # covering the PR #595 bug, all 18 real-subprocess CLI tests, and the
+    # high-concurrency Direct-worker tests. Timeout matches the nightly's
+    # former value; the real-subprocess tests are the long poles.
+    - name: Run slow tests
+      if: needs.changes.outputs.code == 'true' && matrix.suite == 'slow'
+      run: |
+        uv run --no-sync pytest -v -m "slow and not docker" --timeout=900 --log-cli-level=INFO --cov=src/clm --cov-report=xml --cov-report=term
+      env:
+        CLM_E2E_TIMEOUT: 900
         CLM_ENABLE_TEST_LOGGING: "1"
         CLM_LOG_LEVEL: INFO
 

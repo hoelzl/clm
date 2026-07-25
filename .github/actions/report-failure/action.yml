@@ -1,0 +1,96 @@
+name: Report a CI failure as an issue
+description: >-
+  File a GitHub issue for a failed scheduled or post-merge run, or comment on
+  the existing open one so an outage produces one issue rather than one per
+  occurrence. Creates the label if it does not exist, so there is no manual
+  setup step to forget.
+
+inputs:
+  label:
+    description: Label used both to find the existing issue and to tag a new one.
+    required: true
+  title:
+    description: Title for a newly created issue.
+    required: true
+  context:
+    description: >-
+      Extra markdown appended to the body, explaining what this run covers and
+      why its failure matters. Keep it short and specific.
+    required: false
+    default: ''
+  label-color:
+    description: Hex colour (no leading '#') used when the label has to be created.
+    required: false
+    default: 'b60205'
+  label-description:
+    description: Description used when the label has to be created.
+    required: false
+    default: 'An automated run failed'
+  github-token:
+    description: "Token carrying the `issues: write` permission."
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: File or update the failure issue
+      uses: actions/github-script@v8
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const LABEL = ${{ toJSON(inputs.label) }};
+          const TITLE = ${{ toJSON(inputs.title) }};
+          const CONTEXT = ${{ toJSON(inputs.context) }};
+          const LABEL_COLOR = ${{ toJSON(inputs['label-color']) }};
+          const LABEL_DESCRIPTION = ${{ toJSON(inputs['label-description']) }};
+
+          const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+          const body = [
+            `The **${context.workflow}** workflow failed.`,
+            ``,
+            `- Run: ${runUrl}`,
+            `- Commit: ${context.sha}`,
+            `- Branch/ref: ${context.ref}`,
+            `- Trigger: ${context.eventName}`,
+            ...(CONTEXT ? [``, CONTEXT] : []),
+          ].join('\n');
+
+          // The label must exist before it can be applied.
+          try {
+            await github.rest.issues.getLabel({
+              owner: context.repo.owner, repo: context.repo.repo, name: LABEL,
+            });
+          } catch (e) {
+            await github.rest.issues.createLabel({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: LABEL,
+              color: LABEL_COLOR,
+              description: LABEL_DESCRIPTION,
+            });
+          }
+
+          // One open issue per outage, not one per occurrence.
+          const existing = await github.rest.issues.listForRepo({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            state: 'open',
+            labels: LABEL,
+            per_page: 1,
+          });
+
+          if (existing.data.length > 0) {
+            const number = existing.data[0].number;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: number, body,
+            });
+            core.notice(`Commented on existing ${LABEL} issue #${number}`);
+          } else {
+            const created = await github.rest.issues.create({
+              owner: context.repo.owner, repo: context.repo.repo,
+              title: TITLE, body, labels: [LABEL],
+            });
+            core.notice(`Filed ${LABEL} issue #${created.data.number}`);
+          }
