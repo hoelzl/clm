@@ -1,0 +1,181 @@
+name: Nightly slow tests
+
+# The ``slow`` marker is a "runs nowhere" tier (finding T2 of the 2026-07-24
+# adversarial review): every non-docker step in ci.yml excludes it, and the
+# local default in pyproject excludes it too. ~37 tests carry it, including
+# the *only* proof that a cached notebook replays byte-identically to a direct
+# execution (test_cache_equivalence.py — the guard against silently wrong
+# output), the worker-reuse-across-builds e2e tests covering the PR #595 bug,
+# and all 18 real-subprocess CLI tests.
+#
+# This runs them once a day instead of lengthening PR CI (decision D12).
+#
+# WHERE FAILURES SURFACE: the ``report-failure`` job below files a GitHub
+# issue labelled ``nightly-failure``, or comments on the existing open one.
+# That is deliberate and load-bearing — a nightly job nobody reads is worse
+# than no nightly job, because it manufactures the feeling of coverage. Do not
+# remove that job without replacing it with a route the maintainer actually
+# reads.
+
+on:
+  schedule:
+    # 03:17 UTC daily. Off the hour on purpose: GitHub's scheduler is heavily
+    # oversubscribed at :00 and delays runs by tens of minutes.
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+# Never run two nightlies at once (a manual dispatch during a scheduled run).
+concurrency:
+  group: nightly-slow
+  cancel-in-progress: false
+
+jobs:
+  slow:
+    name: Slow tier (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        # One interpreter is enough for a regression net that runs daily; the
+        # PR matrix already covers 3.12 + 3.13 for everything else. Widen this
+        # only if a slow-tier failure ever turns out to be version-specific.
+        python-version: ["3.12"]
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v7
+      with:
+        lfs: false
+
+    # Same exclusion as the PR test job: the non-docker suites need only the
+    # small fixture/template images, not the docker/ build inputs.
+    - name: Pull LFS test fixtures (excluding docker build inputs)
+      run: git lfs pull --exclude="docker/**"
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v6
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Set up Java for PlantUML
+      uses: actions/setup-java@v5
+      with:
+        distribution: 'temurin'
+        java-version: '17'
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y xvfb libgtk-3-0 libnotify4 libnss3 libxss1 libxtst6 xdg-utils libatspi2.0-0 libdrm2 libgbm1 libxcb-dri3-0
+
+    - name: Install PlantUML
+      run: |
+        wget -O plantuml.jar https://github.com/plantuml/plantuml/releases/download/v1.2024.6/plantuml-1.2024.6.jar
+        echo "PLANTUML_JAR=$PWD/plantuml.jar" >> $GITHUB_ENV
+
+    - name: Install DrawIO
+      run: |
+        wget -O drawio.deb https://github.com/jgraph/drawio-desktop/releases/download/v24.7.17/drawio-amd64-24.7.17.deb
+        sudo dpkg -i drawio.deb || sudo apt-get install -f -y
+        echo "DRAWIO_EXECUTABLE=/opt/drawio/drawio" >> $GITHUB_ENV
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+      with:
+        version: "latest"
+
+    - name: Install dependencies
+      run: |
+        # Same lockfile-pinned install as the PR test job; see ci.yml for why
+        # `--locked` and this exact extra set.
+        uv sync --locked --python ${{ matrix.python-version }} --no-default-groups \
+          --extra all-workers --extra summarize --extra recordings --extra slides \
+          --extra mcp --extra replay --extra dev --extra tui --extra web
+
+    - name: Start Xvfb
+      run: |
+        Xvfb :99 -screen 0 1024x768x24 -ac +extension GLX +render -noreset &
+        echo "DISPLAY=:99" >> $GITHUB_ENV
+        sleep 2
+
+    - name: Configure git identity for tests
+      run: |
+        git config --global user.email "ci@github.actions"
+        git config --global user.name "GitHub Actions CI"
+
+    - name: Run slow tests
+      run: |
+        uv run --no-sync pytest -v -m "slow and not docker" --timeout=900 --log-cli-level=INFO
+      env:
+        CLM_E2E_TIMEOUT: 900
+        CLM_ENABLE_TEST_LOGGING: "1"
+        CLM_LOG_LEVEL: INFO
+
+  report-failure:
+    name: Report failure
+    needs: slow
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: File or update the nightly-failure issue
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const LABEL = 'nightly-failure';
+            const TITLE = 'Nightly slow-tier tests are failing';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = [
+              `The nightly \`pytest -m "slow and not docker"\` run failed.`,
+              ``,
+              `- Run: ${runUrl}`,
+              `- Commit: ${context.sha}`,
+              `- Trigger: ${context.eventName}`,
+              ``,
+              `The slow tier is excluded from PR CI by design (decision D12 of the`,
+              `2026-07-24 adversarial review remediation plan), so nothing else`,
+              `covers these tests — notably \`test_cache_equivalence.py\`, the only`,
+              `proof that a cached notebook replays byte-identically to a direct`,
+              `execution.`,
+            ].join('\n');
+
+            // The label must exist before it can be applied.
+            try {
+              await github.rest.issues.getLabel({
+                owner: context.repo.owner, repo: context.repo.repo, name: LABEL,
+              });
+            } catch (e) {
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: LABEL,
+                color: 'b60205',
+                description: 'A scheduled nightly run failed',
+              });
+            }
+
+            // One open issue per outage, not one per night.
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: LABEL,
+              per_page: 1,
+            });
+
+            if (existing.data.length > 0) {
+              const number = existing.data[0].number;
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: number, body,
+              });
+              core.notice(`Commented on existing nightly-failure issue #${number}`);
+            } else {
+              const created = await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo,
+                title: TITLE, body, labels: [LABEL],
+              });
+              core.notice(`Filed nightly-failure issue #${created.data.number}`);
+            }
