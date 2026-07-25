@@ -297,7 +297,7 @@ verified by deliberately breaking a test once. — **All met.**
 
 ---
 
-### Phase 2 — Network-facing security  ▸ STATUS: item 1 DONE; items 2–4 open
+### Phase 2 — Network-facing security  ▸ STATUS: items 1–2 DONE; items 3–4 open
 **Depends on**: Phase 1 (you are about to change Docker-mode networking and the
 cache format; the worker tests must be alive first). **Phase 1 is DONE**, so
 this is unblocked.
@@ -356,14 +356,23 @@ been explicitly granted access.
    - **Landmine**: `executed_notebook_cache.py` stores raw bytes; make sure the
      *stored* format changes too, not just the wire format, or you leave a
      pickle-loading path alive behind an auth wall.
-2. **S3 + D4 — recordings dashboard.** `src/clm/recordings/web/routes.py:567-602`:
-   apply the containment check its own sibling `/open-explorer` (`:794-804`)
-   already implements — `resolve(strict=True)` + `relative_to(root)` — before
-   `/process` submits anything. Then add origin checking to every mutating route
-   and `TrustedHostMiddleware` to the app.
-   - **Landmine**: `/arm` accepts `course_slug` and reaches `get_state_path`
-     unfiltered (verified: `get_state_path('../../../evil')` escapes). Sanitize
-     it here, not only in the generic path fix in Phase 4.
+2. **S3 + D4 — recordings dashboard.** ▸ **DONE** (PR #691) —
+   `src/clm/recordings/web/routes.py`, new
+   `src/clm/infrastructure/web_security.py`.
+   - `/process` now applies the containment check its own sibling
+     `/open-explorer` already implements, over the **whole batch before
+     submitting any of it** (a mid-loop refusal had already started an
+     Auphonic upload).
+   - Two ASGI guards, installed together by `install_web_security()`: a `Host`
+     allowlist (loopback by default; `--allowed-host` opts in) and an origin
+     check on mutating requests only. The host half is what closes DNS
+     rebinding — an origin check alone cannot, because a rebound page *is*
+     same-origin. Hand-rolled rather than Starlette's, whose host splitter
+     turns `[::1]:8000` into `"["`.
+   - `course_slug` validated strictly (it reaches `get_state_path` unsanitized
+     and becomes `<slug>.json`); `section_name`/`deck_name` validated for
+     containment only. **See the notes below — this distinction is the whole
+     lesson of the item.**
 3. **S6 + D4 — `clm serve`.** `src/clm/web/app.py:127-136`: default
    `cors_origins` to the serve origin (never `["*"]` with
    `allow_credentials=True`). `src/clm/web/api/websocket.py:110-126`: require the
@@ -491,6 +500,48 @@ cache path; SSTI proof-of-concept from the review no longer executes.
   other jobs depend on, which the workflow's own comment already worries about at
   lite's size. And there is nothing to buy: the ML stack is the *only* thing
   `full` adds, so no language kernel depends on it.
+
+**Notes from item 2 (2026-07-25/26) — read before items 3 and 4**
+
+- **The dangerous mistake in this item was not a missed attack; it was an
+  over-strict validator.** One rule was applied to `course_slug`,
+  `section_name` and `deck_name`, and it rejected `:`. Real section names are
+  *titles the user wrote* — "Woche 01: Einführung, LLMs und Python in
+  JupyterLite" — and **33 of the 39 in `machine-learning-azav.xml`, the
+  default recordings spec, contain a colon**. That silently 400'd `/arm`,
+  `/record`, `/advance` and both `/decks/…/takes` routes: the entire Lectures
+  page, dead, for every real course. An adversarial review caught it; the
+  test suite did not, because its only positive case was `"Section 1"`.
+- **Then a second false positive of the same shape survived the fix**:
+  "Woche 12: Datenanalyse mit pandas (+ ML-/Metrik-Kostprobe)" contains a
+  **slash**. It was found only by driving the app with *all 22* section names
+  from the real spec instead of three hand-picked ones.
+  **Generalisable rule: when you add validation to a value that originates as
+  human-written content, test it against the real corpus, not against examples
+  you invented.** Both regressions were invisible to hand-picked cases and
+  obvious within seconds of using real data.
+- **The correct distinction**, now encoded in two validators: only
+  `course_slug` is used as a filename *verbatim* (`get_state_path()` joins it
+  into the config dir and appends `.json`), and it is machine-generated
+  (`project_slug + "-de"`, else a sanitized course name), so it can afford a
+  strict rule. `section_name`/`deck_name` reach disk only through
+  `sanitize_file_name()`, which deletes `; ! ? " ' :` and replaces
+  `/ \ $ # % & < > * = ^ € |` — so containment must be judged on the
+  **sanitized** form. Judging the raw form is a false positive. What the
+  sanitizer does *not* neutralize is **dots**: `":..:"` sanitizes to `..` and
+  escapes, which is why the sanitized form is checked for `.`/`..`.
+- **`clm serve` (items 3–4) can reuse `install_web_security()` as-is**,
+  including for its `/ws` route — the origin guard already covers WebSocket
+  handshakes, which are CORS-exempt. Note `clm.web.create_app` will need an
+  `allowed_hosts` parameter for the same reason the recordings app did:
+  `TestClient` sends `Host: testserver`, so the production default 400s every
+  existing test.
+- **Two Windows-first blind spots worth remembering**: `Path.resolve()` raises
+  `OSError` for an embedded null byte on Windows but `ValueError` on POSIX
+  (so catch both — CI is Linux and the local fast suite is not); and a
+  `git checkout HEAD -- <file>` used to check "does this test fail without the
+  fix" **discards uncommitted work in that file** — commit first, then revert
+  to test.
 
 #### Language coverage: what a broken C++ (or C#, or Java) course would hit
 
