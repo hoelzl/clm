@@ -465,15 +465,68 @@ cache path; SSTI proof-of-concept from the review no longer executes.
     `mhoelzl/clm-drawio-converter:latest`, so they ran against Docker Hub rather
     than the working tree. **Fixed**: they now discover the image like the
     notebook tests do, preferring the CI-built `clm-drawio-converter:test`.
-  - `test_notebook_error_context.py::TestCppErrorWithDocker` needs the `:full`
-    image (xeus-cling) and **still fails on any machine whose `:full` predates
-    the token change** — verified failing identically on `master`. It is a stale
-    image, not a code defect; rebuild with
-    `clm docker build notebook --variant full`. Its tag preference also puts
-    floating `:full` ahead of the version-matched `<version>-full`, which is
-    backwards — worth flipping when someone is next in that file.
-  Diagnosing this is one command:
+  - `test_notebook_error_context.py::TestCppErrorWithDocker` asked for the
+    `:full` image, and failed on a machine whose `:full` predates the token
+    change — verified failing identically on `master`. **Fixed, and the fix was
+    not "rebuild `:full`": the `full` variant is not where the C++ kernel comes
+    from.** xeus-cpp is installed in the Dockerfile's shared `common` stage, so
+    **every** notebook image ships `xcpp17/20/23`; `full` differs only by an
+    nvidia/cuda base plus torch/fastai. The test now prefers the CI-built
+    `clm-notebook-processor:lite-test` and passes against it in 30s, with the
+    real compilation error correctly attributed to cell #2 — so **C++ execution
+    is covered by the existing CI docker job at zero extra build time**, where
+    before it was skipped in CI and ran only on a machine that had pulled 23 GB.
+  Diagnosing a stale image is one command:
   `docker run --rm --entrypoint python <image> -c "import inspect; from clm.infrastructure.api import client; print('CLM_API_TOKEN' in inspect.getsource(client))"`.
+
+- **Do not add a `full`-variant build to CI.** The decisive numbers are size,
+  not time: `full` is **22.9 GB** against `lite`'s **6.3 GB** (measured with
+  `docker image inspect`). `load: true` on a 23 GB image does not fit a standard
+  GitHub runner's disk without clearing it first, and its layers alone would
+  exceed the repository's 10 GB Actions-cache budget — evicting the uv caches the
+  other jobs depend on, which the workflow's own comment already worries about at
+  lite's size. And there is nothing to buy: the ML stack is the *only* thing
+  `full` adds, so no language kernel depends on it.
+
+#### Language coverage: what a broken C++ (or C#, or Java) course would hit
+
+Everything about C++ *except execution* was already unit-tested — the
+`cpp:percent` jupytext round-trip, the `// j2` jinja prefix, comment-token
+parsing, code extraction, the CMake export. Execution was the hole, and the one
+Docker test that ran a C++ notebook ran a **deliberately broken** one to check
+error attribution, so "valid C++ compiles and its output reaches the deck" was
+asserted nowhere. Now in the docker tier (`test_cpp_docker_execution.py`, ~13s
+for both, no new image):
+
+- a valid C++ deck through the real Docker worker, asserting the rendered HTML
+  contains a value the C++ code *computes* (`6 * 7`), so a kernel that stops
+  running code cannot pass it. **Note it must be an HTML target**: execution is
+  gated by `evaluate_for_html` (`output_spec.py`), so a `format: notebook` job
+  writes a deck with no outputs and asserts nothing about the kernel — the first
+  version of this test passed that way before the assertion was tightened.
+- the kernel names CLM asks for (`kernelspec_for`) against the kernels the image
+  installs. A rename in an image bump — which the xeus-cling → xeus-cpp move
+  actually did — breaks every deck in a language at once, and this fails in
+  seconds with the name in the message, for every language rather than only C++.
+
+**Still uncovered, in rough value order:**
+1. **C#, Java, TypeScript execute nowhere in CI.** The images ship
+   `.net-csharp`, `java` and `deno`; CLM configures all three; no test runs a
+   deck in any of them. The C++ test is ~40 lines of harness — parameterising it
+   over the four languages is the cheapest large win available here, and
+   CSharpCourses is a live downstream repo.
+2. **`rust` is configured but no image installs a Rust kernel**, so a Rust deck
+   in Docker mode fails `NoSuchKernel`. Pinned as the single expected hole in
+   `KNOWN_MISSING_KERNELS`; decide whether to install it or drop the config.
+3. **No full `clm build` of a non-Python course spec.** Output targets, code
+   extraction, per-language directories and the CMake export are unit-tested but
+   never exercised together for C++. An e2e fixture course with one C++ topic
+   would cover the shape a course repo actually uses.
+4. **`clm kernel-triage` is the real-world signal** (it re-runs `evaluate="no"`
+   decks and telemetry-flagged flakes against the current kernel) but needs the
+   maintainer's CppCourses checkout, so it is the same "private corpus" case as
+   the sync full-corpus gates in Phase 1 — a nightly with a course checkout, not
+   a PR check.
 
 ---
 

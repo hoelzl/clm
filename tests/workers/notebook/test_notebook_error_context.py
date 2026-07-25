@@ -32,6 +32,7 @@ from clm.workers.notebook.notebook_processor import (
     TrackingExecutePreprocessor,
 )
 from clm.workers.notebook.output_spec import create_output_spec
+from tests.docker_image_helpers import docker_available, find_notebook_image
 
 # =============================================================================
 # Test Fixtures - Notebook Creation Helpers
@@ -988,58 +989,20 @@ class TestCellContextTracking:
 # =============================================================================
 
 
+# Image discovery lives in ``tests/docker_image_helpers.py`` so that every
+# Docker-marked test agrees on which image to use — see that module for why this
+# test no longer asks for the `full` variant (short version: the C++ kernels come
+# from the Dockerfile's shared stage, so the image CI builds already has them).
 def _is_docker_available() -> bool:
-    """Check if Docker daemon is available."""
-    try:
-        import docker
+    return docker_available()
 
-        client = docker.from_env()
-        client.ping()
-        return True
-    except Exception:
-        return False
+
+def _get_cpp_image_name() -> str | None:
+    return find_notebook_image()
 
 
 def _is_cpp_image_available() -> bool:
-    """Check if C++ Docker image is available."""
-    try:
-        import docker
-
-        client = docker.from_env()
-        # Try to find the full image with C++ support
-        for tag in [
-            "docker.io/mhoelzl/clm-notebook-processor:full",
-            "docker.io/mhoelzl/clm-notebook-processor:1.22.1-full",
-        ]:
-            try:
-                client.images.get(tag)
-                return True
-            except docker.errors.ImageNotFound:
-                continue
-        return False
-    except Exception:
-        return False
-
-
-def _get_full_image_name() -> str | None:
-    """Get the name of the full Docker image if available."""
-    try:
-        import docker
-
-        client = docker.from_env()
-        # Try to find the full image with C++ support
-        for tag in [
-            "docker.io/mhoelzl/clm-notebook-processor:full",
-            "docker.io/mhoelzl/clm-notebook-processor:1.22.1-full",
-        ]:
-            try:
-                client.images.get(tag)
-                return tag
-            except docker.errors.ImageNotFound:
-                continue
-        return None
-    except Exception:
-        return None
+    return _get_cpp_image_name() is not None
 
 
 @pytest.mark.integration
@@ -1050,14 +1013,16 @@ def _get_full_image_name() -> str | None:
 )
 @pytest.mark.skipif(
     not _is_cpp_image_available(),
-    reason="C++ Docker image not available (need full image)",
+    reason="No notebook Docker image with a C++ kernel available "
+    "(build one with: clm docker build notebook)",
 )
 class TestCppErrorWithDocker:
     """Integration tests that execute real C++ notebooks via Docker.
 
     These tests require:
     - Docker daemon running
-    - docker.io/mhoelzl/clm-notebook-processor:full image (has xeus-cling)
+    - any notebook image (every variant ships the xeus-cpp C++ kernels; see
+      ``_CPP_CAPABLE_IMAGE_TAGS``)
     """
 
     @pytest.fixture
@@ -1142,7 +1107,7 @@ public:
         from clm.infrastructure.workers.lifecycle_manager import WorkerLifecycleManager
 
         env = docker_test_env
-        image_name = _get_full_image_name()
+        image_name = _get_cpp_image_name()
         if not image_name:
             pytest.skip("C++ Docker image not available")
 
