@@ -277,9 +277,22 @@ jobs:
     needs: changes
     # Not a required status check, so it is safe to skip the whole job for
     # docs-only changes.
+    #
+    # It is not required because its image builds reach four external hosts
+    # (Docker Hub, dot.net, astral.sh, the pinned GitHub release assets) and
+    # flaked ~12% of recent runs on registry timeouts and partial transfers —
+    # failures unrelated to the change under test. The layer cache below plus
+    # the retry loops in docker/notebook/Dockerfile exist to drive that toward
+    # zero, so this job can eventually join the ruleset. Until it does,
+    # remember: a green PR proves nothing about this job, and
+    # ``report-master-failure`` is what surfaces a breakage that slips through.
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      contents: read
+      # The type=gha buildx cache backend writes through the Actions cache API.
+      actions: write
 
     steps:
     # The notebook/plantuml/drawio build inputs (deno, ijava, drawio .deb) are
@@ -298,30 +311,59 @@ jobs:
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v4
 
+    # Built through build-push-action rather than plain `docker build` purely
+    # to get `cache-from`/`cache-to`. On a cache hit BuildKit replays the
+    # layers instead of re-running them, so the external fetches inside the
+    # Dockerfiles (dotnet, uv, deno, ijava, the drawio .deb, apt, pip) do not
+    # happen at all — which is the point: those fetches are the flake.
+    #
+    # `load: true` puts the image into the local daemon, which the tests need;
+    # without it buildx keeps the result in its own cache and
+    # `docker.images.get()` finds nothing.
+    #
+    # `mode=min` on purpose. These Dockerfiles are linear multi-stage chains
+    # (base → common → packages-<variant> → final), so the final image's layer
+    # set already covers every stage on the build path; `mode=max` would add
+    # the off-path stages (notably the CUDA-based `base-full-amd64`, which CI
+    # never builds) and could crowd the repository's 10 GB Actions-cache budget,
+    # evicting the uv caches other jobs depend on. Scoped per image so the
+    # three builds cannot evict each other.
     - name: Build notebook-processor:lite-test Docker image
-      run: |
-        docker build \
-          -f docker/notebook/Dockerfile \
-          --build-arg VARIANT=lite \
-          --build-arg DOCKER_PATH=docker/notebook \
-          -t clm-notebook-processor:lite-test \
-          .
+      uses: docker/build-push-action@v6
+      with:
+        context: .
+        file: docker/notebook/Dockerfile
+        build-args: |
+          VARIANT=lite
+          DOCKER_PATH=docker/notebook
+        tags: clm-notebook-processor:lite-test
+        load: true
+        cache-from: type=gha,scope=notebook-lite
+        cache-to: type=gha,mode=min,scope=notebook-lite
 
     - name: Build plantuml-converter:test Docker image
-      run: |
-        docker build \
-          -f docker/plantuml/Dockerfile \
-          --build-arg DOCKER_PATH=docker/plantuml \
-          -t clm-plantuml-converter:test \
-          .
+      uses: docker/build-push-action@v6
+      with:
+        context: .
+        file: docker/plantuml/Dockerfile
+        build-args: |
+          DOCKER_PATH=docker/plantuml
+        tags: clm-plantuml-converter:test
+        load: true
+        cache-from: type=gha,scope=plantuml
+        cache-to: type=gha,mode=min,scope=plantuml
 
     - name: Build drawio-converter:test Docker image
-      run: |
-        docker build \
-          -f docker/drawio/Dockerfile \
-          --build-arg DOCKER_PATH=docker/drawio \
-          -t clm-drawio-converter:test \
-          .
+      uses: docker/build-push-action@v6
+      with:
+        context: .
+        file: docker/drawio/Dockerfile
+        build-args: |
+          DOCKER_PATH=docker/drawio
+        tags: clm-drawio-converter:test
+        load: true
+        cache-from: type=gha,scope=drawio
+        cache-to: type=gha,mode=min,scope=drawio
 
     - name: Install uv
       uses: astral-sh/setup-uv@v7
