@@ -21,6 +21,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from clm.infrastructure.database.job_queue import Job, JobQueue
+
 logger = logging.getLogger(__name__)
 
 # Generous ceiling for registration waits. The waits below return as soon as
@@ -55,6 +57,15 @@ class MockWorkerConfig:
     workspace_path: Path | None = None
     validate_paths: bool = False
     data_dir: Path | None = None
+    # Execution mode this worker registers under and claims with. Mock workers
+    # are their own mode, so a mock never steals a job a real Docker/Direct
+    # worker must run. Jobs with a NULL ``execution_mode`` stay claimable by
+    # anyone, which is what the mock tests submit.
+    execution_mode: str = "mock"
+    # Build session this worker belongs to (issue #620). ``None`` registers an
+    # unstamped worker, which the real queue leaves unrestricted — the legacy
+    # behaviour most mock tests want. Set it to exercise session ownership.
+    session_id: str | None = None
 
 
 @dataclass
@@ -164,9 +175,15 @@ class MockWorker:
         conn = self._get_conn()
         try:
             cursor = conn.execute(
-                """INSERT INTO workers (worker_type, container_id, status, execution_mode)
-                   VALUES (?, ?, 'idle', 'mock')""",
-                (self.config.worker_type, self.container_id),
+                """INSERT INTO workers
+                   (worker_type, container_id, status, execution_mode, session_id)
+                   VALUES (?, ?, 'idle', ?, ?)""",
+                (
+                    self.config.worker_type,
+                    self.container_id,
+                    self.config.execution_mode,
+                    self.config.session_id,
+                ),
             )
             self._db_worker_id = cursor.lastrowid
             conn.commit()
@@ -175,13 +192,18 @@ class MockWorker:
 
         self._registered_event.set()
 
-        # Main loop
-        while not self._stop_event.is_set():
-            job = self._poll_job()
-            if job:
-                self._process_job(job)
-            else:
-                self._stop_event.wait(self.config.poll_interval)
+        # One JobQueue for the worker thread. JobQueue keeps a thread-local
+        # connection, so it must be created and closed on this thread.
+        job_queue = JobQueue(self.db_path)
+        try:
+            while not self._stop_event.is_set():
+                job = self._poll_job(job_queue)
+                if job:
+                    self._process_job(job, job_queue)
+                else:
+                    self._stop_event.wait(self.config.poll_interval)
+        finally:
+            job_queue.close()
 
         # Mark worker as dead
         conn = self._get_conn()
@@ -194,48 +216,49 @@ class MockWorker:
         finally:
             conn.close()
 
-    def _poll_job(self) -> dict | None:
-        """Poll for a pending job from the queue.
+    def _poll_job(self, job_queue: "JobQueue") -> Job | None:
+        """Claim the next pending job using the **real** queue implementation.
 
-        Returns:
-            Job dictionary if a job was claimed, None otherwise
+        This used to be a hand-rolled ``UPDATE … RETURNING`` that had drifted
+        badly from ``JobQueue.get_next_job`` (finding T7): it had no
+        ``execution_mode`` filter, no session-ownership filter, no
+        ``attempts < max_attempts`` guard, did not increment ``attempts``, did
+        not set ``started_at``, ignored ``priority``, and wrote the *container
+        id string* into the integer ``jobs.worker_id`` column. The tier meant
+        to exercise real claiming with real workers together was the
+        permanently-skipped file from T1, so nothing caught the divergence.
+
+        Delegating removes the possibility of drifting again: any future change
+        to claiming semantics is picked up here for free.
         """
         conn = self._get_conn()
         try:
-            # Update worker status to idle
             conn.execute(
                 "UPDATE workers SET status = 'idle' WHERE container_id = ?",
                 (self.container_id,),
             )
             conn.commit()
+        finally:
+            conn.close()
 
-            # Try to claim a job
-            cursor = conn.execute(
-                """UPDATE jobs
-                   SET status = 'processing', worker_id = ?
-                   WHERE id = (
-                       SELECT id FROM jobs
-                       WHERE job_type = ? AND status = 'pending'
-                       ORDER BY created_at ASC
-                       LIMIT 1
-                   )
-                   RETURNING *""",
-                (self.container_id, self.config.worker_type),
-            )
-            row = cursor.fetchone()
-            conn.commit()
+        job = job_queue.get_next_job(
+            job_type=self.config.worker_type,
+            worker_id=self._db_worker_id,
+            execution_mode=self.config.execution_mode,
+        )
 
-            if row:
-                # Update worker status to busy
+        if job is not None:
+            conn = self._get_conn()
+            try:
                 conn.execute(
                     "UPDATE workers SET status = 'busy' WHERE container_id = ?",
                     (self.container_id,),
                 )
                 conn.commit()
-                return dict(row)
-            return None
-        finally:
-            conn.close()
+            finally:
+                conn.close()
+
+        return job
 
     def _validate_output_path(self, output_path: str) -> str | None:
         """Validate that output path would work in Docker mode.
@@ -308,22 +331,25 @@ class MockWorker:
 
         return None
 
-    def _process_job(self, job: dict) -> None:
+    def _process_job(self, job: Job, job_queue: "JobQueue") -> None:
         """Process a single job.
 
         Args:
-            job: Job dictionary from the database
+            job: Job claimed from the queue
+            job_queue: The worker thread's queue handle, used to report the
+                terminal status through the real ``update_job_status`` rather
+                than a second hand-rolled UPDATE.
         """
         start_time = time.time()
 
         # Validate paths for Docker compatibility (if enabled)
-        output_error = self._validate_output_path(job["output_file"])
+        output_error = self._validate_output_path(job.output_file)
         if output_error:
             logger.warning(f"Path validation warning: {output_error}")
             # In strict mode, we could fail the job here
             # For now, just log the warning
 
-        input_error = self._validate_input_path(job["input_file"])
+        input_error = self._validate_input_path(job.input_file)
         if input_error:
             logger.warning(f"Path validation warning: {input_error}")
 
@@ -333,18 +359,13 @@ class MockWorker:
         # Determine if job should fail
         should_fail = random.random() < self.config.fail_rate
 
-        conn = self._get_conn()
         try:
             if should_fail:
-                conn.execute(
-                    """UPDATE jobs SET status = 'failed', error = ?, completed_at = datetime('now')
-                       WHERE id = ?""",
-                    ("Mock failure (simulated)", job["id"]),
-                )
+                job_queue.update_job_status(job.id, "failed", error="Mock failure (simulated)")
                 self.stats.jobs_failed += 1
             else:
                 # Create mock output file
-                output_file = Path(job["output_file"])
+                output_file = Path(job.output_file)
                 output_file.parent.mkdir(parents=True, exist_ok=True)
 
                 # Write mock content based on job type
@@ -381,20 +402,12 @@ class MockWorker:
                     # Write placeholder image content
                     output_file.write_bytes(b"MOCK_IMAGE_CONTENT")
                 else:
-                    output_file.write_text(f"Mock output for job {job['id']}")
+                    output_file.write_text(f"Mock output for job {job.id}")
 
-                conn.execute(
-                    """UPDATE jobs SET status = 'completed', completed_at = datetime('now')
-                       WHERE id = ?""",
-                    (job["id"],),
-                )
+                job_queue.update_job_status(job.id, "completed")
                 self.stats.jobs_processed += 1
-
-            conn.commit()
         finally:
-            conn.close()
-
-        self.stats.total_processing_time += time.time() - start_time
+            self.stats.total_processing_time += time.time() - start_time
 
 
 class MockWorkerPool:
@@ -434,6 +447,8 @@ class MockWorkerPool:
         workspace_path: Path | None = None,
         data_dir: Path | None = None,
         validate_paths: bool = False,
+        execution_mode: str = "mock",
+        session_id: str | None = None,
     ) -> list[MockWorker]:
         """Start multiple mock workers.
 
@@ -446,6 +461,8 @@ class MockWorkerPool:
             workspace_path: Workspace path for Docker path validation
             data_dir: Data directory path for input path validation
             validate_paths: Whether to validate paths for Docker compatibility
+            execution_mode: Execution mode the workers register and claim under
+            session_id: Build session the workers belong to (None = unstamped)
 
         Returns:
             List of started MockWorker instances
@@ -458,6 +475,8 @@ class MockWorkerPool:
             workspace_path=workspace_path,
             data_dir=data_dir,
             validate_paths=validate_paths,
+            execution_mode=execution_mode,
+            session_id=session_id,
         )
 
         workers = []
