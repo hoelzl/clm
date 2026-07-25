@@ -89,6 +89,14 @@ import pytest
 # new heartbeat test cannot silently re-acquire the flake. The dedicated
 # disable-path test re-patches the constant to 0.0 in its own scope, preserving
 # that coverage. ``setdefault`` lets an operator override it explicitly.
+#
+# PRODUCTION VALUE COVERED BY (finding T8 — every neutraliser must name the
+# single test that still exercises the real behaviour, or the neutraliser is
+# indistinguishable from deleting the feature's coverage):
+#   tests/infrastructure/database/test_worker_heartbeats.py
+#     ::TestWorkerHeartbeatStore::test_slow_write_disables_further_writes
+# **Never raise the 50ms production default** to make a test pass — relax it
+# here, in the test environment only.
 os.environ.setdefault("CLM_HEARTBEAT_SLOW_WRITE_THRESHOLD_SECONDS", "30")
 
 from clm.core.course_spec import TopicSpec
@@ -180,6 +188,12 @@ def _isolate_db_path_env():
     (test_status_collector's env-var tests, test_sqlite_backend_resilience's
     decoy) — that runs after this fixture, so those are unaffected. Mirrors the
     ``_isolate_http_replay_env`` / ``_neutralise_pool_size_cap`` precedents.
+
+    PRODUCTION VALUE COVERED BY (finding T8):
+      tests/cli/test_status_collector.py::TestStatusCollector
+        ::test_default_db_path_detection — the anchored default; and
+        ::test_default_db_path_prefers_jobs_db_env — the env var winning over
+        it, set inside the test body so this fixture cannot mask it.
     """
     keys = (
         "CLM_CACHE_DB_PATH",
@@ -839,8 +853,25 @@ def _neutralise_pool_size_cap(monkeypatch, request):
     operator's personal cap (set in their shell profile) cannot leak
     into test runs. Tests that want to assert the env-var plumbing
     can ``monkeypatch.setenv`` it back.
+
+    PRODUCTION VALUE COVERED BY (finding T8):
+      tests/infrastructure/workers/test_pool_size_cap.py — the whole module,
+      exempted above by the ``test_pool_size_cap`` nodeid check.
+    INTERACTION COVERED BY:
+      tests/infrastructure/workers/test_pool_size_cap_interaction.py — the
+      clamp firing *during managed-worker startup*, which unit tests of the
+      helper in isolation cannot see. This was the widest gap the review
+      identified: every neutraliser here is individually justified, but the
+      suite could not observe what happens when the clamp actually engages on
+      the path that uses it.
     """
-    if "test_pool_size_cap" in request.node.nodeid:
+    # Match the module FILE, not a bare substring. The old check was
+    # ``"test_pool_size_cap" in nodeid``, which silently exempted any module
+    # whose name merely started that way — including
+    # ``test_pool_size_cap_interaction.py``, which then saw the *real* host CPU
+    # and RAM caps and became environment-dependent (3 requested workers
+    # resolved to 3 on a 32-core dev box and to 2 on a 2-core CI runner).
+    if "test_pool_size_cap.py" in request.node.nodeid:
         return
 
     monkeypatch.setattr(
