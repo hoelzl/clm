@@ -19,8 +19,16 @@ from clm.cli.output_formatter import (
 class TestBuildDataClasses:
     """Test data classes for build reporting."""
 
-    def test_build_error_creation(self):
-        """Test creating a build error."""
+    def test_build_error_renders_every_field_the_user_needs(self):
+        """``str(BuildError)`` is what the build report shows; assert on it.
+
+        This used to read back the three constructor arguments it had just
+        passed in and then assert only that ``str(error)`` is *truthy*
+        (finding T9: constructor-echo tests inflate apparent coverage of
+        ``build_data_classes.py`` without being able to fail). A dataclass
+        cannot fail to store its own fields; the rendering can, and the
+        rendering is the part a user reads.
+        """
         error = BuildError(
             error_type="user",
             category="notebook_compilation",
@@ -28,22 +36,48 @@ class TestBuildDataClasses:
             file_path="test.py",
             message="SyntaxError",
             actionable_guidance="Fix the syntax error",
+            job_id=42,
         )
-        assert error.error_type == "user"
-        assert error.category == "notebook_compilation"
-        assert error.severity == "error"
-        assert str(error)  # Should have string representation
+        rendered = str(error)
 
-    def test_build_warning_creation(self):
-        """Test creating a build warning."""
-        warning = BuildWarning(
+        assert "[User Error] notebook_compilation" in rendered
+        assert "File: test.py" in rendered
+        assert "Error: SyntaxError" in rendered
+        assert "Action: Fix the syntax error" in rendered
+        assert "Job ID: #42" in rendered
+
+    def test_build_error_omits_optional_lines_when_unset(self):
+        """No guidance and no job id means no empty ``Action:``/``Job ID:`` lines."""
+        error = BuildError(
+            error_type="infrastructure",
+            category="missing_tool",
+            severity="fatal",
+            file_path="course.xml",
+            message="drawio not found",
+            actionable_guidance="",
+        )
+        rendered = str(error)
+
+        assert "[Infrastructure Error] missing_tool" in rendered
+        assert "Action:" not in rendered
+        assert "Job ID:" not in rendered
+
+    def test_build_warning_renders_severity_and_optional_file(self):
+        """``str(BuildWarning)`` carries the priority, and the file only if set."""
+        without_file = BuildWarning(
             category="duplicate_topic_id",
             message="Duplicate ID found",
             severity="high",
         )
-        assert warning.category == "duplicate_topic_id"
-        assert warning.severity == "high"
-        assert str(warning)  # Should have string representation
+        assert str(without_file) == "[High Priority] Duplicate ID found"
+
+        with_file = BuildWarning(
+            category="duplicate_topic_id",
+            message="Duplicate ID found",
+            severity="low",
+            file_path="slides_x.de.py",
+        )
+        assert str(with_file) == "[Low Priority] Duplicate ID found (File: slides_x.de.py)"
 
     def test_build_summary_creation(self):
         """Test creating a build summary."""
