@@ -93,13 +93,25 @@ def _lectures_refresh_response() -> HTMLResponse:
 def _validate_deck_identity(course_slug: str, section_name: str, deck_name: str) -> None:
     """Validate the ``(course, section, deck)`` triple a request names.
 
-    All three become path components under the recordings root via
-    :func:`~clm.recordings.workflow.naming.recording_relative_dir`. See
-    :func:`_validate_name` for why rejecting beats rewriting.
+    The three are **not** interchangeable, and applying one rule to all of
+    them is a bug rather than caution:
+
+    - ``course_slug`` reaches :func:`~clm.recordings.state.get_state_path`
+      **unsanitized**, where it becomes the filename ``<slug>.json``. It has
+      to survive as a literal filename, so :func:`_validate_slug` is strict.
+      It can afford to be: the value is machine-generated
+      (``project_slug + "-de"``, else a sanitized course name), never a title.
+    - ``section_name`` and ``deck_name`` are *titles the user wrote* — "Woche
+      01: Einführung, LLMs und Python" is a real section name, and 33 of the
+      39 in the default recordings spec contain a colon. They only ever reach
+      disk through :func:`~clm.core.utils.text_utils.sanitize_file_name`,
+      which deletes exactly those characters. Judging them as filenames would
+      reject the entire Lectures page for every real course, so
+      :func:`_validate_component` checks containment and nothing else.
     """
-    _validate_name(course_slug, field="course_slug")
-    _validate_name(section_name, field="section_name")
-    _validate_name(deck_name, field="deck_name")
+    _validate_slug(course_slug, field="course_slug")
+    _validate_component(section_name, field="section_name")
+    _validate_component(deck_name, field="deck_name")
 
 
 def _resolve_lecture_id(section_name: str, deck_name: str) -> str:
@@ -218,11 +230,14 @@ def _build_deck_provenance(request: Request, section_name: str, deck_name: str, 
         return None
 
 
-#: Characters that must never appear in a request-supplied name that ends up
-#: as a path component. ``/`` and ``\`` are separators; ``:`` carries a drive
-#: letter or an NTFS alternate data stream; the null byte truncates a path in
-#: the C layer beneath ``open()``.
-_PATH_UNSAFE_CHARS = ("/", "\\", ":", "\x00")
+#: Characters that can never appear in a request-supplied value that becomes a
+#: path component, whatever else is done to it. ``/`` and ``\`` are separators;
+#: the null byte truncates a path in the C layer beneath ``open()``.
+_CONTAINMENT_UNSAFE_CHARS = ("/", "\\", "\x00")
+
+#: Additionally forbidden in a value used as a filename *verbatim*: ``:``
+#: carries a drive letter or an NTFS alternate data stream.
+_FILENAME_UNSAFE_CHARS = (*_CONTAINMENT_UNSAFE_CHARS, ":")
 
 #: Windows device names, which resolve to the device rather than to a file
 #: **whatever extension follows** — ``NUL.json`` is the null device, so a state
@@ -235,54 +250,93 @@ _WINDOWS_RESERVED_NAMES = frozenset(
 )
 
 
-def _validate_name(value: str, *, field: str) -> str:
-    """Return ``value`` if it is safe to use as a single path component.
+def _reject_name(value: str, field: str) -> None:
+    """Raise the 400 both validators use."""
+    raise HTTPException(status_code=400, detail=f"Invalid {field}: {value!r}")
 
-    ``course_slug``, ``section_name`` and ``deck_name`` arrive from a form or
-    a URL and reach the filesystem twice over: through
-    :func:`~clm.recordings.workflow.naming.recording_relative_dir` (under the
-    recordings root) and — for ``course_slug`` — through
-    :func:`~clm.recordings.state.get_state_path`, which joins it into CLM's
-    config directory with **no** sanitizing at all. ``get_state_path(
-    "../../../evil")`` writes outside the config dir; ``..`` alone escapes the
-    recordings root, because the existing sanitizer strips separators but
-    leaves a lone ``..`` intact.
 
-    Rejecting is the right answer rather than rewriting: these values name
-    something the UI already knows exists, so anything unusable as a filename
-    is a bug or an attack, not a user with an eccentric course name.
+def _is_relative_component(value: str) -> bool:
+    """True when ``value`` is ``.``/``..`` (or only dots and spaces)."""
+    return value.strip(". ") == ""
 
-    Beyond containment, this also refuses names that would produce a *silently
-    broken* file rather than an escape — control characters (which make the
-    write raise, and the raise is swallowed by design in
-    ``_on_state_mutation``) and Windows device names (which make the write go
-    to the device and vanish). Failing the request is the honest answer.
+
+def _validate_component(value: str, *, field: str) -> str:
+    """Return ``value`` if it can safely *become* a path component.
+
+    For ``section_name`` and ``deck_name``, which are titles the user wrote.
+    They reach the filesystem only through
+    :func:`~clm.core.utils.text_utils.sanitize_file_name`, which deletes
+    ``; ! ? " ' :`` and replaces ``/ \\ $ # % & < > * = ^ € |`` — so the only
+    question left is containment, and the answer must not depend on the value
+    reading like a tidy filename. "Woche 01: Einführung, LLMs und Python in
+    JupyterLite" is a real section name.
+
+    Both forms are checked. The raw value must not carry a separator (some
+    scanners join it before sanitizing), and the *sanitized* value must not
+    come out as ``.``/``..`` — ``":..:"`` sanitizes to ``..``, which would
+    escape the recordings root even though the raw value looks harmless.
 
     Raises:
-        HTTPException: 400 when ``value`` is empty, is a relative-path
-            component (``.`` / ``..``), contains a separator or a control
-            character, or names a Windows device.
+        HTTPException: 400 when ``value`` is blank, is a relative-path
+            component before or after sanitizing, or contains a separator,
+            a null byte or a control character.
+    """
+    from clm.core.utils.text_utils import sanitize_file_name
+
+    if not value or not value.strip():
+        raise HTTPException(status_code=400, detail=f"{field} must not be empty")
+    if _is_relative_component(value):
+        _reject_name(value, field)
+    for char in _CONTAINMENT_UNSAFE_CHARS:
+        if char in value:
+            _reject_name(value, field)
+    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
+        _reject_name(value, field)
+
+    sanitized = sanitize_file_name(value)
+    if not sanitized.strip() or _is_relative_component(sanitized):
+        _reject_name(value, field)
+    return value
+
+
+def _validate_slug(value: str, *, field: str) -> str:
+    """Return ``value`` if it is safe to use as a filename **verbatim**.
+
+    For ``course_slug`` alone. It reaches
+    :func:`~clm.recordings.state.get_state_path`, which joins it into CLM's
+    config directory with no sanitizing at all and appends ``.json`` —
+    ``get_state_path("../../../evil")`` writes outside the config dir.
+
+    Strictness is affordable here in a way it is not for a title: the value is
+    machine-generated (``project_slug + "-de"``, or a *sanitized* course name
+    plus that suffix), so it never legitimately contains a colon, a control
+    character or a trailing dot.
+
+    Beyond containment this also refuses names that would produce a *silently
+    broken* file rather than an escape — control characters (the write raises,
+    and the raise is swallowed by design in ``_on_state_mutation``) and Windows
+    device names (the write goes to the device and vanishes).
+
+    Raises:
+        HTTPException: 400 when ``value`` is blank, is a relative-path
+            component, contains a separator, colon or control character, ends
+            in a dot or space, or names a Windows device.
     """
     if not value or not value.strip():
         raise HTTPException(status_code=400, detail=f"{field} must not be empty")
-
-    def _reject() -> None:
-        raise HTTPException(status_code=400, detail=f"Invalid {field}: {value!r}")
-
-    if value.strip(". ") == "":
-        _reject()
-    for char in _PATH_UNSAFE_CHARS:
+    if _is_relative_component(value):
+        _reject_name(value, field)
+    for char in _FILENAME_UNSAFE_CHARS:
         if char in value:
-            _reject()
+            _reject_name(value, field)
     if any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
-        _reject()
-    # Windows also strips trailing dots and spaces, so "deck." and "deck "
-    # both open "deck" — two different requests writing one file.
+        _reject_name(value, field)
+    # Windows also strips trailing dots and spaces, so "course." and "course "
+    # both open "course" — two different requests writing one file.
     if value != value.rstrip(". "):
-        _reject()
-    stem = value.split(".", 1)[0].strip().upper()
-    if stem in _WINDOWS_RESERVED_NAMES:
-        _reject()
+        _reject_name(value, field)
+    if value.split(".", 1)[0].strip().upper() in _WINDOWS_RESERVED_NAMES:
+        _reject_name(value, field)
     return value
 
 
@@ -298,7 +352,7 @@ def _get_or_load_course_state(request: Request, course_slug: str) -> CourseRecor
     every path into this function ends in ``get_state_path(course_slug)``,
     which joins the value into CLM's config directory unsanitized.
     """
-    _validate_name(course_slug, field="course_slug")
+    _validate_slug(course_slug, field="course_slug")
     cache = cast(dict[str, CourseRecordingState], request.app.state.recording_states)
     cached = cache.get(course_slug)
     if cached is not None:
@@ -692,10 +746,15 @@ async def process_file(request: Request):
         path = _Path(str(raw_path))
         try:
             resolved = path.resolve(strict=True)
-        except OSError:
+        except (OSError, ValueError):
             # Missing (or unresolvable) stays a skip-with-notice rather than a
             # hard failure: a file can vanish between the page render and the
             # click, and that is not the user's mistake.
+            #
+            # ValueError is not redundant with OSError: an embedded null byte
+            # raises OSError on Windows but ValueError on POSIX, where
+            # ``posixpath.realpath`` guards ``os.lstat`` for OSError only. A
+            # Windows-only run of the suite cannot see that, and CI is Linux.
             logger.warning("Skipping missing file: {}", raw_path)
             _push_notice(request, "warning", f"Skipped missing file: {path.name}")
             continue

@@ -764,6 +764,43 @@ def _configure_recordings_event_log(root_dir: Path) -> None:
     console.print(f"[dim]Event log: {log_path}[/dim]")
 
 
+class _StdlibToLoguruHandler(logging.Handler):
+    """Forward stdlib log records to loguru.
+
+    Defined at module scope, not inside the installer: a class created inside
+    a function is a *new* class object per call, so an
+    ``isinstance(h, _ToLoguru)`` guard would never recognise a handler an
+    earlier call installed. Every ``clm recordings serve`` in one process (the
+    test suite does several) would then add another handler and write every
+    refusal to ``events.log`` one more time — corrupting the forensic record
+    the bridge exists to produce.
+    """
+
+    def emit(self, record: logging.LogRecord) -> None:
+        from loguru import logger as _loguru
+
+        try:
+            # loguru rejects a level it does not know, and stdlib allows any
+            # name via ``addLevelName`` (plus the synthesized "Level 42").
+            # Mapping by severity keeps a future custom level from raising
+            # inside a middleware and turning a 403 into a 500.
+            try:
+                level = _loguru.level(record.levelname).name
+            except ValueError:
+                level = "INFO" if record.levelno < logging.WARNING else "WARNING"
+            # The sink's ``{name}`` would resolve to *this* module, so the
+            # originating logger goes into the message. Binding it into
+            # ``extra`` instead would need a format placeholder that every
+            # other (unbound) record in the process would then KeyError on.
+            _loguru.opt(exception=record.exc_info).log(
+                level, f"[{record.name}] {record.getMessage()}"
+            )
+        except Exception:  # pragma: no cover - logging must never break a request
+            # ``logging.Handler.handle`` does not wrap ``emit``, so anything
+            # raised here would propagate out of the caller's ``log.warning``.
+            self.handleError(record)
+
+
 def _forward_web_security_logs_to_loguru() -> None:
     """Route :mod:`clm.infrastructure.web_security` refusals into the event log.
 
@@ -776,25 +813,18 @@ def _forward_web_security_logs_to_loguru() -> None:
 
     Scoped to that single logger rather than installed on the root: a global
     intercept would re-route every library's logging as a side effect of
-    starting the dashboard.
+    starting the dashboard. Idempotent — safe to call once per server start.
     """
-    import logging as _logging
-
-    from loguru import logger as _loguru
-
     from clm.infrastructure import web_security
 
-    class _ToLoguru(_logging.Handler):
-        def emit(self, record: _logging.LogRecord) -> None:
-            _loguru.bind(stdlib=record.name).opt(depth=0, exception=record.exc_info).log(
-                record.levelname, record.getMessage()
-            )
-
-    target = _logging.getLogger(web_security.__name__)
-    if any(isinstance(h, _ToLoguru) for h in target.handlers):
+    target = logging.getLogger(web_security.__name__)
+    if any(isinstance(h, _StdlibToLoguruHandler) for h in target.handlers):
         return
-    target.addHandler(_ToLoguru())
-    target.setLevel(_logging.INFO)
+    target.addHandler(_StdlibToLoguruHandler())
+    target.setLevel(logging.INFO)
+    # Records are now delivered to loguru; letting them also climb to the root
+    # logger would double every refusal as soon as anything configures root.
+    target.propagate = False
 
 
 def _get_obs_config() -> tuple[str, int, str]:

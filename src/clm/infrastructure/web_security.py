@@ -101,9 +101,17 @@ def extract_host(host_header: str) -> str:
     else:
         # No port, or a bare (invalid) IPv6 literal — either way, use it verbatim.
         host = value.lower()
-    # ``http://localhost./`` is a legal URL (an explicitly-absolute FQDN) and
-    # the browser sends the dot through. Treat it as the same host rather than
-    # 400-ing somebody who typed a legitimate address.
+    return _strip_trailing_dot(host)
+
+
+def _strip_trailing_dot(host: str) -> str:
+    """Drop one trailing dot from ``host``.
+
+    ``http://localhost./`` is a legal URL (an explicitly-absolute FQDN) and the
+    browser sends the dot through, so treating it as a different host would
+    400 somebody who typed a legitimate address. Exactly one dot is stripped,
+    so ``localhost..`` — which names nothing — stays refused.
+    """
     return host[:-1] if host.endswith(".") and len(host) > 1 else host
 
 
@@ -212,11 +220,17 @@ def normalize_origin(origin: str) -> str | None:
     value = origin.strip()
     if not value or value.lower() == "null":
         return None
-    parts = urlsplit(value)
+    try:
+        parts = urlsplit(value)
+    except ValueError:
+        # ``http://[::1`` and friends. An unparseable Origin is not this app's
+        # origin, which is the only question — but letting the ValueError out
+        # would turn a 403 into a 500 from inside the security middleware.
+        return None
     if not parts.scheme or not parts.hostname:
         return None
     scheme = parts.scheme.lower()
-    host = parts.hostname.lower()
+    host = _strip_trailing_dot(parts.hostname.lower())
     if ":" in host:
         # ``urlsplit`` strips the brackets off an IPv6 literal; putting them
         # back keeps the result a parseable authority rather than the
@@ -240,14 +254,20 @@ def _origin_matches_host(origin: str, host_header: str) -> bool:
     access path for no security gain — the check that matters is *which
     authority the browser thinks it is talking to*.
     """
-    parts = urlsplit(origin.strip())
+    try:
+        parts = urlsplit(origin.strip())
+    except ValueError:
+        return False
     if not parts.hostname:
         return False
     try:
         origin_port = parts.port
     except ValueError:
         return False
-    origin_host = parts.hostname.lower()
+    # Same trailing-dot normalization the host side does, so a request made
+    # through the legal FQDN form ``http://localhost./`` is not refused by one
+    # guard after being accepted by the other.
+    origin_host = _strip_trailing_dot(parts.hostname.lower())
     if origin_port is None:
         origin_port_str = _DEFAULT_PORTS.get(parts.scheme.lower(), "")
     else:
@@ -350,7 +370,10 @@ class TrustedHostMiddleware:
             self.allowed_hosts,
         )
         # The remediation belongs in the *body*: the person hitting this is
-        # looking at a browser, not at the server's log.
+        # looking at a browser, not at the server's log. The allowlist itself
+        # stays in the log — under DNS rebinding, the page reading this body is
+        # the attacker's, and the operator's Tailscale or LAN names are not
+        # something to hand it.
         await _reject(
             scope,
             receive,
@@ -358,8 +381,8 @@ class TrustedHostMiddleware:
             status_code=400,
             detail=(
                 f"Invalid host header: {host!r}.\n"
-                f"This server only answers to: {', '.join(self.allowed_hosts)}.\n"
-                f"Restart it with --allowed-host {host or '<name>'} to accept this name."
+                f"Restart the server with --allowed-host {host or '<name>'} "
+                f"to accept this name."
             ),
         )
 

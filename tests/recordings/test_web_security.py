@@ -246,6 +246,9 @@ class TestDeckIdentityValidation:
     def test_restore_refuses_traversal(self, client: TestClient):
         response = client.post("/decks/course/section/%2e%2e/takes/1/restore")
         assert response.status_code == 400
+        # Pin the *source* of the 400: without this the session's own "no such
+        # take" 404 would look like containment.
+        assert "deck_name" in response.text
 
     def test_a_normal_deck_name_still_works(self, client: TestClient):
         """Names with spaces, dots and parentheses are ordinary here."""
@@ -258,6 +261,65 @@ class TestDeckIdentityValidation:
             },
         )
         assert response.status_code == 200
+
+    @pytest.mark.parametrize(
+        "section_name",
+        [
+            # Verbatim from machine-learning-azav.xml, the default recordings
+            # spec: 33 of its 39 section names contain a colon. Validating
+            # these as if they were filenames took out the whole Lectures page.
+            "Woche 01: Einführung, LLMs und Python in JupyterLite",
+            "Week 04: Chatbots in Practice -- CLI, Gradio, Streaming",
+            "Woche 02: Python-Setup, Webservices und erste LLM-API",
+        ],
+    )
+    def test_a_real_course_section_name_is_accepted(self, client: TestClient, section_name: str):
+        """Section names are titles the user wrote, not slugs.
+
+        They reach disk only through ``sanitize_file_name``, which deletes the
+        very characters (``:`` ``?`` ``!`` ``"`` ``'``) that make them look
+        unsafe — so judging them as filenames is a false positive, and an
+        expensive one.
+        """
+        response = client.post(
+            "/arm",
+            data={
+                "course_slug": "ml-course-de",
+                "section_name": section_name,
+                "deck_name": "01 Einführung.py",
+            },
+        )
+        assert response.status_code == 200
+
+    def test_a_colon_is_still_refused_in_the_course_slug(self, client: TestClient):
+        """The slug is used as a filename verbatim, so it keeps the strict rule."""
+        response = client.post(
+            "/arm",
+            data={
+                "course_slug": "ml:course",
+                "section_name": "Woche 01: Einführung",
+                "deck_name": "deck",
+            },
+        )
+        assert response.status_code == 400
+        assert "course_slug" in response.text
+
+    def test_a_component_that_sanitizes_to_dotdot_is_refused(self, client: TestClient):
+        """``":..:"`` looks harmless raw and sanitizes to ``..``.
+
+        The sanitizer deletes colons, so containment has to be judged on the
+        sanitized form as well as the raw one.
+        """
+        response = client.post(
+            "/arm",
+            data={
+                "course_slug": "ml-course-de",
+                "section_name": ":..:",
+                "deck_name": "deck",
+            },
+        )
+        assert response.status_code == 400
+        assert "section_name" in response.text
 
 
 class TestCrossOriginContainment:
@@ -334,7 +396,9 @@ class TestCrossOriginContainment:
         client = TestClient(application, base_url="http://box.ts.net")
 
         allowed = client.post("/disarm", headers={"Origin": "https://proxy.example"})
-        assert allowed.status_code != 403
+        # 409 is the session's own "nothing armed" answer; either way the
+        # request reached the handler, which is what is under test.
+        assert allowed.status_code in (200, 409)
 
         refused = client.post("/disarm", headers={"Origin": "https://other.example"})
         assert refused.status_code == 403

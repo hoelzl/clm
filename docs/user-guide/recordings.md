@@ -184,6 +184,14 @@ clm recordings serve ~/Recordings --host 0.0.0.0 \
 against *other web pages*; they do not (and cannot) protect against another
 program running as you on the same machine, which can set any header it likes.
 
+**Behind a reverse proxy**, prefer a config that forwards the original `Host`
+including its port — nginx's `proxy_set_header Host $http_host`, not `$host`,
+which drops the port. With the port dropped, the dashboard cannot tell that
+`Origin: https://box.example:8443` belongs to the request it received, and
+refuses actions on clients that do not send `Sec-Fetch-Site` (older browsers).
+`--allowed-origin https://box.example:8443` is the escape hatch if you cannot
+change the proxy config.
+
 Paths are contained too: file processing submitted through the dashboard must
 resolve under the recordings root, and course/section/deck names may not
 contain path separators or `..`.

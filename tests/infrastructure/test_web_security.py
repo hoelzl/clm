@@ -124,8 +124,11 @@ class TestNormalizeOrigin:
     def test_default_ports_are_dropped(self, origin: str, expected: str):
         assert normalize_origin(origin) == expected
 
-    @pytest.mark.parametrize("origin", ["null", "", "   ", "not-a-url", "http://"])
+    @pytest.mark.parametrize(
+        "origin", ["null", "", "   ", "not-a-url", "http://", "http://[::1", "http://a]b"]
+    )
     def test_unusable_origins_are_none(self, origin: str):
+        """Includes the forms ``urlsplit`` raises ValueError on."""
         assert normalize_origin(origin) is None
 
     def test_ipv6_keeps_its_brackets(self):
@@ -192,6 +195,22 @@ class TestCheckRequestOrigin:
         """
         headers = self._headers(origin="http://localhost:3000", host="localhost")
         assert check_request_origin(headers) is not None
+
+    @pytest.mark.parametrize("origin", ["http://[::1", "http://[oops", "http://a]b"])
+    def test_a_malformed_origin_is_refused_not_raised(self, origin: str):
+        """``urlsplit`` raises ValueError on these; a raise here would be a 500.
+
+        Not a bypass — the handler is never reached either way — but a refusal
+        turning into a traceback from inside the security middleware is its own
+        defect.
+        """
+        headers = self._headers(origin=origin, host="127.0.0.1:8008")
+        assert check_request_origin(headers) is not None
+
+    def test_trailing_dot_origin_matches_trailing_dot_host(self):
+        """The two guards must agree about the FQDN form."""
+        headers = self._headers(origin="http://localhost.:8008", host="localhost.:8008")
+        assert check_request_origin(headers) is None
 
     def test_explicitly_allowed_origin_passes(self):
         headers = self._headers(origin="https://studio.example", host="127.0.0.1:8008")
