@@ -209,6 +209,35 @@ jobs:
         CLM_ENABLE_TEST_LOGGING: "1"
         CLM_LOG_LEVEL: INFO
 
+  # Keeps ONE issue up to date with the Docker job's recent outcomes on master,
+  # so the decision to promote it to a required status check does not depend on
+  # anyone remembering to look. Independent of whether tonight's suite passed —
+  # it measures the *other* workflow — hence `if: always()`.
+  docker-promotion-tracker:
+    name: Track Docker job stability
+    runs-on: ubuntu-latest
+    if: always()
+    permissions:
+      contents: read
+      issues: write
+      # `gh run list` / `gh run view` read the CI workflow's history.
+      actions: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          lfs: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Update the promotion-readiness issue
+        run: python scripts/docker_job_stability.py --repo "${{ github.repository }}"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
   report-failure:
     name: Report failure
     needs: [full, docker]
