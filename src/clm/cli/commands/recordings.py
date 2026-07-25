@@ -619,6 +619,20 @@ def assemble(root_dir: Path, raw_suffix: str | None, dry_run: bool):
 )
 @click.option("--obs-password", default=None, help="OBS WebSocket password.")
 @click.option("--no-browser", is_flag=True, help="Do not auto-open browser.")
+@click.option(
+    "--allowed-host",
+    multiple=True,
+    help="Extra Host header value to accept (repeatable). Needed when you reach "
+    "the dashboard under a name other than localhost — e.g. a Tailscale "
+    "hostname. Pass '*' to disable the check entirely.",
+)
+@click.option(
+    "--allowed-origin",
+    multiple=True,
+    help="Extra origin allowed to drive actions (repeatable), e.g. "
+    "https://host.tailnet.ts.net. Only needed behind a reverse proxy that "
+    "rewrites the Host header.",
+)
 def serve_recordings(
     root_dir: Path,
     host: str,
@@ -628,6 +642,8 @@ def serve_recordings(
     obs_port: int | None,
     obs_password: str | None,
     no_browser: bool,
+    allowed_host: tuple[str, ...],
+    allowed_origin: tuple[str, ...],
 ):
     """Start the recordings dashboard web UI.
 
@@ -637,6 +653,13 @@ def serve_recordings(
 
     ROOT_DIR is the recordings root containing to-process/, final/,
     and archive/ subdirectories (created automatically if missing).
+
+    The dashboard has no login: anyone who can reach it can arm decks and
+    start recordings. It therefore binds localhost by default, only accepts
+    requests whose Host names this server, and refuses actions driven from
+    another origin — which is what keeps a web page open in another tab from
+    driving it. Use --allowed-host / --allowed-origin when you deliberately
+    reach it under a different name.
     """
     try:
         import uvicorn
@@ -671,6 +694,9 @@ def serve_recordings(
         stability_check_count=cfg_stab_count,
         auphonic_api_key=cfg_auphonic_key,
         auphonic_preset=cfg_auphonic_preset,
+        bind_host=host,
+        allowed_hosts=list(allowed_host),
+        allowed_origins=list(allowed_origin),
     )
 
     url = f"http://{host if host != '0.0.0.0' else 'localhost'}:{port}"

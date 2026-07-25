@@ -90,6 +90,18 @@ def _lectures_refresh_response() -> HTMLResponse:
     return HTMLResponse("", headers={"HX-Location": _LECTURES_REFRESH_LOCATION})
 
 
+def _validate_deck_identity(course_slug: str, section_name: str, deck_name: str) -> None:
+    """Validate the ``(course, section, deck)`` triple a request names.
+
+    All three become path components under the recordings root via
+    :func:`~clm.recordings.workflow.naming.recording_relative_dir`. See
+    :func:`_validate_name` for why rejecting beats rewriting.
+    """
+    _validate_name(course_slug, field="course_slug")
+    _validate_name(section_name, field="section_name")
+    _validate_name(deck_name, field="deck_name")
+
+
 def _resolve_lecture_id(section_name: str, deck_name: str) -> str:
     """Derive a stable ``lecture_id`` for *(section_name, deck_name)*.
 
@@ -206,6 +218,44 @@ def _build_deck_provenance(request: Request, section_name: str, deck_name: str, 
         return None
 
 
+#: Characters that must never appear in a request-supplied name that ends up
+#: as a path component. ``/`` and ``\`` are separators; ``:`` carries a drive
+#: letter or an NTFS alternate data stream; the null byte truncates a path in
+#: the C layer beneath ``open()``.
+_PATH_UNSAFE_CHARS = ("/", "\\", ":", "\x00")
+
+
+def _validate_name(value: str, *, field: str) -> str:
+    """Return ``value`` if it is safe to use as a single path component.
+
+    ``course_slug``, ``section_name`` and ``deck_name`` arrive from a form or
+    a URL and reach the filesystem twice over: through
+    :func:`~clm.recordings.workflow.naming.recording_relative_dir` (under the
+    recordings root) and — for ``course_slug`` — through
+    :func:`~clm.recordings.state.get_state_path`, which joins it into CLM's
+    config directory with **no** sanitizing at all. ``get_state_path(
+    "../../../evil")`` writes outside the config dir; ``..`` alone escapes the
+    recordings root, because the existing sanitizer strips separators but
+    leaves a lone ``..`` intact.
+
+    Rejecting is the right answer rather than rewriting: these values name
+    something the UI already knows exists, so anything containing a separator
+    is a bug or an attack, not a user with an unusual course name.
+
+    Raises:
+        HTTPException: 400 when ``value`` is empty, is a relative-path
+            component (``.`` / ``..``), or contains a separator.
+    """
+    if not value or not value.strip():
+        raise HTTPException(status_code=400, detail=f"{field} must not be empty")
+    if value.strip(". ") == "":
+        raise HTTPException(status_code=400, detail=f"Invalid {field}: {value!r}")
+    for char in _PATH_UNSAFE_CHARS:
+        if char in value:
+            raise HTTPException(status_code=400, detail=f"Invalid {field}: {value!r}")
+    return value
+
+
 def _get_or_load_course_state(request: Request, course_slug: str) -> CourseRecordingState:
     """Return the cached :class:`CourseRecordingState` for *course_slug*.
 
@@ -213,7 +263,12 @@ def _get_or_load_course_state(request: Request, course_slug: str) -> CourseRecor
     fresh empty state if no file exists yet. Subsequent calls return
     the cached in-memory instance so mutations from the session thread
     and the request thread share the same object.
+
+    ``course_slug`` is validated here rather than only at the call sites:
+    every path into this function ends in ``get_state_path(course_slug)``,
+    which joins the value into CLM's config directory unsanitized.
     """
+    _validate_name(course_slug, field="course_slug")
     cache = cast(dict[str, CourseRecordingState], request.app.state.recording_states)
     cached = cache.get(course_slug)
     if cached is not None:
@@ -370,6 +425,7 @@ async def arm_deck(
     part_number: int = Form(0),
 ):
     """Arm a slide deck for the next recording."""
+    _validate_deck_identity(course_slug, section_name, deck_name)
     session = _get_session(request)
     lang = _get_lang(request)
     if not request.app.state.obs.connected:
@@ -425,6 +481,7 @@ async def record_deck(
     OBS error. The user can retry via the lower-level ``/arm`` route or
     start OBS manually.
     """
+    _validate_deck_identity(course_slug, section_name, deck_name)
     session = _get_session(request)
     lang = _get_lang(request)
     if not request.app.state.obs.connected:
@@ -471,6 +528,7 @@ async def advance_take(
     history (e.g. because they noticed a mistake mid-session) without
     having to record a throwaway just to trigger the demote.
     """
+    _validate_deck_identity(course_slug, section_name, deck_name)
     session = _get_session(request)
     lang = _get_lang(request)
     lecture_id = _resolve_lecture_id(section_name, deck_name)
@@ -566,7 +624,19 @@ async def resume_recording(request: Request):
 
 @router.post("/process", response_class=HTMLResponse)
 async def process_file(request: Request):
-    """Manually submit one or more files for backend processing."""
+    """Manually submit one or more files for backend processing.
+
+    Every submitted path must resolve **under the recordings root**. Without
+    that check this route was an arbitrary-file exfiltration primitive: it
+    took a path from a form, checked only that it existed, and handed it to
+    the configured backend — which for Auphonic means uploading the file to a
+    third-party service. Its sibling ``/open-explorer`` already did exactly
+    this check; the omission here was inconsistent, not deliberate.
+
+    Status codes:
+    - 400: no path given, or a path outside the recordings root.
+    - 200: submitted (missing files are skipped with a notice, as before).
+    """
     from pathlib import Path as _Path
 
     from clm.recordings.workflow.jobs import ProcessingOptions
@@ -577,6 +647,7 @@ async def process_file(request: Request):
         raise HTTPException(status_code=400, detail="No raw_path provided")
 
     job_manager = _get_job_manager(request)
+    root = _Path(request.app.state.recordings_root).resolve()
     submitted = 0
     for raw_path in raw_paths:
         path = _Path(str(raw_path))
@@ -584,6 +655,23 @@ async def process_file(request: Request):
             logger.warning("Skipping missing file: {}", raw_path)
             _push_notice(request, "warning", f"Skipped missing file: {path.name}")
             continue
+        # resolve() after the existence check so a missing file keeps its
+        # friendlier "skipped" path rather than turning into a hard 400.
+        try:
+            resolved = path.resolve(strict=True)
+        except OSError as exc:  # pragma: no cover - raced deletion
+            logger.warning("Skipping unresolvable file {}: {}", raw_path, exc)
+            _push_notice(request, "warning", f"Skipped missing file: {path.name}")
+            continue
+        try:
+            resolved.relative_to(root)
+        except ValueError as exc:
+            logger.warning("Refused to process {} — outside the recordings root", resolved)
+            raise HTTPException(
+                status_code=400,
+                detail="Path is outside the recordings root",
+            ) from exc
+        path = resolved
         try:
             # submit_async returns immediately; the actual blocking
             # backend.submit (Auphonic upload, etc.) runs on a worker
@@ -639,6 +727,7 @@ async def deck_takes(
     """
     from clm.recordings.workflow.deck_status import TakeFileInfo, scan_take_files
 
+    _validate_deck_identity(course_slug, section_name, deck_name)
     templates = _get_templates(request)
     root = request.app.state.recordings_root
     raw_suffix = request.app.state.raw_suffix
@@ -737,6 +826,7 @@ async def restore_take(
       state record.
     - 409: Session is busy (recording, paused, or renaming).
     """
+    _validate_deck_identity(course_slug, section_name, deck_name)
     session = _get_session(request)
     lang = _get_lang(request)
     lecture_id = _resolve_lecture_id(section_name, deck_name)
