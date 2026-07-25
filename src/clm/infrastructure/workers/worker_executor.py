@@ -17,6 +17,7 @@ from typing import Any, cast
 
 import psutil  # type: ignore[import-untyped]
 
+from clm.infrastructure.api.binding import DOCKER_HOST_ALIAS
 from clm.infrastructure.workers.windows_job_object import WorkerJobObject
 
 # Note: docker package is optional - may not be installed
@@ -26,10 +27,11 @@ logger = logging.getLogger(__name__)
 
 # DNS alias every container uses to reach the host (extra_hosts host-gateway):
 # the CLM REST API (CLM_API_URL) and, under the mitmproxy transport, the proxy.
-# Shared by the API-URL construction and NO_PROXY so the two can never drift
-# (NO_PROXY must list exactly the API host or worker registration would be
-# routed through the replay proxy — see _mitmproxy_docker_env).
-_DOCKER_HOST_ALIAS = "host.docker.internal"
+# Defined in `api.binding` and shared with the API URL the server hands out, so
+# the two can never drift (NO_PROXY must list exactly the API host or worker
+# registration would be routed through the replay proxy — see
+# _mitmproxy_docker_env).
+_DOCKER_HOST_ALIAS = DOCKER_HOST_ALIAS
 
 # Dedicated in-container bind-mount target for the mitmproxy CA bundle (issue
 # #165 P4). NOT the CLM source tree (that lives at /app/clm); this is a mount-
@@ -306,16 +308,22 @@ class DockerWorkerExecutor(WorkerExecutor):
 
             # Workers communicate via REST API instead of direct SQLite access
             # This solves the SQLite WAL mode issues on Windows Docker
-            from clm.infrastructure.api.server import DEFAULT_PORT, get_worker_api_token
+            from clm.infrastructure.api.server import get_worker_api_endpoint
 
-            api_url = f"http://{_DOCKER_HOST_ALIAS}:{DEFAULT_PORT}"
-            api_token = get_worker_api_token()
-            if not api_token:
+            # Ask the running server where it is, rather than rebuilding the URL
+            # from the default port: the port is chosen at bind time (pinned via
+            # CLM_WORKER_API_PORT, OS-assigned under `0`, or moved off a taken
+            # default), so a hardcoded port would point containers at whatever
+            # else happens to be listening — or at nothing.
+            endpoint = get_worker_api_endpoint()
+            if endpoint is None:
                 raise RuntimeError(
                     "Cannot start a Docker worker: the Worker API server is not running, "
-                    "so there is no token to give the container. Every Worker API route "
-                    "requires one; a container without it would be rejected with 401."
+                    "so there is no port to point the container at and no token to give "
+                    "it. Every Worker API route requires one; a container without it "
+                    "would be rejected with 401."
                 )
+            api_url, api_token = endpoint
 
             # Build volume mounts
             volumes = {

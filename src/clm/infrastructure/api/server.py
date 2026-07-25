@@ -32,8 +32,10 @@ from clm.infrastructure.database.job_queue import JobQueue
 
 logger = logging.getLogger(__name__)
 
-# Default port for the Worker API
-DEFAULT_PORT = 8765
+#: Default port for the Worker API. Not a contract — containers are told the
+#: real port via ``CLM_API_URL`` — so a build whose default port is taken moves
+#: to an OS-assigned one. See :mod:`clm.infrastructure.api.binding`.
+DEFAULT_PORT = binding.DEFAULT_PORT
 
 #: Default bind address. Containers reach the host through
 #: ``host.docker.internal``; on Docker Desktop that forwards to loopback, and
@@ -63,7 +65,7 @@ class WorkerApiServer:
         self,
         db_path: Path,
         host: str | None = None,
-        port: int = DEFAULT_PORT,
+        port: int | None = None,
         cache_db_path: Path | None = None,
         token: str | None = None,
     ):
@@ -75,7 +77,13 @@ class WorkerApiServer:
                 loopback, plus the Docker bridge gateways on Linux. Naming an
                 address explicitly — here or via ``CLM_WORKER_API_HOST`` —
                 selects coordinator mode and requires a pinned token.
-            port: Port to bind to (default: 8765)
+            port: Port to bind. ``None`` (the default) consults
+                ``CLM_WORKER_API_PORT`` and then falls back to
+                :data:`DEFAULT_PORT`, which is advisory: if it is taken, the
+                server moves to an OS-assigned port. Naming a port — here or in
+                the environment — pins it, making a collision an error. ``0``
+                asks the OS for a free port, which is how the test suite gives
+                every test its own server.
             cache_db_path: Path to the executed_notebooks cache database
                 (clm_cache.db). If None, the cache endpoints fall back to
                 ``db_path`` for backwards compatibility — the executed_notebooks
@@ -89,9 +97,10 @@ class WorkerApiServer:
                 machine but no token was pinned. Generated tokens exist only
                 in this process, so there would be no way to tell another
                 machine what to present — refusing is the only honest answer.
+                Also if ``CLM_WORKER_API_PORT`` is not a port number.
         """
         self.db_path = db_path
-        self.port = port
+        self.port, self.port_pinned = binding.resolve_port(port)
         self.cache_db_path = cache_db_path
 
         explicit_host = host if host is not None else (os.environ.get(HOST_ENV_VAR) or None)
@@ -115,6 +124,9 @@ class WorkerApiServer:
 
         #: Primary address, kept for URL building and log lines.
         self.host = self.bind_hosts[0]
+
+        #: Addresses actually bound, filled in by :meth:`_bind`.
+        self.bound_hosts: list[str] = []
 
         self._app: FastAPI | None = None
         self._server: uvicorn.Server | None = None
@@ -174,27 +186,31 @@ class WorkerApiServer:
     def _bind(self) -> list[socket.socket]:
         """Bind every address in :attr:`bind_hosts`, loopback first.
 
-        The loopback bind is mandatory — failing it means the port is taken,
-        which is a real error the caller must see. Gateway binds are
-        best-effort: a Docker network can disappear between discovery and
-        bind, and losing one is a Docker-mode connectivity problem, not a
-        reason to abort a build that may not even use Docker.
+        The first (loopback) bind is mandatory and decides the port: an
+        unpinned default port that is already taken is swapped for an
+        OS-assigned one, while a pinned port that is taken raises. Either way
+        the first successful bind fixes the port, so every address stays on one
+        port and :attr:`port` reports the one actually taken.
 
-        With ``port=0`` the first successful bind fixes the port for the rest,
-        so all addresses stay on one port and :attr:`port` reports it.
+        Gateway binds are best-effort: a Docker network can disappear between
+        discovery and bind, and losing one is a Docker-mode connectivity
+        problem, not a reason to abort a build that may not even use Docker.
         """
-        sockets: list[socket.socket] = []
-        for host in self.bind_hosts:
+        primary, *secondary = self.bind_hosts
+        first = binding.bind_socket_with_fallback(
+            primary, self.port, allow_fallback=not self.port_pinned
+        )
+        self.port = first.getsockname()[1]
+        sockets: list[socket.socket] = [first]
+        self.bound_hosts = [primary]
+
+        for host in secondary:
             try:
-                sock = binding.bind_socket(host, self.port)
+                sockets.append(binding.bind_socket(host, self.port))
             except OSError as e:
-                if not sockets:
-                    raise
                 logger.warning(f"Worker API could not bind {host}:{self.port}: {e}")
                 continue
-            sockets.append(sock)
-            if self.port == 0:
-                self.port = sock.getsockname()[1]
+            self.bound_hosts.append(host)
 
         self._warn_if_containers_cannot_reach_us(sockets)
         return sockets
@@ -252,7 +268,10 @@ class WorkerApiServer:
             True if server started successfully, False otherwise
 
         Raises:
-            OSError: If the primary (loopback) address cannot be bound.
+            OSError: If the primary (loopback) address cannot be bound — which
+                for a *pinned* port includes "the port is already in use". An
+                unpinned default port that is taken is swapped for an
+                OS-assigned one instead, and :attr:`port` reports which.
         """
         if self._thread is not None and self._thread.is_alive():
             logger.warning("Worker API server is already running")
@@ -287,7 +306,7 @@ class WorkerApiServer:
             self._close_sockets()
             return False
 
-        bound = ", ".join(f"{h}:{self.port}" for h in self.bind_hosts[: len(self._sockets)])
+        bound = ", ".join(f"{h}:{self.port}" for h in self.bound_hosts)
         logger.info(
             f"Worker API server started on {bound} "
             f"(Docker: http://host.docker.internal:{self.port}); "
@@ -343,7 +362,7 @@ class WorkerApiServer:
     @property
     def docker_url(self) -> str:
         """Get the URL for Docker containers to use."""
-        return f"http://host.docker.internal:{self.port}"
+        return f"http://{binding.DOCKER_HOST_ALIAS}:{self.port}"
 
 
 # Singleton instance for global access
@@ -376,6 +395,7 @@ def start_worker_api_server(
     db_path: Path,
     timeout: float = 5.0,
     cache_db_path: Path | None = None,
+    port: int | None = None,
 ) -> WorkerApiServer:
     """Start the global Worker API server.
 
@@ -388,6 +408,9 @@ def start_worker_api_server(
         cache_db_path: Path to the executed_notebooks cache database
             (clm_cache.db). Required for cache endpoints to write to the
             real cache; falls back to ``db_path`` if not provided.
+        port: Port to pin, or ``None`` to take the port policy in
+            :func:`clm.infrastructure.api.binding.resolve_port` —
+            ``CLM_WORKER_API_PORT``, else the advisory default.
 
     Returns:
         The WorkerApiServer instance
@@ -402,7 +425,7 @@ def start_worker_api_server(
             logger.debug("Worker API server already running")
             return _server_instance
 
-        _server_instance = WorkerApiServer(db_path, cache_db_path=cache_db_path)
+        _server_instance = WorkerApiServer(db_path, cache_db_path=cache_db_path, port=port)
         if not _server_instance.start(timeout=timeout):
             raise RuntimeError("Failed to start Worker API server")
 
@@ -419,12 +442,19 @@ def stop_worker_api_server(timeout: float = 5.0):
             _server_instance = None
 
 
-def get_worker_api_token() -> str | None:
-    """Return the running server's bearer token, or None if none is running.
+def get_worker_api_endpoint() -> tuple[str, str] | None:
+    """Return ``(docker_url, token)`` for the running server, or None.
 
-    :class:`~clm.infrastructure.workers.worker_executor.WorkerExecutor` calls
-    this to inject ``CLM_API_TOKEN`` into each container it starts — the same
-    channel that already carries ``CLM_API_URL``.
+    :class:`~clm.infrastructure.workers.worker_executor.DockerWorkerExecutor`
+    calls this to fill in ``CLM_API_URL`` and ``CLM_API_TOKEN`` for each
+    container it starts. Both come from the same call on purpose: the URL
+    carries the port the server *actually* bound, which is not necessarily
+    :data:`DEFAULT_PORT`, and a container told the wrong port fails exactly
+    like a container told the wrong token — jobs sit ``pending`` with nothing
+    in the host log. Reading the two from one place is what keeps them from
+    drifting apart.
     """
     with _server_lock:
-        return _server_instance.token if _server_instance is not None else None
+        if _server_instance is None:
+            return None
+        return _server_instance.docker_url, _server_instance.token

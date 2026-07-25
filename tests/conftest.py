@@ -210,6 +210,52 @@ def _isolate_db_path_env():
                 os.environ[key] = value
 
 
+@pytest.fixture(autouse=True)
+def _worker_api_env(request):
+    """Isolate the Worker API env vars, and give each Docker test its own port.
+
+    Two jobs, both about not sharing a port:
+
+    **Hermeticity.** ``CLM_WORKER_API_HOST`` / ``CLM_WORKER_API_PORT`` /
+    ``CLM_API_TOKEN`` are read by ``WorkerApiServer.__init__``. A developer who
+    exports any of them in their shell would otherwise change what tests that
+    assert the *default* bind, port, or token generation observe — passing in
+    CI, failing on the configured machine. Same reasoning as
+    ``_isolate_db_path_env``.
+
+    **Per-test ports for the Docker tier.** Tests marked ``docker`` run real
+    containers against a real ``WorkerApiServer``. On the fixed default port,
+    consecutive tests in a tier can overlap — a server whose listening socket
+    has not gone away yet, plus a fresh one binding the same port — and a
+    container's callback then reaches whichever socket the OS picks, so its job
+    is never claimed and the test fails asserting ``status 'pending'`` with no
+    error. Requesting port 0 makes the OS hand every server a private port, and
+    the container is told that port via ``CLM_API_URL``, so nothing has to agree
+    on a number in advance. (``bind_socket`` no longer sets ``SO_REUSEADDR`` on
+    Windows either, so an overlap would now be a loud error rather than a
+    hijack; per-test ports mean there is no overlap to report.)
+
+    PRODUCTION VALUE COVERED BY (finding T8 — a neutraliser must name the test
+    that still exercises the real behaviour):
+      tests/infrastructure/api/test_binding.py::TestResolvePort — the default
+        port and the env var, both read straight from ``resolve_port``; and
+      tests/infrastructure/api/test_server.py::TestConstruction
+        ::test_defaults_to_standard_host_port.
+    """
+    keys = ("CLM_WORKER_API_HOST", "CLM_WORKER_API_PORT", "CLM_API_TOKEN")
+    saved = {k: os.environ.pop(k, None) for k in keys}
+    if "docker" in request.keywords:
+        os.environ["CLM_WORKER_API_PORT"] = "0"
+    try:
+        yield
+    finally:
+        for key in keys:
+            os.environ.pop(key, None)
+        for key, value in saved.items():
+            if value is not None:
+                os.environ[key] = value
+
+
 # ====================================================================
 # Tool Availability Detection
 # ====================================================================

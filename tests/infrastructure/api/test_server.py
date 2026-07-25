@@ -28,11 +28,14 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from clm.infrastructure.api import binding
 from clm.infrastructure.api import server as server_module
+from clm.infrastructure.api.binding import PORT_ENV_VAR, bind_socket
 from clm.infrastructure.api.server import (
     DEFAULT_HOST,
     DEFAULT_PORT,
     WorkerApiServer,
+    get_worker_api_endpoint,
     get_worker_api_server,
     start_worker_api_server,
     stop_worker_api_server,
@@ -85,6 +88,78 @@ class TestConstruction:
         server = WorkerApiServer(db_path, host="0.0.0.0", port=8888, token="shared-secret")
         assert server.url == "http://0.0.0.0:8888"
         assert server.docker_url == "http://host.docker.internal:8888"
+
+    def test_env_var_pins_the_port(self, db_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv(PORT_ENV_VAR, "9109")
+        server = WorkerApiServer(db_path)
+        assert server.port == 9109
+        assert server.port_pinned is True
+
+    def test_default_port_is_not_pinned(self, db_path: Path) -> None:
+        """Nobody asked for the default, so a collision is not an error."""
+        assert WorkerApiServer(db_path).port_pinned is False
+
+
+class TestPortSelection:
+    """How ``start()`` reacts to the chosen port already being in use.
+
+    The distinction is whether anyone asked for that port. It matters because
+    the port is not a contract: the host tells each container where to call
+    back through ``CLM_API_URL``, so an unpinned build can move without
+    anything noticing, while a pinned one moving would leave whoever pinned it
+    pointing at nothing.
+    """
+
+    def test_taken_default_port_moves_and_still_serves(
+        self, db_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        occupied = bind_socket("127.0.0.1", 0)
+        port = occupied.getsockname()[1]
+        # Make that occupied port *the* default, so the server reaches it the
+        # unpinned way. Patching the real default instead would mean fighting
+        # over 8765 with whatever else is on the machine.
+        monkeypatch.setattr(binding, "DEFAULT_PORT", port)
+        monkeypatch.setattr(server_module.uvicorn, "Server", FakeUvicornServer)
+
+        server = WorkerApiServer(db_path)
+        assert server.port == port and server.port_pinned is False
+        try:
+            assert server.start(timeout=2.0) is True
+            assert server.port != port, "expected a different port, not the occupied one"
+            # Whatever it landed on is what containers are told to use.
+            assert server.docker_url.endswith(f":{server.port}")
+        finally:
+            server.stop(timeout=2.0)
+            occupied.close()
+
+    def test_taken_pinned_port_raises(self, db_path: Path) -> None:
+        occupied = bind_socket("127.0.0.1", 0)
+        port = occupied.getsockname()[1]
+        try:
+            server = WorkerApiServer(db_path, port=port)
+            with pytest.raises(OSError):
+                server.start(timeout=2.0)
+            assert server.is_running is False
+        finally:
+            occupied.close()
+
+    def test_port_zero_resolves_before_start_returns(
+        self, db_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``port=0`` is only useful if the caller can read back the real port.
+
+        This is what the Docker test tier relies on: each test gets its own
+        server, and the container is told which port that server took.
+        """
+        monkeypatch.setattr(server_module.uvicorn, "Server", FakeUvicornServer)
+
+        server = WorkerApiServer(db_path, port=0)
+        try:
+            assert server.start(timeout=2.0) is True
+            assert server.port != 0
+            assert server.url.endswith(f":{server.port}")
+        finally:
+            server.stop(timeout=2.0)
 
 
 class TestCreateApp:
@@ -315,6 +390,46 @@ class TestGlobalSingleton:
     def test_stop_worker_api_server_when_never_started(self) -> None:
         # No exception when global instance is None.
         stop_worker_api_server(timeout=1.0)
+
+    def test_start_worker_api_server_accepts_a_port(
+        self, db_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(server_module.uvicorn, "Server", FakeUvicornServer)
+
+        server = start_worker_api_server(db_path, timeout=2.0, port=0)
+        try:
+            assert server.port != 0, "port 0 must be resolved to the real one"
+        finally:
+            stop_worker_api_server(timeout=2.0)
+
+
+class TestContainerEndpoint:
+    """``get_worker_api_endpoint`` is what containers are configured from.
+
+    URL and token come from one call deliberately: the URL carries the port the
+    server *actually* bound, and a container given the wrong port fails exactly
+    like one given the wrong token — its jobs sit ``pending`` with nothing in
+    the host log. Reading both from the live server keeps them together.
+    """
+
+    def test_none_when_no_server_is_running(self) -> None:
+        assert get_worker_api_endpoint() is None
+
+    def test_reports_the_running_server_url_and_token(
+        self, db_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(server_module.uvicorn, "Server", FakeUvicornServer)
+
+        server = start_worker_api_server(db_path, timeout=2.0, port=0)
+        try:
+            endpoint = get_worker_api_endpoint()
+            assert endpoint == (server.docker_url, server.token)
+            # …and the URL names the port that was actually taken, not the default.
+            assert endpoint is not None
+            assert endpoint[0] == f"http://host.docker.internal:{server.port}"
+            assert str(DEFAULT_PORT) not in endpoint[0] or server.port == DEFAULT_PORT
+        finally:
+            stop_worker_api_server(timeout=2.0)
 
 
 # ---------------------------------------------------------------------------

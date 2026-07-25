@@ -428,17 +428,25 @@ cache path; SSTI proof-of-concept from the review no longer executes.
   with no cold/warm difference (a months-unused image: 1060ms first run,
   1044ms second), and a warm container registers ~3s after `docker run`,
   against a 5s + 60s test budget.
-  The leading hypothesis is port 8765: every test in the tier starts and stops
-  its own `WorkerApiServer` on that fixed port, and `SO_REUSEADDR` on Windows
-  lets a second bind succeed against a socket that is still listening, leaving
-  which socket receives connections undefined. That would match the symptom
+  The leading hypothesis was port 8765: every test in the tier started and
+  stopped its own `WorkerApiServer` on that fixed port, and `SO_REUSEADDR` on
+  Windows lets a second bind succeed against a socket that is still listening,
+  leaving which socket receives connections undefined. That matches the symptom
   exactly — the failing assertion is `status 'pending'` with `Error: None`,
-  i.e. the job was *never claimed*, not "claimed and too slow". The hazard is
-  pre-existing, not introduced here: `uvicorn.Config.bind_socket` sets the same
-  option, and `tests/infrastructure/workers/conftest.py` already documents
-  port-8765 collisions as a known flake source. **If you touch this area,
-  consider giving each test its own port** — that is the fix this note is
-  pointing at, and it would remove a whole class of confusing docker failures.
+  i.e. the job was *never claimed*, not "claimed and too slow".
+
+  **Acted on (item 1 follow-up).** The hijack is now measured, not inferred: on
+  Windows 11, two sockets bound `127.0.0.1:18765` successfully with
+  `SO_REUSEADDR`, and the second bind failed `WSAEADDRINUSE` without it. Three
+  things changed as a result — `bind_socket` no longer sets the option on
+  Windows; the Docker test tier runs with `CLM_WORKER_API_PORT=0`, so every test
+  gets a private OS-assigned port; and `DockerWorkerExecutor` now takes
+  `CLM_API_URL` from the running server instead of rebuilding it from
+  `DEFAULT_PORT` — without which per-test ports could not work at all, since
+  containers were being told 8765 no matter where the server was. **The original
+  three failures were never reproduced**, so treat the hypothesis as plausible
+  and now un-testable rather than confirmed; what is certain is that the
+  mechanism it named can no longer occur.
 - **`/health` no longer reports the database path.** It is the one
   unauthenticated route, and the path names a host filesystem — and, on a
   share, a server name.
@@ -446,6 +454,26 @@ cache path; SSTI proof-of-concept from the review no longer executes.
   presents no token. The 401 path is given its own error message naming
   `clm docker build`, plus entries in the migration info topic and
   troubleshooting guide. Direct mode is untouched.
+- **A stale *local* image now fails the docker tier, and the symptom hides the
+  cause.** The token requirement means any image predating it registers 401 and
+  its jobs stay `pending` — which surfaces as "job never claimed" or
+  `Expected 1 active workers within 30s`, saying nothing about images. CI does
+  not see this (it builds fresh `:test` images and skips what it has not built);
+  a dev machine with published images pulled weeks ago does. Two casualties
+  found while verifying the port work, both pre-existing:
+  - `test_docker_job_execution.py`'s DrawIO tests **hardcoded**
+    `mhoelzl/clm-drawio-converter:latest`, so they ran against Docker Hub rather
+    than the working tree. **Fixed**: they now discover the image like the
+    notebook tests do, preferring the CI-built `clm-drawio-converter:test`.
+  - `test_notebook_error_context.py::TestCppErrorWithDocker` needs the `:full`
+    image (xeus-cling) and **still fails on any machine whose `:full` predates
+    the token change** — verified failing identically on `master`. It is a stale
+    image, not a code defect; rebuild with
+    `clm docker build notebook --variant full`. Its tag preference also puts
+    floating `:full` ahead of the version-matched `<version>-full`, which is
+    backwards — worth flipping when someone is next in that file.
+  Diagnosing this is one command:
+  `docker run --rm --entrypoint python <image> -c "import inspect; from clm.infrastructure.api import client; print('CLM_API_TOKEN' in inspect.getsource(client))"`.
 
 ---
 

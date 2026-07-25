@@ -488,24 +488,36 @@ class TestDockerPathConversionIntegration:
         pass
 
 
-def _is_drawio_docker_image_available() -> bool:
-    """Check if the DrawIO Docker image is available."""
+def _find_drawio_docker_image() -> str | None:
+    """Find the best available DrawIO Docker image for testing.
+
+    Same preference order as ``_find_notebook_docker_image``, and for the same
+    reason: newest-built first. These tests used to *hardcode* the published
+    ``mhoelzl/clm-drawio-converter:latest``, which meant they ran against
+    whatever was last pulled from Docker Hub rather than against the image the
+    working tree builds — so a host-side change to the worker protocol failed
+    here as "job stayed pending" with the real cause (an image predating the
+    change) invisible. The CI-built ``:test`` tag now wins.
+
+    1. clm-drawio-converter:test (CI-built test image)
+    2. docker.io/mhoelzl/clm-drawio-converter:latest (published)
+    """
     try:
         import docker
 
         client = docker.from_env()
-        try:
-            client.images.get("docker.io/mhoelzl/clm-drawio-converter:latest")
-            return True
-        except docker.errors.ImageNotFound:
-            # Try local build
+        for tag in [
+            "clm-drawio-converter:test",
+            "docker.io/mhoelzl/clm-drawio-converter:latest",
+        ]:
             try:
-                client.images.get("clm-drawio-converter:latest")
-                return True
+                client.images.get(tag)
+                return tag
             except docker.errors.ImageNotFound:
-                return False
+                continue
+        return None
     except Exception:
-        return False
+        return None
 
 
 @pytest.fixture
@@ -574,8 +586,12 @@ def drawio_docker_test_env(tmp_path):
 
 @pytest.fixture
 def drawio_docker_image_available():
-    """Check if the DrawIO Docker image is available."""
-    return _is_drawio_docker_image_available()
+    """The DrawIO image tag to test against, or False if none is available.
+
+    Mirrors ``docker_image_available``: falsy means skip, otherwise it is the
+    tag the test must configure the worker with.
+    """
+    return _find_drawio_docker_image() or False
 
 
 class TestDrawioDockerJobExecution:
@@ -617,7 +633,7 @@ class TestDrawioDockerJobExecution:
             "reuse_workers": False,
         }
         config = load_worker_config(cli_overrides)
-        config.drawio.image = "docker.io/mhoelzl/clm-drawio-converter:latest"
+        config.drawio.image = drawio_docker_image_available
 
         manager = WorkerLifecycleManager(
             config=config,
@@ -721,7 +737,7 @@ class TestDrawioDockerJobExecution:
             "drawio_count": 1,
         }
         config = load_worker_config(cli_overrides)
-        config.drawio.image = "docker.io/mhoelzl/clm-drawio-converter:latest"
+        config.drawio.image = drawio_docker_image_available
 
         manager = WorkerLifecycleManager(
             config=config,
@@ -787,7 +803,7 @@ class TestDrawioDockerJobExecution:
             "drawio_count": 1,
         }
         config = load_worker_config(cli_overrides)
-        config.drawio.image = "docker.io/mhoelzl/clm-drawio-converter:latest"
+        config.drawio.image = drawio_docker_image_available
 
         manager = WorkerLifecycleManager(
             config=config,
