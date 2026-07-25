@@ -299,10 +299,36 @@ verified by deliberately breaking a test once. — **All met.**
 
 ### Phase 2 — Network-facing security  ▸ STATUS: not started
 **Depends on**: Phase 1 (you are about to change Docker-mode networking and the
-cache format; the worker tests must be alive first).
+cache format; the worker tests must be alive first). **Phase 1 is DONE**, so
+this is unblocked.
 
 **Goal**: no CLM service is reachable, or actionable, by a party that has not
 been explicitly granted access.
+
+**Read this before you start — it is specific to this phase.**
+
+- **The Docker CI job is not a required status check.** You are about to change
+  Docker-mode networking and the worker-API contract, which is precisely the
+  code `-m docker` covers and the PR matrix does not. A green PR proves nothing
+  about it. Run `pytest <module> -m ""` locally, and check the merge commit's
+  Docker job — not just the PR's green tick. Phase 1 landed three mitigations:
+  a `report-master-failure` job that files a `master-red` issue, an image-tag
+  guard in the fast suite, and a nightly that runs the docker tier. Issue #679
+  tracks whether the job is stable enough to become required.
+- **S2 is confirmed live, not inferred.** A Docker-mode test run during Phase 1
+  logged, verbatim:
+  `Worker API server started on http://0.0.0.0:8765 (Docker: http://host.docker.internal:8765)`.
+  So the bind is genuinely all-interfaces on a normal build, exactly as the
+  review said.
+- **CI shape changed during Phase 1.** There are now four PR suites
+  (`unit`/`integration`/`e2e`/`slow`) × two Python versions = eight required
+  contexts plus `Lint and type check`. If you add or rename a suite you must
+  update the "Require CI green" ruleset in the same breath, *after* the workflow
+  merges. See `docs/developer-guide/testing.md`.
+- **`test_direct_worker_health_monitoring` is the only place `start_monitoring()`
+  runs outside a `__main__` demo.** It passes on a CEST host despite finding C8
+  only because a stale heartbeat merely warns for direct workers. Do not read
+  its green as evidence about the timezone bug.
 
 **Work**
 
