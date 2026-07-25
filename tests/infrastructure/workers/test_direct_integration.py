@@ -4,8 +4,6 @@ These tests verify that workers can run directly as subprocesses
 and process actual jobs end-to-end.
 """
 
-import json
-import sys
 import tempfile
 import time
 from importlib.util import find_spec
@@ -15,8 +13,54 @@ import pytest
 
 from clm.infrastructure.database.job_queue import JobQueue
 from clm.infrastructure.database.schema import init_database
+from clm.infrastructure.messaging.notebook_classes import NotebookPayload
 from clm.infrastructure.workers.pool_manager import WorkerPoolManager
 from clm.infrastructure.workers.worker_executor import WorkerConfig
+
+# A minimal jupytext percent-format slide source — CLM's actual notebook input
+# format. Deliberately trivial so the kernel round-trip is fast.
+NOTEBOOK_SOURCE = """# %% [markdown] lang="en" tags=["slide"]
+#
+# # Test Notebook
+
+# %% tags=["keep"]
+print("Hello, World!")
+"""
+
+
+def _submit_notebook_job(
+    job_queue: JobQueue,
+    input_file: Path,
+    output_file: Path,
+    source: str = NOTEBOOK_SOURCE,
+) -> int:
+    """Submit a notebook job carrying a *valid* ``NotebookPayload``.
+
+    These tests used to hand-roll ``payload={"kernel": "python3", "timeout": 60}``,
+    which has not been a valid notebook payload since ``NotebookPayload`` gained
+    its required ``kind``/``prog_lang``/``language``/``format`` descriptors. The
+    job failed with a ``ValidationError`` — invisible, because the whole module
+    was skipped (stale ``find_spec`` guards). Build the real payload object so
+    the test cannot drift away from the worker's contract again.
+    """
+    payload = NotebookPayload(
+        data=source,
+        input_file=str(input_file),
+        input_file_name=input_file.name,
+        output_file=str(output_file),
+        correlation_id=f"direct-integration-{output_file.stem}",
+        kind="completed",
+        prog_lang="python",
+        language="en",
+        format="notebook",
+    )
+    return job_queue.add_job(
+        job_type="notebook",
+        input_file=str(input_file),
+        output_file=str(output_file),
+        content_hash=payload.content_hash(),
+        payload=payload.model_dump(mode="json"),
+    )
 
 
 def _wait_for_registered_workers(
@@ -66,8 +110,8 @@ def check_worker_module_available(module_name: str) -> bool:
 
 # Check availability of worker modules
 NOTEBOOK_WORKER_AVAILABLE = check_worker_module_available("clm.workers.notebook")
-DRAWIO_WORKER_AVAILABLE = check_worker_module_available("drawio_converter")
-PLANTUML_WORKER_AVAILABLE = check_worker_module_available("plantuml_converter")
+DRAWIO_WORKER_AVAILABLE = check_worker_module_available("clm.workers.drawio")
+PLANTUML_WORKER_AVAILABLE = check_worker_module_available("clm.workers.plantuml")
 
 # Skip all integration tests if notebook worker is not available
 pytestmark = pytest.mark.skipif(
@@ -190,39 +234,15 @@ class TestDirectWorkerIntegration:
         Note: This test creates a simple test notebook job.
         """
         # Create a test notebook file
-        test_notebook = workspace_path / "test.ipynb"
-        notebook_content = {
-            "cells": [
-                {
-                    "cell_type": "code",
-                    "execution_count": None,
-                    "metadata": {},
-                    "outputs": [],
-                    "source": ["print('Hello, World!')"],
-                }
-            ],
-            "metadata": {
-                "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"}
-            },
-            "nbformat": 4,
-            "nbformat_minor": 4,
-        }
-
-        with open(test_notebook, "w") as f:
-            json.dump(notebook_content, f)
+        test_notebook = workspace_path / "test.py"
+        test_notebook.write_text(NOTEBOOK_SOURCE, encoding="utf-8")
 
         # Create output path
         output_file = workspace_path / "output.ipynb"
 
         # Add job to queue
         job_queue = JobQueue(db_path)
-        job_id = job_queue.add_job(
-            job_type="notebook",
-            input_file=str(test_notebook),
-            output_file=str(output_file),
-            content_hash="test-hash-123",
-            payload={"kernel": "python3", "timeout": 60},
-        )
+        job_id = _submit_notebook_job(job_queue, test_notebook, output_file)
 
         # Start worker
         config = WorkerConfig(worker_type="notebook", count=1, execution_mode="direct")
@@ -234,24 +254,27 @@ class TestDirectWorkerIntegration:
         try:
             manager.start_pools()
 
-            # Wait for job to be processed (max 30 seconds)
-            max_wait = 30
+            # Wait for job to be processed. A cold kernel start can take a
+            # while on a loaded machine, so this is generous rather than tight.
+            max_wait = 120
             start_time = time.time()
             job_status = "pending"
+            job_error: str | None = None
 
             while time.time() - start_time < max_wait:
                 conn = job_queue._get_conn()
-                cursor = conn.execute("SELECT status FROM jobs WHERE id = ?", (job_id,))
+                cursor = conn.execute("SELECT status, error FROM jobs WHERE id = ?", (job_id,))
                 row = cursor.fetchone()
                 if row:
-                    job_status = row[0]
+                    job_status, job_error = row[0], row[1]
                     if job_status in ("completed", "failed"):
                         break
 
                 time.sleep(0.5)
 
-            # Verify job was completed
-            assert job_status == "completed", f"Job status: {job_status}"
+            # Verify job was completed. Surface the recorded error — without it
+            # a payload-contract regression reads as a bare "failed != completed".
+            assert job_status == "completed", f"Job status: {job_status}; error: {job_error}"
 
             # Verify output file exists
             assert output_file.exists(), "Output file not created"
@@ -333,32 +356,13 @@ class TestDirectWorkerIntegration:
         Args:
             worker_count: Number of concurrent notebook workers (2, 8, 16, or 32)
         """
-        # Create test notebook file
-        test_notebook = workspace_path / "test.ipynb"
-        notebook_content = {
-            "cells": [
-                {
-                    "cell_type": "code",
-                    "execution_count": None,
-                    "metadata": {},
-                    "outputs": [],
-                    "source": ["print('Test notebook')"],
-                }
-            ],
-            "metadata": {
-                "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"}
-            },
-            "nbformat": 4,
-            "nbformat_minor": 4,
-        }
-
-        with open(test_notebook, "w") as f:
-            json.dump(notebook_content, f)
-
         # Create job queue
         job_queue = JobQueue(db_path)
 
-        # Submit multiple jobs (2x worker count to ensure concurrency)
+        # Submit multiple jobs (2x worker count to ensure concurrency).
+        # Every job gets *distinct* content: identical sources would be served
+        # from the worker's executed-notebook cache after the first job, which
+        # would quietly turn this concurrency test into a cache-lookup test.
         num_jobs = worker_count * 2
         job_ids = []
         output_files = []
@@ -367,14 +371,13 @@ class TestDirectWorkerIntegration:
             output_file = workspace_path / f"output_{i}.ipynb"
             output_files.append(output_file)
 
-            job_id = job_queue.add_job(
-                job_type="notebook",
-                input_file=str(test_notebook),
-                output_file=str(output_file),
-                content_hash=f"test-hash-{i}",
-                payload={"kernel": "python3", "timeout": 60},
+            test_notebook = workspace_path / f"test_{i}.py"
+            source = NOTEBOOK_SOURCE + f'\nprint("job {i}")\n'
+            test_notebook.write_text(source, encoding="utf-8")
+
+            job_ids.append(
+                _submit_notebook_job(job_queue, test_notebook, output_file, source=source)
             )
-            job_ids.append(job_id)
 
         # Start workers
         config = WorkerConfig(worker_type="notebook", count=worker_count, execution_mode="direct")
