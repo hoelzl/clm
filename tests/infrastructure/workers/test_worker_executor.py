@@ -20,6 +20,7 @@ from clm.infrastructure.workers.worker_executor import (
     _mitmproxy_docker_env,
     _notebook_worker_jupyter_env,
 )
+from tests.infrastructure.workers.conftest import FAKE_API_TOKEN
 
 
 @pytest.fixture
@@ -541,12 +542,43 @@ class TestDockerWorkerExecutor:
         # Workers now use CLM_API_URL for REST API communication instead of direct SQLite
         assert "CLM_API_URL" in env
         assert "host.docker.internal:8765" in env["CLM_API_URL"]
+        # …and the API requires a bearer token on every route, so the URL
+        # alone is useless without it (S2).
+        assert env["CLM_API_TOKEN"] == FAKE_API_TOKEN
 
         # When network_name is None (default), network key should not be in kwargs
         assert "network" not in call_args.kwargs
 
         # Verify container is tracked
         assert worker_id in executor.containers
+
+    @patch("docker.DockerClient")
+    @patch("docker.errors.NotFound")
+    def test_start_worker_refuses_without_an_api_token(
+        self, mock_not_found, mock_docker, db_path, workspace_path, monkeypatch
+    ):
+        """No running API server means no token — and a tokenless container
+        would only get 401s. Fail at start, where the cause is still visible,
+        rather than leaving jobs pending with no explanation."""
+        import docker.errors
+
+        monkeypatch.setattr("clm.infrastructure.api.server.get_worker_api_token", lambda: None)
+
+        mock_client = MagicMock()
+        mock_client.containers.get.side_effect = docker.errors.NotFound("Container not found")
+
+        executor = DockerWorkerExecutor(
+            docker_client=mock_client, db_path=db_path, workspace_path=workspace_path
+        )
+        config = WorkerConfig(
+            worker_type="notebook",
+            count=1,
+            execution_mode="docker",
+            image="clm-notebook-processor:latest",
+        )
+
+        assert executor.start_worker("notebook", 0, config) is None
+        assert not mock_client.containers.run.called
 
     @patch("docker.DockerClient")
     @patch("docker.errors.NotFound")

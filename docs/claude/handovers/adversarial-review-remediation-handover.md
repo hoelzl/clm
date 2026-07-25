@@ -1,6 +1,6 @@
 # Adversarial Review Remediation — Handover
 
-**Created**: 2026-07-24 | **Status**: Phases 0–1 DONE; Phase 2 next | **Owner**: unassigned
+**Created**: 2026-07-24 | **Status**: Phases 0–1 DONE; Phase 2 in progress (item 1 done) | **Owner**: unassigned
 
 **2026-07-25 update**: one of Phase 7's prerequisites — "fix the known build
 nondeterminism" — was investigated ahead of schedule and is now resolved; see
@@ -297,10 +297,14 @@ verified by deliberately breaking a test once. — **All met.**
 
 ---
 
-### Phase 2 — Network-facing security  ▸ STATUS: not started
+### Phase 2 — Network-facing security  ▸ STATUS: item 1 DONE; items 2–4 open
 **Depends on**: Phase 1 (you are about to change Docker-mode networking and the
 cache format; the worker tests must be alive first). **Phase 1 is DONE**, so
 this is unblocked.
+
+> **Item 1 (S2 + D2 + D3) completed 2026-07-25.** Notes at the end of this
+> phase — read them before item 2, and before anything that touches a worker
+> image.
 
 **Goal**: no CLM service is reachable, or actionable, by a party that has not
 been explicitly granted access.
@@ -332,7 +336,7 @@ been explicitly granted access.
 
 **Work**
 
-1. **S2 + D2 + D3 — worker API.** `src/clm/infrastructure/api/server.py:22-23`,
+1. **S2 + D2 + D3 — worker API.** ▸ **DONE** — `src/clm/infrastructure/api/server.py:22-23`,
    `worker_routes.py`.
    - Default bind: `127.0.0.1` **plus** the Docker bridge gateway address so
      containers keep working. Binding to anything else requires an explicit
@@ -381,6 +385,67 @@ been explicitly granted access.
 app; `/ws` rejects an unauthenticated connection before accept; the worker API
 refuses a non-loopback bind without a token; no pickle remains on any API or
 cache path; SSTI proof-of-concept from the review no longer executes.
+
+**Notes from item 1 (2026-07-25)**
+
+- **Worker images do not install FastAPI, and nothing warned about it.** The
+  token's env-var name started life in `infrastructure/api/auth.py`, which
+  imports FastAPI; `client.py` imports that name; every worker container then
+  died with `ModuleNotFoundError: No module named 'fastapi'` before claiming a
+  job. On the host — and in CI's non-docker matrix — the import is fine, so it
+  was invisible. The constant now lives in `infrastructure/api/token.py`, which
+  imports nothing, and
+  `tests/infrastructure/workers/test_worker_import_surface.py` pins the
+  property in the **fast** suite: it re-imports each worker-side module in a
+  subprocess with an import hook that refuses fastapi/uvicorn/starlette, and
+  includes a case proving the hook actually bites. **Anything you add to a
+  worker's import path has to survive that.**
+- **`TYPE_CHECKING`-only annotations break FastAPI dependencies.** The first
+  attempt at keeping `auth.py` FastAPI-free put `Request` behind
+  `if TYPE_CHECKING`. FastAPI resolves a dependency's annotations at runtime,
+  so `require_api_token` stopped being recognized and *every* route went back to
+  answering unauthenticated — 52 of the new tests caught it. Splitting the
+  module was the fix; lazy imports inside the function are not enough when
+  FastAPI needs the signature.
+- **Docker Desktop forwards `host.docker.internal` to the host's loopback.**
+  Verified directly (a container `curl`ed a loopback-bound host server), so on
+  Windows/macOS the loopback bind alone is sufficient and the Docker bridge
+  gateway is not even a bindable host address. Linux is the opposite case and
+  gets the gateway binds — via `uvicorn.Server.run(sockets=…)`, since one
+  uvicorn config binds one address. If Linux discovery finds no gateway the
+  server now logs a loud WARNING, because the symptom otherwise is jobs sitting
+  `pending` with nothing in the host log.
+- **`start()` binds before spawning the thread.** It used to signal "started",
+  sleep 0.1s and hope. Binding on the caller's thread makes "port is taken" a
+  synchronous error, and makes `port=0` resolve to the real port before
+  `start()` returns — which let `test_server.py` drop both `_DUMMY_PORT` and
+  the `_free_port()` TOCTOU race it documented.
+- **Docker tests in this tier are order-dependent; re-run before believing a
+  failure.** Three notebook tests failed inside a full serial `-m docker` tier
+  and passed in 26s when run alone immediately afterwards, on the same images
+  and the same code. **The cause is not established.** "Cold image start-up"
+  was the first guess and it is *wrong* — measured: container start is ~1.0s
+  with no cold/warm difference (a months-unused image: 1060ms first run,
+  1044ms second), and a warm container registers ~3s after `docker run`,
+  against a 5s + 60s test budget.
+  The leading hypothesis is port 8765: every test in the tier starts and stops
+  its own `WorkerApiServer` on that fixed port, and `SO_REUSEADDR` on Windows
+  lets a second bind succeed against a socket that is still listening, leaving
+  which socket receives connections undefined. That would match the symptom
+  exactly — the failing assertion is `status 'pending'` with `Error: None`,
+  i.e. the job was *never claimed*, not "claimed and too slow". The hazard is
+  pre-existing, not introduced here: `uvicorn.Config.bind_socket` sets the same
+  option, and `tests/infrastructure/workers/conftest.py` already documents
+  port-8765 collisions as a known flake source. **If you touch this area,
+  consider giving each test its own port** — that is the fix this note is
+  pointing at, and it would remove a whole class of confusing docker failures.
+- **`/health` no longer reports the database path.** It is the one
+  unauthenticated route, and the path names a host filesystem — and, on a
+  share, a server name.
+- Item 1 is a **breaking change for Docker mode**: an image older than the host
+  presents no token. The 401 path is given its own error message naming
+  `clm docker build`, plus entries in the migration info topic and
+  troubleshooting guide. Direct mode is untouched.
 
 ---
 

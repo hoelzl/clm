@@ -11,9 +11,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import cast
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 
+from clm.infrastructure.api.auth import require_api_token
 from clm.infrastructure.api.models import (
     CacheAddRequest,
     CacheAddResponse,
@@ -35,11 +36,24 @@ from clm.infrastructure.api.models import (
 )
 from clm.infrastructure.database.executed_notebook_cache import ExecutedNotebookCache
 from clm.infrastructure.database.job_queue import JobQueue
+from clm.infrastructure.notebook_serialization import (
+    NotebookSerializationError,
+    deserialize_notebook,
+)
 
 logger = logging.getLogger(__name__)
 
-# Create router with /api/worker prefix
-router = APIRouter(prefix="/api/worker", tags=["worker"])
+# Create router with /api/worker prefix.
+#
+# The token dependency is declared on the *router*, not per route, so a route
+# added later inherits it. Every endpoint here mutates build state — claiming
+# jobs, reporting results, writing the executed-notebook cache — so there is
+# no read-only subset that could reasonably be exempt.
+router = APIRouter(
+    prefix="/api/worker",
+    tags=["worker"],
+    dependencies=[Depends(require_api_token)],
+)
 
 
 def get_job_queue(request: Request) -> JobQueue:
@@ -323,17 +337,17 @@ async def get_executed_notebook(
     language: str,
     prog_lang: str,
 ):
-    """Fetch a pickled executed NotebookNode by cache key.
+    """Fetch a cached executed notebook by cache key.
 
-    Returns the gzipped pickle bytes (octet-stream + Content-Encoding: gzip)
-    on a hit, or 404 on a miss. The payload is shipped without unpickling
-    server-side: pickled NotebookNodes can be multi-MB with image outputs,
-    so we round-trip the bytes directly.
+    Returns the gzipped nbformat JSON (octet-stream + Content-Encoding: gzip)
+    on a hit, or 404 on a miss. The payload is shipped without parsing it
+    server-side: executed notebooks can be multi-MB with image outputs, so we
+    round-trip the bytes directly.
     """
     cache_db_path = _get_cache_db_path(request)
     try:
         with ExecutedNotebookCache(cache_db_path) as cache:
-            pickle_bytes = cache.get_raw(
+            json_bytes = cache.get_raw(
                 input_file=input_file,
                 content_hash=content_hash,
                 language=language,
@@ -345,10 +359,10 @@ async def get_executed_notebook(
             status_code=500, detail=f"Failed to read executed_notebook cache: {e}"
         ) from e
 
-    if pickle_bytes is None:
+    if json_bytes is None:
         raise HTTPException(status_code=404, detail="Executed notebook not cached")
 
-    gz = gzip.compress(pickle_bytes)
+    gz = gzip.compress(json_bytes)
     logger.debug(
         f"REST API: executed_notebook cache hit for {input_file} "
         f"({language}, {prog_lang}); shipping {len(gz)} bytes"
@@ -368,29 +382,38 @@ async def store_executed_notebook(
     language: str,
     prog_lang: str,
 ):
-    """Store a pickled executed NotebookNode under the given cache key.
+    """Store an executed notebook under the given cache key.
 
-    The request body MUST be gzip-compressed pickle bytes — the inverse of
-    what :func:`get_executed_notebook` returns. The server stores the
-    decompressed pickle bytes verbatim so subsequent :meth:`ExecutedNotebookCache.get`
-    calls (from direct-mode workers or the Stage 4 reuse path) round-trip
+    The request body MUST be gzip-compressed nbformat JSON — the inverse of
+    what :func:`get_executed_notebook` returns. The server validates that it
+    parses as a notebook before storing (a malformed payload is the client's
+    error, and storing it would poison a later cache hit), then writes the
+    canonical serialization so subsequent :meth:`ExecutedNotebookCache.get`
+    calls — from direct-mode workers or the Stage 4 reuse path — round-trip
     cleanly.
     """
     body = await request.body()
     try:
-        pickle_bytes = gzip.decompress(body)
+        json_bytes = gzip.decompress(body)
     except gzip.BadGzipFile as e:
         raise HTTPException(status_code=400, detail=f"Body is not valid gzip: {e}") from e
+
+    try:
+        notebook = deserialize_notebook(json_bytes)
+    except NotebookSerializationError as e:
+        raise HTTPException(
+            status_code=400, detail=f"Body is not a valid nbformat notebook: {e}"
+        ) from e
 
     cache_db_path = _get_cache_db_path(request)
     try:
         with ExecutedNotebookCache(cache_db_path) as cache:
-            cache.store_raw(
+            cache.store(
                 input_file=input_file,
                 content_hash=content_hash,
                 language=language,
                 prog_lang=prog_lang,
-                pickle_bytes=pickle_bytes,
+                executed_notebook=notebook,
             )
     except Exception as e:
         logger.error(f"Failed to store executed_notebook cache: {e}", exc_info=True)
@@ -400,9 +423,9 @@ async def store_executed_notebook(
 
     logger.debug(
         f"REST API: executed_notebook cache store for {input_file} "
-        f"({language}, {prog_lang}); {len(pickle_bytes)} bytes (pickle)"
+        f"({language}, {prog_lang}); {len(json_bytes)} bytes (nbformat JSON)"
     )
-    return ExecutedNotebookStoreResponse(acknowledged=True, bytes_stored=len(pickle_bytes))
+    return ExecutedNotebookStoreResponse(acknowledged=True, bytes_stored=len(json_bytes))
 
 
 @router.post("/cache/add", response_model=CacheAddResponse)

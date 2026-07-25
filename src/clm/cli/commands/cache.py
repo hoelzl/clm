@@ -22,6 +22,8 @@ from typing import Any
 
 import click
 
+from clm.infrastructure.database.executed_notebook_cache import PAYLOAD_FORMAT
+
 
 @click.group("cache")
 def cache_group():
@@ -96,8 +98,20 @@ def _collect_artifact(payload, op, cache_db: Path, jobs_db: Path) -> dict[str, A
             """
             SELECT created_at FROM executed_notebooks
             WHERE input_file = ? AND content_hash = ? AND language = ? AND prog_lang = ?
+              AND payload_format = ?
             """,
-            (payload.input_file, execution_hash, payload.language, payload.prog_lang),
+            # Matching the reader's filter matters: a legacy pickle row is
+            # unreadable and will be deleted on the next cache open, so
+            # reporting it as a hit would explain the wrong thing. On a DB old
+            # enough to lack the column entirely, _query_one's OperationalError
+            # path reports a miss — which is likewise correct.
+            (
+                payload.input_file,
+                execution_hash,
+                payload.language,
+                payload.prog_lang,
+                PAYLOAD_FORMAT,
+            ),
         )
         issues = _query_one(
             cache_conn,

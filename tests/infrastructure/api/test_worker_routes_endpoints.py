@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 from clm.infrastructure.api.server import WorkerApiServer
 from clm.infrastructure.database.job_queue import JobQueue
 from clm.infrastructure.database.schema import init_database
+from tests.infrastructure.api.conftest import authed_client
 
 
 @pytest.fixture
@@ -28,11 +29,10 @@ def db_path(tmp_path: Path) -> Path:
 @pytest.fixture
 def client(db_path: Path):
     server = WorkerApiServer(db_path)
-    app = server._create_app()
     # raise_server_exceptions=False lets us observe the 500 that FastAPI
     # would return to a real HTTP client instead of re-raising the
     # exception through TestClient.
-    with TestClient(app, raise_server_exceptions=False) as c:
+    with authed_client(server, raise_server_exceptions=False) as c:
         yield c
 
 

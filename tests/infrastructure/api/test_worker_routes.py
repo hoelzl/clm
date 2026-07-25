@@ -4,11 +4,11 @@ import tempfile
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
 
 from clm.infrastructure.api.server import WorkerApiServer
 from clm.infrastructure.database.job_queue import JobQueue
 from clm.infrastructure.database.schema import init_database
+from tests.infrastructure.api.conftest import authed_client
 
 
 @pytest.fixture
@@ -23,8 +23,7 @@ def db_path(tmp_path):
 def client(db_path):
     """Create a test client for the Worker API."""
     server = WorkerApiServer(db_path)
-    app = server._create_app()
-    with TestClient(app) as client:
+    with authed_client(server) as client:
         yield client
 
 

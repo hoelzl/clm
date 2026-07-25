@@ -333,6 +333,35 @@ a project `.env` automatically (pass `--no-env-file` to skip).
 | `CLM_MAX_WORKER_STARTUP_CONCURRENCY` | Max concurrent worker starts | `10` |
 | `CLM_OUTPUT_DEDUP_HASH_LIMIT_MB` | Skip output-write deduplication for files larger than this many megabytes. Repeat writes to a large-file output are reported as a single summary collision counter rather than per-event warnings. Set to `0` to force every write through the large-file fast path (useful for tests). | `50` |
 
+### Worker API (Docker mode)
+
+In Docker mode the host runs a small REST API that containers use instead of
+opening the jobs database directly. It is **not** a public service:
+
+- It binds `127.0.0.1` and, on Linux only, the Docker bridge gateway
+  addresses. On Docker Desktop (Windows/macOS) `host.docker.internal` is
+  forwarded to the host's loopback, so the loopback bind is all containers
+  need; on Linux the gateway bind is what they reach. Neither address is
+  routable from the LAN.
+- Every route requires an `Authorization: Bearer <token>` header. The token is
+  generated fresh for each build and injected into every container as
+  `CLM_API_TOKEN`, so nothing needs configuring in the normal case.
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `CLM_API_TOKEN` | Bearer token for the Worker API. Set on the **host** it pins the token instead of generating one, which is what coordinator mode requires. Set in a **worker** (CLM does this for you when starting a container) it is the token the worker presents. | (generated per build) |
+| `CLM_WORKER_API_HOST` | Bind address for the Worker API. Setting it to anything beyond loopback and the Docker bridge — e.g. `0.0.0.0` — is **coordinator mode**: other machines can reach this build's queue and executed-notebook cache. It therefore also requires `CLM_API_TOKEN`, and CLM refuses to start without one. | (loopback + Docker bridge) |
+
+Coordinator mode is the supported path for letting a second machine take part
+in a build. Do not reach for it to work around a connectivity problem in
+normal Docker mode — a container that cannot reach the host is a Docker
+networking issue, and widening the bind exposes the queue to everyone who can
+route to that address.
+
+If a Docker build fails with `Worker API rejected the token (401)`, the worker
+image predates the token requirement. Rebuild it with `clm docker build`; host
+and worker images have to be upgraded together.
+
 ### Build progress
 
 Tuning for the build's progress logging (also settable as `[progress]` in

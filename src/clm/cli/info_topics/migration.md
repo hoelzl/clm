@@ -2,6 +2,36 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## Docker worker images must be rebuilt — the Worker API now requires a token ({version})
+
+**Breaking for Docker mode only. Direct mode is unaffected.**
+
+In Docker mode CLM runs a small REST API the containers use to reach the job
+queue. It used to bind every interface with no authentication on any route.
+It now binds loopback (plus the Docker bridge gateways on Linux) and requires
+an `Authorization: Bearer` token on every route. The host generates the token
+per build and injects it into each container as `CLM_API_TOKEN`, so nothing
+needs configuring — **but a worker image built before this change sends no
+token**, and its jobs fail with:
+
+```
+Worker API rejected the token (401)
+```
+
+Fix: rebuild the images with `clm docker build`. Host and worker images have
+to be upgraded together.
+
+Two related changes, neither of which needs action:
+
+- The executed-notebook cache (`executed_notebooks` in `clm_cache.db`, and the
+  Worker API payload) stores nbformat JSON instead of pickles. Existing pickle
+  entries are discarded on first open and regenerate on the next build, so
+  expect one slower build after upgrading.
+- Binding the Worker API beyond loopback is now an explicit opt-in
+  (`CLM_WORKER_API_HOST`) that also requires a pinned `CLM_API_TOKEN`. This is
+  the supported way to let a second machine take part in a build; see
+  "Worker API (Docker mode)" in the configuration guide.
+
 ## The voiceover artifact cache moved to a shared, deck-independent root (#568, {version})
 
 **Behavior change, no action required.** `clm harvest` used to cache its

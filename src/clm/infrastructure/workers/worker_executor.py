@@ -306,9 +306,16 @@ class DockerWorkerExecutor(WorkerExecutor):
 
             # Workers communicate via REST API instead of direct SQLite access
             # This solves the SQLite WAL mode issues on Windows Docker
-            from clm.infrastructure.api.server import DEFAULT_PORT
+            from clm.infrastructure.api.server import DEFAULT_PORT, get_worker_api_token
 
             api_url = f"http://{_DOCKER_HOST_ALIAS}:{DEFAULT_PORT}"
+            api_token = get_worker_api_token()
+            if not api_token:
+                raise RuntimeError(
+                    "Cannot start a Docker worker: the Worker API server is not running, "
+                    "so there is no token to give the container. Every Worker API route "
+                    "requires one; a container without it would be rejected with 401."
+                )
 
             # Build volume mounts
             volumes = {
@@ -319,6 +326,7 @@ class DockerWorkerExecutor(WorkerExecutor):
             environment = {
                 "WORKER_TYPE": worker_type,
                 "CLM_API_URL": api_url,  # Use REST API instead of direct SQLite
+                "CLM_API_TOKEN": api_token,  # Bearer token for every API route
                 "CLM_HOST_WORKSPACE": str(
                     self.workspace_path.absolute()
                 ),  # For output path conversion

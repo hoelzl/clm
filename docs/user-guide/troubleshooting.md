@@ -627,6 +627,57 @@ Error: build context is too large
    rm -rf output/
    ```
 
+### Worker API Rejected the Token (401)
+
+**Symptoms**: a Docker-mode build makes no progress, jobs stay `pending`, and
+a worker container's log shows:
+
+```
+Worker API rejected the token (401) at http://host.docker.internal:8765/api/worker/register
+```
+
+**Cause**: every Worker API route requires a per-build bearer token, which the
+host injects into each container as `CLM_API_TOKEN`. A worker image built
+before that requirement sends no token, so the host rejects it. Host and
+worker images have to be upgraded together.
+
+**Solutions**:
+
+1. **Rebuild the images**:
+   ```bash
+   clm docker build
+   ```
+
+2. **Confirm the image is current**:
+   ```bash
+   docker images | grep clm-
+   ```
+   An image older than your installed `clm` is the usual cause.
+
+3. **If you set `CLM_API_TOKEN` yourself** (coordinator mode), make sure every
+   participating machine has the *same* value — a mismatch produces exactly
+   this error.
+
+### Worker API Refuses to Start
+
+**Symptoms**:
+```
+ValueError: Worker API refuses to bind 0.0.0.0 without a configured token.
+```
+
+**Cause**: `CLM_WORKER_API_HOST` is set to an address that reaches beyond this
+machine. That is coordinator mode, and it requires a shared secret the other
+machines can present — a generated per-build token exists only inside one
+process.
+
+**Solutions**:
+
+1. **If you did not mean to expose the API**: unset `CLM_WORKER_API_HOST`.
+   Normal Docker mode needs no bind configuration at all.
+2. **If you did**: set `CLM_API_TOKEN` to a shared secret on the coordinator
+   and on every participating machine. See
+   [Worker API (Docker mode)](configuration.md#worker-api-docker-mode).
+
 ## Getting More Help
 
 ### Enable Debug Logging
@@ -713,6 +764,12 @@ If you can't resolve the issue:
 
 ### "Connection reset by peer" / "WinError 995"
 → See [Too Many Concurrent Operations (Windows)](#too-many-concurrent-operations-windows)
+
+### "Worker API rejected the token (401)"
+→ See [Worker API Rejected the Token (401)](#worker-api-rejected-the-token-401)
+
+### "Worker API refuses to bind ... without a configured token"
+→ See [Worker API Refuses to Start](#worker-api-refuses-to-start)
 
 ## Platform-Specific Issues
 

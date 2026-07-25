@@ -13,6 +13,8 @@ from typing import Any
 
 import httpx
 
+from clm.infrastructure.api.token import TOKEN_ENV_VAR
+
 logger = logging.getLogger(__name__)
 
 
@@ -60,6 +62,7 @@ class WorkerApiClient:
         timeout: float = 30.0,
         max_retries: int = 5,
         initial_retry_delay: float = 0.5,
+        token: str | None = None,
     ):
         """Initialize the API client.
 
@@ -68,16 +71,30 @@ class WorkerApiClient:
             timeout: Request timeout in seconds
             max_retries: Maximum number of retries for failed requests
             initial_retry_delay: Initial delay between retries (doubles each attempt)
+            token: Bearer token for the Worker API. Defaults to the
+                ``CLM_API_TOKEN`` environment variable, which the host injects
+                into every worker container alongside ``CLM_API_URL``. Every
+                worker route requires it; without one the API answers 401.
         """
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.max_retries = max_retries
         self.initial_retry_delay = initial_retry_delay
+        self.token = token if token is not None else os.getenv(TOKEN_ENV_VAR)
+
+        headers = {"Content-Type": "application/json"}
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+        else:
+            logger.warning(
+                f"No Worker API token available ({TOKEN_ENV_VAR} is unset); "
+                f"requests to {self.base_url} will be rejected with 401."
+            )
 
         self._client = httpx.Client(
             base_url=self.base_url,
             timeout=timeout,
-            headers={"Content-Type": "application/json"},
+            headers=headers,
         )
 
     def close(self):
@@ -152,6 +169,18 @@ class WorkerApiClient:
 
             except httpx.HTTPStatusError as e:
                 # Don't retry client errors (4xx)
+                if e.response.status_code == 401:
+                    # Retrying cannot help, and the bare status is unhelpful:
+                    # by far the likeliest cause is a worker image older than
+                    # the host, from before the API required a token.
+                    raise WorkerApiError(
+                        f"Worker API rejected the token (401) at {self.base_url}{path}. "
+                        f"Every route requires the per-build bearer token the host passes "
+                        f"in {TOKEN_ENV_VAR}"
+                        f"{' — which is not set in this worker' if not self.token else ''}. "
+                        f"If this is a Docker worker, its image predates the token and must "
+                        f"be rebuilt: run `clm docker build`."
+                    ) from e
                 if 400 <= e.response.status_code < 500:
                     raise WorkerApiError(
                         f"API error: {e.response.status_code} - {e.response.text}"
@@ -416,14 +445,14 @@ class WorkerApiClient:
         language: str,
         prog_lang: str,
     ) -> bytes | None:
-        """Fetch a cached executed notebook's pickle bytes.
+        """Fetch a cached executed notebook's nbformat JSON bytes.
 
         Returns None on cache miss (HTTP 404). Network/server errors are
         logged and swallowed — a cache lookup failure must never abort
         notebook processing.
 
-        The response body is gzipped pickle bytes; this method decompresses
-        them before returning.
+        The response body is gzipped nbformat JSON; this method decompresses
+        it before returning.
         """
         try:
             response = self._request_with_retry(
@@ -449,7 +478,7 @@ class WorkerApiClient:
 
         # httpx auto-decompresses Content-Encoding: gzip into response.content
         # when the header is present, so the bytes we get back are already
-        # the raw pickle. Guard against servers that strip the header by
+        # the notebook JSON. Guard against servers that strip the header by
         # detecting the gzip magic and decompressing manually.
         body = response.content
         if body[:2] == b"\x1f\x8b":
@@ -468,15 +497,17 @@ class WorkerApiClient:
         content_hash: str,
         language: str,
         prog_lang: str,
-        pickle_bytes: bytes,
+        payload: bytes,
     ) -> None:
-        """Send pickle bytes of an executed notebook to the host's cache.
+        """Send an executed notebook's nbformat JSON to the host's cache.
 
-        The bytes MUST be the output of ``pickle.dumps(notebook_node)``.
-        They are gzip-compressed before transmission. Failures are logged
-        but not raised — caching is best-effort.
+        The bytes MUST be the output of
+        :func:`~clm.infrastructure.notebook_serialization.serialize_notebook`;
+        the server rejects anything else with a 400. They are gzip-compressed
+        before transmission. Failures are logged but not raised — caching is
+        best-effort.
         """
-        body = gzip.compress(pickle_bytes)
+        body = gzip.compress(payload)
         try:
             self._request_with_retry(
                 "POST",
@@ -492,7 +523,7 @@ class WorkerApiClient:
             )
             logger.debug(
                 f"Stored executed_notebook for {input_file} "
-                f"({language}, {prog_lang}); {len(pickle_bytes)} bytes (pickle), "
+                f"({language}, {prog_lang}); {len(payload)} bytes (nbformat JSON), "
                 f"{len(body)} bytes (gzip) via REST API"
             )
         except WorkerApiError as e:

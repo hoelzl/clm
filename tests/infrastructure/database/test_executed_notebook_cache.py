@@ -1,12 +1,18 @@
 """Tests for the ExecutedNotebookCache class."""
 
+import json
+import pickle
+import sqlite3
 import tempfile
 from pathlib import Path
 
 import pytest
 from nbformat.v4 import new_code_cell, new_markdown_cell, new_notebook
 
-from clm.infrastructure.database.executed_notebook_cache import ExecutedNotebookCache
+from clm.infrastructure.database.executed_notebook_cache import (
+    PAYLOAD_FORMAT,
+    ExecutedNotebookCache,
+)
 
 
 @pytest.fixture
@@ -249,3 +255,74 @@ class TestExecutedNotebookCache:
             count = cache.remove_entries_for_missing_files(dry_run=False)
             assert count == 1
             assert cache.get_stats()["total_entries"] == 1
+
+
+class TestPickleEradication:
+    """The payload format is nbformat JSON, and pickle rows are unreachable.
+
+    Storing pickles made every cache read a deserialization sink — including
+    for bytes the Worker API accepted from the network (S2/D3). These tests
+    pin the two halves of the fix: what a fresh write looks like, and what
+    happens to a database written by an older CLM.
+    """
+
+    def test_stored_payload_is_json_not_pickle(self, temp_db_path, sample_notebook):
+        with ExecutedNotebookCache(temp_db_path) as cache:
+            cache.store("/path/nb.py", "hash1", "en", "python", sample_notebook)
+
+            row = cache.conn.execute(
+                "SELECT executed_notebook, payload_format FROM executed_notebooks"
+            ).fetchone()
+
+        payload, fmt = row
+        assert fmt == PAYLOAD_FORMAT
+        # Pickle protocol 2+ opcodes start with \x80; JSON cannot.
+        assert not payload.startswith(b"\x80")
+        assert json.loads(payload.decode("utf-8"))["nbformat"] == 4
+
+    def test_legacy_pickle_rows_are_purged_on_open(self, temp_db_path, sample_notebook):
+        """A cache written before this change must not be read back.
+
+        Simulates the real upgrade: the old schema had no ``payload_format``
+        column at all, so the migration has to add it *and* drop what it
+        marks.
+        """
+        conn = sqlite3.connect(str(temp_db_path))
+        conn.execute("""
+            CREATE TABLE executed_notebooks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                input_file TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
+                language TEXT NOT NULL,
+                prog_lang TEXT NOT NULL,
+                executed_notebook BLOB NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(input_file, content_hash, language, prog_lang)
+            )
+        """)
+        conn.execute(
+            "INSERT INTO executed_notebooks "
+            "(input_file, content_hash, language, prog_lang, executed_notebook) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("/path/nb.py", "hash1", "en", "python", pickle.dumps(sample_notebook)),
+        )
+        conn.commit()
+        conn.close()
+
+        with ExecutedNotebookCache(temp_db_path) as cache:
+            assert cache.get_stats()["total_entries"] == 0
+            assert cache.get("/path/nb.py", "hash1", "en", "python") is None
+
+            # And the cache is usable afterwards: the purge is a migration,
+            # not a permanently broken table.
+            cache.store("/path/nb.py", "hash1", "en", "python", sample_notebook)
+            assert cache.get("/path/nb.py", "hash1", "en", "python") is not None
+
+    def test_unparseable_payload_reads_as_a_miss(self, temp_db_path, sample_notebook):
+        """A damaged entry must degrade to re-execution, never fail a build."""
+        with ExecutedNotebookCache(temp_db_path) as cache:
+            cache.store("/path/nb.py", "hash1", "en", "python", sample_notebook)
+            cache.conn.execute("UPDATE executed_notebooks SET executed_notebook = ?", (b"{ nope",))
+            cache.conn.commit()
+
+            assert cache.get("/path/nb.py", "hash1", "en", "python") is None

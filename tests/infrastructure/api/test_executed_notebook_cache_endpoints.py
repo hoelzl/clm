@@ -12,16 +12,19 @@ that PR #71 fixed for direct mode.
 from __future__ import annotations
 
 import gzip
-import pickle
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
 from nbformat.v4 import new_code_cell, new_notebook
 
 from clm.infrastructure.api.server import WorkerApiServer
 from clm.infrastructure.database.executed_notebook_cache import ExecutedNotebookCache
 from clm.infrastructure.database.schema import init_database
+from clm.infrastructure.notebook_serialization import (
+    deserialize_notebook,
+    serialize_notebook,
+)
+from tests.infrastructure.api.conftest import authed_client
 
 
 @pytest.fixture
@@ -39,8 +42,7 @@ def cache_db_path(tmp_path: Path) -> Path:
 @pytest.fixture
 def client(db_path: Path, cache_db_path: Path):
     server = WorkerApiServer(db_path, cache_db_path=cache_db_path)
-    app = server._create_app()
-    with TestClient(app) as c:
+    with authed_client(server) as c:
         yield c
 
 
@@ -66,8 +68,8 @@ class TestExecutedNotebookCacheEndpoints:
 
     def test_post_then_get_round_trips_notebook(self, client, cache_db_path):
         nb = _sample_nb()
-        pickle_bytes = pickle.dumps(nb)
-        body = gzip.compress(pickle_bytes)
+        payload = serialize_notebook(nb)
+        body = gzip.compress(payload)
 
         post_response = client.post(
             "/api/worker/cache/executed_notebook",
@@ -77,7 +79,7 @@ class TestExecutedNotebookCacheEndpoints:
         )
         assert post_response.status_code == 200
         assert post_response.json()["acknowledged"] is True
-        assert post_response.json()["bytes_stored"] == len(pickle_bytes)
+        assert post_response.json()["bytes_stored"] == len(payload)
 
         # Direct verification: the host's SQLite cache has the entry now,
         # which is exactly the state Stage 4 direct-mode consumers need.
@@ -87,10 +89,10 @@ class TestExecutedNotebookCacheEndpoints:
         assert cached_nb.cells[0].source == "print('hi')"
 
         # GET round-trip: httpx auto-decompresses gzip on the way back, so
-        # response.content is already the raw pickle bytes.
+        # response.content is already the nbformat JSON bytes.
         get_response = client.get("/api/worker/cache/executed_notebook", params=_params())
         assert get_response.status_code == 200
-        round_tripped = pickle.loads(get_response.content)
+        round_tripped = deserialize_notebook(get_response.content)
         assert round_tripped.cells[0].source == "print('hi')"
 
     def test_post_with_non_gzip_body_returns_400(self, client):
@@ -116,7 +118,7 @@ class TestExecutedNotebookCacheEndpoints:
         client.post(
             "/api/worker/cache/executed_notebook",
             params=_params(),
-            content=gzip.compress(pickle.dumps(nb1)),
+            content=gzip.compress(serialize_notebook(nb1)),
             headers={"Content-Type": "application/octet-stream"},
         )
 
@@ -125,7 +127,7 @@ class TestExecutedNotebookCacheEndpoints:
         client.post(
             "/api/worker/cache/executed_notebook",
             params=_params(),
-            content=gzip.compress(pickle.dumps(nb2)),
+            content=gzip.compress(serialize_notebook(nb2)),
             headers={"Content-Type": "application/octet-stream"},
         )
 
@@ -144,8 +146,7 @@ class TestExecutedNotebookCacheEndpoints:
         a cache_db_path should still see endpoint behavior — the cache table
         gets created on-demand in the job DB."""
         server = WorkerApiServer(db_path)  # no cache_db_path
-        app = server._create_app()
-        with TestClient(app) as fallback_client:
+        with authed_client(server) as fallback_client:
             response = fallback_client.get("/api/worker/cache/executed_notebook", params=_params())
             assert response.status_code == 404
 
@@ -153,7 +154,7 @@ class TestExecutedNotebookCacheEndpoints:
             post = fallback_client.post(
                 "/api/worker/cache/executed_notebook",
                 params=_params(),
-                content=gzip.compress(pickle.dumps(nb)),
+                content=gzip.compress(serialize_notebook(nb)),
                 headers={"Content-Type": "application/octet-stream"},
             )
             assert post.status_code == 200

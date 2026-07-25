@@ -3,16 +3,30 @@
 This module provides a lightweight FastAPI server that runs in a background
 thread, allowing Docker containers to communicate with the CLM job queue
 via REST API instead of direct SQLite access.
+
+Two things guard it, and both are on by default:
+
+- **Where it listens** is decided by :mod:`clm.infrastructure.api.binding` —
+  loopback plus (on Linux) the Docker bridge gateways, never all interfaces.
+  Binding wider is coordinator mode: an explicit opt-in that also requires a
+  pinned token.
+- **Who may call it** is decided by :mod:`clm.infrastructure.api.auth` — a
+  per-build bearer token enforced on every worker route.
 """
 
 import logging
+import os
+import socket
+import sys
 import threading
-import time
 from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI
 
+from clm.infrastructure.api import binding
+from clm.infrastructure.api.binding import HOST_ENV_VAR, LOOPBACK_HOST
+from clm.infrastructure.api.token import TOKEN_ENV_VAR, generate_token
 from clm.infrastructure.api.worker_routes import router as worker_router
 from clm.infrastructure.database.job_queue import JobQueue
 
@@ -20,7 +34,11 @@ logger = logging.getLogger(__name__)
 
 # Default port for the Worker API
 DEFAULT_PORT = 8765
-DEFAULT_HOST = "0.0.0.0"  # Bind to all interfaces for Docker access
+
+#: Default bind address. Containers reach the host through
+#: ``host.docker.internal``; on Docker Desktop that forwards to loopback, and
+#: on Linux the additional bridge-gateway binds are added at start time.
+DEFAULT_HOST = LOOPBACK_HOST
 
 
 class WorkerApiServer:
@@ -44,28 +62,63 @@ class WorkerApiServer:
     def __init__(
         self,
         db_path: Path,
-        host: str = DEFAULT_HOST,
+        host: str | None = None,
         port: int = DEFAULT_PORT,
         cache_db_path: Path | None = None,
+        token: str | None = None,
     ):
         """Initialize the Worker API server.
 
         Args:
             db_path: Path to the SQLite job database (clm_jobs.db)
-            host: Host to bind to (default: 0.0.0.0 for Docker access)
+            host: Address to bind. ``None`` (the default) selects local mode:
+                loopback, plus the Docker bridge gateways on Linux. Naming an
+                address explicitly — here or via ``CLM_WORKER_API_HOST`` —
+                selects coordinator mode and requires a pinned token.
             port: Port to bind to (default: 8765)
             cache_db_path: Path to the executed_notebooks cache database
                 (clm_cache.db). If None, the cache endpoints fall back to
                 ``db_path`` for backwards compatibility — the executed_notebooks
                 table is created on demand by ``ExecutedNotebookCache``.
+            token: The bearer token every worker route requires. ``None``
+                falls back to ``CLM_API_TOKEN``, and failing that a freshly
+                generated per-build secret.
+
+        Raises:
+            ValueError: If the requested bind address reaches beyond this
+                machine but no token was pinned. Generated tokens exist only
+                in this process, so there would be no way to tell another
+                machine what to present — refusing is the only honest answer.
         """
         self.db_path = db_path
-        self.host = host
         self.port = port
         self.cache_db_path = cache_db_path
 
+        explicit_host = host if host is not None else (os.environ.get(HOST_ENV_VAR) or None)
+        pinned_token = token if token is not None else (os.environ.get(TOKEN_ENV_VAR) or None)
+
+        self._gateways = binding.docker_gateway_hosts()
+        self.bind_hosts = binding.resolve_bind_hosts(explicit_host, gateways=self._gateways)
+        exposed = binding.classify_hosts(self.bind_hosts, gateways=self._gateways)
+        if exposed and pinned_token is None:
+            raise ValueError(
+                f"Worker API refuses to bind {', '.join(exposed)} without a configured "
+                f"token. Binding beyond loopback and the Docker bridge exposes job "
+                f"claiming and the executed-notebook cache to other machines, so it is "
+                f"only supported in coordinator mode: set {TOKEN_ENV_VAR} to a shared "
+                f"secret that participating machines also present. Unset "
+                f"{HOST_ENV_VAR} to return to the default local bind."
+            )
+
+        self.token = pinned_token or generate_token()
+        self.coordinator_mode = bool(exposed)
+
+        #: Primary address, kept for URL building and log lines.
+        self.host = self.bind_hosts[0]
+
         self._app: FastAPI | None = None
         self._server: uvicorn.Server | None = None
+        self._sockets: list[socket.socket] = []
         self._thread: threading.Thread | None = None
         self._started = threading.Event()
         self._shutdown_requested = threading.Event()
@@ -78,6 +131,7 @@ class WorkerApiServer:
 
         db_path = self.db_path
         cache_db_path = self.cache_db_path
+        token = self.token
 
         @asynccontextmanager
         async def lifespan(app: FastAPI):
@@ -93,42 +147,100 @@ class WorkerApiServer:
             version=__version__,
             lifespan=lifespan,
         )
+        # The token lives on app.state so ``require_api_token`` can reach it
+        # from any request, and so tests can build an app without a server.
+        # Set outside the lifespan: TestClient-less unit tests never run it.
+        app.state.api_token = token
 
         # Include worker routes
         app.include_router(worker_router)
 
-        # Health check endpoint
+        # Health check endpoint. Unauthenticated on purpose — a worker that
+        # cannot yet authenticate still needs a liveness probe, and this is
+        # the one place a misconfigured token can be diagnosed from. It
+        # therefore reports nothing an anonymous caller should not see: no
+        # database path (that names a host filesystem and, on a share, a
+        # server name), and no token.
         @app.get("/health")
         async def health():
             return {
                 "status": "ok",
                 "version": __version__,
                 "api_version": "1.0",
-                "database": str(db_path),
             }
 
         return app
 
+    def _bind(self) -> list[socket.socket]:
+        """Bind every address in :attr:`bind_hosts`, loopback first.
+
+        The loopback bind is mandatory — failing it means the port is taken,
+        which is a real error the caller must see. Gateway binds are
+        best-effort: a Docker network can disappear between discovery and
+        bind, and losing one is a Docker-mode connectivity problem, not a
+        reason to abort a build that may not even use Docker.
+
+        With ``port=0`` the first successful bind fixes the port for the rest,
+        so all addresses stay on one port and :attr:`port` reports it.
+        """
+        sockets: list[socket.socket] = []
+        for host in self.bind_hosts:
+            try:
+                sock = binding.bind_socket(host, self.port)
+            except OSError as e:
+                if not sockets:
+                    raise
+                logger.warning(f"Worker API could not bind {host}:{self.port}: {e}")
+                continue
+            sockets.append(sock)
+            if self.port == 0:
+                self.port = sock.getsockname()[1]
+
+        self._warn_if_containers_cannot_reach_us(sockets)
+        return sockets
+
+    def _warn_if_containers_cannot_reach_us(self, sockets: list[socket.socket]) -> None:
+        """Say so, loudly, when a Linux host bound loopback and nothing else.
+
+        Docker Desktop forwards ``host.docker.internal`` to the host's
+        loopback, so on Windows/macOS a loopback-only bind is complete. On
+        Linux it is not: containers arrive via the bridge gateway, and if
+        discovery found none — the Docker socket is unreadable, the SDK is
+        missing, the daemon is remote — a loopback-only server is invisible to
+        them. Every job would then sit ``pending`` with nothing in the host
+        log explaining why, which is precisely the shape of failure that costs
+        an afternoon.
+        """
+        if sys.platform != "linux" or self.coordinator_mode:
+            return
+        if len(sockets) > 1:
+            return
+        logger.warning(
+            f"Worker API bound only {LOOPBACK_HOST}: no Docker bridge gateway was "
+            f"discovered. On Linux, containers reach the host through that gateway, not "
+            f"through loopback — so Docker workers will not be able to register and their "
+            f"jobs will stay pending. Check that the Docker daemon is reachable from this "
+            f"process, or set {HOST_ENV_VAR} to an address the containers can route to "
+            f"(which also requires {TOKEN_ENV_VAR})."
+        )
+
+    def _close_sockets(self) -> None:
+        for sock in self._sockets:
+            try:
+                sock.close()
+            except OSError:  # pragma: no cover - closing twice is harmless
+                pass
+        self._sockets = []
+
     def _run_server(self):
         """Run the uvicorn server (called in background thread)."""
-        self._app = self._create_app()
+        assert self._app is not None, "_bind/_create_app run before the thread starts"
+        assert self._server is not None
 
-        config = uvicorn.Config(
-            app=self._app,
-            host=self.host,
-            port=self.port,
-            log_level="warning",  # Reduce uvicorn logging noise
-            access_log=False,
-        )
-        self._server = uvicorn.Server(config)
-
-        # Signal that server is starting
-        logger.info(f"Worker API server starting on http://{self.host}:{self.port}")
-
-        # Run the server
-        # Note: We use a custom startup to signal when ready
+        # Run the server on the sockets the caller already bound, so that by
+        # the time start() returns the port is genuinely accepting.
         self._started.set()
-        self._server.run()
+        self._server.run(sockets=self._sockets)
 
     def start(self, timeout: float = 5.0) -> bool:
         """Start the API server in a background thread.
@@ -138,6 +250,9 @@ class WorkerApiServer:
 
         Returns:
             True if server started successfully, False otherwise
+
+        Raises:
+            OSError: If the primary (loopback) address cannot be bound.
         """
         if self._thread is not None and self._thread.is_alive():
             logger.warning("Worker API server is already running")
@@ -145,6 +260,19 @@ class WorkerApiServer:
 
         self._started.clear()
         self._shutdown_requested.clear()
+
+        self._sockets = self._bind()
+        self.host = self.bind_hosts[0]
+
+        self._app = self._create_app()
+        config = uvicorn.Config(
+            app=self._app,
+            log_level="warning",  # Reduce uvicorn logging noise
+            access_log=False,
+        )
+        self._server = uvicorn.Server(config)
+
+        logger.info(f"Worker API server starting on http://{self.host}:{self.port}")
 
         self._thread = threading.Thread(
             target=self._run_server,
@@ -156,14 +284,15 @@ class WorkerApiServer:
         # Wait for server to be ready
         if not self._started.wait(timeout=timeout):
             logger.error(f"Worker API server failed to start within {timeout}s")
+            self._close_sockets()
             return False
 
-        # Give uvicorn a moment to actually bind the port
-        time.sleep(0.1)
-
+        bound = ", ".join(f"{h}:{self.port}" for h in self.bind_hosts[: len(self._sockets)])
         logger.info(
-            f"Worker API server started on http://{self.host}:{self.port} "
-            f"(Docker: http://host.docker.internal:{self.port})"
+            f"Worker API server started on {bound} "
+            f"(Docker: http://host.docker.internal:{self.port}); "
+            f"{'coordinator mode, pinned token' if self.coordinator_mode else 'local bind'}, "
+            f"bearer token required on every worker route"
         )
         return True
 
@@ -191,6 +320,9 @@ class WorkerApiServer:
         self._server = None
         self._thread = None
         self._app = None
+        # uvicorn closes the sockets it was handed on a clean shutdown; this
+        # covers the path where the thread had to be abandoned.
+        self._close_sockets()
 
         logger.info("Worker API server stopped")
 
@@ -285,3 +417,14 @@ def stop_worker_api_server(timeout: float = 5.0):
         if _server_instance is not None:
             _server_instance.stop(timeout=timeout)
             _server_instance = None
+
+
+def get_worker_api_token() -> str | None:
+    """Return the running server's bearer token, or None if none is running.
+
+    :class:`~clm.infrastructure.workers.worker_executor.WorkerExecutor` calls
+    this to inject ``CLM_API_TOKEN`` into each container it starts — the same
+    channel that already carries ``CLM_API_URL``.
+    """
+    with _server_lock:
+        return _server_instance.token if _server_instance is not None else None

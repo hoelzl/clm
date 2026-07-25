@@ -84,6 +84,14 @@ probe) **must** be given the *same* `--cache-db-path` / `--jobs-db-path` /
 - **Trim policy:** newest per `(input_file, language, prog_lang)`
   (`prune_stale_hashes()`, build-end). `prune_old_entries(days)` exists but is
   **not** wired into the build path — there is no age-based expiry.
+- **Payload format:** nbformat JSON, tagged in the `payload_format` column
+  (`infrastructure/notebook_serialization.py`). It used to be `pickle.dumps`,
+  which made every cache read a deserialization sink — including for bytes the
+  Worker API had accepted over the network. Rows in the old format are deleted
+  the first time the cache is opened, so the first build after upgrading
+  re-executes and re-caches. In Docker mode the same JSON crosses the Worker
+  API wire (gzipped), so a container and a direct-mode worker agree on the
+  bytes.
 
 ## Two hashes, and why the caches disagree
 
