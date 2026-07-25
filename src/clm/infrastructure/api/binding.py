@@ -73,7 +73,11 @@ def docker_gateway_hosts() -> list[str]:
     try:
         import docker
 
-        client = docker.from_env()
+        # The paired `unused-ignore` is not redundant: mypy resolves this
+        # attribute on Windows but not on Linux, so a bare `attr-defined`
+        # ignore passes locally and fails CI (and vice versa). Same shape as
+        # `pool_manager.py`'s call.
+        client = docker.from_env()  # type: ignore[attr-defined, unused-ignore]
         networks = client.networks.list(filters={"driver": "bridge"})
     except Exception as e:  # docker missing, daemon down, permissions…
         logger.debug(f"Could not enumerate Docker bridge networks: {e}")

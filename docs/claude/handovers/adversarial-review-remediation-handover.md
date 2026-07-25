@@ -420,11 +420,25 @@ cache path; SSTI proof-of-concept from the review no longer executes.
   synchronous error, and makes `port=0` resolve to the real port before
   `start()` returns — which let `test_server.py` drop both `_DUMMY_PORT` and
   the `_free_port()` TOCTOU race it documented.
-- **A cold worker image can blow the 60s job timeout.** Six docker tests failed
-  repeatedly against a freshly built image, then passed in 26s once it had been
-  run once (Docker Desktop's unpack step alone took 154s). Before concluding a
-  docker test regressed, **run it twice.** Verification for this item was a
-  full `-m docker` tier against images rebuilt from the final source.
+- **Docker tests in this tier are order-dependent; re-run before believing a
+  failure.** Three notebook tests failed inside a full serial `-m docker` tier
+  and passed in 26s when run alone immediately afterwards, on the same images
+  and the same code. **The cause is not established.** "Cold image start-up"
+  was the first guess and it is *wrong* — measured: container start is ~1.0s
+  with no cold/warm difference (a months-unused image: 1060ms first run,
+  1044ms second), and a warm container registers ~3s after `docker run`,
+  against a 5s + 60s test budget.
+  The leading hypothesis is port 8765: every test in the tier starts and stops
+  its own `WorkerApiServer` on that fixed port, and `SO_REUSEADDR` on Windows
+  lets a second bind succeed against a socket that is still listening, leaving
+  which socket receives connections undefined. That would match the symptom
+  exactly — the failing assertion is `status 'pending'` with `Error: None`,
+  i.e. the job was *never claimed*, not "claimed and too slow". The hazard is
+  pre-existing, not introduced here: `uvicorn.Config.bind_socket` sets the same
+  option, and `tests/infrastructure/workers/conftest.py` already documents
+  port-8765 collisions as a known flake source. **If you touch this area,
+  consider giving each test its own port** — that is the fix this note is
+  pointing at, and it would remove a whole class of confusing docker failures.
 - **`/health` no longer reports the database path.** It is the one
   unauthenticated route, and the path names a host filesystem — and, on a
   share, a server name.
