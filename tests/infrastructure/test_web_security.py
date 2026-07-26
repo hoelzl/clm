@@ -23,6 +23,7 @@ from clm.infrastructure.web_security import (
     default_allowed_hosts,
     extract_host,
     host_is_allowed,
+    install_security_headers,
     install_web_security,
     normalize_origin,
     remote_access_warning,
@@ -421,3 +422,90 @@ class TestGuardsAreIndependentlyUsable:
         client = TestClient(app, base_url="http://127.0.0.1:8008")
         assert client.post("/write").status_code == 200
         assert client.post("/write", headers={"Origin": "https://evil.example"}).status_code == 403
+
+
+def _headers_app() -> Starlette:
+    """A small app behind the security-headers middleware, for end-to-end tests."""
+
+    async def read(request):
+        return PlainTextResponse("ok")
+
+    async def docs(request):
+        return PlainTextResponse("swagger-ish")
+
+    async def own_csp(request):
+        return PlainTextResponse("ok", headers={"Content-Security-Policy": "script-src 'none'"})
+
+    async def socket(websocket):
+        await websocket.accept()
+        await websocket.send_text("ws ok")
+        await websocket.close()
+
+    app = Starlette(
+        routes=[
+            Route("/read", read, methods=["GET"]),
+            Route("/docs", docs, methods=["GET"]),
+            Route("/own-csp", own_csp, methods=["GET"]),
+            WebSocketRoute("/ws", socket),
+        ]
+    )
+    install_security_headers(app)
+    return app
+
+
+class TestSecurityHeaders:
+    """The CSP is the backstop that keeps a sanitizer miss from being fatal.
+
+    The Studio page holds a non-expiring bearer token in ``localStorage`` and
+    injects server-sanitized HTML; without a CSP every sanitizing bug is
+    immediately script execution. These tests pin the *content* of the policy,
+    not just its presence — a header that permits inline script protects
+    nothing.
+    """
+
+    def test_security_headers_are_set_on_an_ordinary_response(self):
+        r = TestClient(_headers_app()).get("/read")
+        assert "content-security-policy" in r.headers
+        assert r.headers["x-content-type-options"] == "nosniff"
+        assert r.headers["referrer-policy"] == "no-referrer"
+
+    def test_the_policy_forbids_what_makes_xss_fatal(self):
+        r = TestClient(_headers_app()).get("/read")
+        directives = dict(
+            d.strip().split(" ", 1) for d in r.headers["content-security-policy"].split(";")
+        )
+        # Inline script and event handlers are what an injected tag needs.
+        assert directives["script-src"] == "'self'"
+        # Token exfil goes through fetch/XHR/WebSocket — same-origin only.
+        assert directives["connect-src"] == "'self'"
+        assert directives["object-src"] == "'none'"
+        assert directives["base-uri"] == "'none'"
+        assert directives["frame-ancestors"] == "'none'"
+        # The Studio logo is a data: URI; off-origin images are the documented
+        # tier-1-parity decision.
+        assert "data:" in directives["img-src"]
+        assert "https:" in directives["img-src"]
+        # Inline styles must stay: the Studio shell has an inline <style> block
+        # and the tier-2 sanitizer deliberately keeps style attributes (CSS
+        # policy is the sanitizer's job, not the CSP's).
+        assert "'unsafe-inline'" in directives["style-src"]
+
+    def test_swagger_pages_are_exempt(self):
+        """FastAPI's /docs + /redoc pull JS/CSS from a CDN and run inline script.
+
+        A strict CSP breaks them; they are static, trusted pages, so the
+        exemption costs nothing. (openapi.json needs no exemption — CSP only
+        governs documents.)
+        """
+        r = TestClient(_headers_app()).get("/docs")
+        assert "content-security-policy" not in r.headers
+
+    def test_a_routes_own_csp_is_not_overwritten(self):
+        """A route that sets a policy deliberately keeps the last word."""
+        r = TestClient(_headers_app()).get("/own-csp")
+        assert r.headers["content-security-policy"] == "script-src 'none'"
+
+    def test_websocket_scope_is_untouched(self):
+        client = TestClient(_headers_app())
+        with client.websocket_connect("/ws") as ws:
+            assert ws.receive_text() == "ws ok"

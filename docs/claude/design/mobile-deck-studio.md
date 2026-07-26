@@ -446,6 +446,20 @@ taken while building, several resolving open calls left by §9.1–§9.5:
   an unannotated route parameter made FastAPI treat it as a required query
   parameter — so the "low-sensitivity notifications" it was assumed to be
   carrying were never delivered at all.
+- **CSP (#705, 2026-07-26):** `clm serve` now sends
+  `script-src 'self'; connect-src 'self'` (plus `object-src`/`base-uri`/
+  `frame-ancestors`/`form-action 'none'`, `nosniff`, `no-referrer`) on every
+  response except `/docs` and `/redoc`. This is the backstop the token
+  model needed: the page holds a non-expiring bearer token in `localStorage`,
+  so before this, *any* sanitizer miss (tier-2 server sanitizer or tier-1
+  client markdown) was script execution with the token in reach. Now the same
+  miss is defacement. `style-src` keeps `'unsafe-inline'` (the sanitizer owns
+  CSS policy) and `img-src` keeps `https:` (tier-1 parity, above). The
+  recordings dashboard is excluded — its base template embeds an inline
+  `<script>` — see `SecurityHeadersMiddleware`. **Still open, accepted for
+  now:** the token itself has no lifecycle (persistent until
+  `--rotate-token`); short-lived pairing tokens would shrink the window a
+  future content-injection bug could exploit.
 - **Reuse (§9.3):** only `qr.py` was lifted from the closed #394 branch (with
   the `[edit]`→`[web]` adaptation); the byte-exact "untouched cells unchanged"
   test pattern was re-authored against `FileState`. `DeckFile`, routes, and
