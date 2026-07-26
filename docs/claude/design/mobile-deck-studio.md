@@ -460,6 +460,19 @@ taken while building, several resolving open calls left by §9.1–§9.5:
   now:** the token itself has no lifecycle (persistent until
   `--rotate-token`); short-lived pairing tokens would shrink the window a
   future content-injection bug could exploit.
+  - **Logo as asset, `data:` deleted (#706, 2026-07-26):** the bundled logo's
+  `data:` URI is rewritten to `/api/studio/asset/logo/<prog_lang>` *before*
+  sanitizing (`clm.web.studio.logo`; the route serves the packaged logo
+  files and is deliberately not token-gated — an `<img>` fetch cannot carry
+  the header). `data` left `ALLOWED_URL_SCHEMES` and the `<img src>`
+  confinement rule — the sanitizer's most complex hand-rolled piece and the
+  site of the first #704 bypass — was deleted rather than hardened;
+  `img-src` in the CSP lost its `data:` exception too. Maintainer decision
+  in session: bundled-logo-only, not a generic content-addressed store —
+  the store would re-introduce the surface (decoded attacker bytes served
+  same-origin) this change exists to remove. Cost, accepted: a course
+  author's own `data:` images in custom macros drop out of the phone
+  preview (preview ≠ parity; student deliverables are untouched).
 - **Reuse (§9.3):** only `qr.py` was lifted from the closed #394 branch (with
   the `[edit]`→`[web]` adaptation); the byte-exact "untouched cells unchanged"
   test pattern was re-authored against `FileState`. `DeckFile`, routes, and

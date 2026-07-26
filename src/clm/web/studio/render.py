@@ -87,6 +87,7 @@ import logging
 import re
 from pathlib import Path
 
+from clm.web.studio.logo import rewrite_bundled_logo
 from clm.web.studio.sanitize import SanitizerUnavailableError, sanitize_preview_html
 
 logger = logging.getLogger(__name__)
@@ -358,7 +359,11 @@ def render_j2_cell_html(
         return False, f"render unavailable: {exc}", None
 
     try:
-        return True, None, sanitize_preview_html(_to_preview_html(text, comment_token))
+        # The bundled logo's data: URI becomes a same-origin asset URL *before*
+        # sanitizing (#706) — the client injects exactly what was sanitized,
+        # and a relative URL needs no data: exception in the allowlist.
+        preview_html = rewrite_bundled_logo(_to_preview_html(text, comment_token), prog_lang)
+        return True, None, sanitize_preview_html(preview_html)
     except SanitizerUnavailableError as exc:
         return False, str(exc), None
     except Exception as exc:  # noqa: BLE001 - preview must never crash the request

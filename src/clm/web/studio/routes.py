@@ -19,9 +19,11 @@ from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from starlette.concurrency import run_in_threadpool
+from starlette.responses import FileResponse
 
 from clm.web.studio import sync_runner
 from clm.web.studio.auth import token_matches
+from clm.web.studio.logo import logo_file
 from clm.web.studio.models import (
     DeckTree,
     DeckView,
@@ -275,3 +277,30 @@ async def render_cell(request: Request, req: RenderCellRequest) -> RenderCellRes
     except InvalidDeckIdError as e:
         raise HTTPException(status_code=400, detail=f"Invalid deck id: {e}") from e
     return RenderCellResult(rendered=rendered, body=req.body, html=html, error=error)
+
+
+@router.get("/asset/logo/{prog_lang}")
+async def logo_asset(prog_lang: str) -> FileResponse:
+    """The bundled course logo, for the tier-2 preview's rewritten ``<img>`` (#706).
+
+    Deliberately **not** token-gated: an ``<img src>`` fetch cannot carry the
+    ``Authorization`` header, and there is nothing here to protect — the route
+    serves only the packaged logo files, with ``prog_lang`` selecting a fixed
+    mapping entry (never a path). ``script-src 'none'`` is set in case the SVG
+    is ever opened as a document rather than an image subresource; the global
+    security-headers middleware keeps a route's own CSP (route has the last
+    word), so this overrides ``script-src 'self'`` for exactly this response.
+    """
+    found = logo_file(prog_lang)
+    if found is None:
+        raise HTTPException(status_code=404, detail=f"No bundled logo for {prog_lang!r}")
+    path, media_type = found
+    return FileResponse(
+        path,
+        media_type=media_type,
+        headers={
+            # Packaged with clm; changes only across installs/upgrades.
+            "Cache-Control": "max-age=3600",
+            "Content-Security-Policy": "script-src 'none'",
+        },
+    )

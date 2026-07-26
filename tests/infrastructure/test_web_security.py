@@ -482,9 +482,9 @@ class TestSecurityHeaders:
         assert directives["object-src"] == "'none'"
         assert directives["base-uri"] == "'none'"
         assert directives["frame-ancestors"] == "'none'"
-        # The Studio logo is a data: URI; off-origin images are the documented
-        # tier-1-parity decision.
-        assert "data:" in directives["img-src"]
+        # The Studio logo is a same-origin asset since #706; off-origin images
+        # are the documented tier-1-parity decision.
+        assert "data:" not in directives["img-src"]
         assert "https:" in directives["img-src"]
         # Inline styles must stay: the Studio shell has an inline <style> block
         # and the tier-2 sanitizer deliberately keeps style attributes (CSS

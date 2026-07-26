@@ -51,6 +51,11 @@ def svg_data_uri(url: str, *, scale: int = 6) -> str:
     """Return ``url`` as an inline-SVG ``data:`` URI for an ``<img>`` tag.
 
     ``scale`` is pixels-per-module; 6 renders comfortably on a phone camera.
+
+    Note: the ``clm serve`` CSP carries no ``data:`` exception in ``img-src``
+    (#706 — images come from same-origin asset routes there). A served page
+    that wants to display this should get an SVG asset route instead; this
+    helper is for contexts without that CSP.
     """
     segno = _require_segno()
     qr = segno.make(url, error="m")

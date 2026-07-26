@@ -11,11 +11,12 @@ Two failures met here, and they are different in kind:
   original bug: the predicate can be right about a contract that changed, and
   the contract can be right with nobody consulting it.
 * **The consumer was a raw ``innerHTML`` sink.** The expansion is deliberately
-  HTML (the header macros emit ``<div>``, ``<br>`` and a ``data:`` logo), so
+  HTML (the header macros emit ``<div>``, ``<br>`` and the course logo), so
   escaping it deletes the feature. Decision D13: sanitize **server-side**
-  against an allowlist. These tests are the allowlist's teeth — including the
-  case that made ``data:`` awkward, since the logo needs it and a link must not
-  have it.
+  against an allowlist. These tests are the allowlist's teeth. Since #706 the
+  logo reaches the sanitizer as a same-origin asset URL (rewritten
+  pre-sanitize — see tests/web/studio/test_logo_asset.py), so ``data:`` is
+  refused here like any other unlisted scheme.
 """
 
 from __future__ import annotations
@@ -131,16 +132,22 @@ class TestSanitizer:
         assert "text-align:center" in cleaned
         assert "<br>" in cleaned
 
-    def test_the_data_uri_logo_survives(self) -> None:
+    def test_a_data_uri_image_no_longer_survives(self) -> None:
+        """``data:`` is unlisted since #706 — the logo arrives as an asset URL.
+
+        What reaches the sanitizer is *post-rewrite* HTML, so a ``data:``
+        image here is by definition not the bundled logo and must be refused.
+        """
         cleaned = sanitize_preview_html(
             '<img src="data:image/svg+xml;base64,PHN2Zy8+" style="display:block;width:5%">'
         )
-        assert 'src="data:image/svg+xml;base64,PHN2Zy8+"' in cleaned
+        assert "data:" not in cleaned
+        assert "display:block" in cleaned  # the style policy is unaffected
 
-    def test_a_line_wrapped_data_uri_survives(self) -> None:
-        """The bundled ``*.base64`` includes are wrapped, so the URI has newlines."""
+    def test_a_line_wrapped_data_uri_is_refused_too(self) -> None:
+        """Newlines inside the URI must not resurrect the scheme."""
         cleaned = sanitize_preview_html('<img src="data:image/svg+xml;base64,PHN2\nZy8+\nAA">')
-        assert "data:image/svg+xml;base64," in cleaned
+        assert "data:" not in cleaned.replace("\n", "")
 
     @pytest.mark.parametrize(
         "html",
@@ -171,7 +178,7 @@ class TestSanitizer:
         ],
     )
     def test_a_link_can_never_carry_data_or_script_schemes(self, html: str) -> None:
-        """``data:`` is allowed for the logo, so a link must be refused explicitly."""
+        """``data:`` is unlisted like any other non-web scheme — refused on links."""
         cleaned = sanitize_preview_html(html)
         assert "href" not in cleaned
 
@@ -210,15 +217,21 @@ class TestSanitizer:
     @pytest.mark.parametrize(
         "html",
         [
+            '<img src="data:image/png;base64,AAAA">',
             '<img src="data:text/html,<b>x</b>">',
             '<img src="&#1;data:text/html,x">',
             '<img src="&#14;data:application/javascript,x">',
         ],
     )
-    def test_a_non_image_data_uri_is_refused_even_on_img(self, html: str) -> None:
-        """Cases 2–3 are the control-prefix bypass: the confinement to
-        ``data:image/`` has to normalize the same way nh3's scheme check does, or
-        the prefix defeats one check and not the other."""
+    def test_a_data_uri_is_refused_even_on_img(self, html: str) -> None:
+        """No ``data:`` at all since #706 — not even ``data:image/`` on ``<img>``.
+
+        Cases 2–4 are the old control-prefix bypass: the scheme check has to
+        normalize the same way nh3's does, or the prefix defeats one check and
+        not the other. Case 1 is the #706 change itself: the bundled logo is
+        rewritten to an asset URL *before* this runs, so a ``data:`` image
+        reaching the sanitizer is never legitimate.
+        """
         cleaned = sanitize_preview_html(html)
         assert "data:" not in cleaned
 
@@ -232,8 +245,8 @@ class TestSanitizer:
         parser resolves ``\x7fjavascript:…`` as a same-origin path — so leaving it
         alone is both safer and simpler.
         """
-        cleaned = sanitize_preview_html('<img src="&#8;data:image/svg+xml;base64,AAaaBB">')
-        assert "\x08data:image/svg+xml;base64,AAaaBB" in cleaned
+        cleaned = sanitize_preview_html('<img src="&#8;https://ok.example/x.png">')
+        assert "\x08https://ok.example/x.png" in cleaned
 
     @pytest.mark.parametrize(
         "url",
@@ -386,6 +399,10 @@ class TestRenderJ2CellHtml:
         assert "\n# <" not in html  # and so is the comment prefix
         assert "<div" in html  # the macro's markup survived
         assert "<script" not in html
+        # The bundled logo arrives as a same-origin asset URL, not a data: URI
+        # (#706 — the rewrite happens before sanitizing).
+        assert '<img src="/api/studio/asset/logo/python"' in html
+        assert "data:" not in html
 
     def test_a_body_smuggling_script_is_sanitized_not_reflected(self, tmp_path: Path) -> None:
         """The body is a *request* body — a token holder can put anything in it."""
