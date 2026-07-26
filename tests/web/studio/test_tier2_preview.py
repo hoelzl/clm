@@ -91,15 +91,27 @@ class TestSanitizer:
         assert "alert" not in cleaned
         assert "<svg" not in cleaned and "onerror" not in cleaned
 
-    def test_sanitizing_is_idempotent(self) -> None:
-        """A second pass must not resurrect markup (the mXSS shape)."""
-        for html in (
+    @pytest.mark.parametrize(
+        "html",
+        [
             "<math><mtext><table><mglyph><style><img src=x onerror=alert(1)>",
             '<div style="text-align:center"><b>T</b></div>',
             '<img src="data:image/png;base64,AAAA">',
-        ):
-            once = sanitize_preview_html(html)
-            assert sanitize_preview_html(once) == once
+            # Non-idempotence is the *signature* of a filter that rewrites a
+            # value: pass 1 emits something pass 2 refuses. The `&#127;`
+            # javascript bypass showed up here first, so the corpus now carries
+            # the shapes that would expose the next one.
+            '<a href="&#127;javascript:alert(1)">x</a>',
+            '<a href="&#1;data:text/html,x">x</a>',
+            '<a href="&#127;//evil.example/x">x</a>',
+            '<img src="&#8;data:image/svg+xml;base64,AAaa">',
+            '<a href="&#9;https://ok.example">x</a>',
+        ],
+    )
+    def test_sanitizing_is_idempotent(self, html: str) -> None:
+        """A second pass must neither resurrect markup nor refuse pass 1's output."""
+        once = sanitize_preview_html(html)
+        assert sanitize_preview_html(once) == once
 
     def test_event_handlers_are_dropped(self) -> None:
         cleaned = sanitize_preview_html('<img src="https://x/y.png" onerror="alert(1)">')
@@ -147,12 +159,53 @@ class TestSanitizer:
             '<a href="&#8;data:text/html,x">x</a>',
             '<a href="&#14;data:text/html,x">x</a>',
             '<a href="&#27;javascript:alert(1)">x</a>',
+            # &#127; (DEL) is the case the *first* round of fixes got wrong: it is
+            # in this module's strip set but NOT in ammonia's, so a filter that
+            # rewrote kept values turned an inert relative path into a live
+            # `javascript:` URL that nothing re-checked. See _attribute_filter.
+            '<a href="&#127;javascript:alert(1)">x</a>',
+            '<a href="&#x7f;javascript:alert(1)">x</a>',
+            '<a href="&#127;&#1; javascript:alert(1)">x</a>',
+            '<a href="&#127;vbscript:msgbox(1)">x</a>',
+            '<a href="&#127;data:text/html,x">x</a>',
         ],
     )
     def test_a_link_can_never_carry_data_or_script_schemes(self, html: str) -> None:
         """``data:`` is allowed for the logo, so a link must be refused explicitly."""
         cleaned = sanitize_preview_html(html)
         assert "href" not in cleaned
+
+    @pytest.mark.parametrize(
+        "prefix",
+        ["", "&#1;", "&#8;", "&#9;", "&#14;", "&#27;", "&#127;", "&#x7f;", " ", "&#127;&#1;"],
+    )
+    @pytest.mark.parametrize(
+        "scheme",
+        [
+            "javascript:alert(1)",
+            "jAvAsCrIpT:alert(1)",
+            "vbscript:msgbox(1)",
+            "about:blank",
+            "blob:https://x/y",
+            "filesystem:https://x/y",
+            "data:text/html,x",
+        ],
+    )
+    def test_no_prefix_can_smuggle_an_unlisted_scheme_out(self, prefix: str, scheme: str) -> None:
+        """The property that replaced two rounds of case-by-case patching.
+
+        nh3 checks its scheme allowlist against the *incoming* value and writes
+        whatever the filter returns, and the two normalizations do not agree in
+        either direction (``&#127;`` is stripped here and not by ammonia;
+        ``<tab>blob:`` reads as a relative path to ammonia and as a scheme here).
+        So the filter applies the allowlist itself, over its own normalization,
+        and only ever rejects. This cross-product is that invariant: no padding,
+        in any spelling, may cause an unlisted scheme to reach the client.
+        """
+        for markup in ('<a href="{}">x</a>', '<img src="{}">'):
+            cleaned = sanitize_preview_html(markup.format(prefix + scheme)).lower()
+            for unlisted in ("javascript", "vbscript", "about:", "blob:", "filesystem:", "data:"):
+                assert unlisted not in cleaned, f"{unlisted!r} survived in {cleaned!r}"
 
     @pytest.mark.parametrize(
         "html",
@@ -169,15 +222,18 @@ class TestSanitizer:
         cleaned = sanitize_preview_html(html)
         assert "data:" not in cleaned
 
-    def test_a_kept_url_carries_no_leading_control_characters(self) -> None:
-        """A legitimate image with a stray prefix is kept — normalized, not raw.
+    def test_a_kept_url_is_returned_byte_for_byte(self) -> None:
+        """The filter must not "tidy" a value it keeps — that escapes nh3's check.
 
-        The prefix is inert (every URL parser drops it), but shipping invisible
-        bytes to the client would mean trusting the client to normalize the same
-        way the filter did. Case is preserved: base64 is case-sensitive.
+        This test used to assert the opposite (that a stray control prefix was
+        stripped from a kept URL), and satisfying it is what produced the
+        ``&#127;javascript:`` bypass: nh3 validates the *incoming* value, so a
+        rewritten return value is never re-checked. The prefix is inert — a URL
+        parser resolves ``\x7fjavascript:…`` as a same-origin path — so leaving it
+        alone is both safer and simpler.
         """
         cleaned = sanitize_preview_html('<img src="&#8;data:image/svg+xml;base64,AAaaBB">')
-        assert 'src="data:image/svg+xml;base64,AAaaBB"' in cleaned
+        assert "\x08data:image/svg+xml;base64,AAaaBB" in cleaned
 
     @pytest.mark.parametrize(
         "url",
@@ -301,6 +357,18 @@ class TestPreviewHtmlNormalisation:
         assert _to_preview_html(text, "#") == (
             '<img src="data:image/svg+xml;base64,AAAA\nBBBB\nCCCC">'
         )
+
+    @pytest.mark.parametrize(
+        "line",
+        ["# %%not a delimiter, prose", "# 100%% sicher", "# %%%"],
+    )
+    def test_prose_that_merely_starts_with_percent_percent_survives(self, line: str) -> None:
+        """``%%`` needs whitespace or ``[`` after it — jupytext's own rule.
+
+        The first version of the delimiter pattern was ``%%.*``, which silently
+        deleted any line beginning that way.
+        """
+        assert line.split("# ", 1)[1] in _to_preview_html(line, "#")
 
 
 # ---------------------------------------------------------------------------
@@ -497,7 +565,12 @@ class TestClientConsumer:
         }};
         const api = (path, opts) => apiImpl(path, opts);
         function stubEl() {{
-          return {{ innerHTML: "TIER1", classes: [], classList: {{ add(c) {{ this.classes ??= []; }} }} }};
+          const el = {{ innerHTML: "TIER1", classes: [] }};
+          // Record the argument on the *element*: a stub that drops it cannot
+          // observe the one side effect this exists to check (an earlier version
+          // did exactly that, so deleting the classList.add call passed).
+          el.classList = {{ add: (c) => el.classes.push(c) }};
+          return el;
         }}
         {fn}
         (async () => {{
@@ -536,10 +609,29 @@ class TestClientConsumer:
             """
             const el = stubEl();
             await renderJ2({ body: "x", lang: "de" }, el);
-            return { html: el.innerHTML };
+            return { html: el.innerHTML, classes: el.classes };
             """
         )
         assert out["html"] == "<div>EXPANDED</div>"
+        # The class carries the phone-legibility CSS (and the max-height that
+        # keeps a preview inside its own card), so losing it is a real defect.
+        assert out["classes"] == ["j2-preview"]
+
+    def test_an_empty_expansion_keeps_tier_1(self) -> None:
+        """``typeof "" === "string"``, so an empty render must be caught by name.
+
+        A cell that is only a ``{% import %}`` expands to nothing; blanking the
+        card would be worse than showing the raw source.
+        """
+        out = self._run(
+            """
+            apiImpl = async () => ({ rendered: true, html: "" });
+            const el = stubEl();
+            await renderJ2({ body: "x" }, el);
+            return { html: el.innerHTML, classes: el.classes };
+            """
+        )
+        assert out["html"] == "TIER1" and out["classes"] == []
 
     @pytest.mark.parametrize(
         "reply",
@@ -596,3 +688,22 @@ class TestClientConsumer:
             """
         )
         assert out["calls"] == [] and out["html"] == "TIER1"
+
+    def test_cell_card_wires_the_gate_to_the_consumer(self) -> None:
+        """The *wiring*, which is the third thing that can silently rot.
+
+        The gate is executed, the consumer is executed — and #696 was neither of
+        those, it was the call between them. Executing ``cellCard`` would mean
+        stubbing a DOM (``el()``, ``renderMarkdown``, ``querySelector``…), out of
+        proportion here; so this reads the source and requires that the call
+        exists, is guarded by the gate, and passes the cell and its body element.
+        A static check, deliberately, and named as one.
+        """
+        from .test_client_escaping import _extract_function
+
+        card = _extract_function(APP_JS.read_text(encoding="utf-8"), "cellCard")
+        assert "needsServerRender(cell)" in card
+        assert "renderJ2(cell, body)" in card
+        gate = card.index("needsServerRender(cell)")
+        call = card.index("renderJ2(cell, body)")
+        assert gate < call, "the tier-2 call must sit inside the gate, not before it"

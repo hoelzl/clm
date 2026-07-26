@@ -96,7 +96,11 @@ logger = logging.getLogger(__name__)
 #: expansion happens before cell splitting. A single-cell preview must drop it
 #: (with or without the language's comment prefix, which the source line carries
 #: and the macro's own first line does not).
-_CELL_DELIMITER = re.compile(r"^\s*(?:#|//)?\s*%%.*$")
+#:
+#: ``%%`` must be followed by whitespace, ``[``, or end-of-line: jupytext's own
+#: rule, and without it prose that merely begins ``%%something`` disappears from
+#: the preview.
+_CELL_DELIMITER = re.compile(r"^\s*(?:#|//)?\s*%%(?:\s.*|\[.*)?$")
 
 #: Identity globals the build injects from the course; a header macro only needs
 #: them to be *defined* for a preview, so placeholders are fine.

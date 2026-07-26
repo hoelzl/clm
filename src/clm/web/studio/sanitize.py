@@ -22,11 +22,19 @@ assignment. Two consequences worth stating plainly:
 **The ``data:`` question, measured rather than assumed.** The logo is a
 ``data:`` URI, so the scheme has to be allowed; but with ``data`` merely added
 to nh3's ``url_schemes``, ``<a href="data:text/html,<script>…">`` survives too
-(verified — it is a navigation vector, not a decoration). nh3's
-``attribute_filter`` *can* drop a value before the scheme check but cannot
-re-permit a scheme the allowlist rejects (also verified), so the working
-combination is: allow ``data`` globally, then have the filter refuse it
-everywhere except an ``<img src>`` that is specifically ``data:image/``.
+(verified — it is a navigation vector, not a decoration). So the working
+combination is: allow ``data`` globally, then have
+:func:`_attribute_filter` refuse it everywhere except an ``<img src>`` that is
+specifically ``data:image/``.
+
+**And the filter may only reject, never rewrite.** nh3 checks its scheme
+allowlist against the *incoming* value and then writes whatever the filter
+returns — nothing re-validates that. An adversarial review caught this the hard
+way: a version of the filter that merely *normalized* a kept URL (stripping the
+leading characters a URL parser ignores) turned nh3's already-vetted, inert
+``\x7fjavascript:…`` *relative path* into a live ``javascript:`` URL. Rewriting
+a value is escaping the check, so every URL branch here returns ``value``
+unchanged or ``None``.
 
 **Not sanitized: the contents of ``style``.** Ammonia does not parse CSS, so
 the property allowlist here is CLM's own — the properties the bundled macros
@@ -44,6 +52,15 @@ allowlist is only as tight as the page's own class names. Found by an
 adversarial review of this module; **a property allowlist and a class allowlist
 have to be reasoned about together.**
 
+Be precise about what that closes: only *escaping the card*. With
+``height``/``width``/``background-color`` a preview can still paint a large
+tappable panel **inside** its own cell (bounded by ``.j2-preview``'s
+``max-height`` in ``index.html``, with the sticky header still visible above
+it), and an off-origin ``https://`` link on it is allowed by the same tier-1
+parity rule above. Preview content is *content*; the guarantee here is "no
+script, no fixed-position impersonation of the app chrome", not "cannot look
+inviting".
+
 **URL rules, and why they are here rather than left to nh3.** Two decisions
 nh3's declarative config cannot express, both in :func:`_attribute_filter`:
 
@@ -51,8 +68,11 @@ nh3's declarative config cannot express, both in :func:`_attribute_filter`:
 * an **authority-relative** target (``//host``, and the ``\\`` / ``/\`` / ``\/``
   spellings WHATWG parsing treats identically) is refused, matching the client's
   ``safeUrl()`` for tier-1 markdown links. Both tiers render into the same page,
-  which holds a non-expiring bearer token, so both get the same rule — and an
-  ``<img>`` needs no click, so opening a deck would otherwise beacon.
+  which holds a non-expiring bearer token, so both get the same rule. Note the
+  point is **parity, not anti-beacon defence**: an explicit ``https://`` target
+  is allowed here exactly as tier-1 allows it, so a hostile deck can still fetch
+  an off-origin image. What the rule removes is the *scheme-less* form, which
+  reads as a path and is easy to miss in review.
 
 Both decisions depend on normalizing a URL the way ammonia and the browser do,
 which is **not** Python's ``\s`` — see :data:`_URL_INSIGNIFICANT` for the
@@ -229,15 +249,22 @@ def _scheme_of(normalized: str) -> str:
 def _attribute_filter(tag: str, attribute: str, value: str) -> str | None:
     """nh3 per-attribute hook: the decisions nh3's own config cannot express.
 
-    Returning ``None`` drops the attribute. nh3 still applies its own scheme
-    allowlist afterwards, so this can only ever be *more* restrictive — which
-    is why ``data`` has to be in :data:`ALLOWED_URL_SCHEMES` for the ``img``
-    case to survive at all.
+    **This hook may only reject, never rewrite.** nh3 applies its scheme
+    allowlist to the *incoming* value and writes whatever the filter returns —
+    so a returned value is final and nothing downstream re-checks it. A previous
+    version of this function "tidied" kept URLs by stripping the leading
+    characters a URL parser ignores, and that alone reintroduced script
+    execution: nh3 had already vetted ``\x7fjavascript:…`` as an inert
+    *relative path* (``\x7f`` is not a valid scheme start), and stripping the
+    ``\x7f`` handed the browser a live ``javascript:`` URL that no layer looked
+    at again. Hence: every branch below returns either ``value`` unchanged or
+    ``None``. :func:`_filter_style` is the one exception, and it is not a URL —
+    it can only ever *remove* declarations.
 
-    Three rules: CSS is filtered (:func:`_filter_style`); ``data:`` is confined
-    to an ``<img src>`` that is an image; and an **authority-relative** target is
-    refused outright, matching the client's ``safeUrl()`` for tier-1 links (both
-    land in the same token-holding page, so both get the same rule).
+    Three rules: CSS is filtered; ``data:`` is confined to an ``<img src>`` that
+    is an image; and an **authority-relative** target is refused, matching the
+    client's ``safeUrl()`` for tier-1 links (both land in the same token-holding
+    page, so both get the same rule).
     """
     if attribute == "style":
         return _filter_style(value)
@@ -246,16 +273,22 @@ def _attribute_filter(tag: str, attribute: str, value: str) -> str | None:
     normalized = _normalize_url(value)
     if normalized.startswith(_AUTHORITY_RELATIVE):
         return None
-    # Strip the leading characters a URL parser ignores — case-preserving, so a
-    # base64 payload survives — rather than shipping invisible control bytes the
-    # client would then have to be trusted to normalize the same way we did.
-    kept = value.lstrip("".join(chr(c) for c in range(0x21)) + "\x7f")
-    if _scheme_of(normalized) == "data":
+    scheme = _scheme_of(normalized)
+    if scheme == "data":
         # The one legitimate use is the logo the header macros embed.
         if tag == "img" and attribute == "src" and normalized.startswith("data:image/"):
-            return kept
+            return value
         return None
-    return kept
+    if scheme and scheme not in ALLOWED_URL_SCHEMES:
+        # The scheme allowlist, applied over *this* module's normalization rather
+        # than deferring to nh3's. They do not agree: measured, ammonia reads
+        # ``<tab>blob:x`` as a scheme-less relative path and keeps it, while this
+        # view resolves the scheme the browser will act on. Since the filter can
+        # only reject, being the stricter of the two costs nothing — and it means
+        # a scheme is refused because it is unlisted, not because a second
+        # implementation happened to spell normalization the same way.
+        return None
+    return value
 
 
 def _filter_style(value: str) -> str | None:

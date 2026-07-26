@@ -67,10 +67,16 @@
       border-radius: 8px; }
     .cell-body code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
     /* Tier-2 preview (#697): the header macros size their own text for a
-       projector (font-size: 200%), which on a phone overflows the card. */
-    .cell-body.j2-preview { font-size: .82rem; overflow-x: auto; }
+       projector (font-size: 200%), which on a phone overflows the card. These
+       are *legibility* rules for the bundled macros, not a security boundary —
+       an inline `!important` outranks an author-stylesheet `!important`, so
+       preview content can always out-declare them. The one that does bound
+       something is max-height: it keeps a preview inside its own card, so it
+       cannot become a full-viewport tappable panel. Everything that actually
+       matters is enforced server-side (clm/web/studio/sanitize.py). */
+    .cell-body.j2-preview { font-size: .82rem; overflow: auto; max-height: 55vh; }
     .cell-body.j2-preview img { max-width: 100%; height: auto; }
-    .cell-body.j2-preview div { font-size: inherit !important; }
+    .cell-body.j2-preview div { font-size: inherit; }
     .cell.editable .cell-head { cursor: pointer; }
     .banner { padding: 10px 12px; border-radius: 8px; margin: 10px 0; }
     .banner.warn { background: var(--warn-bg); color: var(--warn-fg); }

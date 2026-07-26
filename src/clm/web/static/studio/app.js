@@ -182,6 +182,10 @@ async function renderJ2(cell, bodyEl) {
   }
   if (!currentDeck || currentDeck.deck_id !== deckId) return; // navigated away
   if (!res || !res.rendered || typeof res.html !== "string") return;
+  // An empty expansion (a cell that is only a `{% import %}`, or a comment)
+  // must keep tier-1 rather than blank the card: `typeof "" === "string"`, so
+  // the guard above is not enough.
+  if (!res.html) return;
   bodyEl.innerHTML = res.html;
   bodyEl.classList.add("j2-preview");
 }
