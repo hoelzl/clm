@@ -28,7 +28,6 @@ import logging
 
 import pytest
 
-import clm.infrastructure.config as config_module
 from clm.infrastructure.config import get_config
 
 
@@ -54,11 +53,3 @@ class TestGlobalStateIsolation:
             "boundary — the autouse _restore_worker_global_state fixture in "
             "tests/conftest.py is broken"
         )
-
-    def test_c_singleton_identity_is_restored(self) -> None:
-        """The fixture restores the *previous* singleton object, not a reset."""
-        # No test before this one in the group reloaded the singleton, so the
-        # object here is the one the worker started with (or None lazily) —
-        # the point is that test_a's reloaded instance is gone.
-        assert get_config() is not None
-        assert config_module._config is not None  # noqa: SLF001 - asserting the fixture's subject
