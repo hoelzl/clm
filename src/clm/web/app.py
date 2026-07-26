@@ -1,16 +1,29 @@
-"""FastAPI application for CLM web dashboard."""
+"""FastAPI application for CLM web dashboard.
+
+The dashboard API (``/api/*``) has no login: like the recordings dashboard, it
+treats "the request arrived on the socket" as "the user asked for this", and
+binds loopback so that stays true. What it therefore needs is containment
+against the two things a *browser* can do without the user's cooperation —
+cross-origin drives and DNS rebinding — which is
+:func:`clm.infrastructure.web_security.install_web_security`.
+
+Mobile Deck Studio (``--spec``) sits on top of that with a real access gate: a
+bearer token on every ``/api/studio`` route. ``/ws`` is part of that gate, not
+outside it — see :mod:`clm.web.api.websocket`.
+"""
 
 import logging
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Iterable
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from clm.__version__ import __version__
+from clm.infrastructure.web_security import install_web_security
 from clm.web.api.routes import router as api_router
 from clm.web.api.websocket import websocket_endpoint
 from clm.web.services.monitor_service import MonitorService
@@ -60,18 +73,29 @@ def create_app(
     cors_origins: list[str] | None = None,
     spec_path: Path | None = None,
     studio_token: str | None = None,
+    allowed_hosts: Iterable[str] | None = None,
+    allowed_origins: Iterable[str] = (),
 ) -> FastAPI:
     """Create and configure FastAPI application.
 
     Args:
         db_path: Path to SQLite database
-        host: Host to bind to
+        host: Host to bind to. Folded into the ``Host`` allowlist, so a
+            deliberate non-loopback bind keeps working.
         port: Port to bind to
-        cors_origins: CORS allowed origins
+        cors_origins: Origins allowed to read responses cross-origin
+            (``--cors-origin``). ``None`` — the default — installs no CORS
+            middleware at all, which is what a same-origin app needs. Named
+            origins are *also* added to the origin guard's allowlist, since
+            "let this origin talk to me" is the only reason to pass the flag.
         spec_path: When given, enable the Mobile Deck Studio view scoped to this
             course spec (one course per server instance).
         studio_token: Bearer token required by the Studio API/WS (ignored when
             ``spec_path`` is None).
+        allowed_hosts: Extra ``Host`` values to accept (``--allowed-host``).
+            ``["*"]`` disables the host check.
+        allowed_origins: Extra origins allowed to drive mutating requests and
+            open ``/ws`` (``--allowed-origin``).
 
     Returns:
         Configured FastAPI application
@@ -123,24 +147,60 @@ def create_app(
                 name="studio",
             )
 
-    # Configure CORS
-    if cors_origins is None:
-        cors_origins = ["*"]
+    # Configure CORS. The default is *no* CORS middleware: this app serves its
+    # own frontend, and same-origin traffic never needs one. The previous
+    # default — `allow_origins=["*"]` together with `allow_credentials=True` —
+    # made Starlette echo whichever Origin asked, which is strictly worse than
+    # a literal `*` because it makes credentialed cross-origin reads legal.
+    guard_origins = list(allowed_origins)
+    if cors_origins:
+        wildcard = "*" in cors_origins
+        if wildcard:
+            # A credentialed wildcard is not a thing the CORS spec allows; the
+            # only reason it "worked" is Starlette's echo. Honour the wildcard
+            # and drop credentials rather than silently reinstating the bug.
+            logger.warning(
+                "CORS origin '*' cannot be combined with credentials; serving "
+                "cross-origin responses without credentials. Name the origins "
+                "explicitly with --cors-origin to keep credentials."
+            )
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=cors_origins,
+            allow_credentials=not wildcard,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+        # CORS governs who may *read* a response; the origin guard governs who
+        # may *cause* one. Naming an origin for the first without the second
+        # leaves a caller with a working preflight and a 403 behind it, so an
+        # explicit --cors-origin implies --allowed-origin.
+        guard_origins.extend(o for o in cors_origins if o != "*")
 
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=cors_origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+    # Browser containment (D4): a Host allowlist closes DNS rebinding, and an
+    # origin check on mutating requests closes CSRF. Installed last so both
+    # guards sit outside CORS — a rebound request is refused before any other
+    # middleware looks at it. Covers the /ws handshake too, which is why the
+    # WebSocket is not exposed by CORS being off.
+    effective_hosts = install_web_security(
+        app,
+        bind_host=host,
+        allowed_hosts=allowed_hosts,
+        allowed_origins=guard_origins,
     )
+    logger.debug("Dashboard accepts Host values: %s", effective_hosts)
+    app.state.allowed_hosts = effective_hosts
 
     # Include API router
     app.include_router(api_router)
 
-    # WebSocket endpoint
+    # WebSocket endpoint. The annotation is load-bearing: FastAPI resolves a
+    # route's parameters from its signature, and an *unannotated* `websocket`
+    # was analysed as a required query parameter — so every handshake was
+    # closed with "Field required" and the Studio's disk-change banner never
+    # fired. Found while adding the token check below.
     @app.websocket("/ws")
-    async def websocket_route(websocket):
+    async def websocket_route(websocket: WebSocket) -> None:
         """WebSocket endpoint."""
         await websocket_endpoint(websocket)
 

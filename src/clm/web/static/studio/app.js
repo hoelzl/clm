@@ -532,7 +532,11 @@ function editCell(cell, idx) {
 function connectWs() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   let ws;
-  try { ws = new WebSocket(`${proto}://${location.host}/ws`); }
+  // The WebSocket constructor cannot set an Authorization header, so the token
+  // travels as a subprotocol (the server matches on the "clm-token." prefix and
+  // echoes it back). A query parameter would work too but would land in the
+  // server's access log on every reconnect.
+  try { ws = new WebSocket(`${proto}://${location.host}/ws`, ["clm-token." + TOKEN]); }
   catch { return; }
   ws.addEventListener("open", () => ws.send(JSON.stringify({ action: "subscribe", channels: ["studio"] })));
   ws.addEventListener("message", (ev) => {

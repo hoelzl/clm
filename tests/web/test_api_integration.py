@@ -28,6 +28,9 @@ class TestAPIEndpoints:
             db_path=test_db,
             host="127.0.0.1",
             port=8000,
+            # TestClient sends ``Host: testserver``; the production default
+            # allowlist is loopback-only, so without this every request 400s.
+            allowed_hosts=["testserver"],
         )
 
         return TestClient(app)

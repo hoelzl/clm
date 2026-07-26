@@ -4344,9 +4344,33 @@ Start the web dashboard server (jobs/workers Monitor). Requires the
 | `--jobs-db-path PATH` | Job-queue database (auto-detected if omitted). |
 | `--no-browser` | Do not auto-open a browser. |
 | `--reload` | Enable auto-reload for development. |
-| `--cors-origin ORIGIN` | CORS allowed origin (repeatable; default `*`). |
+| `--cors-origin ORIGIN` | Origin allowed to read responses cross-origin (repeatable; default: none). Also lets that origin drive the dashboard, as `--allowed-origin` would. |
+| `--allowed-host HOST` | Extra `Host` header value to accept (repeatable). Needed when you reach the dashboard under a name other than `localhost` — e.g. a Tailscale hostname. `*` disables the check. |
+| `--allowed-origin ORIGIN` | Extra origin allowed to drive the dashboard and open `/ws` (repeatable). Only needed behind a reverse proxy that rewrites `Host`. |
 | `--spec SPEC_FILE` | Also enable the **Mobile Deck Studio** scoped to this course spec. |
 | `--rotate-token` | Rotate the persistent Studio pairing token (invalidates old QR codes). |
+
+**Browser containment.** The Monitor dashboard has no login, so it binds
+loopback, answers only to a `Host` that names this server, and refuses
+mutating requests driven from another origin — the same two guards
+`clm recordings serve` uses. This is what stops a web page open in another tab
+from reading your build state, and what closes DNS rebinding. If you reach the
+dashboard under a Tailscale or LAN name, pass `--allowed-host <name>`; a
+wildcard bind (`--host 0.0.0.0`) without one prints a warning, because every
+remote request would otherwise get `400 Invalid host header`.
+
+`--cors-origin` no longer defaults to `*`. The old default combined `*` with
+credentials, which makes Starlette echo whichever origin asked; a same-origin
+dashboard needs no CORS at all. Passing `*` explicitly still works but serves
+cross-origin responses without credentials.
+
+The `/ws` stream requires the Studio bearer token whenever `--spec` is in
+play, checked **before** the handshake is accepted (WebSockets are exempt from
+CORS, so the check cannot live on the HTTP routes). Browsers cannot set an
+`Authorization` header on a WebSocket, so the PWA presents the token as the
+`clm-token.<token>` subprotocol; scripts may use `Authorization: Bearer`
+instead. Subscriptions are restricted to the known channels `status`,
+`workers`, `jobs` and `studio`.
 
 **Mobile Deck Studio** (`--spec`): a phone-friendly authoring surface for the
 given course's decks, served alongside the Monitor at `/studio/`. Browse the

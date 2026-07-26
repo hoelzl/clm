@@ -81,9 +81,20 @@ def extract_token(request: Request) -> str | None:
     return None
 
 
-def token_matches(request: Request, expected: str) -> bool:
-    """Constant-time check that the request presents ``expected``."""
-    presented = extract_token(request)
+def tokens_match(presented: str | None, expected: str) -> bool:
+    """Constant-time comparison of a client-supplied token against ``expected``.
+
+    ``secrets.compare_digest`` raises ``TypeError`` when either ``str`` holds a
+    non-ASCII character, and the presented value comes straight off the wire —
+    Starlette decodes headers as latin-1, so a byte above 0x7F is enough. That
+    would turn a bad token into a 500 from inside the auth check. Comparing
+    the UTF-8 encodings keeps the comparison constant-time *and* total.
+    """
     if not presented:
         return False
-    return secrets.compare_digest(presented, expected)
+    return secrets.compare_digest(presented.encode("utf-8"), expected.encode("utf-8"))
+
+
+def token_matches(request: Request, expected: str) -> bool:
+    """Constant-time check that the request presents ``expected``."""
+    return tokens_match(extract_token(request), expected)

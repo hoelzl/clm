@@ -14,10 +14,9 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from clm.web.app import create_app
 from clm.web.studio.service import LanguageLockedError, StudioService
 
-from .conftest import Bilingual, Course, record_pair
+from .conftest import Bilingual, Course, make_app, record_pair
 
 TOKEN = "test-studio-token"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
@@ -183,11 +182,7 @@ class TestLockOverHttp:
     def test_locked_write_is_423_with_reason(self, bilingual: Bilingual):
         record_pair(bilingual.de_path, bilingual.en_path)
         _dirty_de(bilingual)
-        app = create_app(
-            db_path=bilingual.slides_dir.parent / "jobs.db",
-            spec_path=bilingual.spec_path,
-            studio_token=TOKEN,
-        )
+        app = make_app(bilingual.spec_path, bilingual.slides_dir.parent / "jobs.db", TOKEN)
         client = TestClient(app)
         body = client.get(f"/api/studio/deck?id={bilingual.en_id}", headers=AUTH).json()
         assert body["lock"]["editable"] is False  # EN locked, surfaced on open

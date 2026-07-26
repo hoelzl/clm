@@ -12,6 +12,18 @@ from fastapi.testclient import TestClient
 from clm.__version__ import __version__
 
 
+def _middleware_names(app) -> list[str]:
+    """Names of the middleware classes installed on ``app``."""
+    return [m.cls.__name__ for m in app.user_middleware]
+
+
+def _middleware_named(app, name: str):
+    """Return the single installed middleware whose class is ``name``."""
+    matches = [m for m in app.user_middleware if m.cls.__name__ == name]
+    assert len(matches) == 1, f"expected exactly one {name}, got {_middleware_names(app)}"
+    return matches[0]
+
+
 class TestCreateApp:
     """Test create_app function."""
 
@@ -58,27 +70,45 @@ class TestCreateApp:
         assert hasattr(app.state, "monitor_service")
         assert isinstance(app.state.monitor_service, MonitorService)
 
-    def test_create_app_default_cors(self, tmp_path):
-        """Should add CORS middleware with default origins."""
+    def test_create_app_installs_no_cors_by_default(self, tmp_path):
+        """Default is *no* CORS middleware — a same-origin app needs none.
+
+        The old default was ``allow_origins=["*"]`` with
+        ``allow_credentials=True``, which makes Starlette echo whichever Origin
+        asked (S6 of the 2026-07-24 review).
+        """
         from clm.web.app import create_app
 
         db_path = tmp_path / "test.db"
         app = create_app(db_path)
 
-        # Check that CORS middleware was added
-        middleware_classes = [type(m).__name__ for m in app.user_middleware]
-        # Note: CORS middleware is wrapped, so we check it exists via routes
-        assert app is not None
+        assert "CORSMiddleware" not in _middleware_names(app)
 
     def test_create_app_custom_cors(self, tmp_path):
-        """Should accept custom CORS origins."""
+        """A named origin installs CORS, with credentials allowed."""
         from clm.web.app import create_app
 
         db_path = tmp_path / "test.db"
         app = create_app(db_path, cors_origins=["http://localhost:3000"])
 
-        # App should be created without error
-        assert app is not None
+        cors = _middleware_named(app, "CORSMiddleware")
+        assert cors.kwargs["allow_origins"] == ["http://localhost:3000"]
+        assert cors.kwargs["allow_credentials"] is True
+
+    def test_wildcard_cors_drops_credentials(self, tmp_path):
+        """``*`` and credentials cannot be combined — credentials lose.
+
+        Honouring both is what made the wildcard dangerous: Starlette echoes
+        the requesting Origin, which legalises credentialed cross-origin reads.
+        """
+        from clm.web.app import create_app
+
+        db_path = tmp_path / "test.db"
+        app = create_app(db_path, cors_origins=["*"])
+
+        cors = _middleware_named(app, "CORSMiddleware")
+        assert cors.kwargs["allow_origins"] == ["*"]
+        assert cors.kwargs["allow_credentials"] is False
 
     def test_create_app_includes_api_router(self, tmp_path):
         """Should include API router with endpoints."""
@@ -100,7 +130,7 @@ class TestDefaultFrontend:
         from clm.web.app import create_app
 
         db_path = tmp_path / "test.db"
-        app = create_app(db_path)
+        app = create_app(db_path, allowed_hosts=["testserver"])
 
         client = TestClient(app, raise_server_exceptions=False)
 
