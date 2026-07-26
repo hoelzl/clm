@@ -25,6 +25,13 @@ Hence the two middlewares here, which are meant to be installed together:
 - :class:`OriginGuardMiddleware` — a *mutating* request must come from this
   app's own origin, judged by ``Sec-Fetch-Site`` first and ``Origin`` second.
 
+A third middleware lives here but installs separately
+(:func:`install_security_headers`): :class:`SecurityHeadersMiddleware` sets a
+Content-Security-Policy that makes injected markup unable to execute — the
+backstop for every HTML-sanitizing layer above it. It is separate because it
+is only safe to apply to an app whose pages run no inline script, which the
+recordings dashboard currently does (its base template embeds one).
+
 Both are deliberately zero-friction: no token, no per-form nonce, nothing for
 the user to configure in the common case. That is the point — a protection
 that costs the single-user local workflow something would be turned off.
@@ -54,12 +61,12 @@ not acceptable.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from urllib.parse import urlsplit
 
 from starlette.datastructures import Headers
 from starlette.responses import PlainTextResponse
-from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +75,37 @@ logger = logging.getLogger(__name__)
 #: answerable — a rejected preflight tells the browser nothing useful, and the
 #: actual request behind it is still checked.
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
+
+#: The Content-Security-Policy :class:`SecurityHeadersMiddleware` installs.
+#: ``script-src 'self'`` is the load-bearing directive — every page these apps
+#: serve loads its JavaScript from static files, so inline script and event
+#: handlers (the two things injected markup needs) never run. ``connect-src
+#: 'self'`` confines fetch/XHR/WebSocket to this origin, closing the exfil
+#: channel for the Studio's non-expiring bearer token. CSP3 matches ``'self'``
+#: to a same-origin ``ws:``/``wss:`` — in WebKit only since Safari 15.4
+#: (bug 235873), so an older iOS phone loses the ``/ws`` live-updates channel
+#: (disk-change banner, sync progress); REST is unaffected, and the policy is
+#: deliberately not widened for it. The two relaxations — ``style-src
+#: 'unsafe-inline'`` and ``img-src … https:`` — are deliberate; see the
+#: middleware's docstring.
+CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; "
+    "script-src 'self'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data: https:; "
+    "connect-src 'self'; "
+    "object-src 'none'; "
+    "base-uri 'none'; "
+    "frame-ancestors 'none'; "
+    "form-action 'none'"
+)
+
+#: The full header set. Names are lower-case, as ASGI requires.
+SECURITY_HEADERS: dict[str, str] = {
+    "content-security-policy": CONTENT_SECURITY_POLICY,
+    "x-content-type-options": "nosniff",
+    "referrer-policy": "no-referrer",
+}
 
 #: Host names that always name this machine.
 LOOPBACK_HOSTS: tuple[str, ...] = ("localhost", "127.0.0.1", "::1")
@@ -504,6 +542,111 @@ async def _reject(
         return
     response = PlainTextResponse(detail, status_code=status_code)
     await response(scope, receive, send)
+
+
+class SecurityHeadersMiddleware:
+    """Set a Content-Security-Policy and friends on every HTML-serving response.
+
+    This is the backstop that keeps a bug in any content-sanitizing layer
+    above it from being fatal. The Studio page holds a non-expiring bearer
+    token in ``localStorage`` and injects server-sanitized HTML (the tier-2
+    preview, issue #697); without a CSP, every sanitizer miss is script
+    execution with the token in reach. With ``script-src 'self'`` the same
+    miss is a defacement bug — the injected markup cannot run, and
+    ``connect-src 'self'`` closes the exfil channel for anything that tries.
+
+    Two deliberate properties of :data:`CONTENT_SECURITY_POLICY`:
+
+    * ``style-src`` keeps ``'unsafe-inline'`` — the Studio shell has an inline
+      ``<style>`` block, and the tier-2 sanitizer *deliberately* keeps
+      ``style`` attributes (CSS policy is the sanitizer's job; the CSP's job
+      is script execution and exfiltration).
+    * ``img-src`` allows ``https:`` — the documented tier-1-parity decision
+      that an off-origin image is acceptable (a beacon, not a takeover).
+
+    A response that already carries a ``Content-Security-Policy`` keeps it:
+    a route that sets one deliberately has the last word.
+
+    One uncovered case, by construction: Starlette's ``ServerErrorMiddleware``
+    sits outside all user middleware, so the fixed plain-text 500 for an
+    *unhandled* exception carries no headers. That body has no user content
+    and no script, so the gap is cosmetic — but "every response" above means
+    every response this middleware sees.
+
+    Pure ASGI like the two guards above — ``BaseHTTPMiddleware`` wraps
+    streaming responses badly, and headers cost nothing to add by hand.
+    """
+
+    def __init__(
+        self,
+        app: ASGIApp,
+        *,
+        headers: Mapping[str, str] | None = None,
+        exempt_prefixes: Sequence[str] = ("/docs", "/redoc"),
+    ) -> None:
+        self.app = app
+        self.headers = headers if headers is not None else SECURITY_HEADERS
+        # FastAPI's /docs and /redoc pull JS/CSS from a CDN and run an inline
+        # script, so a strict CSP breaks them; they are static, trusted pages
+        # (no user content), which makes the exemption free. openapi.json is
+        # not exempt — CSP only governs documents, so its header is inert.
+        # Falsy prefixes are dropped: an empty entry would otherwise exempt
+        # *every* path (any path starts with "" + "/"), silently disabling
+        # the whole middleware.
+        self.exempt_prefixes = tuple(p for p in exempt_prefixes if p)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        path = scope.get("path", "")
+        root_path = scope.get("root_path", "")
+        if root_path not in ("", "/") and path.startswith(root_path):
+            # uvicorn folds root_path into scope["path"], so behind a
+            # path-prefixing proxy the exemptions would stop matching (and
+            # /docs would break) without this strip. "/" itself is not a
+            # prefix to strip — that would turn "/docs" into "docs".
+            path = path[len(root_path) :]
+        # Segment-aware: an exemption for /docs must not silently cover a
+        # future /docs-archive route — a prefix typo must never *remove* the
+        # backstop from a page that should have it.
+        if any(path == p or path.startswith(p + "/") for p in self.exempt_prefixes):
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_headers(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                # Header names are case-insensitive (ASGI only *recommends*
+                # lower-case): a route's own CSP must be seen however it was
+                # cased, or the response ends up with two policies and the
+                # browser enforces the intersection.
+                existing = {k.lower() for k, _v in message.setdefault("headers", [])}
+                added = [
+                    (name.encode("latin-1"), value.encode("latin-1"))
+                    for name, value in self.headers.items()
+                    if name.encode("latin-1") not in existing
+                ]
+                message["headers"] = [*message["headers"], *added]
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
+
+
+def install_security_headers(
+    app,
+    *,
+    headers: Mapping[str, str] | None = None,
+    exempt_prefixes: Sequence[str] = ("/docs", "/redoc"),
+) -> None:
+    """Install :class:`SecurityHeadersMiddleware` on ``app``.
+
+    Kept out of :func:`install_web_security` on purpose: the recordings
+    dashboard — that function's other caller — has a large inline ``<script>``
+    in its base template by design, so a ``script-src 'self'`` policy would
+    break it until that script moves to a static file. ``clm serve`` (the
+    dashboard + Studio) installs it from :func:`clm.web.app.create_app`.
+    """
+    app.add_middleware(SecurityHeadersMiddleware, headers=headers, exempt_prefixes=exempt_prefixes)
 
 
 def install_web_security(

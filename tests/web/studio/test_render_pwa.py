@@ -101,3 +101,31 @@ class TestPwaAssets:
     def test_app_shell_served(self, client: TestClient):
         assert client.get("/studio/app.js").status_code == 200
         assert client.get("/studio/").status_code == 200
+
+
+class TestStudioShellSecurityHeaders:
+    """The token-holding page is the entire point of #705 — pin the wiring.
+
+    ``/api/health`` keeping its CSP while ``/studio/`` loses it (an accidental
+    ``exempt_prefixes`` addition, a middleware-ordering change) fails no other
+    test, so the shell asserts its own.
+    """
+
+    @pytest.fixture()
+    def client(self, course: Course) -> TestClient:
+        app = make_app(course.spec_path, course.slides_dir.parent / "jobs.db", TOKEN)
+        return TestClient(app)
+
+    def test_the_shell_carries_the_csp(self, client: TestClient) -> None:
+        r = client.get("/studio/")
+        assert r.status_code == 200
+        csp = r.headers["content-security-policy"]
+        assert "script-src 'self'" in csp
+        assert "connect-src 'self'" in csp
+
+    def test_the_service_worker_keeps_its_own_headers_and_gains_csp(
+        self, client: TestClient
+    ) -> None:
+        r = client.get("/studio/sw.js")
+        assert r.headers["Service-Worker-Allowed"] == "/"
+        assert "content-security-policy" in r.headers

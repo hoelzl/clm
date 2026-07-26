@@ -299,3 +299,21 @@ class TestNoStudioNoToken:
         client = TestClient(app)
         with client.websocket_connect("/ws", subprotocols=[offered]) as ws:
             assert ws.accepted_subprotocol == offered
+
+
+class TestSecurityHeadersOnServe:
+    """``clm serve`` sends the CSP that backstops the Studio's sanitizer (#705)."""
+
+    def test_api_responses_carry_the_policy(self, app):
+        r = TestClient(app).get("/api/health")
+        assert r.status_code == 200
+        csp = r.headers["content-security-policy"]
+        assert "script-src 'self'" in csp
+        assert "connect-src 'self'" in csp
+        assert r.headers["x-content-type-options"] == "nosniff"
+
+    def test_swagger_ui_is_exempt(self, app):
+        """FastAPI's /docs needs CDN assets and inline script; it is static."""
+        r = TestClient(app).get("/docs")
+        assert r.status_code == 200
+        assert "content-security-policy" not in r.headers

@@ -23,7 +23,11 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from clm.__version__ import __version__
-from clm.infrastructure.web_security import install_web_security, normalize_origin
+from clm.infrastructure.web_security import (
+    install_security_headers,
+    install_web_security,
+    normalize_origin,
+)
 from clm.web.api.routes import router as api_router
 from clm.web.api.websocket import websocket_endpoint
 from clm.web.services.monitor_service import MonitorService
@@ -224,6 +228,13 @@ def create_app(
         allowed_hosts=allowed_hosts,
         allowed_origins=guard_origins,
     )
+    # The content-injection backstop (issue #705): the Studio page holds a
+    # non-expiring bearer token and injects sanitized HTML, so a CSP that
+    # forbids inline script turns any sanitizer miss from token theft into
+    # defacement. Installed here rather than inside install_web_security
+    # because the recordings dashboard — that function's other caller — runs
+    # an inline <script> by design and would break.
+    install_security_headers(app)
     logger.debug("Dashboard accepts Host values: %s", effective_hosts)
     app.state.allowed_hosts = effective_hosts
 
