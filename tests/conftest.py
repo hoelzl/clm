@@ -869,6 +869,50 @@ def auto_configure_logging_for_marked_tests(request):
 
 
 @pytest.fixture(scope="function", autouse=True)
+def _restore_worker_global_state():
+    """Restore worker-global logging/config state mutated by a test (#694).
+
+    The 2026-07-26 nightly flaked on a three-hop chain across one xdist
+    worker: a test reloaded the process-global ``ClmConfig`` singleton under
+    a monkeypatched ``CLM_LOGGING__LOG_LEVEL=ERROR`` (monkeypatch reverts the
+    env var, not the singleton); a later in-process ``clm build`` resolved
+    the poisoned value and applied it via ``setup_logging`` →
+    ``getLogger("clm").setLevel(ERROR)``; every later ``clm.*`` WARNING on
+    that worker died at the gate and a ``caplog`` assertion 300 tests
+    downstream failed. Snapshot the clm logger chain (level/disabled/
+    propagate) and the config singleton before each test and restore both
+    after it, so no test can poison its successors. Pinned by
+    ``tests/test_global_state_isolation.py``.
+    """
+    import clm.infrastructure.config as config_module
+
+    chain = (
+        "clm",
+        "clm_cli",
+        "clm_common",
+        "clm_faststream_backend",
+        "clm.workers",
+        "clm.workers.notebook",
+        "clm.workers.notebook.notebook_processor",
+        "clm.infrastructure",
+        "clm.infrastructure.database",
+        "clm.infrastructure.database.executed_notebook_cache",
+        "clm.release",
+    )
+    loggers = [logging.getLogger(name) for name in chain]
+    snapshot = [(lg.level, lg.disabled, lg.propagate) for lg in loggers]
+    previous_config = config_module._config
+    try:
+        yield
+    finally:
+        for lg, (level, disabled, propagate) in zip(loggers, snapshot, strict=True):
+            lg.setLevel(level)
+            lg.disabled = disabled
+            lg.propagate = propagate
+        config_module._config = previous_config
+
+
+@pytest.fixture(scope="function", autouse=True)
 def _neutralise_pool_size_cap(monkeypatch, request):
     """Pin the Fix 4 pool-size cap helpers to effectively-unlimited values.
 

@@ -1,6 +1,7 @@
 """Tests for the ExecutedNotebookCache class."""
 
 import json
+import logging
 import pickle
 import sqlite3
 import tempfile
@@ -210,6 +211,10 @@ class TestExecutedNotebookCache:
 
     def test_without_context_manager_warns(self, temp_db_path, sample_notebook, caplog):
         """Test that using cache without context manager logs warning."""
+        # Guard against worker-global logger pollution (#694).
+        caplog.set_level(
+            logging.WARNING, logger="clm.infrastructure.database.executed_notebook_cache"
+        )
         cache = ExecutedNotebookCache(temp_db_path)
         # conn is None without __enter__
 

@@ -5,6 +5,7 @@ compared to direct execution, validating that the Speaker→Completed cache
 reuse strategy is correct.
 """
 
+import logging
 import tempfile
 from pathlib import Path
 
@@ -211,6 +212,9 @@ class TestCacheEquivalence:
     @pytest.mark.asyncio
     async def test_cache_miss_falls_back_to_direct_execution(self, temp_cache_db, caplog):
         """Verify that cache miss falls back to direct execution with warning."""
+        # Guard against worker-global logger pollution: an earlier test on the
+        # same xdist worker may have raised the clm logger's level (#694).
+        caplog.set_level(logging.WARNING, logger="clm.workers.notebook.notebook_processor")
         payload = NotebookPayload(
             data="# Simple notebook\nprint('hello')",
             input_file="/test/nonexistent.py",

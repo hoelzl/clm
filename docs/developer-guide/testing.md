@@ -243,6 +243,36 @@ xdist load, so the suite relaxes it in one place instead of every heartbeat
 test re-patching the constant. Never raise the **production** default — relax it
 only in tests, via this env var.
 
+### Worker-global state is restored after every test (#694)
+
+Under xdist, every test in a worker shares one Python process, so a test that
+mutates process-global state without restoring it poisons its successors —
+possibly hundreds of tests later, which makes the flake nearly impossible to
+connect to its cause from the failure alone. The 2026-07-26 nightly failed on
+exactly that: a config test reloaded the global `ClmConfig` singleton under a
+monkeypatched `CLM_LOGGING__LOG_LEVEL=ERROR` (monkeypatch reverts the env var,
+**not** the singleton), a later in-process `clm build` applied the poisoned
+level via `setup_logging` → `getLogger("clm").setLevel(ERROR)`, and a
+`caplog`-based assertion ~300 tests downstream lost its WARNING and failed.
+
+The autouse `_restore_worker_global_state` fixture in `tests/conftest.py`
+snapshots the clm logger chain (level/disabled/propagate) and the config
+singleton before each test and restores both after it.
+`tests/test_global_state_isolation.py` pins the property: one test pollutes
+on purpose, the next proves the pollution cannot cross the boundary.
+
+Two takeaways when writing tests:
+
+- **Never mutate process-global state without restore.** `monkeypatch` covers
+  env vars and attributes, but not cached singletons — if a test reloads
+  `get_config()`, that is exactly the case the fixture now guards, but new
+  globals need the same discipline.
+- **Guard `caplog` assertions with `caplog.set_level(level, logger=...)`.**
+  A bare `caplog.records` assertion inherits whatever effective level the
+  logger happens to have; nearly all caplog-using files in this suite set the
+  level explicitly, and the fixture is the second line of defense, not a
+  license to skip the guard.
+
 ### Per-test timeout
 
 `[tool.pytest.ini_options] timeout` (pyproject) defaults to **120s** — the same
