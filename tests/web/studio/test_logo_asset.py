@@ -115,9 +115,16 @@ class TestLogoAssetRoute:
         assert r.content == found[0].read_bytes()
 
     def test_the_response_disables_script_for_document_loads(self, client: TestClient) -> None:
-        """An SVG opened as a *document* must not run — its own CSP says so."""
+        """An SVG opened as a *document* gets a self-contained lockdown CSP.
+
+        The global middleware lets a route's CSP *replace* the app-wide one,
+        so this must carry ``default-src 'none'`` itself — ``script-src
+        'none'`` alone would silently drop every other directive.
+        """
         r = client.get("/api/studio/asset/logo/python")
-        assert r.headers["content-security-policy"] == "script-src 'none'"
+        assert r.headers["content-security-policy"] == (
+            "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'"
+        )
 
     def test_an_unknown_language_is_a_404(self, client: TestClient) -> None:
         assert client.get("/api/studio/asset/logo/rust").status_code == 404
@@ -128,3 +135,32 @@ class TestLogoAssetRoute:
             404,
             422,
         )
+
+
+class TestRewritePerformance:
+    """The regex runs on request-controlled bytes, so it must be linear.
+
+    The first version matched ``src="`` in the same pattern as ``<img``, and
+    every ``<img`` start rescanned the rest of the input: ``"<img a" * N``
+    cost O(N²) — 34 s at N=20000, an authenticated threadpool DoS found by
+    the #709 review round. The ``str.find`` loop rewinds nothing — an
+    unterminated ``<img`` ends the scan in one pass; the threshold is generous
+    so slow CI can't flake, while the old shape would exceed it by an order
+    of magnitude.
+    """
+
+    def test_many_img_starts_do_not_go_quadratic(self) -> None:
+        import time
+
+        payload = "<img a " * 20000  # no complete tag, the old quadratic case
+        start = time.monotonic()
+        assert rewrite_bundled_logo(payload, "python") == payload
+        assert time.monotonic() - start < 5.0
+
+    def test_many_complete_img_tags_are_linear_too(self) -> None:
+        import time
+
+        payload = '<img src="data:image/png;base64,AAAA">' * 20000
+        start = time.monotonic()
+        assert rewrite_bundled_logo(payload, "python") == payload
+        assert time.monotonic() - start < 5.0

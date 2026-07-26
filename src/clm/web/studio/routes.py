@@ -19,7 +19,7 @@ from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from starlette.concurrency import run_in_threadpool
-from starlette.responses import FileResponse
+from starlette.responses import Response
 
 from clm.web.studio import sync_runner
 from clm.web.studio.auth import token_matches
@@ -280,27 +280,34 @@ async def render_cell(request: Request, req: RenderCellRequest) -> RenderCellRes
 
 
 @router.get("/asset/logo/{prog_lang}")
-async def logo_asset(prog_lang: str) -> FileResponse:
+async def logo_asset(prog_lang: str) -> Response:
     """The bundled course logo, for the tier-2 preview's rewritten ``<img>`` (#706).
 
     Deliberately **not** token-gated: an ``<img src>`` fetch cannot carry the
     ``Authorization`` header, and there is nothing here to protect — the route
     serves only the packaged logo files, with ``prog_lang`` selecting a fixed
-    mapping entry (never a path). ``script-src 'none'`` is set in case the SVG
-    is ever opened as a document rather than an image subresource; the global
-    security-headers middleware keeps a route's own CSP (route has the last
-    word), so this overrides ``script-src 'self'`` for exactly this response.
+    mapping entry (never a path). The response carries its own restrictive CSP
+    in case the SVG is ever opened as a *document* rather than an image
+    subresource — and because the global security-headers middleware keeps a
+    route's own CSP (route has the last word), that policy is self-contained
+    (``default-src 'none'``), not just ``script-src 'none'``.
     """
     found = logo_file(prog_lang)
     if found is None:
         raise HTTPException(status_code=404, detail=f"No bundled logo for {prog_lang!r}")
-    path, media_type = found
-    return FileResponse(
-        path,
+    source, media_type = found
+    return Response(
+        content=source.read_bytes(),
         media_type=media_type,
         headers={
             # Packaged with clm; changes only across installs/upgrades.
             "Cache-Control": "max-age=3600",
-            "Content-Security-Policy": "script-src 'none'",
+            # The global CSP middleware lets a route's own policy *replace* the
+            # app-wide one, so this must be self-contained — not just
+            # "script-src 'none'" — or an SVG opened as a same-origin document
+            # would lose default-src/object-src/base-uri with it.
+            "Content-Security-Policy": (
+                "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'"
+            ),
         },
     )

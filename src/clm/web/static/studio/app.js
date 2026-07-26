@@ -153,11 +153,12 @@ function needsServerRender(cell) {
 }
 
 // The server returns HTML it has already sanitized against an allowlist
-// (clm/web/studio/sanitize.py — the header macros emit `<div>`, `<br>` and a
-// data: logo, so escaping here would delete the feature). Inject it verbatim:
-// only the exact bytes the server checked are safe, so this must not
-// post-process them. If anything fails, the tier-1 markdown already in the
-// element stays — a preview is best-effort by design.
+// (clm/web/studio/sanitize.py — the header macros emit `<div>`, `<br>` and the
+// course logo, which the server rewrites to a same-origin asset URL before
+// sanitizing; see clm/web/studio/logo.py), so escaping here would delete the
+// feature. Inject it verbatim: only the exact bytes the server checked are
+// safe, so this must not post-process them. If anything fails, the tier-1
+// markdown already in the element stays — a preview is best-effort by design.
 async function renderJ2(cell, bodyEl) {
   // Captured before the await so a reply can never be attributed to whatever
   // deck is open when it lands, and so the staleness check below has something
