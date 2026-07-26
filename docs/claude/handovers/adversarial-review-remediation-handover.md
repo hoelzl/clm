@@ -689,9 +689,54 @@ a drive-by.
 
 ---
 
-### Phase 3 — Sync engine correctness  ▸ STATUS: not started
+### Phase 3 — Sync engine correctness  ▸ STATUS: not started (item 1's migration prerequisite is DONE — see below)
 **Depends on**: Phase 1 (sync unit coverage is the best in the repo — keep it
 that way and extend it here).
+
+> **Item 1's blast-radius sweep is done, and the answer is zero (2026-07-26).**
+> The plan says to "sweep the course repos to size the blast radius, and
+> prepare the fix-forward instructions" before shipping the strict gate. That
+> was measured rather than estimated, and **no deck regresses**, so there is no
+> migration to prepare and the item is safe to ship on its own.
+>
+> Method — for every split pair, compare what `record` checks today against
+> what D8 will make it check:
+> `structural_gate(raw_de, raw_en)` vs
+> `structural_gate(*project_pair(...))`. A deck regresses iff the first is
+> empty and the second is not.
+>
+> | repo | split pairs | clean both ways | newly failing |
+> |---|---|---|---|
+> | PythonCourses | 956 | 956 | **0** |
+> | CppCourses | 340 | 340 | **0** |
+> | CSharpCourses | 0 | — | — |
+>
+> **The result is not vacuous**: projection genuinely differs from raw text on
+> **230 of the 956** PythonCourses pairs (those with separated voiceover
+> companions), and all 230 still gate clean. **CSharpCourses is out of scope by
+> format**, not by accident — it is entirely *unsplit* (one `slides_x.cs` per
+> topic carrying both `lang="de"` and `lang="en"` cells; no `.de.*` file exists
+> anywhere in the repo), so the split-pair engine never runs on it.
+>
+> Re-measure if this sits unimplemented for long — the sweep reflects the
+> committed state of three working trees on 2026-07-26. The script is trivial
+> to rebuild from the method line above.
+
+> **Two corrections to item 1 as written, found while sizing it:**
+>
+> 1. **There are four gate call sites, not two.** The plan names
+>    `sync_v3.py:239-250` and `:375-385`, but `cli/commands/harvest.py:544`
+>    and `voiceover/harvest_accept.py:442` call `structural_gate` on raw text
+>    too. Fixing only the named two would leave the gate projecting on some
+>    paths and not others — drift *by call site* instead of by function, which
+>    is harder to notice than what is there now.
+> 2. **The "can never drift" claim is at `sync_verify.py:300`**, inside
+>    `structural_gate`'s own docstring, and it is true about the *function*
+>    (the gate is literally the error subset of `structural_violations`) while
+>    being false about its *input* — `verify_pair` projects companions at
+>    `:476` before calling it, and all four gate callers do not. That is
+>    exactly the bug. Whatever shape the fix takes, the shared thing has to be
+>    the **projection**, not just the violation computation.
 
 **Goal**: no path silently destroys authored content. Order within this phase
 matters: **D8 first**, because the gate is what creates the divergent baselines
