@@ -71,9 +71,14 @@ raising — preview, not parity.
 drop the ``%% [markdown]`` delimiter line, strip the comment prefix, and
 **sanitize** the result (:mod:`clm.web.studio.sanitize`). The order is the point:
 the client injects the sanitizer's output verbatim, so every byte-changing step
-happens before sanitizing, never after. The expanded text itself is never sent —
-the response carries the sanitized fragment plus the caller's original body, so
-there is nothing unsanitized for a consumer to reach for by mistake.
+happens before sanitizing, never after.
+
+The endpoint sends the sanitized fragment plus the caller's *original* body (for
+the tier-1 fallback) and never the expanded text — so no route hands a consumer
+something unsanitized to reach for by mistake. Note that is a property of the
+callers, not of this module: :func:`render_j2_cell` is public and still returns
+raw expanded text, because the expansion is worth testing on its own. Anything
+new that calls it and ships the result to a browser owes it a sanitize pass.
 """
 
 from __future__ import annotations

@@ -56,20 +56,50 @@ class TestSanitizer:
     @pytest.mark.parametrize(
         "html",
         [
-            "<script>alert(1)</script>",
-            "<iframe src='https://evil'></iframe>",
-            "<svg onload=alert(1)><circle/></svg>",
-            "<style>body{display:none}</style>",
-            "<form action='https://evil'><input name=a></form>",
-            "<math><mtext><table><mglyph><style><img src=x onerror=alert(1)>",
-            "<object data='x'></object>",
+            "<script>PAYLOAD</script>",
+            "<iframe src='https://evil'>PAYLOAD</iframe>",
+            "<style>PAYLOAD</style>",
+            "<form action='https://evil'>PAYLOAD<input name=a></form>",
+            "<object data='x'>PAYLOAD</object>",
+            "<noscript>PAYLOAD</noscript>",
+            "<template>PAYLOAD</template>",
         ],
     )
-    def test_active_content_is_removed_with_its_contents(self, html: str) -> None:
+    def test_active_content_is_removed_with_its_text(self, html: str) -> None:
+        """Not just unwrapped — the text goes too.
+
+        An adversarial review found the original version of this test vacuous:
+        nh3's ``clean_content_tags`` defaults to ``{script, style}``, so
+        ``<iframe>fallback</iframe>`` left ``fallback`` behind as prose. Harmless
+        in itself, but fallback text is exactly where a payload's "your session
+        expired, tap here" copy lives, and the test's name claimed otherwise.
+        ``PAYLOAD`` is the marker so the assertion cannot pass by accident.
+        """
+        assert sanitize_preview_html(html) == ""
+
+    @pytest.mark.parametrize(
+        "html",
+        [
+            "<svg onload=alert(1)><circle/></svg>",
+            "<math><mtext><table><mglyph><style><img src=x onerror=alert(1)>",
+            "<xmp><p></xmp><img src=x onerror=alert(1)>",
+            "<select><noembed></select><img src=x onerror=alert(1)>",
+        ],
+    )
+    def test_namespace_confusion_payloads_are_inert(self, html: str) -> None:
         cleaned = sanitize_preview_html(html)
         assert "alert" not in cleaned
-        assert "<script" not in cleaned and "<iframe" not in cleaned
-        assert "<svg" not in cleaned and "<style" not in cleaned
+        assert "<svg" not in cleaned and "onerror" not in cleaned
+
+    def test_sanitizing_is_idempotent(self) -> None:
+        """A second pass must not resurrect markup (the mXSS shape)."""
+        for html in (
+            "<math><mtext><table><mglyph><style><img src=x onerror=alert(1)>",
+            '<div style="text-align:center"><b>T</b></div>',
+            '<img src="data:image/png;base64,AAAA">',
+        ):
+            once = sanitize_preview_html(html)
+            assert sanitize_preview_html(once) == once
 
     def test_event_handlers_are_dropped(self) -> None:
         cleaned = sanitize_preview_html('<img src="https://x/y.png" onerror="alert(1)">')
@@ -108,6 +138,15 @@ class TestSanitizer:
             '<a href="da\nta:text/html,x">x</a>',
             '<a href="javascript:alert(1)">x</a>',
             '<a href="vbscript:msgbox(1)">x</a>',
+            # The C0-control prefixes an adversarial review used to bypass this:
+            # ammonia and the URL parser strip every C0 control, Python's `\s`
+            # does not, so `&#1;data:` looked like the scheme "\x01data" to the
+            # filter and like `data:` to nh3. `&#N;` needs no raw control byte in
+            # the deck — the HTML parser decodes it. See _URL_INSIGNIFICANT.
+            '<a href="&#1;data:text/html;base64,PHNjcmlwdD4=">x</a>',
+            '<a href="&#8;data:text/html,x">x</a>',
+            '<a href="&#14;data:text/html,x">x</a>',
+            '<a href="&#27;javascript:alert(1)">x</a>',
         ],
     )
     def test_a_link_can_never_carry_data_or_script_schemes(self, html: str) -> None:
@@ -115,9 +154,74 @@ class TestSanitizer:
         cleaned = sanitize_preview_html(html)
         assert "href" not in cleaned
 
-    def test_a_non_image_data_uri_is_refused_even_on_img(self) -> None:
-        cleaned = sanitize_preview_html('<img src="data:text/html,<b>x</b>">')
+    @pytest.mark.parametrize(
+        "html",
+        [
+            '<img src="data:text/html,<b>x</b>">',
+            '<img src="&#1;data:text/html,x">',
+            '<img src="&#14;data:application/javascript,x">',
+        ],
+    )
+    def test_a_non_image_data_uri_is_refused_even_on_img(self, html: str) -> None:
+        """Cases 2–3 are the control-prefix bypass: the confinement to
+        ``data:image/`` has to normalize the same way nh3's scheme check does, or
+        the prefix defeats one check and not the other."""
+        cleaned = sanitize_preview_html(html)
         assert "data:" not in cleaned
+
+    def test_a_kept_url_carries_no_leading_control_characters(self) -> None:
+        """A legitimate image with a stray prefix is kept — normalized, not raw.
+
+        The prefix is inert (every URL parser drops it), but shipping invisible
+        bytes to the client would mean trusting the client to normalize the same
+        way the filter did. Case is preserved: base64 is case-sensitive.
+        """
+        cleaned = sanitize_preview_html('<img src="&#8;data:image/svg+xml;base64,AAaaBB">')
+        assert 'src="data:image/svg+xml;base64,AAaaBB"' in cleaned
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "//evil.example/x",
+            "\\\\evil.example/x",
+            "/\\evil.example/x",
+            "\\/evil.example/x",
+            "&#1;//evil.example/x",
+            "/\t/evil.example/x",
+        ],
+    )
+    @pytest.mark.parametrize("markup", ['<a href="{}">x</a>', '<img src="{}">'])
+    def test_authority_relative_targets_are_refused(self, markup: str, url: str) -> None:
+        """The rule the client's ``safeUrl()`` already applies to tier-1 links.
+
+        Tier-2 output lands in the same page — one holding a non-expiring bearer
+        token — so it gets the same rule. WHATWG parsing treats ``\\`` as ``/``
+        for http(s), so all four leading pairs reach the same host, and an
+        ``<img>`` needs no click at all: opening the deck is the beacon. The
+        tier-1 markdown renderer has no image syntax, so this vector arrives
+        *with* this feature.
+        """
+        cleaned = sanitize_preview_html(markup.format(url))
+        assert "evil.example" not in cleaned
+
+    @pytest.mark.parametrize(
+        "url", ["https://ok.example/x", "/root/relative", "img/logo.png", "#anchor"]
+    )
+    def test_same_origin_and_absolute_targets_still_work(self, url: str) -> None:
+        cleaned = sanitize_preview_html(f'<a href="{url}">x</a>')
+        assert url in cleaned
+
+    def test_class_is_not_allowed(self) -> None:
+        """Because the page's own stylesheet is a CSS-allowlist bypass.
+
+        ``.toast`` is ``position: fixed; z-index: 20`` in index.html, so injected
+        markup that merely *names* it gets the fixed overlay
+        :data:`ALLOWED_CSS_PROPERTIES` exists to refuse — no ``style`` needed.
+        Found by an adversarial review; the macros only ever emit inline styles.
+        """
+        cleaned = sanitize_preview_html('<div class="toast show">Sitzung abgelaufen</div>')
+        assert "class" not in cleaned
+        assert "Sitzung abgelaufen" in cleaned  # the text is prose, not a threat
 
     def test_https_links_still_work(self) -> None:
         cleaned = sanitize_preview_html('<a href="https://ok.example">ok</a>')
@@ -140,6 +244,24 @@ class TestSanitizer:
     def test_backslash_escaped_css_is_dropped(self) -> None:
         cleaned = sanitize_preview_html(r'<div style="width:expre\ssion(alert(1))">x</div>')
         assert "expre" not in cleaned
+
+    @pytest.mark.parametrize(
+        "style",
+        [
+            "width:url/*x*/(javascript:alert(1))",
+            "width:expression/*x*/(alert(1))",
+            "width:/*}*/url(x)",
+        ],
+    )
+    def test_css_comments_cannot_hide_a_rejected_construct(self, style: str) -> None:
+        """A comment splits ``url(`` so a naive ``url\\s*\\(`` walks past it.
+
+        No impact on its own — none of the allowlisted properties accepts
+        ``url()`` — but the guard has to do what its docstring says, and nothing
+        covered it before an adversarial review pointed at it.
+        """
+        cleaned = sanitize_preview_html(f'<div style="{style}">x</div>')
+        assert "url" not in cleaned and "expression" not in cleaned
 
     def test_fails_closed_without_nh3(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """An install without ``[web]`` loses the feature, not the guarantee."""
@@ -219,6 +341,19 @@ class TestRenderJ2CellHtml:
         monkeypatch.setattr("clm.web.studio.render.sanitize_preview_html", _boom)
         ok, error, html = render_j2_cell_html(tmp_path / "slides_x.de.py", J2_HEADER, "de")
         assert ok is False and html is None and error == "nh3 missing"
+
+    def test_an_unexpected_sanitizer_error_also_yields_no_html(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``nh3.clean`` itself raising must fail closed, not fall through."""
+
+        def _boom(_html: str) -> str:
+            raise ValueError("nh3 config rejected")
+
+        monkeypatch.setattr("clm.web.studio.render.sanitize_preview_html", _boom)
+        ok, error, html = render_j2_cell_html(tmp_path / "slides_x.de.py", J2_HEADER, "de")
+        assert ok is False and html is None
+        assert error is not None and "sanitize failed" in error
 
 
 # ---------------------------------------------------------------------------
@@ -325,3 +460,139 @@ class TestClientGate:
     def test_a_missing_cell_is_handled(self) -> None:
         assert self._run("needsServerRender(undefined)") is False
         assert self._run("needsServerRender({})") is False
+
+
+@pytest.mark.skipif(
+    shutil.which("node") is None,
+    reason="node is not on PATH; the Studio consumer cannot be executed",
+)
+class TestClientConsumer:
+    """``renderJ2`` itself — the line whose absence of coverage caused #696.
+
+    An adversarial review made the point that pinning only the *gate* leaves the
+    consumer exactly as untested as it was when it silently stopped working:
+    rename the server's ``html`` field and every other test here still passes
+    while the feature dies. So this executes ``renderJ2`` under node against a
+    stub ``api()`` and a stub element, and asserts what it sends, what it
+    assigns, and — importantly — when it assigns *nothing*.
+    """
+
+    def _run(self, harness: str) -> dict:
+        from .test_client_escaping import _extract_function
+
+        source = APP_JS.read_text(encoding="utf-8")
+        # The shared extractor keys on `function <name>(`, which drops the
+        # `async` keyword in front of it — and then node rejects the `await`
+        # inside. Re-attach it rather than loosening the shared helper.
+        fn = _extract_function(source, "renderJ2")
+        if "async function renderJ2(" in source:
+            fn = f"async {fn}"
+        assert fn.startswith("async function renderJ2("), fn[:60]
+        script = f"""
+        let currentDeck = {{ deck_id: "m/t/slides_x.de.py" }};
+        const calls = [];
+        let apiImpl = async (path, opts) => {{
+          calls.push({{ path, body: JSON.parse(opts.body) }});
+          return {{ rendered: true, html: "<div>EXPANDED</div>", body: "raw", error: null }};
+        }};
+        const api = (path, opts) => apiImpl(path, opts);
+        function stubEl() {{
+          return {{ innerHTML: "TIER1", classes: [], classList: {{ add(c) {{ this.classes ??= []; }} }} }};
+        }}
+        {fn}
+        (async () => {{
+          {harness}
+        }})().then((out) => process.stdout.write(JSON.stringify(out)))
+             .catch((e) => {{ process.stderr.write(String(e)); process.exit(1); }});
+        """
+        proc = subprocess.run(  # noqa: S603 - fixed argv, no shell
+            ["node", "-e", script],  # noqa: S607 - resolved via PATH, guarded by the skipif
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        assert proc.returncode == 0, f"node failed: {proc.stderr}"
+        return json.loads(proc.stdout)
+
+    def test_it_posts_the_cell_to_the_render_endpoint(self) -> None:
+        out = self._run(
+            """
+            const el = stubEl();
+            await renderJ2({ body: "# {{ header_de('T') }}", lang: "de", is_j2: true }, el);
+            return { calls, html: el.innerHTML };
+            """
+        )
+        assert len(out["calls"]) == 1
+        call = out["calls"][0]
+        assert call["path"] == "/deck/render-cell"
+        assert call["body"]["is_j2"] is True
+        assert call["body"]["deck_id"] == "m/t/slides_x.de.py"
+        assert call["body"]["lang"] == "de"
+
+    def test_it_injects_the_servers_html_field(self) -> None:
+        """The contract, executed: rename ``html`` server-side and this fails."""
+        out = self._run(
+            """
+            const el = stubEl();
+            await renderJ2({ body: "x", lang: "de" }, el);
+            return { html: el.innerHTML };
+            """
+        )
+        assert out["html"] == "<div>EXPANDED</div>"
+
+    @pytest.mark.parametrize(
+        "reply",
+        [
+            '{ rendered: false, html: null, body: "x", error: "nope" }',
+            '{ rendered: true, html: null, body: "x", error: null }',
+            "{}",
+        ],
+    )
+    def test_a_non_render_leaves_tier_1_in_place(self, reply: str) -> None:
+        out = self._run(
+            f"""
+            apiImpl = async () => ({reply});
+            const el = stubEl();
+            await renderJ2({{ body: "x" }}, el);
+            return {{ html: el.innerHTML }};
+            """
+        )
+        assert out["html"] == "TIER1"
+
+    def test_a_failed_request_leaves_tier_1_in_place(self) -> None:
+        out = self._run(
+            """
+            apiImpl = async () => { const e = new Error("401"); e.status = 401; throw e; };
+            const el = stubEl();
+            await renderJ2({ body: "x" }, el);
+            return { html: el.innerHTML };
+            """
+        )
+        assert out["html"] == "TIER1"
+
+    def test_a_reply_arriving_after_navigation_is_dropped(self) -> None:
+        """No write into a card belonging to a deck the user already left."""
+        out = self._run(
+            """
+            apiImpl = async () => {
+              currentDeck = { deck_id: "m/t/other.de.py" };   // navigated away
+              return { rendered: true, html: "<div>LATE</div>" };
+            };
+            const el = stubEl();
+            await renderJ2({ body: "x" }, el);
+            return { html: el.innerHTML };
+            """
+        )
+        assert out["html"] == "TIER1"
+
+    def test_no_deck_open_sends_nothing(self) -> None:
+        out = self._run(
+            """
+            currentDeck = null;
+            const el = stubEl();
+            await renderJ2({ body: "x" }, el);
+            return { calls, html: el.innerHTML };
+            """
+        )
+        assert out["calls"] == [] and out["html"] == "TIER1"

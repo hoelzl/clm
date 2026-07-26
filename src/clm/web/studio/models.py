@@ -260,7 +260,9 @@ class RenderCellResult(BaseModel):
     ``body`` is always the caller's **original** cell body, echoed back for that
     fallback. It is deliberately *not* the expanded text: shipping unsanitized
     expansion alongside the sanitized fragment would just invite the next
-    consumer to inject the wrong field.
+    consumer to inject the wrong field. (So *this endpoint* never emits
+    unsanitized HTML — ``render_j2_cell`` still exists and still returns raw
+    expanded text for tests and future non-browser callers.)
     """
 
     rendered: bool

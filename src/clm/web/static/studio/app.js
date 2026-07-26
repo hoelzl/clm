@@ -159,12 +159,19 @@ function needsServerRender(cell) {
 // post-process them. If anything fails, the tier-1 markdown already in the
 // element stays — a preview is best-effort by design.
 async function renderJ2(cell, bodyEl) {
+  // Captured before the await so a reply can never be attributed to whatever
+  // deck is open when it lands, and so the staleness check below has something
+  // to compare against. (Navigating away also empties `appEl`, which detaches
+  // this node — but that is an accident of how the views re-render, not a
+  // guarantee, so the check is explicit.)
+  const deckId = currentDeck && currentDeck.deck_id;
+  if (!deckId) return;
   let res;
   try {
     res = await api("/deck/render-cell", {
       method: "POST",
       body: JSON.stringify({
-        deck_id: currentDeck.deck_id,
+        deck_id: deckId,
         body: cell.body,
         is_j2: true,
         lang: cell.lang || null,
@@ -173,6 +180,7 @@ async function renderJ2(cell, bodyEl) {
   } catch (e) {
     return; // offline, 401, 5xx — keep tier-1
   }
+  if (!currentDeck || currentDeck.deck_id !== deckId) return; // navigated away
   if (!res || !res.rendered || typeof res.html !== "string") return;
   bodyEl.innerHTML = res.html;
   bodyEl.classList.add("j2-preview");

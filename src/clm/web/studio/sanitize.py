@@ -1,4 +1,4 @@
-"""Server-side HTML sanitizing for the Studio's tier-2 cell preview (issue #697).
+r"""Server-side HTML sanitizing for the Studio's tier-2 cell preview (issue #697).
 
 The tier-2 preview expands a cell's Jinja server-side so the phone sees a
 rendered header instead of raw ``{{ header_de("…") }}``. The expansion is
@@ -31,9 +31,32 @@ everywhere except an ``<img src>`` that is specifically ``data:image/``.
 **Not sanitized: the contents of ``style``.** Ammonia does not parse CSS, so
 the property allowlist here is CLM's own — the properties the bundled macros
 actually use plus a few text-formatting ones — with any declaration containing
-``url(`` / ``expression(`` / a backslash escape dropped. CSS cannot execute
-script in a current browser; the residual risk is visual (an overlay), inside a
-page whose content the token holder can rewrite anyway.
+``url(`` / ``expression(`` / a backslash escape dropped (after comments are
+stripped, since ``url/*x*/(`` otherwise walks past that check). CSS cannot
+execute script in a current browser, so the residual risk is visual: a
+fixed-position overlay that impersonates the app's own UI and links out.
+
+That is also why ``class`` is **not** an allowed attribute even though it looks
+inert. The Studio's own stylesheet defines ``.toast { position: fixed;
+z-index: 20 }``, so injected markup could *name* that class and get the exact
+overlay :data:`ALLOWED_CSS_PROPERTIES` refuses to grant through ``style`` — an
+allowlist is only as tight as the page's own class names. Found by an
+adversarial review of this module; **a property allowlist and a class allowlist
+have to be reasoned about together.**
+
+**URL rules, and why they are here rather than left to nh3.** Two decisions
+nh3's declarative config cannot express, both in :func:`_attribute_filter`:
+
+* ``data:`` is confined to an ``<img src>`` that is ``data:image/…`` (the logo).
+* an **authority-relative** target (``//host``, and the ``\\`` / ``/\`` / ``\/``
+  spellings WHATWG parsing treats identically) is refused, matching the client's
+  ``safeUrl()`` for tier-1 markdown links. Both tiers render into the same page,
+  which holds a non-expiring bearer token, so both get the same rule — and an
+  ``<img>`` needs no click, so opening a deck would otherwise beacon.
+
+Both decisions depend on normalizing a URL the way ammonia and the browser do,
+which is **not** Python's ``\s`` — see :data:`_URL_INSIGNIFICANT` for the
+control-character gap that made this a real bypass.
 """
 
 from __future__ import annotations
@@ -93,15 +116,31 @@ ALLOWED_TAGS: frozenset[str] = frozenset(
     }
 )
 
-#: Per-tag attribute allowlist. ``rel`` is absent on purpose: nh3 manages it
-#: (it adds ``rel="noopener noreferrer"`` to every link) and rejects the config
-#: outright if both are set.
+#: Tags removed **with their text content**, not just unwrapped. Without this,
+#: ``<iframe>fallback</iframe>`` leaves ``fallback`` behind as prose — harmless
+#: on its own, but it makes "active content is removed" false as stated, and
+#: fallback text is exactly where a payload's social-engineering copy lives.
+CLEAN_CONTENT_TAGS: frozenset[str] = frozenset(
+    {"script", "style", "iframe", "object", "embed", "form", "noscript", "template"}
+)
+
+#: Per-tag attribute allowlist. Two deliberate absences:
+#:
+#: * ``rel`` — nh3 manages it (it adds ``rel="noopener noreferrer"`` to every
+#:   link) and rejects the config outright if both are set.
+#: * ``class`` — it was here, and it made :data:`ALLOWED_CSS_PROPERTIES`
+#:   decorative: the Studio's own stylesheet defines ``.toast { position: fixed;
+#:   z-index: 20 }``, so injected markup could *name* that class and get the
+#:   fixed-position overlay the CSS allowlist exists to refuse — no ``style``
+#:   attribute needed. An allowlist that omits a property while allowing the
+#:   page's own class that sets it is not an allowlist. The macros emit inline
+#:   ``style``, never ``class``, so nothing legitimate wanted it.
 ALLOWED_ATTRIBUTES: dict[str, set[str]] = {
     "a": {"href", "title"},
     "img": {"src", "alt", "title", "width", "height"},
     "td": {"colspan", "rowspan"},
     "th": {"colspan", "rowspan", "scope"},
-    "*": {"style", "class", "align"},
+    "*": {"style", "align"},
 }
 
 #: Link schemes a preview may point at. ``data`` is here **only** so the logo
@@ -135,12 +174,29 @@ ALLOWED_CSS_PROPERTIES: frozenset[str] = frozenset(
 
 #: Declaration content that is never kept, whatever the property: ``url()``
 #: fetches, the legacy IE ``expression()``, and CSS backslash escapes (which
-#: exist to spell any of the above without spelling it).
+#: exist to spell any of the above without spelling it). Comments are stripped
+#: first (:data:`_CSS_COMMENT`) — ``url/*x*/(…)`` otherwise walks past a naive
+#: ``url\s*\(``.
 _CSS_REJECT = re.compile(r"url\s*\(|expression\s*\(|\\", re.IGNORECASE)
 
-#: Whitespace is not significant inside a URL scheme, and ``da\nta:`` is a real
-#: obfuscation, so the scheme check runs against a whitespace-stripped copy.
-_WHITESPACE = re.compile(r"\s+")
+#: A CSS comment, which may appear *inside* a declaration.
+_CSS_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
+
+#: Characters to remove before judging a URL's scheme. **Not** Python ``\s``:
+#: ammonia (and the WHATWG URL parser) strip every C0 control plus space, and
+#: Python's ``\s`` misses U+0001–U+0008 and U+000E–U+001B. That gap was a real
+#: bypass — ``<a href="&#1;data:text/html;base64,…">`` left this filter seeing
+#: the scheme ``"\x01data"`` (no match, so no refusal) while nh3 normalized the
+#: control away, saw ``data:``, found it allowlisted, and kept the attribute.
+#: The two normalizations have to agree, so this one is the stricter superset.
+_URL_INSIGNIFICANT = re.compile(r"[\x00-\x20\x7f]+|\s+")
+
+#: Leading pairs that make a URL **authority-relative** — an off-origin
+#: navigation from a page holding a non-expiring bearer token. WHATWG parsing
+#: treats ``\`` as ``/`` for http(s), so all four combinations reach the same
+#: host. The Studio's client-side ``safeUrl()`` refuses these for tier-1
+#: markdown links; tier-2 output lands in the same page and gets the same rule.
+_AUTHORITY_RELATIVE = ("//", r"\\", "/\\", "\\/")
 
 
 class SanitizerUnavailableError(RuntimeError):
@@ -152,38 +208,60 @@ class SanitizerUnavailableError(RuntimeError):
     """
 
 
-def _scheme_of(value: str) -> str:
-    """The URL scheme of ``value``, lowercased, or ``""`` if it names none."""
-    candidate = _WHITESPACE.sub("", value)
-    head, sep, _rest = candidate.partition(":")
+def _normalize_url(value: str) -> str:
+    """``value`` with the characters a URL parser ignores removed, lowercased.
+
+    The comparison form for every URL decision in this module, so all of them
+    agree with the normalization nh3 and the browser perform. See
+    :data:`_URL_INSIGNIFICANT` for why this is not ``\\s``.
+    """
+    return _URL_INSIGNIFICANT.sub("", value).lower()
+
+
+def _scheme_of(normalized: str) -> str:
+    """The scheme of an already-:func:`_normalize_url`\\ ed value, or ``""``."""
+    head, sep, _rest = normalized.partition(":")
     if not sep or not head or not head.isascii():
         return ""
-    return head.lower()
+    return head
 
 
 def _attribute_filter(tag: str, attribute: str, value: str) -> str | None:
-    """nh3 per-attribute hook: confine ``data:`` and filter CSS declarations.
+    """nh3 per-attribute hook: the decisions nh3's own config cannot express.
 
     Returning ``None`` drops the attribute. nh3 still applies its own scheme
     allowlist afterwards, so this can only ever be *more* restrictive — which
     is why ``data`` has to be in :data:`ALLOWED_URL_SCHEMES` for the ``img``
     case to survive at all.
+
+    Three rules: CSS is filtered (:func:`_filter_style`); ``data:`` is confined
+    to an ``<img src>`` that is an image; and an **authority-relative** target is
+    refused outright, matching the client's ``safeUrl()`` for tier-1 links (both
+    land in the same token-holding page, so both get the same rule).
     """
     if attribute == "style":
         return _filter_style(value)
-    if _scheme_of(value) == "data":
-        # The one legitimate use is the logo the header macros embed.
-        if tag == "img" and attribute == "src":
-            head = _WHITESPACE.sub("", value).lower()
-            return value if head.startswith("data:image/") else None
+    if attribute not in ("href", "src"):
+        return value
+    normalized = _normalize_url(value)
+    if normalized.startswith(_AUTHORITY_RELATIVE):
         return None
-    return value
+    # Strip the leading characters a URL parser ignores — case-preserving, so a
+    # base64 payload survives — rather than shipping invisible control bytes the
+    # client would then have to be trusted to normalize the same way we did.
+    kept = value.lstrip("".join(chr(c) for c in range(0x21)) + "\x7f")
+    if _scheme_of(normalized) == "data":
+        # The one legitimate use is the logo the header macros embed.
+        if tag == "img" and attribute == "src" and normalized.startswith("data:image/"):
+            return kept
+        return None
+    return kept
 
 
 def _filter_style(value: str) -> str | None:
     """Keep only allowlisted, inert CSS declarations; ``None`` if none survive."""
     kept: list[str] = []
-    for declaration in value.split(";"):
+    for declaration in _CSS_COMMENT.sub("", value).split(";"):
         prop, sep, val = declaration.partition(":")
         if not sep:
             continue
@@ -205,7 +283,7 @@ def sanitize_preview_html(html: str) -> str:
     """
     try:
         import nh3
-    except ImportError as exc:  # pragma: no cover - exercised via monkeypatch
+    except ImportError as exc:
         raise SanitizerUnavailableError(
             "the HTML sanitizer (nh3) is not installed, so the server-side cell "
             "preview is unavailable; install clm[web]"
@@ -214,6 +292,7 @@ def sanitize_preview_html(html: str) -> str:
     return nh3.clean(
         html,
         tags=set(ALLOWED_TAGS),
+        clean_content_tags=set(CLEAN_CONTENT_TAGS),
         attributes={tag: set(attrs) for tag, attrs in ALLOWED_ATTRIBUTES.items()},
         url_schemes=set(ALLOWED_URL_SCHEMES),
         attribute_filter=_attribute_filter,

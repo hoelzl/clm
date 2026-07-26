@@ -422,10 +422,14 @@ taken while building, several resolving open calls left by §9.1–§9.5:
 - **Self-write echo suppression:** after a Studio write the service records a
   short (`SELF_WRITE_WINDOW_SECONDS`) window so the watcher does not report the
   app's *own* save back to the phone as an external "changed on disk" event.
-- **Tier-2 render scaffolded:** the working preview is **tier-1 client-side
+- **Tier-2 render scaffolded:** ~~the working preview is **tier-1 client-side
   markdown**. `POST /api/studio/deck/render-cell` exists but echoes the body
   with `rendered=false`; wiring the jupytext+Jinja kernel-free expansion for
-  `is_j2` cells is a focused follow-up (still inside the P0 design scope).
+  `is_j2` cells is a focused follow-up (still inside the P0 design scope).~~
+  **Done, twice over**: the server-side expansion landed in P4 (§9.10) and the
+  in-page consumer — which was dead on arrival — in **#697**, where the endpoint
+  also started returning *sanitized* HTML rather than text. Read the correction
+  in §9.10 before trusting anything else in this doc about tier 2.
 - **WS auth:** ~~REST is fully token-gated; the shared `/ws` endpoint is not
   yet token-checked. Gating WS without disrupting the Monitor channel is a
   follow-up.~~ **Done** (S6 of the 2026-07-24 adversarial review): `/ws`
