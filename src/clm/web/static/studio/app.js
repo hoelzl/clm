@@ -140,22 +140,55 @@ function stripCommentPrefix(text, token) {
   }).join("\n");
 }
 
-// Tier-2 in-page preview (P4) is NOT wired up, and the code that used to sit
-// here has been removed rather than left dormant.
+// --- tier-2 in-page preview (P4, wired up in #697) ---------------------------
 //
-// It could never run: it was gated on `cell.cell_type === "markdown"`, but the
-// API gives an is_j2 cell `cell_type === "j2"` (a `markdown` cell always has
-// `is_j2 === false`), so the branch was unreachable from the day it was
-// written. What it *did* contain was `bodyEl.innerHTML = <server response>`
-// with no escaping — the one raw-HTML sink in this file, and the exact sink
-// the S7 hardening of esc()/safeUrl() above exists to close. Keeping a latent
-// one behind a broken gate is the worst of the options.
-//
-// Wiring it up properly is a real design question, not a one-line fix: the
-// header macros legitimately emit HTML, so the answer cannot just be "escape
-// it" — it needs a decision about sanitizing macro output. Tracked as issue
-// #697. The server side (`POST /api/studio/deck/render-cell`) is
-// live, sandboxed and tested; only the in-page consumer is absent.
+// The gate is `cell.is_j2` and nothing else. It used to be
+// `cell.cell_type === "markdown"`, which could never fire: the API types a
+// Jinja cell as `cell_type: "j2"`, and a `markdown` cell always has
+// `is_j2 === false`. That mismatch is why this tier never ran, so the
+// predicate is a named function with a test against the real API payload
+// (tests/web/studio/test_tier2_preview.py) rather than an inline condition.
+function needsServerRender(cell) {
+  return !!(cell && cell.is_j2);
+}
+
+// The server returns HTML it has already sanitized against an allowlist
+// (clm/web/studio/sanitize.py — the header macros emit `<div>`, `<br>` and a
+// data: logo, so escaping here would delete the feature). Inject it verbatim:
+// only the exact bytes the server checked are safe, so this must not
+// post-process them. If anything fails, the tier-1 markdown already in the
+// element stays — a preview is best-effort by design.
+async function renderJ2(cell, bodyEl) {
+  // Captured before the await so a reply can never be attributed to whatever
+  // deck is open when it lands, and so the staleness check below has something
+  // to compare against. (Navigating away also empties `appEl`, which detaches
+  // this node — but that is an accident of how the views re-render, not a
+  // guarantee, so the check is explicit.)
+  const deckId = currentDeck && currentDeck.deck_id;
+  if (!deckId) return;
+  let res;
+  try {
+    res = await api("/deck/render-cell", {
+      method: "POST",
+      body: JSON.stringify({
+        deck_id: deckId,
+        body: cell.body,
+        is_j2: true,
+        lang: cell.lang || null,
+      }),
+    });
+  } catch (e) {
+    return; // offline, 401, 5xx — keep tier-1
+  }
+  if (!currentDeck || currentDeck.deck_id !== deckId) return; // navigated away
+  if (!res || !res.rendered || typeof res.html !== "string") return;
+  // An empty expansion (a cell that is only a `{% import %}`, or a comment)
+  // must keep tier-1 rather than blank the card: `typeof "" === "string"`, so
+  // the guard above is not enough.
+  if (!res.html) return;
+  bodyEl.innerHTML = res.html;
+  bodyEl.classList.add("j2-preview");
+}
 
 // --- UI helpers ---------------------------------------------------------------
 const appEl = document.getElementById("app");
@@ -363,11 +396,14 @@ function cellCard(cell, idx, locked) {
     // are comment-prefixed, so strip the token for the tier-1 preview.
     const md = cell.body_format === "clean" ? cell.body : stripCommentPrefix(cell.body, token);
     body.innerHTML = renderMarkdown(md);
-    // No tier-2 call here: a `markdown` cell always has is_j2 === false (the
-    // API types a j2 cell as `cell_type: "j2"`), so the condition that used to
-    // sit here was dead. See the note where renderJ2 was removed.
   } else {
     body.innerHTML = `<pre><code>${esc(cell.body)}</code></pre>`;
+  }
+  if (needsServerRender(cell)) {
+    // Tier 2: replace the raw `{{ header_de("…") }}` above with the expansion.
+    // Fire-and-forget — the card is already in the DOM with its tier-1 body, and
+    // a failed or slow preview must not block rendering the rest of the deck.
+    renderJ2(cell, body);
   }
 
   const controls = card.querySelector(".cell-controls");

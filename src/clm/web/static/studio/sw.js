@@ -21,7 +21,7 @@
 // times under `-v1`, so the S7 XSS fix would have reached no installed PWA at
 // all. The stale-while-revalidate handler below is the belt to this braces —
 // it means a missed bump costs one stale load rather than permanent staleness.
-const SHELL_CACHE = "clm-studio-shell-v2";
+const SHELL_CACHE = "clm-studio-shell-v3";
 const API_CACHE = "clm-studio-api-v1";
 const SHELL = [
   "/studio/",

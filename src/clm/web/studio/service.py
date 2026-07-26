@@ -443,19 +443,21 @@ class StudioService:
 
     def render_cell(
         self, deck_id: str, body: str, *, is_j2: bool, lang: str | None = None
-    ) -> tuple[bool, str | None, str]:
-        """Tier-2 (kernel-free) render of one cell. Returns ``(rendered, error, text)``.
+    ) -> tuple[bool, str | None, str | None]:
+        """Tier-2 (kernel-free) render of one cell. Returns ``(rendered, error, html)``.
 
         Only ``is_j2`` cells are expanded server-side (through the build's bundled
-        macros); plain cells are returned unchanged for the client to render as
-        markdown (tier 1). Never raises — preview degrades to tier-1 on failure.
+        macros); a plain cell returns ``html=None`` for the client to render as
+        markdown (tier 1). On success ``html`` is a **sanitized** fragment
+        (issue #697) — the client injects it verbatim. Never raises: the preview
+        degrades to tier-1 on any failure, including a missing sanitizer.
         """
         if not is_j2:
-            return False, None, body
-        from clm.web.studio.render import render_j2_cell
+            return False, None, None
+        from clm.web.studio.render import render_j2_cell_html
 
         path = self._resolve_deck_id(deck_id)
-        return render_j2_cell(path, body, lang)
+        return render_j2_cell_html(path, body, lang)
 
     def try_begin_sync(self, key: str) -> bool:
         """Claim the in-flight slot for ``key`` (the DE deck id). False if taken."""

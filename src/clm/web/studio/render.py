@@ -65,14 +65,42 @@ context, a missing include, a sandbox refusal) is caught and returned as
 than failing. It also runs with a **lenient** ``Undefined`` (not the build's
 ``StrictUndefined``) so a missing course variable renders empty instead of
 raising — preview, not parity.
+
+**What reaches the phone (issue #697).** :func:`render_j2_cell` returns expanded
+*text*; :func:`render_j2_cell_html` is what the endpoint uses, and it goes on to
+drop the ``%% [markdown]`` delimiter line, strip the comment prefix, and
+**sanitize** the result (:mod:`clm.web.studio.sanitize`). The order is the point:
+the client injects the sanitizer's output verbatim, so every byte-changing step
+happens before sanitizing, never after.
+
+The endpoint sends the sanitized fragment plus the caller's *original* body (for
+the tier-1 fallback) and never the expanded text — so no route hands a consumer
+something unsanitized to reach for by mistake. Note that is a property of the
+callers, not of this module: :func:`render_j2_cell` is public and still returns
+raw expanded text, because the expansion is worth testing on its own. Anything
+new that calls it and ships the result to a browser owes it a sanitize pass.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
+from clm.web.studio.sanitize import SanitizerUnavailableError, sanitize_preview_html
+
 logger = logging.getLogger(__name__)
+
+#: A cell-delimiter line in the expanded output. The header macros emit a whole
+#: *cell* — ``%% [markdown] lang="de" tags=["slide"]`` — because in the build the
+#: expansion happens before cell splitting. A single-cell preview must drop it
+#: (with or without the language's comment prefix, which the source line carries
+#: and the macro's own first line does not).
+#:
+#: ``%%`` must be followed by whitespace, ``[``, or end-of-line: jupytext's own
+#: rule, and without it prose that merely begins ``%%something`` disappears from
+#: the preview.
+_CELL_DELIMITER = re.compile(r"^\s*(?:#|//)?\s*%%(?:\s.*|\[.*)?$")
 
 #: Identity globals the build injects from the course; a header macro only needs
 #: them to be *defined* for a preview, so placeholders are fine.
@@ -274,3 +302,65 @@ def render_j2_cell(deck_path: Path, body: str, lang: str | None) -> tuple[bool, 
     except Exception as exc:  # noqa: BLE001 - preview must never crash the request
         logger.debug("Studio tier-2 render failed for %s: %s", deck_path, exc)
         return False, str(exc), body
+
+
+def _to_preview_html(text: str, comment_token: str) -> str:
+    """Turn expanded cell text into the HTML fragment the client injects.
+
+    Two transforms, both of which must happen **before** sanitizing — the client
+    injects the sanitizer's output verbatim, so anything that changes the bytes
+    afterwards would be injecting something nobody checked:
+
+    1. drop the ``%% [markdown] …`` cell-delimiter lines the header macros emit
+       (see :data:`_CELL_DELIMITER`);
+    2. strip the language's comment prefix, since the macro output is
+       comment-prefixed source (``# <div …>`` / ``// <div …>``) and the ``<`` has
+       to reach the browser as markup.
+
+    The prefix strip is the editor's own :func:`~clm.web.studio.prefix.deprefix`
+    rather than a second implementation — it is already the per-line,
+    leave-unprefixed-lines-alone rule this needs, which matters because the
+    base64 logo the macros embed continues on *unprefixed* continuation lines.
+    """
+    from clm.web.studio.prefix import deprefix
+
+    kept = [line for line in text.split("\n") if not _CELL_DELIMITER.match(line)]
+    return deprefix("\n".join(kept), comment_token).strip("\n")
+
+
+def render_j2_cell_html(
+    deck_path: Path, body: str, lang: str | None
+) -> tuple[bool, str | None, str | None]:
+    """Expand ``body``'s Jinja and return **sanitized HTML** for the phone.
+
+    Returns ``(ok, error, html)``. ``ok`` True → ``html`` is safe to assign to
+    ``innerHTML`` (:mod:`clm.web.studio.sanitize` is the allowlist, and see
+    :func:`_to_preview_html` for why the de-prefixing runs first). False →
+    ``html`` is ``None``, ``error`` says why, and the caller falls back to
+    tier-1 client-side markdown.
+
+    Fails closed when the sanitizer is missing: no HTML leaves this function
+    unless it went through :func:`sanitize_preview_html`.
+    """
+    ok, error, text = render_j2_cell(deck_path, body, lang)
+    if not ok:
+        return False, error, None
+    try:
+        from clm.infrastructure.utils.path_utils import path_to_prog_lang
+        from clm.workers.notebook.utils.prog_lang_utils import line_comment_for
+
+        try:
+            prog_lang = path_to_prog_lang(deck_path)
+        except (KeyError, ValueError):
+            prog_lang = "python"
+        comment_token = line_comment_for(prog_lang)
+    except Exception as exc:  # noqa: BLE001 - missing optional dep → tier-1 fallback
+        return False, f"render unavailable: {exc}", None
+
+    try:
+        return True, None, sanitize_preview_html(_to_preview_html(text, comment_token))
+    except SanitizerUnavailableError as exc:
+        return False, str(exc), None
+    except Exception as exc:  # noqa: BLE001 - preview must never crash the request
+        logger.debug("Studio tier-2 sanitize failed for %s: %s", deck_path, exc)
+        return False, f"sanitize failed: {exc}", None
