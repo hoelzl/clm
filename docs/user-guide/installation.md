@@ -130,9 +130,12 @@ CLM has several optional dependency groups for different features:
 - **[tui]**: textual, rich
   - Required for: `clm monitor` command
   - Install: `pip install -e ".[tui]"`
-- **[web]**: wsproto, httptools, watchfiles
+- **[web]**: wsproto, httptools, watchfiles, segno, nh3
   - Required for: `clm serve` command
   - Install: `pip install -e ".[web]"`
+  - `segno` renders the Mobile Deck Studio pairing QR code; `nh3` sanitizes the
+    Studio's server-side cell preview. Without `nh3` that preview degrades to
+    client-side markdown rather than shipping unsanitized HTML.
 
 **LLM Features**:
 - **[summarize]**: openai

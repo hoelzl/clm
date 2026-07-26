@@ -186,6 +186,14 @@ web = [
     "httptools>=0.6.2",  # HTTP protocol handling
     "watchfiles>=0.18.0",  # For --reload support + the Studio external-change watcher
     "segno>=1.6.0",  # Pure-Python QR codes for Mobile Deck Studio pairing
+    # HTML sanitizer for the Studio's tier-2 cell preview (issue #697): the
+    # header macros deliberately emit markup, so the preview cannot escape its
+    # way out of the problem — it sanitizes server-side against an allowlist
+    # before the phone injects it. `nh3` (Rust/ammonia) rather than `bleach`,
+    # which is deprecated upstream. Belongs to `[web]` — the extra the Studio
+    # already requires — so an install without it fails closed (the preview
+    # degrades to tier-1) instead of injecting unsanitized HTML.
+    "nh3>=0.2.18",
 ]
 # Everything
 # NOTE: `all` carries no ML/data-science stack. That stack (torch/pandas/

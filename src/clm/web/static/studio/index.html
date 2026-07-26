@@ -66,6 +66,11 @@
     .cell-body pre { overflow-x: auto; background: rgba(127,127,127,.08); padding: 10px;
       border-radius: 8px; }
     .cell-body code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    /* Tier-2 preview (#697): the header macros size their own text for a
+       projector (font-size: 200%), which on a phone overflows the card. */
+    .cell-body.j2-preview { font-size: .82rem; overflow-x: auto; }
+    .cell-body.j2-preview img { max-width: 100%; height: auto; }
+    .cell-body.j2-preview div { font-size: inherit !important; }
     .cell.editable .cell-head { cursor: pointer; }
     .banner { padding: 10px 12px; border-radius: 8px; margin: 10px 0; }
     .banner.warn { background: var(--warn-bg); color: var(--warn-fg); }

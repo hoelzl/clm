@@ -257,8 +257,11 @@ async def render_cell(request: Request, req: RenderCellRequest) -> RenderCellRes
     """Tier-2 (kernel-free) render of one ``is_j2`` cell (P4).
 
     Expands the cell's Jinja (header macros, ``{{ … }}``) server-side through the
-    build's bundled macros, no kernel. Plain cells (or any failure) return the
-    body unchanged with ``rendered=False`` so the phone falls back to tier-1.
+    build's bundled macros, no kernel, and returns it as an HTML fragment that has
+    been **sanitized here** (issue #697) — the header macros emit markup, so the
+    client cannot escape its way to safety. Plain cells (or any failure, including
+    a missing sanitizer) return ``rendered=False`` with ``html=None`` so the phone
+    falls back to tier-1.
 
     Runs in a worker thread: Jinja rendering is CPU-bound and the body is
     client-supplied, so doing it inline would let one request hold the event
@@ -266,9 +269,9 @@ async def render_cell(request: Request, req: RenderCellRequest) -> RenderCellRes
     """
     service = get_service(request)
     try:
-        rendered, error, text = await run_in_threadpool(
+        rendered, error, html = await run_in_threadpool(
             service.render_cell, req.deck_id, req.body, is_j2=req.is_j2, lang=req.lang
         )
     except InvalidDeckIdError as e:
         raise HTTPException(status_code=400, detail=f"Invalid deck id: {e}") from e
-    return RenderCellResult(rendered=rendered, body=text, error=error)
+    return RenderCellResult(rendered=rendered, body=req.body, html=html, error=error)

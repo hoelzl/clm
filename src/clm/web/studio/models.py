@@ -248,13 +248,22 @@ class RenderCellRequest(BaseModel):
 
 
 class RenderCellResult(BaseModel):
-    """Tier-2 render result (P4).
+    """Tier-2 render result (P4; ``html`` added for issue #697).
 
-    ``rendered`` True → ``body`` is the Jinja-expanded text (still markdown the
-    client renders); False → ``body`` is the original and ``error`` (if any) says
-    why, so the phone falls back to tier-1 client markdown.
+    ``rendered`` True → ``html`` is the expanded cell as an **HTML fragment,
+    already sanitized server-side** (:mod:`clm.web.studio.sanitize`) and
+    therefore safe to assign to ``innerHTML`` as-is — do not transform it
+    further client-side, since only the exact bytes returned here were checked.
+    False → ``html`` is ``None`` and ``error`` (if any) says why, so the phone
+    falls back to tier-1 client markdown.
+
+    ``body`` is always the caller's **original** cell body, echoed back for that
+    fallback. It is deliberately *not* the expanded text: shipping unsanitized
+    expansion alongside the sanitized fragment would just invite the next
+    consumer to inject the wrong field.
     """
 
     rendered: bool
     body: str
+    html: str | None = None
     error: str | None = None

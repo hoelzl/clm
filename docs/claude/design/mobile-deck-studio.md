@@ -241,7 +241,7 @@ structural op. No naïve whole-file re-emit.
 | **P2** ✅ | **Structural ops** (`insert` / `delete` / `move` / mint-id) via the byte-exact serializer; reorder mode in the UI; byte-exact untouched-cell tests. *(Implemented — see §9.7.)* |
 | **P3a** ✅ | **Bilingual lock core**: language toggle (switch to the split twin) + watermark-derived lock (read-only `build_sync_plan`) + stale badges + **423** enforcement on every write. *(Implemented — see §9.8.)* |
 | **P3b** ✅ | **Sync-to-other-language**: a streamed server-side `clm slides sync` subprocess (LLM reconciliation) over WS; the lock releases when it completes. *(Implemented — see §9.9. **Discard & unlock deferred** by decision: its revert is git-coupled and risky — use the desktop.)* |
-| **P4** ✅ | **Tier-2 preview** (kernel-free Jinja macro/header expansion per cell) + tier-1 comment-prefix fix + **installable PWA** + **read-only offline cache** of opened decks. *(Implemented — see §9.10. Editor de-prefix ergonomics deferred.)* |
+| **P4** ✅ | **Tier-2 preview** (kernel-free Jinja macro/header expansion per cell) + tier-1 comment-prefix fix + **installable PWA** + **read-only offline cache** of opened decks. *(Implemented — see §9.10. The in-page tier-2 consumer was dead on arrival and only actually shipped in #697; see the correction in §9.10. Editor de-prefix ergonomics deferred.)* |
 | **Later / optional** | **Full executed single-deck build** (tier 3) for code outputs and rendered diagrams. |
 
 ---
@@ -620,6 +620,30 @@ The preview + PWA phase — **completes the initial plan**. Three pieces:
    centered title) wrapped in a `# %% [markdown]` boundary, so the client strips
    prefixes, drops the `%%` remnant line, and injects as **HTML** (trusted — it's
    the user's own deck from their own desktop over an authed channel).
+
+   > **Correction (2026-07-26, issues #696/#697).** Item 2 above overstated what
+   > shipped, in two ways worth keeping visible.
+   >
+   > **The in-page consumer never ran.** It was gated on
+   > `cell.cell_type === "markdown"`, but the API types a Jinja cell as
+   > `cell_type: "j2"` and a `markdown` cell always has `is_j2 === false` — so
+   > "the frontend calls it only for `is_j2` cells" was true of the *intent* and
+   > false of the code. The tier was dead from the day it was written; only the
+   > server half was real. **Generalisable: a build record that says a path is
+   > wired should be backed by a test that executes it** — nothing here asserted
+   > the frontend path, which is why a contradiction between two lines of the
+   > same feature survived a phase sign-off.
+   >
+   > **"Injects as HTML (trusted)" is no longer the model.** The body being
+   > rendered is a *request* body, not a file from the desktop, so #696 sandboxed
+   > and size-bounded the render, and #697 replaced "trusted" with a
+   > **server-side sanitizer** (`clm/web/studio/sanitize.py`, `nh3` from the
+   > `[web]` extra): the endpoint now returns a sanitized `html` field the client
+   > injects verbatim, and `body` echoes the request for the tier-1 fallback. The
+   > `%%`-line drop and prefix strip moved **server-side too**, because the thing
+   > that gets injected has to be exactly the thing that was sanitized. Missing
+   > `nh3` fails closed to tier-1. Remaining, tracked as **#698**: the render's
+   > CPU is still unbounded (decision D14 — subprocess + wall-clock limit).
 3. **PWA + offline (`manifest.json`, `icon.svg`, `sw.js`).** Installable
    (standalone, SVG maskable icon, `theme-color`). The service worker caches the
    `/studio/` app shell **cache-first** and `/api/studio/deck{,s}` **network-

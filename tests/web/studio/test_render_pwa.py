@@ -34,8 +34,10 @@ class TestTier2Render:
         assert text == bad  # body returned unchanged for tier-1 fallback
 
     def test_service_skips_non_j2(self, service: StudioService, course: Course):
-        ok, error, text = service.render_cell(course.deck_id, "# plain", is_j2=False)
-        assert ok is False and text == "# plain"
+        # Since #697 the third element is the sanitized HTML, so "no render" is
+        # `None` — the client keeps the tier-1 markdown it already drew.
+        ok, error, html = service.render_cell(course.deck_id, "# plain", is_j2=False)
+        assert ok is False and html is None and error is None
 
 
 class TestRenderEndpoint:
@@ -53,7 +55,11 @@ class TestRenderEndpoint:
         assert r.status_code == 200
         data = r.json()
         assert data["rendered"] is True
-        assert "Hallo Welt" in data["body"]
+        # Assert on `html`, not `body`: since #697 `body` echoes the *request*
+        # (which contains "Hallo Welt" as the macro argument), so asserting there
+        # would pass even if rendering did nothing at all.
+        assert "Hallo Welt" in data["html"]
+        assert data["body"] == J2_HEADER
 
     def test_render_cell_non_j2_passthrough(self, client: TestClient, course: Course):
         r = client.post(
