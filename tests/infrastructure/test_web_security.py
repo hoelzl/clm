@@ -187,6 +187,36 @@ class TestCheckRequestOrigin:
         headers = self._headers(origin="https://box.ts.net", host="box.ts.net")
         assert check_request_origin(headers) is None
 
+    def test_allowlisted_origin_beats_cross_site_fetch_metadata(self):
+        """``--allowed-origin`` has to outrank ``Sec-Fetch-Site`` to mean anything.
+
+        Every current browser sends fetch metadata, so consulting the
+        allowlist only in the ``Origin`` fallback made the flag unreachable
+        for exactly the clients it exists to authorize: a named front-end got
+        a successful CORS preflight and a 403 on the request behind it.
+        """
+        headers = self._headers(
+            sec_fetch_site="cross-site",
+            origin="https://front.example",
+            host="127.0.0.1:8008",
+        )
+        assert check_request_origin(headers, allowed_origins=["https://front.example"]) is None
+
+    def test_unlisted_origin_is_still_refused_with_an_allowlist_present(self):
+        """Widening for one origin must not widen for its neighbours."""
+        headers = self._headers(
+            sec_fetch_site="cross-site",
+            origin="https://evil.example",
+            host="127.0.0.1:8008",
+        )
+        reason = check_request_origin(headers, allowed_origins=["https://front.example"])
+        assert reason is not None
+
+    def test_allowlist_matching_is_normalized_not_textual(self):
+        """A default port is not part of an origin a browser sends."""
+        headers = self._headers(sec_fetch_site="cross-site", origin="https://front.example:443")
+        assert check_request_origin(headers, allowed_origins=["https://front.example"]) is None
+
     def test_portless_host_still_refuses_an_origin_on_another_port(self):
         """A dev server on :3000 must not drive a dashboard reached as bare ``localhost``.
 

@@ -92,6 +92,40 @@ class TestHandshakeIsGated:
         assert ws_manager.active_connections == set()
 
 
+class TestStudioWithoutATokenFailsClosed:
+    """A Studio app built without a token must not be *more* open than with one.
+
+    ``create_app`` takes ``spec_path`` and ``studio_token`` independently, and
+    the lifespan starts the disk watcher on the spec alone — so in this state
+    the ``studio`` channel is broadcasting while nothing can authenticate. The
+    REST routes already fail closed here (``require_token`` rejects on
+    ``not expected``); ``/ws`` gates on the same condition so the two surfaces
+    cannot disagree. The CLI never produces this state; ``create_app`` is a
+    public constructor that can.
+    """
+
+    @pytest.fixture()
+    def tokenless(self, course: Course) -> TestClient:
+        from clm.web.app import create_app
+
+        app = create_app(
+            db_path=course.slides_dir.parent / "jobs.db",
+            spec_path=course.spec_path,
+            allowed_hosts=["testserver"],
+        )
+        return TestClient(app)
+
+    def test_rest_rejects(self, tokenless: TestClient):
+        assert tokenless.get("/api/studio/decks").status_code == 401
+
+    def test_ws_rejects_too(self, tokenless: TestClient):
+        _refused(tokenless)
+
+    def test_no_token_at_all_does_not_authenticate(self, tokenless: TestClient):
+        """Presenting *some* token must not match an absent expected one."""
+        _refused(tokenless, subprotocols=[f"{TOKEN_SUBPROTOCOL_PREFIX}anything"])
+
+
 class TestHandshakeIsAccepted:
     def test_token_via_subprotocol_connects(self, client: TestClient):
         offered = f"{TOKEN_SUBPROTOCOL_PREFIX}{TOKEN}"
@@ -112,6 +146,20 @@ class TestHandshakeIsAccepted:
     def test_token_via_authorization_header_connects(self, client: TestClient):
         """Non-browser clients (scripts, tests) can use the ordinary header."""
         with client.websocket_connect("/ws", headers={"Authorization": f"Bearer {TOKEN}"}) as ws:
+            ws.send_json({"type": "ping"})
+            assert ws.receive_json() == {"type": "pong"}
+
+    def test_a_valid_header_wins_over_a_stale_subprotocol(self, client: TestClient):
+        """Checking only the first credential found would refuse a valid one.
+
+        A debugging client that copies the PWA's subprotocol list and *also*
+        sets ``Authorization`` should authenticate on the good half.
+        """
+        with client.websocket_connect(
+            "/ws",
+            subprotocols=[f"{TOKEN_SUBPROTOCOL_PREFIX}stale"],
+            headers={"Authorization": f"Bearer {TOKEN}"},
+        ) as ws:
             ws.send_json({"type": "ping"})
             assert ws.receive_json() == {"type": "pong"}
 

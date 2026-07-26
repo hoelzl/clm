@@ -152,16 +152,112 @@ class TestChannelAllowlist:
             ws.send_json({"action": "subscribe", "channels": ["jobss"]})
             assert ws.receive_json() == {"type": "subscribed", "channels": []}
 
-    def test_known_channels_cover_every_broadcast_channel(self):
-        """Guard against a new broadcast channel that no client can subscribe to.
+    def test_every_broadcast_channel_is_subscribable(self):
+        """A channel nothing can subscribe to is a broadcast into the void.
 
-        The allowlist and the broadcast sites are two lists that must agree;
-        this fails when someone adds to one and not the other.
+        Derived from the source rather than restated as a constant: the
+        allowlist and the ``broadcast(..., channel=...)`` call sites are two
+        lists that must agree, and a test that only re-asserts the constant
+        would not notice a new call site at all.
         """
-        from clm.web.studio.sync_runner import SYNC_CHANNEL
+        import re
+        from pathlib import Path
 
-        assert SYNC_CHANNEL in KNOWN_CHANNELS
-        assert KNOWN_CHANNELS == {"status", "workers", "jobs", "studio"}
+        import clm.web as web_pkg
+
+        broadcast = set()
+        for path in Path(web_pkg.__file__).parent.rglob("*.py"):
+            source = path.read_text(encoding="utf-8")
+            broadcast.update(re.findall(r"""channel=["']([a-z_]+)["']""", source))
+            # The studio sites go through a module constant rather than a
+            # literal, so pick that up too.
+            broadcast.update(re.findall(r"""^[A-Z_]*CHANNEL = ["']([a-z_]+)["']""", source, re.M))
+
+        assert broadcast, "found no broadcast channels — did the regex stop matching?"
+        assert broadcast <= KNOWN_CHANNELS, (
+            f"not subscribable: {sorted(broadcast - KNOWN_CHANNELS)}"
+        )
+
+
+class TestAllowedOrigins:
+    """``--allowed-origin`` must actually authorize a browser on that origin."""
+
+    def test_allowlisted_origin_may_open_ws_cross_site(self, tmp_path):
+        from clm.web.app import create_app
+
+        app = create_app(
+            tmp_path / "jobs.db",
+            allowed_hosts=["testserver"],
+            allowed_origins=["https://front.example"],
+        )
+        client = TestClient(app)
+        with client.websocket_connect(
+            "/ws",
+            headers={"Origin": "https://front.example", "Sec-Fetch-Site": "cross-site"},
+        ) as ws:
+            ws.send_json({"type": "ping"})
+            assert ws.receive_json() == {"type": "pong"}
+
+    def test_cors_origin_also_authorizes_driving(self, tmp_path):
+        """The folding `--cors-origin` performs is not decorative.
+
+        Without it the operator gets a successful preflight and a 403 on the
+        request behind it, which is the confusing dead end the flag exists to
+        avoid.
+        """
+        from clm.web.app import create_app
+
+        app = create_app(
+            tmp_path / "jobs.db",
+            allowed_hosts=["testserver"],
+            cors_origins=["https://front.example"],
+        )
+        client = TestClient(app)
+        with client.websocket_connect(
+            "/ws",
+            headers={"Origin": "https://front.example", "Sec-Fetch-Site": "cross-site"},
+        ) as ws:
+            ws.send_json({"type": "ping"})
+            assert ws.receive_json() == {"type": "pong"}
+
+    def test_unlisted_origin_is_still_refused(self, tmp_path):
+        from clm.web.app import create_app
+
+        app = create_app(
+            tmp_path / "jobs.db",
+            allowed_hosts=["testserver"],
+            allowed_origins=["https://front.example"],
+        )
+        client = TestClient(app)
+        with pytest.raises(WebSocketDisconnect):
+            with client.websocket_connect(
+                "/ws",
+                headers={"Origin": "https://evil.example", "Sec-Fetch-Site": "cross-site"},
+            ):
+                pass
+        assert ws_manager.active_connections == set()
+
+    def test_unusable_cors_origin_is_warned_about(self, tmp_path, caplog):
+        """A scheme-less origin matches nothing in either consumer."""
+        import logging
+
+        from clm.web.app import create_app
+
+        with caplog.at_level(logging.WARNING, logger="clm.web.app"):
+            create_app(tmp_path / "jobs.db", cors_origins=["localhost:3000"])
+
+        assert "not a valid origin" in caplog.text
+
+    def test_trailing_slash_cors_origin_is_warned_about(self, tmp_path, caplog):
+        """It widens the guard but never matches what a browser sends."""
+        import logging
+
+        from clm.web.app import create_app
+
+        with caplog.at_level(logging.WARNING, logger="clm.web.app"):
+            create_app(tmp_path / "jobs.db", cors_origins=["https://x.example/"])
+
+        assert "does not match what a browser sends" in caplog.text
 
 
 class TestNoStudioNoToken:
@@ -178,3 +274,16 @@ class TestNoStudioNoToken:
         with client.websocket_connect("/ws") as ws:
             ws.send_json({"type": "ping"})
             assert ws.receive_json() == {"type": "pong"}
+
+    def test_an_offered_token_subprotocol_is_still_echoed(self, app):
+        """RFC 6455: a client that offered protocols and got none selected fails.
+
+        A Studio PWA cached on a phone keeps offering ``clm-token.<stale>``. If
+        a plain ``clm serve`` accepts it while selecting nothing, the browser
+        closes the connection the instant it opens — and the client's reconnect
+        loop makes that permanent, with no diagnostic on either side.
+        """
+        offered = "clm-token.whatever"
+        client = TestClient(app)
+        with client.websocket_connect("/ws", subprotocols=[offered]) as ws:
+            assert ws.accepted_subprotocol == offered

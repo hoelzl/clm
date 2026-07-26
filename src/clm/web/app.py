@@ -23,7 +23,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from clm.__version__ import __version__
-from clm.infrastructure.web_security import install_web_security
+from clm.infrastructure.web_security import install_web_security, normalize_origin
 from clm.web.api.routes import router as api_router
 from clm.web.api.websocket import websocket_endpoint
 from clm.web.services.monitor_service import MonitorService
@@ -64,6 +64,42 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
             await watcher_task
         except (asyncio.CancelledError, Exception):  # noqa: BLE001 - best-effort stop
             pass
+
+
+def _checked_cors_origins(cors_origins: list[str]) -> list[str]:
+    """Return the ``--cors-origin`` values, warning about ones that won't work.
+
+    ``CORSMiddleware`` compares the ``Origin`` header verbatim while the origin
+    guard compares a normalized form, so a value the two read differently is
+    half-applied in silence:
+
+    - ``localhost:3000`` (no scheme) matches neither — no browser ever sends
+      an ``Origin`` without one — and is simply inert.
+    - ``https://x.example/`` (trailing slash) normalizes for the guard but
+      never matches ``CORSMiddleware``, so the flag widens what may *drive*
+      the app without granting what the operator actually asked for.
+
+    Both are operator typos, and both are invisible without this. The values
+    are still returned: refusing to start over a mistyped origin would be
+    worse than saying so.
+    """
+    for origin in cors_origins:
+        if origin == "*":
+            continue
+        normalized = normalize_origin(origin)
+        if normalized is None:
+            logger.warning(
+                "CORS origin %r is not a valid origin (expected scheme://host[:port]) "
+                "and will match nothing.",
+                origin,
+            )
+        elif normalized != origin:
+            logger.warning(
+                "CORS origin %r does not match what a browser sends; use %r.",
+                origin,
+                normalized,
+            )
+    return [o for o in cors_origins if o != "*"]
 
 
 def create_app(
@@ -175,7 +211,7 @@ def create_app(
         # may *cause* one. Naming an origin for the first without the second
         # leaves a caller with a working preflight and a 403 behind it, so an
         # explicit --cors-origin implies --allowed-origin.
-        guard_origins.extend(o for o in cors_origins if o != "*")
+        guard_origins.extend(_checked_cors_origins(cors_origins))
 
     # Browser containment (D4): a Host allowlist closes DNS rebinding, and an
     # origin check on mutating requests closes CSRF. Installed last so both

@@ -419,10 +419,17 @@ taken while building, several resolving open calls left by §9.1–§9.5:
   markdown**. `POST /api/studio/deck/render-cell` exists but echoes the body
   with `rendered=false`; wiring the jupytext+Jinja no-exec expansion for
   `is_j2` cells is a focused follow-up (still inside the P0 design scope).
-- **WS auth:** REST is fully token-gated; the shared `/ws` endpoint is not yet
-  token-checked (it carries only low-sensitivity `deck-changed-on-disk`
-  notifications, no deck content). Gating WS without disrupting the Monitor
-  channel is a follow-up.
+- **WS auth:** ~~REST is fully token-gated; the shared `/ws` endpoint is not
+  yet token-checked. Gating WS without disrupting the Monitor channel is a
+  follow-up.~~ **Done** (S6 of the 2026-07-24 adversarial review): `/ws`
+  requires the Studio token before `accept()` whenever a spec is configured,
+  presented as the `clm-token.<token>` subprotocol since a browser cannot set
+  an `Authorization` header on a WebSocket. The Monitor channel is undisrupted
+  because the gate keys off Studio being enabled, not off the channel
+  subscribed to. The same review found the endpoint had in fact never worked —
+  an unannotated route parameter made FastAPI treat it as a required query
+  parameter — so the "low-sensitivity notifications" it was assumed to be
+  carrying were never delivered at all.
 - **Reuse (§9.3):** only `qr.py` was lifted from the closed #394 branch (with
   the `[edit]`→`[web]` adaptation); the byte-exact "untouched cells unchanged"
   test pattern was re-authored against `FileState`. `DeckFile`, routes, and

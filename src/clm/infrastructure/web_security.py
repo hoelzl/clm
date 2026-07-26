@@ -307,13 +307,25 @@ def check_request_origin(
     Args:
         headers: The request headers.
         allowed_origins: Extra origins to accept verbatim (``--allowed-origin``),
-            already normalized by :func:`normalize_origin`.
+            already normalized by :func:`normalize_origin`. Consulted before
+            the fetch-metadata check, so naming an origin actually authorizes
+            a browser on it — see the comment in the body.
 
     Returns:
         ``None`` when the request may proceed, or a short human-readable reason
         it was refused (safe to log and to return in the 403 body — it echoes
         only what the *client* sent).
     """
+    origin = headers.get("origin")
+
+    # An operator-named origin is trusted whatever the fetch metadata says.
+    # This has to come *first*: every current browser sends Sec-Fetch-Site, so
+    # checking it before the allowlist made ``--allowed-origin`` unreachable
+    # for the only clients it exists to serve — the flag would let a
+    # cross-origin preflight succeed and then 403 the request behind it.
+    if origin and _origin_is_allowed(origin, allowed_origins):
+        return None
+
     fetch_site = headers.get("sec-fetch-site")
     if fetch_site:
         site = fetch_site.strip().lower()
@@ -325,17 +337,19 @@ def check_request_origin(
             return None
         return f"cross-origin request (Sec-Fetch-Site: {site})"
 
-    origin = headers.get("origin")
     if not origin:
         # No Origin and no Sec-Fetch-Site: not a browser. See module docstring.
         return None
 
-    normalized = normalize_origin(origin)
-    if normalized is not None and normalized in allowed_origins:
-        return None
     if _origin_matches_host(origin, headers.get("host", "")):
         return None
     return f"cross-origin request (Origin: {origin})"
+
+
+def _origin_is_allowed(origin: str, allowed_origins: Sequence[str]) -> bool:
+    """True when ``origin`` is one the operator named explicitly."""
+    normalized = normalize_origin(origin)
+    return normalized is not None and normalized in allowed_origins
 
 
 class TrustedHostMiddleware:

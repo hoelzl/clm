@@ -26,6 +26,12 @@
   `studio`.** Any name was previously stored verbatim, which also meant a typo
   looked like a successful subscription and then went quiet forever — the
   reply now reports what was actually subscribed to.
+- **`--allowed-origin` now actually authorizes a browser** (affects
+  `clm recordings serve` too). The origin guard consulted the operator's
+  allowlist only in its `Origin` fallback, which is unreachable whenever
+  `Sec-Fetch-Site` is present — i.e. for every current browser. Naming an
+  origin therefore bought a successful CORS preflight and a `403` on the
+  request behind it. The allowlist is now checked first.
 - **A non-ASCII bearer token no longer raises from inside the auth check.**
   `secrets.compare_digest` rejects non-ASCII `str`, and headers arrive
   latin-1 decoded, so one byte above `0x7F` turned a bad token into a `500`.

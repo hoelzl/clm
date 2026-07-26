@@ -251,6 +251,91 @@ class TestServeCommand:
         kwargs = fake_create_app.call_args.kwargs
         assert kwargs["cors_origins"] == ["https://a.example", "https://b.example"]
 
+    def test_containment_flags_reach_create_app(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """The Host/origin allowlists are only as good as their plumbing.
+
+        A typo in either keyword name would leave the guards at their
+        loopback-only default with the CLI still reporting success, and every
+        remote request answering 400 with no clue why.
+        """
+        db_path = tmp_path / "jobs.db"
+        db_path.touch()
+
+        fake_create_app = MagicMock(return_value="app")
+        fake_web_app_module = MagicMock()
+        fake_web_app_module.create_app = fake_create_app
+
+        import sys
+
+        monkeypatch.setitem(sys.modules, "uvicorn", MagicMock())
+        monkeypatch.setitem(sys.modules, "clm.web.app", fake_web_app_module)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            serve,
+            [
+                "--jobs-db-path",
+                str(db_path),
+                "--no-browser",
+                "--allowed-host",
+                "box.tail1234.ts.net",
+                "--allowed-origin",
+                "https://box.tail1234.ts.net",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        kwargs = fake_create_app.call_args.kwargs
+        assert kwargs["allowed_hosts"] == ["box.tail1234.ts.net"]
+        assert kwargs["allowed_origins"] == ["https://box.tail1234.ts.net"]
+
+    def test_wildcard_bind_without_an_allowed_host_warns(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Otherwise the symptom is a wall of 400s from another machine."""
+        db_path = tmp_path / "jobs.db"
+        db_path.touch()
+
+        fake_web_app_module = MagicMock()
+        fake_web_app_module.create_app = MagicMock(return_value="app")
+
+        import sys
+
+        monkeypatch.setitem(sys.modules, "uvicorn", MagicMock())
+        monkeypatch.setitem(sys.modules, "clm.web.app", fake_web_app_module)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            serve,
+            ["--jobs-db-path", str(db_path), "--no-browser", "--host", "0.0.0.0"],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "--allowed-host" in result.output
+
+    def test_no_warning_when_the_configuration_is_coherent(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A plain loopback serve must not nag."""
+        db_path = tmp_path / "jobs.db"
+        db_path.touch()
+
+        fake_web_app_module = MagicMock()
+        fake_web_app_module.create_app = MagicMock(return_value="app")
+
+        import sys
+
+        monkeypatch.setitem(sys.modules, "uvicorn", MagicMock())
+        monkeypatch.setitem(sys.modules, "clm.web.app", fake_web_app_module)
+
+        runner = CliRunner()
+        result = runner.invoke(serve, ["--jobs-db-path", str(db_path), "--no-browser"])
+
+        assert result.exit_code == 0, result.output
+        assert "--allowed-host" not in result.output
+
     def test_opens_browser_by_default(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         db_path = tmp_path / "jobs.db"
         db_path.touch()

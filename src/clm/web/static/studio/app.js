@@ -529,7 +529,19 @@ function editCell(cell, idx) {
 }
 
 // --- WebSocket: disk-change notifications -------------------------------------
+// Reconnect backs off from 3s to 60s and resets on a successful open. A flat
+// 3s retry hammers the server forever after --rotate-token invalidates a phone
+// that still has a tab open, and each refused handshake writes a server-side
+// WARNING — which would bury the diagnostics the Host/Origin guards emit.
+const WS_RETRY_MIN_MS = 3000;
+const WS_RETRY_MAX_MS = 60000;
+let wsRetryMs = WS_RETRY_MIN_MS;
+
 function connectWs() {
+  // Without a token the handshake is refused, so an unpaired tab would spin on
+  // the retry loop instead of showing the "not paired" banner resolveToken()
+  // already drives.
+  if (!TOKEN) return;
   const proto = location.protocol === "https:" ? "wss" : "ws";
   let ws;
   // The WebSocket constructor cannot set an Authorization header, so the token
@@ -538,7 +550,10 @@ function connectWs() {
   // server's access log on every reconnect.
   try { ws = new WebSocket(`${proto}://${location.host}/ws`, ["clm-token." + TOKEN]); }
   catch { return; }
-  ws.addEventListener("open", () => ws.send(JSON.stringify({ action: "subscribe", channels: ["studio"] })));
+  ws.addEventListener("open", () => {
+    wsRetryMs = WS_RETRY_MIN_MS;
+    ws.send(JSON.stringify({ action: "subscribe", channels: ["studio"] }));
+  });
   ws.addEventListener("message", (ev) => {
     let msg; try { msg = JSON.parse(ev.data); } catch { return; }
     if (!currentDeck || msg.deck_id !== currentDeck.deck_id) return;
@@ -556,7 +571,11 @@ function connectWs() {
       openDeck(currentDeck.deck_id); // refresh content + lock state
     }
   });
-  ws.addEventListener("close", () => setTimeout(connectWs, 3000));
+  ws.addEventListener("close", () => {
+    const delay = wsRetryMs;
+    wsRetryMs = Math.min(wsRetryMs * 2, WS_RETRY_MAX_MS);
+    setTimeout(connectWs, delay);
+  });
 }
 
 // --- service worker (P4): installable PWA + offline read-only cache -----------

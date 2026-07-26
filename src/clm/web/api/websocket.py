@@ -171,23 +171,39 @@ def offered_subprotocols(websocket: WebSocket) -> list[str]:
     return [part.strip() for part in raw.split(",") if part.strip()]
 
 
-def _presented_token(websocket: WebSocket) -> tuple[str | None, str | None]:
-    """Return ``(token, subprotocol_to_echo)`` from the handshake.
+def _token_subprotocol(websocket: WebSocket) -> str | None:
+    """Return the offered ``clm-token.*`` subprotocol, if the client sent one.
 
-    The subprotocol is returned alongside the token because accepting without
-    echoing an offered protocol makes a browser close the connection, so the
-    two decisions cannot be made independently.
+    Echoed back on accept even when no token is required: RFC 6455 says a
+    client that offered protocols and got none selected must fail the
+    connection, so a Studio PWA pointed at a plain ``clm serve`` would
+    otherwise reconnect forever against a server that kept "accepting" it.
     """
     for offered in offered_subprotocols(websocket):
         if offered.startswith(TOKEN_SUBPROTOCOL_PREFIX):
-            token = offered[len(TOKEN_SUBPROTOCOL_PREFIX) :]
-            return (token or None), offered
+            return offered
+    return None
+
+
+def _presented_tokens(websocket: WebSocket) -> list[str]:
+    """Return every credential the handshake carries, best-first.
+
+    Both are returned rather than the first one found: a debugging client that
+    copies the PWA's subprotocol list *and* sets ``Authorization`` should not
+    be refused because the stale half was checked and the valid half ignored.
+    """
+    candidates: list[str] = []
+    subprotocol = _token_subprotocol(websocket)
+    if subprotocol:
+        token = subprotocol[len(TOKEN_SUBPROTOCOL_PREFIX) :]
+        if token:
+            candidates.append(token)
 
     auth = websocket.headers.get("authorization", "")
     scheme, _, param = auth.partition(" ")
     if scheme.lower() == "bearer" and param.strip():
-        return param.strip(), None
-    return None, None
+        candidates.append(param.strip())
+    return candidates
 
 
 async def websocket_endpoint(websocket: WebSocket):
@@ -197,11 +213,18 @@ async def websocket_endpoint(websocket: WebSocket):
     server was started with ``--spec``, the handshake must carry the Studio
     token (see the module docstring) or it is closed without being accepted.
     """
-    expected = getattr(websocket.app.state, "studio_token", None)
-    subprotocol: str | None = None
-    if expected:
-        presented, subprotocol = _presented_token(websocket)
-        if not tokens_match(presented, expected):
+    state = websocket.app.state
+    # Gate on Studio being *enabled*, not on a token being configured — the
+    # same condition `studio.routes.require_token` uses. Keying off the token
+    # alone would fail open in the one state that matters: a Studio app built
+    # without a token, whose disk watcher is broadcasting on `studio` anyway.
+    studio_enabled = getattr(state, "studio_service", None) is not None
+    subprotocol = _token_subprotocol(websocket)
+
+    if studio_enabled:
+        expected = getattr(state, "studio_token", None)
+        presented = _presented_tokens(websocket)
+        if not expected or not any(tokens_match(token, expected) for token in presented):
             logger.warning(
                 "Refused a /ws handshake with %s Studio token.",
                 "an invalid" if presented else "no",
