@@ -589,3 +589,27 @@ class TestExistingHeaderCasing:
             v for k, v in messages[0]["headers"] if k.lower() == b"content-security-policy"
         ]
         assert csp_headers == [b"script-src 'none'"]
+
+
+class TestExemptionEdgeCases:
+    """Round-2 review findings, pinned."""
+
+    def test_root_path_slash_alone_is_not_stripped(self):
+        """``root_path="/"`` must not turn ``/docs`` into ``docs``."""
+        messages = _raw_scope_probe(_ok_app, "/docs", root_path="/")
+        assert all(k != b"content-security-policy" for k, _ in messages[0]["headers"])
+
+    def test_an_empty_prefix_entry_does_not_exempt_everything(self):
+        """``"" + "/"`` is ``"/"``, which every path starts with — drop it."""
+
+        async def app(scope, receive, send):
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b"ok"})
+
+        messages = _raw_scope_probe(app, "/read")
+        assert any(k == b"content-security-policy" for k, _ in messages[0]["headers"])
+
+        # And with the empty entry present alongside a real one, the real one
+        # still works.
+        mw = SecurityHeadersMiddleware(app, exempt_prefixes=("", "/docs"))
+        assert mw.exempt_prefixes == ("/docs",)

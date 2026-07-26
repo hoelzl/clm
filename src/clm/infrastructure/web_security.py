@@ -590,7 +590,10 @@ class SecurityHeadersMiddleware:
         # script, so a strict CSP breaks them; they are static, trusted pages
         # (no user content), which makes the exemption free. openapi.json is
         # not exempt — CSP only governs documents, so its header is inert.
-        self.exempt_prefixes = tuple(exempt_prefixes)
+        # Falsy prefixes are dropped: an empty entry would otherwise exempt
+        # *every* path (any path starts with "" + "/"), silently disabling
+        # the whole middleware.
+        self.exempt_prefixes = tuple(p for p in exempt_prefixes if p)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -598,10 +601,11 @@ class SecurityHeadersMiddleware:
             return
         path = scope.get("path", "")
         root_path = scope.get("root_path", "")
-        if root_path and path.startswith(root_path):
+        if root_path not in ("", "/") and path.startswith(root_path):
             # uvicorn folds root_path into scope["path"], so behind a
             # path-prefixing proxy the exemptions would stop matching (and
-            # /docs would break) without this strip.
+            # /docs would break) without this strip. "/" itself is not a
+            # prefix to strip — that would turn "/docs" into "docs".
             path = path[len(root_path) :]
         # Segment-aware: an exemption for /docs must not silently cover a
         # future /docs-archive route — a prefix typo must never *remove* the
