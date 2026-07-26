@@ -81,10 +81,13 @@ SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
 #: serve loads its JavaScript from static files, so inline script and event
 #: handlers (the two things injected markup needs) never run. ``connect-src
 #: 'self'`` confines fetch/XHR/WebSocket to this origin, closing the exfil
-#: channel for the Studio's non-expiring bearer token; CSP3 browsers match
-#: ``'self'`` to a same-origin ``ws:``/``wss:``, which ``/ws`` needs. The two
-#: relaxations — ``style-src 'unsafe-inline'`` and ``img-src … https:`` — are
-#: deliberate; see the middleware's docstring.
+#: channel for the Studio's non-expiring bearer token. CSP3 matches ``'self'``
+#: to a same-origin ``ws:``/``wss:`` — in WebKit only since Safari 15.4
+#: (bug 235873), so an older iOS phone loses the ``/ws`` live-updates channel
+#: (disk-change banner, sync progress); REST is unaffected, and the policy is
+#: deliberately not widened for it. The two relaxations — ``style-src
+#: 'unsafe-inline'`` and ``img-src … https:`` — are deliberate; see the
+#: middleware's docstring.
 CONTENT_SECURITY_POLICY = (
     "default-src 'self'; "
     "script-src 'self'; "
@@ -564,6 +567,12 @@ class SecurityHeadersMiddleware:
     A response that already carries a ``Content-Security-Policy`` keeps it:
     a route that sets one deliberately has the last word.
 
+    One uncovered case, by construction: Starlette's ``ServerErrorMiddleware``
+    sits outside all user middleware, so the fixed plain-text 500 for an
+    *unhandled* exception carries no headers. That body has no user content
+    and no script, so the gap is cosmetic — but "every response" above means
+    every response this middleware sees.
+
     Pure ASGI like the two guards above — ``BaseHTTPMiddleware`` wraps
     streaming responses badly, and headers cost nothing to add by hand.
     """
@@ -584,13 +593,30 @@ class SecurityHeadersMiddleware:
         self.exempt_prefixes = tuple(exempt_prefixes)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or scope.get("path", "").startswith(self.exempt_prefixes):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        path = scope.get("path", "")
+        root_path = scope.get("root_path", "")
+        if root_path and path.startswith(root_path):
+            # uvicorn folds root_path into scope["path"], so behind a
+            # path-prefixing proxy the exemptions would stop matching (and
+            # /docs would break) without this strip.
+            path = path[len(root_path) :]
+        # Segment-aware: an exemption for /docs must not silently cover a
+        # future /docs-archive route — a prefix typo must never *remove* the
+        # backstop from a page that should have it.
+        if any(path == p or path.startswith(p + "/") for p in self.exempt_prefixes):
             await self.app(scope, receive, send)
             return
 
         async def send_with_headers(message: Message) -> None:
             if message["type"] == "http.response.start":
-                existing = {k for k, _v in message.setdefault("headers", [])}
+                # Header names are case-insensitive (ASGI only *recommends*
+                # lower-case): a route's own CSP must be seen however it was
+                # cased, or the response ends up with two policies and the
+                # browser enforces the intersection.
+                existing = {k.lower() for k, _v in message.setdefault("headers", [])}
                 added = [
                     (name.encode("latin-1"), value.encode("latin-1"))
                     for name, value in self.headers.items()

@@ -18,6 +18,7 @@ from starlette.testclient import TestClient
 
 from clm.infrastructure.web_security import (
     OriginGuardMiddleware,
+    SecurityHeadersMiddleware,
     TrustedHostMiddleware,
     check_request_origin,
     default_allowed_hosts,
@@ -509,3 +510,82 @@ class TestSecurityHeaders:
         client = TestClient(_headers_app())
         with client.websocket_connect("/ws") as ws:
             assert ws.receive_text() == "ws ok"
+
+
+def _raw_scope_probe(app, path: str, root_path: str = "") -> list[dict]:
+    """Drive ``SecurityHeadersMiddleware`` around a raw ASGI ``app``.
+
+    Needed where Starlette gets in the way of what is being tested: uvicorn's
+    root_path-into-``scope["path"]`` composition, and a non-Starlette app that
+    emits a mixed-case header name (Starlette lowercases everything).
+    """
+    import asyncio
+
+    async def _run() -> list[dict]:
+        messages: list[dict] = []
+        scope = {
+            "type": "http",
+            "path": path,
+            "root_path": root_path,
+            "method": "GET",
+            "headers": [],
+        }
+
+        async def receive():
+            return {"type": "http.request", "body": b""}
+
+        async def send(message):
+            messages.append(message)
+
+        await SecurityHeadersMiddleware(app)(scope, receive, send)
+        return messages
+
+    return asyncio.run(_run())
+
+
+async def _ok_app(scope, receive, send):
+    await send({"type": "http.response.start", "status": 200, "headers": []})
+    await send({"type": "http.response.body", "body": b"ok"})
+
+
+class TestExemptionMatching:
+    """The exemption must name pages, never a prefix that can grow."""
+
+    def test_docs_subpaths_are_exempt(self):
+        messages = _raw_scope_probe(_ok_app, "/docs/oauth2-redirect")
+        assert all(k != b"content-security-policy" for k, _ in messages[0]["headers"])
+
+    def test_a_path_that_merely_begins_with_docs_is_not_exempt(self):
+        """A future /docs-archive route must not silently lose the backstop."""
+        messages = _raw_scope_probe(_ok_app, "/docs-archive")
+        assert any(k == b"content-security-policy" for k, _ in messages[0]["headers"])
+
+    def test_docs_stays_exempt_behind_a_root_path_proxy(self):
+        """uvicorn folds ``root_path`` into ``scope["path"]``; strip it first."""
+        messages = _raw_scope_probe(_ok_app, "/clm/docs", root_path="/clm")
+        assert all(k != b"content-security-policy" for k, _ in messages[0]["headers"])
+
+    def test_root_path_does_not_exempt_unrelated_pages(self):
+        messages = _raw_scope_probe(_ok_app, "/clm/read", root_path="/clm")
+        assert any(k == b"content-security-policy" for k, _ in messages[0]["headers"])
+
+
+class TestExistingHeaderCasing:
+    def test_a_mixed_case_route_csp_is_not_duplicated(self):
+        """ASGI only *recommends* lower-case names; two CSPs = intersection."""
+
+        async def mixed_case_app(scope, receive, send):
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 200,
+                    "headers": [(b"Content-Security-Policy", b"script-src 'none'")],
+                }
+            )
+            await send({"type": "http.response.body", "body": b"ok"})
+
+        messages = _raw_scope_probe(mixed_case_app, "/read")
+        csp_headers = [
+            v for k, v in messages[0]["headers"] if k.lower() == b"content-security-policy"
+        ]
+        assert csp_headers == [b"script-src 'none'"]
