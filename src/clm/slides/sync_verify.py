@@ -57,10 +57,28 @@ the gate. It is the only check that touches git and degrades silently to
 "skipped" when the pair is untracked. It is id-based: an id-*less* cell drop is
 invisible here (a known limitation — and, per the design note, the concrete
 trigger for *selectively* adding ids where matching proves fragile).
+
+**What the write gate reads — the two entry points (Y2 / D8).** A structural
+check is only as good as the text it is handed, and a split pair's narration may
+live in a **separated voiceover companion** the deck halves do not contain. The
+two gate entry points differ *only* in that, and they sit next to each other
+here on purpose — the choice belongs at one place, not at four call sites:
+
+* :func:`gate_projected_pair` — the strict gate: it projects the companions the
+  way :func:`verify_pair` does (both go through :func:`projected_pair`), so a
+  divergence hidden in a companion cannot be recorded as verified. **Every
+  trust-store write on a sync verb uses this.**
+* :func:`gate_deck_halves` — deck halves only, no projection. The single
+  sanctioned exception, for ``clm harvest`` (proposal §6): a harvest write
+  lands narration on *one* language side, and that one-sided narrative member is
+  a representable *pending* state there ("translate the twin"), not corruption.
+  Projecting it would read it as an ``id-asymmetry`` error and withhold exactly
+  the ledger entry §6 needs written.
 """
 
 from __future__ import annotations
 
+import logging
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -69,8 +87,10 @@ from clm.notebooks.slide_parser import comment_token_for_path
 from clm.slides.git_text import git_ref_text
 from clm.slides.raw_cells import RawCell, split_cells
 from clm.slides.split import UnifyError, unify_texts
-from clm.slides.sync_companion import project_pair
+from clm.slides.sync_companion import ProjectedPair, project_pair
 from clm.slides.sync_writeback import role_of
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -84,8 +104,11 @@ class VerifyViolation:
     """
 
     severity: str  # "error" | "warning"
-    # error kinds: "unify" | "id-asymmetry" | "duplicate-id"
-    # warning kinds: "tag-parity" | "dropped-id"
+    # error kinds: "unify" | "id-asymmetry" | "duplicate-id" | "companion-refusal"
+    #   ("companion-refusal" is gate-only — see :func:`gate_projected_pair`; verify
+    #   reports the same condition as a warning, since an unprojectable *layout* is
+    #   not an edit that corrupted the pair)
+    # warning kinds: "tag-parity" | "dropped-id" | "companion-refusal"
     kind: str
     message: str
     slide_id: str | None = None
@@ -292,15 +315,23 @@ def structural_gate(
 ) -> list[VerifyViolation]:
     """Error-severity structural violations, optionally scoped to one ``(slide_id, role)``.
 
-    The reusable **write-gate** (Issue #455): a ledger / watermark write must never
-    record a pair — or a single slide — as in-sync while it fails a structural
-    invariant, because that would mask a genuine divergence as "trusted". The return
-    value is the *error* subset of :func:`structural_violations` — the exact
-    invariants ``clm slides sync verify`` enforces, computed from the **same**
-    function, so the gate and the CLI can never drift. An **empty list means "safe to
-    record"**; a non-empty list is the reason it is not. It works on in-memory text
-    (no file/git read), so the apply path can gate a watermark write on the
-    post-apply :class:`~clm.slides.split` state without a re-read.
+    The reusable **write-gate** primitive (Issue #455): a ledger / watermark write
+    must never record a pair — or a single slide — as in-sync while it fails a
+    structural invariant, because that would mask a genuine divergence as "trusted".
+    The return value is the *error* subset of :func:`structural_violations` — the
+    exact invariants ``clm slides sync verify`` enforces, computed from the **same**
+    function. An **empty list means "safe to record"**; a non-empty list is the reason
+    it is not. It works on in-memory text (no file/git read), so the apply path can
+    gate a watermark write on the post-apply :class:`~clm.slides.split` state without
+    a re-read.
+
+    **This is the primitive, not the gate a verb should call.** It judges exactly the
+    two texts it is handed, and a caller that hands it the raw deck halves is blind to
+    a separated voiceover companion — the Y2 hole, where ``verify`` failed on a
+    byte-diverged shared companion while ``record`` blessed it. Sharing
+    :func:`structural_violations` never prevented that, because the drift was in the
+    *input*, not the computation. Use :func:`gate_projected_pair` (which owns the
+    projection) unless you are ``clm harvest`` — see :func:`gate_deck_halves`.
 
     **Whole-deck** (``slide_id is None``): every structural error in the pair — the
     gate for batch ``bless`` and the apply-path full watermark write.
@@ -340,6 +371,148 @@ def _scoped_to(violation: VerifyViolation, slide_id: str, role: str | None) -> b
     if role is None:
         return True
     return violation.role is None or violation.role == role
+
+
+def projected_pair(de_path: Path, en_path: Path) -> ProjectedPair:
+    """Read both halves and project their voiceover companions in memory (#501).
+
+    The **single** place the structural checks decide what text they read: both
+    :func:`verify_pair` and :func:`gate_projected_pair` go through here, so "what
+    does a structural check see?" has one answer per pair instead of one per call
+    site (the Y2 bug was exactly that divergence).
+
+    A **plain** pair projects to itself byte-for-byte; a **separated** pair has each
+    half's companion inlined; **mixed** / **cross-language** / unplaceable-companion
+    pairs carry a ``refusal`` and fall back to their raw text — a caller must decide
+    what an unprojectable pair means for it (verify: a warning; the gate: a refusal
+    to record).
+    """
+    return project_pair(
+        de_path,
+        en_path,
+        de_path.read_text(encoding="utf-8"),
+        en_path.read_text(encoding="utf-8"),
+    )
+
+
+def gate_projected_pair(
+    de_path: Path,
+    en_path: Path,
+    comment_token: str | None = None,
+    *,
+    slide_id: str | None = None,
+    role: str | None = None,
+    allow_diverged_companion: bool = False,
+) -> list[VerifyViolation]:
+    """The strict write gate: :func:`structural_gate` over the **projected** pair (D8).
+
+    Reads both halves from disk, projects their voiceover companions
+    (:func:`projected_pair` — the same projection :func:`verify_pair` uses) and gates
+    on the result. Every trust-store write on a sync verb goes through this: ``record``
+    and ``apply``'s post-write ledger save. An **empty list means "safe to record"**.
+
+    Two things the raw-halves primitive cannot see, and this does:
+
+    * a divergence that lives in a **separated companion** — a byte-diverged shared
+      narration cell, a one-sided id'd narrative member, a duplicated companion id;
+    * a pair CLM **cannot project at all** (a mixed / cross-language layout, or a
+      companion cell whose ``for_slide`` no longer resolves), reported as an
+      ``error``-severity ``companion-refusal``. Falling back to the raw halves there
+      would be the Y2 hole again — a clean verdict reached by not looking.
+
+    ``allow_diverged_companion`` is D8's documented escape hatch (surfaced as
+    ``clm slides sync record|apply --allow-diverged-companion``). It drops **only**
+    those violations the raw deck halves do *not* also show — i.e. the ones the
+    projection introduced — and logs each at WARNING. A corruption in the deck halves
+    themselves still blocks the write: the flag is deliberately not a ``--force``.
+    """
+    token = comment_token if comment_token is not None else comment_token_for_path(de_path)
+    projection = projected_pair(de_path, en_path)
+    violations = structural_gate(
+        projection.de_text, projection.en_text, token, slide_id=slide_id, role=role
+    )
+    if projection.refusal is not None:
+        violations.insert(
+            0,
+            VerifyViolation(
+                severity="error",
+                kind="companion-refusal",
+                message=(
+                    "the voiceover companions cannot be projected, so the pair's "
+                    f"narration cannot be verified: {projection.refusal}"
+                ),
+                slide_id=slide_id,
+            ),
+        )
+    if not allow_diverged_companion:
+        return violations
+    raw_violations = structural_gate(
+        de_path.read_text(encoding="utf-8"),
+        en_path.read_text(encoding="utf-8"),
+        token,
+        slide_id=slide_id,
+        role=role,
+    )
+    overridden = _companion_only(violations, raw_violations)
+    for violation in overridden:
+        logger.warning(
+            "--allow-diverged-companion: recording %s / %s despite a companion "
+            "divergence the strict gate refuses — [%s] %s",
+            de_path.name,
+            en_path.name,
+            violation.kind,
+            violation.message,
+        )
+    keep = [v for v in violations if v not in overridden]
+    return keep
+
+
+def gate_deck_halves(
+    de_path: Path,
+    en_path: Path,
+    comment_token: str | None = None,
+    *,
+    slide_id: str | None = None,
+    role: str | None = None,
+) -> list[VerifyViolation]:
+    """The gate over the deck halves **only** — ``clm harvest``'s §6 exception.
+
+    Identical to :func:`gate_projected_pair` except that it does *not* project the
+    voiceover companions. That difference is deliberate and load-bearing for exactly
+    one consumer: ``clm harvest``'s write path (proposal §6) lands narration on one
+    language side and **records that one-sided narrative member on purpose** — it is
+    what makes the next ``sync report`` frame ``translate_new`` for the twin. Under
+    projection a one-sided id'd narrative member reads as an ``id-asymmetry`` error,
+    so the strict gate would withhold precisely the ledger entry §6 requires.
+
+    Do not reach for this from a sync verb — that is the Y2 bug. If you are adding a
+    third caller, the question to answer first is whether a one-sided narrative
+    member is a *pending state* in your workflow (this function) or a *corruption*
+    (:func:`gate_projected_pair`).
+    """
+    token = comment_token if comment_token is not None else comment_token_for_path(de_path)
+    return structural_gate(
+        de_path.read_text(encoding="utf-8"),
+        en_path.read_text(encoding="utf-8"),
+        token,
+        slide_id=slide_id,
+        role=role,
+    )
+
+
+def _companion_only(
+    projected: list[VerifyViolation], raw: list[VerifyViolation]
+) -> list[VerifyViolation]:
+    """Those projected-gate violations the raw deck halves do not also show.
+
+    Keyed on ``(kind, slide_id, role)`` rather than the whole violation: a ``unify``
+    error carries the offending *line numbers* in its message, and inlining a
+    companion shifts them, so message equality would call a pre-existing deck-half
+    violation "companion-introduced" and let ``--allow-diverged-companion`` override
+    it. The coarse key errs the safe way — it keeps such a violation blocking.
+    """
+    raw_keys = {(v.kind, v.slide_id, v.role) for v in raw}
+    return [v for v in projected if (v.kind, v.slide_id, v.role) not in raw_keys]
 
 
 def _id_symmetry_violations(de_ids: list[str], en_ids: list[str]) -> list[VerifyViolation]:
@@ -464,20 +637,35 @@ def verify_pair(de_path: Path, en_path: Path) -> VerifyResult:
     (``git_baseline=False``) when neither is.
     """
     comment_token = comment_token_for_path(de_path)
-    raw_de_text = de_path.read_text(encoding="utf-8")
-    raw_en_text = en_path.read_text(encoding="utf-8")
 
     # Issue #501: verify the companion-inlined projection. A separated-voiceover pair
     # whose narration drifted to one language now leaves an inlined voiceover cell on
     # only one half, which ``unify_texts`` reports as a structural violation; a
     # symmetric companion pair inlines identically on both halves and verifies clean.
     # A plain pair projects to itself, and a mixed / cross-language pair falls back to
-    # its raw text (``sync`` surfaces that refusal separately).
-    projection = project_pair(de_path, en_path, raw_de_text, raw_en_text)
+    # its raw text. Shared with the write gate through :func:`projected_pair` so the
+    # two provably read the same text (D8 / Y2).
+    projection = projected_pair(de_path, en_path)
     de_text = projection.de_text
     en_text = projection.en_text
 
     violations = structural_violations(de_text, en_text, comment_token)
+    if projection.refusal is not None:
+        # A **warning** here, an error in the gate, and the asymmetry is the point:
+        # verify answers "did an edit corrupt this pair?" and an unprojectable
+        # *layout* is not that (it is a supported-elsewhere state `sync` refuses with
+        # its own normalize hint), while the gate answers "may I record this as
+        # verified?" — which it may not, having been unable to read the narration.
+        violations.append(
+            VerifyViolation(
+                severity="warning",
+                kind="companion-refusal",
+                message=(
+                    "the voiceover companions could not be projected, so the checks "
+                    f"below ran on the deck halves alone: {projection.refusal}"
+                ),
+            )
+        )
 
     git_baseline = False
     for path, current, half in ((de_path, de_text, "DE"), (en_path, en_text, "EN")):

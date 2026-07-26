@@ -33,7 +33,9 @@ one-sided-trust semantics (proposal §6, the load-bearing invariant):
   stale twin — the §6 forbidden state.
 
 The ledger save is additionally gated on the structural verify
-(:func:`clm.slides.sync_verify.structural_gate`), mirroring the sync verbs.
+(:func:`clm.slides.sync_verify.gate_deck_halves`) — the **deck-halves-only**
+gate, deliberately not the companion-projecting one the sync verbs use: a
+one-sided narrative member is §6's pending state here, not corruption.
 """
 
 from __future__ import annotations
@@ -437,11 +439,16 @@ def _record_members(
     save was withheld (the files stay as written — fail-safe, like apply).
     """
     from clm.slides import doc_ledger
-    from clm.slides.sync_verify import structural_gate
+    from clm.slides.sync_verify import gate_deck_halves
 
-    violations = structural_gate(
-        bundle.de_path.read_text(encoding="utf-8"),
-        bundle.en_path.read_text(encoding="utf-8"),
+    # Deck halves only, NOT the companion-projecting gate the sync verbs use
+    # (D8): a harvest write lands narration on one side and §6 *requires* that
+    # one-sided narrative member to be recorded — it is what frames the twin as
+    # translate_new. Projected, it would read as an id-asymmetry error and
+    # withhold exactly this ledger entry. See `gate_deck_halves`.
+    violations = gate_deck_halves(
+        bundle.de_path,
+        bundle.en_path,
         bundle.comment_token,
     )
     if violations:

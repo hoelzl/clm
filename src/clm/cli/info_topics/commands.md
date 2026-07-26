@@ -1902,9 +1902,11 @@ reference.
 ```
 clm slides sync DECK                       # default → `report` (read-only)
 clm slides sync report DECK|DIR [--json] [--since DATE|REF]
-clm slides sync apply  DECK [--decisions FILE|-] [--member KEY]... [--dry-run] [--json]
+clm slides sync apply  DECK [--decisions FILE|-] [--member KEY]... [--dry-run]
+                            [--allow-diverged-companion] [--json]
 clm slides sync verify DECK|DIR [--json]   # structural integrity check
-clm slides sync record DECK|DIR [--member KEY]... [--provenance WHO] [--json]
+clm slides sync record DECK|DIR [--member KEY]... [--provenance WHO]
+                               [--allow-diverged-companion] [--json]
 ```
 
 | Verb | Writes? | Model? | What it does |
@@ -1999,7 +2001,8 @@ written, and the payload labels its baseline `since:<sha>`.
 #### `clm slides sync apply`
 
 ```
-clm slides sync apply DECK [--decisions FILE|-] [--member KEY]... [--dry-run] [--json]
+clm slides sync apply DECK [--decisions FILE|-] [--member KEY]... [--dry-run]
+                          [--allow-diverged-companion] [--json]
 ```
 
 Writes, **per item**: every mechanical row executes deterministically; framed
@@ -2027,7 +2030,9 @@ record-only rows report status `deferred`, file-mutating rows stay `applied`
 with the reason suffix `(recording deferred: unresolved sibling item on this
 member)`. `--member KEY` limits the pass to the named
 handles; `--dry-run` executes and validates everything, writes nothing. Exit
-`0` all-applied / `1` residue / `2` error. Needs no API key; single deck only
+`0` all-applied / `1` residue / `2` error. The ledger gate projects the
+voiceover companions like `record`'s does, and takes the same
+`--allow-diverged-companion` override (see `record`). Needs no API key; single deck only
 (run `report` over a directory to find work). The `--json` result carries
 `counts` (`applied` / `recorded` / `deferred` / `pending` / `rejected` /
 `failed` / `skipped`), per-item `items[].status` + `reason`,
@@ -2050,13 +2055,17 @@ vs git `HEAD` and on a cross-side tag-parity mismatch (twin cells whose tag
 sets differ — tags are language-independent, and `report` frames the fix as a
 tag row). Exit `0` = structurally sound, `2` = corrupt. Answers *"did
 this edit corrupt the pair?"*, not *"is it in sync?"* — run it in CI freely.
-The same checks gate every ledger write (`record`, and `apply`'s ledger
-updates), so a corrupt pair can never be recorded as trusted.
+The same checks, **over the same companion-inlined projection**, gate every
+ledger write (`record`, and `apply`'s ledger updates), so a corrupt pair can
+never be recorded as trusted (CLM {version}: the gate used to read the deck
+halves alone, so a divergence living in a separated voiceover companion failed
+`verify` while `record` blessed it — see `clm info migration`).
 
 #### `clm slides sync record`
 
 ```
-clm slides sync record DECK|DIR [--member KEY]... [--provenance WHO] [--json]
+clm slides sync record DECK|DIR [--member KEY]... [--provenance WHO]
+                               [--allow-diverged-companion] [--json]
 ```
 
 The bless/accept confirmation paths collapsed into one verb: bank the deck's
@@ -2067,6 +2076,19 @@ stale entries and performs the pos→id key migration when a cell gained an id
 (logged); `--member KEY` upserts just the named handles. `--provenance` stamps
 who asserted the verification: `record` (default), `agent`, or
 `semantic:<model>`.
+
+**The gate reads the separated voiceover companions too (CLM {version}).** It
+runs over the same companion-inlined projection `verify` uses, so a divergence
+that lives only in the narration — a byte-diverged *shared* companion cell, a
+one-sided id'd narrative member, a duplicated companion id — refuses the record
+instead of being banked as verified. A pair CLM cannot project at all (mixed /
+cross-language layout, or a companion cell whose `for_slide` matches no slide)
+is refused for the same reason: the narration could not be checked.
+`--allow-diverged-companion` records anyway, but **only** drops the violations
+the projection introduced — a corruption in the deck halves themselves still
+refuses — and logs each overridden divergence at WARNING. Use it when the
+divergence is a deliberate pending state, not to make a message go away.
+`clm slides sync apply` takes the same flag for its post-write ledger save.
 
 **Re-recording is git-idempotent (CLM {version}).** A member whose recorded
 state (fingerprints, provenance, trust state, hash version) is unchanged keeps

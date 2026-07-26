@@ -91,10 +91,19 @@ rejected (nothing written).
 
 ## verify — the structural post-check
 
-`clm harvest verify DECK` runs the v3 lens gate plus the deck-half
+`clm harvest verify DECK` runs the v3 lens gate plus the **deck-halves**
 structural gate. One-sided narrative members are listed as
 `pending_twins`, **not** failures — they are the translation work you
 handed to the sync loop. Exit `2` means real corruption; stop and diagnose.
+
+**Deliberately weaker than `clm slides sync record`'s gate**, which since CLM
+{version} projects the voiceover companions and therefore reads a one-sided
+narrative member as an `id-asymmetry` error. That is the correct reading *there*
+(nothing may be banked as verified while the narration diverges) and the wrong
+one *here* (a one-sided harvest write is the pending state this toolkit
+produces). So a deck you have just harvested one language for will pass
+`harvest verify` and be refused by `sync record` until the twin exists — expected,
+and the sync loop is how you clear it.
 
 ## The `dropped` audit list
 

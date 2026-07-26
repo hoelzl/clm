@@ -507,22 +507,22 @@ def harvest_accept_cmd(
 @click.argument("slides", type=click.Path(exists=True, path_type=Path))
 @click.option("--json", "as_json", is_flag=True, help="Emit the JSON verdict.")
 def harvest_verify_cmd(slides: Path, as_json: bool):
-    """Structural post-check on the pair (v3 lens + the shared write gate).
+    """Structural post-check on the pair (v3 lens + the deck-halves write gate).
 
     Runs the v3 lens gate (the whole bundle must parse back — refusals are
-    corruption) plus the deck-half structural gate `sync record`/`apply`
-    use. One-sided narrative members are NOT failures: a harvest write to
-    one language side is a representable pending state the `clm slides
-    sync` loop resolves as translation work — they are listed as
-    `pending_twin` items. (The v2 `sync verify` projects companions and
-    reads that same state as an id-asymmetry error, which is exactly the
-    "corruption" misreading harvest must avoid — §6.)
+    corruption) plus the **deck-halves-only** structural gate
+    (`gate_deck_halves`). One-sided narrative members are NOT failures: a
+    harvest write to one language side is a representable pending state the
+    `clm slides sync` loop resolves as translation work — they are listed as
+    `pending_twin` items. (`sync verify`, and `sync record`/`apply`'s gate,
+    project the companions and read that same state as an id-asymmetry error,
+    which is exactly the "corruption" misreading harvest must avoid — §6.)
 
     \b
     Exit codes: 0 pass (pending twins allowed) · 2 structural errors.
     """
     from clm.slides.doc_lenses import DocLensError, load_bundle
-    from clm.slides.sync_verify import structural_gate
+    from clm.slides.sync_verify import gate_deck_halves
 
     try:
         bundle = load_bundle(slides)
@@ -541,9 +541,13 @@ def harvest_verify_cmd(slides: Path, as_json: bool):
     else:
         errors.extend(
             f"[{v.kind}] {v.message}"
-            for v in structural_gate(
-                bundle.de_path.read_text(encoding="utf-8"),
-                bundle.en_path.read_text(encoding="utf-8"),
+            # Deck halves only — the §6 exception, see `gate_deck_halves`. The
+            # companion-projecting gate the sync verbs use (D8) reads a
+            # one-sided narrative member as an id-asymmetry error, which is
+            # exactly the "corruption" misreading harvest must avoid.
+            for v in gate_deck_halves(
+                bundle.de_path,
+                bundle.en_path,
                 bundle.comment_token,
             )
         )

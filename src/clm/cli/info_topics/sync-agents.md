@@ -268,6 +268,29 @@ never recorded. Two ways to converge:
   `--provenance agent` (or `semantic:<model>` when a model attested the
   translation quality).
 
+**`record`'s gate reads the voiceover companions (CLM {version}).** It runs the
+structural checks over the same companion-inlined projection `verify` uses, so a
+divergence that lives only in a separated `voiceover_*` companion — a
+byte-diverged **shared** narration cell, a one-sided id'd narrative member, a
+duplicated companion id, or a companion cell whose `for_slide` matches no slide
+— **refuses the record** (exit 1, `refused` in the JSON, nothing written)
+instead of banking it as verified. Before this, `verify` failed on such a pair
+while `record` blessed it, and the banked "verified" divergence is what let a
+later mirror or propagation overwrite content that existed on one side only.
+
+What to do when `record` refuses: read the reason, fix the narration (usually
+`report` already frames the same member as translation work — answer it and
+`apply`), then record. `--allow-diverged-companion` is the escape hatch for a
+divergence you have judged to be a deliberate pending state; it drops **only**
+the companion-introduced violations (a corrupt deck half still refuses) and logs
+each one at WARNING. Do not reach for it to silence a message you have not read.
+`clm slides sync apply` takes the same flag for its post-write ledger save.
+
+(`clm harvest accept --record` is deliberately **not** subject to this gate: a
+harvest write lands narration on one language side, and recording that one-sided
+member is what frames the twin as `translate_new` — see `clm info
+harvest-agents`.)
+
 **Rule of thumb: when a report is *all* `verify_cold` (the report says so in
 a `hint`), use `record`, not a confirm-all decision document.** They assert
 the same trust; `record` is one command instead of a scripted

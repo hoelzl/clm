@@ -182,6 +182,7 @@ def run_apply_v3(
     members: tuple[str, ...],
     dry_run: bool,
     as_json: bool,
+    allow_diverged_companion: bool = False,
 ) -> int:
     """The v3 write verb. Exit 0 all-applied / 1 residue / 2 error."""
     if de_path.is_dir():
@@ -235,15 +236,17 @@ def run_apply_v3(
         # The structural write-gate on the TRUST store (design §5): landed
         # file mutations stay (review them with git), but a pair that fails
         # the structural verify is never recorded as verified — same gate
-        # `record` applies. Lazy import: sync_verify still loads v2 modules.
-        from clm.slides.sync_verify import structural_gate
+        # `record` applies, over the same companion-inlined projection
+        # `verify` reads (D8). Lazy import: sync_verify still loads v2 modules.
+        from clm.slides.sync_verify import gate_projected_pair
 
         verify_violations = [
             v.message
-            for v in structural_gate(
-                bundle.de_path.read_text(encoding="utf-8"),
-                bundle.en_path.read_text(encoding="utf-8"),
+            for v in gate_projected_pair(
+                bundle.de_path,
+                bundle.en_path,
                 bundle.comment_token,
+                allow_diverged_companion=allow_diverged_companion,
             )
         ]
         if not verify_violations:
@@ -269,7 +272,9 @@ def run_apply_v3(
         if verify_violations:
             click.echo(
                 "structural verify failed — applied changes were written but NOT "
-                "recorded into the ledger; fix the pair, then `sync record`",
+                "recorded into the ledger; fix the pair, then `sync record`. If the "
+                "divergence is in a voiceover companion and is intentional, "
+                "`--allow-diverged-companion` records it anyway (logged)",
                 err=True,
             )
     rejected = [r for r in outcome.results if r.status == "rejected"]
@@ -311,6 +316,7 @@ def run_record_v3(
     members: tuple[str, ...],
     provenance: str,
     as_json: bool,
+    allow_diverged_companion: bool = False,
 ) -> int:
     """The v3 trust verb: bless/accept collapsed, gated on structural verify.
 
@@ -324,7 +330,13 @@ def run_record_v3(
     pairs, solos = _scope_pairs(de_path, en_path)
     _warn_solos(solos)
     for de, en in pairs:
-        row = _record_one(de, en, members=members, provenance=provenance)
+        row = _record_one(
+            de,
+            en,
+            members=members,
+            provenance=provenance,
+            allow_diverged_companion=allow_diverged_companion,
+        )
         rows.append(row)
         if row.get("error"):
             errors += 1
@@ -357,6 +369,7 @@ def _record_one(
     *,
     members: tuple[str, ...],
     provenance: str,
+    allow_diverged_companion: bool = False,
 ) -> dict:
     try:
         bundle = _load(de_path, en_path)
@@ -370,14 +383,18 @@ def _record_one(
     assert bundle.outcome.deck is not None
 
     # The structural verify gate (design §5/§8): a structurally corrupt pair
-    # is never recorded as verified. Lazy import — sync_verify still imports
-    # v2 modules, and this module must stay clean of them at import time.
-    from clm.slides.sync_verify import structural_gate
+    # is never recorded as verified. Runs over the companion-inlined projection
+    # `verify` reads, so a divergence hidden in a separated voiceover companion
+    # cannot be blessed here while `verify` fails on it (D8 / finding Y2). Lazy
+    # import — sync_verify still imports v2 modules, and this module must stay
+    # clean of them at import time.
+    from clm.slides.sync_verify import gate_projected_pair
 
-    violations = structural_gate(
-        bundle.de_path.read_text(encoding="utf-8"),
-        bundle.en_path.read_text(encoding="utf-8"),
+    violations = gate_projected_pair(
+        bundle.de_path,
+        bundle.en_path,
         bundle.comment_token,
+        allow_diverged_companion=allow_diverged_companion,
     )
     if violations:
         row["refused"] = True

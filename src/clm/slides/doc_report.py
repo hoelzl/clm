@@ -88,12 +88,20 @@ def cold_sweep_hint(diff: DeckDiff) -> str | None:
     An all-``verify_cold`` report is the seeding case, and the efficient
     answer is the ``record`` verb, not a hand-built confirm-all decision
     document — agents reliably scripted the latter when nothing said so.
+
+    The wording keeps "review the pair" load-bearing: ``record`` asserts
+    trust. Since D8 the verb's own gate reads the separated voiceover
+    companions too, so a divergence hidden in the narration refuses the
+    record rather than being swept up by it — but the gate is structural, and
+    only the reader can judge whether the two halves *say the same thing*.
     """
     if diff.items and all(item.action == "verify_cold" for item in diff.items):
         return (
             "every member is cold (no ledger entry) — for a freshly authored or "
-            "never-recorded deck, review the pair and bank it wholesale with "
-            "`clm slides sync record DECK` instead of confirming per item"
+            "never-recorded deck, review both halves (`record` asserts they are in "
+            "sync; its gate only proves the pair is structurally sound, companions "
+            "included) and then bank it wholesale with `clm slides sync record DECK` "
+            "instead of confirming per item"
         )
     return None
 
