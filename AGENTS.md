@@ -72,6 +72,11 @@ Docker-marked tests require CI-built images and are validated in CI only —
 **use `pytest -m "not docker"` for pre-release local testing**. Full marker
 list and strategy in `docs/developer-guide/testing.md`.
 
+**Claimed-wired rule**: a build record or design doc that claims a path is
+wired must cite the test that executes it, and a security claim in a docstring
+must cite the test that proves it — see "The claimed-wired rule" in
+`docs/developer-guide/testing.md`.
+
 ## Code Conventions
 
 - **Type hints**: required for all public APIs.

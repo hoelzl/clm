@@ -262,6 +262,48 @@ test with `@pytest.mark.timeout(N)`; it takes precedence over all of the above.
 > `uv sync` / `uv run pytest` always has it; without it those tests
 > `importorskip`-skip rather than run.
 
+## The claimed-wired rule: claims about behavior need an executing test
+
+Two failures in the Mobile Deck Studio (issues #696/#697, PR #704) share one
+root cause, and it was not a coding mistake:
+
+- The tier-2 preview was signed off as "P4 ✅ implemented" while its in-page
+  consumer had been **unreachable from the day it was written** — gated on a
+  contract (`cell_type === "markdown"`) the API never produced. Nothing
+  noticed, because nothing executed the frontend path.
+- Sanitizer docstrings stated security properties ("the filter can only ever
+  be more restrictive") that were false, and the suite passed while the bug
+  that contradicted them was live.
+
+So, as a standing rule:
+
+1. **A build record, phase sign-off, or design doc that claims a path is
+   wired must cite the test that executes it.** "Wired" means the test drives
+   the real call chain — for a frontend feature, the predicate *and* the
+   consumer *and* the payload contract, not just the server endpoint. If no
+   executing test exists, the record says "scaffolded", not "done".
+2. **A security-relevant claim in a docstring or comment** ("X can never
+   happen", "this is strictly more restrictive", "active content is removed")
+   **must cite the test that proves it** — and the test must be able to fail
+   for the reason the claim names. (An earlier version of "active content is
+   removed" passed vacuously: the tag set it relied on was a library default,
+   so the assertion held while the claim was false as written.)
+3. **Test both sides of a contract.** The tier-2 gate is pinned by executing
+   the JS predicate under `node` *and* by asserting the payload the real
+   service emits; either half alone would have missed the original bug — a
+   predicate can be right about a contract that changed, and a contract can be
+   right with nobody consulting it.
+4. **Static source checks are a legitimate last resort** (e.g. pinning that a
+   call site exists when executing it would require stubbing a DOM), but name
+   them as static checks in the test's name or docstring, so the next reader
+   knows what is *not* proven.
+
+For security boundaries, property-style tests beat case-by-case regression
+tests: the sanitizer's prefix×scheme cross-product caught a normalization
+desync that two rounds of individually written cases had missed.
+`tests/web/studio/test_tier2_preview.py` is the reference example for all of
+the above.
+
 ## Troubleshooting
 
 ### "I don't see any logs during test execution"
