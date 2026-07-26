@@ -67,7 +67,8 @@ function esc(s) {
     .replace(/'/g, "&#39;");
 }
 
-// A markdown link target may not smuggle in a scripting scheme.
+// A markdown link target may not smuggle in a scripting scheme, nor point
+// off-origin without one.
 //
 // The cleaning mirrors how a browser parses a URL, deliberately and no more
 // than that: tab/CR/LF are removed *anywhere*, and C0 controls or spaces are
@@ -83,10 +84,13 @@ function safeUrl(u) {
   if (/^[a-z][a-z0-9+.\-]*:/i.test(cleaned)) {
     return /^(https?|mailto):/i.test(cleaned) ? cleaned : "#";
   }
-  // `//host` carries no scheme, but the browser supplies the page's — so it
-  // is a live off-origin navigation from a deck's link target, on a page
-  // holding a non-expiring bearer token. Relative paths and fragments are fine.
-  if (cleaned.startsWith("//")) return "#";
+  // No scheme in the string, but the browser supplies the page's — so an
+  // authority-relative target is a live off-origin navigation from a deck's
+  // link, on a page holding a non-expiring bearer token. WHATWG parsing
+  // treats `\` as `/` for http(s), so `/\evil.example` and `\\evil.example`
+  // reach evil.example just as `//evil.example` does; all four leading-pair
+  // combinations have to go. Ordinary relative paths and fragments are fine.
+  if (/^[/\\]{2}/.test(cleaned)) return "#";
   return cleaned;
 }
 function renderMarkdown(src) {

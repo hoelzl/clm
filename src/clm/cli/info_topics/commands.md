@@ -4398,10 +4398,11 @@ authenticate with `Authorization: Bearer` only; `?token=` is **not** accepted
 a Jinja sandbox: it expands the bundled header macros without a kernel, and a
 template cannot walk Python attributes (`__class__` and friends) out of the
 template namespace, nor repeat a sequence into a memory bomb. The sandbox does
-not restrict the template *loader*, so `{% include %}` can still read a file
-sitting next to the deck — path traversal out of the deck's directory is
-refused, but a secret parked beside a slide is readable by anyone holding the
-Studio token.
+not restrict the template *loader*, so `{% include %}` can still read files.
+Traversal out of the deck's directory is refused, but the reach is that
+directory **and its whole subtree, dotfiles included** — so anything parked
+beside a deck (a `.env`, a sidecar subdir, a `.clm/` ledger) is readable by
+anyone holding the Studio token.
 
 This is the P0/P1 slice (read-only browse + the cell-editing concurrency core).
 Structural insert/delete/move, the bilingual language lock + sync-to-other-

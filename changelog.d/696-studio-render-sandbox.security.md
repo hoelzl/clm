@@ -2,7 +2,8 @@
   `POST /api/studio/deck/render-cell` rendered its request body through a plain
   `jinja2.Environment`, so a template could read `__class__` and walk out of
   the template namespace from there — server-side template injection, verified
-  against the real function. It now renders in a `SandboxedEnvironment`. The
+  against the real function. It now renders in an
+  `ImmutableSandboxedEnvironment`. The
   module advertised itself as the "no-execution" render tier while doing this;
   the claim is now accurate about what it means (no *kernel*, not no code).
   Legitimate previews are unaffected — the bundled header macros for all five
@@ -26,12 +27,20 @@
   and relative URLs, with control characters stripped before the scheme is
   judged (browsers strip them when resolving, so `java&#9;script:` would
   otherwise slip past and then execute).
-- **The cell preview can no longer be used to exhaust memory or stall the
-  server.** Blocking attribute traversal says nothing about size:
-  `{{ "A" * 200000000 }}` allocated 200 MB in about a second, and the route
-  rendered inline on the event loop, so one request from any token holder
-  stalled every other request and the disk watcher. Sequence repetition is now
-  bounded, the output has a cap, and the render runs in a worker thread.
+- **The cell preview is bounded in size and no longer runs on the event
+  loop.** Blocking attribute traversal says nothing about how big a render
+  gets: `{{ "A" * 200000000 }}` allocated 200 MB in about a second, and the
+  route rendered inline, so one request from any token holder stalled every
+  other request and the disk watcher. Sequence repetition and `+` are now
+  refused before they allocate, the rendered output is bounded *as it
+  accumulates* (a 500-iteration loop of individually-legal emits went from a
+  100 MB peak to 1.1 MB), and the render runs in a worker thread. **This is
+  not a claim that the preview is DoS-proof**: `~` cannot be intercepted
+  without a process-wide monkeypatch of `jinja2.runtime` that would also
+  change how the build renders decks, and nested loops burn CPU without
+  allocating. A client holding the Studio token can still exhaust the process
+  — accepted, because the token is the trust boundary and that client can
+  already rewrite any deck.
 - **The Studio service worker cached the app shell forever.** `sw.js` only
   re-installs when its own bytes change and `activate` only drops caches whose
   *name* differs, but the shell handler was pure cache-first — so `app.js`,

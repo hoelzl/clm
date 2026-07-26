@@ -57,19 +57,40 @@ self.addEventListener("fetch", (event) => {
   // updated app.js is picked up on the next load even if SHELL_CACHE was not
   // bumped. Pure cache-first made a shell asset permanently immutable, which
   // is how a security fix ends up undeliverable.
+  //
+  // Only `resp.ok` responses are cached: storing a 404 or a 5xx from a restart
+  // would pin the error in place, which is the same failure in a new costume.
   if (url.pathname.startsWith("/studio/")) {
     event.respondWith(
       caches.match(req).then((hit) => {
-        const fresh = fetch(req)
-          .then((resp) => {
-            if (resp && resp.ok) {
-              const copy = resp.clone();
-              caches.open(SHELL_CACHE).then((cache) => cache.put(req, copy));
-            }
-            return resp;
-          })
-          .catch(() => hit); // offline: the cached copy is the answer
-        return hit || fresh;
+        const fresh = fetch(req).then((resp) => {
+          if (resp && resp.ok && resp.type !== "opaque") {
+            const copy = resp.clone();
+            return caches
+              .open(SHELL_CACHE)
+              .then((cache) => cache.put(req, copy))
+              .catch(() => {}) // quota / partial response — not worth failing over
+              .then(() => resp);
+          }
+          return resp;
+        });
+
+        if (hit) {
+          // Answer from cache *now* — that is the "stale" half, and returning
+          // `fresh` here instead would silently make this network-first and
+          // cost the offline guarantee. The revalidation continues in the
+          // background, held open by waitUntil: respondWith settles
+          // immediately, and the browser may kill the worker once every
+          // extendable event has settled, which would abort the refetch and
+          // restore the permanent staleness this handler exists to prevent.
+          event.waitUntil(fresh.catch(() => {}));
+          return hit;
+        }
+        // Cache miss: the network is the only answer, so let a failure
+        // propagate as a failed fetch rather than resolving to `undefined`
+        // (respondWith rejects on a non-Response, which surfaces as a
+        // confusing console error instead of a network error).
+        return fresh;
       })
     );
     return;

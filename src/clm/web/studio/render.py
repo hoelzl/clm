@@ -17,20 +17,39 @@ in the server. It now renders in an
 :class:`~jinja2.sandbox.ImmutableSandboxedEnvironment`, which blocks the
 attribute traversal those escapes depend on.
 
-Two limits that the sandbox does *not* give you, and this module adds:
+Two things the sandbox does *not* give you, and what this module does about
+each. Both are stated precisely because the first attempt at them overclaimed.
 
-- **Size.** A sandbox bounds attribute access and nothing else, so
-  ``{{ "A" * 200000000 }}`` was a one-expression memory bomb. Repetition is
-  intercepted (:data:`MAX_REPEAT`) and the output is capped
-  (:data:`MAX_OUTPUT_CHARS`). The caller runs this off the event loop.
-- **The loader.** ``SandboxedEnvironment`` constrains the *template*, not the
-  ``FileSystemLoader`` under it, so ``{% include %}`` still reads files next to
-  the deck. Jinja refuses traversal out of that directory (``..`` and absolute
-  paths), and ``_resolve_deck_id`` pins the deck under the slides dir, so the
-  reach is "a file sitting beside a slide" — not nothing, but bounded.
+**Size.** A sandbox bounds attribute access and nothing else, so
+``{{ "A" * 200000000 }}`` was a one-expression memory bomb. Now bounded:
+``*`` and ``+`` are intercepted before they allocate (:data:`MAX_REPEAT`,
+:data:`MAX_OUTPUT_CHARS`), and :meth:`concat` accumulates the rendered output
+with a running check — which matters because a post-render ``len()`` bounds
+only what is *returned*: a 500-iteration loop emitting a legal 100 000
+characters each peaked at 100 MB before such a check could run. It is now
+1.1 MB. **Not** bounded: ``~``. Jinja compiles it to a ``Concat`` node, which
+is not a ``BinExpr`` (so ``intercepted_binops`` cannot see it) and which emits
+a call to ``str_join`` resolved from the compiled template's own namespace
+(so ``environment.concat`` does not see it either); the only hook left is a
+process-wide monkeypatch of ``jinja2.runtime``, which would also change how
+the *build* renders decks. So
+``{% set s = "A" * 100000 %}{% set s = s ~ s %}…`` still reaches ~1.2 GB, and
+nested ``{% for %}`` over ``range()`` still burns CPU without allocating.
+**A client holding the Studio token can therefore still exhaust this
+process.** That is accepted rather than fixed: the token is the trust boundary
+(decision D4), the same client can already rewrite any deck, and closing it
+properly means rendering in a subprocess under an rlimit — issue #698.
 
-And the boundary is not unlimited in the usual sense either: a sandbox escape
-is a sandbox escape, and the token remains the access gate.
+**The loader.** The sandbox constrains the *template*, not the
+``FileSystemLoader`` under it, so ``{% include %}`` still reads files. Jinja
+refuses traversal out of the loader's root (``..``, absolute paths, and the
+backslash forms), and ``_resolve_deck_id`` pins the deck under the slides dir
+— but the root is the deck's directory *and its whole subtree*, dotfiles
+included. Anything parked beside a deck (a ``.env``, a sidecar subdir) is
+readable by a token holder.
+
+And the sandbox boundary is not unlimited in the usual sense either: a sandbox
+escape is a sandbox escape, and the token remains the access gate.
 
 This is best-effort preview: any Jinja error (a macro that needs build-only
 context, a missing include, a sandbox refusal) is caught and returned as
@@ -71,32 +90,86 @@ def _preview_environment_class():
 
     ``ImmutableSandboxedEnvironment`` rather than the mutable one — Jinja's own
     recommendation for untrusted template text, and nothing here needs to call
-    a mutating method. On top of that it intercepts ``*``: the sandbox bounds
-    *attribute access* and nothing else, so sequence repetition is left as a
-    one-expression memory bomb.
+    a mutating method. On top of that it adds the size bounds the sandbox does
+    not provide: a sandbox constrains *attribute access* and nothing else, so
+    without these a single expression is a memory bomb. See the module
+    docstring for what remains unbounded and why.
     """
     from jinja2.sandbox import ImmutableSandboxedEnvironment
     from jinja2.sandbox import SecurityError as _SecurityError
 
     class _PreviewEnvironment(ImmutableSandboxedEnvironment):
-        intercepted_binops = frozenset({"*"})
+        # `*` and `+` go through the sandbox's binop interception. `~` does
+        # NOT, and cannot: Jinja compiles it to a `Concat` node, which is not a
+        # `BinExpr` (invisible to `intercepted_binops`) and which calls
+        # `str_join` from the compiled template's own namespace (invisible to
+        # `environment.concat` too). That gap is documented in the module
+        # docstring and pinned by a test; do not add "~" here expecting it to
+        # work — it is silently inert.
+        intercepted_binops = frozenset({"*", "+"})
 
         def call_binop(self, context, operator, left, right):  # noqa: ANN001
             if operator == "*":
                 _refuse_oversized_repeat(left, right)
                 _refuse_oversized_repeat(right, left)
+            else:
+                _refuse_oversized_concat(left, right)
             return super().call_binop(context, operator, left, right)
+
+        def concat(self, iterable) -> str:  # noqa: ANN001
+            """Join with a running bound, refusing before the total is built.
+
+            Jinja calls this once per render, over the root render function's
+            generator, so it is the one place that sees output growth
+            incrementally. Checking ``len()`` after ``"".join(...)`` — which is
+            what this replaced — bounds only what is *returned*: a
+            500-iteration loop each emitting a legal 100 000 characters peaked
+            at 100 MB before the check ran, and 1.1 MB after this.
+
+            (It does **not** see ``~``; that goes to ``str_join``. See above.)
+            """
+            parts: list[str] = []
+            total = 0
+            for part in iterable:
+                total += len(part)
+                if total > MAX_OUTPUT_CHARS:
+                    raise _SecurityError(f"preview output exceeded {MAX_OUTPUT_CHARS} characters")
+                parts.append(part)
+            return "".join(parts)
+
+    def _size_of(value) -> int | None:  # noqa: ANN001
+        """Length of a sequence whose growth is worth bounding, else ``None``.
+
+        Numbers and ``None`` return ``None``: they cannot grow, and treating
+        them as sized would make ordinary arithmetic pay for this check.
+        """
+        if isinstance(value, str | bytes | list | tuple):
+            return len(value)
+        return None
 
     def _refuse_oversized_repeat(sequence, count) -> None:  # noqa: ANN001
         """Raise before ``sequence * count`` allocates, not after."""
-        if not isinstance(sequence, str | bytes | list | tuple):
+        size = _size_of(sequence)
+        if size is None:
             return
         if isinstance(count, bool) or not isinstance(count, int):
             return
-        if count > MAX_REPEAT or len(sequence) * max(count, 0) > MAX_OUTPUT_CHARS:
+        if count > MAX_REPEAT or size * max(count, 0) > MAX_OUTPUT_CHARS:
             raise _SecurityError(
-                f"refusing to repeat a {len(sequence)}-item sequence {count} times "
+                f"refusing to repeat a {size}-item sequence {count} times "
                 f"(preview limit: {MAX_REPEAT} repeats / {MAX_OUTPUT_CHARS} characters)"
+            )
+
+    def _refuse_oversized_concat(left, right) -> None:  # noqa: ANN001
+        """Raise before ``left ~ right`` / ``left + right`` allocates."""
+        left_size, right_size = _size_of(left), _size_of(right)
+        if left_size is None and right_size is None:
+            return  # numeric addition — nothing to bound
+        total = (left_size or 0) + (right_size or 0)
+        if total > MAX_OUTPUT_CHARS:
+            raise _SecurityError(
+                f"refusing to build a {total}-item value "
+                f"(preview limit: {MAX_OUTPUT_CHARS} characters)"
             )
 
     return _PreviewEnvironment

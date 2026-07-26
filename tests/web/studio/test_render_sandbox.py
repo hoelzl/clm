@@ -4,7 +4,7 @@
 hands it whatever the client sent. On a plain ``jinja2.Environment`` a template
 can read ``__class__`` and walk out of the template namespace from there, which
 the review reproduced against this exact function. It now uses
-``SandboxedEnvironment``.
+``ImmutableSandboxedEnvironment``.
 
 **What these tests assert, and why not the obvious thing.** They do not assert
 "the render fails". The environment uses a lenient ``Undefined``, so a refused
@@ -128,8 +128,14 @@ class TestResourceBounds:
         assert text == "ab" * 10
         assert MAX_REPEAT > 10  # the limit is not so tight it breaks real macros
 
-    def test_output_over_the_cap_is_refused(self, tmp_path: Path, monkeypatch):
-        """Backstop for growth the repeat cap cannot see (loops, macros)."""
+    def test_output_is_bounded_while_it_accumulates(self, tmp_path: Path, monkeypatch):
+        """Growth the repeat cap cannot see: a loop of individually-legal emits.
+
+        The bound has to apply *during* the join, not to the finished string.
+        With a post-render ``len()`` check, ``{% for i in range(500) %}{{ "A" *
+        100000 }}{% endfor %}`` peaked at 100 MB before anything looked at it —
+        every repeat is legal and only the total is not.
+        """
         from clm.web.studio import render as render_mod
 
         monkeypatch.setattr(render_mod, "MAX_OUTPUT_CHARS", 100)
@@ -137,8 +143,53 @@ class TestResourceBounds:
         ok, error, text = render_j2_cell(tmp_path / DECK, source, "de")
 
         assert ok is False
-        assert "too large" in str(error)
+        assert "exceeded" in str(error)
         assert text == source
+
+    def test_concatenation_is_bounded(self, tmp_path: Path, monkeypatch):
+        """``+`` on sequences is intercepted before it allocates."""
+        from clm.web.studio import render as render_mod
+
+        monkeypatch.setattr(render_mod, "MAX_OUTPUT_CHARS", 1000)
+        source = '{% set s = "A" * 900 %}{% set s = s + s %}{{ s|length }}'
+        ok, error, _ = render_j2_cell(tmp_path / DECK, source, "de")
+
+        assert ok is False
+        assert "refusing to build" in str(error)
+
+    def test_a_large_render_is_not_silently_truncated(self, tmp_path: Path, monkeypatch):
+        """Refusing beats returning a partial deck — a truncated preview reads
+        as real content."""
+        from clm.web.studio import render as render_mod
+
+        monkeypatch.setattr(render_mod, "MAX_OUTPUT_CHARS", 50)
+        source = "{% for i in range(100) %}0123456789{% endfor %}"
+        ok, _error, text = render_j2_cell(tmp_path / DECK, source, "de")
+
+        assert ok is False
+        assert text == source  # the body, not a 50-character prefix
+
+    def test_tilde_concatenation_is_a_known_gap(self, tmp_path: Path):
+        """``~`` is deliberately NOT bounded — pinned so it stays a known fact.
+
+        Jinja compiles ``~`` to a ``Concat`` node, which is not a ``BinExpr``
+        (so ``intercepted_binops`` cannot see it) and which calls ``str_join``
+        resolved from the compiled template's own namespace (so
+        ``environment.concat`` cannot either). The only remaining hook is a
+        process-wide monkeypatch of ``jinja2.runtime``, which would change how
+        the *build* renders every deck.
+
+        A token holder can therefore still exhaust this process, which is
+        accepted: the token is the trust boundary (D4) and the same client can
+        already rewrite any deck (issue #698). This test documents the limit
+        rather than asserting a fix — if a future jinja2 or a deliberate change closes it,
+        this fails and the docstrings claiming the gap should be updated.
+        """
+        source = '{% set s = "A" * 1000 %}{% set s = s ~ s %}{{ s|length }}'
+        ok, _error, text = render_j2_cell(tmp_path / DECK, source, "de")
+
+        assert ok is True
+        assert text == "2000"
 
 
 class TestLegitimateRenderingSurvives:
