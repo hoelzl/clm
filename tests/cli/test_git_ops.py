@@ -22,6 +22,11 @@ from clm.cli.commands.git import (
 )
 from clm.core.course_spec import GitHubSpec, OutputTargetSpec
 
+#: Every git invocation leads with this (S5): git's ``ext::`` transport executes
+#: its argument, and the remote URLs CLM passes come from course repos. Pinned on
+#: its own in tests/infrastructure/test_repo_supplied_executables.py.
+_SAFE_TRANSPORT = ["-c", "protocol.ext.allow=never"]
+
 
 class TestGitHubSpec:
     """Tests for GitHubSpec class."""
@@ -722,7 +727,16 @@ class TestGitHelpers:
             mock_run.return_value = subprocess.CompletedProcess([], 0, "", "")
             run_git(tmp_path, "push", "-u", "origin", "master")
             cmd = mock_run.call_args[0][0]
-        assert cmd == ["git", "-C", str(tmp_path), "push", "-u", "origin", "master"]
+        assert cmd == [
+            "git",
+            *_SAFE_TRANSPORT,
+            "-C",
+            str(tmp_path),
+            "push",
+            "-u",
+            "origin",
+            "master",
+        ]
 
     def test_token_auth_injects_credential_helper(self, monkeypatch, tmp_path: Path):
         """CLM_GIT_TOKEN_AUTH=1 + token injects the ephemeral helper (#341)."""
@@ -734,7 +748,8 @@ class TestGitHelpers:
             cmd = mock_run.call_args[0][0]
         # Empty first helper clears configured helpers (GCM); the second one
         # reads the token from the environment — never from the command line.
-        assert cmd[1:5] == [
+        assert cmd[1:3] == _SAFE_TRANSPORT
+        assert cmd[3:7] == [
             "-c",
             "credential.helper=",
             "-c",
@@ -750,8 +765,8 @@ class TestGitHelpers:
             mock_run.return_value = subprocess.CompletedProcess([], 0, "", "")
             run_git_global("ls-remote", "https://gitlab.example.com/g/repo.git")
             cmd = mock_run.call_args[0][0]
-        assert cmd[1:3] == ["-c", "credential.helper="]
-        assert "$GITLAB_TOKEN" in cmd[4]
+        assert cmd[1:5] == [*_SAFE_TRANSPORT, "-c", "credential.helper="]
+        assert "$GITLAB_TOKEN" in cmd[6]
 
     def test_token_auth_without_token_is_a_no_op(self, monkeypatch, tmp_path: Path):
         monkeypatch.setenv("CLM_GIT_TOKEN_AUTH", "1")
@@ -761,7 +776,7 @@ class TestGitHelpers:
             mock_run.return_value = subprocess.CompletedProcess([], 0, "", "")
             run_git(tmp_path, "fetch", "origin")
             cmd = mock_run.call_args[0][0]
-        assert cmd == ["git", "-C", str(tmp_path), "fetch", "origin"]
+        assert cmd == ["git", *_SAFE_TRANSPORT, "-C", str(tmp_path), "fetch", "origin"]
 
     def test_remote_exists_true(self):
         """Test remote_exists returns True for existing remote."""

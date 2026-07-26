@@ -9,6 +9,7 @@ from xml.etree import ElementTree as ETree
 
 from attr import Factory, field, frozen
 
+from clm.core.remote_url import validate_remote_url
 from clm.core.utils.text_utils import Text, sanitize_file_name
 
 logger = logging.getLogger(__name__)
@@ -809,13 +810,16 @@ class GitHubSpec:
         # forced to also carry a placeholder ``<repository-base>``.
         if "{repository_base}" in template and not self.repository_base:
             return None
-        return template.format(
-            repository_base=self.repository_base,
-            remote_path=effective_remote_path,
-            repo=repo,
-            slug=slug,
-            lang=language,
-            suffix=suffix,
+        return validate_remote_url(
+            template.format(
+                repository_base=self.repository_base,
+                remote_path=effective_remote_path,
+                repo=repo,
+                slug=slug,
+                lang=language,
+                suffix=suffix,
+            ),
+            source="<repository-base>/<remote-template> in the course spec",
         )
 
     def derive_channel_remote_url(
@@ -869,14 +873,17 @@ class GitHubSpec:
                 template = "{repository_base}/{remote_path}/{repo}"
             else:
                 template = "{repository_base}/{repo}"
-        return template.format(
-            repository_base=self.repository_base,
-            remote_path=effective_remote_path,
-            repo=repo,
-            slug=slug,
-            lang=language,
-            suffix="",
-            stream=stream,
+        return validate_remote_url(
+            template.format(
+                repository_base=self.repository_base,
+                remote_path=effective_remote_path,
+                repo=repo,
+                slug=slug,
+                lang=language,
+                suffix="",
+                stream=stream,
+            ),
+            source="<repository-base>/<remote-template> in the course spec",
         )
 
 

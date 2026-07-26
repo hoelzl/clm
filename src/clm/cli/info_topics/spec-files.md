@@ -446,6 +446,14 @@ This element configures repository URLs derived from the top-level
 > remotes with `<project-slug>` + `<repository-base>` (and, if needed,
 > `<remote-path>`/`<remote-template>`) instead.
 
+> **Allowed URL forms (CLM {version}).** The derived URL must use one of
+> `https`, `http`, `ssh`, `git`, `file`, the scp-like `user@host:path` form, or a
+> local path. Git's `<helper>::<address>` remote-helper syntax is **refused**,
+> because the built-in `ext::` helper executes its argument as a shell command —
+> a spec is content, and content does not get to run programs. A refused value
+> fails at derivation with a message naming the element, and every git invocation
+> additionally runs with `protocol.ext.allow=never`.
+
 URL derivation (requires `<project-slug>`; `<repository-base>` is required only
 when the active template references `{repository_base}` — a self-contained
 `<remote-template>` such as `git@host:{remote_path}/{repo}.git` needs no base):

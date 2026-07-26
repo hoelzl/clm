@@ -51,6 +51,87 @@ DEFAULT_WORKER_IMAGES = {
 }
 
 
+#: Config keys a **repo-local** config file may not set: they name a program CLM
+#: runs (S5 of the 2026-07-24 adversarial review). `clm.toml` / `.clm/config.toml`
+#: are discovered *inside the course repo* by walking up from cwd, so without this
+#: a clone-and-build hands a repo-supplied binary to the first `.drawio` file — and
+#: it runs on the **host**, in every worker mode, whether or not the build executes
+#: a single notebook. Operator channels (user / system config, the environment) are
+#: unaffected; that is the whole distinction. See :data:`ALLOW_PROJECT_TOOL_PATHS_ENV_VAR`.
+#:
+#: Deliberately *not* on this list: ``jupyter.kernel_python``. It is a documented,
+#: load-bearing repo-local setting (PythonCourses commits ``kernel_python = ".venv"``
+#: so a globally-installed clm runs the notebook kernel in the repo's own venv), and
+#: it only takes effect when a Direct-mode kernel executes that same repo's notebook
+#: code on the host anyway — so banning it would break a real workflow to close
+#: nothing. See ``docs/user-guide/configuration.md``.
+PROJECT_FORBIDDEN_KEYS: tuple[tuple[str, str], ...] = (
+    ("external_tools", "plantuml_jar"),
+    ("external_tools", "drawio_executable"),
+)
+
+#: Set to ``1``/``true``/``yes`` to let the repo-local config set the keys above
+#: after all (e.g. a course repo that genuinely vendors its own PlantUML JAR). An
+#: env var is the right channel because it comes from the operator, not the repo.
+ALLOW_PROJECT_TOOL_PATHS_ENV_VAR = "CLM_ALLOW_PROJECT_TOOL_PATHS"
+
+_TRUTHY = ("1", "true", "yes", "on")
+
+
+def project_tool_paths_allowed() -> bool:
+    """Whether repo-local config may set the executable paths (opt-in, env-only)."""
+    return os.environ.get(ALLOW_PROJECT_TOOL_PATHS_ENV_VAR, "").strip().lower() in _TRUTHY
+
+
+def strip_project_forbidden_keys(data: dict[str, Any], source: Path | None) -> dict[str, Any]:
+    """Drop :data:`PROJECT_FORBIDDEN_KEYS` from a repo-local config's parsed data.
+
+    Returns a shallow-copied structure with the offending keys removed and a
+    WARNING logged per key naming the file — silence here would turn "my tool path
+    is ignored" into a mystery. A no-op when the opt-in env var is set, or when the
+    file sets none of the keys (the overwhelmingly common case).
+    """
+    if project_tool_paths_allowed():
+        return data
+    stripped: dict[str, Any] = data
+    for section, key in PROJECT_FORBIDDEN_KEYS:
+        table = stripped.get(section)
+        if not isinstance(table, dict) or key not in table:
+            continue
+        if stripped is data:  # copy lazily — only when there is something to strip
+            stripped = {k: (dict(v) if isinstance(v, dict) else v) for k, v in data.items()}
+            table = stripped[section]
+        value = table.pop(key)
+        logger.warning(
+            "Ignoring %s.%s = %r from the project config %s: a repo-local config "
+            "file may not choose which executable CLM runs. Set it in your user "
+            "config (`clm config init`) or the environment instead, or set %s=1 to "
+            "allow it for this invocation.",
+            section,
+            key,
+            value,
+            source if source is not None else "(project config)",
+            ALLOW_PROJECT_TOOL_PATHS_ENV_VAR,
+        )
+    return stripped
+
+
+class ProjectTomlConfigSettingsSource(TomlConfigSettingsSource):
+    """The repo-local TOML source, with executable paths stripped (S5).
+
+    The one settings source whose file arrives with the *content* being built, so
+    it is the one source that does not get to say which program runs. Everything
+    else about it is an ordinary ``TomlConfigSettingsSource``.
+    """
+
+    def __init__(self, settings_cls: type[BaseSettings], toml_file: Path) -> None:
+        super().__init__(settings_cls, toml_file=toml_file)
+        self._clm_source_path = toml_file
+
+    def __call__(self) -> dict[str, Any]:
+        return strip_project_forbidden_keys(super().__call__(), self._clm_source_path)
+
+
 class LegacyEnvSettingsSource(PydanticBaseSettingsSource):
     """Custom settings source to handle legacy environment variables.
 
@@ -873,11 +954,13 @@ class ClmConfig(BaseSettings):
             except Exception as e:
                 logger.debug(f"Could not load user config: {e}")
 
-        # Project config (highest priority TOML file)
+        # Project config (highest priority TOML file). Loaded through the
+        # filtering source: this file ships inside the course repo, so it may
+        # not name an executable (S5) — see ProjectTomlConfigSettingsSource.
         if config_files["project"]:
             try:
                 toml_sources.append(
-                    TomlConfigSettingsSource(
+                    ProjectTomlConfigSettingsSource(
                         settings_cls,
                         toml_file=config_files["project"],
                     )
@@ -1088,6 +1171,11 @@ auto_cleanup_on_session_start = true
 auto_vacuum_after_cleanup = false
 
 [external_tools]
+# NOTE: these two keys are IGNORED in a *project* config (clm.toml /
+# .clm/config.toml) — a course repo does not get to choose which program CLM
+# runs on the host. Set them in your user config or in the environment; to
+# override for one invocation, CLM_ALLOW_PROJECT_TOOL_PATHS=1.
+#
 # Path to PlantUML JAR file
 # Environment variable: PLANTUML_JAR (no CLM_ prefix)
 # Example: plantuml_jar = "/usr/local/share/plantuml-1.2024.6.jar"

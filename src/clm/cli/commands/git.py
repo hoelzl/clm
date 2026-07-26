@@ -35,6 +35,23 @@ TOKEN_AUTH_ENV_VAR = "CLM_GIT_TOKEN_AUTH"
 _TRUTHY = ("1", "true", "yes", "on")
 
 
+def _transport_safety_config_args() -> list[str]:
+    """``git -c`` options that stop a URL from being an execution vector (S5).
+
+    Git's ``ext::<command>`` transport **runs its argument as a shell command**,
+    and ``protocol.ext.allow`` defaults to ``user`` — i.e. allowed for exactly the
+    kind of direct invocation this module makes. Every remote URL CLM hands to git
+    ultimately comes from a course repo (``<repository-base>`` in the spec, or a
+    remote recorded in an output repo's ``.git/config``), so the transport itself
+    is pinned rather than trusted.
+
+    :func:`clm.core.remote_url.validate_remote_url` is the other layer: it rejects
+    the syntax where a *spec* produces it, with an error naming the spec element.
+    This one covers every path that never passes through a spec.
+    """
+    return ["-c", "protocol.ext.allow=never"]
+
+
 def _token_auth_config_args() -> list[str]:
     """``git -c`` options that authenticate HTTPS transport with the GitLab token.
 
@@ -153,7 +170,14 @@ def run_git(repo_path: Path, *args: str) -> subprocess.CompletedProcess[str]:
         CompletedProcess with stdout/stderr captured.
         In dry-run mode, returns a mock result with returncode=0.
     """
-    cmd = ["git", *_token_auth_config_args(), "-C", str(repo_path), *args]
+    cmd = [
+        "git",
+        *_transport_safety_config_args(),
+        *_token_auth_config_args(),
+        "-C",
+        str(repo_path),
+        *args,
+    ]
     logger.debug(f"Running: {_format_command(cmd)}")
 
     if _dry_run_mode.get():
@@ -183,7 +207,7 @@ def run_git_global(*args: str) -> subprocess.CompletedProcess[str]:
         CompletedProcess with stdout/stderr captured.
         In dry-run mode, returns a mock result with returncode=0.
     """
-    cmd = ["git", *_token_auth_config_args(), *args]
+    cmd = ["git", *_transport_safety_config_args(), *_token_auth_config_args(), *args]
     logger.debug(f"Running: {_format_command(cmd)}")
 
     if _dry_run_mode.get():
