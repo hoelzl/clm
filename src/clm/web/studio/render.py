@@ -1,4 +1,4 @@
-"""Tier-2 (no-execution) cell render — design §3.8.
+"""Tier-2 cell render — design §3.8.
 
 Expands the Jinja in an ``is_j2`` cell (header macros, ``{{ … }}`` expressions)
 server-side using the **same** bundled ``macros.j2`` and line-statement prefix as
@@ -6,11 +6,24 @@ the build pipeline, but **without a kernel** — so the phone sees an expanded
 header instead of raw ``{{ header_de("…") }}``. Plain (non-j2) cells need no
 round-trip; the client renders their markdown directly (tier 1).
 
+**"No-execution" means no kernel, not no code.** This tier used to be described
+as the no-execution one, which was wrong in the way that matters: Jinja
+rendering *is* execution, and on a plain ``Environment`` a template can walk
+``__class__``/``__mro__`` out of the template namespace and reach anything the
+process can. The 2026-07-24 adversarial review (S7) reproduced that against
+this function — the body being rendered is a **request body**, not a file from
+the course repo, so a client with the Studio token could run arbitrary Python
+in the server. It now renders in a :class:`~jinja2.sandbox.SandboxedEnvironment`,
+which blocks the attribute traversal those escapes depend on. That is a real
+boundary but not an unlimited one: a sandbox escape is a sandbox escape, and
+the token remains the access gate.
+
 This is best-effort preview: any Jinja error (a macro that needs build-only
-context, a missing include) is caught and returned as ``ok=False`` with the body
-unchanged, so the preview degrades to tier-1 rather than failing. It also runs
-with a **lenient** ``Undefined`` (not the build's ``StrictUndefined``) so a
-missing course variable renders empty instead of raising — preview, not parity.
+context, a missing include, a sandbox refusal) is caught and returned as
+``ok=False`` with the body unchanged, so the preview degrades to tier-1 rather
+than failing. It also runs with a **lenient** ``Undefined`` (not the build's
+``StrictUndefined``) so a missing course variable renders empty instead of
+raising — preview, not parity.
 """
 
 from __future__ import annotations
@@ -34,7 +47,8 @@ def render_j2_cell(deck_path: Path, body: str, lang: str | None) -> tuple[bool, 
     raises — a preview must not crash the request.
     """
     try:
-        from jinja2 import ChoiceLoader, Environment, FileSystemLoader, PackageLoader
+        from jinja2 import ChoiceLoader, FileSystemLoader, PackageLoader
+        from jinja2.sandbox import SandboxedEnvironment
 
         from clm.infrastructure.utils.path_utils import path_to_prog_lang
         from clm.workers.notebook.utils.prog_lang_utils import jinja_prefix_for
@@ -52,7 +66,10 @@ def render_j2_cell(deck_path: Path, body: str, lang: str | None) -> tuple[bool, 
         if deck_dir.exists():
             # Lets the cell `{% include %}` a sibling file shown in a slide.
             loaders.append(FileSystemLoader(str(deck_dir)))
-        env = Environment(
+        # Sandboxed, not plain: `body` is a request body. See the module
+        # docstring — a plain Environment lets a template reach `__class__` and
+        # walk out of the template namespace.
+        env = SandboxedEnvironment(
             loader=ChoiceLoader(loaders) if len(loaders) > 1 else loaders[0],
             autoescape=False,
             line_statement_prefix=jinja_prefix_for(prog_lang),

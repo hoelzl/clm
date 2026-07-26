@@ -64,20 +64,25 @@ def get_or_create_token(*, rotate: bool = False) -> str:
 
 
 def extract_token(request: Request) -> str | None:
-    """Pull the presented token from a request.
+    """Pull the presented token from a request's ``Authorization`` header.
 
-    Accepts either an ``Authorization: Bearer <token>`` header (used by the
-    PWA for REST/WS calls once paired) or a ``?token=`` query parameter (used
-    by the initial QR-code deep link, which the frontend then stores).
+    **Only** the header. A ``?token=`` query parameter used to be accepted as
+    well, for the QR-code deep link — but a URL is the worst place to keep a
+    credential that never expires: it lands in uvicorn's access log, in any
+    proxy's, in browser history, and in the ``Referer`` of anything the page
+    links out to (S7 of the 2026-07-24 review).
+
+    Nothing needed it. The deep link targets ``/studio/``, which is a static
+    mount with no auth at all — the token in that URL is read by the frontend,
+    not by this function — and the PWA has always sent the header on every API
+    call. The QR now carries the token in the URL *fragment*, which is never
+    transmitted to the server, so the pairing flow leaks nothing.
     """
     auth = request.headers.get("Authorization")
     if auth:
         scheme, param = get_authorization_scheme_param(auth)
         if scheme.lower() == "bearer" and param:
             return param
-    query_token = request.query_params.get("token")
-    if query_token:
-        return query_token
     return None
 
 

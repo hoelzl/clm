@@ -110,6 +110,13 @@ Each of these was an explicit fork resolved during design.
   already authenticated; the app stores the token (localStorage) and sends it on
   every API/WS call. One token, full access — anyone on the tailnet could reach
   the URL, so the token is the real gate.
+  **Amended (S7, 2026-07-26):** the QR URL carries the token in the URL
+  *fragment* (`/studio/#token=…`), not a query string, because a fragment is
+  never sent to the server and so cannot reach an access log; and the server no
+  longer accepts `?token=` as an API credential at all — only
+  `Authorization: Bearer`, plus the `clm-token.<token>` subprotocol on `/ws`.
+  Nothing needed the query form: the deep link targets the unauthenticated
+  `/studio/` static mount, where the token is read by the frontend.
 
 ### 3.3 Scope & navigation
 

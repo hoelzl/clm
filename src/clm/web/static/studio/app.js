@@ -11,15 +11,24 @@
 
 const TOKEN_KEY = "clm_studio_token";
 
-// --- token: from ?token= (QR deep link) then localStorage ---------------------
+// --- token: from #token= (QR deep link) then localStorage ---------------------
+// The QR code carries the token in the URL *fragment*, not the query string: a
+// fragment is never sent to the server, so it cannot land in uvicorn's access
+// log or in a proxy's. `?token=` is still read here for a link somebody
+// bookmarked or typed before the switch — that costs nothing on the client,
+// and the server no longer accepts it as an API credential either way.
 function resolveToken() {
   const url = new URL(window.location.href);
+  const fromHash = new URLSearchParams(url.hash.replace(/^#/, "")).get("token");
   const fromQuery = url.searchParams.get("token");
-  if (fromQuery) {
-    localStorage.setItem(TOKEN_KEY, fromQuery);
+  const paired = fromHash || fromQuery;
+  if (paired) {
+    localStorage.setItem(TOKEN_KEY, paired);
     url.searchParams.delete("token");
-    window.history.replaceState({}, "", url.pathname + url.hash);
-    return fromQuery;
+    // Drop the fragment as well as the query: leaving it would keep the token
+    // on screen in the address bar and in this history entry.
+    window.history.replaceState({}, "", url.pathname + url.search);
+    return paired;
   }
   return localStorage.getItem(TOKEN_KEY) || "";
 }
@@ -43,8 +52,31 @@ async function api(path, opts = {}) {
 }
 
 // --- tiny markdown renderer (tier-1 client preview) ---------------------------
+// Quotes are escaped too. Every caller interpolates the result into an HTML
+// string that reaches innerHTML, and inline() puts it inside href="…" — so
+// leaving `"` intact let a link target close the attribute and add its own
+// (S7 of the 2026-07-24 review). Deck text is not attacker-controlled in the
+// usual sense, but it is the one thing this app renders, and a cell body is
+// exactly what a compromised or shared course repo would carry.
 function esc(s) {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+// A markdown link target may not smuggle in a scripting scheme. Control
+// characters are stripped *before* the scheme test because browsers strip them
+// when resolving a URL, so `java\tscript:` would otherwise pass a naive check
+// and then execute.
+function safeUrl(u) {
+  const cleaned = u.replace(/[\u0000-\u0020\u007f]/g, "").trim();
+  if (/^[a-z][a-z0-9+.\-]*:/i.test(cleaned)) {
+    return /^(https?|mailto):/i.test(cleaned) ? cleaned : "#";
+  }
+  return cleaned; // relative, fragment, or protocol-relative — no scheme to abuse
 }
 function renderMarkdown(src) {
   const lines = src.split("\n");
@@ -74,7 +106,10 @@ function inline(s) {
   return esc(s)
     .replace(/`([^`]+)`/g, "<code>$1</code>")
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    .replace(
+      /\[([^\]]+)\]\(([^)]+)\)/g,
+      (_m, text, url) => `<a href="${safeUrl(url)}" target="_blank" rel="noopener">${text}</a>`
+    );
 }
 
 // --- comment-prefix handling (CLM markdown is `# `/`// ` prefixed in the .py) --
