@@ -5,9 +5,7 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from clm.web.app import create_app
-
-from .conftest import Course
+from .conftest import Course, make_app
 
 TOKEN = "test-studio-token"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
@@ -15,11 +13,7 @@ AUTH = {"Authorization": f"Bearer {TOKEN}"}
 
 @pytest.fixture()
 def client(course: Course) -> TestClient:
-    app = create_app(
-        db_path=course.slides_dir.parent / "jobs.db",
-        spec_path=course.spec_path,
-        studio_token=TOKEN,
-    )
+    app = make_app(course.spec_path, course.slides_dir.parent / "jobs.db", TOKEN)
     # No `with` → lifespan (and the filesystem watcher) is not started; routes
     # work because StudioService is wired in create_app, not the lifespan.
     return TestClient(app)

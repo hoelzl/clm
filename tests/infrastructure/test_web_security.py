@@ -158,8 +158,14 @@ class TestCheckRequestOrigin:
         assert reason is not None
         assert site in reason
 
-    def test_fetch_metadata_wins_over_a_matching_origin(self):
-        """A forged ``Origin`` cannot talk its way past ``Sec-Fetch-Site``."""
+    def test_fetch_metadata_wins_over_an_origin_matching_the_host(self):
+        """Matching the ``Host`` is not enough to beat ``Sec-Fetch-Site``.
+
+        Only an origin the *operator* named can do that — see
+        ``test_allowlisted_origin_beats_cross_site_fetch_metadata`` below. This
+        case passes the default empty allowlist, so a forged ``Origin`` echoing
+        the host buys nothing.
+        """
         headers = self._headers(
             sec_fetch_site="cross-site",
             origin="http://127.0.0.1:8008",
@@ -186,6 +192,52 @@ class TestCheckRequestOrigin:
         """``tailscale serve`` forwards ``https://…`` to a plain-HTTP upstream."""
         headers = self._headers(origin="https://box.ts.net", host="box.ts.net")
         assert check_request_origin(headers) is None
+
+    def test_allowlisted_origin_beats_cross_site_fetch_metadata(self):
+        """``--allowed-origin`` has to outrank ``Sec-Fetch-Site`` to mean anything.
+
+        Every current browser sends fetch metadata, so consulting the
+        allowlist only in the ``Origin`` fallback made the flag unreachable
+        for exactly the clients it exists to authorize: a named front-end got
+        a successful CORS preflight and a 403 on the request behind it.
+        """
+        headers = self._headers(
+            sec_fetch_site="cross-site",
+            origin="https://front.example",
+            host="127.0.0.1:8008",
+        )
+        assert check_request_origin(headers, allowed_origins=["https://front.example"]) is None
+
+    def test_unlisted_origin_is_still_refused_with_an_allowlist_present(self):
+        """Widening for one origin must not widen for its neighbours."""
+        headers = self._headers(
+            sec_fetch_site="cross-site",
+            origin="https://evil.example",
+            host="127.0.0.1:8008",
+        )
+        reason = check_request_origin(headers, allowed_origins=["https://front.example"])
+        assert reason is not None
+
+    def test_allowlist_matching_is_normalized_not_textual(self):
+        """A default port is not part of an origin a browser sends."""
+        headers = self._headers(sec_fetch_site="cross-site", origin="https://front.example:443")
+        assert check_request_origin(headers, allowed_origins=["https://front.example"]) is None
+
+    @pytest.mark.parametrize(
+        "origin",
+        [
+            "https://evil.example@front.example",  # userinfo: hostname is front.example
+            "https://front.exa\tmple",  # WHATWG strips the tab before resolving
+        ],
+    )
+    def test_origins_that_read_as_one_host_and_parse_as_another_are_refused(self, origin: str):
+        """No browser emits these; a hand-rolled client should not benefit from them."""
+        from starlette.datastructures import Headers
+
+        headers = Headers(
+            {"sec-fetch-site": "cross-site", "host": "127.0.0.1:8008", "origin": origin}
+        )
+        assert check_request_origin(headers, allowed_origins=["https://front.example"]) is not None
 
     def test_portless_host_still_refuses_an_origin_on_another_port(self):
         """A dev server on :3000 must not drive a dashboard reached as bare ``localhost``.
@@ -240,6 +292,32 @@ def _guarded_app(**kwargs) -> Starlette:
     )
     install_web_security(app, **kwargs)
     return app
+
+
+class TestUnusableAllowedOriginIsReported:
+    """An exemption the operator asked for and did not get must not be silent."""
+
+    def test_scheme_less_allowed_origin_warns(self, caplog):
+        import logging
+
+        from clm.infrastructure.web_security import OriginGuardMiddleware
+
+        with caplog.at_level(logging.WARNING, logger="clm.infrastructure.web_security"):
+            guard = OriginGuardMiddleware(None, allowed_origins=["box.tail1234.ts.net"])
+
+        assert guard.allowed_origins == []
+        assert "Ignoring --allowed-origin" in caplog.text
+
+    def test_usable_allowed_origin_is_kept_quietly(self, caplog):
+        import logging
+
+        from clm.infrastructure.web_security import OriginGuardMiddleware
+
+        with caplog.at_level(logging.WARNING, logger="clm.infrastructure.web_security"):
+            guard = OriginGuardMiddleware(None, allowed_origins=["https://box.tail1234.ts.net"])
+
+        assert guard.allowed_origins == ["https://box.tail1234.ts.net"]
+        assert "Ignoring" not in caplog.text
 
 
 class TestMiddlewareEndToEnd:

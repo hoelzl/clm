@@ -190,7 +190,12 @@ which drops the port. With the port dropped, the dashboard cannot tell that
 `Origin: https://box.example:8443` belongs to the request it received, and
 refuses actions on clients that do not send `Sec-Fetch-Site` (older browsers).
 `--allowed-origin https://box.example:8443` is the escape hatch if you cannot
-change the proxy config.
+change the proxy config. It is a **full exemption**, not a proxy-only tweak:
+any page served from that origin may drive every action route, whatever the
+browser's fetch metadata says. Name only origins you would let act as you, and
+pass a complete `scheme://host[:port]` — a value that is not a valid origin
+(a missing `https://`, say) is ignored with a warning at startup rather than
+silently granting nothing.
 
 Paths are contained too: file processing submitted through the dashboard must
 resolve under the recordings root, and course/section/deck names may not

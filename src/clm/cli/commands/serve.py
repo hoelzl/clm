@@ -38,7 +38,24 @@ logger = logging.getLogger(__name__)
 @click.option(
     "--cors-origin",
     multiple=True,
-    help="CORS allowed origins (can specify multiple times, default: *)",
+    help="Origin allowed to read responses cross-origin (repeatable). Default: "
+    "none — the dashboard serves its own frontend and needs no CORS. Naming an "
+    "origin here also lets it drive the dashboard, as --allowed-origin would.",
+)
+@click.option(
+    "--allowed-host",
+    multiple=True,
+    help="Extra Host header value to accept (repeatable). Needed when you reach "
+    "the dashboard under a name other than localhost — e.g. a Tailscale "
+    "hostname. Pass '*' to disable the check entirely.",
+)
+@click.option(
+    "--allowed-origin",
+    multiple=True,
+    help="Extra origin allowed to drive the dashboard and open /ws (repeatable), "
+    "e.g. https://host.tailnet.ts.net. A full exemption from the origin check — "
+    "any page on that origin may act as you — typically needed only behind a "
+    "reverse proxy that rewrites the Host header.",
 )
 @click.option(
     "--spec",
@@ -52,7 +69,18 @@ logger = logging.getLogger(__name__)
     is_flag=True,
     help="Rotate the persistent Studio pairing token (invalidates old QR codes).",
 )
-def serve(host, port, jobs_db_path, no_browser, reload, cors_origin, spec_path, rotate_token):
+def serve(
+    host,
+    port,
+    jobs_db_path,
+    no_browser,
+    reload,
+    cors_origin,
+    allowed_host,
+    allowed_origin,
+    spec_path,
+    rotate_token,
+):
     """Start web dashboard server.
 
     Launches FastAPI server with REST API and WebSocket support for
@@ -60,6 +88,13 @@ def serve(host, port, jobs_db_path, no_browser, reload, cors_origin, spec_path, 
     the Mobile Deck Studio — a phone-friendly authoring surface for the given
     course's decks (browse, search, and edit cells with byte-exact write-back
     and optimistic-concurrency guards against concurrent desktop edits).
+
+    The monitoring dashboard has no login: it binds localhost by default, only
+    answers to a Host that names this server, and refuses requests driven from
+    another origin — which is what keeps a web page open in another tab from
+    reading your build state. Use --allowed-host / --allowed-origin when you
+    deliberately reach it under a different name. The Studio surface adds a
+    bearer token on top, required by both its API and the /ws stream.
 
     \b
     Examples:
@@ -108,7 +143,18 @@ def serve(host, port, jobs_db_path, no_browser, reload, cors_origin, spec_path, 
         cors_origins=cors_origins,
         spec_path=spec_path,
         studio_token=studio_token,
+        allowed_hosts=list(allowed_host),
+        allowed_origins=list(allowed_origin),
     )
+
+    # A wildcard bind promises remote access the Host allowlist cannot deliver
+    # on its own; say so here rather than letting the user discover it as a
+    # wall of 400s from another machine.
+    from clm.infrastructure.web_security import remote_access_warning
+
+    reach_warning = remote_access_warning(host, allowed_host)
+    if reach_warning:
+        click.echo(f"Note: {reach_warning}", err=True)
 
     # Mobile Deck Studio pairing: print the URL + a scannable QR code.
     if spec_path is not None and studio_token is not None:
@@ -127,6 +173,17 @@ def serve(host, port, jobs_db_path, no_browser, reload, cors_origin, spec_path, 
             "Note: for phone access over Tailscale, run 'tailscale serve' so the "
             "PWA gets a trusted HTTPS origin."
         )
+        # `remote_access_warning` stays silent here — the bind really is
+        # loopback, which is correct for `tailscale serve`. But the proxy
+        # forwards the tailnet Host, and that is not in the allowlist, so
+        # following the advice above verbatim answers 400 to every request.
+        # Say it where the person about to do it is looking.
+        if not allowed_host:
+            click.echo(
+                "      Add '--allowed-host <your-tailnet-name>' too, or the "
+                "dashboard answers '400 Invalid host header' to the proxied "
+                "requests."
+            )
         click.echo("")
 
     # Open browser

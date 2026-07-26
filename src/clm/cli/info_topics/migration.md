@@ -2,6 +2,51 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## `clm serve` only answers to a `Host` that names it, and `--cors-origin` no longer defaults to `*` ({version})
+
+**Breaking only if you reach the dashboard from another machine, or relied on
+the wildcard CORS default.** A local `clm serve` on `localhost:8000` is
+unaffected.
+
+The Monitor dashboard has no login, so it now applies the same two browser
+guards `clm recordings serve` uses: every request must carry a `Host` header
+naming this server (loopback, plus whatever `--host` bound), and a mutating
+request must come from the dashboard's own origin. Without the first, a page
+that points its own DNS name at `127.0.0.1` is a genuinely same-origin caller
+and no origin check can tell.
+
+If you reach the dashboard under a Tailscale or LAN name, every request now
+answers:
+
+```
+400 Invalid host header: 'box.tail1234.ts.net'.
+```
+
+Fix: `clm serve --allowed-host box.tail1234.ts.net` (repeatable; `*` disables
+the check). Behind a reverse proxy that rewrites `Host`, add
+`--allowed-origin https://box.tail1234.ts.net`. Binding `--host 0.0.0.0`
+without either now prints a warning at startup, because the allowlist has no
+way to guess the name remote machines will use.
+
+`--cors-origin` defaults to *no* CORS middleware instead of `["*"]`. The old
+default paired `*` with credentials, which makes Starlette echo whichever
+origin asked; a dashboard serving its own frontend never needed CORS. Name
+your origins explicitly if a separate frontend calls the API — doing so also
+authorizes them to drive it, so `--allowed-origin` is not additionally needed.
+
+`--allowed-origin` is a full exemption from the origin check, not a
+proxy-only tweak: a named origin may drive every mutating route and open
+`/ws`, whatever fetch metadata the browser sends. Name only origins you would
+let act as you.
+
+One further change affects custom WebSocket clients: `/ws` now requires the
+Studio bearer token before accepting the handshake whenever `--spec` is in
+play. That covers the **whole endpoint**, including the `status`, `workers`
+and `jobs` channels — so a script that polled `/ws` for job status against a
+plain `clm serve` starts being refused once you add `--spec`. The bundled PWA
+presents the token automatically as the `clm-token.<token>` subprotocol; a
+custom client must do the same, or send `Authorization: Bearer <token>`.
+
 ## Docker worker images must be rebuilt — the Worker API now requires a token ({version})
 
 **Breaking for Docker mode only. Direct mode is unaffected.**

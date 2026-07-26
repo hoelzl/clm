@@ -10,10 +10,33 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from textwrap import dedent
+from typing import TYPE_CHECKING
 
 import pytest
 
 from clm.web.studio.service import StudioService
+
+if TYPE_CHECKING:
+    from fastapi import FastAPI
+
+
+def make_app(spec_path: Path, db_path: Path, token: str) -> FastAPI:
+    """Build the ``clm serve`` app wired for Studio, ready for ``TestClient``.
+
+    Exists so one place knows about ``allowed_hosts``: ``TestClient`` sends
+    ``Host: testserver``, and the production allowlist is loopback-only (the
+    DNS-rebinding guard from the 2026-07-24 review, D4), so a plain
+    ``create_app`` here answers every request with ``400 Invalid host header``.
+    """
+    from clm.web.app import create_app
+
+    return create_app(
+        db_path=db_path,
+        spec_path=spec_path,
+        studio_token=token,
+        allowed_hosts=["testserver"],
+    )
+
 
 # A single-language deck with two id'd markdown cells (distinct roles → distinct
 # keys) and one shared, id-less code cell (not per-cell addressable → read-only).

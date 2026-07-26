@@ -14,11 +14,10 @@ import sys
 import pytest
 from fastapi.testclient import TestClient
 
-from clm.web.app import create_app
 from clm.web.studio import sync_runner
 from clm.web.studio.service import InvalidStructuralOpError, StudioService
 
-from .conftest import Bilingual, Course
+from .conftest import Bilingual, Course, make_app
 
 TOKEN = "test-studio-token"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
@@ -116,11 +115,7 @@ async def _collect(bucket: list[dict], message: dict) -> None:
 class TestSyncEndpoint:
     @pytest.fixture()
     def bilingual_client(self, bilingual: Bilingual) -> TestClient:
-        app = create_app(
-            db_path=bilingual.slides_dir.parent / "jobs.db",
-            spec_path=bilingual.spec_path,
-            studio_token=TOKEN,
-        )
+        app = make_app(bilingual.spec_path, bilingual.slides_dir.parent / "jobs.db", TOKEN)
         return TestClient(app)
 
     def test_sync_starts(self, bilingual_client: TestClient, bilingual: Bilingual, monkeypatch):
@@ -148,11 +143,7 @@ class TestSyncEndpoint:
         service.end_sync(de_id)
 
     def test_sync_no_twin_is_400(self, course: Course):
-        app = create_app(
-            db_path=course.slides_dir.parent / "jobs.db",
-            spec_path=course.spec_path,
-            studio_token=TOKEN,
-        )
+        app = make_app(course.spec_path, course.slides_dir.parent / "jobs.db", TOKEN)
         client = TestClient(app)
         r = client.post("/api/studio/deck/sync", headers=AUTH, json={"deck_id": course.deck_id})
         assert r.status_code == 400

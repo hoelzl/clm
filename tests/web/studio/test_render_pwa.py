@@ -7,11 +7,10 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from clm.web.app import create_app
 from clm.web.studio.render import render_j2_cell
 from clm.web.studio.service import StudioService
 
-from .conftest import Course
+from .conftest import Course, make_app
 
 TOKEN = "test-studio-token"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
@@ -42,11 +41,7 @@ class TestTier2Render:
 class TestRenderEndpoint:
     @pytest.fixture()
     def client(self, course: Course) -> TestClient:
-        app = create_app(
-            db_path=course.slides_dir.parent / "jobs.db",
-            spec_path=course.spec_path,
-            studio_token=TOKEN,
-        )
+        app = make_app(course.spec_path, course.slides_dir.parent / "jobs.db", TOKEN)
         return TestClient(app)
 
     def test_render_cell_expands_j2(self, client: TestClient, course: Course):
@@ -79,11 +74,7 @@ class TestRenderEndpoint:
 class TestPwaAssets:
     @pytest.fixture()
     def client(self, course: Course) -> TestClient:
-        app = create_app(
-            db_path=course.slides_dir.parent / "jobs.db",
-            spec_path=course.spec_path,
-            studio_token=TOKEN,
-        )
+        app = make_app(course.spec_path, course.slides_dir.parent / "jobs.db", TOKEN)
         return TestClient(app)
 
     def test_manifest_served(self, client: TestClient):
