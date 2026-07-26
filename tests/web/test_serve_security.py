@@ -152,13 +152,19 @@ class TestChannelAllowlist:
             ws.send_json({"action": "subscribe", "channels": ["jobss"]})
             assert ws.receive_json() == {"type": "subscribed", "channels": []}
 
+    def test_known_channels_are_pinned(self):
+        """``KNOWN_CHANNELS`` is the subscription control — pin it both ways.
+
+        Widening it is what would let a client subscribe to something new, so
+        the set should not change without a test changing with it.
+        """
+        assert KNOWN_CHANNELS == {"status", "workers", "jobs", "studio"}
+
     def test_every_broadcast_channel_is_subscribable(self):
         """A channel nothing can subscribe to is a broadcast into the void.
 
-        Derived from the source rather than restated as a constant: the
-        allowlist and the ``broadcast(..., channel=...)`` call sites are two
-        lists that must agree, and a test that only re-asserts the constant
-        would not notice a new call site at all.
+        Complements the pin above by reading the *call sites*: the two lists
+        must agree, and the pin alone would not notice a new broadcast.
         """
         import re
         from pathlib import Path
@@ -167,13 +173,19 @@ class TestChannelAllowlist:
 
         broadcast = set()
         for path in Path(web_pkg.__file__).parent.rglob("*.py"):
+            # Skip the module that defines KNOWN_CHANNELS: its own
+            # `channel="status"` would keep the non-empty guard below satisfied
+            # even if the pattern stopped matching everywhere else, quietly
+            # turning this test vacuous.
+            if path.name == "websocket.py":
+                continue
             source = path.read_text(encoding="utf-8")
             broadcast.update(re.findall(r"""channel=["']([a-z_]+)["']""", source))
             # The studio sites go through a module constant rather than a
             # literal, so pick that up too.
             broadcast.update(re.findall(r"""^[A-Z_]*CHANNEL = ["']([a-z_]+)["']""", source, re.M))
 
-        assert broadcast, "found no broadcast channels — did the regex stop matching?"
+        assert broadcast, "found no broadcast channels — did the pattern stop matching?"
         assert broadcast <= KNOWN_CHANNELS, (
             f"not subscribable: {sorted(broadcast - KNOWN_CHANNELS)}"
         )

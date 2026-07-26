@@ -53,8 +53,9 @@ logger = logging.getLogger(__name__)
     "--allowed-origin",
     multiple=True,
     help="Extra origin allowed to drive the dashboard and open /ws (repeatable), "
-    "e.g. https://host.tailnet.ts.net. Only needed behind a reverse proxy that "
-    "rewrites the Host header.",
+    "e.g. https://host.tailnet.ts.net. A full exemption from the origin check — "
+    "any page on that origin may act as you — typically needed only behind a "
+    "reverse proxy that rewrites the Host header.",
 )
 @click.option(
     "--spec",
@@ -172,6 +173,17 @@ def serve(
             "Note: for phone access over Tailscale, run 'tailscale serve' so the "
             "PWA gets a trusted HTTPS origin."
         )
+        # `remote_access_warning` stays silent here — the bind really is
+        # loopback, which is correct for `tailscale serve`. But the proxy
+        # forwards the tailnet Host, and that is not in the allowlist, so
+        # following the advice above verbatim answers 400 to every request.
+        # Say it where the person about to do it is looking.
+        if not allowed_host:
+            click.echo(
+                "      Add '--allowed-host <your-tailnet-name>' too, or the "
+                "dashboard answers '400 Invalid host header' to the proxied "
+                "requests."
+            )
         click.echo("")
 
     # Open browser

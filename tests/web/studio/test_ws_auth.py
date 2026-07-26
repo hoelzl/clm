@@ -149,6 +149,18 @@ class TestHandshakeIsAccepted:
             ws.send_json({"type": "ping"})
             assert ws.receive_json() == {"type": "pong"}
 
+    def test_a_valid_subprotocol_wins_over_a_stale_one(self, client: TestClient):
+        """Every offered ``clm-token.*`` is checked, not just the first.
+
+        A phone that re-pairs without dropping its old value offers both.
+        """
+        with client.websocket_connect(
+            "/ws",
+            subprotocols=[f"{TOKEN_SUBPROTOCOL_PREFIX}stale", f"{TOKEN_SUBPROTOCOL_PREFIX}{TOKEN}"],
+        ) as ws:
+            ws.send_json({"type": "ping"})
+            assert ws.receive_json() == {"type": "pong"}
+
     def test_a_valid_header_wins_over_a_stale_subprotocol(self, client: TestClient):
         """Checking only the first credential found would refuse a valid one.
 

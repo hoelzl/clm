@@ -171,30 +171,37 @@ def offered_subprotocols(websocket: WebSocket) -> list[str]:
     return [part.strip() for part in raw.split(",") if part.strip()]
 
 
-def _token_subprotocol(websocket: WebSocket) -> str | None:
-    """Return the offered ``clm-token.*`` subprotocol, if the client sent one.
+def _token_subprotocols(websocket: WebSocket) -> list[str]:
+    """Return every offered ``clm-token.*`` subprotocol, in the order offered."""
+    return [o for o in offered_subprotocols(websocket) if o.startswith(TOKEN_SUBPROTOCOL_PREFIX)]
 
-    Echoed back on accept even when no token is required: RFC 6455 says a
-    client that offered protocols and got none selected must fail the
-    connection, so a Studio PWA pointed at a plain ``clm serve`` would
-    otherwise reconnect forever against a server that kept "accepting" it.
+
+def _echo_subprotocol(websocket: WebSocket) -> str | None:
+    """Return the subprotocol to select on accept, or ``None`` to select none.
+
+    Echoed even when no token is required: RFC 6455 says a client that offered
+    protocols and got none selected must fail the connection, so a Studio PWA
+    pointed at a plain ``clm serve`` would otherwise reconnect forever against
+    a server that kept "accepting" it.
+
+    Only ``clm-token.*`` is ever echoed. Selecting an arbitrary protocol the
+    server does not actually speak would be a worse lie than selecting none —
+    this covers CLM's own client, which offers exactly that one.
     """
-    for offered in offered_subprotocols(websocket):
-        if offered.startswith(TOKEN_SUBPROTOCOL_PREFIX):
-            return offered
-    return None
+    offered = _token_subprotocols(websocket)
+    return offered[0] if offered else None
 
 
 def _presented_tokens(websocket: WebSocket) -> list[str]:
-    """Return every credential the handshake carries, best-first.
+    """Return every credential the handshake carries, in the order offered.
 
-    Both are returned rather than the first one found: a debugging client that
-    copies the PWA's subprotocol list *and* sets ``Authorization`` should not
-    be refused because the stale half was checked and the valid half ignored.
+    All of them, rather than the first found: a client that offers a stale
+    subprotocol alongside a fresh one — or copies the PWA's subprotocol list
+    *and* sets ``Authorization`` — should authenticate on the valid credential
+    rather than be refused because a dead one was checked first.
     """
     candidates: list[str] = []
-    subprotocol = _token_subprotocol(websocket)
-    if subprotocol:
+    for subprotocol in _token_subprotocols(websocket):
         token = subprotocol[len(TOKEN_SUBPROTOCOL_PREFIX) :]
         if token:
             candidates.append(token)
@@ -219,16 +226,23 @@ async def websocket_endpoint(websocket: WebSocket):
     # alone would fail open in the one state that matters: a Studio app built
     # without a token, whose disk watcher is broadcasting on `studio` anyway.
     studio_enabled = getattr(state, "studio_service", None) is not None
-    subprotocol = _token_subprotocol(websocket)
+    subprotocol = _echo_subprotocol(websocket)
 
     if studio_enabled:
         expected = getattr(state, "studio_token", None)
         presented = _presented_tokens(websocket)
         if not expected or not any(tokens_match(token, expected) for token in presented):
-            logger.warning(
-                "Refused a /ws handshake with %s Studio token.",
-                "an invalid" if presented else "no",
-            )
+            # Name the *server's* fault separately: with the Studio enabled but
+            # no token configured, nothing the client sends can ever work, and
+            # blaming the client is the one message that would send an operator
+            # looking in the wrong place.
+            if not expected:
+                reason = "no Studio token is configured on this server"
+            elif presented:
+                reason = "an invalid Studio token"
+            else:
+                reason = "no Studio token"
+            logger.warning("Refused a /ws handshake: %s.", reason)
             # Close without accepting: the connection never exists, so the
             # client cannot send on it. uvicorn turns this into an HTTP 403.
             await websocket.close(code=WS_POLICY_VIOLATION)

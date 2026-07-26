@@ -34,10 +34,18 @@ origin asked; a dashboard serving its own frontend never needed CORS. Name
 your origins explicitly if a separate frontend calls the API — doing so also
 authorizes them to drive it, so `--allowed-origin` is not additionally needed.
 
-One further change needs no action: `/ws` now requires the Studio bearer token
-before accepting the handshake whenever `--spec` is in play. The bundled PWA
-presents it automatically as the `clm-token.<token>` subprotocol. A custom
-WebSocket client must do the same, or send `Authorization: Bearer <token>`.
+`--allowed-origin` is a full exemption from the origin check, not a
+proxy-only tweak: a named origin may drive every mutating route and open
+`/ws`, whatever fetch metadata the browser sends. Name only origins you would
+let act as you.
+
+One further change affects custom WebSocket clients: `/ws` now requires the
+Studio bearer token before accepting the handshake whenever `--spec` is in
+play. That covers the **whole endpoint**, including the `status`, `workers`
+and `jobs` channels — so a script that polled `/ws` for job status against a
+plain `clm serve` starts being refused once you add `--spec`. The bundled PWA
+presents the token automatically as the `clm-token.<token>` subprotocol; a
+custom client must do the same, or send `Authorization: Bearer <token>`.
 
 ## Docker worker images must be rebuilt — the Worker API now requires a token ({version})
 

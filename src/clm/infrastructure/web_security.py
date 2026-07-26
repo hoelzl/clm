@@ -216,9 +216,20 @@ def normalize_origin(origin: str) -> str | None:
 
     Returns ``None`` for ``"null"`` and anything unparseable — both of which
     are *not* this app's origin, which is the only question being asked.
+
+    Also refuses two forms a browser never emits but ``urlsplit`` quietly
+    accepts, because both let a string that *reads* as one host parse as
+    another: **userinfo** (``https://evil.example@front.example`` has hostname
+    ``front.example``) and embedded tab/CR/LF, which WHATWG parsing strips
+    before resolution (``https://front.exa<TAB>mple``). Neither is exploitable
+    from a browser — a page cannot set ``Origin`` — but this is a public
+    helper an app-agnostic caller may reach for, and refusing them costs
+    nothing.
     """
     value = origin.strip()
     if not value or value.lower() == "null":
+        return None
+    if any(c in value for c in "\t\r\n"):
         return None
     try:
         parts = urlsplit(value)
@@ -228,6 +239,8 @@ def normalize_origin(origin: str) -> str | None:
         # would turn a 403 into a 500 from inside the security middleware.
         return None
     if not parts.scheme or not parts.hostname:
+        return None
+    if parts.username is not None or parts.password is not None:
         return None
     scheme = parts.scheme.lower()
     host = _strip_trailing_dot(parts.hostname.lower())
@@ -421,8 +434,22 @@ class OriginGuardMiddleware:
         allowed_origins: Sequence[str] = (),
     ) -> None:
         self.app = app
-        normalized = [normalize_origin(o) for o in allowed_origins]
-        self.allowed_origins = [o for o in normalized if o is not None]
+        self.allowed_origins = []
+        for raw in allowed_origins:
+            normalized = normalize_origin(raw)
+            if normalized is None:
+                # Dropping this silently is the worst outcome: the operator
+                # asked for an exemption, the server starts fine, and every
+                # request from that origin still 403s with nothing connecting
+                # the two. A missing scheme is by far the likeliest typo.
+                logger.warning(
+                    "Ignoring --allowed-origin %r: not a valid origin. Expected "
+                    "scheme://host[:port], e.g. https://%s.",
+                    raw,
+                    raw or "host.example",
+                )
+                continue
+            self.allowed_origins.append(normalized)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         scope_type = scope["type"]

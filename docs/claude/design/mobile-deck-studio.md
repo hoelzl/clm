@@ -424,9 +424,14 @@ taken while building, several resolving open calls left by §9.1–§9.5:
   follow-up.~~ **Done** (S6 of the 2026-07-24 adversarial review): `/ws`
   requires the Studio token before `accept()` whenever a spec is configured,
   presented as the `clm-token.<token>` subprotocol since a browser cannot set
-  an `Authorization` header on a WebSocket. The Monitor channel is undisrupted
-  because the gate keys off Studio being enabled, not off the channel
-  subscribed to. The same review found the endpoint had in fact never worked —
+  an `Authorization` header on a WebSocket. **The "without disrupting the
+  Monitor channel" part was not achieved and was deliberately dropped**: the
+  gate keys off Studio being *enabled*, so under `--spec` the whole endpoint
+  needs the token, including a client that only wants `status`/`workers`/
+  `jobs`. Per-channel gating was rejected because it moves the check after
+  `accept()`, and no shipped client is affected — `static/` contains only
+  `studio/`. Revisit if a Monitor frontend is ever built.
+  The same review found the endpoint had in fact never worked —
   an unannotated route parameter made FastAPI treat it as a required query
   parameter — so the "low-sensitivity notifications" it was assumed to be
   carrying were never delivered at all.

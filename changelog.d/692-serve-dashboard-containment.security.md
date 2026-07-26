@@ -18,7 +18,9 @@
   WebSockets are exempt from CORS — so anyone who could reach the port could
   subscribe and read them, around the bearer token that guards every
   `/api/studio` route. When `--spec` is in play the token is now required
-  *before* the handshake is accepted. Browsers cannot set an `Authorization`
+  *before* the handshake is accepted — for the **whole endpoint**, so a script
+  that polled `/ws` for job status needs the token too once a spec is served.
+  Browsers cannot set an `Authorization`
   header on a WebSocket, so the Studio PWA presents it as the
   `clm-token.<token>` subprotocol (kept out of access logs, unlike a query
   parameter); scripts may still use `Authorization: Bearer`.
@@ -31,7 +33,12 @@
   allowlist only in its `Origin` fallback, which is unreachable whenever
   `Sec-Fetch-Site` is present — i.e. for every current browser. Naming an
   origin therefore bought a successful CORS preflight and a `403` on the
-  request behind it. The allowlist is now checked first.
+  request behind it. The allowlist is now checked first — which makes the flag
+  a full exemption from the origin check, so the docs now say so. A value that
+  is not a valid origin (a missing `https://`, say) is reported at startup
+  instead of being dropped in silence, and an `Origin` carrying userinfo or an
+  embedded tab/newline — forms no browser emits, and which parse to a
+  different host than they read as — is refused rather than normalized.
 - **A non-ASCII bearer token no longer raises from inside the auth check.**
   `secrets.compare_digest` rejects non-ASCII `str`, and headers arrive
   latin-1 decoded, so one byte above `0x7F` turned a bad token into a `500`.
