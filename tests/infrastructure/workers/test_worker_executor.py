@@ -211,10 +211,12 @@ class TestDirectWorkerExecutor:
     ):
         """Config-resolved PlantUML/Draw.io paths reach the Direct worker env.
 
-        This is the Phase 2 wiring: a ``clm.toml`` ``[external_tools]`` value
+        This is the Phase 2 wiring: a configured ``[external_tools]`` value
         (folded into ``get_config().external_tools`` — proven by the config
         tests) must be injected into the worker environment, not just a host
-        ``PLANTUML_JAR`` env var.
+        ``PLANTUML_JAR`` env var. Note the value has to come from the **user**
+        config or the environment: a repo-local ``clm.toml`` may not set these
+        (S5 — see tests/infrastructure/test_repo_supplied_executables.py).
         """
         mock_process = MagicMock()
         mock_process.pid = 12345

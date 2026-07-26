@@ -889,7 +889,7 @@ migrated to the new decision format.
 
 ---
 
-### Phase 3a — Repo-supplied executables (S5, pulled forward)  ▸ STATUS: not started
+### Phase 3a — Repo-supplied executables (S5, pulled forward)  ▸ STATUS: S5 DONE 2026-07-26; S4/S8 ride-alongs not started
 
 **Why it is here.** Pulled out of Phase 4 by the maintainer on 2026-07-26. S5 is
 the same finding class as Phase 0's cassette RCE — content that arrives with a
@@ -907,7 +907,46 @@ back to an allowlist if that proves too restrictive. Same treatment for
 **Ride-alongs, if and only if they stay cheap**: S4 (the `.clm-include`
 `rmtree`) and S8 (MCP containment) are adjacent and both amount to reusing an
 existing correct normalizer. If either grows, split it back out to Phase 4
-rather than letting this phase sprawl.
+rather than letting this phase sprawl. **Not** done with S5 — they stayed out to
+keep the security change reviewable in one sitting, and neither is blocked.
+
+**Notes from S5 (2026-07-26)**
+
+- **The sub-decision splits, and the corpus is what splits it.** "Repo-local
+  config may not set executable paths" is right for
+  `external_tools.{plantuml_jar,drawio_executable}` — nothing uses them from a
+  repo — but **PythonCourses commits `clm.toml` with `[jupyter] kernel_python =
+  ".venv"`**, and it is load-bearing: it is what makes a *globally* installed clm
+  run the notebook kernel in the repo's own venv (where the ML stack lives).
+  Banning that would have broken the maintainer's primary course repo on the
+  first build. Read a course repo's `clm.toml` before restricting a config tier.
+- **And `kernel_python` closes nothing anyway.** It only takes effect when a
+  Direct-mode kernel executes *that same repo's* notebook code on the host — i.e.
+  in the one situation where arbitrary repo code already runs with the same
+  privileges. An attacker gains nothing by redirecting the interpreter that was
+  about to run their notebook. The tool paths are different: they fire on diagram
+  conversion, on the host, regardless of output target or worker mode, and
+  regardless of whether a single notebook is executed. **That asymmetry is the
+  argument for the split, and it is worth keeping in mind for the rest of Phase 4
+  — "content chooses a program" is only interesting where the content was not
+  already going to be executed.**
+- **`ext::` is two layers, deliberately.** `clm.core.remote_url.validate_remote_url`
+  rejects spec-derived URLs (error names the element), and every git invocation
+  now carries `-c protocol.ext.allow=never` — which covers URLs that never pass
+  through a spec, e.g. one hand-edited into an output repo's `.git/config`.
+  Neither layer alone is enough. Watch the ordering: the `-c` options must precede
+  the git subcommand, which is why they are prepended in `run_git`/`run_git_global`
+  rather than appended.
+- **A `::` check has to come before any scp-like fallback.** `ext::sh -c '…'`
+  parses as "host `ext`, path `:sh -c …`" under a naive `host:path` rule, so the
+  helper syntax must be refused first. Also: a **single-letter** scheme is a
+  Windows drive (`C:\repos\x`), so the bare-scheme pattern requires ≥2 characters.
+- **Two existing tests asserted the vulnerable behaviour** (`test_toml_file_loading`
+  and `test_all_config_options` both set `plantuml_jar` from a project-tier
+  `clm.toml`). They were rewritten to cover a non-restricted key, with the
+  restriction and its operator-tier escape hatches pinned in
+  `tests/infrastructure/test_repo_supplied_executables.py`. Expect this shape when
+  removing a capability: the test suite documents what *was* true.
 
 ---
 

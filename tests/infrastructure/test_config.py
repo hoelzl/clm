@@ -171,14 +171,16 @@ class TestConfigurationFiles:
         for var in ["PLANTUML_JAR", "DRAWIO_EXECUTABLE"]:
             monkeypatch.delenv(var, raising=False)
 
-        # Create a temporary config file
+        # Create a temporary config file. NB `external_tools` is deliberately not
+        # exercised here: a repo-local config may no longer set an executable path
+        # (S5) — see TestProjectConfigMayNotChooseExecutables.
         config_file = tmp_path / "clm.toml"
         config_file.write_text("""
 [logging]
 log_level = "WARNING"
 
-[external_tools]
-plantuml_jar = "/custom/plantuml.jar"
+[jupyter]
+kernel_python = ".venv"
 """)
 
         # Change to temp directory so config file is found
@@ -186,7 +188,7 @@ plantuml_jar = "/custom/plantuml.jar"
 
         config = ClmConfig()
         assert config.logging.log_level == "WARNING"
-        assert config.external_tools.plantuml_jar == "/custom/plantuml.jar"
+        assert config.jupyter.kernel_python == ".venv"
 
     def test_dotclm_directory_config(self, tmp_path, monkeypatch):
         """Test loading configuration from .clm/config.toml."""
@@ -442,12 +444,11 @@ plantuml_jar = "/project/plantuml.jar"
         for var in env_vars_to_clear:
             monkeypatch.delenv(var, raising=False)
 
+        # `external_tools` intentionally absent: a repo-local config may no longer
+        # set an executable path (S5). The user tier and the environment still can
+        # — pinned in tests/infrastructure/test_repo_supplied_executables.py.
         config_file = tmp_path / "clm.toml"
         config_file.write_text("""
-[external_tools]
-plantuml_jar = "/test/plantuml.jar"
-drawio_executable = "/test/drawio"
-
 [logging]
 log_level = "DEBUG"
 enable_test_logging = true
@@ -472,8 +473,6 @@ worker_id = "test-worker-1"
         config = ClmConfig()
 
         # Verify all settings were loaded
-        assert config.external_tools.plantuml_jar == "/test/plantuml.jar"
-        assert config.external_tools.drawio_executable == "/test/drawio"
         assert config.logging.log_level == "DEBUG"
         assert config.logging.enable_test_logging is True
         assert config.progress.update_interval == 5

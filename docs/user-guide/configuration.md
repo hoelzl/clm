@@ -214,6 +214,23 @@ plantuml_jar = "/usr/local/share/plantuml.jar"
 drawio_executable = "/usr/bin/drawio"
 ```
 
+> **These two keys are ignored in a *project* config file.** `clm.toml` /
+> `.clm/config.toml` are found by walking up from the working directory, so they
+> are found **inside a cloned course repo** — and CLM then runs whatever program
+> they name, on the host, before any of that repo's content is executed. A
+> course repo does not get to choose that, so the keys are dropped from the
+> project tier with a warning naming the file; set them in your **user** config
+> (`clm config init`) or in the environment instead. If a repo genuinely needs to
+> supply the path (a vendored PlantUML JAR, say), the operator opts in per
+> invocation with `CLM_ALLOW_PROJECT_TOOL_PATHS=1` — an environment variable
+> precisely because the repo cannot set it.
+>
+> Only executable paths are restricted. Everything else in a project config,
+> including `[jupyter] kernel_python` (which points the Direct-mode notebook
+> kernel at a course venv — see below), keeps working: that one selects the
+> interpreter for the repo's *own* notebook code, which the build executes
+> anyway.
+
 (Docker workers use the tools baked into the worker image, so a host path does
 not apply to them.)
 

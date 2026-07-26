@@ -2923,6 +2923,17 @@ Manage CLM configuration files.
 | `config locate` | Show configuration file locations |
 | `config show` | Show current configuration values (effective DB paths + config sections). Add `--json` for machine-readable output. |
 
+**A project config may not set an executable path (CLM {version}).** Project
+config (`clm.toml` / `.clm/config.toml`) is found by walking up from the working
+directory — i.e. *inside a cloned course repo* — so
+`external_tools.plantuml_jar` and `external_tools.drawio_executable` are ignored
+there (with a warning naming the file): CLM would otherwise run a program the
+course content chose, on the host, before any of that content executed. Set them
+in the **user** config or in the environment (`PLANTUML_JAR` /
+`DRAWIO_EXECUTABLE`), or opt in for one invocation with
+`CLM_ALLOW_PROJECT_TOOL_PATHS=1`. Every other project-config key is unaffected,
+including `[jupyter] kernel_python`.
+
 ### `clm cache` (CLM {version}+)
 
 Read-only build-cache inspection.

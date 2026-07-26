@@ -2,6 +2,49 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## A course repo can no longer choose which executable CLM runs ({version})
+
+**Breaking only for a course repo that sets an external-tool path in its own
+`clm.toml` / `.clm/config.toml`.** None of the maintained course repos does.
+
+Two keys are now **ignored** when they come from a *project* config file, with a
+warning naming the file:
+
+- `external_tools.plantuml_jar`
+- `external_tools.drawio_executable`
+
+Project config is discovered by walking up from the working directory, so it is
+found **inside a cloned course repo** — and CLM then runs the program it names,
+on the host, in every worker mode, before any of that repo's content executes.
+That is content choosing a binary, which is the same class as the cassette
+loader fixed in 1.22.1.
+
+Set these in your **user** config (`clm config init`) or in the environment
+(`PLANTUML_JAR` / `DRAWIO_EXECUTABLE`) instead — both unchanged. If a repo
+genuinely must supply the path (a vendored PlantUML JAR), the operator opts in
+per invocation:
+
+```
+CLM_ALLOW_PROJECT_TOOL_PATHS=1 clm build course.xml
+```
+
+An environment variable precisely because a repo cannot set one.
+
+**Not affected**: everything else in a project config, including
+`[jupyter] kernel_python`. That one points the Direct-mode notebook kernel at a
+course venv (PythonCourses commits `kernel_python = ".venv"`), and it selects the
+interpreter for the repo's *own* notebook code, which a Direct-mode build
+executes on the host anyway — restricting it would break a documented workflow
+and close nothing.
+
+**Git remote URLs are also validated now.** A URL derived from
+`<repository-base>` / `<remote-template>` must use `https`, `http`, `ssh`, `git`,
+`file`, the scp-like `user@host:path` form, or a local path. Git's
+`<helper>::<address>` remote-helper syntax is refused — the built-in `ext::`
+helper executes its argument as a shell command — and every git invocation now
+runs with `protocol.ext.allow=never`. A spec using such a URL fails at derivation
+with a message naming the element.
+
 ## `clm slides sync record` can now refuse a deck it used to bank ({version})
 
 **Breaking only for a deck whose separated voiceover companion carries a
