@@ -244,8 +244,17 @@ class TestGitTransportIsPinned:
             return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
         monkeypatch.setattr(subprocess, "run", fake_run)
-        git_cmd.run_git(tmp_path, "status")
-        git_cmd.run_git_global("ls-remote", "https://example.com/repo")
+        # `_dry_run_mode` is a module-level ContextVar, and a `--dry-run` test
+        # that ran earlier in the same xdist worker leaves it True — at which
+        # point both runners echo the command and never reach subprocess, so this
+        # test saw zero calls. It passed locally and failed in CI purely on test
+        # order. Pin the value instead of inheriting whatever ran before.
+        token = git_cmd._dry_run_mode.set(False)
+        try:
+            git_cmd.run_git(tmp_path, "status")
+            git_cmd.run_git_global("ls-remote", "https://example.com/repo")
+        finally:
+            git_cmd._dry_run_mode.reset(token)
 
         assert len(seen) == 2
         for cmd in seen:
