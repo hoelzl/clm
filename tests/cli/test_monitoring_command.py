@@ -315,6 +315,42 @@ class TestServeCommand:
         assert result.exit_code == 0, result.output
         assert "--allowed-host" in result.output
 
+    def test_pairing_url_puts_the_token_in_the_fragment(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A query-string token lands in uvicorn's access log; a fragment never
+        leaves the browser.
+
+        The URL is printed and QR-encoded, so this is the one place the token
+        is deliberately embedded in a URL — it has to be the half that is not
+        transmitted.
+        """
+        db_path = tmp_path / "jobs.db"
+        db_path.touch()
+        spec = tmp_path / "course.xml"
+        spec.write_text("<course/>", encoding="utf-8")
+
+        fake_web_app_module = MagicMock()
+        fake_web_app_module.create_app = MagicMock(return_value="app")
+
+        import sys
+
+        monkeypatch.setitem(sys.modules, "uvicorn", MagicMock())
+        monkeypatch.setitem(sys.modules, "clm.web.app", fake_web_app_module)
+        monkeypatch.setattr(
+            "clm.web.studio.auth.get_or_create_token", lambda rotate=False: "TESTTOKEN"
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(
+            serve,
+            ["--jobs-db-path", str(db_path), "--no-browser", "--spec", str(spec)],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "/studio/#token=TESTTOKEN" in result.output
+        assert "?token=" not in result.output
+
     def test_no_warning_when_the_configuration_is_coherent(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):

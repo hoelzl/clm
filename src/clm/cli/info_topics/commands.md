@@ -4387,7 +4387,22 @@ rather than a silent clobber. A filesystem watcher also pushes a
 "changed on disk — reload" signal over the WebSocket. On startup the command
 prints the Studio URL and a scannable QR code carrying a persistent bearer
 token; for phone access over Tailscale, run `tailscale serve` so the PWA gets a
-trusted HTTPS origin.
+trusted HTTPS origin, and pass `--allowed-host <your-tailnet-name>` so the
+dashboard accepts the proxied `Host`.
+
+The QR URL carries the token in the URL **fragment** (`/studio/#token=…`),
+which browsers never transmit — so pairing cannot write the token into
+uvicorn's access log, a proxy's, or an outbound `Referer`. API calls
+authenticate with `Authorization: Bearer` only; `?token=` is **not** accepted
+(it was, until CLM {version}). The server-side `is_j2` cell preview renders in
+a Jinja sandbox: it expands the bundled header macros without a kernel, and a
+template cannot walk Python attributes (`__class__` and friends) out of the
+template namespace, nor repeat a sequence into a memory bomb. The sandbox does
+not restrict the template *loader*, so `{% include %}` can still read files.
+Traversal out of the deck's directory is refused, but the reach is that
+directory **and its whole subtree, dotfiles included** — so anything parked
+beside a deck (a `.env`, a sidecar subdir, a `.clm/` ledger) is readable by
+anyone holding the Studio token.
 
 This is the P0/P1 slice (read-only browse + the cell-editing concurrency core).
 Structural insert/delete/move, the bilingual language lock + sync-to-other-

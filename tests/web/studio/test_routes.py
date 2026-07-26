@@ -27,9 +27,26 @@ class TestAuth:
         r = client.get("/api/studio/decks", headers={"Authorization": "Bearer nope"})
         assert r.status_code == 401
 
-    def test_token_via_query_param(self, client: TestClient):
+    def test_token_via_query_param_is_rejected(self, client: TestClient):
+        """``?token=`` used to authenticate; a URL is the worst place for a
+        credential.
+
+        It reaches uvicorn's access log, any proxy's, browser history and the
+        ``Referer`` of outbound links, and the Studio token does not expire
+        (S7 of the 2026-07-24 review). Nothing needed it: the QR deep link
+        targets the unauthenticated ``/studio/`` static mount and is read by
+        the frontend, which then sends the header.
+        """
         r = client.get(f"/api/studio/decks?token={TOKEN}")
-        assert r.status_code == 200
+        assert r.status_code == 401
+
+    def test_query_param_cannot_stand_in_for_a_bad_header(self, client: TestClient):
+        """A valid query token must not rescue an invalid header."""
+        r = client.get(f"/api/studio/decks?token={TOKEN}", headers={"Authorization": "Bearer nope"})
+        assert r.status_code == 401
+
+    def test_header_still_works(self, client: TestClient):
+        assert client.get("/api/studio/decks", headers=AUTH).status_code == 200
 
 
 class TestReadEndpoints:

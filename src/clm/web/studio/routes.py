@@ -18,6 +18,7 @@ from collections.abc import Callable
 from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from starlette.concurrency import run_in_threadpool
 
 from clm.web.studio import sync_runner
 from clm.web.studio.auth import token_matches
@@ -253,16 +254,20 @@ async def sync_deck(request: Request, req: SyncRequest) -> SyncStartResult:
     dependencies=[Depends(require_token)],
 )
 async def render_cell(request: Request, req: RenderCellRequest) -> RenderCellResult:
-    """Tier-2 (no-exec) render of one ``is_j2`` cell (P4).
+    """Tier-2 (kernel-free) render of one ``is_j2`` cell (P4).
 
     Expands the cell's Jinja (header macros, ``{{ … }}``) server-side through the
     build's bundled macros, no kernel. Plain cells (or any failure) return the
     body unchanged with ``rendered=False`` so the phone falls back to tier-1.
+
+    Runs in a worker thread: Jinja rendering is CPU-bound and the body is
+    client-supplied, so doing it inline would let one request hold the event
+    loop and stall every other request plus the disk watcher.
     """
     service = get_service(request)
     try:
-        rendered, error, text = service.render_cell(
-            req.deck_id, req.body, is_j2=req.is_j2, lang=req.lang
+        rendered, error, text = await run_in_threadpool(
+            service.render_cell, req.deck_id, req.body, is_j2=req.is_j2, lang=req.lang
         )
     except InvalidDeckIdError as e:
         raise HTTPException(status_code=400, detail=f"Invalid deck id: {e}") from e

@@ -161,7 +161,12 @@ def serve(
         from clm.web.studio import qr
 
         display_host = host if host != "0.0.0.0" else "localhost"
-        studio_url = f"http://{display_host}:{port}/studio/?token={studio_token}"
+        # The token rides in the URL *fragment*: browsers never send a fragment
+        # to the server, so pairing cannot write the token into uvicorn's
+        # access log, a proxy's, or an outbound Referer. `/studio/` itself is
+        # an unauthenticated static mount — the frontend reads the token from
+        # the fragment and stores it, then uses the Authorization header.
+        studio_url = f"http://{display_host}:{port}/studio/#token={studio_token}"
         click.echo("")
         click.echo(f"Mobile Deck Studio: {studio_url}")
         if qr.is_available():

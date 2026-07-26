@@ -14,7 +14,14 @@
  */
 "use strict";
 
-const SHELL_CACHE = "clm-studio-shell-v1";
+// Bump SHELL_CACHE whenever a shell asset changes. Changing this file's bytes
+// is what makes the browser re-run `install`, and the new cache name is what
+// makes `activate` drop the old contents — a shell asset edited without a bump
+// is served from cache forever. That is not hypothetical: app.js changed three
+// times under `-v1`, so the S7 XSS fix would have reached no installed PWA at
+// all. The stale-while-revalidate handler below is the belt to this braces —
+// it means a missed bump costs one stale load rather than permanent staleness.
+const SHELL_CACHE = "clm-studio-shell-v2";
 const API_CACHE = "clm-studio-api-v1";
 const SHELL = [
   "/studio/",
@@ -45,9 +52,47 @@ self.addEventListener("fetch", (event) => {
   if (req.method !== "GET") return; // writes pass through, never cached
   const url = new URL(req.url);
 
-  // App shell: cache-first.
+  // App shell: stale-while-revalidate. Answer from cache (instant, works
+  // offline) but always refetch in the background and store the result, so an
+  // updated app.js is picked up on the next load even if SHELL_CACHE was not
+  // bumped. Pure cache-first made a shell asset permanently immutable, which
+  // is how a security fix ends up undeliverable.
+  //
+  // Only `resp.ok` responses are cached: storing a 404 or a 5xx from a restart
+  // would pin the error in place, which is the same failure in a new costume.
   if (url.pathname.startsWith("/studio/")) {
-    event.respondWith(caches.match(req).then((hit) => hit || fetch(req)));
+    event.respondWith(
+      caches.match(req).then((hit) => {
+        const fresh = fetch(req).then((resp) => {
+          if (resp && resp.ok && resp.type !== "opaque") {
+            const copy = resp.clone();
+            return caches
+              .open(SHELL_CACHE)
+              .then((cache) => cache.put(req, copy))
+              .catch(() => {}) // quota / partial response — not worth failing over
+              .then(() => resp);
+          }
+          return resp;
+        });
+
+        if (hit) {
+          // Answer from cache *now* — that is the "stale" half, and returning
+          // `fresh` here instead would silently make this network-first and
+          // cost the offline guarantee. The revalidation continues in the
+          // background, held open by waitUntil: respondWith settles
+          // immediately, and the browser may kill the worker once every
+          // extendable event has settled, which would abort the refetch and
+          // restore the permanent staleness this handler exists to prevent.
+          event.waitUntil(fresh.catch(() => {}));
+          return hit;
+        }
+        // Cache miss: the network is the only answer, so let a failure
+        // propagate as a failed fetch rather than resolving to `undefined`
+        // (respondWith rejects on a non-Response, which surfaces as a
+        // confusing console error instead of a network error).
+        return fresh;
+      })
+    );
     return;
   }
 

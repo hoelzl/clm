@@ -11,15 +11,24 @@
 
 const TOKEN_KEY = "clm_studio_token";
 
-// --- token: from ?token= (QR deep link) then localStorage ---------------------
+// --- token: from #token= (QR deep link) then localStorage ---------------------
+// The QR code carries the token in the URL *fragment*, not the query string: a
+// fragment is never sent to the server, so it cannot land in uvicorn's access
+// log or in a proxy's. `?token=` is still read here for a link somebody
+// bookmarked or typed before the switch — that costs nothing on the client,
+// and the server no longer accepts it as an API credential either way.
 function resolveToken() {
   const url = new URL(window.location.href);
+  const fromHash = new URLSearchParams(url.hash.replace(/^#/, "")).get("token");
   const fromQuery = url.searchParams.get("token");
-  if (fromQuery) {
-    localStorage.setItem(TOKEN_KEY, fromQuery);
+  const paired = fromHash || fromQuery;
+  if (paired) {
+    localStorage.setItem(TOKEN_KEY, paired);
     url.searchParams.delete("token");
-    window.history.replaceState({}, "", url.pathname + url.hash);
-    return fromQuery;
+    // Drop the fragment as well as the query: leaving it would keep the token
+    // on screen in the address bar and in this history entry.
+    window.history.replaceState({}, "", url.pathname + url.search);
+    return paired;
   }
   return localStorage.getItem(TOKEN_KEY) || "";
 }
@@ -43,8 +52,46 @@ async function api(path, opts = {}) {
 }
 
 // --- tiny markdown renderer (tier-1 client preview) ---------------------------
+// Quotes are escaped too. Every caller interpolates the result into an HTML
+// string that reaches innerHTML, and inline() puts it inside href="…" — so
+// leaving `"` intact let a link target close the attribute and add its own
+// (S7 of the 2026-07-24 review). Deck text is not attacker-controlled in the
+// usual sense, but it is the one thing this app renders, and a cell body is
+// exactly what a compromised or shared course repo would carry.
 function esc(s) {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+// A markdown link target may not smuggle in a scripting scheme, nor point
+// off-origin without one.
+//
+// The cleaning mirrors how a browser parses a URL, deliberately and no more
+// than that: tab/CR/LF are removed *anywhere*, and C0 controls or spaces are
+// trimmed from both ends. Doing less lets `java<TAB>script:` through, because
+// the browser strips the tab when it resolves the URL. Doing more is wrong
+// too: JS `.trim()` also eats U+00A0/U+2028/U+FEFF, which browsers do *not*
+// strip, so trimming those could promote a string the browser reads as a
+// relative path into one it reads as a scheme.
+function safeUrl(u) {
+  const cleaned = u
+    .replace(/[\u0009\u000a\u000d]/g, "")
+    .replace(/^[\u0000-\u0020]+|[\u0000-\u0020]+$/g, "");
+  if (/^[a-z][a-z0-9+.\-]*:/i.test(cleaned)) {
+    return /^(https?|mailto):/i.test(cleaned) ? cleaned : "#";
+  }
+  // No scheme in the string, but the browser supplies the page's — so an
+  // authority-relative target is a live off-origin navigation from a deck's
+  // link, on a page holding a non-expiring bearer token. WHATWG parsing
+  // treats `\` as `/` for http(s), so `/\evil.example` and `\\evil.example`
+  // reach evil.example just as `//evil.example` does; all four leading-pair
+  // combinations have to go. Ordinary relative paths and fragments are fine.
+  if (/^[/\\]{2}/.test(cleaned)) return "#";
+  return cleaned;
 }
 function renderMarkdown(src) {
   const lines = src.split("\n");
@@ -74,7 +121,10 @@ function inline(s) {
   return esc(s)
     .replace(/`([^`]+)`/g, "<code>$1</code>")
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    .replace(
+      /\[([^\]]+)\]\(([^)]+)\)/g,
+      (_m, text, url) => `<a href="${safeUrl(url)}" target="_blank" rel="noopener">${text}</a>`
+    );
 }
 
 // --- comment-prefix handling (CLM markdown is `# `/`// ` prefixed in the .py) --
@@ -90,22 +140,22 @@ function stripCommentPrefix(text, token) {
   }).join("\n");
 }
 
-// Tier-2 (P4): ask the server to expand an is_j2 cell's Jinja, then inject the
-// expanded HTML (header macros emit trusted HTML from our own desktop). Falls
-// back silently to the tier-1 markdown already shown.
-function renderJ2(cell, bodyEl, token) {
-  api("/deck/render-cell", {
-    method: "POST",
-    body: JSON.stringify({ deck_id: currentDeck.deck_id, body: cell.body, is_j2: true, lang: cell.lang }),
-  }).then((res) => {
-    if (!res.rendered) return;
-    const html = stripCommentPrefix(res.body, token)
-      .split("\n")
-      .filter((l) => !l.trimStart().startsWith("%%")) // drop cell-boundary remnants
-      .join("\n");
-    bodyEl.innerHTML = html;
-  }).catch(() => {});
-}
+// Tier-2 in-page preview (P4) is NOT wired up, and the code that used to sit
+// here has been removed rather than left dormant.
+//
+// It could never run: it was gated on `cell.cell_type === "markdown"`, but the
+// API gives an is_j2 cell `cell_type === "j2"` (a `markdown` cell always has
+// `is_j2 === false`), so the branch was unreachable from the day it was
+// written. What it *did* contain was `bodyEl.innerHTML = <server response>`
+// with no escaping — the one raw-HTML sink in this file, and the exact sink
+// the S7 hardening of esc()/safeUrl() above exists to close. Keeping a latent
+// one behind a broken gate is the worst of the options.
+//
+// Wiring it up properly is a real design question, not a one-line fix: the
+// header macros legitimately emit HTML, so the answer cannot just be "escape
+// it" — it needs a decision about sanitizing macro output. Tracked as issue
+// #697. The server side (`POST /api/studio/deck/render-cell`) is
+// live, sandboxed and tested; only the in-page consumer is absent.
 
 // --- UI helpers ---------------------------------------------------------------
 const appEl = document.getElementById("app");
@@ -313,7 +363,9 @@ function cellCard(cell, idx, locked) {
     // are comment-prefixed, so strip the token for the tier-1 preview.
     const md = cell.body_format === "clean" ? cell.body : stripCommentPrefix(cell.body, token);
     body.innerHTML = renderMarkdown(md);
-    if (cell.is_j2) renderJ2(cell, body, token); // tier-2: expand macros server-side
+    // No tier-2 call here: a `markdown` cell always has is_j2 === false (the
+    // API types a j2 cell as `cell_type: "j2"`), so the condition that used to
+    // sit here was dead. See the note where renderJ2 was removed.
   } else {
     body.innerHTML = `<pre><code>${esc(cell.body)}</code></pre>`;
   }

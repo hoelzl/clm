@@ -1,4 +1,4 @@
-"""Tests for P4 — tier-2 (no-exec) render + the PWA / offline assets."""
+"""Tests for P4 — tier-2 (kernel-free) render + the PWA / offline assets."""
 
 from __future__ import annotations
 

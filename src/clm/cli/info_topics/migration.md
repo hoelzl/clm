@@ -2,6 +2,34 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## Mobile Deck Studio no longer accepts `?token=` ({version})
+
+**Breaking only for a custom client.** The bundled PWA is unaffected — it has
+always sent `Authorization: Bearer` on every API call, and it reads the pairing
+token out of the URL itself.
+
+`GET /api/studio/…?token=<token>` now answers `401`. A URL is the worst place
+for a credential that never expires: it lands in uvicorn's access log, in any
+proxy's, in browser history, and in the `Referer` of anything the page links
+out to. Send the header instead:
+
+```
+Authorization: Bearer <token>
+```
+
+On `/ws`, where a browser cannot set a header, use the `clm-token.<token>`
+subprotocol.
+
+Relatedly, the QR pairing URL changed from `/studio/?token=…` to
+`/studio/#token=…`. A fragment is never transmitted to the server, so pairing
+no longer writes the token into uvicorn's access log, a proxy's, or an
+outbound `Referer`. It does **not** hide the token from *browser* history —
+fragments are recorded (and synced) there just as query strings are — so a
+shared phone still warrants `--rotate-token`. The QR is reprinted on every `clm serve
+--spec`, so there is nothing to migrate — rescan if a phone ever loses its
+pairing. The frontend still reads a `?token=` it finds in the URL, so an old
+bookmark keeps working for pairing purposes.
+
 ## `clm serve` only answers to a `Host` that names it, and `--cors-origin` no longer defaults to `*` ({version})
 
 **Breaking only if you reach the dashboard from another machine, or relied on
