@@ -1,6 +1,16 @@
 # Adversarial Review Remediation — Handover
 
-**Created**: 2026-07-24 | **Status**: Phases 0–1 DONE; Phase 2 in progress (item 1 done) | **Owner**: unassigned
+**Created**: 2026-07-24 | **Status**: Phases 0–2 DONE; Phase 3 next | **Owner**: unassigned
+
+**2026-07-26 update**: **Phase 2 is DONE** — items 3 (`clm serve`, PR #695)
+and 4 (Studio render, PR #696) landed, closing S6 and S7. Two follow-ups were
+spun out and are *not* prerequisites for Phase 3: **#697** (wire up the
+Studio's in-page tier-2 preview — the consumer was dead code around a raw
+`innerHTML` sink and was removed) and **#698** (bound the preview's CPU; its
+memory is bounded in-process now). Read the "Notes from items 3–4" at the end
+of Phase 2 before the next phase — two of the four sub-findings turned out to
+be about code that had never executed, which is a pattern worth expecting.
+**Next up: Phase 3 (sync engine correctness), starting with D8.**
 
 **2026-07-25 update**: one of Phase 7's prerequisites — "fix the known build
 nondeterminism" — was investigated ahead of schedule and is now resolved; see
@@ -297,7 +307,7 @@ verified by deliberately breaking a test once. — **All met.**
 
 ---
 
-### Phase 2 — Network-facing security  ▸ STATUS: items 1–2 DONE; items 3–4 open
+### Phase 2 — Network-facing security  ▸ STATUS: DONE
 **Depends on**: Phase 1 (you are about to change Docker-mode networking and the
 cache format; the worker tests must be alive first). **Phase 1 is DONE**, so
 this is unblocked.
@@ -373,23 +383,35 @@ been explicitly granted access.
      and becomes `<slug>.json`); `section_name`/`deck_name` validated for
      containment only. **See the notes below — this distinction is the whole
      lesson of the item.**
-3. **S6 + D4 — `clm serve`.** `src/clm/web/app.py:127-136`: default
-   `cors_origins` to the serve origin (never `["*"]` with
-   `allow_credentials=True`). `src/clm/web/api/websocket.py:110-126`: require the
-   bearer token **before** `accept()`, and validate channel names against a known
-   set. Add `TrustedHostMiddleware`.
-   - WebSockets bypass CORS entirely — this is why the token check must precede
-     `accept()` rather than sitting on the HTTP routes.
+3. **S6 + D4 — `clm serve`.** ▸ **DONE** (PR #695) — `src/clm/web/app.py`,
+   `api/websocket.py`, `cli/commands/serve.py`.
+   - CORS installs *no* middleware by default. An explicit `*` keeps working
+     but drops credentials; `install_web_security()` is reused unchanged, with
+     `--allowed-host` / `--allowed-origin` mirroring `clm recordings serve`.
+   - `/ws` requires the Studio token before `accept()` **when `--spec` is in
+     play**, presented as the `clm-token.<token>` subprotocol (a browser
+     cannot set an `Authorization` header on a WebSocket, and a query
+     parameter would land in the access log on every 3-second reconnect).
+     Channels are restricted to a known set.
+   - **Decision, flagged in the PR**: without `--spec` there is no token
+     concept and `/ws` stays open behind the host/origin guards — every
+     `/api` route is an unauthenticated GET, so gating only the WebSocket
+     would be friction without a gain. Pinned by a test so it reads as a
+     decision. The flip side is that *with* `--spec` the token covers the
+     whole endpoint, including `status`/`workers`/`jobs`.
+4. **S7 — studio render.** ▸ **DONE** (PR #696) — `web/studio/render.py`,
+   `static/studio/app.js`, `studio/auth.py`, `static/studio/sw.js`.
+   - `ImmutableSandboxedEnvironment` for the cell preview, plus the size
+     bounds a sandbox does not give you (see the notes below).
+   - `esc()` escapes quotes; link targets restricted to
+     http/https/mailto/relative, with control characters stripped before the
+     scheme is judged and all four `//`-style authority forms refused.
+   - `?token=` is no longer a credential; the QR pairing URL moved to the URL
+     fragment, which browsers never transmit.
+   - Spun out: **#697** (the in-page tier-2 consumer was dead code around a
+     raw `innerHTML` sink — removed; rewiring it needs a decision on
+     sanitizing macro-emitted HTML) and **#698** (bound the preview's CPU).
 4. **S7 — studio render.** `src/clm/web/studio/render.py:55-71` →
-   `jinja2.SandboxedEnvironment`. Fix `esc()` in
-   `src/clm/web/static/studio/app.js:45-47` to escape quotes (its output is
-   interpolated into an `href`). Stop accepting `?token=` after the initial
-   exchange (`auth.py:78-80`) — it currently lands in QR deep links, browser
-   history and uvicorn access logs.
-   - Update the module docstring: it currently advertises a "no-execution" tier
-     that executes. Either the claim or the behavior has to change; this makes
-     the claim true.
-
 **Acceptance**: a cross-origin page cannot drive any mutating route on either
 app; `/ws` rejects an unauthenticated connection before accept; the worker API
 refuses a non-loopback bind without a token; no pickle remains on any API or
@@ -542,6 +564,68 @@ cache path; SSTI proof-of-concept from the review no longer executes.
   `git checkout HEAD -- <file>` used to check "does this test fail without the
   fix" **discards uncommitted work in that file** — commit first, then revert
   to test.
+
+**Notes from items 3–4 (2026-07-26) — Phase 2 close-out**
+
+- **Both items uncovered a feature that had never worked**, in code the review
+  had assessed as a live hole. `clm serve`'s `/ws` route took an *unannotated*
+  `websocket` parameter, so FastAPI analysed it as a required **query
+  parameter** and closed every handshake with `Field required` — the Studio's
+  disk-change banner and sync line had never fired. And the Studio's in-page
+  tier-2 preview was gated on `cell_type === "markdown"` while the API types a
+  Jinja cell as `"j2"`, so it was unreachable from the day it was written.
+  **Generalisable**: when hardening a path, check it *runs* first. Two of the
+  four S6/S7 sub-findings were about code that could not execute, which
+  changes what the fix is for — S6's WebSocket hole was real in code and
+  unreachable through the mounted route, and fixing the route is what made the
+  token check load-bearing rather than theoretical.
+- **The review rounds were worth more than the first pass, twice over.** On
+  #695 the reviewer found `--allowed-origin` was a **no-op for every current
+  browser** — the guard consulted the operator's allowlist only in its
+  `Origin` fallback, unreachable whenever `Sec-Fetch-Site` is present, so the
+  flag bought a working CORS preflight and a 403 behind it. That bug shipped
+  in PR #691 (item 2) and had been live since. On #696 a focused third pass
+  caught me *documenting a limitation that did not exist*: I had written that
+  Jinja's `~` could only be bounded by monkeypatching `jinja2.runtime`
+  process-wide, and accepted a 1.2 GB one-request memory bomb on that basis.
+  `Environment.code_generator_class` is a documented per-environment hook;
+  fifteen lines closed it. **If you find yourself writing "this cannot be
+  fixed without X", check that X is really the only option before shipping the
+  claim** — a wrong limitation is worse than a missing fix, because it stops
+  the next person from looking.
+- **Three growth vectors, three different hooks.** Bounding Jinja is not one
+  switch: `*`/`+` go through `intercepted_binops`; the rendered output goes
+  through `environment.concat`; `~` goes through neither (its `Concat` node is
+  not a `BinExpr`, and it calls `str_join` from the compiled template's own
+  namespace) and needs the code-generator redirect. Also: a size check *after*
+  `render()` bounds only what is returned — a 500-iteration loop of
+  individually-legal emits peaked at 100 MB before such a check could run.
+  Bound during accumulation.
+- **A security fix behind a service-worker cache is not shipped.** `sw.js`
+  re-installs only when its own bytes change, and `activate` drops only caches
+  whose *name* differs — so with a pure cache-first shell handler, `app.js`
+  was served from `clm-studio-shell-v1` forever, and it had changed three
+  times under that name. Any installed PWA would have kept running the
+  pre-fix frontend *and*, because the pairing URL moved in the same PR, would
+  have been unable to re-pair. **If you touch anything under
+  `static/studio/`, bump `SHELL_CACHE`.** The handler is now
+  stale-while-revalidate so a missed bump costs one stale load rather than
+  permanent staleness.
+- **Windows-first landmines hit again, both in tooling rather than product
+  code**: writing a JS regex containing ` - ` through the editing
+  tools twice produced *literal control bytes* in the file, and once collapsed
+  `\` to `\` (silently breaking a character class). Verify byte content
+  after writing regex-heavy JS — `node --check` catches the syntax errors but
+  not a class that parses and means something else.
+- **`TestClient` sends `Host: testserver`.** The production allowlist is
+  loopback-only, so every existing `create_app` test 400s until it passes
+  `allowed_hosts=["testserver"]`. For the Studio suites that knowledge lives
+  in one place now (`tests/web/studio/conftest.py::make_app`).
+- **There is no JS test harness in this repo**, and adding one (package.json,
+  runner, CI step) is out of proportion to a few pure functions. The
+  frontend's `esc`/`safeUrl`/`inline`/`resolveToken` are lifted out of
+  `app.js` by name and executed under `node`, skipping with a stated reason if
+  node is absent. Worth reusing rather than re-deciding.
 
 #### Language coverage: what a broken C++ (or C#, or Java) course would hit
 
