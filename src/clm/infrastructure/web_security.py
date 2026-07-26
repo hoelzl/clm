@@ -87,12 +87,14 @@ SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
 #: (disk-change banner, sync progress); REST is unaffected, and the policy is
 #: deliberately not widened for it. The two relaxations — ``style-src
 #: 'unsafe-inline'`` and ``img-src … https:`` — are deliberate; see the
-#: middleware's docstring.
+#: middleware's docstring. (``img-src`` carries no ``data:`` exception since
+#: #706: the Studio logo is a same-origin asset now, and the tier-1 renderer
+#: has no image syntax that could produce one.)
 CONTENT_SECURITY_POLICY = (
     "default-src 'self'; "
     "script-src 'self'; "
     "style-src 'self' 'unsafe-inline'; "
-    "img-src 'self' data: https:; "
+    "img-src 'self' https:; "
     "connect-src 'self'; "
     "object-src 'none'; "
     "base-uri 'none'; "
@@ -563,6 +565,8 @@ class SecurityHeadersMiddleware:
       is script execution and exfiltration).
     * ``img-src`` allows ``https:`` — the documented tier-1-parity decision
       that an off-origin image is acceptable (a beacon, not a takeover).
+      No ``data:`` exception: the Studio logo is a same-origin asset since
+      #706, and tier-1 markdown has no image syntax that could produce one.
 
     A response that already carries a ``Content-Security-Policy`` keeps it:
     a route that sets one deliberately has the last word.

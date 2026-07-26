@@ -3,9 +3,9 @@ r"""Server-side HTML sanitizing for the Studio's tier-2 cell preview (issue #697
 The tier-2 preview expands a cell's Jinja server-side so the phone sees a
 rendered header instead of raw ``{{ header_de("…") }}``. The expansion is
 **deliberately HTML** — the bundled ``macros.j2`` header macros emit
-``<div style="text-align:center">``, a ``<br/>``, and the course logo as an
-``<img src="data:image/…;base64,…">`` — so the client cannot escape its way out
-of the problem: escaping the output *is* removing the feature.
+``<div style="text-align:center">``, a ``<br/>``, and the course logo — so the
+client cannot escape its way out of the problem: escaping the output *is*
+removing the feature.
 
 The decision (maintainer, 2026-07-26; D13 in the adversarial-review handover)
 is to **sanitize on the server** and keep the client's ``innerHTML``
@@ -13,19 +13,22 @@ assignment. Two consequences worth stating plainly:
 
 * The client injects this output **verbatim**. So everything that changes the
   bytes — dropping the ``%% [markdown]`` delimiter line the macro emits,
-  stripping the per-language comment prefix — happens *before* the sanitizer
-  runs, never after. Sanitize exactly what gets injected.
+  stripping the per-language comment prefix, and (since #706) rewriting the
+  bundled logo's ``data:`` URI to a same-origin asset URL — happens *before*
+  the sanitizer runs, never after. Sanitize exactly what gets injected.
 * If :mod:`nh3` is missing (an install without the ``[web]`` extra), the
   preview **fails closed**: :func:`sanitize_preview_html` raises and the caller
   degrades to tier-1 client-side markdown. There is no unsanitized fallback.
 
-**The ``data:`` question, measured rather than assumed.** The logo is a
-``data:`` URI, so the scheme has to be allowed; but with ``data`` merely added
-to nh3's ``url_schemes``, ``<a href="data:text/html,<script>…">`` survives too
-(verified — it is a navigation vector, not a decoration). So the working
-combination is: allow ``data`` globally, then have
-:func:`_attribute_filter` refuse it everywhere except an ``<img src>`` that is
-specifically ``data:image/``.
+**The ``data:`` question is gone (measured, then removed).** The logo used to
+be a ``data:`` URI, which forced ``data`` into the scheme allowlist plus a
+confinement rule limiting it to ``<img src="data:image/…">`` — the most
+complex hand-rolled rule in this module, and the site of the first bypass the
+#704 adversarial rounds found. Since #706 the logo is served as a same-origin
+asset (:mod:`clm.web.studio.logo`) and rewritten to that URL *before*
+sanitizing, so ``data:`` is refused everywhere like any other unlisted
+scheme. The rule was deleted rather than hardened — see the #706 changelog
+fragment for why a generic asset store was rejected.
 
 **And the filter may only reject, never rewrite.** nh3 checks its scheme
 allowlist against the *incoming* value and then writes whatever the filter
@@ -61,10 +64,9 @@ parity rule above. Preview content is *content*; the guarantee here is "no
 script, no fixed-position impersonation of the app chrome", not "cannot look
 inviting".
 
-**URL rules, and why they are here rather than left to nh3.** Two decisions
-nh3's declarative config cannot express, both in :func:`_attribute_filter`:
+**URL rules, and why they are here rather than left to nh3.** One decision
+nh3's declarative config cannot express, in :func:`_attribute_filter`:
 
-* ``data:`` is confined to an ``<img src>`` that is ``data:image/…`` (the logo).
 * an **authority-relative** target (``//host``, and the ``\\`` / ``/\`` / ``\/``
   spellings WHATWG parsing treats identically) is refused, matching the client's
   ``safeUrl()`` for tier-1 markdown links. Both tiers render into the same page,
@@ -74,8 +76,9 @@ nh3's declarative config cannot express, both in :func:`_attribute_filter`:
   an off-origin image. What the rule removes is the *scheme-less* form, which
   reads as a path and is easy to miss in review.
 
-Both decisions depend on normalizing a URL the way ammonia and the browser do,
-which is **not** Python's ``\s`` — see :data:`_URL_INSIGNIFICANT` for the
+The scheme allowlist itself is applied over *this* module's normalization
+rather than deferring to nh3's — normalizing a URL the way ammonia and the
+browser do is **not** Python's ``\s``; see :data:`_URL_INSIGNIFICANT` for the
 control-character gap that made this a real bypass.
 """
 
@@ -163,9 +166,14 @@ ALLOWED_ATTRIBUTES: dict[str, set[str]] = {
     "*": {"style", "align"},
 }
 
-#: Link schemes a preview may point at. ``data`` is here **only** so the logo
-#: image works; :func:`_attribute_filter` is what confines it to ``<img src>``.
-ALLOWED_URL_SCHEMES: frozenset[str] = frozenset({"http", "https", "mailto", "data"})
+#: Link schemes a preview may point at. ``data`` is deliberately **absent**:
+#: the bundled logo used to force it in (with a confinement rule limiting it
+#: to ``<img src="data:image/…">`` — the most complex hand-rolled rule here,
+#: and the site of the first bypass the #704 adversarial rounds found). Since
+#: #706 the logo reaches the preview as a same-origin asset URL, rewritten by
+#: :mod:`clm.web.studio.logo` *before* sanitizing, so ``data:`` is simply
+#: refused everywhere like any other unlisted scheme.
+ALLOWED_URL_SCHEMES: frozenset[str] = frozenset({"http", "https", "mailto"})
 
 #: CSS properties kept inside a surviving ``style`` attribute. The first five
 #: are what the bundled header macros use; the rest are inert text formatting.
@@ -261,10 +269,12 @@ def _attribute_filter(tag: str, attribute: str, value: str) -> str | None:
     ``None``. :func:`_filter_style` is the one exception, and it is not a URL —
     it can only ever *remove* declarations.
 
-    Three rules: CSS is filtered; ``data:`` is confined to an ``<img src>`` that
-    is an image; and an **authority-relative** target is refused, matching the
-    client's ``safeUrl()`` for tier-1 links (both land in the same token-holding
-    page, so both get the same rule).
+    Two rules: CSS is filtered, and an **authority-relative** target is
+    refused, matching the client's ``safeUrl()`` for tier-1 links (both land
+    in the same token-holding page, so both get the same rule). Everything
+    scheme-related is the allowlist itself, applied below over this module's
+    own normalization — ``data:`` included, which is simply unlisted since
+    #706 (the logo arrives as a same-origin asset URL instead).
     """
     if attribute == "style":
         return _filter_style(value)
@@ -274,11 +284,6 @@ def _attribute_filter(tag: str, attribute: str, value: str) -> str | None:
     if normalized.startswith(_AUTHORITY_RELATIVE):
         return None
     scheme = _scheme_of(normalized)
-    if scheme == "data":
-        # The one legitimate use is the logo the header macros embed.
-        if tag == "img" and attribute == "src" and normalized.startswith("data:image/"):
-            return value
-        return None
     if scheme and scheme not in ALLOWED_URL_SCHEMES:
         # The scheme allowlist, applied over *this* module's normalization rather
         # than deferring to nh3's. They do not agree: measured, ammonia reads
