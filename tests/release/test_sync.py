@@ -1,6 +1,7 @@
 """Tests for the release sync/promote algorithm (issue #208, step 2)."""
 
 import hashlib
+import logging
 
 from clm.release.frozen_manifest import FrozenManifest, FrozenRecord
 from clm.release.sync import (
@@ -207,6 +208,8 @@ def test_sync_refuses_vcs_paths_from_a_polluted_manifest(tmp_path, caplog):
     """Defense in depth (issue #302): a manifest from an older build that
     walked a stray ``.git`` into the skeleton must never overwrite the
     destination repo's own ``.git``."""
+    # Guard against worker-global logger pollution (#694).
+    caplog.set_level(logging.WARNING, logger="clm.release.sync")
     manifest = _manifest()
     manifest["files"] += [
         {
