@@ -444,7 +444,7 @@ class StudioService:
     def render_cell(
         self, deck_id: str, body: str, *, is_j2: bool, lang: str | None = None
     ) -> tuple[bool, str | None, str]:
-        """Tier-2 (no-exec) render of one cell. Returns ``(rendered, error, text)``.
+        """Tier-2 (kernel-free) render of one cell. Returns ``(rendered, error, text)``.
 
         Only ``is_j2`` cells are expanded server-side (through the build's bundled
         macros); plain cells are returned unchanged for the client to render as

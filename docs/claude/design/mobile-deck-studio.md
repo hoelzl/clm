@@ -227,7 +227,7 @@ structural op. No naïve whole-file re-emit.
    initial phase plan.
 
 - **Inline toggle = hybrid:** tier 1 for plain markdown, tier 2 for `is_j2` cells.
-- **"Build preview" button = tier 2 (fast no-exec) only, for now.** The full
+- **"Build preview" button = tier 2 (fast, kernel-free) only, for now.** The full
   executed build (tier 3) is left for a later phase.
 
 ---
@@ -241,7 +241,7 @@ structural op. No naïve whole-file re-emit.
 | **P2** ✅ | **Structural ops** (`insert` / `delete` / `move` / mint-id) via the byte-exact serializer; reorder mode in the UI; byte-exact untouched-cell tests. *(Implemented — see §9.7.)* |
 | **P3a** ✅ | **Bilingual lock core**: language toggle (switch to the split twin) + watermark-derived lock (read-only `build_sync_plan`) + stale badges + **423** enforcement on every write. *(Implemented — see §9.8.)* |
 | **P3b** ✅ | **Sync-to-other-language**: a streamed server-side `clm slides sync` subprocess (LLM reconciliation) over WS; the lock releases when it completes. *(Implemented — see §9.9. **Discard & unlock deferred** by decision: its revert is git-coupled and risky — use the desktop.)* |
-| **P4** ✅ | **Tier-2 preview** (no-exec Jinja macro/header expansion per cell) + tier-1 comment-prefix fix + **installable PWA** + **read-only offline cache** of opened decks. *(Implemented — see §9.10. Editor de-prefix ergonomics deferred.)* |
+| **P4** ✅ | **Tier-2 preview** (kernel-free Jinja macro/header expansion per cell) + tier-1 comment-prefix fix + **installable PWA** + **read-only offline cache** of opened decks. *(Implemented — see §9.10. Editor de-prefix ergonomics deferred.)* |
 | **Later / optional** | **Full executed single-deck build** (tier 3) for code outputs and rendered diagrams. |
 
 ---
@@ -276,14 +276,14 @@ REST under `/api/decks` (course pre-scoped per server instance):
 | `GET /api/decks` | Tree + recents + "not in spec"; status/coverage badges. |
 | `GET /api/decks/search?q=` | Full-text search (reuses `slides search`). |
 | `GET /api/decks/{id}?lang=` | Cells (with `content_hash`), `deck_version`, lock state. |
-| `POST /api/decks/{id}/render-cell` | Tier-2 no-exec render of one `is_j2` cell. |
+| `POST /api/decks/{id}/render-cell` | Tier-2 kernel-free (sandboxed Jinja) render of one `is_j2` cell. |
 | `PATCH /api/decks/{id}/cells/{slide_id}` | `edit-body` / `edit-tags` (optimistic). |
 | `POST /api/decks/{id}/cells` | `insert` (mints id). |
 | `DELETE /api/decks/{id}/cells/{slide_id}` | `delete`. |
 | `POST /api/decks/{id}/reorder` | `move`. |
 | `POST /api/decks/{id}/sync` | Propagate source → other language (streamed via WS). |
 | `POST /api/decks/{id}/discard` | Discard in-session edits, unlock. |
-| `POST /api/decks/{id}/preview` | Tier-2 no-exec deck render (P4). |
+| `POST /api/decks/{id}/preview` | Tier-2 kernel-free deck render (P4). |
 
 WS `/ws` events: `deck-updated` (after any write, for other tabs),
 `deck-changed-on-disk` (watcher), `sync-progress` / `preview-progress`.
@@ -424,7 +424,7 @@ taken while building, several resolving open calls left by §9.1–§9.5:
   app's *own* save back to the phone as an external "changed on disk" event.
 - **Tier-2 render scaffolded:** the working preview is **tier-1 client-side
   markdown**. `POST /api/studio/deck/render-cell` exists but echoes the body
-  with `rendered=false`; wiring the jupytext+Jinja no-exec expansion for
+  with `rendered=false`; wiring the jupytext+Jinja kernel-free expansion for
   `is_j2` cells is a focused follow-up (still inside the P0 design scope).
 - **WS auth:** ~~REST is fully token-gated; the shared `/ws` endpoint is not
   yet token-checked. Gating WS without disrupting the Monitor channel is a

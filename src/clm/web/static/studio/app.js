@@ -67,16 +67,27 @@ function esc(s) {
     .replace(/'/g, "&#39;");
 }
 
-// A markdown link target may not smuggle in a scripting scheme. Control
-// characters are stripped *before* the scheme test because browsers strip them
-// when resolving a URL, so `java\tscript:` would otherwise pass a naive check
-// and then execute.
+// A markdown link target may not smuggle in a scripting scheme.
+//
+// The cleaning mirrors how a browser parses a URL, deliberately and no more
+// than that: tab/CR/LF are removed *anywhere*, and C0 controls or spaces are
+// trimmed from both ends. Doing less lets `java<TAB>script:` through, because
+// the browser strips the tab when it resolves the URL. Doing more is wrong
+// too: JS `.trim()` also eats U+00A0/U+2028/U+FEFF, which browsers do *not*
+// strip, so trimming those could promote a string the browser reads as a
+// relative path into one it reads as a scheme.
 function safeUrl(u) {
-  const cleaned = u.replace(/[\u0000-\u0020\u007f]/g, "").trim();
+  const cleaned = u
+    .replace(/[\u0009\u000a\u000d]/g, "")
+    .replace(/^[\u0000-\u0020]+|[\u0000-\u0020]+$/g, "");
   if (/^[a-z][a-z0-9+.\-]*:/i.test(cleaned)) {
     return /^(https?|mailto):/i.test(cleaned) ? cleaned : "#";
   }
-  return cleaned; // relative, fragment, or protocol-relative — no scheme to abuse
+  // `//host` carries no scheme, but the browser supplies the page's — so it
+  // is a live off-origin navigation from a deck's link target, on a page
+  // holding a non-expiring bearer token. Relative paths and fragments are fine.
+  if (cleaned.startsWith("//")) return "#";
+  return cleaned;
 }
 function renderMarkdown(src) {
   const lines = src.split("\n");
@@ -125,22 +136,22 @@ function stripCommentPrefix(text, token) {
   }).join("\n");
 }
 
-// Tier-2 (P4): ask the server to expand an is_j2 cell's Jinja, then inject the
-// expanded HTML (header macros emit trusted HTML from our own desktop). Falls
-// back silently to the tier-1 markdown already shown.
-function renderJ2(cell, bodyEl, token) {
-  api("/deck/render-cell", {
-    method: "POST",
-    body: JSON.stringify({ deck_id: currentDeck.deck_id, body: cell.body, is_j2: true, lang: cell.lang }),
-  }).then((res) => {
-    if (!res.rendered) return;
-    const html = stripCommentPrefix(res.body, token)
-      .split("\n")
-      .filter((l) => !l.trimStart().startsWith("%%")) // drop cell-boundary remnants
-      .join("\n");
-    bodyEl.innerHTML = html;
-  }).catch(() => {});
-}
+// Tier-2 in-page preview (P4) is NOT wired up, and the code that used to sit
+// here has been removed rather than left dormant.
+//
+// It could never run: it was gated on `cell.cell_type === "markdown"`, but the
+// API gives an is_j2 cell `cell_type === "j2"` (a `markdown` cell always has
+// `is_j2 === false`), so the branch was unreachable from the day it was
+// written. What it *did* contain was `bodyEl.innerHTML = <server response>`
+// with no escaping — the one raw-HTML sink in this file, and the exact sink
+// the S7 hardening of esc()/safeUrl() above exists to close. Keeping a latent
+// one behind a broken gate is the worst of the options.
+//
+// Wiring it up properly is a real design question, not a one-line fix: the
+// header macros legitimately emit HTML, so the answer cannot just be "escape
+// it" — it needs a decision about sanitizing macro output. Tracked as issue
+// #697. The server side (`POST /api/studio/deck/render-cell`) is
+// live, sandboxed and tested; only the in-page consumer is absent.
 
 // --- UI helpers ---------------------------------------------------------------
 const appEl = document.getElementById("app");
@@ -348,7 +359,9 @@ function cellCard(cell, idx, locked) {
     // are comment-prefixed, so strip the token for the tier-1 preview.
     const md = cell.body_format === "clean" ? cell.body : stripCommentPrefix(cell.body, token);
     body.innerHTML = renderMarkdown(md);
-    if (cell.is_j2) renderJ2(cell, body, token); // tier-2: expand macros server-side
+    // No tier-2 call here: a `markdown` cell always has is_j2 === false (the
+    // API types a j2 cell as `cell_type: "j2"`), so the condition that used to
+    // sit here was dead. See the note where renderJ2 was removed.
   } else {
     body.innerHTML = `<pre><code>${esc(cell.body)}</code></pre>`;
   }

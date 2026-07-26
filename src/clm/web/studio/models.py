@@ -239,7 +239,7 @@ class SyncStartResult(BaseModel):
 
 
 class RenderCellRequest(BaseModel):
-    """Tier-2 (no-exec) render request for one ``is_j2`` cell (P4)."""
+    """Tier-2 (kernel-free) render request for one ``is_j2`` cell (P4)."""
 
     deck_id: str = Field(description="Slides-dir-relative deck path (for prog-lang + includes).")
     body: str = Field(description="Raw cell body (comment-prefixed, with the j2 lines).")

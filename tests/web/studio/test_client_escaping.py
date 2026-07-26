@@ -33,10 +33,13 @@ pytestmark = pytest.mark.skipif(
 
 
 def _extract_function(source: str, name: str) -> str:
-    """Return the full text of the top-level ``function <name>(…) {…}``.
+    r"""Return the full text of the top-level ``function <name>(…) {…}``.
 
-    Brace-matched rather than regex-terminated so a brace inside a string or a
-    nested arrow function does not truncate the result.
+    Brace-counted rather than regex-terminated, so a nested function body does
+    not truncate the result. The scanner is *not* string- or regex-aware, so a
+    brace inside a string literal or a quantifier like ``/\d{1,3}/`` would
+    miscount — the assertion below turns that into a loud failure rather than a
+    silently truncated extraction, and node would reject the result anyway.
     """
     marker = f"function {name}("
     start = source.index(marker)
@@ -143,6 +146,116 @@ class TestLinkSchemes:
     def test_ordinary_targets_still_work(self, run_js, target: str):
         out = run_js(f"inline('[click]({target})')")
 
-        assert 'href="#"' not in out or target == "#anchor"
-        assert "<a href=" in out
+        # Assert the target is preserved verbatim rather than "is not '#'":
+        # for the `#anchor` case the latter is satisfied by the target itself,
+        # so a regression that returned "#" would still have passed.
+        expected = target.replace("&", "&amp;")  # esc() runs before safeUrl()
+        assert f'href="{expected}"' in out, out
         assert ">click</a>" in out
+
+    @pytest.mark.parametrize(
+        "target",
+        [
+            "//evil.example",
+            "//evil.example/path",
+        ],
+    )
+    def test_protocol_relative_targets_are_neutralised(self, run_js, target: str):
+        """No scheme in the string, but the browser supplies the page's.
+
+        That makes it a live off-origin navigation from a deck's link target,
+        on a page whose localStorage holds a bearer token that never expires.
+        """
+        out = run_js(f"inline('[click]({target})')")
+
+        assert 'href="#"' in out, out
+
+    @pytest.mark.parametrize(
+        "target",
+        [
+            "\u00a0javascript:alert(1)",
+            "\u00a0//evil.example",
+        ],
+    )
+    def test_unicode_whitespace_is_not_trimmed_into_a_scheme(self, run_js, target: str):
+        """Browsers do not strip U+00A0, so neither may we.
+
+        A JS ``.trim()`` here would remove it and *promote* these into a live
+        scheme and a live protocol-relative URL respectively. Left in place,
+        both are inert relative paths.
+        """
+        out = run_js(f'inline("[click]({target})")')
+
+        # The precise property is about the *start* of the href: a browser
+        # honours a scheme only at position 0, and it does not strip U+00A0 —
+        # so the character surviving is exactly what keeps these inert. A bare
+        # "javascript: not in out" would wrongly fail on the harmless
+        # " javascript:" that we want to see.
+        assert 'href="javascript:' not in out, out
+        assert 'href="//evil.example"' not in out, out
+        assert " " in out, "the NBSP was trimmed — that is what promotes these"
+
+
+class TestResolveToken:
+    """The pairing half of the fragment change — the part that can break login.
+
+    ``resolveToken`` is the only reader of the new ``#token=`` form. Nothing
+    else pins it: the CLI test checks the string the desktop *prints*.
+    """
+
+    @pytest.fixture(scope="class")
+    def run_resolve(self):
+        source = APP_JS.read_text(encoding="utf-8")
+        fn = _extract_function(source, "resolveToken")
+
+        def _run(url: str) -> str:
+            # Minimal stand-ins for the three browser globals resolveToken uses.
+            script = f"""
+                const store = {{}};
+                globalThis.localStorage = {{
+                    getItem: (k) => (k in store ? store[k] : null),
+                    setItem: (k, v) => {{ store[k] = String(v); }},
+                }};
+                globalThis.window = {{
+                    location: {{ href: {json.dumps(url)} }},
+                    history: {{ replaceState: () => {{}} }},
+                }};
+                const TOKEN_KEY = "clm_studio_token";
+                {fn}
+                process.stdout.write(JSON.stringify(resolveToken()));
+            """
+            proc = subprocess.run(  # noqa: S603 - fixed argv, no shell
+                ["node", "-e", script],  # noqa: S607 - guarded by the module skipif
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            assert proc.returncode == 0, f"node failed: {proc.stderr}"
+            return json.loads(proc.stdout)
+
+        return _run
+
+    def test_reads_the_fragment_form(self, run_resolve):
+        assert run_resolve("http://host:8000/studio/#token=abc123") == "abc123"
+
+    def test_still_reads_the_legacy_query_form(self, run_resolve):
+        """An old bookmark or printed QR must not strand a user unpaired."""
+        assert run_resolve("http://host:8000/studio/?token=abc123") == "abc123"
+
+    def test_base64url_tokens_survive_verbatim(self, run_resolve):
+        """``secrets.token_urlsafe`` emits ``-`` and ``_``; ``+`` would decode to a space.
+
+        ``URLSearchParams`` turns ``+`` into a space, so a token containing one
+        would be silently corrupted and pairing would fail with no diagnostic.
+        base64url never emits ``+`` — this pins that the characters it *does*
+        emit come through untouched.
+        """
+        token = "aB3-_xY9zQ-w_pL2"
+        assert run_resolve(f"http://host:8000/studio/#token={token}") == token
+
+    def test_no_token_anywhere_is_empty(self, run_resolve):
+        assert run_resolve("http://host:8000/studio/") == ""
+
+    def test_fragment_wins_over_a_stale_query(self, run_resolve):
+        assert run_resolve("http://host:8000/studio/?token=old#token=new") == "new"

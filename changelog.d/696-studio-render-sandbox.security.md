@@ -15,8 +15,10 @@
   the unauthenticated `/studio/` static mount and is read by the frontend.
 - **The QR pairing URL moved the token into the fragment**
   (`/studio/#token=…`). Browsers never send a fragment to the server, so
-  pairing itself no longer writes the token into a log. The QR is reprinted on
-  every launch, so there is nothing to migrate.
+  pairing no longer writes the token into uvicorn's access log, a proxy's, or
+  an outbound `Referer`. Browser *history* still records it — a fragment is
+  stored there like a query string — so that half is unchanged. The QR is
+  reprinted on every launch, so there is nothing to migrate.
 - **The Studio frontend escapes quotes.** `esc()` handled `&`, `<` and `>` but
   not `"`, and its output is interpolated into `<a href="…">` before reaching
   `innerHTML` — so a markdown link target could close the attribute and add an
@@ -24,3 +26,18 @@
   and relative URLs, with control characters stripped before the scheme is
   judged (browsers strip them when resolving, so `java&#9;script:` would
   otherwise slip past and then execute).
+- **The cell preview can no longer be used to exhaust memory or stall the
+  server.** Blocking attribute traversal says nothing about size:
+  `{{ "A" * 200000000 }}` allocated 200 MB in about a second, and the route
+  rendered inline on the event loop, so one request from any token holder
+  stalled every other request and the disk watcher. Sequence repetition is now
+  bounded, the output has a cap, and the render runs in a worker thread.
+- **The Studio service worker cached the app shell forever.** `sw.js` only
+  re-installs when its own bytes change and `activate` only drops caches whose
+  *name* differs, but the shell handler was pure cache-first — so `app.js`,
+  which had changed three times under `clm-studio-shell-v1`, was served from
+  cache indefinitely. Any already-installed PWA would have kept running the
+  pre-fix frontend and, because the pairing URL moved, would have been unable
+  to re-pair. The cache name is bumped and the shell now uses
+  stale-while-revalidate, so a future missed bump costs one stale load rather
+  than permanent staleness.

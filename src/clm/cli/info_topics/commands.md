@@ -4395,8 +4395,13 @@ which browsers never transmit — so pairing cannot write the token into
 uvicorn's access log, a proxy's, or an outbound `Referer`. API calls
 authenticate with `Authorization: Bearer` only; `?token=` is **not** accepted
 (it was, until CLM {version}). The server-side `is_j2` cell preview renders in
-a Jinja sandbox: it expands the bundled header macros without a kernel, and
-templates cannot reach out of the template namespace.
+a Jinja sandbox: it expands the bundled header macros without a kernel, and a
+template cannot walk Python attributes (`__class__` and friends) out of the
+template namespace, nor repeat a sequence into a memory bomb. The sandbox does
+not restrict the template *loader*, so `{% include %}` can still read a file
+sitting next to the deck — path traversal out of the deck's directory is
+refused, but a secret parked beside a slide is readable by anyone holding the
+Studio token.
 
 This is the P0/P1 slice (read-only browse + the cell-editing concurrency core).
 Structural insert/delete/move, the bilingual language lock + sync-to-other-

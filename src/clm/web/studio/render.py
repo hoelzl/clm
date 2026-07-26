@@ -13,10 +13,24 @@ rendering *is* execution, and on a plain ``Environment`` a template can walk
 process can. The 2026-07-24 adversarial review (S7) reproduced that against
 this function — the body being rendered is a **request body**, not a file from
 the course repo, so a client with the Studio token could run arbitrary Python
-in the server. It now renders in a :class:`~jinja2.sandbox.SandboxedEnvironment`,
-which blocks the attribute traversal those escapes depend on. That is a real
-boundary but not an unlimited one: a sandbox escape is a sandbox escape, and
-the token remains the access gate.
+in the server. It now renders in an
+:class:`~jinja2.sandbox.ImmutableSandboxedEnvironment`, which blocks the
+attribute traversal those escapes depend on.
+
+Two limits that the sandbox does *not* give you, and this module adds:
+
+- **Size.** A sandbox bounds attribute access and nothing else, so
+  ``{{ "A" * 200000000 }}`` was a one-expression memory bomb. Repetition is
+  intercepted (:data:`MAX_REPEAT`) and the output is capped
+  (:data:`MAX_OUTPUT_CHARS`). The caller runs this off the event loop.
+- **The loader.** ``SandboxedEnvironment`` constrains the *template*, not the
+  ``FileSystemLoader`` under it, so ``{% include %}`` still reads files next to
+  the deck. Jinja refuses traversal out of that directory (``..`` and absolute
+  paths), and ``_resolve_deck_id`` pins the deck under the slides dir, so the
+  reach is "a file sitting beside a slide" — not nothing, but bounded.
+
+And the boundary is not unlimited in the usual sense either: a sandbox escape
+is a sandbox escape, and the token remains the access gate.
 
 This is best-effort preview: any Jinja error (a macro that needs build-only
 context, a missing include, a sandbox refusal) is caught and returned as
@@ -38,6 +52,55 @@ logger = logging.getLogger(__name__)
 _PREVIEW_AUTHOR = "Preview"
 _PREVIEW_ORG = ""
 
+#: Largest sequence repetition a preview template may ask for. Blocking
+#: attribute traversal does nothing about ``{{ "A" * 200000000 }}``, which
+#: allocates 200 MB in about a second — measured — and then again for the JSON
+#: response. The body is client-supplied, so this is the cheapest denial of
+#: service in the app and needs its own bound.
+MAX_REPEAT = 100_000
+
+#: Largest render output returned. Backstop for any other way of growing the
+#: output (nested loops, a macro over a long list) that the repeat cap misses.
+MAX_OUTPUT_CHARS = 1_000_000
+
+
+def _preview_environment_class():
+    """Return the sandboxed Environment subclass used for previews.
+
+    Built lazily so this module keeps importing without jinja2 installed.
+
+    ``ImmutableSandboxedEnvironment`` rather than the mutable one — Jinja's own
+    recommendation for untrusted template text, and nothing here needs to call
+    a mutating method. On top of that it intercepts ``*``: the sandbox bounds
+    *attribute access* and nothing else, so sequence repetition is left as a
+    one-expression memory bomb.
+    """
+    from jinja2.sandbox import ImmutableSandboxedEnvironment
+    from jinja2.sandbox import SecurityError as _SecurityError
+
+    class _PreviewEnvironment(ImmutableSandboxedEnvironment):
+        intercepted_binops = frozenset({"*"})
+
+        def call_binop(self, context, operator, left, right):  # noqa: ANN001
+            if operator == "*":
+                _refuse_oversized_repeat(left, right)
+                _refuse_oversized_repeat(right, left)
+            return super().call_binop(context, operator, left, right)
+
+    def _refuse_oversized_repeat(sequence, count) -> None:  # noqa: ANN001
+        """Raise before ``sequence * count`` allocates, not after."""
+        if not isinstance(sequence, str | bytes | list | tuple):
+            return
+        if isinstance(count, bool) or not isinstance(count, int):
+            return
+        if count > MAX_REPEAT or len(sequence) * max(count, 0) > MAX_OUTPUT_CHARS:
+            raise _SecurityError(
+                f"refusing to repeat a {len(sequence)}-item sequence {count} times "
+                f"(preview limit: {MAX_REPEAT} repeats / {MAX_OUTPUT_CHARS} characters)"
+            )
+
+    return _PreviewEnvironment
+
 
 def render_j2_cell(deck_path: Path, body: str, lang: str | None) -> tuple[bool, str | None, str]:
     """Expand the Jinja in ``body`` for ``deck_path``. Returns ``(ok, error, text)``.
@@ -48,7 +111,6 @@ def render_j2_cell(deck_path: Path, body: str, lang: str | None) -> tuple[bool, 
     """
     try:
         from jinja2 import ChoiceLoader, FileSystemLoader, PackageLoader
-        from jinja2.sandbox import SandboxedEnvironment
 
         from clm.infrastructure.utils.path_utils import path_to_prog_lang
         from clm.workers.notebook.utils.prog_lang_utils import jinja_prefix_for
@@ -69,7 +131,7 @@ def render_j2_cell(deck_path: Path, body: str, lang: str | None) -> tuple[bool, 
         # Sandboxed, not plain: `body` is a request body. See the module
         # docstring — a plain Environment lets a template reach `__class__` and
         # walk out of the template namespace.
-        env = SandboxedEnvironment(
+        env = _preview_environment_class()(
             loader=ChoiceLoader(loaders) if len(loaders) > 1 else loaders[0],
             autoescape=False,
             line_statement_prefix=jinja_prefix_for(prog_lang),
@@ -85,7 +147,17 @@ def render_j2_cell(deck_path: Path, body: str, lang: str | None) -> tuple[bool, 
                 "organization": _PREVIEW_ORG,
             },
         )
-        return True, None, template.render()
+        text = template.render()
+        if len(text) > MAX_OUTPUT_CHARS:
+            # Backstop for growth the repeat cap does not see — a nested loop,
+            # a macro over a long list. Refusing beats returning it: the result
+            # is JSON-encoded into a response and then assigned to innerHTML.
+            return (
+                False,
+                f"preview output too large ({len(text)} chars; limit {MAX_OUTPUT_CHARS})",
+                body,
+            )
+        return True, None, text
     except Exception as exc:  # noqa: BLE001 - preview must never crash the request
         logger.debug("Studio tier-2 render failed for %s: %s", deck_path, exc)
         return False, str(exc), body

@@ -14,7 +14,14 @@
  */
 "use strict";
 
-const SHELL_CACHE = "clm-studio-shell-v1";
+// Bump SHELL_CACHE whenever a shell asset changes. Changing this file's bytes
+// is what makes the browser re-run `install`, and the new cache name is what
+// makes `activate` drop the old contents — a shell asset edited without a bump
+// is served from cache forever. That is not hypothetical: app.js changed three
+// times under `-v1`, so the S7 XSS fix would have reached no installed PWA at
+// all. The stale-while-revalidate handler below is the belt to this braces —
+// it means a missed bump costs one stale load rather than permanent staleness.
+const SHELL_CACHE = "clm-studio-shell-v2";
 const API_CACHE = "clm-studio-api-v1";
 const SHELL = [
   "/studio/",
@@ -45,9 +52,26 @@ self.addEventListener("fetch", (event) => {
   if (req.method !== "GET") return; // writes pass through, never cached
   const url = new URL(req.url);
 
-  // App shell: cache-first.
+  // App shell: stale-while-revalidate. Answer from cache (instant, works
+  // offline) but always refetch in the background and store the result, so an
+  // updated app.js is picked up on the next load even if SHELL_CACHE was not
+  // bumped. Pure cache-first made a shell asset permanently immutable, which
+  // is how a security fix ends up undeliverable.
   if (url.pathname.startsWith("/studio/")) {
-    event.respondWith(caches.match(req).then((hit) => hit || fetch(req)));
+    event.respondWith(
+      caches.match(req).then((hit) => {
+        const fresh = fetch(req)
+          .then((resp) => {
+            if (resp && resp.ok) {
+              const copy = resp.clone();
+              caches.open(SHELL_CACHE).then((cache) => cache.put(req, copy));
+            }
+            return resp;
+          })
+          .catch(() => hit); // offline: the cached copy is the answer
+        return hit || fresh;
+      })
+    );
     return;
   }
 

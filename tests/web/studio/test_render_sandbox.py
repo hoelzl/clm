@@ -53,24 +53,39 @@ class TestSandboxBlocksTraversal:
     def test_the_markers_would_otherwise_appear(self, tmp_path: Path):
         """Prove the assertions above have teeth.
 
-        Renders the same payloads on a plain ``Environment`` — the pre-fix
-        configuration — and requires that at least most of them *do* leak their
-        marker. Without this, a typo in a payload would turn every case above
-        into a test that passes because nothing rendered at all.
+        Renders the same payloads on a plain ``Environment`` configured the way
+        ``render_j2_cell`` configured it before the fix, and requires that
+        **every** one leaks its marker. A threshold ("most of them") would
+        tolerate exactly the typo this is meant to catch: a payload that
+        renders nothing makes its case above pass for the wrong reason.
         """
         from jinja2 import Environment
 
-        env = Environment(autoescape=False)  # noqa: S701 - deliberately the unsafe one
-        leaked = []
+        from clm.workers.notebook.utils.prog_lang_utils import jinja_prefix_for
+
+        env = Environment(  # noqa: S701 - deliberately the pre-fix unsafe one
+            autoescape=False,
+            line_statement_prefix=jinja_prefix_for("python"),
+            keep_trailing_newline=True,
+        )
+        globals_ = {
+            "is_notebook": False,
+            "is_html": True,
+            "lang": "de",
+            "author": "Preview",
+            "organization": "",
+        }
+
+        not_leaked = []
         for param in ESCAPE_ATTEMPTS:
             source, marker = param.values
             try:
-                if marker in env.from_string(source).render():
-                    leaked.append(source)
-            except Exception:  # noqa: BLE001, S110 - a payload that errors is not a leak
-                pass
+                if marker not in env.from_string(source, globals=globals_).render():
+                    not_leaked.append(source)
+            except Exception as exc:  # noqa: BLE001 - an erroring payload proves nothing
+                not_leaked.append(f"{source}  ({type(exc).__name__})")
 
-        assert len(leaked) >= 5, f"only {len(leaked)} payloads leak unsandboxed: {leaked}"
+        assert not not_leaked, f"these payloads do not leak even unsandboxed: {not_leaked}"
 
     def test_a_chained_refusal_reports_a_usable_error(self, tmp_path: Path):
         """When it does error, the message has to name the problem."""
@@ -78,6 +93,52 @@ class TestSandboxBlocksTraversal:
         assert ok is False
         assert "__class__" in str(error)
         assert "unsafe" in str(error)
+
+
+class TestResourceBounds:
+    """Blocking attribute access says nothing about how *big* a render may get.
+
+    ``{{ "A" * 200000000 }}`` allocated 200 MB in ~1.5s on a plain sandbox, and
+    the route rendered inline on the event loop — so one POST from any token
+    holder stalled every other request, and a loop of them exhausts memory.
+    """
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            pytest.param('{{ "A" * 200000000 }}', id="str-repeat"),
+            pytest.param('{{ 200000000 * "A" }}', id="str-repeat-reversed"),
+            pytest.param("{{ [1] * 999999999 }}", id="list-repeat"),
+        ],
+    )
+    def test_oversized_repetition_is_refused(self, tmp_path: Path, source: str):
+        ok, error, text = render_j2_cell(tmp_path / DECK, source, "de")
+
+        assert ok is False
+        assert "refusing to repeat" in str(error)
+        # Refused *before* allocating, not truncated after: the body comes back
+        # untouched and no giant string was ever built.
+        assert text == source
+
+    def test_repetition_within_the_limit_still_works(self, tmp_path: Path):
+        from clm.web.studio.render import MAX_REPEAT
+
+        ok, error, text = render_j2_cell(tmp_path / DECK, '{{ "ab" * 10 }}', "de")
+        assert ok and error is None
+        assert text == "ab" * 10
+        assert MAX_REPEAT > 10  # the limit is not so tight it breaks real macros
+
+    def test_output_over_the_cap_is_refused(self, tmp_path: Path, monkeypatch):
+        """Backstop for growth the repeat cap cannot see (loops, macros)."""
+        from clm.web.studio import render as render_mod
+
+        monkeypatch.setattr(render_mod, "MAX_OUTPUT_CHARS", 100)
+        source = "{% for i in range(200) %}xxxxx{% endfor %}"
+        ok, error, text = render_j2_cell(tmp_path / DECK, source, "de")
+
+        assert ok is False
+        assert "too large" in str(error)
+        assert text == source
 
 
 class TestLegitimateRenderingSurvives:
