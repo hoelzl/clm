@@ -2,6 +2,46 @@
 
 This guide covers breaking changes across major CLM versions.
 
+## `clm slides sync record` can now refuse a deck it used to bank ({version})
+
+**Breaking only for a deck whose separated voiceover companion carries a
+divergence.** No deck in the maintained course repos regressed (measured over
+1063 split pairs across PythonCourses, CppCourses and CSharpCourses: zero), and
+a pair with no companions, or with symmetric ones, is unaffected.
+
+`record` (and `apply`'s post-write ledger save) used to run the structural gate
+on the two **deck halves** while `verify` ran it on the companion-inlined
+**projection**. So the two verbs disagreed about the same pair: `verify` failed
+on a byte-diverged shared narration cell while `record` blessed it — and a
+banked "verified" divergence is what later lets a mirror or a propagation
+overwrite content that only ever existed on one side. Both now read the
+projection.
+
+You will see this as a refusal naming the narration, e.g.
+
+```
+slides_x.de.py: REFUSED
+  - shared cell content diverges: DE line 42, EN line 42
+```
+
+Fix forward, in order of preference:
+
+1. Run `clm slides sync report DECK` — the same member is normally already
+   framed as translation work. Answer it, `apply`, then `record`.
+2. If the companion layout itself is the problem (voiceover both inline and in a
+   companion, or inline on one half and separated on the other, or a
+   `for_slide` naming a slide that no longer exists), the refusal says which:
+   `clm voiceover inline` / `clm voiceover extract` to normalize, or fix the
+   `for_slide` / remove the orphaned narration.
+3. If the divergence is a deliberate pending state, `record
+   --allow-diverged-companion` banks it anyway. It drops **only** the
+   violations the companion projection introduced — a corruption in the deck
+   halves themselves still refuses — and logs each one at WARNING.
+
+`clm harvest accept --record` is deliberately unchanged: it lands narration on
+one language side, and recording that one-sided member is exactly what makes the
+next sync report frame the twin as `translate_new`.
+
 ## Mobile Deck Studio no longer accepts `?token=` ({version})
 
 **Breaking only for a custom client.** The bundled PWA is unaffected — it has

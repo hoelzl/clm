@@ -533,12 +533,23 @@ def sync_verify_cmd(de_path: Path, en_path: Path | None, as_json: bool) -> None:
     metavar="WHO",
     help="Trust provenance to stamp: 'record', 'agent', or 'semantic:<model>'.",
 )
+@click.option(
+    "--allow-diverged-companion",
+    is_flag=True,
+    help=(
+        "Record even when the only structural failures come from a separated "
+        "voiceover companion (a one-sided or byte-diverged narration). Each "
+        "overridden divergence is logged at WARNING. A corruption in the deck "
+        "halves themselves still refuses."
+    ),
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit the record result as JSON.")
 def sync_record_cmd(
     de_path: Path,
     en_path: Path | None,
     members: tuple[str, ...],
     provenance: str,
+    allow_diverged_companion: bool,
     as_json: bool,
 ) -> None:
     """Record the deck's current verified state into the committed ledger.
@@ -547,9 +558,12 @@ def sync_record_cmd(
     after you have verified — or reconciled — a deck, ``record`` banks its
     members' current fingerprints in ``<topic>/.clm/sync-ledger.json`` so
     ``report`` trusts them until they drift. Gated on the structural verify
-    (a corrupt pair is refused, nothing written). A full record sweeps stale
-    entries and performs the §7.3 pos→id key migration (logged); ``--member``
-    upserts just the named handles. Works over a directory.
+    (a corrupt pair is refused, nothing written) — including the narration in a
+    separated voiceover companion, so a divergence ``verify`` fails on can
+    never be blessed here (``--allow-diverged-companion`` overrides that one
+    class, loudly). A full record sweeps stale entries and performs the §7.3
+    pos→id key migration (logged); ``--member`` upserts just the named handles.
+    Works over a directory.
 
     \b
     This is the efficient answer to an all-cold report (a freshly authored or
@@ -566,6 +580,7 @@ def sync_record_cmd(
             members=members,
             provenance=provenance,
             as_json=as_json,
+            allow_diverged_companion=allow_diverged_companion,
         )
     )
 
@@ -599,6 +614,15 @@ def sync_record_cmd(
     is_flag=True,
     help="Execute and validate everything, write nothing.",
 )
+@click.option(
+    "--allow-diverged-companion",
+    is_flag=True,
+    help=(
+        "Let the post-apply ledger write proceed when the only structural "
+        "failures come from a separated voiceover companion. Logged at WARNING "
+        "per divergence; a corrupt deck half still withholds the ledger."
+    ),
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit the apply result as JSON.")
 def sync_apply_cmd(
     de_path: Path,
@@ -606,6 +630,7 @@ def sync_apply_cmd(
     decisions_spec: str | None,
     members: tuple[str, ...],
     dry_run: bool,
+    allow_diverged_companion: bool,
     as_json: bool,
 ) -> None:
     """Apply the reconciliation per item — writes files, never calls a model.
@@ -636,5 +661,6 @@ def sync_apply_cmd(
             members=members,
             dry_run=dry_run,
             as_json=as_json,
+            allow_diverged_companion=allow_diverged_companion,
         )
     )

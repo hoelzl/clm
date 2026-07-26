@@ -1,6 +1,18 @@
 # Adversarial Review Remediation — Handover
 
-**Created**: 2026-07-24 | **Status**: Phases 0–2 DONE; Phase 3 next | **Owner**: unassigned
+**Created**: 2026-07-24 | **Status**: Phases 0–2 DONE; Phase 3 in progress (item 1 DONE) | **Owner**: unassigned
+
+**2026-07-26 update (3)**: **release 1.23.0 shipped** (Phase 2's whole body of
+work is now on PyPI), and **Phase 3 item 1 (Y2 + D8) is DONE** — the strict
+`record` gate. Notes at the end of Phase 3. Two maintainer decisions were fixed
+in the same session and are recorded in §2 as **D13** (#697 — sanitize
+macro-emitted HTML *on the server*) and **D14** (#698 — render the preview in a
+**subprocess**); both are now unblocked issues for the normal backlog, not phase
+work. **S5 has been pulled forward** out of Phase 4 into its own **Phase 3a**
+(see §4) — repo-supplied executable paths are the same finding class as the
+Phase 0 cassette RCE, which is information the original risk×independence
+ordering predates. Next: Phase 3a (S5, plus the adjacent S4/S8 if they ride
+cheaply), then the rest of Phase 3 starting at Y1.
 
 **2026-07-26 update**: **Phase 2 is DONE** — items 3 (`clm serve`, PR #695)
 and 4 (Studio render, PR #696) landed, closing S6 and S7. Two follow-ups were
@@ -65,6 +77,8 @@ landed; §4 states dependencies explicitly where they are hard.
 | D10 | Architecture remediation scope | **Full re-layering, including extracting build orchestration — gated behind test coverage** | The test prerequisite (D11) is a *hard gate*: no re-layering commit lands before Phase 7 is complete and green. |
 | D11 | Re-layering test prerequisite | **All four**: golden e2e characterization suite, layer-boundary contract tests, real unmocked build-pipeline tests in the fast suite, and a coverage threshold on the modules being moved | Phase 7 exists solely to satisfy this. It is the largest single investment in the plan and it is deliberate. |
 | D12 | Test policy | **Fix the dead tests + add a nightly CI job for the `slow` tier** | Recovers lost coverage without lengthening PR CI. Nightly failures need a watcher — see Phase 1 landmines. |
+| D13 | #697 — the Studio's tier-2 preview and macro-emitted HTML | **Sanitize on the server** (option 2) | The preview is rewired, and the macro-emitted HTML is sanitized **server-side** before it reaches the page — not by trusting the macro output, and not by sanitizing in the browser where the sink already exists. Add the sanitizer dependency to the **correct dependency group**: the `[web]` extra in `pyproject.toml` (what the Studio already requires) — not core, not `[dev]`, and `[all]` picks it up through `web`. `nh3` over `bleach` (bleach is deprecated upstream). An install without `[web]` must fail closed rather than fall back to unsanitized HTML. |
+| D14 | #698 — bounding the preview's CPU | **Render in a subprocess** | The in-process memory bounds shipped with S7; CPU needs a boundary a Jinja hook cannot give. A subprocess is killable on a wall-clock timeout, which is the only mechanism that survives a template that loops without allocating. Accepts the per-render process cost. |
 
 **Session scope note**: the maintainer chose *handover document only* for the
 session that produced this plan. No code was changed on 2026-07-24. Phase 0 is
@@ -612,7 +626,7 @@ cache path; SSTI proof-of-concept from the review no longer executes.
   stale-while-revalidate so a missed bump costs one stale load rather than
   permanent staleness.
 - **Windows-first landmines hit again, both in tooling rather than product
-  code**: writing a JS regex containing ` - ` through the editing
+  code**: writing a JS regex containing a literal control-character range through the editing
   tools twice produced *literal control bytes* in the file, and once collapsed
   `\` to `\` (silently breaking a character class). Verify byte content
   after writing regex-heavy JS — `node --check` catches the syntax errors but
@@ -689,7 +703,7 @@ a drive-by.
 
 ---
 
-### Phase 3 — Sync engine correctness  ▸ STATUS: not started (item 1's migration prerequisite is DONE — see below)
+### Phase 3 — Sync engine correctness  ▸ STATUS: item 1 (Y2 + D8) DONE 2026-07-26; next is item 2 (Y1)
 **Depends on**: Phase 1 (sync unit coverage is the best in the repo — keep it
 that way and extend it here).
 
@@ -744,7 +758,10 @@ the other bugs consume.
 
 **Work**
 
-1. **Y2 + D8 — the ledger write gate.** `src/clm/cli/commands/slides/sync_v3.py:239-250`
+1. **Y2 + D8 — the ledger write gate.** ▸ **DONE** (2026-07-26) —
+   `src/clm/slides/sync_verify.py` grew the two named gate entry points and the
+   shared projection; see "Notes from item 1" at the end of this phase.
+   `src/clm/cli/commands/slides/sync_v3.py:239-250`
    and `:375-385`: `structural_gate` must run on the **projected** pair (companions
    inlined via `project_pair`), exactly as `verify_pair` does
    (`sync_verify.py:329-333`). Add the documented override flag; make it log at
@@ -808,9 +825,93 @@ the other bugs consume.
 `record` and `verify` provably agree on the same projected pair; course repos
 migrated to the new decision format.
 
+**Notes from item 1 — Y2 + D8 (2026-07-26)**
+
+- **There are two correct gates, not one, and the plan's "fix all four call
+  sites" would have broken `clm harvest`.** The two sync sites (`record`,
+  `apply`) must project; the two harvest sites must **not**. A harvest write
+  lands narration on one language side, and proposal §6 *requires* that
+  one-sided member to be recorded — it is what makes the next sync report frame
+  the twin as `translate_new`. Measured: a one-sided **id'd** companion member
+  projects to an `id-asymmetry` error, so projecting at
+  `harvest_accept._record_members` would have withheld exactly that ledger
+  entry, breaking `test_one_sided_create_with_record_frames_translate_new`.
+  `harvest verify`'s docstring had said so all along ("the corruption misreading
+  harvest must avoid — §6"); the sizing note in this plan missed it.
+  **The drift-by-call-site worry was real, though**, so the fix is two *named*
+  functions living next to each other in `sync_verify.py` —
+  `gate_projected_pair` and `gate_deck_halves` — each documenting when it is
+  correct, with the projection itself behind one shared `projected_pair`. A
+  boolean parameter was rejected: the call site should read as a choice.
+- **Which shapes projection actually changes** (measured, not reasoned — the
+  probe is trivial to rebuild): a **byte-diverged shared** companion cell →
+  `unify` error (this is Y2's exact shape: raw gate clean, projected not); a
+  **one-sided id'd** narrative member → `id-asymmetry`; a duplicated companion
+  `(slide_id, role)` → `duplicate-id`. An **id-less** one-sided companion cell
+  is clean both ways (`unify_texts` degrades gracefully), which is why the
+  existing `test_one_sided_companion_is_not_a_structural_error` was never
+  evidence that the gate was fine.
+- **A projection *refusal* had to become a gate error, and that is a second
+  hole the finding did not name.** For a mixed / cross-language layout, or a
+  companion whose `for_slide` matches no slide, `project_pair` refuses and
+  returns the *raw* texts — so a gate that just used them reached a clean
+  verdict by not looking. `gate_projected_pair` emits an error-severity
+  `companion-refusal` instead. **Do not assume the v3 lens already stops these**:
+  measured with id'd cells, `load_bundle` *parses* all three (the layout checks
+  at `doc_lenses.py:937-957` are `observe`, not `refuse`), so before this change
+  `record` banked them.
+- **`verify` reports the same refusal as a *warning*, deliberately.** Its
+  contract is "did an edit corrupt this pair?" and an unprojectable *layout* is
+  not that; the gate's question is "may I record this as verified?", which it may
+  not, having been unable to read the narration. This is the one place gate and
+  verify differ, and it is stated in both docstrings.
+- **The escape hatch is scoped by construction, not by discipline.**
+  `--allow-diverged-companion` drops only violations the *raw* halves do not
+  also show, keyed on `(kind, slide_id, role)` rather than the message — a
+  `unify` message carries line numbers that inlining shifts, and matching on it
+  would have let the flag override a pre-existing deck-half corruption. It is
+  therefore provably not a `--force`, and the cross-language fixture pins that
+  (its refusal is overridable, its id-asymmetry is not). The WARNING log lives
+  inside the gate, so no call site can forget it.
+- **Re-measured the blast radius against the final semantics** (the earlier
+  sweep predated the refusal-as-error decision): 723 PythonCourses + 340
+  CppCourses + 0 CSharpCourses split pairs, **0 newly failing**, 229 projecting
+  differently, **0 projection refusals anywhere**. Note the earlier sweep's
+  "956" counted `.claude/worktrees/` copies inside the course repo — 5801 of the
+  6524 `*.de.*` files under PythonCourses are nested worktrees. **Exclude
+  `.claude` when sweeping a course repo**, or you measure the same deck a dozen
+  times.
+- **The "fails before the fix" evidence is in the tests, permanently.** Each
+  blindness test asserts `structural_gate` over the *raw* halves is empty in the
+  same breath as asserting the strict gate is not — i.e. the old behaviour is
+  pinned beside the new one, rather than demonstrated once by reverting the
+  source and then lost.
+
 ---
 
-### Phase 4 — Filesystem containment & secrets  ▸ STATUS: not started
+### Phase 3a — Repo-supplied executables (S5, pulled forward)  ▸ STATUS: not started
+
+**Why it is here.** Pulled out of Phase 4 by the maintainer on 2026-07-26. S5 is
+the same finding class as Phase 0's cassette RCE — content that arrives with a
+course repo causing code execution on a normal `clm` invocation — and Phase 0
+established that class as real and exploitable in this codebase. The original
+phase order was set by risk × independence *before* that was known.
+
+**Work** — item 4 of Phase 4, verbatim; see it for the file references. The
+open sub-decision (§6 item 1) still stands: recommendation is that **repo-local
+config may not set executable paths at all** (user/system config only), falling
+back to an allowlist if that proves too restrictive. Same treatment for
+`notebook_kernel_python`, plus the scheme allowlist for spec-supplied
+`repository_base` before it reaches `git` (`ext::` executes its argument).
+
+**Ride-alongs, if and only if they stay cheap**: S4 (the `.clm-include`
+`rmtree`) and S8 (MCP containment) are adjacent and both amount to reusing an
+existing correct normalizer. If either grows, split it back out to Phase 4
+rather than letting this phase sprawl.
+
+---
+
+### Phase 4 — Filesystem containment & secrets  ▸ STATUS: not started (S5 pulled forward to Phase 3a)
 
 **Goal**: content and config from a course repo cannot reach outside the paths
 CLM owns, and secrets stay out of logs and commits.
@@ -837,7 +938,9 @@ CLM owns, and secrets stay out of logs and commits.
    (`text_utils.py:56-70`). Consider requiring a marker file (e.g.
    `.clm-manifest.json`) before the sweep will empty a directory — a
    one-character typo (`<path>.</path>`) currently reaches the sweep.
-4. **S5 — repo-supplied executables.** `config.py:936-947` discovers config from
+4. **S5 — repo-supplied executables.** ▸ **moved to Phase 3a** (pulled forward
+   2026-07-26 — same class as the Phase 0 RCE). Kept here as the reference text.
+   `config.py:936-947` discovers config from
    inside the course repo, and `drawio_converter.py:14,47` runs the resulting
    path with no validation. **Open sub-decision** (recommendation:
    repo-local config may not set executable paths at all — those come from user
@@ -1085,13 +1188,13 @@ Every finding from the review, and where it is handled. IDs match
 | Finding | Phase | Finding | Phase | Finding | Phase |
 |---|---|---|---|---|---|
 | S1 | 0 | C1 | 0 (interim) → 6 (final) | Y1 | 3 |
-| S2 | 2 | C2 | 5 | Y2 | 3 |
+| S2 | 2 | C2 | 5 | Y2 | 3 ✔ DONE |
 | S3 | 2 | C3 | 5 | Y3 | 3 |
-| S4 | 4 | C4 | 5 | Y4 | 3 |
-| S5 | 4 | C5 | 5 | Y5 | 3 |
+| S4 | 4 (3a if cheap) | C4 | 5 | Y4 | 3 |
+| S5 | **3a** (pulled fwd) | C5 | 5 | Y5 | 3 |
 | S6 | 2 | C6 | 5 | Y6 | 3 |
 | S7 | 2 | C7 | 5 | Y7 | 3 |
-| S8 | 4 | C8 | 5 | Y8 | 3 |
+| S8 | 4 (3a if cheap) | C8 | 5 | Y8 | 3 |
 | S9 | 4 | C9 | 5 | Y9 | 3 |
 | S10 | 4 | C10 | 5 | A1 | 8 |
 | S11 | 4 | C11 | 5 | A2 | 8 |
@@ -1122,8 +1225,10 @@ so the maintainer can object:
    at all (user/system config only). Fall back to an allowlist if too restrictive.
 2. **S11 sweep marker** — recommendation: require `.clm-manifest.json` (or
    equivalent) before the sweep will empty a directory.
-3. **D8 override flag name** — something that reads as dangerous at a glance;
-   `--allow-diverged-companion` rather than `--force`.
+3. ~~**D8 override flag name**~~ — **settled and shipped**: the flag is
+   `--allow-diverged-companion` on both `record` and `apply`, and it is not only
+   *named* narrowly, it *is* narrow — it drops only the violations the companion
+   projection introduced, so it cannot act as a `--force`.
 4. **D3 cache migration** — recommendation: bump the cache version so old pickled
    entries are ignored, rather than writing a converter for a cache that
    regenerates itself.
