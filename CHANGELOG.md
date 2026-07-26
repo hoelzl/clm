@@ -9,6 +9,378 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 Unreleased changes are collected as fragment files in [`changelog.d/`](changelog.d/)
 and folded into this file by `scripts/collect_changelog.py` at release time.
 
+## [1.23.0] - 2026-07-26
+
+### Added
+
+- **Every autouse env-neutraliser in `tests/conftest.py` now names the test that
+  still covers the real production value**, and a new
+  `test_pool_size_cap_interaction.py` closes the widest of the gaps they left:
+  the worker pool-size clamp firing during real managed-worker startup. The
+  neutralisers pin the heartbeat slow-write threshold, the pool-size caps and
+  the `CLM_*_DB_PATH` defaults suite-wide — each justified in isolation, but
+  together they made the production defaults invisible, and nothing outside the
+  clamp's own unit tests had ever seen it engage. The pool-size neutraliser's
+  self-exemption now matches the module *file* rather than a bare substring; it
+  previously exempted any module whose name merely began the same way, leaving
+  it reading the real host CPU/RAM caps and so passing or failing by runner
+  size.
+
+- **The `slow` test tier now runs on every PR, and a nightly workflow runs the
+  whole suite.** `slow` was excluded from every PR-CI step *and* from the local
+  default, so ~37 tests ran nowhere at all — including
+  `test_cache_equivalence.py`, the only proof that a cached notebook replays
+  byte-identically to a direct execution, the worker-reuse-across-builds e2e
+  tests, and all 18 real-subprocess CLI tests. The tier now joins the CI matrix
+  as a fourth parallel suite, so it costs machine-minutes but no wall clock —
+  37 tests in ~78 s at `-n 4`, against a `unit` job of ~4.5 min and a Docker job
+  of ~6.5 min; it was never excluded for cost. `.github/workflows/nightly.yml`
+  runs the **whole** suite, Docker tier included, against unchanged `master` as
+  a flake and rot detector — the one thing PR CI structurally cannot do. A
+  failure files a GitHub issue labelled `nightly-failure`, or comments on the
+  existing open one so an outage produces one issue rather than one per night;
+  `workflow_dispatch` lets the run and its failure route be exercised on demand.
+  The issue-filing mechanism lives in a `.github/actions/report-failure`
+  composite action so other workflows can reuse it.
+
+- **A red `master` now files an issue within minutes.** The "Docker Integration
+  Tests" job is deliberately not a required status check, so a fully green PR
+  can still break `master` — which is exactly what happened when a PR un-skipped
+  a module containing docker-marked tests. A `report-master-failure` job now
+  fires on any post-merge CI failure (not just Docker) and files, or comments
+  on, a `master-red` issue.
+- **`tests/infrastructure/workers/test_docker_image_tags.py`** rejects any test
+  naming a Docker image CLM does not build — the sibling of the module-probe
+  guard, one layer down. Repository names must carry the `clm-` prefix,
+  registry-qualified references must sit under `docker.io/mhoelzl`, and bare
+  tags must be built by a workflow or be a published variant. The CI-built tags
+  are parsed out of the workflow files rather than duplicated, so a renamed tag
+  fails the fast suite instead of only the non-required Docker job. Six
+  references to a pre-rename image name in `test_worker_executor.py` are
+  corrected in passing.
+
+- **The Docker job's promotion readiness now tracks itself.** Whether the layer
+  cache and retry loops actually removed the job's infra flake is an empirical
+  question needing ~20 runs of evidence — the kind of follow-up that gets
+  forgotten. `scripts/docker_job_stability.py`, run nightly, keeps one
+  `ci-health` issue up to date with the job's recent outcomes on `master` and
+  the consecutive-success streak, and comments only when the promotion criterion
+  is first met. Editing an issue body sends no notification, so the daily
+  refresh is a live dashboard rather than noise.
+
+- **`CLM_WORKER_API_PORT` pins the Worker API's port.** The default `8765` is
+  advisory — containers learn the real port from `CLM_API_URL` — so setting this
+  variable is how you make a port a requirement: if it is taken, the build fails
+  instead of moving. `0` asks the OS for any free port, which is what the Docker
+  test tier now uses so each test gets a private server. Documented under
+  "Worker API (Docker mode)" in `docs/user-guide/configuration.md`.
+
+- **Every course language the images support is now executed by CI.** The Docker
+  tier runs one deck per language — Python, C++, C#, Java and TypeScript — each
+  written in that language's own percent format, executed in a real container,
+  and required to render a value the code *computes*, so a kernel that stops
+  running code cannot pass. Previously only Python was ever executed, and C#,
+  Java and TypeScript were configured but exercised by nothing; all five pass in
+  88s, with no new images and no added build time.
+- The matrix is guarded against silently shrinking: a test fails if the case list
+  and the `prog_lang` configuration drift apart, so a new language needs either a
+  case or an explicit entry in the known-missing-kernel set.
+
+### Fixed
+
+- Builds are now byte-reproducible for generated diagrams. A PNG rendered from
+  a DrawIO or PlantUML source is written into the source tree at
+  `<topic>/img/<name>.png`, and the copy of that file into the output tree is
+  meant to run in the later `COPY_GENERATED_IMAGES_STAGE`. The stage was chosen
+  by asking whether the image already existed on disk, so a generated PNG that
+  is *committed* to the course repo — the normal case, since checking them in is
+  what makes notebooks render on GitHub — was misread as a static image and
+  copied in stage 1, concurrently with the conversion overwriting that same
+  path. Whichever finished first decided the bytes, so two consecutive builds of
+  an unchanged course could differ. `Course` now marks every diagram output
+  explicitly, independent of whether the file is present.
+
+- **Eight Direct-mode worker integration tests run again.** `test_direct_integration.py`
+  gated its entire module on `find_spec("drawio_converter")` and
+  `find_spec("plantuml_converter")` — top-level module names that stopped
+  existing when the workers were folded into `clm.workers.*`, so worker
+  startup/registration, concurrent claiming, health monitoring, graceful
+  shutdown and the high-concurrency job tests had been silently skipped
+  everywhere, including CI. The probes now name the real packages. Resurrecting
+  them exposed a stale job payload in two of the tests (`{"kernel": …}`
+  predates `NotebookPayload`'s required descriptor fields, so the job always
+  failed validation); they now submit a real `NotebookPayload`. A new
+  `test_worker_module_probes.py` fails loudly if a skip guard is ever pointed at
+  a module that does not resolve.
+
+- **Repaired the two mixed-mode Docker worker tests unskipped by the T1 fix.**
+  `test_mixed_worker_modes` hard-coded the image tag `drawio-converter:latest`,
+  which CLM has not published since the images gained their `clm-` prefix — the
+  Docker client tried to *pull* it and the test died on `ImageNotFound`. It now
+  resolves the tag from the CI-built and published candidates the way the e2e
+  lifecycle test does, and skips with a stated reason when no image is present
+  instead of quietly degrading to a direct-only run.
+  `test_stale_worker_cleanup_mixed_mode` inserted its "stale" worker rows
+  without a `last_heartbeat`, so the column defaulted to the current timestamp
+  and the direct worker was correctly judged *healthy* and kept; the rows now
+  carry a genuinely old heartbeat.
+
+- **The CLI build integration tests can now fail.** Every functional assertion in
+  `tests/cli/test_cli_integration.py` was wrapped in `if result.exit_code == 0:`,
+  one assertion was a literal tautology (`assert "does not exist" in output or
+  exit_code != 0`, immediately after asserting `exit_code != 0`), and the course
+  output check globbed `kurs-2-*` — a pattern that has matched nothing since the
+  three-tier default output structure landed. The suite reported green for
+  "CLI → Backend → Workers → Output" while only detecting argument-parsing typos.
+  Build success and the produced output tree are now asserted directly,
+  `--clear-cache` is verified against a seeded sentinel row with a
+  no-flag control run, and each error case asserts its specific diagnostic. The
+  tests also pin `--cache-db-path` under `tmp_path`; they previously wrote a
+  multi-megabyte `clm_cache.db` into the working tree and shared it across xdist
+  workers.
+
+- **Three test-integrity gaps closed.** The PlantUML and DrawIO end-to-end tests
+  logged the number of rendered images and asserted nothing, so they passed even
+  when the converter produced no output at all; they now assert that images
+  exist and carry a real PNG signature. `AssertionError` was removed from the
+  `flaky` `only_rerun` lists in `test_worker_base.py` and `test_lifecycle_mock.py`
+  — an intermittent race in the real claim/heartbeat loop surfaces as exactly
+  that exception, so retrying on it hid the class of bug those tests exist to
+  catch. PlantUML JAR discovery now happens in one place: the fallback path in
+  `tests/conftest.py` pointed at the pre-PR-#239 vendored location and matched
+  nothing, leaving local availability to depend on an import-time `os.environ`
+  mutation in `tests/workers/plantuml/test_plantuml_converter.py`, which made
+  availability collection-order-dependent under xdist. That mutation is gone and
+  the surviving fallbacks name paths that exist.
+
+- **`MockWorker` now claims jobs through the real `JobQueue.get_next_job`.** Its
+  hand-rolled `UPDATE … RETURNING` had drifted from the production claim path in
+  six ways — no `execution_mode` filter (PR #564's cross-mode job-theft guard),
+  no session-ownership filter (issue #620), no `attempts < max_attempts` guard,
+  no `attempts` increment, no `started_at` stamp and no `priority` ordering —
+  and wrote the container-id *string* into the integer `jobs.worker_id` column.
+  Terminal status now goes through `update_job_status` for the same reason. A
+  new `test_mock_worker_claiming_parity.py` pins each recovered property so the
+  fixture cannot drift again.
+
+- **The `BuildError` / `BuildWarning` tests now assert the rendering a user
+  reads.** They previously read back the constructor arguments they had just
+  passed in and then checked only that `str(...)` was *truthy* — a dataclass
+  cannot fail to store its own fields, so those tests inflated apparent coverage
+  of `build_data_classes.py` without being able to fail. They now pin the
+  `__str__` output, including that the optional `Action:` and `Job ID:` lines
+  are omitted when unset.
+
+- **The Docker CI job no longer re-fetches the world on every run.** Its three
+  image builds now use a scoped BuildKit layer cache (`type=gha`), so on a cache
+  hit the external fetches inside the Dockerfiles do not run at all — and those
+  fetches were the entire source of the job's ~12% infra failure rate (Docker
+  Hub timeouts, partial transfers). The two remaining un-retried downloads in
+  the notebook image are fixed too: the .NET installer is wrapped in a retry
+  loop, because the script does its *own* downloads and was failing with
+  `curl` exit 18 (partial file), and the `uv` installer is downloaded to a file
+  before execution instead of piped into `sh`, where a truncated download would
+  have executed a truncated script and still reported success. The nightly reads
+  the same cache but does not write it, so a cold-build flake cannot file a
+  spurious `nightly-failure` issue.
+
+- **Docker workers are now told the port the Worker API actually bound.** The
+  container's `CLM_API_URL` was rebuilt from the default port (`8765`) rather
+  than read from the running server, so a server on any other port handed every
+  container an address pointing at whatever else happened to be listening — or
+  at nothing. Jobs then sat `pending` with no error on either side.
+- **Two Worker API servers can no longer quietly share a port.** On Windows
+  `SO_REUSEADDR` lets a second listener bind a port a first one is still using,
+  after which the OS decides which of them receives a given container's
+  callback — so a worker could register with a server owning a different jobs
+  database. CLM no longer sets that option on Windows (POSIX, where it only
+  affects `TIME_WAIT` rebinding, is unchanged), making an overlap a clear error.
+  A default port that is already taken is handled instead by moving to a free
+  one, so two builds on one machine keep working.
+
+- **C++ execution is now covered by CI.** Nothing automated checked that a valid
+  C++ deck still compiles and runs: the one Docker test that ran a C++ notebook
+  ran a deliberately *broken* one to check error attribution, and it asked for
+  the `full` notebook image, which no workflow builds — so it skipped in CI and
+  ran only on a machine that had pulled the 23 GB image. Three changes, no new
+  images and no added build time:
+  - The C++ kernels come from the Dockerfile's shared stage, not from the `full`
+    variant, so every notebook image has them. C++ tests now use the image CI
+    already builds.
+  - A new test executes a valid C++ deck through the Docker notebook worker and
+    requires the rendered deck to contain a value the C++ code *computes*, so a
+    kernel that stops running code cannot pass it.
+  - A new test compares the kernel names CLM asks for against the kernels the
+    image installs. A rename in an image bump — the xeus-cling → xeus-cpp move
+    did exactly this — breaks every deck in a language at once, and now fails in
+    seconds with the kernel name in the message.
+- **Known gap now recorded**: CLM configures a `rust` kernel that none of the
+  images install, so a Rust deck in Docker mode fails with `NoSuchKernel`. The
+  new kernel test pins this as the only expected hole, so a second one cannot
+  appear unnoticed.
+
+- **`clm serve`'s `/ws` endpoint never worked.** Its route function took an
+  unannotated `websocket` parameter, so FastAPI analysed it as a required
+  *query* parameter and closed every handshake with
+  `{"loc": ["query", "websocket"], "msg": "Field required"}`. The Mobile Deck
+  Studio's "changed on disk — reload" banner and its live sync progress line
+  therefore never fired; the deck simply went stale without saying so. Found
+  while adding the token check to the same endpoint.
+
+- **Removed the Studio's dead tier-2 preview path.** `renderJ2()` was gated on
+  `cell.cell_type === "markdown"`, but the API types a Jinja cell as
+  `cell_type: "j2"` (a `markdown` cell always has `is_j2 === false`), so the
+  branch had been unreachable since it was written — and what it contained was
+  an unescaped `innerHTML` assignment of a server response. The server-side
+  endpoint is live, sandboxed and tested; only the in-page consumer is gone.
+  Wiring it up needs a decision about sanitizing macro-emitted HTML, so it is
+  tracked as issue #697 rather than fixed in passing.
+
+### Security
+
+- **Worker API is no longer an open service.** In Docker mode CLM starts a
+  small REST API for containers to reach the job queue. It bound `0.0.0.0`
+  with no authentication on any route, so on every Docker-mode build it was
+  reachable from the whole LAN — and, because its handlers ignored content
+  type, from any web page open in the developer's browser. It now binds
+  `127.0.0.1` plus (on Linux) the Docker bridge gateways, and every route
+  requires an `Authorization: Bearer` token generated per build and injected
+  into worker containers. Binding wider is an explicit opt-in
+  (`CLM_WORKER_API_HOST`) that also requires a pinned `CLM_API_TOKEN`; CLM
+  refuses to start otherwise. See "Worker API (Docker mode)" in
+  `docs/user-guide/configuration.md`.
+- **The executed-notebook cache no longer stores or transmits pickles.**
+  Payloads are nbformat JSON in both `clm_cache.db` and on the Worker API
+  wire, so a cache entry can no longer execute code when it is read. Existing
+  pickle entries are discarded the first time the cache is opened and
+  regenerate on the next build.
+- **Upgrade note for Docker mode**: worker images must be rebuilt
+  (`clm docker build`). An image from before this change presents no token and
+  its jobs fail with `Worker API rejected the token (401)`.
+
+- **The recordings dashboard can no longer be driven by another web page.**
+  `clm recordings serve` has no login, and every action route was a plain form
+  post, so any site open in the same browser could auto-submit one — arming a
+  deck, starting a recording, or submitting a file for processing. Mutating
+  requests now have to come from the dashboard's own origin (checked via
+  `Sec-Fetch-Site` and `Origin`), and every request has to carry a `Host` that
+  names this server, which closes the DNS-rebinding path that an origin check
+  alone cannot. Reads are unaffected, and requests with neither header
+  (`curl`, scripts) still work — this guards against other *pages*, not other
+  processes. `--allowed-host` / `--allowed-origin` opt in to a Tailscale
+  hostname or a reverse proxy.
+- **`POST /process` no longer uploads arbitrary local files.** It took a path
+  from the form and checked only that it existed, then handed it to the
+  configured backend — with Auphonic, that streams the file to a third party.
+  Submitted paths must now resolve under the recordings root, the same check
+  its sibling `/open-explorer` already performed.
+- **Course, section and deck names from the dashboard are validated.**
+  `course_slug` reached `get_state_path()` unsanitized, so `../../../evil`
+  wrote a state file outside CLM's config directory; a bare `..` escaped the
+  recordings root, which the existing filename sanitizer strips separators
+  from but otherwise leaves intact. Names containing a separator, a drive
+  letter, a null byte, or a `.`/`..` component are now rejected with `400`.
+
+- **`clm serve` gets the same browser containment as the recordings
+  dashboard.** The Monitor API has no login, so any page open in the same
+  browser could read your build state, worker list and job history — and,
+  since nothing validated the `Host` header, a DNS-rebinding page reached the
+  app as a genuinely same-origin caller. Requests must now carry a `Host` that
+  names this server, and mutating requests must come from the dashboard's own
+  origin. `--allowed-host` / `--allowed-origin` opt in to a Tailscale hostname
+  or a reverse proxy; a wildcard bind without one now prints a warning instead
+  of silently answering `400` to every remote request.
+- **`--cors-origin` no longer defaults to `*`.** The default combined `*` with
+  `allow_credentials=True`, which makes Starlette echo whichever origin asked —
+  strictly worse than a literal wildcard, because it legalises credentialed
+  cross-origin reads. A dashboard serving its own frontend needs no CORS at
+  all, so the default is now none. Passing `*` explicitly still works, without
+  credentials.
+- **The `/ws` stream is inside the Studio token gate.** It broadcasts
+  deck-change and sync-progress events for the course being served, and
+  WebSockets are exempt from CORS — so anyone who could reach the port could
+  subscribe and read them, around the bearer token that guards every
+  `/api/studio` route. When `--spec` is in play the token is now required
+  *before* the handshake is accepted — for the **whole endpoint**, so a script
+  that polled `/ws` for job status needs the token too once a spec is served.
+  Browsers cannot set an `Authorization`
+  header on a WebSocket, so the Studio PWA presents it as the
+  `clm-token.<token>` subprotocol (kept out of access logs, unlike a query
+  parameter); scripts may still use `Authorization: Bearer`.
+- **Channel subscriptions are restricted to `status`, `workers`, `jobs` and
+  `studio`.** Any name was previously stored verbatim, which also meant a typo
+  looked like a successful subscription and then went quiet forever — the
+  reply now reports what was actually subscribed to.
+- **`--allowed-origin` now actually authorizes a browser** (affects
+  `clm recordings serve` too). The origin guard consulted the operator's
+  allowlist only in its `Origin` fallback, which is unreachable whenever
+  `Sec-Fetch-Site` is present — i.e. for every current browser. Naming an
+  origin therefore bought a successful CORS preflight and a `403` on the
+  request behind it. The allowlist is now checked first — which makes the flag
+  a full exemption from the origin check, so the docs now say so. A value that
+  is not a valid origin (a missing `https://`, say) is reported at startup
+  instead of being dropped in silence, and an `Origin` carrying userinfo or an
+  embedded tab/newline — forms no browser emits, and which parse to a
+  different host than they read as — is refused rather than normalized.
+- **A non-ASCII bearer token no longer raises from inside the auth check.**
+  `secrets.compare_digest` rejects non-ASCII `str`, and headers arrive
+  latin-1 decoded, so one byte above `0x7F` turned a bad token into a `500`.
+
+- **The Studio cell preview no longer runs arbitrary Python.**
+  `POST /api/studio/deck/render-cell` rendered its request body through a plain
+  `jinja2.Environment`, so a template could read `__class__` and walk out of
+  the template namespace from there — server-side template injection, verified
+  against the real function. It now renders in an
+  `ImmutableSandboxedEnvironment`. The
+  module advertised itself as the "no-execution" render tier while doing this;
+  the claim is now accurate about what it means (no *kernel*, not no code).
+  Legitimate previews are unaffected — the bundled header macros for all five
+  shipped languages render unchanged.
+- **The Studio API no longer accepts `?token=`.** A URL is the worst place for
+  a credential that does not expire: it reaches uvicorn's access log, any
+  proxy's, browser history, and the `Referer` of outbound links. Only
+  `Authorization: Bearer` is accepted now (and, on `/ws`, the `clm-token.…`
+  subprotocol). Nothing needed the query form — the pairing deep link targets
+  the unauthenticated `/studio/` static mount and is read by the frontend.
+- **The QR pairing URL moved the token into the fragment**
+  (`/studio/#token=…`). Browsers never send a fragment to the server, so
+  pairing no longer writes the token into uvicorn's access log, a proxy's, or
+  an outbound `Referer`. Browser *history* still records it — a fragment is
+  stored there like a query string — so that half is unchanged. The QR is
+  reprinted on every launch, so there is nothing to migrate.
+- **The Studio frontend escapes quotes.** `esc()` handled `&`, `<` and `>` but
+  not `"`, and its output is interpolated into `<a href="…">` before reaching
+  `innerHTML` — so a markdown link target could close the attribute and add an
+  event handler. Link targets are also restricted to `http`, `https`, `mailto`
+  and relative URLs, with control characters stripped before the scheme is
+  judged (browsers strip them when resolving, so `java&#9;script:` would
+  otherwise slip past and then execute).
+- **The cell preview is bounded in size and no longer runs on the event
+  loop.** Blocking attribute traversal says nothing about how big a render
+  gets: `{{ "A" * 200000000 }}` allocated 200 MB in about a second, and the
+  route rendered inline, so one request from any token holder stalled every
+  other request and the disk watcher. Sequence repetition and `+` are now
+  refused before they allocate, the rendered output is bounded *as it
+  accumulates* (a 500-iteration loop of individually-legal emits went from a
+  100 MB peak to 1.1 MB), `~` is redirected at compile time via
+  `code_generator_class` (a doubling payload went from ~1.2 GB to 5.2 MB), and
+  the render runs in a worker thread. Each needs a different hook because
+  Jinja routes the three differently — in particular `~` compiles to a
+  `Concat` node that neither `intercepted_binops` nor `environment.concat` can
+  see. **This is not a claim that the preview is DoS-proof**: nothing bounds
+  *iteration*, so nested loops still burn CPU without allocating. A client
+  holding the Studio token can still stall the process — accepted, because the
+  token is the trust boundary and that client can already rewrite any deck.
+- **The Studio service worker cached the app shell forever.** `sw.js` only
+  re-installs when its own bytes change and `activate` only drops caches whose
+  *name* differs, but the shell handler was pure cache-first — so `app.js`,
+  which had changed three times under `clm-studio-shell-v1`, was served from
+  cache indefinitely. Any already-installed PWA would have kept running the
+  pre-fix frontend and, because the pairing URL moved, would have been unable
+  to re-pair. The cache name is bumped and the shell now uses
+  stale-while-revalidate, so a future missed bump costs one stale load rather
+  than permanent staleness.
+
 ## [1.22.1] - 2026-07-25
 
 ### Fixed
