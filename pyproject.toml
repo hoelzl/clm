@@ -441,9 +441,6 @@ filename = "docs/developer-guide/architecture.md"
 [[tool.bumpversion.files]]
 filename = "docker/BUILDING.md"
 
-[[tool.bumpversion.files]]
-filename = "tests/workers/notebook/test_notebook_error_context.py"
-
 # uv.lock records the editable project's own version. If we don't update
 # it here, `uv run` resyncs uv.lock on the next invocation, which lands
 # during the bumpversion pre-commit hook and trips "files were modified
