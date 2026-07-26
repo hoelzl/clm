@@ -21,24 +21,32 @@ Two things the sandbox does *not* give you, and what this module does about
 each. Both are stated precisely because the first attempt at them overclaimed.
 
 **Size.** A sandbox bounds attribute access and nothing else, so
-``{{ "A" * 200000000 }}`` was a one-expression memory bomb. Now bounded:
-``*`` and ``+`` are intercepted before they allocate (:data:`MAX_REPEAT`,
-:data:`MAX_OUTPUT_CHARS`), and :meth:`concat` accumulates the rendered output
-with a running check — which matters because a post-render ``len()`` bounds
-only what is *returned*: a 500-iteration loop emitting a legal 100 000
-characters each peaked at 100 MB before such a check could run. It is now
-1.1 MB. **Not** bounded: ``~``. Jinja compiles it to a ``Concat`` node, which
-is not a ``BinExpr`` (so ``intercepted_binops`` cannot see it) and which emits
-a call to ``str_join`` resolved from the compiled template's own namespace
-(so ``environment.concat`` does not see it either); the only hook left is a
-process-wide monkeypatch of ``jinja2.runtime``, which would also change how
-the *build* renders decks. So
-``{% set s = "A" * 100000 %}{% set s = s ~ s %}…`` still reaches ~1.2 GB, and
-nested ``{% for %}`` over ``range()`` still burns CPU without allocating.
-**A client holding the Studio token can therefore still exhaust this
-process.** That is accepted rather than fixed: the token is the trust boundary
-(decision D4), the same client can already rewrite any deck, and closing it
-properly means rendering in a subprocess under an rlimit — issue #698.
+``{{ "A" * 200000000 }}`` was a one-expression memory bomb. Every way of
+growing a *value* is now bounded, each needing a different hook because Jinja
+routes them differently:
+
+- ``*`` and ``+`` — ``intercepted_binops``, refused before they allocate
+  (:data:`MAX_REPEAT`, :data:`MAX_OUTPUT_CHARS`).
+- the rendered output — :meth:`concat`, accumulating with a running check.
+  This matters because a post-render ``len()`` bounds only what is *returned*:
+  a 500-iteration loop emitting an individually-legal 100 000 characters each
+  peaked at 100 MB before such a check could run, and 1.1 MB after it.
+- ``~`` — neither of the above can see it. It compiles to a ``Concat`` node,
+  which is not a ``BinExpr`` (invisible to ``intercepted_binops``) and which
+  emits ``str_join`` resolved from the compiled template's own namespace
+  (invisible to ``environment.concat``). It is redirected at compile time
+  instead, via ``code_generator_class`` — a documented per-environment
+  extension point, so the build pipeline's environments are untouched.
+  ``{% set s = "A" * 100000 %}{% set s = s ~ s %}…`` went from ~1.2 GB to
+  5.2 MB.
+
+**Still unbounded: CPU.** Nothing limits iteration, so nested ``{% for %}``
+over ``range()`` burns time without allocating, and ``run_in_threadpool``
+gives a client 40 shared threads to occupy. A token holder can still stall
+this process. That is accepted rather than fixed — the token is the trust
+boundary (decision D4) and the same client can already rewrite any deck —
+and doing it properly means rendering under a wall-clock limit in a
+subprocess, which is issue #698.
 
 **The loader.** The sandbox constrains the *template*, not the
 ``FileSystemLoader`` under it, so ``{% include %}`` still reads files. Jinja
@@ -95,18 +103,51 @@ def _preview_environment_class():
     without these a single expression is a memory bomb. See the module
     docstring for what remains unbounded and why.
     """
+    from jinja2.compiler import CodeGenerator
     from jinja2.sandbox import ImmutableSandboxedEnvironment
     from jinja2.sandbox import SecurityError as _SecurityError
 
+    def _bounded_join(iterable) -> str:  # noqa: ANN001
+        """Join ``iterable``, refusing once the running total exceeds the cap.
+
+        The point is *running*: a check after ``"".join(...)`` bounds only what
+        is returned, so a 500-iteration loop emitting an individually-legal
+        100 000 characters each peaked at 100 MB before anything looked at it.
+        """
+        parts: list[str] = []
+        total = 0
+        for part in iterable:
+            text = str(part)
+            total += len(text)
+            if total > MAX_OUTPUT_CHARS:
+                raise _SecurityError(f"preview output exceeded {MAX_OUTPUT_CHARS} characters")
+            parts.append(text)
+        return "".join(parts)
+
+    class _BoundedCodeGenerator(CodeGenerator):
+        """Route ``~`` through the environment so it can be bounded.
+
+        Stock Jinja compiles ``~`` to ``str_join((a, b))``, resolved from the
+        compiled template's own module namespace — which is why neither
+        ``intercepted_binops`` (``Concat`` is not a ``BinExpr``) nor
+        ``environment.concat`` can see it. ``code_generator_class`` is a
+        documented per-environment extension point, so redirecting the emitted
+        call is enough; the build pipeline's own environments are untouched.
+        """
+
+        def visit_Concat(self, node, frame) -> None:  # noqa: ANN001
+            self.write("environment.concat_operands((")
+            for arg in node.nodes:
+                self.visit(arg, frame)
+                self.write(", ")
+            self.write("))")
+
     class _PreviewEnvironment(ImmutableSandboxedEnvironment):
-        # `*` and `+` go through the sandbox's binop interception. `~` does
-        # NOT, and cannot: Jinja compiles it to a `Concat` node, which is not a
-        # `BinExpr` (invisible to `intercepted_binops`) and which calls
-        # `str_join` from the compiled template's own namespace (invisible to
-        # `environment.concat` too). That gap is documented in the module
-        # docstring and pinned by a test; do not add "~" here expecting it to
-        # work — it is silently inert.
+        # `*` and `+` go through the sandbox's binop interception; `~` cannot
+        # (see _BoundedCodeGenerator), so it is redirected at compile time
+        # instead. Adding "~" to this set is silently inert — don't.
         intercepted_binops = frozenset({"*", "+"})
+        code_generator_class = _BoundedCodeGenerator
 
         def call_binop(self, context, operator, left, right):  # noqa: ANN001
             if operator == "*":
@@ -117,25 +158,24 @@ def _preview_environment_class():
             return super().call_binop(context, operator, left, right)
 
         def concat(self, iterable) -> str:  # noqa: ANN001
-            """Join with a running bound, refusing before the total is built.
+            """Bound the rendered output as it accumulates.
 
-            Jinja calls this once per render, over the root render function's
-            generator, so it is the one place that sees output growth
-            incrementally. Checking ``len()`` after ``"".join(...)`` — which is
-            what this replaced — bounds only what is *returned*: a
-            500-iteration loop each emitting a legal 100 000 characters peaked
-            at 100 MB before the check ran, and 1.1 MB after this.
-
-            (It does **not** see ``~``; that goes to ``str_join``. See above.)
+            Jinja emits ``concat = environment.concat`` into the root render
+            function *and* every block, macro, ``{% filter %}`` and ``{% call %}``
+            body — so this runs once per output buffer, not once per render.
+            Each call bounds its own buffer and the root call still sees the
+            grand total, so the effect is a stricter bound, not a leaky one.
             """
-            parts: list[str] = []
-            total = 0
-            for part in iterable:
-                total += len(part)
-                if total > MAX_OUTPUT_CHARS:
-                    raise _SecurityError(f"preview output exceeded {MAX_OUTPUT_CHARS} characters")
-                parts.append(part)
-            return "".join(parts)
+            return _bounded_join(iterable)
+
+        def concat_operands(self, iterable) -> str:  # noqa: ANN001
+            """Bound a ``~`` expression. Emitted by :class:`_BoundedCodeGenerator`.
+
+            Separate from :meth:`concat` only because this one receives
+            arbitrary operands rather than already-rendered strings; both
+            stringify, so the shared join handles it.
+            """
+            return _bounded_join(iterable)
 
     def _size_of(value) -> int | None:  # noqa: ANN001
         """Length of a sequence whose growth is worth bounding, else ``None``.

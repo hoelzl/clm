@@ -169,27 +169,62 @@ class TestResourceBounds:
         assert ok is False
         assert text == source  # the body, not a 50-character prefix
 
-    def test_tilde_concatenation_is_a_known_gap(self, tmp_path: Path):
-        """``~`` is deliberately NOT bounded — pinned so it stays a known fact.
+    def test_tilde_concatenation_is_bounded(self, tmp_path: Path, monkeypatch):
+        """``~`` needs its own hook — the other two cannot see it.
 
-        Jinja compiles ``~`` to a ``Concat`` node, which is not a ``BinExpr``
-        (so ``intercepted_binops`` cannot see it) and which calls ``str_join``
+        It compiles to a ``Concat`` node, which is not a ``BinExpr`` (so
+        ``intercepted_binops`` is blind to it) and which emits ``str_join``
         resolved from the compiled template's own namespace (so
-        ``environment.concat`` cannot either). The only remaining hook is a
-        process-wide monkeypatch of ``jinja2.runtime``, which would change how
-        the *build* renders every deck.
-
-        A token holder can therefore still exhaust this process, which is
-        accepted: the token is the trust boundary (D4) and the same client can
-        already rewrite any deck (issue #698). This test documents the limit
-        rather than asserting a fix — if a future jinja2 or a deliberate change closes it,
-        this fails and the docstrings claiming the gap should be updated.
+        ``environment.concat`` is too). It is redirected at compile time via
+        ``code_generator_class``. Before that, this payload reached ~1.2 GB
+        while emitting nine characters — neither the repeat cap (each step is
+        legal) nor an output cap (nine characters) ever saw it.
         """
-        source = '{% set s = "A" * 1000 %}{% set s = s ~ s %}{{ s|length }}'
-        ok, _error, text = render_j2_cell(tmp_path / DECK, source, "de")
+        from clm.web.studio import render as render_mod
 
-        assert ok is True
-        assert text == "2000"
+        monkeypatch.setattr(render_mod, "MAX_OUTPUT_CHARS", 5000)
+        source = '{% set s = "A" * 1000 %}' + "{% set s = s ~ s %}" * 5 + "{{ s|length }}"
+        ok, error, text = render_j2_cell(tmp_path / DECK, source, "de")
+
+        assert ok is False
+        assert "exceeded" in str(error)
+        assert text == source
+
+    def test_tilde_within_the_limit_still_works(self, tmp_path: Path):
+        """The redirect must not cost the operator — `~` is ordinary Jinja."""
+        ok, error, text = render_j2_cell(tmp_path / DECK, '{{ "a" ~ "b" ~ 1 }}', "de")
+        assert ok and error is None
+        assert text == "ab1"
+
+    @pytest.mark.parametrize(
+        ("source", "expected"),
+        [
+            pytest.param(
+                "{% macro m(x) %}{{ x ~ '!' }}{% endmacro %}{{ m('hi') }}", "hi!", id="macro"
+            ),
+            pytest.param("{% filter upper %}ab{% endfilter %}", "AB", id="filter-block"),
+            pytest.param(
+                "{% macro w() %}[{{ caller() }}]{% endmacro %}{% call w() %}in{% endcall %}",
+                "[in]",
+                id="call-block",
+            ),
+            pytest.param(
+                "{{ 6 * 7 }} {{ 10 - 3 }} {{ 9 // 2 }} {{ 2 ** 5 }}", "42 7 4 32", id="arith"
+            ),
+        ],
+    )
+    def test_the_bounds_do_not_change_rendering(self, tmp_path: Path, source: str, expected: str):
+        """Every construct that gets its own output buffer still renders.
+
+        `concat` is emitted into blocks, macros, `{% filter %}` and
+        `{% call %}` bodies as well as the root — so the override runs once per
+        *buffer*, and a mistake there would corrupt output rather than fail
+        loudly. Operators outside the intercepted set must be untouched.
+        """
+        ok, error, text = render_j2_cell(tmp_path / DECK, source, "de")
+
+        assert ok, f"{source} did not render: {error}"
+        assert text == expected
 
 
 class TestLegitimateRenderingSurvives:

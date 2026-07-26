@@ -34,13 +34,15 @@
   other request and the disk watcher. Sequence repetition and `+` are now
   refused before they allocate, the rendered output is bounded *as it
   accumulates* (a 500-iteration loop of individually-legal emits went from a
-  100 MB peak to 1.1 MB), and the render runs in a worker thread. **This is
-  not a claim that the preview is DoS-proof**: `~` cannot be intercepted
-  without a process-wide monkeypatch of `jinja2.runtime` that would also
-  change how the build renders decks, and nested loops burn CPU without
-  allocating. A client holding the Studio token can still exhaust the process
-  — accepted, because the token is the trust boundary and that client can
-  already rewrite any deck.
+  100 MB peak to 1.1 MB), `~` is redirected at compile time via
+  `code_generator_class` (a doubling payload went from ~1.2 GB to 5.2 MB), and
+  the render runs in a worker thread. Each needs a different hook because
+  Jinja routes the three differently — in particular `~` compiles to a
+  `Concat` node that neither `intercepted_binops` nor `environment.concat` can
+  see. **This is not a claim that the preview is DoS-proof**: nothing bounds
+  *iteration*, so nested loops still burn CPU without allocating. A client
+  holding the Studio token can still stall the process — accepted, because the
+  token is the trust boundary and that client can already rewrite any deck.
 - **The Studio service worker cached the app shell forever.** `sw.js` only
   re-installs when its own bytes change and `activate` only drops caches whose
   *name* differs, but the shell handler was pure cache-first — so `app.js`,
